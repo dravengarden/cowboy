@@ -119,8 +119,10 @@ impl Controls {
         if transition.state != AccountState::RateLimited {
             return scoped;
         }
-        let model = self.env.model(&meta.id);
-        let group = model.as_deref().and_then(policy::quota_group);
+        // Reread after the turn: a model switch during it shows as a
+        // disagreement (no group, account-wide) or, at worst, scopes the
+        // wrong group, whose next refusal widens the limit to the account.
+        let group = self.quota_group(&meta.id);
         scoped.reason = policy::rate_limit_reason(group);
         if let Some(group) = group {
             scoped.until_ms = self

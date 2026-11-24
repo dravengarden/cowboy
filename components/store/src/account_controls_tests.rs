@@ -103,6 +103,8 @@ fn models_map_to_their_quota_groups() {
     assert_eq!(quota_group("claude-opus-5-5"), Some(CLAUDE_GPT_GROUP));
     assert_eq!(quota_group("gpt-oss-120b"), Some(CLAUDE_GPT_GROUP));
     assert_eq!(quota_group("default"), None);
+    // Argon has a quota of its own that no group tracks.
+    assert_eq!(quota_group("gemini-4-argon"), None);
     assert_eq!(rate_limit_reason(Some(GEMINI_GROUP)), "rate_limited:gemini");
     assert_eq!(rate_limit_reason(None), "rate_limited");
     assert_eq!(
@@ -166,6 +168,62 @@ fn a_groups_reset_is_its_latest_exhausted_window() {
         group_reset_ms(&serde_json::json!({}), GEMINI_GROUP, 0),
         None
     );
+}
+
+#[test]
+fn an_implausible_reset_is_not_believed() {
+    let far = |resets: serde_json::Value| {
+        serde_json::json!({"rateLimitsByLimitId": {"0101-claude-and-gpt-models": {
+            "limitName": "Claude and GPT models", "primary": {"usedPercent": 100, "resetsAt": resets}}}})
+    };
+    let now = 1_795_486_000_000;
+    let within = (now + MAX_QUOTA_RESET_MS) / 1000;
+    assert_eq!(
+        group_reset_ms(&far(serde_json::json!(within)), CLAUDE_GPT_GROUP, now),
+        Some(within * 1000)
+    );
+    assert_eq!(
+        group_reset_ms(&far(serde_json::json!(within + 1)), CLAUDE_GPT_GROUP, now),
+        None
+    );
+    assert_eq!(
+        group_reset_ms(
+            &far(serde_json::json!(253_402_300_799_i64)),
+            CLAUDE_GPT_GROUP,
+            now
+        ),
+        None
+    );
+    assert_eq!(
+        group_reset_ms(&far(serde_json::json!(1e300)), CLAUDE_GPT_GROUP, now),
+        None
+    );
+}
+
+#[test]
+fn an_ended_limit_holds_on_for_each_group_still_used_up() {
+    let bucket = |name: &str, used: f64, resets: i64| serde_json::json!({"limitName": name, "primary": {"usedPercent": used, "resetsAt": resets}});
+    let both = serde_json::json!({"rateLimitsByLimitId": {
+        "g": bucket("Gemini Models", 100.0, 50), "c": bucket("Claude and GPT models", 100.0, 70)}});
+    let claude = serde_json::json!({"rateLimitsByLimitId": {
+        "g": bucket("Gemini Models", 10.0, 50), "c": bucket("Claude and GPT models", 100.0, 70)}});
+    assert_eq!(
+        hold_after_expiry(None, Some(&both), 0),
+        Some(("rate_limited".into(), 50_000))
+    );
+    assert_eq!(
+        hold_after_expiry(None, Some(&claude), 0),
+        Some(("rate_limited:claude_gpt".into(), 70_000))
+    );
+    assert_eq!(
+        hold_after_expiry(Some(GEMINI_GROUP), Some(&claude), 0),
+        None
+    );
+    assert_eq!(
+        hold_after_expiry(Some(CLAUDE_GPT_GROUP), Some(&claude), 0),
+        Some(("rate_limited:claude_gpt".into(), 70_000))
+    );
+    assert_eq!(hold_after_expiry(None, None, 0), None);
 }
 
 #[test]

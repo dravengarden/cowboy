@@ -142,6 +142,8 @@ const QUOTA_GROUP_LABELS: Record<string, string> = { gemini: "Gemini", claude_gp
  * Antigravity meters Gemini and third-party (Claude, GPT) models separately. */
 export function quotaGroup(model: string | undefined): string | undefined {
   const value = model?.trim().toLowerCase() ?? "";
+  // Argon draws on a separate quota that no group tracks.
+  if (value.includes("argon")) return undefined;
   if (value.startsWith("gemini")) return "gemini";
   if (value.startsWith("claude") || value.startsWith("gpt")) return "claude_gpt";
   return undefined;
@@ -152,13 +154,17 @@ export function rateLimitScope(reason: string | null | undefined): string | unde
   return reason?.startsWith(RATE_LIMIT_SCOPE_PREFIX) ? reason.slice(RATE_LIMIT_SCOPE_PREFIX.length) || undefined : undefined;
 }
 
-/** Whether a running rate limit of another quota group leaves a session of
- * `model` free to send (the Controller's dispatch gate decides the same). */
-function otherGroupLimited(control: AccountControl, model: string | undefined, now: number): boolean {
+/** Whether the account's rate limit is no reason for a session of `model`
+ * to wait: it ended (the queue's own wait then says why it waits), or it
+ * holds for another quota group (the Controller's dispatch gate decides the
+ * same). */
+function rateLimitNotApplicable(control: AccountControl, model: string | undefined, now: number): boolean {
+  if (control.state !== "rate_limited") return false;
+  const running = control.until_ms === null || control.until_ms === undefined || control.until_ms > now;
+  if (!running) return true;
   const scope = rateLimitScope(control.reason);
   const group = quotaGroup(model);
-  const running = control.until_ms === null || control.until_ms === undefined || control.until_ms > now;
-  return control.state === "rate_limited" && running && scope !== undefined && group !== undefined && group !== scope;
+  return scope !== undefined && group !== undefined && group !== scope;
 }
 
 /** The owner-facing text of a control reason code. */
@@ -294,7 +300,7 @@ export function sessionParkedReason(
     return { text: `The outcome of ${what} (${uncertain.method}) is unknown. ${check} Then acknowledge it to resume.`, uncertain };
   }
   if (control && !control.admitted) return { text: "This account is not admitted for sessions." };
-  if (control && control.state !== "ok" && !otherGroupLimited(control, model, now)) {
+  if (control && control.state !== "ok" && !rateLimitNotApplicable(control, model, now)) {
     const badge = accountStateBadge(control, undefined, now);
     return { text: badge.detail ? `${badge.label} · ${badge.detail}` : badge.label };
   }

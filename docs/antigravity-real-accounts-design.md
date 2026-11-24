@@ -1047,19 +1047,26 @@ the default hour, although Gemini had its full quota and the Claude window
 reset four hours later. The rate limit is therefore scoped:
 
 - **Scope.** The raise records the quota group of the refused session's
-  model (`gemini-*` → `gemini`; `claude-*`, `gpt-*` → `claude_gpt`) in the
-  control's reason, `rate_limited:<group>`. A model of no known group, or a
+  model (`gemini-*` → `gemini`; `claude-*`, `gpt-*` → `claude_gpt`; Argon,
+  metered separately, has no group) in the control's reason,
+  `rate_limited:<group>`. A model of no known group, or a
   second group refusing while one limit runs, makes it account-wide
   (`rate_limited`), merged in the raise transaction with the later end.
 - **Gate.** A running scoped limit parks dispatches and revivals of
   sessions whose model is in that group or unknown; a session of the other
-  group proceeds and leaves the limit in place. The model is the session's
-  durable selection, else its last advertised value.
+  group proceeds and leaves the limit in place. A session has a group only
+  when its durable selection, last advertised value and the worker's
+  reported options agree, so a selection the worker has not applied is no
+  group. The refusal carries no model, so the raise rereads it after the
+  turn: a switch during the refused turn can scope the wrong group, whose
+  next refusal then widens the limit to the account.
 - **End.** The limit holds until the group's latest exhausted window resets,
   from the account's last usage observation; without one (the observation
   predates the refusal) it holds the default hour. When it ends, the
   resuming dispatch checks usage again and extends a group that is still
-  used up instead of spending a turn on a certain refusal.
+  used up instead of spending a turn on a certain refusal; an account-wide
+  limit narrows to the one group still used up, or stays account-wide until
+  the first of two resets. A reset beyond eight days is not believed.
 - **UX.** The card and composer name the group ("Claude/GPT rate limited
   until …", "Gemini models still run"); a scoped limit does not make the
   account unchoosable for a new session.

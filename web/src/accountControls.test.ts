@@ -161,6 +161,7 @@ test("a rate limit of one quota group leaves the other group's sessions and new 
   assertEquals(quotaGroup("claude-opus-5-5"), "claude_gpt");
   assertEquals(quotaGroup("gpt-oss-120b"), "claude_gpt");
   assertEquals(quotaGroup(undefined), undefined);
+  assertEquals(quotaGroup("gemini-4-argon"), undefined);
   assertEquals(rateLimitScope("rate_limited:claude_gpt"), "claude_gpt");
   assertEquals(rateLimitScope("rate_limited"), undefined);
   const until = Date.UTC(2026, 10, 24, 6, 31);
@@ -175,6 +176,8 @@ test("a rate limit of one quota group leaves the other group's sessions and new 
   assertEquals(sessionParkedReason(claude, "s1", undefined, until - 1, "gemini-4-neon"), undefined);
   assertStringIncludes(sessionParkedReason(claude, "s1", "x", until - 1, "claude-sonnet-5-5")!.text, "Claude/GPT rate limited until");
   assertStringIncludes(sessionParkedReason(claude, "s1", "x", until - 1)!.text, "Claude/GPT rate limited until");
+  // An ended limit leaves the queue's own wait visible.
+  assertEquals(sessionParkedReason(claude, "s1", "Machine capacity", until + 1, "gemini-4-neon")?.text, "Machine capacity");
   // A new session may still choose the account; an account-wide limit refuses it.
   assertEquals(pickerUnavailableReason(claude, undefined, until - 1), undefined);
   assertStringIncludes(pickerUnavailableReason(control({ state: "rate_limited", reason: "rate_limited", until_ms: until }), undefined, until - 1)!, "Rate limited until");

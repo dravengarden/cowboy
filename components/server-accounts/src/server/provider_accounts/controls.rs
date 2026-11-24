@@ -39,6 +39,16 @@ mod reconcile;
 pub use dispatch::{before_dispatch, handoff};
 pub use reconcile::{start, turn_end_listener};
 
+/// The current value of the `model` option in an ACP options list.
+fn model_option(options: &Value) -> Option<Value> {
+    options
+        .as_array()?
+        .iter()
+        .find(|option| option.get("id").and_then(Value::as_str) == Some("model"))?
+        .get("currentValue")
+        .cloned()
+}
+
 /// What the controls observe of the rest of the Controller. [`AppEnv`] is
 /// the production binding; tests substitute their own.
 pub trait Env: Send + Sync + 'static {
@@ -48,9 +58,9 @@ pub trait Env: Send + Sync + 'static {
     fn worker(&self, session: &str) -> Option<crate::runtime_wire::WorkerSnapshot>;
     fn machine_connected(&self, machine: &str) -> bool;
     fn admitted(&self, account: &ProviderAccountId) -> bool;
-    /// The model a session's next turn uses: its durable selection, else
-    /// the agent's last advertised value.
-    fn model(&self, session: &str) -> Option<String>;
+    /// Every model value the Controller holds for a session: its durable
+    /// selection and the agent's last advertised value.
+    fn models(&self, session: &str) -> Vec<String>;
     /// The `rate_limits` of the account's last usage observation, if any.
     fn rate_limits(
         &self,
@@ -110,12 +120,22 @@ impl Env for AppEnv {
         admitted(&self.0, account)
     }
 
-    fn model(&self, session: &str) -> Option<String> {
-        self.0
+    fn models(&self, session: &str) -> Vec<String> {
+        let selected = self
+            .0
             .hub
-            .current_config_value(session, "model")?
-            .as_str()
-            .map(str::to_owned)
+            .config_preferences(session)
+            .and_then(|preferences| preferences.get("model").cloned());
+        let advertised = self
+            .0
+            .hub
+            .persisted_config_options(session)
+            .and_then(|options| model_option(&options));
+        [selected, advertised]
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.as_str().map(str::to_owned))
+            .collect()
     }
 
     fn rate_limits(
@@ -426,6 +446,27 @@ impl Controls {
             .filter(|(_, sequence)| *sequence > acknowledged)
     }
 
+    /// The quota group a session's turns draw on, only when every model
+    /// value the Controller holds for it (durable selection, last advertised
+    /// value, the worker's reported options) is of one group: a selection the
+    /// worker has not confirmed yet, or an unknown model, is no group.
+    fn quota_group(&self, session: &str) -> Option<&'static str> {
+        let reported = self
+            .env
+            .worker(session)
+            .and_then(|worker| worker.config_options)
+            .and_then(|options| model_option(&options))
+            .and_then(|value| value.as_str().map(str::to_owned));
+        let mut groups = self
+            .env
+            .models(session)
+            .into_iter()
+            .chain(reported)
+            .map(|model| policy::quota_group(&model));
+        let first = groups.next()??;
+        groups.all(|group| group == Some(first)).then_some(first)
+    }
+
     /// Whether a backend signal of `account` is still being recorded.
     fn signal_pending(&self, account: &ProviderAccountId) -> bool {
         self.cache
@@ -441,14 +482,14 @@ impl Controls {
         }
         let control = self.cache.control(meta.provider_account_id.as_str());
         let uncertain = self.uncertain(&meta.id);
-        let model = self.env.model(&meta.id);
+        let group = self.quota_group(&meta.id);
         policy::gate(&GateInput {
             admitted: self.env.admitted(&meta.provider_account_id),
             control: control.as_ref(),
             uncertain: uncertain
                 .as_ref()
                 .map(|(method, sequence)| (method.as_str(), *sequence)),
-            quota_group: model.as_deref().and_then(policy::quota_group),
+            quota_group: group,
             now_ms: now_ms(),
         })
     }
@@ -479,11 +520,10 @@ impl Controls {
             return Err(wait(SIGNAL_PENDING));
         }
         let control = self.cache.control(meta.provider_account_id.as_str());
-        let model = self.env.model(&meta.id);
         policy::revival_allowed(
             self.env.admitted(&meta.provider_account_id),
             control.as_ref(),
-            model.as_deref().and_then(policy::quota_group),
+            self.quota_group(&meta.id),
             now_ms(),
         )
         .map_err(|reason| wait(&reason))

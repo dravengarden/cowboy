@@ -47,8 +47,13 @@ impl Env for Fake {
     fn admitted(&self, account: &ProviderAccountId) -> bool {
         self.admitted.lock().contains(account.as_str())
     }
-    fn model(&self, session: &str) -> Option<String> {
-        self.models.lock().get(session).cloned()
+    fn models(&self, session: &str) -> Vec<String> {
+        self.models
+            .lock()
+            .get(session)
+            .cloned()
+            .into_iter()
+            .collect()
     }
     fn rate_limits(
         &self,

@@ -69,33 +69,37 @@ impl Controls {
                 // A quota group whose usage still shows an exhausted window
                 // stays limited until that window resets, instead of
                 // spending a dispatch on a certain refusal.
-                let extended = match policy::rate_limit_scope(&control.reason) {
-                    Some(group) => {
-                        let owner = meta.owner_user_id.clone().unwrap_or_default();
-                        self.group_reset_ms(owner, &meta.provider_account_id, group)
-                            .await
+                let owner = meta.owner_user_id.clone().unwrap_or_default();
+                let limits = self
+                    .env
+                    .rate_limits(owner, meta.provider_account_id.clone())
+                    .await;
+                let hold = policy::hold_after_expiry(
+                    policy::rate_limit_scope(&control.reason),
+                    limits.as_ref(),
+                    now_ms(),
+                );
+                let (next, reason, until) = match &hold {
+                    Some((reason, until)) => {
+                        (AccountState::RateLimited, reason.as_str(), Some(*until))
                     }
-                    None => None,
+                    None => (AccountState::Ok, "rate_limit_ended", None),
                 };
-                let (next, reason) = match extended {
-                    Some(_) => (AccountState::RateLimited, control.reason.as_str()),
-                    None => (AccountState::Ok, "rate_limit_ended"),
-                };
-                self.enter(
-                    &control,
-                    next,
-                    reason,
-                    extended,
-                    Some(control.revision),
-                    false,
-                )
-                .await
-                .map_err(|_| wait("the account's state changed; send again"))?;
+                self.enter(&control, next, reason, until, Some(control.revision), false)
+                    .await
+                    .map_err(|_| wait("the account's state changed; send again"))?;
                 // The clear awaited a store write: recheck admission, account
                 // state and pending signals before this dispatch proceeds.
+                // A hold that ended again meanwhile is reconciled by the
+                // next attempt, never sent unchecked.
                 match self.gate(&meta) {
                     Gate::Park(reason) => Err(wait(&reason)),
-                    Gate::Proceed { .. } => Ok(()),
+                    Gate::Proceed {
+                        clears_rate_limit: true,
+                    } => Err(wait("the account's rate limit changed; send again")),
+                    Gate::Proceed {
+                        clears_rate_limit: false,
+                    } => Ok(()),
                 }
             }
             Gate::Proceed { .. } => Ok(()),

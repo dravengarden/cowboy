@@ -233,7 +233,11 @@ pub fn fence_revision(fence: &Fence, current: i64) -> Option<u64> {
 #[must_use]
 pub fn quota_group(model: &str) -> Option<&'static str> {
     let model = model.trim().to_ascii_lowercase();
-    if model.starts_with("gemini") {
+    // Pro's Argon models draw on a separate "Gemini 4 Argon" quota, which no
+    // group here tracks.
+    if model.contains("argon") {
+        None
+    } else if model.starts_with("gemini") {
         Some(GEMINI_GROUP)
     } else if model.starts_with("claude") || model.starts_with("gpt") {
         Some(CLAUDE_GPT_GROUP)
@@ -296,11 +300,43 @@ pub fn group_reset_ms(rate_limits: &serde_json::Value, group: &str, now_ms: i64)
             let primary = bucket.get("primary")?;
             let used = primary.get("usedPercent")?.as_f64()?;
             let resets = primary.get("resetsAt")?.as_f64()?;
+            // A reset beyond the longest quota window is not believed: the
+            // limit then holds its default hour instead of indefinitely.
+            let latest = now_ms.saturating_add(MAX_QUOTA_RESET_MS);
+            #[allow(clippy::cast_precision_loss)]
+            let plausible = resets.is_finite() && resets * 1000.0 <= latest as f64;
             #[allow(clippy::cast_possible_truncation)]
             let resets_ms = (resets * 1000.0) as i64;
-            (used >= 100.0 && resets_ms > now_ms).then_some(resets_ms)
+            (used >= 100.0 && plausible && resets_ms > now_ms).then_some(resets_ms)
         })
         .max()
+}
+
+/// The longest wait a usage reset may set: Antigravity's longest window is
+/// weekly, with a day of slack.
+pub const MAX_QUOTA_RESET_MS: i64 = 8 * 24 * 60 * 60 * 1000;
+
+/// The hold an ended rate limit of `scope` still needs by the account's
+/// usage observation: its quota group's exhausted windows, or for an
+/// account-wide limit each group's (both: account-wide until the first
+/// resets; one: that group only). `None` resumes the account.
+#[must_use]
+pub fn hold_after_expiry(
+    scope: Option<&str>,
+    rate_limits: Option<&serde_json::Value>,
+    now_ms: i64,
+) -> Option<(String, i64)> {
+    let limits = rate_limits?;
+    let reset = |group| group_reset_ms(limits, group, now_ms);
+    match scope {
+        Some(group) => reset(group).map(|until| (rate_limit_reason(Some(group)), until)),
+        None => match (reset(GEMINI_GROUP), reset(CLAUDE_GPT_GROUP)) {
+            (Some(gemini), Some(claude)) => Some((rate_limit_reason(None), gemini.min(claude))),
+            (Some(gemini), None) => Some((rate_limit_reason(Some(GEMINI_GROUP)), gemini)),
+            (None, Some(claude)) => Some((rate_limit_reason(Some(CLAUDE_GPT_GROUP)), claude)),
+            (None, None) => None,
+        },
+    }
 }
 
 /// The reason and end of a rate limit raised over the current one. A limit

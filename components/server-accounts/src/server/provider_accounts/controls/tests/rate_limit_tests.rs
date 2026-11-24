@@ -142,3 +142,54 @@ async fn an_ended_limit_whose_quota_is_still_used_up_is_extended_not_cleared() {
     assert_eq!(resumed.state, AccountState::Ok);
     assert_eq!(resumed.reason, "rate_limit_ended");
 }
+
+#[tokio::test]
+async fn a_selection_the_worker_has_not_confirmed_is_no_group() {
+    let (fake, controls, _root) = fixture().await;
+    fake.models.lock().insert("s1".into(), CLAUDE.into());
+    end(&controls, &fake, "s1", &rate_limited()).await;
+    // The owner selected Gemini, but the worker still reports Claude.
+    fake.models.lock().insert("s2".into(), GEMINI.into());
+    let worker = serde_json::from_value(json!({
+        "session_id": "s2", "worker_epoch": "epoch-1", "generation": "g", "state": "running",
+        "config_options": [{"id": "model", "currentValue": CLAUDE}],
+    }))
+    .unwrap();
+    fake.workers.lock().insert("s2".into(), worker);
+    parked(controls.before_dispatch("s2").await, "until");
+    // Once the worker reports Gemini, the session proceeds.
+    let worker = serde_json::from_value(json!({
+        "session_id": "s2", "worker_epoch": "epoch-1", "generation": "g", "state": "running",
+        "config_options": [{"id": "model", "currentValue": GEMINI}],
+    }))
+    .unwrap();
+    fake.workers.lock().insert("s2".into(), worker);
+    controls.before_dispatch("s2").await.unwrap();
+}
+
+#[tokio::test]
+async fn an_ended_account_wide_limit_narrows_to_the_group_still_used_up() {
+    let (fake, controls, _root) = fixture().await;
+    fake.models.lock().insert("s1".into(), CLAUDE.into());
+    fake.models.lock().insert("s2".into(), GEMINI.into());
+    let current = control(&controls).await;
+    controls
+        .enter(
+            &current,
+            AccountState::RateLimited,
+            "rate_limited",
+            Some(now_ms() - 1),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    let reset = (now_ms() / 1000 + 3600) * 1000;
+    *fake.rate_limits.lock() = Some(claude_exhausted(reset));
+    controls.before_dispatch("s2").await.unwrap();
+    let narrowed = control(&controls).await;
+    assert_eq!(narrowed.state, AccountState::RateLimited);
+    assert_eq!(narrowed.reason, "rate_limited:claude_gpt");
+    assert_eq!(narrowed.until_ms, Some(reset));
+    parked(controls.before_dispatch("s1").await, "until");
+}
