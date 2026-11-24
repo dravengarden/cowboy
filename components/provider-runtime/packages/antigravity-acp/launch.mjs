@@ -504,7 +504,7 @@ export async function runProxy({
   frames(
     agy.stdout,
     (message) => {
-      proxy.fromAgent(message).catch((error) => process.stderr.write(`cowboy: ${error.message}\n`));
+      proxy.trackAgentMessage(message);
     },
     () => {},
   );
@@ -528,15 +528,41 @@ export async function runProxy({
   // replies so any uncertainty from `attemptCleanup` settles ahead of TurnEnd.
   ready?.facade.quiesce();
   const settledOk = await ready?.facade.settled(DRAIN_MS);
-  if (settledOk) {
-    const flushBudgetMs = Math.max(DRAIN_MS, ready.facade.remainingRootStopMs());
+  if (ready && !settledOk) {
+    await ready.facade.reportUnsettledOnTimeout();
+  }
+  if (ready) {
+    const flushBudgetMs = settledOk
+      ? Math.max(DRAIN_MS, ready.facade.remainingRootStopMs())
+      : Math.min(DRAIN_MS, 3000);
     const flushDeadline = Date.now() + flushBudgetMs;
     if (await ready.connection.idle(Math.max(1, flushDeadline - Date.now()))) {
       await ready.connection.drained(Math.max(1, flushDeadline - Date.now()));
     }
   }
-  // Now answer each open prompt with settled signals (and open-command uncertainty).
+  // Join any buffered terminal `fromAgent` replies through `endPrompt` before fallback exit.
+  await proxy.settleAgentHandlers(DRAIN_MS);
+  // Now answer any remaining open prompt with settled signals (and open-command uncertainty).
   proxy.settleExit();
+  if (
+    !output.destroyed &&
+    output.writable !== false &&
+    (output.writableNeedDrain || output.writableLength > 0)
+  ) {
+    await new Promise((resolve) => {
+      const done = () => {
+        clearTimeout(timer);
+        output.off?.("drain", done);
+        output.off?.("close", done);
+        output.off?.("error", done);
+        resolve();
+      };
+      const timer = setTimeout(done, 1000);
+      output.once?.("drain", done);
+      output.once?.("close", done);
+      output.once?.("error", done);
+    });
+  }
   ready?.connection.close();
   return signal ? 1 : (code ?? 1);
 }

@@ -831,7 +831,7 @@ async fn wait_for_retry_or_sigterm(
 ) -> bool {
     let sleep = tokio::time::sleep(*backoff);
     tokio::pin!(sleep);
-    tokio::select! {
+    let expired = tokio::select! {
         () = &mut sleep => {
             *backoff = (*backoff * 2).min(BROKER_RECONNECT_MAX_DELAY);
             shutdown_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
@@ -850,7 +850,11 @@ async fn wait_for_retry_or_sigterm(
                 tokio::time::sleep_until(deadline).await;
             }
         }, if shutdown_deadline.is_some() => true,
+    };
+    if expired {
+        execution_launch::finalize_sigterm_cutoff(shared);
     }
+    expired
 }
 
 enum ConnectedExit {
@@ -1200,21 +1204,16 @@ pub fn handle_command(
                 expected_worker_epoch,
                 acknowledged_uncertain_sequence,
             } => {
-                if let Some(reason) = execution_launch::prompt_admission_refusal(
-                    shared,
-                    expected_worker_epoch.as_deref(),
-                    acknowledged_uncertain_sequence,
-                )
-                .or_else(|| shared.workspace_replaced())
-                {
-                    return command_ack(shared, command_id, false, Some(reason));
-                }
-                shared
-                    .observation
-                    .enabled
-                    .store(observe_subagents, Ordering::Relaxed);
-                if !shared.mark_command(&command_id) {
+                if shared.seen_commands.lock().contains(&command_id) {
                     return command_ack(shared, command_id, true, Some("duplicate".to_owned()));
+                }
+                if cmd_tx.is_none() {
+                    return command_ack(
+                        shared,
+                        command_id,
+                        false,
+                        Some("worker is shutting down".into()),
+                    );
                 }
                 let blocks = decoded_prompt(shared, content, echo_artifacts);
                 if blocks.is_empty() {
@@ -1225,6 +1224,19 @@ pub fn handle_command(
                         Some("prompt has no valid content blocks".into()),
                     );
                 }
+                if let Err(reason) = execution_launch::admit_prompt_turn(
+                    shared,
+                    &turn_id,
+                    expected_worker_epoch.as_deref(),
+                    acknowledged_uncertain_sequence,
+                ) {
+                    return command_ack(shared, command_id, false, Some(reason));
+                }
+                shared
+                    .observation
+                    .enabled
+                    .store(observe_subagents, Ordering::Relaxed);
+                shared.mark_command(&command_id);
                 shared.telemetry.lock().admit(cmid.as_deref(), trace);
                 shared.record_prompt_command(cmid.clone(), command_id.clone());
                 (
@@ -2463,6 +2475,51 @@ mod tests {
             },
         );
         assert!(matches!(ack_ok, Frame::CommandAck { accepted: true, .. }));
+        assert!(rx.try_recv().is_ok());
+
+        // Same-worker duplicate returns original acceptance even if uncertainty advances later.
+        shared.snapshot.lock().uncertain_effect = Some(crate::runtime_wire::UncertainEffect {
+            method: "process/terminate".into(),
+            sequence: 99,
+        });
+        let ack_dup = handle_command(
+            &shared,
+            &mut cmd_tx,
+            WorkerCommand::Prompt {
+                command_id: "cmd-ok".into(),
+                turn_id: "t-3".into(),
+                content: vec![serde_json::json!({"type": "text", "text": "hello"})],
+                cmid: Some("c-3".into()),
+                trace: None,
+                echo_artifacts: false,
+                observe_subagents: false,
+                expected_worker_epoch: Some(shared.worker_epoch.clone()),
+                acknowledged_uncertain_sequence: Some(42),
+            },
+        );
+        assert!(matches!(ack_dup, Frame::CommandAck { accepted: true, .. }));
+        assert!(rx.try_recv().is_err());
+
+        // Legacy hop (`acknowledged_uncertain_sequence: None`) does not lock out owner.
+        let ack_legacy = handle_command(
+            &shared,
+            &mut cmd_tx,
+            WorkerCommand::Prompt {
+                command_id: "cmd-legacy".into(),
+                turn_id: "t-4".into(),
+                content: vec![serde_json::json!({"type": "text", "text": "legacy"})],
+                cmid: Some("c-4".into()),
+                trace: None,
+                echo_artifacts: false,
+                observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
+            },
+        );
+        assert!(matches!(
+            ack_legacy,
+            Frame::CommandAck { accepted: true, .. }
+        ));
         assert!(rx.try_recv().is_ok());
     }
 }

@@ -162,6 +162,10 @@ struct State {
     /// Recorded target process trees (retained until confirmed closure) and
     /// their start generation / confirmation state.
     processes: BTreeMap<String, TrackedProcess>,
+    /// Process IDs already admitted in this worker lifetime; refusing reuse
+    /// guarantees stale `closed=true` reads or `process/closed` events can
+    /// never erase a replacement process tree.
+    used_process_ids: HashSet<String>,
     next_gen: u64,
     /// Starts not yet answered by the target.
     starting: HashSet<String>,
@@ -284,11 +288,18 @@ impl Ledger {
         if state.unwritable {
             return Err("the execution ledger cannot be written; the server start was refused");
         }
+        if state.processes.contains_key(process)
+            || state.starting.contains(process)
+            || state.used_process_ids.contains(process)
+        {
+            return Err("process id is already recorded; process start refused");
+        }
         if state.processes.len() >= MAX_PROCESSES {
             return Err("session process limit reached; process start refused");
         }
         state.next_gen = state.next_gen.saturating_add(1);
         let generation = state.next_gen;
+        state.used_process_ids.insert(process.to_owned());
         state.servers.insert(process.to_owned());
         state.processes.insert(
             process.to_owned(),
@@ -383,6 +394,30 @@ impl Ledger {
         state.readiness = false;
     }
 
+    /// Atomically verify `acknowledged_uncertain_sequence` (when negotiated /
+    /// supplied as `Some`) and open `turn` under the ledger lock so a relay
+    /// recording uncertainty cannot race between admission check and turn open.
+    pub fn try_begin_turn(
+        &self,
+        turn: &str,
+        acknowledged_uncertain_sequence: Option<u64>,
+    ) -> Result<(), String> {
+        let mut state = self.state.lock();
+        if let Some(acknowledged) = acknowledged_uncertain_sequence
+            && let Some(method) = state.record.uncertain_effect.as_deref()
+        {
+            let required = state.record.uncertain_sequence.max(1);
+            if required > acknowledged {
+                return Err(format!(
+                    "Target {method} outcome is uncertain (sequence {required}); review and acknowledge before continuing"
+                ));
+            }
+        }
+        state.current_turn = Some(turn.to_owned());
+        state.readiness = false;
+        Ok(())
+    }
+
     #[must_use]
     pub fn current_turn(&self) -> Option<String> {
         self.state.lock().current_turn.clone()
@@ -468,7 +503,10 @@ impl Ledger {
             }
             None => return Err("no Cowboy turn is running; process start refused"),
         };
-        if state.processes.contains_key(&process) || state.starting.contains(&process) {
+        if state.processes.contains_key(&process)
+            || state.starting.contains(&process)
+            || state.used_process_ids.contains(&process)
+        {
             return Err("process id is already recorded; process start refused");
         }
         if state.processes.len() >= MAX_PROCESSES {
@@ -487,6 +525,7 @@ impl Ledger {
         }
         state.next_gen = state.next_gen.saturating_add(1);
         let generation = state.next_gen;
+        state.used_process_ids.insert(process.clone());
         state.processes.insert(
             process.clone(),
             TrackedProcess {

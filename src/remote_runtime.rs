@@ -1882,7 +1882,7 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin + Send>(
         else {
             continue;
         };
-        if !config_sync::prepare_prompt_for_send(shared, &key, &mut command) {
+        if !config_sync::prepare_prompt_for_send(shared, &key, version, &mut command) {
             continue;
         }
         notice_recovery::record_dispatch_worker_epoch_if_notice(shared, &command).await;

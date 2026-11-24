@@ -215,46 +215,37 @@ pub(super) fn finalize_sigterm_cutoff(shared: &super::Shared) {
     }
 }
 
-pub(super) fn prompt_admission_refusal(
+/// Atomically verify epoch, workspace identity, and (when negotiated via
+/// `Some(ack)`) uncertainty sequence, opening the execution ledger turn under
+/// the ledger lock before ACP delivery or `TurnStarted` emission.
+/// `None` preserves legacy Controller / legacy Broker hops without lockout.
+pub(super) fn admit_prompt_turn(
     shared: &super::Shared,
+    turn_id: &str,
     expected_worker_epoch: Option<&str>,
     acknowledged_uncertain_sequence: Option<u64>,
-) -> Option<String> {
+) -> std::result::Result<(), String> {
     if let Some(expected) = expected_worker_epoch
         && expected != shared.worker_epoch
     {
-        return Some("worker epoch changed before prompt admission".to_owned());
+        return Err("worker epoch changed before prompt admission".to_owned());
     }
-    let acknowledged = acknowledged_uncertain_sequence.unwrap_or(0);
-    let snapshot_effect = shared.snapshot.lock().uncertain_effect.clone();
-    let ledger_effect = shared
-        .execution
-        .as_ref()
-        .and_then(|client| client.ledger())
-        .and_then(|ledger| {
-            ledger
-                .uncertain_effect()
-                .map(|method| (method, ledger.uncertain_sequence()))
-        });
-    let highest = match (snapshot_effect, ledger_effect) {
-        (Some(snap), Some((method, seq))) => {
-            if seq >= snap.sequence {
-                Some((method, seq))
-            } else {
-                Some((snap.method, snap.sequence))
-            }
-        }
-        (Some(snap), None) => Some((snap.method, snap.sequence)),
-        (None, Some(pair)) => Some(pair),
-        (None, None) => None,
-    };
-    if let Some((method, sequence)) = highest {
-        let required = sequence.max(1);
+    if let Some(message) = shared.workspace_replaced() {
+        return Err(message);
+    }
+    if let Some(acknowledged) = acknowledged_uncertain_sequence
+        && let Some(snap) = shared.snapshot.lock().uncertain_effect.clone()
+    {
+        let required = snap.sequence.max(1);
         if required > acknowledged {
-            return Some(format!(
-                "Target {method} outcome is uncertain (sequence {required}); review and acknowledge before continuing"
+            return Err(format!(
+                "Target {} outcome is uncertain (sequence {required}); review and acknowledge before continuing",
+                snap.method
             ));
         }
     }
-    None
+    if let Some(ledger) = shared.execution.as_ref().and_then(|client| client.ledger()) {
+        ledger.try_begin_turn(turn_id, acknowledged_uncertain_sequence)?;
+    }
+    Ok(())
 }

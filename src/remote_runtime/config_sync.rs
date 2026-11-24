@@ -342,6 +342,7 @@ fn config_current_value(option: &serde_json::Value) -> Option<&serde_json::Value
 pub(super) fn prepare_prompt_for_send(
     shared: &Shared,
     key: &str,
+    version: u64,
     command: &mut CoreCommand,
 ) -> bool {
     let CoreCommand::Prompt {
@@ -354,12 +355,11 @@ pub(super) fn prepare_prompt_for_send(
         return true;
     };
     let worker_snapshot = shared.workers.lock().get(session_id).cloned();
+    let already_attempted = shared.attempted_sends.lock().contains(key);
     if let Some(worker) = worker_snapshot.as_ref()
         && let Some(reason) = unacknowledged_uncertain_effect(&shared.hub, worker)
     {
-        if !shared.attempted_sends.lock().contains(key)
-            && let Some(removed) = shared.pending.lock().remove(key)
-        {
+        if !already_attempted && let Some(removed) = shared.pending.lock().remove(key) {
             notice_recovery::requeue_rejected_command(
                 shared,
                 session_id,
@@ -369,12 +369,26 @@ pub(super) fn prepare_prompt_for_send(
         }
         return false;
     }
+    if already_attempted {
+        // Never rebind an already-attempted prompt to a replacement worker
+        // epoch or later acknowledgment sequence; keep cross-epoch attempts
+        // unresolved until authoritative turn/worker evidence arrives.
+        if let (Some(bound_epoch), Some(current)) =
+            (expected_worker_epoch.as_deref(), worker_snapshot.as_ref())
+            && current.worker_epoch != bound_epoch
+        {
+            return false;
+        }
+        return true;
+    }
+    let mut mutated = false;
     if acknowledged_uncertain_sequence.is_none() {
         *acknowledged_uncertain_sequence =
             Some(acknowledged_uncertain_sequence_for(&shared.hub, session_id));
+        mutated = true;
     }
     if expected_worker_epoch.is_none() {
-        *expected_worker_epoch = worker_snapshot
+        let bound = worker_snapshot
             .filter(|worker| {
                 !worker.drain_requested
                     && matches!(
@@ -383,6 +397,18 @@ pub(super) fn prepare_prompt_for_send(
                     )
             })
             .map(|worker| worker.worker_epoch);
+        if bound.is_some() {
+            *expected_worker_epoch = bound;
+            mutated = true;
+        }
+    }
+    if mutated
+        && !shared
+            .pending
+            .lock()
+            .update_if_version(key, version, command.clone())
+    {
+        return false;
     }
     true
 }

@@ -114,6 +114,7 @@ export class Facade {
     this.connection = connection;
     this.managed = managed;
     this.stopConfirmMs = stopConfirmMs;
+    this.startWaitMs = 10_000;
     this.root = root;
     this.shell = shell;
     this.onUncertain = onUncertain;
@@ -308,26 +309,53 @@ export class Facade {
       turn.abort?.abort();
     }
     const confirmMs = isRoot ? this.stopConfirmMs : 5000;
+    const startWaitMs = isRoot ? this.startWaitMs : 5000;
     const reportMarginMs = 5000;
-    // Track root cleanup deadline across BOTH inflight start registration and
-    // actual command-termination confirmation + UNCERTAIN_REPORT flush margin.
+    // Combined budget aligns with Controller EXECUTION_FORCE_CANCEL_GRACE (75s =
+    // 10s start registration + 60s Stop confirmation + 5s report flush margin).
     const deadlineEntry = isRoot
-      ? { deadline: Date.now() + confirmMs + reportMarginMs }
+      ? { deadline: Date.now() + startWaitMs + confirmMs + reportMarginMs }
       : undefined;
     if (deadlineEntry) this.rootCleanupDeadlines.add(deadlineEntry);
     const cleanup = (async () => {
       try {
-        // Wait for both active turn inflight work and any work detached by
-        // quiesce() on child exit so buffered terminal replies join the same
-        // publish/start barrier before command termination or TurnEnd.
+        // Bounded start/publish registration phase (joins detached quiesce work too).
+        const startDeadline = Date.now() + startWaitMs;
+        let inflightTimedOut = false;
         const awaited = new Set();
         while (true) {
           const pending = [...(turn?.inflight ?? []), ...session.quiescedInflight].filter(
             (work) => !awaited.has(work),
           );
           if (pending.length === 0) break;
+          const remaining = startDeadline - Date.now();
+          if (remaining <= 0) {
+            inflightTimedOut = true;
+            break;
+          }
+          let timer;
+          const timedOut = new Promise((resolve) => {
+            timer = setTimeout(() => resolve("timeout"), remaining);
+          });
+          let outcome;
+          try {
+            outcome = await Promise.race([
+              Promise.allSettled(pending).then(() => "done"),
+              timedOut,
+            ]);
+          } finally {
+            clearTimeout(timer);
+          }
+          if (outcome === "timeout") {
+            inflightTimedOut = true;
+            break;
+          }
           for (const work of pending) awaited.add(work);
-          await Promise.allSettled(pending);
+        }
+        if (isRoot && inflightTimedOut) {
+          if (turn) this.fenceLost(turn, "process/start");
+          await this.connection.call(UNCERTAIN_REPORT, { method: "process/start" }).catch(() => {});
+          this.onUncertain(sessionId, "process/start");
         }
         const commands = [...session.commands.values()];
         if (deadlineEntry) {
@@ -404,10 +432,11 @@ export class Facade {
         for (const work of session.turn.inflight) {
           session.quiescedInflight.add(work);
           this.activeCleanups.add(work);
-          work.finally(() => {
+          const done = () => {
             session.quiescedInflight.delete(work);
             this.activeCleanups.delete(work);
-          });
+          };
+          work.then(done, done);
         }
         session.turn.abort?.abort();
         session.turn = undefined;
@@ -423,7 +452,23 @@ export class Facade {
       if (entry.deadline > maxDeadline) maxDeadline = entry.deadline;
     }
     if (maxDeadline === 0) return 0;
-    return Math.max(0, Math.min(this.stopConfirmMs + 10_000, maxDeadline - Date.now()));
+    return Math.max(
+      0,
+      Math.min(this.startWaitMs + this.stopConfirmMs + 10_000, maxDeadline - Date.now()),
+    );
+  }
+
+  /** Record uncertainty explicitly before closing the execution connection if
+   *  shutdown drain timed out while admitted starts or cleanups were still open. */
+  async reportUnsettledOnTimeout() {
+    const hasOpen =
+      this.activeCleanups.size > 0 ||
+      [...this.sessions.values()].some(
+        (s) =>
+          (s.turn?.inflight.size ?? 0) > 0 || s.quiescedInflight.size > 0 || s.commands.size > 0,
+      );
+    if (!hasOpen) return;
+    await this.connection.call(UNCERTAIN_REPORT, { method: "process/start" }).catch(() => {});
   }
 
   /** Explicitly mark one relay ambiguous (e.g. failed response handoff) until socket close. */
@@ -566,7 +611,11 @@ ${WRAP_UP_NOTE}`,
   async answer(call) {
     if (this.closing) throw new ToolError("Antigravity proxy is shutting down");
     const turn = call.sessionId === undefined ? undefined : this.sessions.get(call.sessionId)?.turn;
-    if (!turn?.inflight || (call.name !== "WriteFile" && call.name !== "EditFile")) {
+    const trackedEffect =
+      call.name === "WriteFile" ||
+      call.name === "EditFile" ||
+      Boolean(this.extensions?.has(call.name));
+    if (!turn?.inflight || !trackedEffect) {
       return this.answerOnce(call);
     }
     // A publish, its verification and the report of an unknown outcome are
@@ -630,14 +679,8 @@ ${WRAP_UP_NOTE}`,
       return failure(`Unknown tool ${String(name)}`);
     try {
       if (extension) {
-        // Tracked like a mutation: the turn's end waits for it.
-        const call = this.extensions.call(this.connection, name, args);
-        turn.inflight?.add(call);
-        try {
-          return await call;
-        } finally {
-          turn.inflight?.delete(call);
-        }
+        // Tracked via answer() through UncertainEffect reporting in catch below.
+        return await this.extensions.call(this.connection, name, args);
       }
       // A handler answers text, or (an image ReadFile) its own content blocks.
       const answer = await handlers[name]();

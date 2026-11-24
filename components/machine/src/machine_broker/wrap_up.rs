@@ -579,17 +579,16 @@ pub(super) fn departing_cleanup_allows(
             .is_some_and(|entry| entry.epoch == epoch && entry.binding == request.binding)
 }
 
-pub(super) fn departing_uncertainty_event(
+/// True while `reset_session` is actively stopping `(session_id, worker_epoch)`.
+/// Forwarding every event of that departing epoch preserves contiguous
+/// `runtime_seq` on the Controller (which suppresses transcript projection via
+/// `resetting` while still observing `UNCERTAIN_EFFECT_UPDATE`).
+pub(super) fn is_departing_cleanup_epoch(
     broker: &super::Broker,
     session_id: &str,
     worker_epoch: &str,
-    event: &crate::runtime_wire::RuntimeEvent,
 ) -> bool {
-    matches!(
-        event,
-        crate::runtime_wire::RuntimeEvent::Update { update, .. }
-            if crate::runtime_wire::uncertain_effect(update).is_some()
-    ) && broker
+    broker
         .departing_cleanup
         .lock()
         .get(session_id)
@@ -602,6 +601,7 @@ pub(super) fn departing_uncertainty_event(
 pub(super) fn prompt_admission_refusal(
     worker_epoch: &str,
     worker_uncertain: Option<&crate::runtime_wire::UncertainEffect>,
+    controller_protocol: u16,
     command: &WorkerCommand,
 ) -> Option<(String, String)> {
     let WorkerCommand::Prompt {
@@ -618,13 +618,23 @@ pub(super) fn prompt_admission_refusal(
     {
         return Some((
             command_id.clone(),
-            "worker epoch changed before prompt admission".to_owned(),
+            "broker-queued: worker epoch changed before prompt admission".to_owned(),
         ));
     }
     if let Some(effect) = worker_uncertain {
         let required = effect.sequence.max(1);
-        let acknowledged = acknowledged_uncertain_sequence.unwrap_or(0);
-        if required > acknowledged {
+        let enforce = match acknowledged_uncertain_sequence {
+            Some(ack) => Some(*ack),
+            None if controller_protocol
+                >= crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION =>
+            {
+                Some(0)
+            }
+            None => None,
+        };
+        if let Some(acknowledged) = enforce
+            && required > acknowledged
+        {
             return Some((
                 command_id.clone(),
                 format!(
@@ -647,12 +657,18 @@ impl super::Broker {
         {
             self.trace_spans.lock().start(session_id, command_id, trace);
         }
+        let controller_protocol = self
+            .controller
+            .lock()
+            .as_ref()
+            .map_or(0, |controller| controller.protocol);
         let worker_gate = self.workers.lock().get(session_id).map(|worker| {
             (
                 worker.snapshot.drain_requested,
                 prompt_admission_refusal(
                     &worker.epoch,
                     worker.snapshot.uncertain_effect.as_ref(),
+                    controller_protocol,
                     &command,
                 ),
             )
@@ -693,9 +709,17 @@ impl super::Broker {
                     held_prompts.push_back(command);
                     continue;
                 }
-                if let Some((command_id, reason)) =
-                    prompt_admission_refusal(&epoch, uncertain.as_ref(), &command)
-                {
+                let controller_protocol = self
+                    .controller
+                    .lock()
+                    .as_ref()
+                    .map_or(0, |controller| controller.protocol);
+                if let Some((command_id, reason)) = prompt_admission_refusal(
+                    &epoch,
+                    uncertain.as_ref(),
+                    controller_protocol,
+                    &command,
+                ) {
                     self.send_controller(Frame::CommandAck {
                         session_id: session_id.to_owned(),
                         command_id,
@@ -1240,16 +1264,31 @@ mod tests {
             expected_worker_epoch: Some("e-old".into()),
             acknowledged_uncertain_sequence: Some(5),
         };
-        assert!(prompt_admission_refusal("e-new", None, &prompt).is_some());
+        let p8 = crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION;
+        assert!(prompt_admission_refusal("e-new", None, p8, &prompt).is_some());
         let effect = crate::runtime_wire::UncertainEffect {
             method: "process/terminate".into(),
             sequence: 6,
         };
-        assert!(prompt_admission_refusal("e-old", Some(&effect), &prompt).is_some());
+        assert!(prompt_admission_refusal("e-old", Some(&effect), p8, &prompt).is_some());
         let acked = crate::runtime_wire::UncertainEffect {
             method: "process/terminate".into(),
             sequence: 5,
         };
-        assert!(prompt_admission_refusal("e-old", Some(&acked), &prompt).is_none());
+        assert!(prompt_admission_refusal("e-old", Some(&acked), p8, &prompt).is_none());
+        // Legacy Controller (< 8) omitting acknowledged_uncertain_sequence must not be locked out.
+        let legacy_prompt = WorkerCommand::Prompt {
+            command_id: "cmd-legacy".into(),
+            turn_id: "t-2".into(),
+            content: vec![],
+            cmid: None,
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            expected_worker_epoch: None,
+            acknowledged_uncertain_sequence: None,
+        };
+        assert!(prompt_admission_refusal("e-old", Some(&effect), p8 - 1, &legacy_prompt).is_none());
+        assert!(prompt_admission_refusal("e-old", Some(&effect), p8, &legacy_prompt).is_some());
     }
 }

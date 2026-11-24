@@ -189,7 +189,29 @@ pub(super) fn handle_rejected_ack(
     {
         shared.hub.note_provider_generation_missing(session_id);
     }
-    requeue_rejected_command(shared, session_id, command, reason);
+    // A cross-epoch rejection from a replacement worker cannot prove the
+    // original worker never executed an already-attempted prompt; only a
+    // broker-queued rejection (which proves the original worker never received
+    // the prompt) may safely requeue it into Hub.
+    let cross_epoch_unproven = matches!(
+        &command,
+        Some(CoreCommand::Prompt {
+            expected_worker_epoch: Some(_),
+            ..
+        })
+    ) && reason
+        .as_deref()
+        .is_some_and(|message| message.starts_with("worker epoch changed before prompt admission"));
+    if cross_epoch_unproven {
+        shared.hub.broadcast_error(
+            Some(session_id.to_owned()),
+            reason.unwrap_or_else(|| {
+                "prompt delivery across worker change is unresolved; not replaying".to_owned()
+            }),
+        );
+    } else {
+        requeue_rejected_command(shared, session_id, command, reason);
+    }
     shared.in_flight_prompts.lock().retire_command(command_id);
 }
 

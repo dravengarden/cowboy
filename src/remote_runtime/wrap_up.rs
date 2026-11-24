@@ -637,4 +637,86 @@ mod tests {
         assert_eq!(hub.session_info("s-att").unwrap().queue_count, 0);
         assert!(runtime.shared.pending.lock().contains_key("cmd-attempted"));
     }
+
+    #[tokio::test]
+    async fn prompt_binding_persists_in_pending_and_blocks_cross_epoch_rebind() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s-bind".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "s-bind".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        let runtime = super::super::RemoteRuntime::for_test(hub, Vec::new());
+        let mut w1 = busy_snapshot("s-bind", "epoch-1", true);
+        w1.state = WorkerState::Running;
+        w1.current_turn_id = None;
+        runtime.shared.workers.lock().insert("s-bind".into(), w1);
+        let cmd = CoreCommand::Prompt {
+            session_id: "s-bind".into(),
+            command_id: "cmd-bind".into(),
+            turn_id: "turn-1".into(),
+            content: vec![serde_json::json!({"type": "text", "text": "once"})],
+            cmid: Some("cmid-bind".into()),
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            expected_worker_epoch: None,
+            acknowledged_uncertain_sequence: None,
+        };
+        let version = runtime
+            .shared
+            .pending
+            .lock()
+            .insert("cmd-bind".into(), cmd.clone());
+        let mut outbound = cmd;
+        assert!(super::super::config_sync::prepare_prompt_for_send(
+            &runtime.shared,
+            "cmd-bind",
+            version,
+            &mut outbound,
+        ));
+        // Binding MUST be persisted into `shared.pending`, not only on the clone.
+        let stored = runtime
+            .shared
+            .pending
+            .lock()
+            .get("cmd-bind")
+            .unwrap()
+            .clone();
+        assert!(matches!(
+            stored,
+            CoreCommand::Prompt {
+                expected_worker_epoch: Some(ref ep),
+                acknowledged_uncertain_sequence: Some(0),
+                ..
+            } if ep == "epoch-1"
+        ));
+
+        // Simulate lost ACK + worker change to epoch-2 after send attempt.
+        runtime
+            .shared
+            .attempted_sends
+            .lock()
+            .insert("cmd-bind".into());
+        let mut w2 = busy_snapshot("s-bind", "epoch-2", true);
+        w2.state = WorkerState::Running;
+        w2.current_turn_id = None;
+        runtime.shared.workers.lock().insert("s-bind".into(), w2);
+        let mut retry = runtime
+            .shared
+            .pending
+            .lock()
+            .get("cmd-bind")
+            .unwrap()
+            .clone();
+        assert!(!super::super::config_sync::prepare_prompt_for_send(
+            &runtime.shared,
+            "cmd-bind",
+            version,
+            &mut retry,
+        ));
+    }
 }

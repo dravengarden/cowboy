@@ -1744,3 +1744,56 @@ async fn process_closed_event_wakes_terminate_wait_without_recording_uncertainty
     assert!(ledger.live().is_empty());
     assert_eq!(ledger.uncertain_effect(), None);
 }
+
+#[tokio::test]
+async fn reusing_closed_process_id_is_refused_so_stale_closure_cannot_erase_replacement() {
+    let target = Target::new(processes());
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    let first = target
+        .client
+        .relay("process/start".into(), start("p-unique"))
+        .await;
+    assert_eq!(first["result"]["processId"], "p-unique");
+    target
+        .client
+        .observe_event(&json!({"method": "process/closed", "params": {"processId": "p-unique"}}));
+    assert!(ledger.live().is_empty());
+
+    // Reusing the closed process ID in the same worker MUST be refused.
+    let reused = target
+        .client
+        .relay("process/start".into(), start("p-unique"))
+        .await;
+    assert!(reused.get("error").is_some());
+    assert!(ledger.live().is_empty());
+}
+
+#[tokio::test]
+async fn sigterm_cutoff_persists_pending_filesystem_mutation_for_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.json");
+    {
+        let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+            "fs/writeFile" => Reply::Hold,
+            _ => completed(json!({"result": {}})),
+        }));
+        let ledger = ledger(&target.client, Some(path.clone()));
+        ledger.begin_turn("turn-1");
+        let client = Arc::clone(&target.client);
+        let _write_task = tokio::spawn(async move {
+            client
+                .relay(
+                    "fs/writeFile".into(),
+                    json!({"path": "/tmp/a", "contentBase64": ""}),
+                )
+                .await
+        });
+        eventually(|| !target.held.lock().is_empty()).await;
+        // Disconnected SIGTERM cutoff with NO active process, only an in-flight fs/writeFile!
+        assert!(ledger.mark_unresolved_effects_uncertain());
+    }
+    let reopened = Ledger::open("session", Some(path)).unwrap();
+    assert_eq!(reopened.uncertain_effect().as_deref(), Some("request"));
+    assert!(reopened.uncertain_sequence() > 0);
+}

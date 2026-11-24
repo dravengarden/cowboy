@@ -1042,3 +1042,106 @@ test("R3-M3: facade.settled honors dynamic root Stop confirmation deadline exten
   assert.equal(ok, true);
   assert.deepEqual(uncertainCalls, [UNCERTAIN_REPORT]);
 });
+
+test("R4-M1: settleAgentHandlers waits for buffered fromAgent waiting on backend evidence before exit", async () => {
+  const evidenceGate = deferred();
+  const conn = makeFakeConnection();
+  conn.idle = async () => true;
+  conn.drained = async () => true;
+  const facade = new Facade(conn, { root: "/work/repo", shell: "/bin/sh" });
+  const sentToClient = [];
+  const runtime = {
+    managed: false,
+    facade,
+    connection: conn,
+    newChannel: () => ({}),
+    evidence: {
+      mark: () => 0,
+      settle: async () => {
+        await evidenceGate.promise;
+        return { class: "ok" };
+      },
+    },
+  };
+  const proxy = new AcpProxy({
+    agent: () => {},
+    client: (msg) => sentToClient.push(msg),
+    runtime: Promise.resolve(runtime),
+    log: () => {},
+  });
+  proxy.readyRuntime = runtime;
+  proxy.managed = false;
+  proxy.pending.set(77, {
+    id: 77,
+    method: "session/prompt",
+    sessionId: "s-ev",
+    cursor: 0,
+    finalized: false,
+    runtime,
+  });
+  proxy.turns.set("s-ev", { tools: new Map(), wrapUp: { pending: false, delivered: false } });
+  facade.beginTurn("s-ev", { wrapUp: { pending: false, delivered: false } });
+
+  proxy.beginShutdown();
+  proxy.trackAgentMessage({ jsonrpc: "2.0", id: 77, result: { stopReason: "end_turn" } });
+  const wait = proxy.settleAgentHandlers(500);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(
+    sentToClient.some((m) => m.id === 77),
+    false,
+  );
+  evidenceGate.resolve();
+  assert.equal(await wait, true);
+  assert.equal(
+    sentToClient.some((m) => m.id === 77),
+    true,
+  );
+});
+
+test("R4-M2: rejecting extension call during quiesce triggers zero unhandled rejections and settles cleanly", async () => {
+  const extGate = deferred();
+  const unhandled = [];
+  const onUnhandled = (reason) => unhandled.push(reason);
+  process.on("unhandledRejection", onUnhandled);
+  try {
+    const conn = makeFakeConnection();
+    const facade = new Facade(conn, { root: "/work/repo", shell: "/bin/sh" });
+    facade.extensions = {
+      has: (name) => name === "mcp_test_fail",
+      tools: () => [],
+      call: () => extGate.promise,
+    };
+    facade.beginTurn("s-ext", { wrapUp: { pending: false, delivered: false } });
+    const callPromise = facade.call("s-ext", "mcp_test_fail", {});
+    await flush();
+    facade.quiesce();
+    extGate.reject(new Error("extension crashed"));
+    const result = await callPromise;
+    assert.equal(result.isError, true);
+    assert.equal(await facade.settled(500), true);
+    await flush();
+    assert.deepEqual(unhandled, []);
+  } finally {
+    process.off("unhandledRejection", onUnhandled);
+  }
+});
+
+test("R4-M3: hung start registration hits bounded startWaitMs phase and reports UNCERTAIN_REPORT", async () => {
+  const hungStart = deferred();
+  const uncertainCalls = [];
+  const conn = makeFakeConnection({
+    [UNCERTAIN_REPORT]: (params) => {
+      uncertainCalls.push(params.method);
+      return {};
+    },
+  });
+  const facade = new Facade(conn, { root: "/work/repo", shell: "/bin/sh" });
+  facade.startWaitMs = 50;
+  facade.stopConfirmMs = 100;
+  facade.beginTurn("s-hung", { wrapUp: { pending: false, delivered: false } });
+  facade.sessions.get("s-hung").turn.inflight.add(hungStart.promise);
+
+  await facade.endTurn("s-hung", { cancelled: true, errored: false });
+  assert.deepEqual(uncertainCalls, ["process/start"]);
+  hungStart.resolve();
+});

@@ -261,6 +261,8 @@ export class AcpProxy {
       terminate(reason);
     };
     this.pending = new Map();
+    /** Active async `fromAgent` handlers so shutdown joins buffered replies. */
+    this.agentHandlers = new Set();
     /**
      * Parent prompts `agy` answered whose reply to the worker is not yet
      * written (settlement still running), by the worker's request id: a forced
@@ -580,6 +582,42 @@ export class AcpProxy {
   /** Client stdin reached EOF: latch closing and settle unwritten reservations. */
   closeInput() {
     this.beginShutdown();
+  }
+
+  /** Run `fromAgent(message)` while tracking it so shutdown waits through `endPrompt`. */
+  trackAgentMessage(message) {
+    const task = Promise.resolve().then(() => this.fromAgent(message));
+    this.agentHandlers.add(task);
+    const done = () => this.agentHandlers.delete(task);
+    task.then(done, (error) => {
+      done();
+      this.log(error?.message ?? String(error));
+    });
+    return task;
+  }
+
+  /** Wait up to `ms` for all tracked `fromAgent` terminal handlers to finish. */
+  async settleAgentHandlers(ms) {
+    const deadline = Date.now() + Math.max(0, ms);
+    const awaited = new Set();
+    while (true) {
+      const pending = [...this.agentHandlers].filter((task) => !awaited.has(task));
+      if (pending.length === 0) return true;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) return false;
+      let timer;
+      const expired = new Promise((resolve) => {
+        timer = setTimeout(() => resolve("timeout"), remaining);
+      });
+      let outcome;
+      try {
+        outcome = await Promise.race([Promise.allSettled(pending).then(() => "done"), expired]);
+      } finally {
+        clearTimeout(timer);
+      }
+      if (outcome === "timeout") return false;
+      for (const task of pending) awaited.add(task);
+    }
   }
 
   abortAllReservations() {

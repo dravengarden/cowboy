@@ -4864,28 +4864,30 @@ async fn handle_worker(
             } if event_session == session_id && worker_epoch == epoch => {
                 let cancelled = broker.cancelled_sessions.lock();
                 if cancelled.contains(session_id) {
-                    let forward_uncertainty = wrap_up::departing_uncertainty_event(
-                        &broker,
-                        session_id,
-                        &worker_epoch,
-                        &event,
-                    );
+                    // During reset_session with a connected Controller, forward
+                    // every event of the departing epoch contiguously so
+                    // runtime_seq stays unbroken while Controller suppresses
+                    // projection via `resetting` and observes uncertainty.
+                    let forward_departing =
+                        wrap_up::is_departing_cleanup_epoch(&broker, session_id, &worker_epoch)
+                            && broker.controller.lock().is_some();
                     drop(cancelled);
-                    if forward_uncertainty {
+                    if forward_departing {
                         broker.send_controller(Frame::WorkerEvent {
                             session_id: event_session,
-                            worker_epoch: worker_epoch.clone(),
+                            worker_epoch,
                             runtime_seq,
                             event,
                             diagnostics,
                         });
+                    } else {
+                        broker.acknowledge_worker_event(
+                            session_id,
+                            connection_id,
+                            worker_epoch,
+                            runtime_seq,
+                        );
                     }
-                    broker.acknowledge_worker_event(
-                        session_id,
-                        connection_id,
-                        worker_epoch,
-                        runtime_seq,
-                    );
                     continue;
                 }
                 let rehabilitated =
