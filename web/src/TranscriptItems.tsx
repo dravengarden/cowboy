@@ -549,6 +549,7 @@ export function OptimisticUserBubble({
           <Tooltip title="Retry">
             <IconButton
               size="small"
+              data-desktop-transcript-stop="action"
               aria-label="retry send"
               onClick={(): void => retryMessage(sessionId, cmid)}
             >
@@ -558,6 +559,7 @@ export function OptimisticUserBubble({
           <Tooltip title={returnLabelForHome(returnHome)}>
             <IconButton
               size="small"
+              data-desktop-transcript-stop="action"
               aria-label={returnLabelForHome(returnHome)}
               onClick={(): void => {
                 void returnFailedMessage(sessionId, cmid).catch(() => undefined);
@@ -569,6 +571,7 @@ export function OptimisticUserBubble({
           <Tooltip title="Discard">
             <IconButton
               size="small"
+              data-desktop-transcript-stop="action"
               aria-label="discard message"
               onClick={(): void => {
                 void discardMessage(sessionId, cmid).catch(() => undefined);
@@ -922,6 +925,7 @@ export function TurnFailureRecovery({
           variant="outlined"
           color="inherit"
           data-turn-failure-continue
+          data-desktop-transcript-stop="action"
           onClick={(): void => {
             void submitPrompt(sessionId, TURN_CONTINUATION_PROMPT);
           }}

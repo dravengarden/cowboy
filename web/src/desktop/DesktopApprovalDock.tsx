@@ -123,6 +123,7 @@ export function DesktopPermissionDock({
   return (
     <ApprovalDock
       kind="permission"
+      region={item.elicitation ? "conversation.approval" : undefined}
       promptKey={`permission:${item.requestId}:${String(item.seq)}`}
       tone={question ? "primary" : "warning"}
       icon={question
@@ -271,6 +272,7 @@ function CallApprovalDock({
 
 function ApprovalDock({
   kind,
+  region,
   promptKey,
   tone,
   icon,
@@ -283,6 +285,7 @@ function ApprovalDock({
   children,
 }: {
   kind: "permission" | "call";
+  region?: string | undefined;
   promptKey: string;
   tone: Tone;
   icon: ReactNode;
@@ -301,7 +304,11 @@ function ApprovalDock({
       role="group"
       aria-label={title}
       data-desktop-approval-dock={kind}
+      data-desktop-region={region}
+      tabIndex={region ? -1 : undefined}
       sx={(theme) => ({
+        outline: "none",
+        "&:focus-within": { borderColor: theme.palette.primary.main },
         flexShrink: 0,
         minWidth: 0,
         px: 1.5,

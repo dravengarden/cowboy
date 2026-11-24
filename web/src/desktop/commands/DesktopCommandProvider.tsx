@@ -314,9 +314,10 @@ function visibleRegionItems(region: HTMLElement | null): HTMLElement[] {
     });
 }
 
-function conversationWidgets(region: HTMLElement | null): HTMLElement[] {
-  return [...(region?.querySelectorAll<HTMLElement>("[data-desktop-widget-toggle]") ?? [])]
-    .filter((element) => element.offsetParent !== null)
+function conversationWidgets(region: HTMLElement | null, includeActions = false): HTMLElement[] {
+  const selector = includeActions ? "[data-desktop-widget-toggle], [data-desktop-transcript-stop]" : "[data-desktop-widget-toggle]";
+  return [...(region?.querySelectorAll<HTMLElement>(selector) ?? [])]
+    .filter((element) => element.offsetParent !== null && !element.matches(":disabled, [aria-disabled='true']"))
     .sort((left, right) => {
       const a = left.getBoundingClientRect();
       const b = right.getBoundingClientRect();
@@ -921,26 +922,21 @@ export function DesktopCommandProvider(
       const items = visibleRegionItems(region);
       const scrollNavigation = region?.dataset.desktopNavigation === "scroll";
       const widgets = scrollNavigation ? conversationWidgets(region) : [];
-      const activeWidget = document.activeElement instanceof HTMLElement
-        ? document.activeElement.closest<HTMLElement>("[data-desktop-widget-toggle]")
-        : null;
-      if (
-        workspace.mode === "normal" && scrollNavigation && region &&
-        workspaceCommandKey(event) === "Tab" && !event.ctrlKey &&
-        !event.metaKey && !event.altKey
-      ) {
-        const current = activeWidget ? widgets.indexOf(activeWidget) : -1;
-        const nearest = nearestConversationWidget(region, widgets);
-        const nearestIndex = nearest ? widgets.indexOf(nearest) : -1;
-        const next = current >= 0
-          ? (current + (event.shiftKey ? -1 : 1) + widgets.length) % widgets.length
-          : nearestIndex;
-        const widget = widgets[next];
-        if (widget) {
+      const activeEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const activeWidget = activeEl?.closest<HTMLElement>("[data-desktop-widget-toggle]") ?? null;
+      const activeActionStop = activeEl?.closest<HTMLElement>("[data-desktop-transcript-stop]") ?? null;
+      if (workspace.mode === "normal" && scrollNavigation && region && workspaceCommandKey(event) === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        const stops = conversationWidgets(region, true);
+        const activeStop = activeWidget ?? activeActionStop;
+        const current = activeStop ? stops.indexOf(activeStop) : -1;
+        const nearest = nearestConversationWidget(region, stops);
+        const next = current >= 0 ? (current + (event.shiftKey ? -1 : 1) + stops.length) % stops.length : (nearest ? stops.indexOf(nearest) : -1);
+        const stop = stops[next];
+        if (stop) {
           event.preventDefault();
           event.stopPropagation();
-          widget.focus({ preventScroll: true });
-          widget.scrollIntoView({ block: "nearest", inline: "nearest" });
+          stop.focus({ preventScroll: true });
+          stop.scrollIntoView({ block: "nearest", inline: "nearest" });
           return;
         }
       }
@@ -971,7 +967,7 @@ export function DesktopCommandProvider(
           }
         }
         if (action === null) {
-          if (!event.ctrlKey && (key === "h" || key === "l" || key === "Enter")) {
+          if (!event.ctrlKey && !activeActionStop && (key === "h" || key === "l" || key === "Enter")) {
             const widget = activeWidget ?? (region
               ? nearestConversationWidget(region, widgets)
               : null);

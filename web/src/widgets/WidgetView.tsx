@@ -10,6 +10,7 @@ import WidgetsOutlined from "@mui/icons-material/WidgetsOutlined";
 import { Collapsible } from "../tools/Collapsible";
 import { relativeAge } from "../syncStatus";
 import { shortcutKey } from "../desktop/commands/imeShortcut";
+import { DESKTOP_INSET_RADIUS, DESKTOP_SURFACE_RADIUS, desktopRowFocusSx } from "../desktop/DesktopEmbeddedControl";
 import { SurfaceContext } from "../surface/SurfaceProfile";
 import type { ParsedDocument } from "./widgetDocument";
 import { WidgetNode } from "./WidgetNodes";
@@ -76,11 +77,11 @@ function Header({
           ...(desktop
             ? {
                 cursor: "pointer",
-                borderRadius: 1,
+                borderRadius: `${DESKTOP_INSET_RADIUS}px`,
                 mx: -0.5,
                 px: 0.5,
                 outline: "none",
-                "&:focus-visible": { bgcolor: "action.focus" },
+                "&:focus-visible": desktopRowFocusSx(),
               }
             : {}),
         }}
@@ -162,6 +163,7 @@ export default function WidgetView(props: WidgetViewProps): React.JSX.Element {
               my: 1,
               px: 1.5,
               py: 1.25,
+              borderRadius: `${DESKTOP_SURFACE_RADIUS}px`,
               display: "grid",
               gap: 1,
               minWidth: 0,

@@ -21,6 +21,7 @@ import {
 import { setSessionConfigOptions, useStoreSelector } from "../store";
 import { SessionToolsSection } from "../AgentToolsPanel";
 import { SessionContextSettings } from "../SessionContextSettings";
+import { DESKTOP_INSET_RADIUS, DESKTOP_SURFACE_RADIUS } from "./DesktopEmbeddedControl";
 import { DesktopModal } from "./DesktopModal";
 import type { SessionSettingsFocus } from "../sessionSettingsOpen";
 import type { DesktopShortcutGroup } from "./DesktopShortcutBar";
@@ -91,7 +92,7 @@ function RunConfigPane({
         flexDirection: "column",
         border: 1,
         borderColor: "divider",
-        borderRadius: 2,
+        borderRadius: `${DESKTOP_SURFACE_RADIUS}px`,
         bgcolor: (theme) => alpha(theme.palette.background.default, 0.32),
         outline: "none",
         transition: "border-color 120ms, box-shadow 120ms",
@@ -105,7 +106,7 @@ function RunConfigPane({
         "& [data-config-row], & [data-settings-row]": {
           mx: -1,
           px: 1,
-          borderRadius: 1.5,
+          borderRadius: `${DESKTOP_INSET_RADIUS}px`,
           transition: "background-color 120ms",
         },
         "& [data-config-row]": { py: 0.5 },

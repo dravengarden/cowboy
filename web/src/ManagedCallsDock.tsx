@@ -1778,7 +1778,7 @@ export function ManagedChildNotice(
             variant="outlined"
             startIcon={<InfoOutlined fontSize="small" />}
             onClick={(): void => setDetailsOpen(true)}
-            sx={{ minHeight: 44 }}
+            sx={{ minHeight: desktop ? desktopSize(30) : 44 }}
           >
             Details
           </Button>
@@ -1787,7 +1787,7 @@ export function ManagedChildNotice(
           size="small"
           variant="outlined"
           onClick={(): void => setActiveSessionId(parent)}
-          sx={{ minHeight: 44 }}
+          sx={{ minHeight: desktop ? desktopSize(30) : 44 }}
         >
           Open parent
         </Button>

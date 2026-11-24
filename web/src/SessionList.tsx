@@ -220,7 +220,7 @@ export function ScheduleBadgeIcon({ ms }: { ms: number }): React.JSX.Element {
         return () => globalThis.clearInterval(timer);
     }, []);
     return (
-        <Tooltip title={`定时发送 · ${fireLabel(ms, now)}（${fireRel(ms, now)}）`} enterDelay={300}>
+        <Tooltip title={`Scheduled · ${fireLabel(ms, now)} (${fireRel(ms, now)})`} enterDelay={300}>
             <Schedule sx={{ fontSize: glyphSize(15), flexShrink: 0, color: "info.main" }} />
         </Tooltip>
     );

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
 import { Box, Button, Stack, TextField, Typography } from "@mui/material";
 import { Sheet } from "./Sheet";
 import { SegmentedTabs } from "./SegmentedTabs";
@@ -8,14 +8,60 @@ import { desktopCompositionActive } from "./desktop/commands/keyIntent";
 import { Kbd } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import type { Delivery, DraftSchedule } from "./protocol";
-import { fireLabel, fireRel, parseDtLocal, toDtLocal } from "./scheduleTime";
+import {
+  fireLabel,
+  fireRel,
+  parseDtLocal,
+  scheduleQuickPresets,
+  toDtLocal,
+} from "./scheduleTime";
+import { SurfaceContext } from "./surface/SurfaceProfile";
 
-// The schedule picker: a single custom date+time (one native datetime-local
-// field), a queue-position choice (tail/head), and a live human confirm line.
-// Used both to schedule a fresh draft (from the composer clock) and to
-// reschedule/cancel an existing one (its chip). Both positions wait for a running
-// turn to finish and respect a paused queue — neither ever bypasses the ⏸ hold.
-// Mobile-first: lives inside cowboy's frosted `Sheet` (content-sized, ≤75dvh).
+function ScheduleQuickPresets({
+  now,
+  value,
+  onSelect,
+}: {
+  now: number;
+  value: string;
+  onSelect: (next: string) => void;
+}): React.JSX.Element {
+  const presets = scheduleQuickPresets(now);
+  return (
+    <Stack spacing={1}>
+      <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
+        Quick presets
+      </Typography>
+      <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
+        {presets.map((preset) => {
+          const presetValue = toDtLocal(preset.fireAtMs);
+          return (
+            <Button
+              key={preset.id}
+              size="small"
+              variant={value === presetValue ? "contained" : "outlined"}
+              disableElevation
+              data-schedule-preset={preset.id}
+              onClick={(): void => {
+                navigationHaptic();
+                onSelect(presetValue);
+              }}
+              sx={{ textTransform: "none", minWidth: 0, px: 1.25 }}
+            >
+              {preset.label}
+            </Button>
+          );
+        })}
+      </Stack>
+    </Stack>
+  );
+}
+
+// The schedule picker: quick presets + custom datetime-local input, queue
+// position (back/front), and a live human confirm line. Used both to schedule
+// a fresh draft (from the composer clock) and to reschedule/cancel an existing
+// one (its chip). Both positions wait for a running turn to finish and respect
+// a paused queue.
 export function ScheduleSheet({
   open,
   onClose,
@@ -28,15 +74,15 @@ export function ScheduleSheet({
   onClose: () => void;
   /** Pre-fill when rescheduling an existing draft; null for a fresh schedule. */
   initial: DraftSchedule | null;
-  /** True when editing an existing scheduled draft (shows the "取消定时" action). */
+  /** True when editing an existing scheduled draft (shows the "Cancel schedule" action). */
   editing: boolean;
   onCommit: (fireAtMs: number, delivery: Delivery) => void;
   onUnschedule: () => void;
 }): React.JSX.Element {
+  const desktop = useContext(SurfaceContext)?.kind === "desktop";
   const [value, setValue] = useState("");
   const [delivery, setDelivery] = useState<Delivery>("back");
 
-  // Re-seed each time the sheet opens so a reopen reflects current state.
   useEffect(() => {
     if (!open) return;
     setValue(initial ? toDtLocal(initial.fire_at_ms) : "");
@@ -79,19 +125,12 @@ export function ScheduleSheet({
   }, [delivery, editing, fireAt, onClose, onCommit, onUnschedule, open, valid]);
 
   return (
-    <Sheet open={open} onClose={onClose} title="定时发送">
+    <Sheet open={open} onClose={onClose} title="Schedule send">
       <Stack spacing={2} sx={{ pt: 0.5, pb: 1 }}>
-        {
-          /* Caption label ABOVE the field, not a floating notch label — a shrunk
-            CJK label clips against the outlined notch on a datetime-local input. */
-        }
+        <ScheduleQuickPresets now={now} value={value} onSelect={setValue} />
         <Box>
-          <Typography
-            variant="caption"
-            color="text.secondary"
-            sx={{ display: "block", mb: 0.75, fontWeight: 600 }}
-          >
-            发送时间
+          <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.75, fontWeight: 600 }}>
+            Send time
           </Typography>
           <TextField
             type="datetime-local"
@@ -99,80 +138,61 @@ export function ScheduleSheet({
             fullWidth
             value={value}
             onChange={(e): void => setValue(e.target.value)}
-            inputProps={{ "aria-label": "发送时间" }}
+            inputProps={{ "aria-label": "Send time" }}
           />
         </Box>
-
-        {/* Queue position — both wait for the running turn + respect the pause. */}
         <Stack spacing={0.75}>
           <SegmentedTabs<Delivery>
             semantics="toggle"
             fullWidth={false}
             aria-label="Queue position"
             value={delivery}
-            onChange={(v): void => {
-              navigationHaptic();
-              setDelivery(v);
-            }}
+            onChange={(v): void => { navigationHaptic(); setDelivery(v); }}
             options={[
-              { value: "back", label: "队列后方" },
-              { value: "front", label: "队列前方" },
+              { value: "back", label: "End of queue" },
+              { value: "front", label: "Front of queue" },
             ]}
             sx={{ alignSelf: "flex-start" }}
           />
           <Typography variant="caption" color="text.secondary">
             {delivery === "back"
-              ? "到点排到队尾：前面排队的消息发完后再发。"
-              : "到点插到队首：先于其他排队消息。"}
-            {" 两者都等当前回合结束、遵守队列暂停。"}
+              ? "Appends to the end of the queue after earlier queued messages."
+              : "Inserts at the front ahead of other queued messages."}
+            {" Both wait for the current turn and respect a paused queue."}
           </Typography>
         </Stack>
-
-        {/* Live confirm line */}
-        <Typography
-          variant="body2"
-          sx={{
-            color: valid ? "info.main" : "text.disabled",
-            fontWeight: 600,
-            minHeight: 22,
-          }}
-        >
+        <Typography variant="body2" sx={{ color: valid ? "info.main" : "text.disabled", fontWeight: 600, minHeight: 22 }}>
           {valid && fireAt !== null
-            ? `${fireLabel(fireAt)} · ${
-              delivery === "front" ? "队首" : "队尾"
-            } · ${fireRel(fireAt)}`
-            : "选一个未来的时间"}
+            ? `${fireLabel(fireAt)} · ${delivery === "front" ? "Front" : "Back"} · ${fireRel(fireAt)}`
+            : "Choose a future time"}
         </Typography>
-
-        {/* Actions */}
         <Stack direction="row" spacing={1}>
           {editing && (
             <Button
               color="error"
               variant="outlined"
-              onClick={(): void => {
-                confirmationHaptic();
-                onUnschedule();
-                onClose();
-              }}
+              onClick={(): void => { confirmationHaptic(); onUnschedule(); onClose(); }}
               sx={{ textTransform: "none", borderRadius: 2 }}
             >
-              取消定时
+              Cancel schedule
               <Kbd keys={`${MOD_LABEL}⌫`} />
             </Button>
           )}
           <Box sx={{ flex: 1 }} />
+          {desktop && (
+            <Button color="inherit" onClick={onClose} sx={{ textTransform: "none", borderRadius: 2 }}>
+              Cancel
+              <Kbd keys="Esc" />
+            </Button>
+          )}
           <Button
             variant="contained"
             disabled={!valid}
             onClick={commit}
             sx={{ textTransform: "none", borderRadius: 2, minWidth: 96 }}
           >
-            {editing ? "更新" : "定时发送"}
-            <Kbd
-              keys={`${MOD_LABEL}${ENTER_LABEL}`}
-              availability={valid ? "available" : "inactive"}
-            />
+            {editing ? "Update" : "Schedule"}
+            <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} availability={valid ? "available" : "inactive"} />
           </Button>
         </Stack>
       </Stack>

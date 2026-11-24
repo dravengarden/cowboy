@@ -249,6 +249,7 @@ export default function WidgetMcpApp({ node }: { node: McpAppData }): React.JSX.
         {running ? (
           <Button
             size="small"
+            data-desktop-transcript-stop="action"
             startIcon={<StopRounded />}
             onClick={(): void => stop("Stopped.")}
             sx={{ textTransform: "none" }}
@@ -259,6 +260,7 @@ export default function WidgetMcpApp({ node }: { node: McpAppData }): React.JSX.
           <Button
             size="small"
             variant="outlined"
+            data-desktop-transcript-stop="action"
             disabled={state === "opening"}
             startIcon={<PlayArrowRounded />}
             onClick={(): void => void run()}

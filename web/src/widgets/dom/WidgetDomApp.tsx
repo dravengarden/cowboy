@@ -176,6 +176,7 @@ export default function WidgetDomApp({ node }: { node: DomAppData }): React.JSX.
             </Typography>
             <Button
               size="small"
+              data-desktop-transcript-stop="action"
               startIcon={<StopRounded />}
               onClick={(): void => stop("Stopped.")}
               sx={{ textTransform: "none" }}
@@ -196,6 +197,7 @@ export default function WidgetDomApp({ node }: { node: DomAppData }): React.JSX.
           <Button
             size="small"
             variant="outlined"
+            data-desktop-transcript-stop="action"
             startIcon={<PlayArrowRounded />}
             onClick={(): void => setState("running")}
             sx={{ textTransform: "none", justifySelf: "start" }}

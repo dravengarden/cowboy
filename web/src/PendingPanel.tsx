@@ -2756,7 +2756,7 @@ export function PendingRow({
       ...(onSchedule
         ? [{
           key: "schedule",
-          label: message.schedule ? "改期 / 取消定时…" : "定时发送…",
+          label: message.schedule ? "Reschedule / cancel…" : "Schedule send…",
           icon: <Schedule fontSize="small" />,
           onClick: onSchedule,
         }]
@@ -2923,7 +2923,7 @@ export function PendingRow({
             clickable
             icon={<Schedule sx={{ fontSize: glyphSize(15) }} />}
             label={`${fireLabel(message.schedule.fire_at_ms)} · ${
-              message.schedule.delivery === "front" ? "队首" : "队尾"
+              message.schedule.delivery === "front" ? "Front" : "Back"
             }`}
             onClick={onSchedule}
             sx={{
