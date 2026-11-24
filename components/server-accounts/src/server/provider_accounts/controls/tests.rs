@@ -21,6 +21,10 @@ struct Fake {
     logouts: parking_lot::Mutex<Vec<(String, crate::provider_account::NativeLogoutRequest)>>,
     /// The next native logout reaches the Machine but its reply is lost.
     lose_logout_reply: parking_lot::Mutex<bool>,
+    /// Each session's current model.
+    models: parking_lot::Mutex<HashMap<String, String>>,
+    /// The account's last usage observation's `rate_limits`.
+    rate_limits: parking_lot::Mutex<Option<Value>>,
 }
 
 impl Env for Fake {
@@ -42,6 +46,21 @@ impl Env for Fake {
     }
     fn admitted(&self, account: &ProviderAccountId) -> bool {
         self.admitted.lock().contains(account.as_str())
+    }
+    fn models(&self, session: &str) -> Vec<String> {
+        self.models
+            .lock()
+            .get(session)
+            .cloned()
+            .into_iter()
+            .collect()
+    }
+    fn rate_limits(
+        &self,
+        _owner: String,
+        _account: ProviderAccountId,
+    ) -> futures::future::BoxFuture<'static, Option<Value>> {
+        Box::pin(std::future::ready(self.rate_limits.lock().clone()))
     }
     fn setting(&self, key: &str) -> Option<Value> {
         self.settings.lock().get(key).cloned()
@@ -712,6 +731,7 @@ async fn the_first_dispatch_after_a_rate_limit_ends_resumes_the_account() {
 }
 
 mod logout_tests;
+mod rate_limit_tests;
 
 #[tokio::test]
 async fn the_account_card_shows_the_newest_plan_its_sessions_reported() {

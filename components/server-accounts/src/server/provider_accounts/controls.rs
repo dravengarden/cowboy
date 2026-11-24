@@ -39,6 +39,16 @@ mod reconcile;
 pub use dispatch::{before_dispatch, handoff};
 pub use reconcile::{start, turn_end_listener};
 
+/// The current value of the `model` option in an ACP options list.
+fn model_option(options: &Value) -> Option<Value> {
+    options
+        .as_array()?
+        .iter()
+        .find(|option| option.get("id").and_then(Value::as_str) == Some("model"))?
+        .get("currentValue")
+        .cloned()
+}
+
 /// What the controls observe of the rest of the Controller. [`AppEnv`] is
 /// the production binding; tests substitute their own.
 pub trait Env: Send + Sync + 'static {
@@ -48,6 +58,15 @@ pub trait Env: Send + Sync + 'static {
     fn worker(&self, session: &str) -> Option<crate::runtime_wire::WorkerSnapshot>;
     fn machine_connected(&self, machine: &str) -> bool;
     fn admitted(&self, account: &ProviderAccountId) -> bool;
+    /// Every model value the Controller holds for a session: its durable
+    /// selection and the agent's last advertised value.
+    fn models(&self, session: &str) -> Vec<String>;
+    /// The `rate_limits` of the account's last usage observation, if any.
+    fn rate_limits(
+        &self,
+        owner: String,
+        account: ProviderAccountId,
+    ) -> futures::future::BoxFuture<'static, Option<Value>>;
     fn setting(&self, key: &str) -> Option<Value>;
     /// Publish a setting the caller already wrote durably (in memory only:
     /// every writer persists first, under the controls' writer lock).
@@ -99,6 +118,38 @@ impl Env for AppEnv {
 
     fn admitted(&self, account: &ProviderAccountId) -> bool {
         admitted(&self.0, account)
+    }
+
+    fn models(&self, session: &str) -> Vec<String> {
+        let selected = self
+            .0
+            .hub
+            .config_preferences(session)
+            .and_then(|preferences| preferences.get("model").cloned());
+        let advertised = self
+            .0
+            .hub
+            .persisted_config_options(session)
+            .and_then(|options| model_option(&options));
+        [selected, advertised]
+            .into_iter()
+            .flatten()
+            .filter_map(|value| value.as_str().map(str::to_owned))
+            .collect()
+    }
+
+    fn rate_limits(
+        &self,
+        owner: String,
+        account: ProviderAccountId,
+    ) -> futures::future::BoxFuture<'static, Option<Value>> {
+        let state = Arc::clone(&self.0);
+        Box::pin(async move {
+            let value = super::usage::read_one(&state, &owner, &account)
+                .await
+                .ok()?;
+            Some(value["usage"]["rate_limits"].clone()).filter(Value::is_object)
+        })
     }
 
     fn setting(&self, key: &str) -> Option<Value> {
@@ -283,7 +334,13 @@ pub fn parked_reason(state: &Arc<AppState>, meta: &SessionMeta) -> Option<String
 /// [`before_dispatch`]): the session's visible wait when it must park now.
 pub fn handoff_refusal(state: &Arc<AppState>, session: &str) -> Option<String> {
     let meta = state.hub.session_info(session)?.meta;
-    parked_reason(state, &meta).map(|reason| wait(&reason))
+    let reason = parked_reason(state, &meta).or_else(|| {
+        governed(&meta)
+            .then(|| of(state))
+            .flatten()
+            .and_then(|controls| controls.handoff_reason(&meta))
+    });
+    reason.map(|reason| wait(&reason))
 }
 
 /// Every worker revival of a governed session: admitted and `ok` (a rate
@@ -395,6 +452,27 @@ impl Controls {
             .filter(|(_, sequence)| *sequence > acknowledged)
     }
 
+    /// The quota group a session's turns draw on, only when every model
+    /// value the Controller holds for it (durable selection, last advertised
+    /// value, the worker's reported options) is of one group: a selection the
+    /// worker has not confirmed yet, or an unknown model, is no group.
+    fn quota_group(&self, session: &str) -> Option<&'static str> {
+        let reported = self
+            .env
+            .worker(session)
+            .and_then(|worker| worker.config_options)
+            .and_then(|options| model_option(&options))
+            .and_then(|value| value.as_str().map(str::to_owned));
+        let mut groups = self
+            .env
+            .models(session)
+            .into_iter()
+            .chain(reported)
+            .map(|model| policy::quota_group(&model));
+        let first = groups.next()??;
+        groups.all(|group| group == Some(first)).then_some(first)
+    }
+
     /// Whether a backend signal of `account` is still being recorded.
     fn signal_pending(&self, account: &ProviderAccountId) -> bool {
         self.cache
@@ -410,12 +488,14 @@ impl Controls {
         }
         let control = self.cache.control(meta.provider_account_id.as_str());
         let uncertain = self.uncertain(&meta.id);
+        let group = self.quota_group(&meta.id);
         policy::gate(&GateInput {
             admitted: self.env.admitted(&meta.provider_account_id),
             control: control.as_ref(),
             uncertain: uncertain
                 .as_ref()
                 .map(|(method, sequence)| (method.as_str(), *sequence)),
+            quota_group: group,
             now_ms: now_ms(),
         })
     }
@@ -433,6 +513,23 @@ impl Controls {
             Gate::Park(reason) => Some(reason),
             Gate::Proceed { .. } => None,
         }
+    }
+
+    /// Why the final handoff of a dispatch the gate admitted earlier must
+    /// requeue its prompt now: a parked reason, or a rate limit that ended
+    /// after that gate, which only the next dispatch's gate reconciles with
+    /// the account's usage.
+    pub fn handoff_reason(&self, meta: &SessionMeta) -> Option<String> {
+        if let Some(reason) = self.parked_reason(meta) {
+            return Some(reason);
+        }
+        matches!(
+            self.gate(meta),
+            Gate::Proceed {
+                clears_rate_limit: true
+            }
+        )
+        .then(|| "the account's rate limit ended; send again".to_owned())
     }
 
     pub fn revival_gate(&self, meta: &SessionMeta) -> Result<(), String> {
@@ -557,8 +654,11 @@ impl Controls {
         provider: &str,
         transition: &policy::Transition,
     ) -> Result<bool, &'static str> {
-        let until = (transition.state == AccountState::RateLimited)
-            .then(|| now_ms().saturating_add(policy::DEFAULT_RATE_LIMIT_MS));
+        let until = (transition.state == AccountState::RateLimited).then(|| {
+            transition
+                .until_ms
+                .unwrap_or_else(|| now_ms().saturating_add(policy::DEFAULT_RATE_LIMIT_MS))
+        });
         let write = self.cache.writes.lock().await;
         let machines = if transition.stop_units {
             self.account_machines(account).await?

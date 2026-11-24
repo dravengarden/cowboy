@@ -83,8 +83,9 @@ impl Controls {
         let account = meta.provider_account_id.as_str().to_owned();
         if !meta.provider_account_id.is_default() {
             let owner = meta.owner_user_id.clone().unwrap_or_default();
+            let transition = self.scope_rate_limit(meta, transition).await;
             while let Err(error) = self
-                .raise(&account, &owner, &meta.provider, transition)
+                .raise(&account, &owner, &meta.provider, &transition)
                 .await
             {
                 tracing::warn!(
@@ -103,6 +104,48 @@ impl Controls {
                 pending.remove(&account);
             }
         }
+    }
+
+    /// A rate limit of `meta`'s turn holds for the quota group of the
+    /// session's model (account-wide when the model has none) until that
+    /// group's exhausted windows reset, as the account's last usage
+    /// observation shows them; without one it holds the default hour.
+    async fn scope_rate_limit(
+        &self,
+        meta: &SessionMeta,
+        transition: &policy::Transition,
+    ) -> policy::Transition {
+        let mut scoped = transition.clone();
+        if transition.state != AccountState::RateLimited {
+            return scoped;
+        }
+        // Reread after the turn: a model switch during it shows as a
+        // disagreement (no group, account-wide) or, at worst, scopes the
+        // wrong group, whose next refusal widens the limit to the account.
+        let group = self.quota_group(&meta.id);
+        scoped.reason = policy::rate_limit_reason(group);
+        if let Some(group) = group {
+            scoped.until_ms = self
+                .group_reset_ms(
+                    meta.owner_user_id.clone().unwrap_or_default(),
+                    &meta.provider_account_id,
+                    group,
+                )
+                .await;
+        }
+        scoped
+    }
+
+    /// When `group`'s exhausted quota windows of `account` reset, from the
+    /// account's last usage observation.
+    pub(super) async fn group_reset_ms(
+        &self,
+        owner: String,
+        account: &ProviderAccountId,
+        group: &str,
+    ) -> Option<i64> {
+        let limits = self.env.rate_limits(owner, account.clone()).await?;
+        policy::group_reset_ms(&limits, group, now_ms())
     }
 
     /// One reconciliation pass: record uncertain effects, deliver fences and
