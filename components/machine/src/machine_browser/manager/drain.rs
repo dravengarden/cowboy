@@ -81,6 +81,13 @@ impl StartGate {
         }
     }
 
+    /// Hold the gate as a drain does, stopping nothing.
+    #[cfg(test)]
+    pub(super) fn hold(self: &Arc<Self>) -> impl Sized + use<> {
+        self.state.lock().draining += 1;
+        DrainHold(Arc::clone(self))
+    }
+
     #[cfg(test)]
     pub(super) fn counts(&self) -> (usize, usize) {
         let state = self.state.lock();

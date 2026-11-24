@@ -149,18 +149,33 @@ test("a detached browser's summary counts down to the end of its grace", () => {
 test("an attached viewer is warned two minutes ahead of the runtime cap", () => {
   const now = 5_000_000;
   const stopsAt = now + 30 * 60_000;
-  assertEquals(attachedStopTime(state("attached", { deadline_ms: stopsAt })), stopsAt);
+  const mine = state("attached", { deadline_ms: stopsAt, attachment_id: "att-me" });
+  assertEquals(attachedStopTime(mine, "att-me"), stopsAt);
+  // Not before the stream confirmed this device's attachment, and never for
+  // the display another device still holds while a takeover is requested.
+  assertEquals(attachedStopTime(mine, undefined), undefined);
+  assertEquals(attachedStopTime(mine, "att-other"), undefined);
+  assertEquals(attachedStopTime(state("attached", { deadline_ms: stopsAt }), "att-me"), undefined);
   // Nothing to warn about while nobody views it, or without a stop time.
-  assertEquals(attachedStopTime(state("detached", { deadline_ms: stopsAt })), undefined);
-  assertEquals(attachedStopTime(state("attached")), undefined);
-  assertEquals(attachedStopTime(null), undefined);
+  assertEquals(
+    attachedStopTime(
+      state("detached", { deadline_ms: stopsAt, attachment_id: "att-me" }),
+      "att-me",
+    ),
+    undefined,
+  );
+  assertEquals(
+    attachedStopTime(state("attached", { attachment_id: "att-me" }), "att-me"),
+    undefined,
+  );
+  assertEquals(attachedStopTime(null, "att-me"), undefined);
   assertEquals(capWarningDelay(stopsAt, now), 30 * 60_000 - CAP_WARNING_MS);
   // Attached (or reattached) inside the last two minutes: told at once.
   assertEquals(capWarningDelay(stopsAt, stopsAt - 45_000), 0);
   assertEquals(capWarningDelay(stopsAt, stopsAt + 1), 0);
   assertEquals(
     capWarningText(stopsAt, stopsAt - CAP_WARNING_MS),
-    "This browser reaches its running-time limit in about 2 min. It is then saved and restarted on a new tab: your sign-ins stay, open pages do not, so finish the step you are on.",
+    "This browser reaches its running-time limit in about 2 min and is then hibernated. Finish the step you are on: opening it again starts on a new tab, with your sign-ins as last saved.",
   );
   assertEquals(capWarningText(stopsAt, stopsAt - 45_000).includes("in 45 s"), true);
 });

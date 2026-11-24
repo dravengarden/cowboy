@@ -364,14 +364,27 @@ export type ResumeStep =
   | "wait"
   /** Another device holds the display: never taken over by itself. */
   | "other_device"
+  /** The browser was stopped on purpose: never reopened by itself. */
+  | "stopped"
   /** Outside the window or out of attempts. */
   | "give_up";
+
+/** Whether a reconnect reopens a browser that hibernated with `reason`:
+ * only when this viewer's absence explains the stop (its grace ran out
+ * while the stream was down) or the Machine names no reason. A stop made on
+ * purpose (the owner's, the runtime cap, the Machine taking the browser
+ * back for other work, a failure or a confinement finding) is never undone
+ * by itself: reopening it would defeat the cap and fight the reclaim. */
+export function reopensByItself(reason: string | undefined): boolean {
+  return reason === undefined || reason === "grace";
+}
 
 /** What the panel does next to reconnect after a dropped viewer, or
  * `undefined` when it is not reconnecting. It only ever attaches to a
  * browser nobody views, reclaims the display from this device's own
- * dropped attachment, or reopens the hibernated browser of the same
- * Machine; another device's display is left alone. */
+ * dropped attachment, or reopens the browser of the same Machine that
+ * hibernated for being left (`reopensByItself`); another device's display
+ * is left alone. */
 export function resumeStep(model: BrowserModel, now: number): ResumeStep | undefined {
   const resume = model.resume;
   if (!resume) return undefined;
@@ -383,7 +396,8 @@ export function resumeStep(model: BrowserModel, now: number): ResumeStep | undef
   const machine = resume.target.machine_id;
   const read = model.read;
   const state = read?.state;
-  if (read?.machine_id !== machine || !state || state.state === "hibernated") return "open";
+  if (read?.machine_id !== machine || !state) return "open";
+  if (state.state === "hibernated") return reopensByItself(state.reason) ? "open" : "stopped";
   if (state.state === "detached") return "attach";
   if (state.state === "attached") {
     return resume.attachmentId !== undefined && state.attachment_id === resume.attachmentId

@@ -31,6 +31,17 @@ pub(super) struct CopyJob {
     done: tokio::sync::watch::Receiver<bool>,
 }
 
+#[cfg(test)]
+impl CopyJob {
+    /// A registered copy, for tests that only need one to be running.
+    pub(super) fn for_test(
+        cancel: tokio::sync::watch::Sender<bool>,
+        done: tokio::sync::watch::Receiver<bool>,
+    ) -> Self {
+        Self { cancel, done }
+    }
+}
+
 /// Unregisters the job and reports its completion on every path.
 struct JobRegistration<'a> {
     instance: &'a Instance,

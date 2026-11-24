@@ -392,14 +392,25 @@ where
     // dropped reads there as a failed connection, which a broken Controller
     // link looks like too. Never awaited: the viewer's own cleanup (its
     // registration, the Machine's detach) does not wait on this socket.
-    tokio::spawn(async move {
-        let _ = tokio::time::timeout(
-            MACHINE_CLOSE_TIMEOUT,
-            machine_sink.send(Message::Close(None)),
-        )
-        .await;
-    });
+    // Not after an end on the Machine's own half: the Machine closed or
+    // failed it already, and a send that timed out may still hold a frame
+    // of input the handshake would flush to the display after all.
+    if closes_machine_half(end) {
+        tokio::spawn(async move {
+            let _ = tokio::time::timeout(
+                MACHINE_CLOSE_TIMEOUT,
+                machine_sink.send(Message::Close(None)),
+            )
+            .await;
+        });
+    }
     end
+}
+
+/// Whether a relay that ended with `end` owes the Machine's half a close
+/// handshake: every end but those of that half itself.
+fn closes_machine_half(end: &str) -> bool {
+    !end.starts_with("machine_")
 }
 
 /// The paired stream: the attachment's first use, then the relay.
@@ -821,6 +832,35 @@ mod tests {
             Err("browser_not_running")
         );
         assert_eq!(target(None), Err("browser_not_running"));
+    }
+
+    #[test]
+    fn only_an_end_outside_the_machine_s_half_closes_it_with_a_handshake() {
+        // The viewer left, was replaced, or lost its admission.
+        for end in [
+            "viewer_closed",
+            "viewer_error",
+            "viewer_stalled",
+            "viewer_frame_too_large",
+            "replaced",
+            "auth_required",
+            "admission_withdrawn",
+        ] {
+            assert!(closes_machine_half(end), "{end}");
+        }
+        // A send to the Machine that timed out may still hold input: the
+        // socket is dropped, never flushed by a handshake. A Machine whose
+        // connection changed tore its streams down itself.
+        for end in [
+            "machine_stalled",
+            "machine_closed",
+            "machine_error",
+            "machine_frame_too_large",
+            "machine_protocol_error",
+            "machine_connection_changed",
+        ] {
+            assert!(!closes_machine_half(end), "{end}");
+        }
     }
 
     #[tokio::test]

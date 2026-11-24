@@ -19,6 +19,7 @@ import {
   readTicket,
   reduceBrowser,
   resetTarget,
+  reopensByItself,
   resumeStep,
   shownTarget,
   stoppedFor,
@@ -687,6 +688,43 @@ test("a reconnect reopens a hibernated browser on the same Machine", () => {
   });
   assertEquals(refused.resume, undefined);
   assertEquals(refused.error.length > 0, true);
+});
+
+test("a reconnect never reopens a browser that was stopped on purpose", () => {
+  const ended = dropped(viewing());
+  const hibernated = (reason?: string) =>
+    observed(
+      ended,
+      event("hibernated", {
+        instance: { account_id: account, instance_id: "", incarnation: 0 },
+        ...(reason === undefined ? {} : { reason }),
+      }),
+    );
+  // Left for longer than the grace, or no reason known: reopened.
+  assertEquals(reopensByItself(undefined), true);
+  assertEquals(resumeStep(hibernated("grace"), 2_000), "open");
+  // The runtime cap, the owner's hibernate, the Machine taking it back for
+  // other work, a failure or a confinement finding: left as it is.
+  for (const reason of [
+    "deadline",
+    "owner_request",
+    "reclaim",
+    "failed",
+    "confinement_unverified",
+    "revoked",
+    "disabled",
+  ]) {
+    assertEquals(reopensByItself(reason), false, reason);
+    assertEquals(resumeStep(hibernated(reason), 2_000), "stopped", reason);
+  }
+  // The end names the stop; nothing reconnects after it.
+  const final = reduceBrowser(hibernated("deadline"), {
+    type: "resume_end",
+    message: "The browser reached its maximum running time.",
+  });
+  assertEquals(final.resume, undefined);
+  assertEquals(resumeStep(final, 3_000), undefined);
+  assertEquals(final.notice, "The browser reached its maximum running time.");
 });
 
 test("a reconnect reclaims only this device's own attachment", () => {

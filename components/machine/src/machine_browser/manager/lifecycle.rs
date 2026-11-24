@@ -93,8 +93,12 @@ impl BrowserManager {
         // own asynchronous steps, so concurrent opens for other accounts
         // cannot pass the limit together. A full Machine first hibernates
         // instances nobody is viewing (`reserve_slot`).
-        let Some(capacity) = self.reserve_slot(&account_id, settings.max_instances).await else {
-            return hibernated(Reason::Capacity);
+        let capacity = match self
+            .reserve_slot(&account_id, &plan, settings.max_instances)
+            .await
+        {
+            Ok(capacity) => capacity,
+            Err(reason) => return hibernated(reason),
         };
         let (account_dir, record) = match self.prepare_record(&account_id, &plan) {
             Ok(prepared) => prepared,
@@ -208,18 +212,8 @@ impl BrowserManager {
             tracing::warn!(%error, "browser control record unreadable");
             Reason::Failed
         })?;
-        if let Some(pending) = &record.pending {
-            return Err(match pending.kind {
-                OperationKind::Reset => Reason::Busy,
-                OperationKind::Revoke => Reason::Revoked,
-            });
-        }
-        match compare_versions(
-            record.browser_version.as_deref(),
-            &plan.contract.runtime.browser_version,
-        ) {
-            VersionOrder::RecordNewer => return Err(Reason::ProfileNewerThanRuntime),
-            VersionOrder::Same => {}
+        match record_admits(&record, plan)? {
+            VersionOrder::RecordNewer | VersionOrder::Same => {}
             VersionOrder::RuntimeNewer | VersionOrder::Unrecorded => {
                 record.browser_version = Some(plan.contract.runtime.browser_version.clone());
                 record.generation_digest = Some(plan.generation_digest.clone());
@@ -238,6 +232,25 @@ impl BrowserManager {
                 Reason::Failed
             })?;
         Ok((account_dir, record))
+    }
+
+    /// What [`Self::prepare_record`] would refuse for a start with `plan`,
+    /// read without changing anything: a pending reset or revocation, and a
+    /// profile a newer browser wrote. An open checks it before it hibernates
+    /// another account's idle browser to make room.
+    pub(super) fn preflight_record(
+        &self,
+        account_id: &ProviderAccountId,
+        plan: &MachineBrowserRuntimePlan,
+    ) -> Result<(), Reason> {
+        let record = self
+            .account_dir(account_id)
+            .and_then(|dir| state_file::read_control(&dir))
+            .map_err(|error| {
+                tracing::warn!(%error, "browser control record unreadable");
+                Reason::Failed
+            })?;
+        record_admits(&record, plan).map(|_| ())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -394,6 +407,10 @@ impl BrowserManager {
         let mut live = instance.live.lock();
         live.verified = verified;
         live.phase = Phase::Detached;
+        // The detached interval begins now, not when the start began: its
+        // grace, and the moments an open for another account leaves it
+        // before taking its slot, are not consumed by the start itself.
+        live.detached_since = Some(Instant::now());
         Ok(())
     }
 
@@ -662,10 +679,19 @@ impl BrowserManager {
     /// copy is flushed) or was killed (crash-consistent). A staging
     /// generation the launcher may still write is left with the instance
     /// until its unit's exit is confirmed.
+    ///
+    /// Persistence never extends the instance's authority to run: at the
+    /// runtime cap no copy is asked for any more, and a stop still waiting
+    /// (for the control connection, the browser's exit or the copy) is
+    /// abandoned there, so the unit's termination follows at the cap.
     pub(super) async fn stop_with_snapshot(
         &self,
         instance: &Arc<Instance>,
     ) -> Result<Option<(u64, bool)>> {
+        let cap = instance.deadline();
+        if Instant::now() >= cap {
+            return Ok(None);
+        }
         let account_dir = self.account_dir(&instance.account_id)?;
         let mut record = state_file::read_control(&account_dir)?;
         if record.pending.is_some() || record.profile_revision != instance.profile_revision {
@@ -692,12 +718,16 @@ impl BrowserManager {
             plain_stop(instance).await;
             return Err(error);
         }
-        let stopped = instance
-            .control
-            .lock()
-            .await
-            .stop(GRACEFUL_WAIT, Some(generation), unit::STOP_TIMEOUT)
-            .await;
+        let stopped = tokio::time::timeout_at(cap, async {
+            instance
+                .control
+                .lock()
+                .await
+                .stop(GRACEFUL_WAIT, Some(generation), unit::STOP_TIMEOUT)
+                .await
+        })
+        .await
+        .unwrap_or_else(|_| Err(anyhow!("the runtime cap ended the graceful stop")));
         let outcome = match stopped {
             Ok(outcome) => outcome,
             Err(error) => {
@@ -858,14 +888,40 @@ impl BrowserManager {
     }
 }
 
+/// Whether `record` admits a start with `plan`'s browser, and how the two
+/// versions compare: a pending reset or revocation refuses, and so does a
+/// profile a newer browser wrote. Changes nothing.
+fn record_admits(
+    record: &ControlRecord,
+    plan: &MachineBrowserRuntimePlan,
+) -> Result<VersionOrder, Reason> {
+    if let Some(pending) = &record.pending {
+        return Err(match pending.kind {
+            OperationKind::Reset => Reason::Busy,
+            OperationKind::Revoke => Reason::Revoked,
+        });
+    }
+    match compare_versions(
+        record.browser_version.as_deref(),
+        &plan.contract.runtime.browser_version,
+    ) {
+        VersionOrder::RecordNewer => Err(Reason::ProfileNewerThanRuntime),
+        order => Ok(order),
+    }
+}
+
 /// Ask the launcher for a stop without a copy; the unit's termination follows.
 async fn plain_stop(instance: &Instance) {
-    let _ = instance
-        .control
-        .lock()
-        .await
-        .stop(GRACEFUL_WAIT, None, unit::STOP_TIMEOUT)
-        .await;
+    // Like the stop-time copy, it ends at the runtime cap.
+    let _ = tokio::time::timeout_at(instance.deadline(), async {
+        instance
+            .control
+            .lock()
+            .await
+            .stop(GRACEFUL_WAIT, None, unit::STOP_TIMEOUT)
+            .await
+    })
+    .await;
 }
 
 /// Delete the profile tree and lower the fence; the control record survives

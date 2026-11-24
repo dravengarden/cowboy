@@ -57,18 +57,6 @@ impl BrowserManager {
             self.send_state(event);
             return true;
         }
-        // Shortly before the cap the instance stops gracefully instead: the
-        // browser flushes and its profile is snapshotted, where the cap
-        // itself only kills and loses everything since the last published
-        // generation. A copy still running is awaited until the cap, which
-        // then forces the stop (`await_copy_idle`).
-        if now >= instance.graceful_deadline() {
-            let event = self
-                .stop_instance(instance, Reason::Deadline, true, None)
-                .await;
-            self.send_state(event);
-            return true;
-        }
         if let Some(attachment_id) = expired_attachment
             && expire_attachment(instance, &attachment_id, now)
         {
@@ -115,6 +103,20 @@ impl BrowserManager {
             && let Err(reason) = self.recheck_periodic(instance)
         {
             let event = self.stop_instance(instance, reason, false, None).await;
+            self.send_state(event);
+            return true;
+        }
+        // Shortly before the cap the instance stops gracefully: the browser
+        // flushes and its profile is snapshotted, where the cap itself only
+        // kills and loses everything since the last published generation.
+        // It comes after this tick's lease expiry and due scan, and waits
+        // (still supervised: leases, scans, the cap above) while a copy
+        // runs instead of blocking on it; the stop-time copy itself ends at
+        // the cap (`stop_with_snapshot`).
+        if now >= instance.graceful_deadline() && !instance.copy_running() {
+            let event = self
+                .stop_instance(instance, Reason::Deadline, true, None)
+                .await;
             self.send_state(event);
             return true;
         }

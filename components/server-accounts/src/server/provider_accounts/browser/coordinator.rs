@@ -143,6 +143,29 @@ fn observation(state: &StateEvent) -> StateEvent {
     event
 }
 
+/// A bare "nothing runs" answer with what the terminal observation it
+/// confirms said about that stop: its reason and whether unsaved state was
+/// lost. Only a stop's own report carries the instance's profile revision
+/// (a refused open carries none), so a refusal is never taken for one, and a
+/// revision the answer no longer names (a reset since) confirms nothing.
+fn confirming(previous: Option<&StateEvent>, answer: &StateEvent) -> StateEvent {
+    let mut event = answer.clone();
+    let bare = answer.state == State::Hibernated
+        && answer.instance.instance_id.is_empty()
+        && answer.reason.is_none()
+        && !answer.unsaved_state_lost;
+    if bare
+        && let Some(previous) = previous
+        && previous.state == State::Hibernated
+        && previous.profile_revision.is_some()
+        && previous.profile_revision == answer.profile_revision
+    {
+        event.reason = previous.reason;
+        event.unsaved_state_lost = previous.unsaved_state_lost;
+    }
+    event
+}
+
 fn lock_for(locks: &Locks, account_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     Arc::clone(locks.lock().entry(account_id.to_owned()).or_default())
 }
@@ -335,37 +358,52 @@ impl Coordinator {
     /// cached state of that Machine's instance, even a live one, unless a
     /// newer observation already arrived on the same connection. An answer
     /// naming no instance means none runs there: its viewer ends.
-    pub fn record_authoritative(&self, connection: &ConnectionToken, event: &StateEvent) {
+    ///
+    /// The Machine keeps no record of why its last instance stopped: its
+    /// answer that nothing runs is the bare fact. Such an answer keeps the
+    /// reason and the lost-state mark of the terminal observation it
+    /// confirms (same connection, same profile revision), so a state read
+    /// still says why the browser is not running; a reset, a revocation or
+    /// a reconnected Machine starts from the bare fact again. Returns the
+    /// observation as cached (the answer itself when it was not cached).
+    pub fn record_authoritative(
+        &self,
+        connection: &ConnectionToken,
+        event: &StateEvent,
+    ) -> StateEvent {
         if !self.is_current(connection) {
-            return;
+            return event.clone();
         }
         let key = key(connection.machine_id(), event.instance.account_id.as_str());
         // Either way the connection has answered for the account.
         self.answered(connection, &event.instance.account_id);
-        {
+        let cached = {
             let mut states = self.states.write();
-            let newer = states.get(&key).is_some_and(|previous| {
-                previous.connection.same(connection)
-                    && previous.event.observed_at_ms > event.observed_at_ms
-            });
-            if newer {
-                return;
+            let previous = states
+                .get(&key)
+                .filter(|previous| previous.connection.same(connection));
+            if previous.is_some_and(|previous| previous.event.observed_at_ms > event.observed_at_ms)
+            {
+                return event.clone();
             }
+            let cached = confirming(previous.map(|previous| &previous.event), event);
             states.insert(
                 key.clone(),
                 Observed {
                     machine_id: connection.machine_id().to_owned(),
                     connection: connection.clone(),
-                    event: event.clone(),
+                    event: cached.clone(),
                     observed_at: Instant::now(),
                 },
             );
-        }
+            cached
+        };
         if event.instance.instance_id.is_empty() {
             self.cancel_viewer(&key.0, &key.1);
         } else {
             self.end_mismatched_viewer(&key, event);
         }
+        cached
     }
 
     /// The durable placements on the connection's Machine are known: each
@@ -763,6 +801,78 @@ mod tests {
         assert_eq!(
             coordinator.state_on("ovh", ACCOUNT).unwrap().event.reason,
             Some(Reason::Deadline)
+        );
+    }
+
+    #[test]
+    fn a_bare_nothing_runs_answer_keeps_why_the_browser_stopped() {
+        use crate::machine_protocol::machine_browser::Reason;
+        let control = MachineControl::default();
+        let coordinator = Coordinator::default();
+        let connection = connect(&control, &coordinator, "one");
+        let stopped = |reason, unsaved| {
+            let mut event = state_event(7, State::Hibernated, None);
+            event.reason = Some(reason);
+            event.unsaved_state_lost = unsaved;
+            event
+        };
+        let bare = |observed_at_ms, revision| {
+            let mut event = state_event(0, State::Hibernated, None);
+            event.observed_at_ms = observed_at_ms;
+            event.profile_revision = Some(revision);
+            event
+        };
+        // The runtime cap killed it: the Machine's terminal report says so.
+        coordinator.observe(&connection, &Event::State(stopped(Reason::Deadline, true)));
+        // The next state read asks the Machine, which only knows that
+        // nothing runs; the read still reports the stop it confirms.
+        let read = coordinator.record_authoritative(&connection, &bare(8, 1));
+        assert_eq!(read.reason, Some(Reason::Deadline));
+        assert!(read.unsaved_state_lost);
+        assert_eq!(read.instance.incarnation, 0);
+        assert_eq!(coordinator.state_on("ovh", ACCOUNT).unwrap().event, read);
+        // And every read after it.
+        let again = coordinator.record_authoritative(&connection, &bare(9, 1));
+        assert_eq!(again.reason, Some(Reason::Deadline));
+        assert!(again.unsaved_state_lost);
+        // A profile reset since (another revision) confirms nothing of it.
+        let reset = coordinator.record_authoritative(&connection, &bare(10, 2));
+        assert_eq!(reset.reason, None);
+        assert!(!reset.unsaved_state_lost);
+        // A refused open is not a stop: it names no profile revision, and
+        // the read after it is the bare fact.
+        let mut refused = state_event(0, State::Hibernated, None);
+        refused.instance.instance_id = "b-1".into();
+        refused.reason = Some(Reason::Capacity);
+        refused.profile_revision = None;
+        refused.observed_at_ms = 11;
+        coordinator.observe(&connection, &Event::State(refused));
+        assert_eq!(
+            coordinator
+                .record_authoritative(&connection, &bare(12, 2))
+                .reason,
+            None
+        );
+        // Nothing is carried over a reconnect.
+        coordinator.observe(&connection, &Event::State(stopped(Reason::Grace, false)));
+        let second = connect(&control, &coordinator, "two");
+        assert_eq!(
+            coordinator
+                .record_authoritative(&second, &bare(13, 1))
+                .reason,
+            None
+        );
+        // An answer on a connection that is no longer current is returned
+        // as it is and never cached.
+        let stale = coordinator.record_authoritative(&connection, &bare(14, 1));
+        assert_eq!(stale.reason, None);
+        assert_eq!(
+            coordinator
+                .state_on("ovh", ACCOUNT)
+                .unwrap()
+                .event
+                .observed_at_ms,
+            13
         );
     }
 

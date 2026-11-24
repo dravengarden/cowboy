@@ -186,10 +186,16 @@ export function browserStateSummary(state: BrowserStateEvent | null, now = Date.
 /** How long before its runtime cap an attached viewer is told. */
 export const CAP_WARNING_MS = 120_000;
 
-/** When the Machine stops the browser an attached viewer shows (the
- * graceful stop ahead of its runtime cap), when the state names it. */
-export function attachedStopTime(state: BrowserStateEvent | null): number | undefined {
-  return state?.state === "attached" ? state.deadline_ms : undefined;
+/** When the Machine stops the browser this viewer shows (the graceful stop
+ * ahead of its runtime cap): only once the stream confirmed this device's
+ * attachment and while the state still names it, never for another
+ * device's display a takeover has yet to replace. */
+export function attachedStopTime(
+  state: BrowserStateEvent | null,
+  attachmentId: string | undefined,
+): number | undefined {
+  if (attachmentId === undefined || state?.state !== "attached") return undefined;
+  return state.attachment_id === attachmentId ? state.deadline_ms : undefined;
 }
 
 /** How long from `now` until the viewer is told; zero once it is that close. */
@@ -197,9 +203,8 @@ export function capWarningDelay(stopsAt: number, now: number): number {
   return Math.max(0, stopsAt - CAP_WARNING_MS - now);
 }
 
-/** The cap hibernates the browser with its snapshot, and the open panel
- * reopens it (a stopped browser ends the stream like any drop): sign-ins
- * stay, the open pages do not. */
+/** The cap hibernates the browser after a last save of its profile; the
+ * panel never reopens it by itself (`reopensByItself`). */
 export function capWarningText(stopsAt: number, now: number): string {
-  return `This browser reaches its running-time limit in ${remainingText(stopsAt - now)}. It is then saved and restarted on a new tab: your sign-ins stay, open pages do not, so finish the step you are on.`;
+  return `This browser reaches its running-time limit in ${remainingText(stopsAt - now)} and is then hibernated. Finish the step you are on: opening it again starts on a new tab, with your sign-ins as last saved.`;
 }
