@@ -340,6 +340,41 @@ impl Hub {
             if decision != DrainDecision::Dispatch {
                 return;
             }
+            // A retried explicit send carries no caller of its own: it must
+            // not take a row out from under the terminal editing it. A refused
+            // dispatch requeues the row under a new id, which that editor reads
+            // as a sent message and parks its buffer as a duplicate draft. The
+            // retry resumes once the edit is saved or abandoned.
+            // A caller-less manual drain is a retried explicit send: it needs
+            // live intent. Another terminal may have sent the held row since
+            // maintenance read the flag; the next row then gets no bypass.
+            if manual && trigger.is_none() && !s.explicit_wait {
+                return;
+            }
+            if manual
+                && trigger.is_none()
+                && s.queue
+                    .first()
+                    .is_some_and(|head| s.editing.as_deref() == Some(head.id.as_str()))
+            {
+                return;
+            }
+            // Its intent belongs to the row it was recorded for: once the
+            // user removed or reordered that row, the new head is not sent
+            // through Pause on its behalf, and the intent ends. Checked under
+            // the lock that takes the row out.
+            if manual
+                && trigger.is_none()
+                && s.explicit_row
+                    .as_ref()
+                    .is_some_and(|row| s.queue.first().is_none_or(|head| &head.id != row))
+            {
+                s.explicit_wait = false;
+                s.explicit_row = None;
+                drop(sessions);
+                self.persist_explicit_wait(session_id);
+                return;
+            }
             if s.queue.first().is_some_and(|head| {
                 self.is_row_withdrawing(session_id, &head.id)
                     || head
@@ -362,6 +397,7 @@ impl Hub {
                 .unwrap_or_else(|| crate::prompt_origin::DeliveryOrigin::cowboy("legacy_queue"));
             let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(head.cmid);
             s.explicit_wait = false;
+            s.explicit_row = None;
             s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);
@@ -401,28 +437,72 @@ impl Hub {
 
     /// Retry a previously explicit send parked on a resource wait, preserving
     /// its stored `(origin, initiator)` without fabricating a new caller.
+    /// Only the row that intent was recorded for is sent this way.
     pub fn retry_explicit_wait(&self, session_id: &str) {
         self.drain_head(session_id, true, true, None);
     }
 
+    /// Whether the head row is held by a terminal editing it, which a retried
+    /// explicit send waits for.
+    pub fn head_held_for_editing(&self, session_id: &str) -> bool {
+        self.inner.sessions.lock().get(session_id).is_some_and(|s| {
+            s.queue
+                .first()
+                .is_some_and(|head| s.editing.as_deref() == Some(head.id.as_str()))
+        })
+    }
+
+    /// Record (or end) explicit send intent for the current head row.
     pub fn set_explicit_wait(&self, session_id: &str, explicit: bool) {
-        if let Some(s) = self.inner.sessions.lock().get_mut(session_id) {
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
             s.explicit_wait = explicit;
+            s.explicit_row = s
+                .queue
+                .first()
+                .filter(|_| explicit)
+                .map(|head| head.id.clone());
         }
-        // The persisted wait carries the intent across a Controller restart.
+        self.persist_explicit_wait(session_id);
+    }
+
+    /// Write the session's explicit intent into its persisted wait, which
+    /// carries it across a Controller restart.
+    pub fn persist_explicit_wait(&self, session_id: &str) {
+        // Read and write as one step: two concurrent holds must not leave the
+        // older row's intent persisted over the newer one.
+        static PERSIST: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+        let _serial = PERSIST.lock();
+        let Some((explicit, row)) = self
+            .inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .map(|s| (s.explicit_wait, s.explicit_row.clone()))
+        else {
+            return;
+        };
         let key = format!(
             "{}{session_id}",
             settings_keys::SESSION_RESOURCE_WAIT_PREFIX
         );
-        if let Some(serde_json::Value::Object(mut wait)) = self.setting(&key)
-            && wait
-                .get("explicit")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-                != explicit
-        {
+        if let Some(serde_json::Value::Object(mut wait)) = self.setting(&key) {
+            let before = wait.clone();
             wait.insert("explicit".to_owned(), serde_json::Value::Bool(explicit));
-            self.set_setting(key, serde_json::Value::Object(wait));
+            match row {
+                Some(row) => {
+                    wait.insert("row".to_owned(), serde_json::Value::String(row));
+                }
+                None => {
+                    wait.remove("row");
+                }
+            }
+            if wait != before {
+                self.set_setting(key, serde_json::Value::Object(wait));
+            }
         }
     }
 
@@ -1028,14 +1108,35 @@ impl Hub {
     }
 
     /// Move a queued prompt to the front under `caller`'s send intent without
-    /// dispatching it: a session whose account parks dispatch keeps the row in
-    /// place instead of taking it out only to requeue it under a new id.
-    /// Whether the row exists.
+    /// dispatching it, and record that explicit intent for exactly this row in
+    /// the same critical section: a session that cannot dispatch now keeps the
+    /// row in place instead of taking it out only to requeue it under a new
+    /// id. The caller persists the intent with its wait. Whether the row exists.
+    pub fn hold_queued(
+        &self,
+        session_id: &str,
+        id: &str,
+        caller: &crate::prompt_origin::RequestCaller,
+    ) -> bool {
+        self.promote_with(session_id, id, caller, true)
+    }
+
+    /// Move a queued prompt to the front under `caller`'s send intent.
     pub fn promote_queued(
         &self,
         session_id: &str,
         id: &str,
         caller: &crate::prompt_origin::RequestCaller,
+    ) -> bool {
+        self.promote_with(session_id, id, caller, false)
+    }
+
+    fn promote_with(
+        &self,
+        session_id: &str,
+        id: &str,
+        caller: &crate::prompt_origin::RequestCaller,
+        hold: bool,
     ) -> bool {
         if self.is_managed_child(session_id) {
             return false;
@@ -1052,6 +1153,10 @@ impl Hub {
             let mut m = s.queue.remove(pos);
             m.initiator = Some(trigger);
             s.queue.insert(0, m);
+            if hold {
+                s.explicit_wait = true;
+                s.explicit_row = Some(id.to_owned());
+            }
         }
         self.emit_pending(session_id);
         true

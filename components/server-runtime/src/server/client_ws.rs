@@ -967,13 +967,19 @@ pub fn queue_command(
             state.hub.clear_queue(&session_id);
             Ok(())
         }
-        Inbound::RequestSendQueued { session_id, id, .. } => {
-            request_send_queued(state, caller, &session_id, &id);
+        Inbound::RequestSendQueued {
+            session_id,
+            id,
+            cmid,
+        } => {
+            request_send_queued(state, caller, &session_id, &id, cmid.as_deref());
             Ok(())
         }
-        Inbound::ForcePushQueued { session_id, id, .. } => {
-            force_push_queued(state, caller, &session_id, &id)
-        }
+        Inbound::ForcePushQueued {
+            session_id,
+            id,
+            cmid,
+        } => force_push_queued(state, caller, &session_id, &id, cmid.as_deref()),
         Inbound::QueuedToDraft { session_id, id } => {
             state.hub.queued_to_draft(&session_id, &id, caller);
             Ok(())

@@ -158,6 +158,8 @@
     "provider_accounts::usage::read": "accounts.usage",
     "provider_accounts::usage::refresh": "usage.refresh",
     "provider_accounts::usage::reset::http_reset": "usage.account_reset",
+    "provider_accounts::usage::reset::schedule::http_schedule": "usage.account_reset_schedule",
+    "provider_accounts::usage::reset::schedule::http_cancel": "usage.account_reset_cancel",
     "provider_accounts::browser::http_state": "accounts.browser",
     "provider_accounts::controls::http::http_control": "accounts.control",
     "provider_accounts::controls::http::http_acknowledge": "sessions.acknowledge_uncertain_effect",

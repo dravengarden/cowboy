@@ -3,7 +3,7 @@ import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 import { sessionQuota } from "./sessionQuota";
 import type { NativeAccountUsage } from "./nativeAccountUsage";
 import { accountControl, accountPlanLabel, namedOnlyProvider } from "./accountControls";
-import { accountManageUrl, providerManageUrl, accountProviderLabel, type ProviderUsage, record, type UsageSnapshot, usageAccountId, usageCardOrder, usagePluginId, usageResetProvider } from "./usageLimits";
+import { accountManageUrl, providerManageUrl, accountProviderLabel, nearestAvailableResetCredit, type ProviderUsage, record, type UsageSnapshot, usageAccountId, usageCardOrder, usagePluginId, usageResetProvider } from "./usageLimits";
 import type { UsageResetTarget } from "./usageApi";
 
 export interface UsageAccountCard {
@@ -157,6 +157,21 @@ export function usageResetTarget(card: UsageAccountCard): UsageResetTarget | und
   const collected = card.native?.usage;
   if (!collected || card.native?.resets_supported !== true || usageResetProvider(collected) === undefined) return undefined;
   return record(collected.rate_limits?.rateLimitResetCredits) ? { kind: "account", accountId: card.id } : undefined;
+}
+
+/** The owner's pending schedule of this card's account reset. */
+export function usageCardResetSchedule(card: UsageAccountCard): { fire_at_ms: number } | undefined {
+  const schedule = card.native?.reset_schedule;
+  return typeof schedule?.fire_at_ms === "number" ? schedule : undefined;
+}
+
+/** Why a card whose own usage reports an available reset cannot spend it,
+ * so the card says so instead of only hiding the action. */
+export function usageResetUnavailableMessage(card: UsageAccountCard): string | undefined {
+  const native = card.native;
+  if (!native?.usage || native.resets_supported === true) return undefined;
+  if (nearestAvailableResetCredit(native.usage) === undefined) return undefined;
+  return native.reset_unavailable_message;
 }
 
 /** The Provider's plan and reset page, on the cards that own reset actions. */

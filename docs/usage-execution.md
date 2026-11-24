@@ -153,7 +153,8 @@ instead of an older release elsewhere. A cached placement refusal is no longer
 reported once a placement is possible again.
 
 **Named Codex resets.** A named Codex account spends a banked reset immediately
-(no schedules), like a named Claude account: typed `confirm`, the grant ID
+or on a schedule ([named reset schedules](#named-reset-schedules)), like a
+named Claude account: typed `confirm`, the grant ID
 pinned when the dialog opened, the shared Provider pacing (one collector
 start), and only `reset`/`already_used` as outcomes; anything else is unknown
 and never retried. It runs on the Machine the account's usage placement selects
@@ -169,7 +170,70 @@ at admission from the dispatch expiry, so a preceding usage read never blocks a
 manual reset and the Provider spacing holds whenever the Machine ran it. A
 success must name the confirmed grant; a refusal is unsent only with an explicit
 `started: false` and a pre-start code. Grok and DeepSeek named accounts have no
-resets.
+resets. While a card's own usage reports an available reset that cannot be
+spent, the usage read carries `reset_unavailable_reason` and its fixed
+`reset_unavailable_message` (for example `portable_reset_identity_required` for
+an adopted account that was never signed in through Cowboy), and the card shows
+the message instead of only hiding the action.
+
+### Named reset schedules
+
+The owner may schedule one reset of a named account that can spend a reset now
+(`PUT /api/provider-accounts/{account_id}/usage/reset/schedule` with
+`fire_at_ms` one minute to one year ahead and typed `confirm`; `DELETE`
+cancels; `usage.account_reset_schedule` / `usage.account_reset_cancel` in the
+Agent API). One row per owner and account
+(`provider_account_reset_schedules`) replaces the earlier schedule; the usage
+read reports it as `reset_schedule`, and a card shows a pending schedule with
+Cancel even while its reset cannot be spent. Scheduling needs the same
+eligibility as a reset now, including a usage admission ledger that has not
+failed closed. The timer looks every 15 seconds:
+
+- The schedule is bound to the exact sign-in it was created under, in two
+  parts. A change of the account's verified identity or admission revision, a
+  disabled or revoking account, or a disabled owner withdraws it unspent,
+  logged `cancelled`. The reset route's own binding (the native login, or the
+  portable sign-in generation, read again after the vault was sampled) is
+  compared under the account lock after admission and rechecked by the
+  dispatch: another binding (a new sign-in to the same identity, or another
+  Machine's login while the scheduled one is offline) is never spent from,
+  and the schedule waits, uncounted. A fire more than an hour late (a
+  Controller that was down or rolled back, or a binding that never returned)
+  withdraws it. The owner and the cutoff are checked again just before the
+  claim; an owner disabled in the milliseconds between that check and the
+  enqueue is not caught, as for a confirmed reset, and a same-identity
+  Codex sign-in committing inside the dispatch's own lock window is the same
+  verified subscription. A token rotation changes nothing. The cutoff is
+  checked at the claim; a native reset's paced spend may start up to one
+  Provider spacing after it. The timer follows the reset route's ranking, so
+  with logins on several reset-capable Machines it waits for the scheduled
+  one only while that one ranks first (Claude resets are pinned to one
+  Machine by host policy).
+- It spends the nearest available grant of the admitted binding's successful
+  observation, at most ten minutes old. An observation older than two minutes
+  is refreshed first through the ordinary budgeted read (never waiting behind
+  a spend that holds the account); without a fresh one nothing is reserved
+  and the attempt waits a minute, uncounted.
+- Its route's binding is compared before anything is reserved, so a schedule
+  waiting for its binding never charges or holds the Provider window. It is
+  then admitted exactly like a confirmed reset (route, account lock, Provider
+  starts). Pacing only delays it to the named time (never past the cutoff); a
+  wait over two minutes (an account backoff, a long Provider window) releases
+  the Provider hold so other accounts keep polling, and the timer returns a
+  minute before the slot to hold it then. Any other refusal sent nothing and
+  is retried a minute later, three attempts in all, then logged `failed`. An
+  admission dropped before the claim (a shutdown) releases its starts unused,
+  and the pre-admission refresh waits at most 20 seconds.
+- Only after admission is the row deleted under its idempotency key (the
+  one-shot claim), before the audit row and the dispatch, so it fires at most
+  once even across a restart. Without a written `started` audit row nothing is
+  sent (this also holds for a confirmed reset). After the claim it is never
+  retried: an unknown outcome is logged `unknown`, a refusal `failed`. Each
+  claimed spend runs in its own task, so a slow one never delays others.
+
+The action log uses the account's lane (`account-<id>`, trigger `scheduled`).
+A cancellation logs the key of exactly the row it removed and never stops a
+reset the timer already claimed.
 
 Refresh-free usage needs a guarded declaration (`"token_refresh_guard"`):
 `refresh_endpoint_refused` (Codex 3.6.22) or `cli_not_started` (Grok 3.2.21).
@@ -289,8 +353,8 @@ the invocation ends, so the charged time is the actual call time. A scheduled
 reset reserves its start before any one-shot claim, so pacing only delays it. A refused or changed reset records no failure backoff; an
 authentication failure does.
 
-A named native Claude account's confirmed reset is immediate only (named
-accounts have no schedules) and runs on the Machine holding its native login,
+A named native Claude account's confirmed reset (or a
+[scheduled](#named-reset-schedules) one) runs on the Machine holding its native login,
 through the same signed collector, CLI identity and token as its quota read
 (Machine protocol 51, which enforces the reset's spacing; older Machines are
 never selected or dispatched to), on the exact release the Controller selected and never

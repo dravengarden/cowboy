@@ -77,8 +77,8 @@ keys) replace every card.
 - Service-level things unrelated to subscriptions (configuration, telemetry,
   Plugins, Machine components), and the generic Service usage engine: its
   usage-Machine settings route and Service reset scheduler remain for any
-  future non-card binding but serve no card. The Web reset scheduling UI is
-  unreachable without a Service lane.
+  future non-card binding but serve no card. The Web reset scheduling UI now
+  serves named accounts ([named reset schedules](usage-execution.md#named-reset-schedules)).
 - `browser_share_families.cards` stays as an empty list, so a Web release from
   before the retirement still accepts the account snapshot.
 

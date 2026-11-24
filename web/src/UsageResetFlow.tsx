@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   Button,
   DialogContentText,
+  Stack,
   TextField,
   ToggleButton,
   ToggleButtonGroup,
@@ -37,7 +38,7 @@ export interface UsageResetFlow {
   error: string | null;
   /** The confirmation and, for a schedule, its time are complete. */
   ready: boolean;
-  /** Only Service cards schedule; a named card's reset is immediate. */
+  /** Whether this card may schedule its reset (every reset target may). */
   scheduling: boolean;
   setFireAt: (value: string) => void;
   setConfirmText: (value: string) => void;
@@ -57,9 +58,9 @@ export function useUsageResetFlow(
   nearestCreditId: string | undefined,
   onUsageChanged: () => Promise<void>,
 ): UsageResetFlow {
-  // Only a Service target schedules; a missing or named target never flips
-  // a named reset into a schedule.
-  const scheduling = target?.kind === "service";
+  // Service and named reset targets both schedule; without a target nothing
+  // does.
+  const scheduling = target !== undefined;
   const initialMode: UsageResetMode = scheduling ? "schedule" : "now";
   const [open, setOpen] = useState(false);
   const [mode, setMode] = useState<UsageResetMode>(initialMode);
@@ -114,7 +115,6 @@ export function useUsageResetFlow(
     if (target === undefined || pinned === null || !ready) return;
     await run(async () => {
       if (mode === "schedule") {
-        if (target.kind !== "service") throw new Error("Only Service resets can be scheduled.");
         await scheduleNearestReset(target, new Date(fireAt).getTime(), confirmText);
       } else {
         // Exactly the grant confirmed when the dialog opened. A paced
@@ -176,7 +176,7 @@ export function useUsageResetFlow(
       setError(null);
     },
     cancelSchedule: async () => {
-      if (target?.kind !== "service") return;
+      if (target === undefined) return;
       await run(() => cancelNearestResetSchedule(target), "Could not cancel schedule");
     },
     submit,
@@ -257,5 +257,35 @@ export function UsageResetActions({ flow }: { flow: UsageResetFlow }): React.JSX
         />
       </NetworkButton>
     </>
+  );
+}
+
+/** A named account's pending schedule while its reset cannot be spent now
+ * (credits gone, Machine offline): still shown and cancellable. The timer
+ * withdraws it, unspent, if it cannot run when due. */
+export function PendingResetSchedule({ accountId, when, onUsageChanged }: {
+  accountId: string;
+  /** The formatted fire time. */
+  when: string;
+  onUsageChanged: () => Promise<void>;
+}): React.JSX.Element {
+  const [error, setError] = useState<string | null>(null);
+  const cancel = async (): Promise<void> => {
+    setError(null);
+    try {
+      await cancelNearestResetSchedule({ kind: "account", accountId });
+      await onUsageChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not cancel schedule");
+    }
+  };
+  return (
+    <Stack spacing={0.25} data-pending-reset-schedule>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+        <Typography variant="caption" color="text.secondary">Reset scheduled {when}</Typography>
+        <NetworkButton size="small" networkAction={cancel}>Cancel</NetworkButton>
+      </Stack>
+      {error && <Typography variant="caption" color="error.main">{error}</Typography>}
+    </Stack>
   );
 }

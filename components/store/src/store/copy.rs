@@ -79,6 +79,7 @@ const TABLES: &[&str] = &[
     "settings",
     "scheduled_wakeups",
     "scheduled_provider_actions",
+    "provider_account_reset_schedules",
     "provider_action_logs",
     "machine_enrollment_tokens",
     "runtime_incidents",

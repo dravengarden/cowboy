@@ -59,8 +59,8 @@ import { ClientStorageInfoSection, ServiceStorageInfoSection } from "./InfoRunti
 import { SessionMaintenancePanel } from "./SessionMaintenancePanel";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { AccountBrowserEntry } from "./machineBrowser/AccountBrowserEntry";
-import { displayPlan, orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageResetTarget } from "./usageAccounts";
-import { UsageResetActions, UsageResetFields, useUsageResetFlow } from "./UsageResetFlow";
+import { displayPlan, orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageResetUnavailableMessage } from "./usageAccounts";
+import { PendingResetSchedule, UsageResetActions, UsageResetFields, useUsageResetFlow } from "./UsageResetFlow";
 import { useProviderCatalog } from "./providerCatalog";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
 import { formatCompactCurrency, usageBalanceForAccount, usageWidgetForAccount, usageWidgetHasBalance } from "./usageWidget";
@@ -141,7 +141,7 @@ function ProviderUsageCard({ account, usage, schedule, now, onUsageChanged, onRe
   );
 }
 
-function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsageChanged, onRefresh, refreshing, children, action }: {
+function ProviderUsageCardBody({ account: identity, usage, schedule: serviceSchedule, now, onUsageChanged, onRefresh, refreshing, children, action }: {
   account: UsageAccountCard;
   children?: React.ReactNode;
   action?: React.ReactNode;
@@ -202,6 +202,8 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
   const nearestCredit = nearestAvailableResetCredit(usage);
   const nearestCreditId = str(nearestCredit?.id);
   const resetTarget = usageResetTarget(identity);
+  const schedule = serviceSchedule ?? usageCardResetSchedule(identity);
+  const resetUnavailable = usageResetUnavailableMessage(identity);
   const manageUrl = usageCardManageUrl(identity);
   const reset = useUsageResetFlow(resetTarget, nearestCreditId, onUsageChanged);
   const summary = record(usage.activity?.summary);
@@ -473,6 +475,19 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
               )}
             </AccordionDetails>
           </Accordion>
+        )}
+        {resetUnavailable !== undefined && (
+          <Typography variant="caption" color="text.secondary" data-reset-unavailable>
+            {resetUnavailable}
+          </Typography>
+        )}
+        {/* Shown with the nearest credit when it can be spent; otherwise here. */}
+        {identity.native && schedule && (resetTarget === undefined || nearestCreditId === undefined) && (
+          <PendingResetSchedule
+            accountId={identity.id}
+            when={fullDateTime(schedule.fire_at_ms / 1000)}
+            onUsageChanged={onUsageChanged}
+          />
         )}
         {manageUrl !== undefined && (
           <Button

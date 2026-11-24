@@ -24,7 +24,7 @@ import { CallNoticeLine, pendingCallNotice } from "./CallNoticeLine";
 import { QueuedAttachmentChips } from "./QueuedAttachmentChips";
 import { useTouchComposer } from "./ComposerTextarea";
 import { pendingEditLiveText, pendingPanelDisclosureDecision, pendingRowVisibleText } from "./pendingEditLifecycle";
-import { clearPendingEdit, getPendingEdit, recoverPendingEditId, subscribePendingEditRestore, setPendingEdit } from "./pendingEditStore";
+import { beginPendingEditEncoding, clearPendingEdit, getPendingEdit, type PendingEditEncode, pendingEditEncoding, recoverPendingEditId, subscribePendingEditRestore, setPendingEdit } from "./pendingEditStore";
 import { isImeKeyEvent } from "./imeKey";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
@@ -2060,7 +2060,7 @@ export function PendingRow({
     // A synchronous paste placeholder has no ACP bytes yet. Keep the editor
     // alive until encoding either promotes or removes it; persisting the empty
     // block would make the pending row restore a broken inline token.
-    if (editAttachmentsPending) return false;
+    if (editAttachmentsPending || pendingEditEncoding(sessionId, kind, message.id)) return false;
     const text = liveEditText();
     editTextRef.current = text;
     setDraft(text);
@@ -2284,6 +2284,7 @@ export function PendingRow({
           // for raster encoding first unmounts the textarea outside UIKit's
           // activation window and loses the keyboard/selection.
           const pending = images.map((file) => pendingImageAttachment(file));
+          const settleRecord = beginPendingEditEncoding(sessionId, kind, message.id, pending);
           pending.forEach(registerInlineAttachment);
           setEditAttachments((previous) => [...previous, ...pending]);
           activeEditEditor()?.insertImages(pending, options.selection);
@@ -2296,6 +2297,7 @@ export function PendingRow({
               result.status === "fulfilled" ? [result.value] : []
             );
             completed.forEach(registerInlineAttachment);
+            settleRecord(completed);
             const completedById = new Map(
               completed.map((item) => [item.id, item]),
             );
@@ -2317,7 +2319,9 @@ export function PendingRow({
         if (rest.length === 0) return;
         files = rest;
       }
-      void filesToAttachments(files).then((added) => {
+      const settleFiles = beginPendingEditEncoding(sessionId, kind, message.id, []);
+      void filesToAttachments(files).catch((): Attachment[] => []).then((added) => {
+        settleFiles(added);
         if (added.length === 0) return;
         // Mirror addFiles: register bytes BEFORE inserting the token so the
         // inline decoration resolves synchronously, keep editAttachments as the
@@ -2325,7 +2329,11 @@ export function PendingRow({
         // Without the register+insert, a pasted image during edit only became a
         // footer chip and never rendered inline in the editor (the reported bug).
         added.forEach(registerInlineAttachment);
-        setEditAttachments((prev) => [...prev, ...added]);
+        // The store's settlement may already have handed them to this editor.
+        setEditAttachments((prev) => [
+          ...prev,
+          ...added.filter((attachment) => !prev.some((held) => held.id === attachment.id)),
+        ]);
         // Insert the token into whichever editor is actually MOUNTED: the
         // fullscreen overlay owns the edit while open (overlayEditorRef), and the
         // inline editor is unmounted then (`{!overlayOpen && …}`). Hardcoding
@@ -2338,11 +2346,20 @@ export function PendingRow({
     };
     const pasteEditClipboardImages = (
       request: NativeClipboardImagePasteRequest,
-    ): Promise<void> =>
-      runNativeClipboardImagePaste(request, {
+    ): Promise<void> => {
+      // Every stage of one paste belongs to the edit it started in.
+      const stages: { encode: PendingEditEncode; ids: Set<string> }[] = [];
+      return runNativeClipboardImagePaste(request, {
         stage: (pending, selection): void => {
-          pending.forEach(registerInlineAttachment);
+          if (stages[0] !== undefined && !stages[0].encode.alive()) return;
           const editor = activeEditEditor();
+          // Extras staged after the editor unmounted get no token from it;
+          // the store places them when they settle.
+          stages.push({
+            encode: beginPendingEditEncoding(sessionId, kind, message.id, editor ? pending : []),
+            ids: new Set(pending.map((attachment) => attachment.id)),
+          });
+          pending.forEach(registerInlineAttachment);
           flushSync(() => {
             setEditAttachments((previous) => [...previous, ...pending]);
             editor?.insertImages(pending, selection);
@@ -2350,6 +2367,9 @@ export function PendingRow({
         },
         settle: (pending, completed): void => {
           completed.forEach(registerInlineAttachment);
+          for (const stage of stages) {
+            stage.encode(completed.filter((attachment) => stage.ids.has(attachment.id)));
+          }
           const completedById = new Map(
             completed.map((attachment) => [attachment.id, attachment]),
           );
@@ -2361,7 +2381,11 @@ export function PendingRow({
           );
           editor?.refreshImages();
         },
+      }).finally(() => {
+        // A read that failed before settling leaves nothing to wait for.
+        for (const stage of stages) stage.encode([]);
       });
+    };
     // Editing reuses the composer surface, but Desktop treats it as a transaction:
     // Mod+S saves and Esc asks before throwing away the local buffer.
     const desktopEditBar = (

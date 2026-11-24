@@ -81,7 +81,7 @@ import {
 } from "../usageLimits";
 import { UsageLogs } from "../UsageLogs";
 import type { UsageResetTarget } from "../usageApi";
-import { UsageResetActions, UsageResetFields, useUsageResetFlow } from "../UsageResetFlow";
+import { PendingResetSchedule, UsageResetActions, UsageResetFields, useUsageResetFlow } from "../UsageResetFlow";
 import { PluginSlot } from "../pluginHost";
 import { useProviderCatalog } from "../providerCatalog";
 import {
@@ -96,7 +96,7 @@ import { useSubscriptionAccounts } from "../subscriptionAccounts";
 import { type AboutValues, DEFAULT_ABOUT_VALUES, topBarUsageGroups, topBarUsageItems, useAboutPreferences } from "../aboutPreferences";
 import { useNativeAccountUsage } from "../nativeAccountUsage";
 import { sameComposerSheetSession } from "../composerSessionSlice";
-import { registeredUsageAccounts, sameSessionQuotaInputs, type UsageAccountCard, usageCardManageUrl, usageResetTarget } from "../usageAccounts";
+import { registeredUsageAccounts, sameSessionQuotaInputs, type UsageAccountCard, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageResetUnavailableMessage } from "../usageAccounts";
 import { AccountBrowserEntry } from "../machineBrowser/AccountBrowserEntry";
 import { DesktopModal } from "./DesktopModal";
 import { RunConfigurationDialog } from "./RunConfigurationDialog";
@@ -679,6 +679,10 @@ function DesktopProviderUsage({ account, schedule, onUsageChanged, onRefresh, re
 }): React.JSX.Element {
   const usage = account.usage;
   const resetTarget = usageResetTarget(account);
+  const resetSchedule = schedule ?? usageCardResetSchedule(account);
+  const creditList = record(usage.rate_limits?.rateLimitResetCredits)?.credits;
+  const hasCreditList = Array.isArray(creditList) && creditList.length > 0;
+  const resetUnavailable = usageResetUnavailableMessage(account);
   const manageUrl = usageCardManageUrl(account);
   const [details, setDetails] = useState(false);
   const limits = usageLimits(usage);
@@ -745,6 +749,17 @@ function DesktopProviderUsage({ account, schedule, onUsageChanged, onRefresh, re
           </Typography>
         )}
       </PluginSlot>
+      {resetUnavailable !== undefined && (
+        <Typography variant="caption" color="text.secondary" data-reset-unavailable>{resetUnavailable}</Typography>
+      )}
+      {/* The reset list shows it when it can be spent; otherwise here. */}
+      {account.native && resetSchedule && (resetTarget === undefined || !hasCreditList) && (
+        <PendingResetSchedule
+          accountId={account.id}
+          when={fullResetTime(resetSchedule.fire_at_ms / 1000)}
+          onUsageChanged={onUsageChanged}
+        />
+      )}
       <Button size="small" aria-expanded={details} onClick={() => setDetails((value) => !value)}
         sx={{ alignSelf: "flex-start" }}>{details ? "Hide details" : "Details"}</Button>
       <Collapse in={details}>
@@ -756,7 +771,7 @@ function DesktopProviderUsage({ account, schedule, onUsageChanged, onRefresh, re
         {resetTarget && <DesktopUsageExtras
           usage={usage}
           target={resetTarget}
-          schedule={schedule}
+          schedule={resetSchedule}
           onUsageChanged={onUsageChanged}
         />}
       </Collapse>

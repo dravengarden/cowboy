@@ -63,7 +63,7 @@ const zhMessages = {
   "appearance.imageAlt": "Cowboy 五十套图标配色中的部分方案",
   "meta.title": "Cowboy — 远程 Agent IDE",
   "meta.description":
-    "Cowboy 是自托管远程 Agent IDE，可从一个控制平面安全调度你的多台机器上的 Codex、Claude Code、Grok 与 DeepSeek runtime。",
+    "Cowboy 是自托管远程 Agent IDE，可从一个控制平面安全调度你的多台机器上的 Codex、Claude Code、Antigravity、Grok 与 DeepSeek runtime。",
   "meta.socialDescription":
     "在一个自托管控制平面中管理你的 Agent 与 Machine，由独立版本、签名并固定的插件驱动。",
   "meta.twitterDescription": "自托管一个安全控制平面，调度你的多台 Machine 上的所有编码 Agent。",
@@ -76,6 +76,7 @@ const zhMessages = {
   "nav.plugins": "插件",
   "nav.architecture": "架构",
   "nav.start": "开始使用",
+  "nav.docs": "文档",
   "controls.site": "网站控制",
   "preferences.title": "偏好设置",
   "preferences.subtitle": "主题与语言",
@@ -98,7 +99,7 @@ const zhMessages = {
   "hero.workspace": "一个工作区。",
   "hero.hosted": "由你托管。",
   "hero.lede":
-    "在你的基础设施上自托管 Cowboy，调度每台已加入 Machine 上的 Codex、Claude Code、Grok 与 DeepSeek；稍后重新连接时，worker 仍持续运行在原 Machine 上。",
+    "在你的基础设施上自托管 Cowboy，调度每台已加入 Machine 上的 Codex、Claude Code、Antigravity、Grok 与 DeepSeek；稍后重新连接时，worker 仍持续运行在原 Machine 上。",
   "hero.ownership": "你的控制平面。你的数据。你的凭据。永远属于你。",
   "hero.run": "运行 Cowboy",
   "hero.explore": "探索插件",
@@ -168,11 +169,14 @@ const zhMessages = {
   "ecosystem.intro":
     "每个集成都通过同一套通用生命周期独立版本化、打包、签名、发布、安装、升级、回滚与移除。Cowboy 从类型化契约中读取能力，而不是硬编码供应商界面。",
   "plugins.filterAria": "筛选插件",
-  "plugins.filter.all": () => `全部 ${String(document.querySelectorAll(".plugin-card").length)}`,
+  "plugins.filter.all": "全部",
   "plugins.filter.agent": "Agent 提供方",
   "plugins.filter.code": "代码智能",
   "plugins.filter.telemetry": "遥测",
   "plugins.filter.extension": "工作区扩展",
+  "plugins.filter.memory": "记忆",
+  "plugins.filter.calls": "Agent 调用",
+  "plugins.filter.browser": "Machine 浏览器",
   "plugins.browse": "查看源码",
   "plugins.kind.agent": "Agent 提供方",
   "plugins.kind.code": "代码智能",
@@ -257,7 +261,7 @@ const zhMessages = {
   "start.eyebrow": "开源，随时可构建",
   "start.title": "让每个 Agent 触手可及。",
   "start.intro":
-    "Cowboy 在固定版本的 Nix shell 中开发，可使用内存、SQLite 或 PostgreSQL 存储。先在本地启动，再加入实际工作所在的 Machines。",
+    "在固定版本的 Nix shell 中从源码构建，在你的 HTTPS 域名后用 SQLite 或 PostgreSQL 运行一个 Hub，再加入实际工作所在的 Linux 与 macOS Machines。",
   "start.github": "在 GitHub 查看",
   "start.plugin": "构建插件",
   "start.quick": "cowboy — 快速开始",
@@ -273,6 +277,14 @@ const zhMessages = {
   "footer.contract": "平台契约",
   "footer.top": "返回顶部",
   "footer.license": "MIT 许可 · 基于 ACP 构建",
+  "footer.contributing": "参与贡献",
+  "footer.issues": "问题反馈",
+  "start.step.build": "构建并启动 Hub",
+  "start.step.buildBody": "固定版本的 Nix 工具链，默认使用 SQLite。",
+  "start.step.proxy": "通过 HTTPS 提供服务",
+  "start.step.proxyBody": "同主机 TLS 反向代理与设备注册 →",
+  "start.step.enroll": "加入你的 Machines",
+  "start.step.enrollBody": "一次性注册码，Machine 主动外连 →",
 };
 
 const originalText = new WeakMap();
@@ -497,7 +509,14 @@ const copyButton = document.querySelector("[data-copy-target]");
 async function copyQuickStart() {
   const targetId = copyButton?.getAttribute("data-copy-target");
   const source = targetId ? document.getElementById(targetId) : null;
-  const text = source?.innerText ?? "";
+  // Copy only runnable commands: prompts, comments, and sample output are
+  // presentation and must not reach the shell.
+  const clone = source?.cloneNode(true);
+  clone?.querySelectorAll("[data-copy-exclude]").forEach((node) => node.remove());
+  const text = (clone?.textContent ?? "")
+    .split("\n")
+    .filter((line) => line.trim() !== "")
+    .join("\n");
   if (!text) return;
 
   try {

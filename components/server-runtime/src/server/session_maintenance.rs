@@ -98,6 +98,9 @@ pub fn wait(hub: &Hub, session: &str, reason: &str) {
     {
         value["explicit"] = serde_json::Value::Bool(explicit);
     }
+    if let Some(row) = current.as_ref().and_then(|v| v.get("row")).cloned() {
+        value["row"] = row;
+    }
     if hub.setting(&key).as_ref() != Some(&value) {
         hub.set_setting(key, value);
     }
@@ -137,7 +140,10 @@ fn resource_block(state: &AppState, machine: &str) -> Option<&'static str> {
 
 /// A prompt waiting for its rebooting execution Machine is only retried once
 /// that Machine is connected again; until then the queue is left untouched.
-fn execution_target_connected(state: &AppState, meta: &crate::core::SessionMeta) -> bool {
+pub(crate) fn execution_target_connected(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+) -> bool {
     let Some(record) = &meta.execution_binding else {
         return true;
     };
@@ -154,6 +160,17 @@ fn execution_target_connected(state: &AppState, meta: &crate::core::SessionMeta)
         return true;
     };
     state.machine_control.operation_connection(&target).is_ok()
+}
+
+/// Whether a waiting session's retry would only find its head blocked. Skips
+/// popping and re-persisting the entire message on every blocked tick (the
+/// dispatcher still atomically rechecks), and an explicit retry waiting for
+/// the edit of its row leaves the Machine's one wake this tick to another
+/// waiting session.
+fn retry_blocked(state: &Arc<AppState>, meta: &crate::core::SessionMeta, explicit: bool) -> bool {
+    !execution_target_connected(state, meta)
+        || account_parked(state, meta)
+        || (explicit && state.hub.head_held_for_editing(&meta.id))
 }
 
 /// A named-only account parks the session's queue: show why and skip it.
@@ -341,9 +358,7 @@ pub fn start(state: &Arc<AppState>) {
                         || explicit
                         || matches!(meta.status, Status::Exited | Status::Running))
                 {
-                    // Avoid popping/re-persisting the entire message on every
-                    // blocked tick. The dispatcher still atomically rechecks.
-                    if !execution_target_connected(&state, meta) || account_parked(&state, meta) {
+                    if retry_blocked(&state, meta, explicit) {
                         continue;
                     }
                     if !holds_worker_slot(&state.runtime_router, meta) {

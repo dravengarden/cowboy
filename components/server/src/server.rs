@@ -418,6 +418,9 @@ async fn serve_axum(
         tokio::spawn(run_usage_broadcast(Arc::clone(&state))),
         tokio::spawn(superagent::run(Arc::clone(&state))),
         tokio::spawn(provider_accounts::usage::run(Arc::clone(&state.accounts))),
+        tokio::spawn(provider_accounts::usage::reset::schedule::run(Arc::clone(
+            &state.accounts,
+        ))),
         tokio::spawn(session_context::rollover::observe(Arc::clone(&state))),
     ];
     let code_buffers = Arc::clone(&state.code_buffers);
