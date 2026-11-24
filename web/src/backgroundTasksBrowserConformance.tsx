@@ -21,6 +21,8 @@ import { BackgroundTasksInspector } from "./BackgroundTasksInspector";
 import { type ObservedPage, setSubagentTranscriptTransport } from "./observedTranscript";
 import { closeBackgroundTasks, inspectorState, openBackgroundTask } from "./backgroundTaskInspectorState";
 import { BrowserProductTheme } from "./browserProductTheme";
+import { DesktopCommandProvider } from "./desktop/commands/DesktopCommandProvider";
+import { DesktopWorkspaceProvider } from "./desktop/DesktopWorkspaceController";
 import { type CallApproval, currentCallApproval, receiveCallApproval } from "./callApproval";
 import { derive } from "./derive";
 import { ProviderQuotaStatusRow } from "./ProviderQuotaStatus";
@@ -189,7 +191,13 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
         <SurfaceContext.Provider value={surface}>
           <BrowserProductTheme>
             <CssBaseline />
-            {node}
+            {surface.kind === "desktop"
+              ? (
+                <DesktopWorkspaceProvider>
+                  <DesktopCommandProvider>{node}</DesktopCommandProvider>
+                </DesktopWorkspaceProvider>
+              )
+              : node}
           </BrowserProductTheme>
         </SurfaceContext.Provider>,
       )
@@ -281,12 +289,18 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
       "the row's task is selected",
     );
     const order = [...document.querySelectorAll<HTMLElement>("[data-task-option]")].map((node) => node.dataset["taskOption"]);
-    press(dialog, "j");
+    press(document.activeElement ?? dialog, "j");
     await settle();
-    check(inspectorState().key === order[order.indexOf(subagentKey("a")) + 1], "j selects the next task");
-    press(dialog, "k");
+    check(inspectorState().key === order[order.indexOf(subagentKey("a")) + 1], "j selects the next task under DesktopCommandProvider");
+    press(document.activeElement ?? dialog, "k");
     await settle();
-    check(inspectorState().key === subagentKey("a"), "k selects the previous task");
+    check(inspectorState().key === subagentKey("a"), "k selects the previous task under DesktopCommandProvider");
+    press(document.activeElement ?? dialog, "ArrowDown");
+    await settle();
+    check(inspectorState().key === order[order.indexOf(subagentKey("a")) + 1], "ArrowDown selects the next task");
+    press(document.activeElement ?? dialog, "ArrowUp");
+    await settle();
+    check(inspectorState().key === subagentKey("a"), "ArrowUp selects the previous task");
     press(dialog, "]");
     await settle();
     press(dialog, "[");
