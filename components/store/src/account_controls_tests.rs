@@ -491,43 +491,85 @@ fn logout_state_summarizes_its_machine_targets() {
 fn a_prompt_agy_rejected_before_dispatch_leaves_the_account_alone() {
     // sess-1795490077099: images sent while an `ask_question` was pending;
     // `agy` refused the prompt locally and no backend request was made.
-    let rejected = |cowboy: serde_json::Value| {
+    let rejected = |code: &str, cowboy: serde_json::Value| {
         classify_stop_reason(&displayed_proxy_error(
-            "antigravity_prompt_rejected:image_answer",
+            &format!("antigravity_prompt_rejected:{code}"),
             "Antigravity is waiting for your answer to its question.",
             &cowboy,
         ))
     };
     let evidence = serde_json::json!({
         "class": "not_dispatched", "successes": 0, "barrier": true,
-        "dispatches": 0, "transient": 0, "refusals": [],
+        "prompts": 1, "dispatches": 0, "transient": 0, "refusals": [],
     });
-    let proven = rejected(serde_json::json!({
-        "antigravity_backend": evidence,
-        "prompt_rejected": "image_answer",
-    }));
+    let with = |key: &str, value: serde_json::Value| {
+        let mut backend = evidence.clone();
+        backend[key] = value;
+        serde_json::json!({"antigravity_backend": backend, "prompt_rejected": "image_answer"})
+    };
+    let without = |key: &str| {
+        let mut backend = evidence.clone();
+        backend.as_object_mut().unwrap().remove(key);
+        serde_json::json!({"antigravity_backend": backend, "prompt_rejected": "image_answer"})
+    };
+    let proven = rejected(
+        "image_answer",
+        serde_json::json!({"antigravity_backend": evidence, "prompt_rejected": "image_answer"}),
+    );
     assert_eq!(proven, Signal::None);
     assert_eq!(signal_transition(&proven), None);
-    // Only the complete structured result counts.
-    for cowboy in [
-        serde_json::json!({"antigravity_backend": evidence, "prompt_rejected": "other"}),
-        serde_json::json!({"antigravity_backend": evidence}),
-        serde_json::json!({
-            "antigravity_backend": {"class": "unknown_refusal"},
-            "prompt_rejected": "image_answer",
-        }),
-        serde_json::json!({
-            "antigravity_backend": evidence,
-            "prompt_rejected": "image_answer",
-            "policy_violation": "search_web",
-        }),
-        serde_json::json!({
-            "antigravity_backend": evidence,
-            "prompt_rejected": "image_answer",
-            "uncertain_effect": {"method": "cowboy/WriteFile"},
-        }),
+    // Only the complete, self-consistent result of a known code counts.
+    let mut unproven = vec![
+        rejected(
+            "other",
+            serde_json::json!({"antigravity_backend": evidence, "prompt_rejected": "other"}),
+        ),
+        rejected(
+            "image_answer",
+            serde_json::json!({"antigravity_backend": evidence, "prompt_rejected": "other"}),
+        ),
+        rejected(
+            "image_answer",
+            serde_json::json!({"antigravity_backend": evidence}),
+        ),
+        rejected(
+            "image_answer",
+            serde_json::json!({
+                "antigravity_backend": evidence,
+                "prompt_rejected": "image_answer",
+                "policy_violation": "search_web",
+            }),
+        ),
+        rejected(
+            "image_answer",
+            serde_json::json!({
+                "antigravity_backend": evidence,
+                "prompt_rejected": "image_answer",
+                "uncertain_effect": "fs/writeFile",
+            }),
+        ),
+    ];
+    for (key, value) in [
+        ("class", serde_json::json!("unknown_refusal")),
+        ("barrier", serde_json::json!(false)),
+        ("prompts", serde_json::json!(0)),
+        ("prompts", serde_json::json!(2)),
+        ("dispatches", serde_json::json!(1)),
+        ("successes", serde_json::json!(1)),
+        ("transient", serde_json::json!(1)),
+        ("successes", serde_json::json!("0")),
+        (
+            "refusals",
+            serde_json::json!([{"status": "PERMISSION_DENIED", "code": 403, "reasons": []}]),
+        ),
     ] {
-        assert_eq!(rejected(cowboy), Signal::Unclassified);
+        unproven.push(rejected("image_answer", with(key, value)));
+    }
+    for key in ["barrier", "prompts", "dispatches", "successes", "transient", "refusals"] {
+        unproven.push(rejected("image_answer", without(key)));
+    }
+    for signal in unproven {
+        assert_eq!(signal, Signal::Unclassified);
     }
     // Vendor text that merely names the prefix is not the proxy's result.
     assert_eq!(

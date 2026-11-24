@@ -52,6 +52,10 @@ const transient = (record) => record.kind === "retry" && TRANSIENT_CODES.has(rec
 const DISPATCH = new RegExp(
   `${PREFIX}(?:server\\.go:\\d+\\] Sending user message to conversation \\S+ \\(items=\\d+, media=\\d+\\)$|prompt\\.go:\\d+\\] Responding to pending ask_question for session )`,
 );
+// `agy` reading a prompt request (logged before it handles it).
+const PROMPT_RECEIPT = new RegExp(
+  `${PREFIX}server\\.go:\\d+\\] ACP Request received: session/prompt$`,
+);
 // A failed backend request whose structured error follows as JSON lines.
 const REQUEST_FAILURE = new RegExp(
   `${PREFIX}http_helpers\\.go:\\d+\\] Failed to make code assist backend request \\((https://[^)\\s]+)\\): \\{$`,
@@ -91,8 +95,8 @@ function escape(value) {
 
 /**
  * Parse log text into backend records: `success`, `step_failure` (status,
- * code) and `request_failure` (status, code, reasons), and `dispatch` (the
- * prompt reached `agy`'s agent loop). Structured JSON is
+ * code) and `request_failure` (status, code, reasons), `prompt` (`agy` read
+ * a `session/prompt`) and `dispatch` (a prompt reached its agent loop). Structured JSON is
  * read only from a request failure's own block and only for its `code`,
  * `status` and `details[].reason` fields. The barrier is the request
  * barrier `nonce` names when given, else the session's stream barrier.
@@ -118,6 +122,10 @@ export function parseRecords(text, sessionId, nonce) {
     }
     if (DISPATCH.test(line)) {
       records.push({ kind: "dispatch" });
+      continue;
+    }
+    if (PROMPT_RECEIPT.test(line)) {
+      records.push({ kind: "prompt" });
       continue;
     }
     const retry = RETRY.exec(line);
@@ -202,10 +210,15 @@ export function classify(records, { prior = [], stopReason } = {}) {
       refusals.push({ ...record, reasons: source ? source.reasons : [] });
     }
   }
+  // Prompt receipts and dispatches count only through the turn's barrier:
+  // another session's prompt read after it is not this turn's.
+  const end = records.findIndex((record) => record.kind === "barrier");
+  const turn = end < 0 ? records : records.slice(0, end);
   const evidence = {
     successes,
     barrier,
-    dispatches: records.filter((record) => record.kind === "dispatch").length,
+    prompts: turn.filter((record) => record.kind === "prompt").length,
+    dispatches: turn.filter((record) => record.kind === "dispatch").length,
     transient: records.filter(transient).length,
     refusals: refusals.map(({ status, code, reasons }) => ({
       status: status ?? null,

@@ -210,8 +210,17 @@
         },
         {
           "when": {
-            "op": "contains",
-            "value": "antigravity_prompt_rejected:image_answer"
+            "op": "all",
+            "values": [
+              {
+                "op": "contains",
+                "value": "antigravity_prompt_rejected:image_answer"
+              },
+              {
+                "op": "contains",
+                "value": "\"not_dispatched\""
+              }
+            ]
           },
           "user_detail": "Antigravity is waiting for your answer to its question, and images can't answer it. Nothing was sent to Google. Reply in text first, then send the images.",
           "classification": "antigravity-prompt-rejected",
@@ -273,7 +282,7 @@
         "id": "cowboy-antigravity-acp",
         "version": "1.0.27",
         "source": "cowboy:components/provider-runtime/packages/antigravity-acp",
-        "integrity": "sha256:68c720e9f22246be4fdebd260193839c98003bf41f40a8092a53e9357c9c78c4",
+        "integrity": "sha256:556feae4919151e81562600dfc07727f054dd1766d487a4d5d23e6b79570be57",
         "private": true
       },
       {

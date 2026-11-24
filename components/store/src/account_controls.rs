@@ -21,6 +21,8 @@ pub const VIOLATION_PREFIX: &str = "antigravity_policy_violation:";
 pub const PROMPT_REJECTED_PREFIX: &str = "antigravity_prompt_rejected:";
 /// The backend class the proxy reports beside a prompt rejection.
 const NOT_DISPATCHED: &str = "not_dispatched";
+/// The prompt rejections the proxy may report (`LOCAL_REJECTIONS`).
+const PROMPT_REJECTION_CODES: [&str; 1] = ["image_answer"];
 /// How long a rate limit holds when the backend gave no reset time.
 pub const DEFAULT_RATE_LIMIT_MS: i64 = 60 * 60 * 1000;
 /// The reason prefix of a rate limit that holds for one model quota group
@@ -533,15 +535,7 @@ fn proxy_result(error: &str) -> Option<Signal> {
         return (violation?.as_str()? == tool).then(|| Signal::PolicyViolation(tool.into()));
     }
     if let Some(code) = message.strip_prefix(PROMPT_REJECTED_PREFIX) {
-        // Only the complete structured result counts: the same code in
-        // `cowboy`, the not-dispatched evidence, and no violation or
-        // possible effect beside it. Anything else stays unclassified.
-        let code = closed_code(code)?;
-        let consistent = violation.is_none()
-            && cowboy.get("uncertain_effect").is_none()
-            && cowboy.get("prompt_rejected")?.as_str()? == code
-            && cowboy.get("antigravity_backend")?.get("class")?.as_str()? == NOT_DISPATCHED;
-        return consistent.then_some(Signal::None);
+        return prompt_rejection(code, cowboy).then_some(Signal::None);
     }
     let class = closed_code(message.strip_prefix(REFUSAL_PREFIX)?)?;
     if violation.is_some() || cowboy.get("antigravity_backend")?.get("class")?.as_str()? != class {
@@ -552,6 +546,32 @@ fn proxy_result(error: &str) -> Option<Signal> {
         AccountState::Ok => None,
         state => Some(Signal::Refused(state)),
     }
+}
+
+/// Whether a prompt rejection is the proxy's complete, consistent result: a
+/// known code, the same code in `cowboy`, no violation or possible effect,
+/// and not-dispatched evidence that itself proves it (its barrier, exactly
+/// one prompt receipt, and zero dispatches, successes, transient retries and
+/// refusals). Anything missing or contradictory stays unclassified.
+fn prompt_rejection(code: &str, cowboy: &serde_json::Map<String, serde_json::Value>) -> bool {
+    let Some(backend) = cowboy.get("antigravity_backend").and_then(|b| b.as_object()) else {
+        return false;
+    };
+    let count = |key: &str| backend.get(key).and_then(serde_json::Value::as_u64);
+    PROMPT_REJECTION_CODES.contains(&code)
+        && cowboy.get("policy_violation").is_none()
+        && cowboy.get("uncertain_effect").is_none()
+        && cowboy.get("prompt_rejected").and_then(|v| v.as_str()) == Some(code)
+        && backend.get("class").and_then(|v| v.as_str()) == Some(NOT_DISPATCHED)
+        && backend.get("barrier").and_then(serde_json::Value::as_bool) == Some(true)
+        && count("prompts") == Some(1)
+        && count("dispatches") == Some(0)
+        && count("successes") == Some(0)
+        && count("transient") == Some(0)
+        && backend
+            .get("refusals")
+            .and_then(|v| v.as_array())
+            .is_some_and(Vec::is_empty)
 }
 
 /// The account transition a signal causes: the state to enter (never lower

@@ -1203,18 +1203,23 @@ export class AcpProxy {
     const uncertain = turn?.uncertain;
     // A prompt `agy` refused before dispatching it reached no backend: the
     // owner reads why, and the Controller leaves the account as it is. A
-    // turn with a violation, a possible effect, a subagent or an earlier
-    // attempt is never one.
+    // stopped turn, or one with a violation, a possible effect, a subagent
+    // started or an earlier attempt, is never one.
     const rejection =
       message.result === undefined &&
       message.error !== undefined &&
       violation === undefined &&
       uncertain === undefined &&
-      !turn?.childBackends?.length &&
-      !turn?.structured?.backends?.length
-        ? localRejection(message.error, backend)
+      turn !== undefined &&
+      turn.cancelled !== true &&
+      turn.subagents !== true &&
+      !turn.childBackends?.length &&
+      !turn.structured?.backends?.length
+        ? localRejection(message.error, backend, record.params)
         : undefined;
-    if (rejection) {
+    // Emitted only while the proxy still runs this turn: a stop or a forced
+    // exit that began meanwhile keeps the unproven outcome.
+    if (rejection && this.killed === undefined && turn.cancelled !== true) {
       return this.endPrompt(record, {
         jsonrpc: "2.0",
         id: replyId,
@@ -1491,51 +1496,70 @@ function attempts(turn, settled) {
     ...settled,
     successes: total("successes"),
     transient: total("transient"),
+    prompts: total("prompts"),
+    dispatches: total("dispatches"),
     refusals: all.flatMap((item) => (Array.isArray(item.refusals) ? item.refusals : [])),
     attempts: all.length,
   };
 }
 
-/** The strings a JSON-RPC error carries: its message and string data fields. */
-function errorTexts(error) {
-  const texts = [];
-  const add = (value) => {
-    if (typeof value === "string") texts.push(value.trim());
-  };
-  add(error?.message);
-  const data = error?.data;
-  add(data);
-  if (data !== null && typeof data === "object") {
-    add(data.message);
-    add(data.error);
-    add(data.details);
-  }
-  return texts;
+/** Generic JSON-RPC labels a wrapped local error may carry beside its text. */
+const GENERIC_LABELS = new Set(["Internal error", "Invalid params", "Invalid request"]);
+
+/** Whether a forwarded prompt carries at least one image block. */
+export function promptHasImage(params) {
+  return Array.isArray(params?.prompt) && params.prompt.some((block) => block?.type === "image");
+}
+
+/**
+ * The listed rejection an `agy` prompt error states, else `undefined`: one
+ * of its fields (`message`, a string `data`, or `data.message`, `data.error`,
+ * `data.details`) is exactly the listed text, and every other present field
+ * is that text or a generic JSON-RPC label. ACP's `-32000`
+ * (`auth_required`) is never one.
+ */
+function statedRejection(error) {
+  if (error === null || typeof error !== "object" || error.code === -32000) return undefined;
+  const fields = [error.message];
+  const data = error.data;
+  if (typeof data === "string") fields.push(data);
+  else if (data !== null && typeof data === "object") {
+    fields.push(data.message, data.error, data.details);
+  } else if (data !== undefined) return undefined;
+  const present = fields.filter((field) => field !== undefined);
+  if (present.some((field) => typeof field !== "string")) return undefined;
+  return LOCAL_REJECTIONS.find(
+    ({ text }) =>
+      present.includes(text) &&
+      present.every((field) => field === text || GENERIC_LABELS.has(field)),
+  );
 }
 
 /**
  * The local rejection an `agy` prompt error proves, else `undefined`. Proof
- * needs both: the error is one of `LOCAL_REJECTIONS` (alone, or as the last
- * `: `-separated part of a wrapped message), and the turn's log window holds
- * its barrier and nothing else of the turn: no dispatch to the agent loop, no
- * backend success, retry or refusal. An error after a dispatch, or one whose
- * window could not be read, is never a local rejection.
+ * needs all of: the error states a listed rejection exactly
+ * (`statedRejection`); the prompt is the kind that rejection is about (an
+ * image answer needs an image); and the turn's log window, through its
+ * barrier, holds exactly one prompt receipt (this one) and no dispatch to
+ * the agent loop, with no backend success, retry or refusal anywhere in it.
+ * An error after a dispatch, a window that could not be read or a truncated
+ * one (no receipt) is never a local rejection.
  */
-export function localRejection(error, backend) {
+export function localRejection(error, backend, params) {
   if (
     backend?.barrier !== true ||
     backend.successes !== 0 ||
     backend.transient !== 0 ||
+    backend.prompts !== 1 ||
     backend.dispatches !== 0 ||
     !Array.isArray(backend.refusals) ||
     backend.refusals.length
   ) {
     return undefined;
   }
-  const texts = errorTexts(error);
-  return LOCAL_REJECTIONS.find(({ text }) =>
-    texts.some((candidate) => candidate === text || candidate.endsWith(`: ${text}`)),
-  );
+  const rejection = statedRejection(error);
+  if (rejection?.code === "image_answer" && !promptHasImage(params)) return undefined;
+  return rejection;
 }
 
 /**
