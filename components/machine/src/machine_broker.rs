@@ -305,6 +305,8 @@ struct WorkerPeer {
     /// `snapshot.last_runtime_seq` also counts events emitted while no
     /// Controller was attached, which no Controller has seen.
     acked_runtime_seq: u64,
+    highest_runtime_seq: u64,
+    replay_gate: Option<(u64, u64)>,
     last_seen: Instant,
     /// Duplicate of the broker end of this connection, used only to measure
     /// frames the worker already delivered but the broker has not read.
@@ -678,18 +680,21 @@ impl Broker {
             controller_epoch: lease,
             workers: welcome.clone(),
         });
+        // Arm contiguous replay gating on every worker with unacknowledged
+        // events BEFORE exposing the new Controller so a newer live event
+        // cannot overtake the replay prefix and cumulatively ACK past gaps.
+        let replays = self.arm_worker_replay_gates();
         self.controller.lock().replace(Controller {
             lease,
             tx: tx.clone(),
             protocol,
             outer_machine_protocol,
         });
-        for worker in self.workers.lock().values() {
-            let session_id = &worker.snapshot.session_id;
-            let _ = worker.tx.send(Frame::Replay {
-                session_id: session_id.clone(),
-                worker_epoch: worker.epoch.clone(),
-                after_runtime_seq: worker.acked_runtime_seq,
+        for (worker_tx, session_id, worker_epoch, after_runtime_seq) in replays {
+            let _ = worker_tx.send(Frame::Replay {
+                session_id,
+                worker_epoch,
+                after_runtime_seq,
             });
         }
         for current in self.snapshots() {
@@ -1294,6 +1299,8 @@ impl Broker {
                     uncertain_effect: None,
                 },
                 acked_runtime_seq: 0,
+                highest_runtime_seq: 0,
+                replay_gate: None,
                 last_seen: Instant::now(),
                 receive_probe: None,
                 liveness: None,
@@ -4334,12 +4341,16 @@ async fn handle_core(
                     command: CoreCommand::WrapUpHint { session_id, target },
                 } => broker.handle_wrap_up_hint(lease, &session_id, &target),
                 Frame::CoreCommand { mut command } => {
-                    let ctrl_proto = broker
+                    let Some(ctrl_proto) = broker
                         .controller
                         .lock()
                         .as_ref()
                         .filter(|c| c.lease == lease)
-                        .map_or(0, |c| c.protocol);
+                        .map(|c| c.protocol)
+                    else {
+                        tracing::warn!(lease, "ignoring command from fenced controller");
+                        continue;
+                    };
                     wrap_up::normalize_ingress_prompt(ctrl_proto, &mut command);
                     wrap_up::enqueue_core_command(&broker, &command_tx, command)?;
                 }
@@ -4704,6 +4715,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                     .permanently_deleted_sessions
                     .lock()
                     .insert(session_id.clone());
+                broker.dispatched_prompts.lock().retire_session(&session_id);
                 broker.clear_generation_failures_for_session(&session_id);
                 broker.sessions.lock().remove(&session_id);
                 broker.awaiting_reconnect.lock().remove(&session_id);
@@ -4880,53 +4892,27 @@ async fn handle_worker(
                 event,
                 diagnostics,
             } if event_session == session_id && worker_epoch == epoch => {
-                let cancelled = broker.cancelled_sessions.lock();
-                if cancelled.contains(session_id) {
-                    let permanently_deleted = broker
-                        .permanently_deleted_sessions
-                        .lock()
-                        .contains(session_id);
-                    drop(cancelled);
-                    if permanently_deleted {
-                        broker.acknowledge_worker_event(
-                            session_id,
-                            connection_id,
-                            worker_epoch,
-                            runtime_seq,
-                        );
-                    } else {
-                        // Reserve local ACKs strictly for permanent deletion so
-                        // temporary cancellations (reset, hibernation, account
-                        // quiesce, or Controller disconnect during reset) never
-                        // advance `acked_runtime_seq` past unseen events.
-                        broker.send_controller(Frame::WorkerEvent {
-                            session_id: event_session,
-                            worker_epoch,
-                            runtime_seq,
-                            event,
-                            diagnostics,
-                        });
-                    }
-                    continue;
-                }
-                let rehabilitated =
-                    broker.update_from_event(session_id, connection_id, runtime_seq, &event);
-                broker.send_controller(Frame::WorkerEvent {
-                    session_id: event_session,
+                broker.handle_worker_event(
+                    session_id,
+                    connection_id,
+                    event_session,
                     worker_epoch,
                     runtime_seq,
                     event,
                     diagnostics,
-                });
-                broker.maybe_cutover(session_id);
-                drop(cancelled);
-                for fallback_session in rehabilitated {
-                    if fallback_session != session_id {
-                        broker.maybe_cutover(&fallback_session);
-                    }
-                }
+                );
             }
-            Frame::CommandAck { .. } => broker.send_controller(frame),
+            Frame::CommandAck {
+                ref session_id,
+                ref command_id,
+                ..
+            } => {
+                broker
+                    .dispatched_prompts
+                    .lock()
+                    .mark_acked(session_id, command_id);
+                broker.send_controller(frame);
+            }
             Frame::Heartbeat => observed.heartbeat(),
             other => tracing::debug!(?other, "ignoring non-worker runtime frame"),
         }

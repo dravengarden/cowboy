@@ -123,6 +123,34 @@ impl AgentSink for RemoteSink {
             && !snapshot.drain_requested
             && !super::snapshot_is_managed_read_only(&snapshot)
     }
+    fn record_proxy_uncertain_effect(&self, session_id: &str, method: &str) {
+        if session_id != self.shared.session_id {
+            return;
+        }
+        if let Some(ledger) = self
+            .shared
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.ledger())
+        {
+            ledger.mark_uncertain(method);
+        } else {
+            let prev = self
+                .shared
+                .snapshot
+                .lock()
+                .uncertain_effect
+                .as_ref()
+                .map_or(0, |effect| effect.sequence);
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| {
+                    u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+                });
+            self.shared
+                .mark_uncertain_effect(method, prev.saturating_add(1).max(now));
+        }
+    }
     fn session_is_managed_read_only(&self, session_id: &str) -> bool {
         session_id == self.shared.session_id && self.shared.managed_read_only()
     }

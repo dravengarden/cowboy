@@ -21,6 +21,43 @@ impl Hub {
         );
     }
 
+    pub(in crate::core) fn add_recovery_draft(
+        &self,
+        session_id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+    ) {
+        let duplicate;
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            duplicate = cmid
+                .as_deref()
+                .filter(|c| s.drafts.iter().any(|m| m.cmid.as_deref() == Some(*c)))
+                .map(str::to_owned);
+            if duplicate.is_none() {
+                let id = format!("recovery-{}", self.next_qid());
+                s.drafts.push(QueuedMessage {
+                    id,
+                    text,
+                    content,
+                    cmid,
+                    schedule: None,
+                    origin: None,
+                    initiator: None,
+                });
+            }
+        }
+        if let Some(cmid) = duplicate {
+            self.confirm_delivered(session_id, &cmid);
+        } else {
+            self.emit_pending(session_id);
+        }
+    }
+
     pub(in crate::core) fn add_draft_with_origin(
         &self,
         session_id: &str,
@@ -452,10 +489,24 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            s.drafts
-                .iter()
-                .position(|m| m.id == id)
-                .map(|pos| s.drafts.remove(pos))
+            let Some(pos) = s.drafts.iter().position(|m| m.id == id) else {
+                return;
+            };
+            let target = &s.drafts[pos];
+            if target.id.starts_with("recovery-") {
+                let fresh_op = cmid
+                    .as_deref()
+                    .is_some_and(|op| !op.is_empty() && Some(op) != target.cmid.as_deref());
+                if !fresh_op {
+                    drop(sessions);
+                    self.broadcast_error(
+                        Some(session_id.to_owned()),
+                        "Resending a parked recovery draft requires a new operation id".to_owned(),
+                    );
+                    return;
+                }
+            }
+            Some(s.drafts.remove(pos))
         };
         if let Some(m) = msg {
             self.emit_pending(session_id);
@@ -493,7 +544,17 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            std::mem::take(&mut s.drafts)
+            let mut retained = Vec::new();
+            let mut activated = Vec::new();
+            for m in std::mem::take(&mut s.drafts) {
+                if m.id.starts_with("recovery-") {
+                    retained.push(m);
+                } else {
+                    activated.push(m);
+                }
+            }
+            s.drafts = retained;
+            activated
         };
         if msgs.is_empty() {
             return;

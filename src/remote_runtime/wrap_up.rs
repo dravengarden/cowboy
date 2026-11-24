@@ -725,6 +725,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn unbound_attempted_prompt_and_delivery_ambiguous_ack_park_draft_without_requeue() {
         let hub = Hub::new();
         hub.create_local_session(
@@ -830,5 +831,102 @@ mod tests {
         let info3 = runtime.shared.hub.session_info("s-unbound").unwrap();
         assert_eq!(info3.queue_count, 1);
         assert_eq!(info3.drafts_count, 2);
+
+        // R6-2: durable submit dedupe blocks retry of parked cmid.
+        let caller = crate::prompt_origin::RequestCaller::Person;
+        runtime.shared.hub.submit(
+            "s-unbound",
+            "do not replay".into(),
+            vec![serde_json::json!({"type": "text", "text": "do not replay"})],
+            Some("cmid-u".into()),
+            &caller,
+        );
+        assert_eq!(
+            runtime
+                .shared
+                .hub
+                .session_info("s-unbound")
+                .unwrap()
+                .queue_count,
+            1
+        );
+        assert_eq!(
+            runtime
+                .shared
+                .hub
+                .session_info("s-unbound")
+                .unwrap()
+                .drafts_count,
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnect_preserves_pending_prompts_and_retransmitted_refusal_parks_draft() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s-disc".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "s-disc".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        let runtime = super::super::RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let unsent = CoreCommand::Prompt {
+            session_id: "s-disc".into(),
+            command_id: "cmd-unsent".into(),
+            turn_id: "t-u".into(),
+            content: vec![serde_json::json!({"type": "text", "text": "unsent payload"})],
+            cmid: Some("cmid-unsent".into()),
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            expected_worker_epoch: None,
+            acknowledged_uncertain_sequence: Some(0),
+        };
+        let attempted = CoreCommand::Prompt {
+            session_id: "s-disc".into(),
+            command_id: "cmd-att".into(),
+            turn_id: "t-a".into(),
+            content: vec![serde_json::json!({"type": "text", "text": "attempted payload"})],
+            cmid: Some("cmid-att".into()),
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            expected_worker_epoch: Some("e1".into()),
+            acknowledged_uncertain_sequence: Some(0),
+        };
+        runtime
+            .shared
+            .pending
+            .lock()
+            .insert("cmd-unsent".into(), unsent);
+        runtime
+            .shared
+            .pending
+            .lock()
+            .insert("cmd-att".into(), attempted.clone());
+        runtime
+            .shared
+            .attempted_sends
+            .lock()
+            .insert("cmd-att".into());
+
+        // Retransmitted generic refusal MUST park as draft (not requeue).
+        assert!(super::super::notice_recovery::park_if_ambiguous_rejection(
+            &runtime.shared,
+            "s-disc",
+            Some(&attempted),
+            true,
+            Some("Machine is busy; retry shortly"),
+        ));
+        assert_eq!(hub.session_info("s-disc").unwrap().drafts_count, 1);
+
+        // Disconnect recovers remaining unattempted prompt to queue and parks attempted as draft.
+        runtime.disconnect();
+        let info = hub.session_info("s-disc").unwrap();
+        assert_eq!(info.queue_count, 1);
+        assert_eq!(info.drafts_count, 1);
     }
 }

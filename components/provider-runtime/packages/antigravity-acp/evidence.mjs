@@ -293,12 +293,14 @@ export class AgyLog {
     const deadline = Date.now() + this.barrierTimeoutMs;
     try {
       for (;;) {
+        const exitedBeforeRead = this.childExited;
         const size = (await stat(await this.locate())).size;
-        if (size - cursor > MAX_WINDOW) return classify([], {});
-        const records = parseRecords(await this.read(cursor, size), sessionId, nonce);
+        if (!exitedBeforeRead && size - cursor > MAX_WINDOW) return classify([], {});
+        const readStart = exitedBeforeRead ? Math.max(cursor, size - MAX_WINDOW) : cursor;
+        const records = parseRecords(await this.read(readStart, size), sessionId, nonce);
         if (
           records.some((record) => record.kind === "barrier") ||
-          this.childExited ||
+          exitedBeforeRead ||
           Date.now() >= deadline
         ) {
           const prior = parseRecords(
@@ -307,6 +309,7 @@ export class AgyLog {
           );
           return classify(records, { prior, stopReason });
         }
+        if (this.childExited) continue;
         await new Promise((resolve) => setTimeout(resolve, this.pollMs));
       }
     } catch {

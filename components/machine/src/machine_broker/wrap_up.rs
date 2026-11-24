@@ -188,6 +188,7 @@ pub(super) fn enqueue_core_command(
     match command_tx.try_send((command, guard)) {
         Ok(()) => Ok(()),
         Err(mpsc::error::TrySendError::Full((command, _guard))) => {
+            let is_prompt = matches!(command, crate::runtime_wire::CoreCommand::Prompt { .. });
             let Some((session_id, command_id)) = super::core_overflow::overflow_refusal(&command)
             else {
                 anyhow::bail!("Machine core command queue saturated; reconnecting controller");
@@ -197,11 +198,20 @@ pub(super) fn enqueue_core_command(
                 %command_id,
                 "Machine core command queue full; refusing command"
             );
-            broker.command_rejected(
-                &session_id,
-                command_id,
-                "Machine is busy; retry shortly".to_owned(),
-            );
+            let reason = if is_prompt
+                && broker
+                    .dispatched_prompts
+                    .lock()
+                    .was_handed_or_uncertain(&session_id, &command_id)
+            {
+                "delivery_ambiguous: Machine core queue full on retry after prompt handoff"
+                    .to_owned()
+            } else if is_prompt {
+                "unhanded: Machine is busy; retry shortly".to_owned()
+            } else {
+                "Machine is busy; retry shortly".to_owned()
+            };
+            broker.command_rejected(&session_id, command_id, reason);
             Ok(())
         }
         Err(mpsc::error::TrySendError::Closed(_)) => {
@@ -579,31 +589,91 @@ pub(super) fn departing_cleanup_allows(
             .is_some_and(|entry| entry.epoch == epoch && entry.binding == request.binding)
 }
 
-/// Bounded record of `(session_id, command_id) -> worker_epoch` for prompts
-/// the broker has already handed off to a worker channel.
+#[derive(Clone)]
+struct DispatchedPromptRecord {
+    epoch: String,
+    acked: bool,
+}
+
+/// Record of `(session_id, command_id) -> worker_epoch` for prompts handed off
+/// to a worker channel. Unresolved (`!acked`) handoffs are never evicted; if a
+/// completed record is ever evicted for a session, `evicted_sessions` latches
+/// fail-closed so subsequent cache misses classify as `delivery_ambiguous:`.
 #[derive(Default)]
 pub(super) struct DispatchedPrompts {
-    epochs: std::collections::HashMap<(String, String), String>,
+    entries: std::collections::HashMap<(String, String), DispatchedPromptRecord>,
     order: std::collections::VecDeque<(String, String)>,
+    evicted_sessions: std::collections::HashSet<String>,
 }
 
 impl DispatchedPrompts {
-    const MAX_ENTRIES: usize = 512;
+    const MAX_ENTRIES: usize = 16_384;
 
     pub(super) fn get(&self, session_id: &str, command_id: &str) -> Option<&str> {
-        self.epochs
+        self.entries
             .get(&(session_id.to_owned(), command_id.to_owned()))
-            .map(String::as_str)
+            .map(|rec| rec.epoch.as_str())
+    }
+
+    pub(super) fn was_evicted(&self, session_id: &str) -> bool {
+        self.evicted_sessions.contains(session_id)
+    }
+
+    pub(super) fn was_handed_or_uncertain(&self, session_id: &str, command_id: &str) -> bool {
+        self.get(session_id, command_id).is_some() || self.was_evicted(session_id)
     }
 
     pub(super) fn record(&mut self, session_id: &str, command_id: &str, epoch: &str) {
         let key = (session_id.to_owned(), command_id.to_owned());
-        if self.epochs.insert(key.clone(), epoch.to_owned()).is_none() {
+        let inserted = self
+            .entries
+            .insert(
+                key.clone(),
+                DispatchedPromptRecord {
+                    epoch: epoch.to_owned(),
+                    acked: false,
+                },
+            )
+            .is_none();
+        if inserted {
             self.order.push_back(key);
-            while self.order.len() > Self::MAX_ENTRIES {
-                if let Some(evicted) = self.order.pop_front() {
-                    self.epochs.remove(&evicted);
+            self.evict_acked_if_needed();
+        }
+    }
+
+    pub(super) fn mark_acked(&mut self, session_id: &str, command_id: &str) {
+        if let Some(rec) = self
+            .entries
+            .get_mut(&(session_id.to_owned(), command_id.to_owned()))
+        {
+            rec.acked = true;
+        }
+        self.evict_acked_if_needed();
+    }
+
+    pub(super) fn retire_session(&mut self, session_id: &str) {
+        self.entries.retain(|(sid, _), _| sid != session_id);
+        self.order.retain(|(sid, _)| sid != session_id);
+        self.evicted_sessions.remove(session_id);
+    }
+
+    fn evict_acked_if_needed(&mut self) {
+        let mut scanned = 0;
+        let max_scan = self.order.len();
+        while self.entries.len() > Self::MAX_ENTRIES && scanned < max_scan {
+            let Some(candidate) = self.order.pop_front() else {
+                break;
+            };
+            scanned += 1;
+            match self.entries.get(&candidate) {
+                Some(rec) if !rec.acked => {
+                    self.order.push_back(candidate);
                 }
+                Some(_) => {
+                    self.entries.remove(&candidate);
+                    self.evicted_sessions.insert(candidate.0);
+                }
+                None => {}
             }
         }
     }
@@ -689,13 +759,12 @@ impl super::Broker {
                 return;
             }
         };
-        let (prior_epoch, live) = {
+        let (prior_epoch, session_evicted, live) = {
             let workers = self.workers.lock();
-            let prior_epoch = self
-                .dispatched_prompts
-                .lock()
-                .get(session_id, &command_id)
-                .map(str::to_owned);
+            let dispatched = self.dispatched_prompts.lock();
+            let prior_epoch = dispatched.get(session_id, &command_id).map(str::to_owned);
+            let session_evicted = dispatched.was_evicted(session_id);
+            drop(dispatched);
             let live = workers.get(session_id).map(|worker| {
                 (
                     worker.tx.clone(),
@@ -704,7 +773,14 @@ impl super::Broker {
                     worker.snapshot.uncertain_effect.clone(),
                 )
             });
-            (prior_epoch, live)
+            (prior_epoch, session_evicted, live)
+        };
+        let refusal_reason = |reason: String| -> String {
+            if session_evicted {
+                reason.replacen("unhanded:", "delivery_ambiguous:", 1)
+            } else {
+                reason
+            }
         };
         if let Some(prev_epoch) = prior_epoch {
             if let Some((tx, epoch, _, _)) = live
@@ -737,7 +813,7 @@ impl super::Broker {
                         session_id: session_id.to_owned(),
                         command_id: cid,
                         accepted: false,
-                        reason: Some(reason),
+                        reason: Some(refusal_reason(reason)),
                     });
                     return;
                 }
@@ -757,9 +833,9 @@ impl super::Broker {
                         session_id: session_id.to_owned(),
                         command_id,
                         accepted: false,
-                        reason: Some(
+                        reason: Some(refusal_reason(
                             "unhanded: worker disconnected before prompt handoff".to_owned(),
-                        ),
+                        )),
                     });
                 }
             }
@@ -770,15 +846,123 @@ impl super::Broker {
                     session_id: session_id.to_owned(),
                     command_id,
                     accepted: false,
-                    reason: Some(
+                    reason: Some(refusal_reason(
                         "unhanded: worker epoch changed before prompt admission".to_owned(),
-                    ),
+                    )),
                 });
             }
             Some((_, _, true, _)) | None => {
                 self.queue_pending(session_id, command);
+                // Guard against the registration-vs-enqueue race where a
+                // replacement worker registered and flushed an empty queue
+                // between our initial lookup and `queue_pending`.
+                self.flush_pending_guarded(session_id);
             }
         }
+    }
+
+    pub(super) fn arm_worker_replay_gates(
+        &self,
+    ) -> Vec<(mpsc::UnboundedSender<Frame>, String, String, u64)> {
+        let mut workers = self.workers.lock();
+        let mut replays = Vec::with_capacity(workers.len());
+        for worker in workers.values_mut() {
+            if worker.highest_runtime_seq > worker.acked_runtime_seq {
+                worker.replay_gate = Some((
+                    worker.acked_runtime_seq.saturating_add(1),
+                    worker.highest_runtime_seq,
+                ));
+            } else {
+                worker.replay_gate = None;
+            }
+            replays.push((
+                worker.tx.clone(),
+                worker.snapshot.session_id.clone(),
+                worker.epoch.clone(),
+                worker.acked_runtime_seq,
+            ));
+        }
+        replays
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn handle_worker_event(
+        self: &Arc<Self>,
+        session_id: &str,
+        connection_id: u64,
+        event_session: String,
+        worker_epoch: String,
+        runtime_seq: u64,
+        event: crate::runtime_wire::RuntimeEvent,
+        diagnostics: Vec<crate::runtime_trace::SpanRecord>,
+    ) {
+        let cancelled = self.cancelled_sessions.lock();
+        if cancelled.contains(session_id) {
+            let permanently_deleted = self
+                .permanently_deleted_sessions
+                .lock()
+                .contains(session_id);
+            drop(cancelled);
+            if permanently_deleted {
+                self.acknowledge_worker_event(session_id, connection_id, worker_epoch, runtime_seq);
+            } else if self.admit_worker_event_for_controller(session_id, connection_id, runtime_seq)
+            {
+                self.send_controller(Frame::WorkerEvent {
+                    session_id: event_session,
+                    worker_epoch,
+                    runtime_seq,
+                    event,
+                    diagnostics,
+                });
+            }
+            return;
+        }
+        let forward_event =
+            self.admit_worker_event_for_controller(session_id, connection_id, runtime_seq);
+        let rehabilitated = self.update_from_event(session_id, connection_id, runtime_seq, &event);
+        if forward_event {
+            self.send_controller(Frame::WorkerEvent {
+                session_id: event_session,
+                worker_epoch,
+                runtime_seq,
+                event,
+                diagnostics,
+            });
+        }
+        self.maybe_cutover(session_id);
+        drop(cancelled);
+        for fallback_session in rehabilitated {
+            if fallback_session != session_id {
+                self.maybe_cutover(&fallback_session);
+            }
+        }
+    }
+
+    pub(super) fn admit_worker_event_for_controller(
+        &self,
+        session_id: &str,
+        connection_id: u64,
+        runtime_seq: u64,
+    ) -> bool {
+        let mut workers = self.workers.lock();
+        let Some(worker) = workers
+            .get_mut(session_id)
+            .filter(|w| w.connection_id == connection_id)
+        else {
+            return true;
+        };
+        worker.highest_runtime_seq = worker.highest_runtime_seq.max(runtime_seq);
+        if let Some((next_expected, until_seq)) = worker.replay_gate {
+            if runtime_seq != next_expected {
+                return false;
+            }
+            if runtime_seq >= until_seq {
+                worker.replay_gate = None;
+            } else {
+                worker.replay_gate = Some((next_expected.saturating_add(1), until_seq));
+            }
+        }
+        true
     }
 
     pub(super) fn flush_pending_guarded(&self, session_id: &str) {
@@ -793,6 +977,7 @@ impl super::Broker {
         let Some((tx, epoch, draining, uncertain)) = worker else {
             return;
         };
+        let session_evicted = self.dispatched_prompts.lock().was_evicted(session_id);
         let commands = self.pending_commands.lock().remove(session_id);
         if let Some(mut commands) = commands {
             let mut held_prompts = std::collections::VecDeque::new();
@@ -804,6 +989,11 @@ impl super::Broker {
                 if let Some((command_id, reason)) =
                     prompt_admission_refusal(&epoch, uncertain.as_ref(), &command)
                 {
+                    let reason = if session_evicted {
+                        reason.replacen("unhanded:", "delivery_ambiguous:", 1)
+                    } else {
+                        reason
+                    };
                     self.send_controller(Frame::CommandAck {
                         session_id: session_id.to_owned(),
                         command_id,
@@ -1269,6 +1459,8 @@ mod tests {
                 tx: worker_tx,
                 snapshot: snap,
                 acked_runtime_seq: 0,
+                highest_runtime_seq: 0,
+                replay_gate: None,
                 last_seen: std::time::Instant::now(),
                 receive_probe: None,
                 liveness: None,
@@ -1445,6 +1637,8 @@ mod tests {
                 tx: w1_tx,
                 snapshot: s1,
                 acked_runtime_seq: 0,
+                highest_runtime_seq: 0,
+                replay_gate: None,
                 last_seen: std::time::Instant::now(),
                 receive_probe: None,
                 liveness: None,
@@ -1522,6 +1716,8 @@ mod tests {
                 tx: w2_tx,
                 snapshot: s2,
                 acked_runtime_seq: 0,
+                highest_runtime_seq: 0,
+                replay_gate: None,
                 last_seen: std::time::Instant::now(),
                 receive_probe: None,
                 liveness: None,
@@ -1543,5 +1739,56 @@ mod tests {
                 ..
             } if command_id == "cmd-once" && reason.starts_with("delivery_ambiguous:")
         ));
+    }
+
+    #[test]
+    fn replay_gate_blocks_out_of_order_live_event_until_contiguous_replay_prefix() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = Arc::new(super::super::Broker::new(super::super::MachineBrokerArgs {
+            socket: dir.path().join("broker.sock"),
+            worker_command: std::path::PathBuf::from("/bin/false"),
+            desired_generation: "g1".into(),
+            spawn_mode: super::super::SpawnMode::Direct,
+            worker_environment: std::collections::BTreeMap::new(),
+            provider_store: Arc::new(
+                crate::machine_plugins::MachinePluginStore::new(
+                    &dir.path().join("plugins"),
+                    crate::machine_protocol::Platform::Linux,
+                    "x86_64".into(),
+                )
+                .unwrap(),
+            ),
+            worktree_root: dir.path().join("worktrees").into(),
+            worker_ready_timeout: std::time::Duration::from_secs(1),
+            call_context_root: None,
+            memory_relay: None,
+        }));
+        let (w_tx, _w_rx) = mpsc::unbounded_channel();
+        broker.workers.lock().insert(
+            "s1".into(),
+            super::super::WorkerPeer {
+                connection_id: 1,
+                epoch: "e1".into(),
+                tx: w_tx,
+                snapshot: sample_snapshot(Some("antigravity")),
+                acked_runtime_seq: 8,
+                highest_runtime_seq: 9,
+                replay_gate: None,
+                last_seen: std::time::Instant::now(),
+                receive_probe: None,
+                liveness: None,
+                negotiated_protocol: 8,
+                raw_wrap_up_steering: true,
+                hint_tx: None,
+                last_hinted_target: None,
+            },
+        );
+        let replays = broker.arm_worker_replay_gates();
+        assert_eq!(replays.len(), 1);
+        assert_eq!(replays[0].3, 8);
+
+        assert!(!broker.admit_worker_event_for_controller("s1", 1, 10));
+        assert!(broker.admit_worker_event_for_controller("s1", 1, 9));
+        assert!(broker.admit_worker_event_for_controller("s1", 1, 10));
     }
 }

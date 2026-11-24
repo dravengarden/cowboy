@@ -276,6 +276,32 @@ pub fn encoded_acp_wrap_up_hint_within_limit(acp_id: &SessionId, attempt_nonce: 
     crate::wrap_up::wrap_up_hint_within_size_limit(&envelope)
 }
 
+fn validate_uncertain_effect_method(raw: Option<&str>) -> Option<&str> {
+    raw.filter(|method| {
+        !method.is_empty()
+            && method.len() <= 64
+            && method
+                .bytes()
+                .all(|byte| byte.is_ascii_graphic() || byte == b' ')
+    })
+}
+
+/// Extract a validated `cowboy.uncertain_effect` method from an ACP prompt
+/// response `_meta` map (`result._meta.cowboy.uncertain_effect`).
+pub(crate) fn proxy_uncertain_effect_from_meta(
+    meta: Option<&serde_json::Map<String, Value>>,
+) -> Option<&str> {
+    let raw = meta?.get("cowboy")?.get("uncertain_effect")?.as_str();
+    validate_uncertain_effect_method(raw)
+}
+
+/// Extract a validated `cowboy.uncertain_effect` method from an ACP prompt
+/// error `data` value (`error.data.cowboy.uncertain_effect`).
+pub(crate) fn proxy_uncertain_effect_from_error_data(data: Option<&Value>) -> Option<&str> {
+    let raw = data?.get("cowboy")?.get("uncertain_effect")?.as_str();
+    validate_uncertain_effect_method(raw)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -379,5 +405,27 @@ mod tests {
             p2.meta.unwrap().get(ATTEMPT_NONCE_META_KEY),
             Some(&Value::String("abc123".into()))
         );
+    }
+
+    #[test]
+    fn proxy_uncertain_effect_extraction_validates_meta_and_error_data() {
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "cowboy".into(),
+            serde_json::json!({"uncertain_effect": "process/start"}),
+        );
+        assert_eq!(
+            proxy_uncertain_effect_from_meta(Some(&meta)),
+            Some("process/start")
+        );
+        let err_data = serde_json::json!({"cowboy": {"uncertain_effect": "fs/writeFile"}});
+        assert_eq!(
+            proxy_uncertain_effect_from_error_data(Some(&err_data)),
+            Some("fs/writeFile")
+        );
+        let bad = serde_json::json!({"cowboy": {"uncertain_effect": "bad\ncontrol"}});
+        assert_eq!(proxy_uncertain_effect_from_error_data(Some(&bad)), None);
+        let empty = serde_json::json!({"cowboy": {"uncertain_effect": ""}});
+        assert_eq!(proxy_uncertain_effect_from_error_data(Some(&empty)), None);
     }
 }

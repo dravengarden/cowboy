@@ -1197,3 +1197,38 @@ test("R5-M5: settleExit({ force: true }) finalizes unfinalized prompt on normal 
   const reply = sentToClient.find((m) => m.id === 88);
   assert.ok(reply?.error, "must emit explicit terminal error instead of bare EOF");
 });
+
+test("evidence.settle reads final post-exit bytes appended after initial stat", async () => {
+  const { mkdtempSync, writeFileSync, appendFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { AgyLog } = await import("./evidence.mjs");
+  const dir = mkdtempSync(join(tmpdir(), "cowboy-ev-exit-"));
+  const logFile = join(dir, "acp-server-1-4242.log");
+  writeFileSync(logFile, "initial line\n");
+  const reader = new AgyLog(dir, 4242, {
+    barrierTimeoutMs: 5000,
+    pollMs: 500,
+  });
+  const cursor = await reader.mark();
+  const origRead = reader.read.bind(reader);
+  let reads = 0;
+  reader.read = async (from, to) => {
+    reads += 1;
+    const data = await origRead(from, to);
+    if (reads === 1) {
+      appendFileSync(
+        logFile,
+        "I1124 10:00:00.000000 4242 server.go:1] Stream goroutine exited for sess-ev, sending completion signal\n",
+      );
+      reader.markExited();
+    }
+    return data;
+  };
+  const started = Date.now();
+  const verdict = await reader.settle(cursor, "sess-ev", "cancelled");
+  assert.ok(Date.now() - started < 1000, "must not sleep 500ms/5s after childExited");
+  assert.equal(reads, 3, "pre-exit read + fresh post-exit read + prior window read");
+  assert.equal(verdict.barrier, true);
+  assert.equal(verdict.class, "ok");
+});

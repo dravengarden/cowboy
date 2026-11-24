@@ -1450,7 +1450,7 @@ impl Hub {
             .filter(|id| id.starts_with(crate::agent_model::CALL_NOTICE_PREFIX))
             .map(str::to_owned)
         else {
-            self.add_draft_with_origin(session_id, text, content, cmid, None);
+            self.add_recovery_draft(session_id, text, content, cmid);
             return;
         };
         {

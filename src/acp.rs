@@ -994,6 +994,30 @@ fn provider_session_meta(provider_id: &str) -> Option<Meta> {
     stable_claude_session_meta(provider_id)
 }
 
+fn finish_prompt_state(
+    state: &ClientState,
+    prompt: &Arc<ActivePrompt>,
+    sink: &dyn crate::agent_sink::AgentSink,
+    sid: &str,
+    meta: Option<&serde_json::Map<String, serde_json::Value>>,
+    err_data: Option<&serde_json::Value>,
+    record_usage: bool,
+) {
+    if let Some(memory) = &state.memory {
+        memory.finish();
+    }
+    state.clear_prompt(prompt);
+    state.subagents.lock().parent_turn_ended(Instant::now());
+    if let Some(method) = crate::acp_wrap_up::proxy_uncertain_effect_from_meta(meta)
+        .or_else(|| crate::acp_wrap_up::proxy_uncertain_effect_from_error_data(err_data))
+    {
+        sink.record_proxy_uncertain_effect(sid, method);
+    }
+    if record_usage && let Some(usage) = state.model_usage.lock().record_turn(meta) {
+        sink.set_session_usage(sid, usage);
+    }
+}
+
 fn projected_auth_error(
     provider_id: &str,
     service_auth_projected: bool,
@@ -4583,13 +4607,15 @@ async fn run_session(
                             break response;
                         }
                     };
-                    if let Some(memory) = &state.memory {
-                        memory.finish();
-                    }
-                    state.clear_prompt(&prompt);
-                    // Only silence after the parent's turn counts against a
-                    // subagent that is still running.
-                    state.subagents.lock().parent_turn_ended(Instant::now());
+                    finish_prompt_state(
+                        &state,
+                        &prompt,
+                        sink.as_ref(),
+                        &sid,
+                        response.as_ref().ok().and_then(|r| r.meta.as_ref()),
+                        response.as_ref().err().and_then(|e| e.data.as_ref()),
+                        !recycled_by_watchdog && backoff_failure.is_none(),
+                    );
                     if let Some(reason) = backoff_failure.take()
                         && !recycled_by_watchdog
                     {
@@ -4679,11 +4705,7 @@ async fn run_session(
                             // Stop or a force-push (an Ok we WANT to drain). Going Running lets
                             // the auto-drain send the next queued prompt.
                             sink.prompt_completed(&sid, cmid.as_deref(), &format!("{:?}", r.stop_reason));
-                            if let Some(usage) =
-                                state.model_usage.lock().record_turn(r.meta.as_ref())
-                            {
-                                sink.set_session_usage(&sid, usage);
-                            }
+
                             sink.push(
                                 &sid,
                                 Event::TurnEnd {

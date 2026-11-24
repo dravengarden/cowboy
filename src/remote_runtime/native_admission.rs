@@ -408,7 +408,9 @@ fn reserve_for_write(
         {
             return false;
         }
-        shared.attempted_sends.lock().insert(key.to_owned());
+        if !shared.attempted_sends.lock().insert(key.to_owned()) {
+            shared.retransmitted_sends.lock().insert(key.to_owned());
+        }
     }
     true
 }

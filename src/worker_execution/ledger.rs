@@ -169,8 +169,12 @@ struct State {
     next_gen: u64,
     /// Starts not yet answered by the target.
     starting: HashSet<String>,
-    /// Admitted requests still running, per turn.
+    /// Admitted mutations/starts still running, per turn.
     admitted: HashMap<String, usize>,
+    /// In-flight result-bearing relays (`process/read` for non-probe processes,
+    /// `process/terminate`) tracked through reply disposition so `finish_turn`
+    /// and SIGTERM cutoff never complete ahead of lost-result uncertainty.
+    result_relays: HashMap<Option<String>, usize>,
     current_turn: Option<String>,
     fenced: VecDeque<String>,
     /// The worker is starting its session: the readiness probe may run.
@@ -221,8 +225,9 @@ impl std::fmt::Debug for Ledger {
 
 /// One admitted request: settled when its relay finished.
 pub(super) struct Admitted {
-    turn: String,
+    turn: Option<String>,
     start_gen: Option<u64>,
+    is_result_relay: bool,
 }
 
 impl Ledger {
@@ -373,8 +378,9 @@ impl Ledger {
         state.calls += 1;
         *state.admitted.entry(turn.clone()).or_default() += 1;
         Ok(Admitted {
-            turn,
+            turn: Some(turn),
             start_gen: None,
+            is_result_relay: false,
         })
     }
 
@@ -385,7 +391,7 @@ impl Ledger {
     }
 
     pub(super) fn admitted_turn(admitted: &Admitted) -> &str {
-        &admitted.turn
+        admitted.turn.as_deref().unwrap_or("")
     }
 
     pub fn begin_turn(&self, turn: &str) {
@@ -463,6 +469,18 @@ impl Ledger {
             return Err("that process belongs to the worker; request refused");
         }
         if !MUTATIONS.contains(&method) {
+            let carries = method == "process/terminate"
+                || (method == "process/read"
+                    && process_id(params).is_none_or(|p| !state.probes.contains(&p)));
+            if carries {
+                let turn = state.current_turn.clone();
+                *state.result_relays.entry(turn.clone()).or_default() += 1;
+                return Ok(Some(Admitted {
+                    turn,
+                    start_gen: None,
+                    is_result_relay: true,
+                }));
+            }
             return Ok(None);
         }
         if method != "process/start" {
@@ -471,8 +489,9 @@ impl Ledger {
                 .ok_or("no Cowboy turn is running; the filesystem change was refused")?;
             *state.admitted.entry(turn.clone()).or_default() += 1;
             return Ok(Some(Admitted {
-                turn,
+                turn: Some(turn),
                 start_gen: None,
+                is_result_relay: false,
             }));
         }
         let process = process_id(params)
@@ -538,8 +557,9 @@ impl Ledger {
         state.starting.insert(process);
         *state.admitted.entry(turn.clone()).or_default() += 1;
         Ok(Some(Admitted {
-            turn,
+            turn: Some(turn),
             start_gen: Some(generation),
+            is_result_relay: false,
         }))
     }
 
@@ -549,10 +569,19 @@ impl Ledger {
         if let Some(process) = start {
             state.starting.remove(process);
         }
-        if let Some(count) = state.admitted.get_mut(&admitted.turn) {
+        if admitted.is_result_relay {
+            if let Some(count) = state.result_relays.get_mut(&admitted.turn) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    state.result_relays.remove(&admitted.turn);
+                }
+            }
+        } else if let Some(turn) = admitted.turn.as_deref()
+            && let Some(count) = state.admitted.get_mut(turn)
+        {
             *count = count.saturating_sub(1);
             if *count == 0 {
-                state.admitted.remove(&admitted.turn);
+                state.admitted.remove(turn);
             }
         }
         drop(state);
@@ -693,7 +722,8 @@ impl Ledger {
         let has_processes = !state.processes.is_empty()
             || !state.record.active_processes.is_empty()
             || !state.starting.is_empty();
-        let has_effects = !state.admitted.is_empty() || state.calls > 0;
+        let has_effects =
+            !state.admitted.is_empty() || !state.result_relays.is_empty() || state.calls > 0;
         if !has_processes && !has_effects {
             return false;
         }
@@ -737,7 +767,7 @@ impl Ledger {
         self.mark_uncertain("process/terminate");
     }
 
-    pub(super) fn mark_uncertain(&self, method: &str) {
+    pub(crate) fn mark_uncertain(&self, method: &str) {
         let mut state = self.state.lock();
         state.record.uncertain_effect = Some(method.to_owned());
         state.record.uncertain_sequence = next_sequence(state.record.uncertain_sequence);
@@ -782,11 +812,22 @@ impl Ledger {
             .collect()
     }
 
-    fn drained(&self, turn: Option<&str>) -> bool {
+    fn mutations_drained(&self, turn: Option<&str>) -> bool {
         let state = self.state.lock();
         match turn {
             Some(turn) => !state.admitted.contains_key(turn),
             None => state.admitted.is_empty(),
+        }
+    }
+
+    fn drained(&self, turn: Option<&str>) -> bool {
+        let state = self.state.lock();
+        match turn {
+            Some(turn) => {
+                !state.admitted.contains_key(turn)
+                    && !state.result_relays.contains_key(&Some(turn.to_owned()))
+            }
+            None => state.admitted.is_empty() && state.result_relays.is_empty(),
         }
     }
 
@@ -1154,11 +1195,17 @@ impl Client {
         let (client, turn) = (Arc::clone(self), turn.to_owned());
         Some(async move {
             ledger
-                .wait_until(|ledger| ledger.drained(Some(&turn)))
+                .wait_until(|ledger| ledger.mutations_drained(Some(&turn)))
                 .await;
             // Starts admitted before the fence was raised are recorded too.
             let processes = ledger.fence(Some(&turn));
             client.terminate_all(processes, true).await;
+            // Wait for any in-flight result-bearing relays (e.g. `process/read`
+            // unblocked by process closure or lost in transit) to settle and
+            // record uncertainty before `TurnEnded` is emitted.
+            ledger
+                .wait_until(|ledger| ledger.drained(Some(&turn)))
+                .await;
         })
     }
 
@@ -1180,9 +1227,12 @@ impl Client {
                 })
                 .await;
             self.terminate_all(ledger.server_processes(), false).await;
-            ledger.wait_until(|ledger| ledger.drained(None)).await;
+            ledger
+                .wait_until(|ledger| ledger.mutations_drained(None))
+                .await;
             let processes = ledger.fence(None);
             self.terminate_all(processes, true).await;
+            ledger.wait_until(|ledger| ledger.drained(None)).await;
         }
     }
 

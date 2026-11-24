@@ -369,22 +369,28 @@ pub(super) fn prepare_prompt_for_send(
             (Some(_), None) => false,
         };
         if ambiguous {
-            let removed = {
-                let mut pending = shared.pending.lock();
-                let removed = pending.remove_if_version(key, version);
-                if removed.is_some() {
-                    shared.sent.lock().remove(key);
-                    shared.attempted_sends.lock().remove(key);
-                }
-                removed
+            let snapshot = {
+                let pending = shared.pending.lock();
+                (pending.version(key) == Some(version))
+                    .then(|| pending.get(key).cloned())
+                    .flatten()
             };
-            if let Some(removed_cmd) = removed {
+            if let Some(cmd) = snapshot {
+                // Commit durable draft BEFORE retiring the pending command.
                 notice_recovery::park_ambiguous_prompt_command(
                     shared,
                     session_id,
-                    removed_cmd,
+                    cmd,
                     "prompt delivery across worker change is unresolved; retained as draft",
                 );
+                let mut pending = shared.pending.lock();
+                if pending.remove_if_version(key, version).is_some() {
+                    shared.sent.lock().remove(key);
+                    shared.attempted_sends.lock().remove(key);
+                    shared.retransmitted_sends.lock().remove(key);
+                }
+                drop(pending);
+                notice_recovery::reconcile_idle_guard_for_session(shared, session_id);
             }
             return false;
         }

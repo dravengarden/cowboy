@@ -1842,3 +1842,47 @@ async fn lost_mutation_records_uncertainty_before_finish_turn_wakes() {
     assert_eq!(observed.lock().len(), 1);
     let _ = write_task.await.unwrap();
 }
+
+#[tokio::test]
+async fn finish_turn_waits_for_in_flight_result_carrying_process_read_after_process_closed() {
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "process/start" => completed(json!({"result": {"processId": "p-read"}})),
+        "process/read" => Reply::Hold,
+        _ => completed(json!({"result": {}})),
+    }));
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    target
+        .client
+        .relay("process/start".into(), start("p-read"))
+        .await;
+    let client = Arc::clone(&target.client);
+    let read_task = tokio::spawn(async move {
+        client
+            .relay(
+                "process/read".into(),
+                json!({"processId": "p-read", "afterSeq": null, "maxBytes": 64, "waitMs": 0}),
+            )
+            .await
+    });
+    eventually(|| !target.held.lock().is_empty()).await;
+    target
+        .client
+        .observe_event(&json!({"method": "process/closed", "params": {"processId": "p-read"}}));
+    let settle = target
+        .client
+        .finish_turn("turn-1")
+        .expect("finish_turn must wait for in-flight result-bearing process/read");
+    let req = target.held.lock().pop().unwrap();
+    target.client.complete(RuntimeReply {
+        session_id: req.session_id,
+        worker_epoch: req.worker_epoch,
+        request_id: req.request_id,
+        scope: Scope::from_binding(&req.binding),
+        response: MachineResponse::Closed,
+    });
+    settle.await;
+    assert_eq!(ledger.uncertain_effect().as_deref(), Some("process/read"));
+    assert!(ledger.uncertain_sequence() > 0);
+    let _ = read_task.await.unwrap();
+}

@@ -128,6 +128,8 @@ pub struct Shared {
     /// Never cleared on reconnect — only on `CommandAck` or command removal — so
     /// runtime teardown can prove which queued notices never left the Controller.
     attempted_sends: Mutex<HashSet<String>>,
+    /// Commands written to the transport more than once (retries after lost ACK).
+    retransmitted_sends: Mutex<HashSet<String>>,
     /// Uncertain pre-recovery commands fenced from replay after a failed
     /// execution recovery (skipped by `send_pending` even across reconnects).
     fenced_commands: Mutex<HashSet<String>>,
@@ -284,6 +286,7 @@ impl RemoteRuntime {
                 account_stops: Mutex::new(HashMap::new()),
                 sent: Mutex::new(HashSet::new()),
                 attempted_sends: Mutex::new(HashSet::new()),
+                retransmitted_sends: Mutex::new(HashSet::new()),
                 fenced_commands: Mutex::new(HashSet::new()),
                 in_flight_prompts: Mutex::new(prompt_tracking::InFlightPrompts::default()),
                 declarations: Mutex::new(HashMap::new()),
@@ -349,6 +352,7 @@ impl RemoteRuntime {
                 account_stops: Mutex::new(HashMap::new()),
                 sent: Mutex::new(HashSet::new()),
                 attempted_sends: Mutex::new(HashSet::new()),
+                retransmitted_sends: Mutex::new(HashSet::new()),
                 fenced_commands: Mutex::new(HashSet::new()),
                 in_flight_prompts: Mutex::new(prompt_tracking::InFlightPrompts::default()),
                 declarations: Mutex::new(declarations),
@@ -1476,6 +1480,7 @@ impl RemoteRuntime {
         }
         let _ = self.shared.notify.send(());
         notice_recovery::requeue_unsent_notices_on_disconnect(&self.shared);
+        notice_recovery::recover_pending_prompts_on_disconnect(&self.shared);
         self.shared.in_flight_prompts.lock().clear();
     }
 
@@ -2231,31 +2236,15 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                 reject_foreign_frame(shared, &session_id, "CommandAck");
                 return Ok(());
             }
-            let command = {
-                let mut pending = shared.pending.lock();
-                if pending.get(&command_id).is_some_and(|command| {
-                    command
-                        .session_id()
-                        .is_some_and(|expected| expected != session_id)
-                }) {
-                    tracing::warn!(%command_id, "ignoring mismatched Machine command acknowledgement");
-                    return Ok(());
-                }
-                pending.remove(&command_id)
+            let Some((command, parked_ambiguous)) = notice_recovery::take_acked_command(
+                shared,
+                &session_id,
+                &command_id,
+                accepted,
+                reason.as_deref(),
+            ) else {
+                return Ok(());
             };
-            if !accepted
-                && let Some(CoreCommand::Steer { cmid, .. } | CoreCommand::CancelTurn { cmid, .. }) =
-                    &command
-                && let Some(waiter) = shared
-                    .steering
-                    .lock()
-                    .remove(&(session_id.clone(), cmid.clone()))
-            {
-                // A replay can be refused after the original was injected. Only
-                // the native result proves non-delivery, never a transport ACK.
-                let _ = waiter.send("unknown".into());
-            }
-            notice_recovery::clear_acked_command(shared, &command_id);
             if !accepted && matches!(&command, Some(CoreCommand::CancelSubagent { .. })) {
                 shared.hub.broadcast_error(
                     Some(session_id.clone()),
@@ -2328,7 +2317,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
             {
                 shared.hub.set_status(&session_id, Status::Exited, None);
             }
-            if !accepted {
+            if !accepted && !parked_ambiguous {
                 notice_recovery::handle_rejected_ack(
                     shared,
                     &session_id,
