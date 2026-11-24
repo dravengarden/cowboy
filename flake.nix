@@ -519,7 +519,7 @@
         version = "0.1.0";
         src = web-build-src;
         workspaces = web-workspaces;
-        depsHash = "sha256-NbNMuY6PUMZF1wvMbshXGEyA/zm0HU/wcKx1rCq1A7I=";
+        depsHash = "sha256-9XBxHIiqM5cAAjQE6rxCHEbgtCRMiiWHAHTsgajYOlE=";
       };
       cowboy-web-check = pkgs.stdenvNoCC.mkDerivation {
         pname = "cowboy-web-check";

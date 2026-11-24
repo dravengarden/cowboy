@@ -172,7 +172,10 @@ The v1 data plane is exposed under `/api/code/sessions/{id}`:
   predates the operation answers `502`.
 - `GET /file-blob?path=<relative>` returns the worktree file's Git blob id as
   `git add` would store it now (`404` when it is not a file), for comparing
-  with the blob a managed review captured.
+  with the blob a managed review captured. Line-ending conversion applies; a
+  repository filter is not run. A file a filter rewrites (Git LFS, a clean
+  filter) is therefore hashed as its plain bytes and never matches its stored
+  blob, and one whose filter is `required` answers `404`.
 
 Every response carries `apiVersion: 1`. Paths are resolved from the session and
 validated. For a Columbus aggregate worktree, the read-only tree additionally
@@ -261,7 +264,17 @@ fetch. Where the worktree is local to the Controller, **Fetch this branch**
 that one branch. It is a
 mutation under the session's write authorization, not a Code read: it takes only
 a remote branch already listed as a comparison, uses the remote the repository
-names with `ext::` transports refused, and is bounded to 30 seconds. The result
+names with `ext::` transports refused, and is bounded to 30 seconds. Repository
+configuration is agent-writable, so the programs the transport starts (SSH
+command, askpass, `git://` proxy, credential helpers, the program serving the
+pack, the alternate-refs lister) come from user and system configuration only;
+a repository that sets one of them is fetched as if it had not. A variable the
+Controller's own environment carries (`GIT_SSH_COMMAND`, `GIT_ASKPASS`,
+`GIT_PROXY_COMMAND`) decides before any configuration. Proxy rules match per
+host, so when user or system configuration holds one, `git://` remotes are not
+fetched from Review at all. Pruning and the maintenance Git runs after a
+fetch are off whatever the repository configures, and the configuration
+listing shares the 30 seconds. The result
 lands in `refs/cowboy/review/<remote>/<branch>`, so the agent's remote-tracking
 refs do not move. A comparison and the ahead/behind facts use that ref while it
 is at least as new as the remote-tracking ref. The fetch time is that ref's

@@ -427,7 +427,12 @@ authentication required instead (`collector/portable-account.json` with a
 without starting its CLI), otherwise `portable_usage_refresh_unsupported`.
 Codex releases before 3.6.22 let the app-server refresh an expired access token
 on its own; 3.6.22 cannot reach a refresh endpoint for such a request (see
-[usage-execution](usage-execution.md#named-portable-accounts)). A named Codex
+[usage-execution](usage-execution.md#named-portable-accounts)). When a named
+Grok account's read reports authentication required while none of its workers
+runs, a Machine speaking protocol 52 with Grok 3.2.36 or later renews the
+sign-in once in the account's session home (the CLI's own startup refresh)
+and the read reports `portable_usage_replica_pending` until the renewed
+credential is distributed. A named Codex
 account also spends banked resets immediately (`usage.account_reset`, Codex
 3.6.22, Machine protocol 51); Grok and DeepSeek named accounts have none. No
 Machine speaking protocol 50 was ever released, so no further capability

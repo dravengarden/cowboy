@@ -16,7 +16,12 @@ pub fn start(state: &Arc<AppState>) {
         let Some(info) = state.hub.session_info(session) else {
             return Ok(());
         };
-        revival_gate(&state, &info.meta)
+        revival_gate(&state, &info.meta)?;
+        // A named portable account's idle renewal holds its launches.
+        match super::super::usage::launch_hold(&state, &info.meta) {
+            Some(hold) => Err(hold),
+            None => Ok(()),
+        }
     }));
     let weak = Arc::downgrade(state);
     tokio::spawn(async move {

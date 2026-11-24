@@ -188,6 +188,17 @@ pub(super) fn handle(
             operation,
             payload,
         } => {
+            // Renewal has its own admission (`RenewPortableCredential`).
+            if operation == crate::machine_protocol::PluginHostOperation::RenewCredential {
+                let _ = events.send(MachineEvent::PluginHostResponse {
+                    request_id,
+                    accepted: false,
+                    started: false,
+                    payload: None,
+                    detail: Some("portable_renewal_unsupported".to_owned()),
+                });
+                return;
+            }
             let invocation = execution.host(crate::machine_plugins::PluginHostRequest {
                 plugin_id,
                 plugin_version,

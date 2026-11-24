@@ -1,5 +1,6 @@
 {
   "schema": 1,
   "token_refresh": "request",
-  "token_refresh_guard": "cli_not_started"
+  "token_refresh_guard": "cli_not_started",
+  "idle_renewal": "cli_startup"
 }

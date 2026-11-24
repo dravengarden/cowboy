@@ -616,8 +616,31 @@ async function reset(rpc, request) {
   };
 }
 
+/** An idle renewal (`"operation": "renew"`, declared `idle_renewal:
+ * "cli_startup"`): the Machine runs it in the account's session home only
+ * while no session of the account runs. The CLI renews an expiring sign-in
+ * when it starts and after a 401, so one billing read through it renews
+ * exactly as a session's startup would and writes the new sign-in to that
+ * home; the Machine then proposes it to the Service like a session's refresh.
+ * Only `{renewal: "attempted"}` leaves the collector. */
+async function renew(rpc) {
+  await rpc.request("_x.ai/billing", {});
+  return { renewal: "attempted" };
+}
+
 /** Answer one request. Only a request that may refresh starts the CLI. */
 export async function handle(request, { startRpc = () => AcpRpc.start(), ...direct } = {}) {
+  if (request.operation === "renew") {
+    if (request.token_refresh !== "renew") {
+      throw new Error("a renewal must be requested explicitly");
+    }
+    const rpc = await startRpc();
+    try {
+      return await renew(rpc);
+    } finally {
+      rpc.close();
+    }
+  }
   if (request.token_refresh === false) {
     return request.operation === "consume_reset"
       ? await reset(undefined, request)

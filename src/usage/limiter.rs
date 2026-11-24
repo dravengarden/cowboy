@@ -177,6 +177,12 @@ impl Limiter {
         serde_json::to_string(&[owner, account]).expect("string tuple")
     }
 
+    /// The configured minimum interval between one account's collections.
+    #[must_use]
+    pub fn account_interval_ms(&self) -> i64 {
+        super::duration_ms(self.config.get(&schema::USAGE_ACCOUNT_INTERVAL))
+    }
+
     pub fn view(&self, provider: &str, account: &str, now: i64) -> Budget {
         let config = self.config.current();
         Self::budget(
