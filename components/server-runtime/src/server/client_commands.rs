@@ -268,36 +268,49 @@ pub fn submit_command(
             return ControlFlow::Continue(Err(refusal.to_owned()));
         }
         if wrap_up {
+            let reject_wrap_up = |cmid_ref: Option<&str>, message: &str| {
+                if let Some(id) = cmid_ref.filter(|id| !id.is_empty()) {
+                    state
+                        .hub
+                        .command_result(&session_id, id, CommandOutcome::Rejected, message);
+                }
+                ControlFlow::Continue(Err(message.to_owned()))
+            };
             if force {
-                return ControlFlow::Continue(Err("wrap_up conflicts with force".to_owned()));
+                return reject_wrap_up(cmid.as_deref(), "wrap_up conflicts with force");
             }
             if !caller.is_person() {
-                return ControlFlow::Continue(Err(
-                    "wrap_up delivery is restricted to the session owner".to_owned(),
-                ));
+                return reject_wrap_up(
+                    cmid.as_deref(),
+                    "wrap_up delivery is restricted to the session owner",
+                );
             }
-            if !cmid
-                .as_deref()
-                .is_some_and(crate::core::Hub::is_authored_cmid)
-            {
-                return ControlFlow::Continue(Err(
-                    "wrap_up requires an authored client message id".to_owned(),
-                ));
+            if !cmid.as_deref().is_some_and(|id| {
+                crate::wrap_up::is_valid_wrap_up_operation_id(id)
+                    && crate::core::Hub::is_authored_cmid(id)
+            }) {
+                return reject_wrap_up(
+                    cmid.as_deref(),
+                    "wrap_up requires a valid authored client message id",
+                );
             }
             let Some(built_blocks) = build_prompt_blocks(&text, &content) else {
-                return ControlFlow::Continue(Err(
-                    "empty prompt: no substantive text or content".to_owned()
-                ));
+                return reject_wrap_up(
+                    cmid.as_deref(),
+                    "empty prompt: no substantive text or content",
+                );
             };
             let json_blocks: Vec<serde_json::Value> = built_blocks
                 .iter()
                 .map(|b| serde_json::to_value(b).unwrap_or_default())
                 .collect();
             if !crate::wrap_up::has_substantive_prompt_blocks(&json_blocks) {
-                return ControlFlow::Continue(Err(
-                    "empty prompt: no substantive text or content".to_owned()
-                ));
+                return reject_wrap_up(
+                    cmid.as_deref(),
+                    "empty prompt: no substantive text or content",
+                );
             }
+            let cmid_for_reject = cmid.clone();
             return match state.hub.front_submit_with_outcome(
                 &session_id,
                 text,
@@ -305,9 +318,10 @@ pub fn submit_command(
                 cmid,
                 caller,
             ) {
-                crate::core::FrontSubmitOutcome::Refused => ControlFlow::Continue(Err(
-                    "session unavailable for wrap_up delivery".to_owned(),
-                )),
+                crate::core::FrontSubmitOutcome::Refused => reject_wrap_up(
+                    cmid_for_reject.as_deref(),
+                    "session unavailable for wrap_up delivery",
+                ),
                 crate::core::FrontSubmitOutcome::Duplicate => ControlFlow::Break(true),
                 crate::core::FrontSubmitOutcome::DispatchedImmediately
                 | crate::core::FrontSubmitOutcome::QueuedFallback => ControlFlow::Continue(Ok(())),

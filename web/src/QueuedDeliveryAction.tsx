@@ -39,9 +39,15 @@ export function QueuedDeliveryAction({
   const queuePaused = useStoreSelector(
     (snapshot) => snapshot.sessions.find((session) => session.id === sessionId)?.paused ?? false,
   );
+  const sessionProvider = useStoreSelector(
+    (snapshot) => snapshot.sessions.find((session) => session.id === sessionId)?.provider,
+  );
+  const disallowAntigravitySteer = sessionProvider === "antigravity";
   const queueSteerCapable = useStoreSelector(
-    (snapshot) =>
-      snapshot.sessions.find((session) => session.id === sessionId)?.supports_current_turn === true,
+    (snapshot) => {
+      const session = snapshot.sessions.find((candidate) => candidate.id === sessionId);
+      return session?.provider !== "antigravity" && session?.supports_current_turn === true;
+    },
   );
   const queueConnected = useConnected();
   const steerQueued = (target: DeliveryTarget | undefined, nextCheckpoint = false): void => {
@@ -90,6 +96,7 @@ export function QueuedDeliveryAction({
           anchor={deliveryAnchor}
           busy={status === "busy"}
           steerReady={queueConnected && status === "busy" && queueSteerCapable}
+          disallowSteer={disallowAntigravitySteer}
           paused={queuePaused}
           queueCount={queuedAhead}
           queued

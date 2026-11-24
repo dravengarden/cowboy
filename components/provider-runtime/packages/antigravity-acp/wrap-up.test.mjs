@@ -124,7 +124,7 @@ test("initialize strips upstream steering/wrapUpSteering from both _meta surface
   });
   const uRes = unmanaged.client.at(-1).result;
   assert.equal(uRes._meta.steering, undefined);
-  assert.deepEqual(uRes._meta[WRAP_UP_CAPABILITY_KEY], { supported: true });
+  assert.deepEqual(uRes._meta[WRAP_UP_CAPABILITY_KEY], { v: 1, adapter: "cowboy-antigravity-acp" });
   assert.equal(uRes._meta.other, "keep");
   assert.equal(uRes.agentCapabilities._meta.steering, undefined);
   assert.equal(uRes.agentCapabilities._meta[WRAP_UP_CAPABILITY_KEY], undefined);
@@ -600,4 +600,182 @@ test("root cancel forwards session/cancel immediately while attemptCleanup await
   assert.deepEqual(uncertainCalls, [{ method: "process/terminate" }]);
   assert.deepEqual(facadeUncertain, [["s1", "process/terminate"]]);
   facade.quiesce();
+});
+
+test("H2: synchronous session/cancel overtakes a prompt queued behind an earlier client request without ever writing it to agy", async () => {
+  const newSessionGate = deferred();
+  const h = makeProxy({ managed: false });
+  h.runtime.projection = async () => {
+    await newSessionGate.promise;
+    return "PROJECTION";
+  };
+
+  // Start an async request that occupies proxy.queue.
+  const firstReq = h.proxy.fromClient(request(100, "session/new", { cwd: "/work/repo" }));
+  // Send session/prompt followed immediately by session/cancel BEFORE firstReq finishes!
+  const promptReq = h.proxy.fromClient(
+    request(101, "session/prompt", {
+      sessionId: "s-queued",
+      prompt: [{ type: "text", text: "must never reach agy" }],
+      _meta: { "cowboy.dev/attemptNonce": "nonce-queued" },
+    }),
+  );
+  await h.proxy.fromClient({
+    jsonrpc: "2.0",
+    method: "session/cancel",
+    params: { sessionId: "s-queued" },
+  });
+
+  newSessionGate.resolve();
+  await firstReq;
+  await promptReq;
+
+  assert.equal(
+    h.agent.some((m) => m.method === "session/prompt" && m.id === 101),
+    false,
+    "cancelled queued prompt must never be written to agy",
+  );
+  const cancelledReply = h.client.find((m) => m.id === 101);
+  assert.deepEqual(cancelledReply?.result, { stopReason: "cancelled" });
+});
+
+test("H2: wrapUpHint arriving while prompt is queued behind an earlier request binds to that reserved turn", async () => {
+  const gate = deferred();
+  const h = makeProxy({ managed: false });
+  await flush();
+  h.runtime.projection = async () => {
+    await gate.promise;
+    return "PROJECTION";
+  };
+  const firstReq = h.proxy.fromClient(request(200, "session/new", { cwd: "/work/repo" }));
+  const promptReq = h.proxy.fromClient(
+    request(201, "session/prompt", {
+      sessionId: "s-hint-q",
+      prompt: [{ type: "text", text: "do work" }],
+      _meta: { "cowboy.dev/attemptNonce": "nonce-hint-q" },
+    }),
+  );
+  // Hint arrives synchronously while prompt is still waiting on this.queue!
+  await h.proxy.fromClient({
+    jsonrpc: "2.0",
+    method: "cowboy/wrapUpHint",
+    params: { sessionId: "s-hint-q", attemptNonce: "nonce-hint-q" },
+  });
+  gate.resolve();
+  await firstReq;
+  await promptReq;
+
+  const turn = h.proxy.turns.get("s-hint-q");
+  assert.equal(turn?.wrapUp.pending, true);
+});
+
+test("H4: quiesce closes open turns and rejects new MCP tool calls on already-accepted relays", async () => {
+  const conn = makeFakeConnection({
+    "fs/read": async () => ({ content: "should never run" }),
+  });
+  const facade = new Facade(conn, { root: "/work/repo", shell: "/bin/sh" });
+  const { stream, sent } = makeMcpStream();
+  serveMcp(stream, facade, () => "s-shut");
+  facade.beginTurn("s-shut", { wrapUp: { pending: false, delivered: false } });
+
+  facade.quiesce();
+  assert.equal(facade.sessions.get("s-shut")?.turn, undefined);
+
+  stream.push(
+    `${JSON.stringify({ jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "ReadFile", arguments: { path: "a.txt" } } })}\n`,
+  );
+  await flush();
+  await flush();
+
+  assert.equal(conn.calls.length, 0, "no target RPC may start after quiesce");
+  const resp = JSON.parse(sent.join("").trim());
+  assert.equal(resp.result?.isError, true);
+  assert.match(resp.result?.content?.[0]?.text ?? "", /shutting down/);
+  stream.destroy();
+});
+
+test("M1: root Stop unconfirmed UNCERTAIN_REPORT still runs during quiesce drain and exposes remainingRootStopMs", async () => {
+  const stopGate = deferred();
+  const uncertainCalls = [];
+  const conn = makeFakeConnection({
+    "process/terminate": async () => {
+      await stopGate.promise;
+      throw new Error("still alive");
+    },
+    [UNCERTAIN_REPORT]: async (params) => {
+      uncertainCalls.push(params);
+      return {};
+    },
+  });
+  const facade = new Facade(conn, {
+    root: "/work/repo",
+    shell: "/bin/sh",
+    stopConfirmMs: 15_000,
+  });
+  facade.beginTurn("s-m1", { wrapUp: { pending: false, delivered: false } });
+  facade.session("s-m1").commands.set("proc-m1", {
+    processId: "proc-m1",
+    command: "sleep 999",
+    cleaning: 0,
+    stopping: undefined,
+    timer: undefined,
+  });
+
+  const endPromise = facade.endTurn("s-m1", { cancelled: true });
+  // Even after proxy exit triggers quiesce(), drain budget reflects the active 15s root window.
+  facade.quiesce();
+  assert.ok(
+    facade.remainingRootStopMs() > 10_000,
+    `expected remainingRootStopMs > 10s, got ${facade.remainingRootStopMs()}`,
+  );
+
+  stopGate.resolve();
+  await endPromise;
+  assert.deepEqual(uncertainCalls, [{ method: "process/terminate" }]);
+  assert.equal(facade.remainingRootStopMs(), 0);
+});
+
+test("M2: unsettled ReadFile call during turn end marks open MCP relay ambiguous until socket close", async () => {
+  const readGate = deferred();
+  const conn = makeFakeConnection();
+  const facade = new Facade(conn, { root: "/work/repo", shell: "/bin/sh" });
+  let slowOnce = true;
+  facade.answer = async () => {
+    if (slowOnce) {
+      slowOnce = false;
+      await readGate.promise;
+    }
+    return { content: [{ type: "text", text: "read-ok" }] };
+  };
+
+  const { stream: relay1, sent: out1 } = makeMcpStream();
+  serveMcp(relay1, facade, () => "s-m2");
+
+  // Turn 1 starts an ordinary ReadFile; agy ends the turn before ReadFile replies!
+  facade.beginTurn("s-m2", { wrapUp: { pending: false, delivered: false } });
+  relay1.push(
+    `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "ReadFile", arguments: { path: "x" } } })}\n`,
+  );
+  await flush();
+  await facade.endTurn("s-m2", { cancelled: false, errored: false });
+  facade.detachTurn("s-m2", { cancelled: false, errored: false });
+  readGate.resolve();
+  await flush();
+  await flush();
+
+  // Turn 2 on the same relay MUST NOT receive WRAP_UP_NOTE because relay1 is ambiguous!
+  const wrapUp2 = { pending: true, delivered: false };
+  facade.beginTurn("s-m2", { wrapUp: wrapUp2 });
+  out1.length = 0;
+  relay1.push(
+    `${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "ReadFile", arguments: { path: "y" } } })}\n`,
+  );
+  await flush();
+  await flush();
+  const resp2 = JSON.parse(out1.join("").trim());
+  assert.equal(resp2.result.content[0].text, "read-ok");
+  assert.equal(wrapUp2.delivered, false);
+
+  relay1.destroy();
+  await flush();
 });

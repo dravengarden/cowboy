@@ -115,7 +115,7 @@ import { reportClientDuration, reportClientLog, reportClientMetric, startClientS
 import { ClientOperations } from "./otelOperations.ts";
 import { isTurnActivityUpdate } from "./turnWaiting.ts";
 import { ContextNavigationNotice, loadSessionContext, requireCurrentAgentContext, sendWithContext, stagedNextAgent } from "./sessionContext";
-import { captureWrapUpTarget, wrapUpOutboxPatch, wrapUpSubmitFields, type WrapUpOutboxFields } from "./wrapUpDelivery";
+import { wrapUpOutboxPatch, wrapUpQueueAddOptions, wrapUpSubmitFields, type WrapUpOutboxFields } from "./wrapUpDelivery";
 import { composeDraftForStagedAgent } from "./contextPendingPrompt";
 
 const telemetryOperations = new ClientOperations(
@@ -5139,8 +5139,7 @@ export async function wrapUpPrompt(sessionId: string, text: string, attachments:
   const trimmed = text.trimEnd();
   if (!trimmed.trim() && attachments.length === 0) return;
   try { await requireCurrentAgentContext(sessionId); } catch (error) { contextSendError(sessionId, error); }
-  const captured = await captureWrapUpTarget(sessionId, target);
-  return qAdd("queue", sessionId, trimmed, attachments, { mode: "front", origin: "composer", wrapUp: true, wrapUpSessionId: sessionId, ...(captured ? { wrapUpTarget: captured } : {}) });
+  return qAdd("queue", sessionId, trimmed, attachments, wrapUpQueueAddOptions(sessionId, target));
 }
 
 /** Jump to front of queue without interrupting the running turn. */

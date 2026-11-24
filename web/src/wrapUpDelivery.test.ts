@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { isCurrentContextReady, type SessionContext } from "./sessionContext";
-import { resolveDeliveryPickerState, wrapUpSubmitFields } from "./wrapUpDelivery";
+import { resolveDeliveryPickerState, wrapUpQueueAddOptions, wrapUpSubmitFields } from "./wrapUpDelivery";
 
 const baseOptions = {
   target: { worker_epoch: "w1", turn_id: "t1" },
@@ -33,9 +33,11 @@ describe("resolveDeliveryPickerState (Antigravity R1 wrap-up)", () => {
     expect(state.preferred).toBe("wrap_up");
   });
 
-  test("disables Wrap up & send next when paused, editing, targetless, idle, or context pending", () => {
+  test("disables Wrap up & send next when unloaded, paused, editing, targetless, idle, or context pending", () => {
     for (const patch of [
+      { fresh: false },
       { paused: true },
+      { options: { ...baseOptions, paused: true } },
       { busy: false },
       { contextReady: false },
       { options: { ...baseOptions, editing: true } },
@@ -55,6 +57,44 @@ describe("resolveDeliveryPickerState (Antigravity R1 wrap-up)", () => {
       });
       expect(state.wrapUp).toBe(false);
     }
+  });
+
+  test("blocks Steer on queued Antigravity rows even if a legacy Controller advertises steer=true", () => {
+    const state = resolveDeliveryPickerState({
+      busy: true,
+      paused: false,
+      queued: true,
+      steerReady: false,
+      wrapUpReady: false,
+      contextReady: true,
+      disallowSteer: true,
+      fresh: true,
+      error: null,
+      options: {
+        ...baseOptions,
+        steer: true,
+        controls: { version: 1, next_checkpoint: true },
+        wrap_up_steering: false,
+      },
+    });
+    expect(state.steer).toBe(false);
+    expect(state.checkpoint).toBe(false);
+    expect(state.showWrapUp).toBe(false);
+    expect(state.unavailable).toBe("Not supported by this worker");
+  });
+
+  test("wrapUpQueueAddOptions preserves exact target and downgrades targetless submits to plain front queue", () => {
+    expect(wrapUpQueueAddOptions("s1", { worker_epoch: "w1", turn_id: "t1" })).toEqual({
+      mode: "front",
+      origin: "composer",
+      wrapUp: true,
+      wrapUpSessionId: "s1",
+      wrapUpTarget: { worker_epoch: "w1", turn_id: "t1" },
+    });
+    expect(wrapUpQueueAddOptions("s1", undefined)).toEqual({
+      mode: "front",
+      origin: "composer",
+    });
   });
 
   test("never offers Wrap up & send next on queued rows (prevents Peer/Automation promotion)", () => {

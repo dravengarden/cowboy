@@ -1495,3 +1495,28 @@ async fn background_cancel_turn_does_not_park_on_unconfirmed_termination() {
     tokio::time::sleep(Duration::from_millis(5300)).await;
     assert!(l.uncertain_effect().is_none());
 }
+
+#[tokio::test]
+async fn abrupt_worker_exit_with_live_process_parks_replacement_ledger_durably() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.json");
+    let target = Target::new(processes());
+    let l = ledger(&target.client, Some(path.clone()));
+    l.begin_turn("turn-1");
+    let started = target
+        .client
+        .relay("process/start".into(), start("live-before-sigkill"))
+        .await;
+    assert!(started.get("result").is_some());
+    // Worker dies abruptly without running finish_turn/settle_all (SIGTERM/SIGKILL).
+    drop(l);
+
+    // Replacement worker reopening the same ledger sees the unconfirmed process obligation
+    // and immediately latches a durable `process/terminate` uncertain_effect hold.
+    let reopened = Ledger::open("session", Some(path.clone())).unwrap();
+    assert_eq!(
+        reopened.uncertain_effect().as_deref(),
+        Some("process/terminate")
+    );
+    assert!(reopened.uncertain_sequence() > 0);
+}

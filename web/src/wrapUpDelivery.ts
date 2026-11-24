@@ -15,6 +15,7 @@ export interface DeliveryPickerStateInput {
   steerReady: boolean;
   wrapUpReady: boolean;
   contextReady: boolean;
+  disallowSteer?: boolean;
   fresh: boolean;
   error: string | null;
   options: DeliveryOptions | null;
@@ -44,25 +45,31 @@ export function resolveDeliveryPickerState(
     steerReady,
     wrapUpReady,
     contextReady,
+    disallowSteer = false,
     fresh,
     error,
     options,
   } = input;
+  const effectivePaused = paused || Boolean(options?.paused);
   const target = fresh && busy ? options?.target ?? undefined : undefined;
-  const steer = fresh
+  const steer = disallowSteer
+    ? false
+    : fresh
     ? Boolean(busy && options?.steer && target)
     : Boolean(busy && steerReady);
-  const checkpoint = steer && Boolean(options?.controls.next_checkpoint);
+  const checkpoint = !disallowSteer && steer && Boolean(options?.controls.next_checkpoint);
   const showWrapUp = !queued && !steer && (
     fresh
       ? Boolean(!options?.steer && options?.wrap_up_steering)
       : Boolean(wrapUpReady || (!options?.steer && options?.wrap_up_steering))
   );
-  const wrapUp = showWrapUp && busy && !paused && !options?.editing &&
-    contextReady && (fresh ? Boolean(target) : Boolean(wrapUpReady));
+  // Require a fresh read with an exact target before enabling wrap-up so the
+  // owner never hints a later turn than the one shown when the picker opened.
+  const wrapUp = showWrapUp && busy && !effectivePaused && !options?.editing &&
+    contextReady && fresh && Boolean(target);
   const unavailable = !busy
     ? "No active turn"
-    : fresh && !options?.steer
+    : disallowSteer || (fresh && !options?.steer)
     ? "Not supported by this worker"
     : fresh
     ? "Active turn unavailable"
@@ -71,7 +78,7 @@ export function resolveDeliveryPickerState(
     : "Checking runtime…";
   const wrapUpUnavailable = !busy
     ? "No active turn"
-    : paused
+    : effectivePaused
     ? "Queue is paused"
     : options?.editing
     ? "Finish editing queued message first"
@@ -134,11 +141,21 @@ export function wrapUpOutboxPatch(opts: WrapUpOutboxFields): WrapUpOutboxFields 
   };
 }
 
-export async function captureWrapUpTarget(
+/** Build qAdd options for wrap-up: persist the exact target chosen in the
+ *  picker; never re-capture a later turn, and downgrade targetless submits to
+ *  plain front-of-queue admission without a hint. */
+export function wrapUpQueueAddOptions(
   sessionId: string,
   target?: DeliveryTarget,
-): Promise<DeliveryTarget | undefined> {
-  if (target !== undefined) return target;
-  const { captureDeliveryTarget } = await import("./currentTurnDelivery");
-  return await captureDeliveryTarget(sessionId).catch(() => undefined);
+): { mode: "front"; origin: "composer" } & WrapUpOutboxFields {
+  if (!target) {
+    return { mode: "front", origin: "composer" };
+  }
+  return {
+    mode: "front",
+    origin: "composer",
+    wrapUp: true,
+    wrapUpSessionId: sessionId,
+    wrapUpTarget: target,
+  };
 }

@@ -171,15 +171,29 @@ pub fn has_substantive_prompt_blocks(blocks: &[serde_json::Value]) -> bool {
 
 /// Hard-clamps native mid-turn delivery capabilities for Antigravity, which
 /// never supports native `current_turn` or `next_checkpoint` steering.
+/// Fail-closed delivery capability clamp: clears native current-turn and
+/// next-checkpoint steering whenever provider identity is missing (`None`) or
+/// is Antigravity.
 pub fn clamp_delivery_capabilities_for_provider(
     provider: Option<&str>,
     supports_current_turn: &mut bool,
     next_checkpoint: &mut bool,
 ) {
-    if provider.is_some_and(is_antigravity_provider) {
+    if provider.is_none_or(is_antigravity_provider) {
         *supports_current_turn = false;
         *next_checkpoint = false;
     }
+}
+
+/// Validate a caller-supplied authored wrap-up operation ID against the Rev 10
+/// contract: non-empty, `<= 128` bytes, ASCII `[A-Za-z0-9._:-]`.
+#[must_use]
+pub fn is_valid_wrap_up_operation_id(op: &str) -> bool {
+    !op.is_empty()
+        && op.len() <= 128
+        && op
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b':' | b'-'))
 }
 
 /// Effective `wrap_up_steering` gate across Controller, Machine broker, and
@@ -336,6 +350,20 @@ mod tests {
             true
         ));
         assert!(!effective_wrap_up_steering(None, true, Some(53), 8, true));
+        let mut missing_current = true;
+        let mut missing_checkpoint = true;
+        clamp_delivery_capabilities_for_provider(
+            None,
+            &mut missing_current,
+            &mut missing_checkpoint,
+        );
+        assert!(!missing_current);
+        assert!(!missing_checkpoint);
+        assert!(is_valid_wrap_up_operation_id("op-123_a.b:c"));
+        assert!(!is_valid_wrap_up_operation_id(""));
+        assert!(!is_valid_wrap_up_operation_id(&"a".repeat(129)));
+        assert!(!is_valid_wrap_up_operation_id("bad space"));
+        assert!(!is_valid_wrap_up_operation_id("bad/slash"));
     }
 
     #[test]

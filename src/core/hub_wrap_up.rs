@@ -85,6 +85,30 @@ impl Hub {
             .is_some_and(|s| s.active_turn_compacting)
     }
 
+    /// Atomic Hub-side wrap-up hint admission fence covering clear, delivery
+    /// hold, queue editing, sent or observed compaction, pause, and provider.
+    #[must_use]
+    pub fn wrap_up_hint_blocked(&self, session_id: &str) -> bool {
+        if self.is_managed_child(session_id) {
+            return true;
+        }
+        let sessions = self.inner.sessions.lock();
+        let Some(s) = sessions.get(session_id) else {
+            return true;
+        };
+        s.clear_pending
+            || s.delivery_hold.is_some()
+            || s.editing.is_some()
+            || s.active_turn_compacting
+            || !matches!(s.compaction_usage, context_rollover::CompactionUsage::Idle)
+            || s.meta.paused
+            || s.meta.system
+            || s.meta.closing
+            || s.meta.status != Status::Busy
+            || !s.meta.wrap_up_steering
+            || !crate::wrap_up::is_antigravity_provider(&s.meta.provider)
+    }
+
     /// Front-of-queue admission without cancelling the active turn, returning
     /// all 5 distinct outcomes (`Refused`, `Duplicate`, `DispatchedImmediately`,
     /// `QueuedFront`, `QueuedFallback`).
@@ -358,5 +382,55 @@ mod tests {
             hub_closed.queue_and_drafts("s1", |_| true).unwrap().0.len(),
             1
         );
+    }
+
+    #[test]
+    fn wrap_up_hint_blocked_fences_clear_delivery_hold_and_observed_compaction() {
+        let hub = idle_hub();
+        hub.set_status("s1", Status::Busy, None);
+        hub.set_wrap_up_steering("s1", true);
+        assert!(!hub.wrap_up_hint_blocked("s1"));
+
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("s1")
+            .unwrap()
+            .clear_pending = true;
+        assert!(hub.wrap_up_hint_blocked("s1"));
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("s1")
+            .unwrap()
+            .clear_pending = false;
+        assert!(!hub.wrap_up_hint_blocked("s1"));
+
+        hub.publish_delivery_hold("s1", Some("interrupt-op".into()));
+        assert!(hub.wrap_up_hint_blocked("s1"));
+        hub.publish_delivery_hold("s1", None);
+        assert!(!hub.wrap_up_hint_blocked("s1"));
+
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("s1")
+            .unwrap()
+            .compaction_usage = context_rollover::CompactionUsage::Running { reported: false };
+        assert!(hub.wrap_up_hint_blocked("s1"));
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("s1")
+            .unwrap()
+            .compaction_usage = context_rollover::CompactionUsage::Unmeasured;
+        assert!(hub.wrap_up_hint_blocked("s1"));
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("s1")
+            .unwrap()
+            .compaction_usage = context_rollover::CompactionUsage::Idle;
+        assert!(!hub.wrap_up_hint_blocked("s1"));
     }
 }

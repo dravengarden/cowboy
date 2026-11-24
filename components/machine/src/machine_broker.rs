@@ -40,7 +40,7 @@ mod readmission;
 mod systemd_exit;
 mod worker_environment;
 mod worker_launch;
-mod wrap_up;
+pub(crate) mod wrap_up;
 
 /// Consecutive failed cleanup attempts (about three minutes of backoff) after
 /// which a nominated Session stops holding its handles in this process.
@@ -408,6 +408,7 @@ struct Broker {
     launching: Mutex<HashSet<String>>,
     awaiting_reconnect: Mutex<HashSet<String>>,
     cancelled_sessions: Mutex<HashSet<String>>,
+    pending_core_commands: Mutex<HashMap<String, usize>>,
     /// Account stops must not be undone by ordinary reset or hibernation.
     /// Cache only; the auth store retains stop intent across resident restarts.
     account_quiesced_sessions: Mutex<HashSet<String>>,
@@ -541,6 +542,7 @@ impl Broker {
             launching: Mutex::new(HashSet::new()),
             awaiting_reconnect: Mutex::new(HashSet::new()),
             cancelled_sessions: Mutex::new(HashSet::new()),
+            pending_core_commands: Mutex::new(HashMap::new()),
             account_quiesced_sessions: Mutex::new(HashSet::new()),
             deletion_journal: Mutex::new(None),
             cleanup_continuations: Mutex::new(None),
@@ -4221,7 +4223,7 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
     };
     let (tx, rx) = mpsc::unbounded_channel::<Frame>();
     let (hint_tx, hint_rx) = mpsc::channel::<Frame>(wrap_up::WORKER_HINT_CAPACITY);
-    let writer_task = tokio::spawn(wrap_up::run_worker_writer(writer, rx, hint_rx));
+    let writer_task = tokio::spawn(wrap_up::run_worker_unix_writer(writer, rx, hint_rx));
     match role {
         PeerRole::Core => {
             drop(hint_tx);
@@ -4330,20 +4332,8 @@ async fn handle_core(
     lease: u64,
     reader: &mut tokio::net::unix::OwnedReadHalf,
 ) -> Result<()> {
-    // Core commands such as an explicit reset can wait for a previous worker
-    // launch to stop. Keep that lifecycle work serialized, but move it off the
-    // frame reader so a long command cannot starve controller heartbeats.
-    let (command_tx, mut command_rx) = mpsc::channel(CORE_COMMAND_QUEUE_CAPACITY);
-    let command_broker = Arc::clone(&broker);
-    let command_task = tokio::spawn(async move {
-        while let Some(command) = command_rx.recv().await {
-            // Reset, hibernation and deletion fence a session before their last
-            // step. Aborting this loop on disconnect drops queued commands, but
-            // the one in progress runs to completion in its own task.
-            let broker = Arc::clone(&command_broker);
-            let _ = tokio::spawn(async move { handle_core_command(&broker, command).await }).await;
-        }
-    });
+    // Keep lifecycle commands serialized off the frame reader so heartbeats never starve.
+    let (command_tx, command_task) = wrap_up::spawn_core_command_loop(Arc::clone(&broker));
 
     let result = async {
         while let Some(frame) = read_frame(reader).await? {
@@ -4372,34 +4362,9 @@ async fn handle_core(
                 Frame::CoreCommand {
                     command: CoreCommand::WrapUpHint { session_id, target },
                 } => broker.handle_wrap_up_hint(lease, &session_id, &target),
-                Frame::CoreCommand { command } => match command_tx.try_send(command) {
-                    Ok(()) => {}
-                    // Refuse only the overflowing command. Reconnecting drops
-                    // every queued command at once; a rejected ack is
-                    // requeued or surfaced by the controller.
-                    Err(mpsc::error::TrySendError::Full(command)) => {
-                        let Some((session_id, command_id)) =
-                            core_overflow::overflow_refusal(&command)
-                        else {
-                            anyhow::bail!(
-                                "Machine core command queue saturated; reconnecting controller"
-                            );
-                        };
-                        tracing::warn!(
-                            session = %session_id,
-                            %command_id,
-                            "Machine core command queue full; refusing command"
-                        );
-                        broker.command_rejected(
-                            &session_id,
-                            command_id,
-                            "Machine is busy; retry shortly".to_owned(),
-                        );
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => {
-                        anyhow::bail!("Machine core command queue closed");
-                    }
-                },
+                Frame::CoreCommand { command } => {
+                    wrap_up::enqueue_core_command(&broker, &command_tx, command)?;
+                }
                 Frame::Ack {
                     session_id,
                     worker_epoch,

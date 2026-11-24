@@ -1427,7 +1427,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         (chunked, compressed, paced, stream),
         Some(Arc::clone(&credit)),
     ));
-    let mut runtime_writer = tokio::spawn(wrap_up_hint::run_runtime_writer_with_hints(
+    let mut runtime_writer = tokio::spawn(wrap_up_hint::run_runtime_unix_writer_with_hints(
         runtime_writer,
         runtime_write_rx,
         hint_runtime_rx,

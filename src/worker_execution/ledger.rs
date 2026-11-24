@@ -16,7 +16,7 @@
 //! makes the session's effect uncertain, durably, until the owner
 //! acknowledges that exact sequence.
 
-use std::collections::{BTreeMap, HashMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
@@ -137,6 +137,11 @@ struct Record {
     /// session's queue until the owner acknowledged this sequence.
     #[serde(default)]
     uncertain_sequence: u64,
+    /// Target process IDs admitted to start whose exit has not yet been
+    /// confirmed. Any entry present on reopen proves a predecessor worker
+    /// stopped/crashed (SIGTERM/SIGKILL) before confirming termination.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    active_processes: BTreeSet<String>,
 }
 
 #[derive(Default)]
@@ -216,11 +221,26 @@ impl Ledger {
         );
         record.schema = SCHEMA;
         session_id.clone_into(&mut record.session_id);
+        let mut unwritable = false;
+        if !record.active_processes.is_empty() {
+            record.active_processes.clear();
+            if record.uncertain_effect.as_deref() != Some("process/terminate") {
+                record.uncertain_effect = Some("process/terminate".to_owned());
+                record.uncertain_sequence = next_sequence(record.uncertain_sequence);
+            }
+            if let Some(ledger_path) = &path
+                && let Err(error) = write_record(ledger_path, &record)
+            {
+                tracing::warn!(%error, "execution ledger reopen recovery write failed");
+                unwritable = true;
+            }
+        }
         Ok(Arc::new(Self {
             path,
             state: Mutex::new(State {
                 record,
                 readiness: true,
+                unwritable,
                 ..State::default()
             }),
             changed: watch::Sender::new(0),
@@ -422,6 +442,14 @@ impl Ledger {
         }
         if turn == READINESS_TURN {
             state.probes.insert(process.clone());
+        } else {
+            state.record.active_processes.insert(process.clone());
+            if let Err(error) = self.persist(&state.record) {
+                state.record.active_processes.remove(&process);
+                state.unwritable = true;
+                tracing::warn!(%error, "execution ledger process obligation write failed");
+                return Err("the execution ledger cannot be written; process start refused");
+            }
         }
         state.processes.insert(process.clone(), turn.clone());
         state.starting.insert(process);
@@ -447,7 +475,16 @@ impl Ledger {
 
     /// The target's evidence that `process` is gone.
     pub fn exited(&self, process: &str) {
-        if self.state.lock().processes.remove(process).is_some() {
+        let mut state = self.state.lock();
+        let removed_live = state.processes.remove(process).is_some();
+        if state.record.active_processes.remove(process)
+            && let Err(error) = self.persist(&state.record)
+        {
+            tracing::warn!(%error, "execution ledger process exit write failed");
+            state.unwritable = true;
+        }
+        drop(state);
+        if removed_live {
             self.changed.send_modify(|value| *value += 1);
         }
     }
@@ -539,26 +576,7 @@ impl Ledger {
         let Some(path) = &self.path else {
             return Ok(());
         };
-        let bytes = serde_json::to_vec(record)?;
-        let parent = path.parent().context("execution ledger has no directory")?;
-        let temporary = parent.join(format!(
-            ".{}.{:016x}.partial",
-            path.file_name()
-                .and_then(|name| name.to_str())
-                .unwrap_or("ledger"),
-            rand::random::<u64>()
-        ));
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&temporary)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        drop(file);
-        std::fs::rename(&temporary, path)?;
-        std::fs::File::open(parent)?.sync_all()?;
-        Ok(())
+        write_record(path, record)
     }
 }
 
@@ -956,4 +974,27 @@ impl Client {
             }
         }
     }
+}
+
+fn write_record(path: &std::path::Path, record: &Record) -> Result<()> {
+    let bytes = serde_json::to_vec(record)?;
+    let parent = path.parent().context("execution ledger has no directory")?;
+    let temporary = parent.join(format!(
+        ".{}.{:016x}.partial",
+        path.file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or("ledger"),
+        rand::random::<u64>()
+    ));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    drop(file);
+    std::fs::rename(&temporary, path)?;
+    std::fs::File::open(parent)?.sync_all()?;
+    Ok(())
 }

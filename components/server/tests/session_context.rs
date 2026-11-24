@@ -737,3 +737,147 @@ async fn a_retired_default_session_refuses_input_before_any_change() {
             .contains("retired legacy default account")
     );
 }
+
+#[tokio::test]
+async fn wrap_up_http_receipts_and_ws_refusals_settle_authored_outbox() {
+    let mut fixture = Fixture::new().await;
+    let (_controller, base) = fixture.start().await;
+
+    // 1. Invalid wrap_up operation IDs are rejected with 400.
+    for bad_op in ["", "bad/slash", "bad space", &"a".repeat(129)] {
+        let resp = fixture
+            .request(
+                reqwest::Method::POST,
+                &format!("{base}/api/sessions/source/prompt"),
+            )
+            .json(&json!({
+                "text": "please wrap up",
+                "delivery": "wrap_up",
+                "operation": bad_op,
+            }))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), 400, "bad op {bad_op:?}");
+    }
+
+    // 2. Missing session returns 404.
+    let missing = fixture
+        .request(
+            reqwest::Method::POST,
+            &format!("{base}/api/sessions/no-such-session/prompt"),
+        )
+        .json(&json!({
+            "text": "please wrap up",
+            "delivery": "wrap_up",
+            "operation": "wrap-missing-1",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(missing.status(), 404);
+
+    // 3. Valid wrap_up prompt returns 202 with delivery="wrap_up", and exact
+    //    duplicate returns status="already_accepted" + delivery="wrap_up".
+    let first = fixture
+        .request(
+            reqwest::Method::POST,
+            &format!("{base}/api/sessions/source/prompt"),
+        )
+        .json(&json!({
+            "text": "please wrap up",
+            "delivery": "wrap_up",
+            "operation": "wrap-op-1",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(first.status(), 202);
+    let first_body: Value = first.json().await.unwrap();
+    assert_eq!(first_body["delivery"], "wrap_up");
+    assert!(
+        matches!(first_body["status"].as_str(), Some("dispatched" | "queued")),
+        "unexpected status: {first_body}"
+    );
+    assert_eq!(first_body["hinted"], false);
+
+    let dup = fixture
+        .request(
+            reqwest::Method::POST,
+            &format!("{base}/api/sessions/source/prompt"),
+        )
+        .json(&json!({
+            "text": "please wrap up",
+            "delivery": "wrap_up",
+            "operation": "wrap-op-1",
+        }))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(dup.status(), 202);
+    let dup_body: Value = dup.json().await.unwrap();
+    assert_eq!(dup_body["delivery"], "wrap_up");
+    assert_eq!(dup_body["status"], "already_accepted");
+    assert_eq!(dup_body["hinted"], false);
+
+    // 4. WebSocket wrap_up refusals settle authored cmid with CommandResult::Rejected.
+    let dataset = fixture.get(&format!("{base}/api/sync/dataset")).await;
+    let target = format!(
+        "/ws?bootstrap=lazy&client_kind=browser&client_id=wrap-up-refusal-fixture&dataset={}",
+        dataset["dataset_id"].as_str().unwrap()
+    );
+    let mut request = format!("{}{target}", base.replace("http://", "ws://"))
+        .into_client_request()
+        .unwrap();
+    let headers = request.headers_mut();
+    headers.insert("cookie", fixture.cookie.as_ref().unwrap().parse().unwrap());
+    headers.insert("origin", "https://cowboy.example".parse().unwrap());
+    headers.insert("x-forwarded-proto", "https".parse().unwrap());
+    headers.insert(
+        "x-cowboy-browser-proof",
+        fixture.browser_proof("GET", &target).parse().unwrap(),
+    );
+    headers.insert("sec-websocket-protocol", "cowboy-sync-v1".parse().unwrap());
+    let (mut socket, _) = tokio_tungstenite::connect_async(request).await.unwrap();
+
+    for (cmid, payload) in [
+        (
+            "ws-wrap-conflict",
+            json!({
+                "type": "submit",
+                "session_id": "source",
+                "text": "hello",
+                "cmid": "ws-wrap-conflict",
+                "force": true,
+                "wrap_up": true,
+            }),
+        ),
+        (
+            "ws-wrap-empty",
+            json!({
+                "type": "submit",
+                "session_id": "source",
+                "text": "   \u{feff}  ",
+                "cmid": "ws-wrap-empty",
+                "wrap_up": true,
+            }),
+        ),
+    ] {
+        socket
+            .send(Message::Text(payload.to_string().into()))
+            .await
+            .unwrap();
+        let refusal = tokio::time::timeout(Duration::from_secs(3), async {
+            while let Some(Ok(Message::Text(text))) = socket.next().await {
+                let value: Value = serde_json::from_str(&text).unwrap();
+                if value["type"] == "command_result" && value["cmid"] == cmid {
+                    return value;
+                }
+            }
+            panic!("socket closed before command_result for {cmid}");
+        })
+        .await
+        .expect("wrap_up refusal must settle authored cmid");
+        assert_eq!(refusal["outcome"], "rejected", "{cmid}");
+    }
+}

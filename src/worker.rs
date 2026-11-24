@@ -445,13 +445,48 @@ pub fn until_terminated(
     })
 }
 
+/// Run a detached worker until natural completion or SIGTERM, giving the ACP
+/// thread a bounded settlement window so execution processes are terminated
+/// or durably parked before exit.
+pub async fn run_until_terminated(args: WorkerArgs) -> Result<()> {
+    let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
+    let (sigterm_tx, sigterm_rx) = tokio::sync::oneshot::channel::<()>();
+    let session = args.session_id.clone();
+    let worker = run_with_shutdown(args, Some(sigterm_rx));
+    tokio::pin!(worker);
+    tokio::select! {
+        result = &mut worker => result,
+        _ = terminate.recv() => {
+            tracing::info!(event_name = "cowboy.worker.terminated", %session, "worker received SIGTERM; settling execution ledger");
+            let _ = sigterm_tx.send(());
+            match tokio::time::timeout(Duration::from_secs(10), &mut worker).await {
+                Ok(result) => result,
+                Err(_) => {
+                    tracing::warn!(event_name = "cowboy.worker.terminated_timeout", %session, "worker SIGTERM settlement bound reached; durable ledger retains remaining obligations");
+                    Ok(())
+                }
+            }
+        }
+    }
+}
+
 /// Run one detached worker until its ACP session and acknowledged outbox have
 /// both drained.
 pub async fn run(args: WorkerArgs) -> Result<()> {
-    // The detached worker has its own process and never enters Cli::run.
-    // Reqwest's provider-neutral TLS feature also needs this before a plain
-    // loopback sidecar Client is constructed during Provider preparation.
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    run_with_shutdown(args, None).await
+}
+
+struct PreparedWorkerLaunch {
+    prepared: provider::PreparedLaunch,
+    spec: provider::LaunchSpec,
+    _mcp_descriptor: Option<tempfile::NamedTempFile>,
+    managed_child: bool,
+    epoch: String,
+    executable: Option<String>,
+    launch: crate::runtime_wire::StartSession,
+}
+
+async fn prepare_worker_launch(args: &WorkerArgs) -> Result<PreparedWorkerLaunch> {
     let managed_child = args
         .execution_binding
         .as_ref()
@@ -462,7 +497,6 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
             "managed child worker identity mismatch"
         );
     }
-    // A remote managed child executes in a snapshot named after itself.
     let remote_managed = args
         .execution_binding
         .as_ref()
@@ -481,7 +515,7 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         .map(|managed| managed.profile);
     let prepared = provider::prepare(&args.provider, profile).await?;
     let mut spec = prepared.spec.clone();
-    let _mcp_descriptor = mcp_launch::configure(&args, &prepared, &mut spec)?;
+    let _mcp_descriptor = mcp_launch::configure(args, &prepared, &mut spec)?;
     let provider_behavior = (!args.provider_generation_digest.is_empty())
         .then(|| crate::provider::behavior(&args.provider));
     let configuration = provider_behavior.as_ref().map_or_else(
@@ -531,12 +565,40 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         mcp_plan: args.mcp_plan.clone(),
         native_fork: args.native_fork.clone().map(Box::new),
     };
+    Ok(PreparedWorkerLaunch {
+        prepared,
+        spec,
+        _mcp_descriptor,
+        managed_child: managed_child.is_some(),
+        epoch,
+        executable,
+        launch,
+    })
+}
+
+async fn run_with_shutdown(
+    args: WorkerArgs,
+    sigterm_rx: Option<tokio::sync::oneshot::Receiver<()>>,
+) -> Result<()> {
+    // The detached worker has its own process and never enters Cli::run.
+    // Reqwest's provider-neutral TLS feature also needs this before a plain
+    // loopback sidecar Client is constructed during Provider preparation.
+    let _ = rustls::crypto::ring::default_provider().install_default();
+    let PreparedWorkerLaunch {
+        prepared,
+        mut spec,
+        _mcp_descriptor,
+        managed_child,
+        epoch,
+        executable,
+        launch,
+    } = prepare_worker_launch(&args).await?;
     let (notify_tx, notify_rx) = mpsc::unbounded_channel();
     let (endpoint, managed_round) = execution_launch::prepare(
         &args,
         &launch,
         &prepared,
-        managed_child.is_some(),
+        managed_child,
         &epoch,
         &notify_tx,
         &mut spec,
@@ -646,13 +708,53 @@ pub async fn run(args: WorkerArgs) -> Result<()> {
         })
         .context("spawning ACP worker thread")?;
 
-    let result = connection_loop(&args.socket, shared, cmd_tx, notify_rx, &mut done_rx).await;
+    let result = connection_loop_or_sigterm(
+        &args.socket,
+        shared,
+        cmd_tx,
+        notify_rx,
+        &mut done_rx,
+        sigterm_rx,
+    )
+    .await;
     // Keep exact session sidecars alive through ACP shutdown and outbox drain.
     // Dropping their kill-on-drop handles then tears down the full Provider
     // process tree before the worker exits.
     drop(prepared.sidecars);
     drop(endpoint);
     result
+}
+
+async fn connection_loop_or_sigterm(
+    socket: &PathBuf,
+    shared: Arc<Shared>,
+    cmd_tx: mpsc::UnboundedSender<AgentCommand>,
+    notify_rx: mpsc::UnboundedReceiver<()>,
+    done_rx: &mut mpsc::Receiver<()>,
+    sigterm_rx: Option<tokio::sync::oneshot::Receiver<()>>,
+) -> Result<()> {
+    let Some(sigterm) = sigterm_rx else {
+        return connection_loop(socket, shared, cmd_tx, notify_rx, done_rx).await;
+    };
+    let sigterm_fired = {
+        let mut loop_fut = std::pin::pin!(connection_loop(
+            socket,
+            shared,
+            cmd_tx.clone(),
+            notify_rx,
+            done_rx,
+        ));
+        tokio::select! {
+            res = &mut loop_fut => return res,
+            _ = sigterm => true,
+        }
+    };
+    if sigterm_fired {
+        let _ = cmd_tx.send(AgentCommand::Cancel);
+        drop(cmd_tx);
+        let _ = tokio::time::timeout(Duration::from_secs(8), done_rx.recv()).await;
+    }
+    Ok(())
 }
 
 async fn connection_loop(

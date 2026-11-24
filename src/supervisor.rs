@@ -597,22 +597,7 @@ impl Supervisor {
         session_id: &str,
         target: &crate::send_delivery::DeliveryTarget,
     ) -> bool {
-        if self.hub.is_managed_child(session_id)
-            || self.hub.is_editing(session_id)
-            || self.hub.is_active_turn_compacting(session_id)
-        {
-            return false;
-        }
-        let Some(info) = self.hub.session_info(session_id) else {
-            return false;
-        };
-        if info.meta.paused
-            || info.meta.system
-            || info.meta.closing
-            || info.meta.status != Status::Busy
-            || !info.meta.wrap_up_steering
-            || !crate::wrap_up::is_antigravity_provider(&info.meta.provider)
-        {
+        if self.hub.wrap_up_hint_blocked(session_id) {
             return false;
         }
         self.runtime_for_session(session_id)

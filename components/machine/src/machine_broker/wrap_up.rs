@@ -3,6 +3,9 @@
 //! both runtime legs >= 8), and stateless hint forwarding outside
 //! `pending_commands` / `CommandAck`.
 
+use std::os::fd::AsRawFd;
+use std::sync::Arc;
+
 use tokio::sync::mpsc;
 
 use crate::runtime_wire::{DeliveryTarget, Frame, WorkerCommand, WorkerSnapshot, write_frame};
@@ -17,24 +20,108 @@ pub(super) const WORKER_HINT_CAPACITY: usize = 8;
 /// Run a worker connection's UnixStream writer selecting reliable commands
 /// strictly ahead (`biased;`) of bounded drop-on-full hints, always writing
 /// complete frames with zero mid-frame cancellation.
-pub(super) async fn run_worker_writer<W>(
-    mut writer: W,
+pub(crate) const MIN_HINT_HEADROOM_BYTES: usize = 32_768;
+
+#[allow(unsafe_code)]
+pub(crate) fn unix_socket_has_hint_headroom(
+    writer: &tokio::net::unix::OwnedWriteHalf,
+    frame_bytes: usize,
+) -> bool {
+    let fd = writer.as_ref().as_raw_fd();
+    let mut sndbuf: libc::c_int = 0;
+    let mut len = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+    let rc = unsafe {
+        libc::getsockopt(
+            fd,
+            libc::SOL_SOCKET,
+            libc::SO_SNDBUF,
+            std::ptr::from_mut(&mut sndbuf).cast(),
+            &mut len,
+        )
+    };
+    if rc != 0 || sndbuf <= 0 {
+        return false;
+    }
+    let outq: usize = {
+        #[cfg(target_os = "linux")]
+        {
+            let mut queued: libc::c_int = 0;
+            let ioctl_rc = unsafe { libc::ioctl(fd, libc::TIOCOUTQ, &mut queued) };
+            if ioctl_rc != 0 || queued < 0 {
+                return false;
+            }
+            usize::try_from(queued).unwrap_or(usize::MAX)
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let mut queued: libc::c_int = 0;
+            let mut qlen = std::mem::size_of::<libc::c_int>() as libc::socklen_t;
+            let qrc = unsafe {
+                libc::getsockopt(
+                    fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_NWRITE,
+                    std::ptr::from_mut(&mut queued).cast(),
+                    &mut qlen,
+                )
+            };
+            if qrc != 0 || queued < 0 {
+                return false;
+            }
+            usize::try_from(queued).unwrap_or(usize::MAX)
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos")))]
+        {
+            0
+        }
+    };
+    let effective_capacity = usize::try_from(sndbuf).unwrap_or(0) / 2;
+    effective_capacity
+        >= outq
+            .saturating_add(frame_bytes)
+            .saturating_add(MIN_HINT_HEADROOM_BYTES)
+}
+
+pub(crate) fn encoded_frame_bytes(frame: &Frame) -> Option<usize> {
+    serde_json::to_vec(frame)
+        .ok()
+        .map(|bytes| bytes.len().saturating_add(4))
+}
+
+pub(super) async fn run_worker_unix_writer(
+    mut writer: tokio::net::unix::OwnedWriteHalf,
+    reliable_rx: mpsc::UnboundedReceiver<Frame>,
+    hint_rx: mpsc::Receiver<Frame>,
+) {
+    run_worker_writer_with_headroom(
+        &mut writer,
+        reliable_rx,
+        hint_rx,
+        unix_socket_has_hint_headroom,
+    )
+    .await;
+}
+
+pub(super) async fn run_worker_writer_with_headroom<W, F>(
+    writer: &mut W,
     mut reliable_rx: mpsc::UnboundedReceiver<Frame>,
     mut hint_rx: mpsc::Receiver<Frame>,
+    mut has_headroom: F,
 ) where
     W: tokio::io::AsyncWrite + Unpin,
+    F: FnMut(&W, usize) -> bool,
 {
     let mut hints_open = true;
     loop {
-        let frame = if hints_open {
+        let (frame, is_hint) = if hints_open {
             tokio::select! {
                 biased;
                 frame = reliable_rx.recv() => match frame {
-                    Some(frame) => frame,
+                    Some(frame) => (frame, false),
                     None => break,
                 },
                 hint = hint_rx.recv() => match hint {
-                    Some(hint) => hint,
+                    Some(hint) => (hint, true),
                     None => {
                         hints_open = false;
                         continue;
@@ -43,12 +130,101 @@ pub(super) async fn run_worker_writer<W>(
             }
         } else {
             match reliable_rx.recv().await {
-                Some(frame) => frame,
+                Some(frame) => (frame, false),
                 None => break,
             }
         };
-        if write_frame(&mut writer, &frame).await.is_err() {
+        if is_hint {
+            let Some(frame_bytes) = encoded_frame_bytes(&frame) else {
+                continue;
+            };
+            if !has_headroom(writer, frame_bytes) {
+                continue;
+            }
+        }
+        if write_frame(writer, &frame).await.is_err() {
             break;
+        }
+    }
+}
+
+#[cfg(test)]
+pub(super) async fn run_worker_writer<W>(
+    mut writer: W,
+    reliable_rx: mpsc::UnboundedReceiver<Frame>,
+    hint_rx: mpsc::Receiver<Frame>,
+) where
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    run_worker_writer_with_headroom(&mut writer, reliable_rx, hint_rx, |_, _| true).await;
+}
+
+pub(super) fn spawn_core_command_loop(
+    broker: Arc<super::Broker>,
+) -> (
+    mpsc::Sender<(crate::runtime_wire::CoreCommand, PendingCoreCommandGuard)>,
+    tokio::task::JoinHandle<()>,
+) {
+    let (tx, mut rx) = mpsc::channel(super::CORE_COMMAND_QUEUE_CAPACITY);
+    let task = tokio::spawn(async move {
+        while let Some((command, guard)) = rx.recv().await {
+            let broker = Arc::clone(&broker);
+            let _ = tokio::spawn(async move {
+                let _guard = guard;
+                super::handle_core_command(&broker, command).await
+            })
+            .await;
+        }
+    });
+    (tx, task)
+}
+
+pub(super) fn enqueue_core_command(
+    broker: &Arc<super::Broker>,
+    command_tx: &mpsc::Sender<(crate::runtime_wire::CoreCommand, PendingCoreCommandGuard)>,
+    command: crate::runtime_wire::CoreCommand,
+) -> anyhow::Result<()> {
+    let guard = broker.enter_pending_core_command(command.session_id().map(str::to_owned));
+    match command_tx.try_send((command, guard)) {
+        Ok(()) => Ok(()),
+        Err(mpsc::error::TrySendError::Full((command, _guard))) => {
+            let Some((session_id, command_id)) = super::core_overflow::overflow_refusal(&command)
+            else {
+                anyhow::bail!("Machine core command queue saturated; reconnecting controller");
+            };
+            tracing::warn!(
+                session = %session_id,
+                %command_id,
+                "Machine core command queue full; refusing command"
+            );
+            broker.command_rejected(
+                &session_id,
+                command_id,
+                "Machine is busy; retry shortly".to_owned(),
+            );
+            Ok(())
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            anyhow::bail!("Machine core command queue closed");
+        }
+    }
+}
+
+pub(super) struct PendingCoreCommandGuard {
+    broker: Arc<super::Broker>,
+    session_id: Option<String>,
+}
+
+impl Drop for PendingCoreCommandGuard {
+    fn drop(&mut self) {
+        if let Some(session_id) = self.session_id.take() {
+            let mut pending = self.broker.pending_core_commands.lock();
+            if let Some(count) = pending.get_mut(&session_id) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    pending.remove(&session_id);
+                }
+            }
         }
     }
 }
@@ -102,7 +278,7 @@ pub(super) fn sanitize_capability_event(
         true,
     );
     if let Some(obj) = update.as_object_mut() {
-        if declared_provider.is_some_and(crate::wrap_up::is_antigravity_provider) {
+        if declared_provider.is_none_or(crate::wrap_up::is_antigravity_provider) {
             obj.insert("currentTurn".into(), serde_json::Value::Bool(false));
             obj.insert("nextCheckpoint".into(), serde_json::Value::Bool(false));
         }
@@ -237,12 +413,45 @@ impl super::Broker {
         );
     }
 
+    pub(super) fn enter_pending_core_command(
+        self: &Arc<Self>,
+        session_id: Option<String>,
+    ) -> PendingCoreCommandGuard {
+        if let Some(ref sid) = session_id {
+            *self
+                .pending_core_commands
+                .lock()
+                .entry(sid.clone())
+                .or_insert(0) += 1;
+        }
+        PendingCoreCommandGuard {
+            broker: Arc::clone(self),
+            session_id,
+        }
+    }
+
+    pub(super) fn has_pending_core_command(&self, session_id: &str) -> bool {
+        self.pending_core_commands
+            .lock()
+            .get(session_id)
+            .copied()
+            .unwrap_or(0)
+            > 0
+    }
+
     pub(super) fn handle_wrap_up_hint(
         &self,
         lease: u64,
         session_id: &str,
         target: &DeliveryTarget,
     ) {
+        if self.has_pending_core_command(session_id)
+            || self.cancelled_sessions.lock().contains(session_id)
+            || self.resetting_sessions.lock().contains_key(session_id)
+            || self.account_quiesced_sessions.lock().contains(session_id)
+        {
+            return;
+        }
         let Some((outer, ctrl_proto)) = self
             .controller
             .lock()
@@ -355,10 +564,21 @@ mod tests {
         sanitize_snapshot_for_controller(&mut s7, true, 7, Some(53), 8, None);
         assert!(!s7.wrap_up_steering);
 
-        // Missing provider -> fails closed
+        // Missing provider -> fails closed across ALL THREE delivery flags.
         let mut missing = sample_snapshot(None);
         sanitize_snapshot_for_controller(&mut missing, true, 8, Some(53), 8, None);
         assert!(!missing.wrap_up_steering);
+        assert!(!missing.supports_current_turn);
+        assert!(!missing.delivery_controls.next_checkpoint);
+        let mut ev = serde_json::json!({
+            "currentTurn": true,
+            "nextCheckpoint": true,
+            "wrapUpSteering": true,
+        });
+        sanitize_capability_event(&mut ev, true, 8, Some(53), 8, None);
+        assert_eq!(ev["currentTurn"], serde_json::Value::Bool(false));
+        assert_eq!(ev["nextCheckpoint"], serde_json::Value::Bool(false));
+        assert_eq!(ev["wrapUpSteering"], serde_json::Value::Bool(false));
     }
 
     #[tokio::test]
@@ -496,6 +716,222 @@ mod tests {
         drop(reliable_tx);
         drop(hint_tx);
         writer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn worker_writer_drops_hint_before_byte_zero_when_headroom_insufficient() {
+        let (reliable_tx, reliable_rx) = mpsc::unbounded_channel();
+        let (hint_tx, hint_rx) = mpsc::channel(WORKER_HINT_CAPACITY);
+        hint_tx
+            .try_send(Frame::WorkerCommand {
+                session_id: "s1".into(),
+                command: WorkerCommand::WrapUpHint {
+                    session_id: "s1".into(),
+                    target: DeliveryTarget {
+                        worker_epoch: "e1".into(),
+                        turn_id: "t1".into(),
+                    },
+                },
+            })
+            .unwrap();
+        let (mut client, mut server) = tokio::io::duplex(256);
+        let writer = tokio::spawn(async move {
+            run_worker_writer_with_headroom(&mut client, reliable_rx, hint_rx, |_, _| false).await;
+        });
+        tokio::task::yield_now().await;
+        reliable_tx
+            .send(Frame::WorkerCommand {
+                session_id: "s1".into(),
+                command: WorkerCommand::Cancel {
+                    command_id: "stop-after-dropped-hint".into(),
+                },
+            })
+            .unwrap();
+        let first = read_frame(&mut server).await.unwrap().unwrap();
+        assert!(matches!(
+            first,
+            Frame::WorkerCommand {
+                command: WorkerCommand::Cancel { command_id },
+                ..
+            } if command_id == "stop-after-dropped-hint"
+        ));
+        drop(reliable_tx);
+        drop(hint_tx);
+        writer.await.unwrap();
+    }
+
+    struct PartialHintWriter<W> {
+        inner: W,
+        split_once_at: Option<usize>,
+        on_split: Option<tokio::sync::oneshot::Sender<()>>,
+        resume_rx: Option<tokio::sync::oneshot::Receiver<()>>,
+    }
+
+    impl<W: tokio::io::AsyncWrite + Unpin> tokio::io::AsyncWrite for PartialHintWriter<W> {
+        fn poll_write(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &[u8],
+        ) -> std::task::Poll<std::io::Result<usize>> {
+            if let Some(limit) = self.split_once_at.take() {
+                let n = limit.min(buf.len());
+                let res = std::pin::Pin::new(&mut self.inner).poll_write(cx, &buf[..n]);
+                if let std::task::Poll::Ready(Ok(written)) = res {
+                    if let Some(tx) = self.on_split.take() {
+                        let _ = tx.send(());
+                    }
+                    return std::task::Poll::Ready(Ok(written));
+                }
+                self.split_once_at = Some(limit);
+                return res;
+            }
+            if let Some(rx) = self.resume_rx.as_mut() {
+                match std::pin::Pin::new(rx).poll(cx) {
+                    std::task::Poll::Pending => return std::task::Poll::Pending,
+                    std::task::Poll::Ready(_) => {
+                        self.resume_rx = None;
+                    }
+                }
+            }
+            std::pin::Pin::new(&mut self.inner).poll_write(cx, buf)
+        }
+
+        fn poll_flush(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::pin::Pin::new(&mut self.inner).poll_flush(cx)
+        }
+
+        fn poll_shutdown(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            std::pin::Pin::new(&mut self.inner).poll_shutdown(cx)
+        }
+    }
+
+    #[tokio::test]
+    async fn worker_writer_finishes_partial_hint_then_delivers_cancel_intact() {
+        let (reliable_tx, reliable_rx) = mpsc::unbounded_channel();
+        let (hint_tx, hint_rx) = mpsc::channel(WORKER_HINT_CAPACITY);
+        let (split_tx, split_rx) = tokio::sync::oneshot::channel();
+        let (resume_tx, resume_rx) = tokio::sync::oneshot::channel();
+        let (client, mut server) = tokio::io::duplex(512);
+        let mut partial = PartialHintWriter {
+            inner: client,
+            split_once_at: Some(7),
+            on_split: Some(split_tx),
+            resume_rx: Some(resume_rx),
+        };
+        let writer = tokio::spawn(async move {
+            run_worker_writer_with_headroom(&mut partial, reliable_rx, hint_rx, |_, _| true).await;
+        });
+        hint_tx
+            .try_send(Frame::WorkerCommand {
+                session_id: "s1".into(),
+                command: WorkerCommand::WrapUpHint {
+                    session_id: "s1".into(),
+                    target: DeliveryTarget {
+                        worker_epoch: "e1".into(),
+                        turn_id: "t1".into(),
+                    },
+                },
+            })
+            .unwrap();
+        split_rx.await.unwrap();
+        reliable_tx
+            .send(Frame::WorkerCommand {
+                session_id: "s1".into(),
+                command: WorkerCommand::Cancel {
+                    command_id: "stop-after-partial-hint".into(),
+                },
+            })
+            .unwrap();
+        let _ = resume_tx.send(());
+
+        let first = read_frame(&mut server).await.unwrap().unwrap();
+        assert!(matches!(
+            first,
+            Frame::WorkerCommand {
+                command: WorkerCommand::WrapUpHint { .. },
+                ..
+            }
+        ));
+        let second = read_frame(&mut server).await.unwrap().unwrap();
+        assert!(matches!(
+            second,
+            Frame::WorkerCommand {
+                command: WorkerCommand::Cancel { command_id },
+                ..
+            } if command_id == "stop-after-partial-hint"
+        ));
+        drop(reliable_tx);
+        drop(hint_tx);
+        writer.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn pending_core_command_fences_inline_wrap_up_hint() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = Arc::new(super::super::Broker::new(super::super::MachineBrokerArgs {
+            socket: dir.path().join("broker.sock"),
+            worker_command: std::path::PathBuf::from("/bin/false"),
+            desired_generation: "g1".into(),
+            spawn_mode: super::super::SpawnMode::Direct,
+            worker_environment: std::collections::BTreeMap::new(),
+            provider_store: Arc::new(
+                crate::machine_plugins::MachinePluginStore::new(
+                    &dir.path().join("plugins"),
+                    crate::machine_protocol::Platform::Linux,
+                    "x86_64".into(),
+                )
+                .unwrap(),
+            ),
+            worktree_root: dir.path().join("worktrees").into(),
+            worker_ready_timeout: std::time::Duration::from_secs(1),
+            call_context_root: None,
+            memory_relay: None,
+        }));
+        let (ctrl_tx, _ctrl_rx) = mpsc::unbounded_channel();
+        let lease = broker.attach_controller_with_outer(8, Some(53), &ctrl_tx);
+        let (worker_tx, _worker_rx) = mpsc::unbounded_channel();
+        let (hint_tx, mut hint_rx) = mpsc::channel(WORKER_HINT_CAPACITY);
+        let snap = sample_snapshot(Some("antigravity"));
+        broker.workers.lock().insert(
+            "s1".into(),
+            super::super::WorkerPeer {
+                connection_id: 1,
+                epoch: "e1".into(),
+                tx: worker_tx,
+                snapshot: snap,
+                acked_runtime_seq: 0,
+                last_seen: std::time::Instant::now(),
+                receive_probe: None,
+                liveness: None,
+                negotiated_protocol: 8,
+                raw_wrap_up_steering: true,
+                hint_tx: Some(hint_tx),
+                last_hinted_target: None,
+            },
+        );
+        let target = DeliveryTarget {
+            worker_epoch: "e1".into(),
+            turn_id: "t1".into(),
+        };
+        let guard = broker.enter_pending_core_command(Some("s1".into()));
+        broker.handle_wrap_up_hint(lease, "s1", &target);
+        assert!(hint_rx.try_recv().is_err());
+        drop(guard);
+
+        broker.handle_wrap_up_hint(lease, "s1", &target);
+        assert!(matches!(
+            hint_rx.try_recv().ok(),
+            Some(Frame::WorkerCommand {
+                command: WorkerCommand::WrapUpHint { .. },
+                ..
+            })
+        ));
     }
 
     #[test]

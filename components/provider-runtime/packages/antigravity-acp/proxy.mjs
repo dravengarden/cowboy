@@ -4,7 +4,7 @@
 // MCP servers with the Cowboy facade, appends the target projection to the
 // system prompt, and settles each turn with backend refusal evidence.
 import { randomUUID } from "node:crypto";
-import { Compaction, compactionStatus } from "./compaction.mjs";
+import { Compaction, compactionStatus, isCompactionPrompt } from "./compaction.mjs";
 import { allowedTool } from "./hook.mjs";
 import {
   hasManagedRound,
@@ -323,6 +323,7 @@ export class AcpProxy {
         this.root = ready?.facade?.root;
         this.facade = ready?.facade;
         this.memory = ready?.memory ?? null;
+        if (this.closing) ready?.facade?.quiesce?.();
         /** A managed read-only child (`managed.mjs`): its own allow-list. */
         this.managed = ready?.managed === true;
         // A managed child delegates nothing: its facade has no subagent host.
@@ -568,10 +569,11 @@ export class AcpProxy {
     if (shown !== undefined) this.client(shown);
   }
 
-  /** Latch closing and abort all unwritten reservations cleanly. */
+  /** Latch closing, fence facade, and abort all unwritten reservations cleanly. */
   beginShutdown() {
     if (this.closing) return;
     this.closing = true;
+    this.readyRuntime?.facade?.quiesce?.();
     this.abortAllReservations();
   }
 
@@ -635,8 +637,65 @@ export class AcpProxy {
     entry.wrapUp.pending = true;
   }
 
+  /** Reserve an inbound `session/prompt` synchronously upon arrival so a
+   * synchronous `session/cancel` or `cowboy/wrapUpHint` arriving right behind
+   * it (even in the same stdin chunk while `this.queue` is busy) cannot overtake
+   * or miss the prompt. */
+  reserveIncomingPrompt(message) {
+    if (
+      this.closing ||
+      message === null ||
+      typeof message !== "object" ||
+      Array.isArray(message) ||
+      message.id === undefined ||
+      message.method !== "session/prompt"
+    ) {
+      return undefined;
+    }
+    const sessionId = message.params?.sessionId;
+    if (
+      typeof sessionId !== "string" ||
+      this.turns.has(sessionId) ||
+      this.reservedTurns.has(sessionId)
+    ) {
+      return undefined;
+    }
+    let attemptNonce;
+    const rawMeta = message.params?._meta;
+    if (
+      rawMeta !== null &&
+      typeof rawMeta === "object" &&
+      !Array.isArray(rawMeta) &&
+      Object.hasOwn(rawMeta, ATTEMPT_NONCE_KEY) &&
+      typeof rawMeta[ATTEMPT_NONCE_KEY] === "string"
+    ) {
+      attemptNonce = rawMeta[ATTEMPT_NONCE_KEY];
+    }
+    let cancelResolve;
+    const cancelPromise = new Promise((resolve) => {
+      cancelResolve = resolve;
+    });
+    const record = { method: "session/prompt", sessionId, finalized: false };
+    const reserved = {
+      id: message.id,
+      sessionId,
+      record,
+      attemptNonce,
+      compacting: isCompactionPrompt(message.params?.prompt),
+      structured: Boolean(hasManagedRound(message.params)),
+      wrapUp: { pending: false, delivered: false },
+      cancelled: false,
+      cancelGen: this.cancelGen.get(sessionId) ?? 0,
+      cancelResolve,
+      cancelPromise,
+    };
+    this.reservedTurns.set(sessionId, reserved);
+    return reserved;
+  }
+
   /** Messages from the worker are handled strictly in order, except synchronous
-   * `cowboy/wrapUpHint` and `session/cancel` bypasses. */
+   * `cowboy/wrapUpHint` and `session/cancel` bypasses, and synchronous
+   * `session/prompt` reservation ahead of `this.queue`. */
   fromClient(message) {
     if (
       message !== null &&
@@ -649,6 +708,14 @@ export class AcpProxy {
         return Promise.resolve();
       }
       if (message.method === "session/cancel") {
+        if (this.managed === undefined) {
+          const sid = message.params?.sessionId;
+          if (typeof sid === "string" && this.reservedTurns.has(sid)) {
+            return this.cancel(message).catch((error) =>
+              this.log(`client cancel failed: ${error.message}`),
+            );
+          }
+        }
         if (this.foreignSession(message.params)) {
           this.log("dropped session/cancel");
           return Promise.resolve();
@@ -658,8 +725,9 @@ export class AcpProxy {
         );
       }
     }
+    const preReserved = this.reserveIncomingPrompt(message);
     this.queue = this.queue
-      .then(() => this.handleClient(message))
+      .then(() => this.handleClient(message, preReserved))
       .catch((error) => this.log(`client message failed: ${error.message}`));
     return this.queue;
   }
@@ -668,8 +736,39 @@ export class AcpProxy {
     this.client({ jsonrpc: "2.0", id, error: { code, message } });
   }
 
-  async handleClient(message) {
+  async handleClient(message, preReserved = undefined) {
+    let promoted = false;
+    try {
+      await this.handleClientInner(message, preReserved, () => {
+        promoted = true;
+      });
+    } finally {
+      if (preReserved && !promoted) {
+        this.releaseReservation(preReserved.sessionId, preReserved);
+      }
+    }
+  }
+
+  async handleClientInner(message, preReserved, markPromoted) {
     if (message === null || typeof message !== "object" || Array.isArray(message)) return;
+    if (
+      preReserved &&
+      (preReserved.cancelled ||
+        this.closing ||
+        preReserved.record.finalized ||
+        this.reservedTurns.get(preReserved.sessionId) !== preReserved ||
+        (this.cancelGen.get(preReserved.sessionId) ?? 0) !== preReserved.cancelGen)
+    ) {
+      this.releaseReservation(preReserved.sessionId, preReserved);
+      if (!preReserved.record.finalized) {
+        this.endPrompt(preReserved.record, {
+          jsonrpc: "2.0",
+          id: preReserved.id,
+          result: { stopReason: "cancelled" },
+        });
+      }
+      return;
+    }
     const { id, method } = message;
     if (typeof method !== "string") {
       if (this.agentRequests.has(id)) {
@@ -751,23 +850,44 @@ export class AcpProxy {
         return this.refuse(id, `cowboy_antigravity_unavailable: ${error.message}`, -32603);
       }
     } else if (method === "session/prompt") {
-      if (this.closing) {
+      if (preReserved) {
+        if (
+          preReserved.cancelled ||
+          this.closing ||
+          preReserved.record.finalized ||
+          this.reservedTurns.get(preReserved.sessionId) !== preReserved ||
+          (this.cancelGen.get(preReserved.sessionId) ?? 0) !== preReserved.cancelGen
+        ) {
+          this.releaseReservation(preReserved.sessionId, preReserved);
+          if (!preReserved.record.finalized) {
+            this.endPrompt(preReserved.record, {
+              jsonrpc: "2.0",
+              id,
+              result: { stopReason: "cancelled" },
+            });
+          }
+          return;
+        }
+      } else if (this.closing) {
         return this.refuse(id, "Antigravity proxy is shutting down", -32603);
       }
       const sessionId = forwarded.params?.sessionId;
       if (typeof sessionId !== "string") return this.refuse(id, "sessionId is required", -32602);
-      if (this.turns.has(sessionId) || this.reservedTurns.has(sessionId)) {
+      if (!preReserved && (this.turns.has(sessionId) || this.reservedTurns.has(sessionId))) {
         return this.refuse(id, "A turn is already running in this session", -32603);
       }
       // Copy and strip private attemptNonce synchronously before any await or `agy` send.
-      let attemptNonce;
+      let attemptNonce = preReserved?.attemptNonce;
       if (
         forwarded.params?._meta &&
         typeof forwarded.params._meta === "object" &&
         !Array.isArray(forwarded.params._meta) &&
         Object.hasOwn(forwarded.params._meta, ATTEMPT_NONCE_KEY)
       ) {
-        if (typeof forwarded.params._meta[ATTEMPT_NONCE_KEY] === "string") {
+        if (
+          attemptNonce === undefined &&
+          typeof forwarded.params._meta[ATTEMPT_NONCE_KEY] === "string"
+        ) {
           attemptNonce = forwarded.params._meta[ATTEMPT_NONCE_KEY];
         }
         delete forwarded.params._meta[ATTEMPT_NONCE_KEY];
@@ -775,6 +895,9 @@ export class AcpProxy {
           delete forwarded.params._meta;
         }
       }
+      const promptRecord = preReserved
+        ? Object.assign(preReserved.record, record)
+        : Object.assign(record, { sessionId, finalized: false });
       let stagedSeal = undefined;
       if (runtime.managed) {
         const admitted = managedPrompt(forwarded.params);
@@ -784,32 +907,42 @@ export class AcpProxy {
         if (refusal) return this.refuse(id, `A managed Antigravity round's ${refusal}`, -32602);
         stagedSeal = Boolean(admitted.schema);
         if (admitted.schema) {
-          record.schema = admitted.schema;
+          promptRecord.schema = admitted.schema;
           forwarded.params.prompt = [...forwarded.params.prompt, contractBlock(admitted.schema)];
         }
       } else if (hasManagedRound(forwarded.params)) {
         return this.refuse(id, "This Antigravity session is not a Cowboy managed call", -32602);
       }
-      record.sessionId = sessionId;
+      promptRecord.sessionId = sessionId;
       const prompt = forwarded.params?.prompt;
       const stagedCompaction = this.compaction.begin(prompt);
-      let cancelResolve;
-      const cancelPromise = new Promise((resolve) => {
-        cancelResolve = resolve;
-      });
-      const reserved = {
-        id,
-        sessionId,
-        record,
-        attemptNonce,
-        compacting: Boolean(stagedCompaction),
-        structured: Boolean(record.schema),
-        wrapUp: { pending: false, delivered: false },
-        cancelled: false,
-        cancelGen: this.cancelGen.get(sessionId) ?? 0,
-        cancelResolve,
-      };
-      this.reservedTurns.set(sessionId, reserved);
+      let reserved;
+      let cancelPromise;
+      if (preReserved) {
+        reserved = preReserved;
+        reserved.compacting = Boolean(stagedCompaction);
+        reserved.structured = Boolean(promptRecord.schema);
+        cancelPromise = preReserved.cancelPromise;
+      } else {
+        let cancelResolve;
+        cancelPromise = new Promise((resolve) => {
+          cancelResolve = resolve;
+        });
+        reserved = {
+          id,
+          sessionId,
+          record: promptRecord,
+          attemptNonce,
+          compacting: Boolean(stagedCompaction),
+          structured: Boolean(promptRecord.schema),
+          wrapUp: { pending: false, delivered: false },
+          cancelled: false,
+          cancelGen: this.cancelGen.get(sessionId) ?? 0,
+          cancelResolve,
+          cancelPromise,
+        };
+        this.reservedTurns.set(sessionId, reserved);
+      }
       try {
         const text = promptText(prompt);
         let stagedPrompt = forwarded.params.prompt;
@@ -821,10 +954,14 @@ export class AcpProxy {
           runtime.evidence.mark(),
           cancelPromise.then(() => undefined),
         ]);
-        if (reserved.cancelled || this.closing || record.finalized) {
+        if (reserved.cancelled || this.closing || promptRecord.finalized) {
           this.releaseReservation(sessionId, reserved);
-          if (!record.finalized) {
-            this.endPrompt(record, { jsonrpc: "2.0", id, result: { stopReason: "cancelled" } });
+          if (!promptRecord.finalized) {
+            this.endPrompt(promptRecord, {
+              jsonrpc: "2.0",
+              id,
+              result: { stopReason: "cancelled" },
+            });
           }
           return;
         }
@@ -840,19 +977,24 @@ export class AcpProxy {
         if (
           reserved.cancelled ||
           this.closing ||
-          record.finalized ||
+          promptRecord.finalized ||
           this.reservedTurns.get(sessionId) !== reserved ||
           (this.cancelGen.get(sessionId) ?? 0) !== reserved.cancelGen
         ) {
           this.releaseReservation(sessionId, reserved);
-          if (!record.finalized) {
-            this.endPrompt(record, { jsonrpc: "2.0", id, result: { stopReason: "cancelled" } });
+          if (!promptRecord.finalized) {
+            this.endPrompt(promptRecord, {
+              jsonrpc: "2.0",
+              id,
+              result: { stopReason: "cancelled" },
+            });
           }
           return;
         }
+        markPromoted();
         this.releaseReservation(sessionId, reserved);
-        record.cursor = cursor;
-        record.compaction = stagedCompaction;
+        promptRecord.cursor = cursor;
+        promptRecord.compaction = stagedCompaction;
         if (stagedSeal === true) this.sealed.add(sessionId);
         else if (stagedSeal === false) this.sealed.delete(sessionId);
         if (memoryContext) {
@@ -863,18 +1005,18 @@ export class AcpProxy {
         }
         this.compacting.delete(sessionId);
         const restated =
-          record.compaction || !Array.isArray(prompt)
+          promptRecord.compaction || !Array.isArray(prompt)
             ? undefined
             : this.compaction.take(sessionId, prompt);
         if (restated !== undefined) {
-          record.restated = true;
+          promptRecord.restated = true;
           stagedPrompt = [{ type: "text", text: restated }, ...stagedPrompt];
         }
         forwarded.params.prompt = stagedPrompt;
         this.turns.set(sessionId, {
           id,
           attemptNonce,
-          compacting: Boolean(record.compaction),
+          compacting: Boolean(promptRecord.compaction),
           wrapUp: reserved.wrapUp,
           attemptCleanup: null,
           uncertain: undefined,
@@ -885,9 +1027,9 @@ export class AcpProxy {
           evidence: [],
           bytes: 0,
           recorded: new Set(),
-          structured: record.schema
+          structured: promptRecord.schema
             ? {
-                schema: record.schema,
+                schema: promptRecord.schema,
                 reply: "",
                 messageId: undefined,
                 retired: new Set(),
@@ -901,14 +1043,14 @@ export class AcpProxy {
             : undefined,
         });
         runtime.facade.beginTurn(sessionId, { wrapUp: reserved.wrapUp });
-        if (record.compaction) {
-          const started = this.compaction.update(sessionId, record.compaction, "in_progress");
+        if (promptRecord.compaction) {
+          const started = this.compaction.update(sessionId, promptRecord.compaction, "in_progress");
           if (started) {
             this.compacting.add(sessionId);
             this.client(started);
           }
         }
-        this.pending.set(id, record);
+        this.pending.set(id, promptRecord);
         this.agent(forwarded);
         return;
       } finally {
@@ -1355,7 +1497,7 @@ export class AcpProxy {
       delete meta.steering;
       delete meta[WRAP_UP_CAPABILITY_KEY];
       if (!runtime.managed) {
-        meta[WRAP_UP_CAPABILITY_KEY] = { supported: true };
+        meta[WRAP_UP_CAPABILITY_KEY] = { v: 1, adapter: "cowboy-antigravity-acp" };
       }
       if (Object.keys(meta).length > 0) result._meta = meta;
       else delete result._meta;

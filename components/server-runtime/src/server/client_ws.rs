@@ -738,6 +738,13 @@ pub async fn handle_command(
         .and_then(|(key, fences)| fences.get(key))
         .and_then(|fence| provider_fence_refusal(*fence))
     {
+        if let (Some(sid), Some(cmid)) =
+            (session_id_for_err.as_deref(), command_authored_cmid(&cmd))
+        {
+            state
+                .hub
+                .command_result(sid, &cmid, CommandOutcome::Rejected, refusal);
+        }
         state
             .hub
             .broadcast_error(session_id_for_err, refusal.to_owned());

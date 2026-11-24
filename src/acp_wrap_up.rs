@@ -135,9 +135,11 @@ pub fn initialize_capabilities_update(
         && launch_wrap_up_eligible
         && initialize_meta
             .and_then(|meta| meta.get(WRAP_UP_STEERING_CAPABILITY_KEY))
-            .and_then(|value| value.get("supported"))
-            .and_then(Value::as_bool)
-            == Some(true);
+            .is_some_and(|value| {
+                value.get("v").and_then(Value::as_u64) == Some(1)
+                    && value.get("adapter").and_then(Value::as_str)
+                        == Some("cowboy-antigravity-acp")
+            });
     let update = serde_json::json!({
         "sessionUpdate": CURRENT_TURN_CAPABILITIES_UPDATE,
         "currentTurn": supports_current_turn,
@@ -238,7 +240,7 @@ mod tests {
         );
         meta.insert(
             WRAP_UP_STEERING_CAPABILITY_KEY.into(),
-            serde_json::json!({"supported": true}),
+            serde_json::json!({"v": 1, "adapter": "cowboy-antigravity-acp"}),
         );
 
         let (update, eligible) =
@@ -259,6 +261,16 @@ mod tests {
             initialize_capabilities_update("antigravity", Some(&meta), true, true);
         assert_eq!(managed["wrapUpSteering"], false);
         assert!(!managed_eligible);
+
+        let mut unversioned = Map::new();
+        unversioned.insert(
+            WRAP_UP_STEERING_CAPABILITY_KEY.into(),
+            serde_json::json!({"supported": true}),
+        );
+        let (bad, bad_eligible) =
+            initialize_capabilities_update("antigravity", Some(&unversioned), false, true);
+        assert_eq!(bad["wrapUpSteering"], false);
+        assert!(!bad_eligible);
     }
 
     #[test]

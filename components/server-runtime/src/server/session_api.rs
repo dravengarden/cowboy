@@ -409,7 +409,8 @@ fn submit_wrap_up_prompt(
             .into_response();
     }
     if let Some(op) = req.operation.as_deref()
-        && !crate::core::Hub::is_authored_cmid(op)
+        && (!crate::wrap_up::is_valid_wrap_up_operation_id(op)
+            || !crate::core::Hub::is_authored_cmid(op))
     {
         return (StatusCode::BAD_REQUEST, "invalid wrap_up operation id").into_response();
     }
@@ -433,31 +434,53 @@ fn submit_wrap_up_prompt(
             .hub
             .front_submit_with_outcome(session_id, req.text, req.content, cmid, caller);
     match outcome {
-        crate::core::FrontSubmitOutcome::Refused => (
-            StatusCode::CONFLICT,
-            "session unavailable for wrap_up delivery",
-        )
-            .into_response(),
+        crate::core::FrontSubmitOutcome::Refused => {
+            if state.hub.session_info(session_id).is_none() {
+                (StatusCode::NOT_FOUND, "unknown session").into_response()
+            } else {
+                (
+                    StatusCode::CONFLICT,
+                    "session unavailable for wrap_up delivery",
+                )
+                    .into_response()
+            }
+        }
         crate::core::FrontSubmitOutcome::Duplicate => (
             StatusCode::ACCEPTED,
-            Json(serde_json::json!({"status": "duplicate", "hinted": false})),
+            Json(serde_json::json!({
+                "status": "already_accepted",
+                "delivery": "wrap_up",
+                "hinted": false,
+            })),
         )
             .into_response(),
         crate::core::FrontSubmitOutcome::DispatchedImmediately => (
             StatusCode::ACCEPTED,
-            Json(serde_json::json!({"status": "dispatched", "hinted": false})),
+            Json(serde_json::json!({
+                "status": "dispatched",
+                "delivery": "wrap_up",
+                "hinted": false,
+            })),
         )
             .into_response(),
         crate::core::FrontSubmitOutcome::QueuedFallback => (
             StatusCode::ACCEPTED,
-            Json(serde_json::json!({"status": "queued", "hinted": false})),
+            Json(serde_json::json!({
+                "status": "queued",
+                "delivery": "wrap_up",
+                "hinted": false,
+            })),
         )
             .into_response(),
         crate::core::FrontSubmitOutcome::QueuedFront => {
             let hinted = send_delivery::try_wrap_up_hint(state, session_id, req.target.as_ref());
             (
                 StatusCode::ACCEPTED,
-                Json(serde_json::json!({"status": "queued", "hinted": hinted})),
+                Json(serde_json::json!({
+                    "status": "queued",
+                    "delivery": "wrap_up",
+                    "hinted": hinted,
+                })),
             )
                 .into_response()
         }

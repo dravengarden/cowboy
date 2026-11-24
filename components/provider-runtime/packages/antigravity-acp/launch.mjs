@@ -482,10 +482,25 @@ export async function runProxy({
     // Nothing can show that a subagent `agy` did not stop has stopped: end it.
     terminate: () => agy.kill("SIGKILL"),
   });
+  let readyRuntime;
   runtime.then(
-    (ready) => ready.attach(proxy),
+    (ready) => {
+      readyRuntime = ready;
+      ready.attach(proxy);
+      if (proxy.closing) {
+        ready.server.close();
+        ready.facade.quiesce();
+      }
+    },
     () => {},
   );
+  // Fence accepted MCP relays and proxy shutdown synchronously on child exit,
+  // without waiting for stdout EOF (`close`).
+  agy.once("exit", () => {
+    proxy.beginShutdown();
+    readyRuntime?.server.close();
+    readyRuntime?.facade.quiesce();
+  });
   frames(
     agy.stdout,
     (message) => {
@@ -512,9 +527,10 @@ export async function runProxy({
   // Drain in-flight facade work and execution replies BEFORE publishing exit
   // replies so any uncertainty from `attemptCleanup` settles ahead of TurnEnd.
   ready?.facade.quiesce();
-  const deadline = Date.now() + DRAIN_MS;
+  const drainBudgetMs = Math.max(DRAIN_MS, ready?.facade.remainingRootStopMs() ?? 0);
+  const deadline = Date.now() + drainBudgetMs;
   if (
-    (await ready?.facade.settled(DRAIN_MS)) &&
+    (await ready?.facade.settled(drainBudgetMs)) &&
     (await ready.connection.idle(Math.max(0, deadline - Date.now())))
   ) {
     await ready.connection.drained(Math.max(1, deadline - Date.now()));

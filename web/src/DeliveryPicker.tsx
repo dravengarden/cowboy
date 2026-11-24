@@ -66,6 +66,8 @@ export interface DeliveryPickerProps {
   contextReady?: boolean;
   /** Composer-only wrap-up action (front-queue + target-fenced wrap-up hint). */
   onWrapUp?: (target: DeliveryTarget | undefined) => void;
+  /** Disable Steer/checkpoint regardless of legacy Controller capability flags. */
+  disallowSteer?: boolean;
 }
 
 export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element | null {
@@ -159,6 +161,7 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element | 
     steerReady: Boolean(props.steerReady),
     wrapUpReady: Boolean(props.wrapUpReady),
     contextReady: props.contextReady ?? true,
+    disallowSteer: Boolean(props.disallowSteer),
     fresh,
     error,
     options,

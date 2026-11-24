@@ -23,9 +23,9 @@ use crate::wrap_up::{
 pub(super) struct WrapUpState {
     /// Direct per-connection bounded WS hint channel (cap 32, dropped on disconnect).
     hint_ws_tx: Mutex<Option<mpsc::Sender<String>>>,
-    /// Raw broker-reported `wrap_up_steering` per session (before Controller
-    /// protocol/config gating), so reconnects & live config reloads recompute cleanly.
-    raw_wrap_up: Mutex<HashMap<String, bool>>,
+    /// Raw broker-reported `wrap_up_steering` keyed by `(session_id, worker_epoch)`
+    /// so reconnects, epoch switches, and live config reloads cannot cross-contaminate epochs.
+    raw_wrap_up: Mutex<HashMap<(String, String), bool>>,
     /// Last hinted `(worker_epoch, turn_id)` per session so at most ONE hint
     /// frame is emitted per active turn on the Controller->Machine hop.
     last_hinted: Mutex<HashMap<String, DeliveryTarget>>,
@@ -60,9 +60,10 @@ impl WrapUpState {
         hub: &Hub,
     ) {
         let raw = worker.wrap_up_steering;
-        self.raw_wrap_up
-            .lock()
-            .insert(worker.session_id.clone(), raw);
+        self.raw_wrap_up.lock().insert(
+            (worker.session_id.clone(), worker.worker_epoch.clone()),
+            raw,
+        );
         let provider = resolved_provider(worker, hub);
         clamp_delivery_capabilities_for_provider(
             provider.as_deref(),
@@ -82,15 +83,15 @@ impl WrapUpState {
         &self,
         session_id: &str,
         raw: bool,
-        worker: Option<&mut WorkerSnapshot>,
+        worker: &mut WorkerSnapshot,
         machine_protocol: u16,
         runtime_protocol: u16,
         hub: &Hub,
     ) -> bool {
-        self.raw_wrap_up.lock().insert(session_id.to_owned(), raw);
-        let provider = worker
-            .as_deref()
-            .and_then(|w| resolved_provider(w, hub))
+        self.raw_wrap_up
+            .lock()
+            .insert((session_id.to_owned(), worker.worker_epoch.clone()), raw);
+        let provider = resolved_provider(worker, hub)
             .or_else(|| hub.session_info(session_id).map(|info| info.meta.provider));
         let effective = effective_wrap_up_steering(
             provider.as_deref(),
@@ -99,44 +100,71 @@ impl WrapUpState {
             runtime_protocol,
             self.config_enabled(),
         );
-        if let Some(worker) = worker {
-            clamp_delivery_capabilities_for_provider(
-                provider.as_deref(),
-                &mut worker.supports_current_turn,
-                &mut worker.delivery_controls.next_checkpoint,
-            );
-            worker.wrap_up_steering = effective;
-        }
+        clamp_delivery_capabilities_for_provider(
+            provider.as_deref(),
+            &mut worker.supports_current_turn,
+            &mut worker.delivery_controls.next_checkpoint,
+        );
+        worker.wrap_up_steering = effective;
         effective
     }
 
-    pub(super) fn recompute_all(
-        &self,
-        workers: &mut HashMap<String, WorkerSnapshot>,
-        machine_protocol: u16,
-        runtime_protocol: u16,
-        hub: &Hub,
-    ) {
+    pub(super) fn recompute_all(&self, shared: &Shared) {
+        if !shared.connected.load(Ordering::Acquire) || shared.shutdown.load(Ordering::Acquire) {
+            return;
+        }
+        let _projection = shared.hub.runtime_projection_guard();
+        if !shared.connected.load(Ordering::Acquire) || shared.shutdown.load(Ordering::Acquire) {
+            return;
+        }
+        let runtime_protocol = shared.protocol.load(Ordering::Acquire);
         let enabled = self.config_enabled();
-        let raw_map = self.raw_wrap_up.lock().clone();
-        for (session_id, worker) in workers.iter_mut() {
-            let raw = raw_map.get(session_id).copied().unwrap_or(false);
-            let provider = resolved_provider(worker, hub);
-            clamp_delivery_capabilities_for_provider(
-                provider.as_deref(),
-                &mut worker.supports_current_turn,
-                &mut worker.delivery_controls.next_checkpoint,
-            );
-            let effective = effective_wrap_up_steering(
-                provider.as_deref(),
-                raw,
-                Some(machine_protocol),
-                runtime_protocol,
-                enabled,
-            );
-            worker.wrap_up_steering = effective;
-            hub.set_current_turn_support(session_id, worker.supports_current_turn);
-            hub.set_wrap_up_steering(session_id, effective);
+        // Recompute under `workers.lock()`, then drop the lock BEFORE calling
+        // `snapshot::admits_worker` (which may lock `workers` on Reclassified epochs).
+        let updated: Vec<WorkerSnapshot> = {
+            let mut workers = shared.workers.lock();
+            let mut raw_map = self.raw_wrap_up.lock();
+            raw_map.retain(|(sid, epoch), _| {
+                workers
+                    .get(sid)
+                    .is_some_and(|worker| worker.worker_epoch == *epoch)
+            });
+            workers
+                .iter_mut()
+                .map(|(session_id, worker)| {
+                    let raw = raw_map
+                        .get(&(session_id.clone(), worker.worker_epoch.clone()))
+                        .copied()
+                        .unwrap_or(false);
+                    let provider = resolved_provider(worker, &shared.hub);
+                    clamp_delivery_capabilities_for_provider(
+                        provider.as_deref(),
+                        &mut worker.supports_current_turn,
+                        &mut worker.delivery_controls.next_checkpoint,
+                    );
+                    let effective = effective_wrap_up_steering(
+                        provider.as_deref(),
+                        raw,
+                        Some(shared.machine_protocol),
+                        runtime_protocol,
+                        enabled,
+                    );
+                    worker.wrap_up_steering = effective;
+                    worker.clone()
+                })
+                .collect()
+        };
+        for worker in &updated {
+            if !super::foreign_session(shared, &worker.session_id)
+                && super::snapshot::admits_worker(shared, worker)
+            {
+                shared
+                    .hub
+                    .set_current_turn_support(&worker.session_id, worker.supports_current_turn);
+                shared
+                    .hub
+                    .set_wrap_up_steering(&worker.session_id, worker.wrap_up_steering);
+            }
         }
     }
 
@@ -167,9 +195,6 @@ impl WrapUpState {
         if !eligible {
             return false;
         }
-        if self.last_hinted.lock().get(session_id) == Some(target) {
-            return true;
-        }
         let frame = Frame::CoreCommand {
             command: CoreCommand::WrapUpHint {
                 session_id: session_id.to_owned(),
@@ -182,15 +207,16 @@ impl WrapUpState {
         let Ok(text) = serde_json::to_string(&MachineFrame::Runtime { frame }) else {
             return false;
         };
-        let tx = self.hint_ws_tx.lock().clone();
-        let Some(tx) = tx else {
+        let Some(tx) = self.hint_ws_tx.lock().clone() else {
             return false;
         };
+        let mut last_hinted = self.last_hinted.lock();
+        if last_hinted.get(session_id) == Some(target) {
+            return false;
+        }
         match tx.try_send(text) {
             Ok(()) => {
-                self.last_hinted
-                    .lock()
-                    .insert(session_id.to_owned(), target.clone());
+                last_hinted.insert(session_id.to_owned(), target.clone());
                 true
             }
             Err(_) => false,
@@ -220,14 +246,7 @@ impl super::RemoteRuntime {
     }
 
     pub fn refresh_wrap_up_steering(&self) {
-        let runtime_protocol = self.shared.protocol.load(Ordering::Acquire);
-        let mut workers = self.shared.workers.lock();
-        self.shared.wrap_up.recompute_all(
-            &mut workers,
-            self.shared.machine_protocol,
-            runtime_protocol,
-            &self.shared.hub,
-        );
+        self.shared.wrap_up.recompute_all(&self.shared);
     }
 
     pub fn send_wrap_up_hint(
@@ -252,12 +271,23 @@ impl super::Shared {
         let effective = self.wrap_up.record_raw_event(
             session_id,
             raw_wrap,
-            Some(worker),
+            worker,
             self.machine_protocol,
             self.protocol.load(Ordering::Acquire),
             &self.hub,
         );
-        self.hub.set_wrap_up_steering(session_id, effective);
+        if !super::foreign_session(self, session_id)
+            && self.hub.accepts_runtime_projection(session_id)
+            && self.hub.classify_runtime_epoch(
+                session_id,
+                &worker.worker_epoch,
+                worker.agent_session_id.as_deref(),
+            ) == crate::core::RuntimeEpoch::Current
+        {
+            self.hub
+                .set_current_turn_support(session_id, worker.supports_current_turn);
+            self.hub.set_wrap_up_steering(session_id, effective);
+        }
     }
 }
 
@@ -286,4 +316,181 @@ pub(super) async fn merge_worker_snapshots(shared: &super::Shared, workers: Vec<
         },
     )
     .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::SessionOrigin;
+    use crate::runtime_wire::{DeliveryControls, WorkerState};
+
+    fn busy_snapshot(session_id: &str, epoch: &str, wrap_up: bool) -> WorkerSnapshot {
+        WorkerSnapshot {
+            session_id: session_id.into(),
+            worker_epoch: epoch.into(),
+            generation: "g1".into(),
+            executable: None,
+            launch: None,
+            state: WorkerState::Busy,
+            agent_session_id: None,
+            native_thread_materialized: None,
+            current_turn_id: Some("turn-1".into()),
+            supports_current_turn: false,
+            delivery_controls: DeliveryControls::default(),
+            wrap_up_steering: wrap_up,
+            supports_subagent_cancel: false,
+            last_runtime_seq: 1,
+            pending_permissions: vec![],
+            config_options: None,
+            context_used: None,
+            context_size: None,
+            pending_prompt_count: 0,
+            drain_requested: false,
+            exit_detail: None,
+            background_tasks: None,
+            native_cycle_id: None,
+            incarnation: None,
+            account_unit: None,
+            uncertain_effect: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn duplicate_hint_returns_false_and_sends_single_frame() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s1".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "s1".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        let runtime = super::super::RemoteRuntime::for_test(hub, Vec::new());
+        runtime
+            .shared
+            .protocol
+            .store(WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION, Ordering::Release);
+        runtime.shared.connected.store(true, Ordering::Release);
+        let (tx, mut rx) = mpsc::channel(8);
+        runtime.attach_wrap_up_hint_tx(tx);
+        runtime
+            .shared
+            .workers
+            .lock()
+            .insert("s1".into(), busy_snapshot("s1", "e1", true));
+        let target = DeliveryTarget {
+            worker_epoch: "e1".into(),
+            turn_id: "turn-1".into(),
+        };
+        assert!(runtime.send_wrap_up_hint("s1", &target));
+        assert!(
+            !runtime.send_wrap_up_hint("s1", &target),
+            "suppressed duplicate must return false"
+        );
+        assert!(rx.try_recv().is_ok());
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn superseded_or_disconnected_runtime_refresh_never_overwrites_hub() {
+        let hub = Hub::new();
+        hub.create_session(crate::core::SessionRegistration {
+            id: "s1".into(),
+            provider: "antigravity".into(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
+            provider_version: "0.2.35".into(),
+            provider_generation_digest: "sha256:abc".into(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            machine_id: "m-new".into(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: None,
+            cwd: "/tmp".into(),
+            title: "s1".into(),
+            origin: SessionOrigin::Web,
+            system: false,
+            owner_user_id: None,
+            owner_username: None,
+        });
+        hub.set_wrap_up_steering("s1", true);
+
+        // Superseded runtime (`shutdown = true`) must never overwrite Hub.
+        let old_runtime = super::super::RemoteRuntime::for_test(hub.clone(), Vec::new());
+        old_runtime
+            .shared
+            .protocol
+            .store(WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION, Ordering::Release);
+        old_runtime.shared.connected.store(true, Ordering::Release);
+        old_runtime.shared.shutdown.store(true, Ordering::Release);
+        let mut snap = busy_snapshot("s1", "e-old", false);
+        old_runtime.shared.wrap_up.record_raw_and_sanitize(
+            &mut snap,
+            WRAP_UP_STEERING_PROTOCOL_VERSION,
+            WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION,
+            &hub,
+        );
+        old_runtime.shared.workers.lock().insert("s1".into(), snap);
+        old_runtime.refresh_wrap_up_steering();
+        assert!(hub.session_info("s1").unwrap().meta.wrap_up_steering);
+
+        // Runtime whose machine_id ("m-old") does NOT own s1 ("m-new"):
+        // refresh must not overwrite Hub's live wrap_up_steering.
+        let auth_dir = tempfile::tempdir().unwrap();
+        let foreign_runtime = super::super::RemoteRuntime::connecting(
+            hub.clone(),
+            "m-old".into(),
+            std::path::PathBuf::from("/tmp/unused-foreign.sock"),
+            "g1".into(),
+            std::sync::Arc::new(
+                crate::provider_service::ProviderAuthService::open(auth_dir.path()).unwrap(),
+            ),
+            WRAP_UP_STEERING_PROTOCOL_VERSION,
+            None,
+        );
+        foreign_runtime
+            .shared
+            .protocol
+            .store(WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION, Ordering::Release);
+        foreign_runtime
+            .shared
+            .connected
+            .store(true, Ordering::Release);
+        foreign_runtime
+            .shared
+            .workers
+            .lock()
+            .insert("s1".into(), busy_snapshot("s1", "e-foreign", false));
+        foreign_runtime.refresh_wrap_up_steering();
+        assert!(hub.session_info("s1").unwrap().meta.wrap_up_steering);
+
+        // Disconnected runtime for an owned session must also never overwrite Hub.
+        hub.create_local_session(
+            "s2".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "s2".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.set_wrap_up_steering("s2", true);
+        let disconnected = super::super::RemoteRuntime::for_test(hub.clone(), Vec::new());
+        disconnected
+            .shared
+            .protocol
+            .store(WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION, Ordering::Release);
+        disconnected
+            .shared
+            .connected
+            .store(false, Ordering::Release);
+        disconnected
+            .shared
+            .workers
+            .lock()
+            .insert("s2".into(), busy_snapshot("s2", "e-new", false));
+        disconnected.refresh_wrap_up_steering();
+        assert!(hub.session_info("s2").unwrap().meta.wrap_up_steering);
+    }
 }

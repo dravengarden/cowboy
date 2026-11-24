@@ -125,6 +125,8 @@ export class Facade {
     this.invalidations = new Map();
     /** Active `endTurn` promises kept visible to `settled()` even after turn detach. */
     this.activeCleanups = new Set();
+    /** Active root `endTurn` command-stop deadlines for shutdown drain budgeting. */
+    this.rootCleanupDeadlines = new Set();
     /** Open MCP relay streams (`relayId -> sessionOf`). */
     this.relays = new Map();
     this.nextRelayId = 1;
@@ -236,13 +238,22 @@ export class Facade {
     return (this.sessions.get(sessionId)?.commands.size ?? 0) > 0;
   }
 
+  beginCall(sessionId) {
+    const turn = sessionId === undefined ? undefined : this.sessions.get(sessionId)?.turn;
+    if (turn) turn.openCalls += 1;
+    return turn;
+  }
+
+  endCall(turn) {
+    if (turn && turn.openCalls > 0) turn.openCalls -= 1;
+  }
+
   detachTurn(sessionId, { cancelled = false, errored = false } = {}) {
     const session = this.sessions.get(sessionId);
     if (!session) return;
-    if (
-      session.parent === undefined &&
-      (cancelled || errored || (session.turn?.inflight.size ?? 0) > 0)
-    ) {
+    const hadUnsettled =
+      (session.turn?.inflight.size ?? 0) > 0 || (session.turn?.openCalls ?? 0) > 0;
+    if (session.parent === undefined && (cancelled || errored || hadUnsettled)) {
       this.markAmbiguousRelays(sessionId);
     }
     if (session.turn) {
@@ -259,6 +270,7 @@ export class Facade {
       uncertain: undefined,
       wrapUp,
       inflight: new Set(),
+      openCalls: 0,
       // Aborted when the turn ends or is cancelled: a call waiting on a
       // subagent returns at once instead of holding the end of the turn.
       abort: new AbortController(),
@@ -275,7 +287,7 @@ export class Facade {
     const session = this.session(sessionId);
     const turn = session.turn;
     const isRoot = session.parent === undefined;
-    const hadUnsettled = (turn?.inflight.size ?? 0) > 0;
+    const hadUnsettled = (turn?.inflight.size ?? 0) > 0 || (turn?.openCalls ?? 0) > 0;
     if (isRoot && (cancelled || errored || hadUnsettled)) {
       this.markAmbiguousRelays(sessionId);
     }
@@ -288,47 +300,55 @@ export class Facade {
       }
       turn.abort?.abort();
     }
+    const confirmMs = isRoot ? this.stopConfirmMs : 5000;
+    const deadlineEntry =
+      isRoot && session.commands.size > 0 ? { deadline: Date.now() + confirmMs } : undefined;
+    if (deadlineEntry) this.rootCleanupDeadlines.add(deadlineEntry);
     const cleanup = (async () => {
-      if (turn) {
-        await Promise.allSettled([...turn.inflight]);
-      }
-      const commands = [...session.commands.values()];
-      // Root sessions always wait the full `stopConfirmMs` window (native
-      // `session/cancel` is already forwarded before this awaits) and park via
-      // `UNCERTAIN_REPORT` if any root command still fails to confirm exit.
-      const confirmMs = isRoot ? this.stopConfirmMs : 5000;
-      let anyUnconfirmed = false;
-      await Promise.all(
-        commands.map(async (command) => {
-          clearTimeout(command.timer);
-          command.cleaning = (command.cleaning ?? 0) + 1;
-          let closed;
-          try {
-            closed = await this.terminate(command, confirmMs).catch(() => false);
-          } finally {
-            command.cleaning -= 1;
-          }
-          if (closed) this.forget(session, command);
-          else {
-            anyUnconfirmed = true;
-            if (
-              !this.closing &&
-              command.cleaning === 0 &&
-              session.commands.get(command.processId) === command
-            ) {
-              clearTimeout(command.timer);
-              command.timer = setTimeout(() => this.expire(session, command), 5000);
-              command.timer.unref?.();
+      try {
+        if (turn) {
+          await Promise.allSettled([...turn.inflight]);
+        }
+        const commands = [...session.commands.values()];
+        // Root sessions always wait the full `stopConfirmMs` window (native
+        // `session/cancel` is already forwarded before this awaits) and park via
+        // `UNCERTAIN_REPORT` if any root command still fails to confirm exit,
+        // even while shutdown drain is active.
+        let anyUnconfirmed = false;
+        await Promise.all(
+          commands.map(async (command) => {
+            clearTimeout(command.timer);
+            command.cleaning = (command.cleaning ?? 0) + 1;
+            let closed;
+            try {
+              closed = await this.terminate(command, confirmMs).catch(() => false);
+            } finally {
+              command.cleaning -= 1;
             }
-          }
-        }),
-      );
-      if (isRoot && anyUnconfirmed && !this.closing) {
-        if (turn) this.fenceLost(turn, "process/terminate");
-        await this.connection
-          .call(UNCERTAIN_REPORT, { method: "process/terminate" })
-          .catch(() => {});
-        this.onUncertain(sessionId, "process/terminate");
+            if (closed) this.forget(session, command);
+            else {
+              anyUnconfirmed = true;
+              if (
+                !this.closing &&
+                command.cleaning === 0 &&
+                session.commands.get(command.processId) === command
+              ) {
+                clearTimeout(command.timer);
+                command.timer = setTimeout(() => this.expire(session, command), 5000);
+                command.timer.unref?.();
+              }
+            }
+          }),
+        );
+        if (isRoot && anyUnconfirmed) {
+          if (turn) this.fenceLost(turn, "process/terminate");
+          await this.connection
+            .call(UNCERTAIN_REPORT, { method: "process/terminate" })
+            .catch(() => {});
+          this.onUncertain(sessionId, "process/terminate");
+        }
+      } finally {
+        if (deadlineEntry) this.rootCleanupDeadlines.delete(deadlineEntry);
       }
     })();
     this.activeCleanups.add(cleanup);
@@ -347,8 +367,25 @@ export class Facade {
   quiesce() {
     this.closing = true;
     for (const session of this.sessions.values()) {
+      if (session.turn) {
+        session.turn.ended = true;
+        session.turn.cancelled = true;
+        if (session.turn.wrapUp) session.turn.wrapUp.pending = false;
+        session.turn.abort?.abort();
+        session.turn = undefined;
+      }
       for (const command of session.commands.values()) clearTimeout(command.timer);
     }
+  }
+
+  /** Remaining root Stop confirmation budget (ms) for shutdown drain. */
+  remainingRootStopMs() {
+    let maxDeadline = 0;
+    for (const entry of this.rootCleanupDeadlines) {
+      if (entry.deadline > maxDeadline) maxDeadline = entry.deadline;
+    }
+    if (maxDeadline === 0) return 0;
+    return Math.max(0, Math.min(this.stopConfirmMs + 2000, maxDeadline - Date.now()));
   }
 
   /**
@@ -382,18 +419,23 @@ export class Facade {
   async call(sessionId, name, args, relayId = undefined) {
     const session = sessionId === undefined ? undefined : this.sessions.get(sessionId);
     const callTurn = session?.turn;
+    if (callTurn) callTurn.openCalls += 1;
     const call = { sessionId, name, args };
-    const running = this.answer(call);
-    // A subagent's call is part of its parent's turn: the parent's end waits
-    // for it, and for the report of an effect it lost.
-    const parentTurn = session?.parentTurn;
-    const tracked = parentTurn?.inflight ? running.catch(() => {}) : undefined;
-    if (tracked) parentTurn.inflight.add(tracked);
     let result;
     try {
-      result = await running;
+      const running = this.answer(call);
+      // A subagent's call is part of its parent's turn: the parent's end waits
+      // for it, and for the report of an effect it lost.
+      const parentTurn = session?.parentTurn;
+      const tracked = parentTurn?.inflight ? running.catch(() => {}) : undefined;
+      if (tracked) parentTurn.inflight.add(tracked);
+      try {
+        result = await running;
+      } finally {
+        if (tracked) parentTurn.inflight.delete(tracked);
+      }
     } finally {
-      if (tracked) parentTurn.inflight.delete(tracked);
+      if (callTurn && callTurn.openCalls > 0) callTurn.openCalls -= 1;
     }
     // Presentation only: it never changes the answer `agy` receives.
     try {
@@ -452,6 +494,7 @@ ${WRAP_UP_NOTE}`,
   }
 
   async answer(call) {
+    if (this.closing) throw new ToolError("Antigravity proxy is shutting down");
     const turn = call.sessionId === undefined ? undefined : this.sessions.get(call.sessionId)?.turn;
     if (!turn?.inflight || (call.name !== "WriteFile" && call.name !== "EditFile")) {
       return this.answerOnce(call);
@@ -1583,8 +1626,23 @@ export function serveMcp(stream, facade, sessionOf) {
     if (method === "ping") return send({ id, result: {} });
     if (method === "tools/list") return send({ id, result: { tools: facade.tools() } });
     if (method === "tools/call") {
-      const result = await facade.call(sessionOf(), params?.name, params?.arguments, relayId);
-      return send({ id, result });
+      if (facade.closing) {
+        return send({
+          id,
+          result: {
+            isError: true,
+            content: [{ type: "text", text: "Antigravity proxy is shutting down" }],
+          },
+        });
+      }
+      const sid = sessionOf();
+      const trackedTurn = facade.beginCall(sid);
+      try {
+        const result = await facade.call(sid, params?.name, params?.arguments, relayId);
+        return send({ id, result });
+      } finally {
+        facade.endCall(trackedTurn);
+      }
     }
     send({ id, error: { code: -32601, message: "Method not found" } });
   };

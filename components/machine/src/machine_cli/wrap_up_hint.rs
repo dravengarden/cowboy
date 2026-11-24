@@ -6,6 +6,7 @@ use std::time::Duration;
 use anyhow::Context as _;
 use tokio::sync::mpsc;
 
+use crate::machine_broker::wrap_up::{encoded_frame_bytes, unix_socket_has_hint_headroom};
 use crate::machine_protocol::WRAP_UP_STEERING_PROTOCOL_VERSION;
 use crate::runtime_wire::{CoreCommand, Frame};
 use crate::wrap_up::wrap_up_hint_within_size_limit;
@@ -54,25 +55,27 @@ pub(super) fn route_inbound_runtime_frame(
 
 /// Write runtime frames to the local broker UnixStream with strict reliable-first
 /// priority (`biased;`) and complete-frame atomic writes under `timeout`.
-pub(super) async fn write_runtime_frames_with_hints<W>(
+pub(super) async fn write_runtime_frames_with_headroom<W, F>(
     writer: &mut W,
     reliable: &mut mpsc::UnboundedReceiver<Frame>,
     mut hints: Option<mpsc::Receiver<Frame>>,
     timeout: Duration,
+    mut has_headroom: F,
 ) -> anyhow::Result<()>
 where
     W: tokio::io::AsyncWrite + Unpin,
+    F: FnMut(&W, usize) -> bool,
 {
     loop {
-        let frame = match hints.as_mut() {
+        let (frame, is_hint) = match hints.as_mut() {
             Some(hint_rx) => tokio::select! {
                 biased;
                 frame = reliable.recv() => match frame {
-                    Some(frame) => frame,
+                    Some(frame) => (frame, false),
                     None => return Ok(()),
                 },
                 hint = hint_rx.recv() => match hint {
-                    Some(hint) => hint,
+                    Some(hint) => (hint, true),
                     None => {
                         hints = None;
                         continue;
@@ -80,26 +83,51 @@ where
                 },
             },
             None => match reliable.recv().await {
-                Some(frame) => frame,
+                Some(frame) => (frame, false),
                 None => return Ok(()),
             },
         };
+        if is_hint {
+            let Some(frame_bytes) = encoded_frame_bytes(&frame) else {
+                continue;
+            };
+            if !has_headroom(writer, frame_bytes) {
+                continue;
+            }
+        }
         tokio::time::timeout(timeout, crate::runtime_wire::write_frame(writer, &frame))
             .await
             .context("Machine runtime frame write timed out")??;
     }
 }
 
-pub async fn run_runtime_writer_with_hints<W>(
-    mut writer: W,
-    mut frames: mpsc::UnboundedReceiver<Frame>,
-    hints: mpsc::Receiver<Frame>,
+#[cfg(test)]
+pub(super) async fn write_runtime_frames_with_hints<W>(
+    writer: &mut W,
+    reliable: &mut mpsc::UnboundedReceiver<Frame>,
+    hints: Option<mpsc::Receiver<Frame>>,
     timeout: Duration,
 ) -> anyhow::Result<()>
 where
     W: tokio::io::AsyncWrite + Unpin,
 {
-    write_runtime_frames_with_hints(&mut writer, &mut frames, Some(hints), timeout).await
+    write_runtime_frames_with_headroom(writer, reliable, hints, timeout, |_, _| true).await
+}
+
+pub(super) async fn run_runtime_unix_writer_with_hints(
+    mut writer: tokio::net::unix::OwnedWriteHalf,
+    mut frames: mpsc::UnboundedReceiver<Frame>,
+    hints: mpsc::Receiver<Frame>,
+    timeout: Duration,
+) -> anyhow::Result<()> {
+    write_runtime_frames_with_headroom(
+        &mut writer,
+        &mut frames,
+        Some(hints),
+        timeout,
+        unix_socket_has_hint_headroom,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -180,6 +208,54 @@ mod tests {
             Frame::CoreCommand {
                 command: CoreCommand::WrapUpHint { .. }
             }
+        ));
+        drop(reliable_tx);
+        drop(hint_tx);
+        write_task.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn drops_hint_before_byte_zero_when_broker_socket_headroom_is_insufficient() {
+        let (reliable_tx, mut reliable_rx) = mpsc::unbounded_channel();
+        let (hint_tx, hint_rx) = mpsc::channel(HINT_RUNTIME_CAPACITY);
+        hint_tx
+            .try_send(Frame::CoreCommand {
+                command: CoreCommand::WrapUpHint {
+                    session_id: "s1".into(),
+                    target: DeliveryTarget {
+                        worker_epoch: "e1".into(),
+                        turn_id: "t1".into(),
+                    },
+                },
+            })
+            .unwrap();
+        let (mut client, mut server) = tokio::io::duplex(1024);
+        let write_task = tokio::spawn(async move {
+            write_runtime_frames_with_headroom(
+                &mut client,
+                &mut reliable_rx,
+                Some(hint_rx),
+                Duration::from_secs(5),
+                |_, _| false,
+            )
+            .await
+            .unwrap();
+        });
+        tokio::task::yield_now().await;
+        reliable_tx
+            .send(Frame::CoreCommand {
+                command: CoreCommand::Cancel {
+                    session_id: "s1".into(),
+                    command_id: "cancel-first".into(),
+                },
+            })
+            .unwrap();
+        let first = read_frame(&mut server).await.unwrap().unwrap();
+        assert!(matches!(
+            first,
+            Frame::CoreCommand {
+                command: CoreCommand::Cancel { command_id, .. }
+            } if command_id == "cancel-first"
         ));
         drop(reliable_tx);
         drop(hint_tx);
