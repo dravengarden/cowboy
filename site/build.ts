@@ -71,30 +71,50 @@ export interface SitePlugin {
 const PLUGIN_ORDER = [
   "codex",
   "claude-code",
+  "antigravity",
   "grok",
   "codex-deepseek",
   "claude-deepseek",
   "deepseek-harness",
   "zed",
-  "victoria",
-  "matrix",
   "review",
+  "matrix",
+  "github",
+  "machine-browser",
+  "victoria",
 ];
 
 const PLUGIN_SOURCE_ROOTS = ["plugins", "examples/telemetry"];
 
+// Declaration order is the website filter order.
 const PLUGIN_KINDS = {
-  agent_provider: { label: "Agent Provider", translation: "agent" },
-  code_intelligence: { label: "Code Intelligence", translation: "code" },
-  telemetry_backend: { label: "Telemetry", translation: "telemetry" },
+  agent_provider: {
+    label: "Agent Provider",
+    filterLabel: "Agent Providers",
+    translation: "agent",
+  },
+  code_intelligence: {
+    label: "Code Intelligence",
+    filterLabel: "Code Intelligence",
+    translation: "code",
+  },
+  call_profile: { label: "Agent calls", filterLabel: "Agent calls", translation: "calls" },
+  memory_backend: { label: "Memory", filterLabel: "Memory", translation: "memory" },
   workspace_extension: {
     label: "Workspace extension",
+    filterLabel: "Workspace extensions",
     translation: "extension",
   },
-  memory_backend: { label: "Memory", translation: "memory" },
-  call_profile: { label: "Agent calls", translation: "calls" },
-  machine_browser: { label: "Machine browser", translation: "browser" },
-} satisfies Record<PluginManifest["kind"], { label: string; translation: string }>;
+  machine_browser: {
+    label: "Machine browser",
+    filterLabel: "Machine browser",
+    translation: "browser",
+  },
+  telemetry_backend: { label: "Telemetry", filterLabel: "Telemetry", translation: "telemetry" },
+} satisfies Record<
+  PluginManifest["kind"],
+  { label: string; filterLabel: string; translation: string }
+>;
 
 const WEBSITE_PROVIDER_ACCENTS: Partial<Record<string, { light: string; dark: string }>> = {
   codex: { light: "#29252F", dark: "#F0ECF8" },
@@ -470,6 +490,62 @@ export function renderPluginCards(plugins: SitePlugin[]): string {
     .join("");
 }
 
+/** Render one filter per Plugin kind present in the catalog, with its count. */
+export function renderPluginFilters(plugins: SitePlugin[]): string {
+  const counts = new Map<PluginManifest["kind"], number>();
+  for (const plugin of plugins) counts.set(plugin.kind, (counts.get(plugin.kind) ?? 0) + 1);
+  const all = `<button type="button" data-filter="all" aria-pressed="true"><span data-i18n="plugins.filter.all">All</span> <small>${String(
+    plugins.length,
+  )}</small></button>`;
+  const kinds = (Object.keys(PLUGIN_KINDS) as PluginManifest["kind"][])
+    .filter((kind) => counts.has(kind))
+    .map(
+      (kind) =>
+        `<button type="button" data-filter="${escapeHtml(kind)}" aria-pressed="false"><span data-i18n="plugins.filter.${
+          PLUGIN_KINDS[kind].translation
+        }">${escapeHtml(PLUGIN_KINDS[kind].filterLabel)}</span> <small>${String(
+          counts.get(kind),
+        )}</small></button>`,
+    );
+  return [all, ...kinds].join("\n              ");
+}
+
+interface ManifestExample {
+  id: string;
+  version: string;
+  kind: string;
+  entrypoint: string;
+  component_release: string;
+  components: { id: string; version: string }[];
+}
+
+/** Render the live Codex manifest so the example never drifts from the shipped release. */
+export function renderManifestExample(manifest: ManifestExample): string {
+  const field = (name: string, value: string) =>
+    `  <b>"${escapeHtml(name)}"</b>: <em>"${escapeHtml(value)}"</em>,`;
+  const shown = manifest.components.slice(0, 2);
+  const hidden = manifest.components.length - shown.length;
+  const components = shown.map(
+    (component, index) =>
+      `    <span>{</span> <b>"id"</b>: <em>"${escapeHtml(component.id)}"</em>, <b>"version"</b>: <em>"${escapeHtml(
+        component.version,
+      )}"</em> <span>}</span>${index < shown.length - 1 || hidden > 0 ? "," : ""}`,
+  );
+  if (hidden > 0) components.push(`    <i>… ${String(hidden)} more pinned components</i>`);
+  return [
+    "<span>{</span>",
+    field("id", manifest.id),
+    field("version", manifest.version),
+    field("kind", manifest.kind),
+    field("entrypoint", manifest.entrypoint),
+    field("component_release", manifest.component_release),
+    '  <b>"components"</b>: <span>[</span>',
+    ...components,
+    "  <span>]</span>",
+    "<span>}</span>",
+  ].join("\n");
+}
+
 export function renderPluginCatalog(plugins: SitePlugin[]): string {
   return (
     JSON.stringify(
@@ -507,6 +583,9 @@ export async function buildSite(root: string, requestedOutput = "site-dist"): Pr
   const plugins = await loadSitePlugins(root);
   const agentCount = plugins.filter((plugin) => plugin.kind === "agent_provider").length;
   const codeCount = plugins.filter((plugin) => plugin.kind === "code_intelligence").length;
+  const codexManifest = await readJson<ManifestExample>(
+    joinPath(root, "plugins/codex/plugin.json"),
+  );
   const template = await readFile(joinPath(root, "site/index.html"), "utf8");
   const brandMark = await readFile(joinPath(root, "site/assets/cowboy-wordmark-v2.svg"), "utf8");
   let brandIndex = 0;
@@ -517,6 +596,8 @@ export async function buildSite(root: string, requestedOutput = "site-dist"): Pr
     .replaceAll("{{PLUGIN_COUNT}}", String(plugins.length))
     .replaceAll("{{AGENT_PLUGIN_COUNT}}", String(agentCount))
     .replaceAll("{{CODE_PLUGIN_COUNT}}", String(codeCount))
+    .replace("{{PLUGIN_FILTERS}}", renderPluginFilters(plugins))
+    .replace("{{CODEX_MANIFEST}}", renderManifestExample(codexManifest))
     .replace("{{PLUGIN_CARDS}}", renderPluginCards(plugins));
   const catalog = renderPluginCatalog(plugins);
   const staticFiles = await Promise.all(

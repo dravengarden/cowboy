@@ -390,7 +390,29 @@ test("website build produces a complete self-contained Pages artifact", async ()
       catalog.some((plugin) => plugin.id === "victoria" && plugin.kind === "telemetry_backend"),
       "published JSON must include Victoria as telemetry",
     );
-    assert(html.includes(`All ${catalog.length}</button>`), "all-filter count includes telemetry");
+    assert(
+      html.includes(`>All</span> <small>${String(catalog.length)}</small></button>`),
+      "all-filter count includes telemetry",
+    );
+    for (const kind of new Set(catalog.map((plugin) => plugin.kind))) {
+      const count = catalog.filter((plugin) => plugin.kind === kind).length;
+      assert(
+        new RegExp(`data-filter="${kind}"[^>]*>.*?<small>${String(count)}</small>`, "u").test(html),
+        `${kind} Plugins must have a selectable filter with their count`,
+      );
+    }
+    const codexManifest = JSON.parse(await readFile(`${ROOT}/plugins/codex/plugin.json`, "utf8"));
+    assert(
+      html.includes(`<b>"version"</b>: <em>"${codexManifest.version}"</em>`) &&
+        html.includes(`<em>"${codexManifest.component_release}"</em>`),
+      "manifest example must track the shipped Codex release",
+    );
+    assert(
+      html.includes('<span class="prompt" data-copy-exclude>$ </span>') &&
+        script.includes('querySelectorAll("[data-copy-exclude]")'),
+      "quick-start copy must exclude prompts and sample output",
+    );
+    assert(html.includes("Antigravity, Grok, and DeepSeek"), "hero must name every Agent family");
     assert(
       html.includes('data-filter="telemetry_backend"'),
       "telemetry must have a selectable filter",

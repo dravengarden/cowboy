@@ -33,14 +33,11 @@
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/"><strong>Website</strong></a>
   · <a href="#quick-start">Quick start</a>
+  · <a href="#supported-agents">Agents</a>
   · <a href="#architecture">Architecture</a>
   · <a href="#plugin-ecosystem">Plugins</a>
   · <a href="docs/INDEX.md">Documentation</a>
 </p>
-
-**Lilac Flow** is the default. Choose from **50 icon styles** in Settings → Appearance; light/dark mode and semantic status colors stay consistent.
-
-<p align="center"><img src="site/assets/cowboy-colorways-v10.svg" width="760" alt="Cowboy icon colorways"></p>
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
@@ -54,9 +51,9 @@
 <p align="center"><sub>Clients control. The Hub remembers. Your Machines execute.</sub></p>
 
 Cowboy keeps long-running coding agents close to the work. Self-host one Hub,
-enroll Linux and macOS Machines, and direct Codex, Claude Code, Grok,
-DeepSeek, or your own Plugin from a keyboard-first desktop or touch-first mobile
-workspace. Reconnect later without moving the worktree, credentials, or agent
+enroll Linux and macOS Machines, and direct Codex, Claude Code, Antigravity,
+Grok, DeepSeek, or your own Plugin from a keyboard-first desktop or touch-first
+mobile workspace. Reconnect later without moving the worktree, credentials, or agent
 process away from the Machine where it started.
 
 > [!IMPORTANT]
@@ -81,15 +78,16 @@ process away from the Machine where it started.
 
 ## Quick start
 
-The official icon is **Neon (103)**. **Settings → Appearance → Icon & theme** offers
-20 curated styles, each with matching light and dark interface colors. See [app icons and platform behavior](docs/branding-and-app-icons.md)
-for Home Screen installation and native switching.
+Three steps: build and start one Hub, serve it over HTTPS, then enroll the
+Machines where your work lives.
 
 ### Prerequisites
 
 - [Nix](https://nixos.org/download/) with flakes enabled
 - Linux or macOS
 - Git
+
+### 1. Build
 
 Clone Cowboy, enter its pinned environment, install checkout-local frontend
 dependencies, and build a release:
@@ -101,6 +99,8 @@ nix develop
 just install
 just build
 ```
+
+### 2. Start the Hub
 
 Start a local Hub with SQLite persistence:
 
@@ -119,6 +119,8 @@ The Controller requires a database for durable device bindings. Use
 `cowboy store-copy --source postgresql://… --destination sqlite:///…` for a
 fail-closed production migration into a new SQLite file.
 
+### 3. Enroll a Machine
+
 To add another Linux or macOS host, build the target-platform bootstrap with
 <code>just build-machine-bootstrap</code>. Create a one-time enrollment code in
 Cowboy, then run the generated command on that Machine:
@@ -130,6 +132,25 @@ cowboy register https://cowboy.example --background
 The token is entered through a masked prompt and never needs to appear in shell
 history. See [Machine operations](docs/machine-operations.md) for installation,
 identity verification, background services, and multi-Service isolation.
+
+## Supported agents
+
+Every agent is an independently versioned, signed Provider Plugin. Install it
+only on the Machines that should run it; sessions stay pinned to the exact
+installed release.
+
+| Agent                    | Vendor    | Runs with                                              | Local + Remote execution |
+| ------------------------ | --------- | ------------------------------------------------------ | :----------------------: |
+| Codex                    | OpenAI    | Your standard OpenAI account and configuration         | ✓                        |
+| Claude Code              | Anthropic | Your standard Anthropic account and configuration      | ✓                        |
+| Antigravity              | Google    | The official CLI with a personal Google account¹       | Local                    |
+| Grok Build               | xAI       | The official agent with standard xAI authentication    | Local                    |
+| Codex · DeepSeek         | DeepSeek  | Codex in an isolated DeepSeek runtime                  | Local                    |
+| Claude Code · DeepSeek   | DeepSeek  | Claude Code in an isolated DeepSeek runtime            | Local                    |
+| DeepSeek Harness         | DeepSeek  | DeepSeek's native agent harness                        | Local                    |
+| Your Plugin              | You       | Any ACP agent packaged as a `.cowboy-plugin`           | Opt-in                   |
+
+<sub>¹ Antigravity in Cowboy is not a Google-supported configuration.</sub>
 
 ## Architecture
 
@@ -205,6 +226,15 @@ Both clients observe the same server-authoritative model without forcing a
 desktop IDE into a stretched mobile layout—or a mobile workflow into desktop
 chrome.
 
+### Make it yours
+
+**Lilac Flow** is the default. **Settings → Appearance → Icon & theme** offers
+**50 icon colorways** (25 solid, 25 gradient), each with matching light and dark
+accents. See [app icons and platform behavior](docs/branding-and-app-icons.md)
+for Home Screen installation and native icon switching.
+
+<p align="center"><img src="site/assets/cowboy-colorways-v10.svg" width="760" alt="A selection of Cowboy's fifty icon colorways"></p>
+
 ## Plugin ecosystem
 
 A **Plugin** is Cowboy's only discoverable, installable, upgradable, rollback,
@@ -215,10 +245,17 @@ silently installs or activates that release on a Machine.
 source → signed .cowboy-plugin → Catalog → stage + probe → atomic activation → pinned sessions
 ```
 
-| Kind              | First-party Plugins                                                   |
-| ----------------- | --------------------------------------------------------------------- |
-| Agent Provider    | Codex, Claude Code, Grok, Codex + DeepSeek, Claude + DeepSeek         |
-| Code intelligence | Zed                                                                   |
+| Kind                | First-party Plugins                                                                                  |
+| ------------------- | ---------------------------------------------------------------------------------------------------- |
+| Agent Provider      | Codex, Claude Code, Antigravity, Grok Build, Codex · DeepSeek, Claude Code · DeepSeek, DeepSeek Harness |
+| Code intelligence   | Zed — process-isolated symbols, hover, definitions, and references                                    |
+| Agent calls         | Review — read-only code and design reviews by another agent family                                    |
+| Memory              | Matrix — shared, evidence-backed long-term memory across sessions                                     |
+| Workspace extension | GitHub — pull requests, issues, and Actions through the Machine's GitHub CLI session                  |
+| Machine browser     | Machine browser — owner-operated Chromium for account sign-in, isolated per account                   |
+| Telemetry           | [Victoria](examples/telemetry/victoria/README.md) — opt-in OTLP export of logs, metrics, and traces   |
+
+Browse every Plugin, with live versions, on the [website](https://dravengarden.github.io/cowboy/#ecosystem).
 
 The extension boundary is deliberately narrow:
 
@@ -278,10 +315,11 @@ non-root user. Plain `cargo test` still skips this separate group.
 
 | Path                               | Responsibility                                                         |
 | ---------------------------------- | ---------------------------------------------------------------------- |
-| <code>src/</code>                  | Rust Hub, API, persistence, Machine routing, workers, and CLI          |
+| <code>src/</code>                  | Core Rust library: ACP runtime, Machine transport, Plugin activation   |
+| <code>components/</code>           | Rust Hub, store, Machine, and wire crates; versioned Plugin, Provider, state, and UI packages |
 | <code>web/</code>                  | React Desktop, Mobile, Agent, Code, setup, and admin surfaces          |
-| <code>plugins/</code>              | First-party Agent Provider and code-intelligence Plugins               |
-| <code>components/</code>           | Versioned Plugin, Provider, state, UI, and code-intelligence contracts |
+| <code>plugins/</code>              | First-party Agent Provider, code-intelligence, and extension Plugins   |
+| <code>apps/native-shell/</code>    | Tauri desktop and mobile product shell                                 |
 | <code>apps/macos-installer/</code> | Native macOS menu-bar installer and Machine manager                    |
 | <code>site/</code>                 | Public product website and privacy-safe artwork                        |
 | <code>docs/</code>                 | Architecture, product contracts, deployment, and operations            |

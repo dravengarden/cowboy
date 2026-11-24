@@ -827,6 +827,129 @@ async fn a_held_send_promotes_the_row_without_taking_it_out() {
     assert!(!hub.promote_queued("held", "missing", &person));
 }
 
+// A retried explicit send has no caller of its own and must not take the row
+// out from under the terminal editing it: a refused dispatch would requeue it
+// under a new id, which that editor reads as sent and parks as a draft.
+#[tokio::test]
+async fn a_retried_explicit_send_waits_for_the_edit_of_its_row() {
+    let hub = hub_with_session("edit-retry");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    hub.set_dispatch_tx(tx);
+    hub.set_status("edit-retry", Status::Running, None);
+    hub.set_paused("edit-retry", true);
+    let person = crate::prompt_origin::RequestCaller::Person;
+    for (text, cmid) in [("head", "c-head"), ("next", "c-next")] {
+        hub.submit(
+            "edit-retry",
+            text.into(),
+            vec![],
+            Some(cmid.into()),
+            &person,
+        );
+    }
+    let ids: Vec<String> = hub.inner.sessions.lock()["edit-retry"]
+        .queue
+        .iter()
+        .map(|row| row.id.clone())
+        .collect();
+    hub.set_explicit_wait("edit-retry", true);
+    hub.set_queue_editing("edit-retry", Some(ids[0].clone()));
+    hub.retry_explicit_wait("edit-retry");
+    assert!(rx.try_recv().is_err(), "the edited head stays queued");
+    assert_eq!(hub.session_info("edit-retry").unwrap().queue_count, 2);
+    // Editing another row leaves the explicitly sent head free to go.
+    hub.set_queue_editing("edit-retry", Some(ids[1].clone()));
+    hub.retry_explicit_wait("edit-retry");
+    let req = rx
+        .try_recv()
+        .expect("an edit of another row does not hold the head");
+    assert_eq!(req.text, "head");
+}
+
+// Explicit send intent belongs to the row it was recorded for: after the user
+// reorders another row ahead, a retry must not send that row through Pause.
+#[tokio::test]
+async fn explicit_intent_does_not_pass_to_a_reordered_head() {
+    let hub = hub_with_session("bound");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    hub.set_dispatch_tx(tx);
+    hub.set_status("bound", Status::Running, None);
+    hub.set_paused("bound", true);
+    let person = crate::prompt_origin::RequestCaller::Person;
+    for (text, cmid) in [("chosen", "c-chosen"), ("other", "c-other")] {
+        hub.submit("bound", text.into(), vec![], Some(cmid.into()), &person);
+    }
+    let ids: Vec<String> = hub.inner.sessions.lock()["bound"]
+        .queue
+        .iter()
+        .map(|row| row.id.clone())
+        .collect();
+    hub.set_explicit_wait("bound", true);
+    hub.reorder_queue("bound", &[ids[1].clone(), ids[0].clone()]);
+    hub.retry_explicit_wait("bound");
+    assert!(rx.try_recv().is_err(), "the reordered head stays paused");
+    assert!(!hub.explicit_wait("bound"), "the intent ended with its row");
+    // Bound to the head it was recorded for, the retry still sends it.
+    hub.set_explicit_wait("bound", true);
+    hub.retry_explicit_wait("bound");
+    assert_eq!(rx.try_recv().expect("the bound head is sent").text, "other");
+}
+
+// A held Send now records its intent for the requested row itself, not for
+// whatever heads the queue when the intent is persisted.
+#[tokio::test]
+async fn a_held_send_binds_its_intent_to_the_requested_row() {
+    let hub = hub_with_session("hold");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    hub.set_dispatch_tx(tx);
+    hub.set_status("hold", Status::Running, None);
+    hub.set_paused("hold", true);
+    let person = crate::prompt_origin::RequestCaller::Person;
+    for (text, cmid) in [("first", "c-first"), ("held", "c-held")] {
+        hub.submit("hold", text.into(), vec![], Some(cmid.into()), &person);
+    }
+    let ids: Vec<String> = hub.inner.sessions.lock()["hold"]
+        .queue
+        .iter()
+        .map(|row| row.id.clone())
+        .collect();
+    assert!(hub.hold_queued("hold", &ids[1], &person));
+    assert!(hub.explicit_wait("hold"));
+    assert!(rx.try_recv().is_err(), "a held send dispatches nothing");
+    // Another terminal moves the first row back ahead before the retry.
+    hub.reorder_queue("hold", &[ids[0].clone(), ids[1].clone()]);
+    hub.retry_explicit_wait("hold");
+    assert!(
+        rx.try_recv().is_err(),
+        "the other row is not sent through Pause"
+    );
+    assert!(!hub.explicit_wait("hold"));
+}
+
+// Maintenance reads the intent before it retries. If another terminal sent the
+// held row in between, the stale retry must not send the next row through
+// Pause.
+#[tokio::test]
+async fn a_stale_explicit_retry_sends_nothing_once_its_intent_is_consumed() {
+    let hub = hub_with_session("stale");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    hub.set_dispatch_tx(tx);
+    hub.set_status("stale", Status::Running, None);
+    hub.set_paused("stale", true);
+    let person = crate::prompt_origin::RequestCaller::Person;
+    hub.submit(
+        "stale",
+        "next".into(),
+        vec![],
+        Some("c-next".into()),
+        &person,
+    );
+    assert!(!hub.explicit_wait("stale"));
+    hub.retry_explicit_wait("stale");
+    assert!(rx.try_recv().is_err(), "no live intent, no bypass");
+    assert_eq!(hub.session_info("stale").unwrap().queue_count, 1);
+}
+
 #[tokio::test]
 async fn pending_context_holds_schedules_drafts_and_manual_queue_until_cleared() {
     let hub = hub_with_session("context-hold");

@@ -215,3 +215,125 @@ test("without a database the edit still keeps its text", async () => {
     "    indented  edit tail",
   );
 });
+
+test("an edit another tab already recovered is not recovered again", async () => {
+  // Tabs of one origin share localStorage; each holds its own copy in memory.
+  const storage = fakeStorage();
+  const first = await loadPage(storage);
+  first.setPendingEdit({ ...edit("tabs", "typed once", []), kind: "queued" });
+  first.flushPendingEdits();
+  const second = await loadPage(storage);
+  assertEquals(second.getPendingEdit("tabs", "queued", "row-1")?.text, "typed once");
+
+  const claimed = first.claimOrphanedPendingEdits("tabs", new Set(), new Set());
+  assertEquals(claimed.length, 1);
+  first.finishOrphanedPendingEdit(claimed[0]!, true);
+  // The user may already have sent or deleted that draft: the second tab must
+  // not park it once more when its own queue patch arrives later.
+  assertEquals(second.claimOrphanedPendingEdits("tabs", new Set(), new Set()), []);
+  assertEquals(second.getPendingEdit("tabs", "queued", "row-1"), null);
+
+  // Typing this tab has not flushed yet is its own and still recovers.
+  second.setPendingEdit({ ...edit("tabs", "typed here", []), kind: "queued" });
+  assertEquals(second.claimOrphanedPendingEdits("tabs", new Set(), new Set()).length, 1);
+});
+
+test("an image still encoding settles into the edit after its editor is gone", async () => {
+  const page = await loadPage(fakeStorage());
+  const placeholder = { ...image("p1"), block: { type: "image" as const, data: "", mimeType: "image/png" }, pending: true };
+  const settledSessions: string[] = [];
+  const stop = page.onPendingEditEncodesSettled((session) => settledSessions.push(session));
+  const settleImage = page.beginPendingEditEncoding("encode", "queued", "row-1", [placeholder]);
+  const text = "caption ![shot](cowboy-att:p1)";
+  page.setPendingEdit({ ...edit("encode", text, [placeholder]), kind: "queued" });
+  // The placeholder keeps its token, and recovery waits for its bytes.
+  assertEquals(page.getPendingEdit("encode", "queued", "row-1")?.text, text);
+  assertEquals(page.claimOrphanedPendingEdits("encode", new Set(), new Set()), []);
+
+  // The row was sent elsewhere and its editor unmounted; the encode finishes.
+  settleImage([image("p1")]);
+  assertEquals(settledSessions, ["encode"]);
+  const claimed = page.claimOrphanedPendingEdits("encode", new Set(), new Set());
+  assertEquals(claimed.length, 1);
+  assertEquals(claimed[0]?.text, text);
+  assertEquals(claimed[0]?.attachments.map((attachment) => attachment.id), ["p1"]);
+  page.finishOrphanedPendingEdit(claimed[0]!, true);
+
+  // A failed encode drops its token instead of parking a broken image.
+  const settleFailure = page.beginPendingEditEncoding("encode", "queued", "row-2", [placeholder]);
+  page.setPendingEdit({ ...edit("encode", text, [placeholder]), kind: "queued", id: "row-2" });
+  settleFailure([]);
+  assertEquals(page.getPendingEdit("encode", "queued", "row-2")?.text.trimEnd(), "caption");
+
+  // A picked file gets its token only once encoded; the record places it.
+  const settleFile = page.beginPendingEditEncoding("encode", "queued", "row-3", []);
+  page.setPendingEdit({ ...edit("encode", "file", []), kind: "queued", id: "row-3" });
+  settleFile([image("f1")]);
+  const file = page.getPendingEdit("encode", "queued", "row-3");
+  assertEquals(file?.attachments.map((attachment) => attachment.id), ["f1"]);
+  assertEquals(file?.text.includes("cowboy-att:f1"), true);
+  stop();
+});
+
+test("discarding an older copy keeps another tab's newer edit", async () => {
+  const storage = fakeStorage();
+  const first = await loadPage(storage);
+  first.setPendingEdit({ ...edit("newer", "older text", []), kind: "queued" });
+  first.flushPendingEdits();
+  const second = await loadPage(storage);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  second.setPendingEdit({ ...edit("newer", "newer text", []), kind: "queued" });
+  second.flushPendingEdits();
+
+  first.clearPendingEdit("newer", "queued", "row-1");
+  const claimed = second.claimOrphanedPendingEdits("newer", new Set(), new Set());
+  assertEquals(claimed.map((record) => record.text), ["newer text"]);
+});
+
+test("a file whose edit was discarded does not join a later edit of the row", async () => {
+  const page = await loadPage(fakeStorage());
+  const settleFile = page.beginPendingEditEncoding("discard", "queued", "row-1", []);
+  page.setPendingEdit({ ...edit("discard", "first", []), kind: "queued" });
+  assertEquals(page.pendingEditEncoding("discard", "queued", "row-1"), true);
+  page.clearPendingEdit("discard", "queued", "row-1");
+  assertEquals(page.pendingEditEncoding("discard", "queued", "row-1"), false);
+  page.setPendingEdit({ ...edit("discard", "second", []), kind: "queued" });
+  settleFile([image("f1")]);
+  const later = page.getPendingEdit("discard", "queued", "row-1");
+  assertEquals(later?.text, "second");
+  assertEquals(later?.attachments, []);
+});
+
+test("an editor reopened during an encode adopts the settled bytes", async () => {
+  const page = await loadPage(fakeStorage());
+  const placeholder = { ...image("p9"), block: { type: "image" as const, data: "", mimeType: "image/png" }, pending: true };
+  const settle = page.beginPendingEditEncoding("reopen", "queued", "row-1", [placeholder]);
+  page.setPendingEdit({ ...edit("reopen", "x ![s](cowboy-att:p9)", [placeholder]), kind: "queued" });
+  const adopted: string[][] = [];
+  page.subscribePendingEditRestore("reopen", "queued", "row-1", (restored) => {
+    adopted.push(restored.attachments.map((attachment) => attachment.id));
+  });
+  settle([image("p9")]);
+  assertEquals(adopted, [["p9"]]);
+});
+
+test("an unchanged rerender does not overwrite another tab's newer mirror", async () => {
+  const storage = fakeStorage();
+  const first = await loadPage(storage);
+  first.setPendingEdit({ ...edit("rerender", "older", []), kind: "queued" });
+  first.flushPendingEdits();
+  const second = await loadPage(storage);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  second.setPendingEdit({ ...edit("rerender", "newer", []), kind: "queued" });
+  second.flushPendingEdits();
+  // A queue patch makes the first tab write its unchanged buffer again.
+  first.setPendingEdit({ ...edit("rerender", "older", []), kind: "queued", baseText: "patched" });
+  first.flushPendingEdits();
+  const mirror = JSON.parse([...storage.records.values()][0]!);
+  assertEquals(mirror.text, "newer");
+  first.clearPendingEdit("rerender", "queued", "row-1");
+  assertEquals(
+    second.claimOrphanedPendingEdits("rerender", new Set(), new Set()).map((record) => record.text),
+    ["newer"],
+  );
+});
