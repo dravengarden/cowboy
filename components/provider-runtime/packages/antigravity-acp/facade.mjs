@@ -301,8 +301,12 @@ export class Facade {
       turn.abort?.abort();
     }
     const confirmMs = isRoot ? this.stopConfirmMs : 5000;
-    const deadlineEntry =
-      isRoot && session.commands.size > 0 ? { deadline: Date.now() + confirmMs } : undefined;
+    const reportMarginMs = 5000;
+    // Track root cleanup deadline across BOTH inflight start registration and
+    // actual command-termination confirmation + UNCERTAIN_REPORT flush margin.
+    const deadlineEntry = isRoot
+      ? { deadline: Date.now() + confirmMs + reportMarginMs }
+      : undefined;
     if (deadlineEntry) this.rootCleanupDeadlines.add(deadlineEntry);
     const cleanup = (async () => {
       try {
@@ -310,6 +314,13 @@ export class Facade {
           await Promise.allSettled([...turn.inflight]);
         }
         const commands = [...session.commands.values()];
+        if (deadlineEntry) {
+          if (commands.length > 0) {
+            deadlineEntry.deadline = Date.now() + confirmMs + reportMarginMs;
+          } else {
+            this.rootCleanupDeadlines.delete(deadlineEntry);
+          }
+        }
         // Root sessions always wait the full `stopConfirmMs` window (native
         // `session/cancel` is already forwarded before this awaits) and park via
         // `UNCERTAIN_REPORT` if any root command still fails to confirm exit,
@@ -371,6 +382,12 @@ export class Facade {
         session.turn.ended = true;
         session.turn.cancelled = true;
         if (session.turn.wrapUp) session.turn.wrapUp.pending = false;
+        // Retain already-admitted inflight work (e.g. file publish / command
+        // start) in activeCleanups so settled() waits for it before connection close.
+        for (const work of session.turn.inflight) {
+          this.activeCleanups.add(work);
+          work.finally(() => this.activeCleanups.delete(work));
+        }
         session.turn.abort?.abort();
         session.turn = undefined;
       }
@@ -378,14 +395,24 @@ export class Facade {
     }
   }
 
-  /** Remaining root Stop confirmation budget (ms) for shutdown drain. */
+  /** Remaining root Stop confirmation budget (ms) for shutdown drain, including report margin. */
   remainingRootStopMs() {
     let maxDeadline = 0;
     for (const entry of this.rootCleanupDeadlines) {
       if (entry.deadline > maxDeadline) maxDeadline = entry.deadline;
     }
     if (maxDeadline === 0) return 0;
-    return Math.max(0, Math.min(this.stopConfirmMs + 2000, maxDeadline - Date.now()));
+    return Math.max(0, Math.min(this.stopConfirmMs + 10_000, maxDeadline - Date.now()));
+  }
+
+  /** Explicitly mark one relay ambiguous (e.g. failed response handoff) until socket close. */
+  markRelayAmbiguous(sessionId, relayId) {
+    if (sessionId === undefined || relayId === undefined) return;
+    const session = this.sessions.get(sessionId);
+    if (!session || session.parent !== undefined) return;
+    if (this.relays.has(relayId)) {
+      session.ambiguousRelays.add(relayId);
+    }
   }
 
   /**
@@ -1608,12 +1635,34 @@ export function serveMcp(stream, facade, sessionOf) {
   stream.once("close", () => facade.unregisterRelay(relayId));
   let buffered = "";
   stream.setEncoding("utf8");
-  const send = (message) => stream.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`);
+  const send = (message) =>
+    new Promise((resolve) => {
+      if (stream.destroyed || stream.writableEnded || stream.writable === false) {
+        return resolve(false);
+      }
+      let settled = false;
+      const done = (ok) => {
+        if (settled) return;
+        settled = true;
+        stream.off("close", onClose);
+        stream.off("error", onError);
+        resolve(ok);
+      };
+      const onClose = () => done(false);
+      const onError = () => done(false);
+      stream.once("close", onClose);
+      stream.once("error", onError);
+      try {
+        stream.write(`${JSON.stringify({ jsonrpc: "2.0", ...message })}\n`, (err) => done(!err));
+      } catch {
+        done(false);
+      }
+    });
   const handle = async (message) => {
     const { id, method, params } = message;
     if (id === undefined || id === null) return;
     if (method === "initialize") {
-      return send({
+      return await send({
         id,
         result: {
           protocolVersion:
@@ -1623,11 +1672,11 @@ export function serveMcp(stream, facade, sessionOf) {
         },
       });
     }
-    if (method === "ping") return send({ id, result: {} });
-    if (method === "tools/list") return send({ id, result: { tools: facade.tools() } });
+    if (method === "ping") return await send({ id, result: {} });
+    if (method === "tools/list") return await send({ id, result: { tools: facade.tools() } });
     if (method === "tools/call") {
       if (facade.closing) {
-        return send({
+        return await send({
           id,
           result: {
             isError: true,
@@ -1637,14 +1686,25 @@ export function serveMcp(stream, facade, sessionOf) {
       }
       const sid = sessionOf();
       const trackedTurn = facade.beginCall(sid);
+      let delivered = false;
       try {
-        const result = await facade.call(sid, params?.name, params?.arguments, relayId);
-        return send({ id, result });
+        let result;
+        try {
+          result = await facade.call(sid, params?.name, params?.arguments, relayId);
+        } catch {
+          delivered = await send({ id, error: { code: -32603, message: "Internal error" } });
+          return;
+        }
+        delivered = await send({ id, result });
       } finally {
+        if (!delivered) {
+          facade.markRelayAmbiguous(sid, relayId);
+        }
         facade.endCall(trackedTurn);
       }
+      return;
     }
-    send({ id, error: { code: -32601, message: "Method not found" } });
+    await send({ id, error: { code: -32601, message: "Method not found" } });
   };
   stream.on("data", (chunk) => {
     buffered += chunk;

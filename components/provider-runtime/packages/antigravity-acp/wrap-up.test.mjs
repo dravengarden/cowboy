@@ -779,3 +779,150 @@ test("M2: unsettled ReadFile call during turn end marks open MCP relay ambiguous
   relay1.destroy();
   await flush();
 });
+
+test("R2-M1: quiesce transfers admitted inflight work so settled() waits for it before shutdown", async () => {
+  const gate = deferred();
+  const conn = makeFakeConnection();
+  const facade = new Facade(conn, { root: "/work/repo", shell: "/bin/sh" });
+  facade.beginTurn("s-q", { wrapUp: { pending: false, delivered: false } });
+  const turn = facade.sessions.get("s-q").turn;
+  turn.inflight.add(gate.promise);
+
+  facade.quiesce();
+  assert.equal(facade.sessions.get("s-q").turn, undefined);
+
+  let settledDone = false;
+  const settling = facade.settled(500).then((ok) => {
+    settledDone = ok;
+    return ok;
+  });
+  await flush();
+  assert.equal(settledDone, false, "settled() must wait for quiesced inflight work");
+  gate.resolve();
+  assert.equal(await settling, true);
+});
+
+test("R2-M2: endTurn budgets root Stop confirmation even when command registers during inflight", async () => {
+  const inflightStart = deferred();
+  const stopGate = deferred();
+  const conn = makeFakeConnection({
+    "process/terminate": async () => {
+      await stopGate.promise;
+      throw new Error("still running");
+    },
+    [UNCERTAIN_REPORT]: async () => ({}),
+  });
+  const facade = new Facade(conn, {
+    root: "/work/repo",
+    shell: "/bin/sh",
+    stopConfirmMs: 15_000,
+  });
+  facade.beginTurn("s-late-cmd", { wrapUp: { pending: false, delivered: false } });
+  const turn = facade.sessions.get("s-late-cmd").turn;
+  turn.inflight.add(
+    inflightStart.promise.then(() => {
+      facade.session("s-late-cmd").commands.set("proc-late", {
+        processId: "proc-late",
+        command: "sleep 999",
+        cleaning: 0,
+        stopping: undefined,
+        timer: undefined,
+      });
+    }),
+  );
+
+  // Start endTurn BEFORE proc-late has registered!
+  const endPromise = facade.endTurn("s-late-cmd", { cancelled: true });
+  facade.quiesce();
+  assert.ok(
+    facade.remainingRootStopMs() > 15_000,
+    "root Stop budget must include report margin even before command registers",
+  );
+  inflightStart.resolve();
+  await flush();
+  await flush();
+  assert.ok(
+    facade.remainingRootStopMs() > 15_000,
+    "root Stop budget refreshes once late-registered command starts terminating",
+  );
+  stopGate.resolve();
+  await endPromise;
+  assert.equal(facade.remainingRootStopMs(), 0);
+});
+
+test("R2-M6: conflicting prompt B arriving while prompt A is reserved is refused synchronously and never runs after Stop", async () => {
+  const gate = deferred();
+  const h = makeProxy({ managed: false });
+  await flush();
+  h.runtime.projection = async () => {
+    await gate.promise;
+    return "PROJECTION";
+  };
+  const req0 = h.proxy.fromClient(request(300, "session/new", { cwd: "/work/repo" }));
+  const promptA = h.proxy.fromClient(
+    request(301, "session/prompt", {
+      sessionId: "s-conflict",
+      prompt: [{ type: "text", text: "prompt A" }],
+    }),
+  );
+  // Prompt B arrives while A is reserved -> MUST be refused synchronously!
+  await h.proxy.fromClient(
+    request(302, "session/prompt", {
+      sessionId: "s-conflict",
+      prompt: [{ type: "text", text: "prompt B must never run" }],
+    }),
+  );
+  // Stop cancels A before queue runs.
+  await h.proxy.fromClient({
+    jsonrpc: "2.0",
+    method: "session/cancel",
+    params: { sessionId: "s-conflict" },
+  });
+  gate.resolve();
+  await req0;
+  await promptA;
+
+  assert.equal(
+    h.agent.some((m) => m.method === "session/prompt"),
+    false,
+    "neither cancelled A nor conflicting B may reach agy",
+  );
+  const replyB = h.client.find((m) => m.id === 302);
+  assert.match(replyB?.error?.message ?? "", /already running/);
+});
+
+test("R2-M7: serveMcp keeps openCalls open under write backpressure until callback completes", async () => {
+  const writeHold = deferred();
+  const sent = [];
+  const stream = new Duplex({
+    read() {},
+    write(chunk, _enc, cb) {
+      sent.push(chunk.toString("utf8"));
+      writeHold.promise.then(() => cb());
+    },
+  });
+  const conn = makeFakeConnection();
+  const facade = new Facade(conn, { root: "/work/repo", shell: "/bin/sh" });
+  facade.answer = async () => ({ content: [{ type: "text", text: "buffered-ok" }] });
+  serveMcp(stream, facade, () => "s-bp");
+
+  facade.beginTurn("s-bp", { wrapUp: { pending: false, delivered: false } });
+  stream.push(
+    `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "ReadFile", arguments: { path: "x" } } })}\n`,
+  );
+  await flush();
+  await flush();
+
+  // stream.write has been called, but its callback hasn't fired yet -> openCalls MUST still be > 0!
+  assert.equal(sent.length, 1);
+  assert.ok((facade.sessions.get("s-bp")?.turn?.openCalls ?? 0) > 0);
+
+  // Turn ends while write is still buffered -> relay MUST be marked ambiguous!
+  await facade.endTurn("s-bp", { cancelled: false, errored: false });
+  facade.detachTurn("s-bp", { cancelled: false, errored: false });
+  assert.equal(facade.sessions.get("s-bp")?.ambiguousRelays.size, 1);
+
+  writeHold.resolve();
+  await flush();
+  stream.destroy();
+});

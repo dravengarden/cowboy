@@ -528,12 +528,13 @@ export async function runProxy({
   // replies so any uncertainty from `attemptCleanup` settles ahead of TurnEnd.
   ready?.facade.quiesce();
   const drainBudgetMs = Math.max(DRAIN_MS, ready?.facade.remainingRootStopMs() ?? 0);
-  const deadline = Date.now() + drainBudgetMs;
-  if (
-    (await ready?.facade.settled(drainBudgetMs)) &&
-    (await ready.connection.idle(Math.max(0, deadline - Date.now())))
-  ) {
-    await ready.connection.drained(Math.max(1, deadline - Date.now()));
+  const settledOk = await ready?.facade.settled(drainBudgetMs);
+  if (settledOk) {
+    const flushBudgetMs = Math.max(DRAIN_MS, ready.facade.remainingRootStopMs());
+    const flushDeadline = Date.now() + flushBudgetMs;
+    if (await ready.connection.idle(Math.max(1, flushDeadline - Date.now()))) {
+      await ready.connection.drained(Math.max(1, flushDeadline - Date.now()));
+    }
   }
   // Now answer each open prompt with settled signals (and open-command uncertainty).
   proxy.settleExit();

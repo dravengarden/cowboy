@@ -131,15 +131,18 @@ fn current_executable() -> Option<String> {
         .map(|path| path.display().to_string())
 }
 
+fn snapshot_is_managed_read_only(snapshot: &WorkerSnapshot) -> bool {
+    snapshot
+        .launch
+        .as_ref()
+        .and_then(|launch| launch.execution_binding.as_ref())
+        .and_then(crate::execution_environment::ExecutionBinding::managed)
+        .is_some()
+}
+
 impl Shared {
     fn managed_read_only(&self) -> bool {
-        self.snapshot
-            .lock()
-            .launch
-            .as_ref()
-            .and_then(|launch| launch.execution_binding.as_ref())
-            .and_then(crate::execution_environment::ExecutionBinding::managed)
-            .is_some()
+        snapshot_is_managed_read_only(&self.snapshot.lock())
     }
 
     fn emit(&self, event: RuntimeEvent) -> u64 {
@@ -281,7 +284,7 @@ impl Shared {
     }
 
     pub(super) fn raw_wrap_up_launch_eligible_inner(&self, snapshot: &WorkerSnapshot) -> bool {
-        !self.managed_read_only()
+        !snapshot_is_managed_read_only(snapshot)
             && snapshot.launch.as_ref().is_some_and(|launch| {
                 crate::wrap_up::is_antigravity_provider(&launch.provider)
                     && crate::wrap_up::semver_at_least(
@@ -708,7 +711,7 @@ async fn run_with_shutdown(
         })
         .context("spawning ACP worker thread")?;
 
-    let result = connection_loop_or_sigterm(
+    let result = connection_loop(
         &args.socket,
         shared,
         cmd_tx,
@@ -725,36 +728,24 @@ async fn run_with_shutdown(
     result
 }
 
-async fn connection_loop_or_sigterm(
-    socket: &PathBuf,
-    shared: Arc<Shared>,
-    cmd_tx: mpsc::UnboundedSender<AgentCommand>,
-    notify_rx: mpsc::UnboundedReceiver<()>,
-    done_rx: &mut mpsc::Receiver<()>,
-    sigterm_rx: Option<tokio::sync::oneshot::Receiver<()>>,
-) -> Result<()> {
-    let Some(sigterm) = sigterm_rx else {
-        return connection_loop(socket, shared, cmd_tx, notify_rx, done_rx).await;
-    };
-    let sigterm_fired = {
-        let mut loop_fut = std::pin::pin!(connection_loop(
-            socket,
-            shared,
-            cmd_tx.clone(),
-            notify_rx,
-            done_rx,
-        ));
-        tokio::select! {
-            res = &mut loop_fut => return res,
-            _ = sigterm => true,
-        }
-    };
-    if sigterm_fired {
-        let _ = cmd_tx.send(AgentCommand::Cancel);
-        drop(cmd_tx);
-        let _ = tokio::time::timeout(Duration::from_secs(8), done_rx.recv()).await;
+/// Fence new target effects, cancel any running turn, close the ACP command
+/// channel, and arm a bounded settlement deadline WITHOUT severing the broker
+/// transport so execution replies and uncertainty outbox frames keep pumping.
+fn trigger_sigterm_settlement(
+    shared: &Arc<Shared>,
+    cmd_tx: &mut Option<mpsc::UnboundedSender<AgentCommand>>,
+    shutdown_deadline: &mut Option<tokio::time::Instant>,
+) {
+    if shutdown_deadline.is_some() {
+        return;
     }
-    Ok(())
+    if let Some(execution) = &shared.execution {
+        execution.cancel_turn();
+    }
+    if let Some(tx) = cmd_tx.take() {
+        let _ = tx.send(AgentCommand::Cancel);
+    }
+    *shutdown_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(8));
 }
 
 async fn connection_loop(
@@ -763,10 +754,15 @@ async fn connection_loop(
     cmd_tx: mpsc::UnboundedSender<AgentCommand>,
     mut notify_rx: mpsc::UnboundedReceiver<()>,
     done_rx: &mut mpsc::Receiver<()>,
+    mut sigterm_rx: Option<tokio::sync::oneshot::Receiver<()>>,
 ) -> Result<()> {
     let mut backoff = BROKER_RECONNECT_INITIAL_DELAY;
     let mut cmd_tx = Some(cmd_tx);
+    let mut shutdown_deadline: Option<tokio::time::Instant> = None;
     loop {
+        if shutdown_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+            return Ok(());
+        }
         let stream = match UnixStream::connect(socket).await {
             Ok(stream) => stream,
             Err(error) => {
@@ -777,7 +773,17 @@ async fn connection_loop(
                     retry_after_ms = backoff.as_millis(),
                     "Machine broker unavailable; worker keeps running"
                 );
-                wait_for_broker_retry(&mut backoff).await;
+                if wait_for_retry_or_sigterm(
+                    &mut backoff,
+                    &shared,
+                    &mut cmd_tx,
+                    &mut sigterm_rx,
+                    &mut shutdown_deadline,
+                )
+                .await
+                {
+                    return Ok(());
+                }
                 continue;
             }
         };
@@ -788,6 +794,8 @@ async fn connection_loop(
             &mut cmd_tx,
             &mut notify_rx,
             done_rx,
+            &mut sigterm_rx,
+            &mut shutdown_deadline,
         )
         .await;
         if connected_at.elapsed() >= BROKER_CONNECTION_STABLE_AFTER {
@@ -814,13 +822,49 @@ async fn connection_loop(
                 );
             }
         }
-        wait_for_broker_retry(&mut backoff).await;
+        if wait_for_retry_or_sigterm(
+            &mut backoff,
+            &shared,
+            &mut cmd_tx,
+            &mut sigterm_rx,
+            &mut shutdown_deadline,
+        )
+        .await
+        {
+            return Ok(());
+        }
     }
 }
 
-async fn wait_for_broker_retry(backoff: &mut Duration) {
-    tokio::time::sleep(*backoff).await;
-    *backoff = (*backoff * 2).min(BROKER_RECONNECT_MAX_DELAY);
+async fn wait_for_retry_or_sigterm(
+    backoff: &mut Duration,
+    shared: &Arc<Shared>,
+    cmd_tx: &mut Option<mpsc::UnboundedSender<AgentCommand>>,
+    sigterm_rx: &mut Option<tokio::sync::oneshot::Receiver<()>>,
+    shutdown_deadline: &mut Option<tokio::time::Instant>,
+) -> bool {
+    let sleep = tokio::time::sleep(*backoff);
+    tokio::pin!(sleep);
+    tokio::select! {
+        () = &mut sleep => {
+            *backoff = (*backoff * 2).min(BROKER_RECONNECT_MAX_DELAY);
+            shutdown_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline)
+        }
+        _ = async {
+            if let Some(rx) = sigterm_rx.as_mut() {
+                let _ = rx.await;
+            }
+        }, if sigterm_rx.is_some() => {
+            *sigterm_rx = None;
+            trigger_sigterm_settlement(shared, cmd_tx, shutdown_deadline);
+            false
+        }
+        () = async {
+            if let Some(deadline) = *shutdown_deadline {
+                tokio::time::sleep_until(deadline).await;
+            }
+        }, if shutdown_deadline.is_some() => true,
+    }
 }
 
 enum ConnectedExit {
@@ -829,14 +873,11 @@ enum ConnectedExit {
     Rejected { reason: String },
 }
 
-async fn connected(
-    stream: UnixStream,
-    shared: Arc<Shared>,
-    cmd_tx: &mut Option<mpsc::UnboundedSender<AgentCommand>>,
-    notify_rx: &mut mpsc::UnboundedReceiver<()>,
-    done_rx: &mut mpsc::Receiver<()>,
-) -> Result<ConnectedExit> {
-    let (mut reader, mut writer) = stream.into_split();
+async fn handshake_broker(
+    shared: &Shared,
+    reader: &mut tokio::net::unix::OwnedReadHalf,
+    writer: &mut tokio::net::unix::OwnedWriteHalf,
+) -> Result<Option<ConnectedExit>> {
     let minimum_protocol = shared.snapshot.lock().launch.as_ref().map_or(
         if shared.execution.is_some() {
             2
@@ -846,7 +887,7 @@ async fn connected(
         crate::runtime_wire::StartSession::minimum_protocol,
     );
     write_frame(
-        &mut writer,
+        writer,
         &Frame::Hello {
             role: PeerRole::Worker,
             min_protocol: minimum_protocol,
@@ -861,7 +902,7 @@ async fn connected(
         },
     )
     .await?;
-    match read_frame(&mut reader).await? {
+    match read_frame(reader).await? {
         Some(Frame::Welcome { protocol, .. }) => {
             anyhow::ensure!(
                 (minimum_protocol..=PROTOCOL_VERSION).contains(&protocol),
@@ -873,17 +914,33 @@ async fn connected(
                 .store(protocol, Ordering::Relaxed);
             shared.recompute_wrap_up_steering();
         }
-        Some(Frame::Reject { reason }) => return Ok(ConnectedExit::Rejected { reason }),
+        Some(Frame::Reject { reason }) => return Ok(Some(ConnectedExit::Rejected { reason })),
         Some(other) => anyhow::bail!("unexpected Machine broker handshake frame: {other:?}"),
-        None => return Ok(ConnectedExit::Disconnected),
+        None => return Ok(Some(ConnectedExit::Disconnected)),
     }
     write_frame(
-        &mut writer,
+        writer,
         &Frame::Snapshot {
             worker: Box::new(shared.snapshot()),
         },
     )
     .await?;
+    Ok(None)
+}
+
+async fn connected(
+    stream: UnixStream,
+    shared: Arc<Shared>,
+    cmd_tx: &mut Option<mpsc::UnboundedSender<AgentCommand>>,
+    notify_rx: &mut mpsc::UnboundedReceiver<()>,
+    done_rx: &mut mpsc::Receiver<()>,
+    sigterm_rx: &mut Option<tokio::sync::oneshot::Receiver<()>>,
+    shutdown_deadline: &mut Option<tokio::time::Instant>,
+) -> Result<ConnectedExit> {
+    let (mut reader, mut writer) = stream.into_split();
+    if let Some(exit) = handshake_broker(&shared, &mut reader, &mut writer).await? {
+        return Ok(exit);
+    }
     let mut reader = FrameReader::new(reader);
     let mut last_sent = 0;
     // `done_rx.recv()` becomes immediately ready forever after its sender is
@@ -971,6 +1028,23 @@ async fn connected(
             _ = heartbeat.tick() => {
                 write_frame(&mut writer, &Frame::Heartbeat).await?;
                 send_outbox(&shared, &mut writer, &mut last_sent).await?;
+            }
+            _ = async {
+                if let Some(rx) = sigterm_rx.as_mut() {
+                    let _ = rx.await;
+                }
+            }, if sigterm_rx.is_some() => {
+                *sigterm_rx = None;
+                trigger_sigterm_settlement(&shared, cmd_tx, shutdown_deadline);
+                send_outbox(&shared, &mut writer, &mut last_sent).await?;
+            }
+            () = async {
+                if let Some(deadline) = *shutdown_deadline {
+                    tokio::time::sleep_until(deadline).await;
+                }
+            }, if shutdown_deadline.is_some() => {
+                let _ = send_outbox(&shared, &mut writer, &mut last_sent).await;
+                return Ok(ConnectedExit::WorkerDrained);
             }
         }
     }
@@ -1478,6 +1552,70 @@ mod tests {
     }
 
     #[test]
+    fn remote_sink_startup_capability_discovery_and_hint_target_check_never_deadlock() {
+        for (provider, version, digest, managed, expected_eligible) in [
+            ("antigravity", "0.2.35", "sha256:abc", false, true),
+            ("antigravity", "0.2.35", "sha256:abc", true, false),
+            ("codex", "0.9.0", "sha256:def", false, false),
+        ] {
+            let (shared, _notify) = shared();
+            let mut launch_json = serde_json::json!({
+                "session_id": "sess-1",
+                "provider": provider,
+                "provider_version": version,
+                "provider_generation_digest": digest,
+                "cwd": "/tmp",
+                "generation": "gen-1",
+            });
+            if managed {
+                launch_json["execution_binding"] = serde_json::json!({
+                    "schema": 1,
+                    "phase": "managed_child",
+                    "session_id": "sess-1",
+                    "parent_session_id": "parent-1",
+                    "machine_id": "hawk",
+                    "workspace_id": "cowboy",
+                    "cwd": "/tmp",
+                    "profile": "read_only_v1"
+                });
+            }
+            {
+                let mut snap = shared.snapshot.lock();
+                snap.current_turn_id = Some("turn-1".into());
+                snap.launch = Some(serde_json::from_value(launch_json).unwrap());
+            }
+            shared.raw_wrap_up_steering.store(true, Ordering::Relaxed);
+            shared.observation.peer_protocol.store(
+                crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION,
+                Ordering::Relaxed,
+            );
+            let sink = RemoteSink {
+                shared: Arc::clone(&shared),
+            };
+            assert_eq!(
+                sink.raw_wrap_up_launch_eligible("sess-1"),
+                expected_eligible,
+                "{provider}/{managed}"
+            );
+            shared.recompute_wrap_up_steering();
+            assert_eq!(
+                shared.snapshot().wrap_up_steering,
+                expected_eligible,
+                "{provider}/{managed}"
+            );
+            let target = crate::send_delivery::DeliveryTarget {
+                worker_epoch: shared.worker_epoch.clone(),
+                turn_id: "turn-1".into(),
+            };
+            assert_eq!(
+                sink.wrap_up_target_matches("sess-1", &target),
+                expected_eligible,
+                "{provider}/{managed}"
+            );
+        }
+    }
+
+    #[test]
     fn managed_read_only_blocks_configuration_at_worker_admission_and_projection() {
         let (shared, _notify) = shared();
         let sink = RemoteSink {
@@ -1751,7 +1889,7 @@ mod tests {
         let (cmd_tx, _cmd_rx) = mpsc::unbounded_channel();
         let (_done_tx, mut done_rx) = mpsc::channel(1);
         let worker = tokio::spawn(async move {
-            connection_loop(&socket, shared, cmd_tx, notify_rx, &mut done_rx).await
+            connection_loop(&socket, shared, cmd_tx, notify_rx, &mut done_rx, None).await
         });
         let (mut broker, _) = listener.accept().await.unwrap();
         assert!(matches!(
@@ -1863,7 +2001,7 @@ mod tests {
         let (_done_tx, mut done_rx) = mpsc::channel(1);
         let error = tokio::time::timeout(
             Duration::from_secs(1),
-            connection_loop(&socket, shared, cmd_tx, notify_rx, &mut done_rx),
+            connection_loop(&socket, shared, cmd_tx, notify_rx, &mut done_rx, None),
         )
         .await
         .expect("rejected worker exits promptly")
@@ -1983,7 +2121,7 @@ mod tests {
         });
         tokio::time::timeout(
             Duration::from_secs(2),
-            connection_loop(&socket, shared, cmd_tx, notify_rx, &mut done_rx),
+            connection_loop(&socket, shared, cmd_tx, notify_rx, &mut done_rx, None),
         )
         .await
         .expect("stopped worker exits promptly")

@@ -720,6 +720,9 @@ async fn binding_capabilities(
                 output.extend_from_slice(&bytes);
             }
         }
+        if result.get("closed") == Some(&Value::Bool(true)) {
+            ledger.closed(&process);
+        }
         if result.get("exited") == Some(&Value::Bool(true)) {
             ledger.exited(&process);
             if result.get("exitCode").and_then(Value::as_i64) != Some(0) || output.len() > 4096 {

@@ -725,7 +725,33 @@ export class AcpProxy {
         );
       }
     }
-    const preReserved = this.reserveIncomingPrompt(message);
+    let preReserved;
+    if (
+      message !== null &&
+      typeof message === "object" &&
+      !Array.isArray(message) &&
+      message.id !== undefined &&
+      message.method === "session/prompt"
+    ) {
+      if (this.closing) {
+        this.refuse(message.id, "Antigravity proxy is shutting down", -32603);
+        return Promise.resolve();
+      }
+      const sessionId = message.params?.sessionId;
+      if (typeof sessionId !== "string") {
+        this.refuse(message.id, "sessionId is required", -32602);
+        return Promise.resolve();
+      }
+      if (this.turns.has(sessionId) || this.reservedTurns.has(sessionId)) {
+        this.refuse(message.id, "A turn is already running in this session", -32603);
+        return Promise.resolve();
+      }
+      preReserved = this.reserveIncomingPrompt(message);
+      if (!preReserved) {
+        this.refuse(message.id, "A turn is already running in this session", -32603);
+        return Promise.resolve();
+      }
+    }
     this.queue = this.queue
       .then(() => this.handleClient(message, preReserved))
       .catch((error) => this.log(`client message failed: ${error.message}`));
@@ -751,6 +777,10 @@ export class AcpProxy {
 
   async handleClientInner(message, preReserved, markPromoted) {
     if (message === null || typeof message !== "object" || Array.isArray(message)) return;
+    const refuseClient = (reqId, msg, code = -32601) => {
+      if (preReserved) this.releaseReservation(preReserved.sessionId, preReserved);
+      return this.refuse(reqId, msg, code);
+    };
     if (
       preReserved &&
       (preReserved.cancelled ||
@@ -790,20 +820,20 @@ export class AcpProxy {
       return await this.cancel(message);
     }
     if (!RUNTIME_REQUESTS.includes(method)) {
-      return this.refuse(id, `${method} is not available in a Cowboy Antigravity session`);
+      return refuseClient(id, `${method} is not available in a Cowboy Antigravity session`);
     }
     let runtime;
     try {
       runtime = await this.runtime;
     } catch (error) {
-      return this.refuse(id, `cowboy_antigravity_unavailable: ${error.message}`, -32603);
+      return refuseClient(id, `cowboy_antigravity_unavailable: ${error.message}`, -32603);
     }
     if (runtime.managed) {
       if (!managedConfigAllowed(method, message.params)) {
-        return this.refuse(id, `${method} is not available in a Cowboy managed call`, -32602);
+        return refuseClient(id, `${method} is not available in a Cowboy managed call`, -32602);
       }
       const refusal = this.managedSessionRefusal(method, message.params);
-      if (refusal) return this.refuse(id, refusal, -32602);
+      if (refusal) return refuseClient(id, refusal, -32602);
       if (method === "session/new") this.managedOpening = true;
     }
     const forwarded = structuredClone(message);
@@ -847,37 +877,33 @@ export class AcpProxy {
         forwarded.params = params;
       } catch (error) {
         if (method === "session/new") this.managedOpening = false;
-        return this.refuse(id, `cowboy_antigravity_unavailable: ${error.message}`, -32603);
+        return refuseClient(id, `cowboy_antigravity_unavailable: ${error.message}`, -32603);
       }
     } else if (method === "session/prompt") {
-      if (preReserved) {
-        if (
-          preReserved.cancelled ||
-          this.closing ||
-          preReserved.record.finalized ||
-          this.reservedTurns.get(preReserved.sessionId) !== preReserved ||
-          (this.cancelGen.get(preReserved.sessionId) ?? 0) !== preReserved.cancelGen
-        ) {
-          this.releaseReservation(preReserved.sessionId, preReserved);
-          if (!preReserved.record.finalized) {
-            this.endPrompt(preReserved.record, {
-              jsonrpc: "2.0",
-              id,
-              result: { stopReason: "cancelled" },
-            });
-          }
-          return;
+      // Every queued session/prompt MUST carry its original synchronous reservation.
+      if (!preReserved) {
+        return refuseClient(id, "A turn is already running in this session", -32603);
+      }
+      if (
+        preReserved.cancelled ||
+        this.closing ||
+        preReserved.record.finalized ||
+        this.reservedTurns.get(preReserved.sessionId) !== preReserved ||
+        (this.cancelGen.get(preReserved.sessionId) ?? 0) !== preReserved.cancelGen
+      ) {
+        this.releaseReservation(preReserved.sessionId, preReserved);
+        if (!preReserved.record.finalized) {
+          this.endPrompt(preReserved.record, {
+            jsonrpc: "2.0",
+            id,
+            result: { stopReason: "cancelled" },
+          });
         }
-      } else if (this.closing) {
-        return this.refuse(id, "Antigravity proxy is shutting down", -32603);
+        return;
       }
-      const sessionId = forwarded.params?.sessionId;
-      if (typeof sessionId !== "string") return this.refuse(id, "sessionId is required", -32602);
-      if (!preReserved && (this.turns.has(sessionId) || this.reservedTurns.has(sessionId))) {
-        return this.refuse(id, "A turn is already running in this session", -32603);
-      }
+      const sessionId = preReserved.sessionId;
       // Copy and strip private attemptNonce synchronously before any await or `agy` send.
-      let attemptNonce = preReserved?.attemptNonce;
+      let attemptNonce = preReserved.attemptNonce;
       if (
         forwarded.params?._meta &&
         typeof forwarded.params._meta === "object" &&
@@ -895,54 +921,29 @@ export class AcpProxy {
           delete forwarded.params._meta;
         }
       }
-      const promptRecord = preReserved
-        ? Object.assign(preReserved.record, record)
-        : Object.assign(record, { sessionId, finalized: false });
+      const promptRecord = Object.assign(preReserved.record, record);
       let stagedSeal = undefined;
       if (runtime.managed) {
         const admitted = managedPrompt(forwarded.params);
-        if (admitted.error) return this.refuse(id, admitted.error, -32602);
+        if (admitted.error) return refuseClient(id, admitted.error, -32602);
         forwarded.params = admitted.params;
         const refusal = admitted.schema && schemaRefusal(admitted.schema);
-        if (refusal) return this.refuse(id, `A managed Antigravity round's ${refusal}`, -32602);
+        if (refusal) return refuseClient(id, `A managed Antigravity round's ${refusal}`, -32602);
         stagedSeal = Boolean(admitted.schema);
         if (admitted.schema) {
           promptRecord.schema = admitted.schema;
           forwarded.params.prompt = [...forwarded.params.prompt, contractBlock(admitted.schema)];
         }
       } else if (hasManagedRound(forwarded.params)) {
-        return this.refuse(id, "This Antigravity session is not a Cowboy managed call", -32602);
+        return refuseClient(id, "This Antigravity session is not a Cowboy managed call", -32602);
       }
       promptRecord.sessionId = sessionId;
       const prompt = forwarded.params?.prompt;
       const stagedCompaction = this.compaction.begin(prompt);
-      let reserved;
-      let cancelPromise;
-      if (preReserved) {
-        reserved = preReserved;
-        reserved.compacting = Boolean(stagedCompaction);
-        reserved.structured = Boolean(promptRecord.schema);
-        cancelPromise = preReserved.cancelPromise;
-      } else {
-        let cancelResolve;
-        cancelPromise = new Promise((resolve) => {
-          cancelResolve = resolve;
-        });
-        reserved = {
-          id,
-          sessionId,
-          record: promptRecord,
-          attemptNonce,
-          compacting: Boolean(stagedCompaction),
-          structured: Boolean(promptRecord.schema),
-          wrapUp: { pending: false, delivered: false },
-          cancelled: false,
-          cancelGen: this.cancelGen.get(sessionId) ?? 0,
-          cancelResolve,
-          cancelPromise,
-        };
-        this.reservedTurns.set(sessionId, reserved);
-      }
+      const reserved = preReserved;
+      reserved.compacting = Boolean(stagedCompaction);
+      reserved.structured = Boolean(promptRecord.schema);
+      const cancelPromise = preReserved.cancelPromise;
       try {
         const text = promptText(prompt);
         let stagedPrompt = forwarded.params.prompt;

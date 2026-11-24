@@ -39,6 +39,36 @@ impl WrapUpHintSlot {
         self.pending.lock().take()
     }
 
+    /// Clear any queued hint whose `turn_id` matches `turn_id`.
+    pub fn clear_if_turn(&self, turn_id: &str) {
+        let mut guard = self.pending.lock();
+        if guard
+            .as_ref()
+            .is_some_and(|target| target.turn_id == turn_id)
+        {
+            *guard = None;
+        }
+    }
+}
+
+/// Synchronously fence any active wrap-up attempt and pending hint slot for
+/// `turn_id` upon accepting `CancelTurn`, before the async target-check task runs.
+pub fn fence_cancel_turn_hint(
+    active: Option<&ActiveWrapUp>,
+    slot: Option<&WrapUpHintSlot>,
+    turn_id: &str,
+) {
+    if let Some(active) = active
+        && active.turn_id.as_deref() == Some(turn_id)
+    {
+        active.mark_cancelled();
+    }
+    if let Some(slot) = slot {
+        slot.clear_if_turn(turn_id);
+    }
+}
+
+impl WrapUpHintSlot {
     pub async fn notified(&self) {
         self.notify.notified().await;
     }
@@ -221,10 +251,29 @@ pub fn dispatch_pending_wrap_up_hint<F>(
     let Some(attempt_nonce) = active.claim_hint_nonce(&target.turn_id) else {
         return;
     };
+    if !encoded_acp_wrap_up_hint_within_limit(acp_id, &attempt_nonce) {
+        return;
+    }
     let _ = cx.send_notification(WrapUpHintNotification {
         session_id: acp_id.clone(),
         attempt_nonce,
     });
+}
+
+/// Measure the complete JSON-RPC `cowboy/wrapUpHint` notification wire frame
+/// (with the provider-supplied native `sessionId`) against the 512-byte cap so
+/// an oversized native session ID cannot bloat the shared ACP stdin lane.
+#[must_use]
+pub fn encoded_acp_wrap_up_hint_within_limit(acp_id: &SessionId, attempt_nonce: &str) -> bool {
+    let envelope = serde_json::json!({
+        "jsonrpc": "2.0",
+        "method": "cowboy/wrapUpHint",
+        "params": {
+            "sessionId": acp_id,
+            "attemptNonce": attempt_nonce,
+        }
+    });
+    crate::wrap_up::wrap_up_hint_within_size_limit(&envelope)
 }
 
 #[cfg(test)]
@@ -249,6 +298,28 @@ mod tests {
         assert_eq!(update["nextCheckpoint"], false);
         assert_eq!(update["wrapUpSteering"], true);
         assert!(eligible);
+
+        assert!(encoded_acp_wrap_up_hint_within_limit(
+            &SessionId::new("native-session-1"),
+            "0123456789abcdef0123456789abcdef"
+        ));
+        assert!(!encoded_acp_wrap_up_hint_within_limit(
+            &SessionId::new("x".repeat(500)),
+            "0123456789abcdef0123456789abcdef"
+        ));
+        let slot = WrapUpHintSlot::new();
+        slot.set(DeliveryTarget {
+            worker_epoch: "e1".into(),
+            turn_id: "t1".into(),
+        });
+        slot.clear_if_turn("t2");
+        assert!(slot.take().is_some());
+        slot.set(DeliveryTarget {
+            worker_epoch: "e1".into(),
+            turn_id: "t1".into(),
+        });
+        slot.clear_if_turn("t1");
+        assert!(slot.take().is_none());
 
         // Pre-P2 launch refuses wrap-up even if untrusted init meta spoofs it.
         let (pre_p2, pre_eligible) =

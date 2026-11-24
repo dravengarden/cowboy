@@ -52,18 +52,14 @@ impl WrapUpState {
         })
     }
 
-    pub(super) fn record_raw_and_sanitize(
+    pub(super) fn sanitize_snapshot(
         &self,
         worker: &mut WorkerSnapshot,
+        raw: bool,
         machine_protocol: u16,
         runtime_protocol: u16,
         hub: &Hub,
     ) {
-        let raw = worker.wrap_up_steering;
-        self.raw_wrap_up.lock().insert(
-            (worker.session_id.clone(), worker.worker_epoch.clone()),
-            raw,
-        );
         let provider = resolved_provider(worker, hub);
         clamp_delivery_capabilities_for_provider(
             provider.as_deref(),
@@ -77,6 +73,14 @@ impl WrapUpState {
             runtime_protocol,
             self.config_enabled(),
         );
+    }
+
+    /// Record raw capability while caller holds `shared.workers.lock()` so a
+    /// concurrent `recompute_all` can never prune an incoming replacement epoch.
+    pub(super) fn record_raw_locked(&self, session_id: &str, worker_epoch: &str, raw: bool) {
+        self.raw_wrap_up
+            .lock()
+            .insert((session_id.to_owned(), worker_epoch.to_owned()), raw);
     }
 
     pub(super) fn record_raw_event(
@@ -110,17 +114,19 @@ impl WrapUpState {
     }
 
     pub(super) fn recompute_all(&self, shared: &Shared) {
-        if !shared.connected.load(Ordering::Acquire) || shared.shutdown.load(Ordering::Acquire) {
+        // Hold `projection_fence` across the entire recompute + Hub publication
+        // so `disconnect()` serializes against it and a superseded runtime can
+        // never publish stale capabilities after a replacement runtime connects.
+        let fenced = shared.projection_fence.lock();
+        if *fenced
+            || !shared.connected.load(Ordering::Acquire)
+            || shared.shutdown.load(Ordering::Acquire)
+        {
             return;
         }
         let _projection = shared.hub.runtime_projection_guard();
-        if !shared.connected.load(Ordering::Acquire) || shared.shutdown.load(Ordering::Acquire) {
-            return;
-        }
         let runtime_protocol = shared.protocol.load(Ordering::Acquire);
         let enabled = self.config_enabled();
-        // Recompute under `workers.lock()`, then drop the lock BEFORE calling
-        // `snapshot::admits_worker` (which may lock `workers` on Reclassified epochs).
         let updated: Vec<WorkerSnapshot> = {
             let mut workers = shared.workers.lock();
             let mut raw_map = self.raw_wrap_up.lock();
@@ -155,7 +161,13 @@ impl WrapUpState {
                 .collect()
         };
         for worker in &updated {
-            if !super::foreign_session(shared, &worker.session_id)
+            let still_current = shared
+                .workers
+                .lock()
+                .get(&worker.session_id)
+                .is_some_and(|current| current.worker_epoch == worker.worker_epoch);
+            if still_current
+                && !super::foreign_session(shared, &worker.session_id)
                 && super::snapshot::admits_worker(shared, worker)
             {
                 shared
@@ -261,6 +273,13 @@ impl super::RemoteRuntime {
 }
 
 impl super::Shared {
+    pub(super) fn install_worker_with_raw_wrap_up(&self, worker: WorkerSnapshot, raw_wrap: bool) {
+        let mut workers = self.workers.lock();
+        self.wrap_up
+            .record_raw_locked(&worker.session_id, &worker.worker_epoch, raw_wrap);
+        workers.insert(worker.session_id.clone(), worker);
+    }
+
     pub(super) fn apply_wrap_up_capability_update(
         &self,
         session_id: &str,
@@ -393,6 +412,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn superseded_or_disconnected_runtime_refresh_never_overwrites_hub() {
         let hub = Hub::new();
         hub.create_session(crate::core::SessionRegistration {
@@ -426,13 +446,21 @@ mod tests {
         old_runtime.shared.connected.store(true, Ordering::Release);
         old_runtime.shared.shutdown.store(true, Ordering::Release);
         let mut snap = busy_snapshot("s1", "e-old", false);
-        old_runtime.shared.wrap_up.record_raw_and_sanitize(
+        old_runtime.shared.wrap_up.sanitize_snapshot(
             &mut snap,
+            false,
             WRAP_UP_STEERING_PROTOCOL_VERSION,
             WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION,
             &hub,
         );
-        old_runtime.shared.workers.lock().insert("s1".into(), snap);
+        {
+            let mut workers = old_runtime.shared.workers.lock();
+            old_runtime
+                .shared
+                .wrap_up
+                .record_raw_locked("s1", "e-old", false);
+            workers.insert("s1".into(), snap);
+        }
         old_runtime.refresh_wrap_up_steering();
         assert!(hub.session_info("s1").unwrap().meta.wrap_up_steering);
 
@@ -492,5 +520,71 @@ mod tests {
             .insert("s2".into(), busy_snapshot("s2", "e-new", false));
         disconnected.refresh_wrap_up_steering();
         assert!(hub.session_info("s2").unwrap().meta.wrap_up_steering);
+
+        // Projection-fenced runtime (as set by disconnect()) must never publish.
+        let fenced_rt = super::super::RemoteRuntime::for_test(hub.clone(), Vec::new());
+        fenced_rt
+            .shared
+            .protocol
+            .store(WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION, Ordering::Release);
+        fenced_rt.shared.connected.store(true, Ordering::Release);
+        *fenced_rt.shared.projection_fence.lock() = true;
+        fenced_rt
+            .shared
+            .workers
+            .lock()
+            .insert("s2".into(), busy_snapshot("s2", "e-fenced", false));
+        fenced_rt.refresh_wrap_up_steering();
+        assert!(hub.session_info("s2").unwrap().meta.wrap_up_steering);
+    }
+
+    #[tokio::test]
+    async fn replacement_worker_with_unacknowledged_uncertain_effect_requeues_admitted_prompt() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s-unc".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "s-unc".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.set_setting(
+            format!(
+                "{}s-unc",
+                crate::core::settings_keys::SESSION_UNCERTAIN_EFFECT_ACK_PREFIX
+            ),
+            serde_json::json!({"observed": 1, "acknowledged": 1, "method": "process/terminate"}),
+        );
+        let rt = super::super::RemoteRuntime::for_test(hub.clone(), Vec::new());
+        rt.shared.config_startups.lock().insert("s-unc".into());
+        rt.shared.pending.lock().insert(
+            "prompt-1".into(),
+            CoreCommand::Prompt {
+                session_id: "s-unc".into(),
+                command_id: "prompt-1".into(),
+                turn_id: "turn-new".into(),
+                content: vec![serde_json::json!({"type": "text", "text": "next step"})],
+                cmid: Some("cmid-1".into()),
+                trace: None,
+                echo_artifacts: false,
+                observe_subagents: false,
+            },
+        );
+        let mut replacement = busy_snapshot("s-unc", "epoch-2", true);
+        replacement.state = WorkerState::Running;
+        replacement.current_turn_id = None;
+        replacement.config_options = Some(serde_json::json!([]));
+        replacement.uncertain_effect = Some(crate::runtime_wire::UncertainEffect {
+            method: "process/terminate".into(),
+            sequence: 2,
+        });
+        super::super::config_sync::sync_config_for_worker(&rt.shared, &replacement);
+        assert!(
+            rt.shared.pending.lock().is_empty(),
+            "admitted prompt must be withdrawn from pending instead of woken"
+        );
+        let (queue, _) = hub.queue_and_drafts("s-unc", |_| true).unwrap();
+        assert_eq!(queue.len(), 1, "withdrawn prompt must return to Hub queue");
     }
 }

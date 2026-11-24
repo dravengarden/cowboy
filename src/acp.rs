@@ -4761,6 +4761,11 @@ async fn run_session(
             }
             AgentCommand::CancelTurn { target, cmid } => {
                 let expected_prompt = state.current_prompt();
+                crate::acp_wrap_up::fence_cancel_turn_hint(
+                    expected_prompt.as_ref().map(|p| &p.wrap_up),
+                    state.sink.wrap_up_hint_slot(&session_id).as_deref(),
+                    &target.turn_id,
+                );
                 let connection = cx.clone();
                 let state = Arc::clone(state);
                 let acp_id = acp_id.clone();

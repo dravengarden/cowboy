@@ -375,7 +375,7 @@ async fn interrupt_once(
             return serde_json::json!({"status":"unknown","error":"Cancellation acknowledgement is unknown; queue held."});
         }
     }
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    let deadline = tokio::time::Instant::now() + force_cancel_grace(state, session);
     loop {
         match state.supervisor.delivery_turn_finished(session, target) {
             Ok(true) => break,

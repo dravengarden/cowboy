@@ -72,11 +72,10 @@ export interface DeliveryPickerProps {
 
 export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element | null {
   const desktop = useSurfaceProfile().kind === "desktop";
-  const [options, setOptions] = useState<DeliveryOptions | null>(null);
-  // Whether `options` came from this opening's read (authoritative) rather
-  // than the cache (policy and checkpoint support only, never a target).
-  const [fresh, setFresh] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const opening = useRef(0);
+  const wasOpen = useRef(false);
+  const [loaded, setLoaded] = useState<{ key: string; options: DeliveryOptions } | null>(null);
+  const [errorState, setErrorState] = useState<{ key: string; message: string } | null>(null);
   const list = useRef<HTMLUListElement>(null);
   const position = useRef<PopoverActions>(null);
   const interacted = useRef(false);
@@ -86,6 +85,12 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element | 
   // only a reply for this opening may choose the initial row.
   const optionsCurrent = useRef(false);
   const open = props.anchor !== null;
+  if (open && !wasOpen.current) opening.current += 1;
+  wasOpen.current = open;
+  const openingKey = open ? `${props.sessionId}:${opening.current}` : "";
+  const fresh = Boolean(open && loaded?.key === openingKey);
+  const options = fresh ? loaded!.options : (open ? cachedDeliveryOptions(props.sessionId) : null);
+  const error = errorState?.key === openingKey ? errorState.message : null;
   const anchorRect = useRef<DOMRect | null>(null);
   // Keyboard dismissal and busy/idle transitions can replace the real button.
   // Retain the last visible rect instead of letting Popover fall back to body.
@@ -129,22 +134,19 @@ export function DeliveryPicker(props: DeliveryPickerProps): React.JSX.Element | 
     // The default row comes from the best-known policy immediately; nothing
     // waits for the network to show or move.
     optionsCurrent.current = true;
-    setOptions(cachedDeliveryOptions(props.sessionId));
-    setFresh(false);
-    setError(null);
+    const key = openingKey;
     void readDeliveryOptionsRetrying(props.sessionId).then((value) => {
       if (!live) return;
-      setOptions(value);
-      setFresh(true);
+      setLoaded({ key, options: value });
     }).catch((reason: unknown) => {
-      if (live) setError(String(reason));
+      if (live) setErrorState({ key, message: String(reason) });
     });
     return () => {
       live = false;
       optionsCurrent.current = false;
       initializedFocus.current = false;
     };
-  }, [open, props.sessionId]);
+  }, [open, openingKey, props.sessionId]);
   const {
     target,
     steer,

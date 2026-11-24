@@ -1520,3 +1520,98 @@ async fn abrupt_worker_exit_with_live_process_parks_replacement_ledger_durably()
     );
     assert!(reopened.uncertain_sequence() > 0);
 }
+
+#[tokio::test]
+async fn durable_process_obligation_survives_exited_until_closed_and_mints_fresh_sequence_on_second_crash()
+ {
+    let dir = tempfile::tempdir().unwrap();
+    let ledger_path = dir.path().join("ledger.json");
+
+    // Crash 1: leader exited=true / closed=false + process/exited MUST retain obligation!
+    {
+        let target = Target::new(Arc::new(|inv| match inv.method.as_str() {
+            "process/start" => completed(json!({"result": {"processId": "p-tree"}})),
+            "process/read" => {
+                completed(json!({"result": {"chunks": [], "exited": true, "closed": false}}))
+            }
+            _ => completed(json!({"result": {}})),
+        }));
+        let l = ledger(&target.client, Some(ledger_path.clone()));
+        l.begin_turn("turn-1");
+        target
+            .client
+            .relay("process/start".into(), start("p-tree"))
+            .await;
+        target
+            .client
+            .relay(
+                "process/read".into(),
+                json!({"processId": "p-tree", "afterSeq": null, "maxBytes": 10, "waitMs": 0}),
+            )
+            .await;
+        target
+            .client
+            .observe_event(&json!({"method": "process/exited", "params": {"processId": "p-tree"}}));
+        // Abrupt crash without process/closed or closed=true!
+    }
+
+    let first_reopen = Ledger::open("session", Some(ledger_path.clone())).unwrap();
+    assert_eq!(
+        first_reopen.uncertain_effect().as_deref(),
+        Some("process/terminate"),
+        "exited=true/closed=false must NOT erase durable process obligation"
+    );
+    let seq1 = first_reopen.uncertain_sequence();
+    assert!(seq1 > 0);
+    drop(first_reopen);
+
+    // Crash 2 (after owner acknowledged seq1 in Controller): starting a second process
+    // and crashing again MUST mint a strictly greater sequence (seq2 > seq1)!
+    {
+        let target = Target::new(Arc::new(|inv| match inv.method.as_str() {
+            "process/start" => completed(json!({"result": {"processId": "p-second"}})),
+            _ => completed(json!({"result": {}})),
+        }));
+        let l = ledger(&target.client, Some(ledger_path.clone()));
+        l.begin_turn("turn-2");
+        target
+            .client
+            .relay("process/start".into(), start("p-second"))
+            .await;
+        // Abrupt crash 2!
+    }
+    let second_reopen = Ledger::open("session", Some(ledger_path.clone())).unwrap();
+    assert_eq!(
+        second_reopen.uncertain_effect().as_deref(),
+        Some("process/terminate")
+    );
+    let seq2 = second_reopen.uncertain_sequence();
+    assert!(
+        seq2 > seq1,
+        "second crash must mint a fresh sequence ({seq2} > {seq1}) even when method is unchanged"
+    );
+    drop(second_reopen);
+
+    // Verified process/closed clears the durable obligation cleanly (no sequence bump on reopen).
+    {
+        let target = Target::new(Arc::new(|inv| match inv.method.as_str() {
+            "process/start" => completed(json!({"result": {"processId": "p-clean"}})),
+            _ => completed(json!({"result": {}})),
+        }));
+        let l = ledger(&target.client, Some(ledger_path.clone()));
+        l.begin_turn("turn-3");
+        target
+            .client
+            .relay("process/start".into(), start("p-clean"))
+            .await;
+        target.client.observe_event(
+            &json!({"method": "process/closed", "params": {"processId": "p-clean"}}),
+        );
+    }
+    let third_reopen = Ledger::open("session", Some(ledger_path)).unwrap();
+    assert_eq!(
+        third_reopen.uncertain_sequence(),
+        seq2,
+        "process/closed cleared obligation so clean reopen does not bump sequence"
+    );
+}

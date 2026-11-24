@@ -86,6 +86,17 @@ pub(super) fn queue_persisted_config(
 }
 
 pub(super) fn sync_config_for_worker(shared: &Shared, worker: &WorkerSnapshot) {
+    if let Some(reason) = unacknowledged_uncertain_effect(&shared.hub, worker) {
+        let rejected = take_pending_prompts(shared, &worker.session_id);
+        for command in rejected {
+            notice_recovery::requeue_rejected_command(
+                shared,
+                &worker.session_id,
+                Some(command),
+                Some(reason.clone()),
+            );
+        }
+    }
     if !worker.has_connected_owner() || worker.config_options.is_none() {
         return;
     }
@@ -123,8 +134,50 @@ pub(super) fn sync_config_for_worker(shared: &Shared, worker: &WorkerSnapshot) {
         }
     };
     if released_startup || released_recovery {
-        let _ = shared.notify.send(());
+        if let Some(reason) = unacknowledged_uncertain_effect(&shared.hub, worker) {
+            let rejected = take_pending_prompts(shared, &worker.session_id);
+            for command in rejected {
+                notice_recovery::requeue_rejected_command(
+                    shared,
+                    &worker.session_id,
+                    Some(command),
+                    Some(reason.clone()),
+                );
+            }
+        } else {
+            let _ = shared.notify.send(());
+        }
     }
+}
+
+/// Check whether `worker` reports a newer `uncertain_effect` than the owner has
+/// acknowledged in Hub settings, so a replacement worker reviving on a prompt
+/// never runs an already-admitted prompt ahead of owner acknowledgment.
+pub(super) fn unacknowledged_uncertain_effect(
+    hub: &crate::core::Hub,
+    worker: &WorkerSnapshot,
+) -> Option<String> {
+    let effect = worker.uncertain_effect.as_ref()?;
+    let required = effect.sequence.max(1);
+    let key = format!(
+        "{}{}",
+        crate::core::settings_keys::SESSION_UNCERTAIN_EFFECT_ACK_PREFIX,
+        worker.session_id
+    );
+    let acknowledged = hub
+        .setting(&key)
+        .and_then(|value| {
+            value
+                .get("acknowledged")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .unwrap_or(0);
+    (required > acknowledged).then(|| {
+        format!(
+            "Target {} outcome is uncertain (sequence {required}); review and acknowledge before continuing",
+            effect.method
+        )
+    })
 }
 
 // Completion proves admission when the separate CommandAck was lost. Start

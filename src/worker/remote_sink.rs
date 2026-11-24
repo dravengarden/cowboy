@@ -121,7 +121,7 @@ impl AgentSink for RemoteSink {
             && snapshot.worker_epoch == target.worker_epoch
             && snapshot.current_turn_id.as_deref() == Some(target.turn_id.as_str())
             && !snapshot.drain_requested
-            && !self.shared.managed_read_only()
+            && !super::snapshot_is_managed_read_only(&snapshot)
     }
     fn session_is_managed_read_only(&self, session_id: &str) -> bool {
         session_id == self.shared.session_id && self.shared.managed_read_only()

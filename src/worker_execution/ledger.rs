@@ -224,10 +224,8 @@ impl Ledger {
         let mut unwritable = false;
         if !record.active_processes.is_empty() {
             record.active_processes.clear();
-            if record.uncertain_effect.as_deref() != Some("process/terminate") {
-                record.uncertain_effect = Some("process/terminate".to_owned());
-                record.uncertain_sequence = next_sequence(record.uncertain_sequence);
-            }
+            record.uncertain_effect = Some("process/terminate".to_owned());
+            record.uncertain_sequence = next_sequence(record.uncertain_sequence);
             if let Some(ledger_path) = &path
                 && let Err(error) = write_record(ledger_path, &record)
             {
@@ -473,14 +471,26 @@ impl Ledger {
         self.changed.send_modify(|value| *value += 1);
     }
 
-    /// The target's evidence that `process` is gone.
+    /// Leader exit evidence: retires the in-memory live entry while retaining
+    /// the durable `active_processes` obligation until full tree closure
+    /// (`closed == true`, `process/closed`, or verified forgotten-process).
     pub fn exited(&self, process: &str) {
+        let removed_live = self.state.lock().processes.remove(process).is_some();
+        if removed_live {
+            self.changed.send_modify(|value| *value += 1);
+        }
+    }
+
+    /// Full process-tree closure (or refused/unsent start, or verified
+    /// executor forgotten-process response): clears both the in-memory live
+    /// entry and the durable `active_processes` recovery obligation.
+    pub fn closed(&self, process: &str) {
         let mut state = self.state.lock();
         let removed_live = state.processes.remove(process).is_some();
         if state.record.active_processes.remove(process)
             && let Err(error) = self.persist(&state.record)
         {
-            tracing::warn!(%error, "execution ledger process exit write failed");
+            tracing::warn!(%error, "execution ledger process close write failed");
             state.unwritable = true;
         }
         drop(state);
@@ -668,13 +678,19 @@ fn exited(reply: &Value) -> bool {
     reply.pointer("/result/exited") == Some(&Value::Bool(true))
 }
 
-fn unknown_process(reply: &Value) -> bool {
-    reply.get("error").is_some_and(|error| {
-        let text = error.to_string().to_ascii_lowercase();
-        ["unknown process", "not found", "no such process"]
-            .iter()
-            .any(|needle| text.contains(needle))
-    })
+fn closed(reply: &Value) -> bool {
+    reply.pointer("/result/closed") == Some(&Value::Bool(true))
+}
+
+/// Verified executor-originated forgotten-process response (evidence rule E1):
+/// never the worker/ledger's own `-32000` refusal, and must name the exact ID.
+fn forgotten_process(reply: &Value, process: &str) -> bool {
+    let Some(error) = reply.get("error") else {
+        return false;
+    };
+    error.get("code").and_then(Value::as_i64) != Some(-32000)
+        && error.get("message").and_then(Value::as_str)
+            == Some(format!("unknown process id {process}").as_str())
 }
 
 fn process_id(params: &Value) -> Option<String> {
@@ -779,12 +795,16 @@ impl Client {
         }
         match result {
             Ok(reply) => {
-                if let Some(process) = &process
-                    && ((method == "process/read" && exited(&reply))
-                        || (start.is_some() && reply.get("error").is_some()))
-                {
-                    // An exit, or a refused start that started nothing.
-                    ledger.exited(process);
+                if let Some(process) = &process {
+                    if (start.is_some() && reply.get("error").is_some())
+                        || (method == "process/read" && closed(&reply))
+                        || (matches!(method.as_str(), "process/read" | "process/terminate")
+                            && forgotten_process(&reply, process))
+                    {
+                        ledger.closed(process);
+                    } else if method == "process/read" && exited(&reply) {
+                        ledger.exited(process);
+                    }
                 }
                 reply
             }
@@ -792,7 +812,7 @@ impl Client {
                 if !admitted {
                     // Refused before it was sent: nothing can have happened.
                     if let Some(process) = &start {
-                        ledger.exited(process);
+                        ledger.closed(process);
                     }
                     return refused("Execution unavailable; the request was not sent");
                 }
@@ -839,13 +859,20 @@ impl Client {
         }
     }
 
-    /// Exit notifications the agent side receives are evidence too.
+    /// Process lifecycle notifications from the executor: `process/closed`
+    /// retires both live tracking and the durable obligation; `process/exited`
+    /// retires only live leader tracking while keeping the durable obligation.
     pub fn observe_event(&self, message: &Value) {
-        if let Some(ledger) = self.ledger()
-            && message.get("method").and_then(Value::as_str) == Some("process/exited")
-            && let Some(process) = message.get("params").and_then(process_id)
-        {
-            ledger.exited(&process);
+        let Some(ledger) = self.ledger() else {
+            return;
+        };
+        let Some(process) = message.get("params").and_then(process_id) else {
+            return;
+        };
+        match message.get("method").and_then(Value::as_str) {
+            Some("process/closed") => ledger.closed(&process),
+            Some("process/exited") => ledger.exited(&process),
+            _ => {}
         }
     }
 
@@ -955,8 +982,8 @@ impl Client {
                     )
                     .await;
                 match read {
-                    Ok(reply) if exited(&reply) || unknown_process(&reply) => {
-                        ledger.exited(&process);
+                    Ok(reply) if closed(&reply) || forgotten_process(&reply, &process) => {
+                        ledger.closed(&process);
                         return;
                     }
                     Ok(_) => {}
