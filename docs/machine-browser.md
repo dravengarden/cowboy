@@ -422,7 +422,9 @@ Snapshot        = account_id + snapshot generation (+ profile_revision, writer v
 ```
 
 One instance per `(Machine, account)`; `browser.max_instances` (default 1)
-bounds concurrently running instances per Machine. Each instance runs in its
+bounds concurrently running instances per Machine, and an open on a full
+Machine hibernates an instance nobody is viewing to take its slot (see
+[lifecycle](#lifecycle)). Each instance runs in its
 own user, mount, PID and IPC namespaces, its own X server, its own `/tmp`,
 `/dev/shm`, profile and instance tmpfs, and its own systemd unit and cgroup
 with two sub-cgroups, `display/` and `browser/`, created by the launcher so
@@ -632,11 +634,27 @@ hibernated ──open──▶ starting ──ready──▶ detached ◀──a
   what the owner's "tab" shows when nothing is running.
 - `open` admits only when the Plugin is installed and its executables, policy
   binding and `host_requirements` verify, the host policy is present, the
-  account is enabled for the browser and not fenced, `browser.max_instances`
-  is not reached, and the recorded writer version is not newer than the
-  runtime's. The `max_instances` slot is reserved atomically before any
-  asynchronous step (memory wait, unit start) and released only when the
-  unit's exit is confirmed. Memory admission goes through the same launch
+  account is enabled for the browser and not fenced, a `browser.max_instances`
+  slot is free or can be made free, and the recorded writer version is not
+  newer than the runtime's. The `max_instances` slot is reserved in one step
+  under the capacity ledger's lock, before the start's own asynchronous
+  steps (memory wait, unit start), and released only when the unit's exit is
+  confirmed. The limit caps what runs; it is not a queue behind a browser
+  nobody is viewing: an instance stays for `browser.hibernate_after` after
+  its viewer left, so an owner who closed one account's browser and opened
+  another's would otherwise be refused (`capacity`) until that grace ran
+  out. An open that finds every slot taken therefore makes room first: each
+  `detached` instance of another account, longest-detached first, is
+  hibernated gracefully (reason `reclaim`, its stop-time snapshot published
+  exactly as when its grace runs out) once it has been detached for 5 s, and
+  the reservation is tried again. The 5 s cover the moments between an
+  open's answer (or a dropped stream) and the viewer's attach; the idle
+  interval is re-checked under the instance's state lock atomically with the
+  change to `stopping`, so a viewer that attached meanwhile keeps its
+  browser. An instance that is `starting` or `attached` is never taken, and
+  nothing is hibernated when the idle instances could not free a slot anyway
+  (the limit was lowered below what runs, `max_instances = 0`, a unit whose
+  exit is unconfirmed holds a slot): the open is refused with `capacity`. Memory admission goes through the same launch
   ledger as cold workers (a byte-weighted reservation, checked and taken in
   one step under the ledger lock, with exact refunds and the existing floor
   preserved), so a browser and a worker can never both count the same
@@ -688,13 +706,24 @@ hibernated ──open──▶ starting ──ready──▶ detached ◀──a
   lock and atomically with the change to `stopping`, that the instance is
   still `detached` in the same detached interval and that interval still
   exceeds the grace; an attach meanwhile abandons the idle stop. The
-  deadline is not idleness and stops unconditionally.
+  deadline is not idleness and stops unconditionally, viewed or not. It
+  stops gracefully 30 s ahead of the cap (reason `deadline`): the browser
+  flushes and its profile is snapshotted, so a sign-in completed since the
+  last periodic snapshot survives the cap; a running copy is awaited first.
+  The cap itself still only kills (a graceful stop that has not finished,
+  or a copy still running, by then) and reports `unsaved_state_lost`, and
+  the unit's `RuntimeMaxSec` backs it.
   Lease expiry detaches only after
   re-checking, under the instance's state lock, that the instance is still
   `attached` with the same attachment still expired: a stop, renewal or
   takeover that happened meanwhile wins, and `stopping` never returns to
   `detached`. An instance's deadline is `browser.max_runtime` from its
-  start; nothing outside the browser shortens or extends it.
+  start; nothing outside the browser shortens or extends it. Every running
+  state reports, as `deadline_ms`, when the Machine stops the instance if
+  nothing changes: the end of the detached grace while it is `detached`
+  (never later than the graceful stop ahead of the cap), else that graceful
+  stop. The viewer shows the first as the hibernation countdown and warns
+  ahead of the second.
 - Every mutation (`hibernate`, `resize`, `navigate`, `snapshot`, `stop`)
   carries the expected incarnation; attach, detach, resize and stream cleanup
   carry the `attachment_id`; reset carries the expected `profile_revision`.
@@ -942,9 +971,20 @@ Commands and events are a closed addition to `MachineCommand` /
   for the Controller's state read)
 - `BrowserState{instance_id, incarnation, account_id, state, reason, geometry, scale, deadline_ms, attachment_id, snapshot_generation, snapshot_at_ms, profile_revision, unsaved_state_lost}`
 
+`deadline_ms` is when the Machine stops the instance if nothing changes
+(the end of the detached grace, else the graceful stop ahead of the runtime
+cap); the durable instance record keeps the cap itself.
+
 Reasons beyond the lifecycle ones: `capacity` (`browser.max_instances`
-reached), `memory` (no headroom for the reservation), `busy` (a lifecycle
-operation of that account is in progress). `login_ended` and
+reached and no instance idle enough to make room), `memory` (no headroom
+for the reservation), `busy` (a lifecycle operation of that account is in
+progress). `reclaim` is also the reason of an idle instance hibernated to
+make room for another account's open. A reason on a running instance's
+state is the outcome of the command that state answers (a detach of an
+attachment that already ended is `superseded`, a refused resize `failed`,
+an attach during a recheck `busy`), never a condition of the instance: the
+command's caller receives it, and the Controller's cached observation, which
+every state read reports, drops it. `login_ended` and
 `login_mismatch` belong to the retired sign-in purpose and stay decodable
 only for older Machines.
 
@@ -962,7 +1002,10 @@ relay both ways as binary frames of at most 64 KiB under a credit window per
 direction; a slow consumer stalls its producer instead of growing a buffer,
 and a frame that cannot be delivered within the credit timeout closes the
 stream. Closing either side closes the RFB connection and moves the instance
-to `detached`.
+to `detached`. When the viewer's side ends, the Controller closes the
+Machine's half with a close handshake (bounded, and never awaited by the
+viewer's own cleanup), so the Machine records `viewer_closed`; `failed`
+there means the stream between Machine and Controller broke.
 
 An attachment lease is independent of RFB traffic: the viewer renews it every
 10 s through its authenticated WebSocket, the Controller forwards
@@ -1043,13 +1086,13 @@ properties they were started with; bounds enforced by the schema):
 
 | Key | Default | Bounds | Meaning |
 |---|---|---|---|
-| `browser.max_instances` | 1 | 0–4 | running instances per Machine |
+| `browser.max_instances` | 1 | 0–4 | running instances per Machine; an open on a full Machine hibernates an instance nobody is viewing |
 | `browser.memory_max` / `browser.memory_high` | 2048 MiB / 1536 MiB | 1–6 GiB | upper bounds of the unit limits (the admitted budget and the `MemoryHigh` derived from it), including every tmpfs page; `memory_high <= memory_max` |
 | `browser.memory_reserve` | 768 MiB | 256 MiB–6 GiB, `<= memory_high` | smallest admitted budget: an open that cannot reserve this much is refused |
 | `browser.cpu_quota_percent` | 200 | 50–400 | unit CPU quota in percent of one CPU |
 | `browser.tasks_max` | 512 | 128–2048 | unit task limit |
 | `browser.hibernate_after` | 120 s | 30 s–30 min | detached grace |
-| `browser.max_runtime` | 30 min | 5 min–4 h | hard cap per run |
+| `browser.max_runtime` | 30 min | 5 min–4 h | hard cap per run; the graceful stop with its snapshot begins 30 s ahead |
 | `browser.profile_max_bytes` | 256 MiB | 64 MiB–1 GiB | profile tmpfs size, `/dev/shm` size and snapshot bound |
 | `browser.instance_max_bytes` | 128 MiB | 32–512 MiB | instance tmpfs size |
 | `browser.snapshot_interval` | 10 min | 1 min–1 h, or off | periodic frozen snapshot while attached |
@@ -1178,7 +1221,12 @@ whose browser it displays and the Machine it runs on.
   over the frame as dismissible banners, so the frame and its requested
   framebuffer never move; a refusal that frees up by itself (no memory
   headroom, capacity, another operation in progress) says so and offers
-  Retry.
+  Retry. The empty page of a `detached` browser counts down to the end of
+  its grace, and an attached viewer is told two minutes ahead of the
+  runtime cap that the browser is then saved and restarted on a new tab,
+  its sign-ins kept and its open pages gone (both from the state's
+  `deadline_ms`; the stop ends the stream, which the open panel reconnects
+  like any drop by reopening the browser).
 - **Desktop panel.** A large centered modal (`min(96vw, 1960px)` x
   `min(94vh, 1180px)`, rounded, over a dimmed backdrop; the page underneath
   stays as it was). Maximize fills the whole window (100vw x 100vh, no

@@ -19,6 +19,9 @@ import {
 import {
   type BrowserChromeState,
   type ViewerControls,
+  attachedStopTime,
+  capWarningDelay,
+  capWarningText,
   chromeState,
   controlsFor,
   retryOffered,
@@ -192,6 +195,21 @@ function useResume(
         break;
     }
   }, [step, machine, identity, dispatch]);
+}
+
+/** Tell the owner shortly before the attached browser reaches its runtime
+ * cap, once per attachment and stop time while the panel shows it. */
+function useCapWarning(open: boolean, browser: MachineBrowserController): void {
+  const { model, dispatch } = browser;
+  const stopsAt = open && model.viewer ? attachedStopTime(model.read?.state ?? null) : undefined;
+  useEffect(() => {
+    if (stopsAt === undefined) return undefined;
+    const timer = setTimeout(
+      () => dispatch({ type: "notice", message: capWarningText(stopsAt, Date.now()) }),
+      capWarningDelay(stopsAt, Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [stopsAt, dispatch]);
 }
 
 function browserMenuItems({
@@ -382,6 +400,7 @@ function MachineBrowserPanel(
   const commands = browserCommands(browser, areaRef, touch, link?.machine);
   useAutoEntry(props, browser, commands);
   useResume(open, browser, commands);
+  useCapWarning(open, browser);
   const ui = useBrowserChrome(account.id, model);
   const paste = useDevicePaste(ui.controls);
   const clipboard = useRemoteClipboard(model, browser.dispatch);

@@ -57,6 +57,18 @@ impl BrowserManager {
             self.send_state(event);
             return true;
         }
+        // Shortly before the cap the instance stops gracefully instead: the
+        // browser flushes and its profile is snapshotted, where the cap
+        // itself only kills and loses everything since the last published
+        // generation. A copy still running is awaited until the cap, which
+        // then forces the stop (`await_copy_idle`).
+        if now >= instance.graceful_deadline() {
+            let event = self
+                .stop_instance(instance, Reason::Deadline, true, None)
+                .await;
+            self.send_state(event);
+            return true;
+        }
         if let Some(attachment_id) = expired_attachment
             && expire_attachment(instance, &attachment_id, now)
         {

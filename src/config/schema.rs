@@ -518,7 +518,7 @@ pub static DEVICE_FIELDS: &[Field] = &[
         kind: Kind::Integer { min: 0, max: 4 },
         default: Value::Integer(1),
         reload: Reload::Live,
-        doc: "Machine browser instances that may run at once on this Device. Zero\nrefuses every open while leaving installed snapshots in place.",
+        doc: "Machine browser instances that may run at once on this Device. An open\non a full Device first hibernates an instance nobody is viewing. Zero\nrefuses every open while leaving installed snapshots in place.",
     },
     Field {
         key: "browser.memory_max",
@@ -585,7 +585,7 @@ pub static DEVICE_FIELDS: &[Field] = &[
         },
         default: Value::Duration(Duration::from_mins(30)),
         reload: Reload::Live,
-        doc: "Hard cap on one browser run (RuntimeMaxSec of the unit and the Machine's\nown deadline).",
+        doc: "Hard cap on one browser run (RuntimeMaxSec of the unit and the Machine's\nown deadline). The Machine stops the browser gracefully, with its snapshot,\n30 s ahead of it.",
     },
     Field {
         key: "browser.profile_max_bytes",

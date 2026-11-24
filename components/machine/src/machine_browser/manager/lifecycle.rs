@@ -89,9 +89,11 @@ impl BrowserManager {
             );
             return hibernated(Reason::Failed);
         }
-        // Reserved before anything asynchronous, so concurrent opens for
-        // other accounts cannot pass the limit together.
-        let Some(capacity) = self.capacity.try_reserve(settings.max_instances) else {
+        // Reserved (in one step under the ledger's lock) before the start's
+        // own asynchronous steps, so concurrent opens for other accounts
+        // cannot pass the limit together. A full Machine first hibernates
+        // instances nobody is viewing (`reserve_slot`).
+        let Some(capacity) = self.reserve_slot(&account_id, settings.max_instances).await else {
             return hibernated(Reason::Capacity);
         };
         let (account_dir, record) = match self.prepare_record(&account_id, &plan) {

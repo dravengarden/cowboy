@@ -35,6 +35,7 @@ use crate::provider_account::ProviderAccountId;
 mod attachments;
 mod capacity;
 mod drain;
+mod eviction;
 mod generations;
 mod launch;
 mod lifecycle;
@@ -78,6 +79,11 @@ const SNAPSHOT_TIMEOUT: Duration = Duration::from_secs(90);
 /// stop-time copy; it must fit the unit's stop timeout with the copy.
 const GRACEFUL_WAIT: Duration = Duration::from_secs(8);
 const FREEZE_TIMEOUT: Duration = Duration::from_secs(3);
+/// How long before the runtime cap an instance is stopped gracefully, so
+/// that the browser flushes and its profile is snapshotted; the cap itself
+/// only kills. The launcher's graceful stop (`unit::STOP_TIMEOUT`) and the
+/// unit's termination fit in it.
+const DEADLINE_STOP_WINDOW: Duration = Duration::from_secs(30);
 const SUPERVISOR_TICK: Duration = Duration::from_secs(1);
 const SOCKET_SCAN_INTERVAL: Duration = Duration::from_secs(10);
 /// How often the advertised capability is recomputed while connected.
@@ -283,8 +289,29 @@ impl Instance {
         self.deadline
     }
 
-    fn deadline_ms(&self) -> i64 {
-        self.deadline_ms
+    /// When supervision stops the instance gracefully ahead of the cap.
+    fn graceful_deadline(&self) -> Instant {
+        self.deadline
+            .checked_sub(DEADLINE_STOP_WINDOW)
+            .unwrap_or(self.deadline)
+    }
+
+    /// When the Machine stops this instance if nothing changes, as the
+    /// owner is shown it: the end of the detached grace while nobody views
+    /// it, and never later than the graceful stop ahead of the runtime cap.
+    fn stops_at_ms(&self, live: &Live) -> i64 {
+        let millis = |duration: Duration| i64::try_from(duration.as_millis()).unwrap_or(i64::MAX);
+        let cap = self
+            .deadline_ms
+            .saturating_sub(millis(DEADLINE_STOP_WINDOW));
+        match (live.phase, live.detached_since) {
+            (Phase::Detached, Some(since)) => {
+                let grace = (since + self.settings.hibernate_after)
+                    .saturating_duration_since(Instant::now());
+                cap.min(unix_ms().saturating_add(millis(grace)))
+            }
+            _ => cap,
+        }
     }
 
     /// The durable record written once an instance is verified.
@@ -314,8 +341,8 @@ impl Instance {
     }
 
     fn state(&self, request_id: Option<String>) -> StateEvent {
-        let deadline_ms = self.deadline_ms();
         let live = self.live.lock();
+        let deadline_ms = self.stops_at_ms(&live);
         StateEvent {
             request_id,
             instance: self.reference(),

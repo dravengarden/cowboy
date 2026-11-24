@@ -1,7 +1,17 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../../tools/test-assert.ts";
 import type { BrowserRead, BrowserStateEvent } from "./api";
-import { chromeState, parseAddress, retryOffered } from "./browserChrome";
+import {
+  CAP_WARNING_MS,
+  attachedStopTime,
+  browserStateSummary,
+  capWarningDelay,
+  capWarningText,
+  chromeState,
+  parseAddress,
+  remainingText,
+  retryOffered,
+} from "./browserChrome";
 import { type BrowserModel, INITIAL_BROWSER_MODEL, reduceBrowser } from "./browserModel";
 
 const account = "11111111-2222-4333-8444-555555555555";
@@ -104,4 +114,53 @@ test("a refused open for lack of memory offers Retry unless a Machine must be ch
   };
   assertEquals(retryOffered(choose, false), false);
   assertEquals(retryOffered(choose, true), true);
+});
+
+test("a detached browser's summary counts down to the end of its grace", () => {
+  const now = 1_000_000;
+  // The Machine reports when it stops if nothing changes: the grace's end.
+  assertEquals(
+    browserStateSummary(state("detached", { deadline_ms: now + 95_400 }), now),
+    "Running, not attached · Hibernates in about 2 min unless attached",
+  );
+  assertEquals(
+    browserStateSummary(state("detached", { deadline_ms: now + 42_000 }), now),
+    "Running, not attached · Hibernates in 42 s unless attached",
+  );
+  // Already due, or a clock ahead of the Machine's: never negative.
+  assertEquals(
+    browserStateSummary(state("detached", { deadline_ms: now - 5_000 }), now),
+    "Running, not attached · Hibernates in 0 s unless attached",
+  );
+  // An attached browser's stop time is its runtime cap, not a grace.
+  assertEquals(
+    browserStateSummary(state("attached", { deadline_ms: now + 42_000 }), now),
+    "Attached",
+  );
+  assertEquals(
+    browserStateSummary(state("hibernated", { reason: "reclaim", unsaved_state_lost: true }), now),
+    "Hibernated · The Machine needed this browser’s resources for other work and hibernated it. · The last stop lost unsaved page state",
+  );
+  assertEquals(remainingText(89_400), "89 s");
+  assertEquals(remainingText(90_000), "about 2 min");
+  assertEquals(remainingText(28 * 60_000), "about 28 min");
+});
+
+test("an attached viewer is warned two minutes ahead of the runtime cap", () => {
+  const now = 5_000_000;
+  const stopsAt = now + 30 * 60_000;
+  assertEquals(attachedStopTime(state("attached", { deadline_ms: stopsAt })), stopsAt);
+  // Nothing to warn about while nobody views it, or without a stop time.
+  assertEquals(attachedStopTime(state("detached", { deadline_ms: stopsAt })), undefined);
+  assertEquals(attachedStopTime(state("attached")), undefined);
+  assertEquals(attachedStopTime(null), undefined);
+  assertEquals(capWarningDelay(stopsAt, now), 30 * 60_000 - CAP_WARNING_MS);
+  // Attached (or reattached) inside the last two minutes: told at once.
+  assertEquals(capWarningDelay(stopsAt, stopsAt - 45_000), 0);
+  assertEquals(capWarningDelay(stopsAt, stopsAt + 1), 0);
+  assertEquals(
+    capWarningText(stopsAt, stopsAt - CAP_WARNING_MS),
+    "This browser reaches its running-time limit in about 2 min. It is then saved and restarted on a new tab: your sign-ins stay, open pages do not, so finish the step you are on.",
+  );
+  assertEquals(capWarningText(stopsAt, stopsAt - 45_000).includes("in 45 s"), true);
 });
