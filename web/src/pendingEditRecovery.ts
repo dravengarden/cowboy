@@ -10,25 +10,21 @@ import {
   claimOrphanedPendingEdits,
   finishOrphanedPendingEdit,
   onPendingEditEncodesSettled,
+  pendingEditFingerprint,
   type PendingEditRecord,
-  renewPendingEditRecovery,
 } from "./pendingEditStore";
 
 export interface AuthoritativeQueue {
   readonly queue: readonly { readonly id: string }[];
-  readonly drafts: readonly {
-    readonly id: string;
-    readonly cmid?: string;
-    readonly text: string;
-  }[];
+  readonly drafts: readonly { readonly id: string; readonly cmid?: string }[];
 }
 
 export interface PendingEditRecoveryHooks {
   /** Mutation ids the session's queue store still holds, or `undefined` once
    * that store is closed. */
   pendingMutationIds(sessionId: string): readonly string[] | undefined;
-  /** Add the buffer as a draft under `record.recoveryCmid`. */
-  park(sessionId: string, record: PendingEditRecord): Promise<unknown>;
+  /** Add the buffer as a draft under `cmid`. */
+  park(sessionId: string, record: PendingEditRecord, cmid: string): Promise<unknown>;
 }
 
 const authoritative = new Map<string, AuthoritativeQueue>();
@@ -57,22 +53,35 @@ function recover(sessionId: string): void {
     new Set(value.queue.map((row) => row.id)),
     new Set(value.drafts.map((row) => row.id)),
   );
-  for (const claimed of orphaned) {
-    let record = claimed;
-    const parked = value.drafts.find((row) => row.cmid === record.recoveryCmid);
-    if ((parked !== undefined && parked.text === record.text) || pending.includes(record.recoveryCmid)) {
+  for (const record of orphaned) {
+    // Only a draft of exactly this content is its receipt.
+    const cmid = pendingEditParkCmid(record);
+    if (value.drafts.some((row) => row.cmid === cmid) || pending.includes(cmid)) {
       finishOrphanedPendingEdit(record, true);
       continue;
     }
-    // Another tab parked an older copy under the shared cmid. Keep this
-    // newer text as a draft of its own rather than retiring it.
-    if (parked !== undefined) record = renewPendingEditRecovery(record);
     if (!record.text.trim() && record.attachments.length === 0) {
       finishOrphanedPendingEdit(record, false);
       continue;
     }
-    void hooks.park(sessionId, record)
+    void hooks.park(sessionId, record, cmid)
       .then(() => finishOrphanedPendingEdit(record, true))
       .catch(() => finishOrphanedPendingEdit(record, false));
   }
+}
+
+/** The cmid a buffer is parked under: its edit's recovery identity plus its
+ * exact content. Tabs parking the same content converge on one draft; another
+ * tab's older copy never counts as this content's receipt. */
+export function pendingEditParkCmid(record: PendingEditRecord): string {
+  const content = pendingEditFingerprint(record.text, record.attachments);
+  // FNV-1a over UTF-16 units, twice with different seeds: 64 bits.
+  let low = 0x811c9dc5;
+  let high = 0x01000193;
+  for (let index = 0; index < content.length; index += 1) {
+    const unit = content.charCodeAt(index);
+    low = Math.imul(low ^ unit, 0x01000193) >>> 0;
+    high = Math.imul(high ^ unit, 0x811c9dc5) >>> 0;
+  }
+  return `${record.recoveryCmid}.${high.toString(16).padStart(8, "0")}${low.toString(16).padStart(8, "0")}`;
 }

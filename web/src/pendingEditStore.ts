@@ -516,18 +516,25 @@ export function setPendingEdit(input: {
   for (const placeholder of encodes.get(key)?.placeholders ?? []) {
     attachmentIds.add(placeholder);
   }
+  const text = promised ? input.text : dropOrphanImageTokens(input.text, attachmentIds);
+  // The stamp dates the content: a rerender that rewrites the same buffer
+  // (a queue patch replacing the row's arrays) must not make it look newer
+  // than another tab's later edit.
+  const unchanged = existing !== undefined &&
+    pendingEditFingerprint(existing.text, existing.attachments) ===
+      pendingEditFingerprint(text, attachments);
   records.set(key, {
     sessionId: input.sessionId,
     kind: input.kind,
     id: input.id,
-    text: promised ? input.text : dropOrphanImageTokens(input.text, attachmentIds),
+    text,
     attachments,
     baseFingerprint: pendingEditFingerprint(
       input.baseText,
       input.baseAttachments,
     ),
     recoveryCmid: existing?.recoveryCmid ?? `pending-edit-${newUuid()}`,
-    updatedAt: Date.now(),
+    updatedAt: unchanged ? existing.updatedAt : Date.now(),
   });
   schedulePersist(key);
 }
@@ -567,18 +574,6 @@ function mirrorNewerThan(key: string, updatedAt: number): boolean {
   }
 }
 
-/** A draft already carries this edit's recovery cmid but not its text: another
- * tab parked an older copy. Park this newer one under a cmid of its own. */
-export function renewPendingEditRecovery(record: PendingEditRecord): PendingEditRecord {
-  const key = recordKey(record.sessionId, record.kind, record.id);
-  const renewed = { ...record, recoveryCmid: `pending-edit-${newUuid()}` };
-  if (records.get(key) === record) {
-    records.set(key, renewed);
-    schedulePersist(key);
-  }
-  return renewed;
-}
-
 /** Select the newest unresolved edit for a mounted panel. If the authoritative
  * row (or a hydrated durable outbox mutation) already equals the recovery
  * buffer, the edit was safely committed before the crash and can be retired. */
@@ -594,9 +589,11 @@ export function recoverPendingEditId(
   for (const record of candidates) {
     const target = byId.get(record.id);
     if (target === undefined) continue;
+    const key = recordKey(sessionId, kind, record.id);
     if (
-      // Without its bytes an edit cannot be compared with the row yet.
-      !awaitingDatabase.has(recordKey(sessionId, kind, record.id)) &&
+      // Without its bytes an edit cannot be compared with the row yet, and a
+      // file still being read does not show in it.
+      !awaitingDatabase.has(key) && !encodes.has(key) &&
       pendingEditFingerprint(record.text, record.attachments) ===
         pendingEditFingerprint(target.text, target.attachments)
     ) {
@@ -704,14 +701,14 @@ export function beginPendingEditEncoding(
   kind: PendingEditKind,
   id: string,
   placeholders: readonly Attachment[],
-): (completed: readonly Attachment[]) => void {
+): PendingEditEncode {
   const key = recordKey(sessionId, kind, id);
   const entry = encodes.get(key) ?? { batches: 0, placeholders: new Set<string>() };
   entry.batches += 1;
   for (const placeholder of placeholders) entry.placeholders.add(placeholder.id);
   encodes.set(key, entry);
   let settled = false;
-  return (completed) => {
+  const settle = (completed: readonly Attachment[]): void => {
     if (settled) return;
     settled = true;
     // The edit was saved, discarded or recovered meanwhile: these bytes
@@ -724,7 +721,14 @@ export function beginPendingEditEncoding(
     if (encodes.has(key)) return;
     for (const listener of encodeListeners) listener(sessionId);
   };
+  return Object.assign(settle, { alive: (): boolean => encodes.get(key) === entry });
 }
+
+/** Settles one encode with what encoded successfully. `alive` says whether the
+ * edit that started it still owns the row's buffer. */
+export type PendingEditEncode = ((completed: readonly Attachment[]) => void) & {
+  alive(): boolean;
+};
 
 /** Whether an attachment encode for this edit is still running, possibly
  * started by an editor that has since unmounted. Saving now would keep an

@@ -280,6 +280,22 @@ impl Hub {
             {
                 return;
             }
+            // Its intent belongs to the row it was recorded for: once the
+            // user removed or reordered that row, the new head is not sent
+            // through Pause on its behalf, and the intent ends. Checked under
+            // the lock that takes the row out.
+            if manual
+                && trigger.is_none()
+                && s.explicit_row
+                    .as_ref()
+                    .is_some_and(|row| s.queue.first().is_none_or(|head| &head.id != row))
+            {
+                s.explicit_wait = false;
+                s.explicit_row = None;
+                drop(sessions);
+                self.persist_explicit_wait(session_id);
+                return;
+            }
             if s.queue.first().is_some_and(|head| {
                 self.is_row_withdrawing(session_id, &head.id)
                     || head
@@ -341,20 +357,8 @@ impl Hub {
 
     /// Retry a previously explicit send parked on a resource wait, preserving
     /// its stored `(origin, initiator)` without fabricating a new caller.
-    ///
-    /// The intent belongs to the row it was recorded for: once the user
-    /// removed or reordered that row, the new head is not sent through Pause
-    /// on its behalf, and the intent ends.
+    /// Only the row that intent was recorded for is sent this way.
     pub fn retry_explicit_wait(&self, session_id: &str) {
-        let moved = self.inner.sessions.lock().get(session_id).is_some_and(|s| {
-            s.explicit_row
-                .as_ref()
-                .is_some_and(|row| s.queue.first().is_none_or(|head| &head.id != row))
-        });
-        if moved {
-            self.set_explicit_wait(session_id, false);
-            return;
-        }
         self.drain_head(session_id, true, true, None);
     }
 
@@ -370,7 +374,7 @@ impl Hub {
 
     /// Record (or end) explicit send intent for the current head row.
     pub fn set_explicit_wait(&self, session_id: &str, explicit: bool) {
-        let row = {
+        {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
@@ -381,9 +385,22 @@ impl Hub {
                 .first()
                 .filter(|_| explicit)
                 .map(|head| head.id.clone());
-            s.explicit_row.clone()
+        }
+        self.persist_explicit_wait(session_id);
+    }
+
+    /// Write the session's explicit intent into its persisted wait, which
+    /// carries it across a Controller restart.
+    pub fn persist_explicit_wait(&self, session_id: &str) {
+        let Some((explicit, row)) = self
+            .inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .map(|s| (s.explicit_wait, s.explicit_row.clone()))
+        else {
+            return;
         };
-        // The persisted wait carries the intent across a Controller restart.
         let key = format!(
             "{}{session_id}",
             settings_keys::SESSION_RESOURCE_WAIT_PREFIX
@@ -957,14 +974,35 @@ impl Hub {
     }
 
     /// Move a queued prompt to the front under `caller`'s send intent without
-    /// dispatching it: a session whose account parks dispatch keeps the row in
-    /// place instead of taking it out only to requeue it under a new id.
-    /// Whether the row exists.
+    /// dispatching it, and record that explicit intent for exactly this row in
+    /// the same critical section: a session that cannot dispatch now keeps the
+    /// row in place instead of taking it out only to requeue it under a new
+    /// id. The caller persists the intent with its wait. Whether the row exists.
+    pub fn hold_queued(
+        &self,
+        session_id: &str,
+        id: &str,
+        caller: &crate::prompt_origin::RequestCaller,
+    ) -> bool {
+        self.promote_with(session_id, id, caller, true)
+    }
+
+    /// Move a queued prompt to the front under `caller`'s send intent.
     pub fn promote_queued(
         &self,
         session_id: &str,
         id: &str,
         caller: &crate::prompt_origin::RequestCaller,
+    ) -> bool {
+        self.promote_with(session_id, id, caller, false)
+    }
+
+    fn promote_with(
+        &self,
+        session_id: &str,
+        id: &str,
+        caller: &crate::prompt_origin::RequestCaller,
+        hold: bool,
     ) -> bool {
         if self.is_managed_child(session_id) {
             return false;
@@ -981,6 +1019,10 @@ impl Hub {
             let mut m = s.queue.remove(pos);
             m.initiator = Some(trigger);
             s.queue.insert(0, m);
+            if hold {
+                s.explicit_wait = true;
+                s.explicit_row = Some(id.to_owned());
+            }
         }
         self.emit_pending(session_id);
         true

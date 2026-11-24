@@ -697,17 +697,17 @@ pub fn request_send_queued(
         state.hub.request_send_queued(session_id, id, caller);
         return false;
     };
-    if state.hub.promote_queued(session_id, id, caller) {
+    if state.hub.hold_queued(session_id, id, caller) {
         session_maintenance::wait(&state.hub, session_id, &reason);
-        state.hub.set_explicit_wait(session_id, true);
+        state.hub.persist_explicit_wait(session_id);
+        // Command results reach every socket: the wait reason stays in the
+        // session's own state, which only its viewers receive.
         if let Some(cmid) = cmid {
             state.hub.command_result(
                 session_id,
                 cmid,
                 CommandOutcome::Rejected,
-                &format!(
-                    "Waiting: {reason}. The message stays first in the queue and sends once it can."
-                ),
+                "This session cannot send yet. The message stays first in the queue and sends once it can.",
             );
         }
     }

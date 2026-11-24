@@ -894,6 +894,37 @@ async fn explicit_intent_does_not_pass_to_a_reordered_head() {
     assert_eq!(rx.try_recv().expect("the bound head is sent").text, "other");
 }
 
+// A held Send now records its intent for the requested row itself, not for
+// whatever heads the queue when the intent is persisted.
+#[tokio::test]
+async fn a_held_send_binds_its_intent_to_the_requested_row() {
+    let hub = hub_with_session("hold");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    hub.set_dispatch_tx(tx);
+    hub.set_status("hold", Status::Running, None);
+    hub.set_paused("hold", true);
+    let person = crate::prompt_origin::RequestCaller::Person;
+    for (text, cmid) in [("first", "c-first"), ("held", "c-held")] {
+        hub.submit("hold", text.into(), vec![], Some(cmid.into()), &person);
+    }
+    let ids: Vec<String> = hub.inner.sessions.lock()["hold"]
+        .queue
+        .iter()
+        .map(|row| row.id.clone())
+        .collect();
+    assert!(hub.hold_queued("hold", &ids[1], &person));
+    assert!(hub.explicit_wait("hold"));
+    assert!(rx.try_recv().is_err(), "a held send dispatches nothing");
+    // Another terminal moves the first row back ahead before the retry.
+    hub.reorder_queue("hold", &[ids[0].clone(), ids[1].clone()]);
+    hub.retry_explicit_wait("hold");
+    assert!(
+        rx.try_recv().is_err(),
+        "the other row is not sent through Pause"
+    );
+    assert!(!hub.explicit_wait("hold"));
+}
+
 #[tokio::test]
 async fn pending_context_holds_schedules_drafts_and_manual_queue_until_cleared() {
     let hub = hub_with_session("context-hold");

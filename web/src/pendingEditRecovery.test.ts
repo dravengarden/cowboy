@@ -1,9 +1,13 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../tools/test-assert.ts";
-import { bindPendingEditRecovery, recoverPendingEditsFrom } from "./pendingEditRecovery.ts";
+import {
+  bindPendingEditRecovery,
+  pendingEditParkCmid,
+  recoverPendingEditsFrom,
+} from "./pendingEditRecovery.ts";
 import { getPendingEdit, type PendingEditRecord, setPendingEdit } from "./pendingEditStore.ts";
 
-function edit(sessionId: string, text: string): void {
+function edit(sessionId: string, text: string): PendingEditRecord {
   setPendingEdit({
     sessionId,
     kind: "queued",
@@ -13,35 +17,41 @@ function edit(sessionId: string, text: string): void {
     baseText: "before",
     baseAttachments: [],
   });
+  return getPendingEdit(sessionId, "queued", "row-1")!;
 }
 
-test("an older copy parked under the shared cmid does not retire a newer edit", async () => {
-  const parked: PendingEditRecord[] = [];
+test("only a draft of exactly this content retires a recovered edit", async () => {
+  const parked: [string, string][] = [];
   bindPendingEditRecovery({
     pendingMutationIds: () => [],
-    park: (_session, record) => {
-      parked.push(record);
+    park: (_session, record, cmid) => {
+      parked.push([record.text, cmid]);
       return Promise.resolve();
     },
   });
-  edit("cmid-older", "newer text");
-  const cmid = getPendingEdit("cmid-older", "queued", "row-1")!.recoveryCmid;
-  // Another tab parked the older text it had hydrated, under the same cmid.
-  recoverPendingEditsFrom("cmid-older", {
-    queue: [],
-    drafts: [{ id: "d1", cmid, text: "older text" }],
-  });
+  // Another tab parked the older copy it had hydrated.
+  const older = edit("receipt", "older text");
+  const olderCmid = pendingEditParkCmid(older);
+  const newer = edit("receipt", "newer text");
+  assertEquals(newer.recoveryCmid, older.recoveryCmid);
+  recoverPendingEditsFrom("receipt", { queue: [], drafts: [{ id: "d1", cmid: olderCmid }] });
   await Promise.resolve();
-  assertEquals(parked.map((record) => record.text), ["newer text"]);
-  assertEquals(parked[0]!.recoveryCmid === cmid, false);
+  assertEquals(parked, [["newer text", pendingEditParkCmid(newer)]]);
+  assertEquals(pendingEditParkCmid(newer) === olderCmid, false);
 
-  // The same text under that cmid is this edit's own park: it retires.
-  edit("cmid-same", "same text");
-  const own = getPendingEdit("cmid-same", "queued", "row-1")!.recoveryCmid;
-  recoverPendingEditsFrom("cmid-same", {
+  // That content's own draft is its receipt; tabs holding it converge on it.
+  const own = edit("own", "same text");
+  recoverPendingEditsFrom("own", {
     queue: [],
-    drafts: [{ id: "d2", cmid: own, text: "same text" }],
+    drafts: [{ id: "d2", cmid: pendingEditParkCmid(own) }],
   });
-  assertEquals(getPendingEdit("cmid-same", "queued", "row-1"), null);
+  assertEquals(getPendingEdit("own", "queued", "row-1"), null);
   assertEquals(parked.length, 1);
+});
+
+test("rewriting an unchanged buffer keeps its stamp", async () => {
+  const first = edit("stamp", "same");
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assertEquals(edit("stamp", "same").updatedAt, first.updatedAt);
+  assertEquals(edit("stamp", "changed").updatedAt > first.updatedAt, true);
 });

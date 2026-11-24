@@ -4638,9 +4638,9 @@ bindPendingEditRecovery({
   pendingMutationIds: (sessionId) => productSessionAbandoned
     ? undefined
     : qClients.get(sessionId)?.pending().map((mutation) => mutation.id),
-  park: (sessionId, record) => qAdd("drafts", sessionId, record.text, record.attachments, {
+  park: (sessionId, record, cmid) => qAdd("drafts", sessionId, record.text, record.attachments, {
     origin: "composer",
-    cmid: record.recoveryCmid,
+    cmid,
   }),
 });
 
