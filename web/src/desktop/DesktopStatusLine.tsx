@@ -206,6 +206,31 @@ const REVIEW_DOCUMENT_HINTS: RegionHint[] = [
   { keys: DESKTOP_SHORTCUTS.focusConversation, label: "Conversation" },
 ];
 
+const SESSIONS_LIST_HINTS: RegionHint[] = [
+  { keys: "J/K", label: "Row" },
+  { keys: "GG/G", label: "First/last" },
+  { keys: "'", label: "Labels" },
+  { keys: "L/Enter", label: "Open" },
+  { keys: "H", label: "Collapse/up" },
+  { keys: "Ctrl+D/U", label: "Page" },
+  { keys: "zz/zt/zb", label: "View" },
+  { keys: "za/zM/zR", label: "Fold" },
+  { keys: "A", label: "New session here" },
+  { keys: "S", label: "Actions" },
+  { keys: ",", label: "Settings" },
+  { keys: "R", label: "Rename" },
+  { keys: "M", label: "Move to" },
+  { keys: "X", label: "Trash" },
+  { keys: "N", label: "New folder" },
+  { keys: "O", label: "Order mode" },
+];
+
+const APPROVAL_HINTS: RegionHint[] = [
+  { keys: "Tab", label: "Next field" },
+  { keys: "␣1…", label: "Answer" },
+  { keys: "Ctrl+K", label: "Transcript" },
+];
+
 function regionHints(
   region: string | null,
   status: Status | undefined,
@@ -234,24 +259,7 @@ function regionHints(
         { keys: DESKTOP_SHORTCUTS.toggleSessions, label: "Expand list" },
       ];
     case "sessions.list":
-      return [
-        { keys: "J/K", label: "Row" },
-        { keys: "GG/G", label: "First/last" },
-        { keys: "'", label: "Labels" },
-        { keys: "L/Enter", label: "Open" },
-        { keys: "H", label: "Collapse/up" },
-        { keys: "Ctrl+D/U", label: "Page" },
-        { keys: "zz/zt/zb", label: "View" },
-        { keys: "za/zM/zR", label: "Fold" },
-        { keys: "A", label: "New session here" },
-        { keys: "S", label: "Actions" },
-        { keys: ",", label: "Settings" },
-        { keys: "R", label: "Rename" },
-        { keys: "M", label: "Move to" },
-        { keys: "X", label: "Trash" },
-        { keys: "N", label: "New folder" },
-        { keys: "O", label: "Order mode" },
-      ];
+      return SESSIONS_LIST_HINTS;
     case "prompt.calls":
       return [
         { keys: "J/K", label: "Call" },
@@ -287,11 +295,7 @@ function regionHints(
         { keys: "Esc/H", label: "Canvas" },
       ];
     case "conversation.approval":
-      return [
-        { keys: "Tab", label: "Next field" },
-        { keys: "␣1…", label: "Answer" },
-        { keys: "Ctrl+K", label: "Transcript" },
-      ];
+      return APPROVAL_HINTS;
     case "conversation.transcript":
       return projection === "explore" ? EXPLORE_HINTS : HISTORY_HINTS;
     case "review.navigator":
