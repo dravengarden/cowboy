@@ -169,7 +169,6 @@ impl Hub {
                     initiator: Some(initiator.clone()),
                     dispatch_origin,
                     trigger: initiator,
-                    wake_dormant: false,
                 });
             } else {
                 let id = self.next_qid();
@@ -183,8 +182,6 @@ impl Hub {
                         schedule: None,
                         origin: content_origin,
                         initiator: Some(initiator),
-                        explicit: false,
-                        wake_dormant: false,
                     },
                 );
             }

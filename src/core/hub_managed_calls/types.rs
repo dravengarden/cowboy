@@ -3,22 +3,11 @@
 use super::*;
 use crate::store::NoticeClaimRelease;
 
-#[derive(Clone)]
-pub(in crate::core) struct PendingRecoveryPromptItem {
-    pub(super) text: String,
-    pub(super) content: Vec<serde_json::Value>,
-    pub(super) cmid: Option<String>,
-    pub(super) reason: String,
-    pub(super) on_committed: Vec<Arc<dyn Fn() + Send + Sync>>,
-}
-
 pub struct PendingRecoveryPark {
     pub(super) hub: std::sync::Weak<HubInner>,
     pub(super) active: bool,
     pub session_id: String,
     pub(super) added_drafts: Vec<QueuedMessage>,
-    pub(super) replaced_draft_id: Option<String>,
-    pub(super) committed_recovery_cmids: Vec<String>,
     pub(super) settled_notices: Vec<(String, String)>,
 }
 
@@ -284,18 +273,6 @@ impl StoreAckSink {
     }
 }
 
-/// Result of staging a durable `recovery-*` draft for an ambiguous ordinary prompt.
-pub enum RecoveryDraftPark {
-    /// No store writer is attached (in-memory test mode); Hub updated synchronously.
-    NoStore,
-    /// A recovery draft with this `cmid` already exists; delivery already confirmed.
-    Duplicate,
-    /// Enqueued in the FIFO store writer; await `StoreAckRx` before committing or aborting.
-    Pending(Box<PendingRecoveryPark>, StoreAckRx),
-    /// Store queue was full/closed or session missing; Hub memory was not mutated.
-    Rejected(&'static str),
-}
-
 /// Result of attempting to durably requeue an authoritative worker
 /// `UndeliveredPrompt` or provably unsent teardown notice through the FIFO store writer.
 pub enum UndeliveredRequeue {
@@ -309,26 +286,11 @@ pub enum UndeliveredRequeue {
     Rejected(&'static str),
 }
 
-pub(super) struct DeferredDrain {
-    pub(super) expected_head_id: String,
-    pub(super) manual: bool,
-    pub(super) allow_revive: bool,
-    pub(super) trigger: Option<crate::prompt_origin::RequestCaller>,
-}
-
-#[derive(Default)]
-pub(super) struct DeferredDrainActions {
-    pub(super) manual_drain: Option<DeferredDrain>,
-    pub(super) revive_drain: Option<DeferredDrain>,
-    pub(super) notice_wakes: Vec<String>,
-}
-
 #[derive(Default)]
 pub(super) struct DeferredPendingFlush {
     pub(super) dirty: bool,
     pub(super) settled_notices: Vec<(String, String)>,
     pub(super) released_claims: Vec<NoticeClaimRelease>,
-    pub(super) drains: DeferredDrainActions,
 }
 
 #[derive(Default)]
@@ -346,6 +308,4 @@ pub(in crate::core) struct NoticeClaims {
     pub(super) in_flight_pending_commits: HashMap<String, DeferredPendingFlush>,
     pub(super) commit_locks: HashMap<String, Arc<tokio::sync::Mutex<()>>>,
     pub(super) teardown_tasks: Vec<tokio::task::JoinHandle<()>>,
-    pub(super) pending_recovery_parks: HashMap<String, Vec<PendingRecoveryPromptItem>>,
-    pub(super) active_recovery_park_workers: HashSet<String>,
 }

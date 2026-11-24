@@ -739,8 +739,7 @@ mod tests {
                     *command,
                     "prompt delivery across worker change is unresolved; retained as draft",
                     replacement_worker.as_deref(),
-                )
-                .await;
+                );
             }
             _ => panic!("cross-epoch retry must stage ambiguous park"),
         }
@@ -820,8 +819,7 @@ mod tests {
                     *command,
                     "prompt delivery across worker change is unresolved; retained as draft",
                     replacement_worker.as_deref(),
-                )
-                .await;
+                );
             }
             _ => panic!("unbound already-attempted prompt must stage ambiguous park"),
         }
@@ -879,34 +877,6 @@ mod tests {
         let info3 = runtime.shared.hub.session_info("s-unbound").unwrap();
         assert_eq!(info3.queue_count, 1);
         assert_eq!(info3.drafts_count, 2);
-
-        // R6-2: durable submit dedupe blocks retry of parked cmid.
-        let caller = crate::prompt_origin::RequestCaller::Person;
-        runtime.shared.hub.submit(
-            "s-unbound",
-            "do not replay".into(),
-            vec![serde_json::json!({"type": "text", "text": "do not replay"})],
-            Some("cmid-u".into()),
-            &caller,
-        );
-        assert_eq!(
-            runtime
-                .shared
-                .hub
-                .session_info("s-unbound")
-                .unwrap()
-                .queue_count,
-            1
-        );
-        assert_eq!(
-            runtime
-                .shared
-                .hub
-                .session_info("s-unbound")
-                .unwrap()
-                .drafts_count,
-            2
-        );
     }
 
     #[tokio::test]
@@ -976,7 +946,6 @@ mod tests {
             false,
             Some("Machine is busy; retry shortly"),
         )
-        .await
         .expect("matching session CommandAck");
         assert!(parked);
         assert_eq!(hub.session_info("s-disc").unwrap().drafts_count, 1);

@@ -69,24 +69,13 @@ pub async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
                 text,
                 content,
                 cmid,
-                explicit,
-                wake_dormant,
                 origin,
                 initiator,
                 ownership: _ownership,
                 ..
             } = req;
-            retain_failed_dispatch_with_intent(
-                &state.hub,
-                session_id,
-                text,
-                content,
-                cmid,
-                origin,
-                initiator,
-                explicit,
-                wake_dormant,
-                &reason,
+            retain_failed_dispatch(
+                &state.hub, session_id, text, content, cmid, origin, initiator, &reason,
             );
         }
     }
@@ -102,7 +91,6 @@ async fn prepare_dispatch_preflight(
     state: &Arc<AppState>,
     session_id: &str,
     text: &str,
-    content: &[serde_json::Value],
     cmid: Option<&str>,
     dispatch_origin: &crate::prompt_origin::DeliveryOrigin,
 ) -> PreflightOutcome {
@@ -132,53 +120,15 @@ async fn prepare_dispatch_preflight(
     {
         return PreflightOutcome::Retain(error);
     }
-    let is_command = build_prompt_blocks(text, content).is_some_and(|blocks| {
-        let json_blocks: Vec<serde_json::Value> = blocks
-            .iter()
-            .map(|b| serde_json::to_value(b).unwrap_or_default())
-            .collect();
-        crate::session_context::is_command_blocks(&json_blocks)
-    });
-    if !is_command {
-        session_context::rollover::before_dispatch(state, session_id, text, cmid, dispatch_origin)
-            .await;
-        // Links wait for a real message: a preamble would break a slash command.
-        if let Err(error) = session_context::claim_carrier(state, session_id, cmid).await {
-            return PreflightOutcome::Retain(error);
-        }
+    session_context::rollover::before_dispatch(state, session_id, text, cmid, dispatch_origin)
+        .await;
+    // Links wait for a real message: a preamble would break a slash command.
+    if !crate::session_context::is_command(text)
+        && let Err(error) = session_context::claim_carrier(state, session_id, cmid).await
+    {
+        return PreflightOutcome::Retain(error);
     }
     PreflightOutcome::Ready(recovery.map(Box::new))
-}
-
-#[allow(clippy::too_many_arguments)]
-fn retain_with_optional_explicit(
-    hub: &Hub,
-    sid: String,
-    text: String,
-    content: Vec<serde_json::Value>,
-    cmid: Option<String>,
-    origin: Option<crate::prompt_origin::DeliveryOrigin>,
-    initiator: Option<crate::prompt_origin::DeliveryOrigin>,
-    explicit: bool,
-    wake_dormant: bool,
-    error: &str,
-) {
-    let session = sid.clone();
-    retain_failed_dispatch_with_intent(
-        hub,
-        sid,
-        text,
-        content,
-        cmid,
-        origin,
-        initiator,
-        explicit,
-        wake_dormant,
-        error,
-    );
-    if explicit {
-        retain_explicit_intent(hub, &session, error);
-    }
 }
 
 async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
@@ -190,25 +140,17 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
         content,
         cmid,
         explicit,
-        wake_dormant,
         origin,
         initiator,
         dispatch_origin,
         trigger,
     } = req;
     let retain = |sid: String, text, content, cmid, origin, initiator, error: &str| {
-        retain_with_optional_explicit(
-            hub,
-            sid,
-            text,
-            content,
-            cmid,
-            origin,
-            initiator,
-            explicit,
-            wake_dormant,
-            error,
-        );
+        let session = sid.clone();
+        retain_failed_dispatch(hub, sid, text, content, cmid, origin, initiator, error);
+        if explicit {
+            retain_explicit_intent(hub, &session, error);
+        }
     };
     // A user send retries a preparation that failed permanently; the
     // preflight below then holds the prompt until the target is ready.
@@ -219,7 +161,6 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
         &state,
         &session_id,
         &text,
-        &content,
         cmid.as_deref(),
         &dispatch_origin,
     )
@@ -231,17 +172,8 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
             return;
         }
         PreflightOutcome::WorkspaceWait(wait) => {
-            retain_failed_dispatch_with_intent(
-                hub,
-                session_id,
-                text,
-                content,
-                cmid,
-                origin,
-                initiator,
-                explicit,
-                wake_dormant,
-                &wait,
+            retain_failed_dispatch(
+                hub, session_id, text, content, cmid, origin, initiator, &wait,
             );
             return;
         }
@@ -260,16 +192,7 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
         recovery.is_none(),
     ) {
         finish_deferred_dispatch(
-            hub,
-            other,
-            session_id,
-            text,
-            content,
-            cmid,
-            origin,
-            initiator,
-            explicit,
-            wake_dormant,
+            hub, other, session_id, text, content, cmid, origin, initiator, explicit,
         );
         return;
     }
@@ -310,48 +233,11 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
                 return;
             }
         };
-    send_and_finish_dispatch(
-        &state,
-        plugin_key.as_ref(),
-        _ownership,
-        session_id,
-        text,
-        content,
-        blocks,
-        Some(dispatch_cmid),
-        recovery,
-        origin,
-        initiator,
-        explicit,
-        wake_dormant,
-        claim_token,
-        notice_rt,
-    )
-    .await;
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn send_and_finish_dispatch(
-    state: &Arc<AppState>,
-    plugin_key: Option<&(String, String)>,
-    ownership: Arc<crate::core::DispatchOwnership>,
-    session_id: String,
-    text: String,
-    content: Vec<serde_json::Value>,
-    blocks: Vec<ContentBlock>,
-    cmid: Option<String>,
-    recovery: Option<crate::execution_environment::RecoveryV1>,
-    origin: Option<crate::prompt_origin::DeliveryOrigin>,
-    initiator: Option<crate::prompt_origin::DeliveryOrigin>,
-    explicit: bool,
-    wake_dormant: bool,
-    claim_token: Option<managed_calls::NoticeDispatchToken>,
-    notice_rt: Option<(String, Option<Arc<RemoteRuntime>>)>,
-) {
+    let cmid = Some(dispatch_cmid);
     let explicit_command_id = claim_token.as_ref().map(|token| token.command_id.clone());
     let outcome = send_under_dispatch_fence(
-        state,
-        plugin_key,
+        &state,
+        plugin_key.as_ref(),
         &session_id,
         &text,
         &content,
@@ -361,9 +247,9 @@ async fn send_and_finish_dispatch(
         explicit_command_id,
     );
     finish_dispatch_outcome(
-        state,
+        &state,
         outcome,
-        ownership,
+        _ownership,
         session_id,
         text,
         content,
@@ -371,7 +257,6 @@ async fn send_and_finish_dispatch(
         origin,
         initiator,
         explicit,
-        wake_dormant,
         claim_token,
         notice_rt,
     )
@@ -481,7 +366,6 @@ async fn finish_dispatch_outcome(
     origin: Option<crate::prompt_origin::DeliveryOrigin>,
     initiator: Option<crate::prompt_origin::DeliveryOrigin>,
     explicit: bool,
-    wake_dormant: bool,
     claim_token: Option<managed_calls::NoticeDispatchToken>,
     notice_rt: Option<(String, Option<Arc<RemoteRuntime>>)>,
 ) {
@@ -515,16 +399,7 @@ async fn finish_dispatch_outcome(
             )
             .await;
             finish_deferred_dispatch(
-                hub,
-                other,
-                session_id,
-                text,
-                content,
-                cmid,
-                origin,
-                initiator,
-                explicit,
-                wake_dormant,
+                hub, other, session_id, text, content, cmid, origin, initiator, explicit,
             );
             rewake_notice_if_reconnected(state, transient_disconnect, notice_rt).await;
         }
@@ -694,85 +569,35 @@ fn finish_deferred_dispatch(
     origin: Option<crate::prompt_origin::DeliveryOrigin>,
     initiator: Option<crate::prompt_origin::DeliveryOrigin>,
     explicit: bool,
-    wake_dormant: bool,
 ) {
     match outcome {
         SyncSendOutcome::RequeueByFence => {
-            hub.requeue_prompt_preserving_intent(
-                &session_id,
-                text,
-                content,
-                cmid,
-                origin,
-                initiator,
-                explicit,
-                wake_dormant,
-            );
+            hub.requeue_prompt(&session_id, text, content, cmid, origin, initiator);
         }
         SyncSendOutcome::WakeForAgent(Ok(())) => {
-            hub.requeue_prompt_preserving_intent(
-                &session_id,
-                text,
-                content,
-                cmid,
-                origin,
-                initiator,
-                explicit,
-                wake_dormant,
-            );
+            hub.requeue_prompt(&session_id, text, content, cmid, origin, initiator);
             // The launch may already have reported Running.
             hub.context_state_changed(&session_id);
         }
         SyncSendOutcome::WakeForAgent(Err(error)) => {
             let session = session_id.clone();
-            retain_failed_dispatch_with_intent(
-                hub,
-                session_id,
-                text,
-                content,
-                cmid,
-                origin,
-                initiator,
-                explicit,
-                wake_dormant,
-                &error,
+            retain_failed_dispatch(
+                hub, session_id, text, content, cmid, origin, initiator, &error,
             );
             if explicit {
                 retain_explicit_intent(hub, &session, &error);
             }
         }
         SyncSendOutcome::HandoffRefusal(wait) => {
-            let session = session_id.clone();
-            retain_failed_dispatch_with_intent(
-                hub,
-                session_id,
-                text,
-                content,
-                cmid,
-                origin,
-                initiator,
-                explicit,
-                wake_dormant,
-                &wait,
+            retain_failed_dispatch(
+                hub, session_id, text, content, cmid, origin, initiator, &wait,
             );
-            if explicit {
-                retain_explicit_intent(hub, &session, &wait);
-            }
         }
         SyncSendOutcome::SendError(error) => {
             tracing::warn!(session = %session_id, error = %error, "queued dispatch failed");
             let session = session_id.clone();
-            retain_failed_dispatch_with_intent(
-                hub,
-                session_id,
-                text,
-                content,
-                cmid,
-                origin,
-                initiator,
-                explicit,
-                wake_dormant,
-                &error,
+            retain_failed_dispatch(
+                hub, session_id, text, content, cmid, origin, initiator, &error,
             );
             if explicit {
                 retain_explicit_intent(hub, &session, &error);
@@ -783,7 +608,6 @@ fn finish_deferred_dispatch(
 }
 
 /// Restore a prompt that left the durable queue but never reached its runtime.
-#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn retain_failed_dispatch(
     hub: &Hub,
@@ -795,34 +619,7 @@ pub fn retain_failed_dispatch(
     initiator: Option<crate::prompt_origin::DeliveryOrigin>,
     error: &str,
 ) {
-    retain_failed_dispatch_with_intent(
-        hub, session_id, text, content, cmid, origin, initiator, false, false, error,
-    );
-}
-
-#[allow(clippy::too_many_arguments)]
-pub fn retain_failed_dispatch_with_intent(
-    hub: &Hub,
-    session_id: String,
-    text: String,
-    content: Vec<serde_json::Value>,
-    cmid: Option<String>,
-    origin: Option<crate::prompt_origin::DeliveryOrigin>,
-    initiator: Option<crate::prompt_origin::DeliveryOrigin>,
-    explicit: bool,
-    wake_dormant: bool,
-    error: &str,
-) {
-    hub.requeue_prompt_preserving_intent(
-        &session_id,
-        text,
-        content,
-        cmid,
-        origin,
-        initiator,
-        explicit,
-        wake_dormant,
-    );
+    hub.requeue_prompt(&session_id, text, content, cmid, origin, initiator);
     if let Some(reason) = error.strip_prefix(session_maintenance::WAIT_PREFIX) {
         session_maintenance::wait(hub, &session_id, reason);
         return;

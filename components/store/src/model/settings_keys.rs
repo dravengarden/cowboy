@@ -41,8 +41,6 @@ pub const SESSION_DELIVERY_POLICY_PREFIX: &str = "session_delivery_policy:";
 pub const SESSION_DELIVERY_HOLD_PREFIX: &str = "session_delivery_hold:";
 /// The uncertain-effect sequence the owner acknowledged; the session id follows.
 pub const SESSION_UNCERTAIN_EFFECT_ACK_PREFIX: &str = "session_uncertain_effect_ack:";
-/// Original client operation IDs parked by ambiguous prompt recovery; the session id follows.
-pub const SESSION_RECOVERY_CMIDS_PREFIX: &str = "session_recovery_cmids:";
 /// The kill switch's native logout of one named-only account; the account id follows.
 pub const PROVIDER_ACCOUNT_LOGOUT_PREFIX: &str = "provider_account_logout:";
 pub const SESSION_CONTEXT_PREFIX: &str = "session_context:";
@@ -106,7 +104,6 @@ pub const SESSION_STATE_PREFIXES: &[&str] = &[
     SESSION_DELIVERY_POLICY_PREFIX,
     SESSION_DELIVERY_HOLD_PREFIX,
     SESSION_UNCERTAIN_EFFECT_ACK_PREFIX,
-    SESSION_RECOVERY_CMIDS_PREFIX,
     SESSION_CONTEXT_PREFIX,
     SESSION_CONTEXT_CARRIER_PREFIX,
     SESSION_CONTINUED_FROM_PREFIX,
@@ -137,7 +134,6 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             SESSION_DELIVERY_POLICY_PREFIX,
             SESSION_DELIVERY_HOLD_PREFIX,
             SESSION_UNCERTAIN_EFFECT_ACK_PREFIX,
-            SESSION_RECOVERY_CMIDS_PREFIX,
             SESSION_CONTEXT_PREFIX,
             SESSION_CONTEXT_CARRIER_PREFIX,
             SESSION_CONTINUED_FROM_PREFIX,
@@ -184,7 +180,6 @@ pub fn examples() -> Vec<String> {
         format!("{SESSION_DELIVERY_POLICY_PREFIX}sess-1"),
         format!("{SESSION_DELIVERY_HOLD_PREFIX}sess-1"),
         format!("{SESSION_UNCERTAIN_EFFECT_ACK_PREFIX}sess-1"),
-        format!("{SESSION_RECOVERY_CMIDS_PREFIX}sess-1"),
         format!("{SESSION_CONTEXT_PREFIX}sess-1"),
         format!("{SESSION_CONTEXT_CARRIER_PREFIX}sess-1"),
         format!("{SESSION_CONTINUED_FROM_PREFIX}sess-1"),
@@ -221,7 +216,6 @@ mod tests {
         for key in [
             "session.autoResume.default",
             "unrelated",
-            SESSION_RECOVERY_CMIDS_PREFIX,
             SESSION_SPAWNED_FROM_PREFIX,
             SESSION_CREATED_BY_PREFIX,
             SESSION_TURN_GRANTS_PREFIX,

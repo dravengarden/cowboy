@@ -3,15 +3,14 @@
 use super::*;
 use crate::store::NoticeClaimRelease;
 
-mod deferred_drains;
 mod types;
 mod withdrawals;
+use types::DeferredPendingFlush;
 pub(in crate::core) use types::NoticeClaims;
-use types::{DeferredDrainActions, DeferredPendingFlush};
 pub use types::{
     NoticeClaimGuard, NoticeRequeueRequest, OwnerNoticeWithdrawalOp, OwnerQueueMutation,
-    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, RecoveryDraftPark,
-    StoreAckSink, UndeliveredRequeue,
+    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, StoreAckSink,
+    UndeliveredRequeue,
 };
 
 /// Acknowledged FIFO `StoreWrite::UpdatePending` result (`Ok(true)` = applied,
@@ -51,8 +50,6 @@ impl Hub {
     /// alive until the bounded retries in each admitted task finish (matching
     /// `dispatcher_task` shutdown behavior).
     pub async fn drain_teardown_requeues(&self, warn_after: std::time::Duration) {
-        self.inner.teardown_shutdown.store(true, Ordering::Release);
-        self.inner.teardown_shutdown_notify.notify_waiters();
         let mut warned = false;
         let warn_at = tokio::time::Instant::now() + warn_after;
         loop {
@@ -122,12 +119,8 @@ impl Hub {
             };
             let queue = s.queue.clone();
             let drafts = s.drafts.clone();
-            let recovery_cmids = Self::sorted_recovery_cmids(s);
             let mut claims = self.inner.notice_claims.lock();
-            if self.is_pending_writes_poisoned(session_id) {
-                // Unknown-outcome pending commit timed out during shutdown:
-                // permanently refuse further UpdatePending writes for this session.
-            } else if let Some(deferred) = claims.in_flight_pending_commits.get_mut(session_id) {
+            if let Some(deferred) = claims.in_flight_pending_commits.get_mut(session_id) {
                 // An acknowledged pending commit is in flight for this session.
                 // Defer the snapshot until that commit finishes so a pre-commit
                 // Hub view can NEVER overwrite a committed edit, parked draft,
@@ -142,7 +135,6 @@ impl Hub {
                     drafts: drafts.clone(),
                     settled_notices,
                     released_claims,
-                    recovery_cmids,
                     require_claim_release: false,
                     ack_id: None,
                 });
@@ -157,14 +149,10 @@ impl Hub {
         session_id: &str,
         queue: &[QueuedMessage],
         drafts: &[QueuedMessage],
-        recovery_cmids: Option<Vec<String>>,
         claims: &mut NoticeClaims,
-    ) -> DeferredDrainActions {
-        if self.is_pending_writes_poisoned(session_id) {
-            return DeferredDrainActions::default();
-        }
+    ) {
         let Some(deferred) = claims.in_flight_pending_commits.remove(session_id) else {
-            return DeferredDrainActions::default();
+            return;
         };
         if (deferred.dirty
             || !deferred.settled_notices.is_empty()
@@ -177,43 +165,10 @@ impl Hub {
                 drafts: drafts.to_vec(),
                 settled_notices: deferred.settled_notices,
                 released_claims: deferred.released_claims,
-                recovery_cmids,
                 require_claim_release: false,
                 ack_id: None,
             });
         }
-        deferred.drains
-    }
-
-    /// Permanently poison further `StoreWrite::UpdatePending` admissions for a
-    /// session after an unknown-outcome shutdown timeout so no subsequent write
-    /// can overwrite an in-flight SQL transaction (Finding 1).
-    pub(in crate::core) fn is_pending_writes_poisoned(&self, session_id: &str) -> bool {
-        self.inner
-            .poisoned_pending_sessions
-            .lock()
-            .contains(session_id)
-    }
-
-    pub fn poison_session_pending_writes(&self, session_id: &str) {
-        self.inner
-            .poisoned_pending_sessions
-            .lock()
-            .insert(session_id.to_owned());
-        self.inner
-            .notice_claims
-            .lock()
-            .in_flight_pending_commits
-            .entry(session_id.to_owned())
-            .or_default();
-    }
-
-    pub fn abandon_unknown_outcome_notice_requeue(&self, preview: &mut PendingUndeliveredRequeue) {
-        if !preview.active {
-            return;
-        }
-        preview.active = false;
-        self.poison_session_pending_writes(&preview.session_id);
     }
 
     pub(super) fn broadcast_pending_snapshot(
@@ -225,7 +180,7 @@ impl Hub {
         // Broadcast on the generic optimistic-sync channel as state "queue:<sid>".
         // Confirmed = the cmids in the value, so a client drops its optimistic add
         // the moment its cmid lands here (the cross-terminal reconcile).
-        let confirmed = self.confirmed_cmids(session_id, queue, drafts);
+        let confirmed = Self::cmids_of(queue, drafts);
         let value = serde_json::json!({ "queue": queue, "drafts": drafts });
         self.sync_emit(&format!("queue:{session_id}"), value, confirmed);
     }
@@ -834,15 +789,22 @@ impl Hub {
         released_claims: Vec<NoticeClaimRelease>,
         require_claim_release: bool,
     ) -> Option<StoreAckRx> {
-        self.send_acked_update_pending_with_recovery(
-            session_id,
+        let tx = self.inner.store_tx.as_ref()?;
+        let (ack_id, rx) = self.inner.store_acks.allocate();
+        let sent = tx.send(StoreWrite::UpdatePending {
+            session_id: session_id.to_owned(),
             queue,
             drafts,
             settled_notices,
             released_claims,
-            None,
             require_claim_release,
-        )
+            ack_id: Some(ack_id),
+        });
+        if !sent {
+            self.inner.store_acks.cancel(ack_id);
+            return None;
+        }
+        Some(rx)
     }
 
     /// Two-phase authoritative non-delivery requeue for a `call-notice:` prompt.
@@ -885,14 +847,24 @@ impl Hub {
             return UndeliveredRequeue::NoStore;
         };
         let mut next_queue = s.queue.clone();
-        let added_message = (!next_queue
+        let added_message = if next_queue
             .iter()
-            .any(|m| m.cmid.as_deref() == Some(cmid.as_str())))
-        .then(|| {
-            let msg = self.make_notice_requeue_row(text, content, &cmid);
+            .any(|m| m.cmid.as_deref() == Some(cmid.as_str()))
+        {
+            None
+        } else {
+            let msg = QueuedMessage {
+                id: self.next_qid(),
+                text,
+                content,
+                cmid: Some(cmid.clone()),
+                schedule: None,
+                origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
+                initiator: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
+            };
             next_queue.insert(0, msg.clone());
-            msg
-        });
+            Some(msg)
+        };
         let drafts = s.drafts.clone();
         let active_claim = self
             .inner
@@ -957,13 +929,12 @@ impl Hub {
             receipt_key: receipt_key.clone(),
             reconcile_only: false,
         }];
-        let Some(rx) = self.send_acked_update_pending_with_recovery(
+        let Some(rx) = self.send_acked_update_pending(
             &session_id,
             next_queue,
             drafts,
             Vec::new(),
             released_claims,
-            Self::sorted_recovery_cmids(s),
             require_claim_release,
         ) else {
             return UndeliveredRequeue::Rejected(
@@ -1002,7 +973,7 @@ impl Hub {
             return;
         }
         preview.active = false;
-        let (queue, drafts, drains) = {
+        let (queue, drafts) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(&preview.session_id) else {
                 let mut claims = self.inner.notice_claims.lock();
@@ -1055,17 +1026,11 @@ impl Hub {
                 preview.cmid.clone(),
                 preview.receipt_key.clone(),
             ));
-            let drains = self.finish_in_flight_pending_commit(
-                &preview.session_id,
-                &queue,
-                &drafts,
-                Self::sorted_recovery_cmids(s),
-                &mut claims,
-            );
-            (queue, drafts, drains)
+            self.finish_in_flight_pending_commit(&preview.session_id, &queue, &drafts, &mut claims);
+            (queue, drafts)
         };
         self.broadcast_pending_snapshot(&preview.session_id, &queue, &drafts);
-        self.replay_deferred_drains(&preview.session_id, drains);
+        self.try_drain(&preview.session_id);
     }
 
     /// Release the exact Hub dispatch guard for a pre-delivery rejected notice
@@ -1080,7 +1045,7 @@ impl Hub {
             return;
         }
         preview.active = false;
-        let drains = {
+        {
             let mut sessions = self.inner.sessions.lock();
             let mut claims = self.inner.notice_claims.lock();
             let key = (preview.session_id.clone(), preview.cmid.clone());
@@ -1115,15 +1080,13 @@ impl Hub {
                     &preview.session_id,
                     &s.queue,
                     &s.drafts,
-                    Self::sorted_recovery_cmids(s),
                     &mut claims,
-                )
+                );
             } else {
                 claims.in_flight_pending_commits.remove(&preview.session_id);
-                DeferredDrainActions::default()
             }
-        };
-        self.replay_deferred_drains(&preview.session_id, drains);
+        }
+        self.try_drain(&preview.session_id);
     }
 
     /// Abort an undelivered notice requeue (on SQL error or duplicate/settled
@@ -1137,7 +1100,7 @@ impl Hub {
             return;
         }
         preview.active = false;
-        let drains = {
+        {
             let sessions = self.inner.sessions.lock();
             let mut claims = self.inner.notice_claims.lock();
             claims
@@ -1155,15 +1118,13 @@ impl Hub {
                     &preview.session_id,
                     &s.queue,
                     &s.drafts,
-                    Self::sorted_recovery_cmids(s),
                     &mut claims,
-                )
+                );
             } else {
                 claims.in_flight_pending_commits.remove(&preview.session_id);
-                DeferredDrainActions::default()
             }
-        };
-        self.replay_deferred_drains(&preview.session_id, drains);
+        }
+        self.try_drain(&preview.session_id);
     }
 
     /// Identity-checked teardown/recovery-abort fallback when durable conditional
@@ -1175,7 +1136,7 @@ impl Hub {
             return;
         }
         preview.active = false;
-        let (queue, drafts, drains) = {
+        let (queue, drafts) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(&preview.session_id) else {
                 let mut claims = self.inner.notice_claims.lock();
@@ -1224,17 +1185,11 @@ impl Hub {
                     .pending_releases
                     .insert(key, (active_stamp, active_cmd));
             }
-            let drains = self.finish_in_flight_pending_commit(
-                &preview.session_id,
-                &queue,
-                &drafts,
-                Self::sorted_recovery_cmids(s),
-                &mut claims,
-            );
-            (queue, drafts, drains)
+            self.finish_in_flight_pending_commit(&preview.session_id, &queue, &drafts, &mut claims);
+            (queue, drafts)
         };
         self.broadcast_pending_snapshot(&preview.session_id, &queue, &drafts);
-        self.replay_deferred_drains(&preview.session_id, drains);
+        self.try_drain(&preview.session_id);
     }
 
     /// Identity-checked fallback when `preview_and_send_undelivered_notice_requeue`
@@ -1287,8 +1242,6 @@ impl Hub {
                         initiator: Some(crate::prompt_origin::DeliveryOrigin::cowboy(
                             "managed_call",
                         )),
-                        explicit: false,
-                        wake_dormant: false,
                     },
                 );
             }
@@ -1357,8 +1310,6 @@ impl Hub {
                 schedule: None,
                 origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
                 initiator: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
-                explicit: false,
-                wake_dormant: false,
             };
             next_queue.insert(0, msg.clone());
             Some(msg)
@@ -1432,13 +1383,12 @@ impl Hub {
             receipt_key: receipt_key.to_owned(),
             reconcile_only: true,
         }];
-        let Some(rx) = self.send_acked_update_pending_with_recovery(
+        let Some(rx) = self.send_acked_update_pending(
             session_id,
             next_queue,
             drafts,
             Vec::new(),
             reconcile_guard,
-            Self::sorted_recovery_cmids(s),
             true,
         ) else {
             return UndeliveredRequeue::Rejected(
@@ -1482,5 +1432,51 @@ impl Hub {
             .pending_releases
             .insert(key, (stamp, command_id.clone()));
         Some((completion_id.to_owned(), stamp, command_id))
+    }
+
+    /// Park an unacknowledged prompt as a draft during execution recovery.
+    /// For a `call-notice:`, strips the reserved `cmid` so the parked draft is
+    /// never rejected or re-bound to the notice lifecycle, clears any active
+    /// claim, and records `execution_recovery_parked` atomically with the draft.
+    pub fn park_recovery_draft(
+        &self,
+        session_id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+    ) {
+        let Some(notice_cid) = cmid
+            .as_deref()
+            .filter(|id| id.starts_with(crate::agent_model::CALL_NOTICE_PREFIX))
+            .map(str::to_owned)
+        else {
+            self.add_draft_with_origin(session_id, text, content, cmid, None);
+            return;
+        };
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            let id = self.next_qid();
+            s.drafts.push(QueuedMessage {
+                id,
+                text,
+                content,
+                cmid: None,
+                schedule: None,
+                origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
+                initiator: None,
+            });
+            let mut claims = self.inner.notice_claims.lock();
+            let key = (session_id.to_owned(), notice_cid.clone());
+            claims.active.remove(&key);
+            claims.pending_releases.remove(&key);
+        }
+        self.emit_pending_with_notice_ops(
+            session_id,
+            vec![(notice_cid, "execution_recovery_parked".to_owned())],
+            Vec::new(),
+        );
     }
 }

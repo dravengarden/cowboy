@@ -3687,9 +3687,7 @@ async function saveRecoveredSendAsDraft(sessionId: string, id: string): Promise<
     // Save first, then retire the old retry obligation. This never submits the
     // old content to the agent and a storage failure leaves the source intact.
     const cmid = recoveryDraftCmid(id);
-    const existing = qClients.get(sessionId)?.get().drafts.some((draft) =>
-      draft.cmid === cmid || draft.cmid === id || (row.cmid !== undefined && draft.cmid === row.cmid)
-    );
+    const existing = qClients.get(sessionId)?.get().drafts.some((draft) => draft.cmid === cmid);
     if (!existing) await qAdd("drafts", sessionId, row.text, row.attachments, { origin: "composer", cmid });
     await discardQueued(sessionId, id);
     if (row.cmid !== undefined) {
@@ -5480,11 +5478,8 @@ export async function activateDraft(sessionId: string, id: string): Promise<void
 }
 
 // Send all drafts (front-to-back) — bulk "send everything" on the drafts panel.
-// Recovery drafts (whose prior delivery is ambiguous) require explicit per-draft resend.
 export function activateAllDrafts(sessionId: string): Promise<void> {
-  const drafts = [...(state.drafts.get(sessionId) ?? [])].filter(
-    (draft) => !draft.id.startsWith("recovery-"),
-  );
+  const drafts = [...(state.drafts.get(sessionId) ?? [])];
   return drafts.reduce(
     (previous, draft) => previous.then(() => activateDraft(sessionId, draft.id)),
     Promise.resolve(),

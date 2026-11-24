@@ -255,8 +255,6 @@ fn pending(id: &str, text: &str, cmid: &str) -> QueuedMessage {
         schedule: None,
         origin: None,
         initiator: None,
-        explicit: false,
-        wake_dormant: false,
     }
 }
 

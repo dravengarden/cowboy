@@ -344,7 +344,7 @@ pub(super) enum PromptPrep {
     },
 }
 
-pub(super) async fn prepare_or_park_prompt_for_send(
+pub(super) fn prepare_or_park_prompt_for_send(
     shared: &std::sync::Arc<Shared>,
     key: &str,
     version: u64,
@@ -366,8 +366,7 @@ pub(super) async fn prepare_or_park_prompt_for_send(
                 *command,
                 "prompt delivery across worker change is unresolved; retained as draft",
                 replacement_worker.as_deref(),
-            )
-            .await;
+            );
             false
         }
     }

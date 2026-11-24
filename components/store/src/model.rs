@@ -392,16 +392,6 @@ pub struct QueuedMessage {
     /// `None` on parked drafts and legacy rows persisted before C-auth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initiator: Option<crate::delivery_origin::DeliveryOrigin>,
-    /// Persists explicit owner send/activation intent (e.g. an activated
-    /// recovery draft) across deferred drains and Controller restarts so the
-    /// row still revives a dormant session when it reaches queue head.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub explicit: bool,
-    /// Persists permission to wake a cleanly dormant (`Exited`) session (e.g.
-    /// a due scheduled draft) while still respecting `paused` and never
-    /// reviving a `Crashed` or `Interrupted` turn.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub wake_dormant: bool,
 }
 
 /// A draft's future auto-send instruction. Server-controlled (fires even with
@@ -417,14 +407,6 @@ pub struct DraftSchedule {
     /// ⏸ hold) and never interrupt a running turn.
     #[serde(default)]
     pub delivery: Delivery,
-    /// Monotonic schedule generation stamped on each schedule/reschedule so a
-    /// stale timer callback can never fire an unscheduled or rescheduled draft.
-    #[serde(default, skip_serializing_if = "is_zero_u64")]
-    pub generation: u64,
-}
-
-fn is_zero_u64(v: &u64) -> bool {
-    *v == 0
 }
 
 /// Fire-time queue position for a scheduled draft. The two modes differ ONLY in

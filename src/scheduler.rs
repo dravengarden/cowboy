@@ -53,7 +53,6 @@ pub enum ScheduleCmd {
         session_id: String,
         draft_id: String,
         fire_at_ms: i64,
-        generation: u64,
     },
     /// Cancel a scheduled draft's timer (unscheduled / removed / activated).
     CancelDraft {
@@ -78,8 +77,6 @@ enum Action {
     Draft {
         session_id: String,
         draft_id: String,
-        fire_at_ms: i64,
-        generation: u64,
     },
 }
 
@@ -128,36 +125,14 @@ pub async fn run_scheduler(hub: Hub, mut rx: mpsc::Receiver<ScheduleCmd>) {
                 Some(ScheduleCmd::HumanTurn { session_id }) => {
                     fires.remove(&session_id);
                 }
-                Some(
-                    ScheduleCmd::ArmDraft {
-                        session_id,
-                        draft_id,
-                        ..
-                    }
-                    | ScheduleCmd::CancelDraft {
-                        session_id,
-                        draft_id,
-                    },
-                ) => {
-                    let key = Key::Draft(session_id.clone(), draft_id.clone());
-                    if let Some((fire_at_ms, generation)) =
-                        hub.current_draft_schedule(&session_id, &draft_id)
-                    {
-                        pending.insert(
-                            key,
-                            Pending {
-                                fire_at_ms,
-                                action: Action::Draft {
-                                    session_id,
-                                    draft_id,
-                                    fire_at_ms,
-                                    generation,
-                                },
-                            },
-                        );
-                    } else {
-                        pending.remove(&key);
-                    }
+                Some(ScheduleCmd::ArmDraft { session_id, draft_id, fire_at_ms }) => {
+                    pending.insert(
+                        Key::Draft(session_id.clone(), draft_id.clone()),
+                        Pending { fire_at_ms, action: Action::Draft { session_id, draft_id } },
+                    );
+                }
+                Some(ScheduleCmd::CancelDraft { session_id, draft_id }) => {
+                    pending.remove(&Key::Draft(session_id, draft_id));
                 }
             },
             // Only armed when something is pending; fires the soonest-due batch.
@@ -193,16 +168,15 @@ pub async fn run_scheduler(hub: Hub, mut rx: mpsc::Receiver<ScheduleCmd>) {
                             let cmid = format!("{WAKEUP_PREFIX}{sid}-{now}");
                             hub.submit_automatic(&sid, prompt, cmid, "schedule");
                         }
-                        Action::Draft { session_id: sid, draft_id, fire_at_ms, generation } => {
+                        Action::Draft { session_id: sid, draft_id } => {
+                            // One-shot: activate the parked draft per its delivery.
+                            // Persistence is the draft itself, which the fire removes;
+                            // no runaway guard (a scheduled draft fires exactly once).
                             tracing::info!(
                                 session = %sid, draft = %draft_id,
                                 "scheduler: firing scheduled draft",
                             );
-                            hub.fire_scheduled_draft_checked(
-                                &sid,
-                                &draft_id,
-                                Some((fire_at_ms, generation)),
-                            );
+                            hub.fire_scheduled_draft(&sid, &draft_id);
                         }
                     }
                 }

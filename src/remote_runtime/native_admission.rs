@@ -402,7 +402,7 @@ fn reserve_for_write(
     }
     if let Some((key, version)) = expected {
         if pending.version(key) != Some(version)
-            || shared.fenced_commands.lock().get(key) == Some(&version)
+            || shared.fenced_commands.lock().contains(key)
             || matches!(command, CoreCommand::Prompt { session_id, .. }
                 if startups.contains(session_id) || recovery_fences.contains_key(session_id))
         {

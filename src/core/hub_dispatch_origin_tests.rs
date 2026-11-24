@@ -238,8 +238,6 @@ async fn activation_and_move_never_promote_non_owner_or_legacy_drafts() {
             schedule: None,
             origin: None,
             initiator: None,
-            explicit: false,
-            wake_dormant: false,
         });
     hub.activate_draft("src", "legacy-d", None, &RequestCaller::Person);
     let req = rx.try_recv().unwrap();
@@ -352,8 +350,6 @@ async fn legacy_queued_row_stays_non_owner_until_edited_by_owner() {
             schedule: None,
             origin: None,
             initiator: None,
-            explicit: false,
-            wake_dormant: false,
         });
     hub.set_status("legacy-q", Status::Running, None);
     hub.request_send_queued("legacy-q", "q-old", &RequestCaller::Person);

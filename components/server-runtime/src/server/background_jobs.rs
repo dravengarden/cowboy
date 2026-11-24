@@ -5,7 +5,6 @@ mod dispatch;
 
 use super::*;
 #[cfg(test)]
-#[cfg(test)]
 pub use dispatch::retain_failed_dispatch;
 pub use dispatch::{dispatch_preflight, run_dispatcher};
 
@@ -599,21 +598,14 @@ async fn apply_non_event_write(
         queue,
         drafts,
         released_claims,
-        recovery_cmids,
         require_claim_release: true,
         ack_id,
         ..
     } = write
     {
-        let outcome = retry_conditional_pending_write(
-            store,
-            session_id,
-            queue,
-            drafts,
-            released_claims,
-            recovery_cmids.as_deref(),
-        )
-        .await;
+        let outcome =
+            retry_conditional_pending_write(store, session_id, queue, drafts, released_claims)
+                .await;
         let ok = outcome.is_ok();
         if let (Some(id), Some(acks)) = (ack_id, acks) {
             acks.complete(*id, outcome);
@@ -644,18 +636,11 @@ async fn retry_conditional_pending_write(
     queue: &[crate::core::QueuedMessage],
     drafts: &[crate::core::QueuedMessage],
     released_claims: &[crate::store::NoticeClaimRelease],
-    recovery_cmids: Option<&[String]>,
 ) -> Result<bool, String> {
     let mut last_error = None;
     for attempt in 0..4 {
         match store
-            .update_pending_requiring_claim_release_atomic(
-                session_id,
-                queue,
-                drafts,
-                released_claims,
-                recovery_cmids,
-            )
+            .update_pending_requiring_claim_release(session_id, queue, drafts, released_claims)
             .await
         {
             Ok(true) => return Ok(true),
@@ -804,17 +789,15 @@ pub async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Res
             drafts,
             settled_notices,
             released_claims,
-            recovery_cmids,
             ..
         } => {
             store
-                .update_pending_atomic(
+                .update_pending_with_notice_ops(
                     session_id,
                     queue,
                     drafts,
                     settled_notices,
                     released_claims,
-                    recovery_cmids.as_deref(),
                 )
                 .await
         }

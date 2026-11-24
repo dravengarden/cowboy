@@ -1468,8 +1468,6 @@ async fn run_storage_contract(store: &Store, session_id: &str) -> Result<()> {
                 schedule: None,
                 origin: None,
                 initiator: None,
-                explicit: false,
-                wake_dormant: false,
             }],
             &[QueuedMessage {
                 id: "draft-1".to_owned(),
@@ -1479,8 +1477,6 @@ async fn run_storage_contract(store: &Store, session_id: &str) -> Result<()> {
                 schedule: None,
                 origin: None,
                 initiator: None,
-                explicit: false,
-                wake_dormant: false,
             }],
         )
         .await?;

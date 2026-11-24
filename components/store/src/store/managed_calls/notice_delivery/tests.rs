@@ -1010,8 +1010,6 @@ async fn conformance(url: &str) {
         schedule: None,
         origin: None,
         initiator: None,
-        explicit: false,
-        wake_dormant: false,
     };
     assert!(
         store
@@ -1058,8 +1056,6 @@ async fn conformance(url: &str) {
         schedule: None,
         origin: None,
         initiator: None,
-        explicit: false,
-        wake_dormant: false,
     };
     store
         .update_pending("parent-a", std::slice::from_ref(&sentinel), &[])

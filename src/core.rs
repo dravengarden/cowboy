@@ -44,8 +44,8 @@ pub use hub_events::FanoutFrame;
 mod hub_managed_calls;
 pub use hub_managed_calls::{
     NoticeClaimGuard, NoticeRequeueRequest, OwnerNoticeWithdrawalOp, OwnerQueueMutation,
-    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, RecoveryDraftPark,
-    RetainedLogScan, StoreAckSink, UndeliveredRequeue,
+    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, RetainedLogScan,
+    StoreAckSink, UndeliveredRequeue,
 };
 mod hub_peer_notice;
 pub use hub_peer_notice::PromptProgress;
@@ -461,8 +461,6 @@ pub struct DispatchReq {
     pub cmid: Option<String>,
     /// A user-requested send (chat submit, send now, force push).
     pub explicit: bool,
-    /// Whether this dispatch may revive a dormant session if requeued pre-handoff.
-    pub wake_dormant: bool,
     /// Stored content origin (last content writer), preserved across requeue.
     pub origin: Option<crate::prompt_origin::DeliveryOrigin>,
     /// Initiating authority that admitted/triggered the send, preserved across requeue.
@@ -551,6 +549,30 @@ impl Hub {
             settings_keys::SESSION_DELIVERY_HOLD_PREFIX
         ))
         .and_then(|value| value.as_str().map(str::to_owned))
+    }
+
+    /// Whether a restored session waits for resources by explicit request.
+    fn restored_explicit_wait(&self, id: &str) -> bool {
+        self.setting(&format!(
+            "{}{id}",
+            settings_keys::SESSION_RESOURCE_WAIT_PREFIX
+        ))
+        .and_then(|value| value.get("explicit").and_then(serde_json::Value::as_bool))
+        .unwrap_or(false)
+    }
+
+    /// The queued row a restored explicit wait belongs to.
+    fn restored_explicit_row(&self, id: &str) -> Option<String> {
+        self.setting(&format!(
+            "{}{id}",
+            settings_keys::SESSION_RESOURCE_WAIT_PREFIX
+        ))
+        .and_then(|value| {
+            value
+                .get("row")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
     }
 }
 
@@ -678,13 +700,6 @@ struct Session {
     /// ran. Bounded; the echoed `cmid` in `log` covers the rest and survives a
     /// Controller restart.
     dispatched_cmids: VecDeque<DispatchedPrompt>,
-    /// Durable set of original client `cmid`s parked by ambiguous prompt recovery
-    /// so offline retries never replay them even after editing or removing the draft.
-    recovery_cmids: HashSet<String>,
-    /// Subset of `recovery_cmids` proven durably persisted in the store.
-    committed_recovery_cmids: HashSet<String>,
-    /// Original client `cmid`s currently in Hub's Controller-owned recovery-park retry queue.
-    pending_recovery_cmids: HashSet<String>,
     dispatched_origins: HashMap<String, crate::prompt_origin::PromptDispatchRecord>,
     dispatched_origin_order: VecDeque<String>,
     /// Single-use pending worker echoes `(origin, expected_blocks)`.
@@ -1282,8 +1297,6 @@ pub enum StoreWrite {
         settled_notices: Vec<(String, String)>,
         released_claims: Vec<crate::store::NoticeClaimRelease>,
         #[serde(default)]
-        recovery_cmids: Option<Vec<String>>,
-        #[serde(default)]
         require_claim_release: bool,
         #[serde(skip)]
         ack_id: Option<u64>,
@@ -1559,9 +1572,6 @@ struct HubInner {
     sync: Mutex<HashMap<String, SyncArbiter>>,
     /// Active and pending-release completion-notice dispatch stamps. Never held with `sessions`.
     notice_claims: Mutex<hub_managed_calls::NoticeClaims>,
-    teardown_shutdown: std::sync::atomic::AtomicBool,
-    teardown_shutdown_notify: tokio::sync::Notify,
-    poisoned_pending_sessions: Mutex<HashSet<String>>,
     store_acks: hub_managed_calls::StoreAckSink,
     /// Serialize read/compare/apply and ordered write-behind snapshots.
     sync_apply_gate: Mutex<()>,
@@ -1793,9 +1803,6 @@ impl Hub {
                 sync_apply_gate: Mutex::new(()),
                 review_default_receipts: Mutex::new(review_defaults::Receipts::default()),
                 notice_claims: Mutex::new(hub_managed_calls::NoticeClaims::default()),
-                teardown_shutdown: std::sync::atomic::AtomicBool::new(false),
-                teardown_shutdown_notify: tokio::sync::Notify::new(),
-                poisoned_pending_sessions: Mutex::new(HashSet::new()),
                 store_acks: hub_managed_calls::StoreAckSink::default(),
                 next_qid: AtomicU64::new(1),
                 next_error_id: AtomicU64::new(1),
@@ -1979,13 +1986,12 @@ impl Hub {
     /// draft itself (with its `schedule`) is the persisted record — this only
     /// drives the in-memory timer, so it's used both for a fresh schedule and
     /// the startup re-arm (an overdue time fires immediately, catch-up).
-    fn arm_draft_timer(&self, session_id: &str, draft_id: &str, fire_at_ms: i64, generation: u64) {
+    fn arm_draft_timer(&self, session_id: &str, draft_id: &str, fire_at_ms: i64) {
         if let Some(tx) = self.inner.scheduler_tx.lock().as_ref() {
             let _ = tx.try_send(crate::scheduler::ScheduleCmd::ArmDraft {
                 session_id: session_id.to_owned(),
                 draft_id: draft_id.to_owned(),
                 fire_at_ms,
-                generation,
             });
         }
     }
@@ -2007,23 +2013,22 @@ impl Hub {
     /// AFTER restore. An already-overdue schedule fires immediately (catch-up for
     /// downtime), mirroring [`Self::rearm_wakeup`].
     pub fn rearm_scheduled_drafts(&self) {
-        let arms: Vec<(String, String, i64, u64)> = {
+        let arms: Vec<(String, String, i64)> = {
             let sessions = self.inner.sessions.lock();
             sessions
                 .values()
-                .filter(|s| s.meta.trashed_at_ms.is_none())
                 .flat_map(|s| {
                     let sid = s.meta.id.clone();
                     s.drafts.iter().filter_map(move |m| {
                         m.schedule
                             .as_ref()
-                            .map(|sc| (sid.clone(), m.id.clone(), sc.fire_at_ms, sc.generation))
+                            .map(|sc| (sid.clone(), m.id.clone(), sc.fire_at_ms))
                     })
                 })
                 .collect()
         };
-        for (sid, did, fire_at_ms, generation) in arms {
-            self.arm_draft_timer(&sid, &did, fire_at_ms, generation);
+        for (sid, did, fire_at_ms) in arms {
+            self.arm_draft_timer(&sid, &did, fire_at_ms);
         }
     }
 
@@ -2195,7 +2200,7 @@ impl Hub {
                     queue.len() != queue_len || drafts.len() != drafts_len;
                 for m in queue.iter_mut().chain(drafts.iter_mut()) {
                     if !seen.insert(m.id.clone()) {
-                        m.id = self.next_healed_qid(&m.id);
+                        m.id = self.next_qid();
                         seen.insert(m.id.clone());
                         healed = true;
                     }
@@ -2288,14 +2293,6 @@ impl Hub {
                         config_options,
                         config_previews: ConfigPreviews::default(),
                         config_preferences,
-                        committed_recovery_cmids: self.restore_recovery_cmids_and_clean_queue(
-                            &id,
-                            &mut queue,
-                            &drafts,
-                            &mut pending_dirty,
-                        ),
-                        recovery_cmids: self.restored_recovery_cmids(&id, &drafts),
-                        pending_recovery_cmids: HashSet::new(),
                         queue,
                         drafts,
                         editing: None,
@@ -3121,9 +3118,6 @@ impl Hub {
                     explicit_row: None,
                     dispatch_pending: None,
                     dispatched_cmids: VecDeque::new(),
-                    recovery_cmids: HashSet::new(),
-                    committed_recovery_cmids: HashSet::new(),
-                    pending_recovery_cmids: HashSet::new(),
                     dispatched_origins: HashMap::new(),
                     dispatched_origin_order: VecDeque::new(),
                     pending_echoes: HashMap::new(),

@@ -257,9 +257,6 @@ impl Hub {
         // between must never leave a restored folder holding sessions that
         // retention would still delete.
         self.persist_trash(&restored.sessions, None, pins, folders_by_owner, true);
-        if !restored.sessions.is_empty() {
-            self.rearm_scheduled_drafts();
-        }
         Ok(restored)
     }
 

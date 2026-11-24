@@ -2,11 +2,6 @@
 
 use super::*;
 
-enum DrainHeadGuard {
-    Allow,
-    Skip { persist_explicit: bool },
-}
-
 mod drafts;
 mod retry;
 mod submit;
@@ -34,8 +29,7 @@ impl Hub {
         let mut max_qid = 0u64;
         for r in sessions {
             for m in r.queue.iter().chain(r.drafts.iter()) {
-                let raw = m.id.strip_prefix("recovery-").unwrap_or(&m.id);
-                if let Some(n) = raw.strip_prefix('q').and_then(|s| s.parse::<u64>().ok()) {
+                if let Some(n) = m.id.strip_prefix('q').and_then(|s| s.parse::<u64>().ok()) {
                     max_qid = max_qid.max(n);
                 }
             }
@@ -59,15 +53,13 @@ impl Hub {
         {
             let req = error.into_inner();
             tracing::error!(session = %req.session_id, "dispatch queue rejected a prompt");
-            self.requeue_prompt_preserving_intent(
+            self.requeue_prompt(
                 &req.session_id,
                 req.text,
                 req.content,
                 req.cmid,
                 req.origin,
                 req.initiator,
-                req.explicit,
-                req.wake_dormant,
             );
             self.broadcast_error(
                 Some(req.session_id),
@@ -171,7 +163,6 @@ impl Hub {
                 initiator: Some(origin.clone()),
                 dispatch_origin: dispatch_origin.clone(),
                 trigger: origin,
-                wake_dormant: false,
             }
         };
         if dispatch_origin.is_owner() {
@@ -184,20 +175,9 @@ impl Hub {
     /// The drain policy: whether the queue head may be dispatched now, or why
     /// it stays queued. Pure over the session; the context check runs only
     /// when every earlier condition passed, in the same order as before.
-    #[cfg(test)]
     pub(super) fn drain_decision(
         s: &Session,
         allow_revive: bool,
-        manual: bool,
-        context_allows: impl FnOnce(Option<&str>) -> bool,
-    ) -> DrainDecision {
-        Self::drain_decision_for_row(s, allow_revive, false, manual, context_allows)
-    }
-
-    pub(super) fn drain_decision_for_row(
-        s: &Session,
-        allow_revive: bool,
-        wake_dormant: bool,
         manual: bool,
         context_allows: impl FnOnce(Option<&str>) -> bool,
     ) -> DrainDecision {
@@ -205,7 +185,7 @@ impl Hub {
         if s.meta.trashed_at_ms.is_some() {
             return DrainDecision::Trashed;
         }
-        if !Self::ready_for(s, allow_revive, wake_dormant) {
+        if !Self::ready(s, allow_revive) {
             return DrainDecision::NotReady;
         }
         // The user MANUALLY paused the drain (the ⏸ toggle) → hold the queue
@@ -248,20 +228,11 @@ impl Hub {
     }
 
     pub(super) fn ready(s: &Session, allow_revive: bool) -> bool {
-        Self::ready_for(s, allow_revive, false)
-    }
-
-    /// Separate waking a cleanly dormant (`Exited`) session (e.g. a due
-    /// scheduled draft) from explicit permission to revive after a mid-task
-    /// failure (`Crashed` / `Interrupted`) (Finding 18).
-    pub(super) fn ready_for(s: &Session, allow_revive: bool, wake_dormant: bool) -> bool {
         let can = if allow_revive {
             matches!(
                 s.meta.status,
                 Status::Running | Status::Exited | Status::Crashed | Status::Interrupted
             )
-        } else if wake_dormant {
-            matches!(s.meta.status, Status::Running | Status::Exited)
         } else {
             s.meta.status == Status::Running
         };
@@ -269,39 +240,6 @@ impl Hub {
             && s.dispatch_pending.is_none()
             && s.delivery_hold.is_none()
             && !s.clear_pending
-    }
-
-    pub(in crate::core) fn recovery_cmids_contain(set: &HashSet<String>, cmid: &str) -> bool {
-        if set.contains(cmid) {
-            return true;
-        }
-        if let Some(orig) = cmid.strip_prefix("recovery-").filter(|s| !s.is_empty()) {
-            set.contains(orig)
-        } else {
-            set.contains(&format!("recovery-{cmid}"))
-        }
-    }
-
-    pub(in crate::core) fn is_cmid_committed_recovery(s: &Session, cmid: &str) -> bool {
-        Self::recovery_cmids_contain(&s.committed_recovery_cmids, cmid)
-    }
-
-    pub(in crate::core) fn is_cmid_settled_by_recovery(s: &Session, cmid: &str) -> bool {
-        if Self::is_cmid_committed_recovery(s, cmid)
-            || Self::recovery_cmids_contain(&s.pending_recovery_cmids, cmid)
-        {
-            return true;
-        }
-        let orig = cmid.strip_prefix("recovery-").filter(|o| !o.is_empty());
-        let alias = orig.is_none().then(|| format!("recovery-{cmid}"));
-        s.drafts.iter().any(|m| {
-            m.cmid.as_deref().is_some_and(|d| {
-                d == cmid
-                    || alias.as_deref() == Some(d)
-                    || orig.is_some_and(|o| d == o)
-                    || d.strip_prefix("recovery-").is_some_and(|o| o == cmid)
-            })
-        })
     }
 
     /// Dispatch the head of a session's queue if it can take a turn and the head
@@ -315,174 +253,63 @@ impl Hub {
         manual: bool,
         trigger: Option<&crate::prompt_origin::RequestCaller>,
     ) {
-        self.drain_head_checked(session_id, allow_revive, manual, None, None, trigger);
-    }
-
-    /// Collect all confirmed `cmid`s for a session's pending snapshot: queue +
-    /// drafts + committed recovery tombstones so browser outboxes retire
-    /// settled recovery prompts instead of replaying them (Finding 11).
-    pub(super) fn confirmed_cmids(
-        &self,
-        session_id: &str,
-        queue: &[QueuedMessage],
-        drafts: &[QueuedMessage],
-    ) -> Vec<String> {
-        let mut confirmed = Self::cmids_of(queue, drafts);
-        let sessions = self.inner.sessions.lock();
-        if let Some(s) = sessions.get(session_id) {
-            let mut extra: Vec<&String> = s.committed_recovery_cmids.iter().collect();
-            extra.sort();
-            for cmid in extra {
-                if !confirmed.iter().any(|seen| seen == cmid) {
-                    confirmed.push(cmid.clone());
-                }
-                if !cmid.starts_with("recovery-") {
-                    let alias = format!("recovery-{cmid}");
-                    if !confirmed.iter().any(|seen| seen == &alias) {
-                        confirmed.push(alias);
-                    }
-                }
-            }
-        }
-        confirmed
-    }
-
-    fn check_drain_head_guards(
-        &self,
-        session_id: &str,
-        s: &mut Session,
-        manual: bool,
-        callerless: bool,
-    ) -> DrainHeadGuard {
-        if manual && callerless {
-            if !s.explicit_wait
-                || s.queue
-                    .first()
-                    .is_some_and(|head| s.editing.as_deref() == Some(head.id.as_str()))
-            {
-                return DrainHeadGuard::Skip {
-                    persist_explicit: false,
-                };
-            }
-            if s.explicit_row
-                .as_ref()
-                .is_some_and(|row| s.queue.first().is_none_or(|head| &head.id != row))
-            {
-                s.explicit_wait = false;
-                s.explicit_row = None;
-                return DrainHeadGuard::Skip {
-                    persist_explicit: true,
-                };
-            }
-        }
-        if s.queue.first().is_some_and(|head| {
-            self.is_row_withdrawing(session_id, &head.id)
-                || head
-                    .cmid
-                    .as_deref()
-                    .is_some_and(|cid| self.is_notice_withdrawing(session_id, cid))
-        }) {
-            return DrainHeadGuard::Skip {
-                persist_explicit: false,
-            };
-        }
-        DrainHeadGuard::Allow
-    }
-
-    pub(in crate::core) fn drain_head_checked(
-        &self,
-        session_id: &str,
-        allow_revive: bool,
-        manual: bool,
-        expected_head_id: Option<&str>,
-        explicit_head_id: Option<&str>,
-        trigger: Option<&crate::prompt_origin::RequestCaller>,
-    ) {
         if self.inner.dispatch_tx.lock().is_none() {
             return;
         }
-        let mut stripped_stale = false;
         let req = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            // Never pop/dispatch while an acknowledged pending commit is in flight
-            // for this session; record manual/revive intent against the exact head
-            // row so it replays with its original admission rules once the fence lifts.
-            if self.record_deferred_drain_if_fenced(
-                session_id,
-                s.queue.first().map(|h| h.id.as_str()),
-                manual,
-                allow_revive,
-                trigger,
-            ) {
-                return;
-            }
-            // Strip any stale restored queue rows already settled by committed
-            // durable recovery so they never wedge valid rows behind them (Finding 14).
-            while s.queue.first().is_some_and(|head| {
-                head.cmid
-                    .as_deref()
-                    .is_some_and(|c| Self::is_cmid_committed_recovery(s, c))
-            }) {
-                s.queue.remove(0);
-                stripped_stale = true;
-            }
-            // Hold while an active in-flight recovery park for the head row is committing.
-            if s.queue.first().is_some_and(|head| {
-                head.cmid
-                    .as_deref()
-                    .is_some_and(|c| Self::recovery_cmids_contain(&s.pending_recovery_cmids, c))
-            }) {
-                drop(sessions);
-                if stripped_stale {
-                    self.emit_pending(session_id);
-                }
-                return;
-            }
-            // Deferred manual/revive replay validates the exact expected head
-            // row inside the same critical section that pops it (Finding 16).
-            if let Some(expected) = expected_head_id
-                && s.queue.first().is_none_or(|head| head.id != expected)
-            {
-                drop(sessions);
-                if stripped_stale {
-                    self.emit_pending(session_id);
-                }
-                return;
-            }
-            let head_is_explicit = s.queue.first().is_some_and(|head| {
-                head.explicit || explicit_head_id.is_some_and(|id| head.id == id)
+            let decision = Self::drain_decision(s, allow_revive, manual, |cmid| {
+                self.context_allows_dispatch(session_id, cmid)
             });
-            let head_wake_dormant = s.queue.first().is_some_and(|head| head.wake_dormant);
-            let effective_revive = allow_revive || head_is_explicit;
-            let decision = Self::drain_decision_for_row(
-                s,
-                effective_revive,
-                head_wake_dormant,
-                manual,
-                |cmid| self.context_allows_dispatch(session_id, cmid),
-            );
             if decision != DrainDecision::Dispatch {
-                drop(sessions);
-                if stripped_stale {
-                    self.emit_pending(session_id);
-                }
                 return;
             }
-            match self.check_drain_head_guards(session_id, s, manual, trigger.is_none()) {
-                DrainHeadGuard::Allow => {}
-                DrainHeadGuard::Skip { persist_explicit } => {
-                    drop(sessions);
-                    if stripped_stale {
-                        self.emit_pending(session_id);
-                    }
-                    if persist_explicit {
-                        self.persist_explicit_wait(session_id);
-                    }
-                    return;
-                }
+            // A retried explicit send carries no caller of its own: it must
+            // not take a row out from under the terminal editing it. A refused
+            // dispatch requeues the row under a new id, which that editor reads
+            // as a sent message and parks its buffer as a duplicate draft. The
+            // retry resumes once the edit is saved or abandoned.
+            // A caller-less manual drain is a retried explicit send: it needs
+            // live intent. Another terminal may have sent the held row since
+            // maintenance read the flag; the next row then gets no bypass.
+            if manual && trigger.is_none() && !s.explicit_wait {
+                return;
+            }
+            if manual
+                && trigger.is_none()
+                && s.queue
+                    .first()
+                    .is_some_and(|head| s.editing.as_deref() == Some(head.id.as_str()))
+            {
+                return;
+            }
+            // Its intent belongs to the row it was recorded for: once the
+            // user removed or reordered that row, the new head is not sent
+            // through Pause on its behalf, and the intent ends. Checked under
+            // the lock that takes the row out.
+            if manual
+                && trigger.is_none()
+                && s.explicit_row
+                    .as_ref()
+                    .is_some_and(|row| s.queue.first().is_none_or(|head| &head.id != row))
+            {
+                s.explicit_wait = false;
+                s.explicit_row = None;
+                drop(sessions);
+                self.persist_explicit_wait(session_id);
+                return;
+            }
+            if s.queue.first().is_some_and(|head| {
+                self.is_row_withdrawing(session_id, &head.id)
+                    || head
+                        .cmid
+                        .as_deref()
+                        .is_some_and(|cid| self.is_notice_withdrawing(session_id, cid))
+            }) {
+                return;
             }
             let head = s.queue.remove(0);
             let effective_trigger = trigger
@@ -508,8 +335,7 @@ impl Hub {
                 text: head.text,
                 content: head.content,
                 cmid: Some(dispatch_cmid),
-                explicit: manual || head_is_explicit,
-                wake_dormant: head_wake_dormant,
+                explicit: manual,
                 origin: head.origin,
                 initiator: effective_trigger,
                 dispatch_origin,
@@ -644,7 +470,6 @@ impl Hub {
             } else {
                 s.in_flight = false;
                 s.dispatch_pending = None;
-                s.active_turn_compacting = false;
                 s.turn_completion_latched = true;
                 true
             }
@@ -677,7 +502,6 @@ impl Hub {
             } else {
                 s.in_flight = false;
                 s.dispatch_pending = None;
-                s.active_turn_compacting = false;
                 s.turn_completion_latched = true;
                 true
             }
@@ -711,23 +535,6 @@ impl Hub {
         cmid: Option<String>,
         origin: Option<crate::prompt_origin::DeliveryOrigin>,
         initiator: Option<crate::prompt_origin::DeliveryOrigin>,
-    ) {
-        self.requeue_prompt_preserving_intent(
-            session_id, text, content, cmid, origin, initiator, false, false,
-        );
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    pub fn requeue_prompt_preserving_intent(
-        &self,
-        session_id: &str,
-        text: String,
-        content: Vec<serde_json::Value>,
-        cmid: Option<String>,
-        origin: Option<crate::prompt_origin::DeliveryOrigin>,
-        initiator: Option<crate::prompt_origin::DeliveryOrigin>,
-        explicit: bool,
-        wake_dormant: bool,
     ) {
         if let Some(id) = cmid
             .as_deref()
@@ -784,8 +591,7 @@ impl Hub {
                 hub_dispatch_origin::remove_pending_echo(s, c);
             }
             if let Some(c) = cmid.as_deref()
-                && (s.queue.iter().any(|m| m.cmid.as_deref() == Some(c))
-                    || Self::is_cmid_settled_by_recovery(s, c))
+                && s.queue.iter().any(|m| m.cmid.as_deref() == Some(c))
             {
                 false
             } else {
@@ -800,8 +606,6 @@ impl Hub {
                         schedule: None,
                         origin,
                         initiator,
-                        explicit,
-                        wake_dormant,
                     },
                 );
                 true
@@ -955,7 +759,6 @@ impl Hub {
                     initiator: Some(initiator.clone()),
                     dispatch_origin,
                     trigger: initiator,
-                    wake_dormant: false,
                 });
             } else {
                 let id = self.next_qid();
@@ -969,8 +772,6 @@ impl Hub {
                         schedule: None,
                         origin: content_origin,
                         initiator: Some(initiator),
-                        explicit: false,
-                        wake_dormant: false,
                     },
                 );
                 interrupt = interrupt_on_busy && context_allows;
@@ -1010,13 +811,7 @@ impl Hub {
     /// worker, or echoed into the transcript (which survives
     /// a Controller restart because the echo persists its `cmid`).
     pub(super) fn prompt_already_accepted(s: &Session, cmid: &str) -> bool {
-        if s.recovery_cmids.contains(cmid)
-            || s.pending_recovery_cmids.contains(cmid)
-            || s.queue
-                .iter()
-                .chain(&s.drafts)
-                .any(|m| m.cmid.as_deref() == Some(cmid))
-        {
+        if s.queue.iter().any(|m| m.cmid.as_deref() == Some(cmid)) {
             return true;
         }
         Self::tracks_delivery(cmid)
@@ -1049,24 +844,6 @@ impl Hub {
                     .dispatched_cmids
                     .iter()
                     .any(|seen| seen.cmid == cmid && seen.echoed)
-                && !Self::is_cmid_settled_by_recovery(s, cmid)
-                && !cmid
-                    .strip_prefix("recovery-")
-                    .filter(|orig| !orig.is_empty())
-                    .is_some_and(|orig| {
-                        s.committed_recovery_cmids.contains(orig)
-                            || s.pending_recovery_cmids.contains(orig)
-                            || s.queue
-                                .iter()
-                                .chain(&s.drafts)
-                                .any(|m| m.cmid.as_deref() == Some(orig))
-                            || s.dispatched_cmids
-                                .iter()
-                                .any(|seen| seen.cmid == orig && seen.echoed)
-                            || s.log.iter().any(|entry| {
-                                entry.cmid.as_deref() == Some(orig) && is_user_message_chunk(entry)
-                            })
-                    })
                 && !s.log.iter().any(|entry| {
                     entry.cmid.as_deref() == Some(cmid) && is_user_message_chunk(entry)
                 })

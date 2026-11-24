@@ -77,16 +77,6 @@ impl InFlightPrompts {
         let _ = self.take_command(command_id);
     }
 
-    pub(super) fn retire_command_for_turn(&mut self, command_id: &str, expected_turn_id: &str) {
-        if self
-            .entries
-            .get(command_id)
-            .is_some_and(|entry| entry.turn_id == expected_turn_id)
-        {
-            let _ = self.take_command(command_id);
-        }
-    }
-
     pub(super) fn retire_cmid(&mut self, session_id: &str, cmid: &str) {
         let matching_keys: Vec<String> = self
             .entries
