@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../tools/test-assert.ts";
 import {
+  claimActiveVimOwner,
   clearBufferVimMode,
   getVimMode,
   setActiveVimOwner,
@@ -30,4 +31,12 @@ test("per-buffer Vim modes stay isolated and follow the active owner", () => {
   clearBufferVimMode("queue:1");
   setVimMode("normal");
   assertEquals(getVimMode(), "normal");
+
+  setVimMode("insert");
+  const releaseDoc = claimActiveVimOwner("document:doc-1");
+  setBufferVimMode("document:doc-1", "normal");
+  assertEquals(getVimMode(), "normal");
+  releaseDoc();
+  assertEquals(getVimMode(), "insert");
+  setVimMode("normal");
 });

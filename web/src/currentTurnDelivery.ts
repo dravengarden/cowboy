@@ -54,6 +54,8 @@ export async function deliverCurrentTurn(
     content: unknown[];
     target?: DeliveryTarget;
     nextCheckpoint?: boolean;
+    consumeDraftId?: string;
+    consumeQueuedId?: string;
   } | null,
   request: typeof fetch = fetch,
 ): Promise<CurrentTurnOutcome> {
@@ -75,6 +77,8 @@ export async function deliverCurrentTurn(
             ? "next_checkpoint"
             : "current_turn",
           operation,
+          ...(payload.consumeDraftId ? { consume_draft_id: payload.consumeDraftId } : {}),
+          ...(payload.consumeQueuedId ? { consume_queued_id: payload.consumeQueuedId } : {}),
         }),
         signal: AbortSignal.timeout(5000),
       });

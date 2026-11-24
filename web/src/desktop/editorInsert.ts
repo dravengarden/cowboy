@@ -59,12 +59,15 @@ export function useDesktopInsertCommand(
     sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.insertPrompt),
     run: () => {
       const region = document.querySelector<HTMLElement>(PROMPT_REGION);
-      region?.dispatchEvent(
-        new CustomEvent(DESKTOP_FOCUS_NEW_PROMPT_EVENT, {
-          bubbles: true,
-          cancelable: true,
-        }),
-      );
+      const deferred = region
+        ? !region.dispatchEvent(
+          new CustomEvent(DESKTOP_FOCUS_NEW_PROMPT_EVENT, {
+            bubbles: true,
+            cancelable: true,
+          }),
+        )
+        : false;
+      if (deferred) return;
       focus.current("prompt.composer");
       // The region may be expanding or swapping editors this frame.
       requestAnimationFrame(requestDesktopEditorInsert);

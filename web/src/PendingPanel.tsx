@@ -962,7 +962,9 @@ export function PendingPanel({
     setReordering(false);
     if (desktop && rowCallbacksRef.current.onDesktopEditRow) {
       const found = rowCallbacksRef.current.items.find((item) => item.id === id);
-      if (found) rowCallbacksRef.current.onDesktopEditRow(found, "insert");
+      if (found && !found.id.startsWith("opt-") && found.status === undefined) {
+        rowCallbacksRef.current.onDesktopEditRow(found, "insert");
+      }
       return;
     }
     setEditingId(id);

@@ -96,7 +96,7 @@ import {
   retryDraftRestore,
 } from "./draftStore";
 import { announceDraftChanges } from "./documents/store";
-import { bindPendingEditRecovery, recoverPendingEditsFrom } from "./pendingEditRecovery";
+import { bindPendingEditRecovery, claimStaleEditRecoveryCmid, recoverPendingEditsFrom } from "./pendingEditRecovery";
 import {
   attachPendingEditDatabase,
   pendingEditsDurable,
@@ -3577,14 +3577,22 @@ async function settleStaleRowMutation(
   sessionId: string,
   mutation: { id: string; name: string; args: unknown },
 ): Promise<void> {
-  const row = (mutation.args as { row?: QueuedMessage }).row;
+  const args = mutation.args as { id?: string; row?: QueuedMessage };
+  const row = args.row;
   const edit = mutation.name === "editQueue" || mutation.name === "editDraft";
   const kept = edit && row !== undefined &&
     (row.text.trim() !== "" || row.attachments.length > 0);
   try {
     if (kept) {
-      // Persist the replacement first: a failed write keeps the edit held.
-      await qAdd("drafts", sessionId, row.text, row.attachments, { origin: "composer" });
+      const kind = mutation.name === "editQueue" ? "queued" : "draft";
+      const cmid = claimStaleEditRecoveryCmid(
+        sessionId, kind, args.id ?? row.id, row.text, row.attachments,
+        state.drafts.get(sessionId) ?? [],
+        (qClients.get(sessionId)?.pending() ?? []).map((m) => m.id),
+      );
+      if (cmid !== null) {
+        await qAdd("drafts", sessionId, row.text, row.attachments, { origin: "composer", cmid });
+      }
     }
     await discardQueued(sessionId, mutation.id);
     if (row?.cmid !== undefined) {
@@ -3812,8 +3820,9 @@ function commandForQueueMutation(sessionId: string, m: { name: string; id: strin
     return { type: "unschedule_draft", session_id: sessionId, id: args.id };
   }
   if (m.name === "activateDraft" && args.id !== undefined) {
+    const activation = m.args as DraftActivation;
     const id = draftActivationSourceId(
-      m.args as DraftActivation,
+      activation,
       // The view already hides this source. Read the durable authoritative base
       // so reconnect also works for cached sessions that are not currently open.
       qClients.get(sessionId)?.baseValue().drafts ?? [],
@@ -3823,6 +3832,7 @@ function commandForQueueMutation(sessionId: string, m: { name: string; id: strin
       session_id: sessionId,
       id,
       cmid: args.row?.cmid ?? m.id,
+      ...(activation.front ? { front: true } : {}),
     };
   }
   if (isQueuedSend(m.name) && args.id !== undefined) {
@@ -4089,7 +4099,6 @@ async function hydrateCachedQueues(): Promise<void> {
 function commitQueue(sessionId: string): void {
   const c = qClients.get(sessionId);
   let view: QValue = c ? c.get() : emptyQueueValue<QueuedMessage>();
-  syncRemoteQueueEditing(sessionId, view.editing);
   const pending = c?.pending() ?? [];
   const previews = queuePreviews.get(sessionId);
   for (const [id, preview] of previews ?? []) {
@@ -4651,11 +4660,12 @@ bindPendingEditRecovery({
  *  status/timers of any cmid the server confirmed, and cross-signal the chat
  *  overlay (a queue cmid landing also drops a wrong-guessed optimistic bubble). */
 function applyQueuePatch(sessionId: string, version: number, value: unknown, confirmed: string[], resync: boolean): void {
-  const wire = value as { queue?: WireQueued[]; drafts?: WireQueued[] };
+  const wire = value as { queue?: WireQueued[]; drafts?: WireQueued[]; editing?: string | null };
   const next: QValue = {
     queue: fromWire(wire.queue ?? []),
     drafts: fromWire(wire.drafts ?? []),
     inFlight: [],
+    ...(wire.editing !== undefined ? { editing: wire.editing } : {}),
   };
   const store = qClient(sessionId);
   // A prompt guessed as queued may dispatch before the creation receipt. Keep
@@ -4691,7 +4701,10 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
     store.confirm(settled);
   }
   store.applyPatch(snapshotPatch(version, next, confirmed), { force: resync });
-  if (acceptsValue) recoverPendingEditsFrom(sessionId, next);
+  if (acceptsValue) {
+    if (wire.editing !== undefined) syncRemoteQueueEditing(sessionId, wire.editing);
+    recoverPendingEditsFrom(sessionId, next);
+  }
   const delivered = deliveryConfirmations(confirmed, store.pending());
   for (const cmid of delivered) {
     if (qStatus.has(cmid)) {
@@ -4956,6 +4969,7 @@ const currentTurnTargets = new Map<
   string,
   import("./currentTurnDelivery").DeliveryTarget
 >();
+const currentTurnConsume = new Map<string, { draftId?: string; queuedId?: string }>();
 const checkpointDeliveries = new Set<string>();
 const currentTurnRequests = new Set<string>();
 const currentTurnChains = new Map<string, Promise<void>>();
@@ -4987,6 +5001,7 @@ async function performCurrentTurn(
   try {
     const { deliverCurrentTurn } = await import("./currentTurnDelivery");
     const target = currentTurnTargets.get(id);
+    const consume = currentTurnConsume.get(id);
     const outcome = await deliverCurrentTurn(
       sessionId,
       id,
@@ -4996,6 +5011,8 @@ async function performCurrentTurn(
           content: contentOf(row.text, row.attachments),
           target,
           nextCheckpoint: checkpointDeliveries.has(id),
+          ...(consume?.draftId ? { consumeDraftId: consume.draftId } : {}),
+          ...(consume?.queuedId ? { consumeQueuedId: consume.queuedId } : {}),
         }
         : null,
     );
@@ -5029,6 +5046,7 @@ async function performCurrentTurn(
   } finally {
     currentTurnRequests.delete(id);
     currentTurnTargets.delete(id);
+    currentTurnConsume.delete(id);
     checkpointDeliveries.delete(id);
     commitQueue(sessionId);
   }
@@ -5040,6 +5058,7 @@ export async function currentTurnPrompt(
   attachments: Attachment[] = [],
   target?: import("./currentTurnDelivery").DeliveryTarget,
   nextCheckpoint = false,
+  consume?: { draftId?: string; queuedId?: string },
 ): Promise<void> {
   const session = state.sessions.find((entry) => entry.id === sessionId);
   if (
@@ -5057,6 +5076,7 @@ export async function currentTurnPrompt(
   const captured = target ?? await captureDeliveryTarget(sessionId);
   const cmid = newCmid();
   currentTurnTargets.set(cmid, captured);
+  if (consume) currentTurnConsume.set(cmid, consume);
   if (nextCheckpoint) checkpointDeliveries.add(cmid);
   freshCurrentTurns.add(cmid);
   try {
@@ -5070,6 +5090,7 @@ export async function currentTurnPrompt(
   } catch (error) {
     freshCurrentTurns.delete(cmid);
     currentTurnTargets.delete(cmid);
+    currentTurnConsume.delete(cmid);
     checkpointDeliveries.delete(cmid);
     throw error;
   }
@@ -5097,30 +5118,21 @@ export async function submitPrompt(
   sessionId: string,
   text: string,
   attachments: Attachment[] = [],
+  cmid?: string,
 ): Promise<void> {
   if (sessionActionSnapshot()) throw new Error("Finish or cancel the pending session action before sending.");
   const trimmed = text.trimEnd();
   if (!trimmed.trim() && attachments.length === 0) return Promise.resolve();
   if (await sendWithContextNotice(sessionId, trimmed, contentOf(trimmed, attachments))) return;
-  // Predict the daemon's path so the optimistic row lands in the right place: it
-  // DISPATCHES (→ a chat bubble) only when the session is dispatchable AND
-  // nothing is queued; otherwise it QUEUES (→ a queue row). A wrong guess
-  // self-heals — reconcile drops the row from whichever overlay the moment its
-  // cmid lands server-side (queue broadcast OR chat echo).
   const sess = state.sessions.find((s) => s.id === sessionId);
   const dispatchable = sess !== undefined
     && !sess.paused
     && ["running", "exited", "crashed", "interrupted"].includes(sess.status);
-  // state.queues already includes optimistic queue rows (merged by commitQueue),
-  // so this covers both server + local pending.
   const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
   if (shouldUseTranscriptDelivery(dispatchable, queueEmpty)) {
-    // → dispatch: an optimistic CHAT bubble in the transcript.
-    return optimisticMessage(sessionId, trimmed, attachments, "composer");
-  } else {
-    // → queue: an optimistic row in the queue sync state.
-    return qAdd("queue", sessionId, trimmed, attachments, { origin: "composer" });
+    return optimisticMessage(sessionId, trimmed, attachments, "composer", cmid);
   }
+  return qAdd("queue", sessionId, trimmed, attachments, { origin: "composer", ...(cmid ? { cmid } : {}) });
 }
 
 /** "Jump to front of queue" (no interrupt): when a turn is in flight with other
@@ -5360,10 +5372,10 @@ export function setQueueEditing(sessionId: string, id: string | null): void {
 // draft INSTANTLY (optimistic), then sends. The card visibly moves from its
 // local durability barrier to service confirmation, or waits for reconnect.
 // Empty is ignored.
-export function addDraft(sessionId: string, text: string, attachments: Attachment[]): Promise<void> {
+export function addDraft(sessionId: string, text: string, attachments: Attachment[], cmid?: string): Promise<void> {
   const trimmed = text.trimEnd();
   if (!trimmed.trim() && attachments.length === 0) return Promise.resolve();
-  return qAdd("drafts", sessionId, trimmed, attachments);
+  return qAdd("drafts", sessionId, trimmed, attachments, cmid ? { cmid } : {});
 }
 
 /** A writing-document handoff is a new unsent row. The source document stays
@@ -5428,12 +5440,12 @@ export function clearDrafts(sessionId: string): Promise<void> {
   );
 }
 
-export async function activateDraft(sessionId: string, id: string): Promise<void> {
+export async function activateDraft(sessionId: string, id: string, opts?: { front?: boolean }): Promise<void> {
   await prepareAuthoredSend(sessionId, findDraft(sessionId, id)?.cmid);
   const row = findDraft(sessionId, id);
   if (row === undefined) return Promise.resolve();
   if (await composeDraftForStagedAgent(sessionId, row)) return;
-  const dest = destinationForPrompt(
+  const dest = opts?.front ? "queue" : destinationForPrompt(
     sessionDispatchable(sessionId),
     (state.queues.get(sessionId)?.length ?? 0) === 0,
   );
@@ -5456,6 +5468,7 @@ export async function activateDraft(sessionId: string, id: string): Promise<void
         id,
         row: presented,
         destination: dest,
+        ...(opts?.front ? { front: true } : {}),
         ...(row.cmid !== undefined && id === `opt-${row.cmid}`
           ? { sourceCmid: row.cmid }
           : {}),
@@ -5572,20 +5585,28 @@ export async function unscheduleDraft(sessionId: string, id: string): Promise<vo
   );
 }
 
+export async function waitForPendingEdit(sessionId: string, id: string): Promise<void> {
+  if (!isConnected()) return;
+  await waitForState(() =>
+    !(qClients.get(sessionId)?.pending() ?? []).some(
+      (m) => (m.name === "editQueue" || m.name === "editDraft") && (m.args as { id?: string }).id === id,
+    ), "Confirm edit");
+}
+
 // Move a queued prompt back to drafts.
 export async function queuedToDraft(sessionId: string, id: string): Promise<void> {
   const row = findQueued(sessionId, id);
   if (row === undefined) return Promise.resolve();
-  if (row.status !== undefined && row.cmid !== undefined) {
-    const text = row.text;
-    const attachments = row.attachments;
-    await qAdd("drafts", sessionId, text, attachments, { origin: "queue" });
-    await discardQueued(sessionId, row.cmid);
+  const target = queuedSendTarget(confirmedPending(sessionId)?.queue ?? [], row);
+  if (target.kind === "local") {
+    await qAdd("drafts", sessionId, row.text, row.attachments, { origin: "queue" });
+    await discardQueued(sessionId, target.cmid);
     return;
   }
+  const serverId = target.id;
   const opId = newCmid();
   const presented: QueuedMessage = {
-    id: row.id,
+    id: serverId,
     text: row.text,
     attachments: row.attachments,
     ...(row.cmid !== undefined ? { cmid: row.cmid } : {}),
@@ -5602,7 +5623,7 @@ export async function queuedToDraft(sessionId: string, id: string): Promise<void
   try {
     await mutateQueueDurably(sessionId,
       "returnQueuedToDraft",
-      { id, row: presented },
+      { id: serverId, row: presented },
       opId,
     );
   } catch (error) {

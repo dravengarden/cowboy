@@ -217,3 +217,133 @@ fn scheduled_draft_unscheduled_during_edit_does_not_fire_on_release() {
     assert_eq!(d_after.len(), 1);
     assert!(d_after[0].schedule.is_none());
 }
+
+#[test]
+fn stale_timer_callback_never_fires_unscheduled_or_rescheduled_draft() {
+    let hub = session_with_queue("s");
+    hub.clear_queue("s");
+    hub.set_paused("s", true);
+    let past_ms = chrono::Utc::now().timestamp_millis() - 5_000;
+    let future_ms = chrono::Utc::now().timestamp_millis() + 600_000;
+    hub.schedule_draft(
+        "s",
+        None,
+        Some("c-resched".into()),
+        "move later".into(),
+        vec![],
+        past_ms,
+        Delivery::Back,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
+    let draft_id = hub.queue_and_drafts("s", |_| true).unwrap().1[0].id.clone();
+
+    // Reschedule into the future, then simulate an old timer firing with past_ms.
+    hub.schedule_draft(
+        "s",
+        Some(draft_id.clone()),
+        None,
+        String::new(),
+        vec![],
+        future_ms,
+        Delivery::Back,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
+    hub.fire_scheduled_draft_at("s", &draft_id, Some(past_ms));
+    hub.fire_scheduled_draft("s", &draft_id);
+
+    let (q, d) = hub.queue_and_drafts("s", |_| true).unwrap();
+    assert!(q.is_empty());
+    assert_eq!(d.len(), 1);
+    assert_eq!(d[0].schedule.as_ref().unwrap().fire_at_ms, future_ms);
+}
+
+#[test]
+fn clear_queue_preserves_scheduled_draft_hold_and_displaced_hold_fires_deferred_draft() {
+    let hub = session_with_queue("s");
+    hub.set_paused("s", true);
+    let past_ms = chrono::Utc::now().timestamp_millis() - 5_000;
+    hub.schedule_draft(
+        "s",
+        None,
+        Some("d1".into()),
+        "due draft".into(),
+        vec![],
+        past_ms,
+        Delivery::Back,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
+    let draft_id = hub.queue_and_drafts("s", |_| true).unwrap().1[0].id.clone();
+    let epoch = hub.set_queue_editing("s", Some(draft_id.clone()));
+    hub.fire_scheduled_draft("s", &draft_id);
+
+    // Clearing the queue must NOT erase the scheduled-draft edit hold.
+    hub.clear_queue("s");
+    assert!(hub.release_queue_editing_if_epoch("s", &draft_id, epoch));
+    let (q, d) = hub.queue_and_drafts("s", |_| true).unwrap();
+    assert_eq!(q.len(), 1);
+    assert_eq!(q[0].text, "due draft");
+    assert!(d.is_empty());
+
+    // Acquiring a replacement hold on another row must service a displaced
+    // scheduled draft's deferred fire immediately.
+    hub.schedule_draft(
+        "s",
+        None,
+        Some("d2".into()),
+        "second due".into(),
+        vec![],
+        past_ms,
+        Delivery::Front,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
+    let (q_before, d_before) = hub.queue_and_drafts("s", |_| true).unwrap();
+    let q_id = q_before[0].id.clone();
+    let d2_id = d_before[0].id.clone();
+    hub.set_queue_editing("s", Some(d2_id.clone()));
+    hub.fire_scheduled_draft("s", &d2_id);
+    hub.set_queue_editing("s", Some(q_id));
+
+    let (q_final, d_final) = hub.queue_and_drafts("s", |_| true).unwrap();
+    assert!(d_final.is_empty());
+    assert_eq!(q_final.len(), 2);
+    assert_eq!(q_final[0].text, "second due");
+}
+
+#[test]
+fn activate_draft_with_front_atomically_removes_scheduled_draft_and_prepends_queue() {
+    let hub = session_with_queue("s");
+    hub.clear_queue("s");
+    hub.set_paused("s", true);
+    hub.submit(
+        "s",
+        "existing".into(),
+        vec![],
+        Some("q1".into()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
+    let future_ms = chrono::Utc::now().timestamp_millis() + 600_000;
+    hub.schedule_draft(
+        "s",
+        None,
+        Some("d-front".into()),
+        "jump ahead".into(),
+        vec![],
+        future_ms,
+        Delivery::Back,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
+    let draft_id = hub.queue_and_drafts("s", |_| true).unwrap().1[0].id.clone();
+    hub.set_queue_editing("s", Some(draft_id.clone()));
+    hub.activate_draft_with_front(
+        "s",
+        &draft_id,
+        Some("op-front".into()),
+        true,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
+    let (q, d) = hub.queue_and_drafts("s", |_| true).unwrap();
+    assert!(d.is_empty());
+    assert_eq!(q.len(), 2);
+    assert_eq!(q[0].text, "jump ahead");
+    assert_eq!(q[1].text, "existing");
+}

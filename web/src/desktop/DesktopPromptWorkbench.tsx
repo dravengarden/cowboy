@@ -1,9 +1,10 @@
-import { type ReactNode, type RefObject, useMemo, useRef } from "react";
-import type { ComposerEditorHandle } from "../ComposerEditor";
+import { type ReactNode, type RefObject, useEffect, useMemo, useRef } from "react";
+import type { ComposerEditorHandle, ComposerEditorSelection } from "../ComposerEditor";
 import type { AvailableCommand, Status } from "../protocol";
 import type { SessionContext } from "../sessionContext";
 import type { QueuedMessage } from "../store";
 import { useQueueEditHoldStatus } from "../queueEditingHold";
+import { getVimMode } from "../vimModeStore";
 import type { DesktopPendingBufferHandle } from "./DesktopPendingBufferEditor";
 import { createPromptChordTracker } from "./DesktopPromptVimShortcuts";
 import {
@@ -71,7 +72,7 @@ export function DesktopPromptWorkbench(
 
   useWorkbenchEvents({
     sessionId, queue, drafts, activeBuffer: state.activeBuffer,
-    bufferMeta: state.bufferMeta, pendingRef, composerPaperRef, chordTrackerRef,
+    composerPaperRef, chordTrackerRef,
     setActiveBuffer: state.setActiveBuffer, setEmptyDraftOpen: state.setEmptyDraftOpen,
     openBuffer: state.openBuffer, workspace,
   });
@@ -114,6 +115,24 @@ export function DesktopPromptWorkbench(
     : state.activeBuffer.kind === "new-draft"
     ? "new-draft"
     : `${state.activeBuffer.kind}:${state.activeBuffer.cmid ?? state.activeBuffer.id}`;
+  const bufferKeyRef = useRef(bufferKey);
+  bufferKeyRef.current = bufferKey;
+  const deliveryRestoreRef = useRef<{
+    bufferKey: string;
+    vimMode: string;
+    selection: ComposerEditorSelection | undefined;
+  } | null>(null);
+  const prevDeliveryAnchorRef = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    if (actions.deliveryAnchor && !prevDeliveryAnchorRef.current) {
+      deliveryRestoreRef.current = {
+        bufferKey: bufferKeyRef.current,
+        vimMode: getVimMode(),
+        selection: activeEditorProxy.current?.getSelection(),
+      };
+    }
+    prevDeliveryAnchorRef.current = actions.deliveryAnchor;
+  }, [actions.deliveryAnchor, activeEditorProxy]);
 
   return (
     <>
@@ -145,6 +164,7 @@ export function DesktopPromptWorkbench(
         commands={commands} activeBuffer={state.activeBuffer} bufferKey={bufferKey}
         resolved={state.resolved} bufferMeta={state.bufferMeta}
         setBufferMeta={state.setBufferMeta} setActiveBuffer={state.setActiveBuffer}
+        materializedCarryRef={state.materializedCarryRef}
         closeBuffer={state.closeBuffer} newPrompt={newPrompt}
         newPromptCanvas={newPromptCanvas} actions={actions}
         onMoveDraft={onMoveDraft} onCanvasKeyDownCapture={onCanvasKeyDownCapture}
@@ -157,16 +177,19 @@ export function DesktopPromptWorkbench(
           : queue.length}
         activeBuffer={state.activeBuffer} deliveryAnchor={actions.deliveryAnchor}
         onCloseDelivery={() => {
+          const snap = deliveryRestoreRef.current;
+          deliveryRestoreRef.current = null;
           actions.closeDelivery();
           requestAnimationFrame(() => {
-            activeEditorProxy.current?.focus();
-            if (state.activeBuffer.kind !== "new" && state.activeBuffer.entryMode === "insert") {
-              requestDesktopEditorInsert();
-            }
+            if (!snap || bufferKeyRef.current !== snap.bufferKey) return;
+            const editor = activeEditorProxy.current;
+            if (snap.selection) editor?.focusSelection(snap.selection);
+            else editor?.focus();
+            if (snap.vimMode === "insert") requestDesktopEditorInsert();
           });
         }}
         onDeliverBuffer={actions.deliverBuffer} onStop={actions.onStop}
-        pendingSwitch={state.pendingSwitch}
+        pendingSwitch={state.pendingSwitch?.buffer ?? null}
         onCloseSwitch={() => state.setPendingSwitch(null)}
         onConfirmSwitch={state.confirmSwitch}
       />

@@ -1,4 +1,5 @@
 import {
+  type MutableRefObject,
   type ReactNode,
   type RefObject,
   Suspense,
@@ -13,27 +14,32 @@ import { Check, Send } from "@mui/icons-material";
 import type { ComposerEditorHandle } from "../ComposerEditor";
 import { DeliveryPicker } from "../DeliveryPicker";
 import { Kbd, useConfirmEnter } from "../Kbd";
-import { DesktopRegionShortcut, PendingPanel } from "../PendingPanel";
+import { DesktopRegionShortcut, pendingContentCleared, PendingPanel } from "../PendingPanel";
 import { ENTER_LABEL, MOD_LABEL } from "../platform";
 import type { AvailableCommand, Status } from "../protocol";
 import { fireLabel } from "../scheduleTime";
 import type { SessionContext } from "../sessionContext";
 import { ConfirmSheet } from "../Sheet";
-import { notify, type QueuedMessage } from "../store";
+import { confirmedPending, notify, type QueuedMessage } from "../store";
 import { useRemoteQueueEditing } from "../queueEditingHold";
 import { recoverPendingEditId } from "../pendingEditStore";
+import { setActiveVimOwner } from "../vimModeStore";
 import { DesktopComposerToolbar } from "./DesktopComposerToolbar";
 import {
   DesktopPendingBufferEditor,
   type DesktopPendingBufferHandle,
 } from "./DesktopPendingBufferEditor";
+import type { MaterializedCarry } from "./usePendingBufferController";
 import {
   clearPromptChord,
   type createPromptChordTracker,
   evaluatePromptCanvasKey,
 } from "./DesktopPromptVimShortcuts";
 import type { useDesktopWorkspace } from "./DesktopWorkspaceController";
-import { DESKTOP_FOCUS_NEW_PROMPT_EVENT } from "./editorInsert";
+import {
+  DESKTOP_FOCUS_NEW_PROMPT_EVENT,
+  requestDesktopEditorInsert,
+} from "./editorInsert";
 import {
   adjacentSendOrderBuffer,
   consumePendingOpenSessionDraft,
@@ -129,8 +135,6 @@ export function useWorkbenchEvents({
   queue,
   drafts,
   activeBuffer,
-  bufferMeta,
-  pendingRef,
   composerPaperRef,
   chordTrackerRef,
   setActiveBuffer,
@@ -142,21 +146,38 @@ export function useWorkbenchEvents({
   queue: readonly QueuedMessage[];
   drafts: readonly QueuedMessage[];
   activeBuffer: DesktopPromptBuffer;
-  bufferMeta: { scheduled: boolean };
-  pendingRef: RefObject<DesktopPendingBufferHandle | null>;
   composerPaperRef: RefObject<HTMLDivElement | null>;
   chordTrackerRef: RefObject<ReturnType<typeof createPromptChordTracker>>;
   setActiveBuffer: React.Dispatch<React.SetStateAction<DesktopPromptBuffer>>;
   setEmptyDraftOpen: React.Dispatch<React.SetStateAction<boolean>>;
-  openBuffer: (next: DesktopPromptBuffer) => void;
+  openBuffer: (next: DesktopPromptBuffer, opts?: { insertAfter?: boolean }) => boolean;
   workspace: ReturnType<typeof useDesktopWorkspace>;
 }): void {
-  const recoveredOnceRef = useRef(false);
+  const recoveredSessionRef = useRef<string | null>(null);
+  const userInteractedRef = useRef(false);
   useEffect(() => {
-    if (recoveredOnceRef.current || activeBuffer.kind !== "new") return;
+    userInteractedRef.current = false;
+    recoveredSessionRef.current = null;
+  }, [sessionId]);
+  useEffect(() => {
+    if (activeBuffer.kind !== "new") {
+      userInteractedRef.current = true;
+      recoveredSessionRef.current = sessionId;
+    }
+  }, [activeBuffer.kind, sessionId]);
+  useEffect(() => {
+    if (
+      recoveredSessionRef.current === sessionId ||
+      userInteractedRef.current ||
+      activeBuffer.kind !== "new"
+    ) return;
+    const hydrated = confirmedPending(sessionId) !== undefined ||
+      queue.length > 0 ||
+      drafts.length > 0;
+    if (!hydrated) return;
+    recoveredSessionRef.current = sessionId;
     const qId = recoverPendingEditId(sessionId, "queued", queue);
     if (qId) {
-      recoveredOnceRef.current = true;
       const row = queue.find((m) => m.id === qId);
       setActiveBuffer({
         kind: "queued",
@@ -169,7 +190,6 @@ export function useWorkbenchEvents({
     }
     const dId = recoverPendingEditId(sessionId, "draft", drafts);
     if (dId) {
-      recoveredOnceRef.current = true;
       const row = drafts.find((m) => m.id === dId);
       setActiveBuffer({
         kind: "draft",
@@ -196,17 +216,10 @@ export function useWorkbenchEvents({
 
   useEffect(() => {
     const el = composerPaperRef.current;
-    const onFocusNew = (): void => {
+    const onFocusNew = (event: Event): void => {
       if (activeBuffer.kind === "new") return;
-      if (activeBuffer.kind === "draft" && !bufferMeta.scheduled && pendingRef.current?.isDirty()) {
-        void pendingRef.current.save({ silent: true }).catch(() => undefined);
-      } else if (
-        (activeBuffer.kind === "queued" || bufferMeta.scheduled) &&
-        pendingRef.current?.isDirty()
-      ) {
-        notify("Edits kept locally; press ␣Q or ␣D to resume", "info");
-      }
-      setActiveBuffer({ kind: "new" });
+      const switchedSync = openBuffer({ kind: "new" }, { insertAfter: true });
+      if (!switchedSync) event.preventDefault();
     };
     const onToggleEmptyDrafts = (): void => {
       if (drafts.length > 0) return;
@@ -246,12 +259,10 @@ export function useWorkbenchEvents({
     };
   }, [
     activeBuffer.kind,
-    bufferMeta.scheduled,
     chordTrackerRef,
     composerPaperRef,
     drafts.length,
     openBuffer,
-    pendingRef,
     sessionId,
     setActiveBuffer,
     setEmptyDraftOpen,
@@ -345,6 +356,7 @@ export function useWorkbenchCanvasKeys({
     if (!result.consumed) return;
     event.preventDefault();
     event.stopPropagation();
+    event.nativeEvent.stopImmediatePropagation();
     if (!result.action) return;
     if (result.action.kind === "recall-last-pending" && lastMatch) {
       openBuffer({
@@ -394,7 +406,11 @@ export function useWorkbenchBufferState({
 }) {
   const [activeBuffer, setActiveBuffer] = useState<DesktopPromptBuffer>({ kind: "new" });
   const [emptyDraftOpen, setEmptyDraftOpen] = useState(false);
-  const [pendingSwitch, setPendingSwitch] = useState<DesktopPromptBuffer | null>(null);
+  const [pendingSwitch, setPendingSwitch] = useState<{
+    buffer: DesktopPromptBuffer;
+    insertAfter: boolean;
+  } | null>(null);
+  const materializedCarryRef = useRef<{ cmid: string; carry: MaterializedCarry } | null>(null);
   const [bufferMeta, setBufferMeta] = useState({
     sendable: false,
     dirty: false,
@@ -411,7 +427,11 @@ export function useWorkbenchBufferState({
     setActiveBuffer({ kind: "new" });
     setEmptyDraftOpen(false);
     setPendingSwitch(null);
+    materializedCarryRef.current = null;
   }, [sessionId]);
+  useEffect(() => {
+    if (activeBuffer.kind === "new") setActiveVimOwner("default");
+  }, [activeBuffer.kind, sessionId]);
   useEffect(() => {
     if (
       resolved &&
@@ -423,8 +443,18 @@ export function useWorkbenchBufferState({
     if (drafts.length > 0 && emptyDraftOpen) setEmptyDraftOpen(false);
   }, [drafts.length, emptyDraftOpen]);
 
+  const applySwitch = useCallback((next: DesktopPromptBuffer, insertAfter = false): void => {
+    materializedCarryRef.current = null;
+    setActiveBuffer(next);
+    requestAnimationFrame(() => {
+      workspace.focusRegion("prompt.composer");
+      if (insertAfter) requestAnimationFrame(requestDesktopEditorInsert);
+    });
+  }, [workspace]);
+
   const closeBuffer = useCallback(
     (focusTarget?: { kind: "queued" | "draft"; id: string }): void => {
+      materializedCarryRef.current = null;
       setActiveBuffer({ kind: "new" });
       if (focusTarget) {
         requestAnimationFrame(() => {
@@ -441,38 +471,51 @@ export function useWorkbenchBufferState({
     [workspace],
   );
 
-  const openBuffer = useCallback((next: DesktopPromptBuffer): void => {
-    const transactionalDirty =
-      (activeBuffer.kind === "queued" || (activeBuffer.kind === "draft" && bufferMeta.scheduled)) &&
-      pendingRef.current?.isDirty();
-    if (transactionalDirty && next.kind !== "new") {
-      setPendingSwitch(next);
-      return;
-    }
-    if (activeBuffer.kind === "draft" && !bufferMeta.scheduled && pendingRef.current?.isDirty()) {
-      void pendingRef.current.save({ silent: true }).catch(() => undefined);
-    }
-    setActiveBuffer(next);
-    requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
-  }, [activeBuffer.kind, bufferMeta.scheduled, pendingRef, workspace]);
+  const openBuffer = useCallback(
+    (next: DesktopPromptBuffer, opts?: { insertAfter?: boolean }): boolean => {
+      const insertAfter = opts?.insertAfter === true;
+      const handle = pendingRef.current;
+      if (activeBuffer.kind !== "new" && handle?.isEncoding()) {
+        notify("Waiting for attachment to finish encoding…", "info");
+        return false;
+      }
+      const transactionalDirty =
+        (activeBuffer.kind === "queued" || (activeBuffer.kind === "draft" && bufferMeta.scheduled)) &&
+        handle?.isDirty();
+      if (transactionalDirty) {
+        setPendingSwitch({ buffer: next, insertAfter });
+        return false;
+      }
+      const needsDraftFlush = handle !== null && (
+        (activeBuffer.kind === "new-draft" &&
+          !pendingContentCleared(handle.getText(), [...handle.getAttachments()])) ||
+        (activeBuffer.kind === "draft" && !bufferMeta.scheduled && handle.isDirty())
+      );
+      if (needsDraftFlush) {
+        void handle.save({ silent: true }).then((ok) => {
+          if (ok) applySwitch(next, insertAfter);
+        }).catch((e: Error) => notify(e.message, "error"));
+        return false;
+      }
+      applySwitch(next, insertAfter);
+      return true;
+    },
+    [activeBuffer.kind, applySwitch, bufferMeta.scheduled, pendingRef],
+  );
 
   const confirmSwitch = useCallback((resolution: "save" | "discard"): void => {
-    const next = pendingSwitch;
-    if (!next) return;
+    const pending = pendingSwitch;
+    if (!pending) return;
     setPendingSwitch(null);
     if (resolution === "save") {
       void pendingRef.current?.save({ silent: true }).then((ok) => {
-        if (ok) {
-          setActiveBuffer(next);
-          requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
-        }
+        if (ok) applySwitch(pending.buffer, pending.insertAfter);
       }).catch((e: Error) => notify(e.message, "error"));
     } else {
       pendingRef.current?.discard();
-      setActiveBuffer(next);
-      requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
+      applySwitch(pending.buffer, pending.insertAfter);
     }
-  }, [pendingRef, pendingSwitch, workspace]);
+  }, [applySwitch, pendingRef, pendingSwitch]);
   useConfirmEnter(pendingSwitch !== null, () => confirmSwitch("save"));
 
   return {
@@ -482,6 +525,7 @@ export function useWorkbenchBufferState({
     setEmptyDraftOpen,
     pendingSwitch,
     setPendingSwitch,
+    materializedCarryRef,
     bufferMeta,
     setBufferMeta,
     resolved,
@@ -514,6 +558,7 @@ export interface DesktopWorkbenchCanvasProps {
     holdStatus: import("../queueEditingHold").QueueEditHoldStatus;
   }) => void;
   setActiveBuffer: React.Dispatch<React.SetStateAction<DesktopPromptBuffer>>;
+  materializedCarryRef: MutableRefObject<{ cmid: string; carry: MaterializedCarry } | null>;
   closeBuffer: () => void;
   newPrompt: NewPromptCallbacks;
   newPromptCanvas: ReactNode;
@@ -525,7 +570,8 @@ export interface DesktopWorkbenchCanvasProps {
 export function DesktopWorkbenchCanvas({
   composerPaperRef, pendingRef, activeEditorProxy, sendButtonRef, sessionId,
   status, handedOff, overlayOpen, currentTurnAvailable, commands, activeBuffer,
-  bufferKey, resolved, bufferMeta, setBufferMeta, setActiveBuffer, closeBuffer,
+  bufferKey, resolved, bufferMeta, setBufferMeta, setActiveBuffer,
+  materializedCarryRef, closeBuffer,
   newPrompt, newPromptCanvas, actions, onMoveDraft, onCanvasKeyDownCapture,
 }: DesktopWorkbenchCanvasProps): React.JSX.Element {
   const isNew = activeBuffer.kind === "new";
@@ -579,19 +625,25 @@ export function DesktopWorkbenchCanvas({
           sessionId={sessionId}
           kind={activeBuffer.kind}
           row={resolved?.row ?? null}
+          initialCarry={activeBuffer.kind === "draft" && activeBuffer.cmid &&
+              materializedCarryRef.current?.cmid === activeBuffer.cmid
+            ? materializedCarryRef.current.carry
+            : null}
           index={resolved?.index}
           total={resolved?.total}
           entryMode={activeBuffer.entryMode}
           commands={commands}
           onStateChange={setBufferMeta}
-          onMaterializedDraft={(id, cmid) =>
+          onMaterializedDraft={(id, cmid, carry) => {
+            materializedCarryRef.current = cmid && carry ? { cmid, carry } : null;
             setActiveBuffer({
               kind: "draft",
               id,
               ...(cmid ? { cmid } : {}),
               origin: activeBuffer.origin,
               entryMode: "insert",
-            })}
+            });
+          }}
           onSourceVanished={(recovered) => {
             if (recovered) {
               setActiveBuffer({

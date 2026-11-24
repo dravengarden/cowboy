@@ -743,6 +743,15 @@ export function pendingEditEncoding(
   return encodes.has(recordKey(sessionId, kind, id));
 }
 
+/** Whether attachment bytes for this recovered edit are still loading from IndexedDB. */
+export function pendingEditAwaitingBytes(
+  sessionId: string,
+  kind: PendingEditKind,
+  id: string,
+): boolean {
+  return awaitingDatabase.has(recordKey(sessionId, kind, id));
+}
+
 function settleEncodedAttachments(
   key: string,
   placeholders: readonly Attachment[],

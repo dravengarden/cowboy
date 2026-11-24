@@ -1029,7 +1029,10 @@ fn draft_command(
             session_id,
             id,
             cmid,
-        } => state.hub.activate_draft(&session_id, &id, cmid, caller),
+            front,
+        } => state
+            .hub
+            .activate_draft_with_front(&session_id, &id, cmid, front, caller),
         Inbound::ActivateAllDrafts { session_id } => {
             state.hub.activate_all_drafts(&session_id, caller);
         }

@@ -159,15 +159,27 @@ impl Hub {
         }
     }
 
-    /// Fire a scheduled draft (called by the scheduler at its fire time): remove
-    /// it from drafts and submit it per its `delivery`. Tagged with `SCHED_PREFIX`
-    /// so the echo renders as a "↻ scheduled" note. No-op if the draft is gone
-    /// (the user removed/activated it before it fired — the timer was cancelled,
-    /// but a fire already in-flight is harmless here).
+    /// Fire a scheduled draft if its current schedule is still due.
     pub fn fire_scheduled_draft(&self, session_id: &str, draft_id: &str) {
+        self.fire_scheduled_draft_at(session_id, draft_id, None);
+    }
+
+    /// Fire a scheduled draft (called by the scheduler at its fire time, or on
+    /// edit-hold release when a timer elapsed during an edit): remove it from
+    /// drafts and submit it per its `delivery`. Revalidates the draft's live
+    /// schedule and due/expected fire timestamp under the same lock that removes
+    /// it, so a cancelled or rescheduled draft can never be fired by a stale
+    /// timer callback or an out-of-date deferred release list.
+    pub fn fire_scheduled_draft_at(
+        &self,
+        session_id: &str,
+        draft_id: &str,
+        expected_fire_at_ms: Option<i64>,
+    ) {
         if self.is_managed_child(session_id) {
             return;
         }
+        let now_ms = chrono::Utc::now().timestamp_millis();
         let fired = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -179,6 +191,19 @@ impl Hub {
             if s.meta.trashed_at_ms.is_some() {
                 return;
             }
+            let Some(pos) = s.drafts.iter().position(|m| m.id == draft_id) else {
+                s.deferred_scheduled_drafts.retain(|id| id != draft_id);
+                return;
+            };
+            let still_due = s.drafts[pos].schedule.as_ref().is_some_and(|sc| {
+                expected_fire_at_ms.map_or(sc.fire_at_ms <= now_ms, |expected| {
+                    sc.fire_at_ms == expected && sc.fire_at_ms <= now_ms
+                })
+            });
+            if !still_due {
+                s.deferred_scheduled_drafts.retain(|id| id != draft_id);
+                return;
+            }
             // Do not fire stale text out from under an active editor. Record the
             // elapsed timer so releasing the edit fires the updated draft if still due.
             if s.editing.as_deref() == Some(draft_id) {
@@ -188,10 +213,7 @@ impl Hub {
                 return;
             }
             s.deferred_scheduled_drafts.retain(|id| id != draft_id);
-            s.drafts
-                .iter()
-                .position(|m| m.id == draft_id)
-                .map(|pos| s.drafts.remove(pos))
+            Some(s.drafts.remove(pos))
         };
         let Some(m) = fired else {
             return;
@@ -294,6 +316,10 @@ impl Hub {
                 let had = s.drafts.iter().any(|m| m.id == id && m.schedule.is_some());
                 let before = s.drafts.len();
                 s.drafts.retain(|m| m.id != id);
+                s.deferred_scheduled_drafts.retain(|d| d != id);
+                if s.editing.as_deref() == Some(id) {
+                    s.editing = None;
+                }
                 (before != s.drafts.len(), had)
             } else if let Some(m) = s.drafts.iter_mut().find(|m| m.id == id) {
                 if m.origin.as_ref() != Some(&editor) {
@@ -357,6 +383,10 @@ impl Hub {
             let had = s.drafts.iter().any(|m| m.id == id && m.schedule.is_some());
             let before = s.drafts.len();
             s.drafts.retain(|m| m.id != id);
+            s.deferred_scheduled_drafts.retain(|d| d != id);
+            if s.editing.as_deref() == Some(id) {
+                s.editing = None;
+            }
             (before != s.drafts.len(), had)
         };
         self.emit_pending(session_id);
@@ -387,6 +417,10 @@ impl Hub {
             let mut sessions = self.inner.sessions.lock();
             let Some(mut msg) = (if sessions.contains_key(to) {
                 sessions.get_mut(from).and_then(|s| {
+                    s.deferred_scheduled_drafts.retain(|d| d != id);
+                    if s.editing.as_deref() == Some(id) {
+                        s.editing = None;
+                    }
                     s.drafts
                         .iter()
                         .position(|m| m.id == id)
@@ -434,6 +468,13 @@ impl Hub {
                 .filter(|m| m.schedule.is_some())
                 .map(|m| m.id.clone())
                 .collect();
+            if s.editing
+                .as_deref()
+                .is_some_and(|id| s.drafts.iter().any(|m| m.id == id))
+            {
+                s.editing = None;
+            }
+            s.deferred_scheduled_drafts.clear();
             s.drafts.clear();
             ids
         };
@@ -454,6 +495,20 @@ impl Hub {
         cmid: Option<String>,
         caller: &crate::prompt_origin::RequestCaller,
     ) {
+        self.activate_draft_with_front(session_id, id, cmid, false, caller);
+    }
+
+    /// Activate one draft: remove it from drafts (cancelling any schedule timer)
+    /// and submit it to the back (`front = false`) or front (`front = true`) of
+    /// the queue in one server-owned transition.
+    pub fn activate_draft_with_front(
+        &self,
+        session_id: &str,
+        id: &str,
+        cmid: Option<String>,
+        front: bool,
+        caller: &crate::prompt_origin::RequestCaller,
+    ) {
         if self.is_managed_child(session_id)
             || self.reject_reserved_notice_cmid(session_id, cmid.as_deref())
         {
@@ -464,6 +519,10 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            s.deferred_scheduled_drafts.retain(|d| d != id);
+            if s.editing.as_deref() == Some(id) {
+                s.editing = None;
+            }
             s.drafts
                 .iter()
                 .position(|m| m.id == id)
@@ -485,7 +544,7 @@ impl Hub {
                 m.content,
                 cmid.or(fallback_cmid),
                 false,
-                false,
+                front,
                 m.origin,
                 trigger,
             );
@@ -505,6 +564,13 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            if s.editing
+                .as_deref()
+                .is_some_and(|id| s.drafts.iter().any(|m| m.id == id))
+            {
+                s.editing = None;
+            }
+            s.deferred_scheduled_drafts.clear();
             std::mem::take(&mut s.drafts)
         };
         if msgs.is_empty() {

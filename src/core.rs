@@ -1024,6 +1024,8 @@ pub enum Inbound {
         id: String,
         #[serde(default)]
         cmid: Option<String>,
+        #[serde(default)]
+        front: bool,
     },
     /// Activate every draft, front-to-back.
     ActivateAllDrafts { session_id: String },

@@ -797,6 +797,13 @@ pub struct SessionPromptRequest {
     pub operation: Option<String>,
     #[serde(default)]
     pub target: Option<crate::send_delivery::DeliveryTarget>,
+    /// Optional draft or queued row to consume atomically once this prompt
+    /// delivery is admitted, so delivering a scheduled draft cannot leave its
+    /// original timer armed if the client closes mid-flight.
+    #[serde(default)]
+    pub consume_draft_id: Option<String>,
+    #[serde(default)]
+    pub consume_queued_id: Option<String>,
 }
 
 /// Request body for `POST /api/sessions`.

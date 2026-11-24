@@ -4,24 +4,18 @@ import { moveSessionDraftToDocument } from "../documents/sessionDraftImport";
 import type { Delivery, Status } from "../protocol";
 import {
   activateDraft,
-  cancelTurn,
   currentTurnPrompt,
   frontPrompt,
   notify,
   pauseQueueConfirmed,
   type QueuedMessage,
   queuedToDraft,
-  removeDraft,
-  removeQueued,
   reorderQueue,
-  requestSendQueued,
   submitPrompt,
+  waitForPendingEdit,
 } from "../store";
 import type { DesktopPendingBufferHandle } from "./DesktopPendingBufferEditor";
-import {
-  type DesktopPromptBuffer,
-  recordLastSubmittedPending,
-} from "./promptBuffer";
+import type { DesktopPromptBuffer } from "./promptBuffer";
 
 export interface NewPromptCallbacks {
   sendable: boolean;
@@ -66,6 +60,18 @@ export interface DesktopBufferActionsArgs {
   onCloseBuffer: (focusTarget?: { kind: "queued" | "draft"; id: string }) => void;
   onOpenStop: () => void;
   closingRef: MutableRefObject<boolean>;
+}
+
+async function saveAndConfirmRow(
+  sessionId: string,
+  handle: DesktopPendingBufferHandle,
+  row: QueuedMessage | null,
+): Promise<boolean> {
+  if (!(await handle.save({ silent: true }))) return false;
+  if (row && !row.id.startsWith("opt-")) {
+    await waitForPendingEdit(sessionId, row.id);
+  }
+  return true;
 }
 
 function buildToolbarPresentation(
@@ -162,7 +168,7 @@ function useBufferTransferActions(
     if (!handle || !handle.isSendable() || !resolvedRow) return;
     if (activeBuffer.kind === "queued") {
       closingRef.current = true;
-      void handle.save({ silent: true }).then(async (ok) => {
+      void saveAndConfirmRow(sessionId, handle, resolvedRow).then(async (ok) => {
         if (!ok) return;
         await queuedToDraft(sessionId, resolvedRow.id);
         onCloseBuffer();
@@ -172,7 +178,7 @@ function useBufferTransferActions(
       });
       return;
     }
-    void handle.save({ silent: true }).then((ok) => {
+    void saveAndConfirmRow(sessionId, handle, resolvedRow).then((ok) => {
       if (ok) onScheduleDraft(resolvedRow.id);
     }).catch((e: Error) => notify(e.message, "error"));
   }, [activeBuffer.kind, closingRef, isNew, newPrompt, onCloseBuffer, onScheduleDraft, pendingRef, resolvedRow, sessionId]);
@@ -187,13 +193,16 @@ function useBufferTransferActions(
     closingRef.current = true;
     void (async () => {
       if (activeBuffer.kind === "queued") {
-        if (!resolvedRow || !(await handle.save({ silent: true }))) return;
+        if (!resolvedRow || !(await saveAndConfirmRow(sessionId, handle, resolvedRow))) return;
         const order = [resolvedRow.id, ...queue.filter((m) => m.id !== resolvedRow.id).map((m) => m.id)];
         reorderQueue(sessionId, order);
         onCloseBuffer(closeTarget());
+      } else if (resolvedRow) {
+        if (!(await saveAndConfirmRow(sessionId, handle, resolvedRow))) return;
+        await activateDraft(sessionId, resolvedRow.id, { front: true });
+        onCloseBuffer();
       } else {
         await frontPrompt(sessionId, handle.getText(), [...handle.getAttachments()]);
-        if (resolvedRow) await removeDraft(sessionId, resolvedRow.id);
         handle.discard();
         onCloseBuffer();
       }
@@ -206,7 +215,7 @@ function useBufferTransferActions(
     const handle = pendingRef.current;
     if (!handle || !resolvedRow || activeBuffer.kind !== "queued") return;
     closingRef.current = true;
-    void handle.save({ silent: true }).then(async (ok) => {
+    void saveAndConfirmRow(sessionId, handle, resolvedRow).then(async (ok) => {
       if (!ok) return;
       await queuedToDraft(sessionId, resolvedRow.id);
       onCloseBuffer();
@@ -219,7 +228,7 @@ function useBufferTransferActions(
     const handle = pendingRef.current;
     if (!handle || !resolvedRow || activeBuffer.kind !== "draft") return;
     closingRef.current = true;
-    void handle.save({ silent: true }).then(async (ok) => {
+    void saveAndConfirmRow(sessionId, handle, resolvedRow).then(async (ok) => {
       if (!ok) return;
       await moveSessionDraftToDocument(sessionId, {
         ...resolvedRow,
@@ -234,10 +243,12 @@ function useBufferTransferActions(
 
   const handleMoveToSession = useCallback((): void => {
     if (!onMoveDraft || !resolvedRow) return;
-    void pendingRef.current?.save({ silent: true }).then((ok) => {
+    const handle = pendingRef.current;
+    if (!handle) return;
+    void saveAndConfirmRow(sessionId, handle, resolvedRow).then((ok) => {
       if (ok) onMoveDraft(resolvedRow.id);
     }).catch((e: Error) => notify(e.message, "error"));
-  }, [onMoveDraft, pendingRef, resolvedRow]);
+  }, [onMoveDraft, pendingRef, resolvedRow, sessionId]);
 
   return {
     handleSchedule,
@@ -252,7 +263,7 @@ function useBufferCloseActions(
   args: DesktopBufferActionsArgs,
   closeTarget: () => { kind: "queued" | "draft"; id: string } | undefined,
 ) {
-  const { activeBuffer, pendingRef, bufferMeta, onCloseBuffer, closingRef } = args;
+  const { sessionId, activeBuffer, resolvedRow, pendingRef, bufferMeta, onCloseBuffer, closingRef } = args;
   const isNew = activeBuffer.kind === "new";
 
   const handleEscape = useCallback((): void => {
@@ -260,6 +271,11 @@ function useBufferCloseActions(
     const handle = pendingRef.current;
     if (!handle) {
       onCloseBuffer(closeTarget());
+      return;
+    }
+    // Never discard an edit whose attachment is still encoding or hydrating.
+    if (handle.isEncoding()) {
+      notify("Waiting for attachment to finish encoding…", "info");
       return;
     }
     if (activeBuffer.kind === "queued" || bufferMeta.scheduled) {
@@ -277,10 +293,19 @@ function useBufferCloseActions(
       onCloseBuffer(closeTarget());
     };
     if (handle.isDirty() && handle.isSendable()) {
-      void handle.save({ silent: true }).catch(() => undefined).finally(finish);
-    } else {
+      void handle.save({ silent: true }).then((ok) => {
+        if (ok) finish();
+        else closingRef.current = false;
+      }).catch((e: Error) => {
+        closingRef.current = false;
+        notify(e.message, "error");
+      });
+    } else if (!handle.isDirty()) {
       handle.discard();
       finish();
+    } else {
+      closingRef.current = false;
+      handle.flashDirtyHint();
     }
   }, [activeBuffer.kind, bufferMeta.scheduled, closeTarget, closingRef, isNew, onCloseBuffer, pendingRef]);
 
@@ -293,12 +318,12 @@ function useBufferCloseActions(
     const handle = pendingRef.current;
     if (!handle) return;
     closingRef.current = true;
-    void handle.save({ silent: true }).then((ok) => {
+    void saveAndConfirmRow(sessionId, handle, resolvedRow).then((ok) => {
       if (ok) onCloseBuffer(closeTarget());
     }).catch((e: Error) => notify(e.message, "error")).finally(() => {
       closingRef.current = false;
     });
-  }, [closeTarget, closingRef, onCloseBuffer, pendingRef]);
+  }, [closeTarget, closingRef, onCloseBuffer, pendingRef, resolvedRow, sessionId]);
 
   return { handleEscape, handleDiscard, handleSaveAndClose };
 }
@@ -306,6 +331,7 @@ function useBufferCloseActions(
 async function runDeliverBuffer({
   sessionId,
   kind,
+  queue,
   row,
   handle,
   mode,
@@ -314,25 +340,33 @@ async function runDeliverBuffer({
 }: {
   sessionId: string;
   kind: DesktopPromptBuffer["kind"];
+  queue: readonly QueuedMessage[];
   row: QueuedMessage | null;
   handle: DesktopPendingBufferHandle;
   mode: Delivery | "steer" | "pause";
   target?: DeliveryTarget | undefined;
   nextCheckpoint: boolean;
 }): Promise<void> {
+  if (kind !== "new-draft" && row && !(await saveAndConfirmRow(sessionId, handle, row))) return;
   const text = handle.getText();
   const atts = [...handle.getAttachments()];
   if (mode === "steer") {
-    await currentTurnPrompt(sessionId, text, atts, target, nextCheckpoint);
-    if (row) {
-      if (kind === "queued") await removeQueued(sessionId, row.id);
-      else await removeDraft(sessionId, row.id);
-    }
+    // Server atomically removes the source draft/queued row (cancelling any
+    // schedule timer) once steer is admitted under this single operation id.
+    const consume = row
+      ? (kind === "queued" ? { queuedId: row.id } : { draftId: row.id })
+      : undefined;
+    await currentTurnPrompt(sessionId, text, atts, target, nextCheckpoint, consume);
   } else if (mode === "front") {
-    if (kind === "queued" && row) await requestSendQueued(sessionId, row.id);
-    else {
+    if (kind === "queued" && row) {
+      // Reorder-only: respects Pause and never registers explicit_wait.
+      const order = [row.id, ...queue.filter((m) => m.id !== row.id).map((m) => m.id)];
+      reorderQueue(sessionId, order);
+    } else if (row) {
+      // Atomic server transition: removes draft, cancels timer, front-queues.
+      await activateDraft(sessionId, row.id, { front: true });
+    } else {
       await frontPrompt(sessionId, text, atts);
-      if (row) await removeDraft(sessionId, row.id);
     }
   } else if (mode === "pause") {
     await pauseQueueConfirmed(sessionId);
@@ -352,20 +386,13 @@ function useHandleBufferSubmit(
   setDeliveryAnchor: (el: HTMLElement | null) => void,
 ): () => void {
   const {
-    sessionId, paused, serverConnected, queue, activeBuffer,
+    sessionId, queue, activeBuffer,
     resolvedRow, pendingRef, sendButtonRef, bufferMeta,
     newPrompt, onCloseBuffer, closingRef,
   } = args;
   const isNew = activeBuffer.kind === "new";
   return useCallback((): void => {
     if (isNew) {
-      if (busy || paused || queue.length > 0 || !serverConnected) {
-        recordLastSubmittedPending(sessionId, {
-          kind: "queued",
-          textHint: newPrompt.getText(),
-          at: Date.now(),
-        });
-      } else recordLastSubmittedPending(sessionId, null);
       newPrompt.onSubmit();
       return;
     }
@@ -373,7 +400,7 @@ function useHandleBufferSubmit(
     if (!handle || !handle.isSendable()) return;
     if (activeBuffer.kind === "queued") {
       closingRef.current = true;
-      void handle.save({ silent: true }).then((ok) => {
+      void saveAndConfirmRow(sessionId, handle, resolvedRow).then((ok) => {
         if (ok) onCloseBuffer(closeTarget());
       }).catch((e: Error) => notify(e.message, "error")).finally(() => {
         closingRef.current = false;
@@ -383,7 +410,7 @@ function useHandleBufferSubmit(
     if (bufferMeta.scheduled || busy || queue.length > 0) {
       const prep = activeBuffer.kind === "new-draft"
         ? Promise.resolve(true)
-        : handle.save({ silent: true });
+        : saveAndConfirmRow(sessionId, handle, resolvedRow);
       void prep.then((ok) => {
         if (ok) setDeliveryAnchor(sendButtonRef.current);
       }).catch((e: Error) => notify(e.message, "error"));
@@ -397,7 +424,7 @@ function useHandleBufferSubmit(
         onCloseBuffer();
         return;
       }
-      if (!(await handle.save({ silent: true }))) return;
+      if (!(await saveAndConfirmRow(sessionId, handle, resolvedRow))) return;
       await activateDraft(sessionId, resolvedRow.id);
       onCloseBuffer();
     })().catch((e: Error) => notify(e.message, "error")).finally(() => {
@@ -405,14 +432,14 @@ function useHandleBufferSubmit(
     });
   }, [
     activeBuffer.kind, bufferMeta.scheduled, busy, closeTarget, closingRef,
-    isNew, newPrompt, onCloseBuffer, paused, pendingRef, queue.length,
-    resolvedRow, sendButtonRef, serverConnected, sessionId, setDeliveryAnchor,
+    isNew, newPrompt, onCloseBuffer, pendingRef, queue.length,
+    resolvedRow, sendButtonRef, sessionId, setDeliveryAnchor,
   ]);
 }
 
 export function useDesktopBufferActions(args: DesktopBufferActionsArgs) {
   const {
-    sessionId, status, activeBuffer, resolvedRow, pendingRef,
+    sessionId, status, queue, activeBuffer, resolvedRow, pendingRef,
     sendButtonRef, newPrompt, onCloseBuffer, onOpenStop, closingRef,
   } = args;
 
@@ -438,16 +465,11 @@ export function useDesktopBufferActions(args: DesktopBufferActionsArgs) {
 
   const handleSave = useCallback((): void => {
     if (isNew) {
-      recordLastSubmittedPending(sessionId, {
-        kind: "draft",
-        textHint: newPrompt.getText(),
-        at: Date.now(),
-      });
       newPrompt.onSaveDraft();
       return;
     }
     void pendingRef.current?.save().catch((e: Error) => notify(e.message, "error"));
-  }, [isNew, newPrompt, pendingRef, sessionId]);
+  }, [isNew, newPrompt, pendingRef]);
 
   const handleForce = useCallback((): void => {
     if (isNew) {
@@ -458,11 +480,11 @@ export function useDesktopBufferActions(args: DesktopBufferActionsArgs) {
     if (!handle || !handle.isSendable()) return;
     const prep = activeBuffer.kind === "new-draft"
       ? Promise.resolve(true)
-      : handle.save({ silent: true });
+      : saveAndConfirmRow(sessionId, handle, resolvedRow);
     void prep.then((ok) => {
       if (ok) setDeliveryAnchor(sendButtonRef.current);
     }).catch((e: Error) => notify(e.message, "error"));
-  }, [activeBuffer.kind, isNew, newPrompt, pendingRef, sendButtonRef]);
+  }, [activeBuffer.kind, isNew, newPrompt, pendingRef, resolvedRow, sendButtonRef, sessionId]);
 
   const deliverBuffer = useCallback(
     (mode: Delivery | "steer" | "pause", target?: DeliveryTarget, nextCheckpoint = false): void => {
@@ -471,7 +493,7 @@ export function useDesktopBufferActions(args: DesktopBufferActionsArgs) {
       if (!handle) return;
       closingRef.current = true;
       void runDeliverBuffer({
-        sessionId, kind: activeBuffer.kind, row: resolvedRow, handle,
+        sessionId, kind: activeBuffer.kind, queue, row: resolvedRow, handle,
         mode, target, nextCheckpoint,
       }).then(() => onCloseBuffer())
         .catch((e: Error) => notify(e.message, "error"))
@@ -479,7 +501,7 @@ export function useDesktopBufferActions(args: DesktopBufferActionsArgs) {
           closingRef.current = false;
         });
     },
-    [activeBuffer.kind, closingRef, onCloseBuffer, pendingRef, resolvedRow, sessionId],
+    [activeBuffer.kind, closingRef, onCloseBuffer, pendingRef, queue, resolvedRow, sessionId],
   );
 
   return {
@@ -487,8 +509,8 @@ export function useDesktopBufferActions(args: DesktopBufferActionsArgs) {
     closeDelivery: () => setDeliveryAnchor(null),
     deliverBuffer,
     onStop: () => {
+      // Confirmation dialog owns cancellation; never cancel before the user confirms.
       setDeliveryAnchor(null);
-      cancelTurn(sessionId);
       onOpenStop();
     },
     handleSubmit,

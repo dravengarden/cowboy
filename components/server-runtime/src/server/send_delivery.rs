@@ -445,6 +445,8 @@ pub async fn submit(
     let hash = crate::managed_calls::canonical_digest(&serde_json::json!({
         "caller":&caller, "delivery":request.delivery, "text":request.text,
         "content":request.content, "target":request.target,
+        "consume_draft_id":request.consume_draft_id,
+        "consume_queued_id":request.consume_queued_id,
     }));
     match store
         .admit_agent_operation(&owner, &session, &operation, &hash)
@@ -489,6 +491,14 @@ pub async fn submit(
         receipt["caller"] = serde_json::json!(&caller);
         receipt["origin"] =
             serde_json::json!(crate::prompt_origin::DeliveryOrigin::from_caller(&caller));
+        if receipt["status"] == "submitted" || receipt["status"] == "injected" {
+            if let Some(draft_id) = request.consume_draft_id.as_deref() {
+                state.hub.remove_draft(&session, draft_id);
+            }
+            if let Some(queued_id) = request.consume_queued_id.as_deref() {
+                state.hub.remove_queued(&session, queued_id);
+            }
+        }
         if store
             .finish_agent_operation(&owner, &session, &operation, &receipt)
             .await

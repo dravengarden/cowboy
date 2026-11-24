@@ -68,21 +68,21 @@ test("adjacentSendOrderBuffer walks Queue items and places New Prompt at tail", 
   assertEquals(nextFromQ2, { kind: "new" });
 });
 
-test("resolveLastSubmittedRow prefers cmid and falls back to trimmed text", () => {
-  const queue = [row("q1", "older"), row("q2", "fix tests", "c-latest")];
+test("resolveLastSubmittedRow matches strictly by cmid and ignores same-text rows", () => {
+  const queue = [row("q1", "fix tests", "c-older"), row("q2", "fix tests", "c-latest")];
   const matched = resolveLastSubmittedRow(
-    { kind: "queued", cmid: "c-latest", textHint: "fix tests", at: 1 },
+    { kind: "queued", cmid: "c-latest", at: 1 },
     queue,
     [],
   );
   assertEquals(matched?.row.id, "q2");
 
-  const byText = resolveLastSubmittedRow(
-    { kind: "queued", textHint: "fix tests\n", at: 2 },
+  const gone = resolveLastSubmittedRow(
+    { kind: "queued", cmid: "c-already-sent", at: 2 },
     queue,
     [],
   );
-  assertEquals(byText?.row.id, "q2");
+  assertEquals(gone, null);
 });
 
 test("firstLinePreview collapses whitespace, strips image tokens, and truncates", () => {

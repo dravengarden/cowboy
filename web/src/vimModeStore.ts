@@ -36,6 +36,13 @@ export function clearBufferVimMode(owner: string): void {
   if (getVimMode() !== before) notifyListeners();
 }
 
+/** Scoped Vim ownership for an editor mount: claims active ownership and
+ *  restores `"default"` when that editor unmounts. */
+export function claimActiveVimOwner(owner: string): () => void {
+  setActiveVimOwner(owner);
+  return () => clearBufferVimMode(owner);
+}
+
 export function setVimMode(next: string): void {
   setBufferVimMode(DEFAULT_OWNER, next);
 }

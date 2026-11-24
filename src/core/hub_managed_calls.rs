@@ -174,21 +174,10 @@ impl Hub {
     pub(super) fn broadcast_pending_snapshot(
         &self,
         session_id: &str,
-        queue: &[QueuedMessage],
-        drafts: &[QueuedMessage],
+        _queue: &[QueuedMessage],
+        _drafts: &[QueuedMessage],
     ) {
-        // Broadcast on the generic optimistic-sync channel as state "queue:<sid>".
-        // Confirmed = the cmids in the value, so a client drops its optimistic add
-        // the moment its cmid lands here (the cross-terminal reconcile).
-        let editing = self
-            .inner
-            .sessions
-            .lock()
-            .get(session_id)
-            .and_then(|s| s.editing.clone());
-        let confirmed = Self::cmids_of(queue, drafts);
-        let value = serde_json::json!({ "queue": queue, "drafts": drafts, "editing": editing });
-        self.sync_emit(&format!("queue:{session_id}"), value, confirmed);
+        self.publish_pending_snapshot(session_id, &[]);
     }
 
     /// Submit a managed call's prompt to its child. Client entry points refuse

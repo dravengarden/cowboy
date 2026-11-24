@@ -179,7 +179,7 @@ export function handleDesktopPendingRowEditEvent(
   const id = item?.dataset.desktopItem;
   if (!id) return;
   const found = items.find((entry) => entry.id === id);
-  if (!found) return;
+  if (!found || found.id.startsWith("opt-") || found.status !== undefined) return;
   event.preventDefault();
   onEditRow(found, detail?.entryMode ?? "normal");
 }

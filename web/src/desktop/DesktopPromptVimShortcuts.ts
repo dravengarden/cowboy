@@ -98,6 +98,9 @@ export function evaluatePromptCanvasKey({
   if (tracker.prefix !== null) {
     const prefix = tracker.prefix;
     clearPromptChord(tracker);
+    if (event.key === "Escape") {
+      return { consumed: true };
+    }
     if (prefix === "[" && key === "q" && canCycleQueue) {
       return { consumed: true, action: { kind: "cycle-send-order-prev" } };
     }

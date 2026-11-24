@@ -51,7 +51,7 @@ import { seedInlineAttachments } from "../inlineImages";
 import { useVimSetting } from "../vimSetting";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import { imeOwnsEditable, isImeKeyEvent } from "../imeKey";
-import { getVimMode, publishDocumentVimMode } from "../vimModeStore";
+import { claimActiveVimOwner, getVimMode, setBufferVimMode } from "../vimModeStore";
 import { vimSinkAwaitsInput } from "../desktop/vim/vimSinkInput";
 import { LeaderKeycap } from "../desktop/commands/DesktopKeycap";
 import {
@@ -260,7 +260,10 @@ function DraftEditingSession(
     } | null
   >(null);
   const historyPrefetch = useRef<AbortController | null>(null);
-  useEffect(() => () => historyPrefetch.current?.abort(), []);
+  useEffect(() => {
+    const releaseVim = claimActiveVimOwner(`document:${initial.id}`);
+    return () => { releaseVim(); historyPrefetch.current?.abort(); };
+  }, [initial.id]);
   const closeHistory = (): void => {
     historyPrefetch.current?.abort();
     setHistory(null);
@@ -1392,7 +1395,7 @@ function DraftEditingSession(
                 fill={!focusLayout}
                 flushRightScrollbar={desktop}
                 vim={vim}
-                onVimMode={(m) => publishDocumentVimMode(initial.id, m)}
+                onVimMode={(m) => setBufferVimMode(`document:${initial.id}`, m)}
               />
             </Box>
           </Box>

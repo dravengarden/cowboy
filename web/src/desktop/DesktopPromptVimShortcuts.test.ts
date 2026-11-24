@@ -100,5 +100,28 @@ test("Vim Normal [q/]q cycles send order and ZZ/ZQ saves or discards buffer", ()
     canCycleQueue: true,
   });
   assertEquals(zq, { consumed: true, action: { kind: "discard-and-close" } });
+
+  // Escape consumes an armed chord without letting the event close the buffer.
+  const armBracket = evaluatePromptCanvasKey({
+    event: fakeKey("[", "BracketLeft", { onSink: true }),
+    tracker,
+    isNewPrompt: false,
+    isEmpty: false,
+    hasCompletionOpen: false,
+    canRecallLast: false,
+    canCycleQueue: true,
+  });
+  assertEquals(armBracket, { consumed: true });
+  const esc = evaluatePromptCanvasKey({
+    event: fakeKey("Escape", "Escape", { onSink: true }),
+    tracker,
+    isNewPrompt: false,
+    isEmpty: false,
+    hasCompletionOpen: false,
+    canRecallLast: false,
+    canCycleQueue: true,
+  });
+  assertEquals(esc, { consumed: true });
+  assertEquals(tracker.prefix, null);
   clearPromptChord(tracker);
 });

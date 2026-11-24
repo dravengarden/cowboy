@@ -27,15 +27,19 @@ export function syncRemoteQueueEditing(
       remoteEditingBySession.delete(sessionId);
       changed = true;
     }
-  } else {
-    if (prev !== editing) {
-      remoteEditingBySession.set(sessionId, editing);
-      changed = true;
-    }
-    if (activeHolds.get(sessionId) === editing && !confirmedHolds.has(sessionId)) {
+  } else if (prev !== editing) {
+    remoteEditingBySession.set(sessionId, editing);
+    changed = true;
+  }
+  const desired = activeHolds.get(sessionId);
+  const matchesLocal = desired !== undefined && editing === desired;
+  if (matchesLocal) {
+    if (!confirmedHolds.has(sessionId)) {
       confirmedHolds.add(sessionId);
       changed = true;
     }
+  } else if (confirmedHolds.delete(sessionId)) {
+    changed = true;
   }
   if (changed) notifyListeners();
 }
@@ -70,21 +74,21 @@ export function setQueueEditHold(
   const previous = activeHolds.get(sessionId);
   const wasConfirmed = confirmedHolds.has(sessionId);
   activeHolds.set(sessionId, id);
-  const sent = send({ type: "set_queue_editing", session_id: sessionId, id });
-  if (sent) confirmedHolds.add(sessionId);
+  // Only an authoritative server snapshot echoing `editing === id` confirms
+  // the lease; sending a WebSocket frame alone never proves admission.
+  const alreadyConfirmed = remoteEditingBySession.get(sessionId) === id;
+  if (alreadyConfirmed) confirmedHolds.add(sessionId);
   else confirmedHolds.delete(sessionId);
-  if (previous !== id || wasConfirmed !== sent) notifyListeners();
+  send({ type: "set_queue_editing", session_id: sessionId, id });
+  if (previous !== id || wasConfirmed !== alreadyConfirmed) notifyListeners();
 }
 
 export function replayQueueEditHolds(send: SendInbound): void {
   if (activeHolds.size === 0) return;
   let changed = false;
   for (const [sessionId, id] of activeHolds) {
-    const sent = send({ type: "set_queue_editing", session_id: sessionId, id });
-    const had = confirmedHolds.has(sessionId);
-    if (sent) confirmedHolds.add(sessionId);
-    else confirmedHolds.delete(sessionId);
-    if (had !== sent) changed = true;
+    if (confirmedHolds.delete(sessionId)) changed = true;
+    send({ type: "set_queue_editing", session_id: sessionId, id });
   }
   if (changed) notifyListeners();
 }

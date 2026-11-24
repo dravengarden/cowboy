@@ -24,6 +24,7 @@ export interface DraftActivation<R extends QueueItem = QueueItem> {
   sourceCmid?: string;
   row?: R;
   destination?: "queue" | "transcript";
+  front?: boolean;
 }
 
 export function draftActivationSourceId(
@@ -185,6 +186,8 @@ export const queueMutators = {
     ),
     queue: args.row === undefined || args.destination === "transcript"
       ? value.queue
+      : args.front
+      ? prependUnique(value.queue, args.row)
       : appendUnique(value.queue, args.row),
     inFlight: args.row !== undefined && args.destination === "transcript"
       ? appendUnique(value.inFlight ?? [], args.row)

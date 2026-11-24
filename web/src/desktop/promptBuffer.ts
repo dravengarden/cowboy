@@ -20,8 +20,7 @@ export type DesktopPromptBuffer =
 
 export interface LastSubmittedPending {
   kind: "queued" | "draft";
-  cmid?: string;
-  textHint: string;
+  cmid: string;
   at: number;
 }
 
@@ -142,26 +141,19 @@ export function resolveBufferRow(
 }
 
 /** Resolve the last queued/parked message from this Prompt for `↑` recall or
- *  `␣Q` smart cursor selection. Skips call-notice / current-turn rows. */
+ *  `␣Q` smart cursor selection. Matches strictly by accepted `cmid` so another
+ *  row with identical text (or different attachments) is never selected. */
 export function resolveLastSubmittedRow(
   last: LastSubmittedPending | null,
   queue: readonly QueuedMessage[],
   drafts: readonly QueuedMessage[],
 ): { kind: "queued" | "draft"; row: QueuedMessage } | null {
-  if (!last) return null;
+  if (!last || !last.cmid) return null;
   const rows = (last.kind === "queued" ? queue : drafts).filter(
     (item) => !item.currentTurn && item.status === undefined,
   );
-  if (rows.length === 0) return null;
-  if (last.cmid) {
-    const byCmid = rows.find((item) => item.cmid === last.cmid);
-    if (byCmid) return { kind: last.kind, row: byCmid };
-  }
-  const byText = [...rows].reverse().find(
-    (item) => item.text.trimEnd() === last.textHint.trimEnd(),
-  );
-  if (byText) return { kind: last.kind, row: byText };
-  return null;
+  const byCmid = rows.find((item) => item.cmid === last.cmid);
+  return byCmid ? { kind: last.kind, row: byCmid } : null;
 }
 
 /** Walk along send order (`[q` / `]q`): editable Queue rows in order, with New

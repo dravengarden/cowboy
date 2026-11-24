@@ -827,8 +827,46 @@ impl Hub {
     /// changing or re-persisting the queue. Confirmations are monotonic facts the
     /// sync client accepts from any patch, so the resending device retires its
     /// outbox entry instead of waiting out an acknowledgement timeout.
+    /// Capture `(queue, drafts, editing)` and assign the monotonic `queue:<sid>`
+    /// sync version under one `sync -> sessions` lock acquisition (matching
+    /// `sync_resync`'s lock order), so concurrent queue mutations and hold
+    /// changes can never publish older rows under a newer version.
+    pub(super) fn publish_pending_snapshot(&self, session_id: &str, extra_confirmed: &[String]) {
+        let state = format!("queue:{session_id}");
+        let (version, value, confirmed) = {
+            let mut reg = self.inner.sync.lock();
+            let sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get(session_id) else {
+                return;
+            };
+            let entry = reg.entry(state.clone()).or_default();
+            entry.version += 1;
+            let version = entry.version;
+            let mut confirmed = Self::cmids_of(&s.queue, &s.drafts);
+            for cmid in extra_confirmed {
+                if !confirmed.iter().any(|existing| existing == cmid) {
+                    confirmed.push(cmid.clone());
+                }
+            }
+            let value = serde_json::json!({
+                "queue": &s.queue,
+                "drafts": &s.drafts,
+                "editing": &s.editing,
+            });
+            (version, value, confirmed)
+        };
+        tracing::info!(target: "cowboy::oplog", op = "change", %state, version, confirmed = ?confirmed);
+        self.fanout(Outbound::SyncPatch {
+            state,
+            version,
+            value,
+            confirmed,
+            resync: false,
+        });
+    }
+
     pub(super) fn confirm_delivered(&self, session_id: &str, cmid: &str) {
-        let (queue, drafts, editing) = {
+        let should_confirm = {
             let sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get(session_id) else {
                 return;
@@ -836,29 +874,21 @@ impl Hub {
             // Dispatch admission deduplicates execution but does not prove
             // delivery. Until a queue row or user echo owns the prompt, the
             // browser must retain its durable outbox (including attachments).
-            if !s
-                .queue
+            s.queue
                 .iter()
                 .chain(&s.drafts)
                 .any(|m| m.cmid.as_deref() == Some(cmid))
-                && !s
-                    .dispatched_cmids
+                || s.dispatched_cmids
                     .iter()
                     .any(|seen| seen.cmid == cmid && seen.echoed)
-                && !s.log.iter().any(|entry| {
+                || s.log.iter().any(|entry| {
                     entry.cmid.as_deref() == Some(cmid) && is_user_message_chunk(entry)
                 })
-            {
-                return;
-            }
-            (s.queue.clone(), s.drafts.clone(), s.editing.clone())
         };
-        let mut confirmed = Self::cmids_of(&queue, &drafts);
-        if !confirmed.iter().any(|seen| seen == cmid) {
-            confirmed.push(cmid.to_owned());
+        if !should_confirm {
+            return;
         }
-        let value = serde_json::json!({ "queue": queue, "drafts": drafts, "editing": editing });
-        self.sync_emit(&format!("queue:{session_id}"), value, confirmed);
+        self.publish_pending_snapshot(session_id, &[cmid.to_owned()]);
     }
 
     /// Drop one queued prompt. Returns whether the row was still queued.
@@ -960,7 +990,15 @@ impl Hub {
             };
             let settled = submit::extract_notice_settlements(s.queue.iter());
             s.queue.clear();
-            s.editing = None;
+            // Only drop queue edit holds; a scheduled-draft hold belongs to
+            // `s.drafts` and must stay intact so its deferred timer still fires.
+            let editing_draft = s
+                .editing
+                .as_deref()
+                .is_some_and(|id| s.drafts.iter().any(|m| m.id == id));
+            if !editing_draft {
+                s.editing = None;
+            }
             settled
         };
         self.emit_pending_with_notice_ops(session_id, settled, Vec::new());
@@ -1078,46 +1116,55 @@ impl Hub {
         self.try_drain(session_id);
     }
 
-    fn take_due_deferred_drafts(s: &mut Session) -> Vec<String> {
+    fn take_due_deferred_drafts(s: &mut Session, keep_editing_id: Option<&str>) -> Vec<String> {
         let now_ms = chrono::Utc::now().timestamp_millis();
-        std::mem::take(&mut s.deferred_scheduled_drafts)
-            .into_iter()
-            .filter(|draft_id| {
-                s.drafts.iter().any(|m| {
-                    m.id == *draft_id
-                        && m.schedule
-                            .as_ref()
-                            .is_some_and(|sc| sc.fire_at_ms <= now_ms)
-                })
-            })
-            .collect()
+        let mut kept = Vec::new();
+        let mut due = Vec::new();
+        for draft_id in std::mem::take(&mut s.deferred_scheduled_drafts) {
+            if keep_editing_id == Some(draft_id.as_str()) {
+                kept.push(draft_id);
+                continue;
+            }
+            if s.drafts.iter().any(|m| {
+                m.id == draft_id
+                    && m.schedule
+                        .as_ref()
+                        .is_some_and(|sc| sc.fire_at_ms <= now_ms)
+            }) {
+                due.push(draft_id);
+            }
+        }
+        s.deferred_scheduled_drafts = kept;
+        due
     }
 
     /// Hold (`Some`) or release (`None`) a queued message or scheduled draft for
-    /// editing. Broadcasts `editing` to every client; releasing retries auto-drain
-    /// and fires any scheduled draft whose fire time elapsed during the edit.
+    /// editing. Broadcasts `editing` to every client; releasing or displacing a
+    /// hold retries auto-drain when the queue is unblocked and fires any
+    /// scheduled draft whose fire time elapsed while it was held.
     pub fn set_queue_editing(&self, session_id: &str, id: Option<String>) -> u64 {
-        let released = id.is_none();
-        let (epoch, queue, drafts, deferred_due) = {
+        let (epoch, unblock_queue, deferred_due) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return 0;
             };
             s.editing_epoch = s.editing_epoch.wrapping_add(1);
             s.editing = id;
-            let deferred = if released {
-                Self::take_due_deferred_drafts(s)
-            } else {
-                Vec::new()
-            };
-            (s.editing_epoch, s.queue.clone(), s.drafts.clone(), deferred)
+            let editing_draft = s
+                .editing
+                .as_deref()
+                .is_some_and(|cur| s.drafts.iter().any(|m| m.id == cur));
+            let unblock_queue = s.editing.is_none() || editing_draft;
+            let keep = s.editing.clone();
+            let deferred = Self::take_due_deferred_drafts(s, keep.as_deref());
+            (s.editing_epoch, unblock_queue, deferred)
         };
-        self.broadcast_pending_snapshot(session_id, &queue, &drafts);
-        if released {
+        self.publish_pending_snapshot(session_id, &[]);
+        if unblock_queue {
             self.try_drain(session_id);
-            for draft_id in deferred_due {
-                self.fire_scheduled_draft(session_id, &draft_id);
-            }
+        }
+        for draft_id in deferred_due {
+            self.fire_scheduled_draft_at(session_id, &draft_id, None);
         }
         epoch
     }
@@ -1135,14 +1182,13 @@ impl Hub {
             }
             s.editing = None;
             s.editing_epoch = s.editing_epoch.wrapping_add(1);
-            let deferred = Self::take_due_deferred_drafts(s);
-            Some((s.queue.clone(), s.drafts.clone(), deferred))
+            Some(Self::take_due_deferred_drafts(s, None))
         };
-        if let Some((queue, drafts, deferred_due)) = released {
-            self.broadcast_pending_snapshot(session_id, &queue, &drafts);
+        if let Some(deferred_due) = released {
+            self.publish_pending_snapshot(session_id, &[]);
             self.try_drain(session_id);
             for draft_id in deferred_due {
-                self.fire_scheduled_draft(session_id, &draft_id);
+                self.fire_scheduled_draft_at(session_id, &draft_id, None);
             }
             return true;
         }

@@ -22,12 +22,16 @@ import {
 import { useVimSetting } from "../vimSetting";
 import { requestDesktopEditorInsert } from "./editorInsert";
 import { DesktopPromptBufferBar } from "./DesktopPromptBufferBar";
-import { usePendingBufferController } from "./usePendingBufferController";
+import {
+  type MaterializedCarry,
+  usePendingBufferController,
+} from "./usePendingBufferController";
 
 export interface DesktopPendingBufferHandle {
   editor: () => ComposerEditorHandle | null;
   isDirty: () => boolean;
   isSendable: () => boolean;
+  isEncoding: () => boolean;
   isSaving: () => boolean;
   isScheduled: () => boolean;
   getText: () => string;
@@ -42,6 +46,7 @@ export interface DesktopPendingBufferEditorProps {
   sessionId: string;
   kind: "queued" | "draft" | "new-draft";
   row: QueuedMessage | null;
+  initialCarry?: MaterializedCarry | null | undefined;
   index?: number | undefined;
   total?: number | undefined;
   entryMode: "insert" | "normal";
@@ -53,7 +58,7 @@ export interface DesktopPendingBufferEditorProps {
     scheduled: boolean;
     holdStatus: import("../queueEditingHold").QueueEditHoldStatus;
   }) => void;
-  onMaterializedDraft: (rowId: string, cmid?: string) => void;
+  onMaterializedDraft: (rowId: string, cmid?: string, carry?: MaterializedCarry) => void;
   onSourceVanished: (recovered?: { id?: string; cmid: string }) => void;
   onEscape: () => void;
   onBack: () => void;
@@ -272,6 +277,7 @@ export const DesktopPendingBufferEditor = forwardRef<
     sessionId,
     kind,
     row,
+    initialCarry,
     index,
     total,
     entryMode,
@@ -296,6 +302,7 @@ export const DesktopPendingBufferEditor = forwardRef<
     sessionId,
     kind,
     row,
+    initialCarry,
     editorRef,
     onMaterializedDraft,
     onSourceVanished,
@@ -325,6 +332,7 @@ export const DesktopPendingBufferEditor = forwardRef<
     editor: () => editorRef.current,
     isDirty: () => ctrl.dirty,
     isSendable: () => ctrl.sendable,
+    isEncoding: () => ctrl.attachmentsPending,
     isSaving: () => ctrl.saving,
     isScheduled: () => ctrl.scheduled,
     getText: () => editorRef.current?.getValue() ?? ctrl.textRef.current,

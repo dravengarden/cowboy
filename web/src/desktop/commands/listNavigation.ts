@@ -1,8 +1,12 @@
 import { isMac } from "../../platform";
+import { desktopImeOwnsKey } from "./imeShortcut";
+import { matchesShortcut, parseShortcut } from "./shortcut";
 import {
   DESKTOP_NEW_SESSION_DRAFT_EVENT,
   DESKTOP_PENDING_ROW_EDIT_EVENT,
 } from "../promptBuffer";
+
+const MOD_ENTER_STROKE = parseShortcut("Mod+Enter");
 
 export type PendingItemAction =
   | "return"
@@ -24,9 +28,8 @@ export function pendingItemActionKey(key: string): PendingItemAction | null {
 }
 
 export function isPendingModEnter(event: KeyboardEvent): boolean {
-  const mod = isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
-  return mod && !event.altKey && !event.shiftKey &&
-    (event.key === "Enter" || event.code === "NumpadEnter");
+  if (desktopImeOwnsKey(event)) return false;
+  return matchesShortcut(MOD_ENTER_STROKE, event, isMac);
 }
 
 function triggerPendingEdit(
