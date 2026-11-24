@@ -81,3 +81,11 @@ test("desktop-owned session confirms stay centered dialogs", () => {
   assertEquals(desktopSessionActionsSource.includes("<ConfirmSheet"), false);
   assertEquals(desktopTopBarSource.includes("<ConfirmSheet"), false);
 });
+
+test("Desktop Sheet and ConfirmSheet share frosted DesktopModal material and opt-in Mod+Enter confirm", () => {
+  assert(sheetSource.includes("InstantModalTransition"));
+  assert(sheetSource.includes("desktopDialogSlotProps"));
+  assert(sheetSource.includes("disableScrollLock"));
+  assert(sheetSource.includes("useConfirmEnter(confirmReady"));
+  assert(sheetSource.includes("owner: dialogRef"));
+});

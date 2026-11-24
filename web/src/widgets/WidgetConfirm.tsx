@@ -4,7 +4,7 @@
 // note is shown labelled as the agent's, never as product text.
 
 import { useState } from "react";
-import { Alert, Box, Button, Typography } from "@mui/material";
+import { Alert, Box, Typography } from "@mui/material";
 import { ConfirmSheet } from "../Sheet";
 import { requestInteraction, type InteractionRequest } from "./widgetInteractions";
 
@@ -49,27 +49,13 @@ export default function WidgetConfirm({
       open
       onClose={(): void => onClose(false)}
       title="Send this reply?"
-      actions={
-        <>
-          <Button
-            onClick={(): void => onClose(false)}
-            disabled={busy}
-            sx={{ textTransform: "none" }}
-          >
-            Cancel
-          </Button>
-          <Button
-            variant="contained"
-            color={current.destructive ? "error" : "primary"}
-            data-widget-confirm-send=""
-            disabled={busy}
-            onClick={(): void => void send()}
-            sx={{ textTransform: "none" }}
-          >
-            Send
-          </Button>
-        </>
-      }
+      confirm={{
+        label: "Send",
+        color: current.destructive ? "error" : "primary",
+        busy,
+        confirmProps: { "data-widget-confirm-send": "" },
+        onConfirm: (): void => void send(),
+      }}
     >
       <Box sx={{ display: "grid", gap: 1.5 }} data-widget-confirm="">
         {current.agentNote ? (

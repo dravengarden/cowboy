@@ -3,7 +3,7 @@
 // device. Sending queues exactly that text as the person's own prompt.
 
 import { useState } from "react";
-import { Alert, Box, Button, Typography } from "@mui/material";
+import { Alert, Box, Typography } from "@mui/material";
 import { ConfirmSheet } from "../../Sheet";
 import { copyText } from "../../clipboard";
 import { sendAppMessage, type PendingAppMessage } from "./appMessages";
@@ -45,35 +45,23 @@ export default function AppMessageConfirm({
       open
       onClose={cancel}
       title="Send this message?"
-      actions={
-        <>
-          <Button onClick={cancel} disabled={busy} sx={{ textTransform: "none" }}>
-            {notice ? "Close" : "Cancel"}
-          </Button>
-          {notice?.outdated ? (
-            <Button
-              variant="contained"
-              onClick={(): void => {
-                void copyText(pending.text);
-                cancel();
-              }}
-              sx={{ textTransform: "none" }}
-            >
-              Copy for the composer
-            </Button>
-          ) : (
-            <Button
-              variant="contained"
-              data-app-message-send=""
-              disabled={busy}
-              onClick={(): void => void send()}
-              sx={{ textTransform: "none" }}
-            >
-              Send
-            </Button>
-          )}
-        </>
-      }
+      confirm={notice?.outdated
+        ? {
+          label: "Copy for the composer",
+          cancelLabel: "Close",
+          busy,
+          onConfirm: (): void => {
+            void copyText(pending.text);
+            cancel();
+          },
+        }
+        : {
+          label: "Send",
+          cancelLabel: notice ? "Close" : "Cancel",
+          busy,
+          confirmProps: { "data-app-message-send": "" },
+          onConfirm: (): void => void send(),
+        }}
     >
       <Box sx={{ display: "grid", gap: 1.5 }} data-app-message-confirm="">
         <Typography variant="caption" color="text.secondary">

@@ -44,6 +44,7 @@ import {
   useInspectorState,
 } from "./backgroundTaskInspectorState";
 import { setActiveSessionId } from "./controlPlane";
+import { desktopDialogSlotProps, InstantModalTransition, isImeBlockedEscape } from "./desktop/DesktopModal";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { DesktopTasksHeader } from "./DesktopTasksHeader";
 import { handleBackgroundTasksKeyDown } from "./backgroundTasksKeyboard";
@@ -572,23 +573,23 @@ export function BackgroundTasksInspector({
     return createPortal(
       <Dialog
         open
-        onClose={close}
+        onClose={(e, r) => { if (!isImeBlockedEscape(e, r)) close(); }}
         maxWidth={false}
         fullWidth
+        disableScrollLock
         aria-labelledby="background-tasks-title"
-        slotProps={{ root: { onKeyDown: keys } }}
-        PaperProps={{
-          sx: {
+        slots={{ transition: InstantModalTransition }}
+        slotProps={desktopDialogSlotProps({
+          root: { onKeyDown: keys },
+          paperSx: {
             width: "calc(100vw - 32px)",
             maxWidth: 1600,
             height: "calc(100dvh - 32px)",
             maxHeight: 1100,
             m: 2,
             overflow: "hidden",
-            borderRadius: 2.5,
-            backgroundImage: "none",
           },
-        }}
+        })}
       >
         <Box
           ref={inspectorRef}

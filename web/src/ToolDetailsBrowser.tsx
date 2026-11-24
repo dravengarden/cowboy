@@ -15,6 +15,7 @@ import { type ContentChunk, isHumanPrompt, type RenderItem } from "./derive";
 import { ToolStatusChip, toolStatusLabel } from "./tools/ToolStatusChip";
 import { ScrollEdges, FloatingActionIsland } from "@cowboy/app-shell";
 import { Sheet } from "./Sheet";
+import { desktopDialogSlotProps, InstantModalTransition, isImeBlockedEscape } from "./desktop/DesktopModal";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { scrollableAncestor, useToolDetailReveal } from "./useToolDetailReveal";
 
@@ -826,21 +827,21 @@ export function ToolDetailsBrowser({
       ? (
         <Dialog
           open
-          onClose={onClose}
+          onClose={(e, r) => { if (!isImeBlockedEscape(e, r)) onClose(); }}
           maxWidth={false}
           fullWidth
-          PaperProps={{
-            sx: {
+          disableScrollLock
+          slots={{ transition: InstantModalTransition }}
+          slotProps={desktopDialogSlotProps({
+            paperSx: {
               width: "calc(100vw - 32px)",
               maxWidth: 1600,
               height: "calc(100dvh - 32px)",
               maxHeight: 1100,
               m: 2,
               overflow: "hidden",
-              borderRadius: 2.5,
-              backgroundImage: "none",
             },
-          }}
+          })}
         >
           <Box
             ref={dialogRootRef}

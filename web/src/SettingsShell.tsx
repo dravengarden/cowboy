@@ -1018,16 +1018,7 @@ export function MachinesContent({ embedded = false }: { embedded?: boolean } = {
                 open={deleteTarget !== null}
                 onClose={() => !deleting && setDeleteTarget(null)}
                 title={deletingLastMachine ? "Delete the last Machine?" : "Delete this Machine?"}
-                actions={
-                    <>
-                        <Button color="inherit" disabled={deleting} onClick={() => setDeleteTarget(null)}>
-                            Cancel
-                        </Button>
-                        <Button variant="contained" color="error" disabled={deleting} onClick={deleteMachine}>
-                            {deleting ? "Deleting" : "Delete Machine"}
-                        </Button>
-                    </>
-                }
+                confirm={{ label: deleting ? "Deleting" : "Delete Machine", color: "error", busy: deleting, onConfirm: deleteMachine }}
             >
                 <Stack spacing={1.5} sx={{ pt: 0.5 }}>
                     <Typography variant="body2">

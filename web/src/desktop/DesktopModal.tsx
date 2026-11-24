@@ -75,6 +75,38 @@ interface InstantModalTransitionProps {
   easing?: unknown;
 }
 
+/** Ignore Escape close when an active IME composition owns the keystroke. */
+export function isImeBlockedEscape(event: object, reason: string): boolean {
+  if (reason !== "escapeKeyDown") return false;
+  const keyEvent = "nativeEvent" in event
+    ? (event as { nativeEvent: KeyboardEvent }).nativeEvent
+    : event as KeyboardEvent;
+  return isImeKeyEvent(keyEvent) || desktopCompositionActive();
+}
+
+/** Shared MUI Dialog `slotProps` for Desktop frosted modals: unified glass
+ *  material, backdrop scrim, and zero-reflow InstantModalTransition. */
+export function desktopDialogSlotProps(options?: {
+  paperSx?: Record<string, unknown> | undefined;
+  paperRef?: Ref<HTMLDivElement> | undefined;
+  root?: Record<string, unknown> | undefined;
+}) {
+  return {
+    ...(options?.root ? { root: options.root } : {}),
+    paper: {
+      ...(options?.paperRef ? { ref: options.paperRef } : {}),
+      sx: {
+        ...desktopModalPaperSx(),
+        ...options?.paperSx,
+      },
+    },
+    backdrop: {
+      slots: { transition: InstantModalTransition },
+      sx: desktopModalBackdropSx(),
+    },
+  };
+}
+
 export const InstantModalTransition = forwardRef<
   HTMLElement,
   InstantModalTransitionProps
@@ -164,12 +196,7 @@ export function DesktopModal({
       open={open}
       aria-labelledby={titleId}
       onClose={(event, reason): void => {
-        if (reason === "escapeKeyDown") {
-          const keyEvent = "nativeEvent" in event
-            ? event.nativeEvent as KeyboardEvent
-            : event as KeyboardEvent;
-          if (isImeKeyEvent(keyEvent) || desktopCompositionActive()) return;
-        }
+        if (isImeBlockedEscape(event, reason)) return;
         onClose();
       }}
       fullWidth

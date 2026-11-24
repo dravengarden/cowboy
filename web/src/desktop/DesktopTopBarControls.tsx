@@ -97,7 +97,7 @@ import { useNativeAccountUsage } from "../nativeAccountUsage";
 import { sameComposerSheetSession } from "../composerSessionSlice";
 import { registeredUsageAccounts, sameSessionQuotaInputs, type UsageAccountCard, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageResetUnavailableMessage } from "../usageAccounts";
 import { AccountBrowserEntry } from "../machineBrowser/AccountBrowserEntry";
-import { DesktopModal } from "./DesktopModal";
+import { desktopDialogSlotProps, DesktopModal, InstantModalTransition, isImeBlockedEscape } from "./DesktopModal";
 import { RunConfigurationDialog } from "./RunConfigurationDialog";
 import { compactOptionName } from "./runConfigOptions";
 import {
@@ -646,9 +646,12 @@ function DesktopUsageExtras(
       {reset.open && (
       <Dialog
         open
-        onClose={reset.close}
+        onClose={(e, r) => { if (!isImeBlockedEscape(e, r)) reset.close(); }}
         fullWidth
         maxWidth="xs"
+        disableScrollLock
+        slots={{ transition: InstantModalTransition }}
+        slotProps={desktopDialogSlotProps()}
       >
         <DialogTitle>
           {reset.mode === "schedule"

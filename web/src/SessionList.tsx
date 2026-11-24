@@ -3337,76 +3337,95 @@ export function CreateDialog({
                             value={directory}
                             onChange={setDirectory}
                         />
-                    </> : <>
-                        {/* The directory decides every default below, so it is chosen first. */}
-                        <WorkspacePicker
-                            label="Directory (optional)"
-                            clearable
-                            hierarchyPreferenceKey="cowboy.sessionDirectoryHierarchy"
-                            entries={directoryChoices}
-                            value={directory}
-                            onChange={setDirectory}
-                        />
-                        {directory && (
-                            <Stack direction="row" alignItems="center" flexWrap="wrap" data-create-defaults-summary sx={{ gap: 1, mt: "4px !important" }}>
-                                <Typography variant="caption" color="text.secondary" sx={{ mr: "auto" }}>
-                                    {defaultsSummary}
-                                </Typography>
-                                {saveableDefaults && (
-                                    <Button size="small" disabled={creating} onClick={(): void => setSessionFolderDefaults(directory, saveableDefaults)}>
-                                        Save as {directoryName} defaults
-                                    </Button>
+                    </> : (
+                        <Box
+                            data-create-session-grid
+                            sx={desktop
+                                ? {
+                                    display: "grid",
+                                    gap: 2,
+                                    gridTemplateColumns: "minmax(0, 1fr)",
+                                    "@media (min-width: 780px)": {
+                                        gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+                                        alignItems: "start",
+                                    },
+                                }
+                                : { display: "flex", flexDirection: "column", gap: 1.5 }}
+                        >
+                            <Stack spacing={1.5} sx={{ minWidth: 0 }}>
+                                {/* The directory decides every default below, so it is chosen first. */}
+                                <WorkspacePicker
+                                    label="Directory (optional)"
+                                    clearable
+                                    hierarchyPreferenceKey="cowboy.sessionDirectoryHierarchy"
+                                    entries={directoryChoices}
+                                    value={directory}
+                                    onChange={setDirectory}
+                                />
+                                {directory && (
+                                    <Stack direction="row" alignItems="center" flexWrap="wrap" data-create-defaults-summary sx={{ gap: 1, mt: "4px !important" }}>
+                                        <Typography variant="caption" color="text.secondary" sx={{ mr: "auto" }}>
+                                            {defaultsSummary}
+                                        </Typography>
+                                        {saveableDefaults && (
+                                            <Button size="small" disabled={creating} onClick={(): void => setSessionFolderDefaults(directory, saveableDefaults)}>
+                                                Save as {directoryName} defaults
+                                            </Button>
+                                        )}
+                                    </Stack>
                                 )}
+                                <WorkspacePicker
+                                    label="Project"
+                                    entries={placement.projects}
+                                    value={placement.project?.value ?? ""}
+                                    defaultValue={placement.defaultProjectValue}
+                                    configuredDefault={placement.configuredDefaultProject}
+                                    // A directory-supplied project is not this device's default.
+                                    onDefaultChange={projectFromDirectory ? undefined : placement.setDefaultProject}
+                                    onChange={(value): void => {
+                                        placement.selectProject(value);
+                                        setWorkItemId("");
+                                    }}
+                                />
+                                {selectedWorkspace && selectedWorkspace.active_work_items.length > 0 ? (
+                                    <TextField
+                                        select
+                                        label="Durable work item"
+                                        slotProps={{ select: { displayEmpty: true }, inputLabel: { shrink: true } }}
+                                        value={workItemId}
+                                        onChange={(e): void => setWorkItemId(e.target.value)}
+                                        helperText="Optional · resumes durable context in the selected Provider runtime"
+                                    >
+                                        <MenuItem value="">New task</MenuItem>
+                                        {selectedWorkspace.active_work_items.map((item) => (
+                                            <MenuItem key={item.id} value={item.id}>
+                                                {item.title}{item.blocked ? " · blocked" : ""}
+                                            </MenuItem>
+                                        ))}
+                                    </TextField>
+                                ) : null}
                             </Stack>
-                        )}
-                        <WorkspacePicker
-                            label="Project"
-                            entries={placement.projects}
-                            value={placement.project?.value ?? ""}
-                            defaultValue={placement.defaultProjectValue}
-                            configuredDefault={placement.configuredDefaultProject}
-                            // A directory-supplied project is not this device's default.
-                            onDefaultChange={projectFromDirectory ? undefined : placement.setDefaultProject}
-                            onChange={(value): void => {
-                                placement.selectProject(value);
-                                setWorkItemId("");
-                            }}
-                        />
-                        <AiInstallationPicker
-                            installations={placement.installations}
-                            value={placement.installation?.value ?? ""}
-                            onChange={placement.selectInstallation}
-                            helperText={placement.loading ? "Checking available AI installations…" : placement.installation
-                                ? `${placement.separate ? "Remote" : "Local"} · AI on ${placement.installation.machine.display_name} · Files and commands on ${machines.find((m) => m.id === machineId)?.display_name ?? machineId}`
-                                : fullInstallation
-                                ? `${fullInstallation.machine.display_name} is full (${installationCapacity(fullInstallation)}). Choose another AI installation.`
-                                : placement.installations.length ? "Choose an available AI installation; the preferred Machine is unavailable."
-                                : "No ready AI installation can use this project. Check Machines in Settings."}
-                        />
-                        <SessionSubscription state={subscription} disabled={creating} desktop={desktop} helperText={subscription.hinted ? `Same as “${sessionHints?.session.title ?? "latest session"}”` : undefined} />
-                        <SessionContextPicker value={contextSources} onChange={setContextSources} disabled={creating} />
-                        <Typography variant="caption" color="text.secondary">
-                            Git projects open in a session worktree. Other directories are shared in place.
-                        </Typography>
-                        <SessionPresetPicker provider={provider} presets={selectedProviderEntry?.manifest.configuration.presets ?? []} value={selectedPreset} onChange={setPresetOverride} helperText={presetOverride === undefined && directoryDefaults.sources.preset ? `Inherited from ${sessionFolderById(sessionDirectories, directoryDefaults.sources.preset)?.name ?? "directory"}` : "Applied before the first prompt"} />
-                        {selectedWorkspace && selectedWorkspace.active_work_items.length > 0 ? (
-                            <TextField
-                                select
-                                label="Durable work item"
-                                slotProps={{ select: { displayEmpty: true }, inputLabel: { shrink: true } }}
-                                value={workItemId}
-                                onChange={(e): void => setWorkItemId(e.target.value)}
-                                helperText="Optional · resumes durable context in the selected Provider runtime"
-                            >
-                                <MenuItem value="">New task</MenuItem>
-                                {selectedWorkspace.active_work_items.map((item) => (
-                                    <MenuItem key={item.id} value={item.id}>
-                                        {item.title}{item.blocked ? " · blocked" : ""}
-                                    </MenuItem>
-                                ))}
-                            </TextField>
-                        ) : null}
-                    </>}
+                            <Stack spacing={1.5} sx={{ minWidth: 0 }}>
+                                <AiInstallationPicker
+                                    installations={placement.installations}
+                                    value={placement.installation?.value ?? ""}
+                                    onChange={placement.selectInstallation}
+                                    helperText={placement.loading ? "Checking available AI installations…" : placement.installation
+                                        ? `${placement.separate ? "Remote" : "Local"} · AI on ${placement.installation.machine.display_name} · Files and commands on ${machines.find((m) => m.id === machineId)?.display_name ?? machineId}`
+                                        : fullInstallation
+                                        ? `${fullInstallation.machine.display_name} is full (${installationCapacity(fullInstallation)}). Choose another AI installation.`
+                                        : placement.installations.length ? "Choose an available AI installation; the preferred Machine is unavailable."
+                                        : "No ready AI installation can use this project. Check Machines in Settings."}
+                                />
+                                <SessionSubscription state={subscription} disabled={creating} desktop={desktop} helperText={subscription.hinted ? `Same as “${sessionHints?.session.title ?? "latest session"}”` : undefined} />
+                                <SessionPresetPicker provider={provider} presets={selectedProviderEntry?.manifest.configuration.presets ?? []} value={selectedPreset} onChange={setPresetOverride} helperText={presetOverride === undefined && directoryDefaults.sources.preset ? `Inherited from ${sessionFolderById(sessionDirectories, directoryDefaults.sources.preset)?.name ?? "directory"}` : "Applied before the first prompt"} />
+                                <SessionContextPicker value={contextSources} onChange={setContextSources} disabled={creating} />
+                                <Typography variant="caption" color="text.secondary">
+                                    Git projects open in a session worktree. Other directories are shared in place.
+                                </Typography>
+                            </Stack>
+                        </Box>
+                    )}
                     </Stack>
                     {variant === "folder" && <>
                         {!editingFolderDefault && folderPresetMismatch && <Alert severity="warning" action={<Button onClick={(): void => { setFolderDefaultsExpanded(true); setFolderDefaultField("preset"); }}>Choose preset</Button>}>The preset belongs to another agent. Choose a compatible preset or use the agent default.</Alert>}
@@ -3507,6 +3526,7 @@ export function CreateDialog({
             onClose={creating ? (): void => {} : closeLevel}
             title={dialogTitle}
             wide={desktop}
+            desktopDialogWidth={desktop && variant === "session" && !editingFolderDefault ? 860 : undefined}
             actions={
                 <>
                     <Button onClick={requestClose} color="inherit" disabled={creating}>
