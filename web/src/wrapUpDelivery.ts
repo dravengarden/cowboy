@@ -162,3 +162,13 @@ export function wrapUpQueueAddOptions(
     wrapUpTarget: target,
   };
 }
+
+export function isRecoveryDraftId(id: string): boolean {
+  return id.startsWith("recovery-");
+}
+
+export function bulkActivatableDrafts<T extends { readonly id: string }>(
+  drafts: readonly T[],
+): T[] {
+  return drafts.filter((draft) => !isRecoveryDraftId(draft.id));
+}

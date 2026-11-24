@@ -50,6 +50,7 @@ impl Hub {
     /// alive until the bounded retries in each admitted task finish (matching
     /// `dispatcher_task` shutdown behavior).
     pub async fn drain_teardown_requeues(&self, warn_after: std::time::Duration) {
+        self.retry_pending_recovery_parks(None);
         let mut warned = false;
         let warn_at = tokio::time::Instant::now() + warn_after;
         loop {

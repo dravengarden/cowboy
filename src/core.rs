@@ -2200,7 +2200,7 @@ impl Hub {
                     queue.len() != queue_len || drafts.len() != drafts_len;
                 for m in queue.iter_mut().chain(drafts.iter_mut()) {
                     if !seen.insert(m.id.clone()) {
-                        m.id = self.next_qid();
+                        m.id = self.repaired_qid(&m.id);
                         seen.insert(m.id.clone());
                         healed = true;
                     }

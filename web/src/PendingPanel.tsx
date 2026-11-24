@@ -2,6 +2,7 @@ import { ScrollEdges } from "@cowboy/app-shell";
 import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { NativeDeliveryRow } from "./NativeDeliveryRow";
 import { QueuedDeliveryAction } from "./QueuedDeliveryAction";
+import { bulkActivatableDrafts } from "./wrapUpDelivery";
 import { QueueDeliverySettings } from "./QueueDeliverySettings";
 import { moveSessionDraftToDocument } from "./documents/sessionDraftImport";
 import { ProtectedImage } from "./ProtectedImage";
@@ -1426,7 +1427,7 @@ export function PendingPanel({
           )}
           {kind === "draft" && (
             <MenuItem
-              disabled={editingId !== null}
+              disabled={editingId !== null || bulkActivatableDrafts(items).length === 0}
               onClick={(): void => {
                 setPanelMenuEl(null);
                 setBulkConfirm("send-all");

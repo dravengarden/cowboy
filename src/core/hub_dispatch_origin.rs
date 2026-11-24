@@ -116,14 +116,63 @@ impl Hub {
         }
     }
 
-    /// Whether `cmid` is currently parked as a draft in this session.
+    /// Whether `cmid` is fenced in an active recovery park, currently parked as
+    /// a draft, or already retired from non-delivery after parking (Finding 5).
     #[must_use]
-    pub fn is_cmid_parked_as_draft(&self, session_id: &str, cmid: &str) -> bool {
-        self.inner
+    pub fn is_cmid_parked_or_fenced(&self, session_id: &str, cmid: &str) -> bool {
+        let in_drafts = self
+            .inner
             .sessions
             .lock()
             .get(session_id)
-            .is_some_and(|s| s.drafts.iter().any(|m| m.cmid.as_deref() == Some(cmid)))
+            .is_some_and(|s| s.drafts.iter().any(|m| m.cmid.as_deref() == Some(cmid)));
+        if in_drafts {
+            return true;
+        }
+        let claims = self.inner.notice_claims.lock();
+        claims
+            .recovery_parks
+            .iter()
+            .any(|((sid, _), rec)| sid == session_id && rec.cmid.as_deref() == Some(cmid))
+            || claims
+                .retired_undelivered_cmids
+                .get(session_id)
+                .is_some_and(|ids| ids.iter().any(|c| c == cmid))
+    }
+
+    /// Record exact generated context/renewal preamble texts prepended at dispatch
+    /// so later parking strips them even if linked sources changed (Finding 11).
+    pub fn record_generated_preambles(&self, session_id: &str, cmid: &str, preambles: Vec<String>) {
+        if preambles.is_empty() {
+            return;
+        }
+        let mut claims = self.inner.notice_claims.lock();
+        let entry = claims
+            .generated_preambles
+            .entry(session_id.to_owned())
+            .or_default();
+        entry.retain(|(existing, _)| existing != cmid);
+        while entry.len() >= 16 {
+            entry.pop_front();
+        }
+        entry.push_back((cmid.to_owned(), preambles));
+    }
+
+    #[must_use]
+    pub fn generated_preambles_for(&self, session_id: &str, cmid: &str) -> Vec<String> {
+        self.inner
+            .notice_claims
+            .lock()
+            .generated_preambles
+            .get(session_id)
+            .and_then(|entries| {
+                entries
+                    .iter()
+                    .rev()
+                    .find(|(existing, _)| existing == cmid)
+                    .map(|(_, preambles)| preambles.clone())
+            })
+            .unwrap_or_default()
     }
 
     /// Whether `cmid` has already echoed into this session's transcript.
@@ -154,8 +203,18 @@ impl Hub {
             .iter()
             .any(|seen| seen.cmid == cmid && seen.echoed)
             || s.log.iter().any(|env| env.cmid.as_deref() == Some(cmid));
-        let parked_as_draft = s.drafts.iter().any(|m| m.cmid.as_deref() == Some(cmid));
-        if echoed || parked_as_draft {
+        let claims = self.inner.notice_claims.lock();
+        let parked_or_fenced = s.drafts.iter().any(|m| m.cmid.as_deref() == Some(cmid))
+            || claims
+                .recovery_parks
+                .iter()
+                .any(|((sid, _), rec)| sid == session_id && rec.cmid.as_deref() == Some(cmid))
+            || claims
+                .retired_undelivered_cmids
+                .get(session_id)
+                .is_some_and(|ids| ids.iter().any(|c| c == cmid));
+        drop(claims);
+        if echoed || parked_or_fenced {
             remove_pending_echo(s, cmid);
             return None;
         }
@@ -229,6 +288,10 @@ impl Hub {
                     !s.log
                         .iter()
                         .any(|env| env.cmid.as_deref() == Some(r.cmid.as_str()))
+                        && !s
+                            .drafts
+                            .iter()
+                            .any(|m| m.cmid.as_deref() == Some(r.cmid.as_str()))
                 });
             if let Some(record) = candidate
                 && trimmed_floor.is_none_or(|floor| record.dispatched_at_ms >= floor)

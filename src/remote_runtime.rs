@@ -2333,11 +2333,10 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                 reject_foreign_frame(shared, &worker.session_id, "worker snapshot");
                 return Ok(());
             }
+            let mut projected = false;
             native_admission::snapshot(shared, &worker, || {
                 let session_id = worker.session_id.clone();
                 if shared.resetting.lock().contains(&session_id) {
-                    // Only a live worker other than the one being replaced (and
-                    // not the broker's registry placeholder) is the replacement.
                     if let Some((replaced, pending)) =
                         shared.reset_replacements.lock().get_mut(&session_id)
                         && worker.worker_epoch != *replaced
@@ -2349,14 +2348,22 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                     return;
                 }
                 project_snapshot(shared, &worker);
+                projected = true;
             })
             .await;
+            if projected {
+                notice_recovery::retire_superseded_prompts_for_snapshot(shared, &worker);
+                shared
+                    .hub
+                    .retry_pending_recovery_parks(Some(&worker.session_id));
+            }
         }
         Frame::Welcome {
             workers, protocol, ..
         } => {
             shared.protocol.store(protocol, Ordering::Release);
             update_worker_snapshots(shared, workers, protocol).await;
+            shared.hub.retry_pending_recovery_parks(None);
         }
         Frame::Heartbeat => {}
         Frame::Reject { reason } => anyhow::bail!("Machine broker rejected controller: {reason}"),

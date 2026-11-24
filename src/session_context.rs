@@ -127,20 +127,26 @@ pub fn without_preamble(
     cmid: Option<&str>,
     mut content: Vec<serde_json::Value>,
 ) -> Vec<serde_json::Value> {
-    // A renewal's block is recognized even after a Clear retired it, so a
-    // returned prompt never requeues the cleared history as user content.
-    let generated = [
-        read(hub, id)
-            .ok()
-            .and_then(|context| context.rollover)
-            .map(|rollover| renewal_text(id, &rollover)),
-        preamble(hub, id, cmid).ok().flatten(),
-    ];
+    // Prefer exact dispatch-time generated preambles (survives source edits/deletion)
+    // alongside live rollover/preamble reconstruction as fallback (Finding 11).
+    let mut generated = cmid
+        .map(|cid| hub.generated_preambles_for(id, cid))
+        .unwrap_or_default();
+    if let Some(renewal) = read(hub, id)
+        .ok()
+        .and_then(|context| context.rollover)
+        .map(|rollover| renewal_text(id, &rollover))
+    {
+        generated.push(renewal);
+    }
+    if let Ok(Some(live)) = preamble(hub, id, cmid) {
+        generated.push(live);
+    }
     while content.len() > 1
         && content[0].get("type").and_then(serde_json::Value::as_str) == Some("text")
         && let Some(text) = content[0].get("text").and_then(serde_json::Value::as_str)
         && text.starts_with(PREAMBLE_PREFIX)
-        && generated.iter().flatten().any(|preamble| preamble == text)
+        && generated.iter().any(|preamble| preamble == text)
     {
         content.remove(0);
     }
@@ -471,8 +477,10 @@ pub fn prompt_content(
     cmid: Option<&str>,
     mut blocks: Vec<agent_client_protocol::schema::v1::ContentBlock>,
 ) -> Result<Vec<serde_json::Value>, String> {
+    let mut recorded_preambles = Vec::new();
     // Honor any already-claimed pre-upgrade carrier preamble without stranding links.
     if let Some(text) = preamble(hub, id, cmid)? {
+        recorded_preambles.push(text.clone());
         blocks.insert(
             0,
             agent_client_protocol::schema::v1::ContentBlock::from(text),
@@ -487,11 +495,17 @@ pub fn prompt_content(
     if !is_command_blocks(&json_blocks)
         && let Some(text) = renewal_preamble(hub, id)
     {
+        recorded_preambles.push(text.clone());
         json_blocks.insert(
             0,
             serde_json::to_value(agent_client_protocol::schema::v1::ContentBlock::from(text))
                 .expect("ACP content serializes"),
         );
+    }
+    if !recorded_preambles.is_empty()
+        && let Some(cid) = cmid
+    {
+        hub.record_generated_preambles(id, cid, recorded_preambles);
     }
     Ok(json_blocks)
 }
@@ -1237,5 +1251,57 @@ mod tests {
             2,
             "ordinary prompt gets renewal preamble"
         );
+    }
+
+    #[test]
+    fn without_preamble_strips_recorded_preamble_after_linked_source_changes() {
+        let hub = crate::core::Hub::new();
+        hub.create_local_session(
+            "destination".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "dest".into(),
+            crate::core::SessionOrigin::Web,
+            false,
+        );
+        hub.set_setting(
+            key("destination"),
+            serde_json::to_value(Context {
+                revision: 1,
+                applied_revision: 1,
+                rollover: Some(crate::context_rollover::Rollover {
+                    before: 12,
+                    idle_ms: 2 * 3_600_000,
+                    context_used: 300_000,
+                    digest: crate::context_rollover::Digest {
+                        first_request: Some("ship the feature".into()),
+                        recent_requests: vec!["now fix the test".into()],
+                        last_reply: Some("I changed x".into()),
+                    },
+                }),
+                ..Default::default()
+            })
+            .unwrap(),
+        );
+        hub.mark_context_rolled_over("destination", 12, 1, 2);
+        let built = prompt_content(
+            &hub,
+            "destination",
+            Some("c-park"),
+            vec![agent_client_protocol::schema::v1::ContentBlock::from(
+                "user message".to_owned(),
+            )],
+        )
+        .expect("builds with renewal preamble");
+        assert_eq!(built.len(), 2);
+
+        // Mutate/clear context after handoff so live reconstruction no longer matches.
+        hub.set_setting(
+            key("destination"),
+            serde_json::to_value(Context::default()).unwrap(),
+        );
+        let stripped = without_preamble(&hub, "destination", Some("c-park"), built);
+        assert_eq!(stripped.len(), 1);
+        assert_eq!(stripped[0]["text"], "user message");
     }
 }

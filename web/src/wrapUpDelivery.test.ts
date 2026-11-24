@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { isCurrentContextReady, type SessionContext } from "./sessionContext";
-import { resolveDeliveryPickerState, wrapUpQueueAddOptions, wrapUpSubmitFields } from "./wrapUpDelivery";
+import { bulkActivatableDrafts, isRecoveryDraftId, resolveDeliveryPickerState, wrapUpQueueAddOptions, wrapUpSubmitFields } from "./wrapUpDelivery";
 
 const baseOptions = {
   target: { worker_epoch: "w1", turn_id: "t1" },
@@ -279,5 +279,18 @@ describe("resolveDeliveryPickerState reopen cache isolation (R3-L1)", () => {
     });
     expect(refreshedPaused.wrapUp).toBe(false);
     expect(refreshedPaused.wrapUpUnavailable).toBe("Queue is paused");
+  });
+});
+
+describe("bulkActivatableDrafts", () => {
+  test("excludes recovery-* drafts while keeping ordinary drafts", () => {
+    expect(isRecoveryDraftId("recovery-q1")).toBe(true);
+    expect(isRecoveryDraftId("q1")).toBe(false);
+    const filtered = bulkActivatableDrafts([
+      { id: "q1", text: "normal" },
+      { id: "recovery-q2", text: "ambiguous" },
+      { id: "q3", text: "normal-2" },
+    ]);
+    expect(filtered.map((d) => d.id)).toEqual(["q1", "q3"]);
   });
 });

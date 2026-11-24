@@ -122,6 +122,7 @@ async fn prepare_dispatch_preflight(
         return PreflightOutcome::Retain(error);
     }
     let is_command_or_compaction = crate::session_context::is_command(text)
+        || crate::session_context::is_command_blocks(content)
         || crate::wrap_up::is_compaction_prompt_blocks(content);
     session_context::rollover::before_dispatch(
         state,
@@ -167,11 +168,20 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
     if explicit {
         execution::sessions::retry_blocked(&state, &session_id);
     }
+    let Some(blocks) = build_prompt_blocks(&text, &content) else {
+        tracing::warn!(session = %session_id, "queued prompt had no content; dropping");
+        hub.clear_in_flight(&session_id);
+        return;
+    };
+    let canonical_content: Vec<serde_json::Value> = blocks
+        .iter()
+        .map(|block| serde_json::to_value(block).expect("ACP content serializes"))
+        .collect();
     let recovery = match prepare_dispatch_preflight(
         &state,
         &session_id,
         &text,
-        &content,
+        &canonical_content,
         cmid.as_deref(),
         &dispatch_origin,
     )
@@ -188,11 +198,6 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
             );
             return;
         }
-    };
-    let Some(blocks) = build_prompt_blocks(&text, &content) else {
-        tracing::warn!(session = %session_id, "queued prompt had no content; dropping");
-        hub.clear_in_flight(&session_id);
-        return;
     };
     let plugin_key = provider_fence_key_for_session(hub, &session_id);
     if let Some(other) = notice_preflight_gate(

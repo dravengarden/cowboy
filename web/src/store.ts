@@ -114,7 +114,7 @@ import { reportClientDuration, reportClientLog, reportClientMetric, startClientS
 import { ClientOperations } from "./otelOperations.ts";
 import { isTurnActivityUpdate } from "./turnWaiting.ts";
 import { ContextNavigationNotice, loadSessionContext, requireCurrentAgentContext, sendWithContext, stagedNextAgent } from "./sessionContext";
-import { wrapUpOutboxPatch, wrapUpQueueAddOptions, wrapUpSubmitFields, type WrapUpOutboxFields } from "./wrapUpDelivery";
+import { bulkActivatableDrafts, wrapUpOutboxPatch, wrapUpQueueAddOptions, wrapUpSubmitFields, type WrapUpOutboxFields } from "./wrapUpDelivery";
 import { composeDraftForStagedAgent } from "./contextPendingPrompt";
 
 const telemetryOperations = new ClientOperations(
@@ -5477,9 +5477,9 @@ export async function activateDraft(sessionId: string, id: string): Promise<void
   );
 }
 
-// Send all drafts (front-to-back) — bulk "send everything" on the drafts panel.
+// Send all non-recovery drafts (front-to-back); recovery-* drafts need individual resend.
 export function activateAllDrafts(sessionId: string): Promise<void> {
-  const drafts = [...(state.drafts.get(sessionId) ?? [])];
+  const drafts = bulkActivatableDrafts(state.drafts.get(sessionId) ?? []);
   return drafts.reduce(
     (previous, draft) => previous.then(() => activateDraft(sessionId, draft.id)),
     Promise.resolve(),

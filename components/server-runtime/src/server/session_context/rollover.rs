@@ -262,7 +262,9 @@ pub async fn observe(state: Arc<AppState>) {
 /// Authored prompts after [`MEASURED_IDLE`] and every renewal log their
 /// decision.
 fn is_command_or_compaction(text: &str, content: &[serde_json::Value]) -> bool {
-    crate::session_context::is_command(text) || crate::wrap_up::is_compaction_prompt_blocks(content)
+    crate::session_context::is_command(text)
+        || crate::session_context::is_command_blocks(content)
+        || crate::wrap_up::is_compaction_prompt_blocks(content)
 }
 
 pub async fn before_dispatch(

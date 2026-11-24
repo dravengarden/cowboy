@@ -434,7 +434,9 @@ impl Hub {
         }
     }
 
-    /// Activate one draft: remove it from drafts and submit it (send-or-queue).
+    /// Activate one draft: validate operation ownership and move from drafts to
+    /// queue/dispatch atomically under one `sessions` lock so a reused operation
+    /// ID can never discard a draft (Finding 8).
     pub fn activate_draft(
         &self,
         session_id: &str,
@@ -447,53 +449,103 @@ impl Hub {
         {
             return;
         }
-        let msg = {
+        let trigger = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
+        let wired = self.inner.dispatch_tx.lock().is_some();
+        let mut dispatch = None;
+        let mut had_scheduled = false;
+        let mut is_owner_turn = false;
+        let mut error_msg: Option<&'static str> = None;
+        let activated = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            match s.drafts.iter().position(|m| m.id == id) {
-                Some(pos) => {
-                    let target = &s.drafts[pos];
-                    if target.id.starts_with("recovery-") {
-                        let fresh_op = cmid
-                            .as_deref()
-                            .is_some_and(|op| !op.is_empty() && Some(op) != target.cmid.as_deref());
-                        if !fresh_op {
-                            drop(sessions);
-                            self.broadcast_error(
-                                Some(session_id.to_owned()),
-                                "Resending a parked recovery draft requires a new operation id"
-                                    .to_owned(),
-                            );
-                            return;
-                        }
-                    }
-                    Some(s.drafts.remove(pos))
+            let Some(pos) = s.drafts.iter().position(|m| m.id == id) else {
+                return;
+            };
+            let target = &s.drafts[pos];
+            let effective_cmid = cmid.or_else(|| {
+                target
+                    .cmid
+                    .clone()
+                    .filter(|cid| !crate::agent_model::is_reserved_call_notice_cmid(cid))
+            });
+            if target.id.starts_with("recovery-")
+                && !effective_cmid
+                    .as_deref()
+                    .is_some_and(|op| !op.is_empty() && Some(op) != target.cmid.as_deref())
+            {
+                error_msg = Some("Resending a parked recovery draft requires a new operation id");
+                false
+            } else if let Some(op) = effective_cmid.as_deref()
+                && (Self::prompt_already_accepted_excluding_draft(s, op, Some(pos))
+                    || self.has_pending_recovery_park_cmid(session_id, op))
+            {
+                error_msg = Some("Activation operation id is already in use; draft retained");
+                false
+            } else {
+                let m = s.drafts.remove(pos);
+                had_scheduled = m.schedule.is_some();
+                let dispatch_origin = crate::prompt_origin::compute_dispatch_origin(
+                    m.origin.as_ref(),
+                    Some(&trigger),
+                );
+                is_owner_turn = dispatch_origin.is_owner();
+                if wired
+                    && !s.meta.paused
+                    && s.meta.trashed_at_ms.is_none()
+                    && Self::ready(s, true)
+                    && s.queue.is_empty()
+                    && self.context_allows_dispatch(session_id, effective_cmid.as_deref())
+                {
+                    s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
+                    s.in_flight = true;
+                    s.dispatch_pending = Some(s.in_flight_epoch);
+                    let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(effective_cmid);
+                    Self::note_dispatched(s, Some(&dispatch_cmid));
+                    dispatch = Some(DispatchReq {
+                        ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
+                        session_id: session_id.to_owned(),
+                        text: m.text,
+                        content: m.content,
+                        cmid: Some(dispatch_cmid),
+                        explicit: true,
+                        origin: m.origin,
+                        initiator: Some(trigger.clone()),
+                        dispatch_origin,
+                        trigger,
+                    });
+                } else {
+                    s.queue.push(QueuedMessage {
+                        id: self.next_qid(),
+                        text: m.text,
+                        content: m.content,
+                        cmid: effective_cmid,
+                        schedule: None,
+                        origin: m.origin,
+                        initiator: Some(trigger),
+                    });
                 }
-                None => None,
+                true
             }
         };
-        if let Some(m) = msg {
-            self.emit_pending(session_id);
-            if m.schedule.is_some() {
-                self.cancel_draft_timer(session_id, id);
-                self.broadcast_sessions();
-            }
-            let fallback_cmid = m
-                .cmid
-                .filter(|id| !crate::agent_model::is_reserved_call_notice_cmid(id));
-            let trigger = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
-            self.submit_inner(
-                session_id,
-                m.text,
-                m.content,
-                cmid.or(fallback_cmid),
-                false,
-                false,
-                m.origin,
-                trigger,
-            );
+        if let Some(msg) = error_msg {
+            self.broadcast_error(Some(session_id.to_owned()), msg.to_owned());
+            return;
+        }
+        if !activated {
+            return;
+        }
+        if is_owner_turn {
+            self.notify_human_turn(session_id);
+        }
+        self.emit_pending(session_id);
+        if had_scheduled {
+            self.cancel_draft_timer(session_id, id);
+            self.broadcast_sessions();
+        }
+        if let Some(req) = dispatch {
+            self.send_dispatch(req);
         }
     }
 

@@ -82,7 +82,7 @@ pub(super) fn take_acked_command(
     reason: Option<&str>,
 ) -> Option<(Option<CoreCommand>, bool)> {
     let was_retransmitted = shared.retransmitted_sends.lock().contains(command_id);
-    let ambiguous_entry = {
+    let (fenced_entry, ambiguous_entry) = {
         let pending = shared.pending.lock();
         if pending.get(command_id).is_some_and(|command| {
             command
@@ -93,14 +93,33 @@ pub(super) fn take_acked_command(
             return None;
         }
         let cmd = pending.get(command_id);
-        if !accepted && is_ambiguous_prompt_rejection(cmd, was_retransmitted, reason) {
-            pending
-                .version(command_id)
-                .and_then(|version| cmd.cloned().map(|command| (version, command)))
+        let version = pending.version(command_id);
+        if let (Some(ver), Some(c)) = (version, cmd)
+            && shared.fenced_commands.lock().contains(command_id)
+        {
+            (Some((ver, c.clone())), None)
+        } else if !accepted && is_ambiguous_prompt_rejection(cmd, was_retransmitted, reason) {
+            (None, version.and_then(|v| cmd.cloned().map(|c| (v, c))))
         } else {
-            None
+            (None, None)
         }
     };
+    if let Some((version, cmd)) = fenced_entry {
+        if accepted {
+            shared.wrap_up.record_late_park_resolution(
+                command_id.to_owned(),
+                version,
+                super::wrap_up::LateParkResolution::Admitted,
+            );
+        } else if !is_ambiguous_prompt_rejection(Some(&cmd), was_retransmitted, reason) {
+            shared.wrap_up.record_late_park_resolution(
+                command_id.to_owned(),
+                version,
+                super::wrap_up::LateParkResolution::Unhanded(reason.map(str::to_owned)),
+            );
+        }
+        return Some((Some(cmd), true));
+    }
     if let Some((version, cmd)) = ambiguous_entry {
         let message = reason
             .unwrap_or("prompt delivery across worker change is unresolved; retained as draft");

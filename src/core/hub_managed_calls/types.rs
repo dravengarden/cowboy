@@ -299,6 +299,15 @@ pub(super) struct DeferredPendingFlush {
     pub(super) released_claims: Vec<NoticeClaimRelease>,
 }
 
+pub(in crate::core) struct PendingRecoveryDraftRecord {
+    pub(in crate::core) cmid: Option<String>,
+    pub(in crate::core) text: String,
+    pub(in crate::core) content: Vec<serde_json::Value>,
+    pub(in crate::core) reason: String,
+    pub(in crate::core) in_progress: bool,
+    pub(in crate::core) on_committed: Option<Arc<dyn Fn() + Send + Sync>>,
+}
+
 #[derive(Default)]
 pub(in crate::core) struct NoticeClaims {
     pub(super) active: HashMap<(String, String), (i64, String)>,
@@ -314,4 +323,10 @@ pub(in crate::core) struct NoticeClaims {
     pub(super) in_flight_pending_commits: HashMap<String, DeferredPendingFlush>,
     pub(super) commit_locks: HashMap<String, Arc<tokio::sync::Mutex<()>>>,
     pub(super) teardown_tasks: Vec<tokio::task::JoinHandle<()>>,
+    /// Controller-owned durable recovery-park records that survive runtime disconnect/replacement.
+    pub(in crate::core) recovery_parks: HashMap<(String, String), PendingRecoveryDraftRecord>,
+    /// Bounded per-session retired non-delivery cmids (survives draft activation/deletion).
+    pub(in crate::core) retired_undelivered_cmids: HashMap<String, VecDeque<String>>,
+    /// Bounded per-session dispatch-time generated preambles keyed by cmid.
+    pub(in crate::core) generated_preambles: HashMap<String, VecDeque<(String, Vec<String>)>>,
 }

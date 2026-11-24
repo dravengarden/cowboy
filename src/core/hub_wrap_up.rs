@@ -125,6 +125,12 @@ impl Hub {
         {
             return FrontSubmitOutcome::Refused;
         }
+        if let Some(cid) = cmid.as_deref()
+            && self.has_pending_recovery_park_cmid(session_id, cid)
+        {
+            self.retry_pending_recovery_parks(Some(session_id));
+            return FrontSubmitOutcome::Refused;
+        }
         let initiator = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
         let content_origin = Some(initiator.clone());
         let dispatch_origin = crate::prompt_origin::compute_dispatch_origin(

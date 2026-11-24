@@ -246,11 +246,13 @@ pub(super) fn handle_undelivered_prompt(
     if !shared.hub.accepts_runtime_projection(session_id) {
         return;
     }
-    if shared.fenced_commands.lock().contains(command_id) {
+    if shared.fenced_commands.lock().contains(command_id)
+        || cmid.is_some_and(|id| shared.hub.is_cmid_parked_or_fenced(session_id, id))
+    {
         tracing::warn!(
             session = %session_id,
             %command_id,
-            "dropping UndeliveredPrompt for fenced recovery-parked prompt"
+            "dropping UndeliveredPrompt for fenced or recovery-parked prompt"
         );
         return;
     }
@@ -261,7 +263,7 @@ pub(super) fn handle_undelivered_prompt(
     {
         if tracked.cmid.as_deref().is_some_and(|id| {
             shared.hub.is_cmid_already_echoed(session_id, id)
-                || shared.hub.is_cmid_parked_as_draft(session_id, id)
+                || shared.hub.is_cmid_parked_or_fenced(session_id, id)
         }) {
             tracing::warn!(
                 session = %session_id,

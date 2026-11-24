@@ -21,6 +21,12 @@ use crate::wrap_up::{
     wrap_up_hint_within_size_limit,
 };
 
+#[derive(Clone, Debug)]
+pub(super) enum LateParkResolution {
+    Admitted,
+    Unhanded(Option<String>),
+}
+
 #[derive(Default)]
 pub(super) struct WrapUpState {
     /// Direct per-connection bounded WS hint channel (cap 32, dropped on disconnect).
@@ -33,11 +39,35 @@ pub(super) struct WrapUpState {
     last_hinted: Mutex<HashMap<String, DeliveryTarget>>,
     /// Live Service configuration handle (`None` in unit tests defaults to `true`).
     service_config: Mutex<Option<crate::config::Handle>>,
+    /// Late ACK / `TurnEnded` settlements arriving while a pending `(key, version)`
+    /// is fenced for durable recovery draft parking (Finding 2).
+    late_park_resolutions: Mutex<HashMap<(String, u64), LateParkResolution>>,
 }
 
 impl WrapUpState {
     pub(super) fn attach_hint_tx(&self, tx: mpsc::Sender<String>) {
         *self.hint_ws_tx.lock() = Some(tx);
+    }
+
+    pub(super) fn record_late_park_resolution(
+        &self,
+        key: String,
+        version: u64,
+        resolution: LateParkResolution,
+    ) {
+        self.late_park_resolutions
+            .lock()
+            .insert((key, version), resolution);
+    }
+
+    pub(super) fn take_late_park_resolution(
+        &self,
+        key: &str,
+        version: u64,
+    ) -> Option<LateParkResolution> {
+        self.late_park_resolutions
+            .lock()
+            .remove(&(key.to_owned(), version))
     }
 
     pub(super) fn attach_service_config(&self, config: crate::config::Handle) {
@@ -1020,6 +1050,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn durable_disconnect_park_live_replacement_retire_and_draft_dedupe() {
         let health = Arc::new(crate::core::PersistenceHealth::default());
         let (sink, mut store_rx) = crate::core::StoreSink::channel(16, health);
@@ -1067,7 +1098,12 @@ mod tests {
         let mut replacement = busy_snapshot("s-dur", "epoch-new", true);
         replacement.state = WorkerState::Running;
         replacement.current_turn_id = None;
-        super::super::adopt_snapshot(&runtime.shared, &replacement).await;
+        // Exercise the actual live Frame::Snapshot handler (Finding 1).
+        runtime
+            .project_trace_fixture(Frame::Snapshot {
+                worker: Box::new(replacement),
+            })
+            .await;
 
         // Pending command stays fenced until SQL ACK confirms the draft.
         assert!(runtime.shared.pending.lock().contains_key("cmd-sent"));
@@ -1119,8 +1155,190 @@ mod tests {
         assert_eq!(hub.session_info("s-dur").unwrap().drafts_count, 1);
         hub.activate_draft("s-dur", &draft_id, Some("cmid-dur".into()), &caller);
         assert_eq!(hub.session_info("s-dur").unwrap().drafts_count, 1);
+        // Finding 8: reusing a cmid already owned by another prompt retains the recovery draft.
+        hub.submit(
+            "s-dur",
+            "other".into(),
+            vec![],
+            Some("cmid-other".into()),
+            &caller,
+        );
+        hub.activate_draft("s-dur", &draft_id, Some("cmid-other".into()), &caller);
+        assert_eq!(hub.session_info("s-dur").unwrap().drafts_count, 1);
+
         hub.activate_draft("s-dur", &draft_id, Some("cmid-fresh".into()), &caller);
         assert_eq!(hub.session_info("s-dur").unwrap().drafts_count, 0);
-        assert_eq!(hub.session_info("s-dur").unwrap().queue_count, 1);
+        assert_eq!(hub.session_info("s-dur").unwrap().queue_count, 2);
+
+        // Finding 5: late UndeliveredPrompt after draft activation/removal is STILL dropped.
+        assert!(
+            hub.take_pending_echo_for_undelivered("s-dur", "cmid-dur")
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn late_positive_ack_rolls_back_in_flight_recovery_park_and_failed_park_retries() {
+        // Finding 2: late positive ACK while SQL is in flight rolls back committed draft.
+        let health = Arc::new(crate::core::PersistenceHealth::default());
+        let (sink, mut store_rx) = crate::core::StoreSink::channel(16, health);
+        let hub = Hub::with_store(Some(sink));
+        let acks = hub.store_ack_sink();
+        hub.create_local_session(
+            "s-race".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "s-race".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        let runtime = super::super::RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let cmd = CoreCommand::Prompt {
+            session_id: "s-race".into(),
+            command_id: "cmd-race".into(),
+            turn_id: "t-race".into(),
+            content: vec![serde_json::json!({"type": "text", "text": "race"})],
+            cmid: Some("cmid-race".into()),
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            expected_worker_epoch: Some("e-old".into()),
+            acknowledged_uncertain_sequence: Some(0),
+        };
+        runtime.shared.pending.lock().insert("cmd-race".into(), cmd);
+        runtime.shared.sent.lock().insert("cmd-race".into());
+        runtime
+            .shared
+            .attempted_sends
+            .lock()
+            .insert("cmd-race".into());
+        let mut repl = busy_snapshot("s-race", "e-new", true);
+        repl.state = WorkerState::Running;
+        repl.current_turn_id = None;
+        runtime
+            .project_trace_fixture(Frame::Snapshot {
+                worker: Box::new(repl),
+            })
+            .await;
+        let ack_id = loop {
+            if let crate::core::StoreWrite::UpdatePending {
+                ack_id: Some(id), ..
+            } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                break id;
+            }
+        };
+        // Late positive CommandAck arrives BEFORE SQL ACK returns.
+        let _ = super::super::notice_recovery::take_acked_command(
+            &runtime.shared,
+            "s-race",
+            "cmd-race",
+            true,
+            None,
+        );
+        acks.complete(ack_id, Ok(true));
+        hub.drain_teardown_requeues(std::time::Duration::from_secs(2))
+            .await;
+        assert_eq!(hub.session_info("s-race").unwrap().drafts_count, 0);
+        assert!(!runtime.shared.pending.lock().contains_key("cmd-race"));
+    }
+
+    #[tokio::test]
+    async fn failed_recovery_park_retries_across_runtime_drop_and_restore_seeds_prefix() {
+        let health = Arc::new(crate::core::PersistenceHealth::default());
+        let (sink, mut store_rx) = crate::core::StoreSink::channel(16, health);
+        let hub = Hub::with_store(Some(sink));
+        let acks = hub.store_ack_sink();
+        hub.create_local_session(
+            "s-race".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "s-race".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        // Finding 3: failed SQL park stays retryable on Hub across runtime drop & retries cleanly.
+        let cmd2 = CoreCommand::Prompt {
+            session_id: "s-race".into(),
+            command_id: "cmd-fail".into(),
+            turn_id: "t-fail".into(),
+            content: vec![serde_json::json!({"type": "text", "text": "retry me"})],
+            cmid: Some("cmid-fail".into()),
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            expected_worker_epoch: Some("e-old".into()),
+            acknowledged_uncertain_sequence: Some(0),
+        };
+        let rt2 = super::super::RemoteRuntime::for_test(hub.clone(), Vec::new());
+        rt2.shared.pending.lock().insert("cmd-fail".into(), cmd2);
+        rt2.shared.attempted_sends.lock().insert("cmd-fail".into());
+        super::super::notice_recovery::recover_pending_prompts_on_disconnect(&rt2.shared);
+        drop(rt2);
+        for _ in 0..4 {
+            let aid = loop {
+                if let crate::core::StoreWrite::UpdatePending {
+                    ack_id: Some(id), ..
+                } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                {
+                    break id;
+                }
+            };
+            acks.complete(aid, Err("db busy".into()));
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        assert_eq!(hub.session_info("s-race").unwrap().drafts_count, 0);
+        hub.retry_pending_recovery_parks(Some("s-race"));
+        let retry_ack = loop {
+            if let crate::core::StoreWrite::UpdatePending {
+                ack_id: Some(id), ..
+            } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                break id;
+            }
+        };
+        acks.complete(retry_ack, Ok(true));
+        hub.drain_teardown_requeues(std::time::Duration::from_secs(2))
+            .await;
+        assert_eq!(hub.session_info("s-race").unwrap().drafts_count, 1);
+
+        // Finding 7: restore_sessions seeds past recovery-q<N> and preserves prefix on dedupe.
+        let hub_restore = Hub::new();
+        let meta = hub.session_info("s-race").unwrap().meta;
+        let dup_draft = crate::core::QueuedMessage {
+            id: "recovery-q5".into(),
+            text: "dup".into(),
+            content: vec![],
+            cmid: Some("c-dup".into()),
+            schedule: None,
+            origin: None,
+            initiator: None,
+        };
+        hub_restore.restore_reconciling_runtime(vec![crate::core::RestoredSession {
+            meta,
+            log: vec![],
+            event_count: 0,
+            reached_start: true,
+            next_seq: 1,
+            queue: vec![],
+            drafts: vec![dup_draft.clone(), dup_draft],
+            config_options: None,
+            config_preferences: serde_json::json!({}),
+            mobile_review_state: serde_json::json!({}),
+            folder_id: None,
+            last_event_at_ms: None,
+        }]);
+        let restored_drafts = hub_restore.queue_and_drafts("s-race", |_| true).unwrap().1;
+        assert_eq!(restored_drafts[0].id, "recovery-q5");
+        assert_eq!(restored_drafts[1].id, "recovery-q6");
     }
 }

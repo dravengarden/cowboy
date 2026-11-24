@@ -29,7 +29,8 @@ impl Hub {
         let mut max_qid = 0u64;
         for r in sessions {
             for m in r.queue.iter().chain(r.drafts.iter()) {
-                if let Some(n) = m.id.strip_prefix('q').and_then(|s| s.parse::<u64>().ok()) {
+                let raw = m.id.strip_prefix("recovery-").unwrap_or(&m.id);
+                if let Some(n) = raw.strip_prefix('q').and_then(|s| s.parse::<u64>().ok()) {
                     max_qid = max_qid.max(n);
                 }
             }
@@ -39,6 +40,14 @@ impl Hub {
 
     pub(super) fn next_qid(&self) -> String {
         format!("q{}", self.inner.next_qid.fetch_add(1, Ordering::Relaxed))
+    }
+
+    pub(super) fn repaired_qid(&self, existing: &str) -> String {
+        if existing.starts_with("recovery-") {
+            format!("recovery-{}", self.next_qid())
+        } else {
+            self.next_qid()
+        }
     }
 
     /// Re-broadcast (and persist) a session's queue + drafts after any change.
@@ -811,10 +820,19 @@ impl Hub {
     /// worker, or echoed into the transcript (which survives
     /// a Controller restart because the echo persists its `cmid`).
     pub(super) fn prompt_already_accepted(s: &Session, cmid: &str) -> bool {
-        if s.queue
-            .iter()
-            .chain(&s.drafts)
-            .any(|m| m.cmid.as_deref() == Some(cmid))
+        Self::prompt_already_accepted_excluding_draft(s, cmid, None)
+    }
+
+    pub(super) fn prompt_already_accepted_excluding_draft(
+        s: &Session,
+        cmid: &str,
+        skip_draft_pos: Option<usize>,
+    ) -> bool {
+        if s.queue.iter().any(|m| m.cmid.as_deref() == Some(cmid))
+            || s.drafts
+                .iter()
+                .enumerate()
+                .any(|(i, m)| Some(i) != skip_draft_pos && m.cmid.as_deref() == Some(cmid))
         {
             return true;
         }
