@@ -173,7 +173,6 @@ impl UsageBindingSource {
 }
 
 impl UsageService {
-    #[cfg(any(test, feature = "test-support"))]
     /// A Service state file beside the usage cache, if usage persists.
     #[must_use]
     pub fn state_file(&self, name: &str) -> Option<PathBuf> {
@@ -182,6 +181,7 @@ impl UsageService {
             .map(|path| path.with_file_name(name))
     }
 
+    #[cfg(any(test, feature = "test-support"))]
     pub fn new(store: Option<crate::store::Store>, cache_path: Option<PathBuf>) -> Self {
         Self::with_bindings(store, cache_path, Vec::new())
     }

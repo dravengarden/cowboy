@@ -575,15 +575,21 @@ impl MachinePluginStore {
         // decides: the CLI may have renewed before a later read failed, and
         // that credential reaches the vault through the refresh observation
         // either way. No candidate existed before the run.
-        let (renewed, _) = scoped
-            .pending_refresh(account, plugin)
-            .await
-            .map_err(|error| PluginHostInvocationFailure {
-                started: true,
-                error,
-            })?;
+        let (renewed, unreadable) =
+            scoped
+                .pending_refresh(account, plugin)
+                .await
+                .map_err(|error| PluginHostInvocationFailure {
+                    started: true,
+                    error,
+                })?;
         match ran {
             _ if renewed => Ok(serde_json::json!({"outcome": "renewed"})),
+            // A home the CLI may have rewritten cannot be read: indeterminate.
+            _ if unreadable => Err(PluginHostInvocationFailure {
+                started: true,
+                error: anyhow::anyhow!("portable_usage_collector_failed"),
+            }),
             Ok(reply) if reply["renewal"] == "attempted" => {
                 Ok(serde_json::json!({"outcome": "unchanged"}))
             }
