@@ -100,8 +100,15 @@ Today the Controller sends `"trusted": true` for every Session worktree
   private operation.
 - "Restricted" must be enforced, not just routed: the core Git reader starts no
   repository-configured program (fsmonitor, hooks, signature verification,
-  external diff/textconv, clean/smudge/process filters;
-  `src/code_review/git.rs`, implemented).
+  external diff/textconv, clean/smudge/process filters, the transport of a
+  partial clone's lazy fetch, and a nested repository's own filters and
+  drivers; `src/code_review/git.rs`, implemented). A nested repository is
+  therefore reported only when its checked-out commit moved, never for
+  uncommitted changes inside it, and also when `submodule.<name>.ignore`
+  would hide it: only the command line outranks that agent-writable setting.
+  Two residues remain: a writer racing the filter listing can name a new
+  driver for the following command, and `remote.<name>.vcs` can select a
+  helper named after an allowed protocol, which Git ships for HTTPS alone.
 
 ## Capability router
 
