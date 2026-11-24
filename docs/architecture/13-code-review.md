@@ -261,7 +261,11 @@ fetch. Where the worktree is local to the Controller, **Fetch this branch**
 that one branch. It is a
 mutation under the session's write authorization, not a Code read: it takes only
 a remote branch already listed as a comparison, uses the remote the repository
-names with `ext::` transports refused, and is bounded to 30 seconds. The result
+names with `ext::` transports refused, and is bounded to 30 seconds. Repository
+configuration is agent-writable, so the programs the transport starts (SSH
+command, askpass, `git://` proxy, credential helpers, the program serving the
+pack, the alternate-refs lister) come from user and system configuration only;
+a repository that sets one of them is fetched as if it had not. The result
 lands in `refs/cowboy/review/<remote>/<branch>`, so the agent's remote-tracking
 refs do not move. A comparison and the ahead/behind facts use that ref while it
 is at least as new as the remote-tracking ref. The fetch time is that ref's
