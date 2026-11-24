@@ -3,6 +3,8 @@
 //! bounded WebSocket hint dispatch bypassing the shared runtime `UnixStream` FIFO.
 
 use std::collections::HashMap;
+#[cfg(test)]
+use std::sync::Arc;
 use std::sync::atomic::Ordering;
 
 use parking_lot::Mutex;
@@ -323,7 +325,10 @@ pub(super) fn apply_current_turn_capability_event(
 }
 
 #[cfg(test)]
-pub(super) async fn merge_worker_snapshots(shared: &super::Shared, workers: Vec<WorkerSnapshot>) {
+pub(super) async fn merge_worker_snapshots(
+    shared: &Arc<super::Shared>,
+    workers: Vec<WorkerSnapshot>,
+) {
     let proto = shared.protocol.load(Ordering::Acquire);
     super::merge_worker_snapshots_with_protocol(
         shared,
@@ -1012,5 +1017,110 @@ mod tests {
         assert_eq!(info.queue_count, 1);
         assert_eq!(info.drafts_count, 1);
         assert_eq!(hub.status("s-disc"), Some(super::super::Status::Exited));
+    }
+
+    #[tokio::test]
+    async fn durable_disconnect_park_live_replacement_retire_and_draft_dedupe() {
+        let health = Arc::new(crate::core::PersistenceHealth::default());
+        let (sink, mut store_rx) = crate::core::StoreSink::channel(16, health);
+        let hub = Hub::with_store(Some(sink));
+        let acks = hub.store_ack_sink();
+        hub.create_local_session(
+            "s-dur".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "s-dur".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        let runtime = super::super::RemoteRuntime::for_test(hub.clone(), Vec::new());
+
+        // Finding 3 + Finding 1: live replacement snapshot retires a still-`sent` prompt
+        // bound to an earlier epoch ONLY AFTER SQL confirms the recovery draft commit.
+        let sent_cmd = CoreCommand::Prompt {
+            session_id: "s-dur".into(),
+            command_id: "cmd-sent".into(),
+            turn_id: "t-1".into(),
+            content: vec![serde_json::json!({"type": "text", "text": "hello world"})],
+            cmid: Some("cmid-dur".into()),
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            expected_worker_epoch: Some("epoch-old".into()),
+            acknowledged_uncertain_sequence: Some(0),
+        };
+        runtime
+            .shared
+            .pending
+            .lock()
+            .insert("cmd-sent".into(), sent_cmd);
+        runtime.shared.sent.lock().insert("cmd-sent".into());
+        runtime
+            .shared
+            .attempted_sends
+            .lock()
+            .insert("cmd-sent".into());
+        let caller = crate::prompt_origin::RequestCaller::Person;
+        let origin = crate::prompt_origin::DeliveryOrigin::from_caller(&caller);
+        hub.record_prompt_dispatch("s-dur", "cmid-dur".into(), origin.clone(), origin, 1_000);
+
+        let mut replacement = busy_snapshot("s-dur", "epoch-new", true);
+        replacement.state = WorkerState::Running;
+        replacement.current_turn_id = None;
+        super::super::adopt_snapshot(&runtime.shared, &replacement).await;
+
+        // Pending command stays fenced until SQL ACK confirms the draft.
+        assert!(runtime.shared.pending.lock().contains_key("cmd-sent"));
+        assert!(runtime.shared.fenced_commands.lock().contains("cmd-sent"));
+        assert_eq!(hub.session_info("s-dur").unwrap().drafts_count, 0);
+
+        let ack_id = loop {
+            if let crate::core::StoreWrite::UpdatePending {
+                ack_id: Some(id), ..
+            } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                break id;
+            }
+        };
+        acks.complete(ack_id, Ok(true));
+        hub.drain_teardown_requeues(std::time::Duration::from_secs(2))
+            .await;
+
+        assert!(!runtime.shared.pending.lock().contains_key("cmd-sent"));
+        assert_eq!(hub.session_info("s-dur").unwrap().drafts_count, 1);
+
+        // Finding 5: late UndeliveredPrompt echo is suppressed once parked as draft.
+        assert!(
+            hub.take_pending_echo_for_undelivered("s-dur", "cmid-dur")
+                .is_none()
+        );
+
+        // Finding 2: retrying the same cmid is deduplicated while draft sits in drafts,
+        // and activating the recovery-* draft requires a fresh operation id.
+        let blocks = vec![serde_json::json!({"type": "text", "text": "hello world"})];
+        assert_eq!(
+            hub.front_submit_with_outcome(
+                "s-dur",
+                "hello world".into(),
+                blocks,
+                Some("cmid-dur".into()),
+                &caller
+            ),
+            crate::core::FrontSubmitOutcome::Duplicate
+        );
+        let draft_id = hub.queue_and_drafts("s-dur", |_| true).unwrap().1[0]
+            .id
+            .clone();
+        assert!(draft_id.starts_with("recovery-"));
+        hub.activate_all_drafts("s-dur", &caller);
+        assert_eq!(hub.session_info("s-dur").unwrap().drafts_count, 1);
+        hub.activate_draft("s-dur", &draft_id, Some("cmid-dur".into()), &caller);
+        assert_eq!(hub.session_info("s-dur").unwrap().drafts_count, 1);
+        hub.activate_draft("s-dur", &draft_id, Some("cmid-fresh".into()), &caller);
+        assert_eq!(hub.session_info("s-dur").unwrap().drafts_count, 0);
+        assert_eq!(hub.session_info("s-dur").unwrap().queue_count, 1);
     }
 }

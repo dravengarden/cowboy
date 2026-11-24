@@ -91,6 +91,7 @@ async fn prepare_dispatch_preflight(
     state: &Arc<AppState>,
     session_id: &str,
     text: &str,
+    content: &[serde_json::Value],
     cmid: Option<&str>,
     dispatch_origin: &crate::prompt_origin::DeliveryOrigin,
 ) -> PreflightOutcome {
@@ -120,10 +121,19 @@ async fn prepare_dispatch_preflight(
     {
         return PreflightOutcome::Retain(error);
     }
-    session_context::rollover::before_dispatch(state, session_id, text, cmid, dispatch_origin)
-        .await;
-    // Links wait for a real message: a preamble would break a slash command.
-    if !crate::session_context::is_command(text)
+    let is_command_or_compaction = crate::session_context::is_command(text)
+        || crate::wrap_up::is_compaction_prompt_blocks(content);
+    session_context::rollover::before_dispatch(
+        state,
+        session_id,
+        text,
+        content,
+        cmid,
+        dispatch_origin,
+    )
+    .await;
+    // Links wait for a real message: a preamble would break a slash command or compaction.
+    if !is_command_or_compaction
         && let Err(error) = session_context::claim_carrier(state, session_id, cmid).await
     {
         return PreflightOutcome::Retain(error);
@@ -161,6 +171,7 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
         &state,
         &session_id,
         &text,
+        &content,
         cmid.as_deref(),
         &dispatch_origin,
     )

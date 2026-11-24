@@ -261,10 +261,15 @@ pub async fn observe(state: Arc<AppState>) {
 /// recorded, atomic renewal leaves the session to resume its old context.
 /// Authored prompts after [`MEASURED_IDLE`] and every renewal log their
 /// decision.
+fn is_command_or_compaction(text: &str, content: &[serde_json::Value]) -> bool {
+    crate::session_context::is_command(text) || crate::wrap_up::is_compaction_prompt_blocks(content)
+}
+
 pub async fn before_dispatch(
     state: &AppState,
     id: &str,
     text: &str,
+    content: &[serde_json::Value],
     cmid: Option<&str>,
     dispatch_origin: &crate::prompt_origin::DeliveryOrigin,
 ) {
@@ -289,7 +294,7 @@ pub async fn before_dispatch(
     let Some(cmid) = cmid else {
         return;
     };
-    if crate::session_context::is_command(text) {
+    if is_command_or_compaction(text, content) {
         return;
     }
     let Some(meta) = state.hub.session_info(id).map(|info| info.meta) else {

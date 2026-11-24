@@ -66,6 +66,67 @@ impl Hub {
         ))
     }
 
+    /// Stage parking a single ambiguous ordinary prompt as a `recovery-*` draft
+    /// in an acknowledged FIFO `StoreWrite::UpdatePending` transaction without
+    /// mutating Hub or confirming the client's `cmid` until SQL commits (Finding 1).
+    pub fn preview_park_recovery_prompt(
+        &self,
+        session_id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+    ) -> RecoveryParkPreview {
+        let sessions = self.inner.sessions.lock();
+        let Some(s) = sessions.get(session_id) else {
+            return RecoveryParkPreview::Rejected;
+        };
+        if let Some(c) = cmid.as_deref()
+            && s.drafts.iter().any(|m| m.cmid.as_deref() == Some(c))
+        {
+            let dup = c.to_owned();
+            drop(sessions);
+            self.confirm_delivered(session_id, &dup);
+            return RecoveryParkPreview::Duplicate;
+        }
+        let queue = s.queue.clone();
+        let mut drafts = s.drafts.clone();
+        let draft = QueuedMessage {
+            id: format!("recovery-{}", self.next_qid()),
+            text,
+            content,
+            cmid,
+            schedule: None,
+            origin: None,
+            initiator: None,
+        };
+        drafts.push(draft.clone());
+        let Some(rx) = self.send_acked_update_pending(
+            session_id,
+            queue,
+            drafts,
+            Vec::new(),
+            Vec::new(),
+            false,
+        ) else {
+            return RecoveryParkPreview::Rejected;
+        };
+        self.inner
+            .notice_claims
+            .lock()
+            .in_flight_pending_commits
+            .insert(session_id.to_owned(), DeferredPendingFlush::default());
+        RecoveryParkPreview::Pending(
+            Box::new(PendingRecoveryPark {
+                hub: Arc::downgrade(&self.inner),
+                active: true,
+                session_id: session_id.to_owned(),
+                added_drafts: vec![draft],
+                settled_notices: Vec::new(),
+            }),
+            rx,
+        )
+    }
+
     /// Apply an already-committed durable recovery park to `Hub`.
     pub fn commit_park_recovery_notices(&self, preview: &mut PendingRecoveryPark) {
         if !preview.active {
@@ -464,5 +525,78 @@ impl Hub {
             .and_then(|row| row.cmid.as_deref())
             .filter(|cmid| cmid.starts_with(crate::agent_model::CALL_NOTICE_PREFIX))
             .map(str::to_owned)
+    }
+
+    /// Park an unacknowledged prompt as a draft during execution recovery.
+    /// For a `call-notice:`, strips the reserved `cmid` so the parked draft is
+    /// never rejected or re-bound to the notice lifecycle, clears any active
+    /// claim, and records `execution_recovery_parked` atomically with the draft.
+    pub fn park_recovery_draft(
+        &self,
+        session_id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+    ) {
+        let Some(notice_cid) = cmid
+            .as_deref()
+            .filter(|id| id.starts_with(crate::agent_model::CALL_NOTICE_PREFIX))
+            .map(str::to_owned)
+        else {
+            let duplicate = {
+                let mut sessions = self.inner.sessions.lock();
+                let Some(s) = sessions.get_mut(session_id) else {
+                    return;
+                };
+                let dup = cmid
+                    .as_deref()
+                    .filter(|c| s.drafts.iter().any(|m| m.cmid.as_deref() == Some(*c)))
+                    .map(str::to_owned);
+                if dup.is_none() {
+                    let id = format!("recovery-{}", self.next_qid());
+                    s.drafts.push(QueuedMessage {
+                        id,
+                        text,
+                        content,
+                        cmid,
+                        schedule: None,
+                        origin: None,
+                        initiator: None,
+                    });
+                }
+                dup
+            };
+            if let Some(c) = duplicate {
+                self.confirm_delivered(session_id, &c);
+            } else {
+                self.emit_pending(session_id);
+            }
+            return;
+        };
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            let id = self.next_qid();
+            s.drafts.push(QueuedMessage {
+                id,
+                text,
+                content,
+                cmid: None,
+                schedule: None,
+                origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
+                initiator: None,
+            });
+            let mut claims = self.inner.notice_claims.lock();
+            let key = (session_id.to_owned(), notice_cid.clone());
+            claims.active.remove(&key);
+            claims.pending_releases.remove(&key);
+        }
+        self.emit_pending_with_notice_ops(
+            session_id,
+            vec![(notice_cid, "execution_recovery_parked".to_owned())],
+            Vec::new(),
+        );
     }
 }

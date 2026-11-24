@@ -452,10 +452,27 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            s.drafts
-                .iter()
-                .position(|m| m.id == id)
-                .map(|pos| s.drafts.remove(pos))
+            match s.drafts.iter().position(|m| m.id == id) {
+                Some(pos) => {
+                    let target = &s.drafts[pos];
+                    if target.id.starts_with("recovery-") {
+                        let fresh_op = cmid
+                            .as_deref()
+                            .is_some_and(|op| !op.is_empty() && Some(op) != target.cmid.as_deref());
+                        if !fresh_op {
+                            drop(sessions);
+                            self.broadcast_error(
+                                Some(session_id.to_owned()),
+                                "Resending a parked recovery draft requires a new operation id"
+                                    .to_owned(),
+                            );
+                            return;
+                        }
+                    }
+                    Some(s.drafts.remove(pos))
+                }
+                None => None,
+            }
         };
         if let Some(m) = msg {
             self.emit_pending(session_id);
@@ -493,7 +510,17 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            std::mem::take(&mut s.drafts)
+            let mut activatable = Vec::new();
+            let mut retained = Vec::new();
+            for m in std::mem::take(&mut s.drafts) {
+                if m.id.starts_with("recovery-") {
+                    retained.push(m);
+                } else {
+                    activatable.push(m);
+                }
+            }
+            s.drafts = retained;
+            activatable
         };
         if msgs.is_empty() {
             return;

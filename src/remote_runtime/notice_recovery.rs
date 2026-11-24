@@ -20,8 +20,8 @@ pub(super) use teardown::{
     is_ambiguous_prompt_rejection, park_ambiguous_prompt_command,
     park_and_retire_ambiguous_pending, recover_pending_prompts_on_disconnect,
     replacement_worker_superseded_epoch, requeue_rejected_command,
-    requeue_unsent_notices_on_disconnect, revive_and_try_prompt, set_connected,
-    set_connected_if_active,
+    requeue_unsent_notices_on_disconnect, retire_superseded_prompts_for_snapshot,
+    revive_and_try_prompt, set_connected, set_connected_if_active,
 };
 
 /// Per-session execution-recovery send fence owned exclusively by
@@ -75,15 +75,15 @@ pub(super) fn clear_acked_command(shared: &Shared, command_id: &str) {
 /// replacement worker epoch superseded the prompt's bound epoch.
 /// Returns `None` when `command_id` belongs to a different session.
 pub(super) fn take_acked_command(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     session_id: &str,
     command_id: &str,
     accepted: bool,
     reason: Option<&str>,
 ) -> Option<(Option<CoreCommand>, bool)> {
     let was_retransmitted = shared.retransmitted_sends.lock().contains(command_id);
-    let command = {
-        let mut pending = shared.pending.lock();
+    let ambiguous_entry = {
+        let pending = shared.pending.lock();
         if pending.get(command_id).is_some_and(|command| {
             command
                 .session_id()
@@ -92,8 +92,31 @@ pub(super) fn take_acked_command(
             tracing::warn!(%command_id, "ignoring mismatched Machine command acknowledgement");
             return None;
         }
-        pending.remove(command_id)
+        let cmd = pending.get(command_id);
+        if !accepted && is_ambiguous_prompt_rejection(cmd, was_retransmitted, reason) {
+            pending
+                .version(command_id)
+                .and_then(|version| cmd.cloned().map(|command| (version, command)))
+        } else {
+            None
+        }
     };
+    if let Some((version, cmd)) = ambiguous_entry {
+        let message = reason
+            .unwrap_or("prompt delivery across worker change is unresolved; retained as draft");
+        let replacement = replacement_worker_superseded_epoch(shared, session_id, &cmd);
+        park_and_retire_ambiguous_pending(
+            shared,
+            session_id,
+            command_id,
+            version,
+            cmd.clone(),
+            message,
+            replacement.as_ref(),
+        );
+        return Some((Some(cmd), true));
+    }
+    let command = shared.pending.lock().remove(command_id);
     if !accepted
         && let Some(CoreCommand::Steer { cmid, .. } | CoreCommand::CancelTurn { cmid, .. }) =
             &command
@@ -105,30 +128,7 @@ pub(super) fn take_acked_command(
         let _ = waiter.send("unknown".into());
     }
     clear_acked_command(shared, command_id);
-    let parked_ambiguous = if !accepted
-        && is_ambiguous_prompt_rejection(command.as_ref(), was_retransmitted, reason)
-    {
-        let message = reason
-            .unwrap_or("prompt delivery across worker change is unresolved; retained as draft");
-        let replacement = command
-            .as_ref()
-            .and_then(|cmd| replacement_worker_superseded_epoch(shared, session_id, cmd));
-        if let Some(cmd) = command.clone() {
-            park_ambiguous_prompt_command(shared, session_id, cmd, message);
-        } else {
-            shared
-                .hub
-                .broadcast_error(Some(session_id.to_owned()), message.to_owned());
-        }
-        shared.in_flight_prompts.lock().retire_command(command_id);
-        if let Some(worker) = replacement {
-            teardown::reconcile_idle_guard_for_snapshot(shared, session_id, &worker);
-        }
-        true
-    } else {
-        false
-    };
-    Some((command, parked_ambiguous))
+    Some((command, false))
 }
 
 /// Transition an active `AwaitingReplacement` recovery fence to `Failed` when

@@ -246,20 +246,27 @@ pub(super) fn handle_undelivered_prompt(
     if !shared.hub.accepts_runtime_projection(session_id) {
         return;
     }
+    if shared.fenced_commands.lock().contains(command_id) {
+        tracing::warn!(
+            session = %session_id,
+            %command_id,
+            "dropping UndeliveredPrompt for fenced recovery-parked prompt"
+        );
+        return;
+    }
     if let Some(tracked) = shared
         .in_flight_prompts
         .lock()
         .take_matching(command_id, session_id, cmid)
     {
-        if tracked
-            .cmid
-            .as_deref()
-            .is_some_and(|id| shared.hub.is_cmid_already_echoed(session_id, id))
-        {
+        if tracked.cmid.as_deref().is_some_and(|id| {
+            shared.hub.is_cmid_already_echoed(session_id, id)
+                || shared.hub.is_cmid_parked_as_draft(session_id, id)
+        }) {
             tracing::warn!(
                 session = %session_id,
                 %command_id,
-                "dropping UndeliveredPrompt for already-echoed dispatch"
+                "dropping UndeliveredPrompt for already-echoed or parked-draft dispatch"
             );
             return;
         }

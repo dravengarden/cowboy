@@ -811,7 +811,11 @@ impl Hub {
     /// worker, or echoed into the transcript (which survives
     /// a Controller restart because the echo persists its `cmid`).
     pub(super) fn prompt_already_accepted(s: &Session, cmid: &str) -> bool {
-        if s.queue.iter().any(|m| m.cmid.as_deref() == Some(cmid)) {
+        if s.queue
+            .iter()
+            .chain(&s.drafts)
+            .any(|m| m.cmid.as_deref() == Some(cmid))
+        {
             return true;
         }
         Self::tracks_delivery(cmid)

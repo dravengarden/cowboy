@@ -9,8 +9,8 @@ use types::DeferredPendingFlush;
 pub(in crate::core) use types::NoticeClaims;
 pub use types::{
     NoticeClaimGuard, NoticeRequeueRequest, OwnerNoticeWithdrawalOp, OwnerQueueMutation,
-    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, StoreAckSink,
-    UndeliveredRequeue,
+    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, RecoveryParkPreview,
+    StoreAckSink, UndeliveredRequeue,
 };
 
 /// Acknowledged FIFO `StoreWrite::UpdatePending` result (`Ok(true)` = applied,
@@ -1432,51 +1432,5 @@ impl Hub {
             .pending_releases
             .insert(key, (stamp, command_id.clone()));
         Some((completion_id.to_owned(), stamp, command_id))
-    }
-
-    /// Park an unacknowledged prompt as a draft during execution recovery.
-    /// For a `call-notice:`, strips the reserved `cmid` so the parked draft is
-    /// never rejected or re-bound to the notice lifecycle, clears any active
-    /// claim, and records `execution_recovery_parked` atomically with the draft.
-    pub fn park_recovery_draft(
-        &self,
-        session_id: &str,
-        text: String,
-        content: Vec<serde_json::Value>,
-        cmid: Option<String>,
-    ) {
-        let Some(notice_cid) = cmid
-            .as_deref()
-            .filter(|id| id.starts_with(crate::agent_model::CALL_NOTICE_PREFIX))
-            .map(str::to_owned)
-        else {
-            self.add_draft_with_origin(session_id, text, content, cmid, None);
-            return;
-        };
-        {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            let id = self.next_qid();
-            s.drafts.push(QueuedMessage {
-                id,
-                text,
-                content,
-                cmid: None,
-                schedule: None,
-                origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
-                initiator: None,
-            });
-            let mut claims = self.inner.notice_claims.lock();
-            let key = (session_id.to_owned(), notice_cid.clone());
-            claims.active.remove(&key);
-            claims.pending_releases.remove(&key);
-        }
-        self.emit_pending_with_notice_ops(
-            session_id,
-            vec![(notice_cid, "execution_recovery_parked".to_owned())],
-            Vec::new(),
-        );
     }
 }

@@ -513,8 +513,24 @@ pub(in crate::remote_runtime) fn replacement_worker_superseded_epoch(
         .cloned()
 }
 
+fn strip_prompt_preamble_and_text(
+    hub: &crate::core::Hub,
+    session_id: &str,
+    cmid: Option<&str>,
+    content: Vec<serde_json::Value>,
+) -> (String, Vec<serde_json::Value>) {
+    let cleaned = crate::session_context::without_preamble(hub, session_id, cmid, content);
+    let text = cleaned
+        .iter()
+        .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
+        .collect::<Vec<_>>()
+        .join("\n");
+    (text, cleaned)
+}
+
 /// Park an already-attempted prompt whose delivery across a worker change is
-/// ambiguous using Hub's existing `park_recovery_draft` contract.
+/// ambiguous using Hub's `park_recovery_draft` contract, stripping generated
+/// context preamble first (Finding 8).
 pub(in crate::remote_runtime) fn park_ambiguous_prompt_command(
     shared: &Shared,
     session_id: &str,
@@ -533,14 +549,11 @@ pub(in crate::remote_runtime) fn park_ambiguous_prompt_command(
             .as_deref()
             .is_some_and(|cid| cid.starts_with(CALL_NOTICE_PREFIX));
         if !is_call_notice {
-            let text = content
-                .iter()
-                .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n");
+            let (text, cleaned) =
+                strip_prompt_preamble_and_text(&shared.hub, session_id, cmid.as_deref(), content);
             shared
                 .hub
-                .park_recovery_draft(session_id, text, content, cmid);
+                .park_recovery_draft(session_id, text, cleaned, cmid);
         }
         shared
             .hub
@@ -548,9 +561,29 @@ pub(in crate::remote_runtime) fn park_ambiguous_prompt_command(
     }
 }
 
-/// Park and retire a pending cross-epoch prompt detected before transport send.
-pub(in crate::remote_runtime) fn park_and_retire_ambiguous_pending(
+fn retire_pending_prompt_version(
     shared: &Shared,
+    key: &str,
+    version: u64,
+    command_id: &str,
+) -> bool {
+    let mut pending = shared.pending.lock();
+    let removed = pending.remove_if_version(key, version).is_some();
+    if removed {
+        shared.sent.lock().remove(key);
+        shared.attempted_sends.lock().remove(key);
+        shared.retransmitted_sends.lock().remove(key);
+        shared.fenced_commands.lock().remove(key);
+        shared.in_flight_prompts.lock().retire_command(command_id);
+    }
+    removed
+}
+
+/// Park and retire a pending cross-epoch or disconnected prompt. When a durable
+/// store writer is attached, keep the exact pending version fenced until SQL
+/// confirms the draft commit, then retire it and confirm the client op (Finding 1).
+pub(in crate::remote_runtime) fn park_and_retire_ambiguous_pending(
+    shared: &Arc<Shared>,
     session_id: &str,
     key: &str,
     version: u64,
@@ -558,6 +591,69 @@ pub(in crate::remote_runtime) fn park_and_retire_ambiguous_pending(
     reason: &str,
     replacement_worker: Option<&WorkerSnapshot>,
 ) {
+    let is_call_notice = matches!(
+        &command,
+        CoreCommand::Prompt { cmid: Some(cid), .. } if cid.starts_with(CALL_NOTICE_PREFIX)
+    );
+    if !is_call_notice
+        && shared.hub.has_store_writer()
+        && tokio::runtime::Handle::try_current().is_ok()
+        && let CoreCommand::Prompt {
+            command_id,
+            content,
+            cmid,
+            ..
+        } = command
+    {
+        {
+            let pending = shared.pending.lock();
+            if pending.version(key) != Some(version) {
+                return;
+            }
+            if !shared.fenced_commands.lock().insert(key.to_owned()) {
+                return;
+            }
+        }
+        let (text, cleaned) =
+            strip_prompt_preamble_and_text(&shared.hub, session_id, cmid.as_deref(), content);
+        let shared_bg = Arc::clone(shared);
+        let sid = session_id.to_owned();
+        let key_owned = key.to_owned();
+        let reason_owned = reason.to_owned();
+        let replacement = replacement_worker.cloned();
+        shared.hub.spawn_teardown_requeue(async move {
+            let _commit_guard = shared_bg.hub.pending_commit_lock(&sid).await;
+            let committed = match shared_bg
+                .hub
+                .preview_park_recovery_prompt(&sid, text, cleaned, cmid)
+            {
+                crate::core::RecoveryParkPreview::Duplicate => true,
+                crate::core::RecoveryParkPreview::Pending(mut preview, rx) => {
+                    if let Ok(Ok(true)) = rx.await {
+                        shared_bg.hub.commit_park_recovery_notices(&mut preview);
+                        true
+                    } else {
+                        shared_bg.hub.abort_park_recovery_notices(&mut preview);
+                        false
+                    }
+                }
+                crate::core::RecoveryParkPreview::Rejected => false,
+            };
+            if committed {
+                let retired = retire_pending_prompt_version(&shared_bg, &key_owned, version, &command_id);
+                shared_bg.hub.broadcast_error(Some(sid.clone()), reason_owned);
+                if retired && let Some(ref worker) = replacement {
+                    reconcile_idle_guard_for_snapshot(&shared_bg, &sid, worker);
+                }
+            } else {
+                shared_bg.hub.broadcast_error(
+                    Some(sid),
+                    format!("{reason_owned} (durable draft save failed; prompt retained in client outbox)"),
+                );
+            }
+        });
+        return;
+    }
     let removed = {
         let mut pending = shared.pending.lock();
         let removed = pending.remove_if_version(key, version);
@@ -578,16 +674,69 @@ pub(in crate::remote_runtime) fn park_and_retire_ambiguous_pending(
     }
 }
 
-/// Preserve unresolved ordinary (non-`call-notice:`) prompts when a
-/// `RemoteRuntime` disconnects: unattempted prompts roll back optimistic
-/// revivals and return to the queue; already-attempted prompts park as drafts.
-pub(in crate::remote_runtime) fn recover_pending_prompts_on_disconnect(shared: &Shared) {
-    let entries: Vec<(String, u64, CoreCommand, bool)> = {
+/// Park and retire any still-pending (including already-`sent`) prompt whose
+/// bound `expected_worker_epoch` was superseded by a live replacement worker
+/// snapshot while the Machine tunnel stayed connected (Finding 3).
+pub(in crate::remote_runtime) fn retire_superseded_prompts_for_snapshot(
+    shared: &Arc<Shared>,
+    worker: &WorkerSnapshot,
+) {
+    if !worker.has_connected_owner()
+        || matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
+    {
+        return;
+    }
+    let superseded: Vec<(String, u64, CoreCommand)> = {
         let pending = shared.pending.lock();
         let attempted = shared.attempted_sends.lock();
+        let fenced = shared.fenced_commands.lock();
         pending
             .iter_with_versions()
             .filter_map(|(key, version, cmd)| {
+                if !attempted.contains(key) || fenced.contains(key) {
+                    return None;
+                }
+                match cmd {
+                    CoreCommand::Prompt {
+                        session_id,
+                        expected_worker_epoch: Some(bound),
+                        ..
+                    } if session_id == &worker.session_id && bound != &worker.worker_epoch => {
+                        Some((key.clone(), version, cmd.clone()))
+                    }
+                    _ => None,
+                }
+            })
+            .collect()
+    };
+    for (key, version, cmd) in superseded {
+        park_and_retire_ambiguous_pending(
+            shared,
+            &worker.session_id,
+            &key,
+            version,
+            cmd,
+            "prompt delivery across worker change is unresolved; retained as draft",
+            Some(worker),
+        );
+    }
+}
+
+/// Preserve unresolved ordinary (non-`call-notice:`) prompts when a
+/// `RemoteRuntime` disconnects: unattempted prompts roll back optimistic
+/// revivals and return to the queue; already-attempted prompts fence and park
+/// durably before retiring (Finding 1).
+pub(in crate::remote_runtime) fn recover_pending_prompts_on_disconnect(shared: &Arc<Shared>) {
+    let entries: Vec<(String, u64, CoreCommand, bool)> = {
+        let pending = shared.pending.lock();
+        let attempted = shared.attempted_sends.lock();
+        let fenced = shared.fenced_commands.lock();
+        pending
+            .iter_with_versions()
+            .filter_map(|(key, version, cmd)| {
+                if fenced.contains(key) {
+                    return None;
+                }
                 let CoreCommand::Prompt { cmid, .. } = cmd else {
                     return None;
                 };
@@ -607,23 +756,31 @@ pub(in crate::remote_runtime) fn recover_pending_prompts_on_disconnect(shared: &
         let Some(session_id) = cmd.session_id().map(str::to_owned) else {
             continue;
         };
-        let removed = {
-            let mut pending = shared.pending.lock();
-            let removed = pending.remove_if_version(&key, version);
-            if removed.is_some() {
-                shared.sent.lock().remove(&key);
-                shared.attempted_sends.lock().remove(&key);
-                shared.retransmitted_sends.lock().remove(&key);
-                shared.fenced_commands.lock().remove(&key);
-            }
-            removed
-        };
-        let Some(removed_cmd) = removed else {
-            continue;
-        };
         if was_attempted {
-            park_ambiguous_prompt_command(shared, &session_id, removed_cmd, disconnect_reason);
+            park_and_retire_ambiguous_pending(
+                shared,
+                &session_id,
+                &key,
+                version,
+                cmd,
+                disconnect_reason,
+                None,
+            );
         } else {
+            let removed = {
+                let mut pending = shared.pending.lock();
+                let removed = pending.remove_if_version(&key, version);
+                if removed.is_some() {
+                    shared.sent.lock().remove(&key);
+                    shared.attempted_sends.lock().remove(&key);
+                    shared.retransmitted_sends.lock().remove(&key);
+                    shared.fenced_commands.lock().remove(&key);
+                }
+                removed
+            };
+            let Some(removed_cmd) = removed else {
+                continue;
+            };
             let has_live_worker = shared.workers.lock().get(&session_id).is_some_and(|w| {
                 w.has_connected_owner()
                     && !matches!(w.state, WorkerState::Exited | WorkerState::Crashed)

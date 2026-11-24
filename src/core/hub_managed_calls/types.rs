@@ -275,6 +275,12 @@ impl StoreAckSink {
 
 /// Result of attempting to durably requeue an authoritative worker
 /// `UndeliveredPrompt` or provably unsent teardown notice through the FIFO store writer.
+pub enum RecoveryParkPreview {
+    Duplicate,
+    Pending(Box<PendingRecoveryPark>, StoreAckRx),
+    Rejected,
+}
+
 pub enum UndeliveredRequeue {
     /// No store writer is attached (in-memory test mode); Hub already updated.
     NoStore,

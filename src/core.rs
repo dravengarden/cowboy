@@ -44,8 +44,8 @@ pub use hub_events::FanoutFrame;
 mod hub_managed_calls;
 pub use hub_managed_calls::{
     NoticeClaimGuard, NoticeRequeueRequest, OwnerNoticeWithdrawalOp, OwnerQueueMutation,
-    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, RetainedLogScan,
-    StoreAckSink, UndeliveredRequeue,
+    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, RecoveryParkPreview,
+    RetainedLogScan, StoreAckSink, UndeliveredRequeue,
 };
 mod hub_peer_notice;
 pub use hub_peer_notice::PromptProgress;

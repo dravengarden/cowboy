@@ -116,6 +116,16 @@ impl Hub {
         }
     }
 
+    /// Whether `cmid` is currently parked as a draft in this session.
+    #[must_use]
+    pub fn is_cmid_parked_as_draft(&self, session_id: &str, cmid: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|s| s.drafts.iter().any(|m| m.cmid.as_deref() == Some(cmid)))
+    }
+
     /// Whether `cmid` has already echoed into this session's transcript.
     #[must_use]
     pub fn is_cmid_already_echoed(&self, session_id: &str, cmid: &str) -> bool {
@@ -144,7 +154,8 @@ impl Hub {
             .iter()
             .any(|seen| seen.cmid == cmid && seen.echoed)
             || s.log.iter().any(|env| env.cmid.as_deref() == Some(cmid));
-        if echoed {
+        let parked_as_draft = s.drafts.iter().any(|m| m.cmid.as_deref() == Some(cmid));
+        if echoed || parked_as_draft {
             remove_pending_echo(s, cmid);
             return None;
         }

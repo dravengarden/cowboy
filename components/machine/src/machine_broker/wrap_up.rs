@@ -169,9 +169,13 @@ pub(super) fn spawn_core_command_loop(
     )>,
     tokio::task::JoinHandle<()>,
 ) {
-    let (tx, mut rx) = mpsc::channel(super::CORE_COMMAND_QUEUE_CAPACITY);
+    let (tx, mut rx) = mpsc::channel::<(
+        u64,
+        crate::runtime_wire::CoreCommand,
+        PendingCoreCommandGuard,
+    )>(super::CORE_COMMAND_QUEUE_CAPACITY);
     let task = tokio::spawn(async move {
-        while let Some((lease, command, guard)) = rx.recv().await {
+        while let Some((lease, command, mut guard)) = rx.recv().await {
             if broker.controller_for(lease).is_none() {
                 tracing::warn!(lease, "discarding queued command from replaced controller");
                 drop(guard);
@@ -179,6 +183,7 @@ pub(super) fn spawn_core_command_loop(
             }
             let broker = Arc::clone(&broker);
             let _ = tokio::spawn(super::COMMAND_LEASE.scope(lease, async move {
+                guard.mark_entered();
                 let _guard = guard;
                 super::handle_core_command(&broker, command).await
             }))
@@ -224,15 +229,16 @@ pub(super) fn enqueue_leased_core_command(
             } => Some((session_id.clone(), command_id.clone())),
             _ => None,
         };
-        let guard = broker.enter_pending_core_command(command.session_id().map(str::to_owned));
+        let mut guard = broker.enter_pending_core_command(command.session_id().map(str::to_owned));
+        if let Some((sid, cid)) = prompt_key
+            && broker.dispatched_prompts.lock().mark_ingressed(&sid, &cid)
+        {
+            guard.track_ingressed_prompt(sid, cid);
+        }
         match command_tx.try_send((lease, command, guard)) {
-            Ok(()) => {
-                if let Some((sid, cid)) = prompt_key {
-                    broker.dispatched_prompts.lock().mark_ingressed(&sid, &cid);
-                }
-                None
-            }
-            Err(mpsc::error::TrySendError::Full((_, command, _guard))) => {
+            Ok(()) => None,
+            Err(mpsc::error::TrySendError::Full((_, command, guard))) => {
+                drop(guard);
                 let is_prompt = matches!(command, crate::runtime_wire::CoreCommand::Prompt { .. });
                 let Some((session_id, command_id)) =
                     super::core_overflow::overflow_refusal(&command)
@@ -278,10 +284,30 @@ pub(super) fn enqueue_leased_core_command(
 pub(super) struct PendingCoreCommandGuard {
     broker: Arc<super::Broker>,
     session_id: Option<String>,
+    ingressed_prompt: Option<(String, String)>,
+    entered: bool,
+}
+
+impl PendingCoreCommandGuard {
+    pub(super) fn track_ingressed_prompt(&mut self, session_id: String, command_id: String) {
+        self.ingressed_prompt = Some((session_id, command_id));
+    }
+
+    pub(super) fn mark_entered(&mut self) {
+        self.entered = true;
+    }
 }
 
 impl Drop for PendingCoreCommandGuard {
     fn drop(&mut self) {
+        if !self.entered
+            && let Some((sid, cid)) = self.ingressed_prompt.take()
+        {
+            self.broker
+                .dispatched_prompts
+                .lock()
+                .retire_if_unhanded(&sid, &cid);
+        }
         if let Some(session_id) = self.session_id.take() {
             let mut pending = self.broker.pending_core_commands.lock();
             if let Some(count) = pending.get_mut(&session_id) {
@@ -492,6 +518,8 @@ impl super::Broker {
         PendingCoreCommandGuard {
             broker: Arc::clone(self),
             session_id,
+            ingressed_prompt: None,
+            entered: false,
         }
     }
 
@@ -680,7 +708,10 @@ impl DispatchedPrompts {
             || self.was_evicted(session_id)
     }
 
-    pub(super) fn mark_ingressed(&mut self, session_id: &str, command_id: &str) {
+    /// Record a freshly ingressed prompt. Returns `true` only when a brand-new
+    /// record was inserted (so dropping an unentered retry can never retire an
+    /// earlier live ingress record).
+    pub(super) fn mark_ingressed(&mut self, session_id: &str, command_id: &str) -> bool {
         let key = (session_id.to_owned(), command_id.to_owned());
         if !self.entries.contains_key(&key) {
             self.entries.insert(
@@ -692,6 +723,21 @@ impl DispatchedPrompts {
             );
             self.order.push_back(key);
             self.evict_acked_if_needed();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Retire an entry provably dropped in the broker queue before worker handoff.
+    pub(super) fn retire_if_unhanded(&mut self, session_id: &str, command_id: &str) {
+        let key = (session_id.to_owned(), command_id.to_owned());
+        if self
+            .entries
+            .get(&key)
+            .is_some_and(|rec| rec.epoch.is_none() && !rec.acked)
+        {
+            self.entries.remove(&key);
         }
     }
 
@@ -746,6 +792,17 @@ impl DispatchedPrompts {
                     self.evicted_sessions.insert(candidate.0);
                 }
                 None => {}
+            }
+        }
+        // Hard cap against pathological unacked buildup: fail closed via
+        // `evicted_sessions` instead of allowing unbounded growth or repeated O(N) scans.
+        let hard_cap = Self::MAX_ENTRIES * 2;
+        while self.entries.len() > hard_cap {
+            let Some(candidate) = self.order.pop_front() else {
+                break;
+            };
+            if self.entries.remove(&candidate).is_some() {
+                self.evicted_sessions.insert(candidate.0);
             }
         }
     }
@@ -2052,5 +2109,19 @@ mod tests {
                 .admit_and_bind_controller_for_event("s1", 1, 9)
                 .is_some()
         );
+    }
+
+    #[test]
+    fn dropped_unhanded_ingress_retires_record_without_evicting_prior_ingress() {
+        let mut tracked = DispatchedPrompts::default();
+        assert!(tracked.mark_ingressed("s1", "cmd-drop"));
+        tracked.retire_if_unhanded("s1", "cmd-drop");
+        assert!(!tracked.was_ingressed_or_uncertain("s1", "cmd-drop"));
+
+        assert!(tracked.mark_ingressed("s1", "cmd-live"));
+        assert!(!tracked.mark_ingressed("s1", "cmd-live"));
+        tracked.record("s1", "cmd-live", "e1");
+        tracked.retire_if_unhanded("s1", "cmd-live");
+        assert_eq!(tracked.get("s1", "cmd-live"), Some("e1"));
     }
 }

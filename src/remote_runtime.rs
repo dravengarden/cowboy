@@ -2453,8 +2453,11 @@ fn begin_reset(shared: &Shared, session_id: &str) {
         .insert(session_id.to_owned(), (replaced, None));
 }
 
-async fn adopt_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
+async fn adopt_snapshot(shared: &Arc<Shared>, worker: &WorkerSnapshot) {
     native_admission::snapshot(shared, worker, || project_snapshot(shared, worker)).await;
+    if let Some(installed) = shared.workers.lock().get(&worker.session_id).cloned() {
+        notice_recovery::retire_superseded_prompts_for_snapshot(shared, &installed);
+    }
 }
 
 fn project_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
@@ -2479,7 +2482,7 @@ fn project_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
 }
 
 async fn update_worker_snapshots(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     workers: Vec<WorkerSnapshot>,
     runtime_protocol: u16,
 ) {
@@ -2492,7 +2495,7 @@ async fn update_worker_snapshots(
 }
 
 async fn merge_worker_snapshots_with_protocol(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     workers: Vec<WorkerSnapshot>,
     runtime_protocol: u16,
 ) {
@@ -2528,6 +2531,9 @@ async fn merge_worker_snapshots_with_protocol(
             notice_recovery::spawn_record_snapshot_worker_epoch_if_notice(shared, &worker);
         })
         .await;
+        if let Some(installed) = shared.workers.lock().get(&worker.session_id).cloned() {
+            notice_recovery::retire_superseded_prompts_for_snapshot(shared, &installed);
+        }
     }
 }
 
