@@ -2341,7 +2341,7 @@ export function ComposerWorkspace({
                     /* Schedule the current content: park it as a draft that the SERVER
         auto-sends at a future time (fires even with every client offline). */
                   }
-                  <Tooltip title="定时发送">
+                  <Tooltip title="Schedule send">
                     <span>
                       <IconButton
                         aria-label="schedule send"

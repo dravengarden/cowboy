@@ -1,4 +1,4 @@
-import { type HTMLAttributes, useEffect, useRef } from "react";
+import { createContext, type HTMLAttributes, useContext, useEffect, useRef } from "react";
 import {
   Box,
   ButtonBase,
@@ -31,6 +31,10 @@ import { optionLabel, optionShortcut } from "./runConfigOptions";
 
 // The Agent pane's fields: one row per Provider option and the recommended
 // presets. They edit the Run configuration draft, never the agent itself.
+
+/** Whether the Run Configuration pane owning these controls currently holds focus.
+ *  Presets (1-9) and option letters (M/E/F/…) only act on the focused pane. */
+export const RunConfigPaneActiveContext = createContext<boolean>(true);
 
 /** The Model picker: a compact outlined Select in the option grid. */
 const modelSelectSx: SxProps<Theme> = {
@@ -127,6 +131,7 @@ export function ConfigOptionControl({
   savedTitle?: ((name: string) => string) | undefined;
   onChange: (id: string, value: string | boolean) => void;
 }): React.JSX.Element {
+  const paneActive = useContext(RunConfigPaneActiveContext);
   const label = optionLabel(option);
   const shortcut = optionShortcut(option);
   const rowRef = useRef<HTMLDivElement>(null);
@@ -196,7 +201,7 @@ export function ConfigOptionControl({
             {shortcut && (
               <Kbd
                 keys={shortcut}
-                availability={disabled ? "inactive" : "available"}
+                availability={!disabled && paneActive ? "available" : "inactive"}
               />
             )}
           </Stack>
@@ -266,6 +271,7 @@ export function RecommendedPresetControls({
   options: readonly ConfigOption[];
   onChange: (id: string, value: string | boolean) => void;
 }): React.JSX.Element {
+  const paneActive = useContext(RunConfigPaneActiveContext);
   const active = activeRunConfigPreset(presets, options);
   return (
     <Stack data-config-row spacing={0.75} sx={{ minWidth: 0 }}>
@@ -360,7 +366,7 @@ export function RecommendedPresetControls({
               </Box>
               <Kbd
                 keys={String(index + 1)}
-                availability="available"
+                availability={paneActive ? "available" : "inactive"}
               />
             </ButtonBase>
           );

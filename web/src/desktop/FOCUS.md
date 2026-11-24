@@ -113,7 +113,7 @@ and in a queued-message editor), and the focused one runs.
 | `␣C` | Focus Conversation |
 | `␣S` + `S/Z/N/M/P/U` | Sessions group: focus the sidebar, fold (the button beside Create), new folder, move session, organize by project; `U` is Undo history, this device's undoable changes from the last 24 hours (LazyVim's `<leader>su`) |
 | `␣T` + `R/U/A/N/L/T` | Top bar group: run config, usage, verify, Provider update (only while one is available), reload; `T` focuses the bar |
-| `␣L` `␣Q` `␣D` | Focus Plan, Queue, Drafts |
+| `␣L` `␣Q` `␣D` | Toggle/focus Plan, Queue, Drafts (`␣L`, `␣Q`, and `␣D` toggle their panel open/closed symmetrically; `␣D` starts a new draft when empty) |
 | `␣V` | Show the code Review in the work pane and focus it; while Review is shown, `␣V` is the Review group (`␣VV` focuses Review) |
 | `␣G` | Open Background tasks: the subagents and calls this session started (with the previous Calls panel restored: open or close Calls) |
 | `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |
@@ -503,10 +503,11 @@ command palette.
 
 Create is the reference dialog for the grammar above. It opens in the title
 field (Insert). `Esc` puts the Normal cursor on the title; `1` `2` `3` pick
-Session, Draft or Folder from anywhere in Normal and `H/L` step them while
-the cursor stays on the title, so `Esc 2 I` makes a Draft and edits its
-name. `K` reaches the tabs, `J` walks the fields down to Cancel and Create,
-`I` edits, `Esc` closes, `Mod+Enter` creates from either mode. The hint row
+Session, Draft or Folder from anywhere in Normal and `[` / `]` step them
+(with Vim off, or off a text field, `H/L` also step them; with Vim on, `H/L`
+keep intra-field cursor motion in a Vim Normal field), so `Esc 2 I` makes a
+Draft and edits its name. `K` reaches the tabs, `J` walks the fields down to
+Cancel and Create, `I` edits, `Esc` closes, `Mod+Enter` creates from either mode. The hint row
 under the tabs names only the current mode's keys, and the tab digits light
 in Normal. Pointer activation still selects and focuses the title in one
 step. The Cancel `Esc` keycap is inactive while a text field owns `Esc`.
@@ -665,7 +666,7 @@ it); macOS Chrome binds none of them.
 
 - Leader then `P/C`: focus Prompt or Conversation; `␣SS` focuses Sessions
   and `␣TT` the Top Bar.
-- Leader then `L/Q/D`: focus Plan, Queue, or Drafts.
+- Leader then `L/Q/D`: toggle Plan (`␣L`), focus Queue (`␣Q`), or toggle Drafts (`␣D`).
 - Leader then `N`, `,` or `X`: create, open Settings, or open Extensions.
   These window-wide entries sit with Sessions, laid out like VS Code with
   its activity bar on top. The docked sidebar has two bars: the activity

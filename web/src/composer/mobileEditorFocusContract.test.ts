@@ -1107,7 +1107,7 @@ test("mobile keyboard dismissal belongs to the fixed lower editing rail", () => 
   assertEquals(actionRow.includes('position: "sticky"'), false);
   assertEquals(actionRow.includes('<Tooltip title="Force push">'), false);
   assertEquals(
-    actionRow.indexOf('<Tooltip title="定时发送">') <
+    actionRow.indexOf('<Tooltip title="Schedule send">') <
       actionRow.indexOf("data-mobile-composer-clear"),
     true,
   );

@@ -127,11 +127,11 @@ test("system sessions get an explicit kind row", () => {
   assertEquals(rows.Status, "Live");
 });
 
-test("next scheduled draft uses the compact Chinese fire label", () => {
+test("next scheduled draft uses the compact English fire label", () => {
   const now = new Date(2026, 7, 20, 19, 15).getTime();
   const fire = new Date(2026, 7, 20, 20, 0).getTime();
   const rows = rowMap(info({ next_schedule_ms: fire }), now);
-  assertEquals(rows["Next draft"], "今天 20:00 · 45 分钟后");
+  assertEquals(rows["Next draft"], "Today 20:00 · in 45m");
 });
 
 test("merge keeps HTTP counts and takes live status context", () => {

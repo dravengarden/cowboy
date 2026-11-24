@@ -59,6 +59,17 @@ interface FieldState {
 
 const states = new WeakMap<Field, FieldState>();
 const escapeMatchers = new WeakMap<Field, InsertEscapeMatcher>();
+const modeListeners = new Set<() => void>();
+
+function notifyInputVimMode(): void {
+  for (const listener of modeListeners) listener();
+}
+
+/** Notify UI hints when any inputVim field transitions between Insert and Normal. */
+export function subscribeInputVimMode(listener: () => void): () => void {
+  modeListeners.add(listener);
+  return () => modeListeners.delete(listener);
+}
 let escapeConfig: { source: string; sequences: string[]; timeoutMs: number } | null = null;
 
 /** The user's insert escape sequences (`inoremap jj <Esc>`), parsed once per edit. */
@@ -163,6 +174,7 @@ export function enterInputNormal(field: Field, cursor?: number): void {
   }
   field.setAttribute(MODE, "normal");
   place(field, cursor ?? cursorOf(field));
+  notifyInputVimMode();
 }
 
 /** Enter Insert with the caret at `at`. */
@@ -177,6 +189,7 @@ export function enterInputInsert(field: Field, at: number): void {
   field.setAttribute(MODE, "insert");
   const caret = Math.max(0, Math.min(at, field.value.length));
   field.setSelectionRange(caret, caret);
+  notifyInputVimMode();
 }
 
 function edit(field: Field, value: string, cursor: number): void {
@@ -518,16 +531,19 @@ export function installInputVim(): () => void {
     if (field && field.getAttribute(MODE) === null) {
       field.setAttribute(MODE, "insert");
       state(field).insertStart = snapshot(field);
+      notifyInputVimMode();
     }
   };
   const onFocusOut = (event: FocusEvent): void => {
     const field = event.target;
     if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return;
+    const hadMode = field.hasAttribute(MODE);
     if (field.hasAttribute(OWNED_READONLY)) {
       field.readOnly = false;
       field.removeAttribute(OWNED_READONLY);
     }
     field.removeAttribute(MODE);
+    if (hadMode) notifyInputVimMode();
     const current = states.get(field);
     if (current) {
       current.pending = "";

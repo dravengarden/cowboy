@@ -1,7 +1,9 @@
 import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { AboutLayoutEditor } from "./AboutLayoutEditor";
 import { DEFAULT_ABOUT_VALUES, useAboutPreferences } from "./aboutPreferences";
-import { Children, useCallback, useEffect, useMemo, useState } from "react";
+import { useContext, Children, useCallback, useEffect, useMemo, useState } from "react";
+import { DESKTOP_SURFACE_RADIUS } from "./desktop/DesktopEmbeddedControl";
+import { SurfaceContext } from "./surface/SurfaceProfile";
 import {
   Accordion,
   AccordionDetails,
@@ -227,13 +229,14 @@ function ProviderUsageCardBody({ account: identity, usage, schedule: serviceSche
     }
   };
 
+  const desktop = useContext(SurfaceContext)?.kind === "desktop";
   return (
     <Box
       data-usage-account={identity.id}
       sx={{
         border: 1,
         borderColor: "divider",
-        borderRadius: 2,
+        borderRadius: desktop ? `${DESKTOP_SURFACE_RADIUS}px` : 2,
         px: 1.5,
         py: 1.4,
       }}
@@ -298,7 +301,7 @@ function ProviderUsageCardBody({ account: identity, usage, schedule: serviceSche
                 networkAction={refresh}
                 disabled={refreshBusy}
                 size="small"
-                sx={{ width: 40, height: 40 }}
+                sx={desktop ? { width: desktopSize(30), height: desktopSize(30) } : { width: 40, height: 40 }}
               >
                 {refreshBusy
                   ? <CircularProgress size={desktopSize(17)} color="inherit" aria-label={`Refreshing ${title}`} />

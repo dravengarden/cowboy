@@ -7,9 +7,15 @@ import {
 } from "./keyIntent";
 
 class FakeElement {
-  constructor(private readonly selectors: readonly string[]) {}
+  constructor(
+    private readonly selectors: readonly string[],
+    public readonly readOnly = false,
+  ) {}
   matches(selector: string): boolean {
     return this.selectors.some((own) => selector.includes(own));
+  }
+  hasAttribute(name: string): boolean {
+    return name === "readonly" && this.readOnly;
   }
 }
 
@@ -88,6 +94,24 @@ test("idle CJK sources keep modified chords as physical commands", () => {
       idle,
     ),
     { owner: "command", key: "[", modified: true },
+  );
+});
+
+test("read-only picker inputs resolve physical keys under idle CJK", () => {
+  const readonlyInput = new FakeElement(["input"], true) as unknown as EventTarget;
+  assert.deepEqual(
+    desktopKeyIntent(
+      key("KeyJ", { key: "Process", keyCode: 229, target: readonlyInput }),
+      idle,
+    ),
+    { owner: "command", key: "j", modified: false },
+  );
+  assert.deepEqual(
+    desktopKeyIntent(
+      key("Escape", { key: "Process", keyCode: 229, target: readonlyInput }),
+      idle,
+    ),
+    { owner: "command", key: "Escape", modified: false },
   );
 });
 

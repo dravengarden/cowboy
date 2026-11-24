@@ -38,8 +38,7 @@ import {
   useState,
 } from "react";
 import { Kbd } from "../Kbd";
-import { machineBrowserOwnsKeys } from "./commands/desktopShortcutScope";
-import { desktopImeOwnsKey } from "./commands/imeShortcut";
+import { modalHandlerShouldSkip } from "./commands/modalGuard";
 import { workspaceCommandKey } from "./commands/workspaceCommandKey";
 import type { ConfigOption, Status } from "../protocol";
 import {
@@ -98,7 +97,7 @@ import { useNativeAccountUsage } from "../nativeAccountUsage";
 import { sameComposerSheetSession } from "../composerSessionSlice";
 import { registeredUsageAccounts, sameSessionQuotaInputs, type UsageAccountCard, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageResetUnavailableMessage } from "../usageAccounts";
 import { AccountBrowserEntry } from "../machineBrowser/AccountBrowserEntry";
-import { DesktopModal } from "./DesktopModal";
+import { desktopDialogSlotProps, DesktopModal, InstantModalTransition, isImeBlockedEscape } from "./DesktopModal";
 import { RunConfigurationDialog } from "./RunConfigurationDialog";
 import { compactOptionName } from "./runConfigOptions";
 import {
@@ -647,9 +646,12 @@ function DesktopUsageExtras(
       {reset.open && (
       <Dialog
         open
-        onClose={reset.close}
+        onClose={(e, r) => { if (!isImeBlockedEscape(e, r)) reset.close(); }}
         fullWidth
         maxWidth="xs"
+        disableScrollLock
+        slots={{ transition: InstantModalTransition }}
+        slotProps={desktopDialogSlotProps({ onClose: reset.close })}
       >
         <DialogTitle>
           {reset.mode === "schedule"
@@ -916,7 +918,7 @@ export const DesktopTopBarControls = memo(function DesktopTopBarControls({
   useEffect(() => {
     if (!usageOpen) return undefined;
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (desktopImeOwnsKey(event) || machineBrowserOwnsKeys(event, document)) return;
+      if (modalHandlerShouldSkip(event, usagePanelRef.current)) return;
       if (event.metaKey || event.ctrlKey || event.altKey) return;
       const key = workspaceCommandKey(event).toLowerCase();
       if (key === "h" || key === "l") {
@@ -946,10 +948,10 @@ export const DesktopTopBarControls = memo(function DesktopTopBarControls({
         controls[nextIndex]?.focus();
         return;
       }
-      if (key === "u" || key === "l") {
+      if (key === "u") {
         event.preventDefault();
         event.stopPropagation();
-        setUsagePanel(key === "u" ? "usage" : "logs");
+        setUsagePanel("usage");
       } else if (key === "r" && usagePanel === "usage" && !refreshing) {
         event.preventDefault();
         event.stopPropagation();
@@ -1513,7 +1515,7 @@ export const DesktopTopBarControls = memo(function DesktopTopBarControls({
                   label={providerUpdate.when_idle
                     ? "Queued"
                     : `Update ${providerUpdate.version}`}
-                  keyLabel="P"
+                  keyLabel="N"
                   accent={updateTarget !== null}
                   available
                   density={density}

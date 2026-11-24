@@ -3,6 +3,8 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { CssBaseline } from "@mui/material";
 import { BrowserProductTheme } from "./browserProductTheme";
+import { DesktopCommandProvider } from "./desktop/commands/DesktopCommandProvider";
+import { DesktopWorkspaceProvider } from "./desktop/DesktopWorkspaceController";
 import { ToolCard, ToolDetailsBrowser } from "./Transcript";
 import { scrollableAncestor } from "./ToolDetailsBrowser";
 import { derive, type RenderItem } from "./derive";
@@ -194,22 +196,33 @@ export async function runToolInspectorBrowserConformance(
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
+  let locatedKeys: string[] = [];
+  let selectedKeys: string[] = [];
   const show = async (selectedKey: string, desktop = true): Promise<void> => {
+    const browser = (
+      <ToolDetailsBrowser
+        items={items}
+        runs={runs}
+        selectedKey={selectedKey}
+        desktop={desktop}
+        provider="claude"
+        onSelect={(key) => selectedKeys.push(key)}
+        onClose={() => {}}
+        onLocate={(key) => locatedKeys.push(key)}
+        historyComplete={false}
+      />
+    );
     flushSync(() =>
       root.render(
         <BrowserProductTheme>
           <CssBaseline />
-          <ToolDetailsBrowser
-            items={items}
-            runs={runs}
-            selectedKey={selectedKey}
-            desktop={desktop}
-            provider="claude"
-            onSelect={() => {}}
-            onClose={() => {}}
-            onLocate={() => {}}
-            historyComplete={false}
-          />
+          {desktop
+            ? (
+              <DesktopWorkspaceProvider>
+                <DesktopCommandProvider>{browser}</DesktopCommandProvider>
+              </DesktopWorkspaceProvider>
+            )
+            : browser}
         </BrowserProductTheme>,
       )
     );
@@ -269,6 +282,15 @@ export async function runToolInspectorBrowserConformance(
     const raw = [...document.querySelectorAll<HTMLButtonElement>("button")]
       .find((button) => button.textContent === "Raw");
     check(raw, "missing raw escape hatch");
+    locatedKeys = [];
+    selectedKeys = [];
+    raw.focus();
+    raw.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", code: "Enter", bubbles: true, cancelable: true }));
+    await wait(50);
+    check(locatedKeys.length === 0, "bare Enter on a focused button inside ToolDetailsBrowser must not trigger onLocate");
+    raw.dispatchEvent(new KeyboardEvent("keydown", { key: "j", code: "KeyJ", bubbles: true, cancelable: true }));
+    await wait(50);
+    check(selectedKeys.length === 1, "j advances run inside ToolDetailsBrowser under DesktopCommandProvider");
     raw.click();
     await wait(150);
     check(

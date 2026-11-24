@@ -68,10 +68,13 @@ export function desktopKeyIntent(
   const element = typeof Element !== "undefined" && event.target instanceof Element
     ? event.target
     : null;
-  // The CodeMirror Normal sink and a native field in Vim Normal (inputVim)
-  // are read-only command surfaces: their keys resolve physically.
+  // The CodeMirror Normal sink, a native field in Vim Normal (inputVim), and
+  // read-only picker inputs (e.g. WorkspacePicker) are command surfaces: they
+  // cannot host IME marked text, so their keys resolve physically.
+  const readonlyField = (element as { readOnly?: boolean } | null)?.readOnly === true || (element?.hasAttribute?.("readonly") ?? false);
   const vimSink = (element?.matches("[data-vim-command-sink]") ?? false) ||
-    element?.getAttribute?.("data-vim-input-mode") === "normal";
+    element?.getAttribute?.("data-vim-input-mode") === "normal" ||
+    readonlyField;
   if (isTextEditingTarget(event.target) && !vimSink) {
     return isImeKeyEvent(event) ? IME : { owner: "text", key };
   }

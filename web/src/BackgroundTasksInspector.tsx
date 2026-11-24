@@ -44,9 +44,10 @@ import {
   useInspectorState,
 } from "./backgroundTaskInspectorState";
 import { setActiveSessionId } from "./controlPlane";
+import { desktopDialogSlotProps, InstantModalTransition, isImeBlockedEscape } from "./desktop/DesktopModal";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { DesktopTasksHeader } from "./DesktopTasksHeader";
-import { shortcutKey } from "./desktop/commands/imeShortcut";
+import { handleBackgroundTasksKeyDown } from "./backgroundTasksKeyboard";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import { CallConversation, CallDetailView } from "./ManagedCallsDock";
 import { callConversationId } from "./managedCalls";
@@ -62,12 +63,6 @@ import {
   STOP_MESSAGE,
   useStopStates,
 } from "./useBackgroundTasks";
-
-function typingTarget(event: ReactKeyboardEvent): boolean {
-  if (event.nativeEvent.isComposing || event.keyCode === 229) return true;
-  const target = event.target as HTMLElement | null;
-  return !!target?.closest?.("input, textarea, select, [contenteditable='true'], [contenteditable='']");
-}
 
 function Diagnostics({ task }: { task: TaskSummary }): React.JSX.Element {
   const rows: [string, string][] = [
@@ -395,6 +390,14 @@ export function BackgroundTasksInspector({
   const depth = useRef(0);
   const { child, conversation } = useTaskConversation(sessionId, open ? selected : null, desktop, level, setLevel, depth);
   const consumedDeepLink = useRef<string | null>(null);
+  const inspectorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!open || !desktop) return undefined;
+    const frame = requestAnimationFrame(() =>
+      inspectorRef.current?.focus({ preventScroll: true })
+    );
+    return () => cancelAnimationFrame(frame);
+  }, [open, desktop]);
 
   // `␣G` and deep links open this session's inspector.
   useEffect(() => {
@@ -511,56 +514,16 @@ export function BackgroundTasksInspector({
     close();
     onLocate?.(key);
   };
-  const keys = (event: ReactKeyboardEvent<HTMLElement>): void => {
-    if (event.metaKey || event.ctrlKey || event.altKey || typingTarget(event)) return;
-    // A confirmation (Stop) owns its own keys.
-    if ((event.target as HTMLElement).closest?.("[role='dialog'] [role='dialog']")) return;
-    switch (shortcutKey(event.nativeEvent)) {
-      case "j":
-      case "]":
-        event.preventDefault();
-        step(1);
-        return;
-      case "k":
-      case "[":
-        event.preventDefault();
-        step(-1);
-        return;
-      case "o":
-        if (selected?.source === "call") {
-          event.preventDefault();
-          openConversation(selected);
-        }
-        return;
-      case "L":
-        if (selected && selected.anchorSeq !== null) {
-          event.preventDefault();
-          locate(selected.key);
-        }
-        return;
-      case "x":
-      case "X":
-        if (selected?.canStop) {
-          event.preventDefault();
-          const detail = document.querySelector<HTMLElement>(`[data-task-detail="${CSS.escape(selected.key)}"]`);
-          (detail?.querySelector<HTMLButtonElement>("[data-task-detail-stop]") ??
-            [...(detail?.querySelectorAll<HTMLButtonElement>("button") ?? [])]
-              .find((button) => /^stop call$/i.test(button.textContent?.trim() ?? "")))?.click();
-        }
-        return;
-      case "Enter":
-        if (selected?.source === "approval") {
-          event.preventDefault();
-          answerApproval();
-        }
-        return;
-      case "h":
-      case "Escape":
-        event.preventDefault();
-        close();
-        return;
-    }
-  };
+  const keys = (event: ReactKeyboardEvent<HTMLElement>): void =>
+    handleBackgroundTasksKeyDown(event, {
+      ownNode: inspectorRef.current,
+      selected,
+      step,
+      openConversation: () => { if (selected) openConversation(selected); },
+      locate,
+      answerApproval,
+      close,
+    });
   // Only a structured MCP identity links a Call to its tool card (I8).
   const originTool = selected?.source === "call" && selected.call
     ? originToolKey(background.items, selected.call.request_id)
@@ -603,28 +566,32 @@ export function BackgroundTasksInspector({
     return createPortal(
       <Dialog
         open
-        onClose={close}
+        onClose={(e, r) => { if (!isImeBlockedEscape(e, r)) close(); }}
         maxWidth={false}
         fullWidth
+        disableScrollLock
         aria-labelledby="background-tasks-title"
-        PaperProps={{
-          sx: {
+        slots={{ transition: InstantModalTransition }}
+        slotProps={desktopDialogSlotProps({
+          root: { onKeyDown: keys },
+          onClose: close,
+          paperSx: {
             width: "calc(100vw - 32px)",
             maxWidth: 1600,
             height: "calc(100dvh - 32px)",
             maxHeight: 1100,
             m: 2,
             overflow: "hidden",
-            borderRadius: 2.5,
-            backgroundImage: "none",
           },
-        }}
+        })}
       >
         <Box
+          ref={inspectorRef}
+          tabIndex={-1}
           data-background-tasks-inspector={sessionId}
           data-desktop-keys="own"
-          onKeyDown={keys}
-          sx={{ height: "100%", minHeight: 0, display: "grid", gridTemplateRows: "auto minmax(0, 1fr) auto" }}
+          data-desktop-modal-keys="own"
+          sx={{ height: "100%", minHeight: 0, display: "grid", gridTemplateRows: "auto minmax(0, 1fr) auto", outline: "none" }}
         >
           <DesktopTasksHeader
             onLocate={selected && selected.anchorSeq !== null ? (): void => locate(selected.key) : undefined}

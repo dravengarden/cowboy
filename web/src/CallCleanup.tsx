@@ -47,11 +47,13 @@ export function CallCleanup({ parent, calls, onChange }: {
       {error && <Typography variant="caption" color="error" role="alert">{error}</Typography>}
       <ConfirmSheet open={candidates !== null} onClose={() => { if (!busy) setCandidates(null); }}
         title="Clear calls from this list?"
-        actions={<Stack direction="row" spacing={1}>
-          <Button disabled={busy} onClick={() => setCandidates(null)}>Cancel</Button>
-          <Button color="error" variant="contained" disabled={busy || selected.length === 0}
-            onClick={() => void clear(selected)}>Clear {selected.length}</Button>
-        </Stack>}
+        confirm={{
+          label: `Clear ${selected.length}`,
+          color: "error",
+          busy,
+          disabled: selected.length === 0,
+          onConfirm: () => void clear(selected),
+        }}
       >
         <Stack spacing={1}>
           <Typography variant="body2">Only selected ended calls leave this list. Results and call receipts are retained; code and the parent session stay intact.</Typography>

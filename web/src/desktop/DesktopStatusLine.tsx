@@ -286,6 +286,12 @@ function regionHints(
         { keys: "O", label: "Order" },
         { keys: "Esc/H", label: "Canvas" },
       ];
+    case "conversation.approval":
+      return [
+        { keys: "Tab", label: "Next field" },
+        { keys: "␣1…", label: "Answer" },
+        { keys: "Ctrl+K", label: "Transcript" },
+      ];
     case "conversation.transcript":
       return projection === "explore" ? EXPLORE_HINTS : HISTORY_HINTS;
     case "review.navigator":

@@ -3,7 +3,7 @@
 // bound by the Controller to this run. An uncertain outcome is reported to the
 // view and never retried.
 
-import { Box, Button, Typography } from "@mui/material";
+import { Box, Typography } from "@mui/material";
 import { ConfirmSheet } from "../../Sheet";
 
 export type PendingCall = {
@@ -29,20 +29,11 @@ export default function McpCallConfirm({
       open
       onClose={(): void => answer(false)}
       title="Allow this call?"
-      actions={
-        <>
-          <Button onClick={(): void => answer(false)} sx={{ textTransform: "none" }}>
-            Decline
-          </Button>
-          <Button
-            variant="contained"
-            onClick={(): void => answer(true)}
-            sx={{ textTransform: "none" }}
-          >
-            Call {pending.call.tool}
-          </Button>
-        </>
-      }
+      confirm={{
+        label: `Call ${pending.call.tool}`,
+        cancelLabel: "Decline",
+        onConfirm: (): void => answer(true),
+      }}
     >
       <Box sx={{ display: "grid", gap: 1 }}>
         <Typography variant="body2">

@@ -92,10 +92,7 @@ export function AccountControlsPanel({ control, observation, disabled, onChange 
     </Typography>}
     {error && <Alert severity="warning">{error}</Alert>}
     <ConfirmSheet open={Boolean(confirm)} onClose={() => setConfirming(undefined)} title={confirm?.title}
-      actions={<Stack direction="row" spacing={1}>
-        <Button onClick={() => setConfirming(undefined)}>Cancel</Button>
-        <Button color="error" variant="contained" disabled={busy} onClick={() => confirming && void run(confirming)}>{confirm?.button}</Button>
-      </Stack>}>
+      confirm={confirm ? { label: confirm.button, color: "error", busy, onConfirm: () => { if (confirming) void run(confirming); } } : undefined}>
       <Typography variant="body2">{confirm?.body}</Typography>
     </ConfirmSheet>
   </Stack>;

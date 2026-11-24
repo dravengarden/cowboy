@@ -11,14 +11,21 @@ import { Close } from "@mui/icons-material";
 import {
   cloneElement,
   forwardRef,
+  type KeyboardEvent as ReactKeyboardEvent,
   type KeyboardEventHandler,
   type ReactElement,
   type ReactNode,
   type Ref,
   useCallback,
   useEffect,
+  useId,
+  useRef,
+  useState,
 } from "react";
-import { isImeKeyEvent } from "../imeKey";
+import { useVimSetting } from "../vimSetting";
+import { popupOwnsKeys } from "./commands/hintTargets";
+import { desktopImeOwnsKey, shortcutKey } from "./commands/imeShortcut";
+import { isTopmostDialog, owningDialog } from "./commands/modalGuard";
 import { HintTooltip } from "../HintTooltip";
 import {
   desktopModalBackdropSx,
@@ -41,21 +48,126 @@ function assignRef<T>(target: Ref<T> | undefined, value: T | null): void {
 }
 
 /** Desktop dialogs open immediately without MUI Fade's synchronous
- *  `node.scrollTop` reflow on mount. */
-const InstantModalTransition = forwardRef<
+ *  `node.scrollTop` reflow on mount. Forward all remaining MUI Modal /
+ *  FocusTrap props (such as `tabIndex`, `onFocus`, `style`) so focus trapping
+ *  and focus restoration remain intact. */
+interface InstantModalTransitionProps {
+  in?: boolean;
+  children: ReactElement<{
+    ref?: Ref<HTMLElement>;
+    onFocus?: (event: unknown) => void;
+    tabIndex?: number;
+  }>;
+  onEnter?: () => void;
+  onEntered?: () => void;
+  onExit?: () => void;
+  onExited?: () => void;
+  tabIndex?: number;
+  onFocus?: (event: unknown) => void;
+  style?: Record<string, unknown>;
+  className?: string;
+  appear?: boolean;
+  timeout?: unknown;
+  unmountOnExit?: boolean;
+  mountOnEnter?: boolean;
+  addEndListener?: unknown;
+  nodeRef?: unknown;
+  onEntering?: unknown;
+  onExiting?: unknown;
+  easing?: unknown;
+}
+
+/** Ignore Escape close when an active IME composition owns the keystroke. */
+export function isImeBlockedEscape(event: object, reason: string): boolean {
+  if (reason !== "escapeKeyDown") return false;
+  const keyEvent = "nativeEvent" in event
+    ? (event as { nativeEvent: KeyboardEvent }).nativeEvent
+    : event as KeyboardEvent;
+  return desktopImeOwnsKey(keyEvent);
+}
+
+/** Close a Desktop dialog when an idle CJK input source reports physical
+ *  `Escape` as `Process` (which MUI's raw `event.key === "Escape"` misses).
+ *  Ordinary `Escape` is still handled once by MUI `onClose`. */
+export function handleIdleCjkDialogEscape(
+  event: ReactKeyboardEvent<HTMLElement>,
+  onClose: () => void,
+): void {
+  const native = event.nativeEvent;
+  if (event.defaultPrevented || native.defaultPrevented) return;
+  if (event.key === "Escape" || desktopImeOwnsKey(native)) return;
+  if (shortcutKey(native) !== "Escape") return;
+  const dialogNode = owningDialog(event.currentTarget)
+    ?? (typeof event.currentTarget.querySelector === "function"
+      ? event.currentTarget.querySelector<HTMLElement>("[role='dialog'][aria-modal='true']")
+      : null);
+  if (popupOwnsKeys() || !isTopmostDialog(dialogNode)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  onClose();
+}
+
+/** Shared MUI Dialog `slotProps` for Desktop frosted modals: unified glass
+ *  material, backdrop scrim, zero-reflow InstantModalTransition, and idle-CJK
+ *  Escape close parity. */
+export function desktopDialogSlotProps(options?: {
+  paperSx?: Record<string, unknown> | undefined;
+  paperRef?: Ref<HTMLDivElement> | undefined;
+  root?: (Record<string, unknown> & { onKeyDown?: KeyboardEventHandler<HTMLDivElement> | undefined }) | undefined;
+  onClose?: (() => void) | undefined;
+}) {
+  const existingOnKeyDown = options?.root?.onKeyDown;
+  const onClose = options?.onClose;
+  const rootOnKeyDown: KeyboardEventHandler<HTMLDivElement> | undefined =
+    existingOnKeyDown || onClose
+      ? (event): void => {
+        existingOnKeyDown?.(event);
+        if (onClose && !event.isPropagationStopped()) {
+          handleIdleCjkDialogEscape(event, onClose);
+        }
+      }
+      : undefined;
+  const root = options?.root || rootOnKeyDown
+    ? { ...(options?.root), ...(rootOnKeyDown ? { onKeyDown: rootOnKeyDown } : {}) }
+    : undefined;
+  return {
+    ...(root ? { root } : {}),
+    paper: {
+      ...(options?.paperRef ? { ref: options.paperRef } : {}),
+      sx: {
+        ...desktopModalPaperSx(),
+        ...options?.paperSx,
+      },
+    },
+    backdrop: {
+      slots: { transition: InstantModalTransition },
+      sx: desktopModalBackdropSx(),
+    },
+  };
+}
+
+export const InstantModalTransition = forwardRef<
   HTMLElement,
-  {
-    in?: boolean;
-    children: ReactElement<{ ref?: Ref<HTMLElement> }>;
-    onEnter?: () => void;
-    onEntered?: () => void;
-    onExit?: () => void;
-    onExited?: () => void;
-  }
->(function InstantModalTransition(
-  { in: open, children, onEnter, onEntered, onExit, onExited },
-  ref,
-) {
+  InstantModalTransitionProps
+>(function InstantModalTransition(props, ref) {
+  const {
+    in: open,
+    children,
+    onEnter,
+    onEntered,
+    onExit,
+    onExited,
+    appear: _appear,
+    timeout: _timeout,
+    unmountOnExit: _unmountOnExit,
+    mountOnEnter: _mountOnEnter,
+    addEndListener: _addEndListener,
+    nodeRef: _nodeRef,
+    onEntering: _onEntering,
+    onExiting: _onExiting,
+    easing: _easing,
+    ...rest
+  } = props;
   const childRef = children.props.ref;
   const mergedRef = useCallback(
     (node: HTMLElement | null): void => {
@@ -73,7 +185,20 @@ const InstantModalTransition = forwardRef<
       onExited?.();
     }
   }, [open, onEnter, onEntered, onExit, onExited]);
-  return open ? cloneElement(children, { ref: mergedRef }) : null;
+  if (!open) return null;
+  const childOnFocus = children.props.onFocus;
+  const restOnFocus = rest.onFocus;
+  const mergedOnFocus = childOnFocus && restOnFocus
+    ? (event: unknown): void => {
+      restOnFocus(event);
+      childOnFocus(event);
+    }
+    : restOnFocus ?? childOnFocus;
+  return cloneElement(children, {
+    ...rest,
+    ...(mergedOnFocus ? { onFocus: mergedOnFocus } : {}),
+    ref: mergedRef,
+  });
 });
 
 export function DesktopModal({
@@ -103,55 +228,42 @@ export function DesktopModal({
    *  and let the content lay out its own scrolling regions. */
   fill?: boolean;
 }): React.JSX.Element | null {
+  const titleId = useId();
   if (!open) return null;
   return (
     <Dialog
       open={open}
+      aria-labelledby={titleId}
       onClose={(event, reason): void => {
-        if (reason === "escapeKeyDown") {
-          const keyEvent = "nativeEvent" in event
-            ? event.nativeEvent as KeyboardEvent
-            : event as KeyboardEvent;
-          if (isImeKeyEvent(keyEvent)) return;
-        }
+        if (isImeBlockedEscape(event, reason)) return;
         onClose();
       }}
       fullWidth
       maxWidth={false}
       disableScrollLock
       slots={{ transition: InstantModalTransition }}
-      slotProps={{
-        ...(onShortcutKeyDown
-          ? { root: { onKeyDown: onShortcutKeyDown } }
-          : {}),
-        paper: {
-          sx: {
-            ...desktopModalPaperSx(),
-            ...(fill
-              ? {
-                width: "min(1760px, calc(100vw - 48px))",
-                height: "calc(100vh - 48px)",
-                maxWidth: "none",
-                maxHeight: "none",
-                m: 3,
-              }
-              : {
-                width: `min(${width}px, calc(100vw - 64px))`,
-                maxHeight: "min(860px, calc(100vh - 64px))",
-                m: 4,
-              }),
+      slotProps={desktopDialogSlotProps({
+        root: { onKeyDown: onShortcutKeyDown },
+        onClose,
+        paperSx: fill
+          ? {
+            width: "min(1760px, calc(100vw - 48px))",
+            height: "calc(100vh - 48px)",
+            maxWidth: "none",
+            maxHeight: "none",
+            m: 3,
+          }
+          : {
+            width: `min(${width}px, calc(100vw - 64px))`,
+            maxHeight: "min(860px, calc(100vh - 64px))",
+            m: 4,
           },
-        },
-        backdrop: {
-          slots: { transition: InstantModalTransition },
-          sx: desktopModalBackdropSx(),
-        },
-      }}
+      })}
     >
       <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 2.25, py: 1.55 }}>
         {icon}
         <Box sx={{ minWidth: 0 }}>
-          <Typography variant="subtitle1" fontWeight={780}>{title}</Typography>
+          <Typography id={titleId} variant="subtitle1" fontWeight={780}>{title}</Typography>
           {description && <Typography variant="caption" color="text.secondary">{description}</Typography>}
         </Box>
         <Box sx={{ flex: 1 }} />
@@ -177,8 +289,48 @@ export function DesktopModal({
   );
 }
 
-/** A dialog without its own keymap advertises the shared modal grammar. */
+const MODAL_EDITABLE_SELECTOR = [
+  "input:not([type='checkbox']):not([type='radio']):not([type='button']):not([type='submit']):not([type='reset']):not([type='range']):not([type='file']):not([type='color']):not([type='hidden']):not([readonly])",
+  "input[data-vim-readonly]",
+  "textarea:not([readonly])",
+  "textarea[data-vim-readonly]",
+  "[contenteditable='true']",
+].join(", ");
+
+/** A dialog without its own keymap advertises the shared modal grammar,
+ *  adapting to whether the dialog actually has text fields or top tabs. */
 function DesktopModalGrammarBar(): React.JSX.Element {
   const mode = useDesktopModalMode();
-  return <DesktopShortcutBar groups={desktopModalShortcutGroups(mode)} />;
+  const vim = useVimSetting();
+  const barRef = useRef<HTMLDivElement>(null);
+  const [shape, setShape] = useState({ hasTextField: false, tabs: 0 });
+  useEffect(() => {
+    const dialog = barRef.current?.closest("[role='dialog']");
+    if (!dialog) return undefined;
+    const inspect = (): void => {
+      const hasTextField = dialog.querySelector(MODAL_EDITABLE_SELECTOR) !== null;
+      const tabs = dialog.querySelectorAll("[role='tablist'] [role='tab']").length;
+      setShape((prev) =>
+        prev.hasTextField === hasTextField && prev.tabs === tabs
+          ? prev
+          : { hasTextField, tabs }
+      );
+    };
+    inspect();
+    const observer = new MutationObserver(inspect);
+    observer.observe(dialog, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <Box ref={barRef} sx={{ flexShrink: 0 }}>
+      <DesktopShortcutBar
+        groups={desktopModalShortcutGroups(mode, {
+          tabs: shape.tabs,
+          hasTextField: shape.hasTextField,
+          vim,
+          includeLeader: true,
+        })}
+      />
+    </Box>
+  );
 }
