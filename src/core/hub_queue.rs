@@ -267,6 +267,19 @@ impl Hub {
             if decision != DrainDecision::Dispatch {
                 return;
             }
+            // A retried explicit send carries no caller of its own: it must
+            // not take a row out from under the terminal editing it. A refused
+            // dispatch requeues the row under a new id, which that editor reads
+            // as a sent message and parks its buffer as a duplicate draft. The
+            // retry resumes once the edit is saved or abandoned.
+            if manual
+                && trigger.is_none()
+                && s.queue
+                    .first()
+                    .is_some_and(|head| s.editing.as_deref() == Some(head.id.as_str()))
+            {
+                return;
+            }
             if s.queue.first().is_some_and(|head| {
                 self.is_row_withdrawing(session_id, &head.id)
                     || head

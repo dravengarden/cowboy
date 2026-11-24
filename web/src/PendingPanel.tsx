@@ -24,7 +24,7 @@ import { CallNoticeLine, pendingCallNotice } from "./CallNoticeLine";
 import { QueuedAttachmentChips } from "./QueuedAttachmentChips";
 import { useTouchComposer } from "./ComposerTextarea";
 import { pendingEditLiveText, pendingPanelDisclosureDecision, pendingRowVisibleText } from "./pendingEditLifecycle";
-import { clearPendingEdit, getPendingEdit, recoverPendingEditId, subscribePendingEditRestore, setPendingEdit } from "./pendingEditStore";
+import { beginPendingEditEncoding, clearPendingEdit, getPendingEdit, recoverPendingEditId, subscribePendingEditRestore, setPendingEdit } from "./pendingEditStore";
 import { isImeKeyEvent } from "./imeKey";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
@@ -2284,6 +2284,7 @@ export function PendingRow({
           // for raster encoding first unmounts the textarea outside UIKit's
           // activation window and loses the keyboard/selection.
           const pending = images.map((file) => pendingImageAttachment(file));
+          const settleRecord = beginPendingEditEncoding(sessionId, kind, message.id, pending);
           pending.forEach(registerInlineAttachment);
           setEditAttachments((previous) => [...previous, ...pending]);
           activeEditEditor()?.insertImages(pending, options.selection);
@@ -2296,6 +2297,7 @@ export function PendingRow({
               result.status === "fulfilled" ? [result.value] : []
             );
             completed.forEach(registerInlineAttachment);
+            settleRecord(completed);
             const completedById = new Map(
               completed.map((item) => [item.id, item]),
             );
@@ -2317,7 +2319,9 @@ export function PendingRow({
         if (rest.length === 0) return;
         files = rest;
       }
-      void filesToAttachments(files).then((added) => {
+      const settleFiles = beginPendingEditEncoding(sessionId, kind, message.id, []);
+      void filesToAttachments(files).catch((): Attachment[] => []).then((added) => {
+        settleFiles(added);
         if (added.length === 0) return;
         // Mirror addFiles: register bytes BEFORE inserting the token so the
         // inline decoration resolves synchronously, keep editAttachments as the
@@ -2338,9 +2342,11 @@ export function PendingRow({
     };
     const pasteEditClipboardImages = (
       request: NativeClipboardImagePasteRequest,
-    ): Promise<void> =>
-      runNativeClipboardImagePaste(request, {
+    ): Promise<void> => {
+      const settleRecord: ((completed: readonly Attachment[]) => void)[] = [];
+      return runNativeClipboardImagePaste(request, {
         stage: (pending, selection): void => {
+          settleRecord.push(beginPendingEditEncoding(sessionId, kind, message.id, pending));
           pending.forEach(registerInlineAttachment);
           const editor = activeEditEditor();
           flushSync(() => {
@@ -2350,6 +2356,7 @@ export function PendingRow({
         },
         settle: (pending, completed): void => {
           completed.forEach(registerInlineAttachment);
+          settleRecord.forEach((settle) => settle(completed));
           const completedById = new Map(
             completed.map((attachment) => [attachment.id, attachment]),
           );
@@ -2361,7 +2368,11 @@ export function PendingRow({
           );
           editor?.refreshImages();
         },
+      }).finally(() => {
+        // A read that failed before settling leaves nothing to wait for.
+        settleRecord.forEach((settle) => settle([]));
       });
+    };
     // Editing reuses the composer surface, but Desktop treats it as a transaction:
     // Mod+S saves and Esc asks before throwing away the local buffer.
     const desktopEditBar = (

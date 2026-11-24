@@ -827,6 +827,44 @@ async fn a_held_send_promotes_the_row_without_taking_it_out() {
     assert!(!hub.promote_queued("held", "missing", &person));
 }
 
+// A retried explicit send has no caller of its own and must not take the row
+// out from under the terminal editing it: a refused dispatch would requeue it
+// under a new id, which that editor reads as sent and parks as a draft.
+#[tokio::test]
+async fn a_retried_explicit_send_waits_for_the_edit_of_its_row() {
+    let hub = hub_with_session("edit-retry");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    hub.set_dispatch_tx(tx);
+    hub.set_status("edit-retry", Status::Running, None);
+    hub.set_paused("edit-retry", true);
+    let person = crate::prompt_origin::RequestCaller::Person;
+    for (text, cmid) in [("head", "c-head"), ("next", "c-next")] {
+        hub.submit(
+            "edit-retry",
+            text.into(),
+            vec![],
+            Some(cmid.into()),
+            &person,
+        );
+    }
+    let ids: Vec<String> = hub.inner.sessions.lock()["edit-retry"]
+        .queue
+        .iter()
+        .map(|row| row.id.clone())
+        .collect();
+    hub.set_queue_editing("edit-retry", Some(ids[0].clone()));
+    hub.retry_explicit_wait("edit-retry");
+    assert!(rx.try_recv().is_err(), "the edited head stays queued");
+    assert_eq!(hub.session_info("edit-retry").unwrap().queue_count, 2);
+    // Editing another row leaves the explicitly sent head free to go.
+    hub.set_queue_editing("edit-retry", Some(ids[1].clone()));
+    hub.retry_explicit_wait("edit-retry");
+    let req = rx
+        .try_recv()
+        .expect("an edit of another row does not hold the head");
+    assert_eq!(req.text, "head");
+}
+
 #[tokio::test]
 async fn pending_context_holds_schedules_drafts_and_manual_queue_until_cleared() {
     let hub = hub_with_session("context-hold");

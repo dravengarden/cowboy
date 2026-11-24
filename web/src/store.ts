@@ -96,10 +96,9 @@ import {
   retryDraftRestore,
 } from "./draftStore";
 import { announceDraftChanges } from "./documents/store";
+import { bindPendingEditRecovery, recoverPendingEditsFrom } from "./pendingEditRecovery";
 import {
-  claimOrphanedPendingEdits,
   attachPendingEditDatabase,
-  finishOrphanedPendingEdit,
   pendingEditsDurable,
   prunePendingEdits,
   retryPendingEditRestore,
@@ -4635,6 +4634,16 @@ export async function returnFailedMessage(sessionId: string, cmid: string): Prom
   await discardMessage(sessionId, cmid);
 }
 
+bindPendingEditRecovery({
+  pendingMutationIds: (sessionId) => productSessionAbandoned
+    ? undefined
+    : qClients.get(sessionId)?.pending().map((mutation) => mutation.id),
+  park: (sessionId, record) => qAdd("drafts", sessionId, record.text, record.attachments, {
+    origin: "composer",
+    cmid: record.recoveryCmid,
+  }),
+});
+
 /** Fold a queue `sync_patch` for one session: apply (force on resync), clear the
  *  status/timers of any cmid the server confirmed, and cross-signal the chat
  *  overlay (a queue cmid landing also drops a wrong-guessed optimistic bubble). */
@@ -4679,32 +4688,7 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
     store.confirm(settled);
   }
   store.applyPatch(snapshotPatch(version, next, confirmed), { force: resync });
-  const orphaned = acceptsValue
-    ? claimOrphanedPendingEdits(
-      sessionId,
-      new Set(next.queue.map((row) => row.id)),
-      new Set(next.drafts.map((row) => row.id)),
-    )
-    : [];
-  for (const record of orphaned) {
-    const alreadyRecovered = next.drafts.some((row) =>
-      row.cmid === record.recoveryCmid
-    ) || store.pending().some((mutation) => mutation.id === record.recoveryCmid);
-    if (alreadyRecovered) {
-      finishOrphanedPendingEdit(record, true);
-      continue;
-    }
-    if (!record.text.trim() && record.attachments.length === 0) {
-      finishOrphanedPendingEdit(record, false);
-      continue;
-    }
-    void qAdd("drafts", sessionId, record.text, record.attachments, {
-      origin: "composer",
-      cmid: record.recoveryCmid,
-    }).then(() => finishOrphanedPendingEdit(record, true)).catch(() => {
-      finishOrphanedPendingEdit(record, false);
-    });
-  }
+  if (acceptsValue) recoverPendingEditsFrom(sessionId, next);
   const delivered = deliveryConfirmations(confirmed, store.pending());
   for (const cmid of delivered) {
     if (qStatus.has(cmid)) {

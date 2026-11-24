@@ -10,6 +10,8 @@
 import {
   type Attachment,
   dropOrphanImageTokens,
+  imageTokensInText,
+  promoteUnplacedImageTokens,
 } from "./attachments";
 import { mergeRestoredDraft } from "./draftRestore";
 import type { ProductCache, ProductCacheScope } from "./productSyncDatabase";
@@ -43,6 +45,19 @@ const PERSIST_DEBOUNCE_MS = 400;
 const records = new Map<string, PendingEditRecord>();
 const dirty = new Set<string>();
 const recovering = new Set<string>();
+// Records whose localStorage mirror this tab wrote or read. Every tab of the
+// origin shares that storage: a mirror that vanished while this tab held no
+// newer typing was retired by another tab (saved, discarded or recovered).
+const mirrored = new Set<string>();
+// Attachment encodes a row editor started for a record, which may outlive the
+// editor: another terminal can send the row and unmount it mid-encode.
+interface PendingEncodes {
+  batches: number;
+  /** Placeholders whose inline tokens the record keeps until they settle. */
+  placeholders: Set<string>;
+}
+const encodes = new Map<string, PendingEncodes>();
+const encodeListeners = new Set<(sessionId: string) => void>();
 let flushTimer: ReturnType<typeof setTimeout> | undefined;
 
 // Attachment bytes live in the dataset-scoped IndexedDB, one record per
@@ -235,6 +250,7 @@ function hydrate(): void {
         if (parsed !== null) {
           const recovered = recordKey(parsed.sessionId, parsed.kind, parsed.id);
           records.set(recovered, parsed);
+          mirrored.add(recovered);
           if (promised) {
             awaitingDatabase.set(recovered, parsed.text);
             databaseOwners.add(recovered);
@@ -264,6 +280,7 @@ function persist(key: string): void {
   const storageKey = KEY_PREFIX + key;
   if (record === undefined) {
     awaitingDatabase.delete(key);
+    mirrored.delete(key);
     try {
       local?.removeItem(storageKey);
     } catch {
@@ -284,6 +301,7 @@ function persist(key: string): void {
         storageKey,
         JSON.stringify({ ...record, attachments: [], attachmentsInDatabase: true }),
       );
+      if (local) mirrored.add(key);
     } catch {
       // The previous mirror and the database record still hold the edit.
     }
@@ -302,6 +320,7 @@ function persistLegacy(key: string): void {
   const storageKey = KEY_PREFIX + key;
   try {
     local.setItem(storageKey, JSON.stringify(record));
+    mirrored.add(key);
   } catch {
     // Large embedded images can exceed the browser quota. Keep the irreplaceable
     // text and strip now-orphaned inline-image tokens; files can be reattached.
@@ -314,6 +333,7 @@ function persistLegacy(key: string): void {
           attachments: [],
         }),
       );
+      mirrored.add(key);
     } catch {
       // The mounted editor and in-memory mirror remain the last-resort source.
     }
@@ -491,6 +511,11 @@ export function setPendingEdit(input: {
   // The row editor opened on an edit whose bytes are still promised holds
   // their tokens but not their attachments yet. Those tokens are not orphans.
   const promised = awaitingDatabase.has(key);
+  // A placeholder still encoding keeps its token: the store settles its bytes
+  // into this record even if the editor unmounts first.
+  for (const placeholder of encodes.get(key)?.placeholders ?? []) {
+    attachmentIds.add(placeholder);
+  }
   records.set(key, {
     sessionId: input.sessionId,
     kind: input.kind,
@@ -563,6 +588,13 @@ export function claimOrphanedPendingEdits(
     // Parking it now would park it without its images. A later queue patch
     // claims it once the bytes are back.
     if (awaitingDatabase.has(key)) continue;
+    // An image still encoding settles into the record first; the settlement
+    // asks for this claim again.
+    if (encodes.has(key)) continue;
+    if (retiredByAnotherTab(key)) {
+      forgetLocally(key);
+      continue;
+    }
     const ids = record.kind === "queued" ? queueIds : draftIds;
     if (ids.has(record.id)) continue;
     recovering.add(key);
@@ -587,6 +619,119 @@ export function prunePendingEdits(liveSessionIds: ReadonlySet<string>): void {
     dirty.delete(key);
     recovering.delete(key);
     awaitingDatabase.delete(key);
+    encodes.delete(key);
     persist(key);
   }
+}
+
+/** Whether another tab retired this record: its mirror is gone although this
+ * tab wrote or read it and holds no unflushed typing of its own. Recovering it
+ * again would recreate a draft the user may already have sent or deleted. */
+function retiredByAnotherTab(key: string): boolean {
+  if (dirty.has(key) || !mirrored.has(key)) return false;
+  const local = storage();
+  if (local === null) return false;
+  try {
+    return local.getItem(KEY_PREFIX + key) === null;
+  } catch {
+    return false;
+  }
+}
+
+/** Drop a record another tab retired. That tab already removed the mirror and
+ * rewrote the attachment record, so nothing is written back from here. */
+function forgetLocally(key: string): void {
+  records.delete(key);
+  dirty.delete(key);
+  recovering.delete(key);
+  mirrored.delete(key);
+  awaitingDatabase.delete(key);
+  databaseOwners.delete(key);
+}
+
+if (typeof globalThis.addEventListener === "function") {
+  globalThis.addEventListener("storage", (event: StorageEvent) => {
+    const key = event.key;
+    if (key === null || !key.startsWith(KEY_PREFIX) || event.newValue !== null) return;
+    const recordId = key.slice(KEY_PREFIX.length);
+    if (records.has(recordId) && retiredByAnotherTab(recordId)) forgetLocally(recordId);
+  });
+}
+
+/** A row editor starts encoding attachments for its edit. `placeholders` are
+ * the pending attachments whose inline tokens it already placed; files that
+ * get their token only once encoded pass none. Call the returned function with
+ * what encoded successfully. When the editor is gone by then (another terminal
+ * sent the row), this settles the bytes into the recovery record itself, so
+ * the parked draft or returned row keeps the image. */
+export function beginPendingEditEncoding(
+  sessionId: string,
+  kind: PendingEditKind,
+  id: string,
+  placeholders: readonly Attachment[],
+): (completed: readonly Attachment[]) => void {
+  const key = recordKey(sessionId, kind, id);
+  const entry = encodes.get(key) ?? { batches: 0, placeholders: new Set<string>() };
+  entry.batches += 1;
+  for (const placeholder of placeholders) entry.placeholders.add(placeholder.id);
+  encodes.set(key, entry);
+  let settled = false;
+  return (completed) => {
+    if (settled) return;
+    settled = true;
+    const current = encodes.get(key);
+    if (current === entry) {
+      for (const placeholder of placeholders) current.placeholders.delete(placeholder.id);
+      current.batches -= 1;
+      if (current.batches <= 0) encodes.delete(key);
+    }
+    settleEncodedAttachments(key, placeholders, completed);
+    if (encodes.has(key)) return;
+    for (const listener of encodeListeners) listener(sessionId);
+  };
+}
+
+function settleEncodedAttachments(
+  key: string,
+  placeholders: readonly Attachment[],
+  completed: readonly Attachment[],
+): void {
+  const record = records.get(key);
+  if (record === undefined) return;
+  const completedIds = new Set(completed.map((attachment) => attachment.id));
+  const tokens = new Set(imageTokensInText(record.text).map((token) => token.id));
+  const held = new Set(record.attachments.map((attachment) => attachment.id));
+  // A placed image counts only while its token survives: the user may have
+  // deleted it meanwhile. An unplaced file is new to the record.
+  const added = completed.filter((attachment) =>
+    !held.has(attachment.id) &&
+    (placeholders.length === 0 || tokens.has(attachment.id))
+  );
+  const failed = new Set(
+    placeholders
+      .map((placeholder) => placeholder.id)
+      .filter((placeholderId) => !completedIds.has(placeholderId)),
+  );
+  const keep = new Set([...tokens].filter((tokenId) => !failed.has(tokenId)));
+  let text = failed.size === 0 ? record.text : dropOrphanImageTokens(record.text, keep);
+  if (placeholders.length === 0) text = promoteUnplacedImageTokens(text, added);
+  if (added.length === 0 && text === record.text) return;
+  records.set(key, {
+    ...record,
+    text,
+    attachments: [...record.attachments, ...added],
+    updatedAt: Date.now(),
+  });
+  schedulePersist(key);
+}
+
+/** Called with a session whose edits finished every attachment encode, so
+ * orphan recovery deferred for them can run against the current queue. */
+export function onPendingEditEncodesSettled(
+  listener: (sessionId: string) => void,
+): () => void {
+  encodeListeners.add(listener);
+  return () => {
+    encodeListeners.delete(listener);
+  };
 }

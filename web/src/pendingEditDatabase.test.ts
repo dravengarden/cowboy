@@ -215,3 +215,62 @@ test("without a database the edit still keeps its text", async () => {
     "    indented  edit tail",
   );
 });
+
+test("an edit another tab already recovered is not recovered again", async () => {
+  // Tabs of one origin share localStorage; each holds its own copy in memory.
+  const storage = fakeStorage();
+  const first = await loadPage(storage);
+  first.setPendingEdit({ ...edit("tabs", "typed once", []), kind: "queued" });
+  first.flushPendingEdits();
+  const second = await loadPage(storage);
+  assertEquals(second.getPendingEdit("tabs", "queued", "row-1")?.text, "typed once");
+
+  const claimed = first.claimOrphanedPendingEdits("tabs", new Set(), new Set());
+  assertEquals(claimed.length, 1);
+  first.finishOrphanedPendingEdit(claimed[0]!, true);
+  // The user may already have sent or deleted that draft: the second tab must
+  // not park it once more when its own queue patch arrives later.
+  assertEquals(second.claimOrphanedPendingEdits("tabs", new Set(), new Set()), []);
+  assertEquals(second.getPendingEdit("tabs", "queued", "row-1"), null);
+
+  // Typing this tab has not flushed yet is its own and still recovers.
+  second.setPendingEdit({ ...edit("tabs", "typed here", []), kind: "queued" });
+  assertEquals(second.claimOrphanedPendingEdits("tabs", new Set(), new Set()).length, 1);
+});
+
+test("an image still encoding settles into the edit after its editor is gone", async () => {
+  const page = await loadPage(fakeStorage());
+  const placeholder = { ...image("p1"), block: { type: "image" as const, data: "", mimeType: "image/png" }, pending: true };
+  const settledSessions: string[] = [];
+  const stop = page.onPendingEditEncodesSettled((session) => settledSessions.push(session));
+  const settleImage = page.beginPendingEditEncoding("encode", "queued", "row-1", [placeholder]);
+  const text = "caption ![shot](cowboy-att:p1)";
+  page.setPendingEdit({ ...edit("encode", text, [placeholder]), kind: "queued" });
+  // The placeholder keeps its token, and recovery waits for its bytes.
+  assertEquals(page.getPendingEdit("encode", "queued", "row-1")?.text, text);
+  assertEquals(page.claimOrphanedPendingEdits("encode", new Set(), new Set()), []);
+
+  // The row was sent elsewhere and its editor unmounted; the encode finishes.
+  settleImage([image("p1")]);
+  assertEquals(settledSessions, ["encode"]);
+  const claimed = page.claimOrphanedPendingEdits("encode", new Set(), new Set());
+  assertEquals(claimed.length, 1);
+  assertEquals(claimed[0]?.text, text);
+  assertEquals(claimed[0]?.attachments.map((attachment) => attachment.id), ["p1"]);
+  page.finishOrphanedPendingEdit(claimed[0]!, true);
+
+  // A failed encode drops its token instead of parking a broken image.
+  const settleFailure = page.beginPendingEditEncoding("encode", "queued", "row-2", [placeholder]);
+  page.setPendingEdit({ ...edit("encode", text, [placeholder]), kind: "queued", id: "row-2" });
+  settleFailure([]);
+  assertEquals(page.getPendingEdit("encode", "queued", "row-2")?.text.trimEnd(), "caption");
+
+  // A picked file gets its token only once encoded; the record places it.
+  const settleFile = page.beginPendingEditEncoding("encode", "queued", "row-3", []);
+  page.setPendingEdit({ ...edit("encode", "file", []), kind: "queued", id: "row-3" });
+  settleFile([image("f1")]);
+  const file = page.getPendingEdit("encode", "queued", "row-3");
+  assertEquals(file?.attachments.map((attachment) => attachment.id), ["f1"]);
+  assertEquals(file?.text.includes("cowboy-att:f1"), true);
+  stop();
+});

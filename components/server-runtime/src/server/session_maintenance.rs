@@ -137,7 +137,10 @@ fn resource_block(state: &AppState, machine: &str) -> Option<&'static str> {
 
 /// A prompt waiting for its rebooting execution Machine is only retried once
 /// that Machine is connected again; until then the queue is left untouched.
-fn execution_target_connected(state: &AppState, meta: &crate::core::SessionMeta) -> bool {
+pub(crate) fn execution_target_connected(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+) -> bool {
     let Some(record) = &meta.execution_binding else {
         return true;
     };

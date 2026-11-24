@@ -672,23 +672,25 @@ pub fn force_cancel_grace(state: &AppState, session_id: &str) -> std::time::Dura
 }
 
 /// A queued row's Send now. While the session's account parks dispatch (a
-/// rate limit, a block, an unacknowledged effect), the row only moves to the
-/// front and waits there, retried as an explicit send once the account
-/// admits it. Dispatching it would take the row out of the queue just to
-/// requeue it under a new id, which a client editing the row reads as a sent
-/// message and saves the edit as a draft beside the returned original.
-/// Whether the send was held.
+/// rate limit, a block, an unacknowledged effect) or its execution Machine is
+/// not connected, the row only moves to the front and waits there, retried as
+/// an explicit send once the account admits it and the Machine is back.
+/// Dispatching it would take the row out of the queue just to requeue it under
+/// a new id, which a client editing the row reads as a sent message and saves
+/// the edit as a draft beside the returned original. Whether the send was held.
 pub fn request_send_queued(
     state: &Arc<AppState>,
     caller: &crate::prompt_origin::RequestCaller,
     session_id: &str,
     id: &str,
 ) -> bool {
-    let parked = state
-        .hub
-        .session_info(session_id)
-        .and_then(|info| provider_accounts::controls::parked_reason(&state.accounts, &info.meta));
-    let Some(reason) = parked else {
+    let held = state.hub.session_info(session_id).and_then(|info| {
+        provider_accounts::controls::parked_reason(&state.accounts, &info.meta).or_else(|| {
+            (!session_maintenance::execution_target_connected(state, &info.meta))
+                .then(|| session_maintenance::TARGET_WAIT_REASON.to_owned())
+        })
+    });
+    let Some(reason) = held else {
         state.hub.request_send_queued(session_id, id, caller);
         return false;
     };
