@@ -111,7 +111,9 @@ impl Hub {
                     }
                     m.initiator = None;
                     m.schedule = schedule;
-                    m.id.clone()
+                    let did = m.id.clone();
+                    s.deferred_scheduled_drafts.retain(|d| d != &did);
+                    did
                 }
                 None => {
                     let did = self.next_qid();
@@ -144,6 +146,7 @@ impl Hub {
             match s.drafts.iter_mut().find(|m| m.id == id) {
                 Some(m) if m.schedule.is_some() => {
                     m.schedule = None;
+                    s.deferred_scheduled_drafts.retain(|d| d != id);
                     true
                 }
                 _ => false,
@@ -176,6 +179,15 @@ impl Hub {
             if s.meta.trashed_at_ms.is_some() {
                 return;
             }
+            // Do not fire stale text out from under an active editor. Record the
+            // elapsed timer so releasing the edit fires the updated draft if still due.
+            if s.editing.as_deref() == Some(draft_id) {
+                if !s.deferred_scheduled_drafts.iter().any(|id| id == draft_id) {
+                    s.deferred_scheduled_drafts.push(draft_id.to_owned());
+                }
+                return;
+            }
+            s.deferred_scheduled_drafts.retain(|id| id != draft_id);
             s.drafts
                 .iter()
                 .position(|m| m.id == draft_id)

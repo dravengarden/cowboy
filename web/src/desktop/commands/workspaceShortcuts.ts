@@ -75,8 +75,9 @@ export const DESKTOP_TAB_KEYS = {
  * in a Draft; the two surfaces are never mounted together.
  */
 export const DESKTOP_DOCUMENT_KEYS = {
-  // The cursor to the title, in Vim Normal when Vim is on.
-  title: "T",
+  // The cursor to the title, in Vim Normal when Vim is on (`␣R` mirrors
+  // Session Rename and leaves `␣T` free for Top bar everywhere).
+  title: "R",
   copy: "Y",
   history: "H",
   export: "E",
@@ -85,8 +86,8 @@ export const DESKTOP_DOCUMENT_KEYS = {
 
 /** Root keys whose meaning belongs to the Draft surface. */
 export const DESKTOP_DOCUMENT_COMMANDS: Readonly<Record<string, string>> = {
-  // On a Draft page `␣T` is the title; the Top bar group needs a Session.
-  t: "document.title",
+  // On a Draft page `␣R` is the title (matching Session Rename); `␣T` stays Top bar.
+  r: "document.title",
   y: "document.copyToSession",
   h: "document.history",
   e: "document.export",

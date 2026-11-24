@@ -653,10 +653,9 @@ struct Session {
     /// grace. One hold per session (matches the original single client-side
     /// `editingHold` model).
     editing: Option<String>,
-    /// Lease generation for `editing`. A reconnect reasserts the hold and bumps
-    /// this value, so a delayed cleanup owned by the replaced WebSocket cannot
-    /// release the new connection's edit transaction.
     editing_epoch: u64,
+    /// Scheduled drafts whose fire timer elapsed while held open for editing.
+    deferred_scheduled_drafts: Vec<String>,
     /// True while a queue-dispatched prompt of ours is in flight but the session
     /// hasn't yet flipped back to idle. Guards the dispatch-before-`Busy` window
     /// so a same-tick re-drain can't double-send and overlap turns. Cleared once
@@ -2278,6 +2277,7 @@ impl Hub {
                         drafts,
                         editing: None,
                         editing_epoch: 0,
+                        deferred_scheduled_drafts: Vec::new(),
                         in_flight: (defer_missing_busy && was_busy)
                             || runtime.is_some_and(|worker| {
                                 worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
@@ -3088,6 +3088,7 @@ impl Hub {
                     drafts: Vec::new(),
                     editing: None,
                     editing_epoch: 0,
+                    deferred_scheduled_drafts: Vec::new(),
                     in_flight: false,
                     in_flight_epoch: 0,
                     delivery_hold: None,

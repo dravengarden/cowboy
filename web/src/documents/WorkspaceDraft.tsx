@@ -10,7 +10,7 @@ import {
   DragIndicator,
   MoreVert,
 } from "@mui/icons-material";
-import { type MutableRefObject, useState } from "react";
+import { lazy, type MutableRefObject, Suspense, useState } from "react";
 import { flushSync } from "react-dom";
 import type { SxProps, Theme } from "@mui/material";
 import type { Sortable } from "../useSortable";
@@ -24,6 +24,8 @@ import {
   DraftDestinationModal,
   DraftDestinationSheet,
 } from "../DraftDestinationPicker";
+import { requestOpenSessionDraft } from "../desktop/promptBuffer";
+import { requestPickSession } from "../sessionPickRequest";
 import {
   DraftEditor,
   type DraftFlush,
@@ -35,9 +37,14 @@ import { documentNotice } from "./DocumentNotifications";
 import { recordUndo } from "../undoActions";
 import { copyDraftToSession, moveDraftToSession } from "./transfer";
 
+const DesktopStatusLine = lazy(async () => {
+  const module = await import("../desktop/DesktopStatusLine");
+  return { default: module.DesktopStatusLine };
+});
+
 export type WorkspaceDraftAction = {
   draft: DraftMetadata;
-  action: "menu" | "rename" | "move" | "trash" | "copy" | "send";
+  action: "menu" | "rename" | "move" | "trash" | "copy" | "send" | "use-in-session";
 };
 
 export function WorkspaceDraftRow(
@@ -124,6 +131,7 @@ export function WorkspaceDraftPane(
   },
 ): React.JSX.Element {
   const library = useDraftLibrary();
+  const desktop = useSurfaceProfile().kind === "desktop";
   const draft = library.entries.find((entry) => entry.id === id);
   return (
     <Stack
@@ -135,11 +143,17 @@ export function WorkspaceDraftPane(
         id={id}
         beforeLeave={beforeLeave}
         onCopyToSession={() => draft && onAction({ draft, action: "copy" })}
+        onUseInSession={() => draft && onAction({ draft, action: "use-in-session" })}
         mobileChrome={mobileNavigation && {
           ...mobileNavigation,
           onMenu: () => draft && onAction({ draft, action: "menu" }),
         }}
       />
+      {desktop && (
+        <Suspense fallback={null}>
+          <DesktopStatusLine documentMode />
+        </Suspense>
+      )}
     </Stack>
   );
 }
@@ -238,12 +252,14 @@ export function WorkspaceDraftActions(
       />
     );
   }
-  if (action === "copy" || action === "send") {
+  if (action === "copy" || action === "send" || action === "use-in-session") {
     const Picker = desktop ? DraftDestinationModal : DraftDestinationSheet;
     return (
       <Picker
         title={action === "send"
           ? "Move draft to Session"
+          : action === "use-in-session"
+          ? "Use draft in Session"
           : "Add draft to Session"}
         sourceId=""
         initialFolder={request.draft.parent_id}
@@ -255,17 +271,16 @@ export function WorkspaceDraftActions(
         onPick={(session) =>
           run(async () => {
             if (action === "copy") {
-              return copyDraftToSession(
-                request.draft.id,
-                session.id,
-                session.title,
-              );
+              await copyDraftToSession(request.draft.id, session.id, session.title);
+              return;
             }
-            await moveDraftToSession(
-              request.draft.id,
-              session.id,
-              session.title,
-            );
+            if (action === "use-in-session") {
+              const { cmid } = await copyDraftToSession(request.draft.id, session.id, session.title);
+              requestOpenSessionDraft(session.id, { cmid });
+              requestPickSession(session.id, session);
+              return;
+            }
+            await moveDraftToSession(request.draft.id, session.id, session.title);
             if (activeId === request.draft.id) onRemoved();
           })}
       />

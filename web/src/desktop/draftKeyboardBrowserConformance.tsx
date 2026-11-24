@@ -97,7 +97,7 @@ export async function checkDraftKeyboard(): Promise<string> {
             borderless
             vim={false}
           />
-          {kind === "document"
+        {kind === "document"
             ? (
               <DesktopDraftToolbar
                 fallback={null}
@@ -122,6 +122,7 @@ export async function checkDraftKeyboard(): Promise<string> {
                 onSave={save}
                 onAttach={() => calls.push("attach")}
                 onCopy={() => calls.push("copy")}
+                onUseInSession={() => calls.push("use-in-session")}
                 onHistory={() => calls.push("history")}
                 onTitle={() => calls.push("title")}
                 onExport={() => calls.push("export")}
@@ -232,6 +233,11 @@ export async function checkDraftKeyboard(): Promise<string> {
           calls.at(-1) === "submit" && calls.length === before + 1,
           `${kind}: Mod+Enter runs the unified primary action`,
         );
+      } else if (kind === "document") {
+        check(
+          calls.at(-1) === "use-in-session" && calls.length === before + 1,
+          `${kind}: Mod+Enter opens Use in Session destination picker`,
+        );
       } else {
         check(
           calls.length === before,
@@ -304,10 +310,10 @@ export async function checkDraftKeyboard(): Promise<string> {
         key("u", "KeyU");
         key("w", "KeyW");
         check(calls.at(-1) === "width", "␣UW toggles readable width");
-        // `␣T` puts the cursor on the title.
+        // `␣R` puts the cursor on the title (matching Session Rename).
         prefix();
-        key("t", "KeyT");
-        check(calls.at(-1) === "title", "␣T goes to the title");
+        key("r", "KeyR");
+        check(calls.at(-1) === "title", "␣R goes to the title");
         prefix();
         key("m", "KeyM");
         await tick();
@@ -354,8 +360,8 @@ export async function checkDraftKeyboard(): Promise<string> {
               (svg) => svg.getClientRects().length > 0,
             )!;
             check(
-              Math.abs(icon.getBoundingClientRect().width - 1.25 * font) < 1,
-              "Draft icon tracks global root font",
+              Math.abs(icon.getBoundingClientRect().width - 1.125 * font) < 1,
+              "Draft icon tracks shared Desktop toolbar root font",
             );
             const sample = container.querySelector<HTMLElement>(
               "[data-size-fixture]",

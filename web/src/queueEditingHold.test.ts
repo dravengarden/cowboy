@@ -4,9 +4,11 @@ import type { Inbound } from "./protocol.ts";
 import {
   getQueueEditHoldId,
   getQueueEditHoldStatus,
+  getRemoteQueueEditing,
   markQueueEditHoldsUnconfirmed,
   replayQueueEditHolds,
   setQueueEditHold,
+  syncRemoteQueueEditing,
 } from "./queueEditingHold.ts";
 
 test("queue edit hold tracks offline, reconnect replay, and release", () => {
@@ -44,4 +46,16 @@ test("queue edit hold tracks offline, reconnect replay, and release", () => {
 
   replayQueueEditHolds(send);
   assertEquals(sent.length, 3);
+});
+
+test("remote editing broadcast updates status and confirms local hold", () => {
+  const send = (): boolean => false;
+  setQueueEditHold("s2", "q-9", send);
+  assertEquals(getQueueEditHoldStatus("s2"), "unconfirmed");
+  syncRemoteQueueEditing("s2", "q-9");
+  assertEquals(getRemoteQueueEditing("s2"), "q-9");
+  assertEquals(getQueueEditHoldStatus("s2"), "confirmed");
+  syncRemoteQueueEditing("s2", null);
+  assertEquals(getRemoteQueueEditing("s2"), null);
+  setQueueEditHold("s2", null, () => true);
 });

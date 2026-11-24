@@ -156,10 +156,10 @@ try {
   ];
   for (const [name, back] of ways) {
     await press("k", "KeyK", 75, mac ? 4 : 1);
-    await press("t", "KeyT", 84);
+    await press("r", "KeyR", 82);
     await waitFor(
       `document.activeElement === ${titleInput} && ${titleInput}.dataset.vimInputMode === 'normal'`,
-      `␣T puts a Normal cursor on the title (before ${name})`,
+      `␣R puts a Normal cursor on the title (before ${name})`,
     );
     await waitFor("document.querySelector(\"[data-draft-title-hint='normal']\")", "the title names its way back");
     if (name === "j") {

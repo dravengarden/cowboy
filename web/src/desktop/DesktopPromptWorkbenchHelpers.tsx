@@ -20,6 +20,7 @@ import { fireLabel } from "../scheduleTime";
 import type { SessionContext } from "../sessionContext";
 import { ConfirmSheet } from "../Sheet";
 import { notify, type QueuedMessage } from "../store";
+import { useRemoteQueueEditing } from "../queueEditingHold";
 import { recoverPendingEditId } from "../pendingEditStore";
 import { DesktopComposerToolbar } from "./DesktopComposerToolbar";
 import {
@@ -35,6 +36,7 @@ import type { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DESKTOP_FOCUS_NEW_PROMPT_EVENT } from "./editorInsert";
 import {
   adjacentSendOrderBuffer,
+  consumePendingOpenSessionDraft,
   DESKTOP_NEW_SESSION_DRAFT_EVENT,
   DESKTOP_OPEN_SESSION_DRAFT_EVENT,
   DESKTOP_TOGGLE_EMPTY_DRAFTS_EVENT,
@@ -79,7 +81,10 @@ export function DesktopPendingPanels({
   onEditRow: (kind: "queued" | "draft", msg: QueuedMessage, entryMode: "insert" | "normal") => void;
   onNewDraft: () => void;
 }): React.JSX.Element | null {
+  const remoteEditing = useRemoteQueueEditing(sessionId);
   if (queue.length === 0 && drafts.length === 0 && !emptyDraftOpen) return null;
+  const queueAutoDrainHeld = activeBuffer.kind === "queued" ||
+    Boolean(remoteEditing && queue.some((m) => m.id === remoteEditing));
   return (
     <Box data-composer-stack-slot="pending" sx={{ flexShrink: 0, minHeight: 0 }}>
       {queue.length > 0 && (
@@ -93,7 +98,7 @@ export function DesktopPendingPanels({
           nextAgentContext={nextAgentContext}
           commands={commands}
           desktopActiveEditId={activeBuffer.kind === "queued" ? resolvedRowId : null}
-          desktopEditingHeld={activeBuffer.kind === "queued"}
+          desktopEditingHeld={queueAutoDrainHeld}
           desktopPreferredFocusId={preferredQueueFocus}
           onDesktopEditRow={(msg, entryMode) => onEditRow("queued", msg, entryMode)}
         />
@@ -175,6 +180,19 @@ export function useWorkbenchEvents({
       });
     }
   }, [activeBuffer.kind, drafts, queue, sessionId, setActiveBuffer]);
+
+  useEffect(() => {
+    const queuedOpen = consumePendingOpenSessionDraft(sessionId);
+    if (queuedOpen) {
+      openBuffer({
+        kind: "draft",
+        id: queuedOpen.id ?? "",
+        ...(queuedOpen.cmid ? { cmid: queuedOpen.cmid } : {}),
+        origin: "new",
+        entryMode: "normal",
+      });
+    }
+  }, [openBuffer, sessionId]);
 
   useEffect(() => {
     const el = composerPaperRef.current;

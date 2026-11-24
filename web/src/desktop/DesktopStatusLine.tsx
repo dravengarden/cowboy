@@ -35,9 +35,11 @@ import { useDesktopReviewShown } from "./review/desktopWorkView";
 import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
+  DESKTOP_DOCUMENT_KEYS,
   DESKTOP_RESIZE_HINT,
   DESKTOP_APPROVAL_SHORTCUT,
   DESKTOP_SHORTCUTS,
+  desktopWorkspaceSequence,
 } from "./commands/workspaceShortcuts";
 
 function Segment({
@@ -206,13 +208,14 @@ const REVIEW_DOCUMENT_HINTS: RegionHint[] = [
 
 function regionHints(
   region: string | null,
-  status: Status,
+  status: Status | undefined,
   projection: "history" | "explore",
   sourceMode: boolean,
   live: boolean,
   vim: boolean,
   topBar: readonly RegionHint[],
   promptStatus: DesktopPromptStatus,
+  documentMode: boolean,
 ): RegionHint[] {
   switch (region) {
     case "topbar.controls":
@@ -290,6 +293,19 @@ function regionHints(
     case "review.document":
       return REVIEW_DOCUMENT_HINTS;
     case "prompt.composer": {
+      if (documentMode) {
+        return [
+          ...(vim ? [{ keys: "Esc", label: "Normal" }] : []),
+          { keys: "Mod+Enter", label: "Use in Session…" },
+          { keys: "Mod+S", label: "Save" },
+          { keys: desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.title), label: "Title" },
+          { keys: desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.copy), label: "Copy" },
+          {
+            keys: DESKTOP_SHORTCUTS.toggleSourceMode,
+            label: sourceMode ? "Live preview" : "Source",
+          },
+        ];
+      }
       if (promptStatus.kind === "queued") {
         return [
           { keys: "Esc", label: promptStatus.dirty && vim ? "Normal" : "Close" },
@@ -342,9 +358,11 @@ function statusPaneLabel(
   region: string | null,
   pane: string,
   reviewShown: boolean,
+  documentMode: boolean,
 ): string {
   if (resizing) return "layout";
   if (region === "topbar.controls") return "topbar";
+  if (documentMode && pane === "prompt") return "draft";
   // The work pane names the view it shows.
   return pane === "conversation" && reviewShown ? "review" : pane;
 }
@@ -435,28 +453,30 @@ function promptBufferBadge(
 export const DesktopStatusLine = memo(function DesktopStatusLine({
   sessionId,
   status,
+  documentMode = false,
 }: {
-  sessionId: string;
-  status: Status;
+  sessionId?: string | undefined;
+  status?: Status | undefined;
+  documentMode?: boolean | undefined;
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
   const commands = useDesktopCommandActions();
   const { focusedPane, focusedRegion, mode } = workspace;
   const { topBarHints, hasApprovalChoice, hasSessionItems } = useStatusLineSubscriptions(focusedRegion);
   const promptStatus = useDesktopPromptStatus();
-  const bufferBadge = promptBufferBadge(promptStatus);
+  const bufferBadge = documentMode ? null : promptBufferBadge(promptStatus);
   const vimEnabled = useVimSetting();
   const sourceMode = useComposerSourceMode();
   const vimMode = useVimMode();
   const ime = useImeStatus();
   const macro = useVimMacroRecording();
   const reviewShown = useDesktopReviewShown();
-  const projection = useExploreSessionState(sessionId).projection;
+  const projection = useExploreSessionState(sessionId ?? "").projection;
   const rawSync = useSyncStatus();
   const held = useHeldDeliveries();
   // Held rows of this pane's session already show their failure in place;
   // the segment points only at the ones the user is not looking at.
-  const sync = withHeld(rawSync, attentionCount(held.sessions, sessionId, NO_ACKNOWLEDGED));
+  const sync = withHeld(rawSync, attentionCount(held.sessions, sessionId ?? "", NO_ACKNOWLEDGED));
   const syncLive = sync.phase === "live" && sync.outbox.held === 0;
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -520,6 +540,7 @@ export const DesktopStatusLine = memo(function DesktopStatusLine({
       vimEnabled,
       topBarHints,
       promptStatus,
+      documentMode,
     ),
     // Window motion works from every region (FOCUS.md "Window motion").
     ...(focusedRegion ? [{ keys: "Ctrl+H/J/K/L", label: "Window" }] : []),
@@ -553,7 +574,7 @@ export const DesktopStatusLine = memo(function DesktopStatusLine({
       { keys: "Esc", label: "Cancel", availability: "available" },
     ]
     : ordinaryHints;
-  const paneLabel = statusPaneLabel(resizingLayout, focusedRegion, focusedPane, reviewShown);
+  const paneLabel = statusPaneLabel(resizingLayout, focusedRegion, focusedPane, reviewShown, documentMode);
   const regionLabel = workspace.selectedSplitter ?? focusedRegion;
 
   return (
@@ -651,7 +672,7 @@ export const DesktopStatusLine = memo(function DesktopStatusLine({
         divider={<Divider orientation="vertical" flexItem />}
         sx={{ flexShrink: 0 }}
       >
-        <Segment label={status.toUpperCase()} tooltip="Session status" mono />
+      {status && <Segment label={status.toUpperCase()} tooltip="Session status" mono />}
         <Segment
           label={
             <Stack

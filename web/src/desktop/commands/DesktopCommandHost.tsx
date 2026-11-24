@@ -216,7 +216,7 @@ export function DesktopCommandHost({
       run: openUndoHistory,
     },
     {
-      // A Draft's name is its title: `␣T` (document.title) goes there.
+      // A Draft's name is its title: `␣R` (document.title) goes there when a Draft is open.
       id: "item.rename",
       title: "Rename Session",
       description: "Rename the current Session",

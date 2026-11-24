@@ -14,6 +14,7 @@ export interface QueueValue<R extends QueueItem = QueueItem> {
   readonly queue: readonly R[];
   readonly drafts: readonly R[];
   readonly inFlight: readonly R[];
+  readonly editing?: string | null;
 }
 
 export interface DraftActivation<R extends QueueItem = QueueItem> {

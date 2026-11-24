@@ -201,7 +201,7 @@ import {
   SOCKET_UPGRADE_TIMEOUT_MS,
 } from "./socketGuards.ts";
 export { useQueueEditHoldStatus } from "./queueEditingHold";
-import { markQueueEditHoldsUnconfirmed, replayQueueEditHolds, setQueueEditHold } from "./queueEditingHold";
+import { markQueueEditHoldsUnconfirmed, replayQueueEditHolds, setQueueEditHold, syncRemoteQueueEditing } from "./queueEditingHold";
 import { createLivenessWatch } from "./livenessWatch";
 import { createOutageTracker } from "./outageTracker";
 
@@ -4090,6 +4090,7 @@ async function hydrateCachedQueues(): Promise<void> {
 function commitQueue(sessionId: string): void {
   const c = qClients.get(sessionId);
   let view: QValue = c ? c.get() : emptyQueueValue<QueuedMessage>();
+  syncRemoteQueueEditing(sessionId, view.editing);
   const pending = c?.pending() ?? [];
   const previews = queuePreviews.get(sessionId);
   for (const [id, preview] of previews ?? []) {

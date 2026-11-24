@@ -41,6 +41,30 @@ export const DESKTOP_NEW_SESSION_DRAFT_EVENT = "cowboy:desktop-new-session-draft
 export const DESKTOP_PENDING_ROW_EDIT_EVENT = "cowboy:desktop-pending-row-edit";
 export const DESKTOP_OPEN_SESSION_DRAFT_EVENT = "cowboy:desktop-open-session-draft";
 
+const pendingOpenDraftBySession = new Map<string, { id?: string; cmid?: string }>();
+
+/** Queue a session draft to open in the Desktop Prompt canvas as soon as that
+ *  Session's workbench is mounted (and also notify if already mounted). */
+export function requestOpenSessionDraft(
+  sessionId: string,
+  target: { id?: string; cmid?: string },
+): void {
+  pendingOpenDraftBySession.set(sessionId, target);
+  globalThis.dispatchEvent(
+    new CustomEvent(DESKTOP_OPEN_SESSION_DRAFT_EVENT, {
+      detail: { sessionId, ...target },
+    }),
+  );
+}
+
+export function consumePendingOpenSessionDraft(
+  sessionId: string,
+): { id?: string; cmid?: string } | null {
+  const next = pendingOpenDraftBySession.get(sessionId) ?? null;
+  if (next) pendingOpenDraftBySession.delete(sessionId);
+  return next;
+}
+
 const DEFAULT_PROMPT_STATUS: DesktopPromptStatus = {
   kind: "new",
   dirty: false,

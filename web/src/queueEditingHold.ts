@@ -7,10 +7,52 @@ type SendInbound = (cmd: Inbound) => boolean;
 
 const activeHolds = new Map<string, string>();
 const confirmedHolds = new Set<string>();
+const remoteEditingBySession = new Map<string, string>();
 const listeners = new Set<() => void>();
 
 function notifyListeners(): void {
   for (const listener of listeners) listener();
+}
+
+/** Adopt the server's authoritative `editing` id for a session from `queue:<sid>`. */
+export function syncRemoteQueueEditing(
+  sessionId: string,
+  editing: string | null | undefined,
+): void {
+  if (editing === undefined) return;
+  const prev = remoteEditingBySession.get(sessionId) ?? null;
+  let changed = false;
+  if (editing === null) {
+    if (prev !== null) {
+      remoteEditingBySession.delete(sessionId);
+      changed = true;
+    }
+  } else {
+    if (prev !== editing) {
+      remoteEditingBySession.set(sessionId, editing);
+      changed = true;
+    }
+    if (activeHolds.get(sessionId) === editing && !confirmedHolds.has(sessionId)) {
+      confirmedHolds.add(sessionId);
+      changed = true;
+    }
+  }
+  if (changed) notifyListeners();
+}
+
+export function getRemoteQueueEditing(sessionId: string): string | null {
+  return remoteEditingBySession.get(sessionId) ?? null;
+}
+
+export function useRemoteQueueEditing(sessionId: string): string | null {
+  return useSyncExternalStore(
+    (callback) => {
+      listeners.add(callback);
+      return () => listeners.delete(callback);
+    },
+    () => getRemoteQueueEditing(sessionId),
+    () => null,
+  );
 }
 
 export function setQueueEditHold(

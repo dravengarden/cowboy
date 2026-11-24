@@ -180,8 +180,14 @@ impl Hub {
         // Broadcast on the generic optimistic-sync channel as state "queue:<sid>".
         // Confirmed = the cmids in the value, so a client drops its optimistic add
         // the moment its cmid lands here (the cross-terminal reconcile).
+        let editing = self
+            .inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .and_then(|s| s.editing.clone());
         let confirmed = Self::cmids_of(queue, drafts);
-        let value = serde_json::json!({ "queue": queue, "drafts": drafts });
+        let value = serde_json::json!({ "queue": queue, "drafts": drafts, "editing": editing });
         self.sync_emit(&format!("queue:{session_id}"), value, confirmed);
     }
 

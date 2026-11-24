@@ -66,7 +66,11 @@ function usePendingBufferEffects({
   const initialRowRef = useRef(row);
   const vanishedHandledRef = useRef(false);
 
-  const holdId = kind === "queued" && row && row.status === undefined ? row.id : null;
+  const holdId =
+    (kind === "queued" || (kind === "draft" && Boolean(row?.schedule))) &&
+    row && row.status === undefined
+      ? row.id
+      : null;
   useEffect(() => {
     if (holdId === null) return undefined;
     setQueueEditing(sessionId, holdId);
@@ -483,9 +487,9 @@ export function usePendingBufferController({
     saver.cancelTimers();
     const current = rowRef.current;
     if (kind !== "new-draft" && current) clearPendingEdit(sessionId, kind, current.id);
-    if (kind === "queued") setQueueEditing(sessionId, null);
+    if (kind === "queued" || scheduled) setQueueEditing(sessionId, null);
     setDirty(false);
-  }, [kind, saver, sessionId]);
+  }, [kind, saver, scheduled, sessionId]);
 
   return {
     mountSeed,

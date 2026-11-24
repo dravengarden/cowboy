@@ -130,10 +130,11 @@ export interface DraftMobileChrome {
 }
 
 export function DraftEditor(
-  { id, beforeLeave, onCopyToSession, mobileChrome }: {
+  { id, beforeLeave, onCopyToSession, onUseInSession, mobileChrome }: {
     id: string;
     beforeLeave: MutableRefObject<DraftFlush>;
     onCopyToSession: () => void;
+    onUseInSession?: (() => void) | undefined;
     mobileChrome?: DraftMobileChrome | undefined;
   },
 ): React.JSX.Element {
@@ -165,6 +166,7 @@ export function DraftEditor(
       syncError={snapshot.error}
       beforeLeave={beforeLeave}
       onCopyToSession={onCopyToSession}
+      onUseInSession={onUseInSession}
       mobileChrome={mobileChrome}
       onReload={() => setEpoch((n) => n + 1)}
     />
@@ -208,23 +210,13 @@ function exportDraft(
 
 function DraftEditingSession(
   {
-    initial,
-    current,
-    phase,
-    syncError,
-    beforeLeave,
-    onCopyToSession,
-    mobileChrome,
-    onReload,
+    initial, current, phase, syncError, beforeLeave, onCopyToSession,
+    onUseInSession, mobileChrome, onReload,
   }: {
-    initial: DraftDocument;
-    current: DraftDocument;
-    phase: string;
-    syncError: string | null;
-    beforeLeave: MutableRefObject<DraftFlush>;
-    onCopyToSession: () => void;
-    mobileChrome?: DraftMobileChrome | undefined;
-    onReload: () => void;
+    initial: DraftDocument; current: DraftDocument; phase: string;
+    syncError: string | null; beforeLeave: MutableRefObject<DraftFlush>;
+    onCopyToSession: () => void; onUseInSession?: (() => void) | undefined;
+    mobileChrome?: DraftMobileChrome | undefined; onReload: () => void;
   },
 ): React.JSX.Element {
   const editor = useRef<ComposerEditorHandle | null>(null);
@@ -1451,6 +1443,9 @@ function DraftEditingSession(
                 void flush().then(onCopyToSession).catch((e: Error) =>
                   setError(e.message)
                 )}
+              onUseInSession={onUseInSession
+                ? () => void flush().then(onUseInSession).catch((e: Error) => setError(e.message))
+                : undefined}
               onHistory={() => void openHistory()}
               onExport={() =>
                 exportDraft(
