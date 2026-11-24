@@ -544,14 +544,6 @@ pub async fn read_one(
     value["machine_id"] = json!(machine_id);
     value["available"] = json!(true);
     value["signed_in"] = json!(true);
-    // Whether a reset of exactly this resolved binding can be spent now,
-    // and otherwise why not (the Web explains it only where credits exist).
-    value["resets_supported"] = json!(resets_supported.is_ok());
-    if let Err(code) = resets_supported {
-        let code = public_code(code);
-        value["reset_unavailable_reason"] = json!(code);
-        value["reset_unavailable_message"] = json!(error_message(code));
-    }
     let cache = state.usage.native.entry(owner, id.as_str());
     value["refreshing"] = json!(cache.collection.try_lock().is_err());
     // A read neither takes the database admission write lock nor binds a cache
@@ -564,6 +556,20 @@ pub async fn read_one(
     );
     let retry_at_ms = budget.retry_at_ms(now_ms());
     let stopped = budget.next_allowed_ms == i64::MAX;
+    // Whether a reset of exactly this resolved binding can be spent now,
+    // and otherwise why not (the Web explains it only where credits exist).
+    // A failed-closed admission ledger refuses every reset, so none is offered.
+    let resets_supported = if stopped {
+        resets_supported.and(Err("usage_admission_unavailable"))
+    } else {
+        resets_supported
+    };
+    value["resets_supported"] = json!(resets_supported.is_ok());
+    if let Err(code) = resets_supported {
+        let code = public_code(code);
+        value["reset_unavailable_reason"] = json!(code);
+        value["reset_unavailable_message"] = json!(error_message(code));
+    }
     value["usage"] = json!(entry.usage);
     if value["usage"].is_object() {
         value["usage"]["refresh"] = json!({

@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   Button,
   DialogContentText,
+  Stack,
   TextField,
   ToggleButton,
   ToggleButtonGroup,
@@ -256,5 +257,35 @@ export function UsageResetActions({ flow }: { flow: UsageResetFlow }): React.JSX
         />
       </NetworkButton>
     </>
+  );
+}
+
+/** A named account's pending schedule while its reset cannot be spent now
+ * (credits gone, Machine offline): still shown and cancellable. The timer
+ * withdraws it, unspent, if it cannot run when due. */
+export function PendingResetSchedule({ accountId, when, onUsageChanged }: {
+  accountId: string;
+  /** The formatted fire time. */
+  when: string;
+  onUsageChanged: () => Promise<void>;
+}): React.JSX.Element {
+  const [error, setError] = useState<string | null>(null);
+  const cancel = async (): Promise<void> => {
+    setError(null);
+    try {
+      await cancelNearestResetSchedule({ kind: "account", accountId });
+      await onUsageChanged();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not cancel schedule");
+    }
+  };
+  return (
+    <Stack spacing={0.25} data-pending-reset-schedule>
+      <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+        <Typography variant="caption" color="text.secondary">Reset scheduled {when}</Typography>
+        <NetworkButton size="small" networkAction={cancel}>Cancel</NetworkButton>
+      </Stack>
+      {error && <Typography variant="caption" color="error.main">{error}</Typography>}
+    </Stack>
   );
 }

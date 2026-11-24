@@ -184,26 +184,43 @@ The owner may schedule one reset of a named account that can spend a reset now
 cancels; `usage.account_reset_schedule` / `usage.account_reset_cancel` in the
 Agent API). One row per owner and account
 (`provider_account_reset_schedules`) replaces the earlier schedule; the usage
-read reports it as `reset_schedule`. The timer looks every 15 seconds:
+read reports it as `reset_schedule`, and a card shows a pending schedule with
+Cancel even while its reset cannot be spent. Scheduling needs the same
+eligibility as a reset now, including a usage admission ledger that has not
+failed closed. The timer looks every 15 seconds:
 
-- The schedule is bound to the sign-in it was created under (the account's
-  verified identity and admission revision). A new sign-in, a disabled or
-  revoking account, a disabled owner, or a fire more than an hour late (a
-  Controller that was down or rolled back) withdraws it unspent, logged as
-  `cancelled`.
-- It spends the nearest available grant of an observation at most two minutes
-  old; an older one is refreshed through the ordinary budgeted read first.
+- The schedule is bound to the exact sign-in it was created under: the
+  account's verified identity and admission revision and the reset route's own
+  binding (the native login, or the portable sign-in generation). The timer
+  compares it under the account lock after admission, and the dispatch
+  rechecks that binding, so any new sign-in (even to the same identity)
+  withdraws it unspent, while a token rotation keeps it. A disabled or
+  revoking account, a disabled owner (checked again just before the claim), or
+  a fire more than an hour late (a Controller that was down or rolled back,
+  also checked again before the claim) withdraws it too, logged `cancelled`.
+  An owner disabled in the milliseconds between that check and the enqueue is
+  not caught, as for a confirmed reset.
+- It spends the nearest available grant of the admitted binding's successful
+  observation, at most ten minutes old; an observation older than two minutes
+  is refreshed through the ordinary budgeted read first, and without a fresh
+  one the attempt waits a minute (uncounted, bounded by the one-hour cutoff).
 - It is admitted exactly like a confirmed reset (route, account lock, Provider
-  starts). A paced admission moves the next attempt to the named time without
-  counting; any other refusal sent nothing and is retried a minute later, three
-  attempts in all, then logged `failed`.
+  starts). A pacing wait of up to two minutes moves the next attempt to the
+  named time and keeps the Provider held for it; a longer one (an account
+  backoff) releases the hold so other accounts keep polling, and counts as a
+  refusal. A refusal sent nothing and is retried a minute later, three
+  attempts in all, then logged `failed`. An admission dropped before the claim
+  (a shutdown) releases its starts unused.
 - Only after admission is the row deleted under its idempotency key (the
   one-shot claim), before the audit row and the dispatch, so it fires at most
-  once even across a restart. After that it is never retried: an unknown
-  outcome is logged `unknown`, a refusal `failed`.
+  once even across a restart. Without a written `started` audit row nothing is
+  sent (this also holds for a confirmed reset). After the claim it is never
+  retried: an unknown outcome is logged `unknown`, a refusal `failed`. Each
+  claimed spend runs in its own task, so a slow one never delays others.
 
 The action log uses the account's lane (`account-<id>`, trigger `scheduled`).
-A cancellation never stops a reset the timer already claimed.
+A cancellation logs the key of exactly the row it removed and never stops a
+reset the timer already claimed.
 
 Refresh-free usage needs a guarded declaration (`"token_refresh_guard"`):
 `refresh_endpoint_refused` (Codex 3.6.22) or `cli_not_started` (Grok 3.2.21).

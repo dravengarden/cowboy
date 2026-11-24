@@ -24,11 +24,12 @@ async fn assert_account_reset_schedules_contract(store: &Store) {
             .unwrap()
             .is_empty()
     );
-    assert!(
-        !store
+    assert_eq!(
+        store
             .delete_account_reset_schedule(other, account)
             .await
-            .unwrap()
+            .unwrap(),
+        None
     );
     // Not due before its time; due at it.
     assert!(
@@ -119,11 +120,13 @@ async fn assert_account_reset_schedules_contract(store: &Store) {
         .await
         .unwrap();
     assert_eq!(store.account_reset_schedules(owner).await.unwrap().len(), 1);
-    assert!(
+    assert_eq!(
         store
             .delete_account_reset_schedule(owner, account)
             .await
             .unwrap()
+            .as_deref(),
+        Some("key-c")
     );
     assert!(
         store

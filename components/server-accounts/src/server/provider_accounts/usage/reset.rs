@@ -55,6 +55,15 @@ impl Route {
             RouteTarget::Portable { .. } => 1,
         }
     }
+
+    /// The exact sign-in this reset spends from, as the usage cache binds it
+    /// (a native login, or a portable identity, admission and sign-in).
+    fn scope(&self) -> Scope {
+        match &self.target {
+            RouteTarget::Native(target) => Scope::from(target.completion.clone()),
+            RouteTarget::Portable { target, .. } => Scope::Portable(target.scope.clone()),
+        }
+    }
 }
 
 /// The reset binding of exactly this installed release, if it declares
@@ -176,6 +185,8 @@ const BUSY_RETRY_MS: i64 = 5_000;
 struct Refused {
     code: &'static str,
     retry_at_ms: Option<i64>,
+    /// The Provider the limiter now holds for this account, if it does.
+    held: Option<String>,
 }
 
 impl From<&'static str> for Refused {
@@ -183,6 +194,7 @@ impl From<&'static str> for Refused {
         Self {
             code,
             retry_at_ms: None,
+            held: None,
         }
     }
 }
@@ -191,6 +203,7 @@ fn paced(retry_at_ms: i64) -> Refused {
     Refused {
         code: "usage_reset_paced",
         retry_at_ms: Some(retry_at_ms),
+        held: None,
     }
 }
 
@@ -224,7 +237,10 @@ async fn admit(state: &AppState, owner: &str, id: &ProviderAccountId) -> Result<
             if budget.next_allowed_ms == i64::MAX {
                 Refused::from("usage_admission_unavailable")
             } else {
-                paced(budget.next_allowed_ms.max(now))
+                Refused {
+                    held: Some(route.binding.account.clone()),
+                    ..paced(budget.next_allowed_ms.max(now))
+                }
             }
         })?;
     Ok(Admitted {
@@ -505,14 +521,15 @@ impl Trigger {
     }
 }
 
+/// Append one action-log row; whether it was written.
 async fn log(
     store: &crate::store::Store,
     (lane, key, trigger): (&str, &str, Trigger),
     (status, phase): (&str, &str),
     message: &str,
     credit_id: Option<&str>,
-) {
-    let _ = store
+) -> bool {
+    store
         .append_provider_action_log(
             lane,
             trigger.as_str(),
@@ -523,11 +540,14 @@ async fn log(
             Some(key),
             now_ms(),
         )
-        .await;
+        .await
+        .is_ok()
 }
 
 fn refusal(refused: impl Into<Refused>) -> Response {
-    let Refused { code, retry_at_ms } = refused.into();
+    let Refused {
+        code, retry_at_ms, ..
+    } = refused.into();
     let status = match code {
         "account_unavailable" => StatusCode::NOT_FOUND,
         // A 5xx reads as an unknown outcome to the Web client: only a
@@ -564,8 +584,8 @@ fn valid_credit_id(id: &str) -> bool {
 
 /// How one admitted spend ended, after its terminal action-log row.
 enum Spent {
-    /// The pre-dispatch audit row could not be written in time: nothing was
-    /// sent and the Provider start was released unused.
+    /// The pre-dispatch audit row could not be written (in time): nothing
+    /// was sent and the Provider start was released unused.
     NotAudited,
     Done(ResetResult),
     Failed(ResetError),
@@ -590,6 +610,7 @@ async fn spend(
         Trigger::Scheduled => "Scheduled reset attempt started",
     };
     let bound = audit_bound(admitted.expires_at_ms, now_ms());
+    // A failed insert, like a slow one, settles unsent: no spend without it.
     let audited = tokio::time::timeout(
         bound,
         log(
@@ -601,7 +622,7 @@ async fn spend(
         ),
     )
     .await;
-    if audited.is_err() {
+    if !matches!(audited, Ok(true)) {
         admitted
             .permit
             .finish(crate::usage::limiter::Outcome::Unused, now_ms());

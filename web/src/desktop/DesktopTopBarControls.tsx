@@ -81,7 +81,7 @@ import {
 } from "../usageLimits";
 import { UsageLogs } from "../UsageLogs";
 import type { UsageResetTarget } from "../usageApi";
-import { UsageResetActions, UsageResetFields, useUsageResetFlow } from "../UsageResetFlow";
+import { PendingResetSchedule, UsageResetActions, UsageResetFields, useUsageResetFlow } from "../UsageResetFlow";
 import { PluginSlot } from "../pluginHost";
 import { useProviderCatalog } from "../providerCatalog";
 import {
@@ -680,6 +680,8 @@ function DesktopProviderUsage({ account, schedule, onUsageChanged, onRefresh, re
   const usage = account.usage;
   const resetTarget = usageResetTarget(account);
   const resetSchedule = schedule ?? usageCardResetSchedule(account);
+  const creditList = record(usage.rate_limits?.rateLimitResetCredits)?.credits;
+  const hasCreditList = Array.isArray(creditList) && creditList.length > 0;
   const resetUnavailable = usageResetUnavailableMessage(account);
   const manageUrl = usageCardManageUrl(account);
   const [details, setDetails] = useState(false);
@@ -749,6 +751,14 @@ function DesktopProviderUsage({ account, schedule, onUsageChanged, onRefresh, re
       </PluginSlot>
       {resetUnavailable !== undefined && (
         <Typography variant="caption" color="text.secondary" data-reset-unavailable>{resetUnavailable}</Typography>
+      )}
+      {/* The reset list shows it when it can be spent; otherwise here. */}
+      {account.native && resetSchedule && (resetTarget === undefined || !hasCreditList) && (
+        <PendingResetSchedule
+          accountId={account.id}
+          when={fullResetTime(resetSchedule.fire_at_ms / 1000)}
+          onUsageChanged={onUsageChanged}
+        />
       )}
       <Button size="small" aria-expanded={details} onClick={() => setDetails((value) => !value)}
         sx={{ alignSelf: "flex-start" }}>{details ? "Hide details" : "Details"}</Button>

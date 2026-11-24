@@ -2,19 +2,25 @@
 //! persisted intent to spend the account's nearest reset at a chosen time,
 //! through exactly the admission and dispatch of a confirmed reset.
 //!
-//! - It is bound to the sign-in it was created under (the verified identity
-//!   and the account's admission revision). A new sign-in, a disabled or
-//!   revoked account, or a disabled owner withdraws it unspent.
-//! - The timer admits first (route, account lock, Provider starts). A paced
-//!   admission waits without counting; any other refusal sent nothing and is
-//!   retried a minute later, at most [`PREFLIGHT_ATTEMPTS`] times in all.
+//! - It is bound to the exact sign-in it was created under: the verified
+//!   identity, the account's admission revision and the reset route's own
+//!   binding (the native login, or the portable sign-in generation). The
+//!   timer compares it under the account lock after admission, and the
+//!   dispatch rechecks that binding, so any new sign-in, even to the same
+//!   identity, withdraws it unspent; a token rotation does not. So does a
+//!   disabled or revoking account, a disabled owner, or a fire more than
+//!   [`OVERDUE_MS`] late (a Controller that was down or rolled back).
+//! - The timer admits first (route, account lock, Provider starts). A short
+//!   pacing wait only delays it; a long one (an account backoff) releases
+//!   the Provider hold and counts like any other refusal, which sent nothing
+//!   and is retried a minute later, [`PREFLIGHT_ATTEMPTS`] times in all.
+//! - It spends the nearest available grant of the admitted binding's
+//!   successful observation, at most [`FRESH_MS`] old (refreshed through the
+//!   ordinary budgeted read first when older than [`REFRESH_AFTER_MS`]).
 //! - Only then is the row claimed (deleted under its key), before the audit
-//!   row and the dispatch. A crash after the claim leaves the `started` row
-//!   and never fires it again; an unknown outcome is never retried.
-//! - The reset spent is the nearest available grant in a usage observation
-//!   no older than [`FRESH_MS`], read just before admission.
-//! - A schedule overdue by more than [`OVERDUE_MS`] (a Controller that was
-//!   down or rolled back) is withdrawn unspent instead of firing late.
+//!   row and the dispatch: it fires at most once, even across a restart.
+//!   After the claim it is never retried. Until the claim an admitted start
+//!   that is dropped (a shutdown) is released unused.
 use super::*;
 use crate::store::AccountResetSchedule;
 
@@ -24,12 +30,16 @@ const MIN_LEAD_MS: i64 = 60_000;
 const MAX_LEAD_MS: i64 = 366 * 24 * 60 * 60 * 1_000;
 /// A due schedule later than this is withdrawn unspent.
 const OVERDUE_MS: i64 = 60 * 60 * 1_000;
-/// Tries of a due schedule whose admission was refused (not paced).
+/// Tries of a due schedule whose admission was refused (not briefly paced).
 const PREFLIGHT_ATTEMPTS: i32 = 3;
-/// The wait after such a refusal.
+/// The wait after such a refusal, or for a fresh observation.
 const PREFLIGHT_RETRY_MS: i64 = 60_000;
-/// How old the usage observation a schedule picks its grant from may be.
-const FRESH_MS: i64 = 2 * 60 * 1_000;
+/// The longest pacing wait for which a schedule keeps the Provider held.
+const PACED_HOLD_MS: i64 = 2 * 60 * 1_000;
+/// An observation older than this is refreshed before admission.
+const REFRESH_AFTER_MS: i64 = 2 * 60 * 1_000;
+/// The oldest observation a schedule picks its grant from.
+const FRESH_MS: i64 = 10 * 60 * 1_000;
 /// How often the timer looks for due schedules, and at most how many per look.
 const TICK: std::time::Duration = std::time::Duration::from_secs(15);
 const BATCH: i64 = 32;
@@ -40,40 +50,66 @@ pub struct ScheduleRequest {
     pub confirm: String,
 }
 
-/// The sign-in a schedule of this account is bound to: its verified identity
-/// and the registry revision of its last authority change. None without a
-/// verified identity, which no reset may spend from.
-fn authority(owner: &str, account: &crate::store::provider_accounts::Account) -> Option<String> {
+/// The exact sign-in a schedule is bound to: the owner, the account's
+/// verified identity and admission revision, and the reset route's binding.
+/// None without a verified identity, which no reset may spend from.
+fn authority(
+    owner: &str,
+    account: &crate::store::provider_accounts::Account,
+    binding: &Scope,
+) -> Option<String> {
     let identity = account.identity_fingerprint.as_deref()?;
     let bound = (
         owner,
         account.id.as_str(),
         identity,
         account.admission_revision,
+        binding,
     );
     let bytes = serde_json::to_vec(&bound).ok()?;
     Some(format!("sha256:{}", crate::admin::hex_sha256(&bytes)))
 }
 
-/// The owner's available account and its current schedule authority.
-async fn current_authority(
+/// The owner's account, if it is available for a reset.
+async fn available_account(
     store: &crate::store::Store,
     owner: &str,
     id: &ProviderAccountId,
-) -> Result<String, &'static str> {
+) -> Result<crate::store::provider_accounts::Account, &'static str> {
     let registry = store
         .provider_accounts(owner)
         .await
         .map_err(|_| "unavailable")?;
-    let account = registry
+    registry
         .accounts
-        .iter()
+        .into_iter()
         .find(|account| &account.id == id)
-        .ok_or("account_unavailable")?;
-    if !account.available() {
-        return Err("account_unavailable");
+        .filter(crate::store::provider_accounts::Account::available)
+        .ok_or("account_unavailable")
+}
+
+/// Whether the owner may still act: an enabled user, or the local principal
+/// while product authentication is off. Err only for a store failure.
+async fn owner_enabled(state: &AppState, owner: &str) -> Result<bool, ()> {
+    if !state.product_auth_enabled && owner == "local" {
+        return Ok(true);
     }
-    authority(owner, account).ok_or("portable_reset_identity_required")
+    let store = state.store.as_ref().ok_or(())?;
+    match store.user_by_id(owner).await {
+        Ok(user) => Ok(user.is_some_and(|user| user.disabled_at_ms.is_none())),
+        Err(_) => Err(()),
+    }
+}
+
+/// Whether the usage admission ledger failed closed for this route.
+fn admission_stopped(state: &AppState, owner: &str, id: &ProviderAccountId, route: &Route) -> bool {
+    let key = crate::usage::limiter::Limiter::account_key(owner, id.as_str());
+    state
+        .usage
+        .limiter
+        .view(&route.binding.account, &key, now_ms())
+        .next_allowed_ms
+        == i64::MAX
 }
 
 /// The grant a reset would spend in this observation: the collector's
@@ -108,8 +144,8 @@ fn nearest_credit(usage: &Value) -> Option<String> {
 }
 
 /// `PUT /api/provider-accounts/{account_id}/usage/reset/schedule`: spend the
-/// account's nearest reset once at `fire_at_ms` (typed `confirm`, at least a
-/// minute ahead). Only an account whose reset could be spent now may be
+/// account's nearest reset once at `fire_at_ms` (typed `confirm`, one minute
+/// to one year ahead). Only an account whose reset could be spent now may be
 /// scheduled; it replaces the account's earlier schedule.
 pub async fn http_schedule(
     State(state): State<Arc<AppState>>,
@@ -130,14 +166,22 @@ pub async fn http_schedule(
     let Some(store) = state.store.as_ref() else {
         return refusal("unavailable");
     };
-    let authority = match current_authority(store, owner, &id).await {
-        Ok(authority) => authority,
+    let account = match available_account(store, owner, &id).await {
+        Ok(account) => account,
         Err(code) => return refusal(code),
     };
-    // The same eligibility a reset now has (route, release, protocol).
-    if let Err(code) = route(&state, owner, &id).await {
-        return refusal(code);
+    // The same eligibility a reset now has (route, release, protocol,
+    // admission ledger), bound to exactly the route's sign-in.
+    let route = match route(&state, owner, &id).await {
+        Ok(route) => route,
+        Err(code) => return refusal(code),
+    };
+    if admission_stopped(&state, owner, &id, &route) {
+        return refusal("usage_admission_unavailable");
     }
+    let Some(authority) = authority(owner, &account, &route.scope()) else {
+        return refusal("portable_reset_identity_required");
+    };
     let key = new_reset_idempotency_key();
     if store
         .upsert_account_reset_schedule(owner, id.as_str(), request.fire_at_ms, &key, &authority)
@@ -146,10 +190,10 @@ pub async fn http_schedule(
     {
         return refusal("unavailable");
     }
-    let row = (lane(&id), key);
+    let lane = lane(&id);
     log(
         store,
-        (row.0.as_str(), row.1.as_str(), Trigger::Scheduled),
+        (lane.as_str(), key.as_str(), Trigger::Scheduled),
         ("scheduled", "timer"),
         "Reset scheduled",
         None,
@@ -173,19 +217,13 @@ pub async fn http_cancel(
     if let Err(code) = owned(store, owner, &id).await {
         return refusal(code);
     }
-    let existing = match store.account_reset_schedule(owner, id.as_str()).await {
-        Ok(existing) => existing,
-        Err(_) => return refusal("unavailable"),
-    };
     match store
         .delete_account_reset_schedule(owner, id.as_str())
         .await
     {
-        Ok(true) => {
+        // The audit names exactly the row this request removed.
+        Ok(Some(key)) => {
             let lane = lane(&id);
-            let key = existing
-                .map(|schedule| schedule.idempotency_key)
-                .unwrap_or_default();
             log(
                 store,
                 (lane.as_str(), key.as_str(), Trigger::Scheduled),
@@ -197,13 +235,14 @@ pub async fn http_cancel(
             state.hub.broadcast_account_usage_changed(owner);
             StatusCode::NO_CONTENT.into_response()
         }
-        Ok(false) => StatusCode::NO_CONTENT.into_response(),
+        Ok(None) => StatusCode::NO_CONTENT.into_response(),
         Err(_) => refusal("unavailable"),
     }
 }
 
 /// Fire due schedules until the server stops. Schedules live only in the
-/// store, so a restart resumes them and each fires at most once.
+/// store, so a restart resumes them and each fires at most once. A claimed
+/// spend runs in its own task, so a slow one never delays other accounts.
 pub async fn run(state: Arc<AppState>) {
     loop {
         if let Some(store) = state.store.as_ref()
@@ -214,6 +253,31 @@ pub async fn run(state: Arc<AppState>) {
             }
         }
         tokio::time::sleep(TICK).await;
+    }
+}
+
+/// An admitted reset not yet claimed: dropped (an early return, a shutdown)
+/// it releases its Provider starts unused, since nothing was sent.
+struct Unclaimed(Option<Admitted>);
+
+impl Unclaimed {
+    fn route(&self) -> &Route {
+        &self.0.as_ref().expect("admitted until claimed").route
+    }
+
+    /// Hand the admission to the spend once the schedule is claimed.
+    fn claimed(mut self) -> Admitted {
+        self.0.take().expect("admitted until claimed")
+    }
+}
+
+impl Drop for Unclaimed {
+    fn drop(&mut self) {
+        if let Some(admitted) = self.0.take() {
+            admitted
+                .permit
+                .finish(crate::usage::limiter::Outcome::Unused, now_ms());
+        }
     }
 }
 
@@ -235,9 +299,13 @@ impl Due<'_> {
         &self.schedule.idempotency_key
     }
 
-    async fn log(&self, phase: (&str, &str), message: &str, credit_id: Option<&str>) {
+    fn overdue(&self) -> bool {
+        now_ms().saturating_sub(self.schedule.fire_at_ms) > OVERDUE_MS
+    }
+
+    async fn log(&self, phase: (&str, &str), message: &str) {
         let row = (self.lane.as_str(), self.key(), Trigger::Scheduled);
-        log(self.store, row, phase, message, credit_id).await;
+        log(self.store, row, phase, message, None).await;
     }
 
     /// Remove exactly this schedule; true only for the caller that did.
@@ -256,8 +324,22 @@ impl Due<'_> {
     /// Withdraw it unspent, with the reason.
     async fn withdraw(&self, message: &str) {
         if self.claim().await {
-            self.log(("cancelled", "preflight"), message, None).await;
+            self.log(("cancelled", "preflight"), message).await;
         }
+    }
+
+    /// Move its next attempt; a counted one is a refusal that sent nothing.
+    async fn defer(&self, at_ms: i64, counted: bool) -> bool {
+        self.store
+            .defer_account_reset_schedule(
+                self.owner(),
+                self.id.as_str(),
+                self.key(),
+                at_ms,
+                counted,
+            )
+            .await
+            .unwrap_or(false)
     }
 
     /// An admission refusal sent nothing: retry a minute later, a bounded
@@ -265,25 +347,19 @@ impl Due<'_> {
     async fn refused(&self, code: &'static str) {
         if self.schedule.attempt_count.saturating_add(1) >= PREFLIGHT_ATTEMPTS {
             if self.claim().await {
-                self.log(("failed", "preflight"), error_message(code), None)
-                    .await;
+                self.log(("failed", "preflight"), error_message(code)).await;
             }
-            return;
-        }
-        let next = now_ms().saturating_add(PREFLIGHT_RETRY_MS);
-        if self
-            .store
-            .defer_account_reset_schedule(self.owner(), self.id.as_str(), self.key(), next, true)
+        } else if self
+            .defer(now_ms().saturating_add(PREFLIGHT_RETRY_MS), true)
             .await
-            .unwrap_or(false)
         {
-            self.log(("retrying", "preflight"), error_message(code), None)
+            self.log(("retrying", "preflight"), error_message(code))
                 .await;
         }
     }
 
-    /// The account's current usage observation and when it was attempted.
-    async fn observation(&self) -> Option<(i64, Value)> {
+    /// When the account's current usage observation last succeeded.
+    async fn observed_at(&self) -> Option<i64> {
         let resolved = target(self.state, self.owner(), &self.id).await.ok()?;
         let slot = self
             .state
@@ -291,7 +367,19 @@ impl Due<'_> {
             .native
             .entry(self.owner(), self.id.as_str());
         let entry = slot.data.lock().snapshot(&resolved.scope());
-        entry.usage.map(|usage| (entry.last_attempt_at_ms, usage))
+        entry.usage?["observed_at_ms"].as_i64()
+    }
+
+    /// The admitted binding's successful observation, if it is fresh.
+    fn fresh_observation(&self, binding: &Scope) -> Option<Value> {
+        let slot = self
+            .state
+            .usage
+            .native
+            .entry(self.owner(), self.id.as_str());
+        let usage = slot.data.lock().snapshot(binding).usage?;
+        let observed = usage["observed_at_ms"].as_i64()?;
+        (now_ms().saturating_sub(observed) <= FRESH_MS).then_some(usage)
     }
 }
 
@@ -316,68 +404,96 @@ async fn fire(state: &Arc<AppState>, store: &crate::store::Store, schedule: &Acc
         id,
     };
     let owner = due.owner();
-    if now_ms().saturating_sub(schedule.fire_at_ms) > OVERDUE_MS {
-        return due
-            .withdraw("The scheduled reset was more than an hour overdue; no reset was sent.")
-            .await;
+    const GONE: &str =
+        "The account's sign-in changed or it is no longer available; no reset was sent.";
+    const LATE: &str = "The scheduled reset was more than an hour overdue; no reset was sent.";
+    if due.overdue() {
+        return due.withdraw(LATE).await;
     }
-    let owner_enabled = match store.user_by_id(owner).await {
-        Ok(user) => user.is_some_and(|user| user.disabled_at_ms.is_none()),
-        // A transient store failure decides nothing; try again next tick.
-        Err(_) => return,
-    };
-    match current_authority(store, owner, &due.id).await {
-        Ok(current) if owner_enabled && current == schedule.authority => {}
-        Err("unavailable") => return,
-        _ => {
-            return due
-                .withdraw(
-                    "The account's sign-in changed or it is no longer available; no reset was sent.",
-                )
-                .await;
-        }
+    // Cheap withdrawals first; the binding is compared after admission.
+    match (
+        owner_enabled(state, owner).await,
+        available_account(store, owner, &due.id).await,
+    ) {
+        (Err(()), _) | (_, Err("unavailable")) => return,
+        (Ok(true), Ok(_)) => {}
+        _ => return due.withdraw(GONE).await,
     }
     // Pick the grant from a recent observation; the refresh is budgeted like
     // any read, and the admission below then waits for the Provider spacing.
-    let observed_at = due.observation().await.map_or(0, |(at, _)| at);
-    if now_ms().saturating_sub(observed_at) > FRESH_MS {
+    let observed_at = due.observed_at().await.unwrap_or(0);
+    if now_ms().saturating_sub(observed_at) > REFRESH_AFTER_MS {
         let _ = refresh_one(state, owner, &due.id).await;
     }
     let admitted = match admit(state, owner, &due.id).await {
-        Ok(admitted) => admitted,
+        Ok(admitted) => Unclaimed(Some(admitted)),
         Err(Refused {
             code: "usage_reset_paced",
             retry_at_ms: Some(at),
+            held,
         }) => {
-            // Pacing only delays it; the limiter holds the Provider meanwhile.
-            let _ = store
-                .defer_account_reset_schedule(owner, due.id.as_str(), due.key(), at, false)
-                .await;
+            if at.saturating_sub(now_ms()) <= PACED_HOLD_MS {
+                // A short wait only delays it; the Provider stays held.
+                due.defer(at, false).await;
+            } else {
+                // An account backoff: never hold other accounts' polls for it.
+                if let Some(provider) = held {
+                    let key = crate::usage::limiter::Limiter::account_key(owner, due.id.as_str());
+                    state.usage.limiter.release_priority(&provider, &key);
+                }
+                due.refused("usage_reset_paced").await;
+            }
             return;
         }
         Err(Refused { code, .. }) => return due.refused(code).await,
     };
-    let release = |admitted: Admitted| {
-        admitted
-            .permit
-            .finish(crate::usage::limiter::Outcome::Unused, now_ms());
+    // Under the account lock: exactly the sign-in it was scheduled under,
+    // which the dispatch then rechecks for this route's binding.
+    let binding = admitted.route().scope();
+    let account = match available_account(store, owner, &due.id).await {
+        Ok(account) => account,
+        Err("unavailable") => return,
+        Err(_) => return due.withdraw(GONE).await,
     };
-    let Some(credit) = due
-        .observation()
-        .await
-        .and_then(|(_, usage)| nearest_credit(&usage))
-    else {
-        release(admitted);
-        return due.refused("reset_unavailable").await;
-    };
-    // The one-shot claim: only the caller that removes the row spends it.
-    if !due.claim().await {
-        return release(admitted);
+    if authority(owner, &account, &binding).as_deref() != Some(schedule.authority.as_str()) {
+        return due.withdraw(GONE).await;
     }
+    let Some(credit) = due
+        .fresh_observation(&binding)
+        .as_ref()
+        .and_then(nearest_credit)
+    else {
+        drop(admitted);
+        if due.fresh_observation(&binding).is_some() {
+            return due.refused("reset_unavailable").await;
+        }
+        // No fresh observation yet: wait without counting (the cutoff bounds it).
+        due.defer(now_ms().saturating_add(PREFLIGHT_RETRY_MS), false)
+            .await;
+        return;
+    };
+    // The last checks before the one-shot claim.
+    if due.overdue() {
+        drop(admitted);
+        return due.withdraw(LATE).await;
+    }
+    match owner_enabled(state, owner).await {
+        Ok(true) => {}
+        Ok(false) => {
+            drop(admitted);
+            return due.withdraw(GONE).await;
+        }
+        Err(()) => return,
+    }
+    // Only the caller that removes the row spends it.
+    if !due.claim().await {
+        return;
+    }
+    let admitted = admitted.claimed();
     let (state, store) = (Arc::clone(state), store.clone());
     let (owner, id, key) = (owner.to_owned(), due.id.clone(), due.key().to_owned());
-    // The claimed spend runs to completion even if this tick is dropped.
-    let task = tokio::spawn(async move {
+    // The claimed spend runs to completion in its own task.
+    tokio::spawn(async move {
         let spent = spend(
             &state,
             &store,
@@ -400,7 +516,6 @@ async fn fire(state: &Arc<AppState>, store: &crate::store::Store, schedule: &Acc
             .await;
         }
     });
-    let _ = task.await;
 }
 
 #[cfg(test)]
@@ -434,20 +549,44 @@ mod tests {
     }
 
     #[test]
-    fn a_schedule_is_bound_to_the_verified_sign_in() {
+    fn a_schedule_is_bound_to_the_exact_sign_in() {
         let account: crate::store::provider_accounts::Account = serde_json::from_value(json!({
             "id":"11111111-1111-4111-8111-111111111111","provider_id":"codex",
             "label":"Pika","enabled":true,"identity_fingerprint":"abc","admission_revision":4
         }))
         .unwrap();
-        let bound = authority("owner", &account).unwrap();
+        let portable = |sign_in_generation: Option<u64>| {
+            Scope::Portable(crate::usage::native::PortableScope {
+                portable_provider: "codex".into(),
+                usage_provider: "openai".into(),
+                identity_fingerprint: Some("abc".into()),
+                admission_revision: Some(4),
+                credential_generation: None,
+                sign_in_generation,
+            })
+        };
+        let binding = portable(Some(1));
+        let bound = authority("owner", &account, &binding).unwrap();
         assert!(bound.starts_with("sha256:"));
-        assert_ne!(authority("other", &account), Some(bound.clone()));
+        // The same inputs bind the same authority (a token rotation keeps it).
+        assert_eq!(
+            authority("owner", &account, &portable(Some(1))),
+            Some(bound.clone())
+        );
+        assert_ne!(authority("other", &account, &binding), Some(bound.clone()));
+        // A new sign-in to the same identity changes the binding.
+        assert_ne!(
+            authority("owner", &account, &portable(Some(2))),
+            Some(bound.clone())
+        );
         let mut signed_in_again = account.clone();
         signed_in_again.admission_revision = Some(5);
-        assert_ne!(authority("owner", &signed_in_again), Some(bound.clone()));
+        assert_ne!(
+            authority("owner", &signed_in_again, &binding),
+            Some(bound.clone())
+        );
         let mut unverified = account;
         unverified.identity_fingerprint = None;
-        assert_eq!(authority("owner", &unverified), None);
+        assert_eq!(authority("owner", &unverified, &binding), None);
     }
 }

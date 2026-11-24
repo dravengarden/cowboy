@@ -141,9 +141,14 @@ impl Store {
         )? == 1)
     }
 
-    /// Cancel the owner's schedule of this account; true when one existed.
-    pub async fn delete_account_reset_schedule(&self, owner: &str, account: &str) -> Result<bool> {
-        Ok(dispatch!(self, delete_account_reset_schedule_raw(owner, account))? == 1)
+    /// Cancel the owner's schedule of this account: the key of exactly the
+    /// row removed, if one existed.
+    pub async fn delete_account_reset_schedule(
+        &self,
+        owner: &str,
+        account: &str,
+    ) -> Result<Option<String>> {
+        dispatch!(self, delete_account_reset_schedule_raw(owner, account))
     }
 }
 
@@ -273,17 +278,16 @@ macro_rules! shared_impl {
                 &self,
                 owner: &str,
                 account: &str,
-            ) -> Result<u64> {
-                Ok(sqlx::query(
+            ) -> Result<Option<String>> {
+                sqlx::query_scalar(
                     "DELETE FROM provider_account_reset_schedules \
-                     WHERE owner_id = $1 AND account_id = $2",
+                     WHERE owner_id = $1 AND account_id = $2 RETURNING idempotency_key",
                 )
                 .bind(owner)
                 .bind(account)
-                .execute(&self.pool)
+                .fetch_optional(&self.pool)
                 .await
-                .context("DELETE provider_account_reset_schedules")?
-                .rows_affected())
+                .context("DELETE provider_account_reset_schedules")
             }
         }
     };

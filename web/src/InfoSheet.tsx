@@ -60,7 +60,7 @@ import { SessionMaintenancePanel } from "./SessionMaintenancePanel";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { AccountBrowserEntry } from "./machineBrowser/AccountBrowserEntry";
 import { displayPlan, orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageResetUnavailableMessage } from "./usageAccounts";
-import { UsageResetActions, UsageResetFields, useUsageResetFlow } from "./UsageResetFlow";
+import { PendingResetSchedule, UsageResetActions, UsageResetFields, useUsageResetFlow } from "./UsageResetFlow";
 import { useProviderCatalog } from "./providerCatalog";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
 import { formatCompactCurrency, usageBalanceForAccount, usageWidgetForAccount, usageWidgetHasBalance } from "./usageWidget";
@@ -480,6 +480,14 @@ function ProviderUsageCardBody({ account: identity, usage, schedule: serviceSche
           <Typography variant="caption" color="text.secondary" data-reset-unavailable>
             {resetUnavailable}
           </Typography>
+        )}
+        {/* Shown with the nearest credit when it can be spent; otherwise here. */}
+        {identity.native && schedule && (resetTarget === undefined || nearestCreditId === undefined) && (
+          <PendingResetSchedule
+            accountId={identity.id}
+            when={fullDateTime(schedule.fire_at_ms / 1000)}
+            onUsageChanged={onUsageChanged}
+          />
         )}
         {manageUrl !== undefined && (
           <Button

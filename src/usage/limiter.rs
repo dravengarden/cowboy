@@ -425,6 +425,20 @@ impl Limiter {
         })
     }
 
+    /// Release this account's hold of the Provider, if it holds it: an
+    /// action that will not resend at the named time (a scheduled reset
+    /// facing a long account backoff) must not keep other accounts waiting.
+    pub fn release_priority(&self, provider: &str, account: &str) {
+        let mut state = self.inner.lock();
+        if state
+            .priority
+            .get(provider)
+            .is_some_and(|priority| priority.account == account)
+        {
+            state.priority.remove(provider);
+        }
+    }
+
     /// Hold the Provider for a refused confirmed action until a little after
     /// it may start, unless another account's action already holds it.
     fn claim_priority(state: &mut State, provider: &str, account: &str, now: i64, retry_at: i64) {
@@ -749,6 +763,25 @@ mod tests {
         let lapsed = retry + ACTION_PRIORITY_GRACE_MS;
         assert!(limiter.start("anthropic", "other", lapsed - 1).is_err());
         assert!(limiter.start("anthropic", "other", lapsed).is_ok());
+    }
+
+    #[test]
+    fn a_released_hold_frees_the_provider_at_once() {
+        let limiter = Limiter::new(None);
+        limiter
+            .start("anthropic", "poller", 1_000)
+            .unwrap_or_else(|_| panic!("poll"))
+            .finish(Outcome::Success, 2_000);
+        let retry = limiter
+            .start_action_counted("anthropic", "reset", 70_000, 2)
+            .err()
+            .expect("paced")
+            .next_allowed_ms;
+        // Another account's release changes nothing.
+        limiter.release_priority("anthropic", "other");
+        assert!(limiter.start("anthropic", "other", retry).is_err());
+        limiter.release_priority("anthropic", "reset");
+        assert!(limiter.start("anthropic", "other", retry).is_ok());
     }
 
     #[test]
