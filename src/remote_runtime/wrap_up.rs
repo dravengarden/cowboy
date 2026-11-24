@@ -21,12 +21,6 @@ use crate::wrap_up::{
     wrap_up_hint_within_size_limit,
 };
 
-#[derive(Clone, Debug)]
-pub(super) enum LateParkResolution {
-    Admitted,
-    Unhanded(Option<String>),
-}
-
 #[derive(Default)]
 pub(super) struct WrapUpState {
     /// Direct per-connection bounded WS hint channel (cap 32, dropped on disconnect).
@@ -39,35 +33,11 @@ pub(super) struct WrapUpState {
     last_hinted: Mutex<HashMap<String, DeliveryTarget>>,
     /// Live Service configuration handle (`None` in unit tests defaults to `true`).
     service_config: Mutex<Option<crate::config::Handle>>,
-    /// Late ACK / `TurnEnded` settlements arriving while a pending `(key, version)`
-    /// is fenced for durable recovery draft parking (Finding 2).
-    late_park_resolutions: Mutex<HashMap<(String, u64), LateParkResolution>>,
 }
 
 impl WrapUpState {
     pub(super) fn attach_hint_tx(&self, tx: mpsc::Sender<String>) {
         *self.hint_ws_tx.lock() = Some(tx);
-    }
-
-    pub(super) fn record_late_park_resolution(
-        &self,
-        key: String,
-        version: u64,
-        resolution: LateParkResolution,
-    ) {
-        self.late_park_resolutions
-            .lock()
-            .insert((key, version), resolution);
-    }
-
-    pub(super) fn take_late_park_resolution(
-        &self,
-        key: &str,
-        version: u64,
-    ) -> Option<LateParkResolution> {
-        self.late_park_resolutions
-            .lock()
-            .remove(&(key.to_owned(), version))
     }
 
     pub(super) fn attach_service_config(&self, config: crate::config::Handle) {
@@ -774,6 +744,7 @@ mod tests {
                     *command,
                     "prompt delivery across worker change is unresolved; retained as draft",
                     replacement_worker.as_deref(),
+                    false,
                 );
             }
             _ => panic!("cross-epoch retry must stage ambiguous park"),
@@ -854,6 +825,7 @@ mod tests {
                     *command,
                     "prompt delivery across worker change is unresolved; retained as draft",
                     replacement_worker.as_deref(),
+                    false,
                 );
             }
             _ => panic!("unbound already-attempted prompt must stage ambiguous park"),
@@ -1110,32 +1082,36 @@ mod tests {
         assert!(runtime.shared.fenced_commands.lock().contains("cmd-sent"));
         assert_eq!(hub.session_info("s-dur").unwrap().drafts_count, 0);
 
-        let ack_id = loop {
-            if let crate::core::StoreWrite::UpdatePending {
-                ack_id: Some(id), ..
-            } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
-                .await
-                .unwrap()
-                .unwrap()
-            {
-                break id;
-            }
-        };
-        acks.complete(ack_id, Ok(true));
+        // Live replacement park uses 2-phase SQL (provisional-recovery-* then finalized recovery-*).
+        for expected_prefix in ["provisional-recovery-", "recovery-"] {
+            let (ack_id, drafts) = loop {
+                if let crate::core::StoreWrite::UpdatePending {
+                    ack_id: Some(id),
+                    drafts,
+                    ..
+                } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap()
+                {
+                    break (id, drafts);
+                }
+            };
+            assert!(
+                drafts.iter().any(|d| d.id.starts_with(expected_prefix)),
+                "expected {expected_prefix} draft in SQL write, got {drafts:?}"
+            );
+            acks.complete(ack_id, Ok(true));
+        }
         hub.drain_teardown_requeues(std::time::Duration::from_secs(2))
             .await;
 
         assert!(!runtime.shared.pending.lock().contains_key("cmd-sent"));
         assert_eq!(hub.session_info("s-dur").unwrap().drafts_count, 1);
-
-        // Finding 5: late UndeliveredPrompt echo is suppressed once parked as draft.
         assert!(
             hub.take_pending_echo_for_undelivered("s-dur", "cmid-dur")
                 .is_none()
         );
-
-        // Finding 2: retrying the same cmid is deduplicated while draft sits in drafts,
-        // and activating the recovery-* draft requires a fresh operation id.
         let blocks = vec![serde_json::json!({"type": "text", "text": "hello world"})];
         assert_eq!(
             hub.front_submit_with_outcome(
@@ -1154,8 +1130,9 @@ mod tests {
         hub.activate_all_drafts("s-dur", &caller);
         assert_eq!(hub.session_info("s-dur").unwrap().drafts_count, 1);
         hub.activate_draft("s-dur", &draft_id, Some("cmid-dur".into()), &caller);
+        hub.drain_teardown_requeues(std::time::Duration::from_secs(2))
+            .await;
         assert_eq!(hub.session_info("s-dur").unwrap().drafts_count, 1);
-        // Finding 8: reusing a cmid already owned by another prompt retains the recovery draft.
         hub.submit(
             "s-dur",
             "other".into(),
@@ -1164,13 +1141,42 @@ mod tests {
             &caller,
         );
         hub.activate_draft("s-dur", &draft_id, Some("cmid-other".into()), &caller);
+        hub.drain_teardown_requeues(std::time::Duration::from_secs(2))
+            .await;
         assert_eq!(hub.session_info("s-dur").unwrap().drafts_count, 1);
 
+        // Finding 7: recovery activation commits draft->queue in SQL before leaving drafts.
         hub.activate_draft("s-dur", &draft_id, Some("cmid-fresh".into()), &caller);
+        let act_ack = loop {
+            if let crate::core::StoreWrite::UpdatePending {
+                ack_id: Some(id),
+                queue,
+                drafts,
+                ..
+            } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                assert!(drafts.is_empty());
+                assert!(
+                    queue
+                        .iter()
+                        .any(|q| q.cmid.as_deref() == Some("cmid-fresh"))
+                );
+                break id;
+            }
+        };
+        assert_eq!(
+            hub.session_info("s-dur").unwrap().drafts_count,
+            1,
+            "draft stays visible until SQL commits draft->queue transition"
+        );
+        acks.complete(act_ack, Ok(true));
+        hub.drain_teardown_requeues(std::time::Duration::from_secs(2))
+            .await;
         assert_eq!(hub.session_info("s-dur").unwrap().drafts_count, 0);
         assert_eq!(hub.session_info("s-dur").unwrap().queue_count, 2);
-
-        // Finding 5: late UndeliveredPrompt after draft activation/removal is STILL dropped.
         assert!(
             hub.take_pending_echo_for_undelivered("s-dur", "cmid-dur")
                 .is_none()
@@ -1178,6 +1184,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn late_positive_ack_rolls_back_in_flight_recovery_park_and_failed_park_retries() {
         // Finding 2: late positive ACK while SQL is in flight rolls back committed draft.
         let health = Arc::new(crate::core::PersistenceHealth::default());
@@ -1231,7 +1238,28 @@ mod tests {
                 break id;
             }
         };
-        // Late positive CommandAck arrives BEFORE SQL ACK returns.
+        // Finding 3: verified UndeliveredPrompt arrives while fenced, then late positive ACK cancels park.
+        let caller = crate::prompt_origin::RequestCaller::Person;
+        let origin = crate::prompt_origin::DeliveryOrigin::from_caller(&caller);
+        hub.record_prompt_dispatch("s-race", "cmid-race".into(), origin.clone(), origin, 2_000);
+        runtime.shared.in_flight_prompts.lock().record(
+            "cmd-race".into(),
+            super::super::prompt_tracking::prepare_sent_prompt(
+                &hub,
+                "s-race",
+                "t-race",
+                Some("cmid-race"),
+                &[serde_json::json!({"type": "text", "text": "race"})],
+            ),
+        );
+        super::super::prompt_tracking::handle_undelivered_prompt(
+            &runtime.shared,
+            "s-race",
+            "cmd-race",
+            Some("cmid-race"),
+            vec![serde_json::json!({"type": "text", "text": "race"})],
+            "acp startup failed".into(),
+        );
         let _ = super::super::notice_recovery::take_acked_command(
             &runtime.shared,
             "s-race",
@@ -1239,14 +1267,39 @@ mod tests {
             true,
             None,
         );
+        // Phase 1 provisional SQL completes, then acknowledged cancellation SQL removes provisional draft (Finding 4).
         acks.complete(ack_id, Ok(true));
+        let cancel_ack = loop {
+            if let crate::core::StoreWrite::UpdatePending {
+                ack_id: Some(id),
+                drafts,
+                ..
+            } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                assert!(
+                    drafts.is_empty(),
+                    "cancellation write must delete provisional draft"
+                );
+                break id;
+            }
+        };
+        acks.complete(cancel_ack, Ok(true));
         hub.drain_teardown_requeues(std::time::Duration::from_secs(2))
             .await;
         assert_eq!(hub.session_info("s-race").unwrap().drafts_count, 0);
+        assert_eq!(
+            hub.session_info("s-race").unwrap().queue_count,
+            1,
+            "verified UndeliveredPrompt + positive ACK must requeue exact 1 copy instead of losing it"
+        );
         assert!(!runtime.shared.pending.lock().contains_key("cmd-race"));
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn failed_recovery_park_retries_across_runtime_drop_and_restore_seeds_prefix() {
         let health = Arc::new(crate::core::PersistenceHealth::default());
         let (sink, mut store_rx) = crate::core::StoreSink::channel(16, health);
@@ -1294,7 +1347,9 @@ mod tests {
         }
         tokio::time::sleep(std::time::Duration::from_millis(25)).await;
         assert_eq!(hub.session_info("s-race").unwrap().drafts_count, 0);
-        hub.retry_pending_recovery_parks(Some("s-race"));
+        // Finding 5: reconnect handshake bootstrap retries failed park without direct call.
+        let rt3 = super::super::RemoteRuntime::for_test(hub.clone(), Vec::new());
+        super::merge_worker_snapshots(&rt3.shared, Vec::new()).await;
         let retry_ack = loop {
             if let crate::core::StoreWrite::UpdatePending {
                 ack_id: Some(id), ..
@@ -1340,5 +1395,56 @@ mod tests {
         let restored_drafts = hub_restore.queue_and_drafts("s-race", |_| true).unwrap().1;
         assert_eq!(restored_drafts[0].id, "recovery-q5");
         assert_eq!(restored_drafts[1].id, "recovery-q6");
+
+        // Finding 4: provisional-recovery-* drafts are ineligible for restore.
+        // Finding 6: persisted session_retired_undelivered prevents hydration rearm after draft deletion.
+        let hub_f6 = Hub::new();
+        hub_f6.set_setting(
+            format!(
+                "{}s-race",
+                crate::model::settings_keys::SESSION_RETIRED_UNDELIVERED_PREFIX
+            ),
+            serde_json::json!(["cmid-deleted"]),
+        );
+        let provisional = crate::core::QueuedMessage {
+            id: "provisional-recovery-q9".into(),
+            text: "provisional".into(),
+            content: vec![],
+            cmid: Some("c-prov".into()),
+            schedule: None,
+            origin: None,
+            initiator: None,
+        };
+        hub_f6.restore_reconciling_runtime(vec![crate::core::RestoredSession {
+            meta: hub.session_info("s-race").unwrap().meta,
+            log: vec![],
+            event_count: 0,
+            reached_start: true,
+            next_seq: 1,
+            queue: vec![],
+            drafts: vec![provisional],
+            config_options: None,
+            config_preferences: serde_json::json!({}),
+            mobile_review_state: serde_json::json!({}),
+            folder_id: None,
+            last_event_at_ms: None,
+        }]);
+        assert_eq!(hub_f6.session_info("s-race").unwrap().drafts_count, 0);
+        let owner = crate::prompt_origin::DeliveryOrigin::from_caller(
+            &crate::prompt_origin::RequestCaller::Person,
+        );
+        hub_f6.hydrate_prompt_dispatches(vec![crate::prompt_origin::PromptDispatchRecord {
+            session_id: "s-race".into(),
+            cmid: "cmid-deleted".into(),
+            origin: owner.clone(),
+            trigger: owner,
+            dispatched_at_ms: 5_000,
+        }]);
+        assert!(
+            hub_f6
+                .take_pending_echo_for_undelivered("s-race", "cmid-deleted")
+                .is_none(),
+            "persisted retirement must keep deleted recovery draft's cmid unarmed after restart"
+        );
     }
 }

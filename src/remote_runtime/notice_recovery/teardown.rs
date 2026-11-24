@@ -513,7 +513,7 @@ pub(in crate::remote_runtime) fn replacement_worker_superseded_epoch(
         .cloned()
 }
 
-fn strip_prompt_preamble_and_text(
+pub(super) fn strip_prompt_preamble_and_text(
     hub: &crate::core::Hub,
     session_id: &str,
     cmid: Option<&str>,
@@ -579,156 +579,12 @@ fn retire_pending_prompt_version(
     removed
 }
 
-struct DurableParkTask {
-    shared: Arc<Shared>,
-    session_id: String,
-    key: String,
-    version: u64,
-    command_id: String,
-    command: CoreCommand,
-    cmid: Option<String>,
-    text: String,
-    cleaned: Vec<serde_json::Value>,
-    reason: String,
-    on_committed: Arc<dyn Fn() + Send + Sync>,
-}
-
-async fn run_durable_recovery_park(task: DurableParkTask) {
-    let DurableParkTask {
-        shared,
-        session_id,
-        key,
-        version,
-        command_id,
-        command,
-        cmid,
-        text,
-        cleaned,
-        reason,
-        on_committed,
-    } = task;
-    let _commit_guard = shared.hub.pending_commit_lock(&session_id).await;
-    for (attempt, delay_ms) in [0_u64, 25, 75, 150].into_iter().enumerate() {
-        if attempt > 0 {
-            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
-        }
-        if let Some(late) = shared.wrap_up.take_late_park_resolution(&key, version) {
-            apply_late_park_resolution(
-                &shared,
-                &session_id,
-                &key,
-                version,
-                &command_id,
-                command,
-                late,
-            );
-            return;
-        }
-        if shared.pending.lock().version(&key) != Some(version) {
-            shared
-                .hub
-                .clear_pending_recovery_park(&session_id, &command_id);
-            return;
-        }
-        match shared.hub.preview_park_recovery_prompt(
-            &session_id,
-            text.clone(),
-            cleaned.clone(),
-            cmid.clone(),
-        ) {
-            crate::core::RecoveryParkPreview::Duplicate => {
-                shared
-                    .hub
-                    .clear_pending_recovery_park(&session_id, &command_id);
-                on_committed();
-                shared.hub.broadcast_error(Some(session_id), reason);
-                return;
-            }
-            crate::core::RecoveryParkPreview::Pending(mut preview, rx) => {
-                if let Ok(Ok(true)) = rx.await {
-                    if let Some(late) = shared.wrap_up.take_late_park_resolution(&key, version) {
-                        shared.hub.rollback_committed_recovery_draft(&mut preview);
-                        apply_late_park_resolution(
-                            &shared,
-                            &session_id,
-                            &key,
-                            version,
-                            &command_id,
-                            command,
-                            late,
-                        );
-                        return;
-                    }
-                    shared.hub.commit_park_recovery_notices(&mut preview);
-                    shared
-                        .hub
-                        .clear_pending_recovery_park(&session_id, &command_id);
-                    on_committed();
-                    shared.hub.broadcast_error(Some(session_id), reason);
-                    return;
-                }
-                shared.hub.abort_park_recovery_notices(&mut preview);
-            }
-            crate::core::RecoveryParkPreview::Rejected => {}
-        }
-    }
-    if let Some(late) = shared.wrap_up.take_late_park_resolution(&key, version) {
-        apply_late_park_resolution(
-            &shared,
-            &session_id,
-            &key,
-            version,
-            &command_id,
-            command,
-            late,
-        );
-        return;
-    }
-    shared
-        .hub
-        .mark_pending_recovery_park_retryable(&session_id, &command_id);
-    shared.hub.broadcast_error(
-        Some(session_id),
-        format!("{reason} (durable draft save deferred; will retry when storage recovers)"),
-    );
-}
-
-fn apply_late_park_resolution(
-    shared: &Shared,
-    session_id: &str,
-    key: &str,
-    version: u64,
-    command_id: &str,
-    command: CoreCommand,
-    resolution: super::super::wrap_up::LateParkResolution,
-) {
-    shared
-        .hub
-        .clear_pending_recovery_park(session_id, command_id);
-    let retired = retire_pending_prompt_version(shared, key, version, command_id);
-    if !retired {
-        return;
-    }
-    match resolution {
-        super::super::wrap_up::LateParkResolution::Admitted => {
-            if let CoreCommand::Prompt {
-                trace: Some(trace), ..
-            } = command
-                && let Some((_, telemetry)) = shared.telemetry.lock().as_ref()
-            {
-                telemetry.finish_delivery_trace(&trace, true);
-            }
-        }
-        super::super::wrap_up::LateParkResolution::Unhanded(reason) => {
-            requeue_rejected_command(shared, session_id, Some(command), reason);
-        }
-    }
-}
-
-/// Park and retire a pending cross-epoch or disconnected prompt. Keeps the
-/// exact pending version fenced until SQL confirms the draft commit, honors
-/// late ACK / `TurnEnded` settlements atomically, and retains failed parks on
-/// `Hub` for retry across persistence recovery or runtime replacement.
+/// Park and retire a pending cross-epoch or disconnected prompt. Registers a
+/// Controller-owned park record on `Hub` (surviving runtime replacement and
+/// storage outages), serializes late ACK/`TurnEnded`/verified `UndeliveredPrompt`
+/// settlements atomically on `Hub`, and reconciles idle guards against the
+/// CURRENT admitted worker on completion (Findings 2, 3, 4, 5, 9).
+#[allow(clippy::too_many_arguments)]
 pub(in crate::remote_runtime) fn park_and_retire_ambiguous_pending(
     shared: &Arc<Shared>,
     session_id: &str,
@@ -737,6 +593,7 @@ pub(in crate::remote_runtime) fn park_and_retire_ambiguous_pending(
     command: CoreCommand,
     reason: &str,
     replacement_worker: Option<&WorkerSnapshot>,
+    cancellable: bool,
 ) {
     let is_call_notice = matches!(
         &command,
@@ -773,40 +630,41 @@ pub(in crate::remote_runtime) fn park_and_retire_ambiguous_pending(
         let key_cb = key.to_owned();
         let cid_cb = command_id.clone();
         let sid_cb = session_id.to_owned();
-        let replacement_cb = replacement_worker.cloned();
-        let on_committed: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+        let reconcile_idle = replacement_worker.is_some();
+        let on_retired: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
             if let Some(shared) = shared_weak.upgrade() {
                 let retired = retire_pending_prompt_version(&shared, &key_cb, version, &cid_cb);
-                if retired && let Some(ref worker) = replacement_cb {
-                    reconcile_idle_guard_for_snapshot(&shared, &sid_cb, worker);
+                if retired && reconcile_idle {
+                    let current = shared.workers.lock().get(&sid_cb).cloned();
+                    if let Some(ref worker) = current {
+                        reconcile_idle_guard_for_snapshot(&shared, &sid_cb, worker);
+                    }
                 }
             }
         });
-        shared.hub.register_pending_recovery_park(
+        let shared_req = Arc::downgrade(shared);
+        let sid_req = session_id.to_owned();
+        let cmd_req = command.clone();
+        let on_requeue: Arc<dyn Fn(Option<String>) + Send + Sync> = Arc::new(move |reason| {
+            if let Some(shared) = shared_req.upgrade() {
+                requeue_rejected_command(&shared, &sid_req, Some(cmd_req.clone()), reason);
+            }
+        });
+        if shared.hub.register_pending_recovery_park(
             session_id,
             &command_id,
-            cmid.clone(),
-            text.clone(),
-            cleaned.clone(),
-            reason.to_owned(),
-            Some(Arc::clone(&on_committed)),
-        );
-        let task = DurableParkTask {
-            shared: Arc::clone(shared),
-            session_id: session_id.to_owned(),
-            key: key.to_owned(),
-            version,
-            command_id,
-            command,
             cmid,
             text,
             cleaned,
-            reason: reason.to_owned(),
-            on_committed,
-        };
-        shared
-            .hub
-            .spawn_teardown_requeue(run_durable_recovery_park(task));
+            reason.to_owned(),
+            cancellable,
+            Some(on_retired),
+            Some(on_requeue),
+        ) {
+            shared
+                .hub
+                .spawn_recovery_park_driver(session_id.to_owned(), command_id);
+        }
         return;
     }
     let removed = {
@@ -824,8 +682,10 @@ pub(in crate::remote_runtime) fn park_and_retire_ambiguous_pending(
         return;
     }
     park_ambiguous_prompt_command(shared, session_id, command, reason);
-    if let Some(worker) = replacement_worker {
-        reconcile_idle_guard_for_snapshot(shared, session_id, worker);
+    if replacement_worker.is_some()
+        && let Some(current) = shared.workers.lock().get(session_id).cloned()
+    {
+        reconcile_idle_guard_for_snapshot(shared, session_id, &current);
     }
 }
 
@@ -873,6 +733,7 @@ pub(in crate::remote_runtime) fn retire_superseded_prompts_for_snapshot(
             cmd,
             "prompt delivery across worker change is unresolved; retained as draft",
             Some(worker),
+            true,
         );
     }
 }
@@ -920,6 +781,7 @@ pub(in crate::remote_runtime) fn recover_pending_prompts_on_disconnect(shared: &
                 cmd,
                 disconnect_reason,
                 None,
+                false,
             );
         } else {
             let removed = {

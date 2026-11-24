@@ -121,8 +121,7 @@ async fn prepare_dispatch_preflight(
     {
         return PreflightOutcome::Retain(error);
     }
-    let is_command_or_compaction = crate::session_context::is_command(text)
-        || crate::session_context::is_command_blocks(content)
+    let is_command_or_compaction = crate::session_context::is_command_blocks(content)
         || crate::wrap_up::is_compaction_prompt_blocks(content);
     session_context::rollover::before_dispatch(
         state,

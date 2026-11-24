@@ -838,6 +838,7 @@ impl Hub {
         }
         Self::tracks_delivery(cmid)
             && (s.dispatched_cmids.iter().any(|seen| seen.cmid == cmid)
+                || s.dispatched_origins.contains_key(cmid)
                 || s.log
                     .iter()
                     .rev()

@@ -1,9 +1,7 @@
 //! Owner queue withdrawals, recovery parking, and queue inspection for
 //! durable managed-call completion notices.
 
-use super::types::{
-    DeferredPendingFlush, PendingRecoveryDraftRecord, affected_row_ids, apply_withdrawal_to_lists,
-};
+use super::types::{DeferredPendingFlush, affected_row_ids, apply_withdrawal_to_lists};
 use super::*;
 
 impl Hub {
@@ -78,6 +76,18 @@ impl Hub {
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
     ) -> RecoveryParkPreview {
+        let draft_id = format!("recovery-{}", self.next_qid());
+        self.preview_park_recovery_prompt_with_id(session_id, draft_id, text, content, cmid)
+    }
+
+    pub(super) fn preview_park_recovery_prompt_with_id(
+        &self,
+        session_id: &str,
+        draft_id: String,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+    ) -> RecoveryParkPreview {
         let sessions = self.inner.sessions.lock();
         let Some(s) = sessions.get(session_id) else {
             return RecoveryParkPreview::Rejected;
@@ -93,7 +103,7 @@ impl Hub {
         let queue = s.queue.clone();
         let mut drafts = s.drafts.clone();
         let draft = QueuedMessage {
-            id: format!("recovery-{}", self.next_qid()),
+            id: draft_id,
             text,
             content,
             cmid,
@@ -169,35 +179,6 @@ impl Hub {
         self.broadcast_pending_snapshot(&preview.session_id, &queue, &drafts);
     }
 
-    /// Roll back an already-committed durable recovery draft after a late positive
-    /// ACK or `TurnEnded` settled the prompt while SQL was in flight (Finding 2).
-    /// Never publishes the draft to `Hub` or clients, and immediately writes the
-    /// clean pre-park `drafts` snapshot back to SQL in FIFO order.
-    pub fn rollback_committed_recovery_draft(&self, preview: &mut PendingRecoveryPark) {
-        if !preview.active {
-            return;
-        }
-        preview.active = false;
-        let sessions = self.inner.sessions.lock();
-        let mut claims = self.inner.notice_claims.lock();
-        if let Some(s) = sessions.get(&preview.session_id) {
-            if let Some(deferred) = claims
-                .in_flight_pending_commits
-                .get_mut(&preview.session_id)
-            {
-                deferred.dirty = true;
-            }
-            self.finish_in_flight_pending_commit(
-                &preview.session_id,
-                &s.queue,
-                &s.drafts,
-                &mut claims,
-            );
-        } else {
-            claims.in_flight_pending_commits.remove(&preview.session_id);
-        }
-    }
-
     pub(in crate::core) fn record_retired_undelivered_cmid(
         claims: &mut NoticeClaims,
         session_id: &str,
@@ -214,154 +195,6 @@ impl Hub {
             entry.pop_front();
         }
         entry.push_back(cmid.to_owned());
-    }
-
-    /// Register a Controller-owned durable recovery park record so it survives
-    /// runtime disconnect/replacement and fences non-delivery across tunnels.
-    #[allow(clippy::too_many_arguments)]
-    pub fn register_pending_recovery_park(
-        &self,
-        session_id: &str,
-        command_id: &str,
-        cmid: Option<String>,
-        text: String,
-        content: Vec<serde_json::Value>,
-        reason: String,
-        on_committed: Option<Arc<dyn Fn() + Send + Sync>>,
-    ) {
-        self.inner.notice_claims.lock().recovery_parks.insert(
-            (session_id.to_owned(), command_id.to_owned()),
-            PendingRecoveryDraftRecord {
-                cmid,
-                text,
-                content,
-                reason,
-                in_progress: true,
-                on_committed,
-            },
-        );
-    }
-
-    pub fn mark_pending_recovery_park_retryable(&self, session_id: &str, command_id: &str) {
-        if let Some(rec) = self
-            .inner
-            .notice_claims
-            .lock()
-            .recovery_parks
-            .get_mut(&(session_id.to_owned(), command_id.to_owned()))
-        {
-            rec.in_progress = false;
-        }
-    }
-
-    pub fn clear_pending_recovery_park(&self, session_id: &str, command_id: &str) {
-        self.inner
-            .notice_claims
-            .lock()
-            .recovery_parks
-            .remove(&(session_id.to_owned(), command_id.to_owned()));
-    }
-
-    pub(in crate::core) fn has_pending_recovery_park_cmid(
-        &self,
-        session_id: &str,
-        cmid: &str,
-    ) -> bool {
-        self.inner
-            .notice_claims
-            .lock()
-            .recovery_parks
-            .iter()
-            .any(|((sid, _), rec)| sid == session_id && rec.cmid.as_deref() == Some(cmid))
-    }
-
-    /// Retry any failed Controller-owned recovery draft parks for `session_id`
-    /// (or all sessions if `None`) so persistence recovery or runtime replacement
-    /// commits the draft and unblocks queue progress (Finding 3).
-    pub fn retry_pending_recovery_parks(&self, session_id: Option<&str>) {
-        if !self.has_store_writer() || tokio::runtime::Handle::try_current().is_err() {
-            return;
-        }
-        struct RetryItem {
-            sid: String,
-            cid: String,
-            cmid: Option<String>,
-            text: String,
-            content: Vec<serde_json::Value>,
-            reason: String,
-        }
-        let to_retry: Vec<RetryItem> = {
-            let mut claims = self.inner.notice_claims.lock();
-            claims
-                .recovery_parks
-                .iter_mut()
-                .filter_map(|((sid, cid), rec)| {
-                    if rec.in_progress || session_id.is_some_and(|want| want != sid) {
-                        return None;
-                    }
-                    rec.in_progress = true;
-                    Some(RetryItem {
-                        sid: sid.clone(),
-                        cid: cid.clone(),
-                        cmid: rec.cmid.clone(),
-                        text: rec.text.clone(),
-                        content: rec.content.clone(),
-                        reason: rec.reason.clone(),
-                    })
-                })
-                .collect()
-        };
-        for RetryItem {
-            sid,
-            cid,
-            cmid,
-            text,
-            content,
-            reason,
-        } in to_retry
-        {
-            let hub = self.clone();
-            self.spawn_teardown_requeue(async move {
-                let _commit_guard = hub.pending_commit_lock(&sid).await;
-                let still_present = hub
-                    .inner
-                    .notice_claims
-                    .lock()
-                    .recovery_parks
-                    .contains_key(&(sid.clone(), cid.clone()));
-                if !still_present {
-                    return;
-                }
-                let committed = match hub.preview_park_recovery_prompt(&sid, text, content, cmid) {
-                    RecoveryParkPreview::Duplicate => true,
-                    RecoveryParkPreview::Pending(mut preview, rx) => {
-                        if let Ok(Ok(true)) = rx.await {
-                            hub.commit_park_recovery_notices(&mut preview);
-                            true
-                        } else {
-                            hub.abort_park_recovery_notices(&mut preview);
-                            false
-                        }
-                    }
-                    RecoveryParkPreview::Rejected => false,
-                };
-                if committed {
-                    let callback = hub
-                        .inner
-                        .notice_claims
-                        .lock()
-                        .recovery_parks
-                        .remove(&(sid.clone(), cid))
-                        .and_then(|rec| rec.on_committed);
-                    if let Some(cb) = callback {
-                        cb();
-                    }
-                    hub.broadcast_error(Some(sid), reason);
-                } else {
-                    hub.mark_pending_recovery_park_retryable(&sid, &cid);
-                }
-            });
-        }
     }
 
     /// Abort a durable recovery park without mutating `Hub.drafts`, lifting its

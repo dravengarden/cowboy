@@ -226,7 +226,11 @@ pub async fn run_store_writer_with_acks(
                 Ok(None) | Err(_) => break,
             }
         }
-        if !apply_store_batch_with_acks(&store, &mut reducer, batch, acks.as_ref()).await {
+        if apply_store_batch_with_acks(&store, &mut reducer, batch, acks.as_ref()).await {
+            if let Some(acks) = acks.as_ref() {
+                acks.notify_storage_recovered();
+            }
+        } else {
             health.mark_failed_batch();
         }
     }

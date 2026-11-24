@@ -22,10 +22,12 @@ impl Hub {
             );
             return;
         }
+        if self.has_any_retryable_recovery_park(session_id) {
+            self.retry_pending_recovery_parks(Some(session_id));
+        }
         if let Some(cid) = cmid.as_deref()
             && self.has_pending_recovery_park_cmid(session_id, cid)
         {
-            self.retry_pending_recovery_parks(Some(session_id));
             return;
         }
         let dispatch_origin = crate::prompt_origin::compute_dispatch_origin(

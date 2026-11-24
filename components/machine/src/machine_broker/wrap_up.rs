@@ -676,16 +676,17 @@ pub(super) fn departing_cleanup_allows(
 struct DispatchedPromptRecord {
     epoch: Option<String>,
     acked: bool,
+    seq: u64,
 }
 
 /// Record of `(session_id, command_id)` from ingress admission through worker
-/// handoff. Unresolved (`!acked`) entries are never evicted; if a completed
-/// record is ever evicted for a session, `evicted_sessions` latches fail-closed
-/// so subsequent cache misses classify as `delivery_ambiguous:`.
+/// handoff. Each insertion carries a monotonic `seq` so retired/reinserted keys
+/// never match stale `order` entries (Finding 13).
 #[derive(Default)]
 pub(super) struct DispatchedPrompts {
     entries: std::collections::HashMap<(String, String), DispatchedPromptRecord>,
-    order: std::collections::VecDeque<(String, String)>,
+    order: std::collections::VecDeque<(String, String, u64)>,
+    next_seq: u64,
     /// Worker epochs from which acked records were evicted for each session.
     evicted_epochs: std::collections::HashMap<String, std::collections::HashSet<String>>,
     /// Sessions where an unacked or unbound record was evicted (always fail-closed).
@@ -740,20 +741,35 @@ impl DispatchedPrompts {
         }
     }
 
+    fn alloc_seq(&mut self) -> u64 {
+        self.next_seq = self.next_seq.wrapping_add(1);
+        self.next_seq
+    }
+
+    fn compact_order(&mut self) {
+        self.order.retain(|(sid, cid, seq)| {
+            self.entries
+                .get(&(sid.clone(), cid.clone()))
+                .is_some_and(|rec| rec.seq == *seq)
+        });
+    }
+
     /// Record a freshly ingressed prompt. Returns `true` only when a brand-new
     /// record was inserted (so dropping an unentered retry can never retire an
     /// earlier live ingress record).
     pub(super) fn mark_ingressed(&mut self, session_id: &str, command_id: &str) -> bool {
         let key = (session_id.to_owned(), command_id.to_owned());
         if !self.entries.contains_key(&key) {
+            let seq = self.alloc_seq();
             self.entries.insert(
                 key.clone(),
                 DispatchedPromptRecord {
                     epoch: None,
                     acked: false,
+                    seq,
                 },
             );
-            self.order.push_back(key);
+            self.order.push_back((key.0, key.1, seq));
             self.evict_acked_if_needed();
             true
         } else {
@@ -762,40 +778,47 @@ impl DispatchedPrompts {
     }
 
     /// Retire an entry provably dropped in the broker queue before worker handoff
-    /// while keeping `order` bounded under sustained overflows (Finding 9).
+    /// while keeping `order` generation-accurate and bounded (Findings 9 & 13).
     pub(super) fn retire_if_unhanded(&mut self, session_id: &str, command_id: &str) {
         let key = (session_id.to_owned(), command_id.to_owned());
-        if self
+        if let Some(seq) = self
             .entries
             .get(&key)
-            .is_some_and(|rec| rec.epoch.is_none() && !rec.acked)
+            .filter(|rec| rec.epoch.is_none() && !rec.acked)
+            .map(|rec| rec.seq)
         {
             self.entries.remove(&key);
-            if self.order.back() == Some(&key) {
+            if self
+                .order
+                .back()
+                .is_some_and(|(s, c, g)| s == &key.0 && c == &key.1 && *g == seq)
+            {
                 self.order.pop_back();
             } else if self.order.len() > self.entries.len().saturating_mul(2).max(Self::MAX_ENTRIES)
             {
-                self.order.retain(|k| self.entries.contains_key(k));
+                self.compact_order();
             }
         }
     }
 
     pub(super) fn record(&mut self, session_id: &str, command_id: &str, epoch: &str) {
         let key = (session_id.to_owned(), command_id.to_owned());
-        let inserted = self
-            .entries
-            .insert(
-                key.clone(),
-                DispatchedPromptRecord {
-                    epoch: Some(epoch.to_owned()),
-                    acked: false,
-                },
-            )
-            .is_none();
-        if inserted {
-            self.order.push_back(key);
-            self.evict_acked_if_needed();
+        if let Some(rec) = self.entries.get_mut(&key) {
+            rec.epoch = Some(epoch.to_owned());
+            rec.acked = false;
+            return;
         }
+        let seq = self.alloc_seq();
+        self.entries.insert(
+            key.clone(),
+            DispatchedPromptRecord {
+                epoch: Some(epoch.to_owned()),
+                acked: false,
+                seq,
+            },
+        );
+        self.order.push_back((key.0, key.1, seq));
+        self.evict_acked_if_needed();
     }
 
     pub(super) fn mark_acked(&mut self, session_id: &str, command_id: &str) {
@@ -810,7 +833,7 @@ impl DispatchedPrompts {
 
     pub(super) fn retire_session(&mut self, session_id: &str) {
         self.entries.retain(|(sid, _), _| sid != session_id);
-        self.order.retain(|(sid, _)| sid != session_id);
+        self.order.retain(|(sid, _, _)| sid != session_id);
         self.evicted_epochs.remove(session_id);
         self.evicted_unacked.remove(session_id);
     }
@@ -819,17 +842,19 @@ impl DispatchedPrompts {
         let mut scanned = 0;
         let max_scan = self.order.len();
         while self.entries.len() > Self::MAX_ENTRIES && scanned < max_scan {
-            let Some(candidate) = self.order.pop_front() else {
+            let Some((sid, cid, seq)) = self.order.pop_front() else {
                 break;
             };
             scanned += 1;
-            match self.entries.get(&candidate) {
+            let key = (sid, cid);
+            match self.entries.get(&key) {
+                Some(rec) if rec.seq != seq => {}
                 Some(rec) if !rec.acked => {
-                    self.order.push_back(candidate);
+                    self.order.push_back((key.0, key.1, seq));
                 }
                 Some(_) => {
-                    if let Some(rec) = self.entries.remove(&candidate) {
-                        self.record_eviction(candidate.0, rec);
+                    if let Some(rec) = self.entries.remove(&key) {
+                        self.record_eviction(key.0, rec);
                     }
                 }
                 None => {}
@@ -837,15 +862,18 @@ impl DispatchedPrompts {
         }
         let hard_cap = Self::MAX_ENTRIES * 2;
         while self.entries.len() > hard_cap {
-            let Some(candidate) = self.order.pop_front() else {
+            let Some((sid, cid, seq)) = self.order.pop_front() else {
                 break;
             };
-            if let Some(rec) = self.entries.remove(&candidate) {
-                self.record_eviction(candidate.0, rec);
+            let key = (sid, cid);
+            if self.entries.get(&key).is_some_and(|rec| rec.seq == seq)
+                && let Some(rec) = self.entries.remove(&key)
+            {
+                self.record_eviction(key.0, rec);
             }
         }
         if self.order.len() > hard_cap {
-            self.order.retain(|k| self.entries.contains_key(k));
+            self.compact_order();
         }
     }
 }
@@ -1315,18 +1343,34 @@ impl super::Broker {
                     remaining.push_back(command);
                     continue;
                 }
-                if let Some((command_id, reason)) = prompt_admission_refusal(
-                    &worker.epoch,
-                    worker.snapshot.uncertain_effect.as_ref(),
-                    &command,
-                ) {
-                    let reason = if session_evicted {
+                let expected_epoch = match &command {
+                    WorkerCommand::Prompt {
+                        expected_worker_epoch,
+                        ..
+                    } => expected_worker_epoch.as_deref(),
+                    _ => None,
+                };
+                let refusal_reason = |reason: String| -> String {
+                    if session_evicted {
                         reason.replacen("unhanded:", "delivery_ambiguous:", 1)
                     } else {
                         reason
-                    };
-                    dispatched.mark_acked(session_id, &command_id);
-                    rejects.push((command_id, reason));
+                    }
+                };
+                if let WorkerCommand::Prompt { ref command_id, .. } = command
+                    && let Some((cid, reason)) = fresh_prompt_refusal(
+                        &dispatched,
+                        session_id,
+                        command_id,
+                        expected_epoch,
+                        &worker.epoch,
+                        worker.snapshot.uncertain_effect.as_ref(),
+                        &command,
+                        &refusal_reason,
+                    )
+                {
+                    dispatched.mark_acked(session_id, &cid);
+                    rejects.push((cid, reason));
                     continue;
                 }
                 let prompt_cid = match &command {
@@ -2197,17 +2241,19 @@ mod tests {
     #[test]
     fn sustained_unhanded_overflows_keep_eviction_order_bounded() {
         let mut tracked = DispatchedPrompts::default();
-        // Keep one live entry so non-tail removals also exercise compaction.
-        assert!(tracked.mark_ingressed("s1", "live-anchor"));
-        for i in 0..(DispatchedPrompts::MAX_ENTRIES * 2 + 256) {
-            let cid = format!("overflow-{i}");
-            assert!(tracked.mark_ingressed("s1", &cid));
-            tracked.retire_if_unhanded("s1", &cid);
+        // Non-tail retirement + repeated reinsertion of the SAME key exercises generation compaction (F13).
+        assert!(tracked.mark_ingressed("s1", "reused-key"));
+        assert!(tracked.mark_ingressed("s1", "tail-blocker"));
+        for _ in 0..(DispatchedPrompts::MAX_ENTRIES + 512) {
+            tracked.retire_if_unhanded("s1", "reused-key");
+            assert!(tracked.mark_ingressed("s1", "reused-key"));
+            tracked.retire_if_unhanded("s1", "tail-blocker");
+            assert!(tracked.mark_ingressed("s1", "tail-blocker"));
         }
-        assert_eq!(tracked.entries.len(), 1);
+        assert_eq!(tracked.entries.len(), 2);
         assert!(
             tracked.order.len() <= DispatchedPrompts::MAX_ENTRIES,
-            "order index must stay bounded under sustained overflows, got {}",
+            "order index must drop stale generations on compaction, got {}",
             tracked.order.len()
         );
     }
@@ -2273,6 +2319,7 @@ mod tests {
             DispatchedPromptRecord {
                 epoch: Some("epoch-old".into()),
                 acked: true,
+                seq: 0,
             },
         );
         // Unbound (pre-v8) prompt must be refused as delivery_ambiguous on replacement worker.
@@ -2331,5 +2378,71 @@ mod tests {
             w_rx.try_recv().is_ok(),
             "bound prompt for epoch-new must dispatch"
         );
+
+        // Finding 1: unbound prompt queued BEFORE replacement worker connects must
+        // also be refused on flush_pending_guarded instead of executing on epoch-new.
+        broker.workers.lock().remove("s-evict");
+        broker.route_prompt_guarded(
+            "s-evict",
+            WorkerCommand::Prompt {
+                command_id: "cmd-queued-unbound".into(),
+                turn_id: "t3".into(),
+                content: vec![],
+                cmid: Some("c3".into()),
+                trace: None,
+                echo_artifacts: false,
+                observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
+            },
+        );
+        let (w2_tx, mut w2_rx) = mpsc::unbounded_channel();
+        let mut snap2 = sample_snapshot(Some("antigravity"));
+        snap2.session_id = "s-evict".into();
+        snap2.worker_epoch = "epoch-new".into();
+        broker.workers.lock().insert(
+            "s-evict".into(),
+            super::super::WorkerPeer {
+                connection_id: 2,
+                epoch: "epoch-new".into(),
+                tx: w2_tx,
+                snapshot: snap2,
+                acked_runtime_seq: 0,
+                earliest_unacked_seq: None,
+                highest_runtime_seq: 0,
+                replay_gate: None,
+                welcomed: true,
+                replay_deferred: false,
+                last_seen: std::time::Instant::now(),
+                receive_probe: None,
+                liveness: None,
+                negotiated_protocol: crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION,
+                raw_wrap_up_steering: true,
+                hint_tx: None,
+                last_hinted_target: None,
+            },
+        );
+        broker.flush_pending_guarded("s-evict");
+        assert!(
+            w2_rx.try_recv().is_err(),
+            "queued unbound prompt must not flush to replacement worker after eviction"
+        );
+        match ctrl_rx.try_recv().expect("flush refusal ack") {
+            Frame::CommandAck {
+                command_id,
+                accepted,
+                reason,
+                ..
+            } => {
+                assert_eq!(command_id, "cmd-queued-unbound");
+                assert!(!accepted);
+                assert!(
+                    reason
+                        .as_deref()
+                        .is_some_and(|r| r.starts_with("delivery_ambiguous:"))
+                );
+            }
+            other => panic!("expected CommandAck, got {other:?}"),
+        }
     }
 }

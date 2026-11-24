@@ -450,7 +450,7 @@ impl RemoteRuntime {
         self.shared.connected.store(true, Ordering::Release);
     }
 
-    #[cfg(all(any(test, feature = "test-support"), feature = "machine-host"))]
+    #[cfg(any(test, all(feature = "test-support", feature = "machine-host")))]
     pub async fn project_trace_fixture(&self, frame: Frame) {
         handle_frame(&self.shared, frame, &mut tokio::io::sink())
             .await
@@ -502,6 +502,7 @@ impl RemoteRuntime {
                 runtime.recover_stalled_startups(&mut watch, tokio::time::Instant::now());
                 runtime.refresh_pending_delivery();
                 runtime.refresh_wrap_up_steering();
+                runtime.shared.hub.retry_pending_recovery_parks(None);
             }
         });
     }
@@ -2347,8 +2348,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                     }
                     return;
                 }
-                project_snapshot(shared, &worker);
-                projected = true;
+                projected = project_snapshot(shared, &worker);
             })
             .await;
             if projected {
@@ -2461,13 +2461,25 @@ fn begin_reset(shared: &Shared, session_id: &str) {
 }
 
 async fn adopt_snapshot(shared: &Arc<Shared>, worker: &WorkerSnapshot) {
-    native_admission::snapshot(shared, worker, || project_snapshot(shared, worker)).await;
-    if let Some(installed) = shared.workers.lock().get(&worker.session_id).cloned() {
+    let mut projected = false;
+    native_admission::snapshot(shared, worker, || {
+        projected = project_snapshot(shared, worker);
+    })
+    .await;
+    if projected && let Some(installed) = shared.workers.lock().get(&worker.session_id).cloned() {
         notice_recovery::retire_superseded_prompts_for_snapshot(shared, &installed);
     }
 }
 
-fn project_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
+fn project_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
+    project_snapshot_with_protocol(shared, worker, shared.protocol.load(Ordering::Acquire))
+}
+
+fn project_snapshot_with_protocol(
+    shared: &Shared,
+    worker: &WorkerSnapshot,
+    runtime_protocol: u16,
+) -> bool {
     let mut worker = worker.clone();
     let raw_wrap = worker.wrap_up_steering;
     let _projection = shared.hub.runtime_projection_guard();
@@ -2475,17 +2487,18 @@ fn project_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
         &mut worker,
         raw_wrap,
         shared.machine_protocol,
-        shared.protocol.load(Ordering::Acquire),
+        runtime_protocol,
         &shared.hub,
     );
     if !snapshot::current_context(shared, &worker) {
-        return;
+        return false;
     }
     update_declaration(shared, &worker);
     shared.install_worker_with_raw_wrap_up(worker.clone(), raw_wrap);
     acknowledge_pending_ensure_from_snapshot(shared, &worker);
     apply_snapshot(shared, &worker);
     notice_recovery::spawn_record_snapshot_worker_epoch_if_notice(shared, &worker);
+    true
 }
 
 async fn update_worker_snapshots(
@@ -2517,31 +2530,17 @@ async fn merge_worker_snapshots_with_protocol(
         if shared.resetting.lock().contains(&worker.session_id) {
             continue;
         }
-        let raw_wrap = worker.wrap_up_steering;
+        let mut projected = false;
         native_admission::snapshot(shared, &worker, || {
-            let mut worker = worker.clone();
-            let _projection = shared.hub.runtime_projection_guard();
-            shared.wrap_up.sanitize_snapshot(
-                &mut worker,
-                raw_wrap,
-                shared.machine_protocol,
-                runtime_protocol,
-                &shared.hub,
-            );
-            if !snapshot::current_context(shared, &worker) {
-                return;
-            }
-            update_declaration(shared, &worker);
-            apply_snapshot(shared, &worker);
-            acknowledge_pending_ensure_from_snapshot(shared, &worker);
-            shared.install_worker_with_raw_wrap_up(worker.clone(), raw_wrap);
-            notice_recovery::spawn_record_snapshot_worker_epoch_if_notice(shared, &worker);
+            projected = project_snapshot_with_protocol(shared, &worker, runtime_protocol);
         })
         .await;
-        if let Some(installed) = shared.workers.lock().get(&worker.session_id).cloned() {
+        if projected && let Some(installed) = shared.workers.lock().get(&worker.session_id).cloned()
+        {
             notice_recovery::retire_superseded_prompts_for_snapshot(shared, &installed);
         }
     }
+    shared.hub.retry_pending_recovery_parks(None);
 }
 
 fn update_declaration(shared: &Shared, worker: &WorkerSnapshot) {

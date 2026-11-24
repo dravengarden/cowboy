@@ -60,13 +60,12 @@ fn acknowledge_prompt_finish(shared: &Shared, session: &str, turn: &str) {
                     } if session_id == session && turn_id == turn => Some((key.clone(), version)),
                     _ => None,
                 });
-        if let Some((key, version)) = found {
-            if shared.fenced_commands.lock().contains(&key) {
-                shared.wrap_up.record_late_park_resolution(
-                    key,
-                    version,
-                    super::wrap_up::LateParkResolution::Admitted,
-                );
+        if let Some((key, _version)) = found {
+            if shared.hub.record_recovery_park_settlement(
+                session,
+                &key,
+                crate::core::RecoveryParkSettlement::Admitted,
+            ) {
                 return;
             }
             pending.remove(&key).map(|command| (key, command))

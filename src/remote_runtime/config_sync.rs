@@ -366,6 +366,7 @@ pub(super) fn prepare_or_park_prompt_for_send(
                 *command,
                 "prompt delivery across worker change is unresolved; retained as draft",
                 replacement_worker.as_deref(),
+                false,
             );
             false
         }

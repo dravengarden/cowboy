@@ -116,8 +116,22 @@ impl Hub {
         }
     }
 
+    pub(in crate::core) fn is_persisted_retired_undelivered(
+        &self,
+        session_id: &str,
+        cmid: &str,
+    ) -> bool {
+        let key = format!(
+            "{}{session_id}",
+            crate::model::settings_keys::SESSION_RETIRED_UNDELIVERED_PREFIX
+        );
+        self.setting(&key)
+            .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+            .is_some_and(|ids| ids.iter().any(|c| c == cmid))
+    }
+
     /// Whether `cmid` is fenced in an active recovery park, currently parked as
-    /// a draft, or already retired from non-delivery after parking (Finding 5).
+    /// a draft, or already retired from non-delivery (in-memory or persisted) (Findings 5 & 6).
     #[must_use]
     pub fn is_cmid_parked_or_fenced(&self, session_id: &str, cmid: &str) -> bool {
         let in_drafts = self
@@ -126,7 +140,7 @@ impl Hub {
             .lock()
             .get(session_id)
             .is_some_and(|s| s.drafts.iter().any(|m| m.cmid.as_deref() == Some(cmid)));
-        if in_drafts {
+        if in_drafts || self.is_persisted_retired_undelivered(session_id, cmid) {
             return true;
         }
         let claims = self.inner.notice_claims.lock();
@@ -203,8 +217,10 @@ impl Hub {
             .iter()
             .any(|seen| seen.cmid == cmid && seen.echoed)
             || s.log.iter().any(|env| env.cmid.as_deref() == Some(cmid));
+        let persisted_retired = self.is_persisted_retired_undelivered(session_id, cmid);
         let claims = self.inner.notice_claims.lock();
-        let parked_or_fenced = s.drafts.iter().any(|m| m.cmid.as_deref() == Some(cmid))
+        let parked_or_fenced = persisted_retired
+            || s.drafts.iter().any(|m| m.cmid.as_deref() == Some(cmid))
             || claims
                 .recovery_parks
                 .iter()
@@ -280,6 +296,14 @@ impl Hub {
             let trimmed_floor = (!s.reached_start)
                 .then_some(s.restored_last_event_at_ms)
                 .flatten();
+            let retired_key = format!(
+                "{}{session_id}",
+                crate::model::settings_keys::SESSION_RETIRED_UNDELIVERED_PREFIX
+            );
+            let persisted_retired: Vec<String> = self
+                .setting(&retired_key)
+                .and_then(|v| serde_json::from_value::<Vec<String>>(v).ok())
+                .unwrap_or_default();
             let candidate = rows
                 .into_iter()
                 .rev()
@@ -292,6 +316,7 @@ impl Hub {
                             .drafts
                             .iter()
                             .any(|m| m.cmid.as_deref() == Some(r.cmid.as_str()))
+                        && !persisted_retired.iter().any(|c| c == &r.cmid)
                 });
             if let Some(record) = candidate
                 && trimmed_floor.is_none_or(|floor| record.dispatched_at_ms >= floor)

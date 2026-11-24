@@ -45,7 +45,8 @@ mod hub_managed_calls;
 pub use hub_managed_calls::{
     NoticeClaimGuard, NoticeRequeueRequest, OwnerNoticeWithdrawalOp, OwnerQueueMutation,
     PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, RecoveryParkPreview,
-    RetainedLogScan, StoreAckSink, UndeliveredRequeue,
+    RecoveryParkSettlement, RetainedLogScan, StoreAckSink, UndeliveredRequeue,
+    VerifiedUndeliveredPayload,
 };
 mod hub_peer_notice;
 pub use hub_peer_notice::PromptProgress;
@@ -2191,10 +2192,11 @@ impl Hub {
                         .is_some_and(|cmid| cmid.starts_with(LEGACY_AUTO_CONTINUE_PREFIX))
                 });
                 drafts.retain(|message| {
-                    !message
-                        .cmid
-                        .as_deref()
-                        .is_some_and(|cmid| cmid.starts_with(LEGACY_AUTO_CONTINUE_PREFIX))
+                    !message.id.starts_with("provisional-recovery-")
+                        && !message
+                            .cmid
+                            .as_deref()
+                            .is_some_and(|cmid| cmid.starts_with(LEGACY_AUTO_CONTINUE_PREFIX))
                 });
                 let removed_legacy_continuation =
                     queue.len() != queue_len || drafts.len() != drafts_len;

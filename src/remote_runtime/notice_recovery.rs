@@ -16,6 +16,7 @@ use crate::core::{NoticeRequeueRequest, UndeliveredRequeue};
 use crate::store::NoticeDeliveryState;
 
 mod teardown;
+use teardown::strip_prompt_preamble_and_text;
 pub(super) use teardown::{
     is_ambiguous_prompt_rejection, park_ambiguous_prompt_command,
     park_and_retire_ambiguous_pending, recover_pending_prompts_on_disconnect,
@@ -104,21 +105,30 @@ pub(super) fn take_acked_command(
             (None, None)
         }
     };
-    if let Some((version, cmd)) = fenced_entry {
+    if let Some((_version, cmd)) = fenced_entry {
         if accepted {
-            shared.wrap_up.record_late_park_resolution(
-                command_id.to_owned(),
-                version,
-                super::wrap_up::LateParkResolution::Admitted,
+            shared.hub.record_recovery_park_settlement(
+                session_id,
+                command_id,
+                crate::core::RecoveryParkSettlement::Admitted,
             );
         } else if !is_ambiguous_prompt_rejection(Some(&cmd), was_retransmitted, reason) {
-            shared.wrap_up.record_late_park_resolution(
-                command_id.to_owned(),
-                version,
-                super::wrap_up::LateParkResolution::Unhanded(reason.map(str::to_owned)),
+            shared.hub.record_recovery_park_settlement(
+                session_id,
+                command_id,
+                crate::core::RecoveryParkSettlement::Unhanded(reason.map(str::to_owned)),
             );
         }
         return Some((Some(cmd), true));
+    }
+    if accepted
+        && shared.hub.record_recovery_park_settlement(
+            session_id,
+            command_id,
+            crate::core::RecoveryParkSettlement::Admitted,
+        )
+    {
+        return Some((None, true));
     }
     if let Some((version, cmd)) = ambiguous_entry {
         let message = reason
@@ -132,6 +142,7 @@ pub(super) fn take_acked_command(
             cmd.clone(),
             message,
             replacement.as_ref(),
+            false,
         );
         return Some((Some(cmd), true));
     }
@@ -1119,18 +1130,19 @@ fn snapshot_pre_recovery_pending(
         }
         keys.insert(key.clone(), version);
         if let CoreCommand::Prompt { content, cmid, .. } = command {
-            let text = content
-                .iter()
-                .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n");
+            let (text, cleaned) = strip_prompt_preamble_and_text(
+                &shared.hub,
+                session_id,
+                cmid.as_deref(),
+                content.clone(),
+            );
             if let Some(cid) = cmid
                 .as_deref()
                 .filter(|id| id.starts_with(CALL_NOTICE_PREFIX))
             {
-                notices.push((text, content.clone(), cid.to_owned()));
+                notices.push((text, cleaned, cid.to_owned()));
             } else {
-                others.push((text, content.clone(), cmid.clone()));
+                others.push((text, cleaned, cmid.clone()));
             }
         }
     }
@@ -1140,12 +1152,9 @@ fn snapshot_pre_recovery_pending(
 fn park_recovery_prompts_shared(shared: &Shared, id: &str) {
     for command in super::take_pending_prompts(shared, id) {
         if let CoreCommand::Prompt { content, cmid, .. } = command {
-            let text = content
-                .iter()
-                .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n");
-            shared.hub.park_recovery_draft(id, text, content, cmid);
+            let (text, cleaned) =
+                strip_prompt_preamble_and_text(&shared.hub, id, cmid.as_deref(), content);
+            shared.hub.park_recovery_draft(id, text, cleaned, cmid);
             shared.hub.broadcast_error(
                 Some(id.to_owned()),
                 "Execution recovery retained an unacknowledged prompt as a draft; inspect effects before resending"

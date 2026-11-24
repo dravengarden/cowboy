@@ -449,6 +449,15 @@ impl Hub {
         {
             return;
         }
+        let requested_cmid = cmid.clone();
+        if id.starts_with("recovery-")
+            && self.has_store_writer()
+            && tokio::runtime::Handle::try_current().is_ok()
+        {
+            let fresh_cmid = cmid.unwrap_or_default();
+            self.activate_recovery_draft_durable(session_id, id, fresh_cmid, caller.clone());
+            return;
+        }
         let trigger = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
         let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
@@ -530,6 +539,9 @@ impl Hub {
             }
         };
         if let Some(msg) = error_msg {
+            if let Some(op) = requested_cmid.as_deref().filter(|op| !op.is_empty()) {
+                self.command_result(session_id, op, CommandOutcome::Rejected, msg);
+            }
             self.broadcast_error(Some(session_id.to_owned()), msg.to_owned());
             return;
         }
