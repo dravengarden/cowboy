@@ -16,17 +16,30 @@ const EVICTION_SETTLE: Duration = Duration::from_secs(5);
 #[cfg(test)]
 const EVICTION_SETTLE: Duration = Duration::from_millis(300);
 
-/// How long an open waits for idle instances to make room, their settle
-/// included. A stop still running then goes on by itself; the open is
-/// refused (`capacity`) and finds the slot free when it is retried. With the
-/// start that follows, the open stays within what its caller waits for.
+/// The longest an open waits for idle instances to make room, their settle
+/// included. A stop already under way then finishes by itself; the open is
+/// refused (`capacity`) and finds the slot free when it is retried.
 #[cfg(not(test))]
 const MAKE_ROOM_WAIT: Duration = Duration::from_secs(30);
 #[cfg(test)]
 const MAKE_ROOM_WAIT: Duration = Duration::from_secs(2);
 
+/// What an open's caller waits for its answer, less a margin for the
+/// answer's way back: the Controller's `OPEN_TIMEOUT` is 150 s.
+const OPEN_ANSWER_WITHIN: Duration = Duration::from_secs(140);
+
 /// Why an idle instance was left running after all.
 struct Kept;
+
+/// How long an open with `plan` may wait for room: never more than what the
+/// start's own worst case (memory admission, unit activation, the control
+/// connection and readiness) leaves of what the caller waits for, so making
+/// room is never what lets an open outlive its caller.
+fn room_wait(plan: &MachineBrowserRuntimePlan) -> Duration {
+    let readiness = Duration::from_millis(plan.contract.launch.readiness_timeout_ms);
+    let start = MEMORY_WAIT + UNIT_START_TIMEOUT + readiness * 2;
+    MAKE_ROOM_WAIT.min(OPEN_ANSWER_WITHIN.saturating_sub(start))
+}
 
 impl BrowserManager {
     /// Reserve an instance slot for `account_id`'s open with `plan`.
@@ -34,18 +47,20 @@ impl BrowserManager {
     /// When every slot is taken, instances nobody is viewing make room,
     /// longest-detached first: each is hibernated gracefully (its stop-time
     /// snapshot is published, exactly as when its grace runs out) once it
-    /// has been detached for [`EVICTION_SETTLE`], re-checked under its live
-    /// lock atomically with the change to `stopping`, so a viewer that
-    /// attached meanwhile keeps it. An instance being started or viewed is
-    /// never taken.
+    /// has been detached for [`EVICTION_SETTLE`]. An instance being started
+    /// or viewed, or one a snapshot copy keeps busy, is never taken.
     ///
-    /// Nothing is hibernated for an open that would be refused anyway: its
+    /// Nothing is hibernated for an open that would be refused anyway. Its
     /// own record is checked first (a pending reset or revocation, a profile
-    /// a newer browser wrote), a Plugin uninstall that began meanwhile ends
-    /// it, and before every stop the reservation is tried again and the
-    /// instances still idle must suffice for the slots to free (a lowered
-    /// limit, a unit whose exit is unconfirmed). `max_instances = 0` turns
-    /// browsers off on the Device and answers `not_available`.
+    /// a newer browser wrote). Before every stop the reservation is tried
+    /// again and the instances idle then (not when the open began) must
+    /// suffice for the slots to free (a lowered limit, a unit whose exit is
+    /// unconfirmed). And at the stop itself, under the instance's lifecycle
+    /// and state locks, it must still be idle in the same detached interval
+    /// with no copy running, a slot must still be missing, no Plugin
+    /// uninstall may have begun, and this open must still be waiting.
+    /// `max_instances = 0` turns browsers off on the Device and answers
+    /// `not_available`.
     pub(super) async fn reserve_slot(
         self: &Arc<Self>,
         account_id: &ProviderAccountId,
@@ -60,32 +75,45 @@ impl BrowserManager {
             return Err(Reason::NotAvailable);
         }
         self.preflight_record(account_id, plan)?;
-        let until = Instant::now() + MAKE_ROOM_WAIT;
-        let idle = self.idle_instances(account_id);
-        let candidates = idle.len();
-        for (tried, (victim, since)) in idle.into_iter().enumerate() {
-            let settled = since + EVICTION_SETTLE;
-            if settled > until {
-                break;
-            }
-            tokio::time::sleep_until(settled).await;
-            // A slot freed meanwhile needs nobody hibernated.
+        let until = Instant::now() + room_wait(plan);
+        // Instances this open already decided about, stopped or kept.
+        let mut tried: Vec<Arc<Instance>> = Vec::new();
+        loop {
             if let Some(slot) = self.capacity.try_reserve(max_instances) {
                 return Ok(slot);
             }
             if self.starts.draining() {
                 return Err(Reason::NotAvailable);
             }
+            let idle: Vec<_> = self
+                .idle_instances(account_id)
+                .into_iter()
+                .filter(|(instance, _)| !tried.iter().any(|tried| Arc::ptr_eq(tried, instance)))
+                .collect();
             let excess = (self.capacity.used() + 1).saturating_sub(limit);
-            if candidates - tried < excess {
+            let Some((victim, since)) = idle.first().cloned() else {
+                break;
+            };
+            let settled = since + EVICTION_SETTLE;
+            if idle.len() < excess || settled > until {
                 break;
             }
-            // The stop runs to its end whatever happens to this open: an
-            // instance that entered `stopping` is never left there.
+            if settled > Instant::now() {
+                // Everything is decided again after the wait.
+                tokio::time::sleep_until(settled).await;
+                continue;
+            }
+            tried.push(Arc::clone(&victim));
+            // A stop that began runs to its end whatever happens to this
+            // open: an instance that entered `stopping` is never left there.
             let stop = tokio::spawn({
                 let manager = Arc::clone(self);
                 let opener = account_id.clone();
-                async move { manager.make_room(&victim, since, &opener).await }
+                async move {
+                    manager
+                        .make_room(&victim, since, (&opener, limit, until))
+                        .await;
+                }
             });
             if tokio::time::timeout_at(until, stop).await.is_err() {
                 break;
@@ -98,29 +126,34 @@ impl BrowserManager {
                 reason = "Capacity",
                 slots_used = self.capacity.used(),
                 max_instances,
-                idle_instances = candidates,
                 "browser open refused: every instance slot is in use"
             );
             Reason::Capacity
         })
     }
 
-    /// Hibernate `victim` for `opener`'s open unless it stopped being idle
-    /// (a viewer attached, another stop began) or a Plugin uninstall began,
-    /// both checked after the stop's own waits, right before it changes
-    /// anything. Reports the instance's terminal state.
-    async fn make_room(&self, victim: &Arc<Instance>, since: Instant, opener: &ProviderAccountId) {
+    /// Hibernate `victim` for `opener`'s open, unless by the time the stop
+    /// would change anything (under the victim's lifecycle lock, where a
+    /// copy is admitted, and its state lock) a copy runs, a slot is free
+    /// after all, a Plugin uninstall began, the open stopped waiting, or the
+    /// instance is no longer idle in the detached interval it was chosen
+    /// for. Reports the instance's terminal state.
+    async fn make_room(
+        &self,
+        victim: &Arc<Instance>,
+        since: Instant,
+        (opener, limit, until): (&ProviderAccountId, usize, Instant),
+    ) {
         let stopped = self
-            .stop_instance_when(
+            .stop_between_copies(
                 victim,
                 Reason::Reclaim,
-                true,
-                None,
                 || {
-                    if self.starts.draining() {
-                        Err(Kept)
-                    } else {
+                    let needed = self.capacity.used() >= limit;
+                    if needed && !self.starts.draining() && Instant::now() < until {
                         Ok(())
+                    } else {
+                        Err(Kept)
                     }
                 },
                 |live| {
@@ -132,7 +165,7 @@ impl BrowserManager {
                 },
             )
             .await;
-        if let Ok(event) = stopped {
+        if let Ok(Some(event)) = stopped {
             tracing::info!(event_name = "browser.open.made_room",
                 browser_account = %opener.as_str(),
                 evicted_account = %victim.account_id.as_str(),
@@ -163,5 +196,24 @@ impl BrowserManager {
             .collect();
         idle.sort_by_key(|(_, since)| *since);
         idle
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_wait_for_room_fits_what_the_start_leaves_of_the_caller_s_wait() {
+        let mut plan = super::super::tests::plan();
+        // The shipped contract (20 s readiness) leaves the whole wait.
+        assert_eq!(plan.contract.launch.readiness_timeout_ms, 20_000);
+        assert_eq!(room_wait(&plan), MAKE_ROOM_WAIT);
+        // A start that may itself take the caller's whole wait leaves none.
+        plan.contract.launch.readiness_timeout_ms = 60_000;
+        assert_eq!(room_wait(&plan), Duration::ZERO);
+        // In between, only what is left.
+        plan.contract.launch.readiness_timeout_ms = 52_000;
+        assert_eq!(room_wait(&plan), Duration::from_secs(1));
     }
 }

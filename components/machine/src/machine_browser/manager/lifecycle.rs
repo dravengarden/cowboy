@@ -493,6 +493,32 @@ impl BrowserManager {
             .await
     }
 
+    /// A graceful stop that never waits for a snapshot copy, for callers
+    /// that must not block on one: supervision, which keeps its leases,
+    /// scans and the runtime cap meanwhile, and an open making room, whose
+    /// caller is waiting. Under the account lifecycle lock, where a copy is
+    /// admitted, a running copy defers the stop (`Ok(None)`: the caller
+    /// decides again later). `authorized` and `still` are then evaluated as
+    /// in [`Self::stop_instance_when`]; a refusal stops nothing.
+    pub(super) async fn stop_between_copies<E>(
+        &self,
+        instance: &Arc<Instance>,
+        reason: Reason,
+        authorized: impl FnOnce() -> Result<(), E>,
+        still: impl FnOnce(&Live) -> Result<(), E>,
+    ) -> Result<Option<StateEvent>, E> {
+        let slot = self.slot(&instance.account_id);
+        let _lifecycle = slot.lifecycle.lock().await;
+        if instance.copy_running() {
+            return Ok(None);
+        }
+        // Nothing below awaits before the phase changes.
+        authorized()?;
+        self.stop_locked_when(instance, reason, true, None, still)
+            .await
+            .map(Some)
+    }
+
     /// Stop while the caller holds the account lifecycle lock. Any running
     /// copy is cancelled. A graceful stop lets the browser flush and copies
     /// the profile at the barrier; a forced stop keeps the last published
@@ -843,9 +869,17 @@ impl BrowserManager {
         }
     }
 
+    /// The account's running instance, else what is known of its browser:
+    /// a unit that may still run answers `stopping`; otherwise `hibernated`,
+    /// with a pending reset or revocation as its reason, else with how its
+    /// last instance stopped (the stop's reason and whether unsaved state
+    /// was lost) while the profile is still the one that instance ran with.
     pub(super) fn query(&self, request_id: &str, account_id: &ProviderAccountId) -> StateEvent {
         let slot = self.slot(account_id);
-        let running = slot.instance.lock().clone();
+        let (running, last_stop) = {
+            let current = slot.instance.lock();
+            (current.clone(), *slot.last_stop.lock())
+        };
         if let Some(instance) = running {
             return instance.state(Some(request_id.to_owned()));
         }
@@ -863,6 +897,9 @@ impl BrowserManager {
                 ..unresolved
             };
         }
+        let stopped = last_stop.filter(|stop| {
+            record.pending.is_none() && stop.profile_revision == record.profile_revision
+        });
         StateEvent {
             request_id: Some(request_id.to_owned()),
             instance: InstanceRef {
@@ -871,10 +908,13 @@ impl BrowserManager {
                 incarnation: 0,
             },
             state: State::Hibernated,
-            reason: record.pending.as_ref().map(|pending| match pending.kind {
-                OperationKind::Reset => Reason::Busy,
-                OperationKind::Revoke => Reason::Revoked,
-            }),
+            reason: match &record.pending {
+                Some(pending) => Some(match pending.kind {
+                    OperationKind::Reset => Reason::Busy,
+                    OperationKind::Revoke => Reason::Revoked,
+                }),
+                None => stopped.map(|stop| stop.reason),
+            },
             geometry: None,
             scale: None,
             deadline_ms: None,
@@ -882,7 +922,7 @@ impl BrowserManager {
             snapshot_generation: record.current_generation,
             snapshot_at_ms: record.current_generation_at_ms,
             profile_revision: Some(record.profile_revision),
-            unsaved_state_lost: false,
+            unsaved_state_lost: stopped.is_some_and(|stop| stop.unsaved),
             observed_at_ms: unix_ms(),
         }
     }

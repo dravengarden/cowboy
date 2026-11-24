@@ -520,10 +520,10 @@ fn state_json(machine_id: &str, event: &StateEvent) -> Value {
 }
 
 /// Ask a Machine for the account's browser. Its answer is authoritative,
-/// including "nothing runs", and replaces the cached observation. Returns
-/// the observation as cached: a bare "nothing runs" keeps why the browser
-/// last stopped (`record_authoritative`). Bounded by `QUERY_TIMEOUT`; `None`
-/// when the Machine is unreachable or did not answer.
+/// including "nothing runs" (with how the browser last stopped, which the
+/// Machine keeps for as long as it runs), and replaces the cached
+/// observation. Bounded by `QUERY_TIMEOUT`; `None` when the Machine is
+/// unreachable or did not answer.
 pub async fn query_machine(
     state: &AppState,
     machine_id: &str,
@@ -542,7 +542,8 @@ pub async fn query_machine(
         )
         .await
         .ok()?;
-    Some(state.browsers.record_authoritative(&connection, &event))
+    state.browsers.record_authoritative(&connection, &event);
+    Some(event)
 }
 
 /// The observation a state read reports: the named Machine's when it holds

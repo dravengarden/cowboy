@@ -30,7 +30,7 @@ struct Fixture {
     instance: Arc<Instance>,
 }
 
-fn plan() -> MachineBrowserRuntimePlan {
+pub(super) fn plan() -> MachineBrowserRuntimePlan {
     let contract: cowboy_plugin_sdk::MachineBrowserContract = serde_json::from_str(
         &std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR"))

@@ -119,9 +119,23 @@ struct AccountSlot {
     /// Serializes lifecycle mutations and snapshots of one account.
     lifecycle: tokio::sync::Mutex<()>,
     instance: parking_lot::Mutex<Option<Arc<Instance>>>,
+    /// How the account's last instance stopped. Written where `instance` is
+    /// cleared and read with it, both under the `instance` lock, so a query
+    /// never finds the browser gone without the stop that ended it. Kept
+    /// in memory only: a restarted Machine knows the bare fact again.
+    last_stop: parking_lot::Mutex<Option<LastStop>>,
     /// Completion of the account's most recently dispatched ordered command;
     /// the next one starts only after it.
     order: parking_lot::Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+}
+
+/// The terminal outcome of an account's last instance, for the profile
+/// revision it ran with (a reset or revocation since makes it moot).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LastStop {
+    profile_revision: u64,
+    reason: Reason,
+    unsaved: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -859,6 +873,7 @@ impl BrowserManager {
                     Arc::new(AccountSlot {
                         lifecycle: tokio::sync::Mutex::new(()),
                         instance: parking_lot::Mutex::new(None),
+                        last_stop: parking_lot::Mutex::new(None),
                         order: parking_lot::Mutex::new(None),
                     })
                 }),

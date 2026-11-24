@@ -650,22 +650,26 @@ hibernated ──open──▶ starting ──ready──▶ detached ◀──a
   has been detached for 5 s, and the reservation is tried again. The 5 s
   cover the moments between an open's answer (or a dropped stream) and the
   viewer's attach, and count from the instance's verification, not from the
-  beginning of its start; the idle interval is re-checked under the
-  instance's state lock atomically with the change to `stopping`, so a
-  viewer that attached meanwhile keeps its browser. An instance that is
-  `starting` or `attached` is never taken. Nothing is hibernated for an
-  open that would be refused anyway: the opening account's record is read
-  first (a pending reset or revocation, a profile a newer browser wrote),
-  a Plugin uninstall that began meanwhile ends the attempt
-  (`not_available`, re-checked right before the stop changes anything),
-  and before every stop the reservation is tried again and the instances
-  still idle must suffice for the slots to free (the limit was lowered
-  below what runs, a unit whose exit is unconfirmed holds a slot). The
-  open waits at most 30 s for room, settle included: a stop still running
-  then finishes by itself (an instance that entered `stopping` is never
-  left there), the open is refused with `capacity` and finds the slot free
-  when retried, so the open and the start that follows stay within what
-  the Controller waits for. `max_instances = 0` turns browsers off on the
+  beginning of its start. An instance that is `starting` or `attached` is
+  never taken. Nothing is hibernated for an open that would be refused
+  anyway: the opening account's record is read first (a pending reset or
+  revocation, a profile a newer browser wrote); before every stop the
+  reservation is tried again and the instances idle then, not when the
+  open began, must suffice for the slots to free (the limit was lowered
+  below what runs, a unit whose exit is unconfirmed holds a slot); and at
+  the stop itself, under the instance's lifecycle lock (where a copy is
+  admitted) and its state lock, atomically with the change to `stopping`,
+  the instance must still be idle in the detached interval it was chosen
+  for with no copy running, a slot must still be missing, no Plugin
+  uninstall may have begun (`not_available`) and the open must still be
+  waiting. So a viewer that attached meanwhile keeps its browser, and an
+  open that gave up hibernates nobody afterwards. The open waits at most
+  30 s for room, settle included, and never more than the start's own
+  worst case (memory admission, unit activation, the control connection
+  and readiness) leaves of what the Controller waits for its answer: a
+  stop that began finishes by itself (an instance that entered `stopping`
+  is never left there), the open is refused with `capacity` and finds the
+  slot free when retried. `max_instances = 0` turns browsers off on the
   Device and answers `not_available`, not `capacity`: no slot can be freed. Memory admission goes through the same launch
   ledger as cold workers (a byte-weighted reservation, checked and taken in
   one step under the ledger lock, with exact refunds and the existing floor
@@ -713,18 +717,20 @@ hibernated ──open──▶ starting ──ready──▶ detached ◀──a
 - `ready` is accepted only after [confinement verification](#confinement-verification).
 - `attached` requires a live attachment lease. `detached` starts the
   `browser.hibernate_after` grace (default 120 s); expiry hibernates
-  (graceful stop with snapshot). The grace stop waits for a running copy and
-  the account lifecycle lock, so it re-checks, under the instance's state
-  lock and atomically with the change to `stopping`, that the instance is
+  (graceful stop with snapshot). Supervision never blocks on a snapshot
+  copy: while one runs the grace stop is put off to a later tick, so
+  leases, scans and the cap stay enforced. It waits for the account
+  lifecycle lock, so it re-checks, under the instance's state lock and
+  atomically with the change to `stopping`, that the instance is
   still `detached` in the same detached interval and that interval still
   exceeds the grace; an attach meanwhile abandons the idle stop. The
   deadline is not idleness and stops unconditionally, viewed or not. It
   stops gracefully 30 s ahead of the cap (reason `deadline`): the browser
   flushes and its profile is snapshotted, so a sign-in completed since the
   last periodic snapshot survives the cap. That stop begins after the
-  tick's lease expiry and due confinement scan, and while a copy is running
-  supervision keeps ticking (leases, scans, the cap) instead of blocking on
-  it. Persistence never extends the authority to run: every graceful stop's
+  tick's lease expiry and due confinement scan and, like the grace stop, is
+  put off while a copy runs. Persistence never extends the authority to
+  run: every graceful stop's
   launcher exchange (its wait for the control connection, the browser's
   exit and the stop-time copy) ends at the cap, where no copy is asked for
   any more. The cap itself only kills and reports `unsaved_state_lost`,
@@ -1005,14 +1011,16 @@ state is the outcome of the command that state answers (a detach of an
 attachment that already ended is `superseded`, a refused resize `failed`,
 an attach during a recheck `busy`), never a condition of the instance: the
 command's caller receives it, and the Controller's cached observation, which
-every state read reports, drops it. Why an instance stopped is its own
-state, and the Machine keeps no record of it: its answer to a query after
-the stop is the bare fact that nothing runs. The Controller's cache
-therefore keeps the reason and `unsaved_state_lost` of the terminal
-observation such an answer confirms (same connection and profile revision;
-a refused open names no revision and is never taken for a stop), so a state
-read still says why the browser is not running and whether the stop lost
-unsaved state, until the next run, a reset or a reconnect. `login_ended` and
+every state read reports, drops it. Why an instance stopped is the
+account's own state: the Machine keeps the outcome of each account's last
+instance (its reason and `unsaved_state_lost`, for the profile revision it
+ran with) in memory, written where the instance is forgotten and read
+with it under one lock, and `BrowserQuery` answers `hibernated` with it. A
+state read of a stopped browser asks the Machine, so it says why the
+browser is not running and whether the stop lost unsaved state, never the
+bare fact alone in between, until the next run, a reset or revocation
+(another profile revision) or a Machine restart. A pending reset or
+revocation is reported before it. `login_ended` and
 `login_mismatch` belong to the retired sign-in purpose and stay decodable
 only for older Machines.
 
@@ -2270,8 +2278,11 @@ the text above:
   revision and current snapshot. A command naming the retained incarnation
   answers the same `stopping` observation. Otherwise `Query`, and every
   `Reset`/`Revoke` answer, is a `hibernated` observation with
-  `instance_id: ""` and `incarnation: 0`. A failed start whose exit is
-  confirmed later reports that incarnation's terminal `hibernated`.
+  `instance_id: ""` and `incarnation: 0`; `Query`'s carries how the
+  account's last instance stopped (its reason and `unsaved_state_lost`)
+  while the profile revision is still that instance's and no reset or
+  revocation is pending. A failed start whose exit is confirmed later
+  reports that incarnation's terminal `hibernated`.
 - `BrowserAttach` replaces any live attachment (takeover) and the old
   stream's close cannot touch the replacement because the attachment id
   differs; lease renewals are bounded to 30 s from now whatever the

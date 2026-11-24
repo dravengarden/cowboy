@@ -481,3 +481,141 @@ async fn the_graceful_stop_waits_supervised_while_a_copy_runs() {
     );
     assert!(!registered(&fixture));
 }
+
+#[tokio::test]
+async fn an_open_that_stopped_waiting_hibernates_nobody_afterwards() {
+    let mut fixture = fixture().await;
+    fixture.units.make_stoppable("cowboy-browser-inst-1");
+    idle_for_a_minute(&fixture);
+    // The idle browser's lifecycle lock is held (a snapshot being published,
+    // a reset) for longer than the open waits for room.
+    let slot = fixture.manager.slot(&fixture.account);
+    let held = slot.lifecycle.lock().await;
+    let refused = tokio::time::timeout(
+        Duration::from_secs(15),
+        reserve(&fixture.manager, &other_account(), 1),
+    )
+    .await
+    .expect("the open outlived its wait for room");
+    assert_eq!(refused.err(), Some(Reason::Capacity));
+    // Its stop gets the lock only now, and no longer has anyone to make
+    // room for: the browser keeps running.
+    drop(held);
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(registered(&fixture));
+    assert_eq!(fixture.instance.live.lock().phase, Phase::Detached);
+    assert!(fixture.units.terminations().is_empty());
+    assert!(launcher_idle(&mut fixture.launcher).await);
+}
+
+#[tokio::test]
+async fn a_query_after_a_stop_says_how_the_browser_stopped() {
+    // The cap kills: the profile since the last snapshot is lost.
+    let fixture = fixture_with(None, Duration::ZERO).await;
+    fixture.units.make_stoppable("cowboy-browser-inst-1");
+    assert!(fixture.manager.supervise(&fixture.instance).await);
+    let answer = fixture.manager.query("q1", &fixture.account);
+    assert_eq!(answer.state, State::Hibernated);
+    assert_eq!(answer.instance.incarnation, 0);
+    assert_eq!(answer.reason, Some(Reason::Deadline));
+    assert!(answer.unsaved_state_lost);
+    // Another account's query knows nothing of it.
+    let other = fixture.manager.query("q2", &other_account());
+    assert_eq!(other.reason, None);
+    assert!(!other.unsaved_state_lost);
+    // A pending fence is the account's state before any earlier stop.
+    let account_dir = fixture.manager.account_dir(&fixture.account).unwrap();
+    let mut record = state_file::read_control(&account_dir).unwrap();
+    record.pending = Some(PendingOperation {
+        kind: OperationKind::Reset,
+        operation_id: "op-1".into(),
+        next_profile_revision: record.profile_revision + 1,
+        started_at_ms: unix_ms(),
+    });
+    state_file::write_control(&account_dir, &record).unwrap();
+    let fenced = fixture.manager.query("q3", &fixture.account);
+    assert_eq!(fenced.reason, Some(Reason::Busy));
+    assert!(!fenced.unsaved_state_lost);
+    // The reset completed: the stop was of a profile that is gone.
+    record.pending = None;
+    record.profile_revision += 1;
+    state_file::write_control(&account_dir, &record).unwrap();
+    let reset = fixture.manager.query("q4", &fixture.account);
+    assert_eq!(reset.reason, None);
+    assert!(!reset.unsaved_state_lost);
+}
+
+#[tokio::test]
+async fn a_query_after_a_saved_stop_reports_nothing_lost() {
+    let mut fixture = fixture().await;
+    fixture.units.make_stoppable("cowboy-browser-inst-1");
+    let hibernating = {
+        let manager = Arc::clone(&fixture.manager);
+        let reference = fixture.instance.reference();
+        tokio::spawn(async move { manager.hibernate("h1", &reference).await })
+    };
+    answer_graceful_stop(&mut fixture.launcher).await;
+    let stopped = hibernating.await.unwrap();
+    assert_eq!(stopped.reason, Some(Reason::OwnerRequest));
+    let answer = fixture.manager.query("q1", &fixture.account);
+    assert_eq!(answer.state, State::Hibernated);
+    assert_eq!(answer.reason, Some(Reason::OwnerRequest));
+    assert!(!answer.unsaved_state_lost);
+    assert_eq!(answer.snapshot_generation, stopped.snapshot_generation);
+}
+
+#[tokio::test]
+async fn the_grace_stop_is_put_off_while_a_copy_runs() {
+    let mut fixture = fixture().await;
+    fixture.units.make_stoppable("cowboy-browser-inst-1");
+    // The grace ran out while a copy (started while attached) still runs.
+    fixture.instance.live.lock().detached_since = Some(
+        Instant::now()
+            .checked_sub(fixture.instance.settings.hibernate_after + Duration::from_secs(1))
+            .unwrap(),
+    );
+    let mut job = {
+        let manager = Arc::clone(&fixture.manager);
+        let instance = Arc::clone(&fixture.instance);
+        tokio::spawn(async move { manager.snapshot_job(&instance).await })
+    };
+    let copy = read_command(&mut fixture.launcher, &mut job).await;
+    assert_eq!(copy["command"], "snapshot");
+    // Supervision is not blocked by it and stops nothing yet.
+    let gone = tokio::time::timeout(
+        Duration::from_secs(5),
+        fixture.manager.supervise(&fixture.instance),
+    )
+    .await
+    .expect("supervision blocked on the running copy");
+    assert!(!gone);
+    assert_eq!(fixture.instance.live.lock().phase, Phase::Detached);
+    assert!(launcher_idle(&mut fixture.launcher).await);
+    // The copy finishes; the next tick hibernates for the grace.
+    let reply = format!(
+        "{{\"id\":{},\"ok\":true,\"bytes\":0,\"entries\":0}}\n",
+        copy["id"]
+    );
+    fixture.launcher.write_all(reply.as_bytes()).await.unwrap();
+    job.await.unwrap().unwrap();
+    let (_uplink, mut received) = uplink(&fixture.manager);
+    let supervised = {
+        let manager = Arc::clone(&fixture.manager);
+        let instance = Arc::clone(&fixture.instance);
+        tokio::spawn(async move { manager.supervise(&instance).await })
+    };
+    answer_graceful_stop(&mut fixture.launcher).await;
+    assert!(
+        tokio::time::timeout(Duration::from_secs(10), supervised)
+            .await
+            .expect("supervision did not finish the stop")
+            .unwrap()
+    );
+    let reported = states(&mut received);
+    assert!(
+        reported
+            .iter()
+            .any(|state| state.state == State::Hibernated && state.reason == Some(Reason::Grace)),
+        "{reported:?}"
+    );
+}

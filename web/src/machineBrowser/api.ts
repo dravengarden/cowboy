@@ -558,7 +558,7 @@ const REASON_TEXT: Record<string, string> = {
   disabled: "The browser was disabled for this account.",
   owner_request: "Hibernated on request.",
   capacity:
-    "Every browser slot on this Machine is taken by a browser someone is viewing or that is still starting or stopping. Close that one, or retry in a moment.",
+    "Every browser slot on this Machine is in use. Close a browser that is open there, or retry in a moment.",
   memory:
     "The Machine has no memory headroom for a browser right now. It frees up as other work on that Machine finishes; retry in a moment.",
   busy: "Another browser operation for this account is still in progress.",
