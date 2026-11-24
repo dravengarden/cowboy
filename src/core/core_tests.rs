@@ -5003,3 +5003,96 @@ fn wait_cache_context_sample_requires_the_same_native_id_and_provider_generation
     hub.prepare_context_reset(id);
     assert_eq!(hub.verified_context_usage(&meta()), None);
 }
+
+#[test]
+fn recovery_draft_cmid_survives_delete_rejects_reused_op_and_seeds_restored_qids() {
+    let hub = Hub::new();
+    hub.create_local_session(
+        "s-rec-cmid".into(),
+        "antigravity".into(),
+        "/tmp".into(),
+        "s-rec-cmid".into(),
+        SessionOrigin::Web,
+        false,
+    );
+    let caller = crate::prompt_origin::RequestCaller::Person;
+    hub.park_recovery_draft(
+        "s-rec-cmid",
+        "original ambiguous prompt".into(),
+        vec![serde_json::json!({"type": "text", "text": "original ambiguous prompt"})],
+        Some("orig-op-1".into()),
+    );
+    hub.submit(
+        "s-rec-cmid",
+        "other queued".into(),
+        vec![serde_json::json!({"type": "text", "text": "other queued"})],
+        Some("existing-op-2".into()),
+        &caller,
+    );
+    let draft_id = hub.inner.sessions.lock()["s-rec-cmid"].drafts[0].id.clone();
+    assert!(draft_id.starts_with("recovery-"));
+
+    // R7-14: Activating a recovery draft with an already-accepted op ID leaves it intact.
+    hub.activate_draft(
+        "s-rec-cmid",
+        &draft_id,
+        Some("existing-op-2".into()),
+        &caller,
+    );
+    assert_eq!(hub.inner.sessions.lock()["s-rec-cmid"].drafts.len(), 1);
+    assert_eq!(hub.inner.sessions.lock()["s-rec-cmid"].queue.len(), 1);
+
+    // R7-13: Removing the recovery draft preserves durable recovery_cmids dedup + persisted setting.
+    hub.remove_draft("s-rec-cmid", &draft_id);
+    assert_eq!(hub.inner.sessions.lock()["s-rec-cmid"].drafts.len(), 0);
+    assert!(
+        hub.setting(&format!(
+            "{}s-rec-cmid",
+            settings_keys::SESSION_RECOVERY_CMIDS_PREFIX
+        ))
+        .is_some(),
+        "recovery cmid setting must be persisted"
+    );
+    hub.submit(
+        "s-rec-cmid",
+        "offline retry of original".into(),
+        vec![serde_json::json!({"type": "text", "text": "offline retry of original"})],
+        Some("orig-op-1".into()),
+        &caller,
+    );
+    assert_eq!(
+        hub.inner.sessions.lock()["s-rec-cmid"].queue.len(),
+        1,
+        "removed recovery draft cmid must still block offline retry"
+    );
+
+    // R7-12: Restored recovery-qN drafts seed next_qid past N, and healed duplicates keep recovery-.
+    let mut restored_meta = hub.inner.sessions.lock()["s-rec-cmid"].meta.clone();
+    restored_meta.id = "s-rec-seed".into();
+    let restored = RestoredSession {
+        meta: restored_meta,
+        log: Vec::new(),
+        event_count: 0,
+        reached_start: true,
+        next_seq: 1,
+        queue: Vec::new(),
+        drafts: vec![QueuedMessage {
+            id: "recovery-q42".into(),
+            text: "parked".into(),
+            content: vec![],
+            cmid: Some("orig-42".into()),
+            schedule: None,
+            origin: None,
+            initiator: None,
+        }],
+        config_options: None,
+        config_preferences: serde_json::Value::Null,
+        mobile_review_state: serde_json::Value::Null,
+        folder_id: None,
+        last_event_at_ms: None,
+    };
+    hub.seed_restored_queue_ids(&[restored]);
+    assert_eq!(hub.next_qid(), "q43");
+    assert_eq!(hub.next_healed_qid("recovery-q42"), "recovery-q44");
+    assert_eq!(hub.next_healed_qid("q42"), "q45");
+}

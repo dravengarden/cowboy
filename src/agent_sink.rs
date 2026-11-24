@@ -35,6 +35,9 @@ pub trait AgentSink: Send + Sync + 'static {
     /// Record a validated proxy fallback `cowboy.uncertain_effect` into the
     /// worker's trusted ledger before `Event::TurnEnd` is published.
     fn record_proxy_uncertain_effect(&self, _session_id: &str, _method: &str) {}
+    /// If the agent subprocess exited while a sandboxed prompt remained
+    /// unanswered after bounded drain, durably hold the session uncertain.
+    fn record_unconfirmed_exit_if_sandboxed(&self, _session_id: &str) {}
     /// Explicit execution hooks carry only local correlation, never prompt
     /// content or a Provider credential/environment binding.
     fn prompt_started(&self, _session_id: &str, _cmid: Option<&str>) {}

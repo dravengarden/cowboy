@@ -230,6 +230,22 @@ pub(super) struct Admitted {
     is_result_relay: bool,
 }
 
+/// Keeps an admitted mutation or result-bearing relay counted in the ledger
+/// until the endpoint has either written the reply or recorded it undelivered.
+pub(super) struct SettlementGuard {
+    ledger: Arc<Ledger>,
+    admitted: Option<Admitted>,
+    start: Option<String>,
+}
+
+impl Drop for SettlementGuard {
+    fn drop(&mut self) {
+        if let Some(admitted) = self.admitted.take() {
+            self.ledger.settled(&admitted, self.start.as_deref());
+        }
+    }
+}
+
 impl Ledger {
     /// Open the session's ledger on the current runtime. Only the uncertain
     /// effect survives a worker; processes are never inherited. The ledger
@@ -987,48 +1003,57 @@ impl Client {
     /// is the plain invocation; with one, effects are admitted (and starts
     /// recorded) first and lost replies mark the session's effect uncertain.
     pub async fn relay(self: &Arc<Self>, method: String, params: Value) -> Value {
+        let (reply, _guard) = self.relay_guarded(method, params).await;
+        reply
+    }
+
+    pub(super) async fn relay_guarded(
+        self: &Arc<Self>,
+        method: String,
+        params: Value,
+    ) -> (Value, Option<SettlementGuard>) {
         let Some(ledger) = self.ledger().cloned() else {
             if method == UNCERTAIN_REPORT {
-                return refused("no execution ledger");
+                return (refused("no execution ledger"), None);
             }
-            return self
+            let reply = self
                 .invoke(method, params)
                 .await
                 .unwrap_or_else(|_| unavailable());
+            return (reply, None);
         };
         if method == super::memory_bridge::MEMORY_REQUEST {
             if params.get("path").and_then(Value::as_str) == Some("/v1/observe")
                 && !ledger.observation_open()
             {
-                return refused("memory evidence is accepted only for a turn");
+                return (refused("memory evidence is accepted only for a turn"), None);
             }
-            return match self.memory.get() {
+            let reply = match self.memory.get() {
                 Some(memory) => memory.forward(&params).await,
                 None => refused("memory is not available in this session"),
             };
+            return (reply, None);
         }
         if method == super::extension_broker::EXTENSIONS_REQUEST {
-            return match self.extensions.get() {
+            let reply = match self.extensions.get() {
                 Some(broker) => broker.list().await,
                 None => json!({"result": {"tools": [], "instructions": ""}}),
             };
+            return (reply, None);
         }
         if method == super::extension_broker::EXTENSION_CALL {
-            return match self.extensions.get().cloned() {
+            let reply = match self.extensions.get().cloned() {
                 Some(broker) => broker.call(self, &params).await,
                 None => refused("this session has no extensions"),
             };
+            return (reply, None);
         }
         if method == crate::account_sandbox::DRAINED {
             // The unit read every reply it awaited before its stop (L1c).
             self.relays.acknowledge();
-            return json!({"result": {}});
+            return (json!({"result": {}}), None);
         }
         if method == UNCERTAIN_REPORT {
-            // The facade detected an unknown outcome every transport call
-            // of which was answered (a timed-out publish): recorded like a
-            // lost reply. Reporting one only parks the session (fail
-            // closed), so the agent side may.
             let reported = params
                 .get("method")
                 .and_then(Value::as_str)
@@ -1041,17 +1066,22 @@ impl Client {
                 })
                 .unwrap_or("request");
             ledger.mark_uncertain(reported);
-            return json!({"result": {}});
+            return (json!({"result": {}}), None);
         }
         let admitted = match ledger.admit(&method, &params) {
             Ok(admitted) => admitted,
-            Err(reason) => return refused(reason),
+            Err(reason) => return (refused(reason), None),
         };
         let process = process_id(&params);
         let start = (method == "process/start")
             .then(|| process.clone())
             .flatten();
         let start_gen = admitted.as_ref().and_then(|admitted| admitted.start_gen);
+        let guard = admitted.map(|admitted| SettlementGuard {
+            ledger: Arc::clone(&ledger),
+            admitted: Some(admitted),
+            start: start.clone(),
+        });
         // Snapshot confirmed start generation BEFORE sending so a concurrent
         // `process/read` or `process/terminate` overtaking an in-flight/ambiguous
         // `process/start` can never erase its live or durable obligation.
@@ -1103,10 +1133,7 @@ impl Client {
                 }
             }
         };
-        if let Some(admitted) = &admitted {
-            ledger.settled(admitted, start.as_deref());
-        }
-        response
+        (response, guard)
     }
 
     /// Whether a lost reply of this request hides a result the agent acts

@@ -21,6 +21,38 @@ impl Hub {
         );
     }
 
+    pub(in crate::core) fn persist_recovery_cmid_if_needed(
+        &self,
+        session_id: &str,
+        cmid: Option<&str>,
+    ) {
+        let Some(cmid) = cmid.filter(|c| !c.is_empty()) else {
+            return;
+        };
+        let updated = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            if s.recovery_cmids.insert(cmid.to_owned()) {
+                let mut list: Vec<String> = s.recovery_cmids.iter().cloned().collect();
+                list.sort();
+                Some(list)
+            } else {
+                None
+            }
+        };
+        if let Some(list) = updated {
+            self.set_setting(
+                format!(
+                    "{}{session_id}",
+                    settings_keys::SESSION_RECOVERY_CMIDS_PREFIX
+                ),
+                serde_json::json!(list),
+            );
+        }
+    }
+
     pub(in crate::core) fn add_recovery_draft(
         &self,
         session_id: &str,
@@ -28,6 +60,7 @@ impl Hub {
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
     ) {
+        let saved_cmid = cmid.clone();
         let duplicate;
         {
             let mut sessions = self.inner.sessions.lock();
@@ -51,6 +84,7 @@ impl Hub {
                 });
             }
         }
+        self.persist_recovery_cmid_if_needed(session_id, saved_cmid.as_deref());
         if let Some(cmid) = duplicate {
             self.confirm_delivered(session_id, &cmid);
         } else {
@@ -494,9 +528,11 @@ impl Hub {
             };
             let target = &s.drafts[pos];
             if target.id.starts_with("recovery-") {
-                let fresh_op = cmid
-                    .as_deref()
-                    .is_some_and(|op| !op.is_empty() && Some(op) != target.cmid.as_deref());
+                let fresh_op = cmid.as_deref().is_some_and(|op| {
+                    !op.is_empty()
+                        && Some(op) != target.cmid.as_deref()
+                        && !Self::prompt_already_accepted(s, op)
+                });
                 if !fresh_op {
                     drop(sessions);
                     self.broadcast_error(

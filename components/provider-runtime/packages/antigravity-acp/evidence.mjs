@@ -293,23 +293,29 @@ export class AgyLog {
     const deadline = Date.now() + this.barrierTimeoutMs;
     try {
       for (;;) {
-        const exitedBeforeRead = this.childExited;
+        const exitedBeforeStat = this.childExited;
         const size = (await stat(await this.locate())).size;
-        if (!exitedBeforeRead && size - cursor > MAX_WINDOW) return classify([], {});
-        const readStart = exitedBeforeRead ? Math.max(cursor, size - MAX_WINDOW) : cursor;
-        const records = parseRecords(await this.read(readStart, size), sessionId, nonce);
-        if (
-          records.some((record) => record.kind === "barrier") ||
-          exitedBeforeRead ||
-          Date.now() >= deadline
-        ) {
+        if (size - cursor > MAX_WINDOW) {
+          if (!exitedBeforeStat && this.childExited) continue;
+          // Never classify a truncated tail that omits an earlier prefix of the turn.
+          return classify([], {});
+        }
+        const records = parseRecords(await this.read(cursor, size), sessionId, nonce);
+        if (records.some((record) => record.kind === "barrier")) {
           const prior = parseRecords(
             await this.read(Math.max(0, cursor - MAX_WINDOW), cursor),
             undefined,
           );
           return classify(records, { prior, stopReason });
         }
-        if (this.childExited) continue;
+        if (!exitedBeforeStat && this.childExited) continue;
+        if (exitedBeforeStat || Date.now() >= deadline) {
+          const prior = parseRecords(
+            await this.read(Math.max(0, cursor - MAX_WINDOW), cursor),
+            undefined,
+          );
+          return classify(records, { prior, stopReason });
+        }
         await new Promise((resolve) => setTimeout(resolve, this.pollMs));
       }
     } catch {

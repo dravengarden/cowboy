@@ -23,6 +23,9 @@ pub(super) struct Done {
     /// Counted in flight until this reply was handled (written to the unit,
     /// or recorded undelivered): dropped with it.
     _in_flight: crate::account_sandbox::RelayGuard,
+    /// Keeps the ledger admission/result-relay count held until delivery or
+    /// undelivered classification completes (dropped after `delivered`/`undelivered`).
+    _ledger_guard: Option<super::ledger::SettlementGuard>,
 }
 
 impl Done {
@@ -73,16 +76,18 @@ impl Relays {
         self.pending += 1;
         tokio::spawn(async move {
             let carries_result = client.carries_result(&method, &params);
-            let reply = client.relay(method.clone(), params).await;
+            let (reply, ledger_guard) = client.relay_guarded(method.clone(), params).await;
             let done = Done {
                 id,
                 method,
                 carries_result,
                 reply,
                 _in_flight: in_flight,
+                _ledger_guard: ledger_guard,
             };
             if let Err(mpsc::error::SendError(done)) = sender.send(done) {
                 client.undelivered(&done.method, done.carries_result, &done.reply);
+                drop(done);
             }
         });
     }

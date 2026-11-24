@@ -44,8 +44,8 @@ pub use hub_events::FanoutFrame;
 mod hub_managed_calls;
 pub use hub_managed_calls::{
     NoticeClaimGuard, NoticeRequeueRequest, OwnerNoticeWithdrawalOp, OwnerQueueMutation,
-    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, RetainedLogScan,
-    StoreAckSink, UndeliveredRequeue,
+    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, RecoveryDraftPark,
+    RetainedLogScan, StoreAckSink, UndeliveredRequeue,
 };
 mod hub_peer_notice;
 pub use hub_peer_notice::PromptProgress;
@@ -554,6 +554,33 @@ impl Hub {
     }
 
     /// Whether a restored session waits for resources by explicit request.
+    fn next_healed_qid(&self, existing_id: &str) -> String {
+        if existing_id.starts_with("recovery-") {
+            format!("recovery-{}", self.next_qid())
+        } else {
+            self.next_qid()
+        }
+    }
+
+    fn restored_recovery_cmids(&self, id: &str, drafts: &[QueuedMessage]) -> HashSet<String> {
+        let mut cmids: HashSet<String> = self
+            .setting(&format!(
+                "{}{id}",
+                settings_keys::SESSION_RECOVERY_CMIDS_PREFIX
+            ))
+            .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
+            .map(|items| items.into_iter().collect())
+            .unwrap_or_default();
+        for m in drafts {
+            if m.id.starts_with("recovery-")
+                && let Some(cmid) = m.cmid.as_ref()
+            {
+                cmids.insert(cmid.clone());
+            }
+        }
+        cmids
+    }
+
     fn restored_explicit_wait(&self, id: &str) -> bool {
         self.setting(&format!(
             "{}{id}",
@@ -684,6 +711,9 @@ struct Session {
     /// ran. Bounded; the echoed `cmid` in `log` covers the rest and survives a
     /// Controller restart.
     dispatched_cmids: VecDeque<DispatchedPrompt>,
+    /// Durable set of original client `cmid`s parked by ambiguous prompt recovery
+    /// so offline retries never replay them even after editing or removing the draft.
+    recovery_cmids: HashSet<String>,
     dispatched_origins: HashMap<String, crate::prompt_origin::PromptDispatchRecord>,
     dispatched_origin_order: VecDeque<String>,
     /// Single-use pending worker echoes `(origin, expected_blocks)`.
@@ -2184,7 +2214,7 @@ impl Hub {
                     queue.len() != queue_len || drafts.len() != drafts_len;
                 for m in queue.iter_mut().chain(drafts.iter_mut()) {
                     if !seen.insert(m.id.clone()) {
-                        m.id = self.next_qid();
+                        m.id = self.next_healed_qid(&m.id);
                         seen.insert(m.id.clone());
                         healed = true;
                     }
@@ -2277,6 +2307,7 @@ impl Hub {
                         config_options,
                         config_previews: ConfigPreviews::default(),
                         config_preferences,
+                        recovery_cmids: self.restored_recovery_cmids(&id, &drafts),
                         queue,
                         drafts,
                         editing: None,
@@ -3100,6 +3131,7 @@ impl Hub {
                     explicit_wait: false,
                     dispatch_pending: None,
                     dispatched_cmids: VecDeque::new(),
+                    recovery_cmids: HashSet::new(),
                     dispatched_origins: HashMap::new(),
                     dispatched_origin_order: VecDeque::new(),
                     pending_echoes: HashMap::new(),

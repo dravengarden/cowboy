@@ -334,17 +334,55 @@ fn config_current_value(option: &serde_json::Value) -> Option<&serde_json::Value
         .or_else(|| option.get("current_value"))
 }
 
-/// Check whether `command` (when `CoreCommand::Prompt`) is gated by an
-/// unacknowledged `uncertain_effect` on the current worker — withdrawing and
-/// requeuing it ONLY if provably unsent — and stamp its epoch + acknowledged
-/// sequence binding before transport handoff. Returns `false` if dispatch
-/// should be skipped.
-pub(super) fn prepare_prompt_for_send(
+pub(super) enum PromptPrep {
+    Ready,
+    Skip,
+    ParkAmbiguous {
+        session_id: String,
+        command: Box<CoreCommand>,
+        reconcile_idle: bool,
+    },
+}
+
+pub(super) async fn prepare_or_park_prompt_for_send(
     shared: &Shared,
     key: &str,
     version: u64,
     command: &mut CoreCommand,
 ) -> bool {
+    match prepare_prompt_for_send(shared, key, version, command) {
+        PromptPrep::Ready => true,
+        PromptPrep::Skip => false,
+        PromptPrep::ParkAmbiguous {
+            session_id,
+            command,
+            reconcile_idle,
+        } => {
+            notice_recovery::park_and_retire_ambiguous_pending(
+                shared,
+                &session_id,
+                key,
+                version,
+                *command,
+                "prompt delivery across worker change is unresolved; retained as draft",
+                reconcile_idle,
+            )
+            .await;
+            false
+        }
+    }
+}
+
+/// Check whether `command` (when `CoreCommand::Prompt`) is gated by an
+/// unacknowledged `uncertain_effect` on the current worker — withdrawing and
+/// requeuing it ONLY if provably unsent — and stamp its epoch + acknowledged
+/// sequence binding before transport handoff.
+pub(super) fn prepare_prompt_for_send(
+    shared: &Shared,
+    key: &str,
+    version: u64,
+    command: &mut CoreCommand,
+) -> PromptPrep {
     let CoreCommand::Prompt {
         session_id,
         expected_worker_epoch,
@@ -352,7 +390,7 @@ pub(super) fn prepare_prompt_for_send(
         ..
     } = command
     else {
-        return true;
+        return PromptPrep::Ready;
     };
     let worker_snapshot = shared.workers.lock().get(session_id).cloned();
     let already_attempted = shared.attempted_sends.lock().contains(key);
@@ -363,6 +401,10 @@ pub(super) fn prepare_prompt_for_send(
         let current_epoch = worker_snapshot
             .as_ref()
             .map(|worker| worker.worker_epoch.as_str());
+        let superseded_by_replacement = matches!(
+            (expected_worker_epoch.as_deref(), current_epoch),
+            (Some(bound), Some(current)) if current != bound
+        );
         let ambiguous = match (expected_worker_epoch.as_deref(), current_epoch) {
             (Some(bound), Some(current)) => current != bound,
             (None, _) => true,
@@ -375,34 +417,24 @@ pub(super) fn prepare_prompt_for_send(
                     .then(|| pending.get(key).cloned())
                     .flatten()
             };
-            if let Some(cmd) = snapshot {
-                // Commit durable draft BEFORE retiring the pending command.
-                notice_recovery::park_ambiguous_prompt_command(
-                    shared,
-                    session_id,
-                    cmd,
-                    "prompt delivery across worker change is unresolved; retained as draft",
-                );
-                let mut pending = shared.pending.lock();
-                if pending.remove_if_version(key, version).is_some() {
-                    shared.sent.lock().remove(key);
-                    shared.attempted_sends.lock().remove(key);
-                    shared.retransmitted_sends.lock().remove(key);
-                }
-                drop(pending);
-                notice_recovery::reconcile_idle_guard_for_session(shared, session_id);
-            }
-            return false;
+            return match snapshot {
+                Some(cmd) => PromptPrep::ParkAmbiguous {
+                    session_id: session_id.clone(),
+                    command: Box::new(cmd),
+                    reconcile_idle: superseded_by_replacement,
+                },
+                None => PromptPrep::Skip,
+            };
         }
         if current_epoch.is_none() {
-            return false;
+            return PromptPrep::Skip;
         }
         if let Some(worker) = worker_snapshot.as_ref()
             && unacknowledged_uncertain_effect(&shared.hub, worker).is_some()
         {
-            return false;
+            return PromptPrep::Skip;
         }
-        return true;
+        return PromptPrep::Ready;
     }
     if let Some(worker) = worker_snapshot.as_ref()
         && let Some(reason) = unacknowledged_uncertain_effect(&shared.hub, worker)
@@ -415,7 +447,7 @@ pub(super) fn prepare_prompt_for_send(
                 Some(reason),
             );
         }
-        return false;
+        return PromptPrep::Skip;
     }
     let mut mutated = false;
     if acknowledged_uncertain_sequence.is_none() {
@@ -444,7 +476,7 @@ pub(super) fn prepare_prompt_for_send(
             .lock()
             .update_if_version(key, version, command.clone())
     {
-        return false;
+        return PromptPrep::Skip;
     }
-    true
+    PromptPrep::Ready
 }

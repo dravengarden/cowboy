@@ -29,7 +29,8 @@ impl Hub {
         let mut max_qid = 0u64;
         for r in sessions {
             for m in r.queue.iter().chain(r.drafts.iter()) {
-                if let Some(n) = m.id.strip_prefix('q').and_then(|s| s.parse::<u64>().ok()) {
+                let raw = m.id.strip_prefix("recovery-").unwrap_or(&m.id);
+                if let Some(n) = raw.strip_prefix('q').and_then(|s| s.parse::<u64>().ok()) {
                     max_qid = max_qid.max(n);
                 }
             }
@@ -733,10 +734,11 @@ impl Hub {
     /// worker, or echoed into the transcript (which survives
     /// a Controller restart because the echo persists its `cmid`).
     pub(super) fn prompt_already_accepted(s: &Session, cmid: &str) -> bool {
-        if s.queue
-            .iter()
-            .chain(&s.drafts)
-            .any(|m| m.cmid.as_deref() == Some(cmid))
+        if s.recovery_cmids.contains(cmid)
+            || s.queue
+                .iter()
+                .chain(&s.drafts)
+                .any(|m| m.cmid.as_deref() == Some(cmid))
         {
             return true;
         }

@@ -12,11 +12,14 @@ use super::{
     WorkerSnapshot, WorkerState,
 };
 use crate::agent_model::CALL_NOTICE_PREFIX;
-use crate::core::{NoticeRequeueRequest, UndeliveredRequeue};
+use crate::core::{NoticeRequeueRequest, RecoveryDraftPark, UndeliveredRequeue};
 use crate::store::NoticeDeliveryState;
 
 mod teardown;
 pub(super) use teardown::{
+    is_ambiguous_prompt_rejection, park_ambiguous_prompt_command, park_ambiguous_prompt_durable,
+    park_and_retire_ambiguous_pending, reconcile_idle_guard_for_session,
+    recover_pending_prompts_on_disconnect, replacement_worker_superseded_epoch,
     requeue_rejected_command, requeue_unsent_notices_on_disconnect, revive_and_try_prompt,
 };
 
@@ -58,10 +61,11 @@ pub(super) struct PendingUndeliveredNotice {
     admitted: bool,
 }
 
-/// Validate, park-before-retire if ambiguous, remove from `pending`, clear
-/// steering waiters + tracking sets, and reconcile idle guard on `CommandAck`.
-/// Returns `None` when `command_id` belongs to a different session.
-pub(super) fn take_acked_command(
+/// Validate, durably park-before-retire if ambiguous, remove from `pending`,
+/// and clear steering waiters + tracking sets on `CommandAck`.
+/// Returns `None` when `command_id` belongs to a different session or when
+/// durable recovery parking failed (keeping the command fenced in `pending`).
+pub(super) async fn take_acked_command(
     shared: &Shared,
     session_id: &str,
     command_id: &str,
@@ -81,14 +85,25 @@ pub(super) fn take_acked_command(
         }
         pending.get(command_id).cloned()
     };
-    let parked_ambiguous = !accepted
-        && park_if_ambiguous_rejection(
-            shared,
-            session_id,
-            peeked.as_ref(),
-            was_retransmitted,
-            reason,
+    let is_ambiguous =
+        !accepted && is_ambiguous_prompt_rejection(peeked.as_ref(), was_retransmitted, reason);
+    if is_ambiguous {
+        let cmd = peeked.as_ref()?;
+        let message = reason.unwrap_or(
+            "prompt delivery across worker change or retry is unresolved; retained as draft",
         );
+        if !park_ambiguous_prompt_durable(shared, session_id, cmd, message).await {
+            shared.fenced_commands.lock().insert(command_id.to_owned());
+            return None;
+        }
+        let command = shared.pending.lock().remove(command_id);
+        clear_acked_command(shared, command_id);
+        shared.in_flight_prompts.lock().retire_command(command_id);
+        if replacement_worker_superseded_epoch(shared, session_id, cmd) {
+            reconcile_idle_guard_for_session(shared, session_id);
+        }
+        return Some((command, true));
+    }
     let command = shared.pending.lock().remove(command_id);
     if !accepted
         && let Some(CoreCommand::Steer { cmid, .. } | CoreCommand::CancelTurn { cmid, .. }) =
@@ -101,11 +116,7 @@ pub(super) fn take_acked_command(
         let _ = waiter.send("unknown".into());
     }
     clear_acked_command(shared, command_id);
-    if parked_ambiguous {
-        shared.in_flight_prompts.lock().retire_command(command_id);
-        reconcile_idle_guard_for_session(shared, session_id);
-    }
-    Some((command, parked_ambiguous))
+    Some((command, false))
 }
 
 /// Clear in-flight send/attempt/fence tracking once `CommandAck` arrives.
@@ -253,6 +264,9 @@ pub(super) fn handle_rejected_ack(
         let message = reason.unwrap_or_else(|| {
             "prompt delivery across worker change is unresolved; retained as draft".to_owned()
         });
+        let superseded = command
+            .as_ref()
+            .is_some_and(|cmd| replacement_worker_superseded_epoch(shared, session_id, cmd));
         if let Some(cmd) = command {
             park_ambiguous_prompt_command(shared, session_id, cmd, &message);
         } else {
@@ -261,153 +275,12 @@ pub(super) fn handle_rejected_ack(
                 .broadcast_error(Some(session_id.to_owned()), message);
         }
         shared.in_flight_prompts.lock().retire_command(command_id);
-        reconcile_idle_guard_for_session(shared, session_id);
+        if superseded {
+            reconcile_idle_guard_for_session(shared, session_id);
+        }
     } else {
         requeue_rejected_command(shared, session_id, command, reason);
         shared.in_flight_prompts.lock().retire_command(command_id);
-    }
-}
-
-/// Classify whether a negative `CommandAck` for `command` represents an
-/// ambiguous prompt delivery and, if so, commit its durable recovery draft
-/// BEFORE the caller removes `command_id` from `shared.pending`.
-pub(super) fn park_if_ambiguous_rejection(
-    shared: &Shared,
-    session_id: &str,
-    command: Option<&CoreCommand>,
-    was_retransmitted: bool,
-    reason: Option<&str>,
-) -> bool {
-    let Some(cmd @ CoreCommand::Prompt { .. }) = command else {
-        return false;
-    };
-    let explicit_ambiguous = reason.is_some_and(|message| {
-        message.starts_with("delivery_ambiguous:")
-            || message.starts_with("worker epoch changed before prompt admission")
-    });
-    let unproven_retry_refusal =
-        was_retransmitted && !reason.is_some_and(|message| message.starts_with("unhanded:"));
-    if !explicit_ambiguous && !unproven_retry_refusal {
-        return false;
-    }
-    let message = reason.unwrap_or(
-        "prompt delivery across worker change or retry is unresolved; retained as draft",
-    );
-    park_ambiguous_prompt_command(shared, session_id, cmd.clone(), message);
-    true
-}
-
-/// Re-evaluate Hub's idle dispatch guard against the current worker snapshot
-/// after retiring a parked prompt so an already-idle worker is never left
-/// blocked behind a removed pending entry.
-pub(super) fn reconcile_idle_guard_for_session(shared: &Shared, session_id: &str) {
-    let worker = shared.workers.lock().get(session_id).cloned();
-    if let Some(worker) = worker {
-        let guard = super::idle_snapshot_guard(shared, &worker);
-        super::reconcile_idle_guard(shared, session_id, guard);
-    }
-}
-
-/// Preserve unresolved ordinary (non-`call-notice:`) prompt payloads when a
-/// `RemoteRuntime` disconnects or is replaced on Machine tunnel reconnect:
-/// provably unattempted prompts requeue into Hub; already-attempted prompts
-/// commit durable recovery drafts BEFORE retirement.
-pub(super) fn recover_pending_prompts_on_disconnect(shared: &Shared) {
-    let entries: Vec<(String, CoreCommand, bool)> = {
-        let pending = shared.pending.lock();
-        let attempted = shared.attempted_sends.lock();
-        pending
-            .iter()
-            .filter_map(|(key, cmd)| {
-                let CoreCommand::Prompt { cmid, .. } = cmd else {
-                    return None;
-                };
-                if cmid
-                    .as_deref()
-                    .is_some_and(|cid| cid.starts_with(CALL_NOTICE_PREFIX))
-                {
-                    return None;
-                }
-                Some((key.clone(), cmd.clone(), attempted.contains(key)))
-            })
-            .collect()
-    };
-    for (key, cmd, was_attempted) in entries {
-        let Some(session_id) = cmd.session_id().map(str::to_owned) else {
-            continue;
-        };
-        if was_attempted {
-            // Commit durable draft BEFORE retiring the pending command.
-            park_ambiguous_prompt_command(
-                shared,
-                &session_id,
-                cmd,
-                "Machine connection dropped while prompt delivery was unresolved; retained as draft",
-            );
-            let mut pending = shared.pending.lock();
-            pending.remove(&key);
-            shared.sent.lock().remove(&key);
-            shared.attempted_sends.lock().remove(&key);
-            shared.retransmitted_sends.lock().remove(&key);
-            shared.fenced_commands.lock().remove(&key);
-            drop(pending);
-            reconcile_idle_guard_for_session(shared, &session_id);
-        } else {
-            let removed = {
-                let mut pending = shared.pending.lock();
-                let removed = pending.remove(&key);
-                shared.sent.lock().remove(&key);
-                shared.fenced_commands.lock().remove(&key);
-                removed
-            };
-            if let Some(removed_cmd) = removed {
-                requeue_rejected_command(
-                    shared,
-                    &session_id,
-                    Some(removed_cmd),
-                    Some(
-                        "Machine connection dropped before prompt handoff; returned to queue"
-                            .to_owned(),
-                    ),
-                );
-            }
-        }
-    }
-}
-
-/// Park an already-attempted prompt whose delivery across a worker change is
-/// ambiguous: retire `in_flight_prompts`, preserve non-`call-notice:` prompts
-/// as durable non-dispatchable drafts, and surface the error.
-pub(super) fn park_ambiguous_prompt_command(
-    shared: &Shared,
-    session_id: &str,
-    command: CoreCommand,
-    reason: &str,
-) {
-    if let CoreCommand::Prompt {
-        command_id,
-        content,
-        cmid,
-        ..
-    } = command
-    {
-        let is_call_notice = cmid
-            .as_deref()
-            .is_some_and(|cid| cid.starts_with(CALL_NOTICE_PREFIX));
-        if !is_call_notice {
-            let text = content
-                .iter()
-                .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n");
-            shared
-                .hub
-                .park_recovery_draft(session_id, text, content, cmid);
-        }
-        shared.in_flight_prompts.lock().retire_command(&command_id);
-        shared
-            .hub
-            .broadcast_error(Some(session_id.to_owned()), reason.to_owned());
     }
 }
 

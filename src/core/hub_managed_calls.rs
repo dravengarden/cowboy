@@ -9,8 +9,8 @@ use types::DeferredPendingFlush;
 pub(in crate::core) use types::NoticeClaims;
 pub use types::{
     NoticeClaimGuard, NoticeRequeueRequest, OwnerNoticeWithdrawalOp, OwnerQueueMutation,
-    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, StoreAckSink,
-    UndeliveredRequeue,
+    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, RecoveryDraftPark,
+    StoreAckSink, UndeliveredRequeue,
 };
 
 /// Acknowledged FIFO `StoreWrite::UpdatePending` result (`Ok(true)` = applied,

@@ -305,8 +305,10 @@ struct WorkerPeer {
     /// `snapshot.last_runtime_seq` also counts events emitted while no
     /// Controller was attached, which no Controller has seen.
     acked_runtime_seq: u64,
+    first_unacked_seq: Option<u64>,
     highest_runtime_seq: u64,
     replay_gate: Option<(u64, u64)>,
+    welcomed: bool,
     last_seen: Instant,
     /// Duplicate of the broker end of this connection, used only to measure
     /// frames the worker already delivered but the broker has not read.
@@ -680,11 +682,9 @@ impl Broker {
             controller_epoch: lease,
             workers: welcome.clone(),
         });
-        // Arm contiguous replay gating on every worker with unacknowledged
-        // events BEFORE exposing the new Controller so a newer live event
-        // cannot overtake the replay prefix and cumulatively ACK past gaps.
-        let replays = self.arm_worker_replay_gates();
-        self.controller.lock().replace(Controller {
+        // Atomically install the new Controller lease and arm contiguous replay
+        // gating on every worker with unacknowledged events under controller->workers.
+        let replays = self.install_controller_and_arm_replays(Controller {
             lease,
             tx: tx.clone(),
             protocol,
@@ -1182,7 +1182,16 @@ impl Broker {
         }
     }
 
+    #[cfg(test)]
     fn register_worker(&self, registration: WorkerRegistration) -> Result<()> {
+        self.register_worker_inner(registration, true)
+    }
+
+    fn register_worker_inner(
+        &self,
+        registration: WorkerRegistration,
+        welcomed: bool,
+    ) -> Result<()> {
         self.check_deletion_journal()?;
         if let Some(exit) = self
             .args
@@ -1299,8 +1308,10 @@ impl Broker {
                     uncertain_effect: None,
                 },
                 acked_runtime_seq: 0,
+                first_unacked_seq: None,
                 highest_runtime_seq: 0,
                 replay_gate: None,
+                welcomed,
                 last_seen: Instant::now(),
                 receive_probe: None,
                 liveness: None,
@@ -4231,15 +4242,18 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
                 let _ = writer_task.await;
                 return Ok(());
             }
-            if let Err(error) = broker.register_worker(WorkerRegistration {
-                session_id: session_id.clone(),
-                epoch: epoch.clone(),
-                generation: generation.clone(),
-                executable,
-                fallback_for,
-                connection_id,
-                tx: tx.clone(),
-            }) {
+            if let Err(error) = broker.register_worker_inner(
+                WorkerRegistration {
+                    session_id: session_id.clone(),
+                    epoch: epoch.clone(),
+                    generation: generation.clone(),
+                    executable,
+                    fallback_for,
+                    connection_id,
+                    tx: tx.clone(),
+                },
+                false,
+            ) {
                 let _ = tx.send(Frame::Reject {
                     reason: error.to_string(),
                 });
@@ -4275,11 +4289,7 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
                 controller_epoch: lease,
                 workers: Vec::new(),
             });
-            let draining = broker
-                .workers
-                .lock()
-                .get(&session_id)
-                .is_some_and(|worker| worker.snapshot.drain_requested);
+            let draining = broker.mark_worker_welcomed(&session_id, connection_id);
             if draining {
                 broker.route_worker(&session_id, WorkerCommand::Drain);
             }
@@ -4340,19 +4350,8 @@ async fn handle_core(
                 Frame::CoreCommand {
                     command: CoreCommand::WrapUpHint { session_id, target },
                 } => broker.handle_wrap_up_hint(lease, &session_id, &target),
-                Frame::CoreCommand { mut command } => {
-                    let Some(ctrl_proto) = broker
-                        .controller
-                        .lock()
-                        .as_ref()
-                        .filter(|c| c.lease == lease)
-                        .map(|c| c.protocol)
-                    else {
-                        tracing::warn!(lease, "ignoring command from fenced controller");
-                        continue;
-                    };
-                    wrap_up::normalize_ingress_prompt(ctrl_proto, &mut command);
-                    wrap_up::enqueue_core_command(&broker, &command_tx, command)?;
+                Frame::CoreCommand { command } => {
+                    wrap_up::enqueue_leased_core_command(&broker, lease, &command_tx, command)?;
                 }
                 Frame::Ack {
                     session_id,
@@ -4363,6 +4362,12 @@ async fn handle_core(
                         && worker.epoch == worker_epoch
                     {
                         worker.acked_runtime_seq = worker.acked_runtime_seq.max(runtime_seq);
+                        if worker
+                            .first_unacked_seq
+                            .is_some_and(|first| first <= worker.acked_runtime_seq)
+                        {
+                            worker.first_unacked_seq = None;
+                        }
                         let _ = worker.tx.send(Frame::Ack {
                             session_id,
                             worker_epoch,

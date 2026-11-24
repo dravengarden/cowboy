@@ -1232,3 +1232,55 @@ test("evidence.settle reads final post-exit bytes appended after initial stat", 
   assert.equal(verdict.barrier, true);
   assert.equal(verdict.class, "ok");
 });
+
+test("R7-16/17: evidence.settle fails closed on oversize window and rechecks mid-read childExited past deadline", async () => {
+  const { mkdtempSync, writeFileSync, appendFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { AgyLog } = await import("./evidence.mjs");
+
+  const dirBig = mkdtempSync(join(tmpdir(), "cowboy-ev-big-"));
+  const bigLog = join(dirBig, "acp-server-1-4243.log");
+  writeFileSync(bigLog, "header\n");
+  const bigReader = new AgyLog(dirBig, 4243, { barrierTimeoutMs: 500, pollMs: 20 });
+  const bigCursor = await bigReader.mark();
+  appendFileSync(
+    bigLog,
+    "prompt refused: policy\n" +
+      "x".repeat(4 * 1024 * 1024 + 128) +
+      "\nI1124 10:00:00.000000 4243 http_helpers.go:1] URL: https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x1234 ResponseID: r1\n" +
+      "I1124 10:00:00.000000 4243 server.go:1] Stream goroutine exited for sess-big, sending completion signal\n",
+  );
+  bigReader.markExited();
+  const bigVerdict = await bigReader.settle(bigCursor, "sess-big", "end_turn");
+  assert.equal(
+    bigVerdict.class,
+    "unknown_refusal",
+    "oversize window must fail closed without tail truncation",
+  );
+  assert.equal(bigVerdict.barrier, false);
+
+  const dirDead = mkdtempSync(join(tmpdir(), "cowboy-ev-dead-"));
+  const deadLog = join(dirDead, "acp-server-1-4244.log");
+  writeFileSync(deadLog, "header\n");
+  const deadReader = new AgyLog(dirDead, 4244, { barrierTimeoutMs: 1, pollMs: 50 });
+  const deadCursor = await deadReader.mark();
+  const origRead = deadReader.read.bind(deadReader);
+  let deadReads = 0;
+  deadReader.read = async (from, to) => {
+    deadReads += 1;
+    await new Promise((r) => setTimeout(r, 15));
+    const data = await origRead(from, to);
+    if (deadReads === 1) {
+      appendFileSync(
+        deadLog,
+        "I1124 10:00:00.000000 4244 server.go:1] Stream goroutine exited for sess-dead, sending completion signal\n",
+      );
+      deadReader.markExited();
+    }
+    return data;
+  };
+  const deadVerdict = await deadReader.settle(deadCursor, "sess-dead", "cancelled");
+  assert.equal(deadVerdict.barrier, true);
+  assert.equal(deadVerdict.class, "ok");
+});

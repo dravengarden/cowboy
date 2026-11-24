@@ -151,6 +151,19 @@ impl AgentSink for RemoteSink {
                 .mark_uncertain_effect(method, prev.saturating_add(1).max(now));
         }
     }
+    fn record_unconfirmed_exit_if_sandboxed(&self, session_id: &str) {
+        if session_id != self.shared.session_id {
+            return;
+        }
+        if let Some(ledger) = self
+            .shared
+            .execution
+            .as_ref()
+            .and_then(|execution| execution.ledger())
+        {
+            ledger.mark_uncertain("process/start");
+        }
+    }
     fn session_is_managed_read_only(&self, session_id: &str) -> bool {
         session_id == self.shared.session_id && self.shared.managed_read_only()
     }

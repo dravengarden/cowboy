@@ -5494,8 +5494,11 @@ export async function activateDraft(sessionId: string, id: string): Promise<void
 }
 
 // Send all drafts (front-to-back) — bulk "send everything" on the drafts panel.
+// Recovery drafts (whose prior delivery is ambiguous) require explicit per-draft resend.
 export function activateAllDrafts(sessionId: string): Promise<void> {
-  const drafts = [...(state.drafts.get(sessionId) ?? [])];
+  const drafts = [...(state.drafts.get(sessionId) ?? [])].filter(
+    (draft) => !draft.id.startsWith("recovery-"),
+  );
   return drafts.reduce(
     (previous, draft) => previous.then(() => activateDraft(sessionId, draft.id)),
     Promise.resolve(),

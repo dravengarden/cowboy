@@ -639,6 +639,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn prompt_binding_persists_in_pending_and_blocks_cross_epoch_rebind() {
         let hub = Hub::new();
         hub.create_local_session(
@@ -672,11 +673,14 @@ mod tests {
             .lock()
             .insert("cmd-bind".into(), cmd.clone());
         let mut outbound = cmd;
-        assert!(super::super::config_sync::prepare_prompt_for_send(
-            &runtime.shared,
-            "cmd-bind",
-            version,
-            &mut outbound,
+        assert!(matches!(
+            super::super::config_sync::prepare_prompt_for_send(
+                &runtime.shared,
+                "cmd-bind",
+                version,
+                &mut outbound,
+            ),
+            super::super::config_sync::PromptPrep::Ready
         ));
         // Binding MUST be persisted into `shared.pending`, not only on the clone.
         let stored = runtime
@@ -712,12 +716,31 @@ mod tests {
             .get("cmd-bind")
             .unwrap()
             .clone();
-        assert!(!super::super::config_sync::prepare_prompt_for_send(
+        match super::super::config_sync::prepare_prompt_for_send(
             &runtime.shared,
             "cmd-bind",
             version,
             &mut retry,
-        ));
+        ) {
+            super::super::config_sync::PromptPrep::ParkAmbiguous {
+                session_id,
+                command,
+                reconcile_idle,
+            } => {
+                assert!(reconcile_idle, "replacement epoch superseded bound epoch");
+                super::super::notice_recovery::park_and_retire_ambiguous_pending(
+                    &runtime.shared,
+                    &session_id,
+                    "cmd-bind",
+                    version,
+                    *command,
+                    "prompt delivery across worker change is unresolved; retained as draft",
+                    reconcile_idle,
+                )
+                .await;
+            }
+            _ => panic!("cross-epoch retry must stage ambiguous park"),
+        }
         assert!(!runtime.shared.pending.lock().contains_key("cmd-bind"));
         let info = runtime.shared.hub.session_info("s-bind").unwrap();
         assert_eq!(info.queue_count, 0);
@@ -771,12 +794,31 @@ mod tests {
             .insert("s-unbound".into(), w_new);
 
         let mut retry = unbound_cmd;
-        assert!(!super::super::config_sync::prepare_prompt_for_send(
+        match super::super::config_sync::prepare_prompt_for_send(
             &runtime.shared,
             "cmd-unbound",
             version,
             &mut retry,
-        ));
+        ) {
+            super::super::config_sync::PromptPrep::ParkAmbiguous {
+                session_id,
+                command,
+                reconcile_idle,
+            } => {
+                assert!(!reconcile_idle, "unbound prompt has no replacement epoch");
+                super::super::notice_recovery::park_and_retire_ambiguous_pending(
+                    &runtime.shared,
+                    &session_id,
+                    "cmd-unbound",
+                    version,
+                    *command,
+                    "prompt delivery across worker change is unresolved; retained as draft",
+                    reconcile_idle,
+                )
+                .await;
+            }
+            _ => panic!("unbound already-attempted prompt must stage ambiguous park"),
+        }
         assert!(!runtime.shared.pending.lock().contains_key("cmd-unbound"));
         let info = runtime.shared.hub.session_info("s-unbound").unwrap();
         assert_eq!(info.queue_count, 0);
@@ -913,20 +955,38 @@ mod tests {
             .lock()
             .insert("cmd-att".into());
 
-        // Retransmitted generic refusal MUST park as draft (not requeue).
-        assert!(super::super::notice_recovery::park_if_ambiguous_rejection(
+        // Retransmitted generic refusal MUST park as draft (not requeue) and
+        // retire via take_acked_command without reconciling stale idle guard.
+        runtime
+            .shared
+            .retransmitted_sends
+            .lock()
+            .insert("cmd-att".into());
+        let (_, parked) = super::super::notice_recovery::take_acked_command(
             &runtime.shared,
             "s-disc",
-            Some(&attempted),
-            true,
+            "cmd-att",
+            false,
             Some("Machine is busy; retry shortly"),
-        ));
+        )
+        .await
+        .expect("matching session CommandAck");
+        assert!(parked);
         assert_eq!(hub.session_info("s-disc").unwrap().drafts_count, 1);
 
-        // Disconnect recovers remaining unattempted prompt to queue and parks attempted as draft.
+        // Optimistic revival with unattempted prompt rolls back Starting -> Exited on disconnect.
+        hub.set_status("s-disc", super::super::Status::Starting, None);
+        runtime
+            .shared
+            .optimistic_revivals
+            .lock()
+            .insert("s-disc".into());
+
+        // Disconnect recovers remaining unattempted prompt to queue and rolls back Starting -> Exited.
         runtime.disconnect();
         let info = hub.session_info("s-disc").unwrap();
         assert_eq!(info.queue_count, 1);
         assert_eq!(info.drafts_count, 1);
+        assert_eq!(hub.status("s-disc"), Some(super::super::Status::Exited));
     }
 }

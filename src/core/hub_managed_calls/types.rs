@@ -273,6 +273,18 @@ impl StoreAckSink {
     }
 }
 
+/// Result of staging a durable `recovery-*` draft for an ambiguous ordinary prompt.
+pub enum RecoveryDraftPark {
+    /// No store writer is attached (in-memory test mode); Hub updated synchronously.
+    NoStore,
+    /// A recovery draft with this `cmid` already exists; delivery already confirmed.
+    Duplicate,
+    /// Enqueued in the FIFO store writer; await `StoreAckRx` before committing or aborting.
+    Pending(Box<PendingRecoveryPark>, StoreAckRx),
+    /// Store queue was full/closed or session missing; Hub memory was not mutated.
+    Rejected(&'static str),
+}
+
 /// Result of attempting to durably requeue an authoritative worker
 /// `UndeliveredPrompt` or provably unsent teardown notice through the FIFO store writer.
 pub enum UndeliveredRequeue {

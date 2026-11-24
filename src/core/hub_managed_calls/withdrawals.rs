@@ -66,6 +66,91 @@ impl Hub {
         ))
     }
 
+    /// Stage parking a single ambiguous ordinary prompt as a `recovery-*` draft
+    /// through the acknowledged FIFO `StoreWrite::UpdatePending` path BEFORE
+    /// callers retire `RemoteRuntime.pending`.
+    pub fn preview_park_recovery_prompt(
+        &self,
+        session_id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+    ) -> RecoveryDraftPark {
+        if !self.has_store_writer() {
+            self.add_recovery_draft(session_id, text, content, cmid);
+            return RecoveryDraftPark::NoStore;
+        }
+        let duplicate = {
+            let sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get(session_id) else {
+                return RecoveryDraftPark::Rejected("session unavailable");
+            };
+            cmid.as_deref()
+                .filter(|c| s.drafts.iter().any(|m| m.cmid.as_deref() == Some(*c)))
+                .map(str::to_owned)
+        };
+        if let Some(dup) = duplicate {
+            self.persist_recovery_cmid_if_needed(session_id, Some(&dup));
+            self.confirm_delivered(session_id, &dup);
+            return RecoveryDraftPark::Duplicate;
+        }
+        let sessions = self.inner.sessions.lock();
+        let Some(s) = sessions.get(session_id) else {
+            return RecoveryDraftPark::Rejected("session unavailable");
+        };
+        let draft = QueuedMessage {
+            id: format!("recovery-{}", self.next_qid()),
+            text,
+            content,
+            cmid,
+            schedule: None,
+            origin: None,
+            initiator: None,
+        };
+        let queue = s.queue.clone();
+        let mut drafts = s.drafts.clone();
+        drafts.push(draft.clone());
+        let Some(rx) = self.send_acked_update_pending(
+            session_id,
+            queue,
+            drafts,
+            Vec::new(),
+            Vec::new(),
+            false,
+        ) else {
+            return RecoveryDraftPark::Rejected("store writer unavailable");
+        };
+        let mut claims = self.inner.notice_claims.lock();
+        claims
+            .in_flight_pending_commits
+            .insert(session_id.to_owned(), DeferredPendingFlush::default());
+        RecoveryDraftPark::Pending(
+            Box::new(PendingRecoveryPark {
+                hub: Arc::downgrade(&self.inner),
+                active: true,
+                session_id: session_id.to_owned(),
+                added_drafts: vec![draft],
+                settled_notices: Vec::new(),
+            }),
+            rx,
+        )
+    }
+
+    /// Commit an acknowledged ordinary recovery draft park and durably record
+    /// its original `cmid` in `session_recovery_cmids:<session_id>`.
+    pub fn commit_park_recovery_prompt(&self, preview: &mut PendingRecoveryPark) {
+        let session_id = preview.session_id.clone();
+        let cmids: Vec<String> = preview
+            .added_drafts
+            .iter()
+            .filter_map(|m| m.cmid.clone())
+            .collect();
+        self.commit_park_recovery_notices(preview);
+        for cmid in cmids {
+            self.persist_recovery_cmid_if_needed(&session_id, Some(&cmid));
+        }
+    }
+
     /// Apply an already-committed durable recovery park to `Hub`.
     pub fn commit_park_recovery_notices(&self, preview: &mut PendingRecoveryPark) {
         if !preview.active {

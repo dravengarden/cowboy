@@ -3013,6 +3013,7 @@ async fn agent_main(
     let activity_state = state.clone();
     let perm_state = state.clone();
     let elicit_state = state.clone();
+    let exit_state = state.clone();
     let complete_state = state.clone();
     let main_state = state.clone();
 
@@ -3257,12 +3258,23 @@ async fn agent_main(
     // adapter. The phase-aware watchdog also reports which request actually
     // stalled instead of attributing every startup timeout to process launch.
     let watchdog = startup_watchdog(startup_progress);
+    tokio::pin!(conn);
     let result = tokio::select! {
         biased;
-        r = conn => r.map_err(|e| anyhow::anyhow!("acp connection: {e}")),
-        status = process.exited() => Err(anyhow::anyhow!(
-            "agent subprocess exited mid-session ({status})"
-        )),
+        r = &mut conn => r.map_err(|e| anyhow::anyhow!("acp connection: {e}")),
+        status = process.exited() => {
+            if exit_state.current_prompt().is_some() {
+                let _ = tokio::time::timeout(Duration::from_millis(250), &mut conn).await;
+                if exit_state.current_prompt().is_some() {
+                    exit_state
+                        .sink
+                        .record_unconfirmed_exit_if_sandboxed(&exit_state.session_id);
+                }
+            }
+            Err(anyhow::anyhow!(
+                "agent subprocess exited mid-session ({status})"
+            ))
+        }
         timeout = watchdog => Err(anyhow::Error::new(timeout)),
     };
 
