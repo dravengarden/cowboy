@@ -14,20 +14,36 @@
 //! Filter drivers have no command-line switch, so commands that read worktree
 //! files first list the filter keys the repository configures (a pure config
 //! read) and blank each one. A writer racing that read can still name a new
-//! driver for the following command. A nested repository is reported only
-//! when its checked-out commit moved: its worktree is never compared, so its
-//! own filters and drivers are never consulted. A Git that predates
-//! `GIT_NO_LAZY_FETCH` ignores it and still fetches missing objects.
+//! driver for the following command. A file whose filter rewrites it is
+//! therefore read as its plain bytes, and one whose filter is `required`
+//! fails to read. A nested repository is reported only when its checked-out
+//! commit moved: its worktree is never compared, so its own filters and
+//! drivers are never consulted, and an `ignore` setting that would hide it is
+//! overridden too. Lazy fetching is switched off twice, because a Git that
+//! predates `GIT_NO_LAZY_FETCH` ignores it: no command but the fetch is
+//! allowed any transport.
 //!
 //! A fetch cannot avoid its transport, so it runs the programs that user and
 //! system configuration choose and none that the repository's own scopes
-//! name; see [`git_fetch`].
+//! name; see [`git_fetch`]. `remote.<name>.vcs` is the one setting it cannot
+//! outrank: it can only select a helper named after an allowed protocol,
+//! which Git ships for HTTPS alone.
 
+use std::ffi::OsString;
 use std::io::Read as _;
+use std::os::unix::ffi::OsStringExt as _;
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, ExitStatus, Stdio};
+use std::time::Instant;
 
 const GIT_FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+
+/// The trusted transport settings of a host are a handful of short lines.
+const MAX_TRANSPORT_SETTINGS_BYTES: u64 = 1024 * 1024;
+
+/// One configuration setting in command scope. Keys are Git's own bytes: a
+/// driver name need not be text, and a rewritten key would override nothing.
+type Setting = (OsString, OsString);
 
 /// Overrides every invocation carries, in Git's unambiguous environment form.
 const FIXED: [(&str, &str); 4] = [
@@ -55,7 +71,7 @@ const SUBMODULE_COMPARING: [&str; 2] = ["diff", "status"];
 /// serves the pack and the alternate-refs lister.
 const TRANSPORT_PROGRAM_KEYS: &str = r"^(core\.(sshcommand|askpass|gitproxy|alternaterefscommand)|credential\.(.+\.)?helper|remote\..+\.uploadpack)$";
 
-fn command(root: &Path, overrides: &[(String, String)]) -> Command {
+fn command(root: &Path, overrides: &[Setting]) -> Command {
     let mut command = Command::new("git");
     command
         .current_dir(root)
@@ -63,19 +79,19 @@ fn command(root: &Path, overrides: &[(String, String)]) -> Command {
         .env("GIT_TERMINAL_PROMPT", "0")
         // A repository marked as a partial clone would otherwise fetch a
         // missing object in the middle of a read, through the transport
-        // programs its promisor remote configures.
+        // programs its promisor remote configures. Only the fetch names the
+        // protocols it may use.
         .env("GIT_NO_LAZY_FETCH", "1")
+        .env("GIT_ALLOW_PROTOCOL", "")
         .env_remove("GIT_EXTERNAL_DIFF")
         .env(
             "GIT_CONFIG_COUNT",
             (FIXED.len() + overrides.len()).to_string(),
         );
-    let all = FIXED.iter().map(|(key, value)| (*key, *value)).chain(
-        overrides
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.as_str())),
-    );
-    for (index, (key, value)) in all.enumerate() {
+    let fixed = FIXED
+        .iter()
+        .map(|(key, value)| (OsString::from(key), OsString::from(value)));
+    for (index, (key, value)) in fixed.chain(overrides.iter().cloned()).enumerate() {
         command
             .env(format!("GIT_CONFIG_KEY_{index}"), key)
             .env(format!("GIT_CONFIG_VALUE_{index}"), value);
@@ -83,10 +99,29 @@ fn command(root: &Path, overrides: &[(String, String)]) -> Command {
     command
 }
 
+/// Waits for `child` until `deadline`; a child still running then is killed
+/// and reported as `None`.
+fn wait_until(child: &mut Child, deadline: Instant) -> Result<Option<ExitStatus>, String> {
+    loop {
+        match child.try_wait().map_err(|error| error.to_string())? {
+            Some(status) => return Ok(Some(status)),
+            None if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Ok(None);
+            }
+            None => std::thread::sleep(std::time::Duration::from_millis(100)),
+        }
+    }
+}
+
 /// Configured filter-driver keys, each blanked so Git treats the file as
 /// unfiltered. Keys come from Git itself, including included files.
-fn filter_overrides(root: &Path) -> Result<Vec<(String, String)>, String> {
+fn filter_overrides(root: &Path) -> Result<Vec<Setting>, String> {
     let output = command(root, &[])
+        // A driver name need not be text, and under a UTF-8 locale the
+        // pattern does not match bytes that are not.
+        .env("LC_ALL", "C")
         .args([
             "config",
             "--null",
@@ -106,15 +141,21 @@ fn filter_overrides(root: &Path) -> Result<Vec<(String, String)>, String> {
         .stdout
         .split(|byte| *byte == 0)
         .filter(|key| !key.is_empty())
-        .map(|key| (String::from_utf8_lossy(key).into_owned(), String::new()))
+        .map(|key| (OsString::from_vec(key.to_vec()), OsString::new()))
         .collect())
 }
 
 /// What user and system configuration say about [`TRANSPORT_PROGRAM_KEYS`],
 /// in the order Git reads them. The repository's own scopes are left out:
-/// they are agent-writable.
-fn trusted_transport_settings(root: &Path) -> Result<Vec<(String, String)>, String> {
-    let output = command(root, &[])
+/// they are agent-writable. The listing reads every configuration file the
+/// repository includes, so it shares the fetch's deadline.
+fn trusted_transport_settings(
+    root: &Path,
+    deadline: Instant,
+) -> Result<Vec<(String, String)>, String> {
+    let mut child = command(root, &[])
+        // Subsections (remote names, credential URLs) need not be text.
+        .env("LC_ALL", "C")
         .args([
             "config",
             "--null",
@@ -124,14 +165,33 @@ fn trusted_transport_settings(root: &Path) -> Result<Vec<(String, String)>, Stri
             TRANSPORT_PROGRAM_KEYS,
         ])
         .stdin(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
-        .output()
+        .spawn()
         .map_err(|error| format!("starting git: {error}"))?;
+    let stdout = child.stdout.take().ok_or("missing git stdout")?;
+    // Reading beside the wait keeps a full pipe from stalling the child.
+    let reader = std::thread::spawn(move || {
+        let mut listed = Vec::new();
+        let _ = stdout
+            .take(MAX_TRANSPORT_SETTINGS_BYTES)
+            .read_to_end(&mut listed);
+        listed
+    });
+    let status = wait_until(&mut child, deadline)?;
+    let listed = reader
+        .join()
+        .map_err(|_| "reading git configuration failed".to_owned())?;
+    let Some(status) = status else {
+        return Err("reading git configuration timed out".to_owned());
+    };
     // Exit 1 means no key matched.
-    if !output.status.success() && output.status.code() != Some(1) {
+    if (!status.success() && status.code() != Some(1))
+        || listed.len() as u64 >= MAX_TRANSPORT_SETTINGS_BYTES
+    {
         return Err("reading git configuration failed".to_owned());
     }
-    Ok(trusted_settings(&output.stdout))
+    Ok(trusted_settings(&listed))
 }
 
 /// The system and global records of `git config --null --show-scope`
@@ -171,7 +231,10 @@ struct Transport {
 /// reads them: nothing here depends on an earlier look at the repository.
 ///
 /// - The environment outranks `core.sshCommand`, `core.askPass` and
-///   `core.gitProxy`. A variable the Controller already carries stays as it is.
+///   `core.gitProxy`. A variable the Controller already carries stays as it
+///   is and so decides before any configuration. Proxy rules match per host
+///   and the first match wins, so a trusted rule cannot be pinned for every
+///   host: with one configured, `git://` is not fetched at all.
 /// - Git keeps the first `remote.<name>.uploadpack` it reads, so only the
 ///   command line outranks the repository.
 /// - Command-scope configuration replaces the alternate-refs lister, and its
@@ -244,17 +307,28 @@ fn transport(
 ///
 /// Repository config is agent-writable, so the programs the transport starts
 /// are the ones [`transport`] pins. `ext::` and other helper transports stay
-/// refused by protocol, and the maintenance Git would run afterwards under
-/// repository settings is skipped.
+/// refused by protocol. Nothing but the named ref is written: pruning and
+/// the maintenance Git would run afterwards are off whatever the repository
+/// configures.
 pub(super) fn git_fetch(root: &Path, remote: &str, refspec: &str) -> Result<(), String> {
-    let transport = transport(&trusted_transport_settings(root)?, remote, |name| {
-        std::env::var(name).ok()
-    });
-    let mut child = command(root, &transport.overrides)
+    let deadline = Instant::now() + GIT_FETCH_TIMEOUT;
+    let transport = transport(
+        &trusted_transport_settings(root, deadline)?,
+        remote,
+        |name| std::env::var(name).ok(),
+    );
+    let overrides: Vec<Setting> = transport
+        .overrides
+        .iter()
+        .map(|(key, value)| (key.into(), value.into()))
+        .collect();
+    let mut child = command(root, &overrides)
         .args([
             "fetch",
             "--quiet",
             "--no-tags",
+            "--no-prune",
+            "--no-prune-tags",
             "--no-write-fetch-head",
             "--no-auto-maintenance",
         ])
@@ -274,23 +348,17 @@ pub(super) fn git_fetch(root: &Path, remote: &str, refspec: &str) -> Result<(), 
         .stderr(Stdio::null())
         .spawn()
         .map_err(|error| format!("starting git: {error}"))?;
-    let deadline = std::time::Instant::now() + GIT_FETCH_TIMEOUT;
-    loop {
-        match child.try_wait().map_err(|error| error.to_string())? {
-            Some(status) if status.success() => return Ok(()),
-            Some(_) => return Err(format!("could not fetch from {remote}")),
-            None if std::time::Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err(format!("fetching from {remote} timed out"));
-            }
-            None => std::thread::sleep(std::time::Duration::from_millis(100)),
-        }
+    match wait_until(&mut child, deadline)? {
+        Some(status) if status.success() => Ok(()),
+        Some(_) => Err(format!("could not fetch from {remote}")),
+        None => Err(format!("fetching from {remote} timed out")),
     }
 }
 
 pub(super) fn git_output(root: &Path, args: &[&str], limit: usize) -> Result<Vec<u8>, String> {
-    let subcommand = args.first().copied().unwrap_or_default();
+    // Global options may come first; none of them takes a separate value.
+    let position = args.iter().position(|argument| !argument.starts_with('-'));
+    let subcommand = position.map_or("", |position| args[position]);
     let overrides = if WORKTREE_READING.contains(&subcommand) {
         filter_overrides(root)?
     } else {
@@ -307,10 +375,16 @@ pub(super) fn git_output(root: &Path, args: &[&str], limit: usize) -> Result<Vec
     if SUBMODULE_COMPARING.contains(&subcommand) {
         switches.push("--ignore-submodules=dirty");
     }
-    if switches.is_empty() {
-        command.args(args);
-    } else {
-        command.arg(subcommand).args(switches).args(&args[1..]);
+    match position {
+        Some(position) if !switches.is_empty() => {
+            command
+                .args(&args[..=position])
+                .args(switches)
+                .args(&args[position + 1..]);
+        }
+        _ => {
+            command.args(args);
+        }
     }
     let mut child = command
         .stdin(Stdio::null())

@@ -147,11 +147,12 @@ fn review_reads_start_no_repository_configured_program() {
     assert_eq!(ran(&markers), Vec::<String>::new());
 }
 
-/// A repository marked as a partial clone names the remote, and through it the
-/// programs, that Git asks for an object it does not have.
-#[test]
-fn review_reads_fetch_no_missing_object() {
-    let (_scratch, markers) = markers();
+/// A repository marked as a partial clone whose promisor remote runs a marking
+/// program, with the blob of HEAD's `f.txt` missing. Returns the repository,
+/// the promisor it names, HEAD and that blob.
+fn partial_clone_missing_a_blob(
+    markers: &Path,
+) -> (tempfile::TempDir, tempfile::TempDir, String, String) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();
     repository(root, "");
@@ -180,13 +181,103 @@ fn review_reads_fetch_no_missing_object() {
     ] {
         git(root, &["config", key, &value]);
     }
-    let provider = LocalCodeProvider::new(root);
+    (dir, promisor, head, blob)
+}
+
+/// A repository marked as a partial clone names the remote, and through it the
+/// programs, that Git asks for an object it does not have.
+#[test]
+fn review_reads_fetch_no_missing_object() {
+    let (_scratch, markers) = markers();
+    let (dir, _promisor, head, blob) = partial_clone_missing_a_blob(&markers);
+    let provider = LocalCodeProvider::new(dir.path());
 
     assert!(provider.blob(&blob).is_err());
     provider.commit(&head).unwrap();
     assert!(provider.commit_diff(&head, "f.txt").is_err());
     provider.changes(None).unwrap();
     let _ = provider.diff_snapshot("f.txt", 3, true, DiffScope::Combined, None);
+
+    assert_eq!(ran(&markers), Vec::<String>::new());
+}
+
+/// A Git that predates `GIT_NO_LAZY_FETCH` ignores it. No read is allowed a
+/// transport either, which stops the same fetch before it starts a program.
+#[test]
+fn no_read_is_allowed_a_transport() {
+    let (_scratch, markers) = markers();
+    let (dir, _promisor, _head, blob) = partial_clone_missing_a_blob(&markers);
+
+    let output = super::command(dir.path(), &[])
+        .env_remove("GIT_NO_LAZY_FETCH")
+        .args(["cat-file", "blob", &blob])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let refusal = String::from_utf8_lossy(&output.stderr);
+    assert!(refusal.contains("not allowed"), "{refusal}");
+    assert_eq!(ran(&markers), Vec::<String>::new());
+}
+
+/// A driver name is bytes, not text. Its override has to carry the same bytes.
+#[test]
+fn review_reads_blank_a_filter_whose_name_is_not_text() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt as _;
+
+    let (_scratch, markers) = markers();
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    repository(root, "");
+    std::fs::write(root.join(".gitattributes"), b"f.txt filter=\xff\n").unwrap();
+    let configured = Command::new("git")
+        .current_dir(root)
+        .arg("config")
+        .arg(OsStr::from_bytes(b"filter.\xff.clean"))
+        .arg(format!("touch {}; cat", markers.join("clean").display()))
+        .status()
+        .unwrap();
+    assert!(configured.success());
+    std::fs::write(root.join("f.txt"), "two\n").unwrap();
+    let provider = LocalCodeProvider::new(root);
+
+    let changes = provider.changes(None).unwrap();
+    assert!(changes.changes.iter().any(|change| change.path == "f.txt"));
+    provider
+        .diff_snapshot("f.txt", 3, true, DiffScope::Combined, None)
+        .unwrap();
+    provider.file_blob("f.txt").unwrap();
+
+    assert_eq!(ran(&markers), Vec::<String>::new());
+}
+
+/// Options before the subcommand must not hide it from its protections.
+#[test]
+fn leading_global_options_keep_the_subcommand_protections() {
+    let (_scratch, markers) = markers();
+    let dir = hostile_repository(&markers);
+
+    let status = super::git_output(
+        dir.path(),
+        &["--no-replace-objects", "status", "--porcelain=v1"],
+        1 << 16,
+    )
+    .unwrap();
+    assert!(String::from_utf8_lossy(&status).contains("f.txt"));
+    let diff = super::git_output(
+        dir.path(),
+        &["--no-replace-objects", "diff", "--", "f.txt"],
+        1 << 16,
+    )
+    .unwrap();
+    assert!(String::from_utf8_lossy(&diff).contains("+two"));
+    super::git_output(
+        dir.path(),
+        &["--no-replace-objects", "hash-object", "--", "f.txt"],
+        128,
+    )
+    .unwrap();
 
     assert_eq!(ran(&markers), Vec::<String>::new());
 }
@@ -249,8 +340,24 @@ fn review_reads_run_no_nested_repository_program() {
         .map(|change| change.path.as_str())
         .collect();
     assert_eq!(paths, ["moved"]);
+    // The moved commit is an unstaged change of the outer repository; the
+    // uncommitted edit inside the nested one is not part of it.
+    for scope in [DiffScope::Combined, DiffScope::Unstaged] {
+        let diff = provider
+            .diff_snapshot("moved", 3, true, scope, None)
+            .unwrap();
+        assert!(diff.text.contains("+Subproject commit"), "{}", diff.text);
+        assert!(!diff.text.contains("-dirty"), "{}", diff.text);
+    }
+    let staged = provider
+        .diff_snapshot("moved", 3, true, DiffScope::Staged, None)
+        .unwrap();
+    assert_eq!(staged.text, "");
     for scope in [DiffScope::Combined, DiffScope::Staged, DiffScope::Unstaged] {
-        let _ = provider.diff_snapshot("moved", 3, true, scope, None);
+        let edited = provider
+            .diff_snapshot("edited", 3, true, scope, None)
+            .unwrap();
+        assert_eq!(edited.text, "");
     }
     provider.commit(&head).unwrap();
     let diff = provider.commit_diff(&head, "moved").unwrap();
@@ -262,12 +369,22 @@ fn review_reads_run_no_nested_repository_program() {
 #[test]
 fn review_fetch_runs_no_repository_configured_program() {
     let (_scratch, markers) = markers();
-    let source = hostile_repository(&markers);
+    let source = tempfile::tempdir().unwrap();
+    repository(source.path(), "");
+    let branch = git_line(source.path(), &["symbolic-ref", "--short", "HEAD"]);
     let clone = tempfile::tempdir().unwrap();
     git(
         clone.path(),
         &["clone", "-q", &source.path().display().to_string(), "."],
     );
+    // The remote moves on and gains a tag; the clone has a tag of its own.
+    std::fs::write(source.path().join("f.txt"), "two\n").unwrap();
+    git(source.path(), &["commit", "-qam", "second"]);
+    git(source.path(), &["tag", "remote-only"]);
+    git(clone.path(), &["tag", "local-only"]);
+    let advanced = git_line(source.path(), &["rev-parse", "HEAD"]);
+    let tracked = git_line(clone.path(), &["rev-parse", "refs/remotes/origin/HEAD"]);
+
     let hooks = clone.path().join(".git/hooks");
     std::fs::create_dir_all(&hooks).unwrap();
     let hook = hooks.join("reference-transaction");
@@ -302,19 +419,32 @@ fn review_fetch_runs_no_repository_configured_program() {
             "credential.helper",
             format!("!touch {}", marker("credential")),
         ),
+        // Neither tags nor other refs follow from configured pruning.
+        ("fetch.prune", "true".to_owned()),
+        ("fetch.pruneTags", "true".to_owned()),
+        ("remote.origin.prune", "true".to_owned()),
+        ("remote.origin.pruneTags", "true".to_owned()),
     ] {
         git(clone.path(), &["config", key, &value]);
     }
+    let review = format!("refs/cowboy/review/origin/{branch}");
     let fetch = || {
         super::git_fetch(
             clone.path(),
             "origin",
-            "+refs/heads/*:refs/cowboy/review/origin/*",
+            &format!("+refs/heads/{branch}:{review}"),
         )
     };
 
     fetch().unwrap();
     assert_eq!(ran(&markers), Vec::<String>::new());
+    // Only the named ref was written.
+    assert_eq!(git_line(clone.path(), &["rev-parse", &review]), advanced);
+    assert_eq!(
+        git_line(clone.path(), &["rev-parse", "refs/remotes/origin/HEAD"]),
+        tracked
+    );
+    assert_eq!(git_line(clone.path(), &["tag", "--list"]), "local-only");
 
     // Nothing answers on this port, so a transport that reaches for another
     // host fails at once unless a repository program takes its place.

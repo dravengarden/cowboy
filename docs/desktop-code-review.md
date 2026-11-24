@@ -611,7 +611,9 @@ Calls now record their snapshot blobs: the Machine's snapshot names each
 requested file's blob in the captured tree (`ChildPrepared.files`), the
 Controller keeps it on the call record (`input_files`, at most 32), and
 `GET /api/code/sessions/{id}/file-blob?path=` returns the worktree file's
-blob as `git add` would store it. When both are known a finding is `current`
+blob as `git add` would store it, without running a repository filter: a file
+a filter rewrites never equals its stored blob, so its findings read `stale`.
+When both are known a finding is `current`
 exactly while the two blobs are equal (a file edited back to the reviewed
 content is current again) and `stale` otherwise; the blob is read again when
 the file's change fingerprint moves. Calls prepared by a Machine that
