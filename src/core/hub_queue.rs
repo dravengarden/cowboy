@@ -898,22 +898,39 @@ impl Hub {
         if self.is_managed_child(session_id) {
             return;
         }
+        if self.promote_queued(session_id, id, caller) {
+            self.drain_head(session_id, true, true, Some(caller));
+        }
+    }
+
+    /// Move a queued prompt to the front under `caller`'s send intent without
+    /// dispatching it: a session whose account parks dispatch keeps the row in
+    /// place instead of taking it out only to requeue it under a new id.
+    /// Whether the row exists.
+    pub fn promote_queued(
+        &self,
+        session_id: &str,
+        id: &str,
+        caller: &crate::prompt_origin::RequestCaller,
+    ) -> bool {
+        if self.is_managed_child(session_id) {
+            return false;
+        }
         let trigger = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
         {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
-                return;
+                return false;
             };
-            if let Some(pos) = s.queue.iter().position(|m| m.id == id) {
-                let mut m = s.queue.remove(pos);
-                m.initiator = Some(trigger);
-                s.queue.insert(0, m);
-            } else {
-                return;
-            }
+            let Some(pos) = s.queue.iter().position(|m| m.id == id) else {
+                return false;
+            };
+            let mut m = s.queue.remove(pos);
+            m.initiator = Some(trigger);
+            s.queue.insert(0, m);
         }
         self.emit_pending(session_id);
-        self.drain_head(session_id, true, true, Some(caller));
+        true
     }
 
     /// Move a queued prompt back to drafts.
