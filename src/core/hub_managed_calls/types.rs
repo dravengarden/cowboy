@@ -3,11 +3,21 @@
 use super::*;
 use crate::store::NoticeClaimRelease;
 
+#[derive(Clone)]
+pub(in crate::core) struct PendingRecoveryPromptItem {
+    pub(super) text: String,
+    pub(super) content: Vec<serde_json::Value>,
+    pub(super) cmid: Option<String>,
+    pub(super) reason: String,
+}
+
 pub struct PendingRecoveryPark {
     pub(super) hub: std::sync::Weak<HubInner>,
     pub(super) active: bool,
     pub session_id: String,
     pub(super) added_drafts: Vec<QueuedMessage>,
+    pub(super) replaced_draft_id: Option<String>,
+    pub(super) committed_recovery_cmids: Vec<String>,
     pub(super) settled_notices: Vec<(String, String)>,
 }
 
@@ -320,4 +330,6 @@ pub(in crate::core) struct NoticeClaims {
     pub(super) in_flight_pending_commits: HashMap<String, DeferredPendingFlush>,
     pub(super) commit_locks: HashMap<String, Arc<tokio::sync::Mutex<()>>>,
     pub(super) teardown_tasks: Vec<tokio::task::JoinHandle<()>>,
+    pub(super) pending_recovery_parks: HashMap<String, Vec<PendingRecoveryPromptItem>>,
+    pub(super) active_recovery_park_workers: HashSet<String>,
 }

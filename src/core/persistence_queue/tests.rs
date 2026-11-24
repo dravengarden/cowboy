@@ -283,6 +283,7 @@ fn pending_attachments_and_private_settings_are_not_counted_as_tiny_metadata() {
         }],
         settled_notices: Vec::new(),
         released_claims: Vec::new(),
+        recovery_cmids: None,
         require_claim_release: false,
         ack_id: None,
     };

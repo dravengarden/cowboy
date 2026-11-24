@@ -720,7 +720,7 @@ where
                 let Some(message) = message else { break; };
                 match message? {
                     Message::Close(_) => break,
-                    Message::Ping(data) => { writer.send(Message::Pong(data)).await?; }
+                    Message::Ping(data) => { send_bounded(&mut writer, Message::Pong(data)).await?; }
                     Message::Pong(_) => {}
                     Message::Text(text) => {
                         let message: Value = serde_json::from_str(&text)?;
@@ -731,7 +731,7 @@ where
                             tracing::warn!(event_name = "cowboy.execution.request_rejected", session = %client.session, reason = "request_capacity", pending = ids.len(), "execution request not admitted");
                             // No effect was admitted. Limit this request, not
                             // the transport carrying other commands/results.
-                            writer.send(refusal(&id, "Execution request capacity reached; this request was not admitted")).await?;
+                            send_bounded(&mut writer, refusal(&id, "Execution request capacity reached; this request was not admitted")).await?;
                             continue;
                         }
                         ids.insert(id.to_string());
@@ -740,7 +740,7 @@ where
                         // A unit being stopped sends only cleanup (L1c).
                         let Some(in_flight) = client.relays.try_enter(&method) else {
                             ids.remove(&id.to_string());
-                            writer.send(refusal(&id, "The session is ending; this request was not admitted")).await?;
+                            send_bounded(&mut writer, refusal(&id, "The session is ending; this request was not admitted")).await?;
                             continue;
                         };
                         relays.spawn(id, method, params, in_flight);
@@ -750,9 +750,9 @@ where
             }
             done = relays.next(), if relays.pending() > 0 => {
                 ids.remove(&done.id.to_string());
-                if let Err(error) = writer.send(Message::Text(done.frame()?.into())).await {
+                if let Err(error) = send_bounded(&mut writer, Message::Text(done.frame()?.into())).await {
                     relays.undelivered(&done);
-                    return Err(error.into());
+                    return Err(error);
                 }
                 relays.delivered(&done);
             }
@@ -765,7 +765,7 @@ where
                             if ledger::worker_event(&event.message) {
                                 continue;
                             }
-                            writer.send(Message::Text(event.message.to_string().into())).await?;
+                            send_bounded(&mut writer, Message::Text(event.message.to_string().into())).await?;
                         }
                         cursor = through;
                         *client.event_cursor.lock() = Some(cursor);
@@ -777,10 +777,10 @@ where
                         // every reconnect, including unrelated future calls.
                         *client.event_cursor.lock() = None;
                         tracing::warn!(event_name = "cowboy.execution.cursor_expired", session = %client.session, environment_id = %client.binding.environment.id, cursor, reason = "cursor_expired", "resuming native execution after an event gap");
-                        writer.send(Message::Close(Some(CloseFrame {
+                        let _ = send_bounded(&mut writer, Message::Close(Some(CloseFrame {
                             code: CloseCode::Restart,
                             reason: "Execution event history expired; resume the original session".into(),
-                        }))).await?;
+                        }))).await;
                         return Ok(());
                     }
                     _ => bail!("execution events unavailable"),
@@ -790,6 +790,21 @@ where
         }
     }
     Ok(())
+}
+
+/// Bound writes to a backpressured execution endpoint so a wedged peer cannot
+/// hold turn completion guards indefinitely (Finding 14).
+const ENDPOINT_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
+async fn send_bounded<S>(writer: &mut S, message: Message) -> Result<()>
+where
+    S: futures::SinkExt<Message> + Unpin,
+    S::Error: std::error::Error + Send + Sync + 'static,
+{
+    tokio::time::timeout(ENDPOINT_WRITE_TIMEOUT, writer.send(message))
+        .await
+        .map_err(|_| anyhow::anyhow!("execution endpoint write timed out"))?
+        .map_err(Into::into)
 }
 
 /// A refusal of one native request that admitted no effect.

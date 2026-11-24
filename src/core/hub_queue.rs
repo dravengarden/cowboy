@@ -735,6 +735,7 @@ impl Hub {
     /// a Controller restart because the echo persists its `cmid`).
     pub(super) fn prompt_already_accepted(s: &Session, cmid: &str) -> bool {
         if s.recovery_cmids.contains(cmid)
+            || s.pending_recovery_cmids.contains(cmid)
             || s.queue
                 .iter()
                 .chain(&s.drafts)

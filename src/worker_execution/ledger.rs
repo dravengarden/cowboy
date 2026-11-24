@@ -236,12 +236,17 @@ pub(super) struct SettlementGuard {
     ledger: Arc<Ledger>,
     admitted: Option<Admitted>,
     start: Option<String>,
+    is_call: bool,
 }
 
 impl Drop for SettlementGuard {
     fn drop(&mut self) {
         if let Some(admitted) = self.admitted.take() {
-            self.ledger.settled(&admitted, self.start.as_deref());
+            if self.is_call {
+                self.ledger.settle_call(&admitted);
+            } else {
+                self.ledger.settled(&admitted, self.start.as_deref());
+            }
         }
     }
 }
@@ -400,6 +405,17 @@ impl Ledger {
         })
     }
 
+    /// Wrap an admitted extension call in a guard that settles strictly after
+    /// endpoint reply delivery or undelivered classification (Finding 9).
+    pub(super) fn guard_call(self: &Arc<Self>, admitted: Admitted) -> SettlementGuard {
+        SettlementGuard {
+            ledger: Arc::clone(self),
+            admitted: Some(admitted),
+            start: None,
+            is_call: true,
+        }
+    }
+
     /// An admitted extension call finished.
     pub(super) fn settle_call(&self, admitted: &Admitted) {
         self.state.lock().calls -= 1;
@@ -485,9 +501,11 @@ impl Ledger {
             return Err("that process belongs to the worker; request refused");
         }
         if !MUTATIONS.contains(&method) {
-            let carries = method == "process/terminate"
-                || (method == "process/read"
-                    && process_id(params).is_none_or(|p| !state.probes.contains(&p)));
+            let carries = matches!(
+                method,
+                "process/terminate" | "process/write" | "process/signal"
+            ) || (method == "process/read"
+                && process_id(params).is_none_or(|p| !state.probes.contains(&p)));
             if carries {
                 let turn = state.current_turn.clone();
                 *state.result_relays.entry(turn.clone()).or_default() += 1;
@@ -1042,11 +1060,10 @@ impl Client {
             return (reply, None);
         }
         if method == super::extension_broker::EXTENSION_CALL {
-            let reply = match self.extensions.get().cloned() {
-                Some(broker) => broker.call(self, &params).await,
-                None => refused("this session has no extensions"),
+            return match self.extensions.get().cloned() {
+                Some(broker) => broker.call_guarded(self, &params).await,
+                None => (refused("this session has no extensions"), None),
             };
-            return (reply, None);
         }
         if method == crate::account_sandbox::DRAINED {
             // The unit read every reply it awaited before its stop (L1c).
@@ -1081,6 +1098,7 @@ impl Client {
             ledger: Arc::clone(&ledger),
             admitted: Some(admitted),
             start: start.clone(),
+            is_call: false,
         });
         // Snapshot confirmed start generation BEFORE sending so a concurrent
         // `process/read` or `process/terminate` overtaking an in-flight/ambiguous

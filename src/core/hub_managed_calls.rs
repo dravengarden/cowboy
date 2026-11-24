@@ -119,6 +119,7 @@ impl Hub {
             };
             let queue = s.queue.clone();
             let drafts = s.drafts.clone();
+            let recovery_cmids = Self::sorted_recovery_cmids(s);
             let mut claims = self.inner.notice_claims.lock();
             if let Some(deferred) = claims.in_flight_pending_commits.get_mut(session_id) {
                 // An acknowledged pending commit is in flight for this session.
@@ -135,6 +136,7 @@ impl Hub {
                     drafts: drafts.clone(),
                     settled_notices,
                     released_claims,
+                    recovery_cmids,
                     require_claim_release: false,
                     ack_id: None,
                 });
@@ -149,6 +151,7 @@ impl Hub {
         session_id: &str,
         queue: &[QueuedMessage],
         drafts: &[QueuedMessage],
+        recovery_cmids: Option<Vec<String>>,
         claims: &mut NoticeClaims,
     ) {
         let Some(deferred) = claims.in_flight_pending_commits.remove(session_id) else {
@@ -165,6 +168,7 @@ impl Hub {
                 drafts: drafts.to_vec(),
                 settled_notices: deferred.settled_notices,
                 released_claims: deferred.released_claims,
+                recovery_cmids,
                 require_claim_release: false,
                 ack_id: None,
             });
@@ -789,22 +793,15 @@ impl Hub {
         released_claims: Vec<NoticeClaimRelease>,
         require_claim_release: bool,
     ) -> Option<StoreAckRx> {
-        let tx = self.inner.store_tx.as_ref()?;
-        let (ack_id, rx) = self.inner.store_acks.allocate();
-        let sent = tx.send(StoreWrite::UpdatePending {
-            session_id: session_id.to_owned(),
+        self.send_acked_update_pending_with_recovery(
+            session_id,
             queue,
             drafts,
             settled_notices,
             released_claims,
+            None,
             require_claim_release,
-            ack_id: Some(ack_id),
-        });
-        if !sent {
-            self.inner.store_acks.cancel(ack_id);
-            return None;
-        }
-        Some(rx)
+        )
     }
 
     /// Two-phase authoritative non-delivery requeue for a `call-notice:` prompt.
@@ -1026,7 +1023,13 @@ impl Hub {
                 preview.cmid.clone(),
                 preview.receipt_key.clone(),
             ));
-            self.finish_in_flight_pending_commit(&preview.session_id, &queue, &drafts, &mut claims);
+            self.finish_in_flight_pending_commit(
+                &preview.session_id,
+                &queue,
+                &drafts,
+                Self::sorted_recovery_cmids(s),
+                &mut claims,
+            );
             (queue, drafts)
         };
         self.broadcast_pending_snapshot(&preview.session_id, &queue, &drafts);
@@ -1080,6 +1083,7 @@ impl Hub {
                     &preview.session_id,
                     &s.queue,
                     &s.drafts,
+                    Self::sorted_recovery_cmids(s),
                     &mut claims,
                 );
             } else {
@@ -1118,6 +1122,7 @@ impl Hub {
                     &preview.session_id,
                     &s.queue,
                     &s.drafts,
+                    Self::sorted_recovery_cmids(s),
                     &mut claims,
                 );
             } else {
@@ -1185,7 +1190,13 @@ impl Hub {
                     .pending_releases
                     .insert(key, (active_stamp, active_cmd));
             }
-            self.finish_in_flight_pending_commit(&preview.session_id, &queue, &drafts, &mut claims);
+            self.finish_in_flight_pending_commit(
+                &preview.session_id,
+                &queue,
+                &drafts,
+                Self::sorted_recovery_cmids(s),
+                &mut claims,
+            );
             (queue, drafts)
         };
         self.broadcast_pending_snapshot(&preview.session_id, &queue, &drafts);

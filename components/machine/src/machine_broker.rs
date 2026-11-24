@@ -305,10 +305,11 @@ struct WorkerPeer {
     /// `snapshot.last_runtime_seq` also counts events emitted while no
     /// Controller was attached, which no Controller has seen.
     acked_runtime_seq: u64,
-    first_unacked_seq: Option<u64>,
+    earliest_unacked_seq: Option<u64>,
     highest_runtime_seq: u64,
     replay_gate: Option<(u64, u64)>,
     welcomed: bool,
+    replay_deferred: bool,
     last_seen: Instant,
     /// Duplicate of the broker end of this connection, used only to measure
     /// frames the worker already delivered but the broker has not read.
@@ -682,21 +683,15 @@ impl Broker {
             controller_epoch: lease,
             workers: welcome.clone(),
         });
-        // Atomically install the new Controller lease and arm contiguous replay
-        // gating on every worker with unacknowledged events under controller->workers.
-        let replays = self.install_controller_and_arm_replays(Controller {
+        // Atomically install the new Controller lease, arm contiguous replay
+        // gating on every welcomed worker, and queue Replay in total order
+        // under controller->workers (Findings 2, 3, 12).
+        self.install_controller_and_arm_replays(Controller {
             lease,
             tx: tx.clone(),
             protocol,
             outer_machine_protocol,
         });
-        for (worker_tx, session_id, worker_epoch, after_runtime_seq) in replays {
-            let _ = worker_tx.send(Frame::Replay {
-                session_id,
-                worker_epoch,
-                after_runtime_seq,
-            });
-        }
         for current in self.snapshots() {
             if !welcome.contains(&current) {
                 self.send_controller(Frame::Snapshot {
@@ -929,6 +924,7 @@ impl Broker {
     /// New prompts wait behind a generation handoff. Cancellation and
     /// permission replies still route to the old worker because they are part
     /// of the in-flight turn that must reach its safe boundary.
+    #[cfg(test)]
     fn route_prompt(&self, session_id: &str, command: WorkerCommand) {
         self.route_prompt_guarded(session_id, command);
     }
@@ -1171,6 +1167,14 @@ impl Broker {
             .filter(|worker| worker.connection_id == connection_id && worker.epoch == worker_epoch)
             .map(|worker| {
                 worker.acked_runtime_seq = worker.acked_runtime_seq.max(runtime_seq);
+                if worker.acked_runtime_seq >= worker.highest_runtime_seq {
+                    worker.earliest_unacked_seq = None;
+                } else if worker
+                    .earliest_unacked_seq
+                    .is_some_and(|first| first <= worker.acked_runtime_seq)
+                {
+                    worker.earliest_unacked_seq = Some(worker.acked_runtime_seq.saturating_add(1));
+                }
                 worker.tx.clone()
             });
         if let Some(tx) = tx {
@@ -1308,10 +1312,11 @@ impl Broker {
                     uncertain_effect: None,
                 },
                 acked_runtime_seq: 0,
-                first_unacked_seq: None,
+                earliest_unacked_seq: None,
                 highest_runtime_seq: 0,
                 replay_gate: None,
                 welcomed,
+                replay_deferred: false,
                 last_seen: Instant::now(),
                 receive_probe: None,
                 liveness: None,
@@ -1343,7 +1348,7 @@ impl Broker {
         store.get(session_id).map(|entry| entry.incarnation.clone())
     }
 
-    fn send_controller(&self, mut frame: Frame) {
+    fn send_controller(&self, frame: Frame) {
         let controller = self
             .controller
             .lock()
@@ -1352,6 +1357,16 @@ impl Broker {
         let Some((tx, protocol, outer)) = controller else {
             return;
         };
+        self.send_sanitized_to_controller(&tx, protocol, outer, frame);
+    }
+
+    fn send_sanitized_to_controller(
+        &self,
+        tx: &mpsc::UnboundedSender<Frame>,
+        protocol: u16,
+        outer: Option<u16>,
+        mut frame: Frame,
+    ) {
         match &mut frame {
             Frame::Snapshot { worker } => {
                 worker.incarnation = self.reported_lineage(&worker.session_id);
@@ -4358,22 +4373,12 @@ async fn handle_core(
                     worker_epoch,
                     runtime_seq,
                 } => {
-                    if let Some(worker) = broker.workers.lock().get_mut(&session_id)
-                        && worker.epoch == worker_epoch
-                    {
-                        worker.acked_runtime_seq = worker.acked_runtime_seq.max(runtime_seq);
-                        if worker
-                            .first_unacked_seq
-                            .is_some_and(|first| first <= worker.acked_runtime_seq)
-                        {
-                            worker.first_unacked_seq = None;
-                        }
-                        let _ = worker.tx.send(Frame::Ack {
-                            session_id,
-                            worker_epoch,
-                            runtime_seq,
-                        });
-                    }
+                    broker.acknowledge_from_controller(
+                        lease,
+                        session_id,
+                        worker_epoch,
+                        runtime_seq,
+                    );
                 }
                 Frame::Heartbeat => {
                     if let Some(tx) = broker.controller_for(lease) {
@@ -4392,7 +4397,44 @@ async fn handle_core(
     result
 }
 
+tokio::task_local! {
+    static COMMAND_LEASE: u64;
+}
+
+fn active_command_lease() -> Option<u64> {
+    COMMAND_LEASE.try_with(|lease| *lease).ok()
+}
+
+async fn reset_session_for_lease(broker: &Arc<Broker>, session_id: &str, command_id: String) {
+    let Some(session) = broker.sessions.lock().get(session_id).cloned() else {
+        broker.command_rejected(
+            session_id,
+            command_id,
+            "reset session metadata was not declared".to_owned(),
+        );
+        return;
+    };
+    if !lease_active(broker) {
+        return;
+    }
+    broker.reset_session(session, command_id).await;
+}
+
+fn lease_active(broker: &Broker) -> bool {
+    let Some(lease) = active_command_lease() else {
+        return true;
+    };
+    if broker.controller_for(lease).is_some() {
+        return true;
+    }
+    tracing::warn!(lease, "discarding stale-lease command before admission");
+    false
+}
+
 async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
+    if !lease_active(broker) {
+        return;
+    }
     match command {
         CoreCommand::RecoverExecutionSession {
             session,
@@ -4496,7 +4538,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
         }
         prompt @ CoreCommand::Prompt { .. } => {
             if let Some((session_id, prompt)) = prompt.into_worker_prompt() {
-                broker.route_prompt(&session_id, prompt);
+                broker.route_prompt_for_optional_lease(active_command_lease(), &session_id, prompt);
             }
         }
         CoreCommand::CancelTurn {
@@ -4670,15 +4712,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             session_id,
             command_id,
         } if command_id.starts_with("reset-") => {
-            let Some(session) = broker.sessions.lock().get(&session_id).cloned() else {
-                broker.command_rejected(
-                    &session_id,
-                    command_id,
-                    "reset session metadata was not declared".to_owned(),
-                );
-                return;
-            };
-            broker.reset_session(session, command_id).await;
+            reset_session_for_lease(broker, &session_id, command_id).await;
         }
         CoreCommand::StopSession {
             session_id,
@@ -4689,6 +4723,9 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             // owns the session lifecycle decision.
             let cleanup_gate = broker.session_lifecycle_gate(&session_id);
             let _cleanup_guard = cleanup_gate.lock().await;
+            if !lease_active(broker) {
+                return;
+            }
             if let Err(error) = broker.record_deletion(&session_id).await {
                 broker.command_rejected(
                     &session_id,

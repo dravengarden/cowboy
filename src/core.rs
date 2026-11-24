@@ -714,6 +714,10 @@ struct Session {
     /// Durable set of original client `cmid`s parked by ambiguous prompt recovery
     /// so offline retries never replay them even after editing or removing the draft.
     recovery_cmids: HashSet<String>,
+    /// Subset of `recovery_cmids` proven durably persisted in the store.
+    committed_recovery_cmids: HashSet<String>,
+    /// Original client `cmid`s currently in Hub's Controller-owned recovery-park retry queue.
+    pending_recovery_cmids: HashSet<String>,
     dispatched_origins: HashMap<String, crate::prompt_origin::PromptDispatchRecord>,
     dispatched_origin_order: VecDeque<String>,
     /// Single-use pending worker echoes `(origin, expected_blocks)`.
@@ -1310,6 +1314,8 @@ pub enum StoreWrite {
         drafts: Vec<QueuedMessage>,
         settled_notices: Vec<(String, String)>,
         released_claims: Vec<crate::store::NoticeClaimRelease>,
+        #[serde(default)]
+        recovery_cmids: Option<Vec<String>>,
         #[serde(default)]
         require_claim_release: bool,
         #[serde(skip)]
@@ -2307,7 +2313,9 @@ impl Hub {
                         config_options,
                         config_previews: ConfigPreviews::default(),
                         config_preferences,
+                        committed_recovery_cmids: self.restored_recovery_cmids(&id, &drafts),
                         recovery_cmids: self.restored_recovery_cmids(&id, &drafts),
+                        pending_recovery_cmids: HashSet::new(),
                         queue,
                         drafts,
                         editing: None,
@@ -3132,6 +3140,8 @@ impl Hub {
                     dispatch_pending: None,
                     dispatched_cmids: VecDeque::new(),
                     recovery_cmids: HashSet::new(),
+                    committed_recovery_cmids: HashSet::new(),
+                    pending_recovery_cmids: HashSet::new(),
                     dispatched_origins: HashMap::new(),
                     dispatched_origin_order: VecDeque::new(),
                     pending_echoes: HashMap::new(),

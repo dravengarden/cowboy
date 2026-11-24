@@ -1,10 +1,51 @@
 //! Owner queue withdrawals, recovery parking, and queue inspection for
 //! durable managed-call completion notices.
 
-use super::types::{DeferredPendingFlush, affected_row_ids, apply_withdrawal_to_lists};
+use super::types::{
+    DeferredPendingFlush, PendingRecoveryPromptItem, affected_row_ids, apply_withdrawal_to_lists,
+};
 use super::*;
 
 impl Hub {
+    pub(in crate::core) fn sorted_recovery_cmids(s: &Session) -> Option<Vec<String>> {
+        if s.recovery_cmids.is_empty() {
+            return None;
+        }
+        let mut list: Vec<String> = s.recovery_cmids.iter().cloned().collect();
+        list.sort();
+        Some(list)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::core) fn send_acked_update_pending_with_recovery(
+        &self,
+        session_id: &str,
+        queue: Vec<QueuedMessage>,
+        drafts: Vec<QueuedMessage>,
+        settled_notices: Vec<(String, String)>,
+        released_claims: Vec<NoticeClaimRelease>,
+        recovery_cmids: Option<Vec<String>>,
+        require_claim_release: bool,
+    ) -> Option<StoreAckRx> {
+        let tx = self.inner.store_tx.as_ref()?;
+        let (ack_id, rx) = self.inner.store_acks.allocate();
+        let sent = tx.send(StoreWrite::UpdatePending {
+            session_id: session_id.to_owned(),
+            queue,
+            drafts,
+            settled_notices,
+            released_claims,
+            recovery_cmids,
+            require_claim_release,
+            ack_id: Some(ack_id),
+        });
+        if !sent {
+            self.inner.store_acks.cancel(ack_id);
+            return None;
+        }
+        Some(rx)
+    }
+
     /// Preview parking one or more unacknowledged `call-notice:` prompts as
     /// plain drafts (`cmid: None`) with `execution_recovery_parked`, fence the
     /// session's pending snapshots, and enqueue the atomic FIFO
@@ -60,6 +101,8 @@ impl Hub {
                 active: true,
                 session_id: session_id.to_owned(),
                 added_drafts,
+                replaced_draft_id: None,
+                committed_recovery_cmids: Vec::new(),
                 settled_notices,
             },
             rx,
@@ -67,8 +110,8 @@ impl Hub {
     }
 
     /// Stage parking a single ambiguous ordinary prompt as a `recovery-*` draft
-    /// through the acknowledged FIFO `StoreWrite::UpdatePending` path BEFORE
-    /// callers retire `RemoteRuntime.pending`.
+    /// AND its durable `session_recovery_cmids:<session_id>` tombstone inside
+    /// ONE atomic acknowledged `StoreWrite::UpdatePending` transaction (Findings 4 & 5).
     pub fn preview_park_recovery_prompt(
         &self,
         session_id: &str,
@@ -80,42 +123,59 @@ impl Hub {
             self.add_recovery_draft(session_id, text, content, cmid);
             return RecoveryDraftPark::NoStore;
         }
-        let duplicate = {
-            let sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get(session_id) else {
-                return RecoveryDraftPark::Rejected("session unavailable");
-            };
-            cmid.as_deref()
-                .filter(|c| s.drafts.iter().any(|m| m.cmid.as_deref() == Some(*c)))
-                .map(str::to_owned)
-        };
-        if let Some(dup) = duplicate {
-            self.persist_recovery_cmid_if_needed(session_id, Some(&dup));
-            self.confirm_delivered(session_id, &dup);
-            return RecoveryDraftPark::Duplicate;
-        }
         let sessions = self.inner.sessions.lock();
         let Some(s) = sessions.get(session_id) else {
             return RecoveryDraftPark::Rejected("session unavailable");
         };
+        if let Some(c) = cmid.as_deref()
+            && s.committed_recovery_cmids.contains(c)
+            && s.drafts
+                .iter()
+                .any(|m| m.id.starts_with("recovery-") && m.cmid.as_deref() == Some(c))
+        {
+            let dup = c.to_owned();
+            drop(sessions);
+            self.confirm_delivered(session_id, &dup);
+            return RecoveryDraftPark::Duplicate;
+        }
+        let mut drafts = s.drafts.clone();
+        let replaced_draft_id = cmid.as_deref().and_then(|c| {
+            drafts
+                .iter()
+                .position(|m| m.cmid.as_deref() == Some(c))
+                .map(|pos| drafts.remove(pos).id)
+        });
         let draft = QueuedMessage {
             id: format!("recovery-{}", self.next_qid()),
             text,
             content,
-            cmid,
+            cmid: cmid.clone(),
             schedule: None,
             origin: None,
             initiator: None,
         };
-        let queue = s.queue.clone();
-        let mut drafts = s.drafts.clone();
         drafts.push(draft.clone());
-        let Some(rx) = self.send_acked_update_pending(
+        let mut staged_cmids = s.recovery_cmids.clone();
+        let mut committed_recovery_cmids = Vec::new();
+        if let Some(c) = cmid.filter(|c| !c.is_empty()) {
+            staged_cmids.insert(c.clone());
+            committed_recovery_cmids.push(c);
+        }
+        let recovery_cmids_setting = if staged_cmids.is_empty() {
+            None
+        } else {
+            let mut list: Vec<String> = staged_cmids.into_iter().collect();
+            list.sort();
+            Some(list)
+        };
+        let queue = s.queue.clone();
+        let Some(rx) = self.send_acked_update_pending_with_recovery(
             session_id,
             queue,
             drafts,
             Vec::new(),
             Vec::new(),
+            recovery_cmids_setting,
             false,
         ) else {
             return RecoveryDraftPark::Rejected("store writer unavailable");
@@ -130,24 +190,203 @@ impl Hub {
                 active: true,
                 session_id: session_id.to_owned(),
                 added_drafts: vec![draft],
+                replaced_draft_id,
+                committed_recovery_cmids,
                 settled_notices: Vec::new(),
             }),
             rx,
         )
     }
 
-    /// Commit an acknowledged ordinary recovery draft park and durably record
-    /// its original `cmid` in `session_recovery_cmids:<session_id>`.
+    /// Commit an acknowledged ordinary recovery draft park + atomic tombstone
+    /// setting into Hub memory without issuing a second store write.
     pub fn commit_park_recovery_prompt(&self, preview: &mut PendingRecoveryPark) {
-        let session_id = preview.session_id.clone();
-        let cmids: Vec<String> = preview
-            .added_drafts
-            .iter()
-            .filter_map(|m| m.cmid.clone())
-            .collect();
-        self.commit_park_recovery_notices(preview);
-        for cmid in cmids {
-            self.persist_recovery_cmid_if_needed(&session_id, Some(&cmid));
+        if !preview.active {
+            return;
+        }
+        preview.active = false;
+        let (queue, drafts, setting_update) = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(&preview.session_id) else {
+                let mut claims = self.inner.notice_claims.lock();
+                claims.in_flight_pending_commits.remove(&preview.session_id);
+                return;
+            };
+            if let Some(ref old_id) = preview.replaced_draft_id {
+                s.drafts.retain(|m| m.id != *old_id);
+            }
+            s.drafts.extend(preview.added_drafts.iter().cloned());
+            for cmid in &preview.committed_recovery_cmids {
+                s.recovery_cmids.insert(cmid.clone());
+                s.committed_recovery_cmids.insert(cmid.clone());
+                s.pending_recovery_cmids.remove(cmid);
+            }
+            let recovery_cmids = Self::sorted_recovery_cmids(s);
+            let queue = s.queue.clone();
+            let drafts = s.drafts.clone();
+            let mut claims = self.inner.notice_claims.lock();
+            self.finish_in_flight_pending_commit(
+                &preview.session_id,
+                &queue,
+                &drafts,
+                recovery_cmids.clone(),
+                &mut claims,
+            );
+            (queue, drafts, recovery_cmids)
+        };
+        if let Some(list) = setting_update {
+            let key = format!(
+                "{}{}",
+                settings_keys::SESSION_RECOVERY_CMIDS_PREFIX,
+                preview.session_id
+            );
+            self.load_settings(vec![(key, serde_json::json!(list))]);
+        }
+        self.broadcast_pending_snapshot(&preview.session_id, &queue, &drafts);
+    }
+
+    /// Controller-owned durable recovery-park retry queue (Finding 1): survives
+    /// `RemoteRuntime` disconnection/replacement and retries the exact same
+    /// idempotent durable park until acknowledged by the store or shutdown.
+    pub fn enqueue_durable_recovery_park(
+        &self,
+        session_id: String,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+        reason: String,
+    ) {
+        if !self.has_store_writer() {
+            self.add_recovery_draft(&session_id, text, content, cmid);
+            self.broadcast_error(Some(session_id), reason);
+            return;
+        }
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(&session_id) else {
+                return;
+            };
+            if let Some(ref c) = cmid
+                && !c.is_empty()
+            {
+                s.pending_recovery_cmids.insert(c.clone());
+            }
+        }
+        let start_worker = {
+            let mut claims = self.inner.notice_claims.lock();
+            let queue = claims
+                .pending_recovery_parks
+                .entry(session_id.clone())
+                .or_default();
+            let already_queued = cmid
+                .as_deref()
+                .is_some_and(|c| queue.iter().any(|item| item.cmid.as_deref() == Some(c)));
+            if !already_queued {
+                queue.push(PendingRecoveryPromptItem {
+                    text,
+                    content,
+                    cmid,
+                    reason,
+                });
+            }
+            claims
+                .active_recovery_park_workers
+                .insert(session_id.clone())
+        };
+        if !start_worker {
+            return;
+        }
+        let hub = self.clone();
+        self.spawn_teardown_requeue(async move {
+            hub.run_durable_recovery_park_loop(session_id).await;
+        });
+    }
+
+    async fn run_durable_recovery_park_loop(&self, session_id: String) {
+        let mut backoff_ms = 50_u64;
+        loop {
+            let next_item = {
+                let mut claims = self.inner.notice_claims.lock();
+                if let Some(item) = claims
+                    .pending_recovery_parks
+                    .get(&session_id)
+                    .and_then(|q| q.first())
+                    .cloned()
+                {
+                    Some(item)
+                } else {
+                    claims.pending_recovery_parks.remove(&session_id);
+                    claims.active_recovery_park_workers.remove(&session_id);
+                    None
+                }
+            };
+            let Some(item) = next_item else {
+                break;
+            };
+            if !self.has_store_writer() {
+                self.inner
+                    .notice_claims
+                    .lock()
+                    .active_recovery_park_workers
+                    .remove(&session_id);
+                break;
+            }
+            let _commit_guard = self.pending_commit_lock(&session_id).await;
+            let outcome = match self.preview_park_recovery_prompt(
+                &session_id,
+                item.text.clone(),
+                item.content.clone(),
+                item.cmid.clone(),
+            ) {
+                RecoveryDraftPark::NoStore | RecoveryDraftPark::Duplicate => Ok(true),
+                RecoveryDraftPark::Pending(mut preview, rx) => match rx.await {
+                    Ok(Ok(true)) => {
+                        self.commit_park_recovery_prompt(&mut preview);
+                        Ok(true)
+                    }
+                    Ok(Ok(false) | Err(_)) => {
+                        self.abort_park_recovery_notices(&mut preview);
+                        Ok(false)
+                    }
+                    Err(_) => {
+                        self.abort_park_recovery_notices(&mut preview);
+                        Err(false)
+                    }
+                },
+                RecoveryDraftPark::Rejected("session unavailable") => Err(true),
+                RecoveryDraftPark::Rejected(_) => Ok(false),
+            };
+            match outcome {
+                Ok(true) => {
+                    backoff_ms = 50;
+                    if let Some(ref c) = item.cmid
+                        && let Some(s) = self.inner.sessions.lock().get_mut(&session_id)
+                    {
+                        s.pending_recovery_cmids.remove(c);
+                    }
+                    {
+                        let mut claims = self.inner.notice_claims.lock();
+                        if let Some(q) = claims.pending_recovery_parks.get_mut(&session_id)
+                            && !q.is_empty()
+                        {
+                            q.remove(0);
+                        }
+                    }
+                    self.broadcast_error(Some(session_id.clone()), item.reason);
+                }
+                Ok(false) => {
+                    tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)).await;
+                    backoff_ms = (backoff_ms * 2).min(2_000);
+                }
+                Err(drop_queue) => {
+                    let mut claims = self.inner.notice_claims.lock();
+                    if drop_queue {
+                        claims.pending_recovery_parks.remove(&session_id);
+                    }
+                    claims.active_recovery_park_workers.remove(&session_id);
+                    break;
+                }
+            }
         }
     }
 
@@ -179,7 +418,13 @@ impl Hub {
                 claims.active.remove(&key);
                 claims.pending_releases.remove(&key);
             }
-            self.finish_in_flight_pending_commit(&preview.session_id, &queue, &drafts, &mut claims);
+            self.finish_in_flight_pending_commit(
+                &preview.session_id,
+                &queue,
+                &drafts,
+                Self::sorted_recovery_cmids(s),
+                &mut claims,
+            );
             (queue, drafts)
         };
         self.broadcast_pending_snapshot(&preview.session_id, &queue, &drafts);
@@ -204,6 +449,7 @@ impl Hub {
                 &preview.session_id,
                 &s.queue,
                 &s.drafts,
+                Self::sorted_recovery_cmids(s),
                 &mut claims,
             );
         } else {
@@ -268,6 +514,7 @@ impl Hub {
                         drafts: drafts.clone(),
                         settled_notices: Vec::new(),
                         released_claims: Vec::new(),
+                        recovery_cmids: Self::sorted_recovery_cmids(s),
                         require_claim_release: false,
                         ack_id: None,
                     });
@@ -419,6 +666,7 @@ impl Hub {
                     &preview.session_id,
                     &s.queue,
                     &s.drafts,
+                    Self::sorted_recovery_cmids(s),
                     &mut claims,
                 );
             } else {
@@ -478,7 +726,13 @@ impl Hub {
                     .withdrawing_row_ids
                     .remove(&(preview.session_id.clone(), row_id.clone()));
             }
-            self.finish_in_flight_pending_commit(&preview.session_id, &queue, &drafts, &mut claims);
+            self.finish_in_flight_pending_commit(
+                &preview.session_id,
+                &queue,
+                &drafts,
+                Self::sorted_recovery_cmids(s),
+                &mut claims,
+            );
             (changed, queue, drafts)
         };
         self.broadcast_pending_snapshot(&preview.session_id, &queue, &drafts);

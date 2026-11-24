@@ -18,7 +18,7 @@ use crate::store::NoticeDeliveryState;
 mod teardown;
 pub(super) use teardown::{
     is_ambiguous_prompt_rejection, park_ambiguous_prompt_command, park_ambiguous_prompt_durable,
-    park_and_retire_ambiguous_pending, reconcile_idle_guard_for_session,
+    park_and_retire_ambiguous_pending, reconcile_idle_guard_for_snapshot,
     recover_pending_prompts_on_disconnect, replacement_worker_superseded_epoch,
     requeue_rejected_command, requeue_unsent_notices_on_disconnect, revive_and_try_prompt,
 };
@@ -99,8 +99,8 @@ pub(super) async fn take_acked_command(
         let command = shared.pending.lock().remove(command_id);
         clear_acked_command(shared, command_id);
         shared.in_flight_prompts.lock().retire_command(command_id);
-        if replacement_worker_superseded_epoch(shared, session_id, cmd) {
-            reconcile_idle_guard_for_session(shared, session_id);
+        if let Some(replacement) = replacement_worker_superseded_epoch(shared, session_id, cmd) {
+            reconcile_idle_guard_for_snapshot(shared, session_id, &replacement);
         }
         return Some((command, true));
     }
@@ -264,9 +264,9 @@ pub(super) fn handle_rejected_ack(
         let message = reason.unwrap_or_else(|| {
             "prompt delivery across worker change is unresolved; retained as draft".to_owned()
         });
-        let superseded = command
+        let replacement = command
             .as_ref()
-            .is_some_and(|cmd| replacement_worker_superseded_epoch(shared, session_id, cmd));
+            .and_then(|cmd| replacement_worker_superseded_epoch(shared, session_id, cmd));
         if let Some(cmd) = command {
             park_ambiguous_prompt_command(shared, session_id, cmd, &message);
         } else {
@@ -275,8 +275,8 @@ pub(super) fn handle_rejected_ack(
                 .broadcast_error(Some(session_id.to_owned()), message);
         }
         shared.in_flight_prompts.lock().retire_command(command_id);
-        if superseded {
-            reconcile_idle_guard_for_session(shared, session_id);
+        if let Some(worker) = replacement {
+            reconcile_idle_guard_for_snapshot(shared, session_id, &worker);
         }
     } else {
         requeue_rejected_command(shared, session_id, command, reason);

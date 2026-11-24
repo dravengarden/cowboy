@@ -34,6 +34,7 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            s.committed_recovery_cmids.insert(cmid.to_owned());
             if s.recovery_cmids.insert(cmid.to_owned()) {
                 let mut list: Vec<String> = s.recovery_cmids.iter().cloned().collect();
                 list.sort();
@@ -506,6 +507,8 @@ impl Hub {
     }
 
     /// Activate one draft: remove it from drafts and submit it (send-or-queue).
+    /// Recovery drafts atomically validate `cmid` and move into `queue` under
+    /// ONE `sessions` lock before emitting one atomic `UpdatePending` (Finding 6).
     pub fn activate_draft(
         &self,
         session_id: &str,
@@ -518,7 +521,8 @@ impl Hub {
         {
             return;
         }
-        let msg = {
+        let trigger = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
+        let recovery_moved = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
@@ -526,23 +530,67 @@ impl Hub {
             let Some(pos) = s.drafts.iter().position(|m| m.id == id) else {
                 return;
             };
-            let target = &s.drafts[pos];
-            if target.id.starts_with("recovery-") {
-                let fresh_op = cmid.as_deref().is_some_and(|op| {
-                    !op.is_empty()
-                        && Some(op) != target.cmid.as_deref()
-                        && !Self::prompt_already_accepted(s, op)
-                });
-                if !fresh_op {
+            if s.drafts[pos].id.starts_with("recovery-") {
+                let target = &s.drafts[pos];
+                let Some(op) = cmid
+                    .as_deref()
+                    .filter(|op| {
+                        !op.is_empty()
+                            && Some(*op) != target.cmid.as_deref()
+                            && !Self::prompt_already_accepted(s, op)
+                    })
+                    .map(str::to_owned)
+                else {
                     drop(sessions);
                     self.broadcast_error(
                         Some(session_id.to_owned()),
                         "Resending a parked recovery draft requires a new operation id".to_owned(),
                     );
                     return;
-                }
+                };
+                let was_empty = s.queue.is_empty();
+                let m = s.drafts.remove(pos);
+                let had_schedule = m.schedule.is_some();
+                let dispatch_origin = crate::prompt_origin::compute_dispatch_origin(
+                    m.origin.as_ref(),
+                    Some(&trigger),
+                );
+                let new_id = self.next_qid();
+                s.queue.push(QueuedMessage {
+                    id: new_id,
+                    text: m.text,
+                    content: m.content,
+                    cmid: Some(op),
+                    schedule: None,
+                    origin: m.origin,
+                    initiator: Some(trigger.clone()),
+                });
+                Some((had_schedule, was_empty, dispatch_origin.is_owner()))
+            } else {
+                None
             }
-            Some(s.drafts.remove(pos))
+        };
+        if let Some((had_schedule, was_empty, is_owner)) = recovery_moved {
+            self.emit_pending(session_id);
+            if had_schedule {
+                self.cancel_draft_timer(session_id, id);
+                self.broadcast_sessions();
+            }
+            if is_owner {
+                self.notify_human_turn(session_id);
+            }
+            self.drain_head(session_id, was_empty, false, None);
+            return;
+        }
+        let msg = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            s.drafts
+                .iter()
+                .position(|m| m.id == id)
+                .map(|pos| s.drafts.remove(pos))
         };
         if let Some(m) = msg {
             self.emit_pending(session_id);
@@ -553,7 +601,6 @@ impl Hub {
             let fallback_cmid = m
                 .cmid
                 .filter(|id| !crate::agent_model::is_reserved_call_notice_cmid(id));
-            let trigger = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
             self.submit_inner(
                 session_id,
                 m.text,

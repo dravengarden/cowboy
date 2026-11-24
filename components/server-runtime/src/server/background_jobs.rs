@@ -789,15 +789,17 @@ pub async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Res
             drafts,
             settled_notices,
             released_claims,
+            recovery_cmids,
             ..
         } => {
             store
-                .update_pending_with_notice_ops(
+                .update_pending_atomic(
                     session_id,
                     queue,
                     drafts,
                     settled_notices,
                     released_claims,
+                    recovery_cmids.as_deref(),
                 )
                 .await
         }

@@ -291,22 +291,38 @@ impl Broker {
     }
 
     /// One `tools/call` for the unit, inside its active turn.
+    #[cfg(test)]
     pub async fn call(&self, client: &Arc<Client>, params: &Value) -> Value {
+        self.call_guarded(client, params).await.0
+    }
+
+    /// One `tools/call` returning a `SettlementGuard` that keeps the ledger call
+    /// admission open until the endpoint classifies reply delivery (Finding 9).
+    pub(super) async fn call_guarded(
+        &self,
+        client: &Arc<Client>,
+        params: &Value,
+    ) -> (Value, Option<super::ledger::SettlementGuard>) {
         let Some(ledger) = client.ledger().cloned() else {
-            return refused("no execution ledger");
+            return (refused("no execution ledger"), None);
         };
         // A session whose required binding failed has no extension tools.
         let found = match self.discovery.borrow().clone() {
             Some(found) if found.failed.is_none() => found,
-            Some(found) => return refused(found.failed.as_deref().unwrap_or("unavailable")),
-            None => return refused("session extensions are still starting"),
+            Some(found) => {
+                return (
+                    refused(found.failed.as_deref().unwrap_or("unavailable")),
+                    None,
+                );
+            }
+            None => return (refused("session extensions are still starting"), None),
         };
         let name = params
             .get("name")
             .and_then(Value::as_str)
             .unwrap_or_default();
         let Some(tool) = found.tools.into_iter().find(|tool| tool.name == name) else {
-            return refused("unknown extension tool");
+            return (refused("unknown extension tool"), None);
         };
         let arguments = params
             .get("arguments")
@@ -315,7 +331,7 @@ impl Broker {
             .unwrap_or_else(|| json!({}));
         let admitted = match ledger.admit_call() {
             Ok(admitted) => admitted,
-            Err(reason) => return refused(reason),
+            Err(reason) => return (refused(reason), None),
         };
         let turn = Ledger::admitted_turn(&admitted).to_owned();
         let request = json!({"name": tool.original, "arguments": arguments});
@@ -364,8 +380,8 @@ impl Broker {
                 }})
             }
         };
-        ledger.settle_call(&admitted);
-        reply
+        let guard = ledger.guard_call(admitted);
+        (reply, Some(guard))
     }
 }
 

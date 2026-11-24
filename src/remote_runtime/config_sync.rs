@@ -340,7 +340,7 @@ pub(super) enum PromptPrep {
     ParkAmbiguous {
         session_id: String,
         command: Box<CoreCommand>,
-        reconcile_idle: bool,
+        replacement_worker: Option<Box<WorkerSnapshot>>,
     },
 }
 
@@ -356,7 +356,7 @@ pub(super) async fn prepare_or_park_prompt_for_send(
         PromptPrep::ParkAmbiguous {
             session_id,
             command,
-            reconcile_idle,
+            replacement_worker,
         } => {
             notice_recovery::park_and_retire_ambiguous_pending(
                 shared,
@@ -365,7 +365,7 @@ pub(super) async fn prepare_or_park_prompt_for_send(
                 version,
                 *command,
                 "prompt delivery across worker change is unresolved; retained as draft",
-                reconcile_idle,
+                replacement_worker.as_deref(),
             )
             .await;
             false
@@ -377,6 +377,7 @@ pub(super) async fn prepare_or_park_prompt_for_send(
 /// unacknowledged `uncertain_effect` on the current worker — withdrawing and
 /// requeuing it ONLY if provably unsent — and stamp its epoch + acknowledged
 /// sequence binding before transport handoff.
+#[allow(clippy::too_many_lines)]
 pub(super) fn prepare_prompt_for_send(
     shared: &Shared,
     key: &str,
@@ -401,10 +402,21 @@ pub(super) fn prepare_prompt_for_send(
         let current_epoch = worker_snapshot
             .as_ref()
             .map(|worker| worker.worker_epoch.as_str());
-        let superseded_by_replacement = matches!(
-            (expected_worker_epoch.as_deref(), current_epoch),
-            (Some(bound), Some(current)) if current != bound
-        );
+        // Finding 13: Only a connected, non-terminal replacement worker (never
+        // a broker placeholder) authorizes releasing the idle guard.
+        let replacement_worker = expected_worker_epoch.as_deref().and_then(|bound| {
+            worker_snapshot
+                .as_ref()
+                .filter(|w| {
+                    w.worker_epoch != bound
+                        && w.has_connected_owner()
+                        && !matches!(
+                            w.state,
+                            super::WorkerState::Exited | super::WorkerState::Crashed
+                        )
+                })
+                .cloned()
+        });
         let ambiguous = match (expected_worker_epoch.as_deref(), current_epoch) {
             (Some(bound), Some(current)) => current != bound,
             (None, _) => true,
@@ -421,7 +433,7 @@ pub(super) fn prepare_prompt_for_send(
                 Some(cmd) => PromptPrep::ParkAmbiguous {
                     session_id: session_id.clone(),
                     command: Box::new(cmd),
-                    reconcile_idle: superseded_by_replacement,
+                    replacement_worker: replacement_worker.map(Box::new),
                 },
                 None => PromptPrep::Skip,
             };

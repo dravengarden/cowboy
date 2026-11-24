@@ -314,6 +314,7 @@ export class AgyLog {
             await this.read(Math.max(0, cursor - MAX_WINDOW), cursor),
             undefined,
           );
+          if (!exitedBeforeStat && this.childExited) continue;
           return classify(records, { prior, stopReason });
         }
         await new Promise((resolve) => setTimeout(resolve, this.pollMs));

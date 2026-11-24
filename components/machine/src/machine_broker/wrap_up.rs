@@ -178,10 +178,10 @@ pub(super) fn spawn_core_command_loop(
                 continue;
             }
             let broker = Arc::clone(&broker);
-            let _ = tokio::spawn(async move {
+            let _ = tokio::spawn(super::COMMAND_LEASE.scope(lease, async move {
                 let _guard = guard;
                 super::handle_core_command(&broker, command).await
-            })
+            }))
             .await;
         }
     });
@@ -202,12 +202,15 @@ pub(super) fn enqueue_leased_core_command(
     )>,
     mut command: crate::runtime_wire::CoreCommand,
 ) -> anyhow::Result<()> {
+    // Finding 10: Classify overflow refusal and bind to this exact lease's
+    // sender while holding the controller lock so a replacement lease can never
+    // receive an old lease's refusal.
     let overflow = {
         let controller = broker.controller.lock();
-        let Some(ctrl_proto) = controller
+        let Some((ctrl_tx, ctrl_proto)) = controller
             .as_ref()
             .filter(|c| c.lease == lease)
-            .map(|c| c.protocol)
+            .map(|c| (c.tx.clone(), c.protocol))
         else {
             tracing::warn!(lease, "ignoring command from fenced controller");
             return Ok(());
@@ -229,36 +232,45 @@ pub(super) fn enqueue_leased_core_command(
                 }
                 None
             }
-            Err(mpsc::error::TrySendError::Full((_, command, _guard))) => Some(command),
+            Err(mpsc::error::TrySendError::Full((_, command, _guard))) => {
+                let is_prompt = matches!(command, crate::runtime_wire::CoreCommand::Prompt { .. });
+                let Some((session_id, command_id)) =
+                    super::core_overflow::overflow_refusal(&command)
+                else {
+                    anyhow::bail!("Machine core command queue saturated; reconnecting controller");
+                };
+                let reason = if is_prompt
+                    && broker
+                        .dispatched_prompts
+                        .lock()
+                        .was_ingressed_or_uncertain(&session_id, &command_id)
+                {
+                    "delivery_ambiguous: Machine core queue full on retry after prompt ingress"
+                        .to_owned()
+                } else if is_prompt {
+                    "unhanded: Machine is busy; retry shortly".to_owned()
+                } else {
+                    "Machine is busy; retry shortly".to_owned()
+                };
+                Some((ctrl_tx, session_id, command_id, reason))
+            }
             Err(mpsc::error::TrySendError::Closed(_)) => {
                 anyhow::bail!("Machine core command queue closed");
             }
         }
     };
-    if let Some(command) = overflow {
-        let is_prompt = matches!(command, crate::runtime_wire::CoreCommand::Prompt { .. });
-        let Some((session_id, command_id)) = super::core_overflow::overflow_refusal(&command)
-        else {
-            anyhow::bail!("Machine core command queue saturated; reconnecting controller");
-        };
+    if let Some((ctrl_tx, session_id, command_id, reason)) = overflow {
         tracing::warn!(
             session = %session_id,
             %command_id,
             "Machine core command queue full; refusing command"
         );
-        let reason = if is_prompt
-            && broker
-                .dispatched_prompts
-                .lock()
-                .was_ingressed_or_uncertain(&session_id, &command_id)
-        {
-            "delivery_ambiguous: Machine core queue full on retry after prompt ingress".to_owned()
-        } else if is_prompt {
-            "unhanded: Machine is busy; retry shortly".to_owned()
-        } else {
-            "Machine is busy; retry shortly".to_owned()
-        };
-        broker.command_rejected(&session_id, command_id, reason);
+        let _ = ctrl_tx.send(Frame::CommandAck {
+            session_id,
+            command_id,
+            accepted: false,
+            reason: Some(reason),
+        });
     }
     Ok(())
 }
@@ -800,20 +812,63 @@ pub(super) fn prompt_admission_refusal(
     None
 }
 
+fn arm_worker_replay(worker: &mut super::WorkerPeer) {
+    let floor = worker
+        .earliest_unacked_seq
+        .unwrap_or(worker.acked_runtime_seq.saturating_add(1))
+        .max(worker.acked_runtime_seq.saturating_add(1));
+    if worker.highest_runtime_seq >= floor {
+        worker.replay_gate = Some((floor, worker.highest_runtime_seq));
+    } else {
+        worker.replay_gate = None;
+    }
+    let after_runtime_seq = floor.saturating_sub(1).max(worker.acked_runtime_seq);
+    let _ = worker.tx.send(Frame::Replay {
+        session_id: worker.snapshot.session_id.clone(),
+        worker_epoch: worker.epoch.clone(),
+        after_runtime_seq,
+    });
+}
+
 impl super::Broker {
     pub(super) fn mark_worker_welcomed(&self, session_id: &str, connection_id: u64) -> bool {
+        // Finding 12: Acquire controller->workers so any deferred Replay is
+        // queued strictly AFTER Frame::Welcome.
+        let ctrl_guard = self.controller.lock();
         let mut workers = self.workers.lock();
         if let Some(worker) = workers
             .get_mut(session_id)
             .filter(|w| w.connection_id == connection_id)
         {
             worker.welcomed = true;
+            if std::mem::take(&mut worker.replay_deferred) && ctrl_guard.is_some() {
+                arm_worker_replay(worker);
+            }
             return worker.snapshot.drain_requested;
         }
         false
     }
 
+    pub(super) fn route_prompt_for_optional_lease(
+        &self,
+        lease: Option<u64>,
+        session_id: &str,
+        command: WorkerCommand,
+    ) {
+        self.route_prompt_inner(lease, session_id, command);
+    }
+
+    #[cfg(test)]
     pub(super) fn route_prompt_guarded(&self, session_id: &str, command: WorkerCommand) {
+        self.route_prompt_inner(None, session_id, command);
+    }
+
+    fn route_prompt_inner(
+        &self,
+        expected_lease: Option<u64>,
+        session_id: &str,
+        command: WorkerCommand,
+    ) {
         let (command_id, expected_epoch) = match &command {
             WorkerCommand::Prompt {
                 command_id,
@@ -831,9 +886,20 @@ impl super::Broker {
                 return;
             }
         };
-        let reject: Option<(String, String)> = {
-            // Single consistent lock order (`workers` -> `pending_commands` -> `dispatched_prompts`)
-            // serializes routing, worker welcome/registration, and pending flushes.
+        let reject: Option<(Option<mpsc::UnboundedSender<Frame>>, String, String)> = {
+            // Single consistent lock order (`controller` -> `workers` -> `pending_commands` -> `dispatched_prompts`)
+            // validates the lease at effect admission (Finding 7) and serializes routing & flushes.
+            let ctrl_guard = self.controller.lock();
+            let bound_tx = match expected_lease {
+                Some(lease) => match ctrl_guard.as_ref().filter(|c| c.lease == lease) {
+                    Some(c) => Some(c.tx.clone()),
+                    None => {
+                        tracing::warn!(lease, session = %session_id, "discarding stale-lease prompt at admission");
+                        return;
+                    }
+                },
+                None => ctrl_guard.as_ref().map(|c| c.tx.clone()),
+            };
             let workers = self.workers.lock();
             let mut pending = self.pending_commands.lock();
             let mut dispatched = self.dispatched_prompts.lock();
@@ -925,84 +991,119 @@ impl super::Broker {
                     }
                 }
             }
+            .map(|(cid, reason)| (bound_tx, cid, reason))
         };
-        if let Some((command_id, reason)) = reject {
-            self.send_controller(Frame::CommandAck {
+        if let Some((bound_tx, command_id, reason)) = reject {
+            let frame = Frame::CommandAck {
                 session_id: session_id.to_owned(),
                 command_id,
                 accepted: false,
                 reason: Some(reason),
-            });
+            };
+            if let Some(tx) = bound_tx {
+                let _ = tx.send(frame);
+            } else {
+                self.send_controller(frame);
+            }
         }
     }
 
-    pub(super) fn install_controller_and_arm_replays(
-        &self,
-        controller: super::Controller,
-    ) -> Vec<(mpsc::UnboundedSender<Frame>, String, String, u64)> {
+    /// Atomically install `controller`, arm contiguous replay gating on every
+    /// welcomed worker, and queue `Frame::Replay` on each unbounded worker channel
+    /// under `controller -> workers` so an old lease's `Ack` can never overtake
+    /// the replacement's `Replay` and no unwelcomed worker receives `Replay`
+    /// ahead of `Welcome` (Findings 2, 3, 12).
+    pub(super) fn install_controller_and_arm_replays(&self, controller: super::Controller) {
         let mut ctrl_guard = self.controller.lock();
         let mut workers = self.workers.lock();
         ctrl_guard.replace(controller);
-        let mut replays = Vec::with_capacity(workers.len());
         for worker in workers.values_mut() {
-            let floor = worker
-                .first_unacked_seq
-                .unwrap_or(worker.acked_runtime_seq.saturating_add(1))
-                .max(worker.acked_runtime_seq.saturating_add(1));
-            if worker.highest_runtime_seq >= floor {
-                worker.replay_gate = Some((floor, worker.highest_runtime_seq));
+            if worker.welcomed {
+                worker.replay_deferred = false;
+                arm_worker_replay(worker);
             } else {
-                worker.replay_gate = None;
+                worker.replay_deferred = true;
             }
-            replays.push((
-                worker.tx.clone(),
-                worker.snapshot.session_id.clone(),
-                worker.epoch.clone(),
-                worker.acked_runtime_seq,
-            ));
         }
-        replays
     }
 
-    /// Atomically gate `runtime_seq` against any active replay prefix and bind
-    /// event forwarding to the exact Controller sender owning the current lease.
+    /// Revalidate `lease`, advance `acked_runtime_seq` + `earliest_unacked_seq`,
+    /// and enqueue `Frame::Ack` under the exact same `controller -> workers` lock
+    /// order as `install_controller_and_arm_replays` (Findings 2 & 3).
+    pub(super) fn acknowledge_from_controller(
+        &self,
+        lease: u64,
+        session_id: String,
+        worker_epoch: String,
+        runtime_seq: u64,
+    ) {
+        let ctrl_guard = self.controller.lock();
+        if !ctrl_guard.as_ref().is_some_and(|c| c.lease == lease) {
+            tracing::warn!(lease, %session_id, "ignoring Ack from replaced controller");
+            return;
+        }
+        let mut workers = self.workers.lock();
+        if let Some(worker) = workers.get_mut(&session_id)
+            && worker.epoch == worker_epoch
+        {
+            worker.acked_runtime_seq = worker.acked_runtime_seq.max(runtime_seq);
+            if worker.acked_runtime_seq >= worker.highest_runtime_seq {
+                worker.earliest_unacked_seq = None;
+            } else if worker
+                .earliest_unacked_seq
+                .is_some_and(|first| first <= worker.acked_runtime_seq)
+            {
+                worker.earliest_unacked_seq = Some(worker.acked_runtime_seq.saturating_add(1));
+            }
+            if worker.welcomed {
+                let _ = worker.tx.send(Frame::Ack {
+                    session_id,
+                    worker_epoch,
+                    runtime_seq,
+                });
+            }
+        }
+    }
+
+    /// Atomically gate `runtime_seq` against any active replay prefix, track
+    /// `earliest_unacked_seq` across BOTH connected and detached delivery, and
+    /// capture `(tx, protocol, outer_machine_protocol)` for protocol-sanitized
+    /// event forwarding (Findings 2 & 11).
     pub(super) fn admit_and_bind_controller_for_event(
         &self,
         session_id: &str,
         connection_id: u64,
         runtime_seq: u64,
-    ) -> Option<mpsc::UnboundedSender<Frame>> {
+    ) -> Option<(mpsc::UnboundedSender<Frame>, u16, Option<u16>)> {
         let ctrl_guard = self.controller.lock();
         let mut workers = self.workers.lock();
-        let worker = workers
+        let mut worker = workers
             .get_mut(session_id)
             .filter(|w| w.connection_id == connection_id);
-        let Some(ctrl) = ctrl_guard.as_ref() else {
-            if let Some(worker) = worker {
-                worker.highest_runtime_seq = worker.highest_runtime_seq.max(runtime_seq);
-                worker.first_unacked_seq = Some(
+        if let Some(worker) = worker.as_deref_mut() {
+            worker.highest_runtime_seq = worker.highest_runtime_seq.max(runtime_seq);
+            if runtime_seq > worker.acked_runtime_seq {
+                worker.earliest_unacked_seq = Some(
                     worker
-                        .first_unacked_seq
+                        .earliest_unacked_seq
                         .map_or(runtime_seq, |first| first.min(runtime_seq)),
                 );
             }
-            return None;
-        };
-        if let Some(worker) = worker {
-            worker.highest_runtime_seq = worker.highest_runtime_seq.max(runtime_seq);
-            if let Some((next_expected, until_seq)) = worker.replay_gate {
-                if runtime_seq != next_expected {
-                    return None;
-                }
-                if runtime_seq >= until_seq {
-                    worker.replay_gate = None;
-                    worker.first_unacked_seq = None;
-                } else {
-                    worker.replay_gate = Some((next_expected.saturating_add(1), until_seq));
-                }
+        }
+        let ctrl = ctrl_guard.as_ref()?;
+        if let Some(worker) = worker
+            && let Some((next_expected, until_seq)) = worker.replay_gate
+        {
+            if runtime_seq != next_expected {
+                return None;
+            }
+            if runtime_seq >= until_seq {
+                worker.replay_gate = None;
+            } else {
+                worker.replay_gate = Some((next_expected.saturating_add(1), until_seq));
             }
         }
-        Some(ctrl.tx.clone())
+        Some((ctrl.tx.clone(), ctrl.protocol, ctrl.outer_machine_protocol))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1025,30 +1126,40 @@ impl super::Broker {
             drop(cancelled);
             if permanently_deleted {
                 self.acknowledge_worker_event(session_id, connection_id, worker_epoch, runtime_seq);
-            } else if let Some(ctrl_tx) =
+            } else if let Some((ctrl_tx, protocol, outer)) =
                 self.admit_and_bind_controller_for_event(session_id, connection_id, runtime_seq)
             {
-                let _ = ctrl_tx.send(Frame::WorkerEvent {
+                self.send_sanitized_to_controller(
+                    &ctrl_tx,
+                    protocol,
+                    outer,
+                    Frame::WorkerEvent {
+                        session_id: event_session,
+                        worker_epoch,
+                        runtime_seq,
+                        event,
+                        diagnostics,
+                    },
+                );
+            }
+            return;
+        }
+        let bound_ctrl =
+            self.admit_and_bind_controller_for_event(session_id, connection_id, runtime_seq);
+        let rehabilitated = self.update_from_event(session_id, connection_id, runtime_seq, &event);
+        if let Some((ctrl_tx, protocol, outer)) = bound_ctrl {
+            self.send_sanitized_to_controller(
+                &ctrl_tx,
+                protocol,
+                outer,
+                Frame::WorkerEvent {
                     session_id: event_session,
                     worker_epoch,
                     runtime_seq,
                     event,
                     diagnostics,
-                });
-            }
-            return;
-        }
-        let bound_tx =
-            self.admit_and_bind_controller_for_event(session_id, connection_id, runtime_seq);
-        let rehabilitated = self.update_from_event(session_id, connection_id, runtime_seq, &event);
-        if let Some(ctrl_tx) = bound_tx {
-            let _ = ctrl_tx.send(Frame::WorkerEvent {
-                session_id: event_session,
-                worker_epoch,
-                runtime_seq,
-                event,
-                diagnostics,
-            });
+                },
+            );
         }
         self.maybe_cutover(session_id);
         drop(cancelled);
@@ -1557,10 +1668,11 @@ mod tests {
                 tx: worker_tx,
                 snapshot: snap,
                 acked_runtime_seq: 0,
-                first_unacked_seq: None,
+                earliest_unacked_seq: None,
                 highest_runtime_seq: 0,
                 replay_gate: None,
                 welcomed: true,
+                replay_deferred: false,
                 last_seen: std::time::Instant::now(),
                 receive_probe: None,
                 liveness: None,
@@ -1737,10 +1849,11 @@ mod tests {
                 tx: w1_tx,
                 snapshot: s1,
                 acked_runtime_seq: 0,
-                first_unacked_seq: None,
+                earliest_unacked_seq: None,
                 highest_runtime_seq: 0,
                 replay_gate: None,
                 welcomed: true,
+                replay_deferred: false,
                 last_seen: std::time::Instant::now(),
                 receive_probe: None,
                 liveness: None,
@@ -1818,10 +1931,11 @@ mod tests {
                 tx: w2_tx,
                 snapshot: s2,
                 acked_runtime_seq: 0,
-                first_unacked_seq: None,
+                earliest_unacked_seq: None,
                 highest_runtime_seq: 0,
                 replay_gate: None,
                 welcomed: true,
+                replay_deferred: false,
                 last_seen: std::time::Instant::now(),
                 receive_probe: None,
                 liveness: None,
@@ -1876,10 +1990,11 @@ mod tests {
                 tx: w_tx,
                 snapshot: sample_snapshot(Some("antigravity")),
                 acked_runtime_seq: 0,
-                first_unacked_seq: None,
+                earliest_unacked_seq: None,
                 highest_runtime_seq: 0,
                 replay_gate: None,
                 welcomed: true,
+                replay_deferred: false,
                 last_seen: std::time::Instant::now(),
                 receive_probe: None,
                 liveness: None,
@@ -1896,14 +2011,12 @@ mod tests {
         );
 
         let (ctrl_tx, _ctrl_rx) = mpsc::unbounded_channel();
-        let replays = broker.install_controller_and_arm_replays(super::super::Controller {
+        broker.install_controller_and_arm_replays(super::super::Controller {
             lease: 1,
             tx: ctrl_tx,
             protocol: 8,
             outer_machine_protocol: Some(53),
         });
-        assert_eq!(replays.len(), 1);
-        assert_eq!(replays[0].3, 0);
 
         assert!(
             broker
@@ -1918,6 +2031,27 @@ mod tests {
         assert!(
             broker
                 .admit_and_bind_controller_for_event("s1", 1, 10)
+                .is_some()
+        );
+
+        // Finding 2: A second reconnect BEFORE seq 9..10 are ACKed must STILL
+        // arm replay_gate at floor 9 (never fall back to pruned seq 1).
+        let (ctrl_tx2, _ctrl_rx2) = mpsc::unbounded_channel();
+        broker.install_controller_and_arm_replays(super::super::Controller {
+            lease: 2,
+            tx: ctrl_tx2,
+            protocol: 8,
+            outer_machine_protocol: Some(53),
+        });
+        assert!(
+            broker
+                .admit_and_bind_controller_for_event("s1", 1, 10)
+                .is_none(),
+            "second reconnect before ACK must still wait for unacked seq 9"
+        );
+        assert!(
+            broker
+                .admit_and_bind_controller_for_event("s1", 1, 9)
                 .is_some()
         );
     }

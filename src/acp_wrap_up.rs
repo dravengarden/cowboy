@@ -302,6 +302,29 @@ pub(crate) fn proxy_uncertain_effect_from_error_data(data: Option<&Value>) -> Op
     validate_uncertain_effect_method(raw)
 }
 
+/// True when an ACP `Error` indicates a transport/pipe failure rather than a
+/// terminal JSON-RPC error response from the peer or proxy (Finding 8).
+pub(crate) fn is_acp_transport_error(error: &agent_client_protocol::Error) -> bool {
+    if error.data.is_some() {
+        return false;
+    }
+    if error.code == agent_client_protocol::ErrorCode::InternalError {
+        let lower = error.message.to_ascii_lowercase();
+        if lower.contains("closed")
+            || lower.contains("eof")
+            || lower.contains("broken pipe")
+            || lower.contains("connection")
+            || lower.contains("transport")
+            || lower.contains("disconnect")
+            || lower.contains("reset by peer")
+            || lower.contains("channel")
+        {
+            return true;
+        }
+    }
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

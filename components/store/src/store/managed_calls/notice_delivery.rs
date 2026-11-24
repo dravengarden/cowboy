@@ -466,7 +466,27 @@ impl Store {
         settled_notices: &[(String, String)],
         released_claims: &[NoticeClaimRelease],
     ) -> Result<()> {
-        if settled_notices.is_empty() && released_claims.is_empty() {
+        self.update_pending_atomic(
+            session_id,
+            queue,
+            drafts,
+            settled_notices,
+            released_claims,
+            None,
+        )
+        .await
+    }
+
+    pub async fn update_pending_atomic(
+        &self,
+        session_id: &str,
+        queue: &[QueuedMessage],
+        drafts: &[QueuedMessage],
+        settled_notices: &[(String, String)],
+        released_claims: &[NoticeClaimRelease],
+        recovery_cmids: Option<&[String]>,
+    ) -> Result<()> {
+        if settled_notices.is_empty() && released_claims.is_empty() && recovery_cmids.is_none() {
             return self.update_pending(session_id, queue, drafts).await;
         }
         let now = chrono::Utc::now().timestamp_millis();
@@ -478,6 +498,7 @@ impl Store {
                 drafts,
                 settled_notices,
                 released_claims,
+                recovery_cmids,
                 false,
                 now,
             )
@@ -509,6 +530,7 @@ impl Store {
                 drafts,
                 &[],
                 released_claims,
+                None,
                 true,
                 now,
             )
@@ -533,6 +555,7 @@ macro_rules! notice_impl {
         $null_eq:literal,
         $max_fn:literal,
         $update_session_pending_sql:literal,
+        $upsert_setting_sql:literal,
         $bind_now_for_pending:expr,
         $begin_immediate:literal,
         $for_update:literal,
@@ -1133,6 +1156,7 @@ macro_rules! notice_impl {
                 drafts: &[QueuedMessage],
                 settled_notices: &[(String, String)],
                 released_claims: &[NoticeClaimRelease],
+                recovery_cmids: Option<&[String]>,
                 require_claim_release: bool,
                 now_ms: i64,
             ) -> Result<bool> {
@@ -1248,6 +1272,24 @@ macro_rules! notice_impl {
                         .execute(&mut *tx)
                         .await?;
                 }
+                if let Some(cmids) = recovery_cmids {
+                    let key = format!(
+                        "{}{session_id}",
+                        crate::model::settings_keys::SESSION_RECOVERY_CMIDS_PREFIX
+                    );
+                    let mut value = serde_json::json!(cmids);
+                    crate::store::strip_nul(&mut value);
+                    let setting_query = sqlx::query($upsert_setting_sql).bind(&key).bind(&value);
+                    let setting_query = if $bind_now_for_pending {
+                        setting_query.bind(now_ms)
+                    } else {
+                        setting_query
+                    };
+                    setting_query
+                        .execute(&mut *tx)
+                        .await
+                        .with_context(|| format!("UPSERT recovery cmids setting {key}"))?;
+                }
                 tx.commit().await?;
                 Ok(true)
             }
@@ -1271,6 +1313,7 @@ notice_impl!(
     "IS NOT DISTINCT FROM",
     "GREATEST",
     "UPDATE sessions SET queue = $1, drafts = $2, updated_at = now() WHERE id = $3",
+    "INSERT INTO settings(key, value, updated_at) VALUES ($1, $2, now()) ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()",
     false,
     "BEGIN",
     " FOR UPDATE",
@@ -1293,6 +1336,7 @@ notice_impl!(
     "IS",
     "MAX",
     "UPDATE sessions SET queue = ?1, drafts = ?2, updated_at_ms = ?3 WHERE id = ?4",
+    "INSERT INTO settings(key, value, updated_at_ms) VALUES (?1, ?2, ?3) ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at_ms = excluded.updated_at_ms",
     true,
     "BEGIN IMMEDIATE",
     "",

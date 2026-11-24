@@ -725,9 +725,12 @@ mod tests {
             super::super::config_sync::PromptPrep::ParkAmbiguous {
                 session_id,
                 command,
-                reconcile_idle,
+                replacement_worker,
             } => {
-                assert!(reconcile_idle, "replacement epoch superseded bound epoch");
+                assert!(
+                    replacement_worker.is_some(),
+                    "connected replacement epoch superseded bound epoch"
+                );
                 super::super::notice_recovery::park_and_retire_ambiguous_pending(
                     &runtime.shared,
                     &session_id,
@@ -735,7 +738,7 @@ mod tests {
                     version,
                     *command,
                     "prompt delivery across worker change is unresolved; retained as draft",
-                    reconcile_idle,
+                    replacement_worker.as_deref(),
                 )
                 .await;
             }
@@ -803,9 +806,12 @@ mod tests {
             super::super::config_sync::PromptPrep::ParkAmbiguous {
                 session_id,
                 command,
-                reconcile_idle,
+                replacement_worker,
             } => {
-                assert!(!reconcile_idle, "unbound prompt has no replacement epoch");
+                assert!(
+                    replacement_worker.is_none(),
+                    "unbound prompt has no replacement epoch"
+                );
                 super::super::notice_recovery::park_and_retire_ambiguous_pending(
                     &runtime.shared,
                     &session_id,
@@ -813,7 +819,7 @@ mod tests {
                     version,
                     *command,
                     "prompt delivery across worker change is unresolved; retained as draft",
-                    reconcile_idle,
+                    replacement_worker.as_deref(),
                 )
                 .await;
             }
@@ -904,6 +910,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn disconnect_preserves_pending_prompts_and_retransmitted_refusal_parks_draft() {
         let hub = Hub::new();
         hub.create_local_session(
@@ -981,6 +988,54 @@ mod tests {
             .optimistic_revivals
             .lock()
             .insert("s-disc".into());
+
+        // Cached terminal Exited worker must NOT block optimistic revival rollback (Finding 15).
+        let mut exited_worker = busy_snapshot("s-disc", "epoch-exited", true);
+        exited_worker.state = WorkerState::Exited;
+        exited_worker.current_turn_id = None;
+        runtime
+            .shared
+            .workers
+            .lock()
+            .insert("s-disc".into(), exited_worker);
+
+        // Broker placeholder must NEVER be mistaken for a live replacement worker (Finding 13).
+        let mut placeholder = busy_snapshot("s-disc", "broker-s-disc", true);
+        placeholder.state = WorkerState::Running;
+        placeholder.current_turn_id = None;
+        let check_cmd = CoreCommand::Prompt {
+            session_id: "s-disc".into(),
+            command_id: "cmd-ph".into(),
+            turn_id: "t-ph".into(),
+            content: vec![],
+            cmid: None,
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            expected_worker_epoch: Some("epoch-old".into()),
+            acknowledged_uncertain_sequence: Some(0),
+        };
+        let saved = runtime
+            .shared
+            .workers
+            .lock()
+            .insert("s-disc".into(), placeholder);
+        assert!(
+            super::super::notice_recovery::replacement_worker_superseded_epoch(
+                &runtime.shared,
+                "s-disc",
+                &check_cmd,
+            )
+            .is_none(),
+            "broker placeholder must not authorize idle guard release"
+        );
+        if let Some(exited) = saved {
+            runtime
+                .shared
+                .workers
+                .lock()
+                .insert("s-disc".into(), exited);
+        }
 
         // Disconnect recovers remaining unattempted prompt to queue and rolls back Starting -> Exited.
         runtime.disconnect();

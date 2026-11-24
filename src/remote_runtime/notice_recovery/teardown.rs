@@ -3,7 +3,8 @@
 
 use super::{
     Arc, CALL_NOTICE_PREFIX, CoreCommand, NoticeRequeueRequest, Ordering, RecoveryDraftPark,
-    Shared, StartSession, Status, UndeliveredRequeue, WorkerSnapshot, canonical_notice_payload,
+    Shared, StartSession, Status, UndeliveredRequeue, WorkerSnapshot, WorkerState,
+    canonical_notice_payload,
 };
 
 struct UnsentDisconnectNotice {
@@ -59,11 +60,10 @@ fn extract_unsent_notices_on_disconnect(shared: &Shared) -> Vec<UnsentDisconnect
     };
     raw.into_iter()
         .map(|(session_id, command_id, text, content, cid)| {
-            let has_live_worker = shared
-                .workers
-                .lock()
-                .get(&session_id)
-                .is_some_and(crate::runtime_wire::WorkerSnapshot::has_connected_owner);
+            let has_live_worker = shared.workers.lock().get(&session_id).is_some_and(|w| {
+                w.has_connected_owner()
+                    && !matches!(w.state, WorkerState::Exited | WorkerState::Crashed)
+            });
             let was_optimistic_revival =
                 !has_live_worker && shared.optimistic_revivals.lock().remove(&session_id);
             UnsentDisconnectNotice {
@@ -494,18 +494,24 @@ pub(in crate::remote_runtime) fn replacement_worker_superseded_epoch(
     shared: &Shared,
     session_id: &str,
     command: &CoreCommand,
-) -> bool {
-    matches!(
-        command,
-        CoreCommand::Prompt {
-            expected_worker_epoch: Some(bound),
-            ..
-        } if shared
-            .workers
-            .lock()
-            .get(session_id)
-            .is_some_and(|worker| worker.worker_epoch != *bound)
-    )
+) -> Option<WorkerSnapshot> {
+    let CoreCommand::Prompt {
+        expected_worker_epoch: Some(bound),
+        ..
+    } = command
+    else {
+        return None;
+    };
+    shared
+        .workers
+        .lock()
+        .get(session_id)
+        .filter(|worker| {
+            worker.worker_epoch != *bound
+                && worker.has_connected_owner()
+                && !matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
+        })
+        .cloned()
 }
 
 /// Durably park an ambiguous ordinary prompt via the acknowledged FIFO
@@ -560,9 +566,21 @@ pub(in crate::remote_runtime) async fn park_ambiguous_prompt_durable(
             RecoveryDraftPark::Rejected(_) => false,
         };
         if !committed {
+            let text = content
+                .iter()
+                .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n");
+            shared.hub.enqueue_durable_recovery_park(
+                session_id.to_owned(),
+                text,
+                content.clone(),
+                cmid.clone(),
+                reason.to_owned(),
+            );
             shared.hub.broadcast_error(
                 Some(session_id.to_owned()),
-                format!("{reason} (durable draft commit failed; prompt remains fenced)"),
+                format!("{reason} (durable draft commit queued for retry; prompt remains fenced)"),
             );
             return false;
         }
@@ -584,7 +602,7 @@ pub(in crate::remote_runtime) async fn park_and_retire_ambiguous_pending(
     version: u64,
     command: CoreCommand,
     reason: &str,
-    reconcile_idle: bool,
+    replacement_worker: Option<&WorkerSnapshot>,
 ) {
     if park_ambiguous_prompt_durable(shared, session_id, &command, reason).await {
         let mut pending = shared.pending.lock();
@@ -595,26 +613,23 @@ pub(in crate::remote_runtime) async fn park_and_retire_ambiguous_pending(
             shared.fenced_commands.lock().remove(key);
         }
         drop(pending);
-        if reconcile_idle {
-            reconcile_idle_guard_for_session(shared, session_id);
+        if let Some(worker) = replacement_worker {
+            reconcile_idle_guard_for_snapshot(shared, session_id, worker);
         }
     } else {
         shared.fenced_commands.lock().insert(key.to_owned());
     }
 }
 
-/// Re-evaluate Hub's idle dispatch guard against the current replacement worker
-/// snapshot after retiring a parked prompt so an already-idle replacement is
-/// never left blocked behind a removed pending entry.
-pub(in crate::remote_runtime) fn reconcile_idle_guard_for_session(
+/// Re-evaluate Hub's idle dispatch guard against the exact admitted replacement
+/// worker snapshot after retiring a parked prompt (Finding 13).
+pub(in crate::remote_runtime) fn reconcile_idle_guard_for_snapshot(
     shared: &Shared,
     session_id: &str,
+    worker: &WorkerSnapshot,
 ) {
-    let worker = shared.workers.lock().get(session_id).cloned();
-    if let Some(worker) = worker {
-        let guard = super::super::idle_snapshot_guard(shared, &worker);
-        super::super::reconcile_idle_guard(shared, session_id, guard);
-    }
+    let guard = super::super::idle_snapshot_guard(shared, worker);
+    super::super::reconcile_idle_guard(shared, session_id, guard);
 }
 
 /// Preserve unresolved ordinary (non-`call-notice:`) prompt payloads when a
@@ -649,35 +664,33 @@ pub(in crate::remote_runtime) fn recover_pending_prompts_on_disconnect(shared: &
             continue;
         };
         if was_attempted {
-            shared.fenced_commands.lock().insert(key.clone());
-            if shared.hub.has_store_writer() {
-                let shared_task = Arc::clone(shared);
-                shared.hub.spawn_teardown_requeue(async move {
-                    if park_ambiguous_prompt_durable(
-                        &shared_task,
-                        &session_id,
-                        &cmd,
-                        disconnect_reason,
-                    )
-                    .await
-                    {
-                        let mut pending = shared_task.pending.lock();
-                        pending.remove(&key);
-                        shared_task.sent.lock().remove(&key);
-                        shared_task.attempted_sends.lock().remove(&key);
-                        shared_task.retransmitted_sends.lock().remove(&key);
-                        shared_task.fenced_commands.lock().remove(&key);
-                    }
-                });
-            } else {
-                park_ambiguous_prompt_command(shared, &session_id, cmd, disconnect_reason);
-                let mut pending = shared.pending.lock();
-                pending.remove(&key);
-                shared.sent.lock().remove(&key);
-                shared.attempted_sends.lock().remove(&key);
-                shared.retransmitted_sends.lock().remove(&key);
-                shared.fenced_commands.lock().remove(&key);
+            if let CoreCommand::Prompt {
+                command_id,
+                content,
+                cmid,
+                ..
+            } = cmd
+            {
+                let text = content
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                shared.hub.enqueue_durable_recovery_park(
+                    session_id,
+                    text,
+                    content,
+                    cmid,
+                    disconnect_reason.to_owned(),
+                );
+                shared.in_flight_prompts.lock().retire_command(&command_id);
             }
+            let mut pending = shared.pending.lock();
+            pending.remove(&key);
+            shared.sent.lock().remove(&key);
+            shared.attempted_sends.lock().remove(&key);
+            shared.retransmitted_sends.lock().remove(&key);
+            shared.fenced_commands.lock().remove(&key);
         } else {
             let removed = {
                 let mut pending = shared.pending.lock();
@@ -687,11 +700,10 @@ pub(in crate::remote_runtime) fn recover_pending_prompts_on_disconnect(shared: &
                 removed
             };
             if let Some(removed_cmd) = removed {
-                let has_live_worker = shared
-                    .workers
-                    .lock()
-                    .get(&session_id)
-                    .is_some_and(WorkerSnapshot::has_connected_owner);
+                let has_live_worker = shared.workers.lock().get(&session_id).is_some_and(|w| {
+                    w.has_connected_owner()
+                        && !matches!(w.state, WorkerState::Exited | WorkerState::Crashed)
+                });
                 let was_optimistic_revival =
                     !has_live_worker && shared.optimistic_revivals.lock().remove(&session_id);
                 if was_optimistic_revival

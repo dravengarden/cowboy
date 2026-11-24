@@ -999,21 +999,32 @@ fn finish_prompt_state(
     prompt: &Arc<ActivePrompt>,
     sink: &dyn crate::agent_sink::AgentSink,
     sid: &str,
-    meta: Option<&serde_json::Map<String, serde_json::Value>>,
-    err_data: Option<&serde_json::Value>,
-    record_usage: bool,
+    response: &Result<agent_client_protocol::schema::v1::PromptResponse, Error>,
+    completed_cleanly: bool,
 ) {
+    let meta = response.as_ref().ok().and_then(|r| r.meta.as_ref());
+    let err_data = response.as_ref().err().and_then(|e| e.data.as_ref());
+    let terminal_reply = completed_cleanly
+        && response
+            .as_ref()
+            .err()
+            .is_none_or(|err| !crate::acp_wrap_up::is_acp_transport_error(err));
+    state
+        .last_prompt_terminal_reply
+        .store(terminal_reply, Ordering::Release);
     if let Some(memory) = &state.memory {
         memory.finish();
     }
-    state.clear_prompt(prompt);
-    state.subagents.lock().parent_turn_ended(Instant::now());
     if let Some(method) = crate::acp_wrap_up::proxy_uncertain_effect_from_meta(meta)
         .or_else(|| crate::acp_wrap_up::proxy_uncertain_effect_from_error_data(err_data))
     {
         sink.record_proxy_uncertain_effect(sid, method);
+    } else if !terminal_reply {
+        sink.record_unconfirmed_exit_if_sandboxed(sid);
     }
-    if record_usage && let Some(usage) = state.model_usage.lock().record_turn(meta) {
+    state.clear_prompt(prompt);
+    state.subagents.lock().parent_turn_ended(Instant::now());
+    if completed_cleanly && let Some(usage) = state.model_usage.lock().record_turn(meta) {
         sink.set_session_usage(sid, usage);
     }
 }
@@ -2681,6 +2692,9 @@ struct ClientState {
     /// Notification handlers attach progress only to the prompt that currently
     /// owns `prompt_lock`. Queued prompts cannot reset or consume its state.
     active_prompt: Mutex<Option<Arc<ActivePrompt>>>,
+    /// True only when the most recent prompt received a real terminal ACP reply
+    /// (not a transport drop, pipe EOF, or watchdog recycle).
+    last_prompt_terminal_reply: AtomicBool,
     /// Combine the requested prompt lifecycle with native autonomous activity.
     activity: Mutex<SessionActivity>,
     /// The cycle the adapter reports Claude running on its own (a follow-up
@@ -2783,6 +2797,13 @@ impl ClientState {
 
     fn current_prompt(&self) -> Option<Arc<ActivePrompt>> {
         self.active_prompt.lock().clone()
+    }
+
+    fn record_unconfirmed_if_prompt_open(&self) {
+        if self.current_prompt().is_some() {
+            self.sink
+                .record_unconfirmed_exit_if_sandboxed(&self.session_id);
+        }
     }
 
     fn clear_prompt(&self, prompt: &Arc<ActivePrompt>) {
@@ -2992,6 +3013,7 @@ async fn agent_main(
         url_elicitations: Mutex::new(HashMap::new()),
         prompt_lock: tokio::sync::Mutex::new(()),
         active_prompt: Mutex::new(None),
+        last_prompt_terminal_reply: AtomicBool::new(false),
         steering_gate: tokio::sync::Mutex::new(()),
         activity: Mutex::new(SessionActivity::default()),
         native_cycle: Mutex::new(None),
@@ -3261,21 +3283,25 @@ async fn agent_main(
     tokio::pin!(conn);
     let result = tokio::select! {
         biased;
-        r = &mut conn => r.map_err(|e| anyhow::anyhow!("acp connection: {e}")),
+        r = &mut conn => {
+            exit_state.record_unconfirmed_if_prompt_open();
+            r.map_err(|e| anyhow::anyhow!("acp connection: {e}"))
+        }
         status = process.exited() => {
             if exit_state.current_prompt().is_some() {
                 let _ = tokio::time::timeout(Duration::from_millis(250), &mut conn).await;
-                if exit_state.current_prompt().is_some() {
-                    exit_state
-                        .sink
-                        .record_unconfirmed_exit_if_sandboxed(&exit_state.session_id);
+                if exit_state.current_prompt().is_some()
+                    || !exit_state.last_prompt_terminal_reply.load(Ordering::Acquire)
+                {
+                    exit_state.sink.record_unconfirmed_exit_if_sandboxed(&exit_state.session_id);
                 }
             }
-            Err(anyhow::anyhow!(
-                "agent subprocess exited mid-session ({status})"
-            ))
+            Err(anyhow::anyhow!("agent subprocess exited mid-session ({status})"))
         }
-        timeout = watchdog => Err(anyhow::Error::new(timeout)),
+        timeout = watchdog => {
+            exit_state.record_unconfirmed_if_prompt_open();
+            Err(anyhow::Error::new(timeout))
+        }
     };
 
     // Keep the process alive for the whole connection. Shutdown ends it and
@@ -4541,6 +4567,9 @@ async fn run_session(
                     // about this one: this prompt gets its own request, and its
                     // own 429 if the limit is still there.
                     state.backoff.lock().take();
+                    state
+                        .last_prompt_terminal_reply
+                        .store(false, Ordering::Release);
                     sink.prompt_started(&sid, cmid.as_deref());
                     let response = loop {
                         let gate = match steering_gate.take() {
@@ -4624,8 +4653,7 @@ async fn run_session(
                         &prompt,
                         sink.as_ref(),
                         &sid,
-                        response.as_ref().ok().and_then(|r| r.meta.as_ref()),
-                        response.as_ref().err().and_then(|e| e.data.as_ref()),
+                        &response,
                         !recycled_by_watchdog && backoff_failure.is_none(),
                     );
                     if let Some(reason) = backoff_failure.take()

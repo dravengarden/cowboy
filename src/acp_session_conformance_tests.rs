@@ -134,6 +134,7 @@ fn fixture_state(resume: bool) -> (Arc<ClientState>, Arc<HubSink>) {
         prompt_lock: tokio::sync::Mutex::new(()),
         steering_gate: tokio::sync::Mutex::new(()),
         active_prompt: Mutex::new(None),
+        last_prompt_terminal_reply: AtomicBool::new(false),
         activity: Mutex::new(SessionActivity::default()),
         native_cycle: Mutex::new(None),
         prompt_cancellation,
