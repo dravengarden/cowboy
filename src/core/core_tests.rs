@@ -5212,7 +5212,7 @@ fn recovery_draft_cmid_survives_delete_rejects_reused_op_and_seeds_restored_qids
             origin: None,
             initiator: None,
             explicit: false,
-            allow_revive: false,
+            wake_dormant: false,
         }],
         config_options: None,
         config_preferences: serde_json::Value::Null,

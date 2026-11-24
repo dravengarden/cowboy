@@ -128,17 +128,36 @@ pub async fn run_scheduler(hub: Hub, mut rx: mpsc::Receiver<ScheduleCmd>) {
                 Some(ScheduleCmd::HumanTurn { session_id }) => {
                     fires.remove(&session_id);
                 }
-                Some(ScheduleCmd::ArmDraft { session_id, draft_id, fire_at_ms, generation }) => {
-                    pending.insert(
-                        Key::Draft(session_id.clone(), draft_id.clone()),
-                        Pending {
-                            fire_at_ms,
-                            action: Action::Draft { session_id, draft_id, fire_at_ms, generation },
-                        },
-                    );
-                }
-                Some(ScheduleCmd::CancelDraft { session_id, draft_id }) => {
-                    pending.remove(&Key::Draft(session_id, draft_id));
+                Some(
+                    ScheduleCmd::ArmDraft {
+                        session_id,
+                        draft_id,
+                        ..
+                    }
+                    | ScheduleCmd::CancelDraft {
+                        session_id,
+                        draft_id,
+                    },
+                ) => {
+                    let key = Key::Draft(session_id.clone(), draft_id.clone());
+                    if let Some((fire_at_ms, generation)) =
+                        hub.current_draft_schedule(&session_id, &draft_id)
+                    {
+                        pending.insert(
+                            key,
+                            Pending {
+                                fire_at_ms,
+                                action: Action::Draft {
+                                    session_id,
+                                    draft_id,
+                                    fire_at_ms,
+                                    generation,
+                                },
+                            },
+                        );
+                    } else {
+                        pending.remove(&key);
+                    }
                 }
             },
             // Only armed when something is pending; fires the soonest-due batch.

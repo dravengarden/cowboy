@@ -169,7 +169,7 @@ impl Hub {
                     initiator: Some(initiator.clone()),
                     dispatch_origin,
                     trigger: initiator,
-                    allow_revive: false,
+                    wake_dormant: false,
                 });
             } else {
                 let id = self.next_qid();
@@ -184,7 +184,7 @@ impl Hub {
                         origin: content_origin,
                         initiator: Some(initiator),
                         explicit: false,
-                        allow_revive: false,
+                        wake_dormant: false,
                     },
                 );
             }

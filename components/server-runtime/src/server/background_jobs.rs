@@ -5,6 +5,7 @@ mod dispatch;
 
 use super::*;
 #[cfg(test)]
+#[cfg(test)]
 pub use dispatch::retain_failed_dispatch;
 pub use dispatch::{dispatch_preflight, run_dispatcher};
 

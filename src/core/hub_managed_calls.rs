@@ -3,16 +3,15 @@
 use super::*;
 use crate::store::NoticeClaimRelease;
 
-mod recovery_journal;
+mod deferred_drains;
 mod types;
 mod withdrawals;
-pub use recovery_journal::JournalRecoveryItem;
 pub(in crate::core) use types::NoticeClaims;
 use types::{DeferredDrainActions, DeferredPendingFlush};
 pub use types::{
-    JournalUnsentNotice, NoticeClaimGuard, NoticeRequeueRequest, OwnerNoticeWithdrawalOp,
-    OwnerQueueMutation, PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue,
-    RecoveryDraftPark, StoreAckSink, UndeliveredRequeue,
+    NoticeClaimGuard, NoticeRequeueRequest, OwnerNoticeWithdrawalOp, OwnerQueueMutation,
+    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, RecoveryDraftPark,
+    StoreAckSink, UndeliveredRequeue,
 };
 
 /// Acknowledged FIFO `StoreWrite::UpdatePending` result (`Ok(true)` = applied,
@@ -125,7 +124,10 @@ impl Hub {
             let drafts = s.drafts.clone();
             let recovery_cmids = Self::sorted_recovery_cmids(s);
             let mut claims = self.inner.notice_claims.lock();
-            if let Some(deferred) = claims.in_flight_pending_commits.get_mut(session_id) {
+            if self.is_pending_writes_poisoned(session_id) {
+                // Unknown-outcome pending commit timed out during shutdown:
+                // permanently refuse further UpdatePending writes for this session.
+            } else if let Some(deferred) = claims.in_flight_pending_commits.get_mut(session_id) {
                 // An acknowledged pending commit is in flight for this session.
                 // Defer the snapshot until that commit finishes so a pre-commit
                 // Hub view can NEVER overwrite a committed edit, parked draft,
@@ -158,6 +160,9 @@ impl Hub {
         recovery_cmids: Option<Vec<String>>,
         claims: &mut NoticeClaims,
     ) -> DeferredDrainActions {
+        if self.is_pending_writes_poisoned(session_id) {
+            return DeferredDrainActions::default();
+        }
         let Some(deferred) = claims.in_flight_pending_commits.remove(session_id) else {
             return DeferredDrainActions::default();
         };
@@ -180,15 +185,35 @@ impl Hub {
         deferred.drains
     }
 
+    /// Permanently poison further `StoreWrite::UpdatePending` admissions for a
+    /// session after an unknown-outcome shutdown timeout so no subsequent write
+    /// can overwrite an in-flight SQL transaction (Finding 1).
+    pub(in crate::core) fn is_pending_writes_poisoned(&self, session_id: &str) -> bool {
+        self.inner
+            .poisoned_pending_sessions
+            .lock()
+            .contains(session_id)
+    }
+
+    pub fn poison_session_pending_writes(&self, session_id: &str) {
+        self.inner
+            .poisoned_pending_sessions
+            .lock()
+            .insert(session_id.to_owned());
+        self.inner
+            .notice_claims
+            .lock()
+            .in_flight_pending_commits
+            .entry(session_id.to_owned())
+            .or_default();
+    }
+
     pub fn abandon_unknown_outcome_notice_requeue(&self, preview: &mut PendingUndeliveredRequeue) {
         if !preview.active {
             return;
         }
         preview.active = false;
-        let mut claims = self.inner.notice_claims.lock();
-        claims
-            .withdrawing
-            .remove(&(preview.session_id.clone(), preview.cmid.clone()));
+        self.poison_session_pending_writes(&preview.session_id);
     }
 
     pub(super) fn broadcast_pending_snapshot(
@@ -1263,7 +1288,7 @@ impl Hub {
                             "managed_call",
                         )),
                         explicit: false,
-                        allow_revive: false,
+                        wake_dormant: false,
                     },
                 );
             }
@@ -1333,7 +1358,7 @@ impl Hub {
                 origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
                 initiator: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
                 explicit: false,
-                allow_revive: false,
+                wake_dormant: false,
             };
             next_queue.insert(0, msg.clone());
             Some(msg)

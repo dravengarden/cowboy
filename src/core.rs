@@ -43,10 +43,9 @@ mod hub_events;
 pub use hub_events::FanoutFrame;
 mod hub_managed_calls;
 pub use hub_managed_calls::{
-    JournalRecoveryItem, JournalUnsentNotice, NoticeClaimGuard, NoticeRequeueRequest,
-    OwnerNoticeWithdrawalOp, OwnerQueueMutation, PendingNoticeWithdrawal, PendingRecoveryPark,
-    PendingUndeliveredRequeue, RecoveryDraftPark, RetainedLogScan, StoreAckSink,
-    UndeliveredRequeue,
+    NoticeClaimGuard, NoticeRequeueRequest, OwnerNoticeWithdrawalOp, OwnerQueueMutation,
+    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, RecoveryDraftPark,
+    RetainedLogScan, StoreAckSink, UndeliveredRequeue,
 };
 mod hub_peer_notice;
 pub use hub_peer_notice::PromptProgress;
@@ -463,7 +462,7 @@ pub struct DispatchReq {
     /// A user-requested send (chat submit, send now, force push).
     pub explicit: bool,
     /// Whether this dispatch may revive a dormant session if requeued pre-handoff.
-    pub allow_revive: bool,
+    pub wake_dormant: bool,
     /// Stored content origin (last content writer), preserved across requeue.
     pub origin: Option<crate::prompt_origin::DeliveryOrigin>,
     /// Initiating authority that admitted/triggered the send, preserved across requeue.
@@ -552,57 +551,6 @@ impl Hub {
             settings_keys::SESSION_DELIVERY_HOLD_PREFIX
         ))
         .and_then(|value| value.as_str().map(str::to_owned))
-    }
-
-    /// Whether a restored session waits for resources by explicit request.
-    fn next_healed_qid(&self, existing_id: &str) -> String {
-        if existing_id.starts_with("recovery-") {
-            format!("recovery-{}", self.next_qid())
-        } else {
-            self.next_qid()
-        }
-    }
-
-    fn restored_recovery_cmids(&self, id: &str, drafts: &[QueuedMessage]) -> HashSet<String> {
-        let mut cmids: HashSet<String> = self
-            .setting(&format!(
-                "{}{id}",
-                settings_keys::SESSION_RECOVERY_CMIDS_PREFIX
-            ))
-            .and_then(|value| serde_json::from_value::<Vec<String>>(value).ok())
-            .map(|items| items.into_iter().collect())
-            .unwrap_or_default();
-        for m in drafts {
-            if m.id.starts_with("recovery-")
-                && let Some(cmid) = m.cmid.as_ref()
-            {
-                cmids.insert(cmid.clone());
-            }
-        }
-        cmids
-    }
-
-    fn restored_explicit_wait(&self, id: &str) -> bool {
-        self.setting(&format!(
-            "{}{id}",
-            settings_keys::SESSION_RESOURCE_WAIT_PREFIX
-        ))
-        .and_then(|value| value.get("explicit").and_then(serde_json::Value::as_bool))
-        .unwrap_or(false)
-    }
-
-    /// The queued row a restored explicit wait belongs to.
-    fn restored_explicit_row(&self, id: &str) -> Option<String> {
-        self.setting(&format!(
-            "{}{id}",
-            settings_keys::SESSION_RESOURCE_WAIT_PREFIX
-        ))
-        .and_then(|value| {
-            value
-                .get("row")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_owned)
-        })
     }
 }
 
@@ -1613,6 +1561,7 @@ struct HubInner {
     notice_claims: Mutex<hub_managed_calls::NoticeClaims>,
     teardown_shutdown: std::sync::atomic::AtomicBool,
     teardown_shutdown_notify: tokio::sync::Notify,
+    poisoned_pending_sessions: Mutex<HashSet<String>>,
     store_acks: hub_managed_calls::StoreAckSink,
     /// Serialize read/compare/apply and ordered write-behind snapshots.
     sync_apply_gate: Mutex<()>,
@@ -1846,6 +1795,7 @@ impl Hub {
                 notice_claims: Mutex::new(hub_managed_calls::NoticeClaims::default()),
                 teardown_shutdown: std::sync::atomic::AtomicBool::new(false),
                 teardown_shutdown_notify: tokio::sync::Notify::new(),
+                poisoned_pending_sessions: Mutex::new(HashSet::new()),
                 store_acks: hub_managed_calls::StoreAckSink::default(),
                 next_qid: AtomicU64::new(1),
                 next_error_id: AtomicU64::new(1),
@@ -2061,6 +2011,7 @@ impl Hub {
             let sessions = self.inner.sessions.lock();
             sessions
                 .values()
+                .filter(|s| s.meta.trashed_at_ms.is_none())
                 .flat_map(|s| {
                     let sid = s.meta.id.clone();
                     s.drafts.iter().filter_map(move |m| {
@@ -2337,7 +2288,12 @@ impl Hub {
                         config_options,
                         config_previews: ConfigPreviews::default(),
                         config_preferences,
-                        committed_recovery_cmids: self.restored_recovery_cmids(&id, &drafts),
+                        committed_recovery_cmids: self.restore_recovery_cmids_and_clean_queue(
+                            &id,
+                            &mut queue,
+                            &drafts,
+                            &mut pending_dirty,
+                        ),
                         recovery_cmids: self.restored_recovery_cmids(&id, &drafts),
                         pending_recovery_cmids: HashSet::new(),
                         queue,
@@ -3239,7 +3195,6 @@ impl Hub {
                 sync.remove(&format!("queue:{session_id}"));
                 sync.remove(&format!("mobile-review:{session_id}"));
             }
-            self.prune_recovery_journal_for_session(session_id);
             if persist && let Some(tx) = self.inner.store_tx.as_ref() {
                 let _ = tx.send(StoreWrite::DeleteSession(session_id.to_owned()));
             }

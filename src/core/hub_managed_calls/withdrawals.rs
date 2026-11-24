@@ -2,8 +2,7 @@
 //! durable managed-call completion notices.
 
 use super::types::{
-    DeferredDrainActions, DeferredPendingFlush, PendingRecoveryPromptItem, affected_row_ids,
-    apply_withdrawal_to_lists,
+    DeferredDrainActions, DeferredPendingFlush, affected_row_ids, apply_withdrawal_to_lists,
 };
 use super::*;
 
@@ -62,6 +61,9 @@ impl Hub {
         recovery_cmids: Option<Vec<String>>,
         require_claim_release: bool,
     ) -> Option<StoreAckRx> {
+        if self.is_pending_writes_poisoned(session_id) {
+            return None;
+        }
         let tx = self.inner.store_tx.as_ref()?;
         let (ack_id, rx) = self.inner.store_acks.allocate();
         let sent = tx.send(StoreWrite::UpdatePending {
@@ -123,7 +125,7 @@ impl Hub {
                 origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
                 initiator: None,
                 explicit: false,
-                allow_revive: false,
+                wake_dormant: false,
             };
             drafts.push(draft.clone());
             added_drafts.push(draft);
@@ -144,7 +146,7 @@ impl Hub {
                 origin: None,
                 initiator: None,
                 explicit: false,
-                allow_revive: false,
+                wake_dormant: false,
             };
             drafts.push(draft.clone());
             added_drafts.push(draft);
@@ -244,7 +246,7 @@ impl Hub {
             origin: None,
             initiator: None,
             explicit: false,
-            allow_revive: false,
+            wake_dormant: false,
         };
         drafts.push(draft.clone());
         let mut staged_cmids = s.recovery_cmids.clone();
@@ -331,7 +333,7 @@ impl Hub {
                 origin: m.origin,
                 initiator: Some(trigger),
                 explicit: false,
-                allow_revive: true,
+                wake_dormant: true,
             };
             if front {
                 s.queue.insert(0, row);
@@ -360,7 +362,7 @@ impl Hub {
         trigger: crate::prompt_origin::DeliveryOrigin,
         front: bool,
         explicit: bool,
-        allow_revive: bool,
+        wake_dormant: bool,
     ) {
         let hub = self.clone();
         self.spawn_teardown_requeue(async move {
@@ -371,7 +373,7 @@ impl Hub {
                 trigger,
                 front,
                 explicit,
-                allow_revive,
+                wake_dormant,
             )
             .await;
         });
@@ -426,7 +428,7 @@ impl Hub {
                 origin: m.origin,
                 initiator: Some(trigger),
                 explicit: true,
-                allow_revive: true,
+                wake_dormant: true,
             });
             (new_id, had_schedule, dispatch_origin.is_owner())
         };
@@ -531,7 +533,7 @@ impl Hub {
         trigger: &crate::prompt_origin::DeliveryOrigin,
         front: bool,
         explicit: bool,
-        allow_revive: bool,
+        wake_dormant: bool,
     ) -> Option<StagedRecoveryActivation> {
         let mut sessions = self.inner.sessions.lock();
         let mut claims = self.inner.notice_claims.lock();
@@ -559,7 +561,7 @@ impl Hub {
             origin: m.origin.clone(),
             initiator: Some(trigger.clone()),
             explicit,
-            allow_revive: allow_revive || explicit,
+            wake_dormant,
         };
         let mut next_queue = s.queue.clone();
         if front {
@@ -600,7 +602,7 @@ impl Hub {
         trigger: crate::prompt_origin::DeliveryOrigin,
         front: bool,
         explicit: bool,
-        allow_revive: bool,
+        wake_dormant: bool,
     ) {
         let Some(_commit_guard) = self
             .await_with_shutdown(self.pending_commit_lock(&sid))
@@ -616,16 +618,13 @@ impl Hub {
             &trigger,
             front,
             explicit,
-            allow_revive,
+            wake_dormant,
         ) else {
             return;
         };
         let outcome = self.await_with_shutdown(rx).await;
         if outcome.is_none() {
-            let mut claims = self.inner.notice_claims.lock();
-            claims
-                .withdrawing_row_ids
-                .remove(&(sid.clone(), draft_id.clone()));
+            self.poison_session_pending_writes(&sid);
             return;
         }
         let committed = matches!(outcome, Some(Ok(Ok(true))));
@@ -774,209 +773,6 @@ impl Hub {
         self.replay_deferred_drains(&preview.session_id, drains);
     }
 
-    /// Controller-owned durable recovery-park retry queue (Finding 1): survives
-    /// `RemoteRuntime` disconnection/replacement and retries the exact same
-    /// idempotent durable park until acknowledged by the store or shutdown.
-    pub fn enqueue_durable_recovery_park(
-        &self,
-        session_id: String,
-        text: String,
-        content: Vec<serde_json::Value>,
-        cmid: Option<String>,
-        reason: String,
-        on_committed: Option<Arc<dyn Fn() + Send + Sync>>,
-    ) -> bool {
-        if !self.has_store_writer() {
-            self.add_recovery_draft(&session_id, text, content, cmid);
-            if let Some(cb) = on_committed {
-                cb();
-            }
-            self.broadcast_error(Some(session_id), reason);
-            return true;
-        }
-        {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(&session_id) else {
-                return false;
-            };
-            if let Some(ref c) = cmid
-                && !c.is_empty()
-            {
-                s.pending_recovery_cmids.insert(c.clone());
-            }
-        }
-        let (start_worker, journal_ok) = {
-            let mut claims = self.inner.notice_claims.lock();
-            let queue = claims
-                .pending_recovery_parks
-                .entry(session_id.clone())
-                .or_default();
-            let already_queued = cmid
-                .as_deref()
-                .is_some_and(|c| queue.iter().any(|item| item.cmid.as_deref() == Some(c)));
-            let journal_ok = if !already_queued {
-                queue.push(PendingRecoveryPromptItem {
-                    text,
-                    content,
-                    cmid,
-                    reason,
-                    on_committed,
-                });
-                self.persist_recovery_journal_locked(&claims)
-            } else {
-                true
-            };
-            let start = claims
-                .active_recovery_park_workers
-                .insert(session_id.clone());
-            (start, journal_ok)
-        };
-        if start_worker {
-            let hub = self.clone();
-            self.spawn_teardown_requeue(async move {
-                hub.run_durable_recovery_park_loop(session_id).await;
-            });
-        }
-        journal_ok
-    }
-
-    pub(super) async fn run_durable_recovery_park_loop(&self, session_id: String) {
-        let mut backoff_ms = 50_u64;
-        loop {
-            let next_item = {
-                let mut claims = self.inner.notice_claims.lock();
-                if let Some(item) = claims
-                    .pending_recovery_parks
-                    .get(&session_id)
-                    .and_then(|q| q.first())
-                    .cloned()
-                {
-                    Some(item)
-                } else {
-                    claims.pending_recovery_parks.remove(&session_id);
-                    claims.active_recovery_park_workers.remove(&session_id);
-                    None
-                }
-            };
-            let Some(item) = next_item else {
-                break;
-            };
-            if !self.has_store_writer() {
-                self.inner
-                    .notice_claims
-                    .lock()
-                    .active_recovery_park_workers
-                    .remove(&session_id);
-                break;
-            }
-            let Some(_commit_guard) = self
-                .await_with_shutdown(self.pending_commit_lock(&session_id))
-                .await
-            else {
-                tracing::error!(
-                    session = %session_id,
-                    "durable recovery park lock wait aborted during Controller shutdown; entry retained in journal"
-                );
-                self.inner
-                    .notice_claims
-                    .lock()
-                    .active_recovery_park_workers
-                    .remove(&session_id);
-                break;
-            };
-            let outcome = match self.preview_park_recovery_prompt(
-                &session_id,
-                item.text.clone(),
-                item.content.clone(),
-                item.cmid.clone(),
-            ) {
-                RecoveryDraftPark::NoStore | RecoveryDraftPark::Duplicate => Ok(true),
-                RecoveryDraftPark::Pending(mut preview, rx) => {
-                    match self.await_with_shutdown(rx).await {
-                        Some(Ok(Ok(true))) => {
-                            self.commit_park_recovery_prompt(&mut preview);
-                            Ok(true)
-                        }
-                        Some(Ok(Ok(false) | Err(_))) => {
-                            self.abort_park_recovery_notices(&mut preview);
-                            Ok(false)
-                        }
-                        Some(Err(_)) => {
-                            self.abort_park_recovery_notices(&mut preview);
-                            Err(false)
-                        }
-                        None => {
-                            self.abandon_unknown_outcome_recovery_park(&mut preview);
-                            tracing::error!(
-                                session = %session_id,
-                                "durable recovery park store ack timed out during Controller shutdown; entry retained in journal"
-                            );
-                            Err(false)
-                        }
-                    }
-                }
-                RecoveryDraftPark::Rejected("session unavailable") => Err(true),
-                RecoveryDraftPark::Rejected(_) => Ok(false),
-            };
-            match outcome {
-                Ok(true) => {
-                    backoff_ms = 50;
-                    if let Some(ref c) = item.cmid
-                        && let Some(s) = self.inner.sessions.lock().get_mut(&session_id)
-                    {
-                        s.pending_recovery_cmids.remove(c);
-                    }
-                    {
-                        let mut claims = self.inner.notice_claims.lock();
-                        if let Some(q) = claims.pending_recovery_parks.get_mut(&session_id)
-                            && !q.is_empty()
-                        {
-                            q.remove(0);
-                            if q.is_empty() {
-                                claims.pending_recovery_parks.remove(&session_id);
-                            }
-                        }
-                        self.persist_recovery_journal_locked(&claims);
-                    }
-                    if let Some(cb) = item.on_committed {
-                        cb();
-                    }
-                    self.broadcast_error(Some(session_id.clone()), item.reason);
-                }
-                Ok(false) => {
-                    // Finding 5: Bound retries during graceful Controller shutdown
-                    // so a persistent store outage can never hang shutdown.
-                    if self.inner.teardown_shutdown.load(Ordering::Acquire) {
-                        tracing::error!(
-                            session = %session_id,
-                            "durable recovery park retry aborted during Controller shutdown; entry retained in journal"
-                        );
-                        self.inner
-                            .notice_claims
-                            .lock()
-                            .active_recovery_park_workers
-                            .remove(&session_id);
-                        break;
-                    }
-                    tokio::select! {
-                        () = tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)) => {}
-                        () = self.inner.teardown_shutdown_notify.notified() => {}
-                    }
-                    backoff_ms = (backoff_ms * 2).min(2_000);
-                }
-                Err(drop_queue) => {
-                    let mut claims = self.inner.notice_claims.lock();
-                    if drop_queue {
-                        claims.pending_recovery_parks.remove(&session_id);
-                        self.persist_recovery_journal_locked(&claims);
-                    }
-                    claims.active_recovery_park_workers.remove(&session_id);
-                    break;
-                }
-            }
-        }
-    }
-
     /// Apply an already-committed durable recovery park to `Hub`.
     pub fn commit_park_recovery_notices(&self, preview: &mut PendingRecoveryPark) {
         if !preview.active {
@@ -1023,17 +819,7 @@ impl Hub {
             return;
         }
         preview.active = false;
-        let mut claims = self.inner.notice_claims.lock();
-        for (cid, _) in &preview.settled_notices {
-            claims
-                .withdrawing
-                .remove(&(preview.session_id.clone(), cid.clone()));
-        }
-        if let Some(ref old_id) = preview.replaced_draft_id {
-            claims
-                .withdrawing_row_ids
-                .remove(&(preview.session_id.clone(), old_id.clone()));
-        }
+        self.poison_session_pending_writes(&preview.session_id);
     }
 
     /// Abort a durable recovery park without mutating `Hub.drafts`, lifting its
@@ -1120,7 +906,10 @@ impl Hub {
                 s.drafts = drafts.clone();
                 s.editing = editing;
                 let mut claims = self.inner.notice_claims.lock();
-                if let Some(deferred) = claims.in_flight_pending_commits.get_mut(session_id) {
+                if self.is_pending_writes_poisoned(session_id) {
+                    // Never send UpdatePending behind a timed-out unknown-outcome commit.
+                } else if let Some(deferred) = claims.in_flight_pending_commits.get_mut(session_id)
+                {
                     deferred.dirty = true;
                 } else if let Some(tx) = self.inner.store_tx.as_ref() {
                     let _ = tx.send(StoreWrite::UpdatePending {
@@ -1456,7 +1245,7 @@ impl Hub {
                 origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
                 initiator: None,
                 explicit: false,
-                allow_revive: false,
+                wake_dormant: false,
             });
             let mut claims = self.inner.notice_claims.lock();
             let key = (session_id.to_owned(), notice_cid.clone());
@@ -1485,7 +1274,7 @@ impl Hub {
             origin: origin.clone(),
             initiator: origin,
             explicit: false,
-            allow_revive: false,
+            wake_dormant: false,
         }
     }
 }

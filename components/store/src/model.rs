@@ -397,11 +397,11 @@ pub struct QueuedMessage {
     /// row still revives a dormant session when it reaches queue head.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub explicit: bool,
-    /// Persists revive permission for a row whose firing/activation was allowed
-    /// to wake a dormant (`Exited`) session (e.g. a due scheduled recovery draft
-    /// or explicit recovery activation) while still respecting `paused`.
+    /// Persists permission to wake a cleanly dormant (`Exited`) session (e.g.
+    /// a due scheduled draft) while still respecting `paused` and never
+    /// reviving a `Crashed` or `Interrupted` turn.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub allow_revive: bool,
+    pub wake_dormant: bool,
 }
 
 /// A draft's future auto-send instruction. Server-controlled (fires even with

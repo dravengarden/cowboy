@@ -858,44 +858,36 @@ pub(super) fn recover_execution_durable(
         .recovery_fence_counter
         .fetch_add(1, Ordering::Relaxed)
         + 1;
-    if shared.hub.has_store_writer() {
-        let claimed =
-            snapshot_and_claim_pre_recovery_pending(shared, &id, fence_id, &pre_recovery_epoch);
-        if let Some((pre_recovery_keys, journal_items)) = claimed {
-            if tokio::runtime::Handle::try_current().is_err() {
-                teardown::release_claimed_recovery_keys(shared, &id, fence_id, &pre_recovery_keys);
-                let msg = "Execution recovery aborted: async runtime unavailable to park pending completion notice";
-                shared.hub.broadcast_error(Some(id), msg.into());
-                return Err(msg.into());
-            }
-            if !shared.hub.stage_recovery_journal_batch(&id, &journal_items) {
-                teardown::release_claimed_recovery_keys(shared, &id, fence_id, &pre_recovery_keys);
-                let msg = "Execution recovery aborted: could not durably journal pending prompts";
-                shared.hub.broadcast_error(Some(id), msg.into());
-                return Err(msg.into());
-            }
-            super::begin_reset(shared, &id);
-            shared
-                .active_reset_commands
-                .lock()
-                .insert(id.clone(), format!("parking:{fence_id}"));
-            shared.config_startups.lock().insert(id.clone());
-            shared.config_sync_epochs.lock().remove(&id);
-            let shared_bg = Arc::clone(shared);
-            shared.hub.spawn_teardown_requeue(async move {
-                run_explicit_recovery_park_task(
-                    shared_bg,
-                    id,
-                    fence_id,
-                    pre_recovery_keys,
-                    journal_items,
-                    session,
-                    intent,
-                )
-                .await;
-            });
-            return Ok(());
+    if shared.hub.has_store_writer()
+        && let Some(pre_recovery_keys) =
+            snapshot_and_claim_pre_recovery_pending(shared, &id, fence_id, &pre_recovery_epoch)
+    {
+        if tokio::runtime::Handle::try_current().is_err() {
+            teardown::release_claimed_recovery_keys(shared, &id, fence_id, &pre_recovery_keys);
+            let msg = "Execution recovery aborted: async runtime unavailable to park pending completion notice";
+            shared.hub.broadcast_error(Some(id), msg.into());
+            return Err(msg.into());
         }
+        super::begin_reset(shared, &id);
+        shared
+            .active_reset_commands
+            .lock()
+            .insert(id.clone(), format!("parking:{fence_id}"));
+        shared.config_startups.lock().insert(id.clone());
+        shared.config_sync_epochs.lock().remove(&id);
+        let shared_bg = Arc::clone(shared);
+        shared.hub.spawn_teardown_requeue(async move {
+            run_explicit_recovery_park_task(
+                shared_bg,
+                id,
+                fence_id,
+                pre_recovery_keys,
+                session,
+                intent,
+            )
+            .await;
+        });
+        return Ok(());
     }
     park_recovery_prompts_shared(shared, &id);
     finish_recovery_sync(shared, session, intent, fence_id, pre_recovery_epoch);
@@ -907,7 +899,6 @@ async fn run_explicit_recovery_park_task(
     id: String,
     fence_id: u64,
     pre_recovery_keys: HashMap<String, (u64, bool)>,
-    journal_items: Vec<crate::core::JournalRecoveryItem>,
     session: StartSession,
     intent: Option<crate::execution_environment::RecoveryV1>,
 ) {
@@ -916,6 +907,7 @@ async fn run_explicit_recovery_park_task(
         .await_with_shutdown(shared.hub.pending_commit_lock(&id))
         .await
     else {
+        shared.hub.poison_session_pending_writes(&id);
         teardown::release_claimed_recovery_keys_only(&shared, fence_id, &pre_recovery_keys);
         return;
     };
@@ -926,14 +918,12 @@ async fn run_explicit_recovery_park_task(
         .is_none_or(|f| f.id != fence_id)
     {
         teardown::cleanup_superseded_recovery_claims(&shared, &id, fence_id, &pre_recovery_keys);
-        shared.hub.prune_recovery_journal_batch(&id, &journal_items);
         return;
     }
     let (still_owned_keys, notice_prompts, other_prompts) =
         teardown::rebuild_still_owned_recovery_batch(&shared, &id, fence_id, &pre_recovery_keys);
     if notice_prompts.is_empty() && other_prompts.is_empty() {
         let still_owner = retire_parked_recovery_locked(&shared, &id, fence_id, &pre_recovery_keys);
-        shared.hub.prune_recovery_journal_batch(&id, &journal_items);
         drop(commit_guard);
         if still_owner {
             finish_recovery_after_fence(&shared, session, intent, fence_id);
@@ -951,7 +941,6 @@ async fn run_explicit_recovery_park_task(
             &id,
             fence_id,
             &still_owned_keys,
-            &journal_items,
             "Execution recovery aborted: durable store writer unavailable to park pending completion notice",
         )
         .await;
@@ -962,7 +951,6 @@ async fn run_explicit_recovery_park_task(
             shared.hub.commit_park_recovery_prompt(&mut preview);
             let still_owner =
                 retire_parked_recovery_locked(&shared, &id, fence_id, &pre_recovery_keys);
-            shared.hub.prune_recovery_journal_batch(&id, &journal_items);
             drop(commit_guard);
             shared.hub.broadcast_error(
                 Some(id),
@@ -988,7 +976,6 @@ async fn run_explicit_recovery_park_task(
                 &id,
                 fence_id,
                 &still_owned_keys,
-                &journal_items,
                 "Execution recovery aborted: could not durably park pending completion notice",
             )
             .await;
@@ -1001,7 +988,6 @@ async fn run_explicit_recovery_park_task(
                 &id,
                 fence_id,
                 &still_owned_keys,
-                &journal_items,
                 "Execution recovery aborted: store writer closed before parking pending completion notice",
             )
             .await;
@@ -1055,7 +1041,6 @@ async fn abort_failed_execution_recovery(
     session_id: &str,
     fence_id: u64,
     pre_recovery_keys: &HashMap<String, (u64, bool)>,
-    journal_items: &[crate::core::JournalRecoveryItem],
     message: &str,
 ) {
     let (post_recovery_prompts, unsent_notices) = {
@@ -1139,21 +1124,36 @@ async fn abort_failed_execution_recovery(
     if !unsent_notices.is_empty() {
         teardown::spawn_teardown_notice_requeues(shared, unsent_notices);
     }
-    shared
-        .hub
-        .prune_recovery_journal_batch(session_id, journal_items);
     if shared.hub.status(session_id) == Some(Status::Starting) {
         shared
             .hub
             .set_status(session_id, Status::Interrupted, Some(message.to_owned()));
     }
+    requeue_post_recovery_prompts(shared, session_id, post_recovery_prompts).await;
+    shared
+        .hub
+        .broadcast_error(Some(session_id.to_owned()), message.to_owned());
+}
+
+async fn requeue_post_recovery_prompts(
+    shared: &Arc<Shared>,
+    session_id: &str,
+    post_recovery_prompts: Vec<(String, String, Vec<serde_json::Value>, Option<String>)>,
+) {
     for (command_id, text, content, cmid) in post_recovery_prompts {
         if let Some(cid) = cmid
             .as_deref()
             .filter(|id| id.starts_with(CALL_NOTICE_PREFIX))
             .map(str::to_owned)
         {
-            let _commit_guard = shared.hub.pending_commit_lock(session_id).await;
+            let Some(_commit_guard) = shared
+                .hub
+                .await_with_shutdown(shared.hub.pending_commit_lock(session_id))
+                .await
+            else {
+                shared.hub.poison_session_pending_writes(session_id);
+                break;
+            };
             let req = NoticeRequeueRequest {
                 session_id: session_id.to_owned(),
                 text,
@@ -1170,15 +1170,25 @@ async fn abort_failed_execution_recovery(
                 .preview_and_send_undelivered_notice_requeue(req.clone())
             {
                 UndeliveredRequeue::NoStore => {}
-                UndeliveredRequeue::Pending(mut preview, rx) => match rx.await {
-                    Ok(Ok(true)) => shared.hub.commit_undelivered_notice_requeue(&mut preview),
-                    Ok(Ok(false)) => shared
-                        .hub
-                        .abort_undelivered_notice_requeue(&mut preview, false),
-                    Ok(Err(_)) | Err(_) => {
-                        shared.hub.fallback_undelivered_notice_requeue(&mut preview);
+                UndeliveredRequeue::Pending(mut preview, rx) => {
+                    match shared.hub.await_with_shutdown(rx).await {
+                        Some(Ok(Ok(true))) => {
+                            shared.hub.commit_undelivered_notice_requeue(&mut preview);
+                        }
+                        Some(Ok(Ok(false))) => shared
+                            .hub
+                            .abort_undelivered_notice_requeue(&mut preview, false),
+                        Some(Ok(Err(_)) | Err(_)) => {
+                            shared.hub.fallback_undelivered_notice_requeue(&mut preview);
+                        }
+                        None => {
+                            shared
+                                .hub
+                                .abandon_unknown_outcome_notice_requeue(&mut preview);
+                            break;
+                        }
                     }
-                },
+                }
                 UndeliveredRequeue::Rejected(_) => {
                     shared
                         .hub
@@ -1196,27 +1206,19 @@ async fn abort_failed_execution_recovery(
                 .requeue_prompt(session_id, text, content, cmid, origin, initiator);
         }
     }
-    shared
-        .hub
-        .broadcast_error(Some(session_id.to_owned()), message.to_owned());
 }
 
-#[allow(clippy::type_complexity)]
 fn snapshot_and_claim_pre_recovery_pending(
     shared: &Shared,
     session_id: &str,
     fence_id: u64,
     pre_recovery_epoch: &str,
-) -> Option<(
-    HashMap<String, (u64, bool)>,
-    Vec<crate::core::JournalRecoveryItem>,
-)> {
+) -> Option<HashMap<String, (u64, bool)>> {
     let mut recovery_fences = shared.recovery_fences.lock();
     let pending = shared.pending.lock();
     let attempted = shared.attempted_sends.lock();
     let mut owned = shared.recovery_parking_keys.lock();
     let mut keys = HashMap::new();
-    let mut journal_items = Vec::new();
     let mut has_prompt = false;
     for (key, version, command) in pending.iter_with_versions() {
         if command.session_id() != Some(session_id) {
@@ -1224,24 +1226,8 @@ fn snapshot_and_claim_pre_recovery_pending(
         }
         let was_attempted = attempted.contains(key);
         keys.insert(key.clone(), (version, was_attempted));
-        if let CoreCommand::Prompt { content, cmid, .. } = command {
+        if matches!(command, CoreCommand::Prompt { .. }) {
             has_prompt = true;
-            if !cmid
-                .as_deref()
-                .is_some_and(|id| id.starts_with(CALL_NOTICE_PREFIX))
-            {
-                let text = content
-                    .iter()
-                    .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                journal_items.push(crate::core::JournalRecoveryItem {
-                    text,
-                    content: content.clone(),
-                    cmid: cmid.clone(),
-                    reason: "Execution recovery retained an unacknowledged prompt as a draft; inspect effects before resending".to_owned(),
-                });
-            }
         }
     }
     if !has_prompt {
@@ -1259,7 +1245,7 @@ fn snapshot_and_claim_pre_recovery_pending(
     for (key, (version, _)) in &keys {
         owned.insert(key.clone(), (*version, fence_id));
     }
-    Some((keys, journal_items))
+    Some(keys)
 }
 
 fn park_recovery_prompts_shared(shared: &Shared, id: &str) {
@@ -1529,15 +1515,8 @@ mod tests {
                 acknowledged_uncertain_sequence: None,
             },
         );
-        abort_failed_execution_recovery(
-            &rt.shared,
-            "sess-r2",
-            1,
-            &HashMap::new(),
-            &[],
-            "old abort",
-        )
-        .await;
+        abort_failed_execution_recovery(&rt.shared, "sess-r2", 1, &HashMap::new(), "old abort")
+            .await;
         assert_eq!(
             rt.shared.recovery_fences.lock().get("sess-r2").unwrap().id,
             refreshed.id

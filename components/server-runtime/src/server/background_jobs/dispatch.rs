@@ -70,7 +70,7 @@ pub async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
                 content,
                 cmid,
                 explicit,
-                allow_revive,
+                wake_dormant,
                 origin,
                 initiator,
                 ownership: _ownership,
@@ -85,7 +85,7 @@ pub async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
                 origin,
                 initiator,
                 explicit,
-                allow_revive,
+                wake_dormant,
                 &reason,
             );
         }
@@ -160,7 +160,7 @@ fn retain_with_optional_explicit(
     origin: Option<crate::prompt_origin::DeliveryOrigin>,
     initiator: Option<crate::prompt_origin::DeliveryOrigin>,
     explicit: bool,
-    allow_revive: bool,
+    wake_dormant: bool,
     error: &str,
 ) {
     let session = sid.clone();
@@ -173,7 +173,7 @@ fn retain_with_optional_explicit(
         origin,
         initiator,
         explicit,
-        allow_revive,
+        wake_dormant,
         error,
     );
     if explicit {
@@ -190,7 +190,7 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
         content,
         cmid,
         explicit,
-        allow_revive,
+        wake_dormant,
         origin,
         initiator,
         dispatch_origin,
@@ -206,7 +206,7 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
             origin,
             initiator,
             explicit,
-            allow_revive,
+            wake_dormant,
             error,
         );
     };
@@ -240,7 +240,7 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
                 origin,
                 initiator,
                 explicit,
-                allow_revive,
+                wake_dormant,
                 &wait,
             );
             return;
@@ -269,7 +269,7 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
             origin,
             initiator,
             explicit,
-            allow_revive,
+            wake_dormant,
         );
         return;
     }
@@ -323,7 +323,7 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
         origin,
         initiator,
         explicit,
-        allow_revive,
+        wake_dormant,
         claim_token,
         notice_rt,
     )
@@ -344,7 +344,7 @@ async fn send_and_finish_dispatch(
     origin: Option<crate::prompt_origin::DeliveryOrigin>,
     initiator: Option<crate::prompt_origin::DeliveryOrigin>,
     explicit: bool,
-    allow_revive: bool,
+    wake_dormant: bool,
     claim_token: Option<managed_calls::NoticeDispatchToken>,
     notice_rt: Option<(String, Option<Arc<RemoteRuntime>>)>,
 ) {
@@ -371,7 +371,7 @@ async fn send_and_finish_dispatch(
         origin,
         initiator,
         explicit,
-        allow_revive,
+        wake_dormant,
         claim_token,
         notice_rt,
     )
@@ -481,7 +481,7 @@ async fn finish_dispatch_outcome(
     origin: Option<crate::prompt_origin::DeliveryOrigin>,
     initiator: Option<crate::prompt_origin::DeliveryOrigin>,
     explicit: bool,
-    allow_revive: bool,
+    wake_dormant: bool,
     claim_token: Option<managed_calls::NoticeDispatchToken>,
     notice_rt: Option<(String, Option<Arc<RemoteRuntime>>)>,
 ) {
@@ -524,7 +524,7 @@ async fn finish_dispatch_outcome(
                 origin,
                 initiator,
                 explicit,
-                allow_revive,
+                wake_dormant,
             );
             rewake_notice_if_reconnected(state, transient_disconnect, notice_rt).await;
         }
@@ -694,7 +694,7 @@ fn finish_deferred_dispatch(
     origin: Option<crate::prompt_origin::DeliveryOrigin>,
     initiator: Option<crate::prompt_origin::DeliveryOrigin>,
     explicit: bool,
-    allow_revive: bool,
+    wake_dormant: bool,
 ) {
     match outcome {
         SyncSendOutcome::RequeueByFence => {
@@ -706,7 +706,7 @@ fn finish_deferred_dispatch(
                 origin,
                 initiator,
                 explicit,
-                allow_revive,
+                wake_dormant,
             );
         }
         SyncSendOutcome::WakeForAgent(Ok(())) => {
@@ -718,7 +718,7 @@ fn finish_deferred_dispatch(
                 origin,
                 initiator,
                 explicit,
-                allow_revive,
+                wake_dormant,
             );
             // The launch may already have reported Running.
             hub.context_state_changed(&session_id);
@@ -734,7 +734,7 @@ fn finish_deferred_dispatch(
                 origin,
                 initiator,
                 explicit,
-                allow_revive,
+                wake_dormant,
                 &error,
             );
             if explicit {
@@ -742,9 +742,22 @@ fn finish_deferred_dispatch(
             }
         }
         SyncSendOutcome::HandoffRefusal(wait) => {
-            retain_failed_dispatch(
-                hub, session_id, text, content, cmid, origin, initiator, &wait,
+            let session = session_id.clone();
+            retain_failed_dispatch_with_intent(
+                hub,
+                session_id,
+                text,
+                content,
+                cmid,
+                origin,
+                initiator,
+                explicit,
+                wake_dormant,
+                &wait,
             );
+            if explicit {
+                retain_explicit_intent(hub, &session, &wait);
+            }
         }
         SyncSendOutcome::SendError(error) => {
             tracing::warn!(session = %session_id, error = %error, "queued dispatch failed");
@@ -758,7 +771,7 @@ fn finish_deferred_dispatch(
                 origin,
                 initiator,
                 explicit,
-                allow_revive,
+                wake_dormant,
                 &error,
             );
             if explicit {
@@ -770,6 +783,7 @@ fn finish_deferred_dispatch(
 }
 
 /// Restore a prompt that left the durable queue but never reached its runtime.
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub fn retain_failed_dispatch(
     hub: &Hub,
@@ -796,7 +810,7 @@ pub fn retain_failed_dispatch_with_intent(
     origin: Option<crate::prompt_origin::DeliveryOrigin>,
     initiator: Option<crate::prompt_origin::DeliveryOrigin>,
     explicit: bool,
-    allow_revive: bool,
+    wake_dormant: bool,
     error: &str,
 ) {
     hub.requeue_prompt_preserving_intent(
@@ -807,7 +821,7 @@ pub fn retain_failed_dispatch_with_intent(
         origin,
         initiator,
         explicit,
-        allow_revive,
+        wake_dormant,
     );
     if let Some(reason) = error.strip_prefix(session_maintenance::WAIT_PREFIX) {
         session_maintenance::wait(hub, &session_id, reason);

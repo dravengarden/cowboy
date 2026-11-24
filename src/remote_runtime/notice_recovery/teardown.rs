@@ -10,20 +10,40 @@ use super::{
 pub(super) struct UnsentDisconnectNotice {
     pub(super) session_id: String,
     pub(super) command_id: String,
+    pub(super) turn_id: String,
+    pub(super) pending_key: Option<(String, u64)>,
     pub(super) text: String,
     pub(super) content: Vec<serde_json::Value>,
     pub(super) cid: String,
     pub(super) was_optimistic_revival: bool,
 }
 
+fn retire_fenced_pending_command(shared: &Shared, key: &str, version: u64, turn_id: &str) {
+    let mut pending = shared.pending.lock();
+    if pending.remove_if_version(key, version).is_some() {
+        shared.sent.lock().remove(key);
+        shared.attempted_sends.lock().remove(key);
+        shared.retransmitted_sends.lock().remove(key);
+        let mut fenced = shared.fenced_commands.lock();
+        if fenced.get(key) == Some(&version) {
+            fenced.remove(key);
+        }
+        shared
+            .in_flight_prompts
+            .lock()
+            .retire_command_for_turn(key, turn_id);
+    }
+}
+
 fn extract_unsent_notices_on_disconnect(shared: &Shared) -> Vec<UnsentDisconnectNotice> {
+    let has_store = shared.hub.has_store_writer();
     let raw = {
         let mut pending = shared.pending.lock();
         let attempted = shared.attempted_sends.lock();
         let mut sent = shared.sent.lock();
         let mut fenced = shared.fenced_commands.lock();
         let recovery_owned = shared.recovery_parking_keys.lock();
-        let keys: Vec<String> = pending
+        let keys: Vec<(String, u64)> = pending
             .iter_with_versions()
             .filter_map(|(key, version, cmd)| {
                 if attempted.contains(key)
@@ -34,75 +54,85 @@ fn extract_unsent_notices_on_disconnect(shared: &Shared) -> Vec<UnsentDisconnect
                 match cmd {
                     CoreCommand::Prompt {
                         cmid: Some(cid), ..
-                    } if cid.starts_with(CALL_NOTICE_PREFIX) => Some(key.clone()),
+                    } if cid.starts_with(CALL_NOTICE_PREFIX) => Some((key.clone(), version)),
                     _ => None,
                 }
             })
             .collect();
-        let mut staged_journal = Vec::with_capacity(keys.len());
-        for key in &keys {
-            if let Some(CoreCommand::Prompt {
-                session_id,
-                command_id,
-                content,
-                cmid: Some(cid),
-                ..
-            }) = pending.get(key)
-            {
-                let text = content
-                    .iter()
-                    .filter_map(|v| v.get("text").and_then(serde_json::Value::as_str))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                staged_journal.push(crate::core::JournalUnsentNotice {
-                    session_id: session_id.clone(),
-                    command_id: command_id.clone(),
-                    text,
-                    content: content.clone(),
-                    completion_id: cid.clone(),
-                });
-            }
-        }
-        let _ = shared.hub.stage_unsent_notices_journal(&staged_journal);
         let mut extracted = Vec::with_capacity(keys.len());
-        for key in keys {
-            sent.remove(&key);
-            fenced.remove(&key);
-            if let Some(CoreCommand::Prompt {
-                session_id,
-                command_id,
-                content,
-                cmid: Some(cid),
-                ..
-            }) = pending.remove(&key)
-            {
-                let text = content
-                    .iter()
-                    .filter_map(|v| v.get("text").and_then(serde_json::Value::as_str))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                extracted.push((session_id, command_id, text, content, cid));
+        for (key, version) in keys {
+            if has_store {
+                // Keep command retained & fenced in `pending` until authoritative
+                // SQL ACK confirms requeue or settlement (Finding 7).
+                fenced.insert(key.clone(), version);
+                if let Some(CoreCommand::Prompt {
+                    session_id,
+                    command_id,
+                    turn_id,
+                    content,
+                    cmid: Some(cid),
+                    ..
+                }) = pending.get(&key)
+                {
+                    let text = content
+                        .iter()
+                        .filter_map(|v| v.get("text").and_then(serde_json::Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    extracted.push((
+                        session_id.clone(),
+                        command_id.clone(),
+                        turn_id.clone(),
+                        Some((key, version)),
+                        text,
+                        content.clone(),
+                        cid.clone(),
+                    ));
+                }
+            } else {
+                sent.remove(&key);
+                fenced.remove(&key);
+                if let Some(CoreCommand::Prompt {
+                    session_id,
+                    command_id,
+                    turn_id,
+                    content,
+                    cmid: Some(cid),
+                    ..
+                }) = pending.remove(&key)
+                {
+                    let text = content
+                        .iter()
+                        .filter_map(|v| v.get("text").and_then(serde_json::Value::as_str))
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    extracted.push((session_id, command_id, turn_id, None, text, content, cid));
+                }
             }
         }
         extracted
     };
     raw.into_iter()
-        .map(|(session_id, command_id, text, content, cid)| {
-            let has_live_worker = shared.workers.lock().get(&session_id).is_some_and(|w| {
-                w.has_connected_owner()
-                    && !matches!(w.state, WorkerState::Exited | WorkerState::Crashed)
-            });
-            let was_optimistic_revival =
-                !has_live_worker && shared.optimistic_revivals.lock().remove(&session_id);
-            UnsentDisconnectNotice {
-                session_id,
-                command_id,
-                text,
-                content,
-                cid,
-                was_optimistic_revival,
-            }
-        })
+        .map(
+            |(session_id, command_id, turn_id, pending_key, text, content, cid)| {
+                let has_live_worker = shared.workers.lock().get(&session_id).is_some_and(|w| {
+                    w.has_connected_owner()
+                        && !matches!(w.state, WorkerState::Exited | WorkerState::Crashed)
+                });
+                let was_optimistic_revival =
+                    !has_live_worker && shared.optimistic_revivals.lock().remove(&session_id);
+                UnsentDisconnectNotice {
+                    session_id,
+                    command_id,
+                    turn_id,
+                    pending_key,
+                    text,
+                    content,
+                    cid,
+                    was_optimistic_revival,
+                }
+            },
+        )
         .collect()
 }
 
@@ -113,6 +143,7 @@ fn extract_unsent_notices_on_disconnect(shared: &Shared) -> Vec<UnsentDisconnect
 enum TeardownRequeueOutcome {
     Retained,
     AlreadySettled,
+    Failed,
     ShutdownTimedOut,
 }
 
@@ -134,6 +165,7 @@ async fn commit_or_retry_teardown_requeue(
                 .await
                 .is_none()
             {
+                hub.poison_session_pending_writes(&req.session_id);
                 return TeardownRequeueOutcome::ShutdownTimedOut;
             }
         }
@@ -168,7 +200,7 @@ async fn commit_or_retry_teardown_requeue(
     }
     if let Some(store) = store {
         let now = chrono::Utc::now().timestamp_millis();
-        if hub
+        match hub
             .await_with_shutdown(store.clear_call_notice_dispatching(
                 &req.session_id,
                 &req.cmid,
@@ -177,9 +209,21 @@ async fn commit_or_retry_teardown_requeue(
                 now,
             ))
             .await
-            .is_none()
         {
-            return TeardownRequeueOutcome::ShutdownTimedOut;
+            None => {
+                hub.poison_session_pending_writes(&req.session_id);
+                return TeardownRequeueOutcome::ShutdownTimedOut;
+            }
+            Some(Err(error)) => {
+                tracing::error!(
+                    %error,
+                    session = %req.session_id,
+                    completion_id = %req.cmid,
+                    "direct clear_call_notice_dispatching fallback failed; keeping pending command fenced"
+                );
+                return TeardownRequeueOutcome::Failed;
+            }
+            Some(Ok(_)) => {}
         }
     }
     if !last_writer_closed {
@@ -211,12 +255,14 @@ pub(super) fn spawn_teardown_notice_requeues(
         .map(|(_, store)| store.clone());
     if tokio::runtime::Handle::try_current().is_ok() {
         let hub = shared.hub.clone();
+        let weak_shared = Arc::downgrade(shared);
         shared.hub.spawn_teardown_requeue(async move {
             for item in unsent {
                 let Some(_commit_guard) = hub
                     .await_with_shutdown(hub.pending_commit_lock(&item.session_id))
                     .await
                 else {
+                    hub.poison_session_pending_writes(&item.session_id);
                     break;
                 };
                 let (text, content) = if let Some(store) = store.as_ref()
@@ -245,7 +291,11 @@ pub(super) fn spawn_teardown_notice_requeues(
                 };
                 match commit_or_retry_teardown_requeue(&hub, store.as_ref(), &req).await {
                     TeardownRequeueOutcome::Retained => {
-                        hub.prune_unsent_notice_journal(&item.session_id, &item.command_id);
+                        if let Some((ref key, version)) = item.pending_key
+                            && let Some(shared) = weak_shared.upgrade()
+                        {
+                            retire_fenced_pending_command(&shared, key, version, &item.turn_id);
+                        }
                         if item.was_optimistic_revival
                             && hub.status(&item.session_id) == Some(Status::Starting)
                         {
@@ -256,42 +306,60 @@ pub(super) fn spawn_teardown_notice_requeues(
                         }
                     }
                     TeardownRequeueOutcome::AlreadySettled => {
-                        hub.prune_unsent_notice_journal(&item.session_id, &item.command_id);
+                        if let Some((ref key, version)) = item.pending_key
+                            && let Some(shared) = weak_shared.upgrade()
+                        {
+                            retire_fenced_pending_command(&shared, key, version, &item.turn_id);
+                        }
                     }
+                    TeardownRequeueOutcome::Failed => {}
                     TeardownRequeueOutcome::ShutdownTimedOut => break,
                 }
             }
         });
     } else {
-        for item in unsent {
-            let req = NoticeRequeueRequest {
-                session_id: item.session_id.clone(),
-                text: item.text,
-                content: item.content,
-                cmid: item.cid.clone(),
-                expected_command_id: Some(item.command_id.clone()),
-                expected_worker_epoch: None,
-                require_worker_epoch_match: false,
-                receipt_key: format!("teardown:{}", item.command_id),
-                require_claim_release: true,
-            };
-            if shared.hub.has_store_writer() {
-                shared
-                    .hub
-                    .fallback_undelivered_notice_requeue_rejected(&req);
-            } else {
-                let _ = shared.hub.preview_and_send_undelivered_notice_requeue(req);
+        requeue_teardown_notices_sync(shared, unsent, wake_cb.as_deref());
+    }
+}
+
+type NoticeWakeCallback = dyn Fn(&str, &str) + Send + Sync;
+
+fn requeue_teardown_notices_sync(
+    shared: &Shared,
+    unsent: Vec<UnsentDisconnectNotice>,
+    wake_cb: Option<&NoticeWakeCallback>,
+) {
+    for item in unsent {
+        let req = NoticeRequeueRequest {
+            session_id: item.session_id.clone(),
+            text: item.text,
+            content: item.content,
+            cmid: item.cid.clone(),
+            expected_command_id: Some(item.command_id.clone()),
+            expected_worker_epoch: None,
+            require_worker_epoch_match: false,
+            receipt_key: format!("teardown:{}", item.command_id),
+            require_claim_release: true,
+        };
+        if shared.hub.has_store_writer() {
+            shared
+                .hub
+                .fallback_undelivered_notice_requeue_rejected(&req);
+        } else {
+            let _ = shared.hub.preview_and_send_undelivered_notice_requeue(req);
+            if let Some((ref key, version)) = item.pending_key {
+                retire_fenced_pending_command(shared, key, version, &item.turn_id);
             }
-            if item.was_optimistic_revival
-                && shared.hub.status(&item.session_id) == Some(Status::Starting)
-            {
-                shared
-                    .hub
-                    .set_status(&item.session_id, Status::Exited, None);
-            }
-            if let Some(wake) = wake_cb.as_ref() {
-                wake(&item.session_id, &item.cid);
-            }
+        }
+        if item.was_optimistic_revival
+            && shared.hub.status(&item.session_id) == Some(Status::Starting)
+        {
+            shared
+                .hub
+                .set_status(&item.session_id, Status::Exited, None);
+        }
+        if let Some(wake) = wake_cb {
+            wake(&item.session_id, &item.cid);
         }
     }
 }
@@ -397,9 +465,17 @@ pub(in crate::remote_runtime) fn requeue_rejected_command(
         let hub = shared.hub.clone();
         let session_id = session_id.to_owned();
         shared.hub.spawn_teardown_requeue(async move {
-            let _commit_guard = hub.pending_commit_lock(&session_id).await;
+            let Some(_commit_guard) = hub
+                .await_with_shutdown(hub.pending_commit_lock(&session_id))
+                .await
+            else {
+                hub.poison_session_pending_writes(&session_id);
+                return;
+            };
             let (text, content) = if let Some(store) = store.as_ref()
-                && let Ok(Some(rebuilt)) = canonical_notice_payload(store, &session_id, &cid).await
+                && let Some(Ok(Some(rebuilt))) = hub
+                    .await_with_shutdown(canonical_notice_payload(store, &session_id, &cid))
+                    .await
             {
                 rebuilt
             } else {
@@ -418,17 +494,22 @@ pub(in crate::remote_runtime) fn requeue_rejected_command(
             };
             match hub.preview_and_send_undelivered_notice_requeue(req.clone()) {
                 UndeliveredRequeue::NoStore => {}
-                UndeliveredRequeue::Pending(mut preview, rx) => match rx.await {
-                    Ok(Ok(true)) => hub.commit_undelivered_notice_requeue(&mut preview),
-                    Ok(Ok(false)) => {
-                        // Round 3 #14: SQL confirmed this notice is already
-                        // settled (e.g. consumed by `calls.result`); do not
-                        // reinsert it, but release the exact rejected dispatch
-                        // guard so the parent queue is not blocked forever.
-                        hub.release_rejected_settled_notice_dispatch(&mut preview);
+                UndeliveredRequeue::Pending(mut preview, rx) => {
+                    match hub.await_with_shutdown(rx).await {
+                        Some(Ok(Ok(true))) => hub.commit_undelivered_notice_requeue(&mut preview),
+                        Some(Ok(Ok(false))) => {
+                            // Round 3 #14: SQL confirmed this notice is already
+                            // settled (e.g. consumed by `calls.result`); do not
+                            // reinsert it, but release the exact rejected dispatch
+                            // guard so the parent queue is not blocked forever.
+                            hub.release_rejected_settled_notice_dispatch(&mut preview);
+                        }
+                        Some(Ok(Err(_)) | Err(_)) => {
+                            hub.fallback_undelivered_notice_requeue(&mut preview);
+                        }
+                        None => hub.abandon_unknown_outcome_notice_requeue(&mut preview),
                     }
-                    Ok(Err(_)) | Err(_) => hub.fallback_undelivered_notice_requeue(&mut preview),
-                },
+                }
                 UndeliveredRequeue::Rejected(_) => {
                     hub.fallback_undelivered_notice_requeue_rejected(&req);
                 }
@@ -1002,56 +1083,59 @@ pub(super) fn park_aborted_disconnected_prompts(
                 .filter(|c| c.starts_with(CALL_NOTICE_PREFIX))
             {
                 if !was_attempted && !attempted.contains(&key) {
-                    let journal_item = crate::core::JournalUnsentNotice {
-                        session_id: session_id.to_owned(),
-                        command_id: command_id.clone(),
-                        text: text.clone(),
-                        content: content.clone(),
-                        completion_id: cid.to_owned(),
-                    };
-                    if shared.hub.stage_unsent_notices_journal(&[journal_item])
-                        && pending.remove_if_version(&key, version).is_some()
-                    {
-                        sent.remove(&key);
-                        if fenced.get(&key) == Some(&version) {
-                            fenced.remove(&key);
+                    let pending_key = if shared.hub.has_store_writer() {
+                        fenced.insert(key.clone(), version);
+                        Some((key, version))
+                    } else {
+                        if pending.remove_if_version(&key, version).is_some() {
+                            sent.remove(&key);
+                            if fenced.get(&key) == Some(&version) {
+                                fenced.remove(&key);
+                            }
+                            shared
+                                .in_flight_prompts
+                                .lock()
+                                .retire_command_for_turn(&command_id, &turn_id);
                         }
-                        shared
-                            .in_flight_prompts
-                            .lock()
-                            .retire_command_for_turn(&command_id, &turn_id);
-                        let has_live_worker =
-                            shared.workers.lock().get(session_id).is_some_and(|w| {
-                                w.has_connected_owner()
-                                    && !matches!(
-                                        w.state,
-                                        WorkerState::Exited | WorkerState::Crashed
-                                    )
-                            });
-                        let was_optimistic_revival = !has_live_worker
-                            && shared.optimistic_revivals.lock().remove(session_id);
-                        unsent_notices.push(UnsentDisconnectNotice {
-                            session_id: session_id.to_owned(),
-                            command_id,
-                            text,
-                            content,
-                            cid: cid.to_owned(),
-                            was_optimistic_revival,
-                        });
-                        continue;
-                    }
+                        None
+                    };
+                    let has_live_worker = shared.workers.lock().get(session_id).is_some_and(|w| {
+                        w.has_connected_owner()
+                            && !matches!(w.state, WorkerState::Exited | WorkerState::Crashed)
+                    });
+                    let was_optimistic_revival =
+                        !has_live_worker && shared.optimistic_revivals.lock().remove(session_id);
+                    unsent_notices.push(UnsentDisconnectNotice {
+                        session_id: session_id.to_owned(),
+                        command_id,
+                        turn_id,
+                        pending_key,
+                        text,
+                        content,
+                        cid: cid.to_owned(),
+                        was_optimistic_revival,
+                    });
+                    continue;
                 }
                 fenced.insert(key, version);
             } else {
-                let journal_ok = shared.hub.enqueue_durable_recovery_park(
+                let weak_shared = Arc::downgrade(shared);
+                let retry_key = key.clone();
+                let retry_turn = turn_id.clone();
+                let on_committed: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                    if let Some(shared) = weak_shared.upgrade() {
+                        retire_fenced_pending_command(&shared, &retry_key, version, &retry_turn);
+                    }
+                });
+                let settled_now = shared.hub.enqueue_durable_recovery_park(
                     session_id.to_owned(),
                     text,
                     content,
                     cmid,
                     message.to_owned(),
-                    None,
+                    Some(on_committed),
                 );
-                if journal_ok && pending.remove_if_version(&key, version).is_some() {
+                if settled_now && pending.remove_if_version(&key, version).is_some() {
                     sent.remove(&key);
                     attempted.remove(&key);
                     if fenced.get(&key) == Some(&version) {
@@ -1446,8 +1530,6 @@ mod r10_notice_recovery_tests {
 
     #[tokio::test]
     async fn r11_failed_disconnected_recovery_requeues_provably_unsent_notice() {
-        let dir = tempfile::tempdir().unwrap();
-        let journal_path = dir.path().join("recovery-journal").join("parks.json");
         let health = Arc::new(PersistenceHealth::default());
         let (sink, mut store_rx) = StoreSink::channel(32, health);
         let hub = crate::core::Hub::with_store(Some(sink));
@@ -1461,7 +1543,6 @@ mod r10_notice_recovery_tests {
             false,
         );
         hub.set_status("sess-r11-9", Status::Running, None);
-        hub.attach_and_reconcile_recovery_journal(journal_path.clone());
         let worker = super::super::super::tests::snapshot("sess-r11-9");
         let rt = super::super::super::RemoteRuntime::for_test(hub.clone(), vec![worker]);
 

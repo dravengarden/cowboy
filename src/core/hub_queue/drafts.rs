@@ -66,7 +66,7 @@ impl Hub {
                     origin: None,
                     initiator: None,
                     explicit: false,
-                    allow_revive: false,
+                    wake_dormant: false,
                 });
             }
             // Finding 17: update draft and both recovery cmid sets atomically
@@ -151,7 +151,7 @@ impl Hub {
                     origin,
                     initiator: None,
                     explicit: false,
-                    allow_revive: false,
+                    wake_dormant: false,
                 });
             }
         }
@@ -245,7 +245,7 @@ impl Hub {
                             origin: Some(author),
                             initiator: None,
                             explicit: false,
-                            allow_revive: false,
+                            wake_dormant: false,
                         });
                         (did, None)
                     }
@@ -324,6 +324,25 @@ impl Hub {
                 true,
             );
         }
+    }
+
+    /// Authoritative current `(fire_at_ms, generation)` for a live, non-trashed
+    /// scheduled draft; used by the scheduler to reconcile delayed timer commands
+    /// against Hub state (Finding 17).
+    pub(crate) fn current_draft_schedule(
+        &self,
+        session_id: &str,
+        draft_id: &str,
+    ) -> Option<(i64, u64)> {
+        let sessions = self.inner.sessions.lock();
+        let s = sessions.get(session_id)?;
+        if s.meta.trashed_at_ms.is_some() {
+            return None;
+        }
+        s.drafts
+            .iter()
+            .find(|m| m.id == draft_id)
+            .and_then(|m| m.schedule.as_ref().map(|sc| (sc.fire_at_ms, sc.generation)))
     }
 
     pub fn fire_scheduled_draft(&self, session_id: &str, draft_id: &str) {
@@ -422,7 +441,7 @@ impl Hub {
                 crate::prompt_origin::compute_dispatch_origin(m.origin.as_ref(), Some(&trigger));
             if wired
                 && !s.meta.paused
-                && Self::ready(s, true)
+                && Self::ready_for(s, false, true)
                 && s.queue.is_empty()
                 && !self.has_in_flight_pending_commit(session_id)
                 && self.context_allows_dispatch(session_id, cmid.as_deref())
@@ -442,7 +461,7 @@ impl Hub {
                     initiator: Some(trigger.clone()),
                     dispatch_origin,
                     trigger,
-                    allow_revive: false,
+                    wake_dormant: true,
                 });
             } else {
                 let id = self.next_qid();
@@ -455,7 +474,7 @@ impl Hub {
                     origin: m.origin,
                     initiator: Some(trigger),
                     explicit: false,
-                    allow_revive: true,
+                    wake_dormant: true,
                 };
                 if front {
                     s.queue.insert(0, msg);
@@ -962,68 +981,92 @@ mod r10_recovery_tests {
     }
 
     #[tokio::test]
-    async fn recovery_journal_survives_stalled_shutdown_and_reconciles_on_restart() {
-        let dir = tempfile::tempdir().unwrap();
-        let journal_path = dir
-            .path()
-            .join("recovery-journal")
-            .join("recovery-parks.journal.json");
+    async fn r12_shutdown_timeout_poisons_session_blocking_all_subsequent_sql_writes() {
+        let health = Arc::new(PersistenceHealth::default());
+        let (sink, mut store_rx) = StoreSink::channel(32, health);
+        let hub = Hub::with_store(Some(sink));
+        seed_session(&hub, "s-r12-1", Status::Running);
 
-        // Controller #1: store writer NEVER acks (simulated Postgres hang).
-        let health1 = Arc::new(PersistenceHealth::default());
-        let (sink1, _hung_rx1) = StoreSink::channel(16, health1);
-        let hub1 = Hub::with_store(Some(sink1));
-        seed_session(&hub1, "s-f4", Status::Running);
-        hub1.attach_and_reconcile_recovery_journal(journal_path.clone());
-
-        hub1.enqueue_durable_recovery_park(
-            "s-f4".into(),
+        let retired = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let r1 = Arc::clone(&retired);
+        let r2 = Arc::clone(&retired);
+        // With a store writer attached, enqueue returns false until authoritative SQL ACK.
+        assert!(!hub.enqueue_durable_recovery_park(
+            "s-r12-1".into(),
             "unresolved payload".into(),
-            vec![serde_json::json!({"type": "text", "text": "unresolved payload"})],
-            Some("cmid-f4".into()),
+            vec![],
+            Some("cmid-r12-1".into()),
             "disconnect during outage".into(),
-            None,
-        );
-        assert!(journal_path.exists());
+            Some(Arc::new(move || {
+                r1.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })),
+        ));
+        // Duplicate enqueue before SQL commits must also return false (never early-retire).
+        assert!(!hub.enqueue_durable_recovery_park(
+            "s-r12-1".into(),
+            "unresolved payload".into(),
+            vec![],
+            Some("cmid-r12-1".into()),
+            "disconnect during outage".into(),
+            Some(Arc::new(move || {
+                r2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })),
+        ));
+        let mut acked_seen = 0usize;
+        while let Ok(Some(w)) =
+            tokio::time::timeout(std::time::Duration::from_millis(300), store_rx.recv()).await
+        {
+            if let StoreWrite::UpdatePending {
+                ack_id: Some(_), ..
+            } = w
+            {
+                acked_seen += 1;
+                break;
+            }
+        }
+        assert_eq!(acked_seen, 1);
+        assert_eq!(retired.load(std::sync::atomic::Ordering::SeqCst), 0);
 
-        // Graceful shutdown must complete within bounded grace despite hung store ack.
+        // Unrelated mutation while commit is in flight is deferred.
+        hub.add_draft("s-r12-1", "unrelated".into(), vec![], None, &owner_caller());
+
+        // Graceful shutdown bounds wait on hung SQL and permanently poisons the session.
         let started = std::time::Instant::now();
-        hub1.drain_teardown_requeues(std::time::Duration::from_millis(50))
+        hub.drain_teardown_requeues(std::time::Duration::from_millis(50))
             .await;
         assert!(
             started.elapsed() < std::time::Duration::from_secs(4),
             "shutdown must not hang on stalled recovery park ack"
         );
-        assert!(journal_path.exists());
+        assert_eq!(
+            retired.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "timed-out park must never run retirement callbacks"
+        );
 
-        // Controller #2: healthy store writer reconciles journal on startup and prunes file.
-        let health2 = Arc::new(PersistenceHealth::default());
-        let (sink2, mut store_rx2) = StoreSink::channel(16, health2);
-        let hub2 = Hub::with_store(Some(sink2));
-        let acks2 = hub2.store_ack_sink();
-        seed_session(&hub2, "s-f4", Status::Interrupted);
-        let ack_task = tokio::spawn(async move {
-            while let Some(write) = store_rx2.recv().await {
-                if let StoreWrite::UpdatePending {
-                    ack_id: Some(id), ..
-                } = write
-                {
-                    acks2.complete(id, Ok(true));
-                }
-            }
-        });
-        hub2.attach_and_reconcile_recovery_journal(journal_path.clone());
-        for _ in 0..50 {
-            if !pending_of(&hub2, "s-f4").1.is_empty() && !journal_path.exists() {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        // After poisoning, neither fire-and-forget nor acknowledged UpdatePending may be admitted.
+        hub.add_draft(
+            "s-r12-1",
+            "after-timeout".into(),
+            vec![],
+            None,
+            &owner_caller(),
+        );
+        assert!(matches!(
+            hub.preview_park_recovery_prompt(
+                "s-r12-1",
+                "second".into(),
+                vec![],
+                Some("cmid-r12-2".into())
+            ),
+            crate::core::RecoveryDraftPark::Rejected(_)
+        ));
+        while let Ok(w) = store_rx.try_recv() {
+            assert!(
+                !matches!(w, StoreWrite::UpdatePending { .. }),
+                "poisoned session must NEVER emit any further UpdatePending behind timed-out commit"
+            );
         }
-        let (_, drafts) = pending_of(&hub2, "s-f4");
-        assert_eq!(drafts.len(), 1);
-        assert_eq!(drafts[0].cmid.as_deref(), Some("cmid-f4"));
-        assert!(!journal_path.exists(), "journal should prune after commit");
-        ack_task.abort();
     }
 
     #[test]
@@ -1063,49 +1106,111 @@ mod r10_recovery_tests {
         );
     }
 
-    #[tokio::test]
-    async fn r11_shutdown_timeout_never_flushes_stale_snapshot_over_live_park() {
-        let dir = tempfile::tempdir().unwrap();
-        let journal_path = dir.path().join("recovery-journal").join("parks.json");
-        let health = Arc::new(PersistenceHealth::default());
-        let (sink, mut store_rx) = StoreSink::channel(16, health);
-        let hub = Hub::with_store(Some(sink));
-        seed_session(&hub, "s-r11-1", Status::Running);
-        hub.attach_and_reconcile_recovery_journal(journal_path.clone());
+    #[test]
+    fn r12_browser_recovery_draft_blocks_undelivered_and_stale_queue_row_advances_fifo() {
+        let hub = Hub::new();
+        seed_session(&hub, "s-r12-11", Status::Running);
+        let (disp_tx, mut disp_rx) = mpsc::channel(8);
+        hub.set_dispatch_tx(disp_tx);
 
-        assert!(hub.enqueue_durable_recovery_park(
-            "s-r11-1".into(),
-            "do not erase".into(),
+        // Finding 11: browser-parked `recovery-orig-11` draft blocks UndeliveredPrompt hydration for `orig-11`.
+        hub.add_draft(
+            "s-r12-11",
+            "parked in browser".into(),
             vec![],
-            Some("cmid-r11-1".into()),
-            "outage".into(),
-            None,
-        ));
-        let mut acked_seen = 0usize;
-        while let Ok(Some(w)) =
-            tokio::time::timeout(std::time::Duration::from_millis(200), store_rx.recv()).await
+            Some("recovery-orig-11".into()),
+            &owner_caller(),
+        );
+        hub.hydrate_prompt_dispatches(vec![crate::prompt_origin::PromptDispatchRecord {
+            session_id: "s-r12-11".into(),
+            cmid: "orig-11".into(),
+            origin: crate::prompt_origin::DeliveryOrigin::from_caller(&owner_caller()),
+            trigger: crate::prompt_origin::DeliveryOrigin::from_caller(&owner_caller()),
+            dispatched_at_ms: 1_000,
+        }]);
+        assert!(
+            hub.take_pending_echo_for_undelivered("s-r12-11", "orig-11")
+                .is_none(),
+            "browser recovery-X draft must suppress UndeliveredPrompt echo for X"
+        );
+
+        // Finding 14: stale settled queue row at head is stripped so valid row behind it dispatches.
+        hub.set_paused("s-r12-11", true);
+        hub.submit(
+            "s-r12-11",
+            "stale".into(),
+            vec![],
+            Some("settled-14".into()),
+            &owner_caller(),
+        );
+        hub.submit(
+            "s-r12-11",
+            "valid".into(),
+            vec![],
+            Some("valid-14".into()),
+            &owner_caller(),
+        );
         {
-            if let StoreWrite::UpdatePending {
-                ack_id: Some(_), ..
-            } = w
-            {
-                acked_seen += 1;
-                break;
-            }
+            let mut sessions = hub.inner.sessions.lock();
+            sessions
+                .get_mut("s-r12-11")
+                .unwrap()
+                .committed_recovery_cmids
+                .insert("settled-14".into());
         }
-        assert_eq!(acked_seen, 1);
-        hub.add_draft("s-r11-1", "unrelated".into(), vec![], None, &owner_caller());
+        hub.set_paused("s-r12-11", false);
+        let req = disp_rx
+            .try_recv()
+            .expect("valid row behind stale settled row must dispatch");
+        assert_eq!(req.cmid.as_deref(), Some("valid-14"));
 
-        hub.drain_teardown_requeues(std::time::Duration::from_millis(50))
-            .await;
-
-        while let Ok(w) = store_rx.try_recv() {
-            assert!(
-                !matches!(w, StoreWrite::UpdatePending { ack_id: None, .. }),
-                "shutdown timeout must NEVER flush a stale UpdatePending behind an unknown-outcome park"
-            );
-        }
-        assert!(journal_path.exists());
+        // Finding 18: scheduled row wakes Exited cleanly but NEVER revives Crashed.
+        hub.clear_in_flight("s-r12-11");
+        hub.set_status("s-r12-11", Status::Crashed, Some("boom".into()));
+        let due_ms = chrono::Utc::now().timestamp_millis() - 1_000;
+        hub.schedule_draft(
+            "s-r12-11",
+            None,
+            Some("sched-crashed".into()),
+            "wait for human".into(),
+            vec![],
+            due_ms,
+            Delivery::Back,
+            &owner_caller(),
+        );
+        let sched_id = pending_of(&hub, "s-r12-11")
+            .1
+            .iter()
+            .find(|d| d.cmid.as_deref() == Some("sched-crashed"))
+            .unwrap()
+            .id
+            .clone();
+        let sched_gen = pending_of(&hub, "s-r12-11")
+            .1
+            .iter()
+            .find(|d| d.id == sched_id)
+            .unwrap()
+            .schedule
+            .as_ref()
+            .unwrap()
+            .generation;
+        assert_eq!(
+            hub.current_draft_schedule("s-r12-11", &sched_id),
+            Some((due_ms, sched_gen))
+        );
+        hub.fire_scheduled_draft_checked("s-r12-11", &sched_id, Some((due_ms, sched_gen)));
+        assert!(
+            disp_rx.try_recv().is_err(),
+            "scheduled draft must NOT revive a Crashed session"
+        );
+        assert_eq!(pending_of(&hub, "s-r12-11").0.len(), 1);
+        hub.set_status("s-r12-11", Status::Exited, None);
+        hub.try_drain("s-r12-11");
+        let woken = disp_rx
+            .try_recv()
+            .expect("scheduled row must wake cleanly dormant Exited session");
+        assert!(woken.wake_dormant);
+        assert!(!woken.explicit);
     }
 
     #[test]
@@ -1232,7 +1337,7 @@ mod r10_recovery_tests {
             "scheduled recovery fire keeps automatic provenance"
         );
         assert!(
-            req.allow_revive,
+            req.wake_dormant,
             "scheduled recovery fire preserves revive permission"
         );
 
@@ -1272,5 +1377,46 @@ mod r10_recovery_tests {
             "deferred manual drain_now must replay bypassing pause"
         );
         assert_eq!(req2.cmid.as_deref(), Some("m-head"));
+
+        // Finding 16: deferred manual drain_now must NOT bypass pause for a different prepended row.
+        hub.clear_in_flight("s-r11-11");
+        hub.submit(
+            "s-r11-11",
+            "row-a".into(),
+            vec![],
+            Some("cmid-a".into()),
+            &owner_caller(),
+        );
+        hub.add_recovery_draft("s-r11-11", "rec-3".into(), vec![], Some("orig-16".into()));
+        let did3 = pending_of(&hub, "s-r11-11").1[0].id.clone();
+        while store_rx.try_recv().is_ok() {}
+        hub.activate_draft("s-r11-11", &did3, Some("resend-16".into()), &owner_caller());
+        let ack3 = loop {
+            if let StoreWrite::UpdatePending {
+                ack_id: Some(id), ..
+            } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                break id;
+            }
+        };
+        hub.drain_now("s-r11-11", &owner_caller());
+        // Prepend a different row before the fence lifts: deferred manual intent must NOT send it.
+        let _ = hub.force_submit(
+            "s-r11-11",
+            "row-b".into(),
+            vec![],
+            Some("cmid-b".into()),
+            false,
+            &owner_caller(),
+        );
+        acks.complete(ack3, Ok(true));
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert!(
+            disp_rx.try_recv().is_err(),
+            "deferred manual drain_now must never dispatch a different prepended row through pause"
+        );
     }
 }
