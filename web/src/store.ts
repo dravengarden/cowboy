@@ -200,6 +200,8 @@ import {
   SOCKET_BOOTSTRAP_TIMEOUT_MS,
   SOCKET_UPGRADE_TIMEOUT_MS,
 } from "./socketGuards.ts";
+export { useQueueEditHoldStatus } from "./queueEditingHold";
+import { markQueueEditHoldsUnconfirmed, replayQueueEditHolds, setQueueEditHold } from "./queueEditingHold";
 import { createLivenessWatch } from "./livenessWatch";
 import { createOutageTracker } from "./outageTracker";
 
@@ -2324,8 +2326,7 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     for (const peeked of peekedSessions.keys()) ensurePeeked(peeked, true);
     for (const entry of syncClients.values()) entry.resend();
     for (const store of qClients.values()) store.resend();
-    // Behind the replay, not instead of it: a row the replay could not carry
-    // (durable admission still open) now gets a bounded deadline.
+    replayQueueEditHolds(send);
     reconcileStallWatchdogsForEverySession();
     guards.admitted(state.sessionsLoaded);
   };
@@ -2391,6 +2392,7 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     if (ready) outage.markLive();
     outage.countFailure();
     setState({ ...state, connected: false });
+    markQueueEditHoldsUnconfirmed();
     reconcileStallWatchdogsForEverySession();
     outage.begin();
     reportClientLog("warn", "websocket_close", "Cowboy WebSocket disconnected", {
@@ -5362,11 +5364,9 @@ export function retryTurn(sessionId: string): void {
   send({ type: "retry_turn", session_id: sessionId });
 }
 
-// Hold (or release, with `null`) the queue head for editing — pauses the daemon
-// drain on EVERY terminal while one client edits, so the message isn't sent out
-// from under the editor.
+// Hold (or release, with `null`) the session's automatic queue drain while editing.
 export function setQueueEditing(sessionId: string, id: string | null): void {
-  send({ type: "set_queue_editing", session_id: sessionId, id });
+  setQueueEditHold(sessionId, id, send);
 }
 
 // --- Draft operations -------------------------------------------------------

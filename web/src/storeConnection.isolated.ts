@@ -246,6 +246,44 @@ test("a capacity close waits for the admission retry delay before reconnecting",
   await until(() => FakeSocket.all.length === before + 1, 4_000);
 }, 10_000);
 
+test("active queue edit holds re-declare after socket reconnect until cleared", async () => {
+  const first = FakeSocket.all.at(-1)!;
+  first.accept();
+  first.receive({ type: "bootstrap_complete" });
+  await until(() => store.getSyncStatus().phase === "live");
+  store.setQueueEditing("s-hold", "q-42");
+  const initialFrames = first.sent.map((raw) => JSON.parse(raw))
+    .filter((f) => f.type === "set_queue_editing" && f.session_id === "s-hold");
+  expect(initialFrames).toEqual([{ type: "set_queue_editing", session_id: "s-hold", id: "q-42" }]);
+
+  // Drop and reconnect: the store must automatically re-declare the active hold.
+  const before = FakeSocket.all.length;
+  first.drop();
+  await settle(3_000);
+  await until(() => FakeSocket.all.length === before + 1, 4_000);
+  const reconnected = FakeSocket.all.at(-1)!;
+  reconnected.accept();
+  reconnected.receive({ type: "bootstrap_complete" });
+  await until(() => store.getSyncStatus().phase === "live");
+  const replayedFrames = reconnected.sent.map((raw) => JSON.parse(raw))
+    .filter((f) => f.type === "set_queue_editing" && f.session_id === "s-hold");
+  expect(replayedFrames).toEqual([{ type: "set_queue_editing", session_id: "s-hold", id: "q-42" }]);
+
+  // Clearing the hold stops future replays.
+  store.setQueueEditing("s-hold", null);
+  const beforeClear = FakeSocket.all.length;
+  reconnected.drop();
+  await settle(3_000);
+  await until(() => FakeSocket.all.length === beforeClear + 1, 4_000);
+  const afterClear = FakeSocket.all.at(-1)!;
+  afterClear.accept();
+  afterClear.receive({ type: "bootstrap_complete" });
+  await until(() => store.getSyncStatus().phase === "live");
+  const clearedFrames = afterClear.sent.map((raw) => JSON.parse(raw))
+    .filter((f) => f.type === "set_queue_editing" && f.session_id === "s-hold");
+  expect(clearedFrames).toEqual([]);
+}, 15_000);
+
 // Last: an auth-required close pauses the product socket until the sign-in
 // cookie changes, which this harness never signals.
 test("an auth-required close pauses reconnecting until sign-in changes", async () => {

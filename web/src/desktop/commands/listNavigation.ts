@@ -18,6 +18,71 @@ export function pendingItemActionKey(key: string): PendingItemAction | null {
   } as Record<string, PendingItemAction>)[key.toLocaleLowerCase()] ?? null;
 }
 
+/** Handle Queue/Draft list-specific keys (reorder, Esc/h back to canvas, item verbs). */
+export function handlePendingListKey({
+  event,
+  key,
+  region,
+  items,
+  active,
+  reordering,
+  focusComposer,
+}: {
+  event: KeyboardEvent;
+  key: string;
+  region: HTMLElement;
+  items: readonly HTMLElement[];
+  active: number;
+  reordering: boolean;
+  focusComposer: () => void;
+}): boolean {
+  if (key.toLowerCase() === "o" && !event.repeat) {
+    event.preventDefault();
+    event.stopPropagation();
+    region.querySelector<HTMLElement>("[data-desktop-pending-list]")?.dispatchEvent(
+      new CustomEvent("cowboy:desktop-toggle-reorder"),
+    );
+    items[Math.max(0, active)]?.focus({ preventScroll: true });
+    return true;
+  }
+  if (key === "Escape" || (!reordering && key === "h")) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (reordering) {
+      region.querySelector<HTMLElement>("[data-desktop-pending-list]")?.dispatchEvent(
+        new CustomEvent("cowboy:desktop-release-reorder"),
+      );
+    } else {
+      focusComposer();
+    }
+    return true;
+  }
+  if (reordering && (key === "j" || key === "k")) {
+    event.preventDefault();
+    event.stopPropagation();
+    items[Math.max(0, active)]?.dispatchEvent(new CustomEvent("cowboy:desktop-reorder", {
+      bubbles: true,
+      detail: { delta: key === "j" ? 1 : -1 },
+    }));
+    return true;
+  }
+  if (active >= 0) {
+    const pendingAction = pendingItemActionKey(key);
+    const action = pendingAction
+      ? items[active]?.querySelector<HTMLElement>(
+        `[data-desktop-item-action='${pendingAction}']`,
+      )
+      : null;
+    if (action) {
+      event.preventDefault();
+      event.stopPropagation();
+      action.click();
+      return true;
+    }
+  }
+  return false;
+}
+
 /** The nearest scrolling ancestor of a list item. */
 export function listScroller(item: HTMLElement): HTMLElement | null {
   let element = item.parentElement;

@@ -77,6 +77,24 @@ function dispatchSessionFolders(action: string): boolean {
   ) === false;
 }
 
+function togglePendingRegion(
+  workspace: ReturnType<typeof useDesktopWorkspace>,
+  kind: "queued" | "draft",
+): void {
+  const region = `prompt.${kind}`;
+  const toggle = document.querySelector<HTMLElement>(
+    `[data-desktop-collapse-toggle='${kind}']`,
+  );
+  if (!toggle) return;
+  if (workspace.focusedRegion === region) {
+    if (toggle.getAttribute("aria-expanded") === "true") toggle.click();
+    requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
+    return;
+  }
+  if (toggle.getAttribute("aria-expanded") === "false") toggle.click();
+  requestAnimationFrame(() => workspace.focusRegion(region));
+}
+
 export function DesktopCommandHost({
   onNewSession,
   onOpenSettings,
@@ -476,35 +494,18 @@ export function DesktopCommandHost({
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusQueue),
       when: () => document.querySelector("[data-desktop-region='prompt.queued']") !== null,
       disabledReason: "The queue is empty",
-      run: () => {
-        const toggle = document.querySelector<HTMLElement>(
-          "[data-desktop-collapse-toggle='queued']",
-        );
-        if (!toggle) return;
-        if (workspace.focusedRegion === "prompt.queued") {
-          if (toggle.getAttribute("aria-expanded") === "true") toggle.click();
-          requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
-          return;
-        }
-        if (toggle.getAttribute("aria-expanded") === "false") toggle.click();
-        requestAnimationFrame(() => workspace.focusRegion("prompt.queued"));
-      },
+      run: () => togglePendingRegion(workspace, "queued"),
     },
     {
       id: "prompt.focusDrafts",
-      title: "Focus Drafts",
-      description: "Move keyboard focus to parked drafts",
+      title: "Open or Close Drafts",
+      description:
+        "Open and focus parked drafts, or close them when drafts already own focus",
       group: "Prompt",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusDrafts),
       when: () => document.querySelector("[data-desktop-region='prompt.draft']") !== null,
       disabledReason: "There are no drafts",
-      run: () => {
-        const toggle = document.querySelector<HTMLElement>(
-          "[data-desktop-collapse-toggle='draft']",
-        );
-        if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
-        requestAnimationFrame(() => workspace.focusRegion("prompt.draft"));
-      },
+      run: () => togglePendingRegion(workspace, "draft"),
     },
     {
       id: "conversation.toggleFollow",

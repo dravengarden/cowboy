@@ -41,11 +41,11 @@ import {
   desktopVimSinkShouldHandleKeys,
 } from "../desktopComposerOwnership";
 import {
+  handlePendingListKey,
   listPageTarget,
   listScroller,
   listScrollFor,
   listViewKey,
-  pendingItemActionKey,
 } from "./listNavigation";
 import {
   adjacentDesktopSplitter,
@@ -1192,32 +1192,17 @@ export function DesktopCommandProvider(
             }));
             return;
           }
-          if (pendingList && key.toLowerCase() === "o" && !event.repeat) {
-            event.preventDefault();
-            event.stopPropagation();
-            region.querySelector<HTMLElement>("[data-desktop-pending-list]")?.dispatchEvent(
-              new CustomEvent("cowboy:desktop-toggle-reorder"),
-            );
-            items[Math.max(0, active)]?.focus({ preventScroll: true });
-            return;
-          }
-          if (pendingList && reordering && key === "Escape") {
-            event.preventDefault();
-            event.stopPropagation();
-            region.querySelector<HTMLElement>("[data-desktop-pending-list]")?.dispatchEvent(
-              new CustomEvent("cowboy:desktop-release-reorder"),
-            );
-            return;
-          }
-          if (pendingList && reordering && (key === "j" || key === "k")) {
-            event.preventDefault();
-            event.stopPropagation();
-            items[Math.max(0, active)]?.dispatchEvent(new CustomEvent("cowboy:desktop-reorder", {
-              bubbles: true,
-              detail: { delta: key === "j" ? 1 : -1 },
-            }));
-            return;
-          }
+          if (
+            pendingList && region && handlePendingListKey({
+              event,
+              key,
+              region,
+              items,
+              active,
+              reordering,
+              focusComposer: () => workspace.focusRegion("prompt.composer"),
+            })
+          ) return;
           const rowEvent = sessionsList && !event.repeat
             ? SESSIONS_ROW_EVENTS[key.toLowerCase()]
             : undefined;
@@ -1283,20 +1268,6 @@ export function DesktopCommandProvider(
             items[next]?.focus({ preventScroll: true });
             items[next]?.scrollIntoView({ block: "nearest" });
             return;
-          }
-          if (pendingList && active >= 0) {
-            const pendingAction = pendingItemActionKey(key);
-            const action = pendingAction
-              ? items[active]?.querySelector<HTMLElement>(
-                `[data-desktop-item-action='${pendingAction}']`,
-              )
-              : null;
-            if (action) {
-              event.preventDefault();
-              event.stopPropagation();
-              action.click();
-              return;
-            }
           }
           const opensSession = region?.dataset.desktopRegion === "sessions.list" &&
             (key === "Enter" || key.toLowerCase() === "l");

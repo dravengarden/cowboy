@@ -2212,10 +2212,13 @@ export function PendingRow({
     onEditController(controller);
     return () => onEditController(null);
   }, [editing, onEditController]);
-  // Open after the initiating Escape has finished bubbling. Mounting MUI's
-  // Dialog synchronously inside that same key event lets its escape listener
-  // observe the trigger and immediately close the brand-new confirmation.
+  // Clean edits exit directly; dirty edits defer confirmation until after
+  // Escape finishes bubbling so MUI Dialog does not immediately close itself.
   const requestDiscardEdit = (): void => {
+    if (!latestEditTransactionRef.current?.dirty) {
+      discardEdit();
+      return;
+    }
     globalThis.requestAnimationFrame(() => setConfirmDiscardEdit(true));
   };
   useConfirmEnter(confirmDiscardEdit, discardEdit);

@@ -3351,3 +3351,14 @@ textarea stays the first responder. No extension, caret, selection, paste or
 IME behaviour changes, and it does not touch physical iPhone issue #69. Like
 any composer-adjacent change, physical iOS acceptance of the chip is still
 outstanding until checked on a device.
+
+### 2026-11-24 Filtered CM6 defaultKeymap chords (`composer/composerKeymap.ts`)
+
+`ComposerEditor` previously spread `@codemirror/commands`'s raw `defaultKeymap`,
+which binds `Mod-Enter` (`insertBlankLine`), `Mod-i` (`selectParentSyntax`),
+and `Shift-Mod-k` (`deleteLine`). On surfaces where Cowboy did not intercept a
+chord directly (such as Draft documents or row editors), those chords fell
+through to unexpected blank lines, syntax selection, or deleting the current
+line. `composerDefaultKeymap` filters out those three chords only; all other
+CM6 navigation, selection, history, IME, caret, and live-preview extensions are
+unchanged, and this does not affect physical iPhone issue #69.
