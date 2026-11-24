@@ -300,7 +300,7 @@ export async function readBoundedJson(
 }
 
 export async function scheduleNearestReset(
-  target: ServiceResetTarget,
+  target: UsageResetTarget,
   fireAtMs: number,
   confirm: string,
 ): Promise<void> {
@@ -313,7 +313,7 @@ export async function scheduleNearestReset(
 }
 
 export async function cancelNearestResetSchedule(
-  target: ServiceResetTarget,
+  target: UsageResetTarget,
 ): Promise<void> {
   const response = await fetch(`${resetEndpoint(target)}/schedule`, {
     method: "DELETE",

@@ -153,7 +153,8 @@ instead of an older release elsewhere. A cached placement refusal is no longer
 reported once a placement is possible again.
 
 **Named Codex resets.** A named Codex account spends a banked reset immediately
-(no schedules), like a named Claude account: typed `confirm`, the grant ID
+or on a schedule ([named reset schedules](#named-reset-schedules)), like a
+named Claude account: typed `confirm`, the grant ID
 pinned when the dialog opened, the shared Provider pacing (one collector
 start), and only `reset`/`already_used` as outcomes; anything else is unknown
 and never retried. It runs on the Machine the account's usage placement selects
@@ -169,7 +170,40 @@ at admission from the dispatch expiry, so a preceding usage read never blocks a
 manual reset and the Provider spacing holds whenever the Machine ran it. A
 success must name the confirmed grant; a refusal is unsent only with an explicit
 `started: false` and a pre-start code. Grok and DeepSeek named accounts have no
-resets.
+resets. While a card's own usage reports an available reset that cannot be
+spent, the usage read carries `reset_unavailable_reason` and its fixed
+`reset_unavailable_message` (for example `portable_reset_identity_required` for
+an adopted account that was never signed in through Cowboy), and the card shows
+the message instead of only hiding the action.
+
+### Named reset schedules
+
+The owner may schedule one reset of a named account that can spend a reset now
+(`PUT /api/provider-accounts/{account_id}/usage/reset/schedule` with
+`fire_at_ms` one minute to one year ahead and typed `confirm`; `DELETE`
+cancels; `usage.account_reset_schedule` / `usage.account_reset_cancel` in the
+Agent API). One row per owner and account
+(`provider_account_reset_schedules`) replaces the earlier schedule; the usage
+read reports it as `reset_schedule`. The timer looks every 15 seconds:
+
+- The schedule is bound to the sign-in it was created under (the account's
+  verified identity and admission revision). A new sign-in, a disabled or
+  revoking account, a disabled owner, or a fire more than an hour late (a
+  Controller that was down or rolled back) withdraws it unspent, logged as
+  `cancelled`.
+- It spends the nearest available grant of an observation at most two minutes
+  old; an older one is refreshed through the ordinary budgeted read first.
+- It is admitted exactly like a confirmed reset (route, account lock, Provider
+  starts). A paced admission moves the next attempt to the named time without
+  counting; any other refusal sent nothing and is retried a minute later, three
+  attempts in all, then logged `failed`.
+- Only after admission is the row deleted under its idempotency key (the
+  one-shot claim), before the audit row and the dispatch, so it fires at most
+  once even across a restart. After that it is never retried: an unknown
+  outcome is logged `unknown`, a refusal `failed`.
+
+The action log uses the account's lane (`account-<id>`, trigger `scheduled`).
+A cancellation never stops a reset the timer already claimed.
 
 Refresh-free usage needs a guarded declaration (`"token_refresh_guard"`):
 `refresh_endpoint_refused` (Codex 3.6.22) or `cli_not_started` (Grok 3.2.21).
@@ -289,8 +323,8 @@ the invocation ends, so the charged time is the actual call time. A scheduled
 reset reserves its start before any one-shot claim, so pacing only delays it. A refused or changed reset records no failure backoff; an
 authentication failure does.
 
-A named native Claude account's confirmed reset is immediate only (named
-accounts have no schedules) and runs on the Machine holding its native login,
+A named native Claude account's confirmed reset (or a
+[scheduled](#named-reset-schedules) one) runs on the Machine holding its native login,
 through the same signed collector, CLI identity and token as its quota read
 (Machine protocol 51, which enforces the reset's spacing; older Machines are
 never selected or dispatched to), on the exact release the Controller selected and never

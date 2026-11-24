@@ -3,11 +3,13 @@
 //! identity and token as the account's quota reads; the Controller never
 //! talks to the Provider. A reset is a synchronous, typed-confirmed request
 //! like the Service card's: it shares the Provider pacing, and an unknown
-//! outcome is reported as unknown and never retried. Named accounts have no
-//! scheduled resets. A named portable account (Codex) resets the same way on
-//! the Machine its usage runs on, only with an exact release whose collector
-//! declares a refresh-free reset (`portable`).
+//! outcome is reported as unknown and never retried. The owner may instead
+//! schedule one reset of the account (`schedule`), which the timer spends
+//! through the same admission. A named portable account (Codex) resets the
+//! same way on the Machine its usage runs on, only with an exact release
+//! whose collector declares a refresh-free reset (`portable`).
 mod portable;
+pub mod schedule;
 use super::*;
 use crate::machine_control::NativeResetFailure;
 use crate::usage::{ResetError, ResetResult};
@@ -117,21 +119,23 @@ async fn route(
     }
 }
 
-/// Whether the native login the read model resolved can spend a reset now.
-pub(super) fn supported_for(state: &AppState, resolved: &Resolved) -> bool {
+/// Whether the native login the read model resolved can spend a reset now,
+/// or why not.
+pub(super) fn supported_for(state: &AppState, resolved: &Resolved) -> Result<(), &'static str> {
     match resolved {
-        Resolved::Native(target) => native_route(state, (**target).clone()).is_ok(),
-        Resolved::Portable(_) => false,
+        Resolved::Native(target) => native_route(state, (**target).clone()).map(|_| ()),
+        Resolved::Portable(_) => Err("account_reset_unsupported"),
     }
 }
 
-/// Whether a portable account's resolved usage placement can spend a reset.
+/// Whether a portable account's resolved usage placement can spend a reset,
+/// or why not.
 pub fn supported_placed(
     state: &AppState,
     target: super::portable::Target,
     placed: super::portable::Placement,
-) -> bool {
-    portable::route_placed(state, target, placed).is_ok()
+) -> Result<(), &'static str> {
+    portable::route_placed(state, target, placed).map(|_| ())
 }
 
 fn unsent(code: &'static str) -> NativeResetFailure {
@@ -485,9 +489,25 @@ async fn owned(
         .ok_or("account_unavailable")
 }
 
+/// What started a reset: the owner's confirmation now, or their schedule.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Trigger {
+    Manual,
+    Scheduled,
+}
+
+impl Trigger {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Scheduled => "scheduled",
+        }
+    }
+}
+
 async fn log(
     store: &crate::store::Store,
-    (lane, key): (&str, &str),
+    (lane, key, trigger): (&str, &str, Trigger),
     (status, phase): (&str, &str),
     message: &str,
     credit_id: Option<&str>,
@@ -495,7 +515,7 @@ async fn log(
     let _ = store
         .append_provider_action_log(
             lane,
-            "manual",
+            trigger.as_str(),
             status,
             phase,
             message,
@@ -542,6 +562,77 @@ fn valid_credit_id(id: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b':'))
 }
 
+/// How one admitted spend ended, after its terminal action-log row.
+enum Spent {
+    /// The pre-dispatch audit row could not be written in time: nothing was
+    /// sent and the Provider start was released unused.
+    NotAudited,
+    Done(ResetResult),
+    Failed(ResetError),
+}
+
+/// Spend an admitted reset of exactly `expected` under `key`: the audit row
+/// first (bounded so it never holds the Provider permit past the dispatch
+/// window), then the dispatch, then its terminal row. The caller owns
+/// whatever runs this to completion; an unknown outcome is never retried.
+async fn spend(
+    state: &Arc<AppState>,
+    store: &crate::store::Store,
+    (owner, id): (&str, &ProviderAccountId),
+    admitted: Admitted,
+    (key, trigger): (&str, Trigger),
+    expected: &str,
+) -> Spent {
+    let lane = lane(id);
+    let row = (lane.as_str(), key, trigger);
+    let started = match trigger {
+        Trigger::Manual => "Manual reset attempt started",
+        Trigger::Scheduled => "Scheduled reset attempt started",
+    };
+    let bound = audit_bound(admitted.expires_at_ms, now_ms());
+    let audited = tokio::time::timeout(
+        bound,
+        log(
+            store,
+            row,
+            ("started", "preflight"),
+            started,
+            Some(expected),
+        ),
+    )
+    .await;
+    if audited.is_err() {
+        admitted
+            .permit
+            .finish(crate::usage::limiter::Outcome::Unused, now_ms());
+        return Spent::NotAudited;
+    }
+    match consume(state, owner, id, admitted, key, expected).await {
+        Ok(result) => {
+            let phase = ("succeeded", "provider_response");
+            log(
+                store,
+                row,
+                phase,
+                &result.outcome,
+                result.credit_id.as_deref(),
+            )
+            .await;
+            Spent::Done(result)
+        }
+        Err(error) => {
+            let phase = if error.call_may_have_reached_provider {
+                ("unknown", "consume")
+            } else {
+                ("failed", "preflight")
+            };
+            let message = error.to_string();
+            log(store, row, phase, &message, error.credit_id.as_deref()).await;
+            Spent::Failed(error)
+        }
+    }
+}
+
 /// `POST /api/provider-accounts/{account_id}/usage/reset`: spend the
 /// confirmed grant now. Requires the typed `confirm` confirmation and the
 /// confirmed `expected_credit_id`. Synchronous for the caller; the admitted
@@ -575,70 +666,38 @@ pub async fn http_reset(
         Err(code) => return refusal(code),
     };
     let task = tokio::spawn(async move {
-        let (lane, key) = (lane(&id), new_reset_idempotency_key());
+        let key = new_reset_idempotency_key();
         let expected = request.expected_credit_id;
-        let row = (lane.as_str(), key.as_str());
-        let started = ("started", "preflight");
-        // The audit row precedes the spend but never holds the Provider
-        // permit past the dispatch window: a stuck insert settles unsent.
-        let bound = audit_bound(admitted.expires_at_ms, now_ms());
-        let audited = tokio::time::timeout(
-            bound,
-            log(
-                &store,
-                row,
-                started,
-                "Manual reset attempt started",
-                Some(&expected),
-            ),
+        let spent = spend(
+            &state,
+            &store,
+            (&owner, &id),
+            admitted,
+            (&key, Trigger::Manual),
+            &expected,
         )
         .await;
-        if audited.is_err() {
-            admitted
-                .permit
-                .finish(crate::usage::limiter::Outcome::Unused, now_ms());
-            let body = json!({"error":{"code":"reset_failed",
-                "message":error_message("unavailable"),"credit_id":null}});
-            return Ok((StatusCode::CONFLICT, Json(body)).into_response());
-        }
-        let result = consume(&state, &owner, &id, admitted, &key, &expected).await;
-        Ok::<_, &'static str>(match result {
-            Ok(result) => {
-                let phase = ("succeeded", "provider_response");
-                log(
-                    &store,
-                    row,
-                    phase,
-                    &result.outcome,
-                    result.credit_id.as_deref(),
-                )
-                .await;
-                Json(result).into_response()
-            }
-            Err(error) => {
-                let (status, phase, code) = if error.call_may_have_reached_provider {
-                    ("unknown", "consume", "reset_outcome_unknown")
-                } else {
-                    ("failed", "preflight", "reset_failed")
-                };
-                let message = error.to_string();
-                log(
-                    &store,
-                    row,
-                    (status, phase),
-                    &message,
-                    error.credit_id.as_deref(),
-                )
-                .await;
-                let body =
-                    json!({"error":{"code":code,"message":message,"credit_id":error.credit_id}});
+        match spent {
+            Spent::NotAudited => {
+                let body = json!({"error":{"code":"reset_failed",
+                    "message":error_message("unavailable"),"credit_id":null}});
                 (StatusCode::CONFLICT, Json(body)).into_response()
             }
-        })
+            Spent::Done(result) => Json(result).into_response(),
+            Spent::Failed(error) => {
+                let code = if error.call_may_have_reached_provider {
+                    "reset_outcome_unknown"
+                } else {
+                    "reset_failed"
+                };
+                let body = json!({"error":{"code":code,"message":error.to_string(),
+                    "credit_id":error.credit_id}});
+                (StatusCode::CONFLICT, Json(body)).into_response()
+            }
+        }
     });
     match task.await {
-        Ok(Ok(response)) => response,
-        Ok(Err(code)) => refusal(code),
+        Ok(response) => response,
         // The spend task itself failed: its outcome is unknown.
         Err(_) => (
             StatusCode::CONFLICT,

@@ -3,7 +3,7 @@ import { assertEquals } from "../../tools/test-assert.ts";
 import type { SessionMeta } from "./protocol";
 import { applyUsageHostPlugins, type UsageSnapshot, usageLimits } from "./usageLimits";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
-import { displayPlan, orderUsageAccounts, registeredUsageAccounts, sessionAccountQuota, usageCardManageUrl, usageResetTarget } from "./usageAccounts";
+import { displayPlan, orderUsageAccounts, registeredUsageAccounts, sessionAccountQuota, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageResetUnavailableMessage } from "./usageAccounts";
 import { loadProviderCatalog, resetProviderCatalog } from "./providerCatalogRegistry";
 import { providerUiManifestFixture } from "./providerUiContract.fixture";
 
@@ -282,6 +282,32 @@ test("named resets appear only where the Service can spend them", () => {
     { ...observation("pika", "codex", "openai", true), resets_supported: undefined },
   ]);
   assertEquals(usageResetTarget(older.find((card) => card.id === "pika")!), undefined);
+});
+
+test("a card with an available reset it cannot spend says why, and shows its schedule", () => {
+  applyUsageHostPlugins([{ id: "codex", usage: { account: "openai", product: "OpenAI", order: 1, reset: "codex" } }]);
+  const accounts: SubscriptionSnapshot = { ...registry, registry: { revision: 1, defaults: {}, accounts: [
+    { id: "pika", provider_id: "codex", label: "OpenAI · Pika", enabled: true },
+  ] } };
+  const message = "Sign in to this account again before using its resets.";
+  const observation = (credits: unknown[], extra: Record<string, unknown>) => ({
+    account_id: "pika", provider_id: "codex", available: true, refreshing: false,
+    usage: { provider: "openai", status: "available", source: "openai", observed_at_ms: 300,
+      rate_limits: { rateLimitResetCredits: { availableCount: credits.length, credits } } },
+    ...extra,
+  });
+  const card = (credits: unknown[], extra: Record<string, unknown>) =>
+    registeredUsageAccounts(snapshot, accounts, [], [observation(credits, extra)])[0]!;
+  const available = [{ id: "credit-1", status: "available" }];
+  const blocked = { resets_supported: false, reset_unavailable_reason: "portable_reset_identity_required",
+    reset_unavailable_message: message };
+  assertEquals(usageResetUnavailableMessage(card(available, blocked)), message);
+  // No available credit, or a spendable one: nothing to explain.
+  assertEquals(usageResetUnavailableMessage(card([{ id: "credit-1", status: "used" }], blocked)), undefined);
+  assertEquals(usageResetUnavailableMessage(card(available, { resets_supported: true })), undefined);
+  // The account's own schedule, only in its exact shape.
+  assertEquals(usageCardResetSchedule(card(available, { reset_schedule: { fire_at_ms: 42 } })), { fire_at_ms: 42 });
+  assertEquals(usageCardResetSchedule(card(available, {})), undefined);
 });
 
 test("retired-default providers keep product order, host labels, and renewal status without snapshot entries", () => {

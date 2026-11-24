@@ -22,6 +22,16 @@ pub(super) fn account_route(
             "/api/provider-accounts/{account}/usage/reset",
             post(web::provider_accounts::usage::reset::http_reset),
         ),
+        "usage.account_reset_schedule" => (
+            "PUT",
+            "/api/provider-accounts/{account}/usage/reset/schedule",
+            put(web::provider_accounts::usage::reset::schedule::http_schedule),
+        ),
+        "usage.account_reset_cancel" => (
+            "DELETE",
+            "/api/provider-accounts/{account}/usage/reset/schedule",
+            delete(web::provider_accounts::usage::reset::schedule::http_cancel),
+        ),
         "sessions.acknowledge_uncertain_effect" => (
             "POST",
             "/api/sessions/{session_id}/uncertain-effect/acknowledge",

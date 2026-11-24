@@ -460,8 +460,10 @@ broadcasts. Collection is serial and independent of session workers, including
 while all sessions are asleep.
 
 A named Claude card shows its credits, prepaid balance, plan tier and manage
-link, and, when its own usage reports reset credits, an immediate reset only
-(no schedules): `POST /api/provider-accounts/{account_id}/usage/reset` (typed
+link, and, when its own usage reports reset credits, an immediate or scheduled
+reset ([named reset schedules](usage-execution.md#named-reset-schedules),
+`usage.account_reset_schedule` / `usage.account_reset_cancel`):
+`POST /api/provider-accounts/{account_id}/usage/reset` (typed
 `confirm` and the confirmed `expected_credit_id`) or
 `control.apply("usage.account_reset", {account:account_id,...})`. Admission is
 the quota read's (owner, binding, identity, enabled account), but only logins on

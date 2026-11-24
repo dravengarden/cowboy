@@ -59,7 +59,7 @@ import { ClientStorageInfoSection, ServiceStorageInfoSection } from "./InfoRunti
 import { SessionMaintenancePanel } from "./SessionMaintenancePanel";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { AccountBrowserEntry } from "./machineBrowser/AccountBrowserEntry";
-import { displayPlan, orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageResetTarget } from "./usageAccounts";
+import { displayPlan, orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageResetUnavailableMessage } from "./usageAccounts";
 import { UsageResetActions, UsageResetFields, useUsageResetFlow } from "./UsageResetFlow";
 import { useProviderCatalog } from "./providerCatalog";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
@@ -141,7 +141,7 @@ function ProviderUsageCard({ account, usage, schedule, now, onUsageChanged, onRe
   );
 }
 
-function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsageChanged, onRefresh, refreshing, children, action }: {
+function ProviderUsageCardBody({ account: identity, usage, schedule: serviceSchedule, now, onUsageChanged, onRefresh, refreshing, children, action }: {
   account: UsageAccountCard;
   children?: React.ReactNode;
   action?: React.ReactNode;
@@ -202,6 +202,8 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
   const nearestCredit = nearestAvailableResetCredit(usage);
   const nearestCreditId = str(nearestCredit?.id);
   const resetTarget = usageResetTarget(identity);
+  const schedule = serviceSchedule ?? usageCardResetSchedule(identity);
+  const resetUnavailable = usageResetUnavailableMessage(identity);
   const manageUrl = usageCardManageUrl(identity);
   const reset = useUsageResetFlow(resetTarget, nearestCreditId, onUsageChanged);
   const summary = record(usage.activity?.summary);
@@ -473,6 +475,11 @@ function ProviderUsageCardBody({ account: identity, usage, schedule, now, onUsag
               )}
             </AccordionDetails>
           </Accordion>
+        )}
+        {resetUnavailable !== undefined && (
+          <Typography variant="caption" color="text.secondary" data-reset-unavailable>
+            {resetUnavailable}
+          </Typography>
         )}
         {manageUrl !== undefined && (
           <Button

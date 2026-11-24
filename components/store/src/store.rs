@@ -38,6 +38,8 @@ use sqlx::Row as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
 pub mod account_controls;
+pub mod account_reset_schedules;
+pub use account_reset_schedules::AccountResetSchedule;
 pub mod agent_api_operations;
 mod browser_devices;
 mod cardea_operations;
