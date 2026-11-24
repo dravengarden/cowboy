@@ -153,7 +153,9 @@ impl BrowserManager {
                 }
             }
         }
-        if snapshot_due && !instance.copy_running() {
+        // No periodic copy begins once the graceful stop ahead of the cap is
+        // due: that stop makes its own, and a copy would put it off.
+        if snapshot_due && !instance.copy_running() && now < instance.graceful_deadline() {
             // The copy runs as its own job; a failure waits a full interval.
             instance.live.lock().last_periodic = now;
             self.spawn_snapshot(instance);
