@@ -1145,3 +1145,55 @@ test("R4-M3: hung start registration hits bounded startWaitMs phase and reports 
   assert.deepEqual(uncertainCalls, ["process/start"]);
   hungStart.resolve();
 });
+
+test("R5-M4: endTurn stops known commands concurrently with bounded start-timeout UNCERTAIN_REPORT", async () => {
+  const hungStart = deferred();
+  const events = [];
+  const conn = makeFakeConnection({
+    [UNCERTAIN_REPORT]: async (params) => {
+      events.push(`report:${params.method}`);
+      await new Promise((r) => setTimeout(r, 40));
+      return {};
+    },
+    "process/terminate": async (params) => {
+      events.push(`terminate:${params.processId}`);
+      return {};
+    },
+    "process/read": async () => ({ chunks: [], exited: true, closed: true }),
+  });
+  const facade = new Facade(conn, { root: "/work/repo", shell: "/bin/sh" });
+  facade.startWaitMs = 30;
+  facade.stopConfirmMs = 200;
+  facade.beginTurn("s-conc", { wrapUp: { pending: false, delivered: false } });
+  const session = facade.sessions.get("s-conc");
+  session.turn.inflight.add(hungStart.promise);
+  session.commands.set("cmd-known", { processId: "cmd-known", timer: undefined, cleaning: 0 });
+
+  await facade.endTurn("s-conc", { cancelled: true, errored: false });
+  assert.ok(events.includes("report:process/start"));
+  assert.ok(events.includes("terminate:cmd-known"));
+  assert.equal(session.commands.size, 0);
+  hungStart.resolve();
+});
+
+test("R5-M5: settleExit({ force: true }) finalizes unfinalized prompt on normal child exit timeout", async () => {
+  const sentToClient = [];
+  const proxy = new AcpProxy({
+    agent: () => {},
+    client: (msg) => sentToClient.push(msg),
+    runtime: Promise.resolve({ managed: false }),
+    log: () => {},
+  });
+  proxy.settling.set(88, {
+    id: 88,
+    method: "session/prompt",
+    sessionId: "s-timeout",
+    finalized: false,
+  });
+  assert.equal(proxy.killed, undefined);
+  assert.equal(proxy.hasOpenPrompts(), true);
+  proxy.settleExit({ force: true });
+  assert.equal(proxy.hasOpenPrompts(), false);
+  const reply = sentToClient.find((m) => m.id === 88);
+  assert.ok(reply?.error, "must emit explicit terminal error instead of bare EOF");
+});

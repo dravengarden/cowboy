@@ -408,6 +408,8 @@ struct Broker {
     launching: Mutex<HashSet<String>>,
     awaiting_reconnect: Mutex<HashSet<String>>,
     cancelled_sessions: Mutex<HashSet<String>>,
+    permanently_deleted_sessions: Mutex<HashSet<String>>,
+    dispatched_prompts: Mutex<wrap_up::DispatchedPrompts>,
     pending_core_commands: Mutex<HashMap<String, usize>>,
     /// Account stops must not be undone by ordinary reset or hibernation.
     /// Cache only; the auth store retains stop intent across resident restarts.
@@ -543,6 +545,8 @@ impl Broker {
             launching: Mutex::new(HashSet::new()),
             awaiting_reconnect: Mutex::new(HashSet::new()),
             cancelled_sessions: Mutex::new(HashSet::new()),
+            permanently_deleted_sessions: Mutex::new(HashSet::new()),
+            dispatched_prompts: Mutex::new(wrap_up::DispatchedPrompts::default()),
             pending_core_commands: Mutex::new(HashMap::new()),
             account_quiesced_sessions: Mutex::new(HashSet::new()),
             deletion_journal: Mutex::new(None),
@@ -1402,6 +1406,9 @@ impl Broker {
 
     fn attach_deletion_journal(&self, journal: deletions::Journal) {
         self.cancelled_sessions
+            .lock()
+            .extend(journal.deleted().iter().cloned());
+        self.permanently_deleted_sessions
             .lock()
             .extend(journal.deleted().iter().cloned());
         *self.deletion_journal.lock() = Some(journal);
@@ -4326,7 +4333,14 @@ async fn handle_core(
                 Frame::CoreCommand {
                     command: CoreCommand::WrapUpHint { session_id, target },
                 } => broker.handle_wrap_up_hint(lease, &session_id, &target),
-                Frame::CoreCommand { command } => {
+                Frame::CoreCommand { mut command } => {
+                    let ctrl_proto = broker
+                        .controller
+                        .lock()
+                        .as_ref()
+                        .filter(|c| c.lease == lease)
+                        .map_or(0, |c| c.protocol);
+                    wrap_up::normalize_ingress_prompt(ctrl_proto, &mut command);
                     wrap_up::enqueue_core_command(&broker, &command_tx, command)?;
                 }
                 Frame::Ack {
@@ -4686,6 +4700,10 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                 // continuation write below.
                 let mut cancelled = broker.cancelled_sessions.lock();
                 cancelled.insert(session_id.clone());
+                broker
+                    .permanently_deleted_sessions
+                    .lock()
+                    .insert(session_id.clone());
                 broker.clear_generation_failures_for_session(&session_id);
                 broker.sessions.lock().remove(&session_id);
                 broker.awaiting_reconnect.lock().remove(&session_id);
@@ -4864,15 +4882,23 @@ async fn handle_worker(
             } if event_session == session_id && worker_epoch == epoch => {
                 let cancelled = broker.cancelled_sessions.lock();
                 if cancelled.contains(session_id) {
-                    // During reset_session with a connected Controller, forward
-                    // every event of the departing epoch contiguously so
-                    // runtime_seq stays unbroken while Controller suppresses
-                    // projection via `resetting` and observes uncertainty.
-                    let forward_departing =
-                        wrap_up::is_departing_cleanup_epoch(&broker, session_id, &worker_epoch)
-                            && broker.controller.lock().is_some();
+                    let permanently_deleted = broker
+                        .permanently_deleted_sessions
+                        .lock()
+                        .contains(session_id);
                     drop(cancelled);
-                    if forward_departing {
+                    if permanently_deleted {
+                        broker.acknowledge_worker_event(
+                            session_id,
+                            connection_id,
+                            worker_epoch,
+                            runtime_seq,
+                        );
+                    } else {
+                        // Reserve local ACKs strictly for permanent deletion so
+                        // temporary cancellations (reset, hibernation, account
+                        // quiesce, or Controller disconnect during reset) never
+                        // advance `acked_runtime_seq` past unseen events.
                         broker.send_controller(Frame::WorkerEvent {
                             session_id: event_session,
                             worker_epoch,
@@ -4880,13 +4906,6 @@ async fn handle_worker(
                             event,
                             diagnostics,
                         });
-                    } else {
-                        broker.acknowledge_worker_event(
-                            session_id,
-                            connection_id,
-                            worker_epoch,
-                            runtime_seq,
-                        );
                     }
                     continue;
                 }
@@ -9429,6 +9448,10 @@ mod tests {
             .cancelled_sessions
             .lock()
             .insert("sess-deleted-final-event".to_owned());
+        broker
+            .permanently_deleted_sessions
+            .lock()
+            .insert("sess-deleted-final-event".to_owned());
 
         let (mut worker_stream, broker_stream) = UnixStream::pair().expect("worker socket pair");
         let (mut broker_reader, _broker_writer) = broker_stream.into_split();
@@ -9481,6 +9504,98 @@ mod tests {
                 && worker_epoch == "epoch-deleted-final-event"
         ));
         assert!(broker.current_controller().is_none());
+
+        drop(worker_stream);
+        worker_task
+            .await
+            .expect("worker reader task")
+            .expect("worker reader result");
+    }
+
+    #[tokio::test]
+    async fn resetting_worker_event_is_not_locally_acked_without_controller() {
+        let broker = Arc::new(Broker::new(MachineBrokerArgs {
+            socket: PathBuf::from("/tmp/unused.sock"),
+            worker_command: PathBuf::from("/bin/false"),
+            desired_generation: "gen-1".to_owned(),
+            spawn_mode: SpawnMode::Direct,
+            worker_environment: BTreeMap::new(),
+            provider_store: test_provider_store(),
+            worktree_root: PathBuf::from("/tmp/unused-worktrees").into(),
+            worker_ready_timeout: Duration::from_millis(100),
+            call_context_root: None,
+            memory_relay: None,
+        }));
+        let (peer_tx, mut peer_rx) = mpsc::unbounded_channel();
+        broker
+            .register_worker(WorkerRegistration {
+                session_id: "sess-reset-no-ctrl".to_owned(),
+                epoch: "epoch-reset-no-ctrl".to_owned(),
+                generation: "gen-1".to_owned(),
+                executable: Some("/bin/false".to_owned()),
+                fallback_for: None,
+                connection_id: 12,
+                tx: peer_tx,
+            })
+            .expect("register worker before reset");
+        broker
+            .cancelled_sessions
+            .lock()
+            .insert("sess-reset-no-ctrl".to_owned());
+
+        let (mut worker_stream, broker_stream) = UnixStream::pair().expect("worker socket pair");
+        let (mut broker_reader, _broker_writer) = broker_stream.into_split();
+        let task_broker = Arc::clone(&broker);
+        let worker_task = tokio::spawn(async move {
+            let observed = task_broker.liveness.connect(
+                "sess-reset-no-ctrl",
+                12,
+                "epoch-reset-no-ctrl",
+                None,
+                None,
+            );
+            handle_worker(
+                task_broker,
+                12,
+                "sess-reset-no-ctrl",
+                "epoch-reset-no-ctrl",
+                &mut broker_reader,
+                &observed,
+            )
+            .await
+        });
+        write_frame(
+            &mut worker_stream,
+            &Frame::WorkerEvent {
+                session_id: "sess-reset-no-ctrl".to_owned(),
+                diagnostics: Vec::new(),
+                worker_epoch: "epoch-reset-no-ctrl".to_owned(),
+                runtime_seq: 9,
+                event: RuntimeEvent::Status {
+                    state: WorkerState::Exited,
+                    detail: None,
+                },
+            },
+        )
+        .await
+        .expect("send worker event during reset");
+
+        // Must NOT synthesize a local ACK when not permanently deleted so
+        // `acked_runtime_seq` remains 0 for contiguous replay on reconnect.
+        assert!(
+            tokio::time::timeout(Duration::from_millis(150), peer_rx.recv())
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            broker
+                .workers
+                .lock()
+                .get("sess-reset-no-ctrl")
+                .expect("worker present")
+                .acked_runtime_seq,
+            0
+        );
 
         drop(worker_stream);
         worker_task

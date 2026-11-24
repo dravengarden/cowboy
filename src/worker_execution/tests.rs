@@ -1797,3 +1797,48 @@ async fn sigterm_cutoff_persists_pending_filesystem_mutation_for_reopen() {
     assert_eq!(reopened.uncertain_effect().as_deref(), Some("request"));
     assert!(reopened.uncertain_sequence() > 0);
 }
+
+#[tokio::test]
+async fn lost_mutation_records_uncertainty_before_finish_turn_wakes() {
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "fs/writeFile" => Reply::Hold,
+        _ => completed(json!({"result": {}})),
+    }));
+    let ledger = ledger(&target.client, None);
+    let observed = Arc::new(Mutex::new(Vec::<(String, u64)>::new()));
+    let observed_ref = Arc::clone(&observed);
+    ledger.set_observer(Box::new(move |method, seq| {
+        observed_ref.lock().push((method.to_owned(), seq));
+    }));
+    ledger.begin_turn("turn-1");
+    let client = Arc::clone(&target.client);
+    let write_task = tokio::spawn(async move {
+        client
+            .relay(
+                "fs/writeFile".into(),
+                json!({"path": "/tmp/x", "contentBase64": ""}),
+            )
+            .await
+    });
+    eventually(|| !target.held.lock().is_empty()).await;
+    let settle = target
+        .client
+        .finish_turn("turn-1")
+        .expect("finish_turn must wait for admitted fs/writeFile");
+
+    // Simulate lost reply after admission (`fail_pending` / `RuntimeReply` error).
+    let req = target.held.lock().pop().unwrap();
+    target.client.complete(RuntimeReply {
+        session_id: req.session_id,
+        worker_epoch: req.worker_epoch,
+        request_id: req.request_id,
+        scope: Scope::from_binding(&req.binding),
+        response: MachineResponse::Closed,
+    });
+    settle.await;
+    // The instant `finish_turn` resolves, uncertainty MUST already be recorded & observed!
+    assert_eq!(ledger.uncertain_effect().as_deref(), Some("fs/writeFile"));
+    assert!(ledger.uncertain_sequence() > 0);
+    assert_eq!(observed.lock().len(), 1);
+    let _ = write_task.await.unwrap();
+}

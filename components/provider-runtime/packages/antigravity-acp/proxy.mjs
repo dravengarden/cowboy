@@ -1278,9 +1278,19 @@ export class AcpProxy {
    * refusal, a lost effect, else an unproven outcome), so the Controller still
    * receives the account's signal. Another exit changes nothing.
    */
-  settleExit() {
+  hasOpenPrompts() {
+    if (this.settling.size > 0) return true;
+    for (const record of this.pending.values()) {
+      if (record.method === "session/prompt" && !record.internal && !record.finalized) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  settleExit({ force = false } = {}) {
     this.beginShutdown();
-    if (this.killed === undefined) return;
+    if (this.killed === undefined && !force) return;
     // Rows first: the worker must see every child end before the parent does.
     this.subagents.exited();
     const open = [

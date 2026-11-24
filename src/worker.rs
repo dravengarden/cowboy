@@ -463,16 +463,19 @@ pub async fn run_until_terminated(args: WorkerArgs) -> Result<()> {
         _ = terminate.recv() => {
             tracing::info!(event_name = "cowboy.worker.terminated", %session, "worker received SIGTERM; settling execution ledger");
             let _ = sigterm_tx.send(());
-            match tokio::time::timeout(Duration::from_secs(13), &mut worker).await {
+            let result = match tokio::time::timeout(Duration::from_secs(13), &mut worker).await {
                 Ok(result) => result,
                 Err(_) => {
-                    if let Some(ledger) = ledger_slot.lock().clone() {
-                        ledger.mark_unresolved_effects_uncertain();
-                    }
                     tracing::warn!(event_name = "cowboy.worker.terminated_timeout", %session, "worker SIGTERM settlement bound reached; durable ledger retains remaining obligations");
                     Ok(())
                 }
+            };
+            // Finalize unresolved effects on EVERY exit path after SIGTERM
+            // (including broker rejection errors before deadline). No-op when clean.
+            if let Some(ledger) = ledger_slot.lock().clone() {
+                ledger.mark_unresolved_effects_uncertain();
             }
+            result
         }
     }
 }

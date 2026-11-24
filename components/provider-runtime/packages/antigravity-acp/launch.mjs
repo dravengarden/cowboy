@@ -498,6 +498,7 @@ export async function runProxy({
   // without waiting for stdout EOF (`close`).
   agy.once("exit", () => {
     proxy.beginShutdown();
+    readyRuntime?.evidence?.markExited?.();
     readyRuntime?.server.close();
     readyRuntime?.facade.quiesce();
   });
@@ -526,10 +527,11 @@ export async function runProxy({
   ready?.server.close();
   // Drain in-flight facade work and execution replies BEFORE publishing exit
   // replies so any uncertainty from `attemptCleanup` settles ahead of TurnEnd.
+  ready?.evidence?.markExited?.();
   ready?.facade.quiesce();
   const settledOk = await ready?.facade.settled(DRAIN_MS);
   if (ready && !settledOk) {
-    await ready.facade.reportUnsettledOnTimeout();
+    await ready.facade.reportUnsettledOnTimeout(2000);
   }
   if (ready) {
     const flushBudgetMs = settledOk
@@ -541,9 +543,10 @@ export async function runProxy({
     }
   }
   // Join any buffered terminal `fromAgent` replies through `endPrompt` before fallback exit.
-  await proxy.settleAgentHandlers(DRAIN_MS);
-  // Now answer any remaining open prompt with settled signals (and open-command uncertainty).
-  proxy.settleExit();
+  const handlersSettled = await proxy.settleAgentHandlers(DRAIN_MS);
+  // Always finalize any remaining open/settling prompt before exit so the worker
+  // never sees bare EOF instead of a terminal reply.
+  proxy.settleExit({ force: !handlersSettled || proxy.hasOpenPrompts() });
   if (
     !output.destroyed &&
     output.writable !== false &&

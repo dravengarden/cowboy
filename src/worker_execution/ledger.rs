@@ -1023,10 +1023,10 @@ impl Client {
         };
         let result_carrying = self.carries_result(&method, &params);
         let result = self.invoke_classified(method.clone(), params).await;
-        if let Some(admitted) = &admitted {
-            ledger.settled(admitted, start.as_deref());
-        }
-        match result {
+        // Record start/closure/uncertainty BEFORE calling `ledger.settled` so
+        // `finish_turn` can never observe `drained == true` and emit `TurnEnded`
+        // ahead of durable uncertainty publication.
+        let response = match result {
             Ok(reply) => {
                 if let Some(process) = &process {
                     if let (Some(_), Some(generation)) = (&start, start_gen) {
@@ -1047,20 +1047,25 @@ impl Client {
                 }
                 reply
             }
-            Err(admitted) => {
-                if !admitted {
+            Err(was_admitted) => {
+                if !was_admitted {
                     // Refused before it was sent: nothing can have happened.
                     if let (Some(process), Some(generation)) = (&start, start_gen) {
                         ledger.closed_gen(process, generation);
                     }
-                    return refused("Execution unavailable; the request was not sent");
+                    refused("Execution unavailable; the request was not sent")
+                } else {
+                    if effectful(&method) || result_carrying {
+                        ledger.mark_uncertain(&method);
+                    }
+                    unavailable()
                 }
-                if effectful(&method) || result_carrying {
-                    ledger.mark_uncertain(&method);
-                }
-                unavailable()
             }
+        };
+        if let Some(admitted) = &admitted {
+            ledger.settled(admitted, start.as_deref());
         }
+        response
     }
 
     /// Whether a lost reply of this request hides a result the agent acts

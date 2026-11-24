@@ -718,5 +718,117 @@ mod tests {
             version,
             &mut retry,
         ));
+        assert!(!runtime.shared.pending.lock().contains_key("cmd-bind"));
+        let info = runtime.shared.hub.session_info("s-bind").unwrap();
+        assert_eq!(info.queue_count, 0);
+        assert_eq!(info.drafts_count, 1);
+    }
+
+    #[tokio::test]
+    async fn unbound_attempted_prompt_and_delivery_ambiguous_ack_park_draft_without_requeue() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s-unbound".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "s-unbound".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        let runtime = super::super::RemoteRuntime::for_test(hub, Vec::new());
+
+        // First send occurred while no worker snapshot existed -> expected_worker_epoch = None.
+        let unbound_cmd = CoreCommand::Prompt {
+            session_id: "s-unbound".into(),
+            command_id: "cmd-unbound".into(),
+            turn_id: "turn-u".into(),
+            content: vec![serde_json::json!({"type": "text", "text": "do not replay"})],
+            cmid: Some("cmid-u".into()),
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            expected_worker_epoch: None,
+            acknowledged_uncertain_sequence: Some(0),
+        };
+        let version = runtime
+            .shared
+            .pending
+            .lock()
+            .insert("cmd-unbound".into(), unbound_cmd.clone());
+        runtime
+            .shared
+            .attempted_sends
+            .lock()
+            .insert("cmd-unbound".into());
+        let mut w_new = busy_snapshot("s-unbound", "epoch-replacement", true);
+        w_new.state = WorkerState::Running;
+        w_new.current_turn_id = None;
+        runtime
+            .shared
+            .workers
+            .lock()
+            .insert("s-unbound".into(), w_new);
+
+        let mut retry = unbound_cmd;
+        assert!(!super::super::config_sync::prepare_prompt_for_send(
+            &runtime.shared,
+            "cmd-unbound",
+            version,
+            &mut retry,
+        ));
+        assert!(!runtime.shared.pending.lock().contains_key("cmd-unbound"));
+        let info = runtime.shared.hub.session_info("s-unbound").unwrap();
+        assert_eq!(info.queue_count, 0);
+        assert_eq!(info.drafts_count, 1);
+
+        // `delivery_ambiguous:` CommandAck parks a draft without requeuing.
+        let amb_cmd = CoreCommand::Prompt {
+            session_id: "s-unbound".into(),
+            command_id: "cmd-amb".into(),
+            turn_id: "turn-a".into(),
+            content: vec![serde_json::json!({"type": "text", "text": "ambiguous prompt"})],
+            cmid: Some("cmid-a".into()),
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            expected_worker_epoch: Some("epoch-old".into()),
+            acknowledged_uncertain_sequence: Some(0),
+        };
+        super::super::notice_recovery::handle_rejected_ack(
+            &runtime.shared,
+            "s-unbound",
+            "cmd-amb",
+            Some(amb_cmd),
+            false,
+            Some("delivery_ambiguous: original worker changed after prompt handoff".into()),
+        );
+        let info2 = runtime.shared.hub.session_info("s-unbound").unwrap();
+        assert_eq!(info2.queue_count, 0);
+        assert_eq!(info2.drafts_count, 2);
+
+        // `unhanded:` CommandAck safely requeues back into Hub queue.
+        let unhanded_cmd = CoreCommand::Prompt {
+            session_id: "s-unbound".into(),
+            command_id: "cmd-unhanded".into(),
+            turn_id: "turn-uh".into(),
+            content: vec![serde_json::json!({"type": "text", "text": "safe requeue"})],
+            cmid: Some("cmid-uh".into()),
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            expected_worker_epoch: Some("epoch-old".into()),
+            acknowledged_uncertain_sequence: Some(0),
+        };
+        super::super::notice_recovery::handle_rejected_ack(
+            &runtime.shared,
+            "s-unbound",
+            "cmd-unhanded",
+            Some(unhanded_cmd),
+            false,
+            Some("unhanded: worker epoch changed before prompt admission".into()),
+        );
+        let info3 = runtime.shared.hub.session_info("s-unbound").unwrap();
+        assert_eq!(info3.queue_count, 1);
+        assert_eq!(info3.drafts_count, 2);
     }
 }

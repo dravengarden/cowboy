@@ -142,10 +142,8 @@ pub(super) async fn settle(execution: Arc<Client>) {
             pending,
             "target processes remain; the keeper's reap is the backstop"
         );
-        if pending > 0
-            && let Some(ledger) = execution.ledger()
-        {
-            ledger.mark_termination_uncertain();
+        if let Some(ledger) = execution.ledger() {
+            ledger.mark_unresolved_effects_uncertain();
         }
     }
 }

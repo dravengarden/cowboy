@@ -352,11 +352,13 @@ export class Facade {
           }
           for (const work of pending) awaited.add(work);
         }
-        if (isRoot && inflightTimedOut) {
-          if (turn) this.fenceLost(turn, "process/start");
-          await this.connection.call(UNCERTAIN_REPORT, { method: "process/start" }).catch(() => {});
-          this.onUncertain(sessionId, "process/start");
-        }
+        // Run start-timeout uncertainty reporting CONCURRENTLY with stopping
+        // known commands under a strict 3s request timeout so reporting can
+        // never starve termination or wait 185s on a wedged transport.
+        const startReport =
+          isRoot && inflightTimedOut
+            ? this.reportUncertainBounded(sessionId, turn, "process/start", 3000)
+            : Promise.resolve();
         const commands = [...session.commands.values()];
         if (deadlineEntry) {
           if (commands.length > 0) {
@@ -365,13 +367,10 @@ export class Facade {
             this.rootCleanupDeadlines.delete(deadlineEntry);
           }
         }
-        // Root sessions always wait the full `stopConfirmMs` window (native
-        // `session/cancel` is already forwarded before this awaits) and park via
-        // `UNCERTAIN_REPORT` if any root command still fails to confirm exit,
-        // even while shutdown drain is active.
         let anyUnconfirmed = false;
-        await Promise.all(
-          commands.map(async (command) => {
+        await Promise.all([
+          startReport,
+          ...commands.map(async (command) => {
             clearTimeout(command.timer);
             command.cleaning = (command.cleaning ?? 0) + 1;
             let closed;
@@ -394,13 +393,9 @@ export class Facade {
               }
             }
           }),
-        );
+        ]);
         if (isRoot && anyUnconfirmed) {
-          if (turn) this.fenceLost(turn, "process/terminate");
-          await this.connection
-            .call(UNCERTAIN_REPORT, { method: "process/terminate" })
-            .catch(() => {});
-          this.onUncertain(sessionId, "process/terminate");
+          await this.reportUncertainBounded(sessionId, turn, "process/terminate", 3000);
         }
       } finally {
         if (deadlineEntry) this.rootCleanupDeadlines.delete(deadlineEntry);
@@ -458,17 +453,41 @@ export class Facade {
     );
   }
 
+  /** Report uncertainty with a strict bound and local turn/proxy fallback so
+   *  a refused or timed-out report still parks the turn on the trusted worker. */
+  async reportUncertainBounded(sessionId, turn, method, timeoutMs = 3000) {
+    if (turn) this.fenceLost(turn, method);
+    this.onUncertain(sessionId, method);
+    try {
+      await Promise.race([
+        this.connection.call(UNCERTAIN_REPORT, { method }, { timeoutMs }),
+        new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+      ]);
+    } catch {
+      // Proxy already received `onUncertain` and `turn.uncertain` fallback.
+    }
+  }
+
   /** Record uncertainty explicitly before closing the execution connection if
    *  shutdown drain timed out while admitted starts or cleanups were still open. */
-  async reportUnsettledOnTimeout() {
-    const hasOpen =
-      this.activeCleanups.size > 0 ||
-      [...this.sessions.values()].some(
-        (s) =>
-          (s.turn?.inflight.size ?? 0) > 0 || s.quiescedInflight.size > 0 || s.commands.size > 0,
-      );
-    if (!hasOpen) return;
-    await this.connection.call(UNCERTAIN_REPORT, { method: "process/start" }).catch(() => {});
+  async reportUnsettledOnTimeout(timeoutMs = 2000) {
+    const unsettledSessions = [...this.sessions.entries()].filter(
+      ([, s]) =>
+        (s.turn?.inflight.size ?? 0) > 0 || s.quiescedInflight.size > 0 || s.commands.size > 0,
+    );
+    if (this.activeCleanups.size === 0 && unsettledSessions.length === 0) return;
+    for (const [sid, session] of unsettledSessions) {
+      if (session.turn) this.fenceLost(session.turn, "process/start");
+      this.onUncertain(sid, "process/start");
+    }
+    try {
+      await Promise.race([
+        this.connection.call(UNCERTAIN_REPORT, { method: "process/start" }, { timeoutMs }),
+        new Promise((resolve) => setTimeout(resolve, timeoutMs)),
+      ]);
+    } catch {
+      // Local turn uncertainty already latched for settleExit.
+    }
   }
 
   /** Explicitly mark one relay ambiguous (e.g. failed response handoff) until socket close. */

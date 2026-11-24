@@ -167,7 +167,9 @@ export class Connection {
       return Promise.reject(new Error("Execution unavailable; no replay"));
     }
     // Abandoned requests may still run on the executor, so they count.
-    if (this.pending.size + this.abandoned.size >= 15) {
+    // Reserve dedicated reporting headroom for drain/uncertainty notifications
+    // so full tool-request slots can never block `cowboy/uncertainEffect`.
+    if (!DRAIN_REQUESTS.has(method) && this.pending.size + this.abandoned.size >= 15) {
       return Promise.reject(new Error("Too many execution requests"));
     }
     return new Promise((resolve, reject) => {

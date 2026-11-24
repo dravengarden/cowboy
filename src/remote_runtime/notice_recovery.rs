@@ -189,30 +189,69 @@ pub(super) fn handle_rejected_ack(
     {
         shared.hub.note_provider_generation_missing(session_id);
     }
-    // A cross-epoch rejection from a replacement worker cannot prove the
-    // original worker never executed an already-attempted prompt; only a
-    // broker-queued rejection (which proves the original worker never received
-    // the prompt) may safely requeue it into Hub.
-    let cross_epoch_unproven = matches!(
-        &command,
-        Some(CoreCommand::Prompt {
-            expected_worker_epoch: Some(_),
-            ..
-        })
-    ) && reason
-        .as_deref()
-        .is_some_and(|message| message.starts_with("worker epoch changed before prompt admission"));
-    if cross_epoch_unproven {
-        shared.hub.broadcast_error(
-            Some(session_id.to_owned()),
-            reason.unwrap_or_else(|| {
-                "prompt delivery across worker change is unresolved; not replaying".to_owned()
-            }),
-        );
+    // Ambiguous delivery rejections (prompt was already handed to an earlier
+    // worker epoch, or a legacy cross-epoch refusal without `unhanded:` proof)
+    // must never auto-requeue or silently drop the user's message: park as a
+    // durable non-dispatchable draft instead.
+    let ambiguous_delivery = matches!(&command, Some(CoreCommand::Prompt { .. }))
+        && reason.as_deref().is_some_and(|message| {
+            message.starts_with("delivery_ambiguous:")
+                || message.starts_with("worker epoch changed before prompt admission")
+        });
+    if ambiguous_delivery {
+        let message = reason.unwrap_or_else(|| {
+            "prompt delivery across worker change is unresolved; retained as draft".to_owned()
+        });
+        if let Some(cmd) = command {
+            park_ambiguous_prompt_command(shared, session_id, cmd, &message);
+        } else {
+            shared
+                .hub
+                .broadcast_error(Some(session_id.to_owned()), message);
+        }
     } else {
         requeue_rejected_command(shared, session_id, command, reason);
     }
     shared.in_flight_prompts.lock().retire_command(command_id);
+}
+
+/// Park an already-attempted prompt whose delivery across a worker change is
+/// ambiguous: retire `in_flight_prompts`, preserve non-`call-notice:` prompts
+/// as durable non-dispatchable drafts, and surface the error.
+pub(super) fn park_ambiguous_prompt_command(
+    shared: &Shared,
+    session_id: &str,
+    command: CoreCommand,
+    reason: &str,
+) {
+    if let CoreCommand::Prompt {
+        command_id,
+        content,
+        cmid,
+        ..
+    } = command
+    {
+        shared.in_flight_prompts.lock().retire_command(&command_id);
+        let is_call_notice = cmid
+            .as_deref()
+            .is_some_and(|cid| cid.starts_with(CALL_NOTICE_PREFIX));
+        if !is_call_notice {
+            let text = content
+                .iter()
+                .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
+                .collect::<Vec<_>>()
+                .join(
+                    "
+",
+                );
+            shared
+                .hub
+                .park_recovery_draft(session_id, text, content, cmid);
+        }
+        shared
+            .hub
+            .broadcast_error(Some(session_id.to_owned()), reason.to_owned());
+    }
 }
 
 /// Settle a `call-notice:` `UndeliveredPrompt` returned either from an admitted

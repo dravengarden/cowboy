@@ -579,29 +579,61 @@ pub(super) fn departing_cleanup_allows(
             .is_some_and(|entry| entry.epoch == epoch && entry.binding == request.binding)
 }
 
-/// True while `reset_session` is actively stopping `(session_id, worker_epoch)`.
-/// Forwarding every event of that departing epoch preserves contiguous
-/// `runtime_seq` on the Controller (which suppresses transcript projection via
-/// `resetting` while still observing `UNCERTAIN_EFFECT_UPDATE`).
-pub(super) fn is_departing_cleanup_epoch(
-    broker: &super::Broker,
-    session_id: &str,
-    worker_epoch: &str,
-) -> bool {
-    broker
-        .departing_cleanup
-        .lock()
-        .get(session_id)
-        .is_some_and(|entry| entry.epoch == worker_epoch)
+/// Bounded record of `(session_id, command_id) -> worker_epoch` for prompts
+/// the broker has already handed off to a worker channel.
+#[derive(Default)]
+pub(super) struct DispatchedPrompts {
+    epochs: std::collections::HashMap<(String, String), String>,
+    order: std::collections::VecDeque<(String, String)>,
 }
 
-/// Reject a `WorkerCommand::Prompt` before sending it to `worker` when its
-/// bound `expected_worker_epoch` no longer matches or when the worker reports
-/// an `uncertain_effect` newer than the prompt's `acknowledged_uncertain_sequence`.
+impl DispatchedPrompts {
+    const MAX_ENTRIES: usize = 512;
+
+    pub(super) fn get(&self, session_id: &str, command_id: &str) -> Option<&str> {
+        self.epochs
+            .get(&(session_id.to_owned(), command_id.to_owned()))
+            .map(String::as_str)
+    }
+
+    pub(super) fn record(&mut self, session_id: &str, command_id: &str, epoch: &str) {
+        let key = (session_id.to_owned(), command_id.to_owned());
+        if self.epochs.insert(key.clone(), epoch.to_owned()).is_none() {
+            self.order.push_back(key);
+            while self.order.len() > Self::MAX_ENTRIES {
+                if let Some(evicted) = self.order.pop_front() {
+                    self.epochs.remove(&evicted);
+                }
+            }
+        }
+    }
+}
+
+/// Normalize missing `acknowledged_uncertain_sequence` at Controller ingress so
+/// queued prompts retain the admitting Controller's protocol contract even
+/// across later Controller lease changes (`Some(0)` for v8+, `None` for legacy).
+pub(super) fn normalize_ingress_prompt(
+    controller_protocol: u16,
+    command: &mut crate::runtime_wire::CoreCommand,
+) {
+    if controller_protocol >= crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION
+        && let crate::runtime_wire::CoreCommand::Prompt {
+            acknowledged_uncertain_sequence,
+            ..
+        } = command
+        && acknowledged_uncertain_sequence.is_none()
+    {
+        *acknowledged_uncertain_sequence = Some(0);
+    }
+}
+
+/// Reject an unhanded `WorkerCommand::Prompt` before dispatching it to `worker`
+/// when its bound `expected_worker_epoch` no longer matches or when the worker
+/// reports an `uncertain_effect` newer than its ingress-normalized
+/// `acknowledged_uncertain_sequence`.
 pub(super) fn prompt_admission_refusal(
     worker_epoch: &str,
     worker_uncertain: Option<&crate::runtime_wire::UncertainEffect>,
-    controller_protocol: u16,
     command: &WorkerCommand,
 ) -> Option<(String, String)> {
     let WorkerCommand::Prompt {
@@ -618,27 +650,18 @@ pub(super) fn prompt_admission_refusal(
     {
         return Some((
             command_id.clone(),
-            "broker-queued: worker epoch changed before prompt admission".to_owned(),
+            "unhanded: worker epoch changed before prompt admission".to_owned(),
         ));
     }
-    if let Some(effect) = worker_uncertain {
+    if let Some(effect) = worker_uncertain
+        && let Some(acknowledged) = acknowledged_uncertain_sequence
+    {
         let required = effect.sequence.max(1);
-        let enforce = match acknowledged_uncertain_sequence {
-            Some(ack) => Some(*ack),
-            None if controller_protocol
-                >= crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION =>
-            {
-                Some(0)
-            }
-            None => None,
-        };
-        if let Some(acknowledged) = enforce
-            && required > acknowledged
-        {
+        if required > *acknowledged {
             return Some((
                 command_id.clone(),
                 format!(
-                    "Target {} outcome is uncertain (sequence {required}); review and acknowledge before continuing",
+                    "unhanded: Target {} outcome is uncertain (sequence {required}); review and acknowledge before continuing",
                     effect.method
                 ),
             ));
@@ -649,43 +672,112 @@ pub(super) fn prompt_admission_refusal(
 
 impl super::Broker {
     pub(super) fn route_prompt_guarded(&self, session_id: &str, command: WorkerCommand) {
-        if let WorkerCommand::Prompt {
-            command_id,
-            trace: Some(trace),
-            ..
-        } = &command
-        {
-            self.trace_spans.lock().start(session_id, command_id, trace);
-        }
-        let controller_protocol = self
-            .controller
-            .lock()
-            .as_ref()
-            .map_or(0, |controller| controller.protocol);
-        let worker_gate = self.workers.lock().get(session_id).map(|worker| {
-            (
-                worker.snapshot.drain_requested,
-                prompt_admission_refusal(
-                    &worker.epoch,
-                    worker.snapshot.uncertain_effect.as_ref(),
-                    controller_protocol,
-                    &command,
-                ),
-            )
-        });
-        if let Some((false, Some((command_id, reason)))) = worker_gate {
+        let (command_id, expected_epoch) = match &command {
+            WorkerCommand::Prompt {
+                command_id,
+                trace,
+                expected_worker_epoch,
+                ..
+            } => {
+                if let Some(trace) = trace {
+                    self.trace_spans.lock().start(session_id, command_id, trace);
+                }
+                (command_id.clone(), expected_worker_epoch.clone())
+            }
+            _ => {
+                self.route_worker(session_id, command);
+                return;
+            }
+        };
+        let (prior_epoch, live) = {
+            let workers = self.workers.lock();
+            let prior_epoch = self
+                .dispatched_prompts
+                .lock()
+                .get(session_id, &command_id)
+                .map(str::to_owned);
+            let live = workers.get(session_id).map(|worker| {
+                (
+                    worker.tx.clone(),
+                    worker.epoch.clone(),
+                    worker.snapshot.drain_requested,
+                    worker.snapshot.uncertain_effect.clone(),
+                )
+            });
+            (prior_epoch, live)
+        };
+        if let Some(prev_epoch) = prior_epoch {
+            if let Some((tx, epoch, _, _)) = live
+                && epoch == prev_epoch
+                && tx
+                    .send(Frame::WorkerCommand {
+                        session_id: session_id.to_owned(),
+                        command: self.trace_worker_dispatch(session_id, command),
+                    })
+                    .is_ok()
+            {
+                return;
+            }
             self.send_controller(Frame::CommandAck {
                 session_id: session_id.to_owned(),
                 command_id,
                 accepted: false,
-                reason: Some(reason),
+                reason: Some(
+                    "delivery_ambiguous: original worker changed after prompt handoff".to_owned(),
+                ),
             });
             return;
         }
-        if worker_gate.is_some_and(|(draining, _)| draining) {
-            self.queue_pending(session_id, command);
-        } else {
-            self.route_worker(session_id, command);
+        match live {
+            Some((tx, epoch, false, uncertain)) => {
+                if let Some((cid, reason)) =
+                    prompt_admission_refusal(&epoch, uncertain.as_ref(), &command)
+                {
+                    self.send_controller(Frame::CommandAck {
+                        session_id: session_id.to_owned(),
+                        command_id: cid,
+                        accepted: false,
+                        reason: Some(reason),
+                    });
+                    return;
+                }
+                let traced = self.trace_worker_dispatch(session_id, command);
+                if tx
+                    .send(Frame::WorkerCommand {
+                        session_id: session_id.to_owned(),
+                        command: traced,
+                    })
+                    .is_ok()
+                {
+                    self.dispatched_prompts
+                        .lock()
+                        .record(session_id, &command_id, &epoch);
+                } else {
+                    self.send_controller(Frame::CommandAck {
+                        session_id: session_id.to_owned(),
+                        command_id,
+                        accepted: false,
+                        reason: Some(
+                            "unhanded: worker disconnected before prompt handoff".to_owned(),
+                        ),
+                    });
+                }
+            }
+            Some((_, epoch, true, _))
+                if expected_epoch.as_deref().is_some_and(|exp| exp != epoch) =>
+            {
+                self.send_controller(Frame::CommandAck {
+                    session_id: session_id.to_owned(),
+                    command_id,
+                    accepted: false,
+                    reason: Some(
+                        "unhanded: worker epoch changed before prompt admission".to_owned(),
+                    ),
+                });
+            }
+            Some((_, _, true, _)) | None => {
+                self.queue_pending(session_id, command);
+            }
         }
     }
 
@@ -709,17 +801,9 @@ impl super::Broker {
                     held_prompts.push_back(command);
                     continue;
                 }
-                let controller_protocol = self
-                    .controller
-                    .lock()
-                    .as_ref()
-                    .map_or(0, |controller| controller.protocol);
-                if let Some((command_id, reason)) = prompt_admission_refusal(
-                    &epoch,
-                    uncertain.as_ref(),
-                    controller_protocol,
-                    &command,
-                ) {
+                if let Some((command_id, reason)) =
+                    prompt_admission_refusal(&epoch, uncertain.as_ref(), &command)
+                {
                     self.send_controller(Frame::CommandAck {
                         session_id: session_id.to_owned(),
                         command_id,
@@ -728,10 +812,33 @@ impl super::Broker {
                     });
                     continue;
                 }
-                let _ = tx.send(Frame::WorkerCommand {
-                    session_id: session_id.to_owned(),
-                    command: self.trace_worker_dispatch(session_id, command),
-                });
+                let prompt_cid = match &command {
+                    WorkerCommand::Prompt { command_id, .. } => Some(command_id.clone()),
+                    _ => None,
+                };
+                let traced = self.trace_worker_dispatch(session_id, command);
+                if tx
+                    .send(Frame::WorkerCommand {
+                        session_id: session_id.to_owned(),
+                        command: traced,
+                    })
+                    .is_ok()
+                {
+                    if let Some(cid) = prompt_cid {
+                        self.dispatched_prompts
+                            .lock()
+                            .record(session_id, &cid, &epoch);
+                    }
+                } else if let Some(cid) = prompt_cid {
+                    self.send_controller(Frame::CommandAck {
+                        session_id: session_id.to_owned(),
+                        command_id: cid,
+                        accepted: false,
+                        reason: Some(
+                            "unhanded: worker disconnected before queued prompt handoff".to_owned(),
+                        ),
+                    });
+                }
             }
             if !held_prompts.is_empty() {
                 self.pending_commands
@@ -1265,21 +1372,21 @@ mod tests {
             acknowledged_uncertain_sequence: Some(5),
         };
         let p8 = crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION;
-        assert!(prompt_admission_refusal("e-new", None, p8, &prompt).is_some());
+        assert!(prompt_admission_refusal("e-new", None, &prompt).is_some());
         let effect = crate::runtime_wire::UncertainEffect {
             method: "process/terminate".into(),
             sequence: 6,
         };
-        assert!(prompt_admission_refusal("e-old", Some(&effect), p8, &prompt).is_some());
+        assert!(prompt_admission_refusal("e-old", Some(&effect), &prompt).is_some());
         let acked = crate::runtime_wire::UncertainEffect {
             method: "process/terminate".into(),
             sequence: 5,
         };
-        assert!(prompt_admission_refusal("e-old", Some(&acked), p8, &prompt).is_none());
-        // Legacy Controller (< 8) omitting acknowledged_uncertain_sequence must not be locked out.
-        let legacy_prompt = WorkerCommand::Prompt {
-            command_id: "cmd-legacy".into(),
-            turn_id: "t-2".into(),
+        assert!(prompt_admission_refusal("e-old", Some(&acked), &prompt).is_none());
+        let mut v8_omitted = crate::runtime_wire::CoreCommand::Prompt {
+            session_id: "s1".into(),
+            command_id: "cmd-v8".into(),
+            turn_id: "t-v8".into(),
             content: vec![],
             cmid: None,
             trace: None,
@@ -1288,7 +1395,153 @@ mod tests {
             expected_worker_epoch: None,
             acknowledged_uncertain_sequence: None,
         };
-        assert!(prompt_admission_refusal("e-old", Some(&effect), p8 - 1, &legacy_prompt).is_none());
-        assert!(prompt_admission_refusal("e-old", Some(&effect), p8, &legacy_prompt).is_some());
+        let mut legacy_omitted = v8_omitted.clone();
+        normalize_ingress_prompt(p8, &mut v8_omitted);
+        normalize_ingress_prompt(p8 - 1, &mut legacy_omitted);
+        let (_, v8_worker_cmd) = v8_omitted.into_worker_prompt().unwrap();
+        let (_, legacy_worker_cmd) = legacy_omitted.into_worker_prompt().unwrap();
+        assert!(prompt_admission_refusal("e-old", Some(&effect), &v8_worker_cmd).is_some());
+        assert!(prompt_admission_refusal("e-old", Some(&effect), &legacy_worker_cmd).is_none());
+    }
+
+    #[test]
+    fn route_prompt_guarded_distinguishes_unhanded_same_epoch_retry_and_ambiguous_handoff() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = Arc::new(super::super::Broker::new(super::super::MachineBrokerArgs {
+            socket: dir.path().join("broker.sock"),
+            worker_command: std::path::PathBuf::from("/bin/false"),
+            desired_generation: "g1".into(),
+            spawn_mode: super::super::SpawnMode::Direct,
+            worker_environment: std::collections::BTreeMap::new(),
+            provider_store: Arc::new(
+                crate::machine_plugins::MachinePluginStore::new(
+                    &dir.path().join("plugins"),
+                    crate::machine_protocol::Platform::Linux,
+                    "x86_64".into(),
+                )
+                .unwrap(),
+            ),
+            worktree_root: dir.path().join("worktrees").into(),
+            worker_ready_timeout: std::time::Duration::from_secs(1),
+            call_context_root: None,
+            memory_relay: None,
+        }));
+        let (ctrl_tx, mut ctrl_rx) = mpsc::unbounded_channel();
+        broker.attach_controller(
+            crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION,
+            &ctrl_tx,
+        );
+        let _ = ctrl_rx.try_recv(); // Welcome
+
+        // Attach worker epoch e1.
+        let (w1_tx, mut w1_rx) = mpsc::unbounded_channel();
+        let mut s1 = sample_snapshot(Some("antigravity"));
+        s1.worker_epoch = "e1".into();
+        broker.workers.lock().insert(
+            "s1".into(),
+            super::super::WorkerPeer {
+                connection_id: 1,
+                epoch: "e1".into(),
+                tx: w1_tx,
+                snapshot: s1,
+                acked_runtime_seq: 0,
+                last_seen: std::time::Instant::now(),
+                receive_probe: None,
+                liveness: None,
+                negotiated_protocol: crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION,
+                raw_wrap_up_steering: true,
+                hint_tx: None,
+                last_hinted_target: None,
+            },
+        );
+
+        // 1. Unhanded stale-epoch prompt is rejected with `unhanded:` prefix.
+        let stale = WorkerCommand::Prompt {
+            command_id: "cmd-stale".into(),
+            turn_id: "t-stale".into(),
+            content: vec![],
+            cmid: None,
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            expected_worker_epoch: Some("e0".into()),
+            acknowledged_uncertain_sequence: Some(0),
+        };
+        broker.route_prompt_guarded("s1", stale);
+        let ack = ctrl_rx.try_recv().unwrap();
+        assert!(matches!(
+            ack,
+            Frame::CommandAck {
+                command_id,
+                accepted: false,
+                reason: Some(reason),
+                ..
+            } if command_id == "cmd-stale" && reason.starts_with("unhanded:")
+        ));
+
+        // 2. First dispatch to e1 succeeds and records handoff; same-epoch retry
+        // still forwards to e1 even if e1 later acquires an uncertain_effect
+        // so e1 can return its authoritative duplicate ack.
+        let first = WorkerCommand::Prompt {
+            command_id: "cmd-once".into(),
+            turn_id: "t-once".into(),
+            content: vec![],
+            cmid: None,
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            expected_worker_epoch: Some("e1".into()),
+            acknowledged_uncertain_sequence: Some(0),
+        };
+        broker.route_prompt_guarded("s1", first.clone());
+        assert!(w1_rx.try_recv().is_ok());
+
+        broker
+            .workers
+            .lock()
+            .get_mut("s1")
+            .unwrap()
+            .snapshot
+            .uncertain_effect = Some(crate::runtime_wire::UncertainEffect {
+            method: "fs/writeFile".into(),
+            sequence: 7,
+        });
+        broker.route_prompt_guarded("s1", first.clone());
+        assert!(w1_rx.try_recv().is_ok());
+
+        // 3. After replacement worker e2 takes over, retrying cmd-once emits
+        // `delivery_ambiguous:` instead of `unhanded:`.
+        let (w2_tx, mut w2_rx) = mpsc::unbounded_channel();
+        let mut s2 = sample_snapshot(Some("antigravity"));
+        s2.worker_epoch = "e2".into();
+        broker.workers.lock().insert(
+            "s1".into(),
+            super::super::WorkerPeer {
+                connection_id: 2,
+                epoch: "e2".into(),
+                tx: w2_tx,
+                snapshot: s2,
+                acked_runtime_seq: 0,
+                last_seen: std::time::Instant::now(),
+                receive_probe: None,
+                liveness: None,
+                negotiated_protocol: crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION,
+                raw_wrap_up_steering: true,
+                hint_tx: None,
+                last_hinted_target: None,
+            },
+        );
+        broker.route_prompt_guarded("s1", first);
+        assert!(w2_rx.try_recv().is_err());
+        let amb = ctrl_rx.try_recv().unwrap();
+        assert!(matches!(
+            amb,
+            Frame::CommandAck {
+                command_id,
+                accepted: false,
+                reason: Some(reason),
+                ..
+            } if command_id == "cmd-once" && reason.starts_with("delivery_ambiguous:")
+        ));
     }
 }

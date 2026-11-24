@@ -48,6 +48,22 @@ impl PendingCommands {
         self.entries.remove(key).map(|(_, command)| command)
     }
 
+    pub(in crate::remote_runtime) fn remove_if_version(
+        &mut self,
+        key: &str,
+        expected_version: u64,
+    ) -> Option<CoreCommand> {
+        if self
+            .entries
+            .get(key)
+            .is_some_and(|(current_version, _)| *current_version == expected_version)
+        {
+            self.entries.remove(key).map(|(_, command)| command)
+        } else {
+            None
+        }
+    }
+
     pub(in crate::remote_runtime) fn get(&self, key: &str) -> Option<&CoreCommand> {
         self.entries.get(key).map(|(_, command)| command)
     }

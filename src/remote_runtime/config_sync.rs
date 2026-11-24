@@ -356,10 +356,52 @@ pub(super) fn prepare_prompt_for_send(
     };
     let worker_snapshot = shared.workers.lock().get(session_id).cloned();
     let already_attempted = shared.attempted_sends.lock().contains(key);
+    if already_attempted {
+        // Never rebind or blindly replay an already-attempted prompt across a
+        // worker change or without a bound worker epoch. Only a live worker on
+        // the exact bound epoch can safely deduplicate a retry by `command_id`.
+        let current_epoch = worker_snapshot
+            .as_ref()
+            .map(|worker| worker.worker_epoch.as_str());
+        let ambiguous = match (expected_worker_epoch.as_deref(), current_epoch) {
+            (Some(bound), Some(current)) => current != bound,
+            (None, _) => true,
+            (Some(_), None) => false,
+        };
+        if ambiguous {
+            let removed = {
+                let mut pending = shared.pending.lock();
+                let removed = pending.remove_if_version(key, version);
+                if removed.is_some() {
+                    shared.sent.lock().remove(key);
+                    shared.attempted_sends.lock().remove(key);
+                }
+                removed
+            };
+            if let Some(removed_cmd) = removed {
+                notice_recovery::park_ambiguous_prompt_command(
+                    shared,
+                    session_id,
+                    removed_cmd,
+                    "prompt delivery across worker change is unresolved; retained as draft",
+                );
+            }
+            return false;
+        }
+        if current_epoch.is_none() {
+            return false;
+        }
+        if let Some(worker) = worker_snapshot.as_ref()
+            && unacknowledged_uncertain_effect(&shared.hub, worker).is_some()
+        {
+            return false;
+        }
+        return true;
+    }
     if let Some(worker) = worker_snapshot.as_ref()
         && let Some(reason) = unacknowledged_uncertain_effect(&shared.hub, worker)
     {
-        if !already_attempted && let Some(removed) = shared.pending.lock().remove(key) {
+        if let Some(removed) = shared.pending.lock().remove_if_version(key, version) {
             notice_recovery::requeue_rejected_command(
                 shared,
                 session_id,
@@ -368,18 +410,6 @@ pub(super) fn prepare_prompt_for_send(
             );
         }
         return false;
-    }
-    if already_attempted {
-        // Never rebind an already-attempted prompt to a replacement worker
-        // epoch or later acknowledgment sequence; keep cross-epoch attempts
-        // unresolved until authoritative turn/worker evidence arrives.
-        if let (Some(bound_epoch), Some(current)) =
-            (expected_worker_epoch.as_deref(), worker_snapshot.as_ref())
-            && current.worker_epoch != bound_epoch
-        {
-            return false;
-        }
-        return true;
     }
     let mut mutated = false;
     if acknowledged_uncertain_sequence.is_none() {

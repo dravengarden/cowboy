@@ -269,6 +269,10 @@ export class AgyLog {
    * only after the turn's reply has arrived: its barrier request is sent
    * now, with a nonce no earlier line can carry.
    */
+  markExited() {
+    this.childExited = true;
+  }
+
   async settle(cursor, sessionId, stopReason) {
     if (cursor === undefined) return classify([]);
     let nonce;
@@ -292,7 +296,11 @@ export class AgyLog {
         const size = (await stat(await this.locate())).size;
         if (size - cursor > MAX_WINDOW) return classify([], {});
         const records = parseRecords(await this.read(cursor, size), sessionId, nonce);
-        if (records.some((record) => record.kind === "barrier") || Date.now() >= deadline) {
+        if (
+          records.some((record) => record.kind === "barrier") ||
+          this.childExited ||
+          Date.now() >= deadline
+        ) {
           const prior = parseRecords(
             await this.read(Math.max(0, cursor - MAX_WINDOW), cursor),
             undefined,
