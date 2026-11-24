@@ -27,6 +27,7 @@ import type { DesktopShortcutGroup } from "./DesktopShortcutBar";
 import {
   ConfigOptionControl,
   RecommendedPresetControls,
+  RunConfigPaneActiveContext,
 } from "./RunConfigControls";
 import { useRunConfigKeyboard } from "./runConfigNavigation";
 import { currentOptionName, optionShortcut } from "./runConfigOptions";
@@ -64,12 +65,14 @@ const runConfigPanelSx = {
 
 function RunConfigPane({
   pane,
+  active,
   title,
   caption,
   footer,
   children,
 }: {
   pane: "agent" | "context" | "tools";
+  active: boolean;
   title: string;
   caption: string;
   /** Pinned under the pane's scrolling body. */
@@ -160,7 +163,9 @@ function RunConfigPane({
           containerName: "run-config-pane",
         }}
       >
-        {children}
+        <RunConfigPaneActiveContext.Provider value={active}>
+          {children}
+        </RunConfigPaneActiveContext.Provider>
       <ScrollEdges /></Stack>
       {footer}
     </Box>
@@ -465,6 +470,9 @@ function RunConfigurationDialogContent({
 }): React.JSX.Element {
   const liveSession = useStoreSelector((snapshot) => snapshot.sessionsById.get(sessionId)) ?? session;
   const panelRef = useRef<HTMLDivElement>(null);
+  const [activePane, setActivePane] = useState<"agent" | "tools" | "context">(
+    initialFocus === "new_from" ? "context" : "agent",
+  );
   useRunConfigKeyboard(true, panelRef, initialFocus === "new_from" ? "new_from" : "first");
   const directConfigShortcuts = options.map(optionShortcut).filter(
     (shortcut): shortcut is string => shortcut !== undefined,
@@ -509,10 +517,19 @@ function RunConfigurationDialogContent({
         ref={panelRef}
         data-desktop-shortcut-scope="exclusive"
         data-run-config-panel
+        onFocusCapture={(event): void => {
+          const pane = event.target instanceof Element
+            ? event.target.closest<HTMLElement>("[data-config-pane]")?.dataset.configPane
+            : undefined;
+          if (pane === "agent" || pane === "tools" || pane === "context") {
+            setActivePane(pane);
+          }
+        }}
         sx={runConfigPanelSx}
       >
         <RunConfigPane
           pane="agent"
+          active={activePane === "agent"}
           title="Agent"
           caption="How this agent runs"
           footer={unsaved || applyError
@@ -554,6 +571,7 @@ function RunConfigurationDialogContent({
         </RunConfigPane>
         <RunConfigPane
           pane="tools"
+          active={activePane === "tools"}
           title="Tools"
           caption="What this agent may call and remember"
         >
@@ -561,6 +579,7 @@ function RunConfigurationDialogContent({
         </RunConfigPane>
         <RunConfigPane
           pane="context"
+          active={activePane === "context"}
           title="Context"
           caption="Where the work goes, and what the next message reads"
         >

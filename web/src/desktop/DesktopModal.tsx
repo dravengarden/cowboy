@@ -18,8 +18,11 @@ import {
   useCallback,
   useEffect,
   useId,
+  useRef,
+  useState,
 } from "react";
 import { isImeKeyEvent } from "../imeKey";
+import { useVimSetting } from "../vimSetting";
 import { desktopCompositionActive } from "./commands/keyIntent";
 import { HintTooltip } from "../HintTooltip";
 import {
@@ -230,8 +233,48 @@ export function DesktopModal({
   );
 }
 
-/** A dialog without its own keymap advertises the shared modal grammar. */
+const MODAL_EDITABLE_SELECTOR = [
+  "input:not([type='checkbox']):not([type='radio']):not([type='button']):not([type='submit']):not([type='reset']):not([type='range']):not([type='file']):not([type='color']):not([type='hidden']):not([readonly])",
+  "input[data-vim-readonly]",
+  "textarea:not([readonly])",
+  "textarea[data-vim-readonly]",
+  "[contenteditable='true']",
+].join(", ");
+
+/** A dialog without its own keymap advertises the shared modal grammar,
+ *  adapting to whether the dialog actually has text fields or top tabs. */
 function DesktopModalGrammarBar(): React.JSX.Element {
   const mode = useDesktopModalMode();
-  return <DesktopShortcutBar groups={desktopModalShortcutGroups(mode)} />;
+  const vim = useVimSetting();
+  const barRef = useRef<HTMLDivElement>(null);
+  const [shape, setShape] = useState({ hasTextField: false, tabs: 0 });
+  useEffect(() => {
+    const dialog = barRef.current?.closest("[role='dialog']");
+    if (!dialog) return undefined;
+    const inspect = (): void => {
+      const hasTextField = dialog.querySelector(MODAL_EDITABLE_SELECTOR) !== null;
+      const tabs = dialog.querySelectorAll("[role='tablist'] [role='tab']").length;
+      setShape((prev) =>
+        prev.hasTextField === hasTextField && prev.tabs === tabs
+          ? prev
+          : { hasTextField, tabs }
+      );
+    };
+    inspect();
+    const observer = new MutationObserver(inspect);
+    observer.observe(dialog, { childList: true, subtree: true });
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <Box ref={barRef} sx={{ flexShrink: 0 }}>
+      <DesktopShortcutBar
+        groups={desktopModalShortcutGroups(mode, {
+          tabs: shape.tabs,
+          hasTextField: shape.hasTextField,
+          vim,
+          includeLeader: true,
+        })}
+      />
+    </Box>
+  );
 }

@@ -84,6 +84,7 @@ import { fireLabel, fireRel } from "./scheduleTime";
 import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
 import { desktopKeyIntent, installNativeCompositionTracker } from "./desktop/commands/keyIntent";
 import { isTextEditingTarget } from "./desktop/commands/shortcut";
+import { isInputVimNormal, subscribeInputVimMode } from "./desktop/vim/inputVim";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import { desktopEmbeddedControlSx, desktopListItemSx } from "./desktop/DesktopEmbeddedControl";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
@@ -2965,12 +2966,22 @@ export function CreateDialog({
         setContextSources([]);
         setCreating(false);
         setCreateError("");
+        const unsubscribeVim = subscribeInputVimMode(() => {
+            const active = document.activeElement;
+            if (!(active instanceof Element) || !active.closest("[role='dialog']")) return;
+            setFocusZone(
+                active.closest("[role='tablist']")
+                    ? "tabs"
+                    : isTextEditingTarget(active) && !isInputVimNormal(active) ? "text" : "other",
+            );
+        });
         const t = globalThis.setTimeout(() => {
             titleRef.current?.focus({ preventScroll: true });
             titleRef.current?.select();
         }, 120);
         titleFocusTimer.current = t;
         return () => {
+            unsubscribeVim();
             globalThis.clearTimeout(t);
             if (titleFocusTimer.current === t) titleFocusTimer.current = undefined;
         };
@@ -3203,7 +3214,7 @@ export function CreateDialog({
                     setFocusZone(
                         e.target instanceof Element && e.target.closest("[role='tablist']")
                             ? "tabs"
-                            : isTextEditingTarget(e.target) ? "text" : "other",
+                            : isTextEditingTarget(e.target) && !isInputVimNormal(e.target) ? "text" : "other",
                     );
                 }}
                 onBlur={(e): void => {

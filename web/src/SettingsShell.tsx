@@ -39,7 +39,7 @@ import { InfoContent } from "./InfoSheet";
 import { UsageLogs } from "./UsageLogs";
 import { desktopFocusBoundary, type Mode as ThemeMode } from "./theme";
 import { modalHandlerShouldSkip } from "./desktop/commands/modalGuard";
-import { isInputVimNormal } from "./desktop/vim/inputVim";
+import { isInputVimNormal, subscribeInputVimMode } from "./desktop/vim/inputVim";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import { sequentialShortcutAvailability } from "./desktop/commands/shortcutAvailability";
 import { DesktopPanel } from "./desktop/DesktopPanel";
@@ -1541,15 +1541,13 @@ export function SettingsShell({
             next?.focus();
         };
         const onFocusIn = (event: FocusEvent): void => {
-            const panel = settingsPanelRef.current;
-            if (
-                panel?.contains(event.target as Node) &&
-                isSettingsEditableTarget(event.target)
-            ) setGoPending(false);
+            if (settingsPanelRef.current?.contains(event.target as Node) && isSettingsEditableTarget(event.target)) setGoPending(false);
         };
+        const unsubVim = subscribeInputVimMode(() => setSettingsEditableFocus(Boolean(settingsPanelRef.current?.contains(document.activeElement)) && isSettingsEditableTarget(document.activeElement)));
         globalThis.addEventListener("keydown", onKeyDown, true);
         globalThis.addEventListener("focusin", onFocusIn, true);
         return () => {
+            unsubVim();
             cancelAnimationFrame(focusFirst);
             if (goTimer !== null) globalThis.clearTimeout(goTimer);
             globalThis.removeEventListener("keydown", onKeyDown, true);
