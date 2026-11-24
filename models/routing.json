@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "evidence": "2026-11-23",
-  "note": "Review and design review tiers (docs/review-routing.md). `auto` rows choose the automatic preset in order; `allow` rows bound the explicit presets a routine review may name (a high-risk review may name any reviewer preset; Astra Max and Fable are never chosen automatically). A row matches a runnable preset by reviewer family, optional exact model and optional efforts. Costs: top-level fields are paired-pilot medians on identical inputs (null when not measured); `field` holds code-review ledger medians on mixed inputs (cost only, not quality). Tokens are not billing or subscription quota.",
+  "note": "Review and design review tiers (docs/review-routing.md). `auto` rows choose the automatic preset in order; when a tier defines `quota_ample` and the target account has fresh quota headroom relative to reset time, `quota_ample.auto` takes priority. `allow` rows bound the explicit presets a routine review may name (a high-risk review may name any reviewer preset, including Astra Max / Fable, with a concrete reason). Rows match runnable presets by family, optional exact model and optional efforts. Costs: top-level fields are paired-pilot medians on identical inputs (null when not measured); `field` holds ledger medians on mixed inputs.",
   "providers": {
     "codex": {
       "high": {
@@ -13,7 +13,27 @@
               "max"
             ]
           }
-        ]
+        ],
+        "quota_ample": {
+          "min_remaining_percent": 20,
+          "comfort_remaining_percent": 70,
+          "auto": [
+            {
+              "family": "astra",
+              "model": "gpt-6.2-astra",
+              "efforts": [
+                "max"
+              ]
+            },
+            {
+              "family": "sol",
+              "model": "gpt-6.2-sol",
+              "efforts": [
+                "max"
+              ]
+            }
+          ]
+        }
       },
       "routine": {
         "auto": [

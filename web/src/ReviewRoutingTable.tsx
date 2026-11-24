@@ -59,8 +59,10 @@ export function ReviewRoutingTable({ routing }: { routing: ReviewRouting }): Rea
       {Object.entries(routing.providers).map(([provider, table]) => {
         const rows: Array<[string, RoutingRow]> = [];
         for (const [label, key] of tiers) {
+          const ample = table[key]?.quota_ample?.auto[0];
           const row = table[key]?.auto[0];
-          if (row) rows.push([label, row]);
+          if (ample) rows.push([`${label} (ample quota)`, ample]);
+          if (row) rows.push([ample ? `${label} (conserve)` : label, row]);
         }
         if (table.analysis?.auto[0]) rows.push(["Analysis", table.analysis.auto[0]]);
         if (table.analysis?.context_ask?.[0])

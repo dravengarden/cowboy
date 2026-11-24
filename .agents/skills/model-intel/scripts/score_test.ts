@@ -374,3 +374,37 @@ test("auditRouting flags stale historical snapshots when models/field keeps more
     "models/field: keep only the latest cost snapshot (2026-11-23.json); remove older snapshots: 2026-11-21.json",
   ]);
 });
+
+test("auditRouting validates quota_ample rows and threshold bounds", () => {
+  const routing: RoutingTable = {
+    schema: 1,
+    evidence: "2026-11-23",
+    providers: {
+      codex: {
+        high: {
+          auto: [{ family: "sol", model: "gpt-6.2-sol", efforts: ["max"] }],
+          quota_ample: {
+            min_remaining_percent: 80,
+            comfort_remaining_percent: 60,
+            auto: [{ family: "astra", model: "gpt-9-astra", efforts: ["max"] }],
+          },
+        },
+        routine: {
+          auto: [{ family: "sol", model: "gpt-6.2-sol", efforts: ["max"] }],
+        },
+      },
+    },
+    costs: {},
+  };
+  const manifests = {
+    codex: {
+      configuration_presets: [
+        { id: "sol-6-2-max", values: { model: "gpt-6.2-sol", reasoning_effort: "max" } },
+      ],
+    },
+  };
+  assertEquals(auditRouting(routing, manifests, "2026-11-23"), [
+    "routing.json/codex.high.quota_ample: invalid thresholds (80, 60)",
+    "routing.json/codex.high.quota_ample.auto: row (astra model=gpt-9-astra efforts=max) matches no signed preset",
+  ]);
+});

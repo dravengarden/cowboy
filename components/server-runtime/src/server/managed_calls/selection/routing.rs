@@ -1,5 +1,6 @@
 //! Review and analysis routing from `models/routing.json` (docs/review-routing.md):
-//! which reviewer preset a review gets automatically, which explicit presets a
+//! which reviewer preset a review gets automatically (with dynamic quota-pace
+//! priority switching when configured on `high`), which explicit presets a
 //! routine review may name, and which cheap preset an unnamed analysis or
 //! context-ask call defaults to. Rows match resolved model values, never preset
 //! IDs, because one signed ID can resolve to different models per generation.
@@ -40,6 +41,16 @@ struct Tier {
     auto: Vec<Row>,
     #[serde(default)]
     allow: Vec<Row>,
+    #[serde(default)]
+    quota_ample: Option<QuotaAmpleTier>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QuotaAmpleTier {
+    min_remaining_percent: f64,
+    comfort_remaining_percent: f64,
+    auto: Vec<Row>,
 }
 
 #[derive(Deserialize)]
@@ -66,6 +77,165 @@ pub static TABLE: LazyLock<Option<Table>> = LazyLock::new(|| {
         .ok()?;
     (table.schema == 1).then_some(table)
 });
+
+/// Outcome of evaluating cached quota headroom relative to reset time.
+#[derive(Clone, Debug, PartialEq)]
+pub struct QuotaAssessment {
+    pub ample: bool,
+    pub mode: &'static str,
+    pub reason: &'static str,
+    pub min_remaining_percent: Option<f64>,
+    pub remaining_time_percent: Option<f64>,
+}
+
+impl QuotaAssessment {
+    fn conserve(
+        reason: &'static str,
+        min_remaining_percent: Option<f64>,
+        remaining_time_percent: Option<f64>,
+    ) -> Self {
+        Self {
+            ample: false,
+            mode: "conserve",
+            reason,
+            min_remaining_percent,
+            remaining_time_percent,
+        }
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "mode": self.mode,
+            "reason": self.reason,
+            "min_remaining_percent": self.min_remaining_percent,
+            "remaining_time_percent": self.remaining_time_percent,
+        })
+    }
+}
+
+fn round1(value: f64) -> f64 {
+    (value * 10.0).round() / 10.0
+}
+
+fn collect_quota_windows(limits: &Value) -> Vec<&Value> {
+    let mut windows = Vec::new();
+    if let Some(by_id) = limits.get("rateLimitsByLimitId").and_then(Value::as_object) {
+        let mut keys: Vec<&String> = by_id.keys().collect();
+        keys.sort();
+        for key in keys {
+            let Some(detail) = by_id.get(key) else {
+                continue;
+            };
+            for slot in ["primary", "secondary"] {
+                if let Some(window) = detail.get(slot).filter(|v| v.is_object()) {
+                    windows.push(window);
+                }
+            }
+        }
+    } else {
+        for slot in ["primary", "secondary"] {
+            if let Some(window) = limits.get(slot).filter(|v| v.is_object()) {
+                windows.push(window);
+            }
+        }
+    }
+    windows
+}
+
+fn evaluate_quota(quota: Option<&Value>, now_ms: i64, policy: &QuotaAmpleTier) -> QuotaAssessment {
+    let Some(quota) = quota else {
+        return QuotaAssessment::conserve("quota_unavailable", None, None);
+    };
+    if quota["status"].as_str() != Some("available") {
+        return QuotaAssessment::conserve("quota_unavailable", None, None);
+    }
+    if quota["stale"].as_bool().unwrap_or(true) {
+        return QuotaAssessment::conserve("quota_stale", None, None);
+    }
+    let Some(limits) = quota.get("limits").filter(|v| v.is_object()) else {
+        return QuotaAssessment::conserve("limits_missing", None, None);
+    };
+    let now_secs = (now_ms as f64) / 1000.0;
+    let mut saw_window = false;
+    let mut all_ample = true;
+    let mut tightest_remaining: Option<f64> = None;
+    let mut tightest_time: Option<f64> = None;
+    let mut failure_reason = "behind_pace";
+
+    for window in collect_quota_windows(limits) {
+        let Some(used) = window.get("usedPercent").and_then(Value::as_f64) else {
+            continue;
+        };
+        saw_window = true;
+        let remaining = (100.0 - used).clamp(0.0, 100.0);
+        let window_mins = window
+            .get("windowDurationMins")
+            .and_then(Value::as_f64)
+            .filter(|&m| m > 0.0);
+        let resets_at_secs = window
+            .get("resetsAt")
+            .and_then(Value::as_f64)
+            .filter(|&t| t > 0.0)
+            .map(|t| if t > 1e12 { t / 1000.0 } else { t });
+        let remaining_time = match (window_mins, resets_at_secs) {
+            (Some(mins), Some(reset)) if now_secs > 0.0 => {
+                let left_secs = (reset - now_secs).max(0.0);
+                Some((left_secs / (mins * 60.0) * 100.0).clamp(0.0, 100.0))
+            }
+            _ => None,
+        };
+        let meets_floor = remaining >= policy.min_remaining_percent;
+        let meets_pace = remaining >= policy.comfort_remaining_percent
+            || remaining_time.is_some_and(|time_left| remaining >= time_left);
+        if !meets_floor || !meets_pace {
+            if all_ample || !meets_floor {
+                failure_reason = if !meets_floor {
+                    "below_safety_floor"
+                } else {
+                    "behind_pace"
+                };
+            }
+            all_ample = false;
+        }
+        if tightest_remaining.is_none_or(|prev| remaining < prev) {
+            tightest_remaining = Some(round1(remaining));
+            tightest_time = remaining_time.map(round1);
+        }
+    }
+
+    if !saw_window {
+        return QuotaAssessment::conserve("no_windows", None, None);
+    }
+    if all_ample {
+        QuotaAssessment {
+            ample: true,
+            mode: "ample",
+            reason: "headroom_ok",
+            min_remaining_percent: tightest_remaining,
+            remaining_time_percent: tightest_time,
+        }
+    } else {
+        QuotaAssessment::conserve(failure_reason, tightest_remaining, tightest_time)
+    }
+}
+
+/// Evaluate the `high` tier's dynamic quota headroom policy for `provider`,
+/// when `models/routing.json` declares `quota_ample` for that provider.
+pub fn high_quota_assessment(
+    table: &Table,
+    provider: &str,
+    quota: Option<&Value>,
+    now_ms: i64,
+) -> Option<QuotaAssessment> {
+    let policy = table
+        .providers
+        .get(provider)?
+        .high
+        .as_ref()?
+        .quota_ample
+        .as_ref()?;
+    Some(evaluate_quota(quota, now_ms, policy))
+}
 
 /// The model a preset resolves to, without a context suffix such as `[1m]`.
 pub fn model(preset: &Value) -> Option<&str> {
@@ -144,6 +314,8 @@ pub fn order(
     level: Level,
     pool: &[Value],
     coverage: &[Value],
+    quota: Option<&Value>,
+    now_ms: i64,
 ) -> Option<Ranked> {
     let tiers = table.providers.get(provider)?;
     let high = tiers.high.as_ref()?;
@@ -152,6 +324,10 @@ pub fn order(
         Level::High => high,
         Level::Routine => routine,
         Level::Economy => tiers.economy.as_ref().unwrap_or(routine),
+    };
+    let auto_rows: &[Row] = match (level, tier.quota_ample.as_ref()) {
+        (Level::High, Some(qa)) if evaluate_quota(quota, now_ms, qa).ample => &qa.auto,
+        _ => &tier.auto,
     };
     let bounds = if level == Level::High {
         None
@@ -165,7 +341,7 @@ pub fn order(
                     .allow
                     .iter()
                     .chain(&routine.auto)
-                    .chain(tier.auto.iter())
+                    .chain(auto_rows.iter())
                     .any(|row| row.matches(preset))
         })
     };
@@ -173,7 +349,12 @@ pub fn order(
         [high, routine]
             .into_iter()
             .chain(tiers.economy.as_ref())
-            .flat_map(|tier| tier.auto.iter().chain(&tier.allow))
+            .flat_map(|tier| {
+                tier.auto
+                    .iter()
+                    .chain(&tier.allow)
+                    .chain(tier.quota_ample.iter().flat_map(|qa| qa.auto.iter()))
+            })
     };
     // Rows naming an exact model bind the table to known generations; an
     // unknown generation keeps the legacy order.
@@ -193,8 +374,7 @@ pub fn order(
     }
     // The tier's automatic row, else (for example when the caller's own model
     // was excluded) the strongest preset the tier still admits.
-    let automatic = tier
-        .auto
+    let automatic = auto_rows
         .iter()
         .find_map(|row| pool.iter().find(|preset| row.matches(preset)))
         // Never for the high tier: its explicit-only reviewers (Fable) need

@@ -108,6 +108,18 @@ today's family/effort order. For a fresh review:
 
 - **Automatic choice** (no `preset`): the first matching row of the declared
   tier (`risk: "high"` → high, otherwise routine), skipping `explicit_only`.
+- **Dynamic quota-pace priority on `high`** (since 2026-11-24): when a tier
+  declares `quota_ample` (`min_remaining_percent: 20`,
+  `comfort_remaining_percent: 70`), the Controller evaluates the target
+  account's cached quota snapshot (`!stale`, `status == "available"`). When
+  every rate-limit window has `remaining >= 20%` and either
+  `remaining >= 70%` or `remaining >= remaining_time_percent` (ahead of linear
+  pace to `resetsAt`), `codex.high` automatically prioritizes `astra-max`
+  (falling back to `sol-6-2-max` if the caller runs Astra); otherwise it
+  conserves quota on `sol-6-2-max`. `routine` never uses `quota_ample`: simple
+  changes stay on Sol Max and still refuse `astra-max` (`preset_outside_tier`).
+  Agents may also self-assess important changes and explicitly name `astra-max`
+  with `risk: "high"` and a concrete `reason`.
 - **Explicit preset**: accepted when its strength is **at or below** the
   declared tier's first automatic choice. A cheaper preset is always allowed
   (for example `astra-medium` to confirm named fixes). A stronger one needs
