@@ -267,6 +267,9 @@ async function contextPane(driver: AcceptanceDriver): Promise<void> {
     "Space labels every control of the workbench",
   );
   await shot("run-config-leader");
+  // Dismiss the armed modal leader before leaving contextPane.
+  await key("Escape");
+  await driver.sleep(150);
   results.push("Space labels every control across all three panes");
 }
 
@@ -274,8 +277,6 @@ async function contextPane(driver: AcceptanceDriver): Promise<void> {
 async function resizeAndClose(driver: AcceptanceDriver): Promise<void> {
   const { page, key, until, sleep, check, shot, results } = driver;
   const { viewport, sent, sentSince } = helpers(driver);
-  await key("Escape");
-  await sleep(150);
   await viewport(1180, 860);
   await sleep(400);
   const medium = await page.evaluate<number[][]>(`
