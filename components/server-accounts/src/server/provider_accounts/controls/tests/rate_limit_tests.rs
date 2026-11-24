@@ -39,7 +39,9 @@ async fn a_claude_refusal_parks_only_claude_sessions_until_its_quota_resets() {
     assert_eq!(limited.reason, "rate_limited:claude_gpt");
     assert_eq!(limited.until_ms, Some(reset));
     parked(controls.before_dispatch("s1").await, "Claude and GPT quota");
-    assert!(controls.revival_gate(&meta(&fake, "s1")).is_err());
+    assert!(controls.handoff_reason(&meta(&fake, "s1")).is_some());
+    // The Claude session may still revive to apply a switch to Gemini.
+    assert!(controls.revival_gate(&meta(&fake, "s1")).is_ok());
     // The Gemini session keeps running and leaves the limit in place.
     controls.before_dispatch("s2").await.unwrap();
     assert!(controls.parked_reason(&meta(&fake, "s2")).is_none());
@@ -192,4 +194,32 @@ async fn an_ended_account_wide_limit_narrows_to_the_group_still_used_up() {
     assert_eq!(narrowed.reason, "rate_limited:claude_gpt");
     assert_eq!(narrowed.until_ms, Some(reset));
     parked(controls.before_dispatch("s1").await, "until");
+}
+
+#[tokio::test]
+async fn the_final_handoff_requeues_on_a_limit_that_ended_after_the_gate() {
+    let (fake, controls, _root) = fixture().await;
+    fake.models.lock().insert("s1".into(), CLAUDE.into());
+    let current = control(&controls).await;
+    controls
+        .enter(
+            &current,
+            AccountState::RateLimited,
+            "rate_limited:claude_gpt",
+            Some(now_ms() - 1),
+            None,
+            false,
+        )
+        .await
+        .unwrap();
+    // The maintenance scan still dispatches it, so its gate can reconcile.
+    assert!(controls.parked_reason(&meta(&fake, "s1")).is_none());
+    assert!(
+        controls
+            .handoff_reason(&meta(&fake, "s1"))
+            .unwrap()
+            .contains("ended")
+    );
+    controls.before_dispatch("s1").await.unwrap();
+    assert!(controls.handoff_reason(&meta(&fake, "s1")).is_none());
 }

@@ -440,18 +440,23 @@ pub fn gate(input: &GateInput<'_>) -> Gate {
 }
 
 /// A worker revival of a named-only session: admitted, not rate-limited
-/// beyond its end for its quota group, and otherwise `ok`.
+/// account-wide beyond its end, and otherwise `ok`. A running limit of one
+/// quota group admits every revival: a launch sends no prompt, and a session
+/// must be able to apply a switch to the other group (the dispatch gate
+/// still holds its prompts).
 pub fn revival_allowed(
     admitted: bool,
     control: Option<&Control>,
-    quota_group: Option<&str>,
     now_ms: i64,
 ) -> Result<(), String> {
+    let scoped = control.is_some_and(|control| {
+        control.state == AccountState::RateLimited && rate_limit_scope(&control.reason).is_some()
+    });
     match gate(&GateInput {
         admitted,
-        control,
+        control: control.filter(|_| !scoped),
         uncertain: None,
-        quota_group,
+        quota_group: None,
         now_ms,
     }) {
         Gate::Proceed { .. } => Ok(()),

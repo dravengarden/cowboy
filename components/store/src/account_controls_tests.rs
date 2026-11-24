@@ -71,7 +71,7 @@ fn every_non_ok_state_parks_dispatch_and_admission_comes_first() {
             matches!(gate(&input(Some(&record), 0)), Gate::Park(_)),
             "{state:?}"
         );
-        assert!(revival_allowed(true, Some(&record), None, 0).is_err());
+        assert!(revival_allowed(true, Some(&record), 0).is_err());
     }
     let uncertain = GateInput {
         uncertain: Some(("fs/writeFile", 2)),
@@ -92,8 +92,8 @@ fn a_rate_limit_parks_until_it_ends_then_the_next_dispatch_resumes() {
             clears_rate_limit: true
         }
     );
-    assert!(revival_allowed(true, Some(&limited), None, 1_000).is_ok());
-    assert!(revival_allowed(true, Some(&limited), None, 999).is_err());
+    assert!(revival_allowed(true, Some(&limited), 1_000).is_ok());
+    assert!(revival_allowed(true, Some(&limited), 999).is_err());
 }
 
 #[test]
@@ -133,8 +133,8 @@ fn a_scoped_rate_limit_parks_only_its_own_and_unknown_groups() {
             clears_rate_limit: false
         }
     );
-    assert!(revival_allowed(true, Some(&limited), Some(GEMINI_GROUP), 999).is_ok());
-    assert!(revival_allowed(true, Some(&limited), Some(CLAUDE_GPT_GROUP), 999).is_err());
+    // Any session may revive under a scoped limit (it may switch groups).
+    assert!(revival_allowed(true, Some(&limited), 999).is_ok());
     // An account-wide limit parks every group.
     let wide = control(AccountState::RateLimited, Some(1_000));
     let gemini = GateInput {
@@ -142,6 +142,7 @@ fn a_scoped_rate_limit_parks_only_its_own_and_unknown_groups() {
         ..input(Some(&wide), 999)
     };
     assert!(matches!(gate(&gemini), Gate::Park(_)));
+    assert!(revival_allowed(true, Some(&wide), 999).is_err());
 }
 
 #[test]

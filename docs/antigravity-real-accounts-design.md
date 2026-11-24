@@ -1059,7 +1059,11 @@ reset four hours later. The rate limit is therefore scoped:
   reported options agree, so a selection the worker has not applied is no
   group. The refusal carries no model, so the raise rereads it after the
   turn: a switch during the refused turn can scope the wrong group, whose
-  next refusal then widens the limit to the account.
+  next refusal then widens the limit to the account. A scoped limit admits
+  every worker revival (a launch sends no prompt, and a session must be able
+  to apply a switch to the other group); prompts stay gated, and the final
+  handoff requeues a prompt whose limit ended after its gate, so the next
+  dispatch reconciles it with usage first.
 - **End.** The limit holds until the group's latest exhausted window resets,
   from the account's last usage observation; without one (the observation
   predates the refusal) it holds the default hour. When it ends, the

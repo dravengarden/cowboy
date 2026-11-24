@@ -334,7 +334,13 @@ pub fn parked_reason(state: &Arc<AppState>, meta: &SessionMeta) -> Option<String
 /// [`before_dispatch`]): the session's visible wait when it must park now.
 pub fn handoff_refusal(state: &Arc<AppState>, session: &str) -> Option<String> {
     let meta = state.hub.session_info(session)?.meta;
-    parked_reason(state, &meta).map(|reason| wait(&reason))
+    let reason = parked_reason(state, &meta).or_else(|| {
+        governed(&meta)
+            .then(|| of(state))
+            .flatten()
+            .and_then(|controls| controls.handoff_reason(&meta))
+    });
+    reason.map(|reason| wait(&reason))
 }
 
 /// Every worker revival of a governed session: admitted and `ok` (a rate
@@ -509,6 +515,23 @@ impl Controls {
         }
     }
 
+    /// Why the final handoff of a dispatch the gate admitted earlier must
+    /// requeue its prompt now: a parked reason, or a rate limit that ended
+    /// after that gate, which only the next dispatch's gate reconciles with
+    /// the account's usage.
+    pub fn handoff_reason(&self, meta: &SessionMeta) -> Option<String> {
+        if let Some(reason) = self.parked_reason(meta) {
+            return Some(reason);
+        }
+        matches!(
+            self.gate(meta),
+            Gate::Proceed {
+                clears_rate_limit: true
+            }
+        )
+        .then(|| "the account's rate limit ended; send again".to_owned())
+    }
+
     pub fn revival_gate(&self, meta: &SessionMeta) -> Result<(), String> {
         if !governed(meta) {
             return Ok(());
@@ -523,7 +546,6 @@ impl Controls {
         policy::revival_allowed(
             self.env.admitted(&meta.provider_account_id),
             control.as_ref(),
-            self.quota_group(&meta.id),
             now_ms(),
         )
         .map_err(|reason| wait(&reason))
