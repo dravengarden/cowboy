@@ -21,7 +21,7 @@ import {
   DesktopCommandProvider,
   useDesktopCommands,
 } from "./commands/DesktopCommandProvider";
-import { DesktopPendingEditCommandBindings } from "./commands/DesktopPendingEditShortcuts";
+import { DesktopComposerCommandBindings } from "./commands/DesktopComposerShortcuts";
 import { clearImeStatus, setImeComposing } from "./vim/imeStatusStore";
 
 const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 40));
@@ -129,14 +129,29 @@ export async function checkDraftKeyboard(): Promise<string> {
               />
             )
             : (
-              <DesktopPendingEditCommandBindings
-                kind={kind}
+              <DesktopComposerCommandBindings
+                canInsert
+                canAttach
+                canMore
                 sendable
+                canSave
+                canSchedule
+                canJumpFront
+                canForce
                 onSlash={() => calls.push("slash")}
                 onReference={() => calls.push("reference")}
                 onAttach={() => calls.push("pending-attach")}
-                onDone={save}
-                onExpand={() => calls.push("expand")}
+                onSaveDraft={save}
+                onSchedule={() => calls.push("schedule")}
+                onJumpFront={() => calls.push("jump-front")}
+                onForce={() => calls.push("force")}
+                onSubmit={() => calls.push("submit")}
+                onMore={() => calls.push("more")}
+                onFormat={(id) =>
+                  COMPOSER_COMMANDS_BY_ID[id]?.run({
+                    editor: editorRef.current!,
+                    attach: () => {},
+                  })}
               />
             )}
         </>
@@ -145,9 +160,7 @@ export async function checkDraftKeyboard(): Promise<string> {
     return (
       <Box
         data-desktop-pane="prompt"
-        data-desktop-region={kind === "document"
-          ? "prompt.composer"
-          : `prompt.${kind}`}
+        data-desktop-region="prompt.composer"
         sx={{ width: "100%" }}
       >
         <Box
@@ -209,41 +222,47 @@ export async function checkDraftKeyboard(): Promise<string> {
       );
       editorRef.current!.focus();
       flushSync(() =>
-        workspace.focusRegion(
-          kind === "document" ? "prompt.composer" : `prompt.${kind}`,
-        )
+        workspace.focusRegion("prompt.composer")
       );
       const before = calls.length;
       key("Enter", "Enter", mod);
       await tick();
-      check(
-        calls.length === before,
-        `${kind}: Mod+Enter must neither save nor send`,
-      );
+      if (kind === "queued" || kind === "draft") {
+        check(
+          calls.at(-1) === "submit" && calls.length === before + 1,
+          `${kind}: Mod+Enter runs the unified primary action`,
+        );
+      } else {
+        check(
+          calls.length === before,
+          `${kind}: Mod+Enter must neither save nor send`,
+        );
+      }
+      const beforeSave = calls.length;
       key("s", "KeyS", { ...mod, isComposing: true });
-      check(calls.length === before, `${kind}: IME Save is fenced`);
+      check(calls.length === beforeSave, `${kind}: IME Save is fenced`);
       setImeComposing(false);
       key("s", "KeyS", mod);
       check(
-        calls.length === before,
+        calls.length === beforeSave,
         `${kind}: shared composition prevents Save even without a keydown marker`,
       );
       clearImeStatus();
       key("s", "KeyS", mod);
       check(
-        calls.at(-1) === kind && calls.length === before + 1,
+        calls.at(-1) === kind && calls.length === beforeSave + 1,
         `${kind}: Mod+S saves exactly once`,
       );
       key("s", "KeyS", { ...mod, repeat: true });
-      check(calls.length === before + 1, `${kind}: held Save does not repeat`);
+      check(calls.length === beforeSave + 1, `${kind}: held Save does not repeat`);
       if (kind === "queued" || kind === "draft") {
-        // The row editor toolbar: every button has a leader key in its scope.
+        // Unified prompt.composer leader keys work identically for Queue & Draft buffers.
         for (
           const [letter, code, call] of [
-            ["/", "Slash", "slash"],
-            ["f", "KeyF", "reference"],
             ["a", "KeyA", "pending-attach"],
-            ["z", "KeyZ", "expand"],
+            ["h", "KeyH", "schedule"],
+            ["j", "KeyJ", "jump-front"],
+            ["m", "KeyM", "more"],
           ] as const
         ) {
           prefix();

@@ -59,11 +59,10 @@ test("macOS direct and fallback workspace chords are safe", () => {
   assertThrows(() => assertMacShortcutAllowed("prompt.focusQueue", "Q"));
 });
 
-test("transactional edits and independent documents own native Save", () => {
+test("unified Prompt and independent documents own native Save", () => {
   for (
     const id of [
-      "pendingEdit.queued.done",
-      "pendingEdit.draft.done",
+      "composer.saveDraft",
       "document.save",
     ]
   ) {

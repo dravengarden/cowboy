@@ -42,6 +42,7 @@ import {
 } from "../desktopComposerOwnership";
 import {
   handlePendingListKey,
+  isPendingModEnter,
   listPageTarget,
   listScroller,
   listScrollFor,
@@ -1041,6 +1042,23 @@ export function DesktopCommandProvider(
       // text editors and native controls; those surfaces keep their own j/k,
       // arrows and IME semantics. Regions expose items through a tiny DOM
       // contract so Sessions, Queue and Drafts share one implementation.
+      const pendingList = region?.dataset.desktopRegion === "prompt.queued" ||
+        region?.dataset.desktopRegion === "prompt.draft";
+      if (
+        workspace.mode === "normal" && !textEditorOwnsKey && pendingList &&
+        region && (isPendingModEnter(event) || items.length === 0) &&
+        handlePendingListKey({
+          event,
+          key: workspaceCommandKey(event),
+          region,
+          items,
+          active: document.activeElement instanceof HTMLElement
+            ? items.indexOf(document.activeElement.closest<HTMLElement>("[data-desktop-item]") as HTMLElement)
+            : -1,
+          reordering: region.dataset.desktopReordering === "true",
+          focusComposer: () => workspace.focusRegion("prompt.composer"),
+        })
+      ) return;
       const viewMotion = listViewKey(event);
       if (
         workspace.mode === "normal" && !textEditorOwnsKey &&
@@ -1066,8 +1084,6 @@ export function DesktopCommandProvider(
           }
           const sessionsList = region?.dataset.desktopRegion === "sessions.list";
           const pinned = sessionsList && region?.dataset.desktopPinned === "true";
-          const pendingList = region?.dataset.desktopRegion === "prompt.queued" ||
-            region?.dataset.desktopRegion === "prompt.draft";
           const reordering = pendingList && region?.dataset.desktopReordering === "true";
           // A pending `g` owns the next key (the sequential-chord law): `gg`
           // jumps to the first row, and any other unmodified key cancels the
@@ -1271,17 +1287,9 @@ export function DesktopCommandProvider(
           }
           const opensSession = region?.dataset.desktopRegion === "sessions.list" &&
             (key === "Enter" || key.toLowerCase() === "l");
-          const opensPending =
-            (region?.dataset.desktopRegion === "prompt.queued" ||
-              region?.dataset.desktopRegion === "prompt.draft") &&
-            (key === "Enter" || key.toLowerCase() === "l");
-          if ((key === "Enter" || opensSession || opensPending) && active >= 0) {
+          if ((key === "Enter" || opensSession) && active >= 0) {
             const item = items[active];
-            const action = opensPending
-              ? item?.querySelector<HTMLElement>(
-                "[data-desktop-item-action='edit'], button[aria-label='Edit']",
-              )
-              : item?.matches("button,[role='button']")
+            const action = item?.matches("button,[role='button']")
               ? item
               : item?.querySelector<HTMLElement>("[data-desktop-item-action='default']");
             if (action) {
@@ -1294,16 +1302,6 @@ export function DesktopCommandProvider(
                 // open semantics instead of leaving focus behind in the rail.
                 requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
               }
-              return;
-            }
-          }
-          if (key.toLowerCase() === "i" && active >= 0) {
-            const edit = items[active]?.querySelector<HTMLElement>(
-              "[data-desktop-item-action='edit'], button[aria-label='Edit']",
-            );
-            if (edit) {
-              event.preventDefault();
-              edit.click();
               return;
             }
           }

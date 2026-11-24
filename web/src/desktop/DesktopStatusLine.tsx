@@ -18,6 +18,8 @@ import {
 import { useVimMode, VIM_MODE_COLOR } from "../vimModeStore";
 import { useVimSetting } from "../vimSetting";
 import { useComposerSourceMode } from "../composerSourceMode";
+  // The single status-line / toolbar prompt-buffer status updates live.
+import { type DesktopPromptStatus, useDesktopPromptStatus } from "./promptBuffer";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DesktopKeycap, DesktopShortcut } from "./commands/DesktopKeycap";
 import {
@@ -210,6 +212,7 @@ function regionHints(
   live: boolean,
   vim: boolean,
   topBar: readonly RegionHint[],
+  promptStatus: DesktopPromptStatus,
 ): RegionHint[] {
   switch (region) {
     case "topbar.controls":
@@ -258,13 +261,27 @@ function regionHints(
         { keys: "Enter", label: "Toggle" },
       ];
     case "prompt.queued":
+      return [
+        { keys: "J/K", label: "Message" },
+        { keys: "I", label: "Edit" },
+        { keys: "L/Enter", label: "Normal" },
+        { keys: "Mod+Enter", label: "Deliver" },
+        { keys: "R", label: "To drafts" },
+        { keys: "X", label: "Remove" },
+        { keys: "O", label: "Order" },
+        { keys: "Esc/H", label: "Canvas" },
+      ];
     case "prompt.draft":
       return [
         { keys: "J/K", label: "Message" },
-        { keys: "GG/G", label: "First/last" },
-        { keys: "'", label: "Labels" },
-        { keys: "L/Enter", label: "Edit" },
-        { keys: "O", label: "Order mode" },
+        { keys: "I", label: "Edit" },
+        { keys: "L/Enter", label: "Normal" },
+        { keys: "N", label: "New draft" },
+        { keys: "Mod+Enter", label: "Send" },
+        { keys: "T", label: "Schedule" },
+        { keys: "X", label: "Remove" },
+        { keys: "O", label: "Order" },
+        { keys: "Esc/H", label: "Canvas" },
       ];
     case "conversation.transcript":
       return projection === "explore" ? EXPLORE_HINTS : HISTORY_HINTS;
@@ -272,13 +289,41 @@ function regionHints(
       return REVIEW_NAVIGATOR_HINTS;
     case "review.document":
       return REVIEW_DOCUMENT_HINTS;
-    case "prompt.composer":
+    case "prompt.composer": {
+      if (promptStatus.kind === "queued") {
+        return [
+          { keys: "Esc", label: promptStatus.dirty && vim ? "Normal" : "Close" },
+          { keys: "Mod+Enter", label: "Finish" },
+          { keys: "Mod+S", label: "Save" },
+          { keys: "Alt+Enter", label: "Deliver…" },
+          ...(vim ? [{ keys: "[q/]q", label: "Queue" }, { keys: "ZQ", label: "Discard" }] : []),
+        ];
+      }
+      if (promptStatus.kind === "scheduled") {
+        return [
+          { keys: "Esc", label: promptStatus.dirty && vim ? "Normal" : "Close" },
+          { keys: "Mod+Enter", label: "Deliver…" },
+          { keys: "Mod+S", label: "Save" },
+          ...(vim ? [{ keys: "ZQ", label: "Discard" }] : []),
+        ];
+      }
+      if (promptStatus.kind === "draft" || promptStatus.kind === "new-draft") {
+        return [
+          { keys: "Esc", label: "Save & back" },
+          { keys: "Mod+Enter", label: promptStatus.sendLabel },
+          { keys: "Mod+S", label: "Save" },
+          ...(promptStatus.canForce ? [{ keys: "Alt+Enter", label: "Delivery" }] : []),
+        ];
+      }
       return [
         // Only Vim turns Esc into a mode change; without it the editor keeps
         // Esc for its own layers (completion, selection).
         ...(vim ? [{ keys: "Esc", label: "Normal" }] : []),
-        // Without a live server a send is queued, exactly as while busy.
-        { keys: "Mod+Enter", label: status === "busy" || !live ? "Queue" : "Send" },
+        {
+          keys: "Mod+Enter",
+          label: promptStatus.sendLabel || (status === "busy" || !live ? "Send…" : "Send"),
+        },
+        { keys: "Mod+S", label: "Draft" },
         // The label names the destination, not the current state: a hint
         // describes what the key does next.
         {
@@ -286,6 +331,7 @@ function regionHints(
           label: sourceMode ? "Live preview" : "Source",
         },
       ];
+    }
     default:
       return [];
   }
@@ -345,6 +391,47 @@ function useStatusLineSubscriptions(focusedRegion: string | null) {
   return { topBarHints, hasApprovalChoice, hasSessionItems };
 }
 
+function promptBufferBadge(
+  promptStatus: DesktopPromptStatus,
+): { label: string; color: string; tooltip: string } | null {
+  const pos = promptStatus.index !== undefined ? ` #${String(promptStatus.index + 1)}` : "";
+  if (promptStatus.kind === "queued") {
+    return promptStatus.holdStatus === "unconfirmed"
+      ? {
+        label: `QUEUE${pos} · HOLD UNCONFIRMED`,
+        color: "warning.main",
+        tooltip: "Editing queued message offline — server drain hold will be re-confirmed on reconnect",
+      }
+      : {
+        label: `QUEUE${pos}`,
+        color: "warning.main",
+        tooltip: "Editing queued message in Prompt canvas (auto-drain held)",
+      };
+  }
+  if (promptStatus.kind === "scheduled") {
+    return {
+      label: promptStatus.scheduleLabel ? `SCHEDULED · ${promptStatus.scheduleLabel}` : "SCHEDULED",
+      color: "info.main",
+      tooltip: "Editing scheduled draft in Prompt canvas",
+    };
+  }
+  if (promptStatus.kind === "new-draft") {
+    return {
+      label: "NEW DRAFT",
+      color: "primary.main",
+      tooltip: "Composing a new session draft in Prompt canvas",
+    };
+  }
+  if (promptStatus.kind === "draft") {
+    return {
+      label: `DRAFT${pos}`,
+      color: "primary.main",
+      tooltip: "Editing session draft in Prompt canvas",
+    };
+  }
+  return null;
+}
+
 export const DesktopStatusLine = memo(function DesktopStatusLine({
   sessionId,
   status,
@@ -356,6 +443,8 @@ export const DesktopStatusLine = memo(function DesktopStatusLine({
   const commands = useDesktopCommandActions();
   const { focusedPane, focusedRegion, mode } = workspace;
   const { topBarHints, hasApprovalChoice, hasSessionItems } = useStatusLineSubscriptions(focusedRegion);
+  const promptStatus = useDesktopPromptStatus();
+  const bufferBadge = promptBufferBadge(promptStatus);
   const vimEnabled = useVimSetting();
   const sourceMode = useComposerSourceMode();
   const vimMode = useVimMode();
@@ -430,6 +519,7 @@ export const DesktopStatusLine = memo(function DesktopStatusLine({
       rawSync.phase === "live",
       vimEnabled,
       topBarHints,
+      promptStatus,
     ),
     // Window motion works from every region (FOCUS.md "Window motion").
     ...(focusedRegion ? [{ keys: "Ctrl+H/J/K/L", label: "Window" }] : []),
@@ -500,6 +590,14 @@ export const DesktopStatusLine = memo(function DesktopStatusLine({
           <Segment
             label={(regionLabel.split(".").at(-1) ?? regionLabel).toUpperCase()}
             tooltip={resizingLayout ? "Selected resize bar" : "Focused region"}
+            mono
+          />
+        )}
+        {bufferBadge && (
+          <Segment
+            label={bufferBadge.label}
+            color={bufferBadge.color}
+            tooltip={bufferBadge.tooltip}
             mono
           />
         )}

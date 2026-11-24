@@ -376,9 +376,10 @@ test("mobile pending edit stays mounted when the keyboard never reports an open 
     false,
   );
   assertEquals(
-    composerSource.includes(
-      'display: !desktop && mobilePendingEditing ? "none" : "flex"',
-    ),
+    composerSource.includes("{!desktop && <Paper") &&
+      composerSource.includes(
+        'display: mobilePendingEditing ? "none" : "flex"',
+      ),
     true,
   );
   assertEquals(

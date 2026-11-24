@@ -1,4 +1,5 @@
 import { useDesktopInsertCommand } from "../editorInsert";
+import { DESKTOP_TOGGLE_EMPTY_DRAFTS_EVENT } from "../promptBuffer";
 import { OPEN_BACKGROUND_TASKS_EVENT } from "../../backgroundTaskInspectorState";
 import { useMemo, useRef, useState } from "react";
 import { useDesktopWorkspace } from "../DesktopWorkspaceController";
@@ -500,12 +501,21 @@ export function DesktopCommandHost({
       id: "prompt.focusDrafts",
       title: "Open or Close Drafts",
       description:
-        "Open and focus parked drafts, or close them when drafts already own focus",
+        "Open and focus parked drafts (or start a new draft when empty), or close them when drafts already own focus",
       group: "Prompt",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusDrafts),
-      when: () => document.querySelector("[data-desktop-region='prompt.draft']") !== null,
-      disabledReason: "There are no drafts",
-      run: () => togglePendingRegion(workspace, "draft"),
+      when: () => sessionWorkspaceMounted(),
+      disabledReason: "Open a session first",
+      run: () => {
+        const panel = document.querySelector<HTMLElement>(
+          "[data-desktop-region='prompt.draft']",
+        );
+        if (!panel || panel.dataset.desktopEmptyDrafts === "true") {
+          globalThis.dispatchEvent(new CustomEvent(DESKTOP_TOGGLE_EMPTY_DRAFTS_EVENT));
+          return;
+        }
+        togglePendingRegion(workspace, "draft");
+      },
     },
     {
       id: "conversation.toggleFollow",

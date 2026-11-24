@@ -158,8 +158,6 @@ export const DESKTOP_WORKSPACE_KEYS = {
   composerSchedule: "H",
   composerJumpFront: "J",
   composerMore: "M",
-  // Zoom the focused editor into the fullscreen composer.
-  editorExpand: "Z",
   // Pane collapse uses three adjacent physical keys whose left-to-right order
   // matches the panes on screen: Sessions | Prompt | Conversation, inside the
   // Window group (`␣W[` `␣W]` `␣W\\`).
@@ -330,8 +328,6 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   " ": "session.switch",
   tab: "session.alternate",
   k: "commandPalette.open",
-  // Scoped editors register their own `<id>.expand` under this one meaning.
-  z: "editor.expand",
 };
 
 /** The leader key a command answers to, derived from its declared sequence. */

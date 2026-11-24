@@ -91,7 +91,7 @@ import {
   type TranscriptProjection,
   useExploreAtTail,
 } from "./explore/exploreStore";
-import { DESKTOP_FOCUS_CALLS_SHORTCUT, DESKTOP_FOCUS_PLAN_SHORTCUT, DESKTOP_FOCUS_PROMPT_SHORTCUT } from "./desktop/commands/workspaceShortcuts";
+import { DESKTOP_FOCUS_CALLS_SHORTCUT, DESKTOP_FOCUS_PLAN_SHORTCUT } from "./desktop/commands/workspaceShortcuts";
 import { type Attachment } from "./attachments";
 
 import { cancelTurn, type QueuedMessage, resetSession, scheduleDraft, send, setSessionConfigOptions, pauseQueueConfirmed, submitPrompt, unscheduleDraft, useConnected, useStoreSelector } from "./store";
@@ -131,9 +131,9 @@ import { compactTooltip } from "./contextUsageRecord";
 export { SessionProviderSection } from "./ComposerSheet";
 export { PendingPanel } from "./PendingPanel";
 
-const DesktopComposerToolbar = lazy(async () => {
-  const module = await import("./desktop/DesktopComposerToolbar");
-  return { default: module.DesktopComposerToolbar };
+const DesktopPromptWorkbench = lazy(async () => {
+  const module = await import("./desktop/DesktopPromptWorkbench");
+  return { default: module.DesktopPromptWorkbench };
 });
 
 const DesktopApprovalCommands = lazy(async () => {
@@ -1453,131 +1453,205 @@ export function ComposerWorkspace({
           )}
         </Box>
       )}
-      {(queue.length > 0 || draftList.length > 0) && desktop && (
-        <Box
-          data-composer-stack-slot="pending"
-          sx={{
-            flexShrink: 0,
-            minHeight: 0,
-          }}
-        >
-          {queue.length > 0 && (
-            <PendingPanel
-              desktop
-              keyboardOpen={keyboardOpen}
-              kind="queued"
-              sessionId={sessionId}
-              items={queue}
-              status={status}
-              nextAgentContext={nextAgentContext}
-              commands={(): AvailableCommand[] => availableCommands}
-            />
-          )}
-          {draftList.length > 0 && (
-            <PendingPanel
-              desktop
-              keyboardOpen={keyboardOpen}
-              kind="draft"
-              sessionId={sessionId}
-              items={draftList}
-              status={status}
-              commands={(): AvailableCommand[] => availableCommands}
-              onMoveDraft={otherSessions.length > 0
-                ? (id: string): void => surfaces.open({ kind: "move", sourceId: id })
-                : undefined}
-              onScheduleDraft={(id: string): void =>
-                setScheduleTarget({
-                  id,
-                  initial: draftList.find((d) => d.id === id)?.schedule ?? null,
-                })}
-            />
-          )}
-        </Box>
+      {desktop && (
+        <Suspense fallback={<Box sx={{ flex: 1 }} />}>
+          <DesktopPromptWorkbench
+            sessionId={sessionId}
+            status={status}
+            paused={paused}
+            serverConnected={serverConnected}
+            currentTurnAvailable={currentTurnAvailable}
+            queue={queue}
+            drafts={draftList}
+            nextAgentContext={nextAgentContext}
+            commands={(): AvailableCommand[] => availableCommands}
+            handedOff={handedOff}
+            overlayOpen={deliveryAnchor !== null || scheduleTarget !== null}
+            newPromptEditorRef={editorRef}
+            sendButtonRef={queueBtnRef}
+            onMoveDraft={otherSessions.length > 0
+              ? (id: string): void => surfaces.open({ kind: "move", sourceId: id })
+              : undefined}
+            onScheduleDraft={(id: string): void =>
+              setScheduleTarget({
+                id,
+                initial: draftList.find((d) => d.id === id)?.schedule ?? null,
+              })}
+            onOpenStop={(): void => surfaces.open({ kind: "stop" })}
+            beforeCanvas={
+              <>
+                <SessionContextCue sessionId={sessionId} desktop={desktop} />
+                {handedOff && <SessionHandedOffDock sessionId={sessionId} desktop={desktop} />}
+              </>
+            }
+            newPrompt={{
+              sendable,
+              canInsert: !dead,
+              canJumpFront: queue.length > 0,
+              canForce: forceable,
+              canCurrentTurn: currentTurnAvailable,
+              pending: submitFeedback.pending,
+              progress: submitFeedback.progress,
+              sendLabel: busy || queue.length > 0
+                ? "Send…"
+                : starting || paused || !serverConnected
+                ? "Enqueue"
+                : "Send",
+              sendDescription: !serverConnected
+                ? "Queue until Cowboy is reachable"
+                : busy || queue.length > 0
+                ? "Choose delivery timing and queue position"
+                : paused
+                ? "Queue until the paused queue is resumed"
+                : starting
+                ? "Run after the current work finishes"
+                : dead ? "Send to resume this session" : "Send message",
+              unavailableReason: attachments.some((attachment) => attachment.pending)
+                ? "Wait for attachments to finish preparing"
+                : "Write a message or attach a file first",
+              onAttach: (): void => fileInputRef.current?.click(),
+              onSaveDraft: saveDraft,
+              onSchedule: (): void => setScheduleTarget({ id: undefined, initial: null }),
+              onJumpFront: jumpToFront,
+              onForce: (): void => { openDeliveryPicker(); },
+              onCurrentTurn: (): void => { openDeliveryPicker(); },
+              onSubmit: (): void => { requestDelivery(); },
+              getText: (): string => editorRef.current?.getValue() ?? text,
+            }}
+            newPromptCanvas={
+              <Box
+                {...fileDrop.handlers}
+                sx={{
+                  position: "relative",
+                  flex: 1,
+                  minHeight: 0,
+                  display: "flex",
+                  flexDirection: "column",
+                }}
+              >
+                {compactTrayAttachments.length > 0 && (
+                  <AttachmentPreviews
+                    attachments={compactTrayAttachments}
+                    onRemove={removeAttachment}
+                  />
+                )}
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  multiple
+                  hidden
+                  onChange={(e): void => {
+                    addFiles(Array.from(e.target.files ?? []));
+                    e.target.value = "";
+                  }}
+                />
+                {fileDrop.active && (
+                  <Box
+                    data-composer-file-drop="true"
+                    aria-hidden
+                    sx={{
+                      position: "absolute",
+                      inset: 0,
+                      zIndex: 5,
+                      display: "grid",
+                      placeItems: "center",
+                      border: 2,
+                      borderStyle: "dashed",
+                      borderColor: "primary.main",
+                      bgcolor: (t) => alpha(t.palette.primary.main, 0.08),
+                      color: "primary.main",
+                      typography: "body2",
+                      fontWeight: 600,
+                      pointerEvents: "none",
+                    }}
+                  >
+                    Drop files to attach
+                  </Box>
+                )}
+                <Box
+                  ref={editorAreaRef}
+                  sx={{ display: "flex", flexDirection: "column", minHeight: 0, flex: 1 }}
+                >
+                  <PlatformComposerEditor
+                    ref={editorRef}
+                    autoFocus={autoFocus}
+                    value={initialDraftText.current}
+                    onChange={setText}
+                    borderless
+                    fill={desktop && column}
+                    flushRightScrollbar={desktop && column}
+                    endInset={0}
+                    holdToForce={false}
+                    onForceHold={(): void => {
+                      if (!sendable || queueBtnRef.current === null) return;
+                      haptic();
+                      openDeliveryPicker();
+                    }}
+                    sessionId={sessionId}
+                    commands={(): AvailableCommand[] => availableCommands}
+                    placeholder={preparing
+                      ? "You can start typing while this session prepares…"
+                      : messagePlaceholder}
+                    vim={vim}
+                    onVimMode={setVimMode}
+                    onPasteFiles={(files): void =>
+                      addFiles(files, { preserveFocus: true })}
+                    promptSuggestion={offeredPrompt}
+                    onPromptSuggestionDismiss={(): void =>
+                      dismissPromptSuggestion(sessionId)}
+                  />
+                </Box>
+              </Box>
+            }
+          />
+        </Suspense>
       )}
-      {
-        /* CM6 renders token-backed images at their document position. The tray is
-          reserved for files and legacy images that have no placement token. */
-      }
-      {!mobilePendingEditing && compactTrayAttachments.length > 0 && (
+      {!desktop && !mobilePendingEditing && compactTrayAttachments.length > 0 && (
         <AttachmentPreviews
           attachments={compactTrayAttachments}
           onRemove={removeAttachment}
         />
       )}
-      {
-        /* Hidden multi-file picker driven by the paperclip button. `accept` is
-          left open so any file type can be attached (images embed inline, other
-          files ride as ACP resource blocks — see attachments.ts). */
-      }
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        hidden
-        onChange={(e): void => {
-          addFiles(Array.from(e.target.files ?? []));
-          // Reset so picking the same file twice in a row still fires change.
-          e.target.value = "";
-          // NB: do NOT refocus the composer here — on iOS it leaves a phantom
-          // keyboard-viewport shrink (dead gap below the UI). The picker drops the
-          // keyboard regardless (platform limit); the user taps to resume.
-        }}
-      />
-      {
-        /* Input tier: native textarea on touch (CodeMirror's contenteditable
-          strands IME pinyin on iOS — see ComposerTextarea), CodeMirror on
-          desktop (vim + live @/​/ completion). Same ComposerEditorHandle ref. */
-      }
-      {
-        /* Desktop is a flat writing surface inside the Prompt pane. Mobile
-          retains its own input card and keyboard material. Both keep this same
-          editor owner mounted through width, state and focus changes. */
-      }
-      <SessionContextCue sessionId={sessionId} desktop={desktop} />
-      {handedOff && <SessionHandedOffDock sessionId={sessionId} desktop={desktop} />}
-      <Paper
+      {!desktop && (
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          hidden
+          onChange={(e): void => {
+            addFiles(Array.from(e.target.files ?? []));
+            // Reset so picking the same file twice in a row still fires change.
+            e.target.value = "";
+            // NB: do NOT refocus the composer here — on iOS it leaves a phantom
+            // keyboard-viewport shrink (dead gap below the UI). The picker drops the
+            // keyboard regardless (platform limit); the user taps to resume.
+          }}
+        />
+      )}
+      {!desktop && <SessionContextCue sessionId={sessionId} desktop={false} />}
+      {!desktop && handedOff && <SessionHandedOffDock sessionId={sessionId} desktop={false} />}
+      {!desktop && <Paper
         data-composer-stack-slot="primary"
-        {...(surface === "desktop"
-          ? {
-            "data-desktop-region": "prompt.composer",
-            "data-desktop-focus-default": true,
-            tabIndex: -1,
-          }
-          : {})}
         data-mobile-focus-composer={touchInput ? "true" : undefined}
         data-mobile-primary-composer={touchInput ? "true" : undefined}
         data-mobile-keyboard-open={touchInput && mobileKeyboardPresentationOpen
           ? "true"
           : undefined}
-        variant={desktop ? "elevation" : "outlined"}
+        variant="outlined"
         elevation={0}
         {...fileDrop.handlers}
         sx={{
           position: "relative",
-          display: !desktop && mobilePendingEditing ? "none" : "flex",
+          display: mobilePendingEditing ? "none" : "flex",
           flexDirection: "column",
           ...(handedOff && { display: "none" }),
-          ...(desktop && {
-            border: 0,
-            borderRadius: 0,
-            boxShadow: "none",
-            // Pane header and status line own focus; do not outline the canvas.
-            "&:focus-visible, &:focus-within": { outline: "none", boxShadow: "none" },
-          }),
-          bgcolor: desktop ? "transparent" : column
+          bgcolor: column
             ? (t) =>
               alpha(
                 t.palette.background.paper,
                 t.palette.mode === "dark" ? 0.18 : 0.34,
               )
             : "transparent",
-          // Column mode: the card fills the column's remaining height (below the
-          // queued/drafts panels) so the editor is always in its tall form.
-          ...(desktop && column && {
-            flex: 1,
-            minHeight: 0,
-            overflow: "hidden",
-          }),
           ...(touchInput && {
             borderRadius: mobileComposerPanelFrameSx.borderRadius,
             transition:
@@ -1700,17 +1774,6 @@ export function ComposerWorkspace({
           }),
         }}
       >
-        {desktop && (
-          <Suspense fallback={null}>
-            <DesktopRegionShortcut
-              shortcut={DESKTOP_FOCUS_PROMPT_SHORTCUT}
-              title="Focus prompt editor"
-              showWhenPane="prompt"
-              hideWhenRegion="prompt.composer"
-              sx={{ position: "absolute", top: 10, right: 10, zIndex: 4 }}
-            />
-          </Suspense>
-        )}
         {fileDrop.active && (
           <Box
             data-composer-file-drop="true"
@@ -1823,12 +1886,6 @@ export function ComposerWorkspace({
               flexDirection: "column",
               minHeight: 0,
               ...(touchInput && {
-                // Resting compose only has the fullscreen control in its right
-                // rail, so one 44px touch target plus the card edge is enough.
-                // The keyboard-only hide control joins that rail in the focused
-                // state above, which promotes this to the two-control height.
-                // Keeping the resting height content-tight prevents a permanent
-                // blank "padding" band regardless of Plan/Queue/Draft presence.
                 minHeight: mobileComposerIdleEditorMinHeight,
                 transition:
                   `min-height ${mobileComposerFocusMotion.duration} ${mobileComposerFocusMotion.easing}`,
@@ -1836,33 +1893,22 @@ export function ComposerWorkspace({
                   transition: "none",
                 },
               }),
-              ...(desktop && column && { flex: 1 }),
             }}
           >
             <PlatformComposerEditor
               ref={editorRef}
               autoFocus={autoFocus}
-              // CM6 is seeded once and owns its document on every surface. Feeding
-              // live React state back here would bounce the caret and corrupt IME.
               value={initialDraftText.current}
-              {
-                // The native compact touch branch is a controlled textarea and needs
-                // the live value. PlatformComposerEditor never feeds this back to CM6.
-                ...(touchInput ? { nativeValue: text } : {})
-              }
+              {...(touchInput ? { nativeValue: text } : {})}
               onChange={setText}
-              {...(!desktop ? { onSubmit: submitAndNotify, onSaveDraft: saveDraft } : {})}
+              onSubmit={submitAndNotify}
+              onSaveDraft={saveDraft}
               borderless
               expanded={inlineExpanded}
               heightPx={inlineExpanded ? composerHeight : 0}
-              // Column layout: stretch to fill the column instead of the vh-bounded
-              // compact/expanded sizes (overrides expanded/heightPx).
-              fill={desktop && column}
-              flushRightScrollbar={desktop && column}
-              // Reserve a top-right gutter so no line runs under the ↗/↙ expand
-              // toggle the card overlays at its top-right corner.
-              endInset={desktop && column ? 0 : 36}
-              // Keyboard and pointer activation share the same delivery picker.
+              fill={false}
+              flushRightScrollbar={false}
+              endInset={36}
               holdToForce={false}
               onForceHold={(): void => {
                 if (!sendable || queueBtnRef.current === null) return;
@@ -1874,14 +1920,11 @@ export function ComposerWorkspace({
               placeholder={preparing
                 ? "You can start typing while this session prepares…"
                 : messagePlaceholder}
-              // Vim is desktop-only — never load it on touch (no physical keyboard /
-              // modal editing). ComposerEditor also gates the actual vim import on a
-              // fine pointer, so this is belt-and-suspenders.
               vim={touchInput ? false : vim}
               onVimMode={setVimMode}
               onPasteFiles={(files): void =>
                 addFiles(files, { preserveFocus: true })}
-              promptSuggestion={desktop ? offeredPrompt : null}
+              promptSuggestion={null}
               onPromptSuggestionDismiss={(): void =>
                 dismissPromptSuggestion(sessionId)}
             />
@@ -1951,61 +1994,10 @@ export function ComposerWorkspace({
             </Tooltip>
           ))}
         {
-          /* Desktop owns persistent editing and delivery rows below the
-            scrollport. Mobile retains its keyboard-aware input-card controls. */
+          /* Mobile retains its keyboard-aware input-card controls; Desktop
+            owns its unified workbench above. */
         }
-        {desktop
-          ? (
-            <Suspense fallback={<Box sx={{ minHeight: 80 }} />}>
-              <DesktopComposerToolbar
-                sessionId={sessionId}
-                status={status}
-                editorRef={editorRef}
-                sendButtonRef={queueBtnRef}
-                canInsert={!dead}
-                sendable={sendable}
-                canJumpFront={queue.length > 0}
-                canForce={forceable}
-                canCurrentTurn={currentTurnAvailable}
-                onCurrentTurn={openDeliveryPicker}
-                pending={submitFeedback.pending}
-                progress={submitFeedback.progress}
-                sendLabel={busy || queue.length > 0
-                  ? "Send…"
-                  : starting || paused || !serverConnected
-                  ? "Enqueue"
-                  : "Send"}
-                sendDescription={!serverConnected
-                  ? "Queue until Cowboy is reachable"
-                  : busy || queue.length > 0
-                  ? "Choose delivery timing and queue position"
-                  : paused
-                  ? "Queue until the paused queue is resumed"
-                  : starting
-                  ? "Run after the current work finishes"
-                  : dead ? "Send to resume this session" : "Send message"}
-                unavailableReason={attachments.some((attachment) =>
-                    attachment.pending
-                  )
-                  ? "Wait for attachments to finish preparing"
-                  : "Write a message or attach a file first"}
-                overlayOpen={deliveryAnchor !== null ||
-                  scheduleTarget !== null}
-                onAttach={(): void => fileInputRef.current?.click()}
-                onSaveDraft={saveDraft}
-                onSchedule={(): void =>
-                  setScheduleTarget({ id: undefined, initial: null })}
-                onJumpFront={jumpToFront}
-                onForce={(): void => {
-                  openDeliveryPicker();
-                }}
-                onSubmit={(): void => {
-                  requestDelivery();
-                }}
-              />
-            </Suspense>
-          )
-          : (
+        {(
             <>
               {touchInput && (
                 <Box
@@ -2394,7 +2386,7 @@ export function ComposerWorkspace({
           /* (Vim status moved to the app-wide bottom status bar — see App's
             StatusBar at the very bottom of the window, Zed/VSCode style.) */
         }
-      </Paper>
+      </Paper>}
       {
         /* Keep this confirmation non-modal. Even with every FocusTrap option
           disabled, MUI Popover still mounts a Modal and applies its document

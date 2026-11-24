@@ -5,8 +5,6 @@ const SEMANTIC_MAC_SHORTCUTS = new Map<string, ReadonlySet<string>>([
     "mod+s",
     new Set([
       "composer.saveDraft",
-      "pendingEdit.queued.done",
-      "pendingEdit.draft.done",
       "document.save",
     ]),
   ],

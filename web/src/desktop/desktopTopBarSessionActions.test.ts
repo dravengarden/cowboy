@@ -9,6 +9,8 @@ const topBarSource = await readFile(
 const composerSource = await readComposerSource();
 const toolbarSource = await readFile(
   new URL("./DesktopComposerToolbar.tsx", import.meta.url), "utf8",
+) + await readFile(
+  new URL("./DesktopEditorFormatRow.tsx", import.meta.url), "utf8",
 );
 const sessionActionsSource = await readFile(
   new URL("./useDesktopSessionActions.tsx", import.meta.url), "utf8",

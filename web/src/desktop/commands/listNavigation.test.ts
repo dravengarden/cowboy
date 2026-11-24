@@ -5,7 +5,7 @@ import { listPageTarget, listScrollFor, pendingItemActionKey } from "./listNavig
 const assertEquals = (actual: unknown, expected: unknown): void => assert.deepEqual(actual, expected);
 
 test("pending rows expose stable item-scoped action keys", () => {
-  assert.equal(pendingItemActionKey("S"), "default");
+  assert.equal(pendingItemActionKey("S"), null);
   assert.equal(pendingItemActionKey("r"), "return");
   assert.equal(pendingItemActionKey("T"), "schedule");
   assert.equal(pendingItemActionKey("m"), "move");

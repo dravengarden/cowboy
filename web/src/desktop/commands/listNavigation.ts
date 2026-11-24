@@ -1,15 +1,20 @@
+import { isMac } from "../../platform";
+import {
+  DESKTOP_NEW_SESSION_DRAFT_EVENT,
+  DESKTOP_PENDING_ROW_EDIT_EVENT,
+} from "../promptBuffer";
+
 export type PendingItemAction =
-  | "default"
   | "return"
   | "schedule"
   | "move"
   | "document"
   | "remove";
 
-/** Bare item-scoped actions shared by Queue and Draft rows. */
+/** Bare item-scoped actions shared by Queue and Draft rows.
+ *  Primary send/deliver moved to `Mod+Enter` so bare `s` never fires a send. */
 export function pendingItemActionKey(key: string): PendingItemAction | null {
   return ({
-    s: "default",
     r: "return",
     t: "schedule",
     m: "move",
@@ -18,7 +23,35 @@ export function pendingItemActionKey(key: string): PendingItemAction | null {
   } as Record<string, PendingItemAction>)[key.toLocaleLowerCase()] ?? null;
 }
 
-/** Handle Queue/Draft list-specific keys (reorder, Esc/h back to canvas, item verbs). */
+export function isPendingModEnter(event: KeyboardEvent): boolean {
+  const mod = isMac ? event.metaKey && !event.ctrlKey : event.ctrlKey && !event.metaKey;
+  return mod && !event.altKey && !event.shiftKey &&
+    (event.key === "Enter" || event.code === "NumpadEnter");
+}
+
+function triggerPendingEdit(
+  item: HTMLElement | undefined,
+  entryMode: "insert" | "normal",
+): boolean {
+  if (!item) return false;
+  const handled = !item.dispatchEvent(
+    new CustomEvent(DESKTOP_PENDING_ROW_EDIT_EVENT, {
+      bubbles: true,
+      cancelable: true,
+      detail: { entryMode },
+    }),
+  );
+  if (handled) return true;
+  const fallback = item.querySelector<HTMLElement>(
+    "[data-desktop-item-action='edit'], button[aria-label='Edit']",
+  );
+  if (!fallback) return false;
+  fallback.click();
+  return true;
+}
+
+/** Handle Queue/Draft list-specific keys (reorder, Esc/h back to canvas,
+ *  i/l/Enter unified edit, n new draft, Mod+Enter deliver, item verbs). */
 export function handlePendingListKey({
   event,
   key,
@@ -36,15 +69,18 @@ export function handlePendingListKey({
   reordering: boolean;
   focusComposer: () => void;
 }): boolean {
-  if (key.toLowerCase() === "o" && !event.repeat) {
+  if (isPendingModEnter(event)) {
+    if (active < 0) return false;
+    const action = items[active]?.querySelector<HTMLElement>(
+      "[data-desktop-item-action='default']",
+    );
+    if (!action) return false;
     event.preventDefault();
     event.stopPropagation();
-    region.querySelector<HTMLElement>("[data-desktop-pending-list]")?.dispatchEvent(
-      new CustomEvent("cowboy:desktop-toggle-reorder"),
-    );
-    items[Math.max(0, active)]?.focus({ preventScroll: true });
+    action.click();
     return true;
   }
+  if (event.ctrlKey || event.metaKey || event.altKey) return false;
   if (key === "Escape" || (!reordering && key === "h")) {
     event.preventDefault();
     event.stopPropagation();
@@ -57,6 +93,27 @@ export function handlePendingListKey({
     }
     return true;
   }
+  if (
+    !reordering &&
+    key.toLowerCase() === "n" &&
+    region.dataset.desktopRegion === "prompt.draft" &&
+    !event.repeat
+  ) {
+    event.preventDefault();
+    event.stopPropagation();
+    globalThis.dispatchEvent(new CustomEvent(DESKTOP_NEW_SESSION_DRAFT_EVENT));
+    return true;
+  }
+  if (items.length === 0) return false;
+  if (key.toLowerCase() === "o" && !event.repeat) {
+    event.preventDefault();
+    event.stopPropagation();
+    region.querySelector<HTMLElement>("[data-desktop-pending-list]")?.dispatchEvent(
+      new CustomEvent("cowboy:desktop-toggle-reorder"),
+    );
+    items[Math.max(0, active)]?.focus({ preventScroll: true });
+    return true;
+  }
   if (reordering && (key === "j" || key === "k")) {
     event.preventDefault();
     event.stopPropagation();
@@ -66,7 +123,21 @@ export function handlePendingListKey({
     }));
     return true;
   }
-  if (active >= 0) {
+  if (!reordering && active >= 0) {
+    if (key.toLowerCase() === "i" && !event.repeat) {
+      if (triggerPendingEdit(items[active], "insert")) {
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
+    }
+    if ((key === "Enter" || key.toLowerCase() === "l") && !event.repeat) {
+      if (triggerPendingEdit(items[active], "normal")) {
+        event.preventDefault();
+        event.stopPropagation();
+        return true;
+      }
+    }
     const pendingAction = pendingItemActionKey(key);
     const action = pendingAction
       ? items[active]?.querySelector<HTMLElement>(

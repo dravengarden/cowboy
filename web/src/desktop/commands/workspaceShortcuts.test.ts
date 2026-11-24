@@ -148,7 +148,6 @@ test("every prefix continuation has one stable command meaning", () => {
     " ": "session.switch",
     tab: "session.alternate",
     k: "commandPalette.open",
-    z: "editor.expand",
   });
 });
 
