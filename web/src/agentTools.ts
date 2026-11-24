@@ -84,9 +84,15 @@ export interface RoutingRow {
   model?: string;
   efforts?: string[];
 }
+export interface QuotaAmpleTier {
+  min_remaining_percent: number;
+  comfort_remaining_percent: number;
+  auto: RoutingRow[];
+}
 export interface RoutingTier {
   auto: RoutingRow[];
   allow?: RoutingRow[];
+  quota_ample?: QuotaAmpleTier;
 }
 /** Pilot medians at the top level (null when unmeasured), field medians apart. */
 export interface RoutingCost {

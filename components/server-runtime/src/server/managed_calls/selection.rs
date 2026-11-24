@@ -1,10 +1,13 @@
-//! Evidence for the calling model's decision. No quota thresholds or silent
-//! model fallback: the agent chooses a signed preset within session authority.
+//! Evidence and quota-pace-aware routing for managed reviews and analyses.
+//! Simple/routine reviews stay on Sol Max / Opus; high-risk reviews dynamically
+//! switch Codex priority between Astra Max and Sol Max by fresh quota headroom
+//! relative to reset time, and agents may self-assess important changes to name
+//! Astra Max with risk:'high' and a concrete reason.
 use serde_json::{Value, json};
 
 mod routing;
 
-pub const GUIDANCE: &str = "For Review/Design Review, the Controller picks the reviewer from providers[].review_routing by declared risk; cost matters. Declare risk from the review root's own guidance (its AGENTS.md/CLAUDE.md Review risk section) and the affected paths: risk:'high' (a change that can lose or corrupt durable data, weaken credentials, authentication or account isolation, or touch money and usage limits, or a risk area that guidance names; size, concurrency or a wide refactor alone is routine) needs a reason and gets Sol Max (Claude Opus). Everything else is routine (Sol Max; Claude Opus). Astra Max and Fable cost about twice Sol Max and are never chosen automatically. Name one, with risk:'high', only when the user asked for that model or when the review root's guidance (its Review risk section) lists the change's area for the strongest reviewer; the reason cites that request or the guidance entry. high risk alone, or an area the guidance does not list, does not justify them. Prefer another vendor's reviewer (an Auto call tries other vendors first); the caller's own vendor is allowed, but a review never runs the caller's own model (same_model). Otherwise omit preset unless the user named one; a routine review refuses a stronger preset (preset_outside_tier). A fix-confirmation round is routine: continue the same review child when it runs a routine-tier preset; a child on a stronger preset (for example Astra Max) refuses a routine round (preset_outside_tier), so start a fresh routine review with the same task and base (it reuses the captured input). Continue with risk:'high' only when the fixes themselves changed a high-risk design, not because the first round was high. A review child takes at most three completed rounds (review_rounds_exhausted): findings that survive them call for redesigning that mechanism, not another round. Evidence and test-run audits are analysis calls, not reviews; design and contract checks stay design reviews. Costs are measured tokens, not quota; inspect quota windows and reset times before choosing a Provider. review_candidates is the routine order for older callers. No silent fallback after a failed call: diagnose before retrying. usedPercent is USED; resetsAt is epoch seconds. Large quota payloads: use cowboy.usage.read.";
+pub const GUIDANCE: &str = "For Review/Design Review, the Controller picks the reviewer from providers[].review_routing by declared risk and live quota headroom; cost matters. Simple or routine changes (UI, copy, docs, tests, mechanical tweaks, ordinary refactors, fix-confirmation rounds) use risk:'routine' (Sol Max; Claude Opus) and never need Astra Max (a routine review refuses a stronger preset with preset_outside_tier). Important or high-risk changes (durable data loss/corruption, credentials/auth/permissions/isolation, money/billing/usage limits, critical routing/deployment/protocol/concurrency designs, or risk areas in the review root's AGENTS.md/CLAUDE.md Review risk section) use risk:'high' with a concrete reason. On Codex high-risk reviews, the Controller dynamically switches automatic priority between Astra Max (when fresh quota headroom is ample relative to reset time) and Sol Max (when quota is tight, behind pace, or stale); inspect providers[].review_routing.high and quota_mode. You may also self-assess and explicitly name preset:'astra-max' with risk:'high' and a concrete reason whenever an important change warrants the strongest reviewer (Fable remains explicit-only with risk:'high' + reason due to its higher cost). Prefer another vendor's reviewer (Auto tries other vendors first); the caller's own vendor is allowed, but a review never runs the caller's own model (same_model). A fix-confirmation round is routine: continue the same review child when it runs a routine-tier preset; a child on Astra Max refuses a routine round (preset_outside_tier), so start a fresh routine review with the same task and base (it reuses the captured input). Continue with risk:'high' only when the fixes themselves changed a high-risk design. A review child takes at most three completed rounds (review_rounds_exhausted): findings that survive them call for redesigning that mechanism. Evidence and test-run audits are analysis calls, not reviews; design and contract checks stay design reviews. Costs are measured tokens, not quota; inspect quota windows and reset times before choosing a Provider. review_candidates is the routine order for older callers. No silent fallback after a failed call: diagnose before retrying. usedPercent is USED; resetsAt is epoch seconds. Large quota payloads: use cowboy.usage.read.";
 
 pub fn family(model: &str) -> Option<&'static str> {
     // Signed presets may carry a context suffix such as `opus[1m]`.
@@ -60,20 +63,31 @@ pub fn candidates(
     preference: &super::super::agent_tools::ReviewPreferences,
     high_risk: bool,
 ) -> Vec<Value> {
-    ranked(presets, presets, provider, preference, high_risk).list
+    ranked(presets, presets, provider, preference, high_risk, None, 0).list
 }
 
 /// `candidates` for a caller: `runnable` is the whole generation (coverage),
-/// filtered here by the caller's own model.
+/// filtered here by the caller's own model, with optional cached quota evidence
+/// for dynamic high-risk priority switching.
 pub fn candidates_for(
     runnable: &Value,
     provider: &str,
     preference: &super::super::agent_tools::ReviewPreferences,
     high_risk: bool,
     (same_vendor, caller): (bool, Option<Option<&str>>),
+    quota: Option<(&Value, i64)>,
 ) -> routing::Ranked {
     let presets = exclude_caller_model(runnable, same_vendor, caller);
-    ranked(&presets, runnable, provider, preference, high_risk)
+    let (quota_value, now_ms) = quota.map_or((None, 0), |(q, now)| (Some(q), now));
+    ranked(
+        &presets,
+        runnable,
+        provider,
+        preference,
+        high_risk,
+        quota_value,
+        now_ms,
+    )
 }
 
 fn ranked(
@@ -82,6 +96,8 @@ fn ranked(
     provider: &str,
     preference: &super::super::agent_tools::ReviewPreferences,
     high_risk: bool,
+    quota: Option<&Value>,
+    now_ms: i64,
 ) -> routing::Ranked {
     use super::super::agent_tools::ReviewEffort;
     let policy = if provider == "codex" {
@@ -100,7 +116,7 @@ fn ranked(
     let coverage = coverage.as_array().map_or(&[][..], Vec::as_slice);
     routing::TABLE
         .as_ref()
-        .and_then(|table| routing::order(table, provider, level, &pool, coverage))
+        .and_then(|table| routing::order(table, provider, level, &pool, coverage, quota, now_ms))
         .unwrap_or_else(|| {
             let list = legacy(presets, provider, preference, high_risk);
             routing::Ranked {
@@ -207,6 +223,7 @@ pub fn admit(
     preference: &super::super::agent_tools::ReviewPreferences,
     explicit: Option<&str>,
     (same_vendor, caller): (bool, Option<Option<&str>>),
+    quota: Option<(&Value, i64)>,
 ) -> Result<String, Value> {
     let runnable = presets;
     let presets = &exclude_caller_model(runnable, same_vendor, caller);
@@ -215,6 +232,16 @@ pub fn admit(
         .get(crate::managed_calls::review::RISK)
         .map_or("undeclared", String::as_str);
     let high_risk = risk == "high";
+    let quota_mode = high_risk
+        .then(|| {
+            let (q, now) = quota.map_or((None, 0), |(q, now)| (Some(q), now));
+            routing::TABLE
+                .as_ref()
+                .and_then(|table| routing::high_quota_assessment(table, provider, q, now))
+                .map(|a| a.mode)
+        })
+        .flatten()
+        .unwrap_or("none");
     let decided = |outcome: &str, preset: Option<&str>| {
         // Journal-retained (not evidence-only): routing is low volume and its
         // refusals leave no ledger row, so this is their only record.
@@ -225,6 +252,7 @@ pub fn admit(
             provider,
             same_vendor,
             risk,
+            quota_mode,
             explicit_preset = explicit.unwrap_or(""),
             preset = preset.unwrap_or(""),
             outcome,
@@ -251,6 +279,7 @@ pub fn admit(
         preference,
         high_risk,
         (same_vendor, caller),
+        quota,
     );
     let choices = tier.list;
     let all = reviewers(presets, provider, preference);
@@ -269,6 +298,7 @@ pub fn admit(
         preference,
         high_risk,
         (false, Some(None)),
+        quota,
     );
     // Unnamed, the exclusion may also remove only the tier's automatic choice.
     let lost_automatic = explicit.is_none() && eligible.automatic && !tier.automatic;
@@ -376,6 +406,7 @@ pub fn admit_continuation(
         preference,
         high_risk,
         (false, Some(None)),
+        None,
     )
     .list;
     let named =
@@ -428,30 +459,38 @@ pub fn routing_view(
     provider: &str,
     preference: &super::super::agent_tools::ReviewPreferences,
     caller: (bool, Option<Option<&str>>),
+    quota: Option<(&Value, i64)>,
 ) -> Value {
     let Some(table) = routing::TABLE.as_ref() else {
         return Value::Null;
     };
     let entry =
         |preset: &Value| json!({"preset": preset["id"], "cost": routing::cost(table, preset)});
-    let high = candidates_for(runnable, provider, preference, true, caller);
+    let high = candidates_for(runnable, provider, preference, true, caller, quota);
     let high = if high.automatic {
         high.list
     } else {
         Vec::new()
     };
-    let routine = candidates_for(runnable, provider, preference, false, caller);
+    let routine = candidates_for(runnable, provider, preference, false, caller, quota);
     let routine = if routine.automatic {
         routine.list
     } else {
         Vec::new()
     };
-    json!({
+    let (q_val, now_ms) = quota.map_or((None, 0), |(q, now)| (Some(q), now));
+    let assessment = routing::high_quota_assessment(table, provider, q_val, now_ms);
+    let mut out = json!({
         "evidence": table.evidence,
         "high": high.first().map(entry),
         "routine": routine.first().map(entry),
         "cheaper": routine.iter().skip(1).map(entry).collect::<Vec<_>>(),
-    })
+    });
+    if let Some(a) = assessment {
+        out["quota_mode"] = json!(a.mode);
+        out["quota_headroom"] = a.to_json();
+    }
+    out
 }
 
 /// Automatic preset for a fresh unnamed `analysis` (or `context_ask`) call,
@@ -709,7 +748,7 @@ mod tests {
         );
         assert_eq!(family("gpt-6-astra"), Some("astra"));
         assert_eq!(family("gpt-6-luna"), None);
-        let view = routing_view(&gpt, "codex", &preference, (false, Some(None)));
+        let view = routing_view(&gpt, "codex", &preference, (false, Some(None)), None);
         assert_eq!(view["routine"]["preset"], "sol-max");
         assert_eq!(view["routine"]["cost"]["n"], 4);
         assert_eq!(view["high"]["preset"], "sol-max");
@@ -767,6 +806,7 @@ mod tests {
             &preference,
             None,
             (true, Some(Some("opus"))),
+            None,
         )
         .unwrap_err();
         assert_eq!(refused["error"]["code"], "same_model");
@@ -779,7 +819,8 @@ mod tests {
                 "claude-code",
                 &preference,
                 Some("fable-max"),
-                (true, Some(Some("opus")))
+                (true, Some(Some("opus"))),
+                None
             )
             .unwrap_err()["error"]["code"],
             "same_model"
@@ -792,7 +833,16 @@ mod tests {
             .insert("selection_reason".into(), "persistence".into());
         let caller = (true, Some(Some("opus")));
         assert_eq!(
-            admit(&high, &claude, "claude-code", &preference, None, caller).unwrap_err()["error"]["code"],
+            admit(
+                &high,
+                &claude,
+                "claude-code",
+                &preference,
+                None,
+                caller,
+                None
+            )
+            .unwrap_err()["error"]["code"],
             "same_model"
         );
         assert_eq!(
@@ -802,7 +852,8 @@ mod tests {
                 "claude-code",
                 &preference,
                 Some("fable-max"),
-                caller
+                caller,
+                None
             )
             .unwrap(),
             "fable-max"
@@ -821,7 +872,8 @@ mod tests {
                 "codex",
                 &preference,
                 None,
-                (true, Some(Some("sol")))
+                (true, Some(Some("sol"))),
+                None
             )
             .unwrap(),
             "astra-medium"
@@ -1033,5 +1085,187 @@ mod tests {
         assert_eq!(view["stale"], true);
         assert_eq!(view["reason"], "native_login_required");
         assert!(view["limits"].is_null());
+    }
+
+    #[test]
+    fn codex_high_risk_switches_between_astra_and_sol_by_quota_pace() {
+        use super::super::super::agent_tools::ReviewPreferences;
+        let gpt = json!([
+            {"id":"astra-max","values":{"model":"gpt-6.2-astra","reasoning_effort":"max"}},
+            {"id":"sol-max","values":{"model":"gpt-6.2-sol","reasoning_effort":"max"}},
+            {"id":"astra-medium","values":{"model":"gpt-6.2-astra","reasoning_effort":"medium"}},
+            {"id":"sol-medium","values":{"model":"gpt-6.2-sol","reasoning_effort":"medium"}}
+        ]);
+        let preference = ReviewPreferences::default();
+        let now_ms: i64 = 1_795_515_292_000;
+        let now_s = now_ms / 1000;
+        let mk_quota = |used: f64, hours_left: f64, stale: bool| {
+            json!({
+                "status": "available",
+                "stale": stale,
+                "limits": {
+                    "rateLimitsByLimitId": {
+                        "codex": {
+                            "primary": {
+                                "usedPercent": used,
+                                "windowDurationMins": 10080,
+                                "resetsAt": now_s + (hours_left * 3600.0) as i64
+                            }
+                        }
+                    }
+                }
+            })
+        };
+
+        // 1. Ahead of linear pace (57% used => 43% left, 2.14d/7d => 30.6% time left): high -> astra-max, routine stays sol-max.
+        let ample = mk_quota(57.0, 51.4, false);
+        let view = routing_view(
+            &gpt,
+            "codex",
+            &preference,
+            (false, Some(None)),
+            Some((&ample, now_ms)),
+        );
+        assert_eq!(view["high"]["preset"], "astra-max");
+        assert_eq!(view["routine"]["preset"], "sol-max");
+        assert_eq!(view["quota_mode"], "ample");
+
+        // 2. Early-window abundance (10% used => 90% left >= 70% comfort even with 6.9d left): high -> astra-max.
+        let fresh_week = mk_quota(10.0, 165.0, false);
+        let view = routing_view(
+            &gpt,
+            "codex",
+            &preference,
+            (false, Some(None)),
+            Some((&fresh_week, now_ms)),
+        );
+        assert_eq!(view["high"]["preset"], "astra-max");
+        assert_eq!(view["quota_mode"], "ample");
+
+        // 3. Behind linear pace (45% used => 55% left, 5.5d/7d => 78.6% time left): conserve -> sol-max.
+        let burning_fast = mk_quota(45.0, 132.0, false);
+        let view = routing_view(
+            &gpt,
+            "codex",
+            &preference,
+            (false, Some(None)),
+            Some((&burning_fast, now_ms)),
+        );
+        assert_eq!(view["high"]["preset"], "sol-max");
+        assert_eq!(view["quota_mode"], "conserve");
+        assert_eq!(view["quota_headroom"]["reason"], "behind_pace");
+
+        // 4. Below 20% safety floor even near reset (85% used => 15% left, 6h left): conserve -> sol-max.
+        let low_floor = mk_quota(85.0, 6.0, false);
+        let view = routing_view(
+            &gpt,
+            "codex",
+            &preference,
+            (false, Some(None)),
+            Some((&low_floor, now_ms)),
+        );
+        assert_eq!(view["high"]["preset"], "sol-max");
+        assert_eq!(view["quota_mode"], "conserve");
+        assert_eq!(view["quota_headroom"]["reason"], "below_safety_floor");
+
+        // 5. Stale quota fails safe to conserve -> sol-max.
+        let stale = mk_quota(10.0, 24.0, true);
+        let view = routing_view(
+            &gpt,
+            "codex",
+            &preference,
+            (false, Some(None)),
+            Some((&stale, now_ms)),
+        );
+        assert_eq!(view["high"]["preset"], "sol-max");
+        assert_eq!(view["quota_mode"], "conserve");
+        assert_eq!(view["quota_headroom"]["reason"], "quota_stale");
+
+        // 6. Tight secondary 5h burst window overrides ample 7d window -> conserve.
+        let burst_tight = json!({
+            "status": "available",
+            "stale": false,
+            "limits": {
+                "rateLimitsByLimitId": {
+                    "codex": {
+                        "primary": {"usedPercent": 85.0, "windowDurationMins": 300, "resetsAt": now_s + 3600},
+                        "secondary": {"usedPercent": 20.0, "windowDurationMins": 10080, "resetsAt": now_s + 86400}
+                    }
+                }
+            }
+        });
+        let view = routing_view(
+            &gpt,
+            "codex",
+            &preference,
+            (false, Some(None)),
+            Some((&burst_tight, now_ms)),
+        );
+        assert_eq!(view["high"]["preset"], "sol-max");
+        assert_eq!(view["quota_mode"], "conserve");
+
+        // 7. Same-model exclusion under ample quota: Astra caller falls back to sol-max; Sol caller gets astra-max.
+        let high_req: crate::managed_calls::Request = serde_json::from_value(json!({
+            "schema":1,"request_id":"r-high","purpose":"review","instruction":"i",
+            "context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"},
+            "labels":{"review_risk":"high","selection_reason":"critical state machine"}
+        })).unwrap();
+        assert_eq!(
+            admit(
+                &high_req,
+                &gpt,
+                "codex",
+                &preference,
+                None,
+                (true, Some(Some("sol"))),
+                Some((&ample, now_ms))
+            )
+            .unwrap(),
+            "astra-max"
+        );
+        assert_eq!(
+            admit(
+                &high_req,
+                &gpt,
+                "codex",
+                &preference,
+                None,
+                (true, Some(Some("astra"))),
+                Some((&ample, now_ms))
+            )
+            .unwrap(),
+            "sol-max"
+        );
+        // Even under conserve, agent can still explicitly choose astra-max with risk:high + reason.
+        assert_eq!(
+            admit(
+                &high_req,
+                &gpt,
+                "codex",
+                &preference,
+                Some("astra-max"),
+                (false, Some(None)),
+                Some((&burning_fast, now_ms))
+            )
+            .unwrap(),
+            "astra-max"
+        );
+        // Routine review ALWAYS refuses astra-max even when quota is ample.
+        let routine_req: crate::managed_calls::Request = serde_json::from_value(json!({
+            "schema":1,"request_id":"r-routine","purpose":"review","instruction":"i",
+            "context":{"scope":"current-worktree"},"access":"read-only","conversation":{"mode":"fresh"},
+            "labels":{"review_risk":"routine"}
+        })).unwrap();
+        let refused = admit(
+            &routine_req,
+            &gpt,
+            "codex",
+            &preference,
+            Some("astra-max"),
+            (false, Some(None)),
+            Some((&ample, now_ms)),
+        )
+        .unwrap_err();
+        assert_eq!(refused["error"]["code"], "preset_outside_tier");
     }
 }

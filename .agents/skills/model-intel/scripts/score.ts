@@ -105,9 +105,15 @@ export type RoutingRow = {
   model?: string;
   efforts?: string[];
 };
+export type QuotaAmpleTier = {
+  min_remaining_percent: number;
+  comfort_remaining_percent: number;
+  auto: RoutingRow[];
+};
 export type RoutingTier = {
   auto: RoutingRow[];
   allow?: RoutingRow[];
+  quota_ample?: QuotaAmpleTier;
 };
 export type AnalysisRoutingTier = {
   auto: RoutingRow[];
@@ -621,6 +627,11 @@ export function summary(c: Catalog, routing?: RoutingTable): string {
       a.localeCompare(b),
     )) {
       const parts: string[] = [];
+      if (tiersByLevel.high?.quota_ample?.auto[0]) {
+        parts.push(
+          `high (ample quota) ${formatRoutingChoice(tiersByLevel.high.quota_ample.auto[0], routing.costs, "review")}`,
+        );
+      }
       if (tiersByLevel.routine?.auto[0]) {
         parts.push(
           `review ${formatRoutingChoice(tiersByLevel.routine.auto[0], routing.costs, "review")}`,
@@ -748,9 +759,24 @@ export function auditRouting(
     ];
     for (const [level, tier] of levels) {
       if (!tier) continue;
+      if (tier.quota_ample) {
+        const qa = tier.quota_ample;
+        if (
+          !(qa.min_remaining_percent >= 0 && qa.min_remaining_percent <= 100) ||
+          !(
+            qa.comfort_remaining_percent >= qa.min_remaining_percent &&
+            qa.comfort_remaining_percent <= 100
+          )
+        ) {
+          findings.push(
+            `routing.json/${provider}.${level}.quota_ample: invalid thresholds (${qa.min_remaining_percent}, ${qa.comfort_remaining_percent})`,
+          );
+        }
+      }
       for (const [kind, rows] of [
         ["auto", tier.auto ?? []],
         ["allow", tier.allow ?? []],
+        ["quota_ample.auto", tier.quota_ample?.auto ?? []],
       ] as const) {
         for (const row of rows) {
           if (!presets.some((preset) => routingRowMatches(row, preset))) {

@@ -47,6 +47,7 @@ mod context_only;
 mod observation;
 mod readiness;
 mod replay;
+mod review_routing;
 mod turn_budget;
 pub use observation::touch as touch_code_observation;
 pub use observation::{changes as code_changes, head as code_observation_head};
@@ -106,44 +107,6 @@ async fn images_run(
     .await
     .1
     .available
-}
-
-/// A Provider's review view for capabilities: routine order, routing and
-/// whether any reviewer is eligible once the caller's own model is excluded.
-fn review_fields(
-    state: &AppState,
-    meta: &crate::core::SessionMeta,
-    provider: &str,
-    runnable: &Value,
-    policy: &agent_tools::CallsPolicy,
-    available: bool,
-) -> Value {
-    let caller = caller_model(state, meta, provider);
-    let routine =
-        super::selection::candidates_for(runnable, provider, &policy.review, false, caller);
-    let high = super::selection::candidates_for(runnable, provider, &policy.review, true, caller);
-    json!({
-        "review_candidates": routine.list.iter().filter_map(|p| p["id"].as_str()).collect::<Vec<_>>(),
-        "review_routing": super::selection::routing_view(runnable, provider, &policy.review, caller),
-        "analysis_routing": super::selection::analysis_routing_view(runnable, provider),
-        "same_vendor": caller.0,
-        // Analysis may run where no reviewer is eligible; a high-risk review
-        // may still name an explicit-only reviewer.
-        "review_available": available && !(routine.list.is_empty() && high.list.is_empty()),
-    })
-}
-
-/// Whether `agent` is the caller's own vendor, and the reviewer family of the
-/// model the caller currently runs.
-fn caller_model(
-    state: &AppState,
-    meta: &crate::core::SessionMeta,
-    agent: &str,
-) -> (bool, Option<Option<&'static str>>) {
-    (
-        agent_tools::same_family(agent, &meta.provider),
-        super::selection::caller_family(state.supervisor.observed_configuration(&meta.id).as_ref()),
-    )
 }
 
 pub fn error(code: &str, admission: &str) -> Value {
@@ -673,36 +636,6 @@ pub async fn image_capabilities(
     value
 }
 
-/// Cached quota evidence for review selection: each named default account's
-/// own usage read. The retired legacy cards have no Service collector, so a
-/// child on a `default` account has no quota evidence.
-async fn quota_evidence(
-    state: &AppState,
-    meta: &crate::core::SessionMeta,
-    named: &[crate::provider_account::ProviderAccountId],
-) -> Value {
-    if !state.product_auth_enabled || meta.owner_user_id.is_some() {
-        let now = chrono::Utc::now().timestamp_millis();
-        let interval = state
-            .usage
-            .cached_view(|snapshot, _, _| snapshot.refresh_interval_ms)
-            .await;
-        let mut accounts = Vec::new();
-        if let Some(owner) = meta.owner_user_id.as_deref() {
-            for id in named {
-                let read =
-                    super::super::provider_accounts::usage::read_one(&state.accounts, owner, id)
-                        .await
-                        .unwrap_or_else(|code| json!({"account_id":id,"reason":code}));
-                accounts.push(super::selection::named_quota(&read, now, interval));
-            }
-        }
-        json!({"observed_now_ms":now,"accounts":accounts,"unavailable_accounts":[]})
-    } else {
-        json!({"status":"permission_denied"})
-    }
-}
-
 async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger: &Ledger) -> Value {
     let placement = ledger.placement();
     let policy = agent_tools::effective(state, meta).calls;
@@ -787,9 +720,19 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "output": if readiness.structured_output { json!(["text","json_schema"]) } else { json!(["text"]) },
             "conversation": ["fresh","continue"],
         });
+        let q_snap = review_routing::account_quota(state, meta, &readiness.account).await;
+        let q_ref = q_snap.as_ref().map(|(q, now)| (q, *now));
         if let (Value::Object(fields), Value::Object(review)) = (
             &mut entry,
-            review_fields(state, meta, provider, &runnable_presets, &policy, available),
+            review_routing::review_fields(
+                state,
+                meta,
+                provider,
+                &runnable_presets,
+                &policy,
+                available,
+                q_ref,
+            ),
         ) {
             fields.extend(review);
         }
@@ -798,7 +741,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
         }
         providers.push(entry);
     }
-    let quota = quota_evidence(state, meta, &named).await;
+    let quota = review_routing::quota_evidence(state, meta, &named).await;
     // Account observations must not outlive the parent/user permission that
     // was checked before the readiness and cache awaits.
     if let Err(code) =
@@ -851,7 +794,14 @@ async fn first_ready(
     ledger: &Ledger,
     targets: Vec<agent_tools::CallTarget>,
     request: &Request,
-) -> Result<(agent_tools::CallTarget, Option<(String, String)>), &'static str> {
+) -> Result<
+    (
+        agent_tools::CallTarget,
+        Option<(String, String)>,
+        crate::provider_account::ProviderAccountId,
+    ),
+    &'static str,
+> {
     let mut refusal = None;
     for target in targets {
         let (_, readiness) = child_runtime(
@@ -872,7 +822,7 @@ async fn first_ready(
             let generation = readiness
                 .generation
                 .map(|generation| (generation.version, generation.digest));
-            return Ok((target, generation));
+            return Ok((target, generation, readiness.account));
         }
         refusal.get_or_insert(readiness.reason.unwrap_or("provider_unavailable"));
     }
@@ -1004,10 +954,11 @@ async fn start(
                 };
             }
         };
-    let (mut target, generation) = match first_ready(state, meta, ledger, targets, &request).await {
-        Ok(ready) => ready,
-        Err(reason) => return error(reason, "not_submitted"),
-    };
+    let (mut target, generation, account) =
+        match first_ready(state, meta, ledger, targets, &request).await {
+            Ok(ready) => ready,
+            Err(reason) => return error(reason, "not_submitted"),
+        };
     // Discovery and admission use the generation the claim will pin, not the
     // latest Catalog: an id may be absent or name another model on it.
     let runnable = agent_tools::presets_on(
@@ -1023,14 +974,14 @@ async fn start(
         return error("preset_unavailable", "not_submitted");
     }
     if request.purpose.is_review() {
-        if let Err(refused) = route_review(
+        if let Err(refused) = review_routing::route_review(
             state,
             meta,
             ledger,
             &request,
             &runnable,
             &mut target,
-            &policy.review,
+            (&policy.review, &account),
             preset,
         )
         .await
@@ -1106,51 +1057,6 @@ async fn start(
     super::runner::ensure_runner(state, &record);
     state.managed_calls.notify();
     envelope(&wait_started(state, ledger, &record, deadline).await)
-}
-
-/// A review's tier (docs/review-routing.md), not Tools pins: a fresh review
-/// gets the tier's preset; a continued round keeps its child's preset only
-/// when that preset fits the round's declared tier.
-#[allow(clippy::too_many_arguments)] // The admission inputs of one review.
-async fn route_review(
-    state: &AppState,
-    meta: &crate::core::SessionMeta,
-    ledger: &Ledger,
-    request: &Request,
-    runnable: &Value,
-    target: &mut agent_tools::CallTarget,
-    preference: &agent_tools::ReviewPreferences,
-    preset: Option<&str>,
-) -> Result<(), Value> {
-    let caller = caller_model(state, meta, &target.agent);
-    if let Conversation::Continue { child_session_id } = &request.conversation {
-        let child_preset = match ledger.child(child_session_id).await {
-            Ok(Some(previous)) => previous.preset,
-            Ok(None) => return Err(error("conversation_unavailable", "not_submitted")),
-            Err(_) => return Err(error("capacity", "not_submitted")),
-        };
-        let Ok(rounds) = ledger.child_rounds(child_session_id).await else {
-            return Err(error("capacity", "not_submitted"));
-        };
-        return super::selection::admit_continuation(
-            request,
-            runnable,
-            &target.agent,
-            preference,
-            (child_preset.as_deref(), rounds),
-            caller.0,
-        );
-    }
-    target.preset = Some(super::selection::admit(
-        request,
-        runnable,
-        &target.agent,
-        preference,
-        preset,
-        caller,
-    )?);
-    target.options = None;
-    Ok(())
 }
 
 /// A policy refusal becomes a question for the session's person: the agent
