@@ -47,7 +47,10 @@ const REFRESH_AFTER_MS: i64 = 2 * 60 * 1_000;
 const FRESH_MS: i64 = 10 * 60 * 1_000;
 /// How often the timer looks for due schedules, and at most how many per look.
 const TICK: std::time::Duration = std::time::Duration::from_secs(15);
+const TICK_MS: i64 = 15_000;
 const BATCH: i64 = 32;
+/// How long the timer waits for one pre-admission refresh.
+const REFRESH_WAIT: std::time::Duration = std::time::Duration::from_secs(20);
 const GONE: &str = "The account's sign-in changed or it is no longer available; no reset was sent.";
 const LATE: &str = "The scheduled reset was more than an hour overdue; no reset was sent.";
 
@@ -351,8 +354,11 @@ impl Due<'_> {
                 .collection
                 .try_lock()
                 .is_err();
+            // Bounded: a spend that takes the account lock first never
+            // holds the timer (the refresh itself carries on detached).
             if !busy {
-                let _ = refresh_one(self.state, self.owner(), &self.id).await;
+                let refresh = refresh_one(self.state, self.owner(), &self.id);
+                let _ = tokio::time::timeout(REFRESH_WAIT, refresh).await;
             }
         }
         if now_ms().saturating_sub(self.observed_at().await.unwrap_or(0)) > FRESH_MS {
@@ -361,6 +367,15 @@ impl Due<'_> {
             return false;
         }
         true
+    }
+
+    /// Whether this route spends from exactly the scheduled sign-in.
+    async fn binding_matches(&self, route: &Route) -> bool {
+        available_account(self.store, self.owner(), &self.id)
+            .await
+            .ok()
+            .and_then(|account| authority(self.owner(), &account, &route.scope()))
+            .is_some_and(|current| current == self.schedule.authority)
     }
 
     /// Whether the account part of its authority still holds.
@@ -402,8 +417,15 @@ impl Due<'_> {
         }
     }
 
-    /// Move its next attempt; a counted one is a refusal that sent nothing.
+    /// Move its next attempt, never past the first look that withdraws it as
+    /// overdue; a counted one is a refusal that sent nothing.
     async fn defer(&self, at_ms: i64, counted: bool) -> bool {
+        let cutoff = self
+            .schedule
+            .fire_at_ms
+            .saturating_add(OVERDUE_MS)
+            .saturating_add(1);
+        let at_ms = at_ms.min(cutoff);
         self.store
             .defer_account_reset_schedule(
                 self.owner(),
@@ -484,6 +506,17 @@ async fn fire(state: &Arc<AppState>, store: &crate::store::Store, schedule: &Acc
     if !due.prepared().await {
         return;
     }
+    // The route's binding before anything is reserved: a schedule that could
+    // not spend now never charges the Provider window or holds it.
+    match route(state, owner, &due.id).await {
+        Ok(route) if due.binding_matches(&route).await => {}
+        Ok(_) => {
+            due.defer(now_ms().saturating_add(PREFLIGHT_RETRY_MS), false)
+                .await;
+            return;
+        }
+        Err(code) => return due.refused(code).await,
+    }
     let admitted = match admit(state, owner, &due.id).await {
         Ok(admitted) => Unclaimed(Some(admitted)),
         Err(Refused {
@@ -493,14 +526,20 @@ async fn fire(state: &Arc<AppState>, store: &crate::store::Store, schedule: &Acc
         }) => {
             // Pacing only delays it (the cutoff bounds the wait). A long
             // wait (an account backoff, a long Provider window) never holds
-            // other accounts' polls meanwhile.
-            if at.saturating_sub(now_ms()) > PACED_HOLD_MS
-                && let Some(provider) = held
-            {
-                let key = crate::usage::limiter::Limiter::account_key(owner, due.id.as_str());
-                state.usage.limiter.release_priority(&provider, &key);
+            // other accounts' polls meanwhile; the timer comes back shortly
+            // before the slot to take a short hold then, so later polls
+            // cannot keep pushing it out.
+            if at.saturating_sub(now_ms()) > PACED_HOLD_MS {
+                if let Some(provider) = held {
+                    let key = crate::usage::limiter::Limiter::account_key(owner, due.id.as_str());
+                    state.usage.limiter.release_priority(&provider, &key);
+                }
+                let early = at.saturating_sub(PACED_HOLD_MS / 2);
+                due.defer(early.max(now_ms().saturating_add(TICK_MS)), false)
+                    .await;
+            } else {
+                due.defer(at, false).await;
             }
-            due.defer(at, false).await;
             return;
         }
         Err(Refused { code, .. }) => return due.refused(code).await,

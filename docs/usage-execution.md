@@ -203,18 +203,27 @@ failed closed. The timer looks every 15 seconds:
   claim; an owner disabled in the milliseconds between that check and the
   enqueue is not caught, as for a confirmed reset, and a same-identity
   Codex sign-in committing inside the dispatch's own lock window is the same
-  verified subscription. A token rotation changes nothing.
+  verified subscription. A token rotation changes nothing. The cutoff is
+  checked at the claim; a native reset's paced spend may start up to one
+  Provider spacing after it. The timer follows the reset route's ranking, so
+  with logins on several reset-capable Machines it waits for the scheduled
+  one only while that one ranks first (Claude resets are pinned to one
+  Machine by host policy).
 - It spends the nearest available grant of the admitted binding's successful
   observation, at most ten minutes old. An observation older than two minutes
   is refreshed first through the ordinary budgeted read (never waiting behind
   a spend that holds the account); without a fresh one nothing is reserved
   and the attempt waits a minute, uncounted.
-- It is admitted exactly like a confirmed reset (route, account lock, Provider
-  starts). Pacing only delays it to the named time; a wait over two minutes (an
-  account backoff, a long Provider window) releases the Provider hold so
-  other accounts keep polling. Any other refusal sent nothing and is retried a
-  minute later, three attempts in all, then logged `failed`. An admission
-  dropped before the claim (a shutdown) releases its starts unused.
+- Its route's binding is compared before anything is reserved, so a schedule
+  waiting for its binding never charges or holds the Provider window. It is
+  then admitted exactly like a confirmed reset (route, account lock, Provider
+  starts). Pacing only delays it to the named time (never past the cutoff); a
+  wait over two minutes (an account backoff, a long Provider window) releases
+  the Provider hold so other accounts keep polling, and the timer returns a
+  minute before the slot to hold it then. Any other refusal sent nothing and
+  is retried a minute later, three attempts in all, then logged `failed`. An
+  admission dropped before the claim (a shutdown) releases its starts unused,
+  and the pre-admission refresh waits at most 20 seconds.
 - Only after admission is the row deleted under its idempotency key (the
   one-shot claim), before the audit row and the dispatch, so it fires at most
   once even across a restart. Without a written `started` audit row nothing is
