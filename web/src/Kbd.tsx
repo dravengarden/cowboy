@@ -8,6 +8,7 @@ import {
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { confirmEnterIntent } from "./confirmShortcut";
 import { popupOwnsKeys } from "./desktop/commands/hintTargets";
+import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
 import { desktopCompositionActive } from "./desktop/commands/keyIntent";
 import { isTopmostDialog, owningDialog } from "./desktop/commands/modalGuard";
 
@@ -79,9 +80,9 @@ export function useConfirmEnter(
     activeConfirmStack.push(token);
     const onKey = (e: KeyboardEvent): void => {
       if (desktopCompositionActive() || popupOwnsKeys()) return;
-      const ownElement = ownerRef.current?.current ?? null;
-      if (ownElement !== null) {
-        if (!isTopmostDialog(ownElement)) return;
+      if (ownerRef.current !== undefined) {
+        const ownElement = ownerRef.current.current;
+        if (!ownElement || !isTopmostDialog(ownElement)) return;
         const ownDialog = owningDialog(ownElement);
         const targetDialog = e.target instanceof Element ? owningDialog(e.target) : null;
         if (ownDialog && targetDialog && targetDialog !== ownDialog) return;
@@ -90,7 +91,19 @@ export function useConfirmEnter(
       }
       if (ignoreWithin && e.target instanceof Element && e.target.closest(ignoreWithin)) return;
       const intent = confirmEnterIntent(e);
-      if (intent === "ignore") return;
+      if (intent === "ignore") {
+        // Never allow repeat Enter/Mod+Enter or Shift+Enter/Shift+Mod+Enter to
+        // fall through to native button activation inside confirmation dialogs.
+        if (
+          suppressBareEnter && e.key === "Enter" && !desktopImeOwnsKey(e) &&
+          e.target instanceof Element &&
+          e.target.closest("button, [role='button']") !== null
+        ) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
       if (intent === "suppress" && !suppressBareEnter) return;
       e.preventDefault();
       e.stopPropagation();

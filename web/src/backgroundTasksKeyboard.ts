@@ -68,10 +68,17 @@ export function handleBackgroundTasksKeyDown(
       }
       return;
     case "h":
-      // Escape is handled once by MUI Dialog's IME-guarded onClose so closing
-      // does not double-fire and lose opener focus restoration.
       event.preventDefault();
       ctx.close();
+      return;
+    case "Escape":
+      // Normal Escape is handled once by MUI Dialog's onClose. When an idle
+      // CJK source reports physical Escape as `Process`, MUI misses it; close
+      // cleanly here without double-firing ordinary Escape.
+      if (event.key !== "Escape") {
+        event.preventDefault();
+        ctx.close();
+      }
       return;
   }
 }

@@ -2934,6 +2934,7 @@ export function CreateDialog({
     // otherwise survive and show the last-typed value.
     const [title, setTitle] = useState<string>("");
     const titleRef = useRef<HTMLInputElement>(null);
+    const createPaperRef = useRef<HTMLDivElement>(null);
     const titleFocusTimer = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
     // Session count, captured in a ref so its default name is computed at open
     // time WITHOUT a session arriving mid-edit clobbering what you're typing.
@@ -3175,8 +3176,10 @@ export function CreateDialog({
     // available to the Select controls in this form; the title field and
     // focused Create button suppress their own native bare-Enter activation.
     // Mobile retains its established single-Enter form behaviour.
-    useConfirmEnter(open && desktop && !confirmDiscard, create, { suppressBareEnter: false });
-    useConfirmEnter(open && confirmDiscard, discardAndClose);
+    useConfirmEnter(open && desktop && !confirmDiscard, create, {
+        suppressBareEnter: false,
+        owner: createPaperRef,
+    });
     // The shared modal grammar (modalNavigation) owns Insert/Normal and hjkl.
     // A composing IME keeps every key: its Esc cancels the marked text, never
     // the modal.
@@ -3460,18 +3463,7 @@ export function CreateDialog({
             open={confirmDiscard}
             onClose={(): void => setConfirmDiscard(false)}
             title={variant === "folder" ? "Discard this folder?" : variant === "draft" ? "Discard this draft?" : "Discard this session?"}
-            actions={
-                <>
-                    <Button color="inherit" onClick={(): void => setConfirmDiscard(false)}>
-                        Keep editing
-                        {desktop && <Kbd keys="Esc" />}
-                    </Button>
-                    <Button color="error" variant="contained" onClick={discardAndClose}>
-                        Discard
-                        {desktop && <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />}
-                    </Button>
-                </>
-            }
+            confirm={{ label: "Discard", cancelLabel: "Keep editing", color: "error", onConfirm: discardAndClose }}
         >
             <Typography variant="body2" color="text.secondary">Your changes will be lost.</Typography>
         </ConfirmSheet>
@@ -3526,6 +3518,7 @@ export function CreateDialog({
             onClose={creating ? (): void => {} : closeLevel}
             title={dialogTitle}
             wide={desktop}
+            desktopPaperRef={createPaperRef}
             desktopDialogWidth={desktop && variant === "session" && !editingFolderDefault ? 860 : undefined}
             actions={
                 <>
@@ -3536,11 +3529,9 @@ export function CreateDialog({
                     <Button
                         onClick={create}
                         onKeyDown={(e): void => {
-                            if (
-                                desktop && e.key === "Enter" &&
-                                !e.metaKey && !e.ctrlKey &&
-                                !isImeKeyEvent(e.nativeEvent)
-                            ) e.preventDefault();
+                            if (desktop && e.key === "Enter" && !desktopImeOwnsKey(e.nativeEvent)) {
+                                e.preventDefault();
+                            }
                         }}
                         variant="contained"
                         disabled={!canCreate}

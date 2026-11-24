@@ -10,16 +10,15 @@ import {
 import { type ReactNode, type Ref, useContext, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { BottomSheet, type BottomSheetProps, ScrollEdges } from "@cowboy/app-shell";
-import { desktopCompositionActive } from "./desktop/commands/keyIntent";
+import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
 import {
   desktopDialogSlotProps,
   InstantModalTransition,
   isImeBlockedEscape,
 } from "./desktop/DesktopModal";
-import { isImeKeyEvent } from "./imeKey";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ObsidianSheet } from "./ObsidianSheet";
-import { ENTER_LABEL, hasSendMod, MOD_LABEL } from "./platform";
+import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { SurfaceContext, useSurfaceProfile } from "./surface/SurfaceProfile";
 
 function maybePortal(sheet: ReactNode, portal: boolean): ReactNode {
@@ -322,13 +321,10 @@ export function ConfirmSheet({
           disabled={!confirmReady}
           startIcon={activeConfirm.startIcon}
           onKeyDown={(e): void => {
-            // Block native bare/repeat/Shift+Enter activation on the
-            // affirmative button on Desktop so holding Enter or pressing
-            // Shift+Enter can never confirm an irreversible action.
-            if (
-              !forceSheet && e.key === "Enter" && !hasSendMod(e.nativeEvent) &&
-              !isImeKeyEvent(e.nativeEvent) && !desktopCompositionActive()
-            ) {
+            // Block ALL native Enter activation (bare, repeat, Shift, Mod,
+            // repeat-Mod, Shift+Mod) on the affirmative button on Desktop;
+            // only the scoped capture handler accepts fresh unshifted Mod+Enter.
+            if (!forceSheet && e.key === "Enter" && !desktopImeOwnsKey(e.nativeEvent)) {
               e.preventDefault();
             }
           }}

@@ -203,14 +203,17 @@ export function modalHints(root: HTMLElement): DesktopHint[] {
   });
 }
 
-/** Letter labels for a list's visible items, top to bottom. */
+/** Letter labels for a list's currently visible, unclipped items, top to bottom. */
 export function listHints(items: readonly HTMLElement[]): DesktopHint[] {
-  return items.slice(0, DESKTOP_JUMP_LABELS.length).map((element, index) => ({
-    label: DESKTOP_JUMP_LABELS[index]!,
-    element,
-    name: hintName(element),
-    placement: "row",
-  }));
+  return items
+    .filter((element) => isHintActionable(element))
+    .slice(0, DESKTOP_JUMP_LABELS.length)
+    .map((element, index) => ({
+      label: DESKTOP_JUMP_LABELS[index]!,
+      element,
+      name: hintName(element),
+      placement: "row",
+    }));
 }
 
 /** True when a previously labelled hint target is still connected, visible,

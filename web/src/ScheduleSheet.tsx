@@ -19,8 +19,8 @@ import {
 } from "./scheduleTime";
 import { SurfaceContext } from "./surface/SurfaceProfile";
 
-interface SelectedPreset {
-  readonly id: ScheduleQuickPresetId;
+interface ExactScheduleTime {
+  readonly presetId: ScheduleQuickPresetId | null;
   readonly fireAtMs: number;
   readonly inputValue: string;
 }
@@ -82,21 +82,27 @@ export function ScheduleSheet({
 }): React.JSX.Element {
   const desktop = useContext(SurfaceContext)?.kind === "desktop";
   const [value, setValue] = useState("");
-  const [selectedPreset, setSelectedPreset] = useState<SelectedPreset | null>(null);
+  const [exactTime, setExactTime] = useState<ExactScheduleTime | null>(null);
   const [delivery, setDelivery] = useState<Delivery>("back");
 
   useEffect(() => {
     if (!open) return;
-    setValue(initial ? toDtLocal(initial.fire_at_ms) : "");
-    setSelectedPreset(null);
+    if (initial) {
+      const inputValue = toDtLocal(initial.fire_at_ms);
+      setValue(inputValue);
+      setExactTime({ presetId: null, fireAtMs: initial.fire_at_ms, inputValue });
+    } else {
+      setValue("");
+      setExactTime(null);
+    }
     setDelivery(initial?.delivery ?? "back");
   }, [open, initial]);
 
   const now = Date.now();
-  const activePreset = selectedPreset && selectedPreset.inputValue === value
-    ? selectedPreset
+  const preserved = exactTime && exactTime.inputValue === value
+    ? exactTime
     : null;
-  const fireAt = activePreset ? activePreset.fireAtMs : parseDtLocal(value);
+  const fireAt = preserved ? preserved.fireAtMs : parseDtLocal(value);
   const valid = fireAt !== null && fireAt > now;
 
   const commit = (): void => {
@@ -134,12 +140,12 @@ export function ScheduleSheet({
     <Sheet open={open} onClose={onClose} title="Schedule send">
       <Stack spacing={2} sx={{ pt: 0.5, pb: 1 }}>
         <ScheduleQuickPresets
-          selectedId={activePreset?.id ?? null}
+          selectedId={preserved?.presetId ?? null}
           onSelect={(id): void => {
             const fireAtMs = computeSchedulePreset(id, Date.now());
             const inputValue = toDtLocal(fireAtMs);
             setValue(inputValue);
-            setSelectedPreset({ id, fireAtMs, inputValue });
+            setExactTime({ presetId: id, fireAtMs, inputValue });
           }}
         />
         <Box>
@@ -152,7 +158,7 @@ export function ScheduleSheet({
             fullWidth
             value={value}
             onChange={(e): void => {
-              setSelectedPreset(null);
+              setExactTime(null);
               setValue(e.target.value);
             }}
             inputProps={{ "aria-label": "Send time" }}

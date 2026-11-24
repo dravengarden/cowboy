@@ -1410,7 +1410,7 @@ export function SettingsShell({
             )?.focus();
         });
         const onKeyDown = (event: KeyboardEvent): void => {
-            if (event.defaultPrevented || modalHandlerShouldSkip(event, settingsPanelRef.current, { allowEditable: true })) return;
+            if ((event.key !== "Escape" && event.defaultPrevented) || modalHandlerShouldSkip(event, settingsPanelRef.current, { allowEditable: true })) return;
             const target = event.target;
             if (isSettingsEditableTarget(target)) {
                 if (event.key === "Escape") {

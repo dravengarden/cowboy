@@ -21,9 +21,8 @@ import {
   useRef,
   useState,
 } from "react";
-import { isImeKeyEvent } from "../imeKey";
 import { useVimSetting } from "../vimSetting";
-import { desktopCompositionActive } from "./commands/keyIntent";
+import { desktopImeOwnsKey } from "./commands/imeShortcut";
 import { HintTooltip } from "../HintTooltip";
 import {
   desktopModalBackdropSx,
@@ -81,7 +80,7 @@ export function isImeBlockedEscape(event: object, reason: string): boolean {
   const keyEvent = "nativeEvent" in event
     ? (event as { nativeEvent: KeyboardEvent }).nativeEvent
     : event as KeyboardEvent;
-  return isImeKeyEvent(keyEvent) || desktopCompositionActive();
+  return desktopImeOwnsKey(keyEvent);
 }
 
 /** Shared MUI Dialog `slotProps` for Desktop frosted modals: unified glass

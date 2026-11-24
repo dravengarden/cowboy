@@ -82,7 +82,7 @@ import {
   popupOwnsKeys,
   topmostModal,
 } from "./hintTargets";
-import { isInteractiveControl } from "./modalGuard";
+import { focusAdjacentOutsideRegion, isInteractiveControl } from "./modalGuard";
 import { handleDesktopModalKey } from "./modalNavigation";
 import { handleDeliveryPickerKey } from "../../deliveryPickerCommands";
 import { desktopMenuNavigationKey } from "./menuNavigation";
@@ -905,10 +905,10 @@ export function DesktopCommandProvider(
             event.stopPropagation();
             if (event.repeat) return;
             const target = hintsRef.current.find((hint) =>
-              hint.label === key.toLowerCase()
+              hint.label === key.toLowerCase() && isHintActionable(hint.element)
             )?.element;
             clearPendingJumpChord();
-            if (target?.isConnected) {
+            if (target && isHintActionable(target)) {
               target.focus({ preventScroll: true });
               target.scrollIntoView({ block: "nearest" });
             }
@@ -940,6 +940,11 @@ export function DesktopCommandProvider(
           event.stopPropagation();
           stop.focus({ preventScroll: true });
           stop.scrollIntoView({ block: "nearest", inline: "nearest" });
+          return;
+        }
+        if (current >= 0 && focusAdjacentOutsideRegion(region, event.shiftKey ? -1 : 1)) {
+          event.preventDefault();
+          event.stopPropagation();
           return;
         }
       }

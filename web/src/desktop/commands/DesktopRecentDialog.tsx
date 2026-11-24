@@ -414,6 +414,8 @@ function DesktopRecentDialogContent({
           : undefined}
         tabIndex={-1}
         data-desktop-recent
+        data-desktop-keys="own"
+        data-desktop-modal-keys="own"
         sx={{ px: 1, pb: 1, outline: "none", overflowY: "auto" }}
       >
         {visible.length === 0 && (

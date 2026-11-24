@@ -79,12 +79,49 @@ export function isModalEditableTarget(target: EventTarget | null): boolean {
  * stand aside during IME composition, behind the Machine browser, behind a
  * nested modal dialog, behind an open popup/menu, or inside editable text.
  */
-/** True when `target` sits on an interactive button/link/control that owns bare Enter. */
+const TABBABLE_SELECTOR = [
+  "a[href]",
+  "button",
+  "input:not([type='hidden'])",
+  "select",
+  "textarea",
+  "[tabindex]:not([tabindex='-1'])",
+  "[contenteditable='true']",
+].join(", ");
+
+/** True when `target` sits on a native or ARIA interactive control that owns
+ *  its own Tab/Enter/arrow keys (buttons, links, inputs, comboboxes, etc.). */
 export function isInteractiveControl(target: EventTarget | null): boolean {
   return target instanceof Element &&
     target.closest(
-      "button, a[href], [role='button'], [role='tab'], [role='menuitem'], summary",
+      "button, a[href], input, select, textarea, [contenteditable='true'], [role='button'], [role='tab'], [role='menuitem'], [role='combobox'], [role='checkbox'], [role='radio'], [role='switch'], [role='slider'], [role='spinbutton'], [role='option'], [role='textbox'], summary",
     ) !== null;
+}
+
+/** Move keyboard focus cleanly past `region` in document order when a custom
+ *  visual-order Tab walk (e.g. a column-reverse transcript) reaches its end. */
+export function focusAdjacentOutsideRegion(
+  region: HTMLElement,
+  direction: -1 | 1,
+): boolean {
+  if (typeof document === "undefined") return false;
+  const candidates = [...document.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)]
+    .filter((element) => {
+      if (region.contains(element)) return false;
+      if (element.matches(":disabled, [aria-disabled='true']")) return false;
+      if (element.closest("[aria-hidden='true'], [inert]")) return false;
+      if (typeof element.getClientRects === "function" && element.getClientRects().length === 0) {
+        return false;
+      }
+      const pos = region.compareDocumentPosition(element);
+      return direction === 1
+        ? Boolean(pos & Node.DOCUMENT_POSITION_FOLLOWING)
+        : Boolean(pos & Node.DOCUMENT_POSITION_PRECEDING);
+    });
+  const target = direction === 1 ? candidates[0] : candidates.at(-1);
+  if (!target) return false;
+  target.focus({ preventScroll: false });
+  return true;
 }
 
 export function modalHandlerShouldSkip(
