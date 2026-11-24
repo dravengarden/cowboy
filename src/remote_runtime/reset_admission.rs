@@ -124,7 +124,7 @@ pub(super) fn current(
 /// Admission denied `command` before writing it. Report it like a Machine
 /// refusal; a reset's declaration also cancels that reset (see module docs).
 pub(super) async fn denied<W: tokio::io::AsyncWrite + Unpin + Send>(
-    shared: &Shared,
+    shared: &std::sync::Arc<Shared>,
     writer: &mut W,
     key: String,
     command: &CoreCommand,

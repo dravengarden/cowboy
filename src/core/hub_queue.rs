@@ -254,6 +254,24 @@ impl Hub {
         manual: bool,
         trigger: Option<&crate::prompt_origin::RequestCaller>,
     ) {
+        self.drain_head_with_explicit_row(session_id, allow_revive, manual, None, trigger);
+    }
+
+    /// Drain after an explicit recovery-draft activation: preserves `explicit`
+    /// intent when `activated_row_id` is at the head of the queue without
+    /// bypassing pause or changing queue order (Finding 10).
+    pub(super) fn drain_activated_recovery_row(&self, session_id: &str, activated_row_id: &str) {
+        self.drain_head_with_explicit_row(session_id, false, false, Some(activated_row_id), None);
+    }
+
+    fn drain_head_with_explicit_row(
+        &self,
+        session_id: &str,
+        allow_revive: bool,
+        manual: bool,
+        explicit_head_id: Option<&str>,
+        trigger: Option<&crate::prompt_origin::RequestCaller>,
+    ) {
         if self.inner.dispatch_tx.lock().is_none() {
             return;
         }
@@ -262,7 +280,10 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            let decision = Self::drain_decision(s, allow_revive, manual, |cmid| {
+            let head_is_explicit = explicit_head_id
+                .is_some_and(|id| s.queue.first().is_some_and(|head| head.id == id));
+            let effective_revive = allow_revive || head_is_explicit;
+            let decision = Self::drain_decision(s, effective_revive, manual, |cmid| {
                 self.context_allows_dispatch(session_id, cmid)
             });
             if decision != DrainDecision::Dispatch {
@@ -300,7 +321,7 @@ impl Hub {
                 text: head.text,
                 content: head.content,
                 cmid: Some(dispatch_cmid),
-                explicit: manual,
+                explicit: manual || head_is_explicit,
                 origin: head.origin,
                 initiator: effective_trigger,
                 dispatch_origin,

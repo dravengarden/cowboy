@@ -1077,23 +1077,21 @@ impl super::Broker {
     ) -> Option<(mpsc::UnboundedSender<Frame>, u16, Option<u16>)> {
         let ctrl_guard = self.controller.lock();
         let mut workers = self.workers.lock();
-        let mut worker = workers
+        // Finding 3: Reject frames from a replaced/absent worker connection
+        // under the joint controller->workers locks before binding the sender.
+        let worker = workers
             .get_mut(session_id)
-            .filter(|w| w.connection_id == connection_id);
-        if let Some(worker) = worker.as_deref_mut() {
-            worker.highest_runtime_seq = worker.highest_runtime_seq.max(runtime_seq);
-            if runtime_seq > worker.acked_runtime_seq {
-                worker.earliest_unacked_seq = Some(
-                    worker
-                        .earliest_unacked_seq
-                        .map_or(runtime_seq, |first| first.min(runtime_seq)),
-                );
-            }
+            .filter(|w| w.connection_id == connection_id)?;
+        worker.highest_runtime_seq = worker.highest_runtime_seq.max(runtime_seq);
+        if runtime_seq > worker.acked_runtime_seq {
+            worker.earliest_unacked_seq = Some(
+                worker
+                    .earliest_unacked_seq
+                    .map_or(runtime_seq, |first| first.min(runtime_seq)),
+            );
         }
         let ctrl = ctrl_guard.as_ref()?;
-        if let Some(worker) = worker
-            && let Some((next_expected, until_seq)) = worker.replay_gate
-        {
+        if let Some((next_expected, until_seq)) = worker.replay_gate {
             if runtime_seq != next_expected {
                 return None;
             }

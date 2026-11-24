@@ -520,7 +520,7 @@ pub(in crate::remote_runtime) fn replacement_worker_superseded_epoch(
 /// store writer); returns `false` on store failure so callers keep the command
 /// fenced rather than losing the payload.
 pub(in crate::remote_runtime) async fn park_ambiguous_prompt_durable(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     session_id: &str,
     command: &CoreCommand,
     reason: &str,
@@ -571,12 +571,41 @@ pub(in crate::remote_runtime) async fn park_ambiguous_prompt_durable(
                 .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
                 .collect::<Vec<_>>()
                 .join("\n");
+            // Finding 6: Carry exact command identity through retry completion
+            // so once Hub commits the draft, the fenced command is retired and
+            // an idle replacement worker can release the dispatch guard.
+            let weak_shared = Arc::downgrade(shared);
+            let retry_sid = session_id.to_owned();
+            let retry_cmd_id = command_id.clone();
+            let retry_cmd = command.clone();
+            let on_committed: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
+                let Some(shared) = weak_shared.upgrade() else {
+                    return;
+                };
+                let mut pending = shared.pending.lock();
+                pending.remove(&retry_cmd_id);
+                shared.sent.lock().remove(&retry_cmd_id);
+                shared.attempted_sends.lock().remove(&retry_cmd_id);
+                shared.retransmitted_sends.lock().remove(&retry_cmd_id);
+                shared.fenced_commands.lock().remove(&retry_cmd_id);
+                drop(pending);
+                shared
+                    .in_flight_prompts
+                    .lock()
+                    .retire_command(&retry_cmd_id);
+                if let Some(replacement) =
+                    replacement_worker_superseded_epoch(&shared, &retry_sid, &retry_cmd)
+                {
+                    reconcile_idle_guard_for_snapshot(&shared, &retry_sid, &replacement);
+                }
+            });
             shared.hub.enqueue_durable_recovery_park(
                 session_id.to_owned(),
                 text,
                 content.clone(),
                 cmid.clone(),
                 reason.to_owned(),
+                Some(on_committed),
             );
             shared.hub.broadcast_error(
                 Some(session_id.to_owned()),
@@ -596,7 +625,7 @@ pub(in crate::remote_runtime) async fn park_ambiguous_prompt_durable(
 /// If durable commit fails, keeps the entry fenced in `shared.pending` so it is
 /// neither lost nor replayed.
 pub(in crate::remote_runtime) async fn park_and_retire_ambiguous_pending(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     session_id: &str,
     key: &str,
     version: u64,
@@ -682,6 +711,7 @@ pub(in crate::remote_runtime) fn recover_pending_prompts_on_disconnect(shared: &
                     content,
                     cmid,
                     disconnect_reason.to_owned(),
+                    None,
                 );
                 shared.in_flight_prompts.lock().retire_command(&command_id);
             }

@@ -500,12 +500,11 @@ impl Ledger {
         }) {
             return Err("that process belongs to the worker; request refused");
         }
-        if !MUTATIONS.contains(&method) {
-            let carries = matches!(
-                method,
-                "process/terminate" | "process/write" | "process/signal"
-            ) || (method == "process/read"
-                && process_id(params).is_none_or(|p| !state.probes.contains(&p)));
+        let is_process_mutation = matches!(method, "process/write" | "process/signal");
+        if !MUTATIONS.contains(&method) && !is_process_mutation {
+            let carries = method == "process/terminate"
+                || (method == "process/read"
+                    && process_id(params).is_none_or(|p| !state.probes.contains(&p)));
             if carries {
                 let turn = state.current_turn.clone();
                 *state.result_relays.entry(turn.clone()).or_default() += 1;
@@ -518,9 +517,12 @@ impl Ledger {
             return Ok(None);
         }
         if method != "process/start" {
-            let turn = state
-                .active_turn()
-                .ok_or("no Cowboy turn is running; the filesystem change was refused")?;
+            let err_msg = if is_process_mutation {
+                "no Cowboy turn is running; the process mutation was refused"
+            } else {
+                "no Cowboy turn is running; the filesystem change was refused"
+            };
+            let turn = state.active_turn().ok_or(err_msg)?;
             *state.admitted.entry(turn.clone()).or_default() += 1;
             return Ok(Some(Admitted {
                 turn: Some(turn),

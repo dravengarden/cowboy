@@ -598,14 +598,21 @@ async fn apply_non_event_write(
         queue,
         drafts,
         released_claims,
+        recovery_cmids,
         require_claim_release: true,
         ack_id,
         ..
     } = write
     {
-        let outcome =
-            retry_conditional_pending_write(store, session_id, queue, drafts, released_claims)
-                .await;
+        let outcome = retry_conditional_pending_write(
+            store,
+            session_id,
+            queue,
+            drafts,
+            released_claims,
+            recovery_cmids.as_deref(),
+        )
+        .await;
         let ok = outcome.is_ok();
         if let (Some(id), Some(acks)) = (ack_id, acks) {
             acks.complete(*id, outcome);
@@ -636,11 +643,18 @@ async fn retry_conditional_pending_write(
     queue: &[crate::core::QueuedMessage],
     drafts: &[crate::core::QueuedMessage],
     released_claims: &[crate::store::NoticeClaimRelease],
+    recovery_cmids: Option<&[String]>,
 ) -> Result<bool, String> {
     let mut last_error = None;
     for attempt in 0..4 {
         match store
-            .update_pending_requiring_claim_release(session_id, queue, drafts, released_claims)
+            .update_pending_requiring_claim_release_atomic(
+                session_id,
+                queue,
+                drafts,
+                released_claims,
+                recovery_cmids,
+            )
             .await
         {
             Ok(true) => return Ok(true),

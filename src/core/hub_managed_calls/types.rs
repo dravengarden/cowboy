@@ -9,6 +9,7 @@ pub(in crate::core) struct PendingRecoveryPromptItem {
     pub(super) content: Vec<serde_json::Value>,
     pub(super) cmid: Option<String>,
     pub(super) reason: String,
+    pub(super) on_committed: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 
 pub struct PendingRecoveryPark {

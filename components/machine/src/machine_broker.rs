@@ -2148,6 +2148,9 @@ impl Broker {
         session.adopt_only = false;
         let cleanup_gate = self.session_lifecycle_gate(&session_id);
         let _cleanup_guard = cleanup_gate.lock().await;
+        if !lease_active(self) {
+            return;
+        }
         if !self.account_binding_matches(&session, true) {
             self.command_rejected(
                 &session_id,

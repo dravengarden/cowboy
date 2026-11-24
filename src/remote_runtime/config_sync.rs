@@ -345,7 +345,7 @@ pub(super) enum PromptPrep {
 }
 
 pub(super) async fn prepare_or_park_prompt_for_send(
-    shared: &Shared,
+    shared: &std::sync::Arc<Shared>,
     key: &str,
     version: u64,
     command: &mut CoreCommand,

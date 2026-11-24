@@ -50,6 +50,8 @@ impl Hub {
     /// alive until the bounded retries in each admitted task finish (matching
     /// `dispatcher_task` shutdown behavior).
     pub async fn drain_teardown_requeues(&self, warn_after: std::time::Duration) {
+        self.inner.teardown_shutdown.store(true, Ordering::Release);
+        self.inner.teardown_shutdown_notify.notify_waiters();
         let mut warned = false;
         let warn_at = tokio::time::Instant::now() + warn_after;
         loop {
@@ -926,12 +928,13 @@ impl Hub {
             receipt_key: receipt_key.clone(),
             reconcile_only: false,
         }];
-        let Some(rx) = self.send_acked_update_pending(
+        let Some(rx) = self.send_acked_update_pending_with_recovery(
             &session_id,
             next_queue,
             drafts,
             Vec::new(),
             released_claims,
+            Self::sorted_recovery_cmids(s),
             require_claim_release,
         ) else {
             return UndeliveredRequeue::Rejected(
@@ -1394,12 +1397,13 @@ impl Hub {
             receipt_key: receipt_key.to_owned(),
             reconcile_only: true,
         }];
-        let Some(rx) = self.send_acked_update_pending(
+        let Some(rx) = self.send_acked_update_pending_with_recovery(
             session_id,
             next_queue,
             drafts,
             Vec::new(),
             reconcile_guard,
+            Self::sorted_recovery_cmids(s),
             true,
         ) else {
             return UndeliveredRequeue::Rejected(

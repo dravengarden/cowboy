@@ -518,6 +518,24 @@ impl Store {
         drafts: &[QueuedMessage],
         released_claims: &[NoticeClaimRelease],
     ) -> Result<bool> {
+        self.update_pending_requiring_claim_release_atomic(
+            session_id,
+            queue,
+            drafts,
+            released_claims,
+            None,
+        )
+        .await
+    }
+
+    pub async fn update_pending_requiring_claim_release_atomic(
+        &self,
+        session_id: &str,
+        queue: &[QueuedMessage],
+        drafts: &[QueuedMessage],
+        released_claims: &[NoticeClaimRelease],
+        recovery_cmids: Option<&[String]>,
+    ) -> Result<bool> {
         if released_claims.is_empty() {
             return Ok(false);
         }
@@ -530,7 +548,7 @@ impl Store {
                 drafts,
                 &[],
                 released_claims,
-                None,
+                recovery_cmids,
                 true,
                 now,
             )

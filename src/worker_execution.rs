@@ -19,7 +19,7 @@ use std::sync::{Arc, OnceLock};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context as _, Result, bail, ensure};
-use futures::{SinkExt as _, StreamExt as _};
+use futures::StreamExt as _;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -697,13 +697,8 @@ where
             .is_none_or(|value| value.is_null() || Some(value) == initialization.get("sessionId")),
         "execution session identity mismatch"
     );
-    socket
-        .send(Message::Text(
-            json!({"id": first["id"], "result": initialization})
-                .to_string()
-                .into(),
-        ))
-        .await?;
+    let init_frame = json!({"id": first["id"], "result": initialization}).to_string();
+    send_bounded(&mut socket, Message::Text(init_frame.into())).await?;
 
     let (mut writer, mut reader) = socket.split();
     let mut relays = relay::Relays::new(Arc::clone(&client));

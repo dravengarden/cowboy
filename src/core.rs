@@ -1592,6 +1592,8 @@ struct HubInner {
     sync: Mutex<HashMap<String, SyncArbiter>>,
     /// Active and pending-release completion-notice dispatch stamps. Never held with `sessions`.
     notice_claims: Mutex<hub_managed_calls::NoticeClaims>,
+    teardown_shutdown: std::sync::atomic::AtomicBool,
+    teardown_shutdown_notify: tokio::sync::Notify,
     store_acks: hub_managed_calls::StoreAckSink,
     /// Serialize read/compare/apply and ordered write-behind snapshots.
     sync_apply_gate: Mutex<()>,
@@ -1823,6 +1825,8 @@ impl Hub {
                 sync_apply_gate: Mutex::new(()),
                 review_default_receipts: Mutex::new(review_defaults::Receipts::default()),
                 notice_claims: Mutex::new(hub_managed_calls::NoticeClaims::default()),
+                teardown_shutdown: std::sync::atomic::AtomicBool::new(false),
+                teardown_shutdown_notify: tokio::sync::Notify::new(),
                 store_acks: hub_managed_calls::StoreAckSink::default(),
                 next_qid: AtomicU64::new(1),
                 next_error_id: AtomicU64::new(1),

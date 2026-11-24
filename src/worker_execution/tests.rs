@@ -5,6 +5,7 @@ use super::*;
 use crate::execution_environment::{
     EnvironmentLocation, ExecutionAccess, RuntimeLocation, WorkspaceLocation,
 };
+use futures::SinkExt as _;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 
 fn binding() -> BindingV1 {

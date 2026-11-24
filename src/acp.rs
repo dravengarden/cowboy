@@ -994,17 +994,21 @@ fn provider_session_meta(provider_id: &str) -> Option<Meta> {
     stable_claude_session_meta(provider_id)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn finish_prompt_state(
     state: &ClientState,
     prompt: &Arc<ActivePrompt>,
     sink: &dyn crate::agent_sink::AgentSink,
     sid: &str,
     response: &Result<agent_client_protocol::schema::v1::PromptResponse, Error>,
-    completed_cleanly: bool,
+    recycled_by_watchdog: bool,
+    no_backoff: bool,
 ) {
     let meta = response.as_ref().ok().and_then(|r| r.meta.as_ref());
     let err_data = response.as_ref().err().and_then(|e| e.data.as_ref());
-    let terminal_reply = completed_cleanly
+    // Finding 11: Determine terminal reply receipt from response + recycle
+    // state independently of provider backoff error presentation.
+    let terminal_reply = !recycled_by_watchdog
         && response
             .as_ref()
             .err()
@@ -1024,7 +1028,10 @@ fn finish_prompt_state(
     }
     state.clear_prompt(prompt);
     state.subagents.lock().parent_turn_ended(Instant::now());
-    if completed_cleanly && let Some(usage) = state.model_usage.lock().record_turn(meta) {
+    if !recycled_by_watchdog
+        && no_backoff
+        && let Some(usage) = state.model_usage.lock().record_turn(meta)
+    {
         sink.set_session_usage(sid, usage);
     }
 }
@@ -4648,14 +4655,7 @@ async fn run_session(
                             break response;
                         }
                     };
-                    finish_prompt_state(
-                        &state,
-                        &prompt,
-                        sink.as_ref(),
-                        &sid,
-                        &response,
-                        !recycled_by_watchdog && backoff_failure.is_none(),
-                    );
+                    finish_prompt_state(&state, &prompt, sink.as_ref(), &sid, &response, recycled_by_watchdog, backoff_failure.is_none());
                     if let Some(reason) = backoff_failure.take()
                         && !recycled_by_watchdog
                     {

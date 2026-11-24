@@ -44,13 +44,18 @@ impl Hub {
             }
         };
         if let Some(list) = updated {
-            self.set_setting(
-                format!(
-                    "{}{session_id}",
-                    settings_keys::SESSION_RECOVERY_CMIDS_PREFIX
-                ),
-                serde_json::json!(list),
+            let key = format!(
+                "{}{session_id}",
+                settings_keys::SESSION_RECOVERY_CMIDS_PREFIX
             );
+            if self.has_store_writer() {
+                // Finding 2: Never issue a separate best-effort PutSetting when a
+                // store writer is attached; `UpdatePending` commits `recovery_cmids`
+                // atomically in the same SQL transaction as `queue`/`drafts`.
+                self.load_settings(vec![(key, serde_json::json!(list))]);
+            } else {
+                self.set_setting(key, serde_json::json!(list));
+            }
         }
     }
 
@@ -344,6 +349,9 @@ impl Hub {
         content: Vec<serde_json::Value>,
         caller: &crate::prompt_origin::RequestCaller,
     ) -> bool {
+        if self.is_row_withdrawing(session_id, id) {
+            return false;
+        }
         let editor = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
         let (found, unscheduled) = {
             let mut sessions = self.inner.sessions.lock();
@@ -409,6 +417,9 @@ impl Hub {
 
     /// Drop one draft. Returns whether the draft still existed.
     pub fn remove_draft(&self, session_id: &str, id: &str) -> bool {
+        if self.is_row_withdrawing(session_id, id) {
+            return false;
+        }
         let (removed, unscheduled) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -439,7 +450,7 @@ impl Hub {
         to: &str,
         caller: &crate::prompt_origin::RequestCaller,
     ) {
-        if from == to || self.is_managed_child(to) {
+        if from == to || self.is_managed_child(to) || self.is_row_withdrawing(from, id) {
             return;
         }
         let mover = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
@@ -522,64 +533,11 @@ impl Hub {
             return;
         }
         let trigger = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
-        let recovery_moved = {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            let Some(pos) = s.drafts.iter().position(|m| m.id == id) else {
-                return;
-            };
-            if s.drafts[pos].id.starts_with("recovery-") {
-                let target = &s.drafts[pos];
-                let Some(op) = cmid
-                    .as_deref()
-                    .filter(|op| {
-                        !op.is_empty()
-                            && Some(*op) != target.cmid.as_deref()
-                            && !Self::prompt_already_accepted(s, op)
-                    })
-                    .map(str::to_owned)
-                else {
-                    drop(sessions);
-                    self.broadcast_error(
-                        Some(session_id.to_owned()),
-                        "Resending a parked recovery draft requires a new operation id".to_owned(),
-                    );
-                    return;
-                };
-                let was_empty = s.queue.is_empty();
-                let m = s.drafts.remove(pos);
-                let had_schedule = m.schedule.is_some();
-                let dispatch_origin = crate::prompt_origin::compute_dispatch_origin(
-                    m.origin.as_ref(),
-                    Some(&trigger),
-                );
-                let new_id = self.next_qid();
-                s.queue.push(QueuedMessage {
-                    id: new_id,
-                    text: m.text,
-                    content: m.content,
-                    cmid: Some(op),
-                    schedule: None,
-                    origin: m.origin,
-                    initiator: Some(trigger.clone()),
-                });
-                Some((had_schedule, was_empty, dispatch_origin.is_owner()))
-            } else {
-                None
-            }
-        };
-        if let Some((had_schedule, was_empty, is_owner)) = recovery_moved {
-            self.emit_pending(session_id);
-            if had_schedule {
-                self.cancel_draft_timer(session_id, id);
-                self.broadcast_sessions();
-            }
-            if is_owner {
-                self.notify_human_turn(session_id);
-            }
-            self.drain_head(session_id, was_empty, false, None);
+        if self.is_row_withdrawing(session_id, id) {
+            return;
+        }
+        if id.starts_with("recovery-") {
+            self.activate_recovery_draft_durable(session_id, id, cmid, trigger);
             return;
         }
         let msg = {

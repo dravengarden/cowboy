@@ -66,7 +66,7 @@ pub(super) struct PendingUndeliveredNotice {
 /// Returns `None` when `command_id` belongs to a different session or when
 /// durable recovery parking failed (keeping the command fenced in `pending`).
 pub(super) async fn take_acked_command(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     session_id: &str,
     command_id: &str,
     accepted: bool,
@@ -812,7 +812,7 @@ pub(super) fn recover_execution_durable(
         + 1;
     let (pre_recovery_keys, notice_prompts, other_prompts) =
         snapshot_pre_recovery_pending(shared, &id);
-    if !notice_prompts.is_empty() && shared.hub.has_store_writer() {
+    if (!notice_prompts.is_empty() || !other_prompts.is_empty()) && shared.hub.has_store_writer() {
         let Ok(handle) = tokio::runtime::Handle::try_current() else {
             let msg = "Execution recovery aborted: async runtime unavailable to park pending completion notice";
             shared.hub.broadcast_error(Some(id), msg.into());
@@ -850,10 +850,11 @@ pub(super) fn recover_execution_durable(
             {
                 return;
             }
-            let Some((mut preview, rx)) = shared
-                .hub
-                .preview_park_recovery_notices(&id, &notice_prompts)
-            else {
+            let Some((mut preview, rx)) = shared.hub.preview_park_recovery_batch(
+                &id,
+                &notice_prompts,
+                &other_prompts,
+            ) else {
                 drop(commit_guard);
                 abort_failed_execution_recovery(
                     &shared,
@@ -867,14 +868,13 @@ pub(super) fn recover_execution_durable(
             };
             match rx.await {
                 Ok(Ok(true)) => {
-                    shared.hub.commit_park_recovery_notices(&mut preview);
+                    shared.hub.commit_park_recovery_prompt(&mut preview);
                     drop(commit_guard);
                     retire_parked_recovery_and_launch(
                         &shared,
                         &id,
                         fence_id,
                         &pre_recovery_keys,
-                        other_prompts,
                         session,
                         intent,
                     );
@@ -920,7 +920,6 @@ fn retire_parked_recovery_and_launch(
     id: &str,
     fence_id: u64,
     pre_recovery_keys: &HashMap<String, u64>,
-    other_prompts: Vec<(String, Vec<serde_json::Value>, Option<String>)>,
     session: StartSession,
     intent: Option<crate::execution_environment::RecoveryV1>,
 ) {
@@ -947,9 +946,6 @@ fn retire_parked_recovery_and_launch(
             false
         }
     };
-    for (text, content, cmid) in other_prompts {
-        shared.hub.park_recovery_draft(id, text, content, cmid);
-    }
     shared.hub.broadcast_error(
         Some(id.to_owned()),
         "Execution recovery retained an unacknowledged prompt as a draft; inspect effects before resending"

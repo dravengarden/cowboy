@@ -1822,7 +1822,7 @@ async fn connected(
 }
 
 async fn send_pending<W: tokio::io::AsyncWrite + Unpin + Send>(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     writer: &mut W,
 ) -> Result<()> {
     let mut commands: Vec<_> = {
@@ -2100,7 +2100,7 @@ use crate::subagent_transcripts::divert;
 
 #[allow(clippy::too_many_lines)] // One exhaustive wire-frame dispatch keeps broker ordering visible.
 async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     frame: Frame,
     writer: &mut W,
 ) -> Result<()> {
