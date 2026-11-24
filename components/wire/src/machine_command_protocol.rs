@@ -126,6 +126,12 @@ impl MachineCommand {
                 operation: PluginHostOperation::ExportTelemetry,
                 ..
             } => TELEMETRY_PLUGIN_PROTOCOL_VERSION,
+            // Renewal runs only through `RenewPortableCredential`'s admission;
+            // the generic host route never carries it to any peer.
+            Self::InvokePluginHost {
+                operation: PluginHostOperation::RenewCredential,
+                ..
+            } => u16::MAX,
             // Uninstall is destructive and its Controller saga relies on
             // exact-generation reactivation for compensation. Never let a
             // protocol-three Machine begin removal that it cannot undo.

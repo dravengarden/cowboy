@@ -591,6 +591,17 @@ mod tests {
             PORTABLE_RENEWAL_PROTOCOL_VERSION
         );
         const { assert!(PORTABLE_RENEWAL_PROTOCOL_VERSION <= super::super::MACHINE_PROTOCOL_VERSION) };
+        let generic: super::super::MachineCommand = serde_json::from_value(serde_json::json!({
+            "command": "invoke_plugin_host", "request_id": "r", "plugin_id": "grok",
+            "plugin_version": "3.2.36", "generation_digest": "sha256:x", "auth_generation": 3,
+            "operation": "renew_credential", "payload": {},
+        }))
+        .unwrap();
+        assert_eq!(
+            generic.minimum_protocol(),
+            u16::MAX,
+            "never through the generic route"
+        );
         let mut extra = serde_json::json!({"account_id": "11111111-1111-4111-8111-111111111111",
             "plugin_id": "grok", "plugin_version": "3.2.22", "generation_digest": "sha256:x",
             "auth_generation": 3, "expires_at_ms": 1});

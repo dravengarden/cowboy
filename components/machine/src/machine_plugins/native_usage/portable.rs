@@ -535,6 +535,18 @@ impl MachinePluginStore {
         {
             return Err(refuse("portable_renewal_unsupported"));
         }
+        // The session homes must hold exactly the admitted sealed credential:
+        // a home with an uncommitted refresh (or another sign-in) is the
+        // ordinary refresh observation's to reconcile, never this renewal's
+        // to spend, and only then is a later candidate this run's.
+        let (account, plugin) = (request.account_id.clone(), request.plugin_id.clone());
+        if scoped
+            .pending_refresh(account.clone(), plugin.clone())
+            .await
+            .map_or(true, |(candidate, unreadable)| candidate || unreadable)
+        {
+            return Err(refuse("portable_usage_replica_pending"));
+        }
         // No sidecar and no private home: the session environment.
         admission.sidecars = Some(BTreeMap::new());
         let ran = scoped
@@ -562,21 +574,14 @@ impl MachinePluginStore {
         // Whatever the collector reported once it started, the session home
         // decides: the CLI may have renewed before a later read failed, and
         // that credential reaches the vault through the refresh observation
-        // either way.
-        let (account, plugin) = (request.account_id, request.plugin_id);
-        let observer = scoped.clone();
-        let renewed = tokio::task::spawn_blocking(move || {
-            observer
-                .auth_refresh_observations()
-                .candidates
-                .iter()
-                .any(|candidate| candidate.account_id == account && candidate.provider_id == plugin)
-        })
-        .await
-        .map_err(|error| PluginHostInvocationFailure {
-            started: true,
-            error: error.into(),
-        })?;
+        // either way. No candidate existed before the run.
+        let (renewed, _) = scoped
+            .pending_refresh(account, plugin)
+            .await
+            .map_err(|error| PluginHostInvocationFailure {
+                started: true,
+                error,
+            })?;
         match ran {
             _ if renewed => Ok(serde_json::json!({"outcome": "renewed"})),
             Ok(reply) if reply["renewal"] == "attempted" => {
@@ -588,6 +593,31 @@ impl MachinePluginStore {
             }),
             Err(failure) => Err(failure),
         }
+    }
+
+    /// Whether a writable session home of `account`'s `plugin` holds a
+    /// credential its sealed replica does not (a refresh candidate), and
+    /// whether some home could not be read at all.
+    async fn pending_refresh(
+        &self,
+        account: ProviderAccountId,
+        plugin: String,
+    ) -> Result<(bool, bool)> {
+        let observer = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let observations = observer.auth_refresh_observations();
+            (
+                observations.candidates.iter().any(|candidate| {
+                    candidate.account_id == account && candidate.provider_id == plugin
+                }),
+                observations
+                    .failed_provider_ids
+                    .iter()
+                    .any(|(failed, provider)| *failed == account && *provider == plugin),
+            )
+        })
+        .await
+        .map_err(anyhow::Error::from)
     }
 
     /// Collect one named portable account's usage. Errors are closed codes

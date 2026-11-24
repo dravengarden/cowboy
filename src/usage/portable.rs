@@ -256,14 +256,19 @@ pub fn begin_collect<'a>(
     })
 }
 
+/// A renewal that did not report an outcome: whether it may have started
+/// (a lost or late reply may follow a started renewal), and its closed code.
+pub type RenewalFailure = (bool, &'static str);
+
 /// Enqueue an idle renewal (synchronously, like [`begin_collect`]); the
-/// future awaits its closed outcome (`renewed` or `unchanged`).
+/// future awaits its closed outcome (`renewed` or `unchanged`). A refusal is
+/// unsent only with the Machine's explicit `started: false`.
 pub fn begin_renewal<'a>(
     machine_control: &'a MachineControl,
     machine_id: &str,
     plugin: &PluginInventory,
     request: PortableRenewalRequest,
-) -> Result<impl Future<Output = Result<&'static str, &'static str>> + 'a, &'static str> {
+) -> Result<impl Future<Output = Result<&'static str, RenewalFailure>> + 'a, &'static str> {
     let binding = machine_control
         .bind_plugin_host(machine_id, plugin, PluginHostOperation::RenewCredential)
         .map_err(|_| "portable_usage_machine_unavailable")?;
@@ -290,13 +295,16 @@ pub fn begin_renewal<'a>(
             })) => RENEWAL_OUTCOMES
                 .into_iter()
                 .find(|outcome| value["outcome"].as_str() == Some(outcome))
-                .ok_or("portable_usage_collector_failed"),
+                .ok_or((true, "portable_usage_collector_failed")),
             Ok(Ok(Reply::PluginHost {
-                detail: Some(code), ..
-            })) => Err(portable_usage_error_code(&code)),
-            Ok(Err(_)) => Err("portable_usage_machine_unavailable"),
-            Err(_) => Err("portable_usage_temporarily_unavailable"),
-            Ok(Ok(_)) => Err("portable_usage_collector_failed"),
+                accepted: false,
+                started,
+                detail: Some(code),
+                ..
+            })) => Err((started, portable_usage_error_code(&code))),
+            Ok(Err(_)) => Err((true, "portable_usage_machine_unavailable")),
+            Err(_) => Err((true, "portable_usage_temporarily_unavailable")),
+            Ok(Ok(_)) => Err((true, "portable_usage_collector_failed")),
         }
     })
 }
