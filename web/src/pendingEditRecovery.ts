@@ -11,11 +11,16 @@ import {
   finishOrphanedPendingEdit,
   onPendingEditEncodesSettled,
   type PendingEditRecord,
+  renewPendingEditRecovery,
 } from "./pendingEditStore";
 
 export interface AuthoritativeQueue {
   readonly queue: readonly { readonly id: string }[];
-  readonly drafts: readonly { readonly id: string; readonly cmid?: string }[];
+  readonly drafts: readonly {
+    readonly id: string;
+    readonly cmid?: string;
+    readonly text: string;
+  }[];
 }
 
 export interface PendingEditRecoveryHooks {
@@ -52,14 +57,16 @@ function recover(sessionId: string): void {
     new Set(value.queue.map((row) => row.id)),
     new Set(value.drafts.map((row) => row.id)),
   );
-  for (const record of orphaned) {
-    if (
-      value.drafts.some((row) => row.cmid === record.recoveryCmid) ||
-      pending.includes(record.recoveryCmid)
-    ) {
+  for (const claimed of orphaned) {
+    let record = claimed;
+    const parked = value.drafts.find((row) => row.cmid === record.recoveryCmid);
+    if ((parked !== undefined && parked.text === record.text) || pending.includes(record.recoveryCmid)) {
       finishOrphanedPendingEdit(record, true);
       continue;
     }
+    // Another tab parked an older copy under the shared cmid. Keep this
+    // newer text as a draft of its own rather than retiring it.
+    if (parked !== undefined) record = renewPendingEditRecovery(record);
     if (!record.text.trim() && record.attachments.length === 0) {
       finishOrphanedPendingEdit(record, false);
       continue;

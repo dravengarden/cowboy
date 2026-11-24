@@ -677,12 +677,15 @@ pub fn force_cancel_grace(state: &AppState, session_id: &str) -> std::time::Dura
 /// an explicit send once the account admits it and the Machine is back.
 /// Dispatching it would take the row out of the queue just to requeue it under
 /// a new id, which a client editing the row reads as a sent message and saves
-/// the edit as a draft beside the returned original. Whether the send was held.
+/// the edit as a draft beside the returned original. The sending device gets
+/// an addressed refusal for `cmid`, so it retires its optimistic send instead
+/// of replaying it after a reconnect. Whether the send was held.
 pub fn request_send_queued(
     state: &Arc<AppState>,
     caller: &crate::prompt_origin::RequestCaller,
     session_id: &str,
     id: &str,
+    cmid: Option<&str>,
 ) -> bool {
     let held = state.hub.session_info(session_id).and_then(|info| {
         provider_accounts::controls::parked_reason(&state.accounts, &info.meta).or_else(|| {
@@ -697,6 +700,16 @@ pub fn request_send_queued(
     if state.hub.promote_queued(session_id, id, caller) {
         session_maintenance::wait(&state.hub, session_id, &reason);
         state.hub.set_explicit_wait(session_id, true);
+        if let Some(cmid) = cmid {
+            state.hub.command_result(
+                session_id,
+                cmid,
+                CommandOutcome::Rejected,
+                &format!(
+                    "Waiting: {reason}. The message stays first in the queue and sends once it can."
+                ),
+            );
+        }
     }
     true
 }
@@ -710,6 +723,7 @@ pub fn force_push_queued(
     caller: &crate::prompt_origin::RequestCaller,
     session_id: &str,
     id: &str,
+    cmid: Option<&str>,
 ) -> Result<(), String> {
     if let Some(refusal) =
         provider_accounts::retirement::session_refusal(&state.accounts, session_id)
@@ -717,7 +731,7 @@ pub fn force_push_queued(
         return Err(refusal.to_owned());
     }
     // Promote to front either way.
-    if request_send_queued(state, caller, session_id, id) {
+    if request_send_queued(state, caller, session_id, id, cmid) {
         return Ok(());
     }
     if matches!(

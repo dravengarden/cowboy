@@ -302,6 +302,7 @@ impl Hub {
                 .unwrap_or_else(|| crate::prompt_origin::DeliveryOrigin::cowboy("legacy_queue"));
             let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(head.cmid);
             s.explicit_wait = false;
+            s.explicit_row = None;
             s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);
@@ -340,28 +341,67 @@ impl Hub {
 
     /// Retry a previously explicit send parked on a resource wait, preserving
     /// its stored `(origin, initiator)` without fabricating a new caller.
+    ///
+    /// The intent belongs to the row it was recorded for: once the user
+    /// removed or reordered that row, the new head is not sent through Pause
+    /// on its behalf, and the intent ends.
     pub fn retry_explicit_wait(&self, session_id: &str) {
+        let moved = self.inner.sessions.lock().get(session_id).is_some_and(|s| {
+            s.explicit_row
+                .as_ref()
+                .is_some_and(|row| s.queue.first().is_none_or(|head| &head.id != row))
+        });
+        if moved {
+            self.set_explicit_wait(session_id, false);
+            return;
+        }
         self.drain_head(session_id, true, true, None);
     }
 
+    /// Whether the head row is held by a terminal editing it, which a retried
+    /// explicit send waits for.
+    pub fn head_held_for_editing(&self, session_id: &str) -> bool {
+        self.inner.sessions.lock().get(session_id).is_some_and(|s| {
+            s.queue
+                .first()
+                .is_some_and(|head| s.editing.as_deref() == Some(head.id.as_str()))
+        })
+    }
+
+    /// Record (or end) explicit send intent for the current head row.
     pub fn set_explicit_wait(&self, session_id: &str, explicit: bool) {
-        if let Some(s) = self.inner.sessions.lock().get_mut(session_id) {
+        let row = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
             s.explicit_wait = explicit;
-        }
+            s.explicit_row = s
+                .queue
+                .first()
+                .filter(|_| explicit)
+                .map(|head| head.id.clone());
+            s.explicit_row.clone()
+        };
         // The persisted wait carries the intent across a Controller restart.
         let key = format!(
             "{}{session_id}",
             settings_keys::SESSION_RESOURCE_WAIT_PREFIX
         );
-        if let Some(serde_json::Value::Object(mut wait)) = self.setting(&key)
-            && wait
-                .get("explicit")
-                .and_then(serde_json::Value::as_bool)
-                .unwrap_or(false)
-                != explicit
-        {
+        if let Some(serde_json::Value::Object(mut wait)) = self.setting(&key) {
+            let before = wait.clone();
             wait.insert("explicit".to_owned(), serde_json::Value::Bool(explicit));
-            self.set_setting(key, serde_json::Value::Object(wait));
+            match row {
+                Some(row) => {
+                    wait.insert("row".to_owned(), serde_json::Value::String(row));
+                }
+                None => {
+                    wait.remove("row");
+                }
+            }
+            if wait != before {
+                self.set_setting(key, serde_json::Value::Object(wait));
+            }
         }
     }
 

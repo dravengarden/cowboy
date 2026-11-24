@@ -24,7 +24,7 @@ import { CallNoticeLine, pendingCallNotice } from "./CallNoticeLine";
 import { QueuedAttachmentChips } from "./QueuedAttachmentChips";
 import { useTouchComposer } from "./ComposerTextarea";
 import { pendingEditLiveText, pendingPanelDisclosureDecision, pendingRowVisibleText } from "./pendingEditLifecycle";
-import { beginPendingEditEncoding, clearPendingEdit, getPendingEdit, recoverPendingEditId, subscribePendingEditRestore, setPendingEdit } from "./pendingEditStore";
+import { beginPendingEditEncoding, clearPendingEdit, getPendingEdit, pendingEditEncoding, recoverPendingEditId, subscribePendingEditRestore, setPendingEdit } from "./pendingEditStore";
 import { isImeKeyEvent } from "./imeKey";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
@@ -2060,7 +2060,7 @@ export function PendingRow({
     // A synchronous paste placeholder has no ACP bytes yet. Keep the editor
     // alive until encoding either promotes or removes it; persisting the empty
     // block would make the pending row restore a broken inline token.
-    if (editAttachmentsPending) return false;
+    if (editAttachmentsPending || pendingEditEncoding(sessionId, kind, message.id)) return false;
     const text = liveEditText();
     editTextRef.current = text;
     setDraft(text);
@@ -2346,9 +2346,13 @@ export function PendingRow({
       const settleRecord: ((completed: readonly Attachment[]) => void)[] = [];
       return runNativeClipboardImagePaste(request, {
         stage: (pending, selection): void => {
-          settleRecord.push(beginPendingEditEncoding(sessionId, kind, message.id, pending));
-          pending.forEach(registerInlineAttachment);
           const editor = activeEditEditor();
+          // Extras staged after the editor unmounted get no token from it;
+          // the store places them when they settle.
+          settleRecord.push(
+            beginPendingEditEncoding(sessionId, kind, message.id, editor ? pending : []),
+          );
+          pending.forEach(registerInlineAttachment);
           flushSync(() => {
             setEditAttachments((previous) => [...previous, ...pending]);
             editor?.insertImages(pending, selection);

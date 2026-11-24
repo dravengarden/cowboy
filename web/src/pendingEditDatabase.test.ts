@@ -274,3 +274,45 @@ test("an image still encoding settles into the edit after its editor is gone", a
   assertEquals(file?.text.includes("cowboy-att:f1"), true);
   stop();
 });
+
+test("discarding an older copy keeps another tab's newer edit", async () => {
+  const storage = fakeStorage();
+  const first = await loadPage(storage);
+  first.setPendingEdit({ ...edit("newer", "older text", []), kind: "queued" });
+  first.flushPendingEdits();
+  const second = await loadPage(storage);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  second.setPendingEdit({ ...edit("newer", "newer text", []), kind: "queued" });
+  second.flushPendingEdits();
+
+  first.clearPendingEdit("newer", "queued", "row-1");
+  const claimed = second.claimOrphanedPendingEdits("newer", new Set(), new Set());
+  assertEquals(claimed.map((record) => record.text), ["newer text"]);
+});
+
+test("a file whose edit was discarded does not join a later edit of the row", async () => {
+  const page = await loadPage(fakeStorage());
+  const settleFile = page.beginPendingEditEncoding("discard", "queued", "row-1", []);
+  page.setPendingEdit({ ...edit("discard", "first", []), kind: "queued" });
+  assertEquals(page.pendingEditEncoding("discard", "queued", "row-1"), true);
+  page.clearPendingEdit("discard", "queued", "row-1");
+  assertEquals(page.pendingEditEncoding("discard", "queued", "row-1"), false);
+  page.setPendingEdit({ ...edit("discard", "second", []), kind: "queued" });
+  settleFile([image("f1")]);
+  const later = page.getPendingEdit("discard", "queued", "row-1");
+  assertEquals(later?.text, "second");
+  assertEquals(later?.attachments, []);
+});
+
+test("an editor reopened during an encode adopts the settled bytes", async () => {
+  const page = await loadPage(fakeStorage());
+  const placeholder = { ...image("p9"), block: { type: "image" as const, data: "", mimeType: "image/png" }, pending: true };
+  const settle = page.beginPendingEditEncoding("reopen", "queued", "row-1", [placeholder]);
+  page.setPendingEdit({ ...edit("reopen", "x ![s](cowboy-att:p9)", [placeholder]), kind: "queued" });
+  const adopted: string[][] = [];
+  page.subscribePendingEditRestore("reopen", "queued", "row-1", (restored) => {
+    adopted.push(restored.attachments.map((attachment) => attachment.id));
+  });
+  settle([image("p9")]);
+  assertEquals(adopted, [["p9"]]);
+});

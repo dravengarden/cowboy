@@ -538,10 +538,45 @@ export function clearPendingEdit(
   id: string,
 ): void {
   const key = recordKey(sessionId, kind, id);
+  const retired = records.get(key);
   records.delete(key);
   dirty.delete(key);
   recovering.delete(key);
+  // Encodes this edit started no longer belong to any edit of the row.
+  encodes.delete(key);
+  if (retired !== undefined && mirrorNewerThan(key, retired.updatedAt)) {
+    // Another tab flushed a newer revision of this edit: it stays theirs,
+    // mirror and attachment bytes included.
+    mirrored.delete(key);
+    awaitingDatabase.delete(key);
+    databaseOwners.delete(key);
+    return;
+  }
   persist(key);
+}
+
+function mirrorNewerThan(key: string, updatedAt: number): boolean {
+  try {
+    const raw = storage()?.getItem(KEY_PREFIX + key);
+    if (raw === null || raw === undefined) return false;
+    const mirror: unknown = JSON.parse(raw);
+    const stamp = (mirror as { updatedAt?: unknown } | null)?.updatedAt;
+    return typeof stamp === "number" && stamp > updatedAt;
+  } catch {
+    return false;
+  }
+}
+
+/** A draft already carries this edit's recovery cmid but not its text: another
+ * tab parked an older copy. Park this newer one under a cmid of its own. */
+export function renewPendingEditRecovery(record: PendingEditRecord): PendingEditRecord {
+  const key = recordKey(record.sessionId, record.kind, record.id);
+  const renewed = { ...record, recoveryCmid: `pending-edit-${newUuid()}` };
+  if (records.get(key) === record) {
+    records.set(key, renewed);
+    schedulePersist(key);
+  }
+  return renewed;
 }
 
 /** Select the newest unresolved edit for a mounted panel. If the authoritative
@@ -679,16 +714,27 @@ export function beginPendingEditEncoding(
   return (completed) => {
     if (settled) return;
     settled = true;
-    const current = encodes.get(key);
-    if (current === entry) {
-      for (const placeholder of placeholders) current.placeholders.delete(placeholder.id);
-      current.batches -= 1;
-      if (current.batches <= 0) encodes.delete(key);
-    }
+    // The edit was saved, discarded or recovered meanwhile: these bytes
+    // belong to none of the row's later edits.
+    if (encodes.get(key) !== entry) return;
+    for (const placeholder of placeholders) entry.placeholders.delete(placeholder.id);
+    entry.batches -= 1;
+    if (entry.batches <= 0) encodes.delete(key);
     settleEncodedAttachments(key, placeholders, completed);
     if (encodes.has(key)) return;
     for (const listener of encodeListeners) listener(sessionId);
   };
+}
+
+/** Whether an attachment encode for this edit is still running, possibly
+ * started by an editor that has since unmounted. Saving now would keep an
+ * image token without its bytes. */
+export function pendingEditEncoding(
+  sessionId: string,
+  kind: PendingEditKind,
+  id: string,
+): boolean {
+  return encodes.has(recordKey(sessionId, kind, id));
 }
 
 function settleEncodedAttachments(
@@ -716,13 +762,11 @@ function settleEncodedAttachments(
   let text = failed.size === 0 ? record.text : dropOrphanImageTokens(record.text, keep);
   if (placeholders.length === 0) text = promoteUnplacedImageTokens(text, added);
   if (added.length === 0 && text === record.text) return;
-  records.set(key, {
-    ...record,
-    text,
-    attachments: [...record.attachments, ...added],
-    updatedAt: Date.now(),
-  });
+  const attachments = [...record.attachments, ...added];
+  records.set(key, { ...record, text, attachments, updatedAt: Date.now() });
   schedulePersist(key);
+  // An editor reopened on this edit meanwhile adopts the bytes.
+  for (const listener of restoreListeners.get(key) ?? []) listener({ text, attachments });
 }
 
 /** Called with a session whose edits finished every attachment encode, so

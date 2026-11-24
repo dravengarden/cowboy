@@ -865,6 +865,35 @@ async fn a_retried_explicit_send_waits_for_the_edit_of_its_row() {
     assert_eq!(req.text, "head");
 }
 
+// Explicit send intent belongs to the row it was recorded for: after the user
+// reorders another row ahead, a retry must not send that row through Pause.
+#[tokio::test]
+async fn explicit_intent_does_not_pass_to_a_reordered_head() {
+    let hub = hub_with_session("bound");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    hub.set_dispatch_tx(tx);
+    hub.set_status("bound", Status::Running, None);
+    hub.set_paused("bound", true);
+    let person = crate::prompt_origin::RequestCaller::Person;
+    for (text, cmid) in [("chosen", "c-chosen"), ("other", "c-other")] {
+        hub.submit("bound", text.into(), vec![], Some(cmid.into()), &person);
+    }
+    let ids: Vec<String> = hub.inner.sessions.lock()["bound"]
+        .queue
+        .iter()
+        .map(|row| row.id.clone())
+        .collect();
+    hub.set_explicit_wait("bound", true);
+    hub.reorder_queue("bound", &[ids[1].clone(), ids[0].clone()]);
+    hub.retry_explicit_wait("bound");
+    assert!(rx.try_recv().is_err(), "the reordered head stays paused");
+    assert!(!hub.explicit_wait("bound"), "the intent ended with its row");
+    // Bound to the head it was recorded for, the retry still sends it.
+    hub.set_explicit_wait("bound", true);
+    hub.retry_explicit_wait("bound");
+    assert_eq!(rx.try_recv().expect("the bound head is sent").text, "other");
+}
+
 #[tokio::test]
 async fn pending_context_holds_schedules_drafts_and_manual_queue_until_cleared() {
     let hub = hub_with_session("context-hold");

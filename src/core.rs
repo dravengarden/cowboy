@@ -560,6 +560,20 @@ impl Hub {
         .and_then(|value| value.get("explicit").and_then(serde_json::Value::as_bool))
         .unwrap_or(false)
     }
+
+    /// The queued row a restored explicit wait belongs to.
+    fn restored_explicit_row(&self, id: &str) -> Option<String> {
+        self.setting(&format!(
+            "{}{id}",
+            settings_keys::SESSION_RESOURCE_WAIT_PREFIX
+        ))
+        .and_then(|value| {
+            value
+                .get("row")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+    }
 }
 
 /// When a restored session was last active, from its newest durable event.
@@ -673,6 +687,10 @@ struct Session {
     /// wait. Maintenance redelivers it as that explicit send; any dispatch of
     /// the head consumes the intent.
     explicit_wait: bool,
+    /// The queued row that explicit intent was recorded for. Another row at
+    /// the head (the user removed or reordered it) does not inherit it.
+    /// `None` for an intent recorded before rows were bound.
+    explicit_row: Option<String>,
     /// A channel/preflight-owned prompt has not reached its runtime yet.
     dispatch_pending: Option<u64>,
     /// Client message ids of prompts this Hub recently handed to a worker. A
@@ -2285,6 +2303,7 @@ impl Hub {
                         in_flight_epoch: 0,
                         delivery_hold: self.restored_delivery_hold(&id),
                         explicit_wait: self.restored_explicit_wait(&id),
+                        explicit_row: self.restored_explicit_row(&id),
                         dispatch_pending: None,
                         dispatched_cmids: VecDeque::new(),
                         dispatched_origins: HashMap::new(),
@@ -3092,6 +3111,7 @@ impl Hub {
                     in_flight_epoch: 0,
                     delivery_hold: None,
                     explicit_wait: false,
+                    explicit_row: None,
                     dispatch_pending: None,
                     dispatched_cmids: VecDeque::new(),
                     dispatched_origins: HashMap::new(),
