@@ -78,6 +78,7 @@ impl Hub {
                     initiator: Some(initiator.clone()),
                     dispatch_origin,
                     trigger: initiator,
+                    allow_revive: false,
                 });
             } else {
                 let id = self.next_qid();
@@ -90,6 +91,7 @@ impl Hub {
                     origin: content_origin,
                     initiator: Some(initiator),
                     explicit: false,
+                    allow_revive: false,
                 };
                 if front {
                     s.queue.insert(0, message);
@@ -135,11 +137,13 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
+            if self.record_deferred_notice_wake_if_fenced(session_id, completion_id) {
+                return false;
+            }
             if s.meta.status != Status::Exited
                 || s.meta.paused
                 || s.meta.closing
                 || s.meta.trashed_at_ms.is_some()
-                || self.has_in_flight_pending_commit(session_id)
                 || s.in_flight
                 || s.dispatch_pending.is_some()
                 || s.delivery_hold.is_some()
@@ -174,6 +178,7 @@ impl Hub {
                 initiator: head.initiator.or_else(|| Some(trigger.clone())),
                 dispatch_origin,
                 trigger,
+                allow_revive: false,
             }
         };
         self.emit_pending(session_id);

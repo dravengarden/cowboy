@@ -21,44 +21,6 @@ impl Hub {
         );
     }
 
-    pub(in crate::core) fn persist_recovery_cmid_if_needed(
-        &self,
-        session_id: &str,
-        cmid: Option<&str>,
-    ) {
-        let Some(cmid) = cmid.filter(|c| !c.is_empty()) else {
-            return;
-        };
-        let updated = {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            s.committed_recovery_cmids.insert(cmid.to_owned());
-            if s.recovery_cmids.insert(cmid.to_owned()) {
-                let mut list: Vec<String> = s.recovery_cmids.iter().cloned().collect();
-                list.sort();
-                Some(list)
-            } else {
-                None
-            }
-        };
-        if let Some(list) = updated {
-            let key = format!(
-                "{}{session_id}",
-                settings_keys::SESSION_RECOVERY_CMIDS_PREFIX
-            );
-            if self.has_store_writer() {
-                // Finding 2: Never issue a separate best-effort PutSetting when a
-                // store writer is attached; `UpdatePending` commits `recovery_cmids`
-                // atomically in the same SQL transaction as `queue`/`drafts`.
-                self.load_settings(vec![(key, serde_json::json!(list))]);
-            } else {
-                self.set_setting(key, serde_json::json!(list));
-            }
-        }
-    }
-
     pub(in crate::core) fn add_recovery_draft(
         &self,
         session_id: &str,
@@ -66,14 +28,12 @@ impl Hub {
         content: Vec<serde_json::Value>,
         cmid: Option<String>,
     ) {
-        let saved_cmid = cmid.clone();
-        let duplicate;
-        {
+        let (duplicate, updated_setting) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            duplicate = cmid
+            let duplicate = cmid
                 .as_deref()
                 .filter(|c| {
                     s.committed_recovery_cmids.contains(*c)
@@ -81,20 +41,61 @@ impl Hub {
                 })
                 .map(str::to_owned);
             if duplicate.is_none() {
+                if let Some(c) = cmid.as_deref() {
+                    let alias = format!("recovery-{c}");
+                    s.drafts
+                        .retain(|m| m.cmid.as_deref() != Some(alias.as_str()));
+                    let before_q = s.queue.len();
+                    s.queue.retain(|m| m.cmid.as_deref() != Some(c));
+                    if before_q != s.queue.len()
+                        && s.editing
+                            .as_deref()
+                            .is_some_and(|ed| !s.queue.iter().any(|m| m.id == ed))
+                    {
+                        s.editing = None;
+                    }
+                    hub_dispatch_origin::remove_pending_echo(s, c);
+                }
                 let id = format!("recovery-{}", self.next_qid());
                 s.drafts.push(QueuedMessage {
                     id,
                     text,
                     content,
-                    cmid,
+                    cmid: cmid.clone(),
                     schedule: None,
                     origin: None,
                     initiator: None,
                     explicit: false,
+                    allow_revive: false,
                 });
             }
+            // Finding 17: update draft and both recovery cmid sets atomically
+            // in the same critical section so Clear Drafts can never interleave.
+            let updated_setting = cmid.as_deref().filter(|c| !c.is_empty()).and_then(|c| {
+                s.committed_recovery_cmids.insert(c.to_owned());
+                s.pending_recovery_cmids.remove(c);
+                hub_dispatch_origin::remove_pending_echo(s, c);
+                if s.recovery_cmids.insert(c.to_owned()) {
+                    let mut list: Vec<String> = s.recovery_cmids.iter().cloned().collect();
+                    list.sort();
+                    Some(list)
+                } else {
+                    None
+                }
+            });
+            (duplicate, updated_setting)
+        };
+        if let Some(list) = updated_setting {
+            let key = format!(
+                "{}{session_id}",
+                settings_keys::SESSION_RECOVERY_CMIDS_PREFIX
+            );
+            if self.has_store_writer() {
+                self.load_settings(vec![(key, serde_json::json!(list))]);
+            } else {
+                self.set_setting(key, serde_json::json!(list));
+            }
         }
-        self.persist_recovery_cmid_if_needed(session_id, saved_cmid.as_deref());
         if let Some(cmid) = duplicate {
             self.confirm_delivered(session_id, &cmid);
         } else {
@@ -119,12 +120,28 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            let browser_recovery_orig = cmid
+                .as_deref()
+                .and_then(|c| c.strip_prefix("recovery-"))
+                .filter(|orig| !orig.is_empty());
             duplicate = cmid
                 .as_deref()
-                .filter(|c| s.drafts.iter().any(|m| m.cmid.as_deref() == Some(*c)))
+                .filter(|c| {
+                    s.drafts.iter().any(|m| m.cmid.as_deref() == Some(*c))
+                        || browser_recovery_orig.is_some_and(|orig| {
+                            s.committed_recovery_cmids.contains(orig)
+                                || s.pending_recovery_cmids.contains(orig)
+                                || s.drafts.iter().any(|m| m.cmid.as_deref() == Some(orig))
+                                || Self::prompt_already_accepted(s, orig)
+                        })
+                })
                 .map(str::to_owned);
             if duplicate.is_none() {
-                let id = self.next_qid();
+                let id = if browser_recovery_orig.is_some() {
+                    format!("recovery-{}", self.next_qid())
+                } else {
+                    self.next_qid()
+                };
                 s.drafts.push(QueuedMessage {
                     id,
                     text,
@@ -134,6 +151,7 @@ impl Hub {
                     origin,
                     initiator: None,
                     explicit: false,
+                    allow_revive: false,
                 });
             }
         }
@@ -167,7 +185,8 @@ impl Hub {
             return;
         }
         let author = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
-        let draft_id = {
+        let generation = self.inner.next_qid.fetch_add(1, Ordering::Relaxed);
+        let (draft_id, duplicate_recovery) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
@@ -182,6 +201,7 @@ impl Hub {
             let schedule = Some(DraftSchedule {
                 fire_at_ms,
                 delivery,
+                generation,
             });
             match pos {
                 Some(p) => {
@@ -196,27 +216,49 @@ impl Hub {
                     }
                     m.initiator = None;
                     m.schedule = schedule;
-                    m.id.clone()
+                    (m.id.clone(), None)
                 }
                 None => {
-                    let did = self.next_qid();
-                    s.drafts.push(QueuedMessage {
-                        id: did.clone(),
-                        text,
-                        content,
-                        cmid,
-                        schedule,
-                        origin: Some(author),
-                        initiator: None,
-                        explicit: false,
-                    });
-                    did
+                    let browser_recovery_orig = cmid
+                        .as_deref()
+                        .and_then(|c| c.strip_prefix("recovery-"))
+                        .filter(|orig| !orig.is_empty());
+                    if let Some(orig) = browser_recovery_orig
+                        && (s.committed_recovery_cmids.contains(orig)
+                            || s.pending_recovery_cmids.contains(orig)
+                            || s.drafts.iter().any(|m| m.cmid.as_deref() == Some(orig))
+                            || Self::prompt_already_accepted(s, orig))
+                    {
+                        (String::new(), cmid.clone())
+                    } else {
+                        let did = if browser_recovery_orig.is_some() {
+                            format!("recovery-{}", self.next_qid())
+                        } else {
+                            self.next_qid()
+                        };
+                        s.drafts.push(QueuedMessage {
+                            id: did.clone(),
+                            text,
+                            content,
+                            cmid,
+                            schedule,
+                            origin: Some(author),
+                            initiator: None,
+                            explicit: false,
+                            allow_revive: false,
+                        });
+                        (did, None)
+                    }
                 }
             }
         };
+        if let Some(dup) = duplicate_recovery {
+            self.confirm_delivered(session_id, &dup);
+            return;
+        }
         self.emit_pending(session_id);
         self.broadcast_sessions();
-        self.arm_draft_timer(session_id, &draft_id, fire_at_ms);
+        self.arm_draft_timer(session_id, &draft_id, fire_at_ms, generation);
     }
 
     /// Strip the schedule off a draft, leaving it a plain parked draft, and cancel
@@ -250,46 +292,99 @@ impl Hub {
     /// so the echo renders as a "↻ scheduled" note. No-op if the draft is gone
     /// (the user removed/activated it before it fired — the timer was cancelled,
     /// but a fire already in-flight is harmless here).
+    fn finish_scheduled_recovery_activation(
+        &self,
+        session_id: &str,
+        draft_id: &str,
+        trigger: crate::prompt_origin::DeliveryOrigin,
+        front: bool,
+        reserved: Option<(String, Option<(bool, bool)>)>,
+    ) {
+        let Some((reserved_op, in_memory_post)) = reserved else {
+            return;
+        };
+        if let Some((had_schedule, is_owner)) = in_memory_post {
+            self.emit_pending(session_id);
+            if had_schedule {
+                self.cancel_draft_timer(session_id, draft_id);
+                self.broadcast_sessions();
+            }
+            if is_owner {
+                self.notify_human_turn(session_id);
+            }
+            self.try_drain(session_id);
+        } else {
+            self.spawn_commit_activated_recovery_draft(
+                session_id.to_owned(),
+                draft_id.to_owned(),
+                reserved_op,
+                trigger,
+                front,
+                false,
+                true,
+            );
+        }
+    }
+
     pub fn fire_scheduled_draft(&self, session_id: &str, draft_id: &str) {
+        self.fire_scheduled_draft_checked(session_id, draft_id, None);
+    }
+
+    /// Fire a scheduled draft after validating trash state, withdrawal fence,
+    /// current schedule presence, and (when invoked from the timer loop) the
+    /// exact armed `(fire_at_ms, generation)` and wall-clock due time under ONE
+    /// `sessions` lock (Finding 11).
+    pub(crate) fn fire_scheduled_draft_checked(
+        &self,
+        session_id: &str,
+        draft_id: &str,
+        expected: Option<(i64, u64)>,
+    ) {
         if self.is_managed_child(session_id) {
             return;
         }
+        let now = chrono::Utc::now().timestamp_millis();
         let fired = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            // A trashed session keeps its scheduled Drafts unsent; they stay
-            // visible (overdue) if the session is restored. Checked under the
-            // lock that removes the Draft, so a concurrent Trash or conversion
-            // fence cannot slip in.
             if s.meta.trashed_at_ms.is_some() || self.is_row_withdrawing(session_id, draft_id) {
                 return;
             }
+            let Some(pos) = s.drafts.iter().position(|m| m.id == draft_id) else {
+                return;
+            };
+            let Some(sc) = s.drafts[pos].schedule.as_ref() else {
+                return;
+            };
+            if let Some((expected_fire_at_ms, expected_gen)) = expected
+                && (sc.fire_at_ms != expected_fire_at_ms
+                    || sc.generation != expected_gen
+                    || now < sc.fire_at_ms)
+            {
+                return;
+            }
             if draft_id.starts_with("recovery-") {
-                let Some(pos) = s.drafts.iter().position(|m| m.id == draft_id) else {
-                    return;
-                };
-                let front = s.drafts[pos]
-                    .schedule
-                    .as_ref()
-                    .is_some_and(|sc| sc.delivery == Delivery::Front);
-                drop(sessions);
-                let cmid = Some(format!("{SCHED_PREFIX}{session_id}-{draft_id}"));
-                self.activate_recovery_draft_durable_opts(
+                let front = sc.delivery == Delivery::Front;
+                let op = format!("{SCHED_PREFIX}{session_id}-{draft_id}");
+                let trigger = crate::prompt_origin::DeliveryOrigin::cowboy("schedule");
+                let reserved = self.reserve_scheduled_recovery_activation_locked(
+                    s,
                     session_id,
                     draft_id,
-                    cmid,
-                    crate::prompt_origin::DeliveryOrigin::cowboy("schedule"),
+                    pos,
+                    op,
+                    trigger.clone(),
                     front,
-                    false,
+                );
+                drop(sessions);
+                self.finish_scheduled_recovery_activation(
+                    session_id, draft_id, trigger, front, reserved,
                 );
                 return;
             }
-            s.drafts
-                .iter()
-                .position(|m| m.id == draft_id)
-                .map(|pos| s.drafts.remove(pos))
+            Some(s.drafts.remove(pos))
         };
         let Some(m) = fired else {
             return;
@@ -347,6 +442,7 @@ impl Hub {
                     initiator: Some(trigger.clone()),
                     dispatch_origin,
                     trigger,
+                    allow_revive: false,
                 });
             } else {
                 let id = self.next_qid();
@@ -359,6 +455,7 @@ impl Hub {
                     origin: m.origin,
                     initiator: Some(trigger),
                     explicit: false,
+                    allow_revive: true,
                 };
                 if front {
                     s.queue.insert(0, msg);
@@ -517,7 +614,10 @@ impl Hub {
                 msg.origin = Some(mover);
             }
             msg.initiator = None;
-            let scheduled = msg.schedule.as_ref().map(|sc| sc.fire_at_ms);
+            let scheduled = msg
+                .schedule
+                .as_ref()
+                .map(|sc| (sc.fire_at_ms, sc.generation));
             if let Some(dst) = sessions.get_mut(to) {
                 dst.drafts.push(msg);
             }
@@ -527,9 +627,9 @@ impl Hub {
         self.emit_pending(to);
         // A scheduled draft keeps its fire time across the move — retarget the
         // timer from the source session to the destination (same draft id).
-        if let Some(fire_at_ms) = scheduled {
+        if let Some((fire_at_ms, generation)) = scheduled {
             self.cancel_draft_timer(from, id);
-            self.arm_draft_timer(to, id, fire_at_ms);
+            self.arm_draft_timer(to, id, fire_at_ms, generation);
             self.broadcast_sessions();
         }
     }
@@ -769,6 +869,7 @@ mod r10_recovery_tests {
                     session_id,
                     draft_id: did,
                     fire_at_ms,
+                    ..
                 })) if session_id == "s-f1"
                     && did == draft_id
                     && fire_at_ms == 1_900_000_000_000 =>
@@ -863,7 +964,10 @@ mod r10_recovery_tests {
     #[tokio::test]
     async fn recovery_journal_survives_stalled_shutdown_and_reconciles_on_restart() {
         let dir = tempfile::tempdir().unwrap();
-        let journal_path = dir.path().join("recovery-parks.journal.json");
+        let journal_path = dir
+            .path()
+            .join("recovery-journal")
+            .join("recovery-parks.journal.json");
 
         // Controller #1: store writer NEVER acks (simulated Postgres hang).
         let health1 = Arc::new(PersistenceHealth::default());
@@ -957,5 +1061,216 @@ mod r10_recovery_tests {
             confirmed.iter().any(|c| c == "cmid-settled"),
             "queue_resync must confirm settled recovery cmid"
         );
+    }
+
+    #[tokio::test]
+    async fn r11_shutdown_timeout_never_flushes_stale_snapshot_over_live_park() {
+        let dir = tempfile::tempdir().unwrap();
+        let journal_path = dir.path().join("recovery-journal").join("parks.json");
+        let health = Arc::new(PersistenceHealth::default());
+        let (sink, mut store_rx) = StoreSink::channel(16, health);
+        let hub = Hub::with_store(Some(sink));
+        seed_session(&hub, "s-r11-1", Status::Running);
+        hub.attach_and_reconcile_recovery_journal(journal_path.clone());
+
+        assert!(hub.enqueue_durable_recovery_park(
+            "s-r11-1".into(),
+            "do not erase".into(),
+            vec![],
+            Some("cmid-r11-1".into()),
+            "outage".into(),
+            None,
+        ));
+        let mut acked_seen = 0usize;
+        while let Ok(Some(w)) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), store_rx.recv()).await
+        {
+            if let StoreWrite::UpdatePending {
+                ack_id: Some(_), ..
+            } = w
+            {
+                acked_seen += 1;
+                break;
+            }
+        }
+        assert_eq!(acked_seen, 1);
+        hub.add_draft("s-r11-1", "unrelated".into(), vec![], None, &owner_caller());
+
+        hub.drain_teardown_requeues(std::time::Duration::from_millis(50))
+            .await;
+
+        while let Ok(w) = store_rx.try_recv() {
+            assert!(
+                !matches!(w, StoreWrite::UpdatePending { ack_id: None, .. }),
+                "shutdown timeout must NEVER flush a stale UpdatePending behind an unknown-outcome park"
+            );
+        }
+        assert!(journal_path.exists());
+    }
+
+    #[test]
+    fn r11_stale_queue_row_fenced_and_browser_recovery_alias_and_undelivered_echo_deduped() {
+        let hub = Hub::new();
+        seed_session(&hub, "s-r11-5", Status::Running);
+        let (disp_tx, mut disp_rx) = mpsc::channel(8);
+        hub.set_dispatch_tx(disp_tx);
+
+        hub.set_paused("s-r11-5", true);
+        hub.submit(
+            "s-r11-5",
+            "original".into(),
+            vec![],
+            Some("cmid-r11-5".into()),
+            &owner_caller(),
+        );
+        hub.record_prompt_dispatch(
+            "s-r11-5",
+            "cmid-r11-5".into(),
+            crate::prompt_origin::DeliveryOrigin::from_caller(&owner_caller()),
+            crate::prompt_origin::DeliveryOrigin::from_caller(&owner_caller()),
+            1_000,
+        );
+        hub.add_recovery_draft(
+            "s-r11-5",
+            "original".into(),
+            vec![],
+            Some("cmid-r11-5".into()),
+        );
+        assert!(
+            pending_of(&hub, "s-r11-5").0.is_empty(),
+            "stale queue row must be stripped"
+        );
+        assert_eq!(pending_of(&hub, "s-r11-5").1.len(), 1);
+        let did = pending_of(&hub, "s-r11-5").1[0].id.clone();
+        assert!(hub.remove_draft("s-r11-5", &did));
+        assert!(
+            hub.take_pending_echo_for_undelivered("s-r11-5", "cmid-r11-5")
+                .is_none(),
+            "late UndeliveredPrompt must never consume echo of a settled recovery prompt"
+        );
+        hub.add_draft(
+            "s-r11-5",
+            "browser replay".into(),
+            vec![],
+            Some("recovery-cmid-r11-5".into()),
+            &owner_caller(),
+        );
+        assert!(
+            pending_of(&hub, "s-r11-5").1.is_empty(),
+            "browser recovery-<orig> alias must not resurrect a settled server recovery draft"
+        );
+        hub.add_draft(
+            "s-r11-5",
+            "browser only".into(),
+            vec![],
+            Some("recovery-fresh-op".into()),
+            &owner_caller(),
+        );
+        assert!(pending_of(&hub, "s-r11-5").1[0].id.starts_with("recovery-"));
+        hub.set_paused("s-r11-5", false);
+        hub.activate_all_drafts("s-r11-5", &owner_caller());
+        assert_eq!(
+            pending_of(&hub, "s-r11-5").1.len(),
+            1,
+            "browser recovery draft must be excluded from bulk activate_all_drafts"
+        );
+        assert!(disp_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn r11_scheduled_recovery_stale_timer_rejected_and_due_fire_wakes_exited_and_deferred_drain_replays()
+     {
+        let health = Arc::new(PersistenceHealth::default());
+        let (sink, mut store_rx) = StoreSink::channel(32, health);
+        let hub = Hub::with_store(Some(sink));
+        let acks = hub.store_ack_sink();
+        let (disp_tx, mut disp_rx) = mpsc::channel(8);
+        hub.set_dispatch_tx(disp_tx);
+        seed_session(&hub, "s-r11-11", Status::Exited);
+
+        hub.add_recovery_draft("s-r11-11", "wake me".into(), vec![], Some("orig-11".into()));
+        let did = pending_of(&hub, "s-r11-11").1[0].id.clone();
+        let due_ms = chrono::Utc::now().timestamp_millis() - 1_000;
+        hub.schedule_draft(
+            "s-r11-11",
+            Some(did.clone()),
+            None,
+            String::new(),
+            vec![],
+            due_ms,
+            Delivery::Back,
+            &owner_caller(),
+        );
+        let gen1 = pending_of(&hub, "s-r11-11").1[0]
+            .schedule
+            .as_ref()
+            .unwrap()
+            .generation;
+        hub.fire_scheduled_draft_checked("s-r11-11", &did, Some((due_ms, gen1 + 999)));
+        assert_eq!(pending_of(&hub, "s-r11-11").1.len(), 1);
+
+        while store_rx.try_recv().is_ok() {}
+        hub.fire_scheduled_draft_checked("s-r11-11", &did, Some((due_ms, gen1)));
+        let ack_id = loop {
+            if let StoreWrite::UpdatePending {
+                ack_id: Some(id), ..
+            } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                break id;
+            }
+        };
+        acks.complete(ack_id, Ok(true));
+        let req = tokio::time::timeout(std::time::Duration::from_secs(1), disp_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            !req.explicit,
+            "scheduled recovery fire keeps automatic provenance"
+        );
+        assert!(
+            req.allow_revive,
+            "scheduled recovery fire preserves revive permission"
+        );
+
+        hub.clear_in_flight("s-r11-11");
+        hub.set_paused("s-r11-11", true);
+        hub.submit(
+            "s-r11-11",
+            "manual-head".into(),
+            vec![],
+            Some("m-head".into()),
+            &owner_caller(),
+        );
+        hub.add_recovery_draft("s-r11-11", "rec-2".into(), vec![], Some("orig-13".into()));
+        let did2 = pending_of(&hub, "s-r11-11").1[0].id.clone();
+        while store_rx.try_recv().is_ok() {}
+        hub.activate_draft("s-r11-11", &did2, Some("resend-13".into()), &owner_caller());
+        let ack2 = loop {
+            if let StoreWrite::UpdatePending {
+                ack_id: Some(id), ..
+            } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                break id;
+            }
+        };
+        hub.drain_now("s-r11-11", &owner_caller());
+        assert!(disp_rx.try_recv().is_err());
+        acks.complete(ack2, Ok(true));
+        let req2 = tokio::time::timeout(std::time::Duration::from_secs(1), disp_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            req2.explicit,
+            "deferred manual drain_now must replay bypassing pause"
+        );
+        assert_eq!(req2.cmid.as_deref(), Some("m-head"));
     }
 }

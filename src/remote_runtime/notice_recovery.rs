@@ -21,6 +21,7 @@ pub(super) use teardown::{
     park_and_retire_ambiguous_pending, reconcile_idle_guard_for_snapshot,
     recover_pending_prompts_on_disconnect, replacement_worker_superseded_epoch,
     requeue_rejected_command, requeue_unsent_notices_on_disconnect, revive_and_try_prompt,
+    set_connected, set_connected_if_active,
 };
 
 /// Per-session execution-recovery send fence owned exclusively by
@@ -73,8 +74,8 @@ pub(super) async fn take_acked_command(
     reason: Option<&str>,
 ) -> Option<(Option<CoreCommand>, bool)> {
     let was_retransmitted = shared.retransmitted_sends.lock().contains(command_id);
-    let (peeked, pending_version) = {
-        let pending = shared.pending.lock();
+    let ambiguous_target = {
+        let mut pending = shared.pending.lock();
         let version = pending.version(command_id);
         if let Some(v) = version
             && shared
@@ -83,8 +84,6 @@ pub(super) async fn take_acked_command(
                 .get(command_id)
                 .is_some_and(|(owned_v, _)| *owned_v == v)
         {
-            // Explicit execution recovery exclusively owns settlement of this
-            // exact `(command_id, version)` until its durable batch park settles.
             return None;
         }
         if pending.get(command_id).is_some_and(|command| {
@@ -95,56 +94,77 @@ pub(super) async fn take_acked_command(
             tracing::warn!(%command_id, "ignoring mismatched Machine command acknowledgement");
             return None;
         }
-        (pending.get(command_id).cloned(), version)
-    };
-    let is_ambiguous =
-        !accepted && is_ambiguous_prompt_rejection(peeked.as_ref(), was_retransmitted, reason);
-    if is_ambiguous {
-        let cmd = peeked.as_ref()?;
-        let message = reason.unwrap_or(
-            "prompt delivery across worker change or retry is unresolved; retained as draft",
-        );
-        if !park_ambiguous_prompt_durable(shared, session_id, cmd, pending_version, message).await {
-            if let Some(v) = pending_version {
-                shared
-                    .fenced_commands
-                    .lock()
-                    .insert(command_id.to_owned(), v);
-            }
-            return None;
-        }
-        let command = match pending_version {
-            Some(v) => shared.pending.lock().remove_if_version(command_id, v),
-            None => None,
-        };
-        if command.is_some() {
+        let peeked = pending.get(command_id).cloned();
+        let is_ambiguous =
+            !accepted && is_ambiguous_prompt_rejection(peeked.as_ref(), was_retransmitted, reason);
+        if is_ambiguous {
+            peeked.map(|cmd| (cmd, version))
+        } else {
+            let command = pending.remove(command_id);
             clear_acked_command(shared, command_id);
-            shared.in_flight_prompts.lock().retire_command(command_id);
-            let projection_guard = shared.projection_fence.lock();
-            if !*projection_guard
-                && shared.connected.load(Ordering::Acquire)
-                && !shared.shutdown.load(Ordering::Acquire)
-                && let Some(replacement) =
-                    replacement_worker_superseded_epoch(shared, session_id, cmd)
+            drop(pending);
+            if !accepted
+                && let Some(CoreCommand::Steer { cmid, .. } | CoreCommand::CancelTurn { cmid, .. }) =
+                    &command
+                && let Some(waiter) = shared
+                    .steering
+                    .lock()
+                    .remove(&(session_id.to_owned(), cmid.clone()))
             {
-                reconcile_idle_guard_for_snapshot(shared, session_id, &replacement);
+                let _ = waiter.send("unknown".into());
+            }
+            return Some((command, false));
+        }
+    };
+    let (cmd, pending_version) = ambiguous_target?;
+    let message = reason.unwrap_or(
+        "prompt delivery across worker change or retry is unresolved; retained as draft",
+    );
+    if !park_ambiguous_prompt_durable(shared, session_id, &cmd, pending_version, message).await {
+        if let Some(v) = pending_version {
+            shared
+                .fenced_commands
+                .lock()
+                .insert(command_id.to_owned(), v);
+        }
+        return None;
+    }
+    let command = {
+        let mut pending = shared.pending.lock();
+        let owned_by_recovery = pending_version.is_some_and(|v| {
+            shared
+                .recovery_parking_keys
+                .lock()
+                .get(command_id)
+                .is_some_and(|(owned_v, _)| *owned_v == v)
+        });
+        let removed = if owned_by_recovery {
+            None
+        } else {
+            pending_version.and_then(|v| pending.remove_if_version(command_id, v))
+        };
+        if let Some(ref removed_cmd) = removed {
+            clear_acked_command(shared, command_id);
+            if let CoreCommand::Prompt { turn_id, .. } = removed_cmd {
+                shared
+                    .in_flight_prompts
+                    .lock()
+                    .retire_command_for_turn(command_id, turn_id);
             }
         }
-        return Some((command, true));
+        removed
+    };
+    if command.is_some() {
+        let projection_guard = shared.projection_fence.lock();
+        if !*projection_guard
+            && shared.connected.load(Ordering::Acquire)
+            && !shared.shutdown.load(Ordering::Acquire)
+            && let Some(replacement) = replacement_worker_superseded_epoch(shared, session_id, &cmd)
+        {
+            reconcile_idle_guard_for_snapshot(shared, session_id, &replacement);
+        }
     }
-    let command = shared.pending.lock().remove(command_id);
-    if !accepted
-        && let Some(CoreCommand::Steer { cmid, .. } | CoreCommand::CancelTurn { cmid, .. }) =
-            &command
-        && let Some(waiter) = shared
-            .steering
-            .lock()
-            .remove(&(session_id.to_owned(), cmid.clone()))
-    {
-        let _ = waiter.send("unknown".into());
-    }
-    clear_acked_command(shared, command_id);
-    Some((command, false))
+    Some((command, true))
 }
 
 /// Clear in-flight send/attempt/fence tracking once `CommandAck` arrives.
@@ -838,201 +858,218 @@ pub(super) fn recover_execution_durable(
         .recovery_fence_counter
         .fetch_add(1, Ordering::Relaxed)
         + 1;
-    let (pre_recovery_keys, notice_prompts, other_prompts) =
-        snapshot_pre_recovery_pending(shared, &id);
-    if (!notice_prompts.is_empty() || !other_prompts.is_empty()) && shared.hub.has_store_writer() {
-        let Ok(handle) = tokio::runtime::Handle::try_current() else {
-            let msg = "Execution recovery aborted: async runtime unavailable to park pending completion notice";
-            shared.hub.broadcast_error(Some(id), msg.into());
-            return Err(msg.into());
-        };
-        // Install a dedicated recovery send fence synchronously BEFORE returning
-        // (Finding 3). `fail_config_startup` never clears `recovery_fences`, so
-        // a negative ACK for an earlier `EnsureSession` cannot reopen sends.
-        super::begin_reset(shared, &id);
-        shared
-            .active_reset_commands
-            .lock()
-            .insert(id.clone(), format!("parking:{fence_id}"));
-        shared.config_startups.lock().insert(id.clone());
-        shared.recovery_fences.lock().insert(
-            id.clone(),
-            RecoveryFence {
-                id: fence_id,
-                pre_recovery_epoch,
-                state: RecoveryFenceState::Parking,
-                command_id: None,
-            },
-        );
-        shared.config_sync_epochs.lock().remove(&id);
-        {
-            let mut owned = shared.recovery_parking_keys.lock();
-            for (key, version) in &pre_recovery_keys {
-                owned.insert(key.clone(), (*version, fence_id));
+    if shared.hub.has_store_writer() {
+        let claimed =
+            snapshot_and_claim_pre_recovery_pending(shared, &id, fence_id, &pre_recovery_epoch);
+        if let Some((pre_recovery_keys, journal_items)) = claimed {
+            if tokio::runtime::Handle::try_current().is_err() {
+                teardown::release_claimed_recovery_keys(shared, &id, fence_id, &pre_recovery_keys);
+                let msg = "Execution recovery aborted: async runtime unavailable to park pending completion notice";
+                shared.hub.broadcast_error(Some(id), msg.into());
+                return Err(msg.into());
             }
-        }
-        let shared = Arc::clone(shared);
-        handle.spawn(async move {
-            let commit_guard = shared.hub.pending_commit_lock(&id).await;
-            // Round 3 #2: if a newer recovery or reload already superseded this
-            // fence before parking began, exit without creating duplicate drafts.
-            if shared
-                .recovery_fences
+            if !shared.hub.stage_recovery_journal_batch(&id, &journal_items) {
+                teardown::release_claimed_recovery_keys(shared, &id, fence_id, &pre_recovery_keys);
+                let msg = "Execution recovery aborted: could not durably journal pending prompts";
+                shared.hub.broadcast_error(Some(id), msg.into());
+                return Err(msg.into());
+            }
+            super::begin_reset(shared, &id);
+            shared
+                .active_reset_commands
                 .lock()
-                .get(&id)
-                .is_none_or(|f| f.id != fence_id)
-            {
-                let mut owned = shared.recovery_parking_keys.lock();
-                for (key, version) in &pre_recovery_keys {
-                    if owned.get(key) == Some(&(*version, fence_id)) {
-                        owned.remove(key);
-                    }
-                }
-                return;
-            }
-            let Some((mut preview, rx)) = shared.hub.preview_park_recovery_batch(
-                &id,
-                &notice_prompts,
-                &other_prompts,
-            ) else {
-                drop(commit_guard);
-                abort_failed_execution_recovery(
-                    &shared,
-                    &id,
+                .insert(id.clone(), format!("parking:{fence_id}"));
+            shared.config_startups.lock().insert(id.clone());
+            shared.config_sync_epochs.lock().remove(&id);
+            let shared_bg = Arc::clone(shared);
+            shared.hub.spawn_teardown_requeue(async move {
+                run_explicit_recovery_park_task(
+                    shared_bg,
+                    id,
                     fence_id,
-                    &pre_recovery_keys,
-                    "Execution recovery aborted: durable store writer unavailable to park pending completion notice",
+                    pre_recovery_keys,
+                    journal_items,
+                    session,
+                    intent,
                 )
                 .await;
-                return;
-            };
-            match rx.await {
-                Ok(Ok(true)) => {
-                    shared.hub.commit_park_recovery_prompt(&mut preview);
-                    drop(commit_guard);
-                    retire_parked_recovery_and_launch(
-                        &shared,
-                        &id,
-                        fence_id,
-                        &pre_recovery_keys,
-                        session,
-                        intent,
-                    );
-                }
-                Ok(Ok(false) | Err(_)) => {
-                    shared.hub.abort_park_recovery_notices(&mut preview);
-                    drop(commit_guard);
-                    abort_failed_execution_recovery(
-                        &shared,
-                        &id,
-                        fence_id,
-                        &pre_recovery_keys,
-                        "Execution recovery aborted: could not durably park pending completion notice",
-                    )
-                    .await;
-                }
-                Err(_) => {
-                    shared.hub.abort_park_recovery_notices(&mut preview);
-                    drop(commit_guard);
-                    abort_failed_execution_recovery(
-                        &shared,
-                        &id,
-                        fence_id,
-                        &pre_recovery_keys,
-                        "Execution recovery aborted: store writer closed before parking pending completion notice",
-                    )
-                    .await;
-                }
-            }
-        });
-        return Ok(());
+            });
+            return Ok(());
+        }
     }
     park_recovery_prompts_shared(shared, &id);
     finish_recovery_sync(shared, session, intent, fence_id, pre_recovery_epoch);
     Ok(())
 }
 
-/// Retire every pre-recovery `(key, version)` that parking durably committed as
-/// drafts + `execution_recovery_parked`, then launch replacement recovery if
-/// `fence_id` is still the active fence owner.
-fn retire_parked_recovery_and_launch(
-    shared: &Shared,
-    id: &str,
+async fn run_explicit_recovery_park_task(
+    shared: Arc<Shared>,
+    id: String,
     fence_id: u64,
-    pre_recovery_keys: &HashMap<String, u64>,
+    pre_recovery_keys: HashMap<String, (u64, bool)>,
+    journal_items: Vec<crate::core::JournalRecoveryItem>,
     session: StartSession,
     intent: Option<crate::execution_environment::RecoveryV1>,
 ) {
-    let still_owner = {
-        let mut recovery_fences = shared.recovery_fences.lock();
-        let mut pending = shared.pending.lock();
-        let mut sent = shared.sent.lock();
-        let mut attempted = shared.attempted_sends.lock();
-        let mut fenced = shared.fenced_commands.lock();
-        let mut owned = shared.recovery_parking_keys.lock();
-        for (key, expected_version) in pre_recovery_keys {
-            if owned.get(key) == Some(&(*expected_version, fence_id)) {
-                owned.remove(key);
-            }
-            if pending.version(key) == Some(*expected_version) {
-                pending.remove(key);
-                sent.remove(key);
-                attempted.remove(key);
-                fenced.remove(key);
-            }
-        }
-        if let Some(fence) = recovery_fences.get_mut(id)
-            && fence.id == fence_id
-        {
-            fence.state = RecoveryFenceState::AwaitingReplacement;
-            true
-        } else {
-            false
-        }
+    let Some(commit_guard) = shared
+        .hub
+        .await_with_shutdown(shared.hub.pending_commit_lock(&id))
+        .await
+    else {
+        teardown::release_claimed_recovery_keys_only(&shared, fence_id, &pre_recovery_keys);
+        return;
     };
-    shared.hub.broadcast_error(
-        Some(id.to_owned()),
-        "Execution recovery retained an unacknowledged prompt as a draft; inspect effects before resending"
-            .into(),
-    );
-    if still_owner {
-        finish_recovery_after_fence(shared, session, intent, fence_id);
+    if shared
+        .recovery_fences
+        .lock()
+        .get(&id)
+        .is_none_or(|f| f.id != fence_id)
+    {
+        teardown::cleanup_superseded_recovery_claims(&shared, &id, fence_id, &pre_recovery_keys);
+        shared.hub.prune_recovery_journal_batch(&id, &journal_items);
+        return;
+    }
+    let (still_owned_keys, notice_prompts, other_prompts) =
+        teardown::rebuild_still_owned_recovery_batch(&shared, &id, fence_id, &pre_recovery_keys);
+    if notice_prompts.is_empty() && other_prompts.is_empty() {
+        let still_owner = retire_parked_recovery_locked(&shared, &id, fence_id, &pre_recovery_keys);
+        shared.hub.prune_recovery_journal_batch(&id, &journal_items);
+        drop(commit_guard);
+        if still_owner {
+            finish_recovery_after_fence(&shared, session, intent, fence_id);
+        }
+        return;
+    }
+    let Some((mut preview, rx)) =
+        shared
+            .hub
+            .preview_park_recovery_batch(&id, &notice_prompts, &other_prompts)
+    else {
+        drop(commit_guard);
+        abort_failed_execution_recovery(
+            &shared,
+            &id,
+            fence_id,
+            &still_owned_keys,
+            &journal_items,
+            "Execution recovery aborted: durable store writer unavailable to park pending completion notice",
+        )
+        .await;
+        return;
+    };
+    match shared.hub.await_with_shutdown(rx).await {
+        Some(Ok(Ok(true))) => {
+            shared.hub.commit_park_recovery_prompt(&mut preview);
+            let still_owner =
+                retire_parked_recovery_locked(&shared, &id, fence_id, &pre_recovery_keys);
+            shared.hub.prune_recovery_journal_batch(&id, &journal_items);
+            drop(commit_guard);
+            shared.hub.broadcast_error(
+                Some(id),
+                "Execution recovery retained an unacknowledged prompt as a draft; inspect effects before resending"
+                    .into(),
+            );
+            if still_owner {
+                finish_recovery_after_fence(&shared, session, intent, fence_id);
+            }
+        }
+        None => {
+            shared
+                .hub
+                .abandon_unknown_outcome_recovery_park(&mut preview);
+            teardown::release_claimed_recovery_keys_only(&shared, fence_id, &pre_recovery_keys);
+            drop(commit_guard);
+        }
+        Some(Ok(Ok(false) | Err(_))) => {
+            shared.hub.abort_park_recovery_notices(&mut preview);
+            drop(commit_guard);
+            abort_failed_execution_recovery(
+                &shared,
+                &id,
+                fence_id,
+                &still_owned_keys,
+                &journal_items,
+                "Execution recovery aborted: could not durably park pending completion notice",
+            )
+            .await;
+        }
+        Some(Err(_)) => {
+            shared.hub.abort_park_recovery_notices(&mut preview);
+            drop(commit_guard);
+            abort_failed_execution_recovery(
+                &shared,
+                &id,
+                fence_id,
+                &still_owned_keys,
+                &journal_items,
+                "Execution recovery aborted: store writer closed before parking pending completion notice",
+            )
+            .await;
+        }
     }
 }
 
-/// Clean up after durable notice parking failed during execution recovery:
-/// - Atomically publish `RecoveryFenceState::Failed` under `recovery_fences -> pending`
-///   so any late triggering prompt arriving via `try_prompt_traced` is rejected
-///   synchronously rather than stranded behind a fence in `Starting` (Finding 8).
-/// - Keep every uncertain pre-recovery command fenced in `fenced_commands` so
-///   it is NEVER replayed to the old worker (even after reconnect).
-/// - Extract ONLY post-recovery `CoreCommand::Prompt` commands (leaving unrelated
-///   later control commands like `Cancel` or `Permission` under their owner!).
-/// - Restore a `Starting` session back to `Interrupted` so execution reconciliation
-///   can retry it cleanly.
+fn retire_parked_recovery_locked(
+    shared: &Shared,
+    id: &str,
+    fence_id: u64,
+    pre_recovery_keys: &HashMap<String, (u64, bool)>,
+) -> bool {
+    let mut recovery_fences = shared.recovery_fences.lock();
+    let mut pending = shared.pending.lock();
+    let mut sent = shared.sent.lock();
+    let mut attempted = shared.attempted_sends.lock();
+    let mut fenced = shared.fenced_commands.lock();
+    let mut owned = shared.recovery_parking_keys.lock();
+    for (key, (expected_version, _)) in pre_recovery_keys {
+        if owned.get(key) == Some(&(*expected_version, fence_id)) {
+            owned.remove(key);
+        }
+        if let Some(removed_cmd) = pending.remove_if_version(key, *expected_version) {
+            sent.remove(key);
+            attempted.remove(key);
+            if fenced.get(key) == Some(expected_version) {
+                fenced.remove(key);
+            }
+            if let CoreCommand::Prompt { turn_id, .. } = &removed_cmd {
+                shared
+                    .in_flight_prompts
+                    .lock()
+                    .retire_command_for_turn(key, turn_id);
+            }
+        }
+    }
+    if let Some(fence) = recovery_fences.get_mut(id)
+        && fence.id == fence_id
+    {
+        fence.state = RecoveryFenceState::AwaitingReplacement;
+        true
+    } else {
+        false
+    }
+}
+
 #[allow(clippy::too_many_lines)]
 async fn abort_failed_execution_recovery(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     session_id: &str,
     fence_id: u64,
-    pre_recovery_keys: &HashMap<String, u64>,
+    pre_recovery_keys: &HashMap<String, (u64, bool)>,
+    journal_items: &[crate::core::JournalRecoveryItem],
     message: &str,
 ) {
-    let post_recovery_prompts = {
+    let (post_recovery_prompts, unsent_notices) = {
         let mut recovery_fences = shared.recovery_fences.lock();
         let mut pending = shared.pending.lock();
         let mut sent = shared.sent.lock();
         let mut attempted = shared.attempted_sends.lock();
         let mut fenced = shared.fenced_commands.lock();
         let mut owned = shared.recovery_parking_keys.lock();
-        for (key, expected_version) in pre_recovery_keys {
+        for (key, (expected_version, _)) in pre_recovery_keys {
             if owned.get(key) == Some(&(*expected_version, fence_id)) {
                 owned.remove(key);
             }
         }
-        // Round 2 #8: if a newer recovery or reload already superseded this
-        // fence, return immediately without touching the newer recovery's
-        // pending prompts, fenced commands, or session status.
         let Some(fence) = recovery_fences.get_mut(session_id) else {
             return;
         };
@@ -1055,9 +1092,11 @@ async fn abort_failed_execution_recovery(
             if cmd.session_id() != Some(session_id) {
                 continue;
             }
-            if pre_recovery_keys.get(key).is_some_and(|v| *v == version) {
+            if let Some(&(v, was_attempted)) = pre_recovery_keys.get(key)
+                && v == version
+            {
                 if disconnected {
-                    disconnected_parks.push((key.clone(), version, cmd.clone()));
+                    disconnected_parks.push((key.clone(), version, was_attempted, cmd.clone()));
                 } else {
                     fenced.insert(key.clone(), version);
                 }
@@ -1065,7 +1104,7 @@ async fn abort_failed_execution_recovery(
                 to_remove.push(key.clone());
             }
         }
-        teardown::park_aborted_disconnected_prompts(
+        let unsent_notices = teardown::park_aborted_disconnected_prompts(
             shared,
             session_id,
             disconnected_parks,
@@ -1095,8 +1134,14 @@ async fn abort_failed_execution_recovery(
                 prompts.push((command_id, text, content, cmid));
             }
         }
-        prompts
+        (prompts, unsent_notices)
     };
+    if !unsent_notices.is_empty() {
+        teardown::spawn_teardown_notice_requeues(shared, unsent_notices);
+    }
+    shared
+        .hub
+        .prune_recovery_journal_batch(session_id, journal_items);
     if shared.hub.status(session_id) == Some(Status::Starting) {
         shared
             .hub
@@ -1157,40 +1202,64 @@ async fn abort_failed_execution_recovery(
 }
 
 #[allow(clippy::type_complexity)]
-fn snapshot_pre_recovery_pending(
+fn snapshot_and_claim_pre_recovery_pending(
     shared: &Shared,
     session_id: &str,
-) -> (
-    HashMap<String, u64>,
-    Vec<(String, Vec<serde_json::Value>, String)>,
-    Vec<(String, Vec<serde_json::Value>, Option<String>)>,
-) {
+    fence_id: u64,
+    pre_recovery_epoch: &str,
+) -> Option<(
+    HashMap<String, (u64, bool)>,
+    Vec<crate::core::JournalRecoveryItem>,
+)> {
+    let mut recovery_fences = shared.recovery_fences.lock();
     let pending = shared.pending.lock();
+    let attempted = shared.attempted_sends.lock();
+    let mut owned = shared.recovery_parking_keys.lock();
     let mut keys = HashMap::new();
-    let mut notices = Vec::new();
-    let mut others = Vec::new();
+    let mut journal_items = Vec::new();
+    let mut has_prompt = false;
     for (key, version, command) in pending.iter_with_versions() {
         if command.session_id() != Some(session_id) {
             continue;
         }
-        keys.insert(key.clone(), version);
+        let was_attempted = attempted.contains(key);
+        keys.insert(key.clone(), (version, was_attempted));
         if let CoreCommand::Prompt { content, cmid, .. } = command {
-            let text = content
-                .iter()
-                .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
-                .collect::<Vec<_>>()
-                .join("\n");
-            if let Some(cid) = cmid
+            has_prompt = true;
+            if !cmid
                 .as_deref()
-                .filter(|id| id.starts_with(CALL_NOTICE_PREFIX))
+                .is_some_and(|id| id.starts_with(CALL_NOTICE_PREFIX))
             {
-                notices.push((text, content.clone(), cid.to_owned()));
-            } else {
-                others.push((text, content.clone(), cmid.clone()));
+                let text = content
+                    .iter()
+                    .filter_map(|part| part.get("text").and_then(serde_json::Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                journal_items.push(crate::core::JournalRecoveryItem {
+                    text,
+                    content: content.clone(),
+                    cmid: cmid.clone(),
+                    reason: "Execution recovery retained an unacknowledged prompt as a draft; inspect effects before resending".to_owned(),
+                });
             }
         }
     }
-    (keys, notices, others)
+    if !has_prompt {
+        return None;
+    }
+    recovery_fences.insert(
+        session_id.to_owned(),
+        RecoveryFence {
+            id: fence_id,
+            pre_recovery_epoch: pre_recovery_epoch.to_owned(),
+            state: RecoveryFenceState::Parking,
+            command_id: None,
+        },
+    );
+    for (key, (version, _)) in &keys {
+        owned.insert(key.clone(), (*version, fence_id));
+    }
+    Some((keys, journal_items))
 }
 
 fn park_recovery_prompts_shared(shared: &Shared, id: &str) {
@@ -1460,8 +1529,15 @@ mod tests {
                 acknowledged_uncertain_sequence: None,
             },
         );
-        abort_failed_execution_recovery(&rt.shared, "sess-r2", 1, &HashMap::new(), "old abort")
-            .await;
+        abort_failed_execution_recovery(
+            &rt.shared,
+            "sess-r2",
+            1,
+            &HashMap::new(),
+            &[],
+            "old abort",
+        )
+        .await;
         assert_eq!(
             rt.shared.recovery_fences.lock().get("sess-r2").unwrap().id,
             refreshed.id

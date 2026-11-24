@@ -698,6 +698,12 @@ impl Hub {
         let version = self.inner.sync.lock().get(&state).map_or(0, |e| e.version);
         let mut confirmed = Self::cmids_of(&queue, &drafts);
         for cmid in committed_recovery {
+            if !cmid.starts_with("recovery-") {
+                let alias = format!("recovery-{cmid}");
+                if !confirmed.iter().any(|seen| seen == &alias) {
+                    confirmed.push(alias);
+                }
+            }
             if !confirmed.iter().any(|seen| seen == &cmid) {
                 confirmed.push(cmid);
             }

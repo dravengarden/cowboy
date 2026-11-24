@@ -397,6 +397,11 @@ pub struct QueuedMessage {
     /// row still revives a dormant session when it reaches queue head.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub explicit: bool,
+    /// Persists revive permission for a row whose firing/activation was allowed
+    /// to wake a dormant (`Exited`) session (e.g. a due scheduled recovery draft
+    /// or explicit recovery activation) while still respecting `paused`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub allow_revive: bool,
 }
 
 /// A draft's future auto-send instruction. Server-controlled (fires even with
@@ -412,6 +417,14 @@ pub struct DraftSchedule {
     /// ⏸ hold) and never interrupt a running turn.
     #[serde(default)]
     pub delivery: Delivery,
+    /// Monotonic schedule generation stamped on each schedule/reschedule so a
+    /// stale timer callback can never fire an unscheduled or rescheduled draft.
+    #[serde(default, skip_serializing_if = "is_zero_u64")]
+    pub generation: u64,
+}
+
+fn is_zero_u64(v: &u64) -> bool {
+    *v == 0
 }
 
 /// Fire-time queue position for a scheduled draft. The two modes differ ONLY in

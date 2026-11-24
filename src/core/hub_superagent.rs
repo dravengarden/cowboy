@@ -168,6 +168,7 @@ impl Hub {
                 initiator: Some(origin.clone()),
                 dispatch_origin: origin.clone(),
                 trigger: origin,
+                allow_revive: false,
             }
         };
         permit.send(req);
@@ -272,6 +273,7 @@ mod tests {
                         origin: Some(crate::prompt_origin::DeliveryOrigin::Owner),
                         initiator: Some(crate::prompt_origin::DeliveryOrigin::Owner),
                         explicit: false,
+                        allow_revive: false,
                     }),
                     "hold" => s.delivery_hold = Some("interruption".into()),
                     _ => unreachable!(),

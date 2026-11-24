@@ -1736,7 +1736,7 @@ async fn connection_manager(
         let (reader, writer, buffered, protocol) = match connection {
             Ok(connection) => connection,
             Err(error) => {
-                shared.connected.store(false, Ordering::Release);
+                notice_recovery::set_connected(&shared, false);
                 let retry_delay = broker_retry_delay(&mut backoff, false);
                 tracing::warn!(
                     error = %error,
@@ -1750,12 +1750,12 @@ async fn connection_manager(
         let connected_at = tokio::time::Instant::now();
         shared.protocol.store(protocol, Ordering::Release);
         shared.account_stop_epoch.fetch_add(1, Ordering::AcqRel);
-        shared.connected.store(true, Ordering::Release);
+        notice_recovery::set_connected_if_active(&shared);
         shared.sent.lock().clear();
         if let Err(error) = connected(&shared, reader, writer, buffered, &mut notify_rx).await {
             tracing::warn!(error = %error, "Machine broker connection dropped");
         }
-        shared.connected.store(false, Ordering::Release);
+        notice_recovery::set_connected(&shared, false);
         if shared.shutdown.load(Ordering::Acquire) {
             return;
         }

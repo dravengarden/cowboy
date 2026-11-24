@@ -43,9 +43,10 @@ mod hub_events;
 pub use hub_events::FanoutFrame;
 mod hub_managed_calls;
 pub use hub_managed_calls::{
-    NoticeClaimGuard, NoticeRequeueRequest, OwnerNoticeWithdrawalOp, OwnerQueueMutation,
-    PendingNoticeWithdrawal, PendingRecoveryPark, PendingUndeliveredRequeue, RecoveryDraftPark,
-    RetainedLogScan, StoreAckSink, UndeliveredRequeue,
+    JournalRecoveryItem, JournalUnsentNotice, NoticeClaimGuard, NoticeRequeueRequest,
+    OwnerNoticeWithdrawalOp, OwnerQueueMutation, PendingNoticeWithdrawal, PendingRecoveryPark,
+    PendingUndeliveredRequeue, RecoveryDraftPark, RetainedLogScan, StoreAckSink,
+    UndeliveredRequeue,
 };
 mod hub_peer_notice;
 pub use hub_peer_notice::PromptProgress;
@@ -459,10 +460,10 @@ pub struct DispatchReq {
     /// user-message echo can be tagged for optimistic reconcile. None for a
     /// drained queue item (its optimistic row already reconciled via `queues`).
     pub cmid: Option<String>,
-    /// A user-requested send (chat submit, send now, force push). If it is
-    /// returned for a transient resource wait, maintenance retries it once the
-    /// resource returns even if the queue is paused or the session crashed.
+    /// A user-requested send (chat submit, send now, force push).
     pub explicit: bool,
+    /// Whether this dispatch may revive a dormant session if requeued pre-handoff.
+    pub allow_revive: bool,
     /// Stored content origin (last content writer), preserved across requeue.
     pub origin: Option<crate::prompt_origin::DeliveryOrigin>,
     /// Initiating authority that admitted/triggered the send, preserved across requeue.
@@ -2010,12 +2011,13 @@ impl Hub {
     /// draft itself (with its `schedule`) is the persisted record — this only
     /// drives the in-memory timer, so it's used both for a fresh schedule and
     /// the startup re-arm (an overdue time fires immediately, catch-up).
-    fn arm_draft_timer(&self, session_id: &str, draft_id: &str, fire_at_ms: i64) {
+    fn arm_draft_timer(&self, session_id: &str, draft_id: &str, fire_at_ms: i64, generation: u64) {
         if let Some(tx) = self.inner.scheduler_tx.lock().as_ref() {
             let _ = tx.try_send(crate::scheduler::ScheduleCmd::ArmDraft {
                 session_id: session_id.to_owned(),
                 draft_id: draft_id.to_owned(),
                 fire_at_ms,
+                generation,
             });
         }
     }
@@ -2037,7 +2039,7 @@ impl Hub {
     /// AFTER restore. An already-overdue schedule fires immediately (catch-up for
     /// downtime), mirroring [`Self::rearm_wakeup`].
     pub fn rearm_scheduled_drafts(&self) {
-        let arms: Vec<(String, String, i64)> = {
+        let arms: Vec<(String, String, i64, u64)> = {
             let sessions = self.inner.sessions.lock();
             sessions
                 .values()
@@ -2046,13 +2048,13 @@ impl Hub {
                     s.drafts.iter().filter_map(move |m| {
                         m.schedule
                             .as_ref()
-                            .map(|sc| (sid.clone(), m.id.clone(), sc.fire_at_ms))
+                            .map(|sc| (sid.clone(), m.id.clone(), sc.fire_at_ms, sc.generation))
                     })
                 })
                 .collect()
         };
-        for (sid, did, fire_at_ms) in arms {
-            self.arm_draft_timer(&sid, &did, fire_at_ms);
+        for (sid, did, fire_at_ms, generation) in arms {
+            self.arm_draft_timer(&sid, &did, fire_at_ms, generation);
         }
     }
 

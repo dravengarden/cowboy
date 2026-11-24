@@ -144,7 +144,10 @@ impl Hub {
             .iter()
             .any(|seen| seen.cmid == cmid && seen.echoed)
             || s.log.iter().any(|env| env.cmid.as_deref() == Some(cmid));
-        if echoed {
+        let settled_by_recovery = s.pending_recovery_cmids.contains(cmid)
+            || s.committed_recovery_cmids.contains(cmid)
+            || s.drafts.iter().any(|m| m.cmid.as_deref() == Some(cmid));
+        if echoed || settled_by_recovery {
             remove_pending_echo(s, cmid);
             return None;
         }
@@ -218,6 +221,12 @@ impl Hub {
                     !s.log
                         .iter()
                         .any(|env| env.cmid.as_deref() == Some(r.cmid.as_str()))
+                        && !s.committed_recovery_cmids.contains(&r.cmid)
+                        && !s.pending_recovery_cmids.contains(&r.cmid)
+                        && !s
+                            .drafts
+                            .iter()
+                            .any(|m| m.cmid.as_deref() == Some(r.cmid.as_str()))
                 });
             if let Some(record) = candidate
                 && trimmed_floor.is_none_or(|floor| record.dispatched_at_ms >= floor)

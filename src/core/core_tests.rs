@@ -856,11 +856,14 @@ async fn pending_context_holds_schedules_drafts_and_manual_queue_until_cleared()
         &crate::prompt_origin::RequestCaller::Person,
     );
     hub.activate_all_drafts("context-hold", &crate::prompt_origin::RequestCaller::Person);
-    hub.add_draft(
+    hub.schedule_draft(
         "context-hold",
+        None,
+        Some("scheduled-id".into()),
         "scheduled".into(),
         vec![],
-        Some("scheduled-id".into()),
+        0,
+        crate::model::Delivery::Back,
         &crate::prompt_origin::RequestCaller::Person,
     );
     let id = hub.queue_and_drafts("context-hold", |_| true).unwrap().1[0]
@@ -1167,6 +1170,7 @@ fn copy_undo_requires_the_original_unsent_row() {
         .schedule = Some(DraftSchedule {
         fire_at_ms: i64::MAX,
         delivery: Delivery::default(),
+        generation: 0,
     });
     assert!(!hub.remove_draft_if_unchanged("undo-copy", "copy-2", "original", &content));
 }
@@ -5085,6 +5089,7 @@ fn recovery_draft_cmid_survives_delete_rejects_reused_op_and_seeds_restored_qids
             origin: None,
             initiator: None,
             explicit: false,
+            allow_revive: false,
         }],
         config_options: None,
         config_preferences: serde_json::Value::Null,

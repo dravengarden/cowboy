@@ -53,6 +53,7 @@ pub enum ScheduleCmd {
         session_id: String,
         draft_id: String,
         fire_at_ms: i64,
+        generation: u64,
     },
     /// Cancel a scheduled draft's timer (unscheduled / removed / activated).
     CancelDraft {
@@ -77,6 +78,8 @@ enum Action {
     Draft {
         session_id: String,
         draft_id: String,
+        fire_at_ms: i64,
+        generation: u64,
     },
 }
 
@@ -125,10 +128,13 @@ pub async fn run_scheduler(hub: Hub, mut rx: mpsc::Receiver<ScheduleCmd>) {
                 Some(ScheduleCmd::HumanTurn { session_id }) => {
                     fires.remove(&session_id);
                 }
-                Some(ScheduleCmd::ArmDraft { session_id, draft_id, fire_at_ms }) => {
+                Some(ScheduleCmd::ArmDraft { session_id, draft_id, fire_at_ms, generation }) => {
                     pending.insert(
                         Key::Draft(session_id.clone(), draft_id.clone()),
-                        Pending { fire_at_ms, action: Action::Draft { session_id, draft_id } },
+                        Pending {
+                            fire_at_ms,
+                            action: Action::Draft { session_id, draft_id, fire_at_ms, generation },
+                        },
                     );
                 }
                 Some(ScheduleCmd::CancelDraft { session_id, draft_id }) => {
@@ -168,15 +174,16 @@ pub async fn run_scheduler(hub: Hub, mut rx: mpsc::Receiver<ScheduleCmd>) {
                             let cmid = format!("{WAKEUP_PREFIX}{sid}-{now}");
                             hub.submit_automatic(&sid, prompt, cmid, "schedule");
                         }
-                        Action::Draft { session_id: sid, draft_id } => {
-                            // One-shot: activate the parked draft per its delivery.
-                            // Persistence is the draft itself, which the fire removes;
-                            // no runaway guard (a scheduled draft fires exactly once).
+                        Action::Draft { session_id: sid, draft_id, fire_at_ms, generation } => {
                             tracing::info!(
                                 session = %sid, draft = %draft_id,
                                 "scheduler: firing scheduled draft",
                             );
-                            hub.fire_scheduled_draft(&sid, &draft_id);
+                            hub.fire_scheduled_draft_checked(
+                                &sid,
+                                &draft_id,
+                                Some((fire_at_ms, generation)),
+                            );
                         }
                     }
                 }

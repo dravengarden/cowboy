@@ -54,13 +54,15 @@ impl Hub {
         {
             let req = error.into_inner();
             tracing::error!(session = %req.session_id, "dispatch queue rejected a prompt");
-            self.requeue_prompt(
+            self.requeue_prompt_preserving_intent(
                 &req.session_id,
                 req.text,
                 req.content,
                 req.cmid,
                 req.origin,
                 req.initiator,
+                req.explicit,
+                req.allow_revive,
             );
             self.broadcast_error(
                 Some(req.session_id),
@@ -164,6 +166,7 @@ impl Hub {
                 initiator: Some(origin.clone()),
                 dispatch_origin: dispatch_origin.clone(),
                 trigger: origin,
+                allow_revive: false,
             }
         };
         if dispatch_origin.is_owner() {
@@ -275,6 +278,12 @@ impl Hub {
                 if !confirmed.iter().any(|seen| seen == cmid) {
                     confirmed.push(cmid.clone());
                 }
+                if !cmid.starts_with("recovery-") {
+                    let alias = format!("recovery-{cmid}");
+                    if !confirmed.iter().any(|seen| seen == &alias) {
+                        confirmed.push(alias);
+                    }
+                }
             }
         }
         confirmed
@@ -297,15 +306,34 @@ impl Hub {
                 return;
             };
             // Never pop/dispatch while an acknowledged pending commit is in flight
-            // for this session: the in-flight SQL UpdatePending still carries this
-            // queue snapshot, so popping now could resurrect a dispatched row on crash.
-            if self.has_in_flight_pending_commit(session_id) {
+            // for this session; record manual/revive intent against the exact head
+            // row so it replays with its original admission rules once the fence lifts.
+            if self.record_deferred_drain_if_fenced(
+                session_id,
+                s.queue.first().map(|h| h.id.as_str()),
+                manual,
+                allow_revive,
+                trigger,
+            ) {
+                return;
+            }
+            // Never dispatch a stale restored queue row whose cmid is already
+            // pending or committed in durable recovery (Finding 5).
+            if s.queue.first().is_some_and(|head| {
+                head.cmid.as_deref().is_some_and(|c| {
+                    s.pending_recovery_cmids.contains(c) || s.committed_recovery_cmids.contains(c)
+                })
+            }) {
                 return;
             }
             let head_is_explicit = s.queue.first().is_some_and(|head| {
                 head.explicit || explicit_head_id.is_some_and(|id| head.id == id)
             });
-            let effective_revive = allow_revive || head_is_explicit;
+            let head_allow_revive = s
+                .queue
+                .first()
+                .is_some_and(|head| head.allow_revive || head_is_explicit);
+            let effective_revive = allow_revive || head_allow_revive;
             let decision = Self::drain_decision(s, effective_revive, manual, |cmid| {
                 self.context_allows_dispatch(session_id, cmid)
             });
@@ -345,6 +373,7 @@ impl Hub {
                 content: head.content,
                 cmid: Some(dispatch_cmid),
                 explicit: manual || head_is_explicit,
+                allow_revive: effective_revive,
                 origin: head.origin,
                 initiator: effective_trigger,
                 dispatch_origin,
@@ -503,6 +532,23 @@ impl Hub {
         origin: Option<crate::prompt_origin::DeliveryOrigin>,
         initiator: Option<crate::prompt_origin::DeliveryOrigin>,
     ) {
+        self.requeue_prompt_preserving_intent(
+            session_id, text, content, cmid, origin, initiator, false, false,
+        );
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn requeue_prompt_preserving_intent(
+        &self,
+        session_id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+        origin: Option<crate::prompt_origin::DeliveryOrigin>,
+        initiator: Option<crate::prompt_origin::DeliveryOrigin>,
+        explicit: bool,
+        allow_revive: bool,
+    ) {
         if let Some(id) = cmid
             .as_deref()
             .filter(|id| id.starts_with("cowboy-superagent:"))
@@ -558,7 +604,9 @@ impl Hub {
                 hub_dispatch_origin::remove_pending_echo(s, c);
             }
             if let Some(c) = cmid.as_deref()
-                && s.queue.iter().any(|m| m.cmid.as_deref() == Some(c))
+                && (s.queue.iter().any(|m| m.cmid.as_deref() == Some(c))
+                    || s.pending_recovery_cmids.contains(c)
+                    || s.committed_recovery_cmids.contains(c))
             {
                 false
             } else {
@@ -573,7 +621,8 @@ impl Hub {
                         schedule: None,
                         origin,
                         initiator,
-                        explicit: false,
+                        explicit,
+                        allow_revive: allow_revive || explicit,
                     },
                 );
                 true
@@ -727,6 +776,7 @@ impl Hub {
                     initiator: Some(initiator.clone()),
                     dispatch_origin,
                     trigger: initiator,
+                    allow_revive: false,
                 });
             } else {
                 let id = self.next_qid();
@@ -741,6 +791,7 @@ impl Hub {
                         origin: content_origin,
                         initiator: Some(initiator),
                         explicit: false,
+                        allow_revive: false,
                     },
                 );
                 interrupt = interrupt_on_busy && context_allows;
@@ -820,6 +871,23 @@ impl Hub {
                     .iter()
                     .any(|seen| seen.cmid == cmid && seen.echoed)
                 && !s.committed_recovery_cmids.contains(cmid)
+                && !cmid
+                    .strip_prefix("recovery-")
+                    .filter(|orig| !orig.is_empty())
+                    .is_some_and(|orig| {
+                        s.committed_recovery_cmids.contains(orig)
+                            || s.pending_recovery_cmids.contains(orig)
+                            || s.queue
+                                .iter()
+                                .chain(&s.drafts)
+                                .any(|m| m.cmid.as_deref() == Some(orig))
+                            || s.dispatched_cmids
+                                .iter()
+                                .any(|seen| seen.cmid == orig && seen.echoed)
+                            || s.log.iter().any(|entry| {
+                                entry.cmid.as_deref() == Some(orig) && is_user_message_chunk(entry)
+                            })
+                    })
                 && !s.log.iter().any(|entry| {
                     entry.cmid.as_deref() == Some(cmid) && is_user_message_chunk(entry)
                 })

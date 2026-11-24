@@ -3688,7 +3688,9 @@ async function saveRecoveredSendAsDraft(sessionId: string, id: string): Promise<
     // Save first, then retire the old retry obligation. This never submits the
     // old content to the agent and a storage failure leaves the source intact.
     const cmid = recoveryDraftCmid(id);
-    const existing = qClients.get(sessionId)?.get().drafts.some((draft) => draft.cmid === cmid);
+    const existing = qClients.get(sessionId)?.get().drafts.some((draft) =>
+      draft.cmid === cmid || draft.cmid === id || (row.cmid !== undefined && draft.cmid === row.cmid)
+    );
     if (!existing) await qAdd("drafts", sessionId, row.text, row.attachments, { origin: "composer", cmid });
     await discardQueued(sessionId, id);
     if (row.cmid !== undefined) {

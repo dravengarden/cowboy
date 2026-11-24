@@ -309,11 +309,28 @@ pub enum UndeliveredRequeue {
     Rejected(&'static str),
 }
 
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct JournalUnsentNotice {
+    pub session_id: String,
+    pub command_id: String,
+    pub text: String,
+    pub content: Vec<serde_json::Value>,
+    pub completion_id: String,
+}
+
+#[derive(Default)]
+pub(super) struct DeferredDrainActions {
+    pub(super) manual_drain: Option<(String, crate::prompt_origin::RequestCaller)>,
+    pub(super) revive_head: Option<String>,
+    pub(super) notice_wakes: Vec<String>,
+}
+
 #[derive(Default)]
 pub(super) struct DeferredPendingFlush {
     pub(super) dirty: bool,
     pub(super) settled_notices: Vec<(String, String)>,
     pub(super) released_claims: Vec<NoticeClaimRelease>,
+    pub(super) drains: DeferredDrainActions,
 }
 
 #[derive(Default)]
@@ -332,6 +349,9 @@ pub(in crate::core) struct NoticeClaims {
     pub(super) commit_locks: HashMap<String, Arc<tokio::sync::Mutex<()>>>,
     pub(super) teardown_tasks: Vec<tokio::task::JoinHandle<()>>,
     pub(super) pending_recovery_parks: HashMap<String, Vec<PendingRecoveryPromptItem>>,
+    pub(super) staged_batch_parks:
+        HashMap<String, Vec<super::recovery_journal::JournalRecoveryItem>>,
+    pub(super) pending_unsent_notices: HashMap<String, Vec<JournalUnsentNotice>>,
     pub(super) active_recovery_park_workers: HashSet<String>,
     pub(super) recovery_journal_path: Option<std::path::PathBuf>,
 }
