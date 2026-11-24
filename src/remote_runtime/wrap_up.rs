@@ -1190,24 +1190,31 @@ mod tests {
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
-    async fn rejected_snapshot_keeps_pending_and_retired_floor_survives_restart() {
-        // 1. When `apply_snapshot` returns `false` (e.g., bound provider account
-        //    mismatch), `adopt_snapshot` must NOT retire pending prompts bound to an
-        //    earlier epoch.
+    async fn rejected_binding_snapshot_preserves_cache_and_atomic_recovery_activation_persists_before_dispatch()
+     {
+        // 1. Finding 4: default-account session with execution_binding mismatch must
+        //    leave previous cached worker, raw_wrap_up, pending EnsureSession, and
+        //    pending prompts completely intact.
         let seed_hub = Hub::new();
         seed_hub.create_local_session(
-            "s-unprojected".into(),
+            "s-bound".into(),
             "antigravity".into(),
             "/tmp".into(),
-            "s-unprojected".into(),
+            "s-bound".into(),
             SessionOrigin::Web,
             false,
         );
-        let mut bound_meta = seed_hub.session_info("s-unprojected").unwrap().meta;
-        bound_meta.provider_account_id = "00000000-0000-0000-0000-000000000001".parse().unwrap();
+        let mut bound_meta = seed_hub.session_info("s-bound").unwrap().meta;
+        bound_meta.execution_binding = Some(
+            crate::execution_environment::ExecutionBinding::from_record(serde_json::json!({
+                "schema": 1,
+                "kind": "remote",
+                "target": "hawk"
+            })),
+        );
         let hub = Hub::new();
         hub.restore_reconciling_runtime(vec![crate::core::RestoredSession {
-            meta: bound_meta,
+            meta: bound_meta.clone(),
             log: vec![],
             event_count: 0,
             reached_start: true,
@@ -1220,52 +1227,267 @@ mod tests {
             folder_id: None,
             last_event_at_ms: None,
         }]);
-        let runtime = super::super::RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let mut good_worker = busy_snapshot("s-bound", "epoch-good", true);
+        good_worker.launch = Some(crate::runtime_wire::StartSession {
+            session_id: "s-bound".into(),
+            provider: "antigravity".into(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_account_id: bound_meta.provider_account_id.clone(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            cwd: "/tmp".into(),
+            agent_session_id: Some("agent-1".into()),
+            system: false,
+            context_window: None,
+            auto_compact_token_limit: None,
+            cache_protection: None,
+            generation: "g1".into(),
+            fallback_for: None,
+            adopt_only: true,
+            execution_binding: bound_meta.execution_binding.clone(),
+            extensions: None,
+            mcp_plan: None,
+            native_fork: None,
+        });
+        let runtime = super::super::RemoteRuntime::for_test(hub.clone(), vec![good_worker.clone()]);
         let cmd = CoreCommand::Prompt {
-            session_id: "s-unprojected".into(),
-            command_id: "cmd-unproj".into(),
-            turn_id: "t-u".into(),
+            session_id: "s-bound".into(),
+            command_id: "cmd-bound".into(),
+            turn_id: "t-b".into(),
             content: vec![serde_json::json!({"type": "text", "text": "stay pending"})],
-            cmid: Some("cmid-u".into()),
+            cmid: Some("cmid-b".into()),
             trace: None,
             echo_artifacts: false,
             observe_subagents: false,
-            expected_worker_epoch: Some("e-old".into()),
+            expected_worker_epoch: Some("epoch-good".into()),
             acknowledged_uncertain_sequence: Some(0),
         };
         runtime
             .shared
             .pending
             .lock()
-            .insert("cmd-unproj".into(), cmd);
+            .insert("cmd-bound".into(), cmd);
         runtime
             .shared
             .attempted_sends
             .lock()
-            .insert("cmd-unproj".into());
-        let mut rejected_worker = busy_snapshot("s-unprojected", "e-new", true);
-        rejected_worker.state = WorkerState::Running;
-        rejected_worker.current_turn_id = None;
+            .insert("cmd-bound".into());
+        runtime
+            .shared
+            .wrap_up
+            .record_raw_locked("s-bound", "epoch-good", true);
+        runtime.shared.pending.lock().insert(
+            "ensure:s-bound".into(),
+            CoreCommand::EnsureSession {
+                session: good_worker.launch.clone().unwrap(),
+            },
+        );
+        // Incoming snapshot has mismatched execution_binding (launch = None) and wrap_up_steering = false.
+        let mut stale_worker = busy_snapshot("s-bound", "epoch-stale", false);
+        stale_worker.state = WorkerState::Running;
+        stale_worker.current_turn_id = None;
         runtime
             .project_trace_fixture(Frame::Snapshot {
-                worker: Box::new(rejected_worker),
+                worker: Box::new(stale_worker),
             })
             .await;
+        assert_eq!(
+            runtime
+                .shared
+                .workers
+                .lock()
+                .get("s-bound")
+                .map(|w| w.worker_epoch.as_str()),
+            Some("epoch-good"),
+            "rejected snapshot must not overwrite cached worker authority"
+        );
         assert!(
-            runtime.shared.pending.lock().contains_key("cmd-unproj"),
-            "rejected apply_snapshot must not retire pending prompts"
+            !runtime
+                .shared
+                .wrap_up
+                .raw_wrap_up
+                .lock()
+                .contains_key(&("s-bound".into(), "epoch-stale".into())),
+            "rejected snapshot must not cache raw_wrap_up for stale epoch"
+        );
+        assert!(
+            runtime.shared.pending.lock().contains_key("ensure:s-bound"),
+            "rejected snapshot must not acknowledge pending EnsureSession"
+        );
+        assert!(
+            runtime.shared.pending.lock().contains_key("cmd-bound"),
+            "rejected snapshot must not retire pending prompts"
         );
 
-        // 2. Restore seeds past `recovery-q<N>` and preserves `recovery-` prefix on dedupe.
-        hub.create_local_session(
-            "s-rest".into(),
+        // 2. Findings 1, 3, 5, 6: atomic park (draft + retired_dispatches in one SQL write,
+        //    addressed confirm_delivered ONLY AFTER commit and on replay) + durable recovery
+        //    activation (rejects synthetic op IDs, persists draft -> queue before dispatch,
+        //    and rolls back cleanly on SQL error).
+        let health = Arc::new(crate::core::PersistenceHealth::default());
+        let (sink, mut store_rx) = crate::core::StoreSink::channel(16, health);
+        let hub_store = Hub::with_store(Some(sink));
+        let acks = hub_store.store_ack_sink();
+        let (disp_tx, mut disp_rx) = tokio::sync::mpsc::channel(16);
+        hub_store.set_dispatch_tx(disp_tx);
+        hub_store.create_local_session(
+            "s-atomic".into(),
             "antigravity".into(),
             "/tmp".into(),
-            "s-rest".into(),
+            "s-atomic".into(),
             SessionOrigin::Web,
             false,
         );
-        let meta = hub.session_info("s-rest").unwrap().meta;
+        hub_store.set_status("s-atomic", super::super::Status::Running, None);
+        let caller = crate::prompt_origin::RequestCaller::Person;
+        let origin = crate::prompt_origin::DeliveryOrigin::from_caller(&caller);
+        hub_store.record_prompt_dispatch(
+            "s-atomic",
+            "op-orig".into(),
+            origin.clone(),
+            origin,
+            5_000,
+        );
+        let mut events = hub_store.subscribe();
+
+        hub_store.park_recovery_draft(
+            "s-atomic",
+            "recover me".into(),
+            vec![serde_json::json!({"type": "text", "text": "recover me"})],
+            Some("op-orig".into()),
+        );
+        let (park_ack, park_drafts, park_retired) = loop {
+            if let crate::core::StoreWrite::UpdatePending {
+                ack_id: Some(id),
+                drafts,
+                retired_dispatches,
+                ..
+            } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                break (id, drafts, retired_dispatches);
+            }
+        };
+        assert_eq!(park_drafts.len(), 1);
+        assert_eq!(park_retired, vec!["op-orig".to_owned()]);
+        // Before SQL ACK, duplicate submit must NOT confirm `op-orig` early.
+        assert_eq!(
+            hub_store.front_submit_with_outcome(
+                "s-atomic",
+                "recover me".into(),
+                vec![],
+                Some("op-orig".into()),
+                &caller,
+            ),
+            crate::core::FrontSubmitOutcome::Duplicate
+        );
+        while let Ok(frame) = events.try_recv() {
+            if let crate::core::Outbound::SyncPatch { confirmed, .. } = frame.outbound() {
+                assert!(
+                    !confirmed.iter().any(|c| c == "op-orig"),
+                    "op-orig must not be confirmed before atomic park commits"
+                );
+            }
+        }
+        // Complete SQL park -> browser receives addressed `confirmed: ["op-orig"]` with recovery draft.
+        acks.complete(park_ack, Ok(true));
+        let confirmed_after_park = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                let frame = events.recv().await.unwrap();
+                if let crate::core::Outbound::SyncPatch { confirmed, .. } = frame.outbound()
+                    && confirmed.iter().any(|c| c == "op-orig")
+                {
+                    return confirmed.clone();
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(confirmed_after_park.iter().any(|c| c == "op-orig"));
+        let draft_id = hub_store.queue_and_drafts("s-atomic", |_| true).unwrap().1[0]
+            .id
+            .clone();
+
+        // Synthetic op IDs (`cowboy-*`, `__*`) must be refused on recovery draft activation.
+        for bad_op in ["cowboy-retry:1", "__sched:1", "managed-call:1"] {
+            hub_store.activate_draft("s-atomic", &draft_id, Some(bad_op.into()), &caller);
+            assert_eq!(hub_store.session_info("s-atomic").unwrap().drafts_count, 1);
+        }
+
+        // Recovery activation persists draft -> queue BEFORE dispatching, and rolls back on SQL failure.
+        hub_store.activate_draft("s-atomic", &draft_id, Some("op-fail".into()), &caller);
+        assert!(
+            disp_rx.try_recv().is_err(),
+            "idle session must not dispatch recovery draft before UpdatePending commits"
+        );
+        let fail_ack = loop {
+            if let crate::core::StoreWrite::UpdatePending {
+                ack_id: Some(id),
+                queue,
+                drafts,
+                ..
+            } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                assert_eq!(queue.len(), 1);
+                assert_eq!(queue[0].cmid.as_deref(), Some("op-fail"));
+                assert!(drafts.is_empty());
+                break id;
+            }
+        };
+        acks.complete(fail_ack, Err("db busy".into()));
+        hub_store
+            .drain_teardown_requeues(std::time::Duration::from_secs(2))
+            .await;
+        assert_eq!(hub_store.session_info("s-atomic").unwrap().drafts_count, 1);
+        assert_eq!(hub_store.session_info("s-atomic").unwrap().queue_count, 0);
+        assert!(disp_rx.try_recv().is_err());
+
+        // Succeeding activation persists draft -> queue and dispatches ONLY AFTER SQL ACK.
+        hub_store.activate_draft("s-atomic", &draft_id, Some("op-send-2".into()), &caller);
+        assert!(disp_rx.try_recv().is_err());
+        let ok_ack = loop {
+            if let crate::core::StoreWrite::UpdatePending {
+                ack_id: Some(id),
+                queue,
+                ..
+            } = tokio::time::timeout(std::time::Duration::from_secs(2), store_rx.recv())
+                .await
+                .unwrap()
+                .unwrap()
+            {
+                assert_eq!(queue.len(), 1);
+                assert_eq!(queue[0].cmid.as_deref(), Some("op-send-2"));
+                break id;
+            }
+        };
+        acks.complete(ok_ack, Ok(true));
+        let dispatched = tokio::time::timeout(std::time::Duration::from_secs(2), disp_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(dispatched.cmid.as_deref(), Some("op-send-2"));
+    }
+
+    #[tokio::test]
+    async fn exact_undelivered_retirement_survives_restart_without_wall_clock_collision() {
+        // Finding 7: exact per-dispatch `undelivered_retired` suppresses the parked/deleted
+        // dispatch after restart while NEVER suppressing a fresh dispatch on the exact same
+        // millisecond or after a backward clock correction, and restore seeds past `recovery-q5`.
+        let seed_hub = Hub::new();
+        seed_hub.create_local_session(
+            "s-exact".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "s-exact".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        let meta = seed_hub.session_info("s-exact").unwrap().meta;
         let dup_draft = crate::core::QueuedMessage {
             id: "recovery-q5".into(),
             text: "dup".into(),
@@ -1277,7 +1499,7 @@ mod tests {
         };
         let hub_restore = Hub::new();
         hub_restore.restore_reconciling_runtime(vec![crate::core::RestoredSession {
-            meta: meta.clone(),
+            meta,
             log: vec![],
             event_count: 0,
             reached_start: true,
@@ -1290,84 +1512,57 @@ mod tests {
             folder_id: None,
             last_event_at_ms: None,
         }]);
-        let restored_drafts = hub_restore.queue_and_drafts("s-rest", |_| true).unwrap().1;
+        let restored_drafts = hub_restore.queue_and_drafts("s-exact", |_| true).unwrap().1;
         assert_eq!(restored_drafts[0].id, "recovery-q5");
         assert_eq!(restored_drafts[1].id, "recovery-q6");
 
-        // 3. Persisted scalar `SESSION_UNDELIVERED_RETIRED_AT_PREFIX` blocks hydration
-        //    rearm for parked/deleted dispatches (<= floor) while allowing newer dispatches (> floor),
-        //    and hydrated `dispatched_origins` still rejects reusing historical cmids on resend.
-        let hub_floor = Hub::new();
-        hub_floor.set_setting(
-            format!(
-                "{}s-rest",
-                crate::model::settings_keys::SESSION_UNDELIVERED_RETIRED_AT_PREFIX
-            ),
-            serde_json::json!(5_000_i64),
-        );
-        hub_floor.restore_reconciling_runtime(vec![crate::core::RestoredSession {
-            meta,
-            log: vec![],
-            event_count: 0,
-            reached_start: true,
-            next_seq: 1,
-            queue: vec![],
-            drafts: vec![crate::core::QueuedMessage {
-                id: "recovery-q7".into(),
-                text: "restored".into(),
-                content: vec![serde_json::json!({"type": "text", "text": "restored"})],
-                cmid: None,
-                schedule: None,
-                origin: None,
-                initiator: None,
-            }],
-            config_options: None,
-            config_preferences: serde_json::json!({}),
-            mobile_review_state: serde_json::json!({}),
-            folder_id: None,
-            last_event_at_ms: None,
-        }]);
         let owner = crate::prompt_origin::DeliveryOrigin::from_caller(
             &crate::prompt_origin::RequestCaller::Person,
         );
-        hub_floor.hydrate_prompt_dispatches(vec![crate::prompt_origin::PromptDispatchRecord {
-            session_id: "s-rest".into(),
-            cmid: "cmid-retired".into(),
-            origin: owner.clone(),
-            trigger: owner.clone(),
-            dispatched_at_ms: 5_000,
-        }]);
+        hub_restore.hydrate_prompt_dispatches(vec![
+            crate::prompt_origin::PromptDispatchRecord {
+                session_id: "s-exact".into(),
+                cmid: "cmid-parked".into(),
+                origin: owner.clone(),
+                trigger: owner.clone(),
+                dispatched_at_ms: 5_000,
+                undelivered_retired: true,
+            },
+            // Same millisecond (5_000) fresh dispatch must NOT be suppressed by cmid-parked.
+            crate::prompt_origin::PromptDispatchRecord {
+                session_id: "s-exact".into(),
+                cmid: "cmid-same-ms".into(),
+                origin: owner.clone(),
+                trigger: owner.clone(),
+                dispatched_at_ms: 5_000,
+                undelivered_retired: false,
+            },
+        ]);
+        assert!(hub_restore.is_cmid_parked_or_fenced("s-exact", "cmid-parked"));
+        assert!(!hub_restore.is_cmid_parked_or_fenced("s-exact", "cmid-same-ms"));
         assert!(
-            hub_floor
-                .take_pending_echo_for_undelivered("s-rest", "cmid-retired")
-                .is_none(),
-            "retired floor must keep deleted/parked dispatch unarmed after restart"
+            hub_restore
+                .take_pending_echo_for_undelivered("s-exact", "cmid-parked")
+                .is_none()
         );
-        let caller = crate::prompt_origin::RequestCaller::Person;
-        hub_floor.activate_draft(
-            "s-rest",
-            "recovery-q7",
-            Some("cmid-retired".into()),
-            &caller,
-        );
-        assert_eq!(
-            hub_floor.session_info("s-rest").unwrap().drafts_count,
-            1,
-            "hydrated dispatched_origins must still reject reusing historical cmid"
-        );
-        // Newer dispatch strictly above floor still hydrates normally.
-        hub_floor.hydrate_prompt_dispatches(vec![crate::prompt_origin::PromptDispatchRecord {
-            session_id: "s-rest".into(),
-            cmid: "cmid-newer".into(),
-            origin: owner.clone(),
-            trigger: owner,
-            dispatched_at_ms: 5_001,
-        }]);
         assert!(
-            hub_floor
-                .take_pending_echo_for_undelivered("s-rest", "cmid-newer")
-                .is_some(),
-            "dispatch strictly newer than retired floor must arm pending_echo"
+            hub_restore
+                .take_pending_echo_for_undelivered("s-exact", "cmid-same-ms")
+                .is_some()
+        );
+        // Even a live dispatch whose timestamp stepped backward (4_999 < 5_000) is NOT suppressed.
+        hub_restore.record_prompt_dispatch(
+            "s-exact",
+            "cmid-clock-step".into(),
+            owner.clone(),
+            owner,
+            4_999,
+        );
+        assert!(!hub_restore.is_cmid_parked_or_fenced("s-exact", "cmid-clock-step"));
+        assert!(
+            hub_restore
+                .take_pending_echo_for_undelivered("s-exact", "cmid-clock-step")
+                .is_some()
         );
     }
 }

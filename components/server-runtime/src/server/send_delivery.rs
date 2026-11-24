@@ -107,6 +107,7 @@ pub(crate) async fn record_steer_dispatch_in(
             origin: origin.clone(),
             trigger: origin.clone(),
             dispatched_at_ms,
+            undelivered_retired: false,
         };
         let compatible = store
             .record_prompt_dispatch_if_compatible(&record)

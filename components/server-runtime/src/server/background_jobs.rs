@@ -789,6 +789,7 @@ pub async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Res
             drafts,
             settled_notices,
             released_claims,
+            retired_dispatches,
             ..
         } => {
             store
@@ -798,6 +799,7 @@ pub async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Res
                     drafts,
                     settled_notices,
                     released_claims,
+                    retired_dispatches,
                 )
                 .await
         }

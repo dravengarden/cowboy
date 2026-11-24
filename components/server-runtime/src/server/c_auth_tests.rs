@@ -262,6 +262,7 @@ async fn retry_resolves_evicted_dispatch_origin_from_durable_store() {
             origin: DeliveryOrigin::Owner,
             trigger: DeliveryOrigin::Owner,
             dispatched_at_ms: 10,
+            undelivered_retired: false,
         })
         .await
         .unwrap();
@@ -272,6 +273,7 @@ async fn retry_resolves_evicted_dispatch_origin_from_durable_store() {
             origin: DeliveryOrigin::peer("agent-9"),
             trigger: DeliveryOrigin::peer("agent-9"),
             dispatched_at_ms: 20,
+            undelivered_retired: false,
         })
         .await
         .unwrap();
@@ -338,6 +340,7 @@ async fn superagent_evidence_and_turn_budget_consult_durable_prompt_dispatches()
             origin: DeliveryOrigin::Automation,
             trigger: DeliveryOrigin::Automation,
             dispatched_at_ms: 100,
+            undelivered_retired: false,
         })
         .await
         .unwrap();
@@ -402,6 +405,7 @@ async fn superagent_evidence_and_turn_budget_consult_durable_prompt_dispatches()
             origin: DeliveryOrigin::Owner,
             trigger: DeliveryOrigin::Owner,
             dispatched_at_ms: 200,
+            undelivered_retired: false,
         })
         .await
         .unwrap();

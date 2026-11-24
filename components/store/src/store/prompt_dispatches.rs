@@ -34,6 +34,7 @@ fn decode_record(
     origin_json: &str,
     trigger_json: &str,
     dispatched_at_ms: i64,
+    undelivered_retired: i64,
 ) -> Result<PromptDispatchRecord> {
     let origin: DeliveryOrigin =
         serde_json::from_str(origin_json).context("decode prompt_dispatches.origin")?;
@@ -45,6 +46,7 @@ fn decode_record(
         origin,
         trigger,
         dispatched_at_ms,
+        undelivered_retired: undelivered_retired != 0,
     })
 }
 
@@ -118,16 +120,24 @@ impl Store {
         cmid: &str,
     ) -> Result<Option<PromptDispatchRecord>> {
         let row = dispatch!(self, prompt_dispatch_raw(session_id, cmid))?;
-        row.map(|(origin, trigger, dispatched_at_ms)| {
+        row.map(|(origin, trigger, dispatched_at_ms, retired)| {
             decode_record(
                 session_id.to_owned(),
                 cmid.to_owned(),
                 &origin,
                 &trigger,
                 dispatched_at_ms,
+                retired,
             )
         })
         .transpose()
+    }
+
+    /// True if `(session_id, cmid)` was already recorded in durable
+    /// `prompt_dispatches` or persisted transcript `events` history, even after
+    /// leaving Hub's bounded in-memory caches.
+    pub async fn operation_id_used_in_history(&self, session_id: &str, cmid: &str) -> Result<bool> {
+        dispatch!(self, operation_id_used_in_history_raw(session_id, cmid))
     }
 
     /// Load up to `per_session_limit` newest dispatch records per active
@@ -138,8 +148,15 @@ impl Store {
     ) -> Result<Vec<PromptDispatchRecord>> {
         let rows = dispatch!(self, recent_prompt_dispatches_raw(per_session_limit))?;
         let mut out = Vec::with_capacity(rows.len());
-        for (session_id, cmid, origin, trigger, dispatched_at_ms) in rows {
-            match decode_record(session_id, cmid, &origin, &trigger, dispatched_at_ms) {
+        for (session_id, cmid, origin, trigger, dispatched_at_ms, retired) in rows {
+            match decode_record(
+                session_id,
+                cmid,
+                &origin,
+                &trigger,
+                dispatched_at_ms,
+                retired,
+            ) {
                 Ok(record) => out.push(record),
                 Err(error) => {
                     tracing::warn!(%error, "skipping unreadable prompt_dispatches row on hydrate");
@@ -249,9 +266,9 @@ macro_rules! shared_impl {
                 &self,
                 session_id: &str,
                 cmid: &str,
-            ) -> Result<Option<(String, String, i64)>> {
+            ) -> Result<Option<(String, String, i64, i64)>> {
                 sqlx::query_as(
-                    "SELECT origin, trigger_origin, dispatched_at_ms \
+                    "SELECT origin, trigger_origin, dispatched_at_ms, CAST(undelivered_retired AS BIGINT) \
                      FROM prompt_dispatches \
                      WHERE session_id = $1 AND cmid = $2",
                 )
@@ -278,11 +295,11 @@ macro_rules! shared_impl {
             async fn recent_prompt_dispatches_raw(
                 &self,
                 per_session_limit: i64,
-            ) -> Result<Vec<(String, String, String, String, i64)>> {
+            ) -> Result<Vec<(String, String, String, String, i64, i64)>> {
                 sqlx::query_as(concat!(
                     "WITH ranked AS ( ",
                     "SELECT pd.session_id, pd.cmid, pd.origin, pd.trigger_origin, ",
-                    "pd.dispatched_at_ms, ",
+                    "pd.dispatched_at_ms, CAST(pd.undelivered_retired AS BIGINT) AS undelivered_retired, ",
                     "ROW_NUMBER() OVER ( ",
                     "PARTITION BY pd.session_id ",
                     "ORDER BY pd.dispatched_at_ms DESC, pd.cmid DESC ",
@@ -292,7 +309,7 @@ macro_rules! shared_impl {
                     "WHERE ",
                     $active_session,
                     " ) ",
-                    "SELECT session_id, cmid, origin, trigger_origin, dispatched_at_ms ",
+                    "SELECT session_id, cmid, origin, trigger_origin, dispatched_at_ms, undelivered_retired ",
                     "FROM ranked WHERE rn <= $1 ",
                     "ORDER BY session_id, dispatched_at_ms ASC, cmid ASC"
                 ))
@@ -345,6 +362,19 @@ impl PostgresStorage {
         .fetch_all(&self.pool)
         .await
         .with_context(|| format!("SELECT prompt_dispatches batch ({session_id})"))
+    }
+
+    async fn operation_id_used_in_history_raw(&self, session_id: &str, cmid: &str) -> Result<bool> {
+        let used: bool = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM prompt_dispatches WHERE session_id = $1 AND cmid = $2) \
+             OR EXISTS (SELECT 1 FROM events WHERE session_id = $1 AND (payload ->> 'cmid') = $2)",
+        )
+        .bind(session_id)
+        .bind(cmid)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("CHECK operation id history ({session_id}, {cmid})"))?;
+        Ok(used)
     }
 }
 
@@ -399,5 +429,18 @@ impl SqliteStorage {
             out.append(&mut rows);
         }
         Ok(out)
+    }
+
+    async fn operation_id_used_in_history_raw(&self, session_id: &str, cmid: &str) -> Result<bool> {
+        let used: i64 = sqlx::query_scalar(
+            "SELECT EXISTS (SELECT 1 FROM prompt_dispatches WHERE session_id = ?1 AND cmid = ?2) \
+             OR EXISTS (SELECT 1 FROM events WHERE session_id = ?1 AND json_extract(payload, '$.cmid') = ?2)",
+        )
+        .bind(session_id)
+        .bind(cmid)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("CHECK SQLite operation id history ({session_id}, {cmid})"))?;
+        Ok(used != 0)
     }
 }

@@ -816,7 +816,14 @@ export class AcpProxy {
   async handleClientInner(message, preReserved, markPromoted) {
     if (message === null || typeof message !== "object" || Array.isArray(message)) return;
     const refuseClient = (reqId, msg, code = -32601) => {
-      if (preReserved) this.releaseReservation(preReserved.sessionId, preReserved);
+      if (preReserved) {
+        this.releaseReservation(preReserved.sessionId, preReserved);
+        return this.endPrompt(preReserved.record, {
+          jsonrpc: "2.0",
+          id: reqId,
+          error: { code, message: msg },
+        });
+      }
       return this.refuse(reqId, msg, code);
     };
     if (
@@ -1091,6 +1098,17 @@ export class AcpProxy {
         }
         this.pending.set(id, promptRecord);
         this.agent(forwarded);
+        return;
+      } catch (error) {
+        this.releaseReservation(sessionId, reserved);
+        this.endPrompt(promptRecord, {
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32603,
+            message: `cowboy_antigravity_prompt_failed: ${error?.message ?? String(error)}`,
+          },
+        });
         return;
       } finally {
         this.releaseReservation(sessionId, reserved);

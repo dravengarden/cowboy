@@ -453,6 +453,13 @@ impl Hub {
         let trigger = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
         let wired = self.inner.dispatch_tx.lock().is_some();
         let mut dispatch = None;
+        let mut durable_recovery: Option<(
+            String,
+            String,
+            QueuedMessage,
+            crate::core::hub_managed_calls::StoreAckRx,
+        )> = None;
+        let mut sync_recovery_drain = false;
         let mut had_scheduled = false;
         let mut is_owner_turn = false;
         let mut error_msg: Option<&'static str> = None;
@@ -465,67 +472,60 @@ impl Hub {
                 return;
             };
             let target = &s.drafts[pos];
+            let is_recovery = target.id.starts_with("recovery-");
             let effective_cmid = cmid.or_else(|| {
                 target
                     .cmid
                     .clone()
                     .filter(|cid| !crate::agent_model::is_reserved_call_notice_cmid(cid))
             });
-            if target.id.starts_with("recovery-")
-                && !effective_cmid
-                    .as_deref()
-                    .is_some_and(|op| !op.is_empty() && Some(op) != target.cmid.as_deref())
+            if is_recovery
+                && !effective_cmid.as_deref().is_some_and(|op| {
+                    Self::is_authored_cmid(op) && Some(op) != target.cmid.as_deref()
+                })
             {
-                error_msg = Some("Resending a parked recovery draft requires a new operation id");
+                error_msg =
+                    Some("Resending a parked recovery draft requires a new client operation id");
                 false
             } else if let Some(op) = effective_cmid.as_deref()
                 && Self::prompt_already_accepted_excluding_draft(s, op, Some(pos))
             {
                 error_msg = Some("Activation operation id is already in use; draft retained");
                 false
-            } else {
-                let m = s.drafts.remove(pos);
-                had_scheduled = m.schedule.is_some();
-                let dispatch_origin = crate::prompt_origin::compute_dispatch_origin(
-                    m.origin.as_ref(),
-                    Some(&trigger),
-                );
-                is_owner_turn = dispatch_origin.is_owner();
-                if wired
-                    && !s.meta.paused
-                    && s.meta.trashed_at_ms.is_none()
-                    && Self::ready(s, true)
-                    && s.queue.is_empty()
-                    && self.context_allows_dispatch(session_id, effective_cmid.as_deref())
-                {
-                    s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
-                    s.in_flight = true;
-                    s.dispatch_pending = Some(s.in_flight_epoch);
-                    let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(effective_cmid);
-                    Self::note_dispatched(s, Some(&dispatch_cmid));
-                    dispatch = Some(DispatchReq {
-                        ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
-                        session_id: session_id.to_owned(),
-                        text: m.text,
-                        content: m.content,
-                        cmid: Some(dispatch_cmid),
-                        explicit: true,
-                        origin: m.origin,
-                        initiator: Some(trigger.clone()),
-                        dispatch_origin,
-                        trigger,
-                    });
-                } else {
-                    s.queue.push(QueuedMessage {
-                        id: self.next_qid(),
-                        text: m.text,
-                        content: m.content,
-                        cmid: effective_cmid,
-                        schedule: None,
-                        origin: m.origin,
-                        initiator: Some(trigger),
-                    });
+            } else if is_recovery {
+                match self.stage_recovery_draft_activation(
+                    session_id,
+                    s,
+                    pos,
+                    effective_cmid.clone().unwrap_or_default(),
+                    trigger,
+                ) {
+                    Ok((scheduled, pending)) => {
+                        had_scheduled = scheduled;
+                        if let Some(entry) = pending {
+                            durable_recovery = Some(entry);
+                        } else {
+                            sync_recovery_drain = true;
+                        }
+                        true
+                    }
+                    Err(msg) => {
+                        error_msg = Some(msg);
+                        false
+                    }
                 }
+            } else {
+                let (scheduled, owner_turn, req) = self.stage_regular_draft_activation(
+                    session_id,
+                    s,
+                    pos,
+                    effective_cmid,
+                    trigger,
+                    wired,
+                );
+                had_scheduled = scheduled;
+                is_owner_turn = owner_turn;
+                dispatch = req;
                 true
             }
         };
@@ -539,6 +539,19 @@ impl Hub {
         if !activated {
             return;
         }
+        if let Some((new_qid, op, original, rx)) = durable_recovery {
+            self.spawn_recovery_activation_commit(
+                session_id.to_owned(),
+                id.to_owned(),
+                new_qid,
+                op,
+                original,
+                had_scheduled,
+                caller.clone(),
+                rx,
+            );
+            return;
+        }
         if is_owner_turn {
             self.notify_human_turn(session_id);
         }
@@ -547,9 +560,182 @@ impl Hub {
             self.cancel_draft_timer(session_id, id);
             self.broadcast_sessions();
         }
-        if let Some(req) = dispatch {
+        if sync_recovery_drain {
+            self.drain_head(session_id, true, true, Some(caller));
+        } else if let Some(req) = dispatch {
             self.send_dispatch(req);
         }
+    }
+
+    fn stage_regular_draft_activation(
+        &self,
+        session_id: &str,
+        s: &mut Session,
+        pos: usize,
+        effective_cmid: Option<String>,
+        trigger: crate::prompt_origin::DeliveryOrigin,
+        wired: bool,
+    ) -> (bool, bool, Option<DispatchReq>) {
+        let m = s.drafts.remove(pos);
+        let had_scheduled = m.schedule.is_some();
+        let dispatch_origin =
+            crate::prompt_origin::compute_dispatch_origin(m.origin.as_ref(), Some(&trigger));
+        let is_owner_turn = dispatch_origin.is_owner();
+        let dispatch = if wired
+            && !s.meta.paused
+            && s.meta.trashed_at_ms.is_none()
+            && Self::ready(s, true)
+            && s.queue.is_empty()
+            && self.context_allows_dispatch(session_id, effective_cmid.as_deref())
+        {
+            s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
+            s.in_flight = true;
+            s.dispatch_pending = Some(s.in_flight_epoch);
+            let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(effective_cmid);
+            Self::note_dispatched(s, Some(&dispatch_cmid));
+            Some(DispatchReq {
+                ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),
+                session_id: session_id.to_owned(),
+                text: m.text,
+                content: m.content,
+                cmid: Some(dispatch_cmid),
+                explicit: true,
+                origin: m.origin,
+                initiator: Some(trigger.clone()),
+                dispatch_origin,
+                trigger,
+            })
+        } else {
+            s.queue.push(QueuedMessage {
+                id: self.next_qid(),
+                text: m.text,
+                content: m.content,
+                cmid: effective_cmid,
+                schedule: None,
+                origin: m.origin,
+                initiator: Some(trigger),
+            });
+            None
+        };
+        (had_scheduled, is_owner_turn, dispatch)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn stage_recovery_draft_activation(
+        &self,
+        session_id: &str,
+        s: &mut Session,
+        pos: usize,
+        op: String,
+        trigger: crate::prompt_origin::DeliveryOrigin,
+    ) -> Result<
+        (
+            bool,
+            Option<(
+                String,
+                String,
+                QueuedMessage,
+                crate::core::hub_managed_calls::StoreAckRx,
+            )>,
+        ),
+        &'static str,
+    > {
+        let original = s.drafts.remove(pos);
+        let had_scheduled = original.schedule.is_some();
+        let new_qid = self.next_qid();
+        s.queue.push(QueuedMessage {
+            id: new_qid.clone(),
+            text: original.text.clone(),
+            content: original.content.clone(),
+            cmid: Some(op.clone()),
+            schedule: None,
+            origin: original.origin.clone(),
+            initiator: Some(trigger),
+        });
+        if self.has_store_writer() && tokio::runtime::Handle::try_current().is_ok() {
+            if let Some(rx) = self.send_acked_update_pending_with_retired(
+                session_id,
+                s.queue.clone(),
+                s.drafts.clone(),
+                Vec::new(),
+                Vec::new(),
+                s.pending_retired_dispatches.clone(),
+                false,
+            ) {
+                s.pending_durable_queue_ids.insert(new_qid.clone());
+                Ok((had_scheduled, Some((new_qid, op, original, rx))))
+            } else {
+                s.queue.retain(|m| m.id != new_qid);
+                s.drafts.insert(pos.min(s.drafts.len()), original);
+                Err("Failed to persist recovery draft activation; draft retained")
+            }
+        } else {
+            Ok((had_scheduled, None))
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn spawn_recovery_activation_commit(
+        &self,
+        sid: String,
+        draft_id: String,
+        new_qid: String,
+        op: String,
+        original: QueuedMessage,
+        had_scheduled: bool,
+        caller: crate::prompt_origin::RequestCaller,
+        rx: crate::core::hub_managed_calls::StoreAckRx,
+    ) {
+        let hub = self.clone();
+        self.spawn_teardown_requeue(async move {
+            match rx.await {
+                Ok(Ok(true)) => {
+                    let snapshot = {
+                        let mut sessions = hub.inner.sessions.lock();
+                        sessions.get_mut(&sid).map(|s| {
+                            s.pending_durable_queue_ids.remove(&new_qid);
+                            let visible_queue: Vec<QueuedMessage> = s
+                                .queue
+                                .iter()
+                                .filter(|m| !s.pending_durable_queue_ids.contains(&m.id))
+                                .cloned()
+                                .collect();
+                            (visible_queue, s.drafts.clone())
+                        })
+                    };
+                    if let Some((q, d)) = snapshot {
+                        hub.broadcast_pending_snapshot(&sid, &q, &d);
+                        if had_scheduled {
+                            hub.cancel_draft_timer(&sid, &draft_id);
+                            hub.broadcast_sessions();
+                        }
+                        hub.drain_head(&sid, true, true, Some(&caller));
+                    }
+                }
+                _ => {
+                    let restored = {
+                        let mut sessions = hub.inner.sessions.lock();
+                        sessions.get_mut(&sid).is_some_and(|s| {
+                            s.pending_durable_queue_ids.remove(&new_qid);
+                            let had_row = s.queue.iter().any(|m| m.id == new_qid);
+                            s.queue.retain(|m| m.id != new_qid);
+                            if had_row && !s.drafts.iter().any(|m| m.id == original.id) {
+                                s.drafts.push(original);
+                                true
+                            } else {
+                                false
+                            }
+                        })
+                    };
+                    if restored {
+                        hub.emit_pending(&sid);
+                    }
+                    let msg = "Failed to persist recovery draft activation; draft retained";
+                    hub.command_result(&sid, &op, CommandOutcome::Rejected, msg);
+                    hub.broadcast_error(Some(sid), msg.to_owned());
+                }
+            }
+        });
     }
 
     pub fn activate_all_drafts(

@@ -465,8 +465,10 @@ impl Store {
         drafts: &[QueuedMessage],
         settled_notices: &[(String, String)],
         released_claims: &[NoticeClaimRelease],
+        retired_dispatches: &[String],
     ) -> Result<()> {
-        if settled_notices.is_empty() && released_claims.is_empty() {
+        if settled_notices.is_empty() && released_claims.is_empty() && retired_dispatches.is_empty()
+        {
             return self.update_pending(session_id, queue, drafts).await;
         }
         let now = chrono::Utc::now().timestamp_millis();
@@ -478,6 +480,7 @@ impl Store {
                 drafts,
                 settled_notices,
                 released_claims,
+                retired_dispatches,
                 false,
                 now,
             )
@@ -509,6 +512,7 @@ impl Store {
                 drafts,
                 &[],
                 released_claims,
+                &[],
                 true,
                 now,
             )
@@ -1126,6 +1130,7 @@ macro_rules! notice_impl {
             }
 
             #[allow(clippy::too_many_arguments, clippy::too_many_lines)]
+            #[allow(clippy::too_many_arguments)]
             async fn update_pending_with_notice_ops(
                 &self,
                 session_id: &str,
@@ -1133,6 +1138,7 @@ macro_rules! notice_impl {
                 drafts: &[QueuedMessage],
                 settled_notices: &[(String, String)],
                 released_claims: &[NoticeClaimRelease],
+                retired_dispatches: &[String],
                 require_claim_release: bool,
                 now_ms: i64,
             ) -> Result<bool> {
@@ -1247,6 +1253,20 @@ macro_rules! notice_impl {
                         .bind(now_ms)
                         .execute(&mut *tx)
                         .await?;
+                }
+                for cmid in retired_dispatches {
+                    sqlx::query(
+                        "UPDATE prompt_dispatches \
+                         SET undelivered_retired = 1 \
+                         WHERE session_id = $1 AND cmid = $2",
+                    )
+                    .bind(session_id)
+                    .bind(cmid)
+                    .execute(&mut *tx)
+                    .await
+                    .with_context(|| {
+                        format!("retire prompt_dispatches ({session_id}, {cmid})")
+                    })?;
                 }
                 tx.commit().await?;
                 Ok(true)

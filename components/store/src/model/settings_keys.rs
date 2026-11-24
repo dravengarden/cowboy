@@ -37,9 +37,6 @@ pub const MACHINE_MAINTENANCE_PREFIX: &str = "machine_maintenance:";
 pub const SESSION_RESOURCE_WAIT_PREFIX: &str = "session_resource_wait:";
 /// Explicit queue pause must survive a Controller restart.
 pub const SESSION_QUEUE_PAUSED_PREFIX: &str = "session_queue_paused:";
-/// Monotonic `dispatched_at_ms` floor at or below which recovery parking retired
-/// non-delivery (`UndeliveredPrompt`) authorization for this session.
-pub const SESSION_UNDELIVERED_RETIRED_AT_PREFIX: &str = "session_undelivered_retired_at:";
 pub const SESSION_DELIVERY_POLICY_PREFIX: &str = "session_delivery_policy:";
 pub const SESSION_DELIVERY_HOLD_PREFIX: &str = "session_delivery_hold:";
 /// The uncertain-effect sequence the owner acknowledged; the session id follows.
@@ -104,7 +101,6 @@ pub const SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX: &str = "session_provider_upd
 pub const SESSION_STATE_PREFIXES: &[&str] = &[
     SESSION_RESOURCE_WAIT_PREFIX,
     SESSION_QUEUE_PAUSED_PREFIX,
-    SESSION_UNDELIVERED_RETIRED_AT_PREFIX,
     SESSION_DELIVERY_POLICY_PREFIX,
     SESSION_DELIVERY_HOLD_PREFIX,
     SESSION_UNCERTAIN_EFFECT_ACK_PREFIX,
@@ -135,7 +131,6 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             MACHINE_MAINTENANCE_PREFIX,
             SESSION_RESOURCE_WAIT_PREFIX,
             SESSION_QUEUE_PAUSED_PREFIX,
-            SESSION_UNDELIVERED_RETIRED_AT_PREFIX,
             SESSION_DELIVERY_POLICY_PREFIX,
             SESSION_DELIVERY_HOLD_PREFIX,
             SESSION_UNCERTAIN_EFFECT_ACK_PREFIX,

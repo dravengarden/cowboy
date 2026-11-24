@@ -1,7 +1,8 @@
 use super::{
-    RuntimeEvent, Shared, Status, WorkerSnapshot, WorkerState, fail_config_startup,
-    idle_snapshot_guard, reconcile_idle_guard, recoverable_live_worker_error,
-    sync_config_for_worker, worker_status,
+    Ordering, RuntimeEvent, Shared, Status, WorkerSnapshot, WorkerState,
+    acknowledge_pending_ensure_from_snapshot, fail_config_startup, idle_snapshot_guard,
+    notice_recovery, reconcile_idle_guard, recoverable_live_worker_error, sync_config_for_worker,
+    update_declaration, worker_status,
 };
 
 /// The session accepts runtime projection and `worker` belongs to its current
@@ -221,4 +222,46 @@ impl super::RemoteRuntime {
                 })
             })
     }
+}
+
+pub(super) fn project_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
+    project_snapshot_with_protocol(shared, worker, shared.protocol.load(Ordering::Acquire))
+}
+
+pub(super) fn project_snapshot_with_protocol(
+    shared: &Shared,
+    worker: &WorkerSnapshot,
+    runtime_protocol: u16,
+) -> bool {
+    let mut worker = worker.clone();
+    let raw_wrap = worker.wrap_up_steering;
+    let _projection = shared.hub.runtime_projection_guard();
+    shared.wrap_up.sanitize_snapshot(
+        &mut worker,
+        raw_wrap,
+        shared.machine_protocol,
+        runtime_protocol,
+        &shared.hub,
+    );
+    if !current_context(shared, &worker) {
+        return false;
+    }
+    // Reconcile compatible provider release transitions before enforcing the
+    // bound launch tuple, matching `apply_snapshot`.
+    if admits_worker(shared, &worker) {
+        shared.hub.reconcile_provider_release(&worker);
+    }
+    if !shared.hub.matches_runtime_snapshot_binding(&worker)
+        || shared.hub.is_reconciling_runtime_placeholder(&worker)
+    {
+        return false;
+    }
+    let applied = apply_snapshot(shared, &worker);
+    update_declaration(shared, &worker);
+    shared.install_worker_with_raw_wrap_up(worker.clone(), raw_wrap);
+    if applied {
+        acknowledge_pending_ensure_from_snapshot(shared, &worker);
+        notice_recovery::spawn_record_snapshot_worker_epoch_if_notice(shared, &worker);
+    }
+    applied
 }

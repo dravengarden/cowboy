@@ -118,7 +118,14 @@ impl Hub {
                 return;
             };
             let queue = s.queue.clone();
+            let visible_queue: Vec<QueuedMessage> = s
+                .queue
+                .iter()
+                .filter(|m| !s.pending_durable_queue_ids.contains(&m.id))
+                .cloned()
+                .collect();
             let drafts = s.drafts.clone();
+            let retired_dispatches = s.pending_retired_dispatches.clone();
             let mut claims = self.inner.notice_claims.lock();
             if let Some(deferred) = claims.in_flight_pending_commits.get_mut(session_id) {
                 // An acknowledged pending commit is in flight for this session.
@@ -128,18 +135,20 @@ impl Hub {
                 deferred.dirty = true;
                 deferred.settled_notices.extend(settled_notices);
                 deferred.released_claims.extend(released_claims);
+                deferred.retired_dispatches.extend(retired_dispatches);
             } else if let Some(tx) = self.inner.store_tx.as_ref() {
                 let _ = tx.send(StoreWrite::UpdatePending {
                     session_id: session_id.to_owned(),
-                    queue: queue.clone(),
+                    queue,
                     drafts: drafts.clone(),
                     settled_notices,
                     released_claims,
+                    retired_dispatches,
                     require_claim_release: false,
                     ack_id: None,
                 });
             }
-            (queue, drafts)
+            (visible_queue, drafts)
         };
         self.broadcast_pending_snapshot(session_id, &queue, &drafts);
     }
@@ -156,7 +165,8 @@ impl Hub {
         };
         if (deferred.dirty
             || !deferred.settled_notices.is_empty()
-            || !deferred.released_claims.is_empty())
+            || !deferred.released_claims.is_empty()
+            || !deferred.retired_dispatches.is_empty())
             && let Some(tx) = self.inner.store_tx.as_ref()
         {
             let _ = tx.send(StoreWrite::UpdatePending {
@@ -165,6 +175,7 @@ impl Hub {
                 drafts: drafts.to_vec(),
                 settled_notices: deferred.settled_notices,
                 released_claims: deferred.released_claims,
+                retired_dispatches: deferred.retired_dispatches,
                 require_claim_release: false,
                 ack_id: None,
             });
@@ -789,6 +800,28 @@ impl Hub {
         released_claims: Vec<NoticeClaimRelease>,
         require_claim_release: bool,
     ) -> Option<StoreAckRx> {
+        self.send_acked_update_pending_with_retired(
+            session_id,
+            queue,
+            drafts,
+            settled_notices,
+            released_claims,
+            Vec::new(),
+            require_claim_release,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn send_acked_update_pending_with_retired(
+        &self,
+        session_id: &str,
+        queue: Vec<QueuedMessage>,
+        drafts: Vec<QueuedMessage>,
+        settled_notices: Vec<(String, String)>,
+        released_claims: Vec<NoticeClaimRelease>,
+        retired_dispatches: Vec<String>,
+        require_claim_release: bool,
+    ) -> Option<StoreAckRx> {
         let tx = self.inner.store_tx.as_ref()?;
         let (ack_id, rx) = self.inner.store_acks.allocate();
         let sent = tx.send(StoreWrite::UpdatePending {
@@ -797,6 +830,7 @@ impl Hub {
             drafts,
             settled_notices,
             released_claims,
+            retired_dispatches,
             require_claim_release,
             ack_id: Some(ack_id),
         });

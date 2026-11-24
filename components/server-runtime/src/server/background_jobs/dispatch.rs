@@ -336,6 +336,7 @@ pub(crate) async fn record_dispatch_provenance_in(
             origin: dispatch_origin.clone(),
             trigger: trigger.clone(),
             dispatched_at_ms,
+            undelivered_retired: false,
         };
         match store.record_prompt_dispatch_if_compatible(&record).await {
             Ok(true) => {}

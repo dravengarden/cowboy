@@ -916,7 +916,70 @@ pub async fn prehandle_command(
     if refuse_command(state, principal, cmd, session_id_for_err, &authored_cmid) {
         return Some(false);
     }
+    if let Some(done) = verify_recovery_draft_activation_op_id(state, cmd).await {
+        return Some(done);
+    }
     try_commit_owner_notice_withdrawal(state, cmd, &authored_cmid).await
+}
+
+/// Reject recovery-draft activation with missing, synthetic, or historically
+/// used operation IDs against durable `prompt_dispatches` + `events` history
+/// BEFORE mutating Hub or removing the recovery draft.
+async fn verify_recovery_draft_activation_op_id(
+    state: &Arc<AppState>,
+    cmd: &Inbound,
+) -> Option<bool> {
+    let Inbound::ActivateDraft {
+        session_id,
+        id,
+        cmid,
+    } = cmd
+    else {
+        return None;
+    };
+    if !id.starts_with("recovery-") {
+        return None;
+    }
+    let Some(op) = cmid
+        .as_deref()
+        .filter(|op| crate::core::Hub::is_authored_cmid(op))
+    else {
+        let msg = "Resending a parked recovery draft requires a new client operation id";
+        if let Some(raw) = cmid.as_deref().filter(|op| !op.is_empty()) {
+            state
+                .hub
+                .command_result(session_id, raw, CommandOutcome::Rejected, msg);
+        }
+        state
+            .hub
+            .broadcast_error(Some(session_id.clone()), msg.to_owned());
+        return Some(false);
+    };
+    let store = state.store.as_ref()?;
+    match store.operation_id_used_in_history(session_id, op).await {
+        Ok(false) => None,
+        Ok(true) => {
+            let msg = "Activation operation id is already in use; draft retained";
+            state
+                .hub
+                .command_result(session_id, op, CommandOutcome::Rejected, msg);
+            state
+                .hub
+                .broadcast_error(Some(session_id.clone()), msg.to_owned());
+            Some(false)
+        }
+        Err(error) => {
+            tracing::warn!(%error, session = %session_id, "failed to verify recovery activation op id");
+            let msg = "Could not verify activation operation id; draft retained";
+            state
+                .hub
+                .command_result(session_id, op, CommandOutcome::Rejected, msg);
+            state
+                .hub
+                .broadcast_error(Some(session_id.clone()), msg.to_owned());
+            Some(false)
+        }
+    }
 }
 
 /// Durably commit owner queue mutations that remove, clear, park, edit, or

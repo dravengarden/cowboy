@@ -291,6 +291,7 @@ pub(super) struct DeferredPendingFlush {
     pub(super) dirty: bool,
     pub(super) settled_notices: Vec<(String, String)>,
     pub(super) released_claims: Vec<NoticeClaimRelease>,
+    pub(super) retired_dispatches: Vec<String>,
 }
 
 #[derive(Default)]

@@ -202,6 +202,7 @@ impl Hub {
                         drafts: drafts.clone(),
                         settled_notices: Vec::new(),
                         released_claims: Vec::new(),
+                        retired_dispatches: s.pending_retired_dispatches.clone(),
                         require_claim_release: false,
                         ack_id: None,
                     });
@@ -501,12 +502,11 @@ impl Hub {
             .filter(|id| id.starts_with(crate::agent_model::CALL_NOTICE_PREFIX))
             .map(str::to_owned)
         else {
-            let retired_ts = {
+            let ack_rx = {
                 let mut sessions = self.inner.sessions.lock();
                 let Some(s) = sessions.get_mut(session_id) else {
                     return;
                 };
-                let mut retired_ts = None;
                 if let Some(cid) = cmid.as_deref() {
                     let mut claims = self.inner.notice_claims.lock();
                     if !Self::record_parked_recovery_cmid(&mut claims, session_id, cid) {
@@ -515,14 +515,14 @@ impl Hub {
                     drop(claims);
                     Self::note_dispatched(s, Some(cid));
                     hub_dispatch_origin::remove_pending_echo(s, cid);
-                    retired_ts = Some(s.dispatched_origins.get(cid).map_or_else(
-                        || chrono::Utc::now().timestamp_millis(),
-                        |r| r.dispatched_at_ms,
-                    ));
+                    if !s.pending_retired_dispatches.iter().any(|c| c == cid) {
+                        s.pending_retired_dispatches.push(cid.to_owned());
+                    }
                 }
-                // Keep `cmid: None` on recovery drafts so `emit_pending` never
-                // prematurely confirms the original client operation before SQL
-                // commits, and resending always requires a fresh operation ID.
+                // Keep `cmid: None` on recovery drafts so resending always requires
+                // a fresh client operation ID and the originating operation is only
+                // confirmed via `confirm_delivered` AFTER the atomic SQL transaction
+                // commits both `sessions.drafts` and `prompt_dispatches.undelivered_retired`.
                 let id = format!("recovery-{}", self.next_qid());
                 s.drafts.push(QueuedMessage {
                     id,
@@ -533,19 +533,57 @@ impl Hub {
                     origin: None,
                     initiator: None,
                 });
-                retired_ts
-            };
-            if let Some(ts) = retired_ts {
-                let key = format!(
-                    "{}{session_id}",
-                    crate::model::settings_keys::SESSION_UNDELIVERED_RETIRED_AT_PREFIX
-                );
-                let prev = self.setting(&key).and_then(|v| v.as_i64()).unwrap_or(0);
-                if ts > prev {
-                    self.set_setting(key, serde_json::json!(ts));
+                let queue = s.queue.clone();
+                let drafts = s.drafts.clone();
+                let retired = s.pending_retired_dispatches.clone();
+                if self.has_store_writer() && tokio::runtime::Handle::try_current().is_ok() {
+                    self.send_acked_update_pending_with_retired(
+                        session_id,
+                        queue,
+                        drafts,
+                        Vec::new(),
+                        Vec::new(),
+                        retired,
+                        false,
+                    )
+                } else {
+                    None
                 }
+            };
+            if let Some(rx) = ack_rx {
+                let hub = self.clone();
+                let sid = session_id.to_owned();
+                let orig_cid = cmid;
+                self.spawn_teardown_requeue(async move {
+                    let mut current_rx = Some(rx);
+                    for (attempt, delay_ms) in [0_u64, 25, 50, 100].into_iter().enumerate() {
+                        if attempt > 0 {
+                            if !hub.has_store_writer() {
+                                break;
+                            }
+                            tokio::time::sleep(std::time::Duration::from_millis(delay_ms)).await;
+                            current_rx = hub.retry_recovery_park_write(&sid, orig_cid.as_deref());
+                        }
+                        let Some(rx) = current_rx.take() else {
+                            break;
+                        };
+                        match rx.await {
+                            Ok(Ok(true)) => {
+                                hub.finish_committed_recovery_park(&sid, orig_cid.as_deref());
+                                return;
+                            }
+                            Ok(Ok(false)) => return,
+                            Ok(Err(_)) => {}
+                            Err(_) => break,
+                        }
+                    }
+                });
+            } else {
+                if self.has_store_writer() {
+                    self.emit_pending(session_id);
+                }
+                self.finish_committed_recovery_park(session_id, cmid.as_deref());
             }
-            self.emit_pending(session_id);
             return;
         };
         {
@@ -573,5 +611,62 @@ impl Hub {
             vec![(notice_cid, "execution_recovery_parked".to_owned())],
             Vec::new(),
         );
+    }
+
+    fn retry_recovery_park_write(
+        &self,
+        session_id: &str,
+        orig_cmid: Option<&str>,
+    ) -> Option<StoreAckRx> {
+        let sessions = self.inner.sessions.lock();
+        let s = sessions.get(session_id)?;
+        let mut retired = s.pending_retired_dispatches.clone();
+        if let Some(cid) = orig_cmid
+            && !retired.iter().any(|c| c == cid)
+        {
+            retired.push(cid.to_owned());
+        }
+        self.send_acked_update_pending_with_retired(
+            session_id,
+            s.queue.clone(),
+            s.drafts.clone(),
+            Vec::new(),
+            Vec::new(),
+            retired,
+            false,
+        )
+    }
+
+    fn finish_committed_recovery_park(&self, session_id: &str, orig_cmid: Option<&str>) {
+        let snapshot = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            if let Some(cid) = orig_cmid {
+                s.pending_retired_dispatches.retain(|c| c != cid);
+                if !s.committed_parked_cmids.iter().any(|c| c == cid) {
+                    while s.committed_parked_cmids.len() >= 512 {
+                        s.committed_parked_cmids.pop_front();
+                    }
+                    s.committed_parked_cmids.push_back(cid.to_owned());
+                }
+                if let Some(rec) = s.dispatched_origins.get_mut(cid) {
+                    rec.undelivered_retired = true;
+                }
+            }
+            let visible_queue: Vec<QueuedMessage> = s
+                .queue
+                .iter()
+                .filter(|m| !s.pending_durable_queue_ids.contains(&m.id))
+                .cloned()
+                .collect();
+            (visible_queue, s.drafts.clone())
+        };
+        if let Some(cid) = orig_cmid {
+            self.confirm_delivered(session_id, cid);
+        } else {
+            self.broadcast_pending_snapshot(session_id, &snapshot.0, &snapshot.1);
+        }
     }
 }

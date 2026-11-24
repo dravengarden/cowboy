@@ -238,6 +238,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0090_provider_account_reset_schedules.sql",
         "7e6c0aa8017a34628f1698681f37de01f266ba4d38df4f6b53a675432cd6997e",
     ),
+    (
+        "0091_prompt_dispatches_undelivered_retired.sql",
+        "48f8b510c0ed71acc7294704834bada076be849c6c405e36958fd9830a5daf60",
+    ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -467,6 +471,10 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0064_provider_account_reset_schedules.sql",
         "1efb1b8c501e20fb330707ba74ef130d306d2b00c2453202a20390f9a77b8bac",
+    ),
+    (
+        "0065_prompt_dispatches_undelivered_retired.sql",
+        "48f8b510c0ed71acc7294704834bada076be849c6c405e36958fd9830a5daf60",
     ),
 ];
 

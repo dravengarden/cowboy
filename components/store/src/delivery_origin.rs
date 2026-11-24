@@ -104,6 +104,8 @@ pub struct PromptDispatchRecord {
     pub origin: DeliveryOrigin,
     pub trigger: DeliveryOrigin,
     pub dispatched_at_ms: i64,
+    #[serde(default)]
+    pub undelivered_retired: bool,
 }
 
 /// Compute the authoritative dispatch origin for a send.

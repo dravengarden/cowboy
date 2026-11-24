@@ -8,8 +8,10 @@
 )]
 
 mod snapshot;
+#[cfg(test)]
 use snapshot::apply_snapshot;
 pub use snapshot::{CrashedWorkerObservation, CrashedWorkerSighting};
+use snapshot::{project_snapshot, project_snapshot_with_protocol};
 use std::collections::{BTreeSet, HashMap, HashSet, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -2467,36 +2469,6 @@ async fn adopt_snapshot(shared: &Arc<Shared>, worker: &WorkerSnapshot) {
             notice_recovery::retire_superseded_prompts_for_snapshot(shared, &installed);
         }
     }
-}
-
-fn project_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
-    project_snapshot_with_protocol(shared, worker, shared.protocol.load(Ordering::Acquire))
-}
-
-fn project_snapshot_with_protocol(
-    shared: &Shared,
-    worker: &WorkerSnapshot,
-    runtime_protocol: u16,
-) -> bool {
-    let mut worker = worker.clone();
-    let raw_wrap = worker.wrap_up_steering;
-    let _projection = shared.hub.runtime_projection_guard();
-    shared.wrap_up.sanitize_snapshot(
-        &mut worker,
-        raw_wrap,
-        shared.machine_protocol,
-        runtime_protocol,
-        &shared.hub,
-    );
-    if !snapshot::current_context(shared, &worker) {
-        return false;
-    }
-    update_declaration(shared, &worker);
-    shared.install_worker_with_raw_wrap_up(worker.clone(), raw_wrap);
-    acknowledge_pending_ensure_from_snapshot(shared, &worker);
-    let applied = apply_snapshot(shared, &worker);
-    notice_recovery::spawn_record_snapshot_worker_epoch_if_notice(shared, &worker);
-    applied
 }
 
 async fn update_worker_snapshots(

@@ -1284,3 +1284,59 @@ test("R7-16/17: evidence.settle fails closed on oversize window and rechecks mid
   assert.equal(deadVerdict.barrier, true);
   assert.equal(deadVerdict.class, "ok");
 });
+
+test("cancelled proxy reservation awaiting runtime readiness or failing prep gets exactly one terminal reply", async () => {
+  // 1. Cancelled while awaiting runtime readiness, then runtime rejects:
+  //    must emit ONLY the single cancelled reply, never a second error reply.
+  const rt = deferred();
+  const r1 = [];
+  const p1 = new AcpProxy({
+    agent: () => {},
+    client: (msg) => r1.push(msg),
+    runtime: rt.promise,
+    log: () => {},
+  });
+  const promptMsg = request(42, "session/prompt", {
+    sessionId: "s-cancel",
+    prompt: [{ type: "text", text: "hi" }],
+  });
+  const inflight = p1.fromClient(promptMsg);
+  await p1.fromClient({
+    jsonrpc: "2.0",
+    method: "session/cancel",
+    params: { sessionId: "s-cancel" },
+  });
+  rt.reject(new Error("startup boom"));
+  await inflight;
+  assert.equal(r1.length, 1, "cancelled reservation must receive exactly one terminal reply");
+  assert.equal(r1[0].id, 42);
+  assert.deepEqual(r1[0].result, { stopReason: "cancelled" });
+
+  // 2. Preparation exception (evidence.mark throws) routes through endPrompt once.
+  const r2 = [];
+  const p2 = new AcpProxy({
+    agent: () => {},
+    client: (msg) => r2.push(msg),
+    runtime: Promise.resolve({
+      managed: false,
+      facade: { beginTurn() {}, endTurn() {} },
+      evidence: {
+        async mark() {
+          throw new Error("disk full");
+        },
+      },
+      memory: null,
+    }),
+    log: () => {},
+  });
+  await p2.fromClient(
+    request(43, "session/prompt", {
+      sessionId: "s-err",
+      prompt: [{ type: "text", text: "hi" }],
+    }),
+  );
+  assert.equal(r2.length, 1, "preparation exception must send one JSON-RPC error reply");
+  assert.equal(r2[0].id, 43);
+  assert.equal(r2[0].error.code, -32603);
+  assert.match(r2[0].error.message, /disk full/);
+});

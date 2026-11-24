@@ -84,6 +84,7 @@ pub async fn dispatch(state: Arc<AppState>, req: crate::core::DispatchReq) {
                 origin: req.dispatch_origin.clone(),
                 trigger: req.trigger.clone(),
                 dispatched_at_ms: chrono::Utc::now().timestamp_millis(),
+                undelivered_retired: false,
             };
             match store.record_prompt_dispatch_if_compatible(&record).await {
                 Ok(true) => {

@@ -206,6 +206,9 @@ impl Hub {
         let Some(head) = s.queue.first() else {
             return DrainDecision::Empty;
         };
+        if s.pending_durable_queue_ids.contains(&head.id) {
+            return DrainDecision::NotReady;
+        }
         if !context_allows(head.cmid.as_deref()) {
             return DrainDecision::ContextHold;
         }
@@ -858,11 +861,17 @@ impl Hub {
             // Dispatch admission deduplicates execution but does not prove
             // delivery. Until a queue row or user echo owns the prompt, the
             // browser must retain its durable outbox (including attachments).
-            if !s
-                .queue
-                .iter()
-                .chain(&s.drafts)
-                .any(|m| m.cmid.as_deref() == Some(cmid))
+            let committed_parked = s.committed_parked_cmids.iter().any(|c| c == cmid)
+                || s.dispatched_origins
+                    .get(cmid)
+                    .is_some_and(|rec| rec.undelivered_retired);
+            if !committed_parked
+                && !s
+                    .queue
+                    .iter()
+                    .filter(|m| !s.pending_durable_queue_ids.contains(&m.id))
+                    .chain(&s.drafts)
+                    .any(|m| m.cmid.as_deref() == Some(cmid))
                 && !s
                     .dispatched_cmids
                     .iter()
@@ -873,7 +882,13 @@ impl Hub {
             {
                 return;
             }
-            (s.queue.clone(), s.drafts.clone())
+            let visible_queue: Vec<QueuedMessage> = s
+                .queue
+                .iter()
+                .filter(|m| !s.pending_durable_queue_ids.contains(&m.id))
+                .cloned()
+                .collect();
+            (visible_queue, s.drafts.clone())
         };
         let mut confirmed = Self::cmids_of(&queue, &drafts);
         if !confirmed.iter().any(|seen| seen == cmid) {
@@ -890,6 +905,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
+            if s.pending_durable_queue_ids.contains(id) {
+                return false;
+            }
             let settled = submit::extract_notice_settlements(s.queue.iter().filter(|m| m.id == id));
             let before = s.queue.len();
             s.queue.retain(|m| m.id != id);
@@ -917,7 +935,9 @@ impl Hub {
                 return false;
             };
             let before = s.queue.len();
-            s.queue.retain(|m| m.cmid.as_deref() != Some(cmid));
+            s.queue.retain(|m| {
+                s.pending_durable_queue_ids.contains(&m.id) || m.cmid.as_deref() != Some(cmid)
+            });
             before != s.queue.len()
         };
         if removed {
@@ -943,6 +963,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
+            if s.pending_durable_queue_ids.contains(id) {
+                return false;
+            }
             if text.trim().is_empty() && content.is_empty() {
                 let settled =
                     submit::extract_notice_settlements(s.queue.iter().filter(|m| m.id == id));
@@ -980,8 +1003,13 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            let settled = submit::extract_notice_settlements(s.queue.iter());
-            s.queue.clear();
+            let settled = submit::extract_notice_settlements(
+                s.queue
+                    .iter()
+                    .filter(|m| !s.pending_durable_queue_ids.contains(&m.id)),
+            );
+            s.queue
+                .retain(|m| s.pending_durable_queue_ids.contains(&m.id));
             s.editing = None;
             settled
         };
@@ -1046,6 +1074,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
+            if s.pending_durable_queue_ids.contains(id) {
+                return false;
+            }
             let Some(pos) = s.queue.iter().position(|m| m.id == id) else {
                 return false;
             };
@@ -1074,7 +1105,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            if let Some(pos) = s.queue.iter().position(|m| m.id == id) {
+            if !s.pending_durable_queue_ids.contains(id)
+                && let Some(pos) = s.queue.iter().position(|m| m.id == id)
+            {
                 let mut m = s.queue.remove(pos);
                 let settled = submit::extract_notice_settlements(std::iter::once(&m));
                 if !settled.is_empty() {

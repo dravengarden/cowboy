@@ -84,6 +84,7 @@ fn note_dispatch_origin(
             origin,
             trigger,
             dispatched_at_ms,
+            undelivered_retired: false,
         },
     );
 }
@@ -116,26 +117,16 @@ impl Hub {
         }
     }
 
-    fn undelivered_retired_floor(&self, session_id: &str) -> Option<i64> {
-        let key = format!(
-            "{}{session_id}",
-            crate::model::settings_keys::SESSION_UNDELIVERED_RETIRED_AT_PREFIX
-        );
-        self.setting(&key).and_then(|v| v.as_i64())
-    }
-
-    /// Whether `cmid` was already parked as a recovery draft or retired at/below
-    /// the session's monotonic non-delivery retirement floor.
+    /// Whether THIS exact `cmid` was already parked as a recovery draft or
+    /// retired in durable `prompt_dispatches` (never compares wall-clock times).
     #[must_use]
     pub fn is_cmid_parked_or_fenced(&self, session_id: &str, cmid: &str) -> bool {
-        let retired_floor = self.undelivered_retired_floor(session_id);
         let in_session = self.inner.sessions.lock().get(session_id).is_some_and(|s| {
             s.drafts.iter().any(|m| m.cmid.as_deref() == Some(cmid))
-                || retired_floor.is_some_and(|floor| {
-                    s.dispatched_origins
-                        .get(cmid)
-                        .is_some_and(|rec| rec.dispatched_at_ms <= floor)
-                })
+                || s.committed_parked_cmids.iter().any(|c| c == cmid)
+                || s.dispatched_origins
+                    .get(cmid)
+                    .is_some_and(|rec| rec.undelivered_retired)
         });
         if in_session {
             return true;
@@ -211,12 +202,11 @@ impl Hub {
             .iter()
             .any(|seen| seen.cmid == cmid && seen.echoed)
             || s.log.iter().any(|env| env.cmid.as_deref() == Some(cmid));
-        let retired_floor = self.undelivered_retired_floor(session_id);
-        let retired_by_floor = retired_floor.is_some_and(|floor| {
-            s.dispatched_origins
-                .get(cmid)
-                .is_some_and(|rec| rec.dispatched_at_ms <= floor)
-        });
+        let retired_exact = s
+            .dispatched_origins
+            .get(cmid)
+            .is_some_and(|rec| rec.undelivered_retired)
+            || s.committed_parked_cmids.iter().any(|c| c == cmid);
         let parked_in_lifetime = self
             .inner
             .notice_claims
@@ -224,7 +214,7 @@ impl Hub {
             .parked_recovery_cmids
             .get(session_id)
             .is_some_and(|ids| ids.iter().any(|c| c == cmid));
-        let parked_or_retired = retired_by_floor
+        let parked_or_retired = retired_exact
             || parked_in_lifetime
             || s.drafts.iter().any(|m| m.cmid.as_deref() == Some(cmid));
         if echoed || parked_or_retired {
@@ -293,15 +283,16 @@ impl Hub {
             let trimmed_floor = (!s.reached_start)
                 .then_some(s.restored_last_event_at_ms)
                 .flatten();
-            let retired_floor = self.undelivered_retired_floor(&session_id);
             let candidate = rows
                 .into_iter()
                 .rev()
                 .filter(|r| r.dispatched_at_ms == max_ts)
                 .find(|r| {
-                    !s.log
-                        .iter()
-                        .any(|env| env.cmid.as_deref() == Some(r.cmid.as_str()))
+                    !r.undelivered_retired
+                        && !s
+                            .log
+                            .iter()
+                            .any(|env| env.cmid.as_deref() == Some(r.cmid.as_str()))
                         && !s
                             .drafts
                             .iter()
@@ -309,7 +300,6 @@ impl Hub {
                 });
             if let Some(record) = candidate
                 && trimmed_floor.is_none_or(|floor| record.dispatched_at_ms >= floor)
-                && retired_floor.is_none_or(|floor| record.dispatched_at_ms > floor)
             {
                 note_pending_echo(
                     s,

@@ -708,6 +708,9 @@ struct Session {
     /// Active contiguous `user_message_chunk` echo `(cmid, origin, remaining)`.
     active_echo: Option<(Option<String>, crate::prompt_origin::DeliveryOrigin, usize)>,
     restored_last_event_at_ms: Option<i64>,
+    pending_retired_dispatches: Vec<String>,
+    committed_parked_cmids: VecDeque<String>,
+    pending_durable_queue_ids: HashSet<String>,
     /// A worker reports the same completed turn through both `TurnEnded` and a
     /// trailing `Busy` -> `Running` lifecycle edge. The first edge may drain the
     /// next prompt before the second arrives. Latch that completion until the
@@ -1296,6 +1299,8 @@ pub enum StoreWrite {
         drafts: Vec<QueuedMessage>,
         settled_notices: Vec<(String, String)>,
         released_claims: Vec<crate::store::NoticeClaimRelease>,
+        #[serde(default)]
+        retired_dispatches: Vec<String>,
         #[serde(default)]
         require_claim_release: bool,
         #[serde(skip)]
@@ -2314,6 +2319,9 @@ impl Hub {
                         pending_echo_order: VecDeque::new(),
                         active_echo: None,
                         restored_last_event_at_ms: last_event_at_ms,
+                        pending_retired_dispatches: Vec::new(),
+                        committed_parked_cmids: VecDeque::new(),
+                        pending_durable_queue_ids: HashSet::new(),
                         turn_completion_latched: false,
                         provider_generation_missing: false,
                         lifecycle_epoch: 0,
@@ -2384,11 +2392,11 @@ impl Hub {
     /// reconciliation. A broker-only placeholder is ignored while a persisted
     /// Busy turn is still waiting for its owner, so it cannot overwrite Busy
     /// with a speculative Starting/Running state.
-    pub fn accept_runtime_snapshot(&self, worker: &WorkerSnapshot) -> bool {
-        if !self.accepts_runtime_projection(&worker.session_id) {
-            return false;
-        }
-        if self.session_info(&worker.session_id).is_some_and(|info| {
+    /// Returns false when a known session with an execution binding or named
+    /// provider account receives a snapshot whose launch spec does not match
+    /// the session's bound execution/provider tuple.
+    pub fn matches_runtime_snapshot_binding(&self, worker: &WorkerSnapshot) -> bool {
+        !self.session_info(&worker.session_id).is_some_and(|info| {
             (info.meta.execution_binding.is_some() || !info.meta.provider_account_id.is_default())
                 && !worker.launch.as_ref().is_some_and(|launch| {
                     launch.execution_binding == info.meta.execution_binding
@@ -2399,7 +2407,24 @@ impl Hub {
                         && launch.provider_auth_generation == info.meta.provider_auth_generation
                         && launch.cwd == info.meta.cwd
                 })
-        }) {
+        })
+    }
+
+    /// True when `worker` is a broker-only placeholder for a session still
+    /// awaiting its real connected owner during startup reconciliation.
+    pub fn is_reconciling_runtime_placeholder(&self, worker: &WorkerSnapshot) -> bool {
+        !worker.has_connected_owner()
+            && self
+                .inner
+                .runtime_reconciliation
+                .lock()
+                .contains(&worker.session_id)
+    }
+
+    pub fn accept_runtime_snapshot(&self, worker: &WorkerSnapshot) -> bool {
+        if !self.accepts_runtime_projection(&worker.session_id)
+            || !self.matches_runtime_snapshot_binding(worker)
+        {
             return false;
         }
         if worker.has_connected_owner() {
@@ -3124,6 +3149,9 @@ impl Hub {
                     pending_echo_order: VecDeque::new(),
                     active_echo: None,
                     restored_last_event_at_ms: None,
+                    pending_retired_dispatches: Vec::new(),
+                    committed_parked_cmids: VecDeque::new(),
+                    pending_durable_queue_ids: HashSet::new(),
                     turn_completion_latched: false,
                     provider_generation_missing: false,
                     lifecycle_epoch: 0,

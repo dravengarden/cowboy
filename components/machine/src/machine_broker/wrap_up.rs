@@ -679,23 +679,35 @@ struct DispatchedPromptRecord {
     seq: u64,
 }
 
+fn evicted_command_digest(command_id: &str) -> [u8; 16] {
+    use sha2::Digest as _;
+    let hash = sha2::Sha256::digest(command_id.as_bytes());
+    let mut out = [0_u8; 16];
+    out.copy_from_slice(&hash[..16]);
+    out
+}
+
 /// Record of `(session_id, command_id)` from ingress admission through worker
 /// handoff. Each insertion carries a monotonic `seq` so retired/reinserted keys
-/// never match stale `order` entries (Finding 13).
+/// never match stale `order` entries. Evicted commands stay indexed by exact
+/// `(session_id, command_id_digest)` so replaying an evicted command across a
+/// worker change is refused without ever blocking brand-new cold-wake or legacy
+/// unbound prompts.
 #[derive(Default)]
 pub(super) struct DispatchedPrompts {
     entries: std::collections::HashMap<(String, String), DispatchedPromptRecord>,
     order: std::collections::VecDeque<(String, String, u64)>,
     next_seq: u64,
-    /// Worker epochs from which acked records were evicted for each session.
-    evicted_epochs: std::collections::HashMap<String, std::collections::HashSet<String>>,
-    /// Sessions where an unacked or unbound record was evicted (always fail-closed).
-    evicted_unacked: std::collections::HashSet<String>,
+    /// Evicted command disposition keyed by `(session_id, digest(command_id))`:
+    /// `Some(epoch)` when acked with a known handed-off worker epoch, or `None`
+    /// when evicted unacked / without an epoch (always ambiguous on replay).
+    evicted_commands: std::collections::HashMap<(String, [u8; 16]), Option<String>>,
+    evicted_order: std::collections::VecDeque<(String, [u8; 16])>,
 }
 
 impl DispatchedPrompts {
     const MAX_ENTRIES: usize = 16_384;
-    const MAX_EVICTED_EPOCHS_PER_SESSION: usize = 64;
+    const MAX_EVICTED_COMMANDS: usize = 262_144;
 
     pub(super) fn get(&self, session_id: &str, command_id: &str) -> Option<&str> {
         self.entries
@@ -703,41 +715,67 @@ impl DispatchedPrompts {
             .and_then(|rec| rec.epoch.as_deref())
     }
 
-    pub(super) fn was_evicted(&self, session_id: &str) -> bool {
-        self.evicted_unacked.contains(session_id) || self.evicted_epochs.contains_key(session_id)
+    pub(super) fn was_command_evicted(&self, session_id: &str, command_id: &str) -> bool {
+        let key = (session_id.to_owned(), evicted_command_digest(command_id));
+        self.evicted_commands.contains_key(&key)
     }
 
-    /// True when broker eviction removed handoff evidence that could prove an
-    /// unbound (pre-v8) prompt was not already handed to an earlier worker epoch
-    /// or an unacked disposition (Finding 6).
-    pub(super) fn blocks_unbound_replay(&self, session_id: &str, current_epoch: &str) -> bool {
-        self.evicted_unacked.contains(session_id)
-            || self
-                .evicted_epochs
-                .get(session_id)
-                .is_some_and(|epochs| epochs.iter().any(|e| e != current_epoch))
+    /// True only when THIS specific `(session_id, command_id)` was evicted from
+    /// active tracking while unacked or bound to a different worker epoch, so
+    /// replaying it unbound is ambiguous while brand-new cold-wake / legacy
+    /// commands remain unaffected.
+    pub(super) fn evicted_blocks_replay(
+        &self,
+        session_id: &str,
+        command_id: &str,
+        current_epoch: &str,
+    ) -> bool {
+        let key = (session_id.to_owned(), evicted_command_digest(command_id));
+        match self.evicted_commands.get(&key) {
+            None => false,
+            Some(None) => true,
+            Some(Some(prior_epoch)) => prior_epoch != current_epoch,
+        }
     }
 
     pub(super) fn was_ingressed_or_uncertain(&self, session_id: &str, command_id: &str) -> bool {
         self.entries
             .contains_key(&(session_id.to_owned(), command_id.to_owned()))
-            || self.was_evicted(session_id)
+            || self.was_command_evicted(session_id, command_id)
     }
 
-    fn record_eviction(&mut self, session_id: String, record: DispatchedPromptRecord) {
-        if !record.acked {
-            self.evicted_unacked.insert(session_id);
-            return;
-        }
-        let Some(epoch) = record.epoch else {
-            self.evicted_unacked.insert(session_id);
-            return;
+    fn record_eviction(
+        &mut self,
+        session_id: String,
+        command_id: &str,
+        record: DispatchedPromptRecord,
+    ) {
+        let key = (session_id, evicted_command_digest(command_id));
+        let disposition = if record.acked { record.epoch } else { None };
+        let existing = self.evicted_commands.get(&key);
+        let merged = match (existing, disposition) {
+            (Some(None), _) | (_, None) => None,
+            (_, Some(epoch)) => Some(epoch),
         };
-        let epochs = self.evicted_epochs.entry(session_id.clone()).or_default();
-        if epochs.len() >= Self::MAX_EVICTED_EPOCHS_PER_SESSION && !epochs.contains(&epoch) {
-            self.evicted_unacked.insert(session_id);
-        } else {
-            epochs.insert(epoch);
+        let is_new = !self.evicted_commands.contains_key(&key);
+        self.evicted_commands.insert(key.clone(), merged);
+        if is_new {
+            self.evicted_order.push_back(key);
+        }
+        let mut scanned = 0;
+        let max_scan = self.evicted_order.len();
+        while self.evicted_commands.len() > Self::MAX_EVICTED_COMMANDS && scanned < max_scan {
+            let Some(oldest) = self.evicted_order.pop_front() else {
+                break;
+            };
+            scanned += 1;
+            match self.evicted_commands.get(&oldest) {
+                Some(None) => self.evicted_order.push_back(oldest),
+                Some(Some(_)) => {
+                    self.evicted_commands.remove(&oldest);
+                }
+                None => {}
+            }
         }
     }
 
@@ -834,8 +872,9 @@ impl DispatchedPrompts {
     pub(super) fn retire_session(&mut self, session_id: &str) {
         self.entries.retain(|(sid, _), _| sid != session_id);
         self.order.retain(|(sid, _, _)| sid != session_id);
-        self.evicted_epochs.remove(session_id);
-        self.evicted_unacked.remove(session_id);
+        self.evicted_commands
+            .retain(|(sid, _), _| sid != session_id);
+        self.evicted_order.retain(|(sid, _)| sid != session_id);
     }
 
     fn evict_acked_if_needed(&mut self) {
@@ -854,7 +893,7 @@ impl DispatchedPrompts {
                 }
                 Some(_) => {
                     if let Some(rec) = self.entries.remove(&key) {
-                        self.record_eviction(key.0, rec);
+                        self.record_eviction(key.0, &key.1, rec);
                     }
                 }
                 None => {}
@@ -869,7 +908,7 @@ impl DispatchedPrompts {
             if self.entries.get(&key).is_some_and(|rec| rec.seq == seq)
                 && let Some(rec) = self.entries.remove(&key)
             {
-                self.record_eviction(key.0, rec);
+                self.record_eviction(key.0, &key.1, rec);
             }
         }
         if self.order.len() > hard_cap {
@@ -907,7 +946,9 @@ fn fresh_prompt_refusal(
     command: &WorkerCommand,
     refusal_reason: &impl Fn(String) -> String,
 ) -> Option<(String, String)> {
-    if expected_epoch.is_none() && dispatched.blocks_unbound_replay(session_id, worker_epoch) {
+    if expected_epoch.is_none()
+        && dispatched.evicted_blocks_replay(session_id, command_id, worker_epoch)
+    {
         return Some((
             command_id.to_owned(),
             "delivery_ambiguous: broker evicted prior prompt handoff state across worker change; refusing unbound replay"
@@ -1053,9 +1094,9 @@ impl super::Broker {
             let mut pending = self.pending_commands.lock();
             let mut dispatched = self.dispatched_prompts.lock();
             let prior_epoch = dispatched.get(session_id, &command_id).map(str::to_owned);
-            let session_evicted = dispatched.was_evicted(session_id);
+            let command_evicted = dispatched.was_command_evicted(session_id, &command_id);
             let refusal_reason = |reason: String| -> String {
-                if session_evicted {
+                if command_evicted {
                     reason.replacen("unhanded:", "delivery_ambiguous:", 1)
                 } else {
                     reason
@@ -1334,7 +1375,6 @@ impl super::Broker {
                 return;
             };
             let mut dispatched = self.dispatched_prompts.lock();
-            let session_evicted = dispatched.was_evicted(session_id);
             let mut remaining = std::collections::VecDeque::new();
             while let Some(command) = queue.pop_front() {
                 if worker.snapshot.drain_requested
@@ -1350,15 +1390,16 @@ impl super::Broker {
                     } => expected_worker_epoch.as_deref(),
                     _ => None,
                 };
-                let refusal_reason = |reason: String| -> String {
-                    if session_evicted {
-                        reason.replacen("unhanded:", "delivery_ambiguous:", 1)
-                    } else {
-                        reason
-                    }
-                };
-                if let WorkerCommand::Prompt { ref command_id, .. } = command
-                    && let Some((cid, reason)) = fresh_prompt_refusal(
+                if let WorkerCommand::Prompt { ref command_id, .. } = command {
+                    let command_evicted = dispatched.was_command_evicted(session_id, command_id);
+                    let refusal_reason = |reason: String| -> String {
+                        if command_evicted {
+                            reason.replacen("unhanded:", "delivery_ambiguous:", 1)
+                        } else {
+                            reason
+                        }
+                    };
+                    if let Some((cid, reason)) = fresh_prompt_refusal(
                         &dispatched,
                         session_id,
                         command_id,
@@ -1367,11 +1408,11 @@ impl super::Broker {
                         worker.snapshot.uncertain_effect.as_ref(),
                         &command,
                         &refusal_reason,
-                    )
-                {
-                    dispatched.mark_acked(session_id, &cid);
-                    rejects.push((cid, reason));
-                    continue;
+                    ) {
+                        dispatched.mark_acked(session_id, &cid);
+                        rejects.push((cid, reason));
+                        continue;
+                    }
                 }
                 let prompt_cid = match &command {
                     WorkerCommand::Prompt { command_id, .. } => Some(command_id.clone()),
@@ -1390,7 +1431,7 @@ impl super::Broker {
                         dispatched.record(session_id, &cid, &worker.epoch);
                     }
                 } else if let Some(cid) = prompt_cid {
-                    let reason = if session_evicted {
+                    let reason = if dispatched.was_command_evicted(session_id, &cid) {
                         "delivery_ambiguous: worker disconnected before queued prompt handoff"
                     } else {
                         "unhanded: worker disconnected before queued prompt handoff"
@@ -2313,16 +2354,17 @@ mod tests {
             },
         );
 
-        // Simulate prior eviction of a handed-off prompt on epoch-old.
+        // Simulate prior eviction of `cmd-unbound` handed off on epoch-old.
         broker.dispatched_prompts.lock().record_eviction(
             "s-evict".into(),
+            "cmd-unbound",
             DispatchedPromptRecord {
                 epoch: Some("epoch-old".into()),
                 acked: true,
                 seq: 0,
             },
         );
-        // Unbound (pre-v8) prompt must be refused as delivery_ambiguous on replacement worker.
+        // Replaying the evicted command unbound on a replacement worker must be refused.
         broker.route_prompt_guarded(
             "s-evict",
             WorkerCommand::Prompt {
@@ -2339,7 +2381,7 @@ mod tests {
         );
         assert!(
             w_rx.try_recv().is_err(),
-            "unbound replay must not reach worker"
+            "evicted unbound replay must not reach worker"
         );
         match ctrl_rx.try_recv().expect("refusal ack") {
             Frame::CommandAck {
@@ -2359,6 +2401,31 @@ mod tests {
             }
             other => panic!("expected CommandAck, got {other:?}"),
         }
+        // A brand-new unbound cold-wake / legacy prompt must still succeed on the replacement worker.
+        broker.route_prompt_guarded(
+            "s-evict",
+            WorkerCommand::Prompt {
+                command_id: "cmd-fresh-cold-wake".into(),
+                turn_id: "t2".into(),
+                content: vec![],
+                cmid: Some("c2".into()),
+                trace: None,
+                echo_artifacts: false,
+                observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
+            },
+        );
+        assert!(
+            matches!(
+                w_rx.try_recv().expect("fresh cold-wake reaches worker"),
+                Frame::WorkerCommand {
+                    command: WorkerCommand::Prompt { command_id, .. },
+                    ..
+                } if command_id == "cmd-fresh-cold-wake"
+            ),
+            "fresh unbound prompt must not be blocked by an earlier evicted command"
+        );
         // Bound v8 prompt targeting epoch-new still succeeds.
         broker.route_prompt_guarded(
             "s-evict",
@@ -2379,16 +2446,31 @@ mod tests {
             "bound prompt for epoch-new must dispatch"
         );
 
-        // Finding 1: unbound prompt queued BEFORE replacement worker connects must
-        // also be refused on flush_pending_guarded instead of executing on epoch-new.
+        // An evicted unbound prompt queued BEFORE replacement worker connects must
+        // be refused on flush_pending_guarded, while a brand-new cold-wake prompt
+        // queued beside it still flushes cleanly to epoch-new.
         broker.workers.lock().remove("s-evict");
         broker.route_prompt_guarded(
             "s-evict",
             WorkerCommand::Prompt {
-                command_id: "cmd-queued-unbound".into(),
+                command_id: "cmd-unbound".into(),
                 turn_id: "t3".into(),
                 content: vec![],
                 cmid: Some("c3".into()),
+                trace: None,
+                echo_artifacts: false,
+                observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
+            },
+        );
+        broker.route_prompt_guarded(
+            "s-evict",
+            WorkerCommand::Prompt {
+                command_id: "cmd-queued-fresh".into(),
+                turn_id: "t4".into(),
+                content: vec![],
+                cmid: Some("c4".into()),
                 trace: None,
                 echo_artifacts: false,
                 observe_subagents: false,
@@ -2424,8 +2506,18 @@ mod tests {
         );
         broker.flush_pending_guarded("s-evict");
         assert!(
+            matches!(
+                w2_rx.try_recv().expect("fresh queued prompt flushes"),
+                Frame::WorkerCommand {
+                    command: WorkerCommand::Prompt { command_id, .. },
+                    ..
+                } if command_id == "cmd-queued-fresh"
+            ),
+            "only the fresh queued prompt should flush to replacement worker"
+        );
+        assert!(
             w2_rx.try_recv().is_err(),
-            "queued unbound prompt must not flush to replacement worker after eviction"
+            "evicted queued unbound prompt must not flush to replacement worker"
         );
         match ctrl_rx.try_recv().expect("flush refusal ack") {
             Frame::CommandAck {
@@ -2434,7 +2526,7 @@ mod tests {
                 reason,
                 ..
             } => {
-                assert_eq!(command_id, "cmd-queued-unbound");
+                assert_eq!(command_id, "cmd-unbound");
                 assert!(!accepted);
                 assert!(
                     reason
