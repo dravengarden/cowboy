@@ -16,7 +16,11 @@ import {
 
 export interface AuthoritativeQueue {
   readonly queue: readonly { readonly id: string }[];
-  readonly drafts: readonly { readonly id: string; readonly cmid?: string }[];
+  readonly drafts: readonly {
+    readonly id: string;
+    readonly cmid?: string;
+    readonly text: string;
+  }[];
 }
 
 export interface PendingEditRecoveryHooks {
@@ -56,7 +60,15 @@ function recover(sessionId: string): void {
   for (const record of orphaned) {
     // Only a draft of exactly this content is its receipt.
     const cmid = pendingEditParkCmid(record);
-    if (value.drafts.some((row) => row.cmid === cmid) || pending.includes(cmid)) {
+    if (
+      value.drafts.some((row) =>
+        row.cmid === cmid ||
+        // Parked by an earlier client under the bare recovery identity.
+        (row.cmid === record.recoveryCmid && row.text === record.text)
+      ) ||
+      pending.includes(cmid) ||
+      pending.includes(record.recoveryCmid)
+    ) {
       finishOrphanedPendingEdit(record, true);
       continue;
     }

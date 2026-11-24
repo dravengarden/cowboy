@@ -536,7 +536,8 @@ export function setPendingEdit(input: {
     recoveryCmid: existing?.recoveryCmid ?? `pending-edit-${newUuid()}`,
     updatedAt: unchanged ? existing.updatedAt : Date.now(),
   });
-  schedulePersist(key);
+  // Nor rewrite the shared mirror, which may hold that later edit.
+  if (!unchanged) schedulePersist(key);
 }
 
 export function clearPendingEdit(
@@ -660,7 +661,8 @@ export function prunePendingEdits(liveSessionIds: ReadonlySet<string>): void {
  * tab wrote or read it and holds no unflushed typing of its own. Recovering it
  * again would recreate a draft the user may already have sent or deleted. */
 function retiredByAnotherTab(key: string): boolean {
-  if (dirty.has(key) || !mirrored.has(key)) return false;
+  // A file this tab is still reading is newer than whatever was retired.
+  if (dirty.has(key) || !mirrored.has(key) || encodes.has(key)) return false;
   const local = storage();
   if (local === null) return false;
   try {

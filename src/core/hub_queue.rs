@@ -272,6 +272,12 @@ impl Hub {
             // dispatch requeues the row under a new id, which that editor reads
             // as a sent message and parks its buffer as a duplicate draft. The
             // retry resumes once the edit is saved or abandoned.
+            // A caller-less manual drain is a retried explicit send: it needs
+            // live intent. Another terminal may have sent the held row since
+            // maintenance read the flag; the next row then gets no bypass.
+            if manual && trigger.is_none() && !s.explicit_wait {
+                return;
+            }
             if manual
                 && trigger.is_none()
                 && s.queue
@@ -392,6 +398,10 @@ impl Hub {
     /// Write the session's explicit intent into its persisted wait, which
     /// carries it across a Controller restart.
     pub fn persist_explicit_wait(&self, session_id: &str) {
+        // Read and write as one step: two concurrent holds must not leave the
+        // older row's intent persisted over the newer one.
+        static PERSIST: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+        let _serial = PERSIST.lock();
         let Some((explicit, row)) = self
             .inner
             .sessions

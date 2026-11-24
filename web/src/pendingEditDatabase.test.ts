@@ -316,3 +316,24 @@ test("an editor reopened during an encode adopts the settled bytes", async () =>
   settle([image("p9")]);
   assertEquals(adopted, [["p9"]]);
 });
+
+test("an unchanged rerender does not overwrite another tab's newer mirror", async () => {
+  const storage = fakeStorage();
+  const first = await loadPage(storage);
+  first.setPendingEdit({ ...edit("rerender", "older", []), kind: "queued" });
+  first.flushPendingEdits();
+  const second = await loadPage(storage);
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  second.setPendingEdit({ ...edit("rerender", "newer", []), kind: "queued" });
+  second.flushPendingEdits();
+  // A queue patch makes the first tab write its unchanged buffer again.
+  first.setPendingEdit({ ...edit("rerender", "older", []), kind: "queued", baseText: "patched" });
+  first.flushPendingEdits();
+  const mirror = JSON.parse([...storage.records.values()][0]!);
+  assertEquals(mirror.text, "newer");
+  first.clearPendingEdit("rerender", "queued", "row-1");
+  assertEquals(
+    second.claimOrphanedPendingEdits("rerender", new Set(), new Set()).map((record) => record.text),
+    ["newer"],
+  );
+});

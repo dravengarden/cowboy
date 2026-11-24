@@ -34,7 +34,7 @@ test("only a draft of exactly this content retires a recovered edit", async () =
   const olderCmid = pendingEditParkCmid(older);
   const newer = edit("receipt", "newer text");
   assertEquals(newer.recoveryCmid, older.recoveryCmid);
-  recoverPendingEditsFrom("receipt", { queue: [], drafts: [{ id: "d1", cmid: olderCmid }] });
+  recoverPendingEditsFrom("receipt", { queue: [], drafts: [{ id: "d1", cmid: olderCmid, text: "older text" }] });
   await Promise.resolve();
   assertEquals(parked, [["newer text", pendingEditParkCmid(newer)]]);
   assertEquals(pendingEditParkCmid(newer) === olderCmid, false);
@@ -43,7 +43,7 @@ test("only a draft of exactly this content retires a recovered edit", async () =
   const own = edit("own", "same text");
   recoverPendingEditsFrom("own", {
     queue: [],
-    drafts: [{ id: "d2", cmid: pendingEditParkCmid(own) }],
+    drafts: [{ id: "d2", cmid: pendingEditParkCmid(own), text: "same text" }],
   });
   assertEquals(getPendingEdit("own", "queued", "row-1"), null);
   assertEquals(parked.length, 1);

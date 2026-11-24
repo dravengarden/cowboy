@@ -852,6 +852,7 @@ async fn a_retried_explicit_send_waits_for_the_edit_of_its_row() {
         .iter()
         .map(|row| row.id.clone())
         .collect();
+    hub.set_explicit_wait("edit-retry", true);
     hub.set_queue_editing("edit-retry", Some(ids[0].clone()));
     hub.retry_explicit_wait("edit-retry");
     assert!(rx.try_recv().is_err(), "the edited head stays queued");
@@ -923,6 +924,30 @@ async fn a_held_send_binds_its_intent_to_the_requested_row() {
         "the other row is not sent through Pause"
     );
     assert!(!hub.explicit_wait("hold"));
+}
+
+// Maintenance reads the intent before it retries. If another terminal sent the
+// held row in between, the stale retry must not send the next row through
+// Pause.
+#[tokio::test]
+async fn a_stale_explicit_retry_sends_nothing_once_its_intent_is_consumed() {
+    let hub = hub_with_session("stale");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    hub.set_dispatch_tx(tx);
+    hub.set_status("stale", Status::Running, None);
+    hub.set_paused("stale", true);
+    let person = crate::prompt_origin::RequestCaller::Person;
+    hub.submit(
+        "stale",
+        "next".into(),
+        vec![],
+        Some("c-next".into()),
+        &person,
+    );
+    assert!(!hub.explicit_wait("stale"));
+    hub.retry_explicit_wait("stale");
+    assert!(rx.try_recv().is_err(), "no live intent, no bypass");
+    assert_eq!(hub.session_info("stale").unwrap().queue_count, 1);
 }
 
 #[tokio::test]
