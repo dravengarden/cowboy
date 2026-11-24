@@ -6,66 +6,55 @@ import {
   useRef,
   useState,
 } from "react";
-import { EditorPluginToolbar } from "../editorPlugins/EditorPluginToolbar";
 import {
   alpha,
   Box,
   Button,
   CircularProgress,
   Divider,
-  ListItemIcon,
   ListItemText,
   Menu,
   MenuItem,
   Tooltip,
 } from "@mui/material";
 import {
-  AlternateEmail,
-  AttachFile,
   CleaningServicesOutlined,
   Compress,
   EditNoteOutlined,
-  MoreHoriz,
-  MoreVert,
   KeyboardArrowUp,
-  RawOn,
+  MoreVert,
   Schedule,
   Send,
   Stop,
 } from "@mui/icons-material";
 import type { ComposerEditorHandle } from "../ComposerEditor";
 import type { Status } from "../protocol";
-import {
-  COMPOSER_COMMANDS,
-  COMPOSER_COMMANDS_BY_ID,
-} from "../composerCommands";
+import { COMPOSER_COMMANDS_BY_ID } from "../composerCommands";
 import {
   toggleComposerSourceMode,
   useComposerSourceMode,
 } from "../composerSourceMode";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DesktopComposerCommandBindings } from "./commands/DesktopComposerShortcuts";
-import { DesktopShortcut, LeaderKeycap } from "./commands/DesktopKeycap";
+import { DesktopShortcut } from "./commands/DesktopKeycap";
 import { HintTooltip } from "../HintTooltip";
 import { desktopOverlayOwnsShortcuts } from "./commands/desktopShortcutScope";
 import { shortcutAvailability } from "./commands/shortcutAvailability";
 import {
-  DESKTOP_COMPOSER_FORMAT_CHORDS,
   DESKTOP_SHORTCUTS,
   DESKTOP_WORKSPACE_KEYS,
-  desktopWorkspaceSequence,
 } from "./commands/workspaceShortcuts";
 import { useImeStatus } from "./vim/imeStatusStore";
 import { desktopToolbarActionSx } from "./desktopToolbarAction";
 import {
+  DesktopEditorFormatRow,
+  DesktopToolbarActionButton,
+  type DesktopToolbarButtonSpec,
+} from "./DesktopEditorFormatRow";
+import {
   type DesktopSessionActions,
   useDesktopSessionActions,
 } from "./useDesktopSessionActions";
-
-const QUICK_FORMATS = ["bold", "italic", "code", "link", "bulletList"];
-const FORMAT_COMMANDS = COMPOSER_COMMANDS.filter((command) =>
-  !["slash", "mention", "attach", "sourceMode"].includes(command.id)
-);
 
 export interface DesktopComposerToolbarProps {
   sessionId: string;
@@ -74,14 +63,22 @@ export interface DesktopComposerToolbarProps {
   sendButtonRef: RefObject<HTMLButtonElement | null>;
   canInsert: boolean;
   sendable: boolean;
+  canSave?: boolean;
+  canSchedule?: boolean;
   canJumpFront: boolean;
   canForce: boolean;
   canCurrentTurn?: boolean;
   onCurrentTurn?: () => void;
   pending: boolean;
   progress: boolean;
-  sendLabel: "Send" | "Queue" | "Send…" | "Enqueue";
+  sendLabel: "Send" | "Queue" | "Send…" | "Enqueue" | "Finish" | "Deliver…";
+  sendIcon?: ReactNode;
   sendDescription: string;
+  saveLabel?: string;
+  saveTitle?: string;
+  saveIcon?: ReactNode;
+  scheduleLabel?: string;
+  scheduleTitle?: string;
   unavailableReason: string;
   overlayOpen: boolean;
   onAttach: () => void;
@@ -156,108 +153,18 @@ export function DesktopComposerToolbarView(
       COMPOSER_COMMANDS_BY_ID[id]?.run({ editor, attach: props.onAttach });
     }
   };
-  const action = ({
-    id,
-    icon,
-    label,
-    title = label,
-    key,
-    shortcut,
-    disabled = false,
-    reason,
-    onClick,
-    formatTier,
-    pressed,
-    anywhere = false,
-    tone,
-    held = false,
-  }: {
-    id: string;
-    icon: ReactNode;
-    label: string;
-    title?: string;
-    key?: string;
-    shortcut?: string;
-    disabled?: boolean;
-    reason?: string;
-    onClick: () => void;
-    formatTier?: "primary" | "secondary";
-    pressed?: boolean;
-    /** The key runs from any focus (a Prompt-group or global command). */
-    anywhere?: boolean;
-    /** Error marks Stop. */
-    tone?: "error";
-    /** Keep the slot's width but show nothing: idle Stop, so the row does
-     *  not move when a turn starts. */
-    held?: boolean;
-  }): ReactNode => (
-    <HintTooltip
-      key={id}
-      title={title}
-      shortcut={key ? desktopWorkspaceSequence(key) : shortcut}
-      detail={disabled ? reason : undefined}
-    >
-      <Box
-        component="span"
-        data-format-tier={formatTier}
-        aria-hidden={held || undefined}
-        sx={{
-          display: "inline-flex",
-          flexShrink: 0,
-          ...(held && { visibility: "hidden" }),
-        }}
-      >
-        <Button
-          data-composer-action={id}
-          aria-label={title}
-          aria-pressed={pressed}
-          disabled={disabled || held}
-          tabIndex={held ? -1 : undefined}
-          onPointerDown={(event) => {
-            if (event.button === 0) event.preventDefault();
-          }}
-          onClick={onClick}
-          color={id === "force"
-            ? "warning"
-            : tone === "error"
-            ? "error"
-            : pressed
-            ? "primary"
-            : "inherit"}
-          size="small"
-          sx={{
-            ...desktopToolbarActionSx,
-            bgcolor: pressed ? "action.selected" : "transparent",
-          }}
-        >
-          {icon}
-          <Box component="span" data-composer-action-label>{label}</Box>
-          {key
-            ? (
-              <LeaderKeycap
-                leaderKey={key}
-                scopeAvailable={(id === "source"
-                  ? sourceScope
-                  : anywhere
-                  ? prefixAvailable
-                  : scoped) &&
-                  !disabled}
-              />
-            )
-            : shortcut && (
-              <DesktopShortcut
-                shortcut={shortcut}
-                compact
-                quiet
-                availability={shortcutAvailability(
-                  (anywhere ? !overlayOwnsKeys : scoped) && !disabled,
-                )}
-              />
-            )}
-        </Button>
-      </Box>
-    </HintTooltip>
+  const action = (spec: DesktopToolbarButtonSpec): ReactNode => (
+    <DesktopToolbarActionButton
+      key={spec.id}
+      spec={spec}
+      scoped={scoped}
+      sourceScope={sourceScope}
+      prefixAvailable={prefixAvailable}
+      overlayOwnsKeys={overlayOwnsKeys}
+    />
   );
+  const saveReady = (props.canSave ?? ready) && !props.pending;
+  const scheduleReady = (props.canSchedule ?? true) && ready;
   return (
     <Box
       data-desktop-composer-toolbar
@@ -265,6 +172,8 @@ export function DesktopComposerToolbarView(
     >
       <DesktopComposerCommandBindings
         sendable={ready}
+        canSave={saveReady}
+        canSchedule={props.canSchedule ?? true}
         canInsert={props.canInsert}
         canAttach={props.canInsert}
         canJumpFront={props.canJumpFront}
@@ -272,6 +181,7 @@ export function DesktopComposerToolbarView(
         onCurrentTurn={props.onCurrentTurn ?? (() => {})}
         canForce={props.canForce}
         canMore
+        onSubmit={props.onSubmit}
         onSlash={() => props.editorRef.current?.insertTrigger("/")}
         onReference={() => props.editorRef.current?.insertTrigger("@")}
         onAttach={props.onAttach}
@@ -282,129 +192,28 @@ export function DesktopComposerToolbarView(
         onMore={() => setMoreAnchor(moreRef.current)}
         onFormat={format}
       />
-      <Box
-        role="group"
-        aria-label="Prompt editing"
-        sx={{
-          display: "flex",
-          alignItems: "center",
-          flexWrap: "wrap",
-          gap: 0.25,
-          px: 1,
-          pt: 0.5,
-          pb: 0.25,
-        }}
-      >
-        <Box data-composer-insert sx={{ display: "flex", gap: 0.25 }}>
-          {action({
-            id: "slash",
-            icon: (
-              <Box
-                component="span"
-                sx={{
-                  fontSize: "1.125rem",
-                  width: "1.125rem",
-                  fontWeight: 700,
-                }}
-              >
-                /
-              </Box>
-            ),
-            label: "Commands",
-            title: "Slash command / skill",
-            key: DESKTOP_WORKSPACE_KEYS.composerSlash,
-            disabled: !props.canInsert || composing,
-            reason: composing
-              ? "Finish text composition first"
-              : "Resume this session to use completions",
-            onClick: () => props.editorRef.current?.insertTrigger("/"),
-          })}
-          {action({
-            id: "reference",
-            icon: <AlternateEmail />,
-            label: "Files",
-            title: "Reference a file",
-            key: DESKTOP_WORKSPACE_KEYS.composerReference,
-            disabled: !props.canInsert || composing,
-            reason: composing
-              ? "Finish text composition first"
-              : "Resume this session to use completions",
-            onClick: () => props.editorRef.current?.insertTrigger("@"),
-          })}
-          {action({
-            id: "attach",
-            icon: <AttachFile />,
-            label: "Attach",
-            title: "Attach image or file",
-            key: DESKTOP_WORKSPACE_KEYS.composerAttach,
-            disabled: !props.canInsert,
-            reason: "Resume this session to attach files",
-            onClick: props.onAttach,
-          })}
-        </Box>
-        <Divider orientation="vertical" flexItem sx={{ my: 0.75, mx: 0.5 }} />
-        {QUICK_FORMATS.map((id, index) => {
-          const command = COMPOSER_COMMANDS_BY_ID[id]!;
-          return action({
-            id,
-            icon: command.icon,
-            label: command.label,
-            shortcut: DESKTOP_COMPOSER_FORMAT_CHORDS[id]!,
-            disabled: composing,
-            reason: "Finish text composition first",
-            formatTier: index < 3 ? "primary" : "secondary",
-            onClick: () => format(id),
-          });
-        })}
-        <HintTooltip
-          title="More formatting"
-          shortcut={desktopWorkspaceSequence(
-            DESKTOP_WORKSPACE_KEYS.composerMore,
-          )}
-        >
-          <Button
-            ref={moreRef}
-            aria-label="More formatting"
-            aria-haspopup="menu"
-            aria-controls={moreAnchor
-              ? "desktop-composer-formatting"
-              : undefined}
-            aria-expanded={moreAnchor ? "true" : undefined}
-            data-composer-action="more"
-            size="small"
-            color="inherit"
-            onPointerDown={(event) => {
-              if (event.button === 0) event.preventDefault();
-            }}
-            onClick={(event) => setMoreAnchor(event.currentTarget)}
-            sx={desktopToolbarActionSx}
-          >
-            <MoreHoriz />
-            <LeaderKeycap
-              leaderKey={DESKTOP_WORKSPACE_KEYS.composerMore}
-              scopeAvailable={scoped}
-              {...(moreAnchor ? { availability: "active" as const } : {})}
-            />
-          </Button>
-        </HintTooltip>
-        <EditorPluginToolbar kind="session" disabled={composing} />
-        <Box sx={{ flex: 1 }} />
-        {action({
-          id: "source",
-          icon: <RawOn />,
-          label: "Source",
-          title: sourceMode
-            ? "Switch to live preview"
-            : "Switch to Source mode",
-          key: DESKTOP_WORKSPACE_KEYS.toggleSourceMode,
-          pressed: sourceMode,
-          disabled: composing,
-          reason: "Finish text composition first",
-          onClick: () => {
-            toggleComposerSourceMode();
-          },
-        })}
-      </Box>
+      <DesktopEditorFormatRow
+        kind="session"
+        ariaLabel="Prompt editing"
+        menuId="desktop-composer-formatting"
+        canInsert={props.canInsert}
+        canAttach={props.canInsert}
+        composing={composing}
+        sourceMode={sourceMode}
+        scoped={scoped}
+        sourceScope={sourceScope}
+        prefixAvailable={prefixAvailable}
+        overlayOwnsKeys={overlayOwnsKeys}
+        moreRef={moreRef}
+        moreAnchor={moreAnchor}
+        onMoreOpen={setMoreAnchor}
+        onMoreClose={() => setMoreAnchor(null)}
+        onSlash={() => props.editorRef.current?.insertTrigger("/")}
+        onReference={() => props.editorRef.current?.insertTrigger("@")}
+        onAttach={props.onAttach}
+        onFormat={format}
+        onToggleSourceMode={() => toggleComposerSourceMode()}
+      />
       <Box
         data-composer-delivery
         role="group"
@@ -429,21 +238,21 @@ export function DesktopComposerToolbarView(
         >
           {action({
             id: "draft",
-            icon: <EditNoteOutlined />,
-            label: "Draft",
-            title: "Save as draft",
+            icon: props.saveIcon ?? <EditNoteOutlined />,
+            label: props.saveLabel ?? "Draft",
+            title: props.saveTitle ?? "Save as draft",
             shortcut: DESKTOP_SHORTCUTS.saveDraft,
-            disabled: !ready,
+            disabled: !saveReady,
             reason: deliveryReason,
             onClick: props.onSaveDraft,
           })}
           {action({
             id: "schedule",
             icon: <Schedule />,
-            label: "Schedule",
-            title: "Schedule send",
+            label: props.scheduleLabel ?? "Schedule",
+            title: props.scheduleTitle ?? "Schedule send",
             key: DESKTOP_WORKSPACE_KEYS.composerSchedule,
-            disabled: !ready,
+            disabled: !scheduleReady,
             reason: deliveryReason,
             onClick: props.onSchedule,
           })}
@@ -548,7 +357,7 @@ export function DesktopComposerToolbarView(
             >
               {props.progress
                 ? <CircularProgress size="1rem" color="inherit" />
-                : <Send sx={{ fontSize: "1rem" }} />}
+                : (props.sendIcon ?? <Send sx={{ fontSize: "1rem" }} />)}
               {props.sendLabel}
               <DesktopShortcut
                 shortcut="Mod+Enter"
@@ -605,38 +414,6 @@ export function DesktopComposerToolbarView(
             </Box>
           </MenuItem>
         )}
-      </Menu>}
-      {moreAnchor !== null && <Menu
-        id="desktop-composer-formatting"
-        anchorEl={moreAnchor}
-        open
-        onClose={() => setMoreAnchor(null)}
-        anchorOrigin={{ vertical: "top", horizontal: "left" }}
-        transformOrigin={{ vertical: "bottom", horizontal: "left" }}
-      >
-        {FORMAT_COMMANDS.map((command) => (
-          <MenuItem
-            key={command.id}
-            disabled={composing}
-            onClick={() => {
-              setMoreAnchor(null);
-              format(command.id);
-            }}
-          >
-            <ListItemIcon>{command.icon}</ListItemIcon>
-            <ListItemText>{command.label}</ListItemText>
-            {DESKTOP_COMPOSER_FORMAT_CHORDS[command.id] && (
-              <Box sx={{ ml: 2 }} data-shortcut-reference>
-                <DesktopShortcut
-                  shortcut={DESKTOP_COMPOSER_FORMAT_CHORDS[command.id]!}
-                  quiet
-                  compact
-                  availability="inactive"
-                />
-              </Box>
-            )}
-          </MenuItem>
-        ))}
       </Menu>}
     </Box>
   );

@@ -196,23 +196,16 @@ function CleanupPanel({ source }: { source: CodeBufferCleanup }) {
         open={selected !== null && !snapshot.contextLost}
         onClose={() => setSelected(null)}
         title="Continue buffer cleanup?"
-        actions={
-          <>
-            <Button onClick={() => setSelected(null)}>Cancel</Button>
-            <Button
-              variant="contained"
-              disabled={!confirmable}
-              onClick={() => {
-                if (!selected || !confirmable) return;
-                const original = selected;
-                setSelected(null);
-                run(original, true);
-              }}
-            >
-              Continue cleanup
-            </Button>
-          </>
-        }
+        confirm={{
+          label: "Continue cleanup",
+          disabled: !confirmable,
+          onConfirm: () => {
+            if (!selected || !confirmable) return;
+            const original = selected;
+            setSelected(null);
+            run(original, true);
+          },
+        }}
       >
         {!snapshot.contextLost && selected && (
           <Stack spacing={1} sx={{ overflowWrap: "anywhere" }}>

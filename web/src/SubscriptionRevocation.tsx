@@ -112,13 +112,19 @@ export function SubscriptionRevocation({ account, label, revoking, owner, datase
       {revoking ? "Cleanup status…" : pending ? "Resume removal…" : "Remove account…"}
     </Button>
     <ConfirmSheet open={open} onClose={() => setOpen(false)} title={`${label} · ${started ? "Cleanup" : "Remove account?"}`}
-      actions={<Stack direction="row" spacing={1}>
+      actions={started ? <Stack direction="row" spacing={1}>
         <Button onClick={() => setOpen(false)}>Close</Button>
-        {started ? <>
-          <Button disabled={busy} onClick={() => void run("read")}>Check status</Button>
-          {!completed && <Button disabled={busy} onClick={() => void run("resume")}>Retry pending cleanup</Button>}
-        </> : <Button color="error" variant="contained" disabled={busy || !ready || !progress} onClick={() => void run("start")}>{pending ? "Retry same revocation" : "Revoke on all Machines"}</Button>}
-      </Stack>}>
+        <Button disabled={busy} onClick={() => void run("read")}>Check status</Button>
+        {!completed && <Button disabled={busy} onClick={() => void run("resume")}>Retry pending cleanup</Button>}
+      </Stack> : undefined}
+      confirm={!started ? {
+        label: pending ? "Retry same revocation" : "Revoke on all Machines",
+        cancelLabel: "Close",
+        color: "error",
+        busy,
+        disabled: !ready || !progress,
+        onConfirm: () => void run("start"),
+      } : undefined}>
       <Stack spacing={1.5}>
         <Typography variant="body2">This permanently disables this Cowboy account, stops its sessions and removes its native logins on every Machine, including Machines that reconnect later. The disabled account stays in history so cleanup can be tracked. Other subscriptions are unaffected. Your Provider subscription and billing continue.</Typography>
         {error && <Alert severity="warning">{error}</Alert>}

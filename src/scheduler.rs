@@ -176,7 +176,7 @@ pub async fn run_scheduler(hub: Hub, mut rx: mpsc::Receiver<ScheduleCmd>) {
                                 session = %sid, draft = %draft_id,
                                 "scheduler: firing scheduled draft",
                             );
-                            hub.fire_scheduled_draft(&sid, &draft_id);
+                            hub.fire_scheduled_draft_at(&sid, &draft_id, Some(p.fire_at_ms));
                         }
                     }
                 }

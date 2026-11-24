@@ -75,8 +75,9 @@ export const DESKTOP_TAB_KEYS = {
  * in a Draft; the two surfaces are never mounted together.
  */
 export const DESKTOP_DOCUMENT_KEYS = {
-  // The cursor to the title, in Vim Normal when Vim is on.
-  title: "T",
+  // The cursor to the title, in Vim Normal when Vim is on (`␣R` mirrors
+  // Session Rename and leaves `␣T` free for Top bar everywhere).
+  title: "R",
   copy: "Y",
   history: "H",
   export: "E",
@@ -85,8 +86,8 @@ export const DESKTOP_DOCUMENT_KEYS = {
 
 /** Root keys whose meaning belongs to the Draft surface. */
 export const DESKTOP_DOCUMENT_COMMANDS: Readonly<Record<string, string>> = {
-  // On a Draft page `␣T` is the title; the Top bar group needs a Session.
-  t: "document.title",
+  // On a Draft page `␣R` is the title (matching Session Rename); `␣T` stays Top bar.
+  r: "document.title",
   y: "document.copyToSession",
   h: "document.history",
   e: "document.export",
@@ -111,7 +112,7 @@ export const DESKTOP_WORKSPACE_KEYS = {
   // Step through the tab strip (Vim's `[b` / `]b`).
   previousTab: "[",
   nextTab: "]",
-  // Rename the current Session (a Draft's name is its title, `␣T`).
+  // Rename the current Session (a Draft's name is its title, also `␣R`).
   rename: "R",
   commandPalette: "K",
   // The Sessions group mirrors Top bar: the doubled key focuses the surface,
@@ -158,8 +159,6 @@ export const DESKTOP_WORKSPACE_KEYS = {
   composerSchedule: "H",
   composerJumpFront: "J",
   composerMore: "M",
-  // Zoom the focused editor into the fullscreen composer.
-  editorExpand: "Z",
   // Pane collapse uses three adjacent physical keys whose left-to-right order
   // matches the panes on screen: Sessions | Prompt | Conversation, inside the
   // Window group (`␣W[` `␣W]` `␣W\\`).
@@ -330,8 +329,6 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   " ": "session.switch",
   tab: "session.alternate",
   k: "commandPalette.open",
-  // Scoped editors register their own `<id>.expand` under this one meaning.
-  z: "editor.expand",
 };
 
 /** The leader key a command answers to, derived from its declared sequence. */

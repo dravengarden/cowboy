@@ -38,7 +38,8 @@ import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { InfoContent } from "./InfoSheet";
 import { UsageLogs } from "./UsageLogs";
 import { desktopFocusBoundary, type Mode as ThemeMode } from "./theme";
-import { pageBelowBrowserSkipsKey } from "./desktop/commands/desktopShortcutScope";
+import { modalHandlerShouldSkip } from "./desktop/commands/modalGuard";
+import { isInputVimNormal, subscribeInputVimMode } from "./desktop/vim/inputVim";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import { sequentialShortcutAvailability } from "./desktop/commands/shortcutAvailability";
 import { DesktopPanel } from "./desktop/DesktopPanel";
@@ -1017,16 +1018,7 @@ export function MachinesContent({ embedded = false }: { embedded?: boolean } = {
                 open={deleteTarget !== null}
                 onClose={() => !deleting && setDeleteTarget(null)}
                 title={deletingLastMachine ? "Delete the last Machine?" : "Delete this Machine?"}
-                actions={
-                    <>
-                        <Button color="inherit" disabled={deleting} onClick={() => setDeleteTarget(null)}>
-                            Cancel
-                        </Button>
-                        <Button variant="contained" color="error" disabled={deleting} onClick={deleteMachine}>
-                            {deleting ? "Deleting" : "Delete Machine"}
-                        </Button>
-                    </>
-                }
+                confirm={{ label: deleting ? "Deleting" : "Delete Machine", color: "error", busy: deleting, onConfirm: deleteMachine }}
             >
                 <Stack spacing={1.5} sx={{ pt: 0.5 }}>
                     <Typography variant="body2">
@@ -1087,10 +1079,8 @@ export function MachinesContent({ embedded = false }: { embedded?: boolean } = {
 }
 
 export function isSettingsEditableTarget(target: EventTarget | null): target is HTMLElement {
-    return target instanceof HTMLElement && (
-        target.matches("input, textarea, select, [contenteditable='true']") ||
-        target.closest("[contenteditable='true']") !== null
-    );
+    return target instanceof HTMLElement && !isInputVimNormal(target) &&
+        (target.matches("input, textarea, select, [contenteditable='true']") || target.closest("[contenteditable='true']") !== null);
 }
 
 export function isSettingsTextEntryTarget(target: EventTarget | null): target is HTMLElement {
@@ -1420,7 +1410,7 @@ export function SettingsShell({
             )?.focus();
         });
         const onKeyDown = (event: KeyboardEvent): void => {
-            if (pageBelowBrowserSkipsKey(event)) return;
+            if ((event.key !== "Escape" && event.defaultPrevented) || modalHandlerShouldSkip(event, settingsPanelRef.current, { allowEditable: true })) return;
             const target = event.target;
             if (isSettingsEditableTarget(target)) {
                 if (event.key === "Escape") {
@@ -1542,15 +1532,13 @@ export function SettingsShell({
             next?.focus();
         };
         const onFocusIn = (event: FocusEvent): void => {
-            const panel = settingsPanelRef.current;
-            if (
-                panel?.contains(event.target as Node) &&
-                isSettingsEditableTarget(event.target)
-            ) setGoPending(false);
+            if (settingsPanelRef.current?.contains(event.target as Node) && isSettingsEditableTarget(event.target)) setGoPending(false);
         };
+        const unsubVim = subscribeInputVimMode(() => setSettingsEditableFocus(Boolean(settingsPanelRef.current?.contains(document.activeElement)) && isSettingsEditableTarget(document.activeElement)));
         globalThis.addEventListener("keydown", onKeyDown, true);
         globalThis.addEventListener("focusin", onFocusIn, true);
         return () => {
+            unsubVim();
             cancelAnimationFrame(focusFirst);
             if (goTimer !== null) globalThis.clearTimeout(goTimer);
             globalThis.removeEventListener("keydown", onKeyDown, true);

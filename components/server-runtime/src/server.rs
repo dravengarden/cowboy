@@ -797,6 +797,10 @@ pub struct SessionPromptRequest {
     pub operation: Option<String>,
     #[serde(default)]
     pub target: Option<crate::send_delivery::DeliveryTarget>,
+    /// Optional source draft or queued row reserved and consumed atomically by
+    /// this steer operation once the worker admits delivery.
+    #[serde(default)]
+    pub consume_source: Option<crate::core::SteerSource>,
 }
 
 /// Request body for `POST /api/sessions`.

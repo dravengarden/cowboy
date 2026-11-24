@@ -15,9 +15,6 @@ const host = await readFile(
 const composerBindings = await readFile(
   new URL("./DesktopComposerShortcuts.tsx", import.meta.url), "utf8",
 );
-const pendingBindings = await readFile(
-  new URL("./DesktopPendingEditShortcuts.tsx", import.meta.url), "utf8",
-);
 const composer = await readComposerSource();
 const sessionActions = await readFile(
   new URL("../useDesktopSessionActions.tsx", import.meta.url), "utf8",
@@ -109,7 +106,6 @@ test("low-frequency Option letter bindings are palette-only", () => {
     ]
   ) {
     assertEquals(composerBindings.includes(`shortcut: "${shortcut}"`), false);
-    assertEquals(pendingBindings.includes(`shortcut: "${shortcut}"`), false);
   }
   for (const hint of ["/", "R", "A", "S", "J", "X", "E"]) {
     assertEquals(composer.includes("`${ALT_LABEL}" + hint + "`,"), false);

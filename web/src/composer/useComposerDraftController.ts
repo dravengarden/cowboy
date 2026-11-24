@@ -47,6 +47,23 @@ import {
   runNativeClipboardImagePaste,
 } from "./nativeClipboardImagePaste";
 import { prepareUserPrompt } from "./slashCommandIntent";
+import { recordLastSubmittedPending } from "../desktop/promptBuffer";
+
+function newSubmissionCmid(): string {
+  return globalThis.crypto?.randomUUID?.() ??
+    `sub-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function submitWithRecord(
+  sessionId: string,
+  kind: "queued" | "draft",
+  send: (cmid: string) => Promise<void>,
+): Promise<void> {
+  const cmid = newSubmissionCmid();
+  return send(cmid).then(() => {
+    recordLastSubmittedPending(sessionId, { kind, cmid, at: Date.now() });
+  });
+}
 
 export interface ComposerDraftController {
   text: string;
@@ -407,9 +424,9 @@ export function useComposerDraftController(
     removeAttachment,
     clear,
     submit: () =>
-      commit(() => submitPrompt(sessionId, preparedText(), attachments)),
+      commit(() => submitWithRecord(sessionId, "queued", (cmid) => submitPrompt(sessionId, preparedText(), attachments, cmid))),
     submitTracked: () =>
-      commitTracked(() => submitPrompt(sessionId, preparedText(), attachments)),
+      commitTracked(() => submitWithRecord(sessionId, "queued", (cmid) => submitPrompt(sessionId, preparedText(), attachments, cmid))),
     currentTurnTracked: (target, nextCheckpoint) =>
       commitTracked(() => currentTurnPrompt(sessionId, preparedText(), attachments, target, nextCheckpoint)),
     wrapUpTracked: (target) =>
@@ -425,12 +442,12 @@ export function useComposerDraftController(
     // gesture, so preserve the existing no-haptic behaviour.
     saveAsDraft: () =>
       commit(
-        () => addDraft(sessionId, textRef.current.trimEnd(), attachments),
+        () => submitWithRecord(sessionId, "draft", (cmid) => addDraft(sessionId, textRef.current.trimEnd(), attachments, cmid)),
         false,
       ),
     saveAsDraftTracked: () =>
       commitTracked(
-        () => addDraft(sessionId, textRef.current.trimEnd(), attachments),
+        () => submitWithRecord(sessionId, "draft", (cmid) => addDraft(sessionId, textRef.current.trimEnd(), attachments, cmid)),
         false,
       ),
     scheduleNew: (fireAtMs, delivery) =>

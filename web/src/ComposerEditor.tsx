@@ -25,12 +25,12 @@ import {
   startCompletion,
 } from "@codemirror/autocomplete";
 import {
-  defaultKeymap,
   history,
   historyKeymap,
   redo,
   undo,
 } from "@codemirror/commands";
+import { composerDefaultKeymap } from "./composer/composerKeymap";
 import { indentUnit } from "@codemirror/language";
 import { cmTheme } from "./cmTheme";
 import { livePreviewExtensions } from "./composerExtensions";
@@ -1148,7 +1148,7 @@ export const ComposerEditor = forwardRef<
       ),
       // completionKeymap first so Enter/Tab/arrows drive the picker when it's
       // open, falling through to newline/normal editing when it's closed.
-      keymap.of([...completionKeymap, ...historyKeymap, ...defaultKeymap]),
+      keymap.of([...completionKeymap, ...historyKeymap, ...composerDefaultKeymap]),
       // Markdown live-preview engine (mdlive). Placed AFTER the ⌘⏎/⌃⏎ chord
       // handler (Prec.highest, earlier in this array) so the send/draft chords
       // keep precedence; the engine's own Prec.highest Enter then drives tight-

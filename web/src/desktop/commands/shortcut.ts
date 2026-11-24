@@ -56,8 +56,8 @@ export function matchesShortcut(
     : undefined;
   const keyMatches = event.key.toLowerCase() === stroke.key ||
     ((stroke.mod || stroke.ctrl || stroke.alt || physicalBare) &&
-      physicalCode !== undefined &&
-      event.code === physicalCode) ||
+      ((physicalCode !== undefined && event.code === physicalCode) ||
+        (stroke.key === "enter" && event.code === "NumpadEnter"))) ||
     (/^\d$/.test(stroke.key) &&
       (event.code === `Digit${stroke.key}` ||
         event.code === `Numpad${stroke.key}`));

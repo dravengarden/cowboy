@@ -73,6 +73,7 @@ pub struct PendingRecoveryActivationCommit {
     hub: Weak<HubInner>,
     active: bool,
     new_row: QueuedMessage,
+    front: bool,
     had_scheduled: bool,
     reservation: RecoveryActivationReservation,
 }
@@ -246,6 +247,10 @@ impl Hub {
             });
             match pos {
                 Some(p) => {
+                    let did = s.drafts[p].id.clone();
+                    if s.steer_reservations.values().any(|r| r.row_id == did) {
+                        return;
+                    }
                     let m = &mut s.drafts[p];
                     if !text.trim().is_empty() || !content.is_empty() {
                         m.text = text;
@@ -254,7 +259,8 @@ impl Hub {
                     }
                     m.initiator = None;
                     m.schedule = schedule;
-                    m.id.clone()
+                    s.deferred_scheduled_drafts.retain(|d| d != &did);
+                    did
                 }
                 None => {
                     let did = self.next_qid();
@@ -284,12 +290,15 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            if s.activating_recovery_drafts.contains(id) {
+            if s.activating_recovery_drafts.contains(id)
+                || s.steer_reservations.values().any(|r| r.row_id == id)
+            {
                 return;
             }
             match s.drafts.iter_mut().find(|m| m.id == id) {
                 Some(m) if m.schedule.is_some() => {
                     m.schedule = None;
+                    s.deferred_scheduled_drafts.retain(|d| d != id);
                     true
                 }
                 _ => false,
@@ -302,15 +311,27 @@ impl Hub {
         }
     }
 
-    /// Fire a scheduled draft (called by the scheduler at its fire time): remove
-    /// it from drafts and submit it per its `delivery`. Tagged with `SCHED_PREFIX`
-    /// so the echo renders as a "↻ scheduled" note. No-op if the draft is gone
-    /// (the user removed/activated it before it fired — the timer was cancelled,
-    /// but a fire already in-flight is harmless here).
+    /// Fire a scheduled draft if its current schedule is still due.
     pub fn fire_scheduled_draft(&self, session_id: &str, draft_id: &str) {
+        self.fire_scheduled_draft_at(session_id, draft_id, None);
+    }
+
+    /// Fire a scheduled draft (called by the scheduler at its fire time, or on
+    /// edit-hold release when a timer elapsed during an edit): remove it from
+    /// drafts and submit it per its `delivery`. Revalidates the draft's live
+    /// schedule and due/expected fire timestamp under the same lock that removes
+    /// it, so a cancelled or rescheduled draft can never be fired by a stale
+    /// timer callback or an out-of-date deferred release list.
+    pub fn fire_scheduled_draft_at(
+        &self,
+        session_id: &str,
+        draft_id: &str,
+        expected_fire_at_ms: Option<i64>,
+    ) {
         if self.is_managed_child(session_id) || draft_id.starts_with("recovery-") {
             return;
         }
+        let now_ms = chrono::Utc::now().timestamp_millis();
         let fired = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -322,10 +343,32 @@ impl Hub {
             if s.meta.trashed_at_ms.is_some() {
                 return;
             }
-            s.drafts
-                .iter()
-                .position(|m| m.id == draft_id)
-                .map(|pos| s.drafts.remove(pos))
+            let Some(pos) = s.drafts.iter().position(|m| m.id == draft_id) else {
+                s.deferred_scheduled_drafts.retain(|id| id != draft_id);
+                return;
+            };
+            let still_due = s.drafts[pos].schedule.as_ref().is_some_and(|sc| {
+                expected_fire_at_ms.map_or(sc.fire_at_ms <= now_ms, |expected| {
+                    sc.fire_at_ms == expected && sc.fire_at_ms <= now_ms
+                })
+            });
+            if !still_due {
+                s.deferred_scheduled_drafts.retain(|id| id != draft_id);
+                return;
+            }
+            // Do not fire stale text out from under an active editor or an
+            // in-flight steer reservation. Record the elapsed timer so releasing
+            // the hold or reservation fires the draft if still due.
+            if s.editing.as_deref() == Some(draft_id)
+                || s.steer_reservations.values().any(|r| r.row_id == draft_id)
+            {
+                if !s.deferred_scheduled_drafts.iter().any(|id| id == draft_id) {
+                    s.deferred_scheduled_drafts.push(draft_id.to_owned());
+                }
+                return;
+            }
+            s.deferred_scheduled_drafts.retain(|id| id != draft_id);
+            Some(s.drafts.remove(pos))
         };
         let Some(m) = fired else {
             return;
@@ -424,13 +467,20 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
-            if s.activating_recovery_drafts.contains(id) {
+            if s.activating_recovery_drafts.contains(id)
+                || s.steer_reservations.values().any(|r| r.row_id == id)
+            {
                 return false;
             }
             if text.trim().is_empty() && content.is_empty() {
                 let had = s.drafts.iter().any(|m| m.id == id && m.schedule.is_some());
                 let before = s.drafts.len();
                 s.drafts.retain(|m| m.id != id);
+                s.deferred_scheduled_drafts.retain(|d| d != id);
+                if s.editing.as_deref() == Some(id) {
+                    s.editing = None;
+                    s.editing_token = None;
+                }
                 (before != s.drafts.len(), had)
             } else if let Some(m) = s.drafts.iter_mut().find(|m| m.id == id) {
                 if m.origin.as_ref() != Some(&editor) {
@@ -476,13 +526,21 @@ impl Hub {
             };
             let row = &session.drafts[index];
             if session.activating_recovery_drafts.contains(&row.id)
+                || session
+                    .steer_reservations
+                    .values()
+                    .any(|r| r.row_id == row.id)
                 || row.schedule.is_some()
                 || row.text != text
                 || row.content != content
             {
                 return false;
             }
-            session.drafts.remove(index);
+            let removed_id = session.drafts.remove(index).id;
+            if session.editing.as_deref() == Some(removed_id.as_str()) {
+                session.editing = None;
+                session.editing_token = None;
+            }
         }
         self.emit_pending(session_id);
         true
@@ -490,7 +548,7 @@ impl Hub {
 
     /// Drop one draft. Returns whether the draft still existed.
     pub fn remove_draft(&self, session_id: &str, id: &str) -> bool {
-        let (removed, unscheduled) = {
+        let (removed, unscheduled, dropped_reservation) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
@@ -501,8 +559,22 @@ impl Hub {
             let had = s.drafts.iter().any(|m| m.id == id && m.schedule.is_some());
             let before = s.drafts.len();
             s.drafts.retain(|m| m.id != id);
-            (before != s.drafts.len(), had)
+            s.deferred_scheduled_drafts.retain(|d| d != id);
+            let res_before = s.steer_reservations.len();
+            s.steer_reservations.retain(|_, r| r.row_id != id);
+            if s.editing.as_deref() == Some(id) {
+                s.editing = None;
+                s.editing_token = None;
+            }
+            (
+                before != s.drafts.len(),
+                had,
+                res_before != s.steer_reservations.len(),
+            )
         };
+        if dropped_reservation {
+            self.persist_steer_reservations(session_id);
+        }
         self.emit_pending(session_id);
         if unscheduled {
             self.cancel_draft_timer(session_id, id);
@@ -531,8 +603,15 @@ impl Hub {
             let mut sessions = self.inner.sessions.lock();
             let Some(mut msg) = (if sessions.contains_key(to) {
                 sessions.get_mut(from).and_then(|s| {
-                    if s.activating_recovery_drafts.contains(id) {
+                    if s.activating_recovery_drafts.contains(id)
+                        || s.steer_reservations.values().any(|r| r.row_id == id)
+                    {
                         return None;
+                    }
+                    s.deferred_scheduled_drafts.retain(|d| d != id);
+                    if s.editing.as_deref() == Some(id) {
+                        s.editing = None;
+                        s.editing_token = None;
                     }
                     s.drafts
                         .iter()
@@ -568,21 +647,45 @@ impl Hub {
         }
     }
 
-    /// Drop a session's whole draft list.
+    /// Drop a session's whole draft list (preserving drafts held by active steer reservations).
     pub fn clear_drafts(&self, session_id: &str) {
         let scheduled_ids: Vec<String> = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            let is_reserved = |id: &str, res: &HashMap<String, SteerReservation>| {
+                res.values().any(|r| r.row_id == id)
+            };
             let ids = s
                 .drafts
                 .iter()
-                .filter(|m| m.schedule.is_some() && !s.activating_recovery_drafts.contains(&m.id))
+                .filter(|m| {
+                    m.schedule.is_some()
+                        && !s.activating_recovery_drafts.contains(&m.id)
+                        && !is_reserved(&m.id, &s.steer_reservations)
+                })
                 .map(|m| m.id.clone())
                 .collect();
-            s.drafts
-                .retain(|m| s.activating_recovery_drafts.contains(&m.id));
+            let keep_draft =
+                |id: &str,
+                 activating: &HashSet<String>,
+                 res: &HashMap<String, SteerReservation>| {
+                    activating.contains(id) || is_reserved(id, res)
+                };
+            let editing_cleared = s.editing.as_deref().is_some_and(|id| {
+                s.drafts.iter().any(|m| m.id == id)
+                    && !keep_draft(id, &s.activating_recovery_drafts, &s.steer_reservations)
+            });
+            if editing_cleared {
+                s.editing = None;
+                s.editing_token = None;
+            }
+            let activating = &s.activating_recovery_drafts;
+            let res = &s.steer_reservations;
+            s.deferred_scheduled_drafts
+                .retain(|d| keep_draft(d, activating, res));
+            s.drafts.retain(|m| keep_draft(&m.id, activating, res));
             ids
         };
         self.emit_pending(session_id);
@@ -646,7 +749,9 @@ impl Hub {
         let Some(pos) = s.drafts.iter().position(|m| m.id == draft_id) else {
             return Err(RecoveryReserveErr::NotFound);
         };
-        if s.activating_recovery_drafts.contains(draft_id) {
+        if s.activating_recovery_drafts.contains(draft_id)
+            || s.steer_reservations.values().any(|r| r.row_id == draft_id)
+        {
             return Err(RecoveryReserveErr::AlreadyActivating(
                 "Recovery draft activation is already in progress; draft retained",
             ));
@@ -678,6 +783,7 @@ impl Hub {
     pub fn begin_durable_recovery_draft_activation(
         &self,
         mut reservation: RecoveryActivationReservation,
+        front: bool,
         caller: &crate::prompt_origin::RequestCaller,
     ) -> Result<RecoveryActivationCommitStep, &'static str> {
         let sid = reservation.session_id.clone();
@@ -705,8 +811,17 @@ impl Hub {
             };
             if !self.has_store_writer() {
                 s.drafts.remove(pos);
+                s.deferred_scheduled_drafts.retain(|d| d != &draft_id);
+                if s.editing.as_deref() == Some(draft_id.as_str()) {
+                    s.editing = None;
+                    s.editing_token = None;
+                }
                 let new_qid = new_row.id.clone();
-                s.queue.push(new_row);
+                if front {
+                    s.queue.insert(0, new_row);
+                } else {
+                    s.queue.push(new_row);
+                }
                 reservation.release_in_session(s);
                 (Some(new_qid), had_scheduled, None)
             } else {
@@ -715,7 +830,11 @@ impl Hub {
                     return Err("Another pending queue update is in progress; draft retained");
                 }
                 let mut preview_queue = s.queue.clone();
-                preview_queue.push(new_row.clone());
+                if front {
+                    preview_queue.insert(0, new_row.clone());
+                } else {
+                    preview_queue.push(new_row.clone());
+                }
                 let mut preview_drafts = s.drafts.clone();
                 preview_drafts.remove(pos);
                 let Some(rx) = self.send_acked_update_pending_with_retired(
@@ -736,6 +855,7 @@ impl Hub {
                     hub: Arc::downgrade(&self.inner),
                     active: true,
                     new_row,
+                    front,
                     had_scheduled,
                     reservation,
                 });
@@ -776,7 +896,16 @@ impl Hub {
             let mut claims = self.inner.notice_claims.lock();
             if let Some(s) = sessions.get_mut(&sid) {
                 s.drafts.retain(|m| m.id != draft_id);
-                s.queue.push(commit.new_row.clone());
+                s.deferred_scheduled_drafts.retain(|d| d != &draft_id);
+                if s.editing.as_deref() == Some(draft_id.as_str()) {
+                    s.editing = None;
+                    s.editing_token = None;
+                }
+                if commit.front {
+                    s.queue.insert(0, commit.new_row.clone());
+                } else {
+                    s.queue.push(commit.new_row.clone());
+                }
                 commit.reservation.release_in_session(s);
                 let snapshot = (s.queue.clone(), s.drafts.clone());
                 self.finish_in_flight_pending_commit(&sid, &snapshot.0, &snapshot.1, &mut claims);
@@ -824,13 +953,27 @@ impl Hub {
         cmid: Option<String>,
         caller: &crate::prompt_origin::RequestCaller,
     ) {
+        self.activate_draft_with_front(session_id, id, cmid, false, caller);
+    }
+
+    /// Activate one draft: remove it from drafts (cancelling any schedule timer)
+    /// and submit it to the back (`front = false`) or front (`front = true`) of
+    /// the queue in one server-owned transition.
+    pub fn activate_draft_with_front(
+        &self,
+        session_id: &str,
+        id: &str,
+        cmid: Option<String>,
+        front: bool,
+        caller: &crate::prompt_origin::RequestCaller,
+    ) {
         if self.is_managed_child(session_id)
             || self.reject_reserved_notice_cmid(session_id, cmid.as_deref())
         {
             return;
         }
         if id.starts_with("recovery-") {
-            self.activate_recovery_draft_direct(session_id, id, cmid, caller);
+            self.activate_recovery_draft_direct(session_id, id, cmid, front, caller);
             return;
         }
         let requested_cmid = cmid.clone();
@@ -845,6 +988,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            if s.steer_reservations.values().any(|r| r.row_id == id) {
+                return;
+            }
             let Some(pos) = s.drafts.iter().position(|m| m.id == id) else {
                 return;
             };
@@ -860,11 +1006,17 @@ impl Hub {
                 error_msg = Some("Activation operation id is already in use; draft retained");
                 false
             } else {
+                s.deferred_scheduled_drafts.retain(|d| d != id);
+                if s.editing.as_deref() == Some(id) {
+                    s.editing = None;
+                    s.editing_token = None;
+                }
                 let (scheduled, owner_turn, req) = self.stage_regular_draft_activation(
                     session_id,
                     s,
                     pos,
                     effective_cmid,
+                    front,
                     trigger,
                     wired,
                 );
@@ -902,6 +1054,7 @@ impl Hub {
         session_id: &str,
         id: &str,
         cmid: Option<String>,
+        front: bool,
         caller: &crate::prompt_origin::RequestCaller,
     ) {
         let Some(op) = cmid.as_deref().filter(|op| !op.is_empty()) else {
@@ -928,7 +1081,7 @@ impl Hub {
             self.broadcast_error(Some(session_id.to_owned()), msg.to_owned());
             return;
         }
-        match self.begin_durable_recovery_draft_activation(reservation, caller) {
+        match self.begin_durable_recovery_draft_activation(reservation, front, caller) {
             Ok(RecoveryActivationCommitStep::CommittedSync) => {}
             Ok(RecoveryActivationCommitStep::Pending(mut commit, rx)) => {
                 let hub = self.clone();
@@ -954,12 +1107,14 @@ impl Hub {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn stage_regular_draft_activation(
         &self,
         session_id: &str,
         s: &mut Session,
         pos: usize,
         effective_cmid: Option<String>,
+        front: bool,
         trigger: crate::prompt_origin::DeliveryOrigin,
         wired: bool,
     ) -> (bool, bool, Option<DispatchReq>) {
@@ -993,7 +1148,7 @@ impl Hub {
                 trigger,
             })
         } else {
-            s.queue.push(QueuedMessage {
+            let row = QueuedMessage {
                 id: self.next_qid(),
                 text: m.text,
                 content: m.content,
@@ -1001,7 +1156,12 @@ impl Hub {
                 schedule: None,
                 origin: m.origin,
                 initiator: Some(trigger),
-            });
+            };
+            if front {
+                s.queue.insert(0, row);
+            } else {
+                s.queue.push(row);
+            }
             None
         };
         (had_scheduled, is_owner_turn, dispatch)
@@ -1020,17 +1180,29 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            let mut activatable = Vec::new();
-            let mut retained = Vec::new();
+            let mut kept = Vec::new();
+            let mut activated = Vec::new();
             for m in std::mem::take(&mut s.drafts) {
-                if m.id.starts_with("recovery-") {
-                    retained.push(m);
+                if m.id.starts_with("recovery-")
+                    || s.steer_reservations.values().any(|r| r.row_id == m.id)
+                {
+                    kept.push(m);
                 } else {
-                    activatable.push(m);
+                    activated.push(m);
                 }
             }
-            s.drafts = retained;
-            activatable
+            if s.editing
+                .as_deref()
+                .is_some_and(|id| activated.iter().any(|m| m.id == id))
+            {
+                s.editing = None;
+                s.editing_token = None;
+            }
+            let res = &s.steer_reservations;
+            s.deferred_scheduled_drafts
+                .retain(|d| d.starts_with("recovery-") || res.values().any(|r| r.row_id == *d));
+            s.drafts = kept;
+            activated
         };
         if msgs.is_empty() {
             return;

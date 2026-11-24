@@ -148,7 +148,6 @@ test("every prefix continuation has one stable command meaning", () => {
     " ": "session.switch",
     tab: "session.alternate",
     k: "commandPalette.open",
-    z: "editor.expand",
   });
 });
 
@@ -254,12 +253,12 @@ test("an open Draft's actions are root keys, not a group", () => {
   assertEquals(DESKTOP_DOCUMENT_KEYS.copy, "Y");
   assertEquals(DESKTOP_DOCUMENT_KEYS.readableWidth, "UW");
   for (const key of Object.keys(DESKTOP_DOCUMENT_COMMANDS)) {
-    // Only surface-scoped meanings: Schedule (`H`) and the Top bar group
-    // (`T`), which needs a Session page.
+    // Only surface-scoped meanings: Schedule (`H`) and Rename (`R`),
+    // which maps to the Draft's title on a Draft page.
     const session = DESKTOP_WORKSPACE_COMMANDS[key];
     assertEquals(
       session === undefined || session === "composer.schedule" ||
-        session === "group:t",
+        session === "item.rename",
       true,
     );
   }

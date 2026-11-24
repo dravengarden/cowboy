@@ -39,6 +39,8 @@ pub const SESSION_RESOURCE_WAIT_PREFIX: &str = "session_resource_wait:";
 pub const SESSION_QUEUE_PAUSED_PREFIX: &str = "session_queue_paused:";
 pub const SESSION_DELIVERY_POLICY_PREFIX: &str = "session_delivery_policy:";
 pub const SESSION_DELIVERY_HOLD_PREFIX: &str = "session_delivery_hold:";
+/// Active/uncertain steer reservations protecting source queue/draft rows across restarts.
+pub const SESSION_STEER_RESERVATIONS_PREFIX: &str = "session_steer_reservations:";
 /// The uncertain-effect sequence the owner acknowledged; the session id follows.
 pub const SESSION_UNCERTAIN_EFFECT_ACK_PREFIX: &str = "session_uncertain_effect_ack:";
 /// The kill switch's native logout of one named-only account; the account id follows.
@@ -103,6 +105,7 @@ pub const SESSION_STATE_PREFIXES: &[&str] = &[
     SESSION_QUEUE_PAUSED_PREFIX,
     SESSION_DELIVERY_POLICY_PREFIX,
     SESSION_DELIVERY_HOLD_PREFIX,
+    SESSION_STEER_RESERVATIONS_PREFIX,
     SESSION_UNCERTAIN_EFFECT_ACK_PREFIX,
     SESSION_CONTEXT_PREFIX,
     SESSION_CONTEXT_CARRIER_PREFIX,
@@ -133,6 +136,7 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             SESSION_QUEUE_PAUSED_PREFIX,
             SESSION_DELIVERY_POLICY_PREFIX,
             SESSION_DELIVERY_HOLD_PREFIX,
+            SESSION_STEER_RESERVATIONS_PREFIX,
             SESSION_UNCERTAIN_EFFECT_ACK_PREFIX,
             SESSION_CONTEXT_PREFIX,
             SESSION_CONTEXT_CARRIER_PREFIX,
@@ -179,6 +183,7 @@ pub fn examples() -> Vec<String> {
         format!("{SESSION_QUEUE_PAUSED_PREFIX}sess-1"),
         format!("{SESSION_DELIVERY_POLICY_PREFIX}sess-1"),
         format!("{SESSION_DELIVERY_HOLD_PREFIX}sess-1"),
+        format!("{SESSION_STEER_RESERVATIONS_PREFIX}sess-1"),
         format!("{SESSION_UNCERTAIN_EFFECT_ACK_PREFIX}sess-1"),
         format!("{SESSION_CONTEXT_PREFIX}sess-1"),
         format!("{SESSION_CONTEXT_CARRIER_PREFIX}sess-1"),
@@ -230,6 +235,7 @@ mod tests {
             SESSION_MCP_DEFAULT_PREFIX,
             SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX,
             SESSION_CONFIG_REVERT_PREFIX,
+            SESSION_STEER_RESERVATIONS_PREFIX,
         ] {
             assert!(!is_persisted_setting_key(key), "{key}");
         }

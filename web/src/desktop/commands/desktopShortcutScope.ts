@@ -43,6 +43,9 @@ export function desktopOverlayOwnsShortcuts(root: QueryRoot): boolean {
         return true;
       }
     }
+    if (appRoot && appRoot.querySelector(OVERLAY_SELECTOR) !== null) {
+      return true;
+    }
     return false;
   }
   return root.querySelector(OVERLAY_SELECTOR) !== null;

@@ -6,7 +6,7 @@ export async function copyDraftToSession(
   documentId: string,
   sessionId: string,
   sessionTitle: string,
-): Promise<void> {
+): Promise<{ cmid: string }> {
   const owner = draftRepository().document(documentId);
   await owner.hydrate();
   if (!owner.get().document) await owner.refresh();
@@ -27,6 +27,7 @@ export async function copyDraftToSession(
       attachments: [...document.attachments],
     }],
   );
+  return { cmid: receipt.cmid };
 }
 
 /** Copy to the Session's unsent drafts, then put the document in Trash. A

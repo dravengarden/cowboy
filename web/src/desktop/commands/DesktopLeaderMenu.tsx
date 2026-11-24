@@ -1,5 +1,5 @@
 import { ScrollEdges } from "@cowboy/app-shell";
-import { useEffect, useState } from "react";
+import { useEffect, useReducer, useState } from "react";
 import { alpha, Box, ButtonBase, Stack, Typography } from "@mui/material";
 import { ShortcutKeycap } from "../../ShortcutKeycap";
 import { HintTooltip } from "../../HintTooltip";
@@ -13,7 +13,7 @@ import {
   useDesktopCommands,
 } from "./DesktopCommandProvider";
 import { useDesktopHints, useDesktopLeaderOptional } from "./leaderContext";
-import { activateHint } from "./hintTargets";
+import { activateHint, isHintActionable, topmostModal } from "./hintTargets";
 import {
   DESKTOP_SESSION_JUMP_EVENT,
   useSessionJumpTargets,
@@ -143,6 +143,23 @@ function LeaderModalHints({
   hints: ReturnType<typeof useDesktopHints>;
   onClose: () => void;
 }): React.JSX.Element {
+  const [, reflow] = useReducer((value: number) => value + 1, 0);
+  useEffect(() => {
+    let frame = 0;
+    const schedule = (): void => {
+      cancelAnimationFrame(frame);
+      frame = requestAnimationFrame(reflow);
+    };
+    globalThis.addEventListener("scroll", schedule, true);
+    globalThis.addEventListener("resize", schedule);
+    return () => {
+      cancelAnimationFrame(frame);
+      globalThis.removeEventListener("scroll", schedule, true);
+      globalThis.removeEventListener("resize", schedule);
+    };
+  }, []);
+  const modal = topmostModal();
+  const visibleHints = hints.filter((hint) => isHintActionable(hint.element, modal));
   return (
     <Box
       sx={{
@@ -151,13 +168,16 @@ function LeaderModalHints({
         columnGap: 1,
       }}
     >
-      {hints.map((hint) => (
+      {visibleHints.map((hint) => (
         <ButtonBase
           key={`${hint.label}:${hint.name}`}
           data-modal-leader-entry={hint.label}
           onClick={() => {
+            const currentModal = topmostModal();
             onClose();
-            activateHint(hint.element);
+            if (isHintActionable(hint.element, currentModal)) {
+              activateHint(hint.element);
+            }
           }}
           sx={entrySx(false)}
         >

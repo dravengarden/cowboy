@@ -1,11 +1,10 @@
 import { desktopSize } from "./surface/desktopSize";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Box, Button, ButtonBase, CircularProgress, Dialog, DialogContent, IconButton, keyframes, Skeleton, Stack, Tooltip, Typography } from "@mui/material";
 import { alpha } from "@mui/material/styles";
-import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
 import { sequentialShortcutAvailability } from "./desktop/commands/shortcutAvailability";
-import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
+import { useToolDetailsKeyboard } from "./toolDetailsKeyboard";
 import { Close, Code, Construction, ExpandMore, ExtensionOutlined, Folder, KeyboardArrowDown, MyLocation, NavigateBefore, NavigateNext, Search, Terminal } from "@mui/icons-material";
 import { Markdown } from "./Markdown";
 import { CodeView, Labeled } from "./tools/blocks";
@@ -16,6 +15,7 @@ import { type ContentChunk, isHumanPrompt, type RenderItem } from "./derive";
 import { ToolStatusChip, toolStatusLabel } from "./tools/ToolStatusChip";
 import { ScrollEdges, FloatingActionIsland } from "@cowboy/app-shell";
 import { Sheet } from "./Sheet";
+import { desktopDialogSlotProps, InstantModalTransition, isImeBlockedEscape } from "./desktop/DesktopModal";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { scrollableAncestor, useToolDetailReveal } from "./useToolDetailReveal";
 
@@ -269,6 +269,7 @@ export function ToolDetailsBrowser({
   const currentRef = useRef<HTMLDivElement>(null);
   const anchorSpacerRef = useRef<HTMLDivElement>(null);
   const historyRef = useRef<HTMLElement>(null);
+  const dialogRootRef = useRef<HTMLDivElement>(null);
   const scrollByKey = useRef(new Map<string, number>());
   const navigationChord = useRef<number | null>(null);
   const [navigationPrefixArmed, setNavigationPrefixArmed] = useState(false);
@@ -313,73 +314,10 @@ export function ToolDetailsBrowser({
     onSelect(next.key);
   };
 
-  useEffect(() => {
-    if (!desktop || !item) return undefined;
-    const clearNavigationChord = (): void => {
-      if (navigationChord.current !== null) {
-        globalThis.clearTimeout(navigationChord.current);
-        navigationChord.current = null;
-      }
-      setNavigationPrefixArmed(false);
-    };
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (desktopImeOwnsKey(event)) return;
-      if (event.metaKey || event.ctrlKey || event.altKey) {
-        clearNavigationChord();
-        return;
-      }
-      const target = event.target instanceof Element ? event.target : null;
-      if (target?.matches("input, textarea, [contenteditable='true']")) return;
-      const key = workspaceCommandKey(event);
-      if (navigationChord.current !== null) {
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.repeat) return;
-        clearNavigationChord();
-        if (key === "g") select(runs[0]?.tools[0]);
-        return;
-      }
-      if (key === "Escape") {
-        event.preventDefault();
-        onClose();
-      } else if (key === "[") {
-        event.preventDefault();
-        select(runs[runIndex - 1]?.tools.at(-1));
-      } else if (key === "]") {
-        event.preventDefault();
-        select(runs[runIndex + 1]?.tools[0]);
-      } else if (key === "j") {
-        event.preventDefault();
-        select(runs[Math.min(runs.length - 1, runIndex + 1)]?.tools[0]);
-      } else if (key === "k") {
-        event.preventDefault();
-        select(runs[Math.max(0, runIndex - 1)]?.tools.at(-1));
-      } else if (!rawOnly && (key === "h" || key === "l")) {
-        event.preventDefault();
-        setRawByKey((state) => ({ ...state, [item.key]: key === "l" }));
-      } else if (key === "Enter") {
-        event.preventDefault();
-        onLocate(item.key);
-      } else if (key === "g") {
-        event.preventDefault();
-        event.stopPropagation();
-        if (event.repeat) return;
-        setNavigationPrefixArmed(true);
-        navigationChord.current = globalThis.setTimeout(() => {
-          navigationChord.current = null;
-          setNavigationPrefixArmed(false);
-        }, 1200);
-      } else if (key === "G") {
-        event.preventDefault();
-        select(runs.at(-1)?.tools.at(-1));
-      }
-    };
-    globalThis.addEventListener("keydown", onKeyDown, true);
-    return () => {
-      globalThis.removeEventListener("keydown", onKeyDown, true);
-      clearNavigationChord();
-    };
-  }, [desktop, runIndex, item, rawOnly, runs, onClose, onLocate]);
+  useToolDetailsKeyboard({
+    desktop, item, runIndex, rawOnly, runs, dialogRootRef,
+    navigationChord, setNavigationPrefixArmed, setRawByKey, select, onClose, onLocate,
+  });
 
   if (!item) return null;
   // A search query has no useful alternate presentation: formatting it only
@@ -889,23 +827,26 @@ export function ToolDetailsBrowser({
       ? (
         <Dialog
           open
-          onClose={onClose}
+          onClose={(e, r) => { if (!isImeBlockedEscape(e, r)) onClose(); }}
           maxWidth={false}
           fullWidth
-          PaperProps={{
-            sx: {
+          disableScrollLock
+          slots={{ transition: InstantModalTransition }}
+          slotProps={desktopDialogSlotProps({
+            onClose,
+            paperSx: {
               width: "calc(100vw - 32px)",
               maxWidth: 1600,
               height: "calc(100dvh - 32px)",
               maxHeight: 1100,
               m: 2,
               overflow: "hidden",
-              borderRadius: 2.5,
-              backgroundImage: "none",
             },
-          }}
+          })}
         >
           <Box
+            ref={dialogRootRef}
+            data-desktop-modal-keys="own"
             sx={{
               height: "100%",
               minHeight: 0,

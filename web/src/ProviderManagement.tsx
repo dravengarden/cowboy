@@ -1423,26 +1423,18 @@ function ProviderManagement(
             entry.provider_id === uninstallPlan?.plugin_id
           )?.manifest.display.name ?? "Provider"
         } from ${machine?.display_name ?? "Machine"}?`}
-        actions={
-          <>
-            <Button color="inherit" onClick={() => owners?.uninstall.close()}>
-              {uninstall.busy === "confirm" ? "Close" : "Cancel"}
-            </Button>
-            <Button
-              color="error"
-              variant="contained"
-              disabled={Boolean(uninstall.busy) || !uninstallPlan ||
-                (Boolean(uninstallPlan.active_session_ids.length) &&
-                  !confirmActive)}
-              startIcon={uninstall.busy === "confirm"
-                ? <CircularProgress size={desktopSize(16)} color="inherit" />
-                : undefined}
-              onClick={() => void confirmUninstall()}
-            >
-              Uninstall and remove sessions
-            </Button>
-          </>
-        }
+        confirm={{
+          label: "Uninstall and remove sessions",
+          cancelLabel: uninstall.busy === "confirm" ? "Close" : "Cancel",
+          color: "error",
+          disabled: Boolean(uninstall.busy) || !uninstallPlan ||
+            (Boolean(uninstallPlan.active_session_ids.length) &&
+              !confirmActive),
+          startIcon: uninstall.busy === "confirm"
+            ? <CircularProgress size={desktopSize(16)} color="inherit" />
+            : undefined,
+          onConfirm: () => void confirmUninstall(),
+        }}
       >
         {uninstallPlan
           ? (

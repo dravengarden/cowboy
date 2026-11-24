@@ -1649,7 +1649,7 @@ export async function runDraftDocumentsBrowserConformance(
         () => !!container.querySelector("[data-workspace-document]"),
         "Draft reopens after the leader jump",
       );
-      // Draft title: `␣T` goes to it, Enter returns to the body start, and ↑ on
+      // Draft title: `␣R` goes to it, Enter returns to the body start, and ↑ on
       // the first body line re-enters the title (FOCUS.md "Draft document").
       {
         const titleField = () =>
@@ -1657,22 +1657,22 @@ export async function runDraftDocumentsBrowserConformance(
         await until(() => !!titleField(), "Draft title field");
         check(
           container.querySelector("[data-draft-title-shortcut]")?.textContent
-            ?.includes("␣T"),
-          "The title shows its ␣T slot",
+            ?.includes("␣R"),
+          "The title shows its ␣R slot",
         );
         const leader = isMac ? { metaKey: true } : { altKey: true };
         const at = document.activeElement ?? document.body;
         flushSync(() =>
           at.dispatchEvent(new KeyboardEvent("keydown", { key: "k", code: "KeyK", bubbles: true, cancelable: true, ...leader }))
         );
-        press(document.activeElement ?? document.body, "t", "KeyT");
+        press(document.activeElement ?? document.body, "r", "KeyR");
         await tick();
         const field = titleField()!;
         check(
           document.activeElement === field &&
             field.selectionStart === field.value.length &&
             field.selectionEnd === field.value.length,
-          "␣T puts the cursor at the end of the title",
+          "␣R puts the cursor at the end of the title",
         );
         press(field, "Enter", "Enter");
         await tick();

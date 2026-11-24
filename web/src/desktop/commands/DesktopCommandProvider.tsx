@@ -41,11 +41,12 @@ import {
   desktopVimSinkShouldHandleKeys,
 } from "../desktopComposerOwnership";
 import {
+  handlePendingListKey,
+  isPendingModEnter,
   listPageTarget,
   listScroller,
   listScrollFor,
   listViewKey,
-  pendingItemActionKey,
 } from "./listNavigation";
 import {
   adjacentDesktopSplitter,
@@ -76,11 +77,13 @@ import {
 import {
   activateHint,
   type DesktopHint,
+  isHintActionable,
   listHints,
   modalHints,
   popupOwnsKeys,
   topmostModal,
 } from "./hintTargets";
+import { focusAdjacentOutsideRegion, isInteractiveControl } from "./modalGuard";
 import { handleDesktopModalKey } from "./modalNavigation";
 import { handleDeliveryPickerKey } from "../../deliveryPickerCommands";
 import { desktopMenuNavigationKey } from "./menuNavigation";
@@ -179,8 +182,8 @@ export function desktopLeaderGroupAvailable(
   );
 }
 
-/** A page's own root command (`␣T` Title on a Draft) takes its key over a
- *  group of the same letter, which needs the other page (Top bar). */
+/** A page's own root command (`␣R` Title on a Draft) takes its key over a
+ *  group of the same letter, if one exists on another page. */
 export function desktopSurfaceCommandOwnsKey(
   commands: Iterable<DesktopCommand>,
   key: string,
@@ -314,9 +317,18 @@ function visibleRegionItems(region: HTMLElement | null): HTMLElement[] {
     });
 }
 
-function conversationWidgets(region: HTMLElement | null): HTMLElement[] {
-  return [...(region?.querySelectorAll<HTMLElement>("[data-desktop-widget-toggle]") ?? [])]
-    .filter((element) => element.offsetParent !== null)
+function conversationWidgets(region: HTMLElement | null, includeActions = false): HTMLElement[] {
+  const selector = includeActions
+    ? "[data-desktop-widget-toggle], [data-desktop-transcript-stop], a[href], button, input:not([type='hidden']), select, textarea, summary, [contenteditable='true'], [tabindex]:not([tabindex='-1'])"
+    : "[data-desktop-widget-toggle]";
+  return [...(region?.querySelectorAll<HTMLElement>(selector) ?? [])]
+    .filter((element) => {
+      if (element.offsetParent === null || element.matches(":disabled, [aria-disabled='true']")) return false;
+      if (element.hasAttribute("data-desktop-transcript-scroller")) return false;
+      const marked = element.matches("[data-desktop-widget-toggle], [data-desktop-transcript-stop]");
+      if (!marked && element.tabIndex < 0) return false;
+      return !element.closest("[aria-hidden='true'], [inert]");
+    })
     .sort((left, right) => {
       const a = left.getBoundingClientRect();
       const b = right.getBoundingClientRect();
@@ -327,18 +339,40 @@ function conversationWidgets(region: HTMLElement | null): HTMLElement[] {
 function nearestConversationWidget(
   region: HTMLElement,
   widgets: HTMLElement[],
+  preferMarked = false,
 ): HTMLElement | null {
   if (widgets.length === 0) return null;
   const scroller = region.querySelector<HTMLElement>("[data-desktop-transcript-scroller]");
   const bounds = scroller?.getBoundingClientRect() ?? region.getBoundingClientRect();
+  const pool = preferMarked
+    ? widgets.filter((el) => {
+      if (!el.matches("[data-desktop-widget-toggle], [data-desktop-transcript-stop]")) return false;
+      const r = el.getBoundingClientRect();
+      return r.bottom > bounds.top && r.top < bounds.bottom;
+    })
+    : [];
+  const candidates = pool.length > 0 ? pool : widgets;
   const center = bounds.top + bounds.height / 2;
-  return widgets.reduce((nearest, candidate) => {
+  return candidates.reduce((nearest, candidate) => {
     const candidateRect = candidate.getBoundingClientRect();
     const nearestRect = nearest.getBoundingClientRect();
     const candidateDistance = Math.abs(candidateRect.top + candidateRect.height / 2 - center);
     const nearestDistance = Math.abs(nearestRect.top + nearestRect.height / 2 - center);
     return candidateDistance < nearestDistance ? candidate : nearest;
   });
+}
+
+function interceptImeEscape(
+  event: KeyboardEvent,
+  armed: boolean,
+  clearLeader: () => void,
+  clearJump: () => void,
+): boolean {
+  if (event.key !== "Escape" || desktopKeyIntent(event).owner !== "ime") return false;
+  if (!event.isComposing) event.stopPropagation();
+  if (armed) clearLeader();
+  clearJump();
+  return true;
 }
 
 function isModifierKey(key: string): boolean {
@@ -385,8 +419,8 @@ export function DesktopCommandProvider(
     setHintsState(next);
   }, []);
   const workspace = useDesktopWorkspace();
-  const focusRef = useRef({ focusedPane: workspace.focusedPane, focusedRegion: workspace.focusedRegion });
-  focusRef.current = { focusedPane: workspace.focusedPane, focusedRegion: workspace.focusedRegion };
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
   const clearWorkspaceCommand = useCallback((): void => {
     unlockEditableForLeader();
     leaderArmed.current = false;
@@ -448,7 +482,7 @@ export function DesktopCommandProvider(
     if (!command || command.when?.() === false) return false;
     if (
       !anyScope &&
-      !desktopCommandInScope(command, focusRef.current.focusedPane, focusRef.current.focusedRegion)
+      !desktopCommandInScope(command, workspaceRef.current.focusedPane, workspaceRef.current.focusedRegion)
     ) return false;
     command.run();
     return true;
@@ -495,15 +529,16 @@ export function DesktopCommandProvider(
     }
   }, [clearPendingJumpChord, workspace.focusedRegion, workspace.mode]);
 
+  const handlersRef = useRef({ armPendingJumpChord, armWorkspaceCommand, clearPendingJumpChord, clearWorkspaceCommand, setHints });
+  handlersRef.current = { armPendingJumpChord, armWorkspaceCommand, clearPendingJumpChord, clearWorkspaceCommand, setHints };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (remoteViewerOwnsKey(event)) return; // The remote page owns every key.
-      // Vim in a native text field (inputVim) goes first: its Insert Esc and
-      // Normal motions belong to the field. An armed leader keeps its continuation; a composition keeps every key.
-      if (
-        !leaderArmed.current && desktopKeyIntent(event).owner !== "ime" &&
-        handleInputVimKey(event)
-      ) {
+      if (remoteViewerOwnsKey(event)) return;
+      const workspace = workspaceRef.current;
+      const { armPendingJumpChord, armWorkspaceCommand, clearPendingJumpChord, clearWorkspaceCommand, setHints } = handlersRef.current;
+      if (interceptImeEscape(event, leaderArmed.current, clearWorkspaceCommand, clearPendingJumpChord)) return;
+      // inputVim owns native text fields (Insert Esc & Normal motions) unless leader/IME is active.
+      if (!leaderArmed.current && desktopKeyIntent(event).owner !== "ime" && handleInputVimKey(event)) {
         clearPendingJumpChord();
         return;
       }
@@ -638,10 +673,10 @@ export function DesktopCommandProvider(
             if (event.code === "Space") swallowSpaceKeyUp.current = true;
             if (event.repeat) return;
             const target = hintsRef.current.find((hint) =>
-              hint.label === key.toLowerCase()
+              hint.label === key.toLowerCase() && isHintActionable(hint.element, modal)
             );
             clearWorkspaceCommand();
-            if (target) afterLeaderKey(event, () => activateHint(target.element));
+            if (target) afterLeaderKey(event, () => { if (isHintActionable(target.element, modal)) activateHint(target.element); });
             return;
           }
         }
@@ -888,10 +923,10 @@ export function DesktopCommandProvider(
             event.stopPropagation();
             if (event.repeat) return;
             const target = hintsRef.current.find((hint) =>
-              hint.label === key.toLowerCase()
+              hint.label === key.toLowerCase() && isHintActionable(hint.element)
             )?.element;
             clearPendingJumpChord();
-            if (target?.isConnected) {
+            if (target && isHintActionable(target)) {
               target.focus({ preventScroll: true });
               target.scrollIntoView({ block: "nearest" });
             }
@@ -907,26 +942,27 @@ export function DesktopCommandProvider(
       const items = visibleRegionItems(region);
       const scrollNavigation = region?.dataset.desktopNavigation === "scroll";
       const widgets = scrollNavigation ? conversationWidgets(region) : [];
-      const activeWidget = document.activeElement instanceof HTMLElement
-        ? document.activeElement.closest<HTMLElement>("[data-desktop-widget-toggle]")
-        : null;
-      if (
-        workspace.mode === "normal" && scrollNavigation && region &&
-        workspaceCommandKey(event) === "Tab" && !event.ctrlKey &&
-        !event.metaKey && !event.altKey
-      ) {
-        const current = activeWidget ? widgets.indexOf(activeWidget) : -1;
-        const nearest = nearestConversationWidget(region, widgets);
-        const nearestIndex = nearest ? widgets.indexOf(nearest) : -1;
-        const next = current >= 0
-          ? (current + (event.shiftKey ? -1 : 1) + widgets.length) % widgets.length
-          : nearestIndex;
-        const widget = widgets[next];
-        if (widget) {
+      const activeEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      const activeWidget = activeEl?.closest<HTMLElement>("[data-desktop-widget-toggle]") ?? null;
+      const activeActionStop = activeEl?.closest<HTMLElement>("[data-desktop-transcript-stop]") ?? null;
+      const activeOtherControl = activeEl !== null && !activeWidget && !activeActionStop && isInteractiveControl(activeEl);
+      if (workspace.mode === "normal" && scrollNavigation && region && workspaceCommandKey(event) === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+        const stops = conversationWidgets(region, true);
+        const activeStop = (activeEl && stops.includes(activeEl) ? activeEl : null) ?? activeWidget ?? activeActionStop;
+        const current = activeStop ? stops.indexOf(activeStop) : -1;
+        const nearest = nearestConversationWidget(region, stops, true);
+        const next = current >= 0 ? current + (event.shiftKey ? -1 : 1) : (nearest ? stops.indexOf(nearest) : -1);
+        const stop = next >= 0 && next < stops.length ? stops[next] : undefined;
+        if (stop) {
           event.preventDefault();
           event.stopPropagation();
-          widget.focus({ preventScroll: true });
-          widget.scrollIntoView({ block: "nearest", inline: "nearest" });
+          stop.focus({ preventScroll: true });
+          stop.scrollIntoView({ block: "nearest", inline: "nearest" });
+          return;
+        }
+        if (current >= 0 && focusAdjacentOutsideRegion(region, event.shiftKey ? -1 : 1)) {
+          event.preventDefault();
+          event.stopPropagation();
           return;
         }
       }
@@ -957,7 +993,7 @@ export function DesktopCommandProvider(
           }
         }
         if (action === null) {
-          if (!event.ctrlKey && (key === "h" || key === "l" || key === "Enter")) {
+          if (!event.ctrlKey && !activeActionStop && !activeOtherControl && (key === "h" || key === "l" || key === "Enter")) {
             const widget = activeWidget ?? (region
               ? nearestConversationWidget(region, widgets)
               : null);
@@ -1041,6 +1077,23 @@ export function DesktopCommandProvider(
       // text editors and native controls; those surfaces keep their own j/k,
       // arrows and IME semantics. Regions expose items through a tiny DOM
       // contract so Sessions, Queue and Drafts share one implementation.
+      const pendingList = region?.dataset.desktopRegion === "prompt.queued" ||
+        region?.dataset.desktopRegion === "prompt.draft";
+      if (
+        workspace.mode === "normal" && !textEditorOwnsKey && pendingList &&
+        region && (isPendingModEnter(event) || items.length === 0) &&
+        handlePendingListKey({
+          event,
+          key: workspaceCommandKey(event),
+          region,
+          items,
+          active: document.activeElement instanceof HTMLElement
+            ? items.indexOf(document.activeElement.closest<HTMLElement>("[data-desktop-item]") as HTMLElement)
+            : -1,
+          reordering: region.dataset.desktopReordering === "true",
+          focusComposer: () => workspace.focusRegion("prompt.composer"),
+        })
+      ) return;
       const viewMotion = listViewKey(event);
       if (
         workspace.mode === "normal" && !textEditorOwnsKey &&
@@ -1066,8 +1119,6 @@ export function DesktopCommandProvider(
           }
           const sessionsList = region?.dataset.desktopRegion === "sessions.list";
           const pinned = sessionsList && region?.dataset.desktopPinned === "true";
-          const pendingList = region?.dataset.desktopRegion === "prompt.queued" ||
-            region?.dataset.desktopRegion === "prompt.draft";
           const reordering = pendingList && region?.dataset.desktopReordering === "true";
           // A pending `g` owns the next key (the sequential-chord law): `gg`
           // jumps to the first row, and any other unmodified key cancels the
@@ -1192,32 +1243,17 @@ export function DesktopCommandProvider(
             }));
             return;
           }
-          if (pendingList && key.toLowerCase() === "o" && !event.repeat) {
-            event.preventDefault();
-            event.stopPropagation();
-            region.querySelector<HTMLElement>("[data-desktop-pending-list]")?.dispatchEvent(
-              new CustomEvent("cowboy:desktop-toggle-reorder"),
-            );
-            items[Math.max(0, active)]?.focus({ preventScroll: true });
-            return;
-          }
-          if (pendingList && reordering && key === "Escape") {
-            event.preventDefault();
-            event.stopPropagation();
-            region.querySelector<HTMLElement>("[data-desktop-pending-list]")?.dispatchEvent(
-              new CustomEvent("cowboy:desktop-release-reorder"),
-            );
-            return;
-          }
-          if (pendingList && reordering && (key === "j" || key === "k")) {
-            event.preventDefault();
-            event.stopPropagation();
-            items[Math.max(0, active)]?.dispatchEvent(new CustomEvent("cowboy:desktop-reorder", {
-              bubbles: true,
-              detail: { delta: key === "j" ? 1 : -1 },
-            }));
-            return;
-          }
+          if (
+            pendingList && region && handlePendingListKey({
+              event,
+              key,
+              region,
+              items,
+              active,
+              reordering,
+              focusComposer: () => workspace.focusRegion("prompt.composer"),
+            })
+          ) return;
           const rowEvent = sessionsList && !event.repeat
             ? SESSIONS_ROW_EVENTS[key.toLowerCase()]
             : undefined;
@@ -1284,33 +1320,11 @@ export function DesktopCommandProvider(
             items[next]?.scrollIntoView({ block: "nearest" });
             return;
           }
-          if (pendingList && active >= 0) {
-            const pendingAction = pendingItemActionKey(key);
-            const action = pendingAction
-              ? items[active]?.querySelector<HTMLElement>(
-                `[data-desktop-item-action='${pendingAction}']`,
-              )
-              : null;
-            if (action) {
-              event.preventDefault();
-              event.stopPropagation();
-              action.click();
-              return;
-            }
-          }
           const opensSession = region?.dataset.desktopRegion === "sessions.list" &&
             (key === "Enter" || key.toLowerCase() === "l");
-          const opensPending =
-            (region?.dataset.desktopRegion === "prompt.queued" ||
-              region?.dataset.desktopRegion === "prompt.draft") &&
-            (key === "Enter" || key.toLowerCase() === "l");
-          if ((key === "Enter" || opensSession || opensPending) && active >= 0) {
+          if ((key === "Enter" || opensSession) && active >= 0) {
             const item = items[active];
-            const action = opensPending
-              ? item?.querySelector<HTMLElement>(
-                "[data-desktop-item-action='edit'], button[aria-label='Edit']",
-              )
-              : item?.matches("button,[role='button']")
+            const action = item?.matches("button,[role='button']")
               ? item
               : item?.querySelector<HTMLElement>("[data-desktop-item-action='default']");
             if (action) {
@@ -1323,16 +1337,6 @@ export function DesktopCommandProvider(
                 // open semantics instead of leaving focus behind in the rail.
                 requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
               }
-              return;
-            }
-          }
-          if (key.toLowerCase() === "i" && active >= 0) {
-            const edit = items[active]?.querySelector<HTMLElement>(
-              "[data-desktop-item-action='edit'], button[aria-label='Edit']",
-            );
-            if (edit) {
-              event.preventDefault();
-              edit.click();
               return;
             }
           }
@@ -1404,14 +1408,7 @@ export function DesktopCommandProvider(
         itemChord.current = null;
       }
     };
-  }, [
-    armPendingJumpChord,
-    armWorkspaceCommand,
-    clearPendingJumpChord,
-    clearWorkspaceCommand,
-    setHints,
-    workspace,
-  ]);
+  }, []);
 
   const leader = useMemo<DesktopLeaderState>(() => ({
     armed: workspace.mode === "command",

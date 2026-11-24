@@ -18,7 +18,12 @@
 
 import { workspaceCommandKey } from "./workspaceCommandKey";
 import { regionMotionKey } from "./regionNavigation";
-import { enterInputNormal, inputVimField } from "../vim/inputVim";
+import {
+  enterInputInsert,
+  enterInputNormal,
+  inputVimField,
+  isInputVimNormal,
+} from "../vim/inputVim";
 
 /** Regions inside a modal that keep their own keys while focused. */
 export const DESKTOP_MODAL_OWN_KEYS = [
@@ -218,6 +223,52 @@ let goTimer: ReturnType<typeof setTimeout> | undefined;
  * the key was consumed. IME composition and the dialog leader are resolved
  * by the caller first.
  */
+function targetInModalScope(target: HTMLElement | null, modal: HTMLElement): boolean {
+  return !target || modal.contains(target) || target.contains(modal) ||
+    target === document.body || target === document.documentElement;
+}
+
+function tryModalDirectShortcut(
+  modal: HTMLElement,
+  key: string,
+): boolean {
+  const escaped = CSS.escape(key.toLowerCase());
+  const direct = modal.querySelector<HTMLElement>(
+    `[data-modal-shortcut="${escaped}"], [data-session-shortcut="${escaped}"], [data-folder-shortcut="${escaped}"], [data-folder-shortcut-alt="${escaped}"]`,
+  );
+  if (!direct || !visible(direct) || !enabled(direct)) return false;
+  direct.click();
+  return true;
+}
+
+function tryReenterField(
+  target: HTMLElement | null,
+  field: HTMLElement | null,
+  key: string,
+): boolean {
+  if (
+    key === "Enter" &&
+    (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+    isInputVimNormal(target)
+  ) {
+    enterInputInsert(target, target.selectionStart ?? 0);
+    return true;
+  }
+  if (field && (key === "i" || key === "a" || key === "Enter")) {
+    field.focus({ preventScroll: true });
+    if (
+      key === "a" &&
+      (field instanceof HTMLInputElement ||
+        field instanceof HTMLTextAreaElement)
+    ) {
+      const end = field.value.length;
+      field.setSelectionRange(end, end);
+    }
+    return true;
+  }
+  return false;
+}
+
 export function handleDesktopModalKey(
   event: KeyboardEvent,
   modal: HTMLElement,
@@ -225,7 +276,7 @@ export function handleDesktopModalKey(
   if (!modal.matches("[role='dialog']")) return false;
   if (modal.querySelector("[data-desktop-modal-keys='own']")) return false;
   const target = event.target instanceof HTMLElement ? event.target : null;
-  if (target && !modal.contains(target)) return false;
+  if (!targetInModalScope(target, modal)) return false;
   if (target?.closest(DESKTOP_MODAL_OWN_KEYS)) return false;
   const consume = (): true => {
     event.preventDefault();
@@ -260,18 +311,11 @@ export function handleDesktopModalKey(
   const field = target?.hasAttribute(FIELD_CURSOR)
     ? target.querySelector<HTMLElement>(TEXT_FIELD)
     : null;
-  if (field && (key === "i" || key === "a" || key === "Enter")) {
-    field.focus({ preventScroll: true });
-    if (
-      key === "a" &&
-      (field instanceof HTMLInputElement ||
-        field instanceof HTMLTextAreaElement)
-    ) {
-      const end = field.value.length;
-      field.setSelectionRange(end, end);
-    }
-    return consume();
-  }
+  if (tryReenterField(target, field, key)) return consume();
+  if (
+    motion === null && !event.shiftKey && key.length === 1 &&
+    !field && !isInputVimNormal(target) && tryModalDirectShortcut(modal, key)
+  ) return consume();
   if (
     key === "Enter" && target?.matches(
       "[role='checkbox'], [role='switch'], [role='radio'], input[type='checkbox'], input[type='radio']",

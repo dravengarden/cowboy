@@ -457,12 +457,19 @@ pub async fn submit(
     let hash = crate::managed_calls::canonical_digest(&serde_json::json!({
         "caller":&caller, "delivery":request.delivery, "text":request.text,
         "content":request.content, "target":request.target,
+        "consume_source":request.consume_source,
     }));
     match store
         .admit_agent_operation(&owner, &session, &operation, &hash)
         .await
     {
         Ok(Admission::Existing(saved)) => {
+            if let Some(ref receipt) = saved
+                && (receipt["status"] == "submitted" || receipt["status"] == "injected")
+                && request.consume_source.is_some()
+            {
+                state.hub.commit_steer_reservation(&session, &operation);
+            }
             return Json(saved.unwrap_or_else(pending_result)).into_response();
         }
         Ok(Admission::Conflict) => {
@@ -470,6 +477,26 @@ pub async fn submit(
         }
         Ok(Admission::New) => {}
         Err(_) => return StatusCode::SERVICE_UNAVAILABLE.into_response(),
+    }
+    if let Some(source) = request.consume_source.as_ref()
+        && let Err(reason) = state.hub.reserve_steer_source(
+            &session,
+            &operation,
+            source,
+            &request.text,
+            &request.content,
+        )
+    {
+        let receipt = serde_json::json!({
+            "status": "not_delivered",
+            "delivery": request.delivery,
+            "operation": request.operation,
+            "error": reason,
+        });
+        let _ = store
+            .finish_agent_operation(&owner, &session, &operation, &receipt)
+            .await;
+        return Json(receipt).into_response();
     }
     let pending = serde_json::json!({"status":"pending","delivery":request.delivery,"operation":request.operation});
     let task = tokio::spawn(async move {
@@ -501,6 +528,15 @@ pub async fn submit(
         receipt["caller"] = serde_json::json!(&caller);
         receipt["origin"] =
             serde_json::json!(crate::prompt_origin::DeliveryOrigin::from_caller(&caller));
+        if request.consume_source.is_some() {
+            if receipt["status"] == "submitted" || receipt["status"] == "injected" {
+                state.hub.commit_steer_reservation(&session, &operation);
+            } else if receipt["status"] == "not_delivered" {
+                state.hub.release_steer_reservation(&session, &operation);
+            }
+            // Keep the reservation held on "unknown" so neither timers nor
+            // drains can duplicate a steer that may have reached the worker.
+        }
         if store
             .finish_agent_operation(&owner, &session, &operation, &receipt)
             .await

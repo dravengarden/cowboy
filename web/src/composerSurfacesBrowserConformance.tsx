@@ -508,12 +508,12 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
   )).click();
   await typeDraft(desktop.container, "surface check");
   (await until(() => desktop.container.querySelector<HTMLElement>("[data-composer-action=schedule]:not([disabled])"), "schedule action")).click();
-  await until(() => document.querySelector("[aria-label=发送时间]"), "schedule dialog");
+  await until(() => document.querySelector("[aria-label='Send time']"), "schedule dialog");
   // A synthetic Escape is not trusted input for the Desktop key dispatcher;
   // the backdrop reaches the same onClose.
   const backdrop = await until(() => [...document.querySelectorAll<HTMLElement>(".MuiBackdrop-root")].at(-1), "schedule backdrop");
   backdrop.click();
-  await gone(() => document.querySelector("[aria-label=发送时间]"), "schedule dialog");
+  await gone(() => document.querySelector("[aria-label='Send time']"), "schedule dialog");
   passed.push("Desktop schedule dialog opens from the toolbar and dismissing it closes it");
 
   (await until(() => desktop.container.querySelector<HTMLElement>("[data-composer-action=send]:not([disabled])"), "send action")).click();

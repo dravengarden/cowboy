@@ -11,7 +11,7 @@ import { activityRowSurface } from "./activityRowStyle";
 import { AccountTreeOutlined, CallSplitOutlined, StopCircleOutlined } from "@mui/icons-material";
 import type { TaskSummary } from "./backgroundTasks";
 import { openBackgroundTask } from "./backgroundTaskInspectorState";
-import { DESKTOP_INSET_RADIUS } from "./desktop/DesktopEmbeddedControl";
+import { DESKTOP_INSET_RADIUS, desktopRowFocusSx } from "./desktop/DesktopEmbeddedControl";
 import { Kbd } from "./Kbd";
 import { SubagentStopConfirm, taskChipColor, taskToneColor } from "./SubagentCard";
 import { glyphSize } from "./surface/desktopSize";
@@ -146,7 +146,7 @@ export const TaskRow = memo(function TaskRow({
           pl: 1,
           py: 0.5,
           borderRadius: "inherit",
-          "&:focus-visible": { bgcolor: "action.hover" },
+          "&:focus-visible": desktopRowFocusSx(),
         }}
       >
         <Icon sx={(theme) => ({ fontSize: glyphSize(18), color: taskToneColor(tone, theme), flexShrink: 0 })} />

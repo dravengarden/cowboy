@@ -405,39 +405,31 @@ export function ExtensionManagerView(
           if (!busy) setRemoval(null);
         }}
         title="Uninstall extension"
-        actions={
-          <>
-            <Button disabled={busy} onClick={() => setRemoval(null)}>
-              Cancel
-            </Button>
-            <Button
-              color="error"
-              disabled={busy || !removal ||
-                removal.affected_sessions.length > 0}
-              onClick={() => {
-                if (!removal) return;
-                const plan = removal;
-                setRemoval(null);
-                void run(() =>
-                  changeExtensionInstallation(
-                    `/api/machines/${
-                      encodeURIComponent(plan.machine_id)
-                    }/plugins/${encodeURIComponent(plan.plugin_id)}/uninstall`,
-                    {
-                      method: "POST",
-                      headers: { "content-type": "application/json" },
-                      body: JSON.stringify({
-                        plan_id: plan.plan_id,
-                        confirm_active_sessions: false,
-                      }),
-                    },
-                  ), "Extension uninstalled.");
-              }}
-            >
-              Uninstall
-            </Button>
-          </>
-        }
+        confirm={{
+          label: "Uninstall",
+          color: "error",
+          busy,
+          disabled: !removal || removal.affected_sessions.length > 0,
+          onConfirm: () => {
+            if (!removal) return;
+            const plan = removal;
+            setRemoval(null);
+            void run(() =>
+              changeExtensionInstallation(
+                `/api/machines/${
+                  encodeURIComponent(plan.machine_id)
+                }/plugins/${encodeURIComponent(plan.plugin_id)}/uninstall`,
+                {
+                  method: "POST",
+                  headers: { "content-type": "application/json" },
+                  body: JSON.stringify({
+                    plan_id: plan.plan_id,
+                    confirm_active_sessions: false,
+                  }),
+                },
+              ), "Extension uninstalled.");
+          },
+        }}
       >
         <Typography>
           {removal?.warning ||

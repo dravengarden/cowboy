@@ -1717,7 +1717,7 @@ mod tests {
         // queue_resync does NOT confirm op-res-1, and ClearQueue does NOT delete
         // the recovery draft when SQL subsequently fails!
         let (mut commit, rx_fail) = match hub
-            .begin_durable_recovery_draft_activation(reservation, &caller)
+            .begin_durable_recovery_draft_activation(reservation, false, &caller)
             .unwrap()
         {
             crate::core::RecoveryActivationCommitStep::Pending(c, rx) => (c, rx),
@@ -1765,7 +1765,7 @@ mod tests {
             .reserve_recovery_draft_activation("s-r2", &draft_id, "op-res-2")
             .unwrap();
         let (mut commit2, rx_ok) = match hub
-            .begin_durable_recovery_draft_activation(reservation2, &caller)
+            .begin_durable_recovery_draft_activation(reservation2, false, &caller)
             .unwrap()
         {
             crate::core::RecoveryActivationCommitStep::Pending(c, rx) => (c, rx),

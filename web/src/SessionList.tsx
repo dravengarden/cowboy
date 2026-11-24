@@ -83,7 +83,8 @@ import { DesktopShortcut } from "./desktop/commands/DesktopKeycap";
 import { fireLabel, fireRel } from "./scheduleTime";
 import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
 import { desktopKeyIntent, installNativeCompositionTracker } from "./desktop/commands/keyIntent";
-import { isTextEditingTarget } from "./desktop/commands/shortcut";
+import { isModalTextField } from "./desktop/commands/modalNavigation";
+import { isInputVimNormal, subscribeInputVimMode } from "./desktop/vim/inputVim";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import { desktopEmbeddedControlSx, desktopListItemSx } from "./desktop/DesktopEmbeddedControl";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
@@ -219,7 +220,7 @@ export function ScheduleBadgeIcon({ ms }: { ms: number }): React.JSX.Element {
         return () => globalThis.clearInterval(timer);
     }, []);
     return (
-        <Tooltip title={`定时发送 · ${fireLabel(ms, now)}（${fireRel(ms, now)}）`} enterDelay={300}>
+        <Tooltip title={`Scheduled · ${fireLabel(ms, now)} (${fireRel(ms, now)})`} enterDelay={300}>
             <Schedule sx={{ fontSize: glyphSize(15), flexShrink: 0, color: "info.main" }} />
         </Tooltip>
     );
@@ -2673,14 +2674,14 @@ export function SessionList({
                     <Stack data-desktop-folder-actions spacing={0.5} sx={{ p: 2 }}>
                         <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>Actions</Typography>
                         {allowNewSession && onNewInFolder && (
-                            <Button data-folder-shortcut="n" autoFocus fullWidth startIcon={<Add />} onClick={(): void => { if (folderMenuFolder) onNewInFolder(folderMenuFolder.id); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
+                            <Button data-folder-shortcut="a" autoFocus fullWidth startIcon={<Add />} onClick={(): void => { if (folderMenuFolder) onNewInFolder(folderMenuFolder.id); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>New session here</Box>
-                                <Kbd keys="N" />
+                                <Kbd keys="A" />
                             </Button>
                         )}
-                        <Button data-folder-shortcut="f" fullWidth startIcon={<CreateNewFolderOutlined />} onClick={(): void => { if (folderMenuFolder) openFolderName({ mode: "create", parent: folderMenuFolder.id }); }} sx={{ justifyContent: "flex-start" }}>
+                        <Button data-folder-shortcut="n" fullWidth startIcon={<CreateNewFolderOutlined />} onClick={(): void => { if (folderMenuFolder) openFolderName({ mode: "create", parent: folderMenuFolder.id }); }} sx={{ justifyContent: "flex-start" }}>
                             <Box component="span" sx={{ flex: 1, textAlign: "left" }}>New folder inside</Box>
-                            <Kbd keys="F" />
+                            <Kbd keys="N" />
                         </Button>
                         <Button data-folder-shortcut="r" fullWidth startIcon={<DriveFileRenameOutline />} onClick={(): void => { if (folderMenuFolder) openFolderName({ mode: "rename", folder: folderMenuFolder }); }} sx={{ justifyContent: "flex-start" }}>
                             <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Rename</Box>
@@ -2933,6 +2934,7 @@ export function CreateDialog({
     // otherwise survive and show the last-typed value.
     const [title, setTitle] = useState<string>("");
     const titleRef = useRef<HTMLInputElement>(null);
+    const createPaperRef = useRef<HTMLDivElement>(null);
     const titleFocusTimer = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
     // Session count, captured in a ref so its default name is computed at open
     // time WITHOUT a session arriving mid-edit clobbering what you're typing.
@@ -2965,12 +2967,22 @@ export function CreateDialog({
         setContextSources([]);
         setCreating(false);
         setCreateError("");
+        const unsubscribeVim = subscribeInputVimMode(() => {
+            const active = document.activeElement;
+            if (!(active instanceof Element) || !active.closest("[role='dialog']")) return;
+            setFocusZone(
+                active.closest("[role='tablist']")
+                    ? "tabs"
+                    : isModalTextField(active) && !isInputVimNormal(active) ? "text" : "other",
+            );
+        });
         const t = globalThis.setTimeout(() => {
             titleRef.current?.focus({ preventScroll: true });
             titleRef.current?.select();
         }, 120);
         titleFocusTimer.current = t;
         return () => {
+            unsubscribeVim();
             globalThis.clearTimeout(t);
             if (titleFocusTimer.current === t) titleFocusTimer.current = undefined;
         };
@@ -3164,8 +3176,10 @@ export function CreateDialog({
     // available to the Select controls in this form; the title field and
     // focused Create button suppress their own native bare-Enter activation.
     // Mobile retains its established single-Enter form behaviour.
-    useConfirmEnter(open && desktop && !confirmDiscard, create, { suppressBareEnter: false });
-    useConfirmEnter(open && confirmDiscard, discardAndClose);
+    useConfirmEnter(open && desktop && !confirmDiscard, create, {
+        suppressBareEnter: false,
+        owner: createPaperRef,
+    });
     // The shared modal grammar (modalNavigation) owns Insert/Normal and hjkl.
     // A composing IME keeps every key: its Esc cancels the marked text, never
     // the modal.
@@ -3203,7 +3217,7 @@ export function CreateDialog({
                     setFocusZone(
                         e.target instanceof Element && e.target.closest("[role='tablist']")
                             ? "tabs"
-                            : isTextEditingTarget(e.target) ? "text" : "other",
+                            : e.target instanceof Element && isModalTextField(e.target) && !isInputVimNormal(e.target) ? "text" : "other",
                     );
                 }}
                 onBlur={(e): void => {
@@ -3326,76 +3340,95 @@ export function CreateDialog({
                             value={directory}
                             onChange={setDirectory}
                         />
-                    </> : <>
-                        {/* The directory decides every default below, so it is chosen first. */}
-                        <WorkspacePicker
-                            label="Directory (optional)"
-                            clearable
-                            hierarchyPreferenceKey="cowboy.sessionDirectoryHierarchy"
-                            entries={directoryChoices}
-                            value={directory}
-                            onChange={setDirectory}
-                        />
-                        {directory && (
-                            <Stack direction="row" alignItems="center" flexWrap="wrap" data-create-defaults-summary sx={{ gap: 1, mt: "4px !important" }}>
-                                <Typography variant="caption" color="text.secondary" sx={{ mr: "auto" }}>
-                                    {defaultsSummary}
-                                </Typography>
-                                {saveableDefaults && (
-                                    <Button size="small" disabled={creating} onClick={(): void => setSessionFolderDefaults(directory, saveableDefaults)}>
-                                        Save as {directoryName} defaults
-                                    </Button>
+                    </> : (
+                        <Box
+                            data-create-session-grid
+                            sx={desktop
+                                ? {
+                                    display: "grid",
+                                    gap: 2,
+                                    gridTemplateColumns: "minmax(0, 1fr)",
+                                    "@media (min-width: 780px)": {
+                                        gridTemplateColumns: "minmax(0, 1fr) minmax(0, 1fr)",
+                                        alignItems: "start",
+                                    },
+                                }
+                                : { display: "flex", flexDirection: "column", gap: 1.5 }}
+                        >
+                            <Stack spacing={1.5} sx={{ minWidth: 0 }}>
+                                {/* The directory decides every default below, so it is chosen first. */}
+                                <WorkspacePicker
+                                    label="Directory (optional)"
+                                    clearable
+                                    hierarchyPreferenceKey="cowboy.sessionDirectoryHierarchy"
+                                    entries={directoryChoices}
+                                    value={directory}
+                                    onChange={setDirectory}
+                                />
+                                {directory && (
+                                    <Stack direction="row" alignItems="center" flexWrap="wrap" data-create-defaults-summary sx={{ gap: 1, mt: "4px !important" }}>
+                                        <Typography variant="caption" color="text.secondary" sx={{ mr: "auto" }}>
+                                            {defaultsSummary}
+                                        </Typography>
+                                        {saveableDefaults && (
+                                            <Button size="small" disabled={creating} onClick={(): void => setSessionFolderDefaults(directory, saveableDefaults)}>
+                                                Save as {directoryName} defaults
+                                            </Button>
+                                        )}
+                                    </Stack>
                                 )}
+                                <WorkspacePicker
+                                    label="Project"
+                                    entries={placement.projects}
+                                    value={placement.project?.value ?? ""}
+                                    defaultValue={placement.defaultProjectValue}
+                                    configuredDefault={placement.configuredDefaultProject}
+                                    // A directory-supplied project is not this device's default.
+                                    onDefaultChange={projectFromDirectory ? undefined : placement.setDefaultProject}
+                                    onChange={(value): void => {
+                                        placement.selectProject(value);
+                                        setWorkItemId("");
+                                    }}
+                                />
+                                {selectedWorkspace && selectedWorkspace.active_work_items.length > 0 ? (
+                                    <TextField
+                                        select
+                                        label="Durable work item"
+                                        slotProps={{ select: { displayEmpty: true }, inputLabel: { shrink: true } }}
+                                        value={workItemId}
+                                        onChange={(e): void => setWorkItemId(e.target.value)}
+                                        helperText="Optional · resumes durable context in the selected Provider runtime"
+                                    >
+                                        <MenuItem value="">New task</MenuItem>
+                                        {selectedWorkspace.active_work_items.map((item) => (
+                                            <MenuItem key={item.id} value={item.id}>
+                                                {item.title}{item.blocked ? " · blocked" : ""}
+                                            </MenuItem>
+                                        ))}
+                                    </TextField>
+                                ) : null}
                             </Stack>
-                        )}
-                        <WorkspacePicker
-                            label="Project"
-                            entries={placement.projects}
-                            value={placement.project?.value ?? ""}
-                            defaultValue={placement.defaultProjectValue}
-                            configuredDefault={placement.configuredDefaultProject}
-                            // A directory-supplied project is not this device's default.
-                            onDefaultChange={projectFromDirectory ? undefined : placement.setDefaultProject}
-                            onChange={(value): void => {
-                                placement.selectProject(value);
-                                setWorkItemId("");
-                            }}
-                        />
-                        <AiInstallationPicker
-                            installations={placement.installations}
-                            value={placement.installation?.value ?? ""}
-                            onChange={placement.selectInstallation}
-                            helperText={placement.loading ? "Checking available AI installations…" : placement.installation
-                                ? `${placement.separate ? "Remote" : "Local"} · AI on ${placement.installation.machine.display_name} · Files and commands on ${machines.find((m) => m.id === machineId)?.display_name ?? machineId}`
-                                : fullInstallation
-                                ? `${fullInstallation.machine.display_name} is full (${installationCapacity(fullInstallation)}). Choose another AI installation.`
-                                : placement.installations.length ? "Choose an available AI installation; the preferred Machine is unavailable."
-                                : "No ready AI installation can use this project. Check Machines in Settings."}
-                        />
-                        <SessionSubscription state={subscription} disabled={creating} desktop={desktop} helperText={subscription.hinted ? `Same as “${sessionHints?.session.title ?? "latest session"}”` : undefined} />
-                        <SessionContextPicker value={contextSources} onChange={setContextSources} disabled={creating} />
-                        <Typography variant="caption" color="text.secondary">
-                            Git projects open in a session worktree. Other directories are shared in place.
-                        </Typography>
-                        <SessionPresetPicker provider={provider} presets={selectedProviderEntry?.manifest.configuration.presets ?? []} value={selectedPreset} onChange={setPresetOverride} helperText={presetOverride === undefined && directoryDefaults.sources.preset ? `Inherited from ${sessionFolderById(sessionDirectories, directoryDefaults.sources.preset)?.name ?? "directory"}` : "Applied before the first prompt"} />
-                        {selectedWorkspace && selectedWorkspace.active_work_items.length > 0 ? (
-                            <TextField
-                                select
-                                label="Durable work item"
-                                slotProps={{ select: { displayEmpty: true }, inputLabel: { shrink: true } }}
-                                value={workItemId}
-                                onChange={(e): void => setWorkItemId(e.target.value)}
-                                helperText="Optional · resumes durable context in the selected Provider runtime"
-                            >
-                                <MenuItem value="">New task</MenuItem>
-                                {selectedWorkspace.active_work_items.map((item) => (
-                                    <MenuItem key={item.id} value={item.id}>
-                                        {item.title}{item.blocked ? " · blocked" : ""}
-                                    </MenuItem>
-                                ))}
-                            </TextField>
-                        ) : null}
-                    </>}
+                            <Stack spacing={1.5} sx={{ minWidth: 0 }}>
+                                <AiInstallationPicker
+                                    installations={placement.installations}
+                                    value={placement.installation?.value ?? ""}
+                                    onChange={placement.selectInstallation}
+                                    helperText={placement.loading ? "Checking available AI installations…" : placement.installation
+                                        ? `${placement.separate ? "Remote" : "Local"} · AI on ${placement.installation.machine.display_name} · Files and commands on ${machines.find((m) => m.id === machineId)?.display_name ?? machineId}`
+                                        : fullInstallation
+                                        ? `${fullInstallation.machine.display_name} is full (${installationCapacity(fullInstallation)}). Choose another AI installation.`
+                                        : placement.installations.length ? "Choose an available AI installation; the preferred Machine is unavailable."
+                                        : "No ready AI installation can use this project. Check Machines in Settings."}
+                                />
+                                <SessionSubscription state={subscription} disabled={creating} desktop={desktop} helperText={subscription.hinted ? `Same as “${sessionHints?.session.title ?? "latest session"}”` : undefined} />
+                                <SessionPresetPicker provider={provider} presets={selectedProviderEntry?.manifest.configuration.presets ?? []} value={selectedPreset} onChange={setPresetOverride} helperText={presetOverride === undefined && directoryDefaults.sources.preset ? `Inherited from ${sessionFolderById(sessionDirectories, directoryDefaults.sources.preset)?.name ?? "directory"}` : "Applied before the first prompt"} />
+                                <SessionContextPicker value={contextSources} onChange={setContextSources} disabled={creating} />
+                                <Typography variant="caption" color="text.secondary">
+                                    Git projects open in a session worktree. Other directories are shared in place.
+                                </Typography>
+                            </Stack>
+                        </Box>
+                    )}
                     </Stack>
                     {variant === "folder" && <>
                         {!editingFolderDefault && folderPresetMismatch && <Alert severity="warning" action={<Button onClick={(): void => { setFolderDefaultsExpanded(true); setFolderDefaultField("preset"); }}>Choose preset</Button>}>The preset belongs to another agent. Choose a compatible preset or use the agent default.</Alert>}
@@ -3430,18 +3463,7 @@ export function CreateDialog({
             open={confirmDiscard}
             onClose={(): void => setConfirmDiscard(false)}
             title={variant === "folder" ? "Discard this folder?" : variant === "draft" ? "Discard this draft?" : "Discard this session?"}
-            actions={
-                <>
-                    <Button color="inherit" onClick={(): void => setConfirmDiscard(false)}>
-                        Keep editing
-                        {desktop && <Kbd keys="Esc" />}
-                    </Button>
-                    <Button color="error" variant="contained" onClick={discardAndClose}>
-                        Discard
-                        {desktop && <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />}
-                    </Button>
-                </>
-            }
+            confirm={{ label: "Discard", cancelLabel: "Keep editing", color: "error", onConfirm: discardAndClose }}
         >
             <Typography variant="body2" color="text.secondary">Your changes will be lost.</Typography>
         </ConfirmSheet>
@@ -3496,6 +3518,8 @@ export function CreateDialog({
             onClose={creating ? (): void => {} : closeLevel}
             title={dialogTitle}
             wide={desktop}
+            desktopPaperRef={createPaperRef}
+            desktopDialogWidth={desktop && variant === "session" && !editingFolderDefault ? 860 : undefined}
             actions={
                 <>
                     <Button onClick={requestClose} color="inherit" disabled={creating}>
@@ -3506,10 +3530,11 @@ export function CreateDialog({
                         onClick={create}
                         onKeyDown={(e): void => {
                             if (
-                                desktop && e.key === "Enter" &&
-                                !e.metaKey && !e.ctrlKey &&
-                                !isImeKeyEvent(e.nativeEvent)
-                            ) e.preventDefault();
+                                desktop &&
+                                (e.key === "Enter" || e.code === "Enter" || e.code === "NumpadEnter")
+                            ) {
+                                e.preventDefault();
+                            }
                         }}
                         variant="contained"
                         disabled={!canCreate}

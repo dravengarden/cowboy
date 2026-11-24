@@ -1,4 +1,5 @@
 import { useDesktopInsertCommand } from "../editorInsert";
+import { DESKTOP_TOGGLE_EMPTY_DRAFTS_EVENT } from "../promptBuffer";
 import { OPEN_BACKGROUND_TASKS_EVENT } from "../../backgroundTaskInspectorState";
 import { useMemo, useRef, useState } from "react";
 import { useDesktopWorkspace } from "../DesktopWorkspaceController";
@@ -75,6 +76,24 @@ function dispatchSessionFolders(action: string): boolean {
       detail: { action, row: focused },
     }),
   ) === false;
+}
+
+function togglePendingRegion(
+  workspace: ReturnType<typeof useDesktopWorkspace>,
+  kind: "queued" | "draft",
+): void {
+  const region = `prompt.${kind}`;
+  const toggle = document.querySelector<HTMLElement>(
+    `[data-desktop-collapse-toggle='${kind}']`,
+  );
+  if (!toggle) return;
+  if (workspace.focusedRegion === region) {
+    if (toggle.getAttribute("aria-expanded") === "true") toggle.click();
+    requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
+    return;
+  }
+  if (toggle.getAttribute("aria-expanded") === "false") toggle.click();
+  requestAnimationFrame(() => workspace.focusRegion(region));
 }
 
 export function DesktopCommandHost({
@@ -197,7 +216,7 @@ export function DesktopCommandHost({
       run: openUndoHistory,
     },
     {
-      // A Draft's name is its title: `␣T` (document.title) goes there.
+      // A Draft's name is its title: `␣R` (document.title) goes there when a Draft is open.
       id: "item.rename",
       title: "Rename Session",
       description: "Rename the current Session",
@@ -416,15 +435,26 @@ export function DesktopCommandHost({
     },
     {
       id: "prompt.focusPlan",
-      title: "Focus Plan",
-      description: "Move keyboard focus to the current task plan",
+      title: "Open or Close Plan",
+      description: "Open and focus the current task plan, or close it when Plan already owns focus",
       group: "Prompt",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusPlan),
       when: () => document.querySelector("[data-desktop-region='prompt.plan']") !== null,
       disabledReason: "The agent has not published a plan",
       // The prefix continuation is stable even while Plan is absent.
       consumeWhenDisabled: true,
-      run: () => workspace.focusRegion("prompt.plan"),
+      run: () => {
+        const toggle = document.querySelector<HTMLElement>(
+          "[data-desktop-region='prompt.plan'] button[aria-label='Expand plan'], [data-desktop-region='prompt.plan'] button[aria-label='Collapse plan']",
+        );
+        if (workspace.focusedRegion === "prompt.plan") {
+          if (toggle?.getAttribute("aria-label") === "Collapse plan") toggle.click();
+          requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
+          return;
+        }
+        if (toggle?.getAttribute("aria-label") === "Expand plan") toggle.click();
+        requestAnimationFrame(() => workspace.focusRegion("prompt.plan"));
+      },
     },
     {
       id: "prompt.focusCalls",
@@ -476,34 +506,26 @@ export function DesktopCommandHost({
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusQueue),
       when: () => document.querySelector("[data-desktop-region='prompt.queued']") !== null,
       disabledReason: "The queue is empty",
-      run: () => {
-        const toggle = document.querySelector<HTMLElement>(
-          "[data-desktop-collapse-toggle='queued']",
-        );
-        if (!toggle) return;
-        if (workspace.focusedRegion === "prompt.queued") {
-          if (toggle.getAttribute("aria-expanded") === "true") toggle.click();
-          requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
-          return;
-        }
-        if (toggle.getAttribute("aria-expanded") === "false") toggle.click();
-        requestAnimationFrame(() => workspace.focusRegion("prompt.queued"));
-      },
+      run: () => togglePendingRegion(workspace, "queued"),
     },
     {
       id: "prompt.focusDrafts",
-      title: "Focus Drafts",
-      description: "Move keyboard focus to parked drafts",
+      title: "Open or Close Drafts",
+      description:
+        "Open and focus parked drafts (or start a new draft when empty), or close them when drafts already own focus",
       group: "Prompt",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusDrafts),
-      when: () => document.querySelector("[data-desktop-region='prompt.draft']") !== null,
-      disabledReason: "There are no drafts",
+      when: () => sessionWorkspaceMounted(),
+      disabledReason: "Open a session first",
       run: () => {
-        const toggle = document.querySelector<HTMLElement>(
-          "[data-desktop-collapse-toggle='draft']",
+        const panel = document.querySelector<HTMLElement>(
+          "[data-desktop-region='prompt.draft']",
         );
-        if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
-        requestAnimationFrame(() => workspace.focusRegion("prompt.draft"));
+        if (!panel || panel.dataset.desktopEmptyDrafts === "true") {
+          globalThis.dispatchEvent(new CustomEvent(DESKTOP_TOGGLE_EMPTY_DRAFTS_EVENT));
+          return;
+        }
+        togglePendingRegion(workspace, "draft");
       },
     },
     {

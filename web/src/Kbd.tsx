@@ -1,12 +1,19 @@
 import type React from "react";
-import { useEffect, useRef } from "react";
+import { type RefObject, useEffect, useRef } from "react";
 import {
   ShortcutKeycap,
   type ShortcutKeycapAvailability,
   type ShortcutKeycapVariant,
 } from "./ShortcutKeycap";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
-import { confirmEnterIntent } from "./confirmShortcut";
+import { desktopConfirmEnterIntent } from "./confirmShortcut";
+import { popupOwnsKeys } from "./desktop/commands/hintTargets";
+import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
+import { desktopCompositionActive } from "./desktop/commands/keyIntent";
+import { isTopmostDialog, owningDialog } from "./desktop/commands/modalGuard";
+
+/** Most recently opened active confirm hook sits at the top of the stack. */
+const activeConfirmStack: symbol[] = [];
 
 // A keyboard-shortcut keycap (Linear / Raycast style) shown after a modal
 // button's label. Desktop-ONLY: use the canonical product surface instead of a
@@ -53,26 +60,61 @@ export function useConfirmEnter(
   {
     suppressBareEnter = true,
     ignoreWithin,
+    owner,
   }: {
     suppressBareEnter?: boolean;
     /** A region with its own Mod+Enter: keys from inside it pass through. */
     ignoreWithin?: string;
+    /** Dialog or descendant element that owns this confirmation; stands aside
+     *  whenever another modal dialog sits above it. */
+    owner?: RefObject<Element | null>;
   } = {},
 ): void {
   const ref = useRef(onConfirm);
   ref.current = onConfirm;
+  const ownerRef = useRef(owner);
+  ownerRef.current = owner;
   useEffect(() => {
     if (!open) return undefined;
+    const token = Symbol("confirm-enter");
+    activeConfirmStack.push(token);
     const onKey = (e: KeyboardEvent): void => {
+      if (desktopCompositionActive() || popupOwnsKeys()) return;
+      if (ownerRef.current !== undefined) {
+        const ownElement = ownerRef.current.current;
+        if (!ownElement || !isTopmostDialog(ownElement)) return;
+        const ownDialog = owningDialog(ownElement);
+        const targetDialog = e.target instanceof Element ? owningDialog(e.target) : null;
+        if (ownDialog && targetDialog && targetDialog !== ownDialog) return;
+      } else if (activeConfirmStack.at(-1) !== token) {
+        return;
+      }
       if (ignoreWithin && e.target instanceof Element && e.target.closest(ignoreWithin)) return;
-      const intent = confirmEnterIntent(e);
-      if (intent === "ignore") return;
+      const intent = desktopConfirmEnterIntent(e);
+      if (intent === "ignore") {
+        // Never allow repeat Enter/Mod+Enter or Shift+Enter/Shift+Mod+Enter to
+        // fall through to native button activation inside confirmation dialogs.
+        const isEnter = e.key === "Enter" || e.code === "Enter" || e.code === "NumpadEnter";
+        if (
+          suppressBareEnter && isEnter && !desktopImeOwnsKey(e) &&
+          e.target instanceof Element &&
+          e.target.closest("button, [role='button']") !== null
+        ) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
       if (intent === "suppress" && !suppressBareEnter) return;
       e.preventDefault();
       e.stopPropagation();
       if (intent === "confirm") ref.current();
     };
     globalThis.addEventListener("keydown", onKey, true);
-    return (): void => globalThis.removeEventListener("keydown", onKey, true);
+    return (): void => {
+      const idx = activeConfirmStack.lastIndexOf(token);
+      if (idx >= 0) activeConfirmStack.splice(idx, 1);
+      globalThis.removeEventListener("keydown", onKey, true);
+    };
   }, [open, suppressBareEnter, ignoreWithin]);
 }

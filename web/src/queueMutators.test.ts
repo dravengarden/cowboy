@@ -219,6 +219,36 @@ test("pending edits rebase locally and settle only on matching server content", 
   );
 });
 
+test("editing an unconfirmed local draft rebases onto its server id and waits for creation", () => {
+  const local = { id: "opt-c-draft", text: "first", cmid: "c-draft" };
+  const edited = { ...local, text: "second" };
+  const args = { id: local.id, sourceCmid: local.cmid, row: edited };
+  // Before server echo: updates the optimistic row in place.
+  const optimistic = queueMutators.editDraft(
+    { ...emptyQueueValue(), drafts: [local] },
+    args,
+  );
+  assertEquals(optimistic.drafts, [edited]);
+  // After server echo assigns id "d1": rebases onto "d1" preserving server id.
+  const echoed = { id: "d1", text: "first", cmid: "c-draft" };
+  const rebased = queueMutators.editDraft(
+    { ...emptyQueueValue(), drafts: [echoed] },
+    args,
+  );
+  assertEquals(rebased.drafts, [{ ...edited, id: "d1" }]);
+  assertEquals(draftActivationSourceId(args, [echoed]), "d1");
+  assertEquals(draftActivationSourceId(args, []), null);
+  // Cannot settle while addDraft is still pending or before server echoes edited text.
+  const creation = { id: local.cmid, name: "addDraft", args: { row: local } };
+  const editOp = { id: "edit-op", name: "editDraft", args };
+  assertEquals(settledTransitionIds([creation, editOp], { ...emptyQueueValue(), drafts: [echoed] }), []);
+  assertEquals(settledTransitionIds([editOp], { ...emptyQueueValue(), drafts: [echoed] }), []);
+  assertEquals(
+    settledTransitionIds([editOp], { ...emptyQueueValue(), drafts: [{ ...echoed, text: "second" }] }),
+    ["edit-op"],
+  );
+});
+
 test("reschedule stays pending until the authoritative schedule matches", () => {
   const original = { ...draft, schedule: { fire_at_ms: 10, delivery: "back" } };
   const rescheduled = {

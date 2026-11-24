@@ -5,6 +5,8 @@ import { useState } from "react";
 import { BrowserProductTheme } from "../browserProductTheme";
 import { SurfaceProvider } from "../surface/SurfaceProfile";
 import { getVimSetting, setVimSetting } from "../vimSetting";
+import { DesktopModal } from "./DesktopModal";
+import { useDesktopModalMode } from "./DesktopModalKeyHint";
 import { DesktopWorkspaceProvider } from "./DesktopWorkspaceController";
 import { DesktopCommandProvider } from "./commands/DesktopCommandProvider";
 
@@ -34,6 +36,27 @@ function press(key: string, init: KeyboardEventInit = {}): boolean {
   return event.defaultPrevented;
 }
 
+function ModalModeProbe(): React.JSX.Element {
+  const modalMode = useDesktopModalMode();
+  return <span data-modal-mode={modalMode}>{modalMode}</span>;
+}
+
+function FocusRestoreProbe(): React.JSX.Element {
+  const [open, setOpen] = useState(false);
+  return (
+    <>
+      <button type="button" data-focus-opener onClick={() => setOpen(true)}>
+        Open modal
+      </button>
+      <DesktopModal open={open} onClose={() => setOpen(false)} title="Focus probe" width={420}>
+        <Stack spacing={1} sx={{ p: 2 }}>
+          <button type="button" data-focus-inside>Inside</button>
+        </Stack>
+      </DesktopModal>
+    </>
+  );
+}
+
 function Fields({ dialog }: { dialog: boolean }): React.JSX.Element {
   const [first, setFirst] = useState("hello world foo");
   const [second, setSecond] = useState("second");
@@ -61,9 +84,15 @@ function Fields({ dialog }: { dialog: boolean }): React.JSX.Element {
   );
   return dialog
     ? (
-      <Dialog open={open} onClose={() => setOpen(false)}>
-        <div data-dialog-open>{fields}</div>
-      </Dialog>
+      <>
+        <Dialog open={open} onClose={() => setOpen(false)}>
+          <div data-dialog-open>
+            <ModalModeProbe />
+            {fields}
+          </div>
+        </Dialog>
+        <FocusRestoreProbe />
+      </>
     )
     : fields;
 }
@@ -171,11 +200,21 @@ export async function checkInputVim(): Promise<string> {
     await tick();
     const dialogFirst = field("first");
     dialogFirst.focus();
+    await tick();
+    check(
+      document.querySelector("[data-modal-mode]")?.getAttribute("data-modal-mode") === "insert",
+      "modal mode badge reports insert while focused in inputVim Insert",
+    );
     press("Escape");
+    await tick();
     check(
       mode(dialogFirst) === "normal" &&
         document.querySelector("[data-dialog-open]"),
       "Esc in a dialog field enters Normal and keeps the dialog",
+    );
+    check(
+      document.querySelector("[data-modal-mode]")?.getAttribute("data-modal-mode") === "normal",
+      "modal mode badge syncs to normal immediately on inputVim Esc without blur",
     );
     press("j");
     await tick();
@@ -187,9 +226,36 @@ export async function checkInputVim(): Promise<string> {
     );
     press("h");
     check(at(dialogSecond) === 4, "h moves inside the field");
+    press("Enter");
+    await tick();
+    check(
+      mode(dialogSecond) === "insert" && !dialogSecond.readOnly &&
+        document.querySelector("[data-modal-mode]")?.getAttribute("data-modal-mode") === "insert",
+      "Enter in inputVim Normal re-enters Insert and updates modal mode badge",
+    );
+    press("Escape");
+    await tick();
     press("Escape");
     await new Promise((resolve) => setTimeout(resolve, 600));
     check(!document.querySelector("[data-dialog-open]"), "Esc in Normal closes the dialog");
+    // F1: DesktopModal with InstantModalTransition restores focus to its opener on Esc.
+    const opener = document.querySelector<HTMLButtonElement>("[data-focus-opener]")!;
+    opener.focus();
+    flushSync(() => opener.click());
+    await tick();
+    const inside = document.querySelector<HTMLButtonElement>("[data-focus-inside]");
+    check(inside !== null, "DesktopModal opened");
+    inside.focus();
+    press("Escape");
+    await tick();
+    check(
+      document.querySelector("[data-focus-inside]") === null,
+      "DesktopModal closed on Esc",
+    );
+    check(
+      document.activeElement === opener,
+      "DesktopModal InstantModalTransition restores focus to opener on close",
+    );
     return "Vim in native Desktop fields: Insert/Normal with a block cursor, motions, operators, undo, put, textarea lines; dialog rows and Esc layering";
   } finally {
     setVimSetting(vimBefore);

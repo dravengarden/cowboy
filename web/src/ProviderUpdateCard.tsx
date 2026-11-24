@@ -1,7 +1,9 @@
 import Schedule from "@mui/icons-material/Schedule";
 import Upgrade from "@mui/icons-material/Upgrade";
 import { alpha, Box, Button, Stack, Typography } from "@mui/material";
-import { useEffect, useState } from "react";
+import { useContext, useEffect, useState } from "react";
+import { desktopSize } from "./surface/desktopSize";
+import { SurfaceContext } from "./surface/SurfaceProfile";
 import { useNetworkActionState } from "./NetworkActionFeedback";
 import type { SessionMeta } from "./protocol";
 import { providerName } from "./providerPresentation";
@@ -21,6 +23,7 @@ export function ProviderUpdateCard({
   session: SessionMeta;
   onUpdate: () => void;
 }): React.JSX.Element | null {
+  const desktop = useContext(SurfaceContext)?.kind === "desktop";
   const action = useNetworkActionState();
   const offer = sessionProviderUpdate(session);
   const hasOffer = offer !== null;
@@ -89,7 +92,7 @@ export function ProviderUpdateCard({
                   requestProviderUpdateWhenIdle(session.id, false)
                 );
               }}
-              sx={{ minHeight: 44, flexShrink: 0, textTransform: "none" }}
+              sx={{ minHeight: desktop ? desktopSize(30) : 44, flexShrink: 0, textTransform: "none" }}
             >
               Cancel
             </Button>
@@ -103,7 +106,7 @@ export function ProviderUpdateCard({
               aria-label={`update ${name} to ${offer.version}`}
               onClick={onUpdate}
               sx={{
-                minHeight: 40,
+                minHeight: desktop ? desktopSize(30) : 40,
                 px: 2,
                 flexShrink: 0,
                 textTransform: "none",

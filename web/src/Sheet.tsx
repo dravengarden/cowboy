@@ -1,13 +1,25 @@
-import { Dialog, DialogContent, useMediaQuery, useTheme } from "@mui/material";
-import type { ReactNode } from "react";
-import { createPortal } from "react-dom";
-import { BottomSheet, type BottomSheetProps } from "@cowboy/app-shell";
 import {
-  desktopModalBackdropSx,
-  desktopModalPaperSx,
-} from "./desktop/DesktopEmbeddedControl";
+  Box,
+  Button,
+  Dialog,
+  DialogContent,
+  DialogTitle,
+  useMediaQuery,
+  useTheme,
+} from "@mui/material";
+import { type ReactNode, type Ref, useContext, useId, useRef } from "react";
+import { createPortal } from "react-dom";
+import { BottomSheet, type BottomSheetProps, ScrollEdges } from "@cowboy/app-shell";
+
+import {
+  desktopDialogSlotProps,
+  InstantModalTransition,
+  isImeBlockedEscape,
+} from "./desktop/DesktopModal";
+import { Kbd, useConfirmEnter } from "./Kbd";
 import { ObsidianSheet } from "./ObsidianSheet";
-import { useSurfaceProfile } from "./surface/SurfaceProfile";
+import { ENTER_LABEL, MOD_LABEL } from "./platform";
+import { SurfaceContext, useSurfaceProfile } from "./surface/SurfaceProfile";
 
 function maybePortal(sheet: ReactNode, portal: boolean): ReactNode {
   // A picker nested inside a full-screen sheet otherwise inherits iOS
@@ -20,13 +32,109 @@ function maybePortal(sheet: ReactNode, portal: boolean): ReactNode {
     : sheet;
 }
 
+function workbenchPaperSx(
+  desktopMaxWidth: number,
+  desktopFill: boolean,
+  desktopFullScreen: boolean,
+): Record<string, unknown> {
+  if (desktopFullScreen) {
+    return {
+      width: "100vw",
+      height: "100dvh",
+      maxWidth: "none",
+      maxHeight: "none",
+      m: 0,
+      border: 0,
+      borderRadius: 0,
+    };
+  }
+  if (desktopFill) {
+    return {
+      width: "calc(100vw - 32px)",
+      height: "calc(100dvh - 32px)",
+      maxWidth: "none",
+      maxHeight: "none",
+      m: 2,
+    };
+  }
+  return {
+    width: `min(${desktopMaxWidth}px, calc(100vw - 64px))`,
+    maxWidth: "none",
+    maxHeight: "calc(100vh - 48px)",
+    m: 3,
+  };
+}
+
+function DesktopTitledSheet({
+  open,
+  onClose,
+  title,
+  actions,
+  children,
+  wide,
+  desktopDialogWidth,
+  desktopPaperRef,
+}: {
+  open: boolean;
+  onClose: (event: object, reason: string) => void;
+  title?: ReactNode;
+  actions?: ReactNode;
+  children: ReactNode;
+  wide?: boolean | undefined;
+  desktopDialogWidth?: number | undefined;
+  desktopPaperRef?: Ref<HTMLDivElement> | undefined;
+}): React.JSX.Element {
+  const titleId = useId();
+  return (
+    <Dialog
+      open={open}
+      onClose={onClose}
+      aria-labelledby={title != null ? titleId : undefined}
+      maxWidth={false}
+      fullWidth
+      disableScrollLock
+      slots={{ transition: InstantModalTransition }}
+      slotProps={desktopDialogSlotProps({
+        paperRef: desktopPaperRef,
+        onClose: () => onClose({}, "escapeKeyDown"),
+        paperSx: {
+          maxWidth: desktopDialogWidth !== undefined
+            ? `min(${desktopDialogWidth}px, calc(100vw - 64px))`
+            : wide
+            ? { sm: 560, lg: 720 }
+            : 444,
+        },
+      })}
+    >
+      {title == null ? null : (
+        <DialogTitle id={titleId} sx={{ fontWeight: 700, pb: 1 }}>
+          {title}
+        </DialogTitle>
+      )}
+      <DialogContent>
+        {children}
+        <ScrollEdges />
+      </DialogContent>
+      {actions == null ? null : (
+        <Box sx={{ display: "flex", justifyContent: "flex-end", gap: 1, px: 3, pb: 2 }}>
+          {actions}
+        </Box>
+      )}
+    </Dialog>
+  );
+}
+
 // cowboy's BottomSheet: always the frosted 磨砂玻璃 material (no per-app toggle —
 // the translucent surface is the house look). Drop-in for the shared BottomSheet.
 // Compact phone/tablet sheets (no `cover`) use a flush bottom-docked
 // action card instead of the tall DetentSheet + floating footer pad.
 export function Sheet(
   props: Omit<BottomSheetProps, "frosted"> & {
-    desktopMaxWidth?: number;
+    desktopMaxWidth?: number | undefined;
+    /** Desktop: cap width for titled centered dialogs (default 444, wide 560/720). */
+    desktopDialogWidth?: number | undefined;
+    /** Optional ref to the Desktop Dialog paper (for topmost-modal guards). */
+    desktopPaperRef?: Ref<HTMLDivElement> | undefined;
     /** Desktop: claim the whole viewport less a 16px margin, the Tool
      * inspector's geometry, instead of sizing to the content. */
     desktopFill?: boolean;
@@ -38,67 +146,51 @@ export function Sheet(
 ): ReactNode {
   const theme = useTheme();
   const widthIsMobile = useMediaQuery(theme.breakpoints.down("sm"));
+  // Desktop always keeps modal Dialog surfaces even in narrow (<1200px or
+  // <600px) windows; a width-derived `forceSheet={navbarAtBottom}` must never
+  // downgrade a Desktop confirmation into a non-modal touch sheet.
+  const desktopSurface = useContext(SurfaceContext)?.kind === "desktop";
+  const effectiveForceSheet = Boolean(props.forceSheet) && !desktopSurface;
+  const effectiveMobile = widthIsMobile && !desktopSurface;
   const {
     desktopMaxWidth,
+    desktopDialogWidth,
+    desktopPaperRef,
     desktopFill = false,
     desktopFullScreen = false,
     portal = false,
     ...bottomSheetProps
   } = props;
-  // Content-heavy Cowboy workbenches may claim the available Desktop canvas.
-  // Cover sheets stay on DetentSheet; compact phone/tablet sheets use the
-  // flush bottom card.
-  if (
-    desktopMaxWidth !== undefined && !widthIsMobile && !props.forceSheet
-  ) {
+  const handleDesktopClose = (event: object, reason: string): void => {
+    if (isImeBlockedEscape(event, reason)) return;
+    props.onClose();
+  };
+  // Titled non-fill Desktop dialogs (filters, details, confirmations) use the
+  // scrollable titled dialog so actions stay reachable in short/narrow windows.
+  // Untitled or fill/full-screen workbenches (Settings, Calls) own their own
+  // internal scroller and bottom rail.
+  const useWorkbenchBody = desktopMaxWidth !== undefined && !effectiveMobile &&
+    !effectiveForceSheet &&
+    !(desktopSurface && props.title != null && !desktopFill && !desktopFullScreen);
+  if (useWorkbenchBody) {
     return (
       <Dialog
         open={props.open}
-        onClose={props.onClose}
+        onClose={handleDesktopClose}
         fullWidth
         maxWidth={false}
-        slotProps={{
-          // A Desktop workbench is a Desktop modal: share DesktopModal's
-          // material instead of MUI's flat default paper, which in dark mode
-          // left the control center as an edgeless black slab.
-          paper: {
-            sx: {
-              ...desktopModalPaperSx(),
-              ...(desktopFullScreen
-                ? {
-                  width: "100vw",
-                  height: "100dvh",
-                  maxWidth: "none",
-                  maxHeight: "none",
-                  m: 0,
-                  border: 0,
-                  borderRadius: 0,
-                }
-                : desktopFill
-                ? {
-                  width: "calc(100vw - 32px)",
-                  height: "calc(100dvh - 32px)",
-                  maxWidth: "none",
-                  maxHeight: "none",
-                  m: 2,
-                }
-                : {
-                  width: `min(${desktopMaxWidth}px, calc(100vw - 64px))`,
-                  maxWidth: "none",
-                  maxHeight: "calc(100vh - 48px)",
-                  m: 3,
-                }),
-            },
-          },
-          backdrop: { sx: desktopModalBackdropSx() },
-        }}
+        disableScrollLock
+        slots={{ transition: InstantModalTransition }}
+        slotProps={desktopDialogSlotProps({
+          paperRef: desktopPaperRef,
+          onClose: props.onClose,
+          paperSx: workbenchPaperSx(
+            desktopMaxWidth,
+            desktopFill,
+            desktopFullScreen,
+          ),
+        })}
       >
-        {
-          /* Desktop workbenches own a fixed command rail as their final child.
-            The workbench's middle child scrolls; keeping the DialogContent
-            itself out of the scroll chain makes the rail visible from the
-            moment the modal opens. */
-        }
         <DialogContent
           sx={{
             pb: 0,
@@ -113,7 +205,22 @@ export function Sheet(
       </Dialog>
     );
   }
-  const useCompactCard = (props.forceSheet || widthIsMobile) && !props.cover;
+  if (desktopSurface) {
+    return (
+      <DesktopTitledSheet
+        open={props.open}
+        onClose={handleDesktopClose}
+        title={props.title}
+        actions={props.actions}
+        wide={props.wide}
+        desktopDialogWidth={desktopDialogWidth ?? desktopMaxWidth}
+        desktopPaperRef={desktopPaperRef}
+      >
+        {props.children}
+      </DesktopTitledSheet>
+    );
+  }
+  const useCompactCard = (effectiveForceSheet || effectiveMobile) && !props.cover;
   if (useCompactCard) {
     return maybePortal(
       <ObsidianSheet
@@ -152,12 +259,24 @@ export function useConfirmSheetSurface(): boolean {
   return useSurfaceProfile().kind !== "desktop";
 }
 
+export interface ConfirmSheetAction {
+  readonly label: ReactNode;
+  readonly onConfirm: () => void | Promise<void>;
+  readonly color?: "primary" | "error" | "warning" | "info" | "secondary";
+  readonly disabled?: boolean;
+  readonly busy?: boolean;
+  readonly cancelLabel?: ReactNode;
+  readonly startIcon?: ReactNode;
+  readonly confirmProps?: Record<`data-${string}`, string>;
+}
+
 export function ConfirmSheet({
   open,
   onClose,
   title,
   children,
-  actions,
+  actions: explicitActions,
+  confirm,
   wide = false,
   portal = true,
 }: {
@@ -166,11 +285,71 @@ export function ConfirmSheet({
   title?: ReactNode;
   children: ReactNode;
   actions?: ReactNode;
+  /** Explicit opt-in primary action (mutually exclusive with `actions`):
+   *  renders Cancel (Esc) + Confirm (Mod+Enter) and binds stack-aware
+   *  `useConfirmEnter` from one source of truth. */
+  confirm?: ConfirmSheetAction | undefined;
   wide?: boolean;
   /** Folder sheets already live in the keyboard-resized App host. */
   portal?: boolean;
 }): ReactNode {
   const forceSheet = useConfirmSheetSurface();
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const activeConfirm = explicitActions == null ? confirm : undefined;
+  const confirmReady = Boolean(
+    open && activeConfirm && !activeConfirm.disabled && !activeConfirm.busy,
+  );
+  const triggerConfirm = (): void => {
+    if (!confirmReady || !activeConfirm) return;
+    void activeConfirm.onConfirm();
+  };
+  // On Desktop, bind the topmost-dialog owner ref; on touch/tablet (where
+  // ObsidianSheet renders instead of a Dialog paper), rely on the confirm stack
+  // so hardware keyboards keep Mod+Enter and bare-Enter protection.
+  useConfirmEnter(confirmReady, triggerConfirm, !forceSheet ? { owner: dialogRef } : {});
+  const actions = explicitActions ?? (activeConfirm
+    ? (
+      <>
+        <Button
+          color="inherit"
+          disabled={Boolean(activeConfirm.busy)}
+          onClick={onClose}
+          sx={{ textTransform: "none" }}
+        >
+          {activeConfirm.cancelLabel ?? "Cancel"}
+          {!forceSheet && <Kbd keys="Esc" />}
+        </Button>
+        <Button
+          {...activeConfirm.confirmProps}
+          variant="contained"
+          color={activeConfirm.color ?? "primary"}
+          disabled={!confirmReady}
+          startIcon={activeConfirm.startIcon}
+          onKeyDown={(e): void => {
+            // Unconditionally suppress native button Enter activation on
+            // Desktop (even during post-composition hold — a button never
+            // hosts IME composition); only useConfirmEnter accepts fresh Mod+Enter.
+            if (
+              !forceSheet &&
+              (e.key === "Enter" || e.code === "Enter" || e.code === "NumpadEnter")
+            ) {
+              e.preventDefault();
+            }
+          }}
+          onClick={triggerConfirm}
+          sx={{ textTransform: "none" }}
+        >
+          {activeConfirm.label}
+          {!forceSheet && (
+            <Kbd
+              keys={`${MOD_LABEL}${ENTER_LABEL}`}
+              availability={confirmReady ? "available" : "inactive"}
+            />
+          )}
+        </Button>
+      </>
+    )
+    : undefined);
   return (
     <Sheet
       open={open}
@@ -179,6 +358,7 @@ export function ConfirmSheet({
       actions={actions}
       wide={wide}
       portal={portal}
+      desktopPaperRef={dialogRef}
       forceSheet={forceSheet}
       mobileDismiss={actions == null ? "footer" : "none"}
     >

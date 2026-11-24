@@ -29,10 +29,10 @@ export async function surfacesFlow(
   const enabled = (id: string) => `[data-composer-action=${id}]:not([disabled])`;
   await until(`document.querySelector(${JSON.stringify(enabled("schedule"))})`, "schedule enabled");
   await click(enabled("schedule"));
-  await until(`document.querySelector("[aria-label=发送时间]")`, "schedule sheet opens");
+  await until(`document.querySelector("[aria-label='Send time']")`, "schedule sheet opens");
   await key("Escape");
   await until(
-    `!document.querySelector("[aria-label=发送时间]")`,
+    `!document.querySelector("[aria-label='Send time']")`,
     "Escape closes the schedule sheet",
   );
   results.push("Schedule sheet: a trusted Escape closes it");

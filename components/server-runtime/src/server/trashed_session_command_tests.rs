@@ -6,10 +6,12 @@ fn trashed_session_accepts_only_non_waking_commands() {
     assert!(allowed_on_trashed_session(&Inbound::SetQueueEditing {
         session_id: session_id.clone(),
         id: None,
+        token: None,
     }));
     assert!(!allowed_on_trashed_session(&Inbound::SetQueueEditing {
         session_id: session_id.clone(),
         id: Some("m-1".to_owned()),
+        token: None,
     }));
     assert!(allowed_on_trashed_session(&Inbound::OpenSession {
         session_id: session_id.clone(),

@@ -109,7 +109,6 @@ test("workspace navigation has no global bare-letter shortcut", () => {
     "v",
     "w",
     "x",
-    "z",
   ]);
   // Windows/Linux held-prefix pane folds (Alt + [ ] \) are not Chrome chords.
   // macOS Cmd+[ / Cmd+] are Chrome Back/Forward, which are not reserved
@@ -148,11 +147,10 @@ test("intentional Chrome overrides are limited to reader Vim motions", () => {
   ]);
 });
 
-test("transactional edits and independent documents own native Save", () => {
+test("unified Prompt and independent documents own native Save", () => {
   for (
     const id of [
-      "pendingEdit.queued.done",
-      "pendingEdit.draft.done",
+      "composer.saveDraft",
       "document.save",
     ]
   ) {

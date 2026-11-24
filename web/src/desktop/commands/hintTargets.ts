@@ -27,10 +27,52 @@ const MODAL_CONTROLS = [
   "[contenteditable='true']",
 ].join(", ");
 
+const COMPOSITE_LIST_WIDGET = "[role='tree'], [role='treegrid'], [role='listbox']";
+const CLIPPING_OVERFLOW = /(auto|scroll|clip|hidden)/;
+
 function visible(element: HTMLElement): boolean {
   if (element.getClientRects().length === 0) return false;
   const style = getComputedStyle(element);
   return style.visibility !== "hidden" && style.display !== "none";
+}
+
+/** True when `element` is completely scrolled or clipped outside the viewport
+ *  or any scrollable/clipping ancestor up to `stopAt`. */
+export function isClippedOutsideScrollContainer(
+  element: HTMLElement,
+  stopAt?: HTMLElement | null,
+): boolean {
+  const rect = element.getBoundingClientRect();
+  if (rect.width === 0 && rect.height === 0) return true;
+  if (
+    typeof globalThis.innerWidth === "number" && globalThis.innerWidth > 0 &&
+    typeof globalThis.innerHeight === "number" && globalThis.innerHeight > 0
+  ) {
+    if (
+      rect.bottom <= 0 || rect.top >= globalThis.innerHeight ||
+      rect.right <= 0 || rect.left >= globalThis.innerWidth
+    ) return true;
+  }
+  let ancestor = element.parentElement;
+  while (ancestor) {
+    const style = getComputedStyle(ancestor);
+    const clipY = CLIPPING_OVERFLOW.test(style.overflowY);
+    const clipX = CLIPPING_OVERFLOW.test(style.overflowX);
+    if (clipY || clipX) {
+      const box = ancestor.getBoundingClientRect();
+      if (box.width > 0 && box.height > 0) {
+        if (clipY && (rect.bottom <= box.top + 2 || rect.top >= box.bottom - 2)) {
+          return true;
+        }
+        if (clipX && (rect.right <= box.left + 2 || rect.left >= box.right - 2)) {
+          return true;
+        }
+      }
+    }
+    if (ancestor === stopAt || ancestor === document.body) break;
+    ancestor = ancestor.parentElement;
+  }
+  return false;
 }
 
 function disabled(element: HTMLElement): boolean {
@@ -110,20 +152,37 @@ export function assignMnemonics(
   return result;
 }
 
-/** Every operable control of the topmost modal, labelled. */
+/** Every visible operable control of the topmost modal, labelled. Off-screen
+ *  scrolled controls and repeated rows inside tree/listbox widgets are skipped
+ *  so the 36-letter pool stays reserved for reachable dialog controls. */
 export function modalHints(root: HTMLElement): DesktopHint[] {
   const seen = new Set<HTMLElement>();
+  const compositeRegions = new Set<Element>();
   const controls = [...root.querySelectorAll<HTMLElement>(MODAL_CONTROLS)]
-    .filter((element) => {
-      if (!visible(element) || disabled(element)) return false;
+    .flatMap((element): HTMLElement[] => {
+      if (!visible(element) || disabled(element)) return [];
+      if (isClippedOutsideScrollContainer(element, root)) return [];
+      const region = element.closest(COMPOSITE_LIST_WIDGET);
+      if (region && region !== root && root.contains(region)) {
+        if (compositeRegions.has(region)) return [];
+        compositeRegions.add(region);
+        const entry = region.querySelector<HTMLElement>("[tabindex='0']");
+        const pick = entry && visible(entry) && !disabled(entry) &&
+            !isClippedOutsideScrollContainer(entry, root)
+          ? entry
+          : element;
+        if (seen.has(pick)) return [];
+        seen.add(pick);
+        return [pick];
+      }
       // A native input inside a labelled button-like wrapper is one target.
       const owner = element.parentElement?.closest<HTMLElement>(MODAL_CONTROLS);
       if (owner && root.contains(owner) && !owner.matches("input, textarea")) {
-        return false;
+        return [];
       }
-      if (seen.has(element)) return false;
+      if (seen.has(element)) return [];
       seen.add(element);
-      return true;
+      return [element];
     })
     .sort((left, right) => {
       const a = left.getBoundingClientRect();
@@ -144,14 +203,33 @@ export function modalHints(root: HTMLElement): DesktopHint[] {
   });
 }
 
-/** Letter labels for a list's visible items, top to bottom. */
+/** Letter labels for a list's currently visible, unclipped items, top to bottom. */
 export function listHints(items: readonly HTMLElement[]): DesktopHint[] {
-  return items.slice(0, DESKTOP_JUMP_LABELS.length).map((element, index) => ({
-    label: DESKTOP_JUMP_LABELS[index]!,
-    element,
-    name: hintName(element),
-    placement: "row",
-  }));
+  return items
+    .filter((element) => isHintActionable(element))
+    .slice(0, DESKTOP_JUMP_LABELS.length)
+    .map((element, index) => ({
+      label: DESKTOP_JUMP_LABELS[index]!,
+      element,
+      name: hintName(element),
+      placement: "row",
+    }));
+}
+
+/** True when a previously labelled hint target is still connected, visible,
+ *  enabled, unclipped in its scroll chain, and owned by the current topmost
+ *  modal (with no popup above it). */
+export function isHintActionable(
+  element: HTMLElement,
+  modal?: HTMLElement | null,
+): boolean {
+  if (!element.isConnected || !visible(element) || disabled(element)) return false;
+  if (modal !== undefined) {
+    if (!modal || popupOwnsKeys() || topmostModal() !== modal || !modal.contains(element)) {
+      return false;
+    }
+  }
+  return !isClippedOutsideScrollContainer(element, modal ?? undefined);
 }
 
 /** Activate a labelled target the way a pointer would. */

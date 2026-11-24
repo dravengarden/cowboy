@@ -12,9 +12,11 @@ import {
   type QueuedMessage,
   removeQueued,
   requestSendQueued,
+  setQueueEditing,
   useConnected,
   useStoreSelector,
 } from "./store";
+import { getQueueEditHoldId } from "./queueEditingHold";
 
 export function QueuedDeliveryAction({
   desktop,
@@ -52,10 +54,18 @@ export function QueuedDeliveryAction({
   const queueConnected = useConnected();
   const steerQueued = (target: DeliveryTarget | undefined, nextCheckpoint = false): void => {
     setDeliveryAnchor(null);
+    const prevHold = getQueueEditHoldId(sessionId);
+    // Hold auto-drain while steering so the queued original cannot race and double-send.
+    if (prevHold === null) setQueueEditing(sessionId, message.id);
     // Current-turn delivery persists the message before removing the queued original.
     void currentTurnPrompt(sessionId, message.text, message.attachments, target, nextCheckpoint)
       .then(() => removeQueued(sessionId, message.id))
-      .catch((error: Error) => notify(error.message));
+      .catch((error: Error) => notify(error.message))
+      .finally(() => {
+        if (prevHold === null && getQueueEditHoldId(sessionId) === message.id) {
+          setQueueEditing(sessionId, null);
+        }
+      });
   };
 
   const primary = dispatchable ? (

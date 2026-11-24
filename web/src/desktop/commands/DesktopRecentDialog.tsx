@@ -88,25 +88,44 @@ function handleRecentDialogKeyDown(
   choose: (index: number) => void,
   onClose: () => void,
   onStartFilter: () => void,
+  pendingGo: React.MutableRefObject<number>,
 ): void {
   const native = event.nativeEvent;
   if (desktopImeOwnsKey(native) || event.metaKey || event.ctrlKey || event.altKey) return;
   const digit = desktopRecentDigit(event.code);
   const key = workspaceCommandKey(native);
+  const now = Date.now();
+  const armed = pendingGo.current > 0 && now - pendingGo.current <= 1200;
+  if (armed) {
+    if (["Shift", "Control", "Meta", "Alt", "AltGraph"].includes(key)) return;
+    pendingGo.current = 0;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat && key === "g" && count > 0) setSelected(0);
+    return;
+  }
+  pendingGo.current = 0;
+  if (key === "g") {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) pendingGo.current = now;
+    return;
+  }
   let handled = true;
   if (key === "/") onStartFilter();
   else if (key === "h") onClose();
   else if (count <= 0) {
     handled = digit !== null ||
       key === "j" || key === "k" || key === "ArrowDown" || key === "ArrowUp" ||
-      key === "Tab" || key === "g" || key === "G" || key === "l" || key === "Enter";
+      key === "Home" || key === "End" ||
+      key === "Tab" || key === "G" || key === "l" || key === "Enter";
   } else if (digit !== null) choose(digit - 1);
   else if (key === "j" || key === "ArrowDown" || (key === "Tab" && !event.shiftKey)) {
     setSelected((index) => stepRecentIndex(count, index, "next"));
   } else if (key === "k" || key === "ArrowUp" || key === "Tab") {
     setSelected((index) => stepRecentIndex(count, index, "prev"));
-  } else if (key === "g") setSelected(0);
-  else if (key === "G") setSelected(stepRecentIndex(count, selected, "last"));
+  } else if (key === "Home") setSelected(0);
+  else if (key === "End" || key === "G") setSelected(stepRecentIndex(count, selected, "last"));
   else if (key === "l" || key === "Enter") choose(selected);
   else handled = false;
   if (handled) {
@@ -186,6 +205,7 @@ function RecentFilterBar({
           placeholder="Filter recent Sessions and Drafts…"
           inputProps={{
             "aria-label": "Filter recent items",
+            "data-desktop-escape": "close",
             "data-desktop-vim": "off",
           }}
           sx={{ fontSize: "0.84rem" }}
@@ -294,6 +314,7 @@ function DesktopRecentDialogContent({
   const listRef = useRef<HTMLDivElement>(null);
   const filterRef = useRef<HTMLInputElement>(null);
   const lastPointer = useRef<{ x: number; y: number } | null>(null);
+  const pendingGo = useRef(0);
   const visible = useMemo(() => filterRecentItems(items, query), [items, query]);
 
   useEffect(() => {
@@ -341,6 +362,7 @@ function DesktopRecentDialogContent({
       choose,
       onClose,
       startFilter,
+      pendingGo,
     );
   };
   return (
@@ -392,6 +414,8 @@ function DesktopRecentDialogContent({
           : undefined}
         tabIndex={-1}
         data-desktop-recent
+        data-desktop-keys="own"
+        data-desktop-modal-keys="own"
         sx={{ px: 1, pb: 1, outline: "none", overflowY: "auto" }}
       >
         {visible.length === 0 && (

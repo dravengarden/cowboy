@@ -36,7 +36,15 @@ import { mobileComposerFocusMotion, mobileComposerIdleEditorMinHeight, mobileCom
 import { mobileComposerOutlineColor, mobileFocusedComposerFill, mobileFocusedComposerSurfaceSx } from "./mobileComposerSurface";
 import { setVimMode } from "./vimModeStore";
 import { useVimSetting } from "./vimSetting";
-import { DESKTOP_SHORTCUTS, DESKTOP_WORKSPACE_KEYS, desktopWorkspaceSequence } from "./desktop/commands/workspaceShortcuts";
+import { DESKTOP_WORKSPACE_KEYS, desktopWorkspaceSequence } from "./desktop/commands/workspaceShortcuts";
+import { DESKTOP_PENDING_ROW_EDIT_EVENT } from "./desktop/promptBuffer";
+import {
+  DesktopEmptyDraftsRow,
+  DesktopPendingHeaderSummary,
+  DesktopPendingHeaderTrailing,
+  handleDesktopPendingRowEditEvent,
+} from "./desktop/DesktopPendingListChrome";
+import { recordUndo } from "./undoActions";
 import { type Attachment, filesToAttachments, fileToAttachment, pendingImageAttachment, imageTokensInText, promoteUnplacedImageTokens, reconcileDeletedInlineImages, settlePendingAttachments, stripImageTokens } from "./attachments";
 import { getInlineAttachment, registerInlineAttachment, seedInlineAttachments } from "./inlineImages";
 import { activateAllDrafts, activateDraft, clearDrafts, clearQueue, discardQueued, returnFailedQueued, editDraft, editQueued, type QueuedMessage, notify, queuedToDraft, removeDraft, removeQueued, reorderDrafts, reorderQueue, retryQueued, setQueueEditing, useConnected, useStoreSelector } from "./store";
@@ -56,16 +64,6 @@ import { COMPOSER_STACK_DISCLOSURE_TIMEOUT, composerStackDisclosureSx, swallowSt
 export const DesktopContextShortcut = lazy(async () => {
   const module = await import("./desktop/commands/DesktopContextShortcut");
   return { default: module.DesktopContextShortcut };
-});
-
-export const DesktopRowEditToolbar = lazy(async () => {
-  const module = await import("./desktop/DesktopRowEditToolbar");
-  return { default: module.DesktopRowEditToolbar };
-});
-
-export const DesktopPendingEditCommandBindings = lazy(async () => {
-  const module = await import("./desktop/commands/DesktopPendingEditShortcuts");
-  return { default: module.DesktopPendingEditCommandBindings };
 });
 
 export const DesktopRegionShortcut = lazy(async () => {
@@ -207,21 +205,6 @@ export function ComposeBar(
           attachments={attachments.filter((a) => !a.isImage)}
           onRemove={onRemoveAttachment}
         />
-      )}
-      {desktop && (
-        <Suspense fallback={null}>
-          <DesktopRowEditToolbar
-            dead={dead}
-            sendable={sendable}
-            submitLabel={submitLabel}
-            submitShortcut={submitShortcut}
-            submitIcon={submitIcon}
-            onTrigger={onTrigger}
-            onAttach={onAttach}
-            onSubmit={onSend}
-            onExpand={onExpand}
-          />
-        </Suspense>
       )}
       {
         /* LEFT-aligned with a fixed gap (not space-evenly — a few icons shouldn't
@@ -405,23 +388,17 @@ export function ComposeBar(
           </Tooltip>
         )}
         {onExpand && (
-          <HintTooltip
-            title="Expand editor"
-            shortcut={leaderHint(DESKTOP_WORKSPACE_KEYS.editorExpand)}
-          >
+          <Tooltip title="Expand editor">
             <span>
-              {leaderSlot(
-                <IconButton
-                  aria-label="expand editor"
-                  sx={TOOLBAR_ICON_BTN}
-                  onClick={onExpand}
-                >
-                  <OpenInFull />
-                </IconButton>,
-                DESKTOP_WORKSPACE_KEYS.editorExpand,
-              )}
+              <IconButton
+                aria-label="expand editor"
+                sx={TOOLBAR_ICON_BTN}
+                onClick={onExpand}
+              >
+                <OpenInFull />
+              </IconButton>
             </span>
-          </HintTooltip>
+          </Tooltip>
         )}
       </Stack>}
       {
@@ -754,39 +731,33 @@ export interface PendingEditController {
 // Collapsible header ("N Queued Messages" / "N Drafts"). Bulk Send all /
 // Clear all live in the header kebab so the collapsed bar stays one line.
 // Drafts sit BELOW the queue and above the composer (see the Composer render).
-export function PendingPanel({
-  desktop,
-  keyboardOpen,
-  kind,
-  sessionId,
-  items,
-  status,
-  nextAgentContext,
-  commands,
-  onMoveDraft,
-  onScheduleDraft,
-  onEditingChange,
-  onResumeKeyboardSurface,
-}: {
+interface PendingPanelProps {
   desktop: boolean;
   keyboardOpen: boolean;
   kind: "queued" | "draft";
   sessionId: string;
   items: QueuedMessage[];
   status: Status;
-  /** A pending agent switch holds the old queue until its first prompt is chosen. */
   nextAgentContext?: SessionContext | undefined;
   commands: () => AvailableCommand[];
-  /** Composer owns these draft pickers so they survive the panel unmounting. */
   onMoveDraft?: ((id: string) => void) | undefined;
   onScheduleDraft?: ((id: string) => void) | undefined;
-  /** Mobile parent projection used to yield the ordinary composer while this
-   *  panel owns the only active writing surface. */
   onEditingChange?: ((editing: boolean) => void) | undefined;
-  /** Clear the compact-surface latch so a Queue/Draft tap can own the
-   *  keyboard-up two-track chrome after delivery or hide-keyboard. */
   onResumeKeyboardSurface?: (() => void) | undefined;
-}): React.JSX.Element {
+  desktopActiveEditId?: string | null | undefined;
+  desktopEditingHeld?: boolean | undefined;
+  desktopPreferredFocusId?: string | null | undefined;
+  desktopEmptyOpen?: boolean | undefined;
+  onDesktopEditRow?: ((msg: QueuedMessage, entryMode: "insert" | "normal") => void) | undefined;
+  onDesktopNewDraft?: (() => void) | undefined;
+}
+
+export function PendingPanel({
+  desktop, keyboardOpen, kind, sessionId, items, status, nextAgentContext,
+  commands, onMoveDraft, onScheduleDraft, onEditingChange,
+  onResumeKeyboardSurface, desktopActiveEditId, desktopEditingHeld,
+  desktopPreferredFocusId, desktopEmptyOpen, onDesktopEditRow, onDesktopNewDraft,
+}: PendingPanelProps): React.JSX.Element {
   const scrollRef = useRef<HTMLDivElement>(null);
   // Plan / Queue / Draft share one exclusive accordion: opening this panel
   // folds the other two; tapping the already-open panel folds all three.
@@ -813,7 +784,9 @@ export function PendingPanel({
   // Accordion disclosure is a view preference; edit ownership is a transaction.
   // A transaction always wins visually so persisted/local disclosure state can
   // never hide the only active Mobile composer.
-  const visuallyCollapsed = collapsed && editingId === null;
+  const visuallyCollapsed = desktop && desktopEmptyOpen
+    ? false
+    : collapsed && editingId === null;
   const settleEditAndCollapse = (resolution: "save" | "discard"): void => {
     const controller = editControllerRef.current;
     if (controller === null) return;
@@ -940,12 +913,12 @@ export function PendingPanel({
     }
   }, [editingId, items]);
   useEffect(() => {
-    if (editingId !== null || items.length === 0) return;
+    if (desktop || editingId !== null || items.length === 0) return;
     const recoveredId = recoverPendingEditId(sessionId, kind, items);
     if (recoveredId !== null) {
       setEditingId(recoveredId);
     }
-  }, [editingId, items, kind, sessionId]);
+  }, [desktop, editingId, items, kind, sessionId]);
   // Reorder is a low-frequency action, so the per-row drag grips are hidden by
   // default (they'd waste ~40px on every row of a narrow phone) and revealed
   // only in this opt-in "reorder mode" (iOS list-Edit pattern). Local + ephemeral
@@ -959,15 +932,19 @@ export function PendingPanel({
   // through this ref instead.
   const rowCallbacksRef = useRef({
     commands,
+    items,
     onMoveDraft,
     onScheduleDraft,
     onResumeKeyboardSurface,
+    onDesktopEditRow,
   });
   rowCallbacksRef.current = {
     commands,
+    items,
     onMoveDraft,
     onScheduleDraft,
     onResumeKeyboardSurface,
+    onDesktopEditRow,
   };
   const rowCommands = useCallback(
     (): AvailableCommand[] => rowCallbacksRef.current.commands(),
@@ -984,8 +961,15 @@ export function PendingPanel({
   }, []);
   const editRow = useCallback((id: string): void => {
     setReordering(false);
+    if (desktop && rowCallbacksRef.current.onDesktopEditRow) {
+      const found = rowCallbacksRef.current.items.find((item) => item.id === id);
+      if (found && !found.id.startsWith("opt-") && found.status === undefined) {
+        rowCallbacksRef.current.onDesktopEditRow(found, "insert");
+      }
+      return;
+    }
     setEditingId(id);
-  }, []);
+  }, [desktop]);
   const finishRowEdit = useCallback((id: string): void => {
     const restoreFocus = !suppressEditFocusRestoreRef.current;
     suppressEditFocusRestoreRef.current = false;
@@ -1049,12 +1033,12 @@ export function PendingPanel({
   }, [desktop, kind]);
   // Bridge the locally-edited QUEUED message id to the store so the auto-drain
   // holds that message (and everything behind it) until the edit finishes.
-  // Drafts don't drain, so they need no hold. Clears on unmount / session switch.
+  // Desktop owns this hold inside DesktopPendingBufferEditor.
   useEffect(() => {
-    if (kind !== "queued") return undefined;
+    if (desktop || kind !== "queued") return undefined;
     setQueueEditing(sessionId, editingId);
     return (): void => setQueueEditing(sessionId, null);
-  }, [kind, sessionId, editingId]);
+  }, [desktop, kind, sessionId, editingId]);
   // Drag-to-reorder. For the QUEUE, a drag behaves like an edit: hold the head so
   // the WHOLE queue pauses (drain is front-to-back) until the drop commits the
   // new order and releases. Drafts don't drain, so no hold.
@@ -1069,18 +1053,24 @@ export function PendingPanel({
     onDragStart: (): void => {
       // Pickup haptic is fired centrally in useSortable (covers every list). Here
       // we only need the QUEUE-specific hold: holding the head pauses the drain.
-      if (kind === "queued") {
+      if (kind === "queued" && !desktopEditingHeld) {
         const head = items[0];
         if (head) setQueueEditing(sessionId, head.id);
       }
     },
     onDragEnd: kind === "queued"
-      ? (): void => setQueueEditing(sessionId, null)
+      ? (): void => { if (!desktopEditingHeld) setQueueEditing(sessionId, null); }
       : undefined,
   });
   useEffect(() => {
     const list = scrollRef.current;
     if (!desktop || !list) return undefined;
+    const onDesktopRowEdit = (event: Event): void =>
+      handleDesktopPendingRowEditEvent(
+        event,
+        rowCallbacksRef.current.items,
+        rowCallbacksRef.current.onDesktopEditRow,
+      );
     const onKeyboardReorder = (event: Event): void => {
       const detail = (event as CustomEvent<{ delta?: number }>).detail;
       const item = event.target instanceof Element
@@ -1107,8 +1097,11 @@ export function PendingPanel({
       );
     };
     list.addEventListener("cowboy:desktop-reorder", onKeyboardReorder);
-    return () =>
+    list.addEventListener(DESKTOP_PENDING_ROW_EDIT_EVENT, onDesktopRowEdit);
+    return () => {
       list.removeEventListener("cowboy:desktop-reorder", onKeyboardReorder);
+      list.removeEventListener(DESKTOP_PENDING_ROW_EDIT_EVENT, onDesktopRowEdit);
+    };
   }, [desktop, kind, sessionId, sortable.order]);
   const noun = kind === "queued" ? "Queued Message" : "Draft";
   const mobileFloatingEdit = !desktop && editingId !== null && keyboardOpen;
@@ -1121,6 +1114,7 @@ export function PendingPanel({
           "data-desktop-region": `prompt.${kind}`,
           "data-desktop-reorderable": "true",
           "data-desktop-focus-default": true,
+          "data-desktop-empty-drafts": desktopEmptyOpen && count === 0 ? "true" : undefined,
           tabIndex: -1,
         }
         : {})}
@@ -1242,7 +1236,16 @@ export function PendingPanel({
               {count}
             </Typography>
           )}
-          {editingId !== null && (
+          {desktop && (
+            <DesktopPendingHeaderSummary
+              kind={kind}
+              items={items}
+              reordering={reordering}
+              activeEditId={desktopActiveEditId}
+              editingHeld={desktopEditingHeld}
+            />
+          )}
+          {!desktop && editingId !== null && (
             <Typography
               variant="caption"
               color="primary.main"
@@ -1308,53 +1311,11 @@ export function PendingPanel({
           )}
           <Box sx={{ flex: 1, minWidth: 0 }} />
           {desktop && (
-            <Stack
-              direction="row"
-              spacing={0.5}
-              alignItems="center"
-              sx={{
-                display: "none",
-                "@container pendingPanel (min-width: 24rem)": { display: "flex" },
-              }}
-            >
-              {kind === "queued" && (
-                <Suspense fallback={null}>
-                  <DesktopRegionShortcut
-                    shortcut={DESKTOP_SHORTCUTS.focusQueue}
-                    title={visuallyCollapsed
-                      ? "Open and focus queue"
-                      : "Close queue when focused"}
-                    singleKeycap={DESKTOP_SHORTCUTS.focusQueue}
-                  />
-                </Suspense>
-              )}
-              {kind === "draft" && (
-                <Suspense fallback={null}>
-                  <DesktopRegionShortcut
-                    shortcut={DESKTOP_SHORTCUTS.focusDrafts}
-                    title="Focus drafts"
-                    singleKeycap={DESKTOP_SHORTCUTS.focusDrafts}
-                  />
-                </Suspense>
-              )}
-            </Stack>
-          )}
-          {desktop && reordering && (
-            <Typography
-              variant="caption"
-              color="primary.main"
-              sx={{
-                ml: 0.75,
-                minWidth: 0,
-                fontWeight: 700,
-                letterSpacing: "0.04em",
-                overflow: "hidden",
-                textOverflow: "ellipsis",
-                whiteSpace: "nowrap",
-              }}
-            >
-              REORDER · J/K MOVE · ESC DONE
-            </Typography>
+            <DesktopPendingHeaderTrailing
+              kind={kind}
+              visuallyCollapsed={visuallyCollapsed}
+              reordering={reordering}
+            />
           )}
         </ButtonBase>
         {
@@ -1547,6 +1508,9 @@ export function PendingPanel({
             {nativeItems.map((item) => <NativeDeliveryRow key={item.id} sessionId={sessionId} row={item} />)}
             {sortable.order.length > 0 && <Typography variant="caption" color="text.secondary">Next turn</Typography>}
           </Box>}
+          {desktop && desktopEmptyOpen && count === 0 && (
+            <DesktopEmptyDraftsRow onNewDraft={onDesktopNewDraft} />
+          )}
           {sortable.order.map((id) => {
             const index = sortable.order.indexOf(id);
             const m = byId.get(id);
@@ -1561,6 +1525,9 @@ export function PendingPanel({
               m,
               arrivalFlash,
             );
+            const isCurrentDesktopRow = desktop
+              ? desktopActiveEditId === m.id
+              : editingId === m.id;
             return (
               <Stack
                 key={m.id}
@@ -1574,7 +1541,10 @@ export function PendingPanel({
                 {...(desktop
                   ? {
                     "data-desktop-item": m.id,
-                    "data-desktop-current": editingId === m.id
+                    "data-desktop-current": isCurrentDesktopRow
+                      ? "true"
+                      : undefined,
+                    "data-desktop-preferred": desktopPreferredFocusId === m.id
                       ? "true"
                       : undefined,
                     tabIndex: -1,
@@ -1707,7 +1677,8 @@ export function PendingPanel({
                         nextAgentContext={nextAgentContext}
                         onlyQueuedMessage={count === 1}
                         commands={rowCommands}
-                        editing={editingId === m.id}
+                        editing={!desktop && editingId === m.id}
+                        desktopEditing={desktop && desktopActiveEditId === m.id}
                         keyboardOpen={keyboardOpen}
                         onResumeKeyboardSurface={onResumeKeyboardSurface
                           ? resumeRowKeyboardSurface
@@ -1848,6 +1819,7 @@ export function PendingRow({
   onlyQueuedMessage,
   commands,
   editing,
+  desktopEditing,
   keyboardOpen,
   onResumeKeyboardSurface,
   onEdit,
@@ -1865,6 +1837,7 @@ export function PendingRow({
   onlyQueuedMessage?: boolean;
   commands: () => AvailableCommand[];
   editing: boolean;
+  desktopEditing?: boolean | undefined;
   /** Panel-owned software-keyboard state, shared by every row. */
   keyboardOpen: boolean;
   onResumeKeyboardSurface?: (() => void) | undefined;
@@ -2213,10 +2186,13 @@ export function PendingRow({
     onEditController(controller);
     return () => onEditController(null);
   }, [editing, onEditController]);
-  // Open after the initiating Escape has finished bubbling. Mounting MUI's
-  // Dialog synchronously inside that same key event lets its escape listener
-  // observe the trigger and immediately close the brand-new confirmation.
+  // Clean edits exit directly; dirty edits defer confirmation until after
+  // Escape finishes bubbling so MUI Dialog does not immediately close itself.
   const requestDiscardEdit = (): void => {
+    if (!latestEditTransactionRef.current?.dirty) {
+      discardEdit();
+      return;
+    }
     globalThis.requestAnimationFrame(() => setConfirmDiscardEdit(true));
   };
   useConfirmEnter(confirmDiscardEdit, discardEdit);
@@ -2518,19 +2494,6 @@ export function PendingRow({
             }
             : undefined}
         >
-          {desktop && !overlayOpen && (
-            <Suspense fallback={null}>
-              <DesktopPendingEditCommandBindings
-                kind={kind}
-                sendable={editSendable}
-                onSlash={(): void => editorRef.current?.insertTrigger("/")}
-                onReference={(): void => editorRef.current?.insertTrigger("@")}
-                onAttach={(): void => editFileInputRef.current?.click()}
-                onDone={requestSaveEdit}
-                onExpand={(): void => setOverlayOpen(true)}
-              />
-            </Suspense>
-          )}
           {
             /* Inline editor — hidden while the focused overlay owns the edit so only
               ONE editor is mounted at a time (shared `draft`, no uncontrolled desync). */
@@ -2757,7 +2720,7 @@ export function PendingRow({
       ...(onSchedule
         ? [{
           key: "schedule",
-          label: message.schedule ? "改期 / 取消定时…" : "定时发送…",
+          label: message.schedule ? "Reschedule / cancel…" : "Schedule send…",
           icon: <Schedule fontSize="small" />,
           onClick: onSchedule,
         }]
@@ -2780,7 +2743,20 @@ export function PendingRow({
         key: "remove",
         label: "Remove",
         icon: <Close fontSize="small" />,
-        onClick: (): void => setConfirmRemove(true),
+        onClick: (): void => {
+          if (desktop && !message.schedule) {
+            void removeDraft(sessionId, message.id).then(() => {
+              recordUndo("Draft removed", [{
+                kind: "copy_to_session",
+                sessionId,
+                text: message.text,
+                attachments: message.attachments,
+              }]);
+            }).catch(() => undefined);
+            return;
+          }
+          setConfirmRemove(true);
+        },
       },
     ]
     : [
@@ -2862,7 +2838,7 @@ export function PendingRow({
     primary = (
       <Suspense fallback={primaryControl}>
         <DesktopContextShortcut
-          badge="S"
+          badge={`${MOD_LABEL}${ENTER_LABEL}`}
           itemScoped
           placement="corner"
         >
@@ -2916,6 +2892,21 @@ export function PendingRow({
         {seedTray.length > 0 && (
           <QueuedAttachmentChips attachments={seedTray} />
         )}
+        {desktop && desktopEditing && (
+          <Chip
+            size="small"
+            color="primary"
+            variant="outlined"
+            label="Editing in canvas"
+            sx={{
+              mt: 0.5,
+              mr: 0.5,
+              height: 20,
+              fontSize: desktopSize(11),
+              fontWeight: 600,
+            }}
+          />
+        )}
         {/* Scheduled-draft badge: info chip for when it fires; tap to reschedule. Info, never red: a schedule is a notice, not a failure (conventions/ui.md §4). */}
         {message.schedule && (
           <Chip
@@ -2924,7 +2915,7 @@ export function PendingRow({
             clickable
             icon={<Schedule sx={{ fontSize: glyphSize(15) }} />}
             label={`${fireLabel(message.schedule.fire_at_ms)} · ${
-              message.schedule.delivery === "front" ? "队首" : "队尾"
+              message.schedule.delivery === "front" ? "Front" : "Back"
             }`}
             onClick={onSchedule}
             sx={{

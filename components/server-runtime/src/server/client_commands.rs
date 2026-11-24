@@ -205,12 +205,16 @@ pub fn set_queue_editing_command(
     held: &mut HashMap<String, (String, u64)>,
     session_id: String,
     id: Option<String>,
+    token: Option<String>,
 ) -> Result<(), String> {
     // Track the hold per-connection so a mid-edit disconnect releases it
     // (the hold is global server state — see handle_ws teardown).
     match &id {
         Some(mid) => {
-            let epoch = state.hub.set_queue_editing(&session_id, Some(mid.clone()));
+            let epoch =
+                state
+                    .hub
+                    .set_queue_editing_with_token(&session_id, Some(mid.clone()), token);
             held.insert(session_id.clone(), (mid.clone(), epoch));
         }
         None => {
@@ -697,6 +701,20 @@ pub fn report_stale_row(state: &AppState, session_id: &str, cmid: Option<&str>) 
     }
 }
 
+/// Address an edit blocked by an in-flight steer reservation on that row.
+/// Keeps the row alive and reports `rejected` (never `stale`) so the client
+/// retains the edit for retry instead of parking a duplicate draft.
+pub fn report_reserved_row(state: &AppState, session_id: &str, cmid: Option<&str>) {
+    if let Some(cmid) = cmid {
+        state.hub.command_result(
+            session_id,
+            cmid,
+            CommandOutcome::Rejected,
+            "this message is currently being delivered; try again once delivery settles",
+        );
+    }
+}
+
 /// The folder tree a principal organizes: their own while product auth is on,
 /// the shared unowned tree while it is off (mirroring session ownership).
 pub fn folder_actor(state: &AppState, principal: &ProductPrincipal) -> FolderActor {
@@ -976,6 +994,7 @@ async fn try_commit_recovery_draft_activation(
         session_id,
         id,
         cmid,
+        front,
     } = cmd
     else {
         return None;
@@ -1045,22 +1064,23 @@ async fn try_commit_recovery_draft_activation(
         }
     }
     let _guard = state.hub.pending_commit_lock(session_id).await;
-    let (mut commit, rx) = match state
-        .hub
-        .begin_durable_recovery_draft_activation(reservation, caller)
-    {
-        Ok(crate::core::RecoveryActivationCommitStep::CommittedSync) => return Some(true),
-        Ok(crate::core::RecoveryActivationCommitStep::Pending(commit, rx)) => (commit, rx),
-        Err(msg) => {
-            state
-                .hub
-                .command_result(session_id, op, CommandOutcome::Rejected, msg);
-            state
-                .hub
-                .broadcast_error(Some(session_id.clone()), msg.to_owned());
-            return Some(false);
-        }
-    };
+    let (mut commit, rx) =
+        match state
+            .hub
+            .begin_durable_recovery_draft_activation(reservation, *front, caller)
+        {
+            Ok(crate::core::RecoveryActivationCommitStep::CommittedSync) => return Some(true),
+            Ok(crate::core::RecoveryActivationCommitStep::Pending(commit, rx)) => (commit, rx),
+            Err(msg) => {
+                state
+                    .hub
+                    .command_result(session_id, op, CommandOutcome::Rejected, msg);
+                state
+                    .hub
+                    .broadcast_error(Some(session_id.clone()), msg.to_owned());
+                return Some(false);
+            }
+        };
     match rx.await {
         Ok(Ok(true)) => {
             state

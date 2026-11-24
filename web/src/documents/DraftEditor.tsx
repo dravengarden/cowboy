@@ -51,7 +51,7 @@ import { seedInlineAttachments } from "../inlineImages";
 import { useVimSetting } from "../vimSetting";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import { imeOwnsEditable, isImeKeyEvent } from "../imeKey";
-import { getVimMode } from "../vimModeStore";
+import { claimActiveVimOwner, getVimMode, setBufferVimMode } from "../vimModeStore";
 import { vimSinkAwaitsInput } from "../desktop/vim/vimSinkInput";
 import { LeaderKeycap } from "../desktop/commands/DesktopKeycap";
 import {
@@ -130,10 +130,11 @@ export interface DraftMobileChrome {
 }
 
 export function DraftEditor(
-  { id, beforeLeave, onCopyToSession, mobileChrome }: {
+  { id, beforeLeave, onCopyToSession, onUseInSession, mobileChrome }: {
     id: string;
     beforeLeave: MutableRefObject<DraftFlush>;
     onCopyToSession: () => void;
+    onUseInSession?: (() => void) | undefined;
     mobileChrome?: DraftMobileChrome | undefined;
   },
 ): React.JSX.Element {
@@ -165,6 +166,7 @@ export function DraftEditor(
       syncError={snapshot.error}
       beforeLeave={beforeLeave}
       onCopyToSession={onCopyToSession}
+      onUseInSession={onUseInSession}
       mobileChrome={mobileChrome}
       onReload={() => setEpoch((n) => n + 1)}
     />
@@ -208,23 +210,13 @@ function exportDraft(
 
 function DraftEditingSession(
   {
-    initial,
-    current,
-    phase,
-    syncError,
-    beforeLeave,
-    onCopyToSession,
-    mobileChrome,
-    onReload,
+    initial, current, phase, syncError, beforeLeave, onCopyToSession,
+    onUseInSession, mobileChrome, onReload,
   }: {
-    initial: DraftDocument;
-    current: DraftDocument;
-    phase: string;
-    syncError: string | null;
-    beforeLeave: MutableRefObject<DraftFlush>;
-    onCopyToSession: () => void;
-    mobileChrome?: DraftMobileChrome | undefined;
-    onReload: () => void;
+    initial: DraftDocument; current: DraftDocument; phase: string;
+    syncError: string | null; beforeLeave: MutableRefObject<DraftFlush>;
+    onCopyToSession: () => void; onUseInSession?: (() => void) | undefined;
+    mobileChrome?: DraftMobileChrome | undefined; onReload: () => void;
   },
 ): React.JSX.Element {
   const editor = useRef<ComposerEditorHandle | null>(null);
@@ -268,7 +260,10 @@ function DraftEditingSession(
     } | null
   >(null);
   const historyPrefetch = useRef<AbortController | null>(null);
-  useEffect(() => () => historyPrefetch.current?.abort(), []);
+  useEffect(() => {
+    const releaseVim = claimActiveVimOwner(`document:${initial.id}`);
+    return () => { releaseVim(); historyPrefetch.current?.abort(); };
+  }, [initial.id]);
   const closeHistory = (): void => {
     historyPrefetch.current?.abort();
     setHistory(null);
@@ -319,7 +314,7 @@ function DraftEditingSession(
   }, [focusLayout]);
   const vim = useVimSetting();
   const toolbar = useComposerToolbar();
-  // The title is the document's first line (Obsidian inline title): `␣T`
+  // The title is the document's first line (Obsidian inline title): `␣R`
   // or a Vim Normal `k` on the body's first line puts the cursor on its end
   // in Normal; `↑` in Insert enters it typing. `Enter`/`↓`/`Tab` (and `j`
   // in Normal) return to the body start, `Esc` to where the body caret was
@@ -1393,14 +1388,14 @@ function DraftEditingSession(
                   ? { initialSelection: positions.get(initial.id)!.head }
                   : {})}
                 onPasteFiles={attach}
-                // In Trash the server refuses every write, and each refused
-                // autosave would keep the text as one more conflicted copy.
+                // Trash refuses writes; avoid refused-save copies.
                 disabled={current.deleted}
                 placeholder="Start writing…"
                 borderless
                 fill={!focusLayout}
                 flushRightScrollbar={desktop}
                 vim={vim}
+                onVimMode={(m) => setBufferVimMode(`document:${initial.id}`, m)}
               />
             </Box>
           </Box>
@@ -1451,6 +1446,9 @@ function DraftEditingSession(
                 void flush().then(onCopyToSession).catch((e: Error) =>
                   setError(e.message)
                 )}
+              onUseInSession={onUseInSession
+                ? () => void flush().then(onUseInSession).catch((e: Error) => setError(e.message))
+                : undefined}
               onHistory={() => void openHistory()}
               onExport={() =>
                 exportDraft(

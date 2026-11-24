@@ -55,6 +55,7 @@ mod hub_peer_notice;
 pub use hub_peer_notice::PromptProgress;
 mod hub_provider_pins;
 mod hub_queue;
+pub use hub_queue::{SteerSource, SteerSourceKind};
 mod hub_superagent;
 mod hub_sync;
 mod mobile_review;
@@ -671,11 +672,12 @@ struct Session {
     /// grace. One hold per session (matches the original single client-side
     /// `editingHold` model).
     editing: Option<String>,
-    /// Lease generation for `editing`. A reconnect reasserts the hold and bumps
-    /// this value, so a delayed cleanup owned by the replaced WebSocket cannot
-    /// release the new connection's edit transaction.
+    editing_token: Option<String>,
     editing_epoch: u64,
     active_turn_compacting: bool,
+    /// Scheduled drafts whose fire timer elapsed while held open for editing.
+    deferred_scheduled_drafts: Vec<String>,
+    steer_reservations: HashMap<String, hub_queue::SteerReservation>,
     /// True while a queue-dispatched prompt of ours is in flight but the session
     /// hasn't yet flipped back to idle. Guards the dispatch-before-`Busy` window
     /// so a same-tick re-drain can't double-send and overlap turns. Cleared once
@@ -997,6 +999,8 @@ pub enum Inbound {
         session_id: String,
         #[serde(default)]
         id: Option<String>,
+        #[serde(default)]
+        token: Option<String>,
     },
     /// Park the composer's content as a new draft.
     AddDraft {
@@ -1035,6 +1039,8 @@ pub enum Inbound {
         id: String,
         #[serde(default)]
         cmid: Option<String>,
+        #[serde(default)]
+        front: bool,
     },
     /// Activate every draft, front-to-back.
     ActivateAllDrafts { session_id: String },
@@ -2308,8 +2314,11 @@ impl Hub {
                         queue,
                         drafts,
                         editing: None,
+                        editing_token: None,
                         editing_epoch: 0,
                         active_turn_compacting: false,
+                        deferred_scheduled_drafts: Vec::new(),
+                        steer_reservations: self.restored_steer_reservations(&id),
                         in_flight: (defer_missing_busy && was_busy)
                             || runtime.is_some_and(|worker| {
                                 worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
@@ -3114,8 +3123,11 @@ impl Hub {
                     queue: Vec::new(),
                     drafts: Vec::new(),
                     editing: None,
+                    editing_token: None,
                     editing_epoch: 0,
                     active_turn_compacting: false,
+                    deferred_scheduled_drafts: Vec::new(),
+                    steer_reservations: HashMap::new(),
                     in_flight: false,
                     in_flight_epoch: 0,
                     delivery_hold: None,

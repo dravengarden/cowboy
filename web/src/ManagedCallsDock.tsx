@@ -577,36 +577,23 @@ export function CallDetailView({
         open={confirmStop}
         onClose={(): void => setConfirmStop(false)}
         title="Stop this call?"
-        actions={
-          <Stack
-            direction="row"
-            spacing={1}
-            justifyContent="flex-end"
-            sx={{ width: "100%" }}
-          >
-            <Button onClick={(): void => setConfirmStop(false)}>
-              Keep running
-            </Button>
-            <Button
-              color="error"
-              variant="contained"
-              onClick={(): void => {
-                setConfirmStop(false);
-                void cancelCall(parent, call.call_id).catch(
-                  (reason: unknown) => {
-                    setStopError(
-                      reason instanceof Error
-                        ? reason.message
-                        : "Stop was not recorded",
-                    );
-                  },
+        confirm={{
+          label: "Stop call",
+          cancelLabel: "Keep running",
+          color: "error",
+          onConfirm: (): void => {
+            setConfirmStop(false);
+            void cancelCall(parent, call.call_id).catch(
+              (reason: unknown) => {
+                setStopError(
+                  reason instanceof Error
+                    ? reason.message
+                    : "Stop was not recorded",
                 );
-              }}
-            >
-              Stop call
-            </Button>
-          </Stack>
-        }
+              },
+            );
+          },
+        }}
       >
         <Typography variant="body2">
           Cowboy asks the child to stop its current turn. If the child finishes
@@ -1791,7 +1778,7 @@ export function ManagedChildNotice(
             variant="outlined"
             startIcon={<InfoOutlined fontSize="small" />}
             onClick={(): void => setDetailsOpen(true)}
-            sx={{ minHeight: 44 }}
+            sx={{ minHeight: desktop ? desktopSize(30) : 44 }}
           >
             Details
           </Button>
@@ -1800,7 +1787,7 @@ export function ManagedChildNotice(
           size="small"
           variant="outlined"
           onClick={(): void => setActiveSessionId(parent)}
-          sx={{ minHeight: 44 }}
+          sx={{ minHeight: desktop ? desktopSize(30) : 44 }}
         >
           Open parent
         </Button>

@@ -16,9 +16,15 @@ const topBarSource = (await Promise.all([
   "../DesktopTopBarControls.tsx",
   "../runConfigNavigation.ts",
 ].map((path) => readFile(new URL(path, import.meta.url), "utf8")))).join("\n");
-const transcriptSource = await readTranscriptSource();
+const transcriptSource = [
+  await readTranscriptSource(),
+  await readFile(new URL("../../toolDetailsKeyboard.ts", import.meta.url), "utf8"),
+].join("\n");
 const exploreSource = await readFile(
   new URL("../../explore/ExploreSurface.tsx", import.meta.url), "utf8",
+);
+const modalGuardSource = await readFile(
+  new URL("./modalGuard.ts", import.meta.url), "utf8",
 );
 
 class FakeElement {
@@ -102,9 +108,10 @@ test("every Desktop shortcut owner checks the shared IME boundary", () => {
       ["top bar overlays", topBarSource, 2],
       ["transcript inspector", transcriptSource, 1],
       ["question page navigation", exploreSource, 2],
+      ["shared modal guard", modalGuardSource, 1],
     ] as const
   ) {
-    const checks = source.match(/desktopImeOwnsKey\(/gu)?.length ?? 0;
+    const checks = source.match(/(?:desktopImeOwnsKey|modalHandlerShouldSkip)\(/gu)?.length ?? 0;
     assert(
       checks >= minimum,
       name + " has " + String(checks) + " IME checks; expected " +

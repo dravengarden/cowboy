@@ -106,12 +106,12 @@ const NAVIGATION: ShortcutRow[] = [
     keys: [DESKTOP_SHORTCUTS.focusQueue, DESKTOP_SHORTCUTS.focusDrafts],
     title: "Queue / Drafts inside Prompt",
     description:
-      `${DESKTOP_FOCUS_PROMPT_SHORTCUT} returns to the editor without changing its Vim mode or caret`,
+      `␣Q lands on your just-queued prompt (press I to edit in the Prompt canvas). ␣D opens Drafts even when empty (press N for a new draft). ${DESKTOP_FOCUS_PROMPT_SHORTCUT} returns to the active buffer; ${DESKTOP_SHORTCUTS.insertPrompt} returns to New Prompt in Insert`,
   },
   {
     keys: ["Ctrl+H/J/K/L"],
     title: "Move to the region left / below / above / right",
-    description: "By on-screen position, as LazyVim's window keys. Works from Vim Normal and every list, reader and bar, and inside dialogs; a field in Vim Insert keeps Ctrl+H/J/K",
+    description: "By on-screen position, as LazyVim's window keys. Works from Vim Normal, Insert, and every list, reader, bar, and dialog; only a pending Vim command keeps its next key",
   },
   { keys: [DESKTOP_SHORTCUTS.cycleRegion], title: "Cycle visible workspace regions" },
   {
@@ -171,9 +171,25 @@ const DISCOVERY: ShortcutRow[] = [
 ];
 
 const DIRECT_ACTIONS: ShortcutRow[] = [
-  { keys: ["Mod+Enter"], title: "Send or queue the current prompt" },
-  { keys: [DESKTOP_SHORTCUTS.saveDraft], title: "Save edited Queue/Draft changes, save a document, or save the new prompt as a draft" },
-  { keys: ["Alt+Enter"], title: "Choose delivery mode" },
+  {
+    keys: ["Mod+Enter"],
+    title: "Primary action: Send prompt, Finish queue edit, or Use Draft in Session…",
+    description:
+      "In New Prompt or Session Draft: send or open delivery picker. In a Queue edit: save and release hold without sending. In an independent Draft: choose a Session to open it in its Prompt canvas",
+  },
+  {
+    keys: [DESKTOP_SHORTCUTS.saveDraft],
+    title: "Save in place without sending",
+    description:
+      "In New Prompt: save as a Session draft. In a Queue edit, Session Draft, or independent Draft: save and stay in the editor",
+  },
+  { keys: ["Alt+Enter"], title: "Choose delivery mode (Steer / Queue first / Send & pause)" },
+  {
+    keys: ["↑ / K", "[q / ]q", "ZZ / ZQ"],
+    title: "Prompt workbench editing motions",
+    description:
+      "↑ (or Vim Normal k) on an empty New Prompt recalls the just-queued message into Insert. [q / ]q walk send order across Queue items and New Prompt. ZZ saves and closes; ZQ discards changes",
+  },
   { keys: [DESKTOP_SHORTCUTS.stop], title: "Stop the current turn" },
   {
     keys: [DESKTOP_SHORTCUTS.reconnect],
@@ -220,17 +236,18 @@ const DIRECT_ACTIONS: ShortcutRow[] = [
     title: "Tabs: D close, O others, R right, L left, A all",
     description: "P pin, K keep the preview tab, U reopen the last closed, < > move",
   },
-  {
-    keys: [
-      desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.title),
-      desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.copy),
-      desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.history),
-      desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.export),
-      desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.readableWidth),
-    ],
-    title: "On a Draft: title, copy to a Session, history, export, readable width",
-    description: "The open Draft's own actions are root keys; H is Schedule in a Session and History in a Draft",
-  },
+    {
+      keys: [
+        desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.title),
+        desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.copy),
+        desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.history),
+        desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.export),
+        desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.readableWidth),
+      ],
+      title: "On a Draft: rename title, copy to a Session, history, export, readable width",
+      description:
+        "␣R focuses the title (matching Session Rename); Mod+Enter copies to a Session and opens it in its Prompt canvas; H is Schedule in a Session and History in a Draft",
+    },
 ];
 
 const CONVERSATION: ShortcutRow[] = [
@@ -489,6 +506,63 @@ function ShortcutsFilterBar({
   );
 }
 
+function handleShortcutsDialogKeyDown(
+  event: React.KeyboardEvent<HTMLDivElement>,
+  searchRef: React.RefObject<HTMLInputElement | null>,
+  bodyRef: React.RefObject<HTMLDivElement | null>,
+  pendingGo: React.MutableRefObject<number>,
+): void {
+  if (document.activeElement === searchRef.current) return;
+  const native = event.nativeEvent;
+  if (desktopImeOwnsKey(native) || event.metaKey || event.altKey) return;
+  const key = workspaceCommandKey(native);
+  const scroller = bodyRef.current?.parentElement ?? null;
+  if (event.ctrlKey && !event.shiftKey) {
+    const lower = key.toLowerCase();
+    if (scroller && ["d", "u", "f", "b"].includes(lower)) {
+      const dir = lower === "d" || lower === "f" ? 1 : -1;
+      const share = lower === "d" || lower === "u" ? 0.5 : 0.9;
+      scroller.scrollBy({ top: dir * scroller.clientHeight * share });
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    pendingGo.current = 0;
+    return;
+  }
+  if (event.ctrlKey) return;
+  if (key === "/") {
+    pendingGo.current = 0;
+    event.preventDefault();
+    event.stopPropagation();
+    searchRef.current?.focus();
+    return;
+  }
+  if (!scroller) return;
+  if (key === "g" && !event.shiftKey) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat) return;
+    const now = Date.now();
+    if (pendingGo.current && now - pendingGo.current <= 1200) {
+      pendingGo.current = 0;
+      scroller.scrollTo({ top: 0 });
+    } else {
+      pendingGo.current = now;
+    }
+    return;
+  }
+  pendingGo.current = 0;
+  if (key === "G") {
+    scroller.scrollTo({ top: scroller.scrollHeight });
+    event.preventDefault();
+    event.stopPropagation();
+  } else if (key === "j" || key === "k") {
+    scroller.scrollBy({ top: key === "j" ? 64 : -64 });
+    event.preventDefault();
+    event.stopPropagation();
+  }
+}
+
 function DesktopShortcutsDialogContent({
   onClose,
 }: {
@@ -498,6 +572,8 @@ function DesktopShortcutsDialogContent({
   const registry = useDesktopCommands();
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const pendingGo = useRef(0);
   const paneCommands = useMemo<ShortcutRow[]>(() =>
     registry.commands
       .filter((command) =>
@@ -558,16 +634,8 @@ function DesktopShortcutsDialogContent({
       description={`Vim-first navigation · ${workspace.focusedRegion ?? workspace.focusedPane}`}
       icon={<Keyboard color="primary" />}
       width={920}
-      onShortcutKeyDown={(event): void => {
-        if (document.activeElement === searchRef.current) return;
-        const native = event.nativeEvent;
-        if (desktopImeOwnsKey(native) || event.metaKey || event.ctrlKey || event.altKey) return;
-        if (workspaceCommandKey(native) === "/") {
-          event.preventDefault();
-          event.stopPropagation();
-          searchRef.current?.focus();
-        }
-      }}
+      onShortcutKeyDown={(event): void =>
+        handleShortcutsDialogKeyDown(event, searchRef, bodyRef, pendingGo)}
       shortcutGroups={[
         {
           slots: [{
@@ -576,10 +644,18 @@ function DesktopShortcutsDialogContent({
             availability: "active",
           }],
         },
-        { slots: [{ shortcut: "/", label: "Search" }] },
-        { slots: [{ shortcut: "Esc", label: "Close" }] },
+        {
+          label: "Scroll",
+          slots: [
+            { shortcut: "J/K", label: "Line" },
+            { shortcut: "Ctrl+D/U", label: "Half" },
+            { shortcut: "gg/G", label: "Top · Bottom" },
+          ],
+        },
+        { slots: [{ shortcut: "/", label: "Search" }, { shortcut: "Esc", label: "Close" }] },
       ]}
     >
+      <Box ref={bodyRef} data-desktop-modal-keys="own">
       <ShortcutsFilterBar inputRef={searchRef} query={query} onChange={setQuery} />
       <Box
         sx={{
@@ -606,6 +682,7 @@ function DesktopShortcutsDialogContent({
             active={section.active === true}
           />
         ))}
+      </Box>
       </Box>
     </DesktopModal>
   );

@@ -18,6 +18,8 @@ import {
 import { useVimMode, VIM_MODE_COLOR } from "../vimModeStore";
 import { useVimSetting } from "../vimSetting";
 import { useComposerSourceMode } from "../composerSourceMode";
+  // The single status-line / toolbar prompt-buffer status updates live.
+import { type DesktopPromptStatus, useDesktopPromptStatus } from "./promptBuffer";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { DesktopKeycap, DesktopShortcut } from "./commands/DesktopKeycap";
 import {
@@ -33,9 +35,11 @@ import { useDesktopReviewShown } from "./review/desktopWorkView";
 import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
+  DESKTOP_DOCUMENT_KEYS,
   DESKTOP_RESIZE_HINT,
   DESKTOP_APPROVAL_SHORTCUT,
   DESKTOP_SHORTCUTS,
+  desktopWorkspaceSequence,
 } from "./commands/workspaceShortcuts";
 
 function Segment({
@@ -202,14 +206,41 @@ const REVIEW_DOCUMENT_HINTS: RegionHint[] = [
   { keys: DESKTOP_SHORTCUTS.focusConversation, label: "Conversation" },
 ];
 
+const SESSIONS_LIST_HINTS: RegionHint[] = [
+  { keys: "J/K", label: "Row" },
+  { keys: "GG/G", label: "First/last" },
+  { keys: "'", label: "Labels" },
+  { keys: "L/Enter", label: "Open" },
+  { keys: "H", label: "Collapse/up" },
+  { keys: "Ctrl+D/U", label: "Page" },
+  { keys: "zz/zt/zb", label: "View" },
+  { keys: "za/zM/zR", label: "Fold" },
+  { keys: "A", label: "New session here" },
+  { keys: "S", label: "Actions" },
+  { keys: ",", label: "Settings" },
+  { keys: "R", label: "Rename" },
+  { keys: "M", label: "Move to" },
+  { keys: "X", label: "Trash" },
+  { keys: "N", label: "New folder" },
+  { keys: "O", label: "Order mode" },
+];
+
+const APPROVAL_HINTS: RegionHint[] = [
+  { keys: "Tab", label: "Next field" },
+  { keys: "␣1…", label: "Answer" },
+  { keys: "Ctrl+K", label: "Transcript" },
+];
+
 function regionHints(
   region: string | null,
-  status: Status,
+  status: Status | undefined,
   projection: "history" | "explore",
   sourceMode: boolean,
   live: boolean,
   vim: boolean,
   topBar: readonly RegionHint[],
+  promptStatus: DesktopPromptStatus,
+  documentMode: boolean,
 ): RegionHint[] {
   switch (region) {
     case "topbar.controls":
@@ -228,24 +259,7 @@ function regionHints(
         { keys: DESKTOP_SHORTCUTS.toggleSessions, label: "Expand list" },
       ];
     case "sessions.list":
-      return [
-        { keys: "J/K", label: "Row" },
-        { keys: "GG/G", label: "First/last" },
-        { keys: "'", label: "Labels" },
-        { keys: "L/Enter", label: "Open" },
-        { keys: "H", label: "Collapse/up" },
-        { keys: "Ctrl+D/U", label: "Page" },
-        { keys: "zz/zt/zb", label: "View" },
-        { keys: "za/zM/zR", label: "Fold" },
-        { keys: "A", label: "New session here" },
-        { keys: "S", label: "Actions" },
-        { keys: ",", label: "Settings" },
-        { keys: "R", label: "Rename" },
-        { keys: "M", label: "Move to" },
-        { keys: "X", label: "Trash" },
-        { keys: "N", label: "New folder" },
-        { keys: "O", label: "Order mode" },
-      ];
+      return SESSIONS_LIST_HINTS;
     case "prompt.calls":
       return [
         { keys: "J/K", label: "Call" },
@@ -258,27 +272,84 @@ function regionHints(
         { keys: "Enter", label: "Toggle" },
       ];
     case "prompt.queued":
+      return [
+        { keys: "J/K", label: "Message" },
+        { keys: "I", label: "Edit" },
+        { keys: "L/Enter", label: "Normal" },
+        { keys: "Mod+Enter", label: "Deliver" },
+        { keys: "R", label: "To drafts" },
+        { keys: "X", label: "Remove" },
+        { keys: "O", label: "Order" },
+        { keys: "Esc/H", label: "Canvas" },
+      ];
     case "prompt.draft":
       return [
         { keys: "J/K", label: "Message" },
-        { keys: "GG/G", label: "First/last" },
-        { keys: "'", label: "Labels" },
-        { keys: "L/Enter", label: "Edit" },
-        { keys: "O", label: "Order mode" },
+        { keys: "I", label: "Edit" },
+        { keys: "L/Enter", label: "Normal" },
+        { keys: "N", label: "New draft" },
+        { keys: "Mod+Enter", label: "Send" },
+        { keys: "T", label: "Schedule" },
+        { keys: "X", label: "Remove" },
+        { keys: "O", label: "Order" },
+        { keys: "Esc/H", label: "Canvas" },
       ];
+    case "conversation.approval":
+      return APPROVAL_HINTS;
     case "conversation.transcript":
       return projection === "explore" ? EXPLORE_HINTS : HISTORY_HINTS;
     case "review.navigator":
       return REVIEW_NAVIGATOR_HINTS;
     case "review.document":
       return REVIEW_DOCUMENT_HINTS;
-    case "prompt.composer":
+    case "prompt.composer": {
+      if (documentMode) {
+        return [
+          ...(vim ? [{ keys: "Esc", label: "Normal" }] : []),
+          { keys: "Mod+Enter", label: "Use in Session…" },
+          { keys: "Mod+S", label: "Save" },
+          { keys: desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.title), label: "Title" },
+          { keys: desktopWorkspaceSequence(DESKTOP_DOCUMENT_KEYS.copy), label: "Copy" },
+          {
+            keys: DESKTOP_SHORTCUTS.toggleSourceMode,
+            label: sourceMode ? "Live preview" : "Source",
+          },
+        ];
+      }
+      if (promptStatus.kind === "queued") {
+        return [
+          { keys: "Esc", label: promptStatus.dirty && vim ? "Normal" : "Close" },
+          { keys: "Mod+Enter", label: "Finish" },
+          { keys: "Mod+S", label: "Save" },
+          { keys: "Alt+Enter", label: "Deliver…" },
+          ...(vim ? [{ keys: "[q/]q", label: "Queue" }, { keys: "ZQ", label: "Discard" }] : []),
+        ];
+      }
+      if (promptStatus.kind === "scheduled") {
+        return [
+          { keys: "Esc", label: promptStatus.dirty && vim ? "Normal" : "Close" },
+          { keys: "Mod+Enter", label: "Deliver…" },
+          { keys: "Mod+S", label: "Save" },
+          ...(vim ? [{ keys: "ZQ", label: "Discard" }] : []),
+        ];
+      }
+      if (promptStatus.kind === "draft" || promptStatus.kind === "new-draft") {
+        return [
+          { keys: "Esc", label: "Save & back" },
+          { keys: "Mod+Enter", label: promptStatus.sendLabel },
+          { keys: "Mod+S", label: "Save" },
+          ...(promptStatus.canForce ? [{ keys: "Alt+Enter", label: "Delivery" }] : []),
+        ];
+      }
       return [
         // Only Vim turns Esc into a mode change; without it the editor keeps
         // Esc for its own layers (completion, selection).
         ...(vim ? [{ keys: "Esc", label: "Normal" }] : []),
-        // Without a live server a send is queued, exactly as while busy.
-        { keys: "Mod+Enter", label: status === "busy" || !live ? "Queue" : "Send" },
+        {
+          keys: "Mod+Enter",
+          label: promptStatus.sendLabel || (status === "busy" || !live ? "Send…" : "Send"),
+        },
+        { keys: "Mod+S", label: "Draft" },
         // The label names the destination, not the current state: a hint
         // describes what the key does next.
         {
@@ -286,6 +357,7 @@ function regionHints(
           label: sourceMode ? "Live preview" : "Source",
         },
       ];
+    }
     default:
       return [];
   }
@@ -296,9 +368,11 @@ function statusPaneLabel(
   region: string | null,
   pane: string,
   reviewShown: boolean,
+  documentMode: boolean,
 ): string {
   if (resizing) return "layout";
   if (region === "topbar.controls") return "topbar";
+  if (documentMode && pane === "prompt") return "draft";
   // The work pane names the view it shows.
   return pane === "conversation" && reviewShown ? "review" : pane;
 }
@@ -345,29 +419,74 @@ function useStatusLineSubscriptions(focusedRegion: string | null) {
   return { topBarHints, hasApprovalChoice, hasSessionItems };
 }
 
+function promptBufferBadge(
+  promptStatus: DesktopPromptStatus,
+): { label: string; color: string; tooltip: string } | null {
+  const pos = promptStatus.index !== undefined ? ` #${String(promptStatus.index + 1)}` : "";
+  if (promptStatus.kind === "queued") {
+    return promptStatus.holdStatus === "unconfirmed"
+      ? {
+        label: `QUEUE${pos} · HOLD UNCONFIRMED`,
+        color: "warning.main",
+        tooltip: "Editing queued message offline — server drain hold will be re-confirmed on reconnect",
+      }
+      : {
+        label: `QUEUE${pos}`,
+        color: "warning.main",
+        tooltip: "Editing queued message in Prompt canvas (auto-drain held)",
+      };
+  }
+  if (promptStatus.kind === "scheduled") {
+    return {
+      label: promptStatus.scheduleLabel ? `SCHEDULED · ${promptStatus.scheduleLabel}` : "SCHEDULED",
+      color: "info.main",
+      tooltip: "Editing scheduled draft in Prompt canvas",
+    };
+  }
+  if (promptStatus.kind === "new-draft") {
+    return {
+      label: "NEW DRAFT",
+      color: "primary.main",
+      tooltip: "Composing a new session draft in Prompt canvas",
+    };
+  }
+  if (promptStatus.kind === "draft") {
+    return {
+      label: `DRAFT${pos}`,
+      color: "primary.main",
+      tooltip: "Editing session draft in Prompt canvas",
+    };
+  }
+  return null;
+}
+
 export const DesktopStatusLine = memo(function DesktopStatusLine({
   sessionId,
   status,
+  documentMode = false,
 }: {
-  sessionId: string;
-  status: Status;
+  sessionId?: string | undefined;
+  status?: Status | undefined;
+  documentMode?: boolean | undefined;
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
   const commands = useDesktopCommandActions();
   const { focusedPane, focusedRegion, mode } = workspace;
   const { topBarHints, hasApprovalChoice, hasSessionItems } = useStatusLineSubscriptions(focusedRegion);
+  const promptStatus = useDesktopPromptStatus();
+  const bufferBadge = documentMode ? null : promptBufferBadge(promptStatus);
   const vimEnabled = useVimSetting();
   const sourceMode = useComposerSourceMode();
   const vimMode = useVimMode();
   const ime = useImeStatus();
   const macro = useVimMacroRecording();
   const reviewShown = useDesktopReviewShown();
-  const projection = useExploreSessionState(sessionId).projection;
+  const projection = useExploreSessionState(sessionId ?? "").projection;
   const rawSync = useSyncStatus();
   const held = useHeldDeliveries();
   // Held rows of this pane's session already show their failure in place;
   // the segment points only at the ones the user is not looking at.
-  const sync = withHeld(rawSync, attentionCount(held.sessions, sessionId, NO_ACKNOWLEDGED));
+  const sync = withHeld(rawSync, attentionCount(held.sessions, sessionId ?? "", NO_ACKNOWLEDGED));
   const syncLive = sync.phase === "live" && sync.outbox.held === 0;
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -430,6 +549,8 @@ export const DesktopStatusLine = memo(function DesktopStatusLine({
       rawSync.phase === "live",
       vimEnabled,
       topBarHints,
+      promptStatus,
+      documentMode,
     ),
     // Window motion works from every region (FOCUS.md "Window motion").
     ...(focusedRegion ? [{ keys: "Ctrl+H/J/K/L", label: "Window" }] : []),
@@ -463,7 +584,7 @@ export const DesktopStatusLine = memo(function DesktopStatusLine({
       { keys: "Esc", label: "Cancel", availability: "available" },
     ]
     : ordinaryHints;
-  const paneLabel = statusPaneLabel(resizingLayout, focusedRegion, focusedPane, reviewShown);
+  const paneLabel = statusPaneLabel(resizingLayout, focusedRegion, focusedPane, reviewShown, documentMode);
   const regionLabel = workspace.selectedSplitter ?? focusedRegion;
 
   return (
@@ -500,6 +621,14 @@ export const DesktopStatusLine = memo(function DesktopStatusLine({
           <Segment
             label={(regionLabel.split(".").at(-1) ?? regionLabel).toUpperCase()}
             tooltip={resizingLayout ? "Selected resize bar" : "Focused region"}
+            mono
+          />
+        )}
+        {bufferBadge && (
+          <Segment
+            label={bufferBadge.label}
+            color={bufferBadge.color}
+            tooltip={bufferBadge.tooltip}
             mono
           />
         )}
@@ -553,7 +682,7 @@ export const DesktopStatusLine = memo(function DesktopStatusLine({
         divider={<Divider orientation="vertical" flexItem />}
         sx={{ flexShrink: 0 }}
       >
-        <Segment label={status.toUpperCase()} tooltip="Session status" mono />
+      {status && <Segment label={status.toUpperCase()} tooltip="Session status" mono />}
         <Segment
           label={
             <Stack

@@ -267,6 +267,9 @@ async function contextPane(driver: AcceptanceDriver): Promise<void> {
     "Space labels every control of the workbench",
   );
   await shot("run-config-leader");
+  // Dismiss the armed modal leader before leaving contextPane.
+  await key("Escape");
+  await driver.sleep(150);
   results.push("Space labels every control across all three panes");
 }
 
@@ -274,8 +277,6 @@ async function contextPane(driver: AcceptanceDriver): Promise<void> {
 async function resizeAndClose(driver: AcceptanceDriver): Promise<void> {
   const { page, key, until, sleep, check, shot, results } = driver;
   const { viewport, sent, sentSince } = helpers(driver);
-  await key("Escape");
-  await sleep(150);
   await viewport(1180, 860);
   await sleep(400);
   const medium = await page.evaluate<number[][]>(`
@@ -289,6 +290,18 @@ async function resizeAndClose(driver: AcceptanceDriver): Promise<void> {
   await shot("run-config-medium");
   results.push("A 1180px window keeps the two columns");
   const beforeClose = (await sent()).length;
+  // Inactive pane shortcuts must not leak into Agent: focus Tools and verify
+  // `f` does not stage an Agent edit, then return to Agent and stage `f`.
+  await page.evaluate(`document.querySelector("[data-config-pane='tools']")?.focus()`);
+  await sleep(100);
+  await key("f");
+  await sleep(100);
+  check(
+    !(await page.evaluate<boolean>("Boolean(document.querySelector('[data-config-apply-bar]'))")),
+    "Inactive Agent shortcut `f` does not fire from Tools",
+  );
+  await key("[");
+  await sleep(100);
   await key("g");
   await key("g");
   await key("f");

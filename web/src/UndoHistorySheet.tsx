@@ -15,10 +15,12 @@ import {
   Stack,
   Typography,
 } from "@mui/material";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useContext, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import { desktopRecentAge } from "./desktop/commands/DesktopRecentDialog";
+import { DesktopModal } from "./desktop/DesktopModal";
 import { documentNotice } from "./documents/DocumentNotifications";
 import { ConfirmSheet } from "./Sheet";
+import { SurfaceContext } from "./surface/SurfaceProfile";
 import { useStoreSelector } from "./store";
 import { undoEntry } from "./undoActions";
 import {
@@ -130,12 +132,15 @@ function UndoHistorySheet({ onClose }: { onClose: () => void }): React.JSX.Eleme
     return () => globalThis.clearInterval(timer);
   }, []);
   const hours = Math.round(UNDO_TTL_MS / 3_600_000);
-  return (
-    <ConfirmSheet open onClose={onClose} title="Undo history">
-      <Stack spacing={1.5} data-undo-history>
-        <Typography variant="body2" color="text.secondary">
-          Changes made on this device in the last {hours} hours. Older entries are cleared automatically; deleted items stay in Trash longer.
-        </Typography>
+  const desktop = useContext(SurfaceContext)?.kind === "desktop";
+  const subtitle = `Changes made on this device in the last ${hours} hours. Older entries are cleared automatically; deleted items stay in Trash longer.`;
+  const body = (
+      <Stack spacing={1.5} data-undo-history sx={desktop ? { px: 2.25, py: 1.75 } : undefined}>
+        {!desktop && (
+          <Typography variant="body2" color="text.secondary">
+            {subtitle}
+          </Typography>
+        )}
         {entries.length === 0
           ? (
             <Typography variant="body2" color="text.disabled" sx={{ py: 2, textAlign: "center", fontStyle: "italic" }}>
@@ -198,6 +203,24 @@ function UndoHistorySheet({ onClose }: { onClose: () => void }): React.JSX.Eleme
             </Stack>
           )}
       </Stack>
+  );
+  if (desktop) {
+    return (
+      <DesktopModal
+        open
+        onClose={onClose}
+        title="Undo history"
+        description={subtitle}
+        icon={<History sx={{ color: "primary.main" }} />}
+        width={640}
+      >
+        {body}
+      </DesktopModal>
+    );
+  }
+  return (
+    <ConfirmSheet open onClose={onClose} title="Undo history">
+      {body}
     </ConfirmSheet>
   );
 }

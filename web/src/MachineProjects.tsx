@@ -387,31 +387,23 @@ export function MachineProjects(
         open={Boolean(removing)}
         onClose={() => !busy && setRemoving(undefined)}
         title="Remove project from Cowboy?"
-        actions={
-          <>
-            <Button disabled={busy} onClick={() => setRemoving(undefined)}>
-              Cancel
-            </Button>
-            <Button
-              color="error"
-              disabled={busy}
-              onClick={() => {
-                void run(async () => {
-                  setRegistry(
-                    await request<Registry>("projects", {
-                      action: "remove",
-                      expected_revision: registry?.revision,
-                      id: removing?.id,
-                    }),
-                  );
-                  setRemoving(undefined);
-                });
-              }}
-            >
-              Remove project
-            </Button>
-          </>
-        }
+        confirm={{
+          label: "Remove project",
+          color: "error",
+          busy,
+          onConfirm: () => {
+            void run(async () => {
+              setRegistry(
+                await request<Registry>("projects", {
+                  action: "remove",
+                  expected_revision: registry?.revision,
+                  id: removing?.id,
+                }),
+              );
+              setRemoving(undefined);
+            });
+          },
+        }}
       >
         <Typography>
           {removing?.display_name}{" "}

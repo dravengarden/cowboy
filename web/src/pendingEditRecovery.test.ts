@@ -55,3 +55,34 @@ test("rewriting an unchanged buffer keeps its stamp", async () => {
   assertEquals(edit("stamp", "same").updatedAt, first.updatedAt);
   assertEquals(edit("stamp", "changed").updatedAt > first.updatedAt, true);
 });
+
+test("in-flight orphan park preserves and recovers a newer revision", async () => {
+  const parked: string[] = [];
+  let releaseFirst!: () => void;
+  let calls = 0;
+  bindPendingEditRecovery({
+    pendingMutationIds: () => [],
+    park: (_session, record) => {
+      parked.push(record.text);
+      calls += 1;
+      if (calls === 1) {
+        return new Promise<void>((resolve) => {
+          releaseFirst = resolve;
+        });
+      }
+      return Promise.resolve();
+    },
+  });
+
+  edit("in-flight-newer", "rev-1");
+  recoverPendingEditsFrom("in-flight-newer", { queue: [], drafts: [] });
+  assertEquals(parked, ["rev-1"]);
+
+  // User types a newer revision while rev-1's orphan park is still in flight.
+  edit("in-flight-newer", "rev-2");
+  releaseFirst();
+  for (let i = 0; i < 6; i += 1) await Promise.resolve();
+
+  assertEquals(parked, ["rev-1", "rev-2"]);
+  assertEquals(getPendingEdit("in-flight-newer", "queued", "row-1"), null);
+});

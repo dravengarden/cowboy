@@ -96,7 +96,8 @@ import {
   retryDraftRestore,
 } from "./draftStore";
 import { announceDraftChanges } from "./documents/store";
-import { bindPendingEditRecovery, recoverPendingEditsFrom } from "./pendingEditRecovery";
+import { createCurrentTurnRegistry, type CurrentTurnConsumeSource, type CurrentTurnOutcome } from "./currentTurnDelivery";
+import { bindPendingEditRecovery, parkStaleEditOnce, recoverPendingEditsFrom } from "./pendingEditRecovery";
 import {
   attachPendingEditDatabase,
   pendingEditsDurable,
@@ -200,6 +201,8 @@ import {
   SOCKET_BOOTSTRAP_TIMEOUT_MS,
   SOCKET_UPGRADE_TIMEOUT_MS,
 } from "./socketGuards.ts";
+export { useQueueEditHoldStatus } from "./queueEditingHold";
+import { markQueueEditHoldsUnconfirmed, replayQueueEditHolds, setQueueEditHold, syncRemoteQueueEditing } from "./queueEditingHold";
 import { createLivenessWatch } from "./livenessWatch";
 import { createOutageTracker } from "./outageTracker";
 
@@ -1839,6 +1842,18 @@ function handle(msg: Outbound): void {
   }
 }
 
+function applyBootstrapMessage(message: Outbound, bootstrapGen: number, applyConfig: boolean): void {
+  if (message.type === "config_options" && !applyConfig) return;
+  if (message.type === "sync_patch" && message.state.startsWith("queue:")) {
+    const sid = message.state.slice("queue:".length);
+    telemetryOperations.acknowledge(sid, message.confirmed);
+    applyQueuePatch(sid, message.version, message.value, message.confirmed, message.resync === true, bootstrapGen);
+    retireEchoedRecoveryDrafts(sid, state.timelines.get(sid) ?? []);
+    return;
+  }
+  handle(message);
+}
+
 async function hydrateSession(
   sessionId: string,
   replace = false,
@@ -1859,6 +1874,7 @@ async function hydrateSession(
     controller.abort();
   }, 30_000);
   const startedAt = performance.now();
+  const bootstrapGen = socketGeneration;
   const configOptionsRevisionAtRequestStart =
     configOptionsRevisions.get(sessionId) ?? 0;
   const promise = (async (): Promise<void> => {
@@ -1883,10 +1899,7 @@ async function hydrateSession(
         configOptionsRevisions.get(sessionId) ?? 0,
       );
       for (const message of bootstrap.messages) {
-        if (message.type === "config_options" && !applyHydratedConfigOptions) {
-          continue;
-        }
-        handle(message);
+        applyBootstrapMessage(message, bootstrapGen, applyHydratedConfigOptions);
       }
       if (!bootstrap.messages.some((message) => message.type === "snapshot" && message.session_id === sessionId)) {
         throw new Error("session bootstrap contained no transcript snapshot");
@@ -1940,7 +1953,7 @@ async function hydrateSession(
         if (retryableFailure && needsDraftSource(sessionId) && retryAttempt >= SESSION_HYDRATION_RETRY_DELAYS_MS.length) {
           let newlyFailed = false;
           for (const mutation of qClients.get(sessionId)?.pending() ?? []) {
-            if (mutation.name === "activateDraft" && commandForQueueMutation(sessionId, mutation) === null && qStatus.get(mutation.id) !== "failed") {
+            if (awaitsDraftSource(sessionId, mutation) && qStatus.get(mutation.id) !== "failed") {
               qStatus.set(mutation.id, "failed");
               newlyFailed = true;
             }
@@ -2291,7 +2304,7 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     if (ready || socket !== ws || ws.readyState !== WebSocket.OPEN) return;
     ready = true;
     socketReady = true;
-    socketReadyAt = Date.now();
+    socketGeneration += 1; socketReadyAt = Date.now();
     connectionSpan?.end();
     const readyAt = performance.now();
     const connectDurationMs = readyAt - connectStartedAt;
@@ -2322,10 +2335,9 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
       void hydrateSession(openedSessionId, true);
     }
     for (const peeked of peekedSessions.keys()) ensurePeeked(peeked, true);
+    replayQueueEditHolds(send);
     for (const entry of syncClients.values()) entry.resend();
     for (const store of qClients.values()) store.resend();
-    // Behind the replay, not instead of it: a row the replay could not carry
-    // (durable admission still open) now gets a bounded deadline.
     reconcileStallWatchdogsForEverySession();
     guards.admitted(state.sessionsLoaded);
   };
@@ -2391,6 +2403,7 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     if (ready) outage.markLive();
     outage.countFailure();
     setState({ ...state, connected: false });
+    markQueueEditHoldsUnconfirmed();
     reconcileStallWatchdogsForEverySession();
     outage.begin();
     reportClientLog("warn", "websocket_close", "Cowboy WebSocket disconnected", {
@@ -3488,7 +3501,7 @@ const qMut = {
     queueMutators.scheduleDraft(v, a),
   rescheduleDraft: (v: QValue, a: { id: string; row: QueuedMessage }): QValue =>
     queueMutators.rescheduleDraft(v, a),
-  editDraft: (v: QValue, a: { id: string; row: QueuedMessage }): QValue =>
+  editDraft: (v: QValue, a: { id: string; sourceCmid?: string; row: QueuedMessage }): QValue =>
     queueMutators.editDraft(v, a),
   editQueue: (v: QValue, a: { id: string; row: QueuedMessage }): QValue =>
     queueMutators.editQueue(v, a),
@@ -3513,6 +3526,8 @@ const qMut = {
     queueMutators.returnQueuedToDraft(v, a),
 } satisfies Mutators<QValue>;
 const qClients = new Map<string, ReplicatedStore<QValue, typeof qMut>>();
+let socketGeneration = 0;
+const qLiveGeneration = new Map<string, number>();
 const qStatus = new Map<string, DeliveryStatus>();
 // Why a held row will not send, when the Hub said so (an addressed
 // `command_result`). Absent for an ordinary acknowledgement timeout.
@@ -3576,14 +3591,20 @@ async function settleStaleRowMutation(
   sessionId: string,
   mutation: { id: string; name: string; args: unknown },
 ): Promise<void> {
-  const row = (mutation.args as { row?: QueuedMessage }).row;
+  const args = mutation.args as { id?: string; row?: QueuedMessage };
+  const row = args.row;
   const edit = mutation.name === "editQueue" || mutation.name === "editDraft";
   const kept = edit && row !== undefined &&
     (row.text.trim() !== "" || row.attachments.length > 0);
   try {
     if (kept) {
-      // Persist the replacement first: a failed write keeps the edit held.
-      await qAdd("drafts", sessionId, row.text, row.attachments, { origin: "composer" });
+      const kind = mutation.name === "editQueue" ? "queued" : "draft";
+      await parkStaleEditOnce(
+        sessionId, kind, args.id ?? row.id, row.text, row.attachments,
+        state.drafts.get(sessionId) ?? [],
+        (qClients.get(sessionId)?.pending() ?? []).map((m) => m.id),
+        (cmid) => qAdd("drafts", sessionId, row.text, row.attachments, { origin: "composer", cmid }),
+      );
     }
     await discardQueued(sessionId, mutation.id);
     if (row?.cmid !== undefined) {
@@ -3792,10 +3813,16 @@ function commandForQueueMutation(sessionId: string, m: { name: string; id: strin
     args.id !== undefined &&
     args.row !== undefined
   ) {
-    return {
+    const targetId = m.name === "editDraft"
+      ? draftActivationSourceId(
+        m.args as { id: string; sourceCmid?: string },
+        qClients.get(sessionId)?.baseValue().drafts ?? [],
+      )
+      : args.id;
+    return targetId === null ? null : {
       type: m.name === "editDraft" ? "edit_draft" : "edit_queued",
       session_id: sessionId,
-      id: args.id,
+      id: targetId,
       text: args.row.text,
       content: contentOf(args.row.text, args.row.attachments),
       cmid: m.id,
@@ -3811,8 +3838,9 @@ function commandForQueueMutation(sessionId: string, m: { name: string; id: strin
     return { type: "unschedule_draft", session_id: sessionId, id: args.id };
   }
   if (m.name === "activateDraft" && args.id !== undefined) {
+    const activation = m.args as DraftActivation;
     const id = draftActivationSourceId(
-      m.args as DraftActivation,
+      activation,
       // The view already hides this source. Read the durable authoritative base
       // so reconnect also works for cached sessions that are not currently open.
       qClients.get(sessionId)?.baseValue().drafts ?? [],
@@ -3822,6 +3850,7 @@ function commandForQueueMutation(sessionId: string, m: { name: string; id: strin
       session_id: sessionId,
       id,
       cmid: args.row?.cmid ?? m.id,
+      ...(activation.front ? { front: true } : {}),
     };
   }
   if (isQueuedSend(m.name) && args.id !== undefined) {
@@ -3903,6 +3932,7 @@ function transmitQueueMutation(
       if (sent) armQTimers(sessionId, m.id, mutationRow.cmid);
       commitQueue(sessionId);
     }
+    if (command === null && isConnected()) void hydrateSession(sessionId);
     return;
   }
   const attempt = QUEUE_TRANSITION_MUTATORS.has(m.name)
@@ -4288,7 +4318,7 @@ function awaitsDraftSource(
   sessionId: string,
   m: { name: string; id: string; args: unknown },
 ): boolean {
-  return m.name === "activateDraft" &&
+  return (m.name === "activateDraft" || m.name === "editDraft") &&
     commandForQueueMutation(sessionId, m) === null;
 }
 
@@ -4645,14 +4675,22 @@ bindPendingEditRecovery({
 /** Fold a queue `sync_patch` for one session: apply (force on resync), clear the
  *  status/timers of any cmid the server confirmed, and cross-signal the chat
  *  overlay (a queue cmid landing also drops a wrong-guessed optimistic bubble). */
-function applyQueuePatch(sessionId: string, version: number, value: unknown, confirmed: string[], resync: boolean): void {
-  const wire = value as { queue?: WireQueued[]; drafts?: WireQueued[] };
+function applyQueuePatch(sessionId: string, version: number, value: unknown, confirmed: string[], resync: boolean, generation?: number): void {
+  if (generation !== undefined && generation !== socketGeneration) return;
+  const store = qClient(sessionId);
+  if (resync && qLiveGeneration.get(sessionId) === socketGeneration && version < store.version()) return;
+  const wire = value as {
+    queue?: WireQueued[];
+    drafts?: WireQueued[];
+    editing?: string | null;
+    editing_token?: string | null;
+  };
   const next: QValue = {
     queue: fromWire(wire.queue ?? []),
     drafts: fromWire(wire.drafts ?? []),
     inFlight: [],
+    ...(wire.editing !== undefined ? { editing: wire.editing } : {}),
   };
-  const store = qClient(sessionId);
   // A prompt guessed as queued may dispatch before the creation receipt. Keep
   // its local content available to bridge the empty queue receipt to the echo.
   const acceptedQueueRows = store.pending().flatMap((mutation) => {
@@ -4686,7 +4724,11 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
     store.confirm(settled);
   }
   store.applyPatch(snapshotPatch(version, next, confirmed), { force: resync });
-  if (acceptsValue) recoverPendingEditsFrom(sessionId, next);
+  if (acceptsValue) {
+    qLiveGeneration.set(sessionId, socketGeneration);
+    if (wire.editing !== undefined) syncRemoteQueueEditing(sessionId, wire.editing, wire.editing_token);
+    recoverPendingEditsFrom(sessionId, next);
+  }
   const delivered = deliveryConfirmations(confirmed, store.pending());
   for (const cmid of delivered) {
     if (qStatus.has(cmid)) {
@@ -4697,12 +4739,11 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
     suppressedInFlight.delete(cmid);
   }
   for (const cmid of settledSuppressed) suppressedInFlight.delete(cmid);
-  // A local draft can be sent before its add_draft acknowledgement. Its durable
-  // activation already owns the visible row; now deliver the original server
-  // move using the assigned id. Never mint a second submit/cmid for its content.
+  // A local draft can be sent or edited before its add_draft acknowledgement.
+  // Once the server assigns an id, deliver the pending mutation using it.
   for (const mutation of store.pending()) {
     if (
-      mutation.name === "activateDraft" &&
+      (mutation.name === "activateDraft" || mutation.name === "editDraft") &&
       qStatus.get(mutation.id) === "pending" &&
       commandForQueueMutation(sessionId, mutation) !== null
     ) dispatchQueueMutation(sessionId, mutation);
@@ -4946,57 +4987,35 @@ export function markSessionHydrated(id: string): void {
 // The single entry point the composer calls to send a user prompt. The daemon
 // dispatches it immediately when idle, else queues it. A prompt with at least
 // one attachment is valid even with empty text; otherwise empty text is ignored.
-const freshCurrentTurns = new Set<string>();
-const currentTurnTargets = new Map<
-  string,
-  import("./currentTurnDelivery").DeliveryTarget
->();
-const checkpointDeliveries = new Set<string>();
+const currentTurns = createCurrentTurnRegistry();
 const currentTurnRequests = new Set<string>();
 const currentTurnChains = new Map<string, Promise<void>>();
 
-function transmitCurrentTurn(
-  sessionId: string, id: string, row: QueuedMessage,
-): Promise<void> {
+function transmitCurrentTurn(sessionId: string, id: string, row: QueuedMessage): Promise<void> {
   const prior = currentTurnChains.get(sessionId) ?? Promise.resolve();
   const next = prior.catch(() => undefined).then(() => performCurrentTurn(sessionId, id, row));
   currentTurnChains.set(sessionId, next);
-  const cleanup = () => {
-    if (currentTurnChains.get(sessionId) === next) currentTurnChains.delete(sessionId);
-  };
+  const cleanup = () => { if (currentTurnChains.get(sessionId) === next) currentTurnChains.delete(sessionId); };
   void next.then(cleanup, cleanup);
   return next;
 }
 
-async function performCurrentTurn(
-  sessionId: string,
-  id: string,
-  row: QueuedMessage,
-): Promise<void> {
+async function performCurrentTurn(sessionId: string, id: string, row: QueuedMessage): Promise<void> {
   if (!qClients.get(sessionId)?.pending().some((mutation) => mutation.id === id)) return;
   if (currentTurnRequests.has(id)) return;
   currentTurnRequests.add(id);
-  const fresh = freshCurrentTurns.delete(id);
   qStatus.set(id, "sending");
   commitQueue(sessionId);
+  let outcome: CurrentTurnOutcome = "unknown";
   try {
     const { deliverCurrentTurn } = await import("./currentTurnDelivery");
-    const target = currentTurnTargets.get(id);
-    const outcome = await deliverCurrentTurn(
+    const staged = isConnected() ? currentTurns.takePayload(id) : null;
+    outcome = await deliverCurrentTurn(
       sessionId,
       id,
-      fresh && isConnected() && target
-        ? {
-          text: row.text,
-          content: contentOf(row.text, row.attachments),
-          target,
-          nextCheckpoint: checkpointDeliveries.has(id),
-        }
-        : null,
+      staged ? { text: row.text, content: contentOf(row.text, row.attachments), ...staged } : null,
     );
-    if (
-      !qClients.get(sessionId)?.pending().some((mutation) => mutation.id === id)
-    ) return;
+    if (!qClients.get(sessionId)?.pending().some((mutation) => mutation.id === id)) return;
     if (outcome === "injected" || outcome === "submitted") {
       qClients.get(sessionId)?.confirm([id]);
       qStatus.delete(id);
@@ -5007,24 +5026,17 @@ async function performCurrentTurn(
       });
       void hydrateSession(sessionId);
     } else {
-      qFailure.set(
-        id,
-        outcome === "not_delivered"
-          ? "Not delivered to the current turn. Your message is retained."
-          : "Delivery unknown. Retry checks the receipt without resending.",
-      );
+      qFailure.set(id, outcome === "not_delivered"
+        ? "Not delivered to the current turn. Your message is retained."
+        : "Delivery unknown. Retry checks the receipt without resending.");
       failDelivery(sessionId, [id]);
     }
   } catch {
-    qFailure.set(
-      id,
-      "Delivery unknown. Retry checks the receipt without resending.",
-    );
+    qFailure.set(id, "Delivery unknown. Retry checks the receipt without resending.");
     failDelivery(sessionId, [id]);
   } finally {
+    currentTurns.finish(id, outcome);
     currentTurnRequests.delete(id);
-    currentTurnTargets.delete(id);
-    checkpointDeliveries.delete(id);
     commitQueue(sessionId);
   }
 }
@@ -5035,38 +5047,30 @@ export async function currentTurnPrompt(
   attachments: Attachment[] = [],
   target?: import("./currentTurnDelivery").DeliveryTarget,
   nextCheckpoint = false,
+  consume?: CurrentTurnConsumeSource,
 ): Promise<void> {
   const session = state.sessions.find((entry) => entry.id === sessionId);
-  if (
-    !isConnected() || session?.status !== "busy" ||
-    !session.supports_current_turn
-  ) {
-    throw new Error(
-      "The current turn is unavailable. Queue this message instead.",
-    );
+  if (!isConnected() || session?.status !== "busy" || !session.supports_current_turn) {
+    throw new Error("The current turn is unavailable. Queue this message instead.");
   }
-  try { await requireCurrentAgentContext(sessionId); } catch (error) {
-    contextSendError(sessionId, error);
-  }
+  try { await requireCurrentAgentContext(sessionId); } catch (error) { contextSendError(sessionId, error); }
   const { captureDeliveryTarget } = await import("./currentTurnDelivery");
   const captured = target ?? await captureDeliveryTarget(sessionId);
   const cmid = newCmid();
-  currentTurnTargets.set(cmid, captured);
-  if (nextCheckpoint) checkpointDeliveries.add(cmid);
-  freshCurrentTurns.add(cmid);
+  const settled = currentTurns.stage(cmid, captured, nextCheckpoint, consume);
   try {
-    // qAdd acknowledges the durable local outbox. Its retained row owns receipt
-    // observation, so later native acknowledgement cannot clear a newer draft.
     await qAdd("queue", sessionId, text.trimEnd(), attachments, {
-      cmid,
-      currentTurn: true,
-      nativeDelivery: nextCheckpoint ? "next_checkpoint" : "current_turn",
+      cmid, currentTurn: true, nativeDelivery: nextCheckpoint ? "next_checkpoint" : "current_turn",
     });
   } catch (error) {
-    freshCurrentTurns.delete(cmid);
-    currentTurnTargets.delete(cmid);
-    checkpointDeliveries.delete(cmid);
+    currentTurns.cancel(cmid);
     throw error;
+  }
+  if (settled) {
+    const outcome = await settled;
+    if (outcome !== "injected" && outcome !== "submitted") {
+      throw new Error(qFailure.get(cmid) ?? "Not delivered to the current turn.");
+    }
   }
 }
 
@@ -5092,30 +5096,21 @@ export async function submitPrompt(
   sessionId: string,
   text: string,
   attachments: Attachment[] = [],
+  cmid?: string,
 ): Promise<void> {
   if (sessionActionSnapshot()) throw new Error("Finish or cancel the pending session action before sending.");
   const trimmed = text.trimEnd();
   if (!trimmed.trim() && attachments.length === 0) return Promise.resolve();
   if (await sendWithContextNotice(sessionId, trimmed, contentOf(trimmed, attachments))) return;
-  // Predict the daemon's path so the optimistic row lands in the right place: it
-  // DISPATCHES (→ a chat bubble) only when the session is dispatchable AND
-  // nothing is queued; otherwise it QUEUES (→ a queue row). A wrong guess
-  // self-heals — reconcile drops the row from whichever overlay the moment its
-  // cmid lands server-side (queue broadcast OR chat echo).
   const sess = state.sessions.find((s) => s.id === sessionId);
   const dispatchable = sess !== undefined
     && !sess.paused
     && ["running", "exited", "crashed", "interrupted"].includes(sess.status);
-  // state.queues already includes optimistic queue rows (merged by commitQueue),
-  // so this covers both server + local pending.
   const queueEmpty = (state.queues.get(sessionId)?.length ?? 0) === 0;
   if (shouldUseTranscriptDelivery(dispatchable, queueEmpty)) {
-    // → dispatch: an optimistic CHAT bubble in the transcript.
-    return optimisticMessage(sessionId, trimmed, attachments, "composer");
-  } else {
-    // → queue: an optimistic row in the queue sync state.
-    return qAdd("queue", sessionId, trimmed, attachments, { origin: "composer" });
+    return optimisticMessage(sessionId, trimmed, attachments, "composer", cmid);
   }
+  return qAdd("queue", sessionId, trimmed, attachments, { origin: "composer", ...(cmid ? { cmid } : {}) });
 }
 
 export async function wrapUpPrompt(sessionId: string, text: string, attachments: Attachment[] = [], target?: QueuedMessage["wrapUpTarget"]): Promise<void> {
@@ -5196,12 +5191,15 @@ async function editPendingRow(
     text: text.trimEnd(),
     attachments,
   };
+  const sourceCmid = target === "draft" && source.cmid !== undefined && id === `opt-${source.cmid}`
+    ? source.cmid
+    : undefined;
   const opId = newCmid();
   qStatus.set(opId, "committing");
   try {
     await mutateQueueDurably(sessionId,
       target === "draft" ? "editDraft" : "editQueue",
-      { id, row },
+      sourceCmid !== undefined ? { id, sourceCmid, row } : { id, row },
       opId,
     );
   } catch (error) {
@@ -5214,7 +5212,9 @@ async function editPendingRow(
       const rows = target === "draft"
         ? snapshot.drafts.get(sessionId)
         : snapshot.queues.get(sessionId);
-      const current = rows?.find((message) => message.id === id);
+      const current = rows?.find((message) =>
+        message.id === id || (sourceCmid !== undefined && message.cmid === sourceCmid)
+      );
       return current !== undefined && sameQueuedContent(current, row);
     },
     target === "draft" ? "Save draft edit" : "Save queued edit",
@@ -5347,11 +5347,9 @@ export function retryTurn(sessionId: string): void {
   send({ type: "retry_turn", session_id: sessionId });
 }
 
-// Hold (or release, with `null`) the queue head for editing — pauses the daemon
-// drain on EVERY terminal while one client edits, so the message isn't sent out
-// from under the editor.
+// Hold (or release, with `null`) the session's automatic queue drain while editing.
 export function setQueueEditing(sessionId: string, id: string | null): void {
-  send({ type: "set_queue_editing", session_id: sessionId, id });
+  setQueueEditHold(sessionId, id, send);
 }
 
 // --- Draft operations -------------------------------------------------------
@@ -5360,10 +5358,10 @@ export function setQueueEditing(sessionId: string, id: string | null): void {
 // draft INSTANTLY (optimistic), then sends. The card visibly moves from its
 // local durability barrier to service confirmation, or waits for reconnect.
 // Empty is ignored.
-export function addDraft(sessionId: string, text: string, attachments: Attachment[]): Promise<void> {
+export function addDraft(sessionId: string, text: string, attachments: Attachment[], cmid?: string): Promise<void> {
   const trimmed = text.trimEnd();
   if (!trimmed.trim() && attachments.length === 0) return Promise.resolve();
-  return qAdd("drafts", sessionId, trimmed, attachments);
+  return qAdd("drafts", sessionId, trimmed, attachments, cmid ? { cmid } : {});
 }
 
 /** A writing-document handoff is a new unsent row. The source document stays
@@ -5428,12 +5426,12 @@ export function clearDrafts(sessionId: string): Promise<void> {
   );
 }
 
-export async function activateDraft(sessionId: string, id: string): Promise<void> {
+export async function activateDraft(sessionId: string, id: string, opts?: { front?: boolean }): Promise<void> {
   await prepareAuthoredSend(sessionId, findDraft(sessionId, id)?.cmid);
   const row = findDraft(sessionId, id);
   if (row === undefined) return Promise.resolve();
   if (await composeDraftForStagedAgent(sessionId, row)) return;
-  const dest = destinationForPrompt(
+  const dest = opts?.front ? "queue" : destinationForPrompt(
     sessionDispatchable(sessionId),
     (state.queues.get(sessionId)?.length ?? 0) === 0,
   );
@@ -5456,6 +5454,7 @@ export async function activateDraft(sessionId: string, id: string): Promise<void
         id,
         row: presented,
         destination: dest,
+        ...(opts?.front ? { front: true } : {}),
         ...(row.cmid !== undefined && id === `opt-${row.cmid}`
           ? { sourceCmid: row.cmid }
           : {}),
@@ -5572,20 +5571,37 @@ export async function unscheduleDraft(sessionId: string, id: string): Promise<vo
   );
 }
 
+export async function waitForPendingEdit(sessionId: string, id: string): Promise<void> {
+  const pendingForRow = (): boolean => {
+    const baseDraft = qClients.get(sessionId)?.baseValue().drafts.find((r) => r.id === id);
+    return (qClients.get(sessionId)?.pending() ?? []).some((m) => {
+      if (m.name !== "editQueue" && m.name !== "editDraft") return false;
+      const a = m.args as { id?: string; sourceCmid?: string };
+      return a.id === id || (a.sourceCmid !== undefined &&
+        (id === `opt-${a.sourceCmid}` || baseDraft?.cmid === a.sourceCmid));
+    });
+  };
+  if (!pendingForRow()) return;
+  if (!isConnected()) {
+    throw new Error("Reconnect before leaving so your saved edit reaches the server, or discard to abandon it.");
+  }
+  await waitForState(() => !pendingForRow(), "Confirm edit");
+}
+
 // Move a queued prompt back to drafts.
 export async function queuedToDraft(sessionId: string, id: string): Promise<void> {
   const row = findQueued(sessionId, id);
   if (row === undefined) return Promise.resolve();
-  if (row.status !== undefined && row.cmid !== undefined) {
-    const text = row.text;
-    const attachments = row.attachments;
-    await qAdd("drafts", sessionId, text, attachments, { origin: "queue" });
-    await discardQueued(sessionId, row.cmid);
+  const target = queuedSendTarget(confirmedPending(sessionId)?.queue ?? [], row);
+  if (target.kind === "local") {
+    await qAdd("drafts", sessionId, row.text, row.attachments, { origin: "queue" });
+    await discardQueued(sessionId, target.cmid);
     return;
   }
+  const serverId = target.id;
   const opId = newCmid();
   const presented: QueuedMessage = {
-    id: row.id,
+    id: serverId,
     text: row.text,
     attachments: row.attachments,
     ...(row.cmid !== undefined ? { cmid: row.cmid } : {}),
@@ -5602,7 +5618,7 @@ export async function queuedToDraft(sessionId: string, id: string): Promise<void
   try {
     await mutateQueueDurably(sessionId,
       "returnQueuedToDraft",
-      { id, row: presented },
+      { id: serverId, row: presented },
       opId,
     );
   } catch (error) {

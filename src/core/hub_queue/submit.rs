@@ -226,6 +226,178 @@ impl Hub {
         }
         false
     }
+
+    /// Whether `cmid` names a prompt a browser client minted. Hub-synthesized
+    /// ids (scheduler wakeups, scheduled drafts, retry, legacy continuation)
+    /// are deliberately reusable and never participate in delivery dedupe.
+    /// A human/API prompt, not a scheduler, retry or managed-call prompt.
+    pub fn is_authored_cmid(cmid: &str) -> bool {
+        Self::is_client_cmid(cmid)
+            && !cmid.starts_with(MANAGED_CALL_CMID_PREFIX)
+            && !cmid.starts_with(crate::agent_model::CALL_NOTICE_PREFIX)
+            && !cmid.starts_with(crate::agent_model::PEER_NOTICE_PREFIX)
+    }
+
+    pub(in crate::core) fn is_client_cmid(cmid: &str) -> bool {
+        !cmid.is_empty() && !cmid.starts_with("__") && !cmid.starts_with("cowboy-")
+    }
+
+    pub(in crate::core) fn tracks_delivery(cmid: &str) -> bool {
+        Self::is_client_cmid(cmid) || cmid.starts_with("cowboy-superagent:")
+    }
+
+    /// True once this Hub has accepted the prompt: still queued, handed to a
+    /// worker, or echoed into the transcript (which survives
+    /// a Controller restart because the echo persists its `cmid`).
+    pub(in crate::core) fn prompt_already_accepted(s: &Session, cmid: &str) -> bool {
+        Self::prompt_already_accepted_excluding_draft(s, cmid, None)
+    }
+
+    pub(in crate::core) fn prompt_already_accepted_excluding_draft(
+        s: &Session,
+        cmid: &str,
+        skip_draft_pos: Option<usize>,
+    ) -> bool {
+        if s.queue.iter().any(|m| m.cmid.as_deref() == Some(cmid))
+            || s.drafts
+                .iter()
+                .enumerate()
+                .any(|(i, m)| Some(i) != skip_draft_pos && m.cmid.as_deref() == Some(cmid))
+        {
+            return true;
+        }
+        s.reserved_recovery_cmids.contains(cmid)
+            || s.in_flight_dispatch_cmids.contains(cmid)
+            || (Self::tracks_delivery(cmid)
+                && (s.dispatched_cmids.iter().any(|seen| seen.cmid == cmid)
+                    || s.dispatched_origins.contains_key(cmid)
+                    || s.committed_parked_cmids.iter().any(|c| c == cmid)
+                    || s.log
+                        .iter()
+                        .rev()
+                        .any(|entry| entry.cmid.as_deref() == Some(cmid))))
+    }
+
+    /// True when `cmid` is currently reserved by an in-flight durable recovery
+    /// draft activation so competing steer/submit/dispatch paths cannot claim
+    /// the same operation ID in SQL before the activation commits.
+    pub fn is_cmid_reserved_for_recovery(&self, session_id: &str, cmid: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|s| s.reserved_recovery_cmids.contains(cmid))
+    }
+
+    /// True when `cmid` is already known in Hub's in-memory session state
+    /// (queued, drafted, reserved, dispatched, parked, or in hot log).
+    pub fn is_cmid_known_in_hub(&self, session_id: &str, cmid: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|s| Self::prompt_already_accepted(s, cmid))
+    }
+
+    /// Fold a durably retired `cmid` discovered on a Hub cache miss back into
+    /// memory and send an addressed confirmation so the replaying browser drops
+    /// its outbox entry without re-executing the retired prompt.
+    pub fn confirm_durably_retired_cmid(&self, session_id: &str, cmid: &str) {
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            Self::note_dispatched(s, Some(cmid));
+            if !s.committed_parked_cmids.iter().any(|c| c == cmid) {
+                while s.committed_parked_cmids.len() >= 512 {
+                    s.committed_parked_cmids.pop_front();
+                }
+                s.committed_parked_cmids.push_back(cmid.to_owned());
+            }
+            if let Some(rec) = s.dispatched_origins.get_mut(cmid) {
+                rec.undelivered_retired = true;
+            }
+        }
+        self.confirm_delivered(session_id, cmid);
+    }
+
+    /// Tell every client that `cmid` is already folded into this session, without
+    /// changing or re-persisting the queue. Confirmations are monotonic facts the
+    /// sync client accepts from any patch, so the resending device retires its
+    /// outbox entry instead of waiting out an acknowledgement timeout.
+    /// Capture `(queue, drafts, editing)` and assign the monotonic `queue:<sid>`
+    /// sync version under one `sync -> sessions` lock acquisition (matching
+    /// `sync_resync`'s lock order), so concurrent queue mutations and hold
+    /// changes can never publish older rows under a newer version.
+    pub(in crate::core) fn publish_pending_snapshot(
+        &self,
+        session_id: &str,
+        extra_confirmed: &[String],
+    ) {
+        let state = format!("queue:{session_id}");
+        let (version, value, confirmed) = {
+            let mut reg = self.inner.sync.lock();
+            let sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get(session_id) else {
+                return;
+            };
+            let entry = reg.entry(state.clone()).or_default();
+            entry.version += 1;
+            let version = entry.version;
+            let mut confirmed = Self::cmids_of(&s.queue, &s.drafts);
+            for cmid in extra_confirmed {
+                if !confirmed.iter().any(|existing| existing == cmid) {
+                    confirmed.push(cmid.clone());
+                }
+            }
+            let value = serde_json::json!({
+                "queue": &s.queue,
+                "drafts": &s.drafts,
+                "editing": &s.editing,
+                "editing_token": &s.editing_token,
+            });
+            (version, value, confirmed)
+        };
+        tracing::info!(target: "cowboy::oplog", op = "change", %state, version, confirmed = ?confirmed);
+        self.fanout(Outbound::SyncPatch {
+            state,
+            version,
+            value,
+            confirmed,
+            resync: false,
+        });
+    }
+
+    pub(in crate::core) fn confirm_delivered(&self, session_id: &str, cmid: &str) {
+        let should_confirm = {
+            let sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get(session_id) else {
+                return;
+            };
+            // Dispatch admission deduplicates execution but does not prove
+            // delivery. Until a queue row or user echo owns the prompt, the
+            // browser must retain its durable outbox (including attachments).
+            s.committed_parked_cmids.iter().any(|c| c == cmid)
+                || s.dispatched_origins
+                    .get(cmid)
+                    .is_some_and(|rec| rec.undelivered_retired)
+                || s.queue
+                    .iter()
+                    .chain(&s.drafts)
+                    .any(|m| m.cmid.as_deref() == Some(cmid))
+                || s.dispatched_cmids
+                    .iter()
+                    .any(|seen| seen.cmid == cmid && seen.echoed)
+                || s.log.iter().any(|entry| {
+                    entry.cmid.as_deref() == Some(cmid) && is_user_message_chunk(entry)
+                })
+        };
+        if !should_confirm {
+            return;
+        }
+        self.publish_pending_snapshot(session_id, &[cmid.to_owned()]);
+    }
 }
 
 pub(super) fn extract_notice_settlements<'a>(

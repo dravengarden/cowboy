@@ -105,15 +105,15 @@ and in a queued-message editor), and the focused one runs.
 | `␣[` `␣]` | Previous, next tab (see "Tabs") |
 | `␣1`…`␣9` | Open the nth tab (a pending approval takes the digits; see "Tabs") |
 | `␣B` + `D/O/R/L/A` `P/K/U` `<` `>` | Tabs group: close this, others, right, left, all; pin, keep, reopen; move |
-| `␣R` | Rename the current Session (a Draft's name is its title, `␣T`) |
+| `␣R` | Rename the current Session (on a Draft: cursor to the inline title) |
 | `␣N` | Create (Session / Draft / Folder) |
 | `␣K` | Command Palette |
-| `␣P` | Focus the Prompt as it was (Vim mode and caret kept) |
-| `␣I` | The Prompt in Insert at its caret, ready to type (Vim's `i`; without Vim, focus) |
+| `␣P` | Focus the Prompt canvas as it was (active buffer, Vim mode, and caret kept) |
+| `␣I` | Return to New Prompt in Insert at its caret, ready to type (Vim's `i`; without Vim, focus) |
 | `␣C` | Focus Conversation |
 | `␣S` + `S/Z/N/M/P/U` | Sessions group: focus the sidebar, fold (the button beside Create), new folder, move session, organize by project; `U` is Undo history, this device's undoable changes from the last 24 hours (LazyVim's `<leader>su`) |
 | `␣T` + `R/U/A/N/L/T` | Top bar group: run config, usage, verify, Provider update (only while one is available), reload; `T` focuses the bar |
-| `␣L` `␣Q` `␣D` | Focus Plan, Queue, Drafts |
+| `␣L` `␣Q` `␣D` | Toggle/focus Plan, Queue, Drafts (`␣L`, `␣Q`, and `␣D` toggle their panel open/closed symmetrically; `␣D` starts a new draft when empty) |
 | `␣V` | Show the code Review in the work pane and focus it; while Review is shown, `␣V` is the Review group (`␣VV` focuses Review) |
 | `␣G` | Open Background tasks: the subagents and calls this session started (with the previous Calls panel restored: open or close Calls) |
 | `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |
@@ -123,10 +123,10 @@ and in a queued-message editor), and the focused one runs.
 | `⌘R` / `Ctrl+R` | Reload into a ready new version while the update bar offers it (also its Retry/Cancel); otherwise the browser reloads |
 | `␣1`…`␣9` | While an approval waits: answer it with that choice (see "Approvals") |
 | `␣U` + `E/W` | Interface group: Source / live preview, readable width (a Draft) |
-| `␣/` `␣F` `␣A` `␣Z` | Slash, reference file, attach, zoom (expand) the focused editor |
+| `␣/` `␣F` `␣A` | Slash, reference file, attach in the Prompt canvas |
 | `␣H` `␣J` | Schedule, run next (Composer; on a Draft `␣H` is History) |
-| `␣M` | More formatting menu (Composer) |
-| `␣T` `␣Y` `␣H` `␣E` | On a Draft: cursor to the title, yank (copy) to a Session, history, export Markdown |
+| `␣M` | More formatting menu (Composer and Draft) |
+| `␣R` `␣Y` `␣H` `␣E` | On a Draft: cursor to the title, yank (copy) to a Session, history, export Markdown |
 
 The root keeps what is pressed most (switching, creating, focusing, the
 editor's insert actions); families live one layer down in groups, LazyVim
@@ -170,12 +170,12 @@ line numbers and skipped.
 #### Context keys
 
 What the current page owns needs no prefix beyond the leader. The open
-Draft's own actions are root keys (`␣T` title, `␣Y` `␣H` `␣E`) rather
+Draft's own actions are root keys (`␣R` title, `␣Y` `␣H` `␣E`) rather
 than a `␣D` group, exactly as the Composer's insert actions are in a
 Session. A letter may mean different things on the two pages only when the
 pages are never mounted together, declared with `surface: "session" |
-"document"` (`␣H` Schedule / History); registration still rejects any other
-overlap. The current page's actions are listed first in which-key, under
+"document"` (`␣R` Rename / Title, `␣H` Schedule / History); registration still
+rejects any other overlap. The current page's actions are listed first in which-key, under
 "Here". which-key lists only keys that can run now; a key that cannot run
 here appears dimmed only when it belongs to the focused surface (an empty Composer's
 Schedule), so Session-only keys (Conversation, Plan, Queue, the Prompt and
@@ -503,10 +503,11 @@ command palette.
 
 Create is the reference dialog for the grammar above. It opens in the title
 field (Insert). `Esc` puts the Normal cursor on the title; `1` `2` `3` pick
-Session, Draft or Folder from anywhere in Normal and `H/L` step them while
-the cursor stays on the title, so `Esc 2 I` makes a Draft and edits its
-name. `K` reaches the tabs, `J` walks the fields down to Cancel and Create,
-`I` edits, `Esc` closes, `Mod+Enter` creates from either mode. The hint row
+Session, Draft or Folder from anywhere in Normal and `[` / `]` step them
+(with Vim off, or off a text field, `H/L` also step them; with Vim on, `H/L`
+keep intra-field cursor motion in a Vim Normal field), so `Esc 2 I` makes a
+Draft and edits its name. `K` reaches the tabs, `J` walks the fields down to
+Cancel and Create, `I` edits, `Esc` closes, `Mod+Enter` creates from either mode. The hint row
 under the tabs names only the current mode's keys, and the tab digits light
 in Normal. Pointer activation still selects and focuses the title in one
 step. The Cancel `Esc` keycap is inactive while a text field owns `Esc`.
@@ -665,7 +666,7 @@ it); macOS Chrome binds none of them.
 
 - Leader then `P/C`: focus Prompt or Conversation; `␣SS` focuses Sessions
   and `␣TT` the Top Bar.
-- Leader then `L/Q/D`: focus Plan, Queue, or Drafts.
+- Leader then `L/Q/D`: toggle Plan (`␣L`), focus Queue (`␣Q`), or toggle Drafts (`␣D`).
 - Leader then `N`, `,` or `X`: create, open Settings, or open Extensions.
   These window-wide entries sit with Sessions, laid out like VS Code with
   its activity bar on top. The docked sidebar has two bars: the activity
@@ -694,21 +695,21 @@ it); macOS Chrome binds none of them.
   Conversation. The three adjacent keys sit in the same left-to-right
   order as the panes. See [Pane collapse](#pane-collapse).
 - `␣␣` then a label switches session; `␣⇥` returns to the previous one and `␣O` lists Recent.
-- `Mod+Enter` sends or queues, `Mod+S` saves a draft, `Mod+.` stops the current
-  turn, `Mod+Shift+P` opens Command Palette, and `Mod+/` opens shortcut help.
-- `Alt/Option+Enter` opens delivery choices. On macOS, no other product action
-  reserves an Option letter; on Windows/Linux, `Alt+K` is additionally the
-  workspace prefix. Slash, references, attachments, scheduling, queue priority,
-  expand, and More remain visible in the UI and searchable in Command Palette.
-- In the main Composer, leader then `/`, `F`, `A`, `H`, `J` opens slash
-  commands, file references, attachments, scheduling or queue priority; `Z`
-  zooms the editor; `␣M` opens More formatting. Formatting itself is direct
-  chords (see Rich text). These are
-  scoped to `prompt.composer`; `␣UE` Source mode retains its whole-Prompt scope.
-  Every toolbar button carries its `␣` slot, which lights while the leader is
-  armed; tooltips and the Command Palette show the same keycap. A claimed direct chord stops
-  propagation to editor fallbacks. In particular, `Alt+Enter` must never also
-  save a draft, even when delivery choices are unavailable.
+- `Mod+Enter` runs the active canvas primary action (send/queue New Prompt or
+  Session Draft, open delivery picker on Scheduled Draft, finish Queue edit
+  without sending, or open Use-in-Session picker on an independent Draft);
+  `Mod+S` saves in place without sending; `Mod+.` stops the current turn;
+  `Mod+Shift+P` opens Command Palette; `Mod+/` opens shortcut help.
+- `Alt/Option+Enter` opens delivery choices across New Prompt, Session Draft,
+  and Queue item buffers. On macOS, no other product action reserves an Option
+  letter; on Windows/Linux, `Alt+K` is additionally the workspace prefix.
+- In the unified Prompt canvas (`prompt.composer`), leader then `/`, `F`, `A`,
+  `H`, `J` opens slash commands, file references, attachments, scheduling or
+  queue priority; `␣M` opens More formatting. Formatting itself is direct
+  chords (see Rich text). `␣UE` Source mode retains its whole-Prompt scope.
+  Empty New Prompt `↑` (or Vim Normal `k`) recalls the just-queued/drafted
+  message directly into Insert; Vim Normal `[q` / `]q` walk send order across
+  Queue items and New Prompt; `ZZ` saves and closes, `ZQ` discards edits.
 - In Resize mode, `H/L` moves the selected split.
 - `j/k`, `gg`, `G`: item navigation outside text-editing controls. Conversation
   is a reader rather than an item list, so the same keys scroll by line or jump
@@ -1028,12 +1029,17 @@ OS remaps are outside the static guarantee. Reference inventories:
 [Chrome keyboard shortcuts](https://support.google.com/chrome/answer/157179)
 and [Apple Mac keyboard shortcuts](https://support.apple.com/en-us/102650).
 
-An expanded Queue or Draft region starts on its first row. `j/k` moves the row
-selection, while `l` or `Enter` opens the selected message for editing. The
-inline queued/draft editor uses `Mod+S` to save and `Esc` to open the
-discard confirmation; plain `Enter` remains a newline. Slash, reference,
-attachment, and expand remain visible actions and Command Palette entries but
-do not reserve Option/Alt letters. Mobile renders neither bindings nor hints.
+An expanded Queue or Draft region is a pure list above the unified Prompt
+canvas (never an inline card editor on Desktop). `␣Q` focuses the just-queued
+item when present; `␣D` opens Drafts even at count 0 (`N` creates a new Session
+draft). `j/k` moves selection, `i` opens the selected item in the Prompt canvas
+in Insert at end, `l`/`Enter` opens it in Vim Normal, and `Esc`/`h` returns to
+the Prompt canvas. Editing a Queue item holds server auto-drain (and editing a
+Scheduled draft protects its fire timer); `Mod+Enter` finishes a Queue edit in
+place, `Mod+S` saves in place without sending, and plain `Esc` returns cleanly
+for clean/autosaved buffers or flashes an inline save/discard hint for dirty
+Queue/Scheduled edits (no modal; `ZQ` discards explicitly). Mobile retains its
+established inline/fullscreen card flow.
 
 ## Visual hierarchy
 
@@ -1106,42 +1112,47 @@ transcript widgets, or destructive actions. Pointer dragging keeps working and
 selecting a bar with the pointer enters the same visible state.
 
 Queue and Draft use the same list contract as Sessions: `J/K` selects, `gg` and
-`G` jump to the ends, and `'` then a label jumps to any visible row.
-`L`/`Enter` opens the
-selected message editor. `O` pins Order reorder mode
+`G` jump to the ends, and `'` then a label jumps to any visible row. `I` opens
+the selected message in the unified Prompt canvas in Insert at end; `L`/`Enter`
+opens it in Normal; `Esc`/`H` returns to the Prompt canvas; `N` in Drafts
+starts a new Session draft (including at count 0). `O` pins Order reorder mode
 so `J/K` moves the message and `Esc` releases it; `Shift+J/K` moves it
 directly. The rows are flat lines of the Prompt with a primary edge on the
-current row; the pointer grip is a slim edge handle revealed on hover or focus
-and carries the `O` hint. Row actions are `S` send, `R` return to drafts, `T`
-schedule, `M` move to another Session, `D` move to independent Drafts and `X`
-remove. Inside the editor, `Mod+S` saves and `Esc` cancels, with both
-returning focus to the originating list row.
+current row; persistent 1-line headers stay glanceable with a first-line
+preview and `Auto-drain held` status. Row actions are `Mod+Enter` send/deliver,
+`R` return to drafts, `T` schedule, `M` move to another Session, `D` move to
+independent Drafts and `X` remove (instant with Undo toast for ordinary
+unscheduled Desktop drafts; confirmed for Queue and Scheduled drafts).
 
-`M` (and `␣Y` from a Draft document) opens the Session destination modal: the
-Sessions folder tree with the source Session shown as Current. It opens in
-search (Insert); `Esc`, `↓` or `Enter` reaches the tree, where `J/K` moves,
-`H/L` folds or walks the tree, `gg`/`G` jump, `/` returns to search and
-`L`/`Enter` chooses. `Esc` on the tree closes.
+`M` (and `␣Y` or `Mod+Enter` from a Draft document) opens the Session
+destination modal: the Sessions folder tree with the source Session shown as
+Current. It opens in search (Insert); `Esc`, `↓` or `Enter` reaches the tree,
+where `J/K` moves, `H/L` folds or walks the tree, `gg`/`G` jump, `/` returns to
+search and `L`/`Enter` chooses. `Esc` on the tree closes.
 
 ### Draft document
 
-Independent Draft documents share the Prompt editor region and command host.
-They autosave; `Mod+S` flushes local persistence without sending. The leader
+Independent Draft documents share the Prompt editor region, shared formatting
+row (`DesktopEditorFormatRow`), status line, and command host. They autosave;
+`Mod+S` flushes local persistence without sending. `Mod+Enter` opens the
+destination Session picker, copies the draft into that Session's Drafts, and
+opens it in that Session's Prompt canvas (never blind-sending). The leader
 exposes the same formatting, attachment and Source commands as Sessions.
 
 The document's actions are root keys, available from any focus while a Draft
-is open ("Context keys"): `␣T` title, `␣Y` copy (yank) to Session drafts
-(source retained), `␣H` recovery history, `␣E` export Markdown, `␣UW`
-readable width. Each control shows its slot; Desktop draws the document
-actions once, in the bottom bar.
+is open ("Context keys"): `␣R` title (consistent with Session Rename, leaving
+`␣T` for Top bar everywhere), `␣Y` copy (yank) to Session drafts (source
+retained), `␣H` recovery history, `␣E` export Markdown, `␣UW` readable width.
+Each control shows its slot; Desktop draws the document actions once, in the
+bottom bar.
 
 The title behaves as the document's first line, as Obsidian's inline title:
-`␣T` puts the cursor on its end: with Vim on, a Normal block cursor (the
+`␣R` puts the cursor on its end: with Vim on, a Normal block cursor (the
 title is a Vim field, "Vim in text fields"), otherwise a caret. A plain Vim
 Normal `k` on the body's first line enters it the same way and `↑` in Insert
 enters it typing (a pending Vim command such as `dk` keeps its key);
 `Enter`, `↓`, `Tab` or Normal `j` returns to the start of the body and `Esc`
 (from Normal) to where the body caret was. While the title owns focus it names
 these keys beside itself for its current mode (Normal: `J` body, `I` edit,
-`Esc` back; Insert: `Esc` normal, `↵` body). Every
-action is also in the Command Palette.
+`Esc` back; Insert: `Esc` normal, `↵` body). Every action is also in the
+Command Palette.

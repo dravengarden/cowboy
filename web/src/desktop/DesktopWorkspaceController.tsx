@@ -1,4 +1,5 @@
 import { isDesktopSplitterId } from "./desktopSplitterKeyboard";
+import { activeDesktopComposerScope } from "./editorInsert";
 import {
   createContext,
   useCallback,
@@ -133,12 +134,18 @@ function focusElement(element: HTMLElement | null): void {
   const currentItem = element.querySelector<HTMLElement>(
     "[data-desktop-item][data-desktop-current='true']",
   );
+  const preferredItem = element.querySelector<HTMLElement>(
+    "[data-desktop-item][data-desktop-preferred='true']",
+  );
   const firstItem = element.querySelector<HTMLElement>("[data-desktop-item]");
-  const composerCommandSink = element.dataset.desktopRegion === "prompt.composer"
-    ? element.querySelector<HTMLElement>("[data-vim-command-sink]")
+  const composerScope = element.dataset.desktopRegion === "prompt.composer"
+    ? activeDesktopComposerScope(element)
     : null;
-  const composer = element.dataset.desktopRegion === "prompt.composer"
-    ? element.querySelector<HTMLElement>(".cm-content[contenteditable='true']")
+  const composerCommandSink = composerScope
+    ? composerScope.querySelector<HTMLElement>("[data-vim-command-sink]")
+    : null;
+  const composer = composerScope
+    ? composerScope.querySelector<HTMLElement>(".cm-content[contenteditable='true']")
     : null;
   const planToggle = element.dataset.desktopRegion === "prompt.plan"
     ? element.querySelector<HTMLElement>(
@@ -147,13 +154,13 @@ function focusElement(element: HTMLElement | null): void {
     : null;
   // Entering Sessions must anchor navigation on the session already open in
   // the workspace. Falling back to row one made the first J/K jump unrelated
-  // to what the user was looking at. Other list regions retain their first-row
-  // default, while explicit focus targets still beat that generic fallback.
+  // to what the user was looking at. Queue focuses the just-queued item via
+  // `data-desktop-preferred` when no edit is active (`␣Q i` edits it in 2 keys).
   // Focusing Prompt must not change the editor's modal state or caret. Focus
   // CodeMirror's content surface first; the Vim runtime transfers focus to its
   // command sink itself when the preserved state is Normal/Visual, while Insert
   // retains the native editable and its selection.
-  (composer ?? composerCommandSink ?? currentItem ?? preferred ?? firstItem ?? planToggle ?? element).focus({
+  (composer ?? composerCommandSink ?? currentItem ?? preferredItem ?? preferred ?? firstItem ?? planToggle ?? element).focus({
     preventScroll: true,
   });
   element.scrollIntoView({ block: "nearest", inline: "nearest" });

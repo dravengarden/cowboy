@@ -176,6 +176,27 @@ export function desktopModalBackdropSx() {
  * into dark mode's near-black paper, which is what made the control center
  * read as one flat sheet of rows; a faint raised fill gives every section the
  * same findable edge. */
+/** Shared crisp keyboard-focus cue for focusable Desktop rows and inline
+ *  triggers (task rows, widget headers, plan steps): tinted primary fill plus
+ *  a 2px primary leading accent so focus is unmistakable in dark & light mode. */
+export function desktopRowFocusSx() {
+  return {
+    outline: "none",
+    bgcolor: (theme: Theme) => alpha(theme.palette.primary.main, 0.08),
+    boxShadow: (theme: Theme) => `inset 2px 0 0 ${theme.palette.primary.main}`,
+  };
+}
+
+/** Shared focus-ring token for standalone Desktop cards and bordered panels. */
+export function desktopCardFocusSx() {
+  return {
+    outline: "none",
+    borderColor: "primary.main",
+    boxShadow: (theme: Theme) =>
+      `0 0 0 2px ${alpha(theme.palette.primary.main, 0.18)}`,
+  };
+}
+
 export function desktopPanelSx() {
   return {
     border: 1,

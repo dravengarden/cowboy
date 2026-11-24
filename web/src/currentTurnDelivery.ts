@@ -9,6 +9,71 @@ export interface DeliveryTarget {
   turn_id: string;
 }
 
+export interface CurrentTurnConsumeSource {
+  kind: "draft" | "queued";
+  id: string;
+}
+
+export interface CurrentTurnRegistry {
+  stage(
+    id: string,
+    target: DeliveryTarget,
+    nextCheckpoint: boolean,
+    consume?: CurrentTurnConsumeSource,
+  ): Promise<CurrentTurnOutcome> | null;
+  cancel(id: string): void;
+  takePayload(id: string): {
+    target: DeliveryTarget;
+    nextCheckpoint: boolean;
+    consumeSource?: CurrentTurnConsumeSource;
+  } | null;
+  finish(id: string, outcome: CurrentTurnOutcome): void;
+}
+
+export function createCurrentTurnRegistry(): CurrentTurnRegistry {
+  const fresh = new Set<string>();
+  const targets = new Map<string, DeliveryTarget>();
+  const consumes = new Map<string, CurrentTurnConsumeSource>();
+  const checkpoints = new Set<string>();
+  const settlers = new Map<string, (outcome: CurrentTurnOutcome) => void>();
+  return {
+    stage(id, target, nextCheckpoint, consume) {
+      targets.set(id, target);
+      if (consume) consumes.set(id, consume);
+      if (nextCheckpoint) checkpoints.add(id);
+      fresh.add(id);
+      return consume
+        ? new Promise<CurrentTurnOutcome>((resolve) => settlers.set(id, resolve))
+        : null;
+    },
+    cancel(id) {
+      settlers.delete(id);
+      fresh.delete(id);
+      targets.delete(id);
+      consumes.delete(id);
+      checkpoints.delete(id);
+    },
+    takePayload(id) {
+      const isFresh = fresh.delete(id);
+      const target = targets.get(id);
+      if (!isFresh || !target) return null;
+      const consumeSource = consumes.get(id);
+      return {
+        target,
+        nextCheckpoint: checkpoints.has(id),
+        ...(consumeSource ? { consumeSource } : {}),
+      };
+    },
+    finish(id, outcome) {
+      settlers.get(id)?.(outcome);
+      settlers.delete(id);
+      targets.delete(id);
+      consumes.delete(id);
+      checkpoints.delete(id);
+    },
+  };
+}
+
 export async function captureDeliveryTarget(
   session: string,
 ): Promise<DeliveryTarget> {
@@ -54,6 +119,7 @@ export async function deliverCurrentTurn(
     content: unknown[];
     target?: DeliveryTarget;
     nextCheckpoint?: boolean;
+    consumeSource?: { kind: "draft" | "queued"; id: string };
   } | null,
   request: typeof fetch = fetch,
 ): Promise<CurrentTurnOutcome> {
@@ -75,6 +141,7 @@ export async function deliverCurrentTurn(
             ? "next_checkpoint"
             : "current_turn",
           operation,
+          ...(payload.consumeSource ? { consume_source: payload.consumeSource } : {}),
         }),
         signal: AbortSignal.timeout(5000),
       });

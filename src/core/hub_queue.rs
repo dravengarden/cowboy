@@ -10,6 +10,27 @@ pub use drafts::{
 mod retry;
 mod submit;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SteerSourceKind {
+    Draft,
+    Queued,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SteerSource {
+    pub kind: SteerSourceKind,
+    pub id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(super) struct SteerReservation {
+    pub kind: SteerSourceKind,
+    pub row_id: String,
+    pub text: String,
+    pub content: Vec<serde_json::Value>,
+}
+
 /// Why a session's queue head stays queued, or that it may be dispatched.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum DrainDecision {
@@ -213,13 +234,14 @@ impl Hub {
         if !context_allows(head.cmid.as_deref()) {
             return DrainDecision::ContextHold;
         }
-        // ANY message being edited pauses the WHOLE auto-drain — not just when
-        // the head is the one open (the old `== head` check let the head fire
-        // out from under you while you edited message #2). The hold lifts on
-        // Save/Cancel (set_queue_editing(None)). A MANUAL "send now" still
-        // overrides (the user explicitly chose to send), so the queue is never
-        // permanently trapped.
-        if !manual && s.editing.is_some() {
+        // Editing a queued message pauses the whole queue auto-drain; editing a
+        // scheduled draft protects only that draft's fire timer without freezing
+        // the unrelated queue. Manual sends always override.
+        let editing_draft = s
+            .editing
+            .as_deref()
+            .is_some_and(|id| s.drafts.iter().any(|m| m.id == id));
+        if !manual && s.editing.is_some() && !editing_draft {
             return DrainDecision::Editing;
         }
         DrainDecision::Dispatch
@@ -333,6 +355,7 @@ impl Hub {
             }
             if s.queue.first().is_some_and(|head| {
                 self.is_row_withdrawing(session_id, &head.id)
+                    || s.steer_reservations.values().any(|r| r.row_id == head.id)
                     || head
                         .cmid
                         .as_deref()
@@ -838,147 +861,9 @@ impl Hub {
         Some(interrupt)
     }
 
-    /// Whether `cmid` names a prompt a browser client minted. Hub-synthesized
-    /// ids (scheduler wakeups, scheduled drafts, retry, legacy continuation)
-    /// are deliberately reusable and never participate in delivery dedupe.
-    /// A human/API prompt, not a scheduler, retry or managed-call prompt.
-    pub fn is_authored_cmid(cmid: &str) -> bool {
-        Self::is_client_cmid(cmid)
-            && !cmid.starts_with(MANAGED_CALL_CMID_PREFIX)
-            && !cmid.starts_with(crate::agent_model::CALL_NOTICE_PREFIX)
-            && !cmid.starts_with(crate::agent_model::PEER_NOTICE_PREFIX)
-    }
-
-    pub(super) fn is_client_cmid(cmid: &str) -> bool {
-        !cmid.is_empty() && !cmid.starts_with("__") && !cmid.starts_with("cowboy-")
-    }
-
-    pub(super) fn tracks_delivery(cmid: &str) -> bool {
-        Self::is_client_cmid(cmid) || cmid.starts_with("cowboy-superagent:")
-    }
-
-    /// True once this Hub has accepted the prompt: still queued, handed to a
-    /// worker, or echoed into the transcript (which survives
-    /// a Controller restart because the echo persists its `cmid`).
-    pub(super) fn prompt_already_accepted(s: &Session, cmid: &str) -> bool {
-        Self::prompt_already_accepted_excluding_draft(s, cmid, None)
-    }
-
-    pub(super) fn prompt_already_accepted_excluding_draft(
-        s: &Session,
-        cmid: &str,
-        skip_draft_pos: Option<usize>,
-    ) -> bool {
-        if s.queue.iter().any(|m| m.cmid.as_deref() == Some(cmid))
-            || s.drafts
-                .iter()
-                .enumerate()
-                .any(|(i, m)| Some(i) != skip_draft_pos && m.cmid.as_deref() == Some(cmid))
-        {
-            return true;
-        }
-        s.reserved_recovery_cmids.contains(cmid)
-            || s.in_flight_dispatch_cmids.contains(cmid)
-            || (Self::tracks_delivery(cmid)
-                && (s.dispatched_cmids.iter().any(|seen| seen.cmid == cmid)
-                    || s.dispatched_origins.contains_key(cmid)
-                    || s.committed_parked_cmids.iter().any(|c| c == cmid)
-                    || s.log
-                        .iter()
-                        .rev()
-                        .any(|entry| entry.cmid.as_deref() == Some(cmid))))
-    }
-
-    /// True when `cmid` is currently reserved by an in-flight durable recovery
-    /// draft activation so competing steer/submit/dispatch paths cannot claim
-    /// the same operation ID in SQL before the activation commits.
-    pub fn is_cmid_reserved_for_recovery(&self, session_id: &str, cmid: &str) -> bool {
-        self.inner
-            .sessions
-            .lock()
-            .get(session_id)
-            .is_some_and(|s| s.reserved_recovery_cmids.contains(cmid))
-    }
-
-    /// True when `cmid` is already known in Hub's in-memory session state
-    /// (queued, drafted, reserved, dispatched, parked, or in hot log).
-    pub fn is_cmid_known_in_hub(&self, session_id: &str, cmid: &str) -> bool {
-        self.inner
-            .sessions
-            .lock()
-            .get(session_id)
-            .is_some_and(|s| Self::prompt_already_accepted(s, cmid))
-    }
-
-    /// Fold a durably retired `cmid` discovered on a Hub cache miss back into
-    /// memory and send an addressed confirmation so the replaying browser drops
-    /// its outbox entry without re-executing the retired prompt.
-    pub fn confirm_durably_retired_cmid(&self, session_id: &str, cmid: &str) {
-        {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            Self::note_dispatched(s, Some(cmid));
-            if !s.committed_parked_cmids.iter().any(|c| c == cmid) {
-                while s.committed_parked_cmids.len() >= 512 {
-                    s.committed_parked_cmids.pop_front();
-                }
-                s.committed_parked_cmids.push_back(cmid.to_owned());
-            }
-            if let Some(rec) = s.dispatched_origins.get_mut(cmid) {
-                rec.undelivered_retired = true;
-            }
-        }
-        self.confirm_delivered(session_id, cmid);
-    }
-
-    /// Tell every client that `cmid` is already folded into this session, without
-    /// changing or re-persisting the queue. Confirmations are monotonic facts the
-    /// sync client accepts from any patch, so the resending device retires its
-    /// outbox entry instead of waiting out an acknowledgement timeout.
-    pub(super) fn confirm_delivered(&self, session_id: &str, cmid: &str) {
-        let (queue, drafts) = {
-            let sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get(session_id) else {
-                return;
-            };
-            // Dispatch admission deduplicates execution but does not prove
-            // delivery. Until a queue row or user echo owns the prompt, the
-            // browser must retain its durable outbox (including attachments).
-            let committed_parked = s.committed_parked_cmids.iter().any(|c| c == cmid)
-                || s.dispatched_origins
-                    .get(cmid)
-                    .is_some_and(|rec| rec.undelivered_retired);
-            if !committed_parked
-                && !s
-                    .queue
-                    .iter()
-                    .chain(&s.drafts)
-                    .any(|m| m.cmid.as_deref() == Some(cmid))
-                && !s
-                    .dispatched_cmids
-                    .iter()
-                    .any(|seen| seen.cmid == cmid && seen.echoed)
-                && !s.log.iter().any(|entry| {
-                    entry.cmid.as_deref() == Some(cmid) && is_user_message_chunk(entry)
-                })
-            {
-                return;
-            }
-            (s.queue.clone(), s.drafts.clone())
-        };
-        let mut confirmed = Self::cmids_of(&queue, &drafts);
-        if !confirmed.iter().any(|seen| seen == cmid) {
-            confirmed.push(cmid.to_owned());
-        }
-        let value = serde_json::json!({ "queue": queue, "drafts": drafts });
-        self.sync_emit(&format!("queue:{session_id}"), value, confirmed);
-    }
-
     /// Drop one queued prompt. Returns whether the row was still queued.
     pub fn remove_queued(&self, session_id: &str, id: &str) -> bool {
-        let (removed, settled) = {
+        let (removed, settled, dropped_reservation) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
@@ -986,11 +871,21 @@ impl Hub {
             let settled = submit::extract_notice_settlements(s.queue.iter().filter(|m| m.id == id));
             let before = s.queue.len();
             s.queue.retain(|m| m.id != id);
+            let res_before = s.steer_reservations.len();
+            s.steer_reservations.retain(|_, r| r.row_id != id);
             if s.editing.as_deref() == Some(id) {
                 s.editing = None;
+                s.editing_token = None;
             }
-            (before != s.queue.len(), settled)
+            (
+                before != s.queue.len(),
+                settled,
+                res_before != s.steer_reservations.len(),
+            )
         };
+        if dropped_reservation {
+            self.persist_steer_reservations(session_id);
+        }
         self.emit_pending_with_notice_ops(session_id, settled, Vec::new());
         self.try_drain(session_id);
         removed
@@ -1010,7 +905,10 @@ impl Hub {
                 return false;
             };
             let before = s.queue.len();
-            s.queue.retain(|m| m.cmid.as_deref() != Some(cmid));
+            let res = &s.steer_reservations;
+            s.queue.retain(|m| {
+                m.cmid.as_deref() != Some(cmid) || res.values().any(|r| r.row_id == m.id)
+            });
             before != s.queue.len()
         };
         if removed {
@@ -1036,6 +934,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
+            if s.steer_reservations.values().any(|r| r.row_id == id) {
+                return false;
+            }
             if text.trim().is_empty() && content.is_empty() {
                 let settled =
                     submit::extract_notice_settlements(s.queue.iter().filter(|m| m.id == id));
@@ -1043,6 +944,7 @@ impl Hub {
                 s.queue.retain(|m| m.id != id);
                 if s.editing.as_deref() == Some(id) {
                     s.editing = None;
+                    s.editing_token = None;
                 }
                 (before != s.queue.len(), settled)
             } else if let Some(m) = s.queue.iter_mut().find(|m| m.id == id) {
@@ -1066,16 +968,28 @@ impl Hub {
         found
     }
 
-    /// Drop a session's whole queue.
+    /// Drop a session's whole queue (preserving rows held by active steer reservations).
     pub fn clear_queue(&self, session_id: &str) {
         let settled = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            let settled = submit::extract_notice_settlements(s.queue.iter());
-            s.queue.clear();
-            s.editing = None;
+            let settled = submit::extract_notice_settlements(
+                s.queue
+                    .iter()
+                    .filter(|m| !s.steer_reservations.values().any(|r| r.row_id == m.id)),
+            );
+            let res = &s.steer_reservations;
+            s.queue.retain(|m| res.values().any(|r| r.row_id == m.id));
+            // Keep scheduled-draft holds and holds on retained steer-reserved rows.
+            let editing_kept = s.editing.as_deref().is_some_and(|id| {
+                s.drafts.iter().any(|m| m.id == id) || s.queue.iter().any(|m| m.id == id)
+            });
+            if !editing_kept {
+                s.editing = None;
+                s.editing_token = None;
+            }
             settled
         };
         self.emit_pending_with_notice_ops(session_id, settled, Vec::new());
@@ -1139,6 +1053,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
+            if s.steer_reservations.values().any(|r| r.row_id == id) {
+                return false;
+            }
             let Some(pos) = s.queue.iter().position(|m| m.id == id) else {
                 return false;
             };
@@ -1167,6 +1084,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            if s.steer_reservations.values().any(|r| r.row_id == id) {
+                return;
+            }
             if let Some(pos) = s.queue.iter().position(|m| m.id == id) {
                 let mut m = s.queue.remove(pos);
                 let settled = submit::extract_notice_settlements(std::iter::once(&m));
@@ -1182,6 +1102,7 @@ impl Hub {
                 m.initiator = None;
                 if s.editing.as_deref() == Some(id) {
                     s.editing = None;
+                    s.editing_token = None;
                 }
                 s.drafts.push(m);
                 settled
@@ -1193,21 +1114,240 @@ impl Hub {
         self.try_drain(session_id);
     }
 
-    /// Hold (`Some`) or release (`None`) the queue head for editing. A held head
-    /// pauses the drain on every terminal; releasing tries the drain again.
+    fn take_due_deferred_drafts(s: &mut Session, keep_editing_id: Option<&str>) -> Vec<String> {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let mut kept = Vec::new();
+        let mut due = Vec::new();
+        for draft_id in std::mem::take(&mut s.deferred_scheduled_drafts) {
+            if keep_editing_id == Some(draft_id.as_str())
+                || s.steer_reservations.values().any(|r| r.row_id == draft_id)
+            {
+                kept.push(draft_id);
+                continue;
+            }
+            if s.drafts.iter().any(|m| {
+                m.id == draft_id
+                    && m.schedule
+                        .as_ref()
+                        .is_some_and(|sc| sc.fire_at_ms <= now_ms)
+            }) {
+                due.push(draft_id);
+            }
+        }
+        s.deferred_scheduled_drafts = kept;
+        due
+    }
+
+    pub(super) fn restored_steer_reservations(
+        &self,
+        session_id: &str,
+    ) -> HashMap<String, SteerReservation> {
+        let key = format!(
+            "{}{session_id}",
+            settings_keys::SESSION_STEER_RESERVATIONS_PREFIX
+        );
+        self.setting(&key)
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn persist_steer_reservations(&self, session_id: &str) {
+        let snapshot = {
+            let sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get(session_id) else {
+                return;
+            };
+            s.steer_reservations.clone()
+        };
+        let key = format!(
+            "{}{session_id}",
+            settings_keys::SESSION_STEER_RESERVATIONS_PREFIX
+        );
+        let value = if snapshot.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null)
+        };
+        self.set_setting(key, value);
+    }
+
+    pub fn is_steer_reserved(&self, session_id: &str, row_id: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|s| s.steer_reservations.values().any(|r| r.row_id == row_id))
+    }
+
+    /// Reserve one exact draft or queued row before dispatching a current-turn
+    /// steer so neither auto-drain, scheduled timers, nor concurrent edits can
+    /// race the delivery. Fails closed if the row vanished, is already
+    /// reserved, or its content changed since the caller read it.
+    pub fn reserve_steer_source(
+        &self,
+        session_id: &str,
+        operation: &str,
+        source: &SteerSource,
+        expected_text: &str,
+        expected_content: &[serde_json::Value],
+    ) -> Result<(), &'static str> {
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return Err("This session no longer exists.");
+            };
+            if s.steer_reservations
+                .iter()
+                .any(|(op, r)| op != operation && r.row_id == source.id)
+            {
+                return Err("The source message is already being delivered.");
+            }
+            let rows = match source.kind {
+                SteerSourceKind::Draft => &s.drafts,
+                SteerSourceKind::Queued => &s.queue,
+            };
+            let Some(row) = rows.iter().find(|m| m.id == source.id) else {
+                return Err("The source message is no longer available.");
+            };
+            if row.text.trim_end() != expected_text.trim_end() || row.content != expected_content {
+                return Err("The source message was edited elsewhere.");
+            }
+            s.steer_reservations.insert(
+                operation.to_owned(),
+                SteerReservation {
+                    kind: source.kind,
+                    row_id: row.id.clone(),
+                    text: row.text.clone(),
+                    content: row.content.clone(),
+                },
+            );
+        }
+        self.persist_steer_reservations(session_id);
+        Ok(())
+    }
+
+    /// Consume the reserved source row once the steer is admitted by the worker.
+    /// Removes the row only if its content still matches the reservation.
+    pub fn commit_steer_reservation(&self, session_id: &str, operation: &str) {
+        let outcome = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            let Some(res) = s.steer_reservations.remove(operation) else {
+                return;
+            };
+            match res.kind {
+                SteerSourceKind::Draft => {
+                    let pos = s.drafts.iter().position(|m| {
+                        m.id == res.row_id && m.text == res.text && m.content == res.content
+                    });
+                    let had_schedule = pos.and_then(|i| s.drafts[i].schedule.as_ref()).is_some();
+                    if let Some(i) = pos {
+                        s.drafts.remove(i);
+                    }
+                    s.deferred_scheduled_drafts.retain(|d| d != &res.row_id);
+                    if s.editing.as_deref() == Some(res.row_id.as_str()) {
+                        s.editing = None;
+                        s.editing_token = None;
+                    }
+                    (pos.is_some(), had_schedule, res.row_id, Vec::new(), false)
+                }
+                SteerSourceKind::Queued => {
+                    let pos = s.queue.iter().position(|m| {
+                        m.id == res.row_id && m.text == res.text && m.content == res.content
+                    });
+                    let settled = pos
+                        .map(|i| submit::extract_notice_settlements(std::iter::once(&s.queue[i])))
+                        .unwrap_or_default();
+                    if let Some(i) = pos {
+                        s.queue.remove(i);
+                    }
+                    if s.editing.as_deref() == Some(res.row_id.as_str()) {
+                        s.editing = None;
+                        s.editing_token = None;
+                    }
+                    (pos.is_some(), false, res.row_id, settled, true)
+                }
+            }
+        };
+        self.persist_steer_reservations(session_id);
+        let (removed, had_schedule, row_id, settled, is_queued) = outcome;
+        if removed {
+            if is_queued {
+                self.emit_pending_with_notice_ops(session_id, settled, Vec::new());
+                self.try_drain(session_id);
+            } else {
+                self.emit_pending(session_id);
+                if had_schedule {
+                    self.cancel_draft_timer(session_id, &row_id);
+                    self.broadcast_sessions();
+                }
+            }
+        }
+    }
+
+    /// Release a steer reservation after a definitive non-delivered outcome so
+    /// the untouched source row resumes normal queue/timer eligibility.
+    pub fn release_steer_reservation(&self, session_id: &str, operation: &str) {
+        let (was_queued, deferred_due) = {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            let Some(res) = s.steer_reservations.remove(operation) else {
+                return;
+            };
+            let keep = s.editing.clone();
+            let due = Self::take_due_deferred_drafts(s, keep.as_deref());
+            (res.kind == SteerSourceKind::Queued, due)
+        };
+        self.persist_steer_reservations(session_id);
+        if was_queued {
+            self.try_drain(session_id);
+        }
+        for draft_id in deferred_due {
+            self.fire_scheduled_draft_at(session_id, &draft_id, None);
+        }
+    }
+
+    /// Hold (`Some`) or release (`None`) a queued message or scheduled draft for
+    /// editing. Broadcasts `editing` and `editing_token` to every client;
+    /// releasing or displacing a hold retries auto-drain when the queue is
+    /// unblocked and fires any scheduled draft whose fire time elapsed while held.
     pub fn set_queue_editing(&self, session_id: &str, id: Option<String>) -> u64 {
-        let released = id.is_none();
-        let epoch = {
+        self.set_queue_editing_with_token(session_id, id, None)
+    }
+
+    pub fn set_queue_editing_with_token(
+        &self,
+        session_id: &str,
+        id: Option<String>,
+        token: Option<String>,
+    ) -> u64 {
+        let (epoch, unblock_queue, deferred_due) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return 0;
             };
             s.editing_epoch = s.editing_epoch.wrapping_add(1);
             s.editing = id;
-            s.editing_epoch
+            s.editing_token = s.editing.as_ref().and(token);
+            let editing_draft = s
+                .editing
+                .as_deref()
+                .is_some_and(|cur| s.drafts.iter().any(|m| m.id == cur));
+            let unblock_queue = s.editing.is_none() || editing_draft;
+            let keep = s.editing.clone();
+            let deferred = Self::take_due_deferred_drafts(s, keep.as_deref());
+            (s.editing_epoch, unblock_queue, deferred)
         };
-        if released {
+        self.publish_pending_snapshot(session_id, &[]);
+        if unblock_queue {
             self.try_drain(session_id);
+        }
+        for draft_id in deferred_due {
+            self.fire_scheduled_draft_at(session_id, &draft_id, None);
         }
         epoch
     }
@@ -1224,13 +1364,19 @@ impl Hub {
                 return false;
             }
             s.editing = None;
+            s.editing_token = None;
             s.editing_epoch = s.editing_epoch.wrapping_add(1);
-            true
+            Some(Self::take_due_deferred_drafts(s, None))
         };
-        if released {
+        if let Some(deferred_due) = released {
+            self.publish_pending_snapshot(session_id, &[]);
             self.try_drain(session_id);
+            for draft_id in deferred_due {
+                self.fire_scheduled_draft_at(session_id, &draft_id, None);
+            }
+            return true;
         }
-        released
+        false
     }
 
     // --- Reorder --------------------------------------------------------------

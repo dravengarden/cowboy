@@ -158,9 +158,9 @@ const draftFlow = async (): Promise<void> => {
   await sleep(800);
   check(
     await page.evaluate<boolean>(
-      "document.querySelector('[data-draft-title-shortcut]')?.textContent.includes('␣T')",
+      "document.querySelector('[data-draft-title-shortcut]')?.textContent.includes('␣R')",
     ),
-    "The title shows its ␣T slot",
+    "The title shows its ␣R slot",
   );
   // Write two lines in the shared Vim editor.
   await click("[data-workspace-document] .cm-content");
@@ -224,17 +224,17 @@ const draftFlow = async (): Promise<void> => {
   await shot("4-draft-leader");
   check(
     await page.evaluate<boolean>(
-      "['t','y','h','e'].every((k) => document.querySelector(`[data-leader-entry=\"${k}\"]`)) && !['c','l','q','d'].some((k) => document.querySelector(`[data-leader-entry=\"${k}\"]`))",
+      "['r','y','h','e'].every((k) => document.querySelector(`[data-leader-entry=\"${k}\"]`)) && !['c','l','q','d'].some((k) => document.querySelector(`[data-leader-entry=\"${k}\"]`))",
     ),
-    "Draft which-key lists T Y H E and no Session-only keys",
+    "Draft which-key lists R Y H E and no Session-only keys",
   );
-  await key("t");
+  await key("r");
   await sleep(150);
   check(
     await page.evaluate<boolean>(
       `document.activeElement === ${title} && ${title}.dataset.vimInputMode === "normal" && ${title}.selectionEnd === ${title}.value.length && ${title}.selectionStart === ${title}.value.length - 1`,
     ),
-    "␣T puts a Vim Normal block cursor on the title's last character",
+    "␣R puts a Vim Normal block cursor on the title's last character",
   );
   // The title is a Vim field: b moves by word, A appends, Esc returns to
   // Normal, j returns to the body.
@@ -258,7 +258,7 @@ const draftFlow = async (): Promise<void> => {
   await sleep(150);
   check(await inBody(), "j in the title's Normal returns to the body");
   results.push(
-    "Draft which-key: T Y H E at the root, no Session-only keys; ␣T puts a Vim Normal cursor on the title; b, A, Esc, j work there",
+    "Draft which-key: R Y H E at the root, no Session-only keys; ␣R puts a Vim Normal cursor on the title; b, A, Esc, j work there",
   );
   await key("Escape");
   await sleep(150);

@@ -979,11 +979,14 @@ async fn pending_context_holds_schedules_drafts_and_manual_queue_until_cleared()
         &crate::prompt_origin::RequestCaller::Person,
     );
     hub.activate_all_drafts("context-hold", &crate::prompt_origin::RequestCaller::Person);
-    hub.add_draft(
+    hub.schedule_draft(
         "context-hold",
+        None,
+        Some("scheduled-id".into()),
         "scheduled".into(),
         vec![],
-        Some("scheduled-id".into()),
+        0,
+        Delivery::Back,
         &crate::prompt_origin::RequestCaller::Person,
     );
     let id = hub.queue_and_drafts("context-hold", |_| true).unwrap().1[0]
@@ -1486,10 +1489,12 @@ async fn legacy_draft_activation_keeps_the_source_identity_when_available() {
             session_id,
             id,
             cmid: send_cmid,
+            front,
         } = request
         else {
             panic!("expected draft activation");
         };
+        assert!(!front);
         assert!(send_cmid.is_none());
         hub.activate_draft(
             &session_id,
