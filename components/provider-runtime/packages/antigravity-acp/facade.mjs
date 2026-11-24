@@ -176,6 +176,7 @@ export class Facade {
     if (!session) {
       session = {
         turn: undefined,
+        quiescedInflight: new Set(),
         observed: new Map(),
         commands: new Map(),
         parent: undefined,
@@ -202,7 +203,13 @@ export class Facade {
    */
   forgetSession(sessionId) {
     const session = this.sessions.get(sessionId);
-    if (session && !session.turn && session.commands.size === 0) this.sessions.delete(sessionId);
+    if (
+      session &&
+      !session.turn &&
+      session.commands.size === 0 &&
+      session.quiescedInflight.size === 0
+    )
+      this.sessions.delete(sessionId);
   }
 
   registerRelay(sessionOf) {
@@ -310,8 +317,17 @@ export class Facade {
     if (deadlineEntry) this.rootCleanupDeadlines.add(deadlineEntry);
     const cleanup = (async () => {
       try {
-        if (turn) {
-          await Promise.allSettled([...turn.inflight]);
+        // Wait for both active turn inflight work and any work detached by
+        // quiesce() on child exit so buffered terminal replies join the same
+        // publish/start barrier before command termination or TurnEnd.
+        const awaited = new Set();
+        while (true) {
+          const pending = [...(turn?.inflight ?? []), ...session.quiescedInflight].filter(
+            (work) => !awaited.has(work),
+          );
+          if (pending.length === 0) break;
+          for (const work of pending) awaited.add(work);
+          await Promise.allSettled(pending);
         }
         const commands = [...session.commands.values()];
         if (deadlineEntry) {
@@ -383,10 +399,15 @@ export class Facade {
         session.turn.cancelled = true;
         if (session.turn.wrapUp) session.turn.wrapUp.pending = false;
         // Retain already-admitted inflight work (e.g. file publish / command
-        // start) in activeCleanups so settled() waits for it before connection close.
+        // start) in BOTH session.quiescedInflight (so buffered endTurn awaits it)
+        // and activeCleanups (so settled() waits for it before connection close).
         for (const work of session.turn.inflight) {
+          session.quiescedInflight.add(work);
           this.activeCleanups.add(work);
-          work.finally(() => this.activeCleanups.delete(work));
+          work.finally(() => {
+            session.quiescedInflight.delete(work);
+            this.activeCleanups.delete(work);
+          });
         }
         session.turn.abort?.abort();
         session.turn = undefined;
@@ -421,18 +442,40 @@ export class Facade {
    * bound ended the wait.
    */
   async settled(ms) {
-    const work = [
-      ...[...this.sessions.values()].flatMap((session) => [...(session.turn?.inflight ?? [])]),
-      ...this.activeCleanups,
-    ];
-    let timer;
-    const expired = new Promise((resolve) => {
-      timer = setTimeout(() => resolve(false), ms);
-    });
-    try {
-      return await Promise.race([Promise.allSettled(work).then(() => true), expired]);
-    } finally {
-      clearTimeout(timer);
+    const floorDeadline = Date.now() + Math.max(0, ms);
+    const awaited = new Set();
+    while (true) {
+      const work = [
+        ...[...this.sessions.values()].flatMap((session) => [
+          ...(session.turn?.inflight ?? []),
+          ...session.quiescedInflight,
+        ]),
+        ...this.activeCleanups,
+      ].filter((item) => !awaited.has(item));
+      if (work.length === 0) return true;
+      const allDone = Promise.allSettled(work).then(() => "done");
+      while (true) {
+        const targetDeadline = Math.max(floorDeadline, Date.now() + this.remainingRootStopMs());
+        const remaining = targetDeadline - Date.now();
+        if (remaining <= 0) return false;
+        let timer;
+        const expired = new Promise((resolve) => {
+          timer = setTimeout(() => resolve("timeout"), remaining);
+        });
+        let outcome;
+        try {
+          outcome = await Promise.race([allDone, expired]);
+        } finally {
+          clearTimeout(timer);
+        }
+        if (outcome === "done") {
+          for (const item of work) awaited.add(item);
+          break;
+        }
+        // Re-check root cleanup deadlines in case a late command start registered
+        // while waiting and extended its confirmation + report window.
+        if (this.remainingRootStopMs() <= 0) return false;
+      }
     }
   }
 

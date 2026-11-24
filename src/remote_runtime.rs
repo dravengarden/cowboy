@@ -984,6 +984,8 @@ impl RemoteRuntime {
                 trace,
                 echo_artifacts,
                 observe_subagents: true,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
             },
         ) {
             self.shared
@@ -1872,14 +1874,17 @@ async fn send_pending<W: tokio::io::AsyncWrite + Unpin + Send>(
                 continue;
             }
         }
-        // A denied reset declaration withdraws its stop during this pass.
         if !shared.pending.lock().contains_key(&key) {
             continue;
         }
-        let Some(command) = reset_admission::current(shared, &key, version, command, &mut deferred)
+        let Some(mut command) =
+            reset_admission::current(shared, &key, version, command, &mut deferred)
         else {
             continue;
         };
+        if !config_sync::prepare_prompt_for_send(shared, &key, &mut command) {
+            continue;
+        }
         notice_recovery::record_dispatch_worker_epoch_if_notice(shared, &command).await;
         match native_admission::send(shared, writer, Some((&key, version)), command.clone()).await?
         {
@@ -4501,6 +4506,8 @@ mod tests {
             cmid: Some("retry-1".to_owned()),
             echo_artifacts: false,
             observe_subagents: false,
+            expected_worker_epoch: None,
+            acknowledged_uncertain_sequence: None,
         };
         for mut commands in [
             vec![prompt.clone(), stop.clone()],
@@ -4743,6 +4750,8 @@ mod tests {
                 trace: None,
                 echo_artifacts: false,
                 observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
             },
         );
         let _stop = runtime
@@ -4792,6 +4801,8 @@ mod tests {
                 trace: None,
                 echo_artifacts: false,
                 observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
             },
         );
         assert!(pending_wire_commands(&runtime).await.is_empty());
@@ -5980,6 +5991,8 @@ mod tests {
                 cmid: Some("m".to_owned()),
                 echo_artifacts: false,
                 observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
             }),
             Some("failed".to_owned()),
         );
@@ -6127,6 +6140,8 @@ mod tests {
                 cmid: Some("call-notice:cid-9".to_owned()),
                 echo_artifacts: false,
                 observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
             }),
             Some("rejected".to_owned()),
         );
@@ -6849,6 +6864,8 @@ mod tests {
                 cmid: None,
                 echo_artifacts: false,
                 observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
             },
         );
         let mut idle = snapshot("s");

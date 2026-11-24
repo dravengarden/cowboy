@@ -454,17 +454,21 @@ pub fn until_terminated(
 pub async fn run_until_terminated(args: WorkerArgs) -> Result<()> {
     let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
     let (sigterm_tx, sigterm_rx) = tokio::sync::oneshot::channel::<()>();
+    let ledger_slot: Arc<Mutex<Option<Arc<crate::worker_execution::Ledger>>>> = Arc::default();
     let session = args.session_id.clone();
-    let worker = run_with_shutdown(args, Some(sigterm_rx));
+    let worker = run_with_shutdown(args, Some(sigterm_rx), Some(Arc::clone(&ledger_slot)));
     tokio::pin!(worker);
     tokio::select! {
         result = &mut worker => result,
         _ = terminate.recv() => {
             tracing::info!(event_name = "cowboy.worker.terminated", %session, "worker received SIGTERM; settling execution ledger");
             let _ = sigterm_tx.send(());
-            match tokio::time::timeout(Duration::from_secs(10), &mut worker).await {
+            match tokio::time::timeout(Duration::from_secs(13), &mut worker).await {
                 Ok(result) => result,
                 Err(_) => {
+                    if let Some(ledger) = ledger_slot.lock().clone() {
+                        ledger.mark_unresolved_effects_uncertain();
+                    }
                     tracing::warn!(event_name = "cowboy.worker.terminated_timeout", %session, "worker SIGTERM settlement bound reached; durable ledger retains remaining obligations");
                     Ok(())
                 }
@@ -476,7 +480,7 @@ pub async fn run_until_terminated(args: WorkerArgs) -> Result<()> {
 /// Run one detached worker until its ACP session and acknowledged outbox have
 /// both drained.
 pub async fn run(args: WorkerArgs) -> Result<()> {
-    run_with_shutdown(args, None).await
+    run_with_shutdown(args, None, None).await
 }
 
 struct PreparedWorkerLaunch {
@@ -582,6 +586,7 @@ async fn prepare_worker_launch(args: &WorkerArgs) -> Result<PreparedWorkerLaunch
 async fn run_with_shutdown(
     args: WorkerArgs,
     sigterm_rx: Option<tokio::sync::oneshot::Receiver<()>>,
+    ledger_slot: Option<Arc<Mutex<Option<Arc<crate::worker_execution::Ledger>>>>>,
 ) -> Result<()> {
     // The detached worker has its own process and never enters Cli::run.
     // Reqwest's provider-neutral TLS feature also needs this before a plain
@@ -674,7 +679,7 @@ async fn run_with_shutdown(
         raw_wrap_up_steering: AtomicBool::new(false),
         wrap_up_hint: Arc::new(crate::acp_wrap_up::WrapUpHintSlot::new()),
     });
-    execution_launch::observe(&shared);
+    execution_launch::observe_with_slot(&shared, ledger_slot);
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
     let (done_tx, mut done_rx) = mpsc::channel(1);
     let thread_shared = Arc::clone(&shared);
@@ -728,26 +733,6 @@ async fn run_with_shutdown(
     result
 }
 
-/// Fence new target effects, cancel any running turn, close the ACP command
-/// channel, and arm a bounded settlement deadline WITHOUT severing the broker
-/// transport so execution replies and uncertainty outbox frames keep pumping.
-fn trigger_sigterm_settlement(
-    shared: &Arc<Shared>,
-    cmd_tx: &mut Option<mpsc::UnboundedSender<AgentCommand>>,
-    shutdown_deadline: &mut Option<tokio::time::Instant>,
-) {
-    if shutdown_deadline.is_some() {
-        return;
-    }
-    if let Some(execution) = &shared.execution {
-        execution.cancel_turn();
-    }
-    if let Some(tx) = cmd_tx.take() {
-        let _ = tx.send(AgentCommand::Cancel);
-    }
-    *shutdown_deadline = Some(tokio::time::Instant::now() + Duration::from_secs(8));
-}
-
 async fn connection_loop(
     socket: &PathBuf,
     shared: Arc<Shared>,
@@ -761,6 +746,7 @@ async fn connection_loop(
     let mut shutdown_deadline: Option<tokio::time::Instant> = None;
     loop {
         if shutdown_deadline.is_some_and(|deadline| tokio::time::Instant::now() >= deadline) {
+            execution_launch::finalize_sigterm_cutoff(&shared);
             return Ok(());
         }
         let stream = match UnixStream::connect(socket).await {
@@ -856,7 +842,7 @@ async fn wait_for_retry_or_sigterm(
             }
         }, if sigterm_rx.is_some() => {
             *sigterm_rx = None;
-            trigger_sigterm_settlement(shared, cmd_tx, shutdown_deadline);
+            execution_launch::trigger_sigterm_settlement(shared, cmd_tx, shutdown_deadline);
             false
         }
         () = async {
@@ -1035,7 +1021,7 @@ async fn connected(
                 }
             }, if sigterm_rx.is_some() => {
                 *sigterm_rx = None;
-                trigger_sigterm_settlement(&shared, cmd_tx, shutdown_deadline);
+                execution_launch::trigger_sigterm_settlement(&shared, cmd_tx, shutdown_deadline);
                 send_outbox(&shared, &mut writer, &mut last_sent).await?;
             }
             () = async {
@@ -1043,6 +1029,7 @@ async fn connected(
                     tokio::time::sleep_until(deadline).await;
                 }
             }, if shutdown_deadline.is_some() => {
+                execution_launch::finalize_sigterm_cutoff(&shared);
                 let _ = send_outbox(&shared, &mut writer, &mut last_sent).await;
                 return Ok(ConnectedExit::WorkerDrained);
             }
@@ -1107,6 +1094,18 @@ fn turn_prompt_command(
     }
 }
 
+fn parse_steer_blocks(content: Vec<serde_json::Value>) -> Result<Vec<ContentBlock>, &'static str> {
+    let blocks = content
+        .into_iter()
+        .map(serde_json::from_value)
+        .collect::<Result<Vec<ContentBlock>, _>>()
+        .map_err(|_| "invalid steering content")?;
+    if blocks.is_empty() {
+        return Err("empty steering content");
+    }
+    Ok(blocks)
+}
+
 pub fn handle_command(
     shared: &Shared,
     cmd_tx: &mut Option<mpsc::UnboundedSender<AgentCommand>>,
@@ -1167,26 +1166,12 @@ pub fn handle_command(
                         Some("current turn is unavailable".into()),
                     );
                 }
-                let Ok(blocks) = content
-                    .into_iter()
-                    .map(serde_json::from_value)
-                    .collect::<Result<Vec<ContentBlock>, _>>()
-                else {
-                    return command_ack(
-                        shared,
-                        command_id,
-                        false,
-                        Some("invalid steering content".into()),
-                    );
+                let blocks = match parse_steer_blocks(content) {
+                    Ok(blocks) => blocks,
+                    Err(reason) => {
+                        return command_ack(shared, command_id, false, Some(reason.into()));
+                    }
                 };
-                if blocks.is_empty() {
-                    return command_ack(
-                        shared,
-                        command_id,
-                        false,
-                        Some("empty steering content".into()),
-                    );
-                }
                 if !shared.mark_command(&command_id) {
                     return command_ack(shared, command_id, true, Some("duplicate".into()));
                 }
@@ -1212,16 +1197,22 @@ pub fn handle_command(
                 trace,
                 echo_artifacts,
                 observe_subagents,
+                expected_worker_epoch,
+                acknowledged_uncertain_sequence,
             } => {
-                // Each turn's Controller states whether it keeps observed
-                // transcripts, so a rolled-back Controller stops receiving them.
+                if let Some(reason) = execution_launch::prompt_admission_refusal(
+                    shared,
+                    expected_worker_epoch.as_deref(),
+                    acknowledged_uncertain_sequence,
+                )
+                .or_else(|| shared.workspace_replaced())
+                {
+                    return command_ack(shared, command_id, false, Some(reason));
+                }
                 shared
                     .observation
                     .enabled
                     .store(observe_subagents, Ordering::Relaxed);
-                if let Some(message) = shared.workspace_replaced() {
-                    return command_ack(shared, command_id, false, Some(message));
-                }
                 if !shared.mark_command(&command_id) {
                     return command_ack(shared, command_id, true, Some("duplicate".to_owned()));
                 }
@@ -1231,7 +1222,7 @@ pub fn handle_command(
                         shared,
                         command_id,
                         false,
-                        Some("prompt has no valid content blocks".to_owned()),
+                        Some("prompt has no valid content blocks".into()),
                     );
                 }
                 shared.telemetry.lock().admit(cmid.as_deref(), trace);
@@ -2185,6 +2176,8 @@ mod tests {
                 cmid: None,
                 echo_artifacts: false,
                 observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
             },
         );
 
@@ -2223,6 +2216,8 @@ mod tests {
                 cmid: Some("c-1".to_owned()),
                 echo_artifacts: true,
                 observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
             },
         );
         let sink = RemoteSink {
@@ -2343,6 +2338,8 @@ mod tests {
                 cmid: Some("call-notice:call-42".to_owned()),
                 echo_artifacts: false,
                 observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
             },
         );
         assert!(matches!(ack, Frame::CommandAck { accepted: true, .. }));
@@ -2387,5 +2384,85 @@ mod tests {
 
         assert_ne!(workspace_identity(&stable), Some(original));
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn worker_refuses_prompt_with_unacknowledged_uncertainty_or_stale_epoch_before_acp() {
+        let (shared, _notify_rx) = shared();
+        shared.snapshot.lock().uncertain_effect = Some(crate::runtime_wire::UncertainEffect {
+            method: "process/terminate".into(),
+            sequence: 42,
+        });
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        let mut cmd_tx = Some(tx);
+
+        // Unacknowledged sequence (0 < 42) -> refused BEFORE ACP delivery!
+        let ack = handle_command(
+            &shared,
+            &mut cmd_tx,
+            WorkerCommand::Prompt {
+                command_id: "cmd-unack".into(),
+                turn_id: "t-1".into(),
+                content: vec![serde_json::json!({"type": "text", "text": "hello"})],
+                cmid: Some("c-1".into()),
+                trace: None,
+                echo_artifacts: false,
+                observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: Some(0),
+            },
+        );
+        assert!(matches!(
+            ack,
+            Frame::CommandAck {
+                accepted: false,
+                ..
+            }
+        ));
+        assert!(rx.try_recv().is_err());
+
+        // Stale worker epoch -> refused BEFORE ACP delivery even when sequence is acknowledged!
+        let ack_epoch = handle_command(
+            &shared,
+            &mut cmd_tx,
+            WorkerCommand::Prompt {
+                command_id: "cmd-stale-epoch".into(),
+                turn_id: "t-2".into(),
+                content: vec![serde_json::json!({"type": "text", "text": "hello"})],
+                cmid: Some("c-2".into()),
+                trace: None,
+                echo_artifacts: false,
+                observe_subagents: false,
+                expected_worker_epoch: Some("other-epoch".into()),
+                acknowledged_uncertain_sequence: Some(42),
+            },
+        );
+        assert!(matches!(
+            ack_epoch,
+            Frame::CommandAck {
+                accepted: false,
+                ..
+            }
+        ));
+        assert!(rx.try_recv().is_err());
+
+        // Matching epoch + acknowledged sequence -> accepted and forwarded to ACP!
+        let ack_ok = handle_command(
+            &shared,
+            &mut cmd_tx,
+            WorkerCommand::Prompt {
+                command_id: "cmd-ok".into(),
+                turn_id: "t-3".into(),
+                content: vec![serde_json::json!({"type": "text", "text": "hello"})],
+                cmid: Some("c-3".into()),
+                trace: None,
+                echo_artifacts: false,
+                observe_subagents: false,
+                expected_worker_epoch: Some(shared.worker_epoch.clone()),
+                acknowledged_uncertain_sequence: Some(42),
+            },
+        );
+        assert!(matches!(ack_ok, Frame::CommandAck { accepted: true, .. }));
+        assert!(rx.try_recv().is_ok());
     }
 }

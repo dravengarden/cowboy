@@ -439,6 +439,7 @@ struct Broker {
     /// A permanent stop removes the token so a late reset task cannot revive a
     /// session that was genuinely deleted while the old worker was stopping.
     resetting_sessions: Mutex<HashMap<String, String>>,
+    departing_cleanup: Arc<Mutex<HashMap<String, wrap_up::DepartingCleanup>>>,
     replacing: Mutex<HashMap<String, String>>,
     /// Session-local rollback pins. A healthy fallback must remain available
     /// even though the global desired generation is still marked unhealthy.
@@ -553,6 +554,7 @@ impl Broker {
             deleted_session_workspaces: Mutex::new(HashMap::new()),
             session_lifecycle_gates: Mutex::new(HashMap::new()),
             resetting_sessions: Mutex::new(HashMap::new()),
+            departing_cleanup: Arc::new(Mutex::new(HashMap::new())),
             replacing: Mutex::new(HashMap::new()),
             fallback_pins: Mutex::new(HashMap::new()),
             fallback_targets: Mutex::new(HashMap::new()),
@@ -919,24 +921,7 @@ impl Broker {
     /// permission replies still route to the old worker because they are part
     /// of the in-flight turn that must reach its safe boundary.
     fn route_prompt(&self, session_id: &str, command: WorkerCommand) {
-        if let WorkerCommand::Prompt {
-            command_id,
-            trace: Some(trace),
-            ..
-        } = &command
-        {
-            self.trace_spans.lock().start(session_id, command_id, trace);
-        }
-        let draining = self
-            .workers
-            .lock()
-            .get(session_id)
-            .is_some_and(|worker| worker.snapshot.drain_requested);
-        if draining {
-            self.queue_pending(session_id, command);
-        } else {
-            self.route_worker(session_id, command);
-        }
+        self.route_prompt_guarded(session_id, command);
     }
 
     fn queue_pending(&self, session_id: &str, command: WorkerCommand) {
@@ -1324,31 +1309,7 @@ impl Broker {
     }
 
     fn flush_pending(&self, session_id: &str) {
-        let worker = self
-            .workers
-            .lock()
-            .get(session_id)
-            .map(|worker| (worker.tx.clone(), worker.snapshot.drain_requested));
-        let Some((tx, draining)) = worker else { return };
-        let commands = self.pending_commands.lock().remove(session_id);
-        if let Some(mut commands) = commands {
-            let mut held_prompts = VecDeque::new();
-            while let Some(command) = commands.pop_front() {
-                if draining && matches!(command, WorkerCommand::Prompt { .. }) {
-                    held_prompts.push_back(command);
-                    continue;
-                }
-                let _ = tx.send(Frame::WorkerCommand {
-                    session_id: session_id.to_owned(),
-                    command: self.trace_worker_dispatch(session_id, command),
-                });
-            }
-            if !held_prompts.is_empty() {
-                self.pending_commands
-                    .lock()
-                    .insert(session_id.to_owned(), held_prompts);
-            }
-        }
+        self.flush_pending_guarded(session_id);
     }
 
     /// The Session's durable lineage, reported only while this build's writer
@@ -2193,6 +2154,9 @@ impl Broker {
             .lock()
             .insert(session_id.clone(), command_id.clone());
 
+        // Retain narrowly scoped target-cleanup authority for the departing
+        // epoch until recycle finishes so terminate/read/uncertainty can settle.
+        let _departing_cleanup = wrap_up::capture_departing_cleanup(self, &session_id);
         // Fence both an attached worker and a launch that has not connected yet.
         // The tombstone remains set until every old launch task has observed it.
         self.cancelled_sessions.lock().insert(session_id.clone());
@@ -4826,14 +4790,15 @@ async fn handle_worker(
             Frame::ExecutionRequest { request } => {
                 let allowed = request.session_id == session_id
                     && request.worker_epoch == epoch
-                    && !broker.cancelled_sessions.lock().contains(session_id)
-                    && broker
-                        .sessions
-                        .lock()
-                        .get(session_id)
-                        .and_then(|launch| launch.execution_binding.as_ref())
-                        .and_then(|binding| binding.decode().ok())
-                        .is_some_and(|binding| binding == request.binding);
+                    && ((!broker.cancelled_sessions.lock().contains(session_id)
+                        && broker
+                            .sessions
+                            .lock()
+                            .get(session_id)
+                            .and_then(|launch| launch.execution_binding.as_ref())
+                            .and_then(|binding| binding.decode().ok())
+                            .is_some_and(|binding| binding == request.binding))
+                        || wrap_up::departing_cleanup_allows(&broker, session_id, epoch, &request));
                 if allowed {
                     broker.send_controller(Frame::ExecutionRequest { request });
                 } else if let Some(worker) = broker.workers.lock().get(session_id) {
@@ -4899,11 +4864,22 @@ async fn handle_worker(
             } if event_session == session_id && worker_epoch == epoch => {
                 let cancelled = broker.cancelled_sessions.lock();
                 if cancelled.contains(session_id) {
-                    // The event is intentionally not forwarded after permanent
-                    // deletion, but it was consumed by this broker. ACK it so
-                    // the stopping worker can drain its final Exited event and
-                    // terminate instead of retaining an unbounded outbox.
+                    let forward_uncertainty = wrap_up::departing_uncertainty_event(
+                        &broker,
+                        session_id,
+                        &worker_epoch,
+                        &event,
+                    );
                     drop(cancelled);
+                    if forward_uncertainty {
+                        broker.send_controller(Frame::WorkerEvent {
+                            session_id: event_session,
+                            worker_epoch: worker_epoch.clone(),
+                            runtime_seq,
+                            event,
+                            diagnostics,
+                        });
+                    }
                     broker.acknowledge_worker_event(
                         session_id,
                         connection_id,
@@ -5627,6 +5603,8 @@ mod tests {
             cmid: None,
             echo_artifacts: false,
             observe_subagents: false,
+            expected_worker_epoch: None,
+            acknowledged_uncertain_sequence: None,
         };
         broker.route_prompt("sess-1", prompt.clone());
         broker.route_prompt("sess-1", prompt);
@@ -8788,6 +8766,8 @@ mod tests {
                 cmid: None,
                 echo_artifacts: false,
                 observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
             },
         );
         let snapshots = broker.snapshots();

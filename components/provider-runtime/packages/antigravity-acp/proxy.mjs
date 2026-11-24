@@ -1531,6 +1531,18 @@ export class AcpProxy {
         });
     await this.subagents.finish(record.sessionId);
     await fenced;
+    if (this.closing) {
+      const drainBudget = Math.max(5000, runtime.facade.remainingRootStopMs?.() ?? 0);
+      const drainDeadline = Date.now() + drainBudget;
+      const settledOk = (await runtime.facade.settled?.(drainBudget)) ?? true;
+      if (settledOk && runtime.connection?.idle && runtime.connection?.drained) {
+        const flushBudget = Math.max(5000, runtime.facade.remainingRootStopMs?.() ?? 0);
+        const flushDeadline = Math.max(drainDeadline, Date.now() + flushBudget);
+        if (await runtime.connection.idle(Math.max(1, flushDeadline - Date.now()))) {
+          await runtime.connection.drained(Math.max(1, flushDeadline - Date.now()));
+        }
+      }
+    }
     runtime.facade.detachTurn?.(record.sessionId, {
       cancelled: endedCancelled,
       errored: endedErrored,

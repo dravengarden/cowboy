@@ -926,3 +926,119 @@ test("R2-M7: serveMcp keeps openCalls open under write backpressure until callba
   await flush();
   stream.destroy();
 });
+
+test("R3-M2: buffered prompt reply after quiesce awaits detached inflight publish and execution drain", async () => {
+  const publishGate = deferred();
+  let drainedCalled = false;
+  const conn = makeFakeConnection({
+    "fs/writeFile": async () => {
+      await publishGate.promise;
+      return {};
+    },
+  });
+  conn.idle = async () => true;
+  conn.drained = async () => {
+    drainedCalled = true;
+    return true;
+  };
+  const facade = new Facade(conn, { root: "/work/repo", shell: "/bin/sh" });
+  const sentToClient = [];
+  const runtime = {
+    managed: false,
+    facade,
+    connection: conn,
+    newChannel: () => ({}),
+    evidence: {
+      mark: () => 0,
+      settle: async () => ({ class: "ok" }),
+    },
+  };
+  const proxy = new AcpProxy({
+    agent: () => {},
+    client: (msg) => sentToClient.push(msg),
+    runtime: Promise.resolve(runtime),
+    log: () => {},
+  });
+  proxy.readyRuntime = runtime;
+  proxy.managed = false;
+
+  const record = {
+    id: 42,
+    method: "session/prompt",
+    sessionId: "s-buf",
+    cursor: 0,
+    finalized: false,
+    runtime,
+  };
+  proxy.pending.set(42, record);
+  proxy.turns.set("s-buf", { tools: new Map(), wrapUp: { pending: false, delivered: false } });
+  facade.beginTurn("s-buf", { wrapUp: { pending: false, delivered: false } });
+  const inflightWork = conn.call("fs/writeFile", { path: "a" });
+  facade.sessions.get("s-buf").turn.inflight.add(inflightWork);
+  inflightWork.finally(() => facade.sessions.get("s-buf")?.turn?.inflight.delete(inflightWork));
+
+  // agy exits before stdout EOF -> beginShutdown + quiesce detach session.turn!
+  proxy.beginShutdown();
+  assert.equal(facade.sessions.get("s-buf")?.turn, undefined);
+
+  // Buffered prompt reply arrives from stdout AFTER quiesce().
+  const agentReply = proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 42,
+    result: { stopReason: "end_turn" },
+  });
+  await flush();
+  await flush();
+  // Terminal reply MUST NOT be published while detached inflight publish is unresolved!
+  assert.equal(
+    sentToClient.some((m) => m.id === 42),
+    false,
+  );
+
+  publishGate.resolve();
+  await agentReply;
+  assert.equal(drainedCalled, true);
+  assert.equal(
+    sentToClient.some((m) => m.id === 42),
+    true,
+  );
+});
+
+test("R3-M3: facade.settled honors dynamic root Stop confirmation deadline extensions after late start", async () => {
+  const startGate = deferred();
+  const uncertainCalls = [];
+  const conn = makeFakeConnection({
+    [UNCERTAIN_REPORT]: () => {
+      uncertainCalls.push(UNCERTAIN_REPORT);
+      return {};
+    },
+    "process/terminate": () => ({}),
+    "process/read": () => ({ chunks: [], exited: false, closed: false }),
+  });
+  const facade = new Facade(conn, { root: "/work/repo", shell: "/bin/sh" });
+  facade.stopConfirmMs = 120;
+  facade.beginTurn("s-late", { wrapUp: { pending: false, delivered: false } });
+  const session = facade.sessions.get("s-late");
+  const startWork = startGate.promise.then(() => {
+    session.commands.set("cmd-late", { processId: "cmd-late", timer: undefined, cleaning: 0 });
+  });
+  session.turn.inflight.add(startWork);
+  startWork.finally(() => session.turn?.inflight.delete(startWork));
+
+  // Start endTurn (which arms provisional deadline), then call settled with a short initial floor.
+  const endPromise = facade.endTurn("s-late", { cancelled: true, errored: false });
+  // Artificially tighten the initial provisional deadline so it would expire if not extended.
+  for (const entry of facade.rootCleanupDeadlines) {
+    entry.deadline = Date.now() + 90;
+  }
+  const settledPromise = facade.settled(30);
+
+  // Start finishes at 50ms -> endTurn extends deadline by stopConfirmMs + 5000ms.
+  await new Promise((r) => setTimeout(r, 50));
+  startGate.resolve();
+
+  const ok = await settledPromise;
+  await endPromise;
+  assert.equal(ok, true);
+  assert.deepEqual(uncertainCalls, [UNCERTAIN_REPORT]);
+});

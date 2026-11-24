@@ -600,6 +600,8 @@ impl CoreCommand {
             trace,
             echo_artifacts,
             observe_subagents,
+            expected_worker_epoch,
+            acknowledged_uncertain_sequence,
         } = self
         else {
             return None;
@@ -614,6 +616,8 @@ impl CoreCommand {
                 trace,
                 echo_artifacts,
                 observe_subagents,
+                expected_worker_epoch,
+                acknowledged_uncertain_sequence,
             },
         ))
     }
@@ -699,6 +703,14 @@ pub enum CoreCommand {
         /// changes what the agent runs or sees.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         observe_subagents: bool,
+        /// Optional worker epoch bound by the Controller at dispatch time; a
+        /// replacement worker with a different epoch refuses admission before ACP.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_worker_epoch: Option<String>,
+        /// Highest uncertain-effect sequence acknowledged by the owner when this
+        /// prompt was admitted; workers with a higher sequence refuse before ACP.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        acknowledged_uncertain_sequence: Option<u64>,
     },
     Cancel {
         session_id: String,
@@ -843,6 +855,14 @@ pub enum WorkerCommand {
         /// changes what the agent runs or sees.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         observe_subagents: bool,
+        /// Optional worker epoch bound by the Controller at dispatch time; a
+        /// replacement worker with a different epoch refuses admission before ACP.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_worker_epoch: Option<String>,
+        /// Highest uncertain-effect sequence acknowledged by the owner when this
+        /// prompt was admitted; workers with a higher sequence refuse before ACP.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        acknowledged_uncertain_sequence: Option<u64>,
     },
     Cancel {
         command_id: String,

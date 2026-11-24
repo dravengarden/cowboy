@@ -50,7 +50,10 @@ export function resolveDeliveryPickerState(
     error,
     options,
   } = input;
-  const effectivePaused = paused || Boolean(options?.paused);
+  // Use cached options only for capability hints; pause/editing flags from a
+  // prior opening must never shadow live props on reopen before fresh read.
+  const effectivePaused = paused || (fresh && Boolean(options?.paused));
+  const effectiveEditing = fresh && Boolean(options?.editing);
   const target = fresh && busy ? options?.target ?? undefined : undefined;
   const steer = disallowSteer
     ? false
@@ -65,7 +68,7 @@ export function resolveDeliveryPickerState(
   );
   // Require a fresh read with an exact target before enabling wrap-up so the
   // owner never hints a later turn than the one shown when the picker opened.
-  const wrapUp = showWrapUp && busy && !effectivePaused && !options?.editing &&
+  const wrapUp = showWrapUp && busy && !effectivePaused && !effectiveEditing &&
     contextReady && fresh && Boolean(target);
   const unavailable = !busy
     ? "No active turn"
@@ -80,7 +83,7 @@ export function resolveDeliveryPickerState(
     ? "No active turn"
     : effectivePaused
     ? "Queue is paused"
-    : options?.editing
+    : effectiveEditing
     ? "Finish editing queued message first"
     : !contextReady
     ? "Pending context change"

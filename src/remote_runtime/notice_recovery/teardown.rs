@@ -270,6 +270,8 @@ fn requeue_rejected_ordinary_prompt(
             trace: None,
             echo_artifacts: false,
             observe_subagents: false,
+            expected_worker_epoch: None,
+            acknowledged_uncertain_sequence: None,
         }),
         reason,
         Some(provenance),
@@ -451,6 +453,8 @@ pub(in crate::remote_runtime) fn revive_and_try_prompt(
                 trace,
                 echo_artifacts,
                 observe_subagents: true,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
             },
         );
         drop(sent);

@@ -375,7 +375,7 @@ async fn interrupt_once(
             return serde_json::json!({"status":"unknown","error":"Cancellation acknowledgement is unknown; queue held."});
         }
     }
-    let deadline = tokio::time::Instant::now() + force_cancel_grace(state, session);
+    let deadline = tokio::time::Instant::now() + interrupt_turn_settle_grace(state, session);
     loop {
         match state.supervisor.delivery_turn_finished(session, target) {
             Ok(true) => break,
@@ -407,6 +407,10 @@ async fn interrupt_once(
         return serde_json::json!({"status":"unknown","error":"Replacement admission is unresolved; queue held."});
     }
     serde_json::json!({"status":"submitted"})
+}
+
+pub(crate) fn interrupt_turn_settle_grace(state: &AppState, session: &str) -> Duration {
+    Duration::from_secs(30).max(force_cancel_grace(state, session))
 }
 
 fn operation_key(operation: &str) -> Option<String> {

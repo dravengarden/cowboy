@@ -569,6 +569,8 @@ mod tests {
                 trace: None,
                 echo_artifacts: false,
                 observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
             },
         );
         let mut replacement = busy_snapshot("s-unc", "epoch-2", true);
@@ -586,5 +588,53 @@ mod tests {
         );
         let (queue, _) = hub.queue_and_drafts("s-unc", |_| true).unwrap();
         assert_eq!(queue.len(), 1, "withdrawn prompt must return to Hub queue");
+    }
+
+    #[tokio::test]
+    async fn attempted_prompt_is_not_blindly_requeued_on_replacement_uncertainty() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s-att".into(),
+            "antigravity".into(),
+            "/tmp".into(),
+            "s-att".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        let runtime = super::super::RemoteRuntime::for_test(hub.clone(), Vec::new());
+        runtime.shared.pending.lock().insert(
+            "cmd-attempted".into(),
+            CoreCommand::Prompt {
+                session_id: "s-att".into(),
+                command_id: "cmd-attempted".into(),
+                turn_id: "turn-1".into(),
+                content: vec![serde_json::json!({"type": "text", "text": "already sent"})],
+                cmid: Some("cmid-att".into()),
+                trace: None,
+                echo_artifacts: false,
+                observe_subagents: false,
+                expected_worker_epoch: Some("e-old".into()),
+                acknowledged_uncertain_sequence: Some(0),
+            },
+        );
+        runtime
+            .shared
+            .attempted_sends
+            .lock()
+            .insert("cmd-attempted".into());
+
+        let mut replacement = busy_snapshot("s-att", "e-new", true);
+        replacement.state = WorkerState::Running;
+        replacement.current_turn_id = None;
+        replacement.config_options = Some(serde_json::json!([]));
+        replacement.uncertain_effect = Some(crate::runtime_wire::UncertainEffect {
+            method: "process/terminate".into(),
+            sequence: 99,
+        });
+        super::super::config_sync::sync_config_for_worker(&runtime.shared, &replacement);
+
+        // Already-attempted send MUST stay out of Hub queue until explicit CommandAck refusal.
+        assert_eq!(hub.session_info("s-att").unwrap().queue_count, 0);
+        assert!(runtime.shared.pending.lock().contains_key("cmd-attempted"));
     }
 }

@@ -527,8 +527,7 @@ export async function runProxy({
   // Drain in-flight facade work and execution replies BEFORE publishing exit
   // replies so any uncertainty from `attemptCleanup` settles ahead of TurnEnd.
   ready?.facade.quiesce();
-  const drainBudgetMs = Math.max(DRAIN_MS, ready?.facade.remainingRootStopMs() ?? 0);
-  const settledOk = await ready?.facade.settled(drainBudgetMs);
+  const settledOk = await ready?.facade.settled(DRAIN_MS);
   if (settledOk) {
     const flushBudgetMs = Math.max(DRAIN_MS, ready.facade.remainingRootStopMs());
     const flushDeadline = Date.now() + flushBudgetMs;

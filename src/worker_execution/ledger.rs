@@ -144,11 +144,25 @@ struct Record {
     active_processes: BTreeSet<String>,
 }
 
+#[derive(Debug, Clone)]
+struct TrackedProcess {
+    turn: String,
+    generation: u64,
+    /// True only once the target confirmed `process/start` (no error reply).
+    started: bool,
+    /// True once leader exit (`exited=true` / `process/exited`) was observed
+    /// while full process-tree closure (`closed=true` / `process/closed`) has
+    /// not yet been confirmed.
+    leader_exited: bool,
+}
+
 #[derive(Default)]
 struct State {
     record: Record,
-    /// Recorded target processes and the turn that started each.
-    processes: BTreeMap<String, String>,
+    /// Recorded target process trees (retained until confirmed closure) and
+    /// their start generation / confirmation state.
+    processes: BTreeMap<String, TrackedProcess>,
+    next_gen: u64,
     /// Starts not yet answered by the target.
     starting: HashSet<String>,
     /// Admitted requests still running, per turn.
@@ -204,6 +218,7 @@ impl std::fmt::Debug for Ledger {
 /// One admitted request: settled when its relay finished.
 pub(super) struct Admitted {
     turn: String,
+    start_gen: Option<u64>,
 }
 
 impl Ledger {
@@ -272,10 +287,18 @@ impl Ledger {
         if state.processes.len() >= MAX_PROCESSES {
             return Err("session process limit reached; process start refused");
         }
+        state.next_gen = state.next_gen.saturating_add(1);
+        let generation = state.next_gen;
         state.servers.insert(process.to_owned());
-        state
-            .processes
-            .insert(process.to_owned(), SERVER_TURN.to_owned());
+        state.processes.insert(
+            process.to_owned(),
+            TrackedProcess {
+                turn: SERVER_TURN.to_owned(),
+                generation,
+                started: false,
+                leader_exited: false,
+            },
+        );
         // Starting until the target answers, so teardown waits for it.
         state.starting.insert(process.to_owned());
         Ok(())
@@ -285,7 +308,11 @@ impl Ledger {
     pub(super) fn server_started(&self, process: &str, started: bool) {
         let mut state = self.state.lock();
         state.starting.remove(process);
-        if !started {
+        if started {
+            if let Some(entry) = state.processes.get_mut(process) {
+                entry.started = true;
+            }
+        } else {
             state.processes.remove(process);
         }
         drop(state);
@@ -293,13 +320,13 @@ impl Ledger {
     }
 
     /// The worker's servers and probes (teardown ends them first).
-    fn server_processes(&self) -> Vec<String> {
+    fn server_processes(&self) -> Vec<(String, u64)> {
         let state = self.state.lock();
         state
             .processes
             .iter()
-            .filter(|(_, owner)| *owner == SERVER_TURN)
-            .map(|(process, _)| process.clone())
+            .filter(|(_, entry)| entry.turn == SERVER_TURN)
+            .map(|(process, entry)| (process.clone(), entry.generation))
             .collect()
     }
 
@@ -334,7 +361,10 @@ impl Ledger {
         }
         state.calls += 1;
         *state.admitted.entry(turn.clone()).or_default() += 1;
-        Ok(Admitted { turn })
+        Ok(Admitted {
+            turn,
+            start_gen: None,
+        })
     }
 
     /// An admitted extension call finished.
@@ -405,7 +435,10 @@ impl Ledger {
                 .active_turn()
                 .ok_or("no Cowboy turn is running; the filesystem change was refused")?;
             *state.admitted.entry(turn.clone()).or_default() += 1;
-            return Ok(Some(Admitted { turn }));
+            return Ok(Some(Admitted {
+                turn,
+                start_gen: None,
+            }));
         }
         let process = process_id(params)
             .filter(|process| !process.is_empty() && process.len() <= 256)
@@ -420,7 +453,10 @@ impl Ledger {
                         "only the readiness probe may start before a turn; process start refused",
                     );
                 }
-                let busy = state.processes.values().any(|turn| turn == READINESS_TURN)
+                let busy = state
+                    .processes
+                    .values()
+                    .any(|entry| entry.turn == READINESS_TURN && !entry.leader_exited)
                     || state.admitted.contains_key(READINESS_TURN);
                 if busy {
                     return Err("a readiness probe is already running; process start refused");
@@ -449,10 +485,23 @@ impl Ledger {
                 return Err("the execution ledger cannot be written; process start refused");
             }
         }
-        state.processes.insert(process.clone(), turn.clone());
+        state.next_gen = state.next_gen.saturating_add(1);
+        let generation = state.next_gen;
+        state.processes.insert(
+            process.clone(),
+            TrackedProcess {
+                turn: turn.clone(),
+                generation,
+                started: false,
+                leader_exited: false,
+            },
+        );
         state.starting.insert(process);
         *state.admitted.entry(turn.clone()).or_default() += 1;
-        Ok(Some(Admitted { turn }))
+        Ok(Some(Admitted {
+            turn,
+            start_gen: Some(generation),
+        }))
     }
 
     /// An admitted request finished (answered, refused or lost).
@@ -471,22 +520,79 @@ impl Ledger {
         self.changed.send_modify(|value| *value += 1);
     }
 
-    /// Leader exit evidence: retires the in-memory live entry while retaining
-    /// the durable `active_processes` obligation until full tree closure
-    /// (`closed == true`, `process/closed`, or verified forgotten-process).
-    pub fn exited(&self, process: &str) {
-        let removed_live = self.state.lock().processes.remove(process).is_some();
-        if removed_live {
-            self.changed.send_modify(|value| *value += 1);
+    /// Record that the target confirmed `process/start` for this exact
+    /// generation. Only a confirmed start may later be retired by a verified
+    /// `unknown process id` response issued after confirmation.
+    fn mark_started(&self, process: &str, generation: u64) {
+        let mut state = self.state.lock();
+        if let Some(entry) = state.processes.get_mut(process)
+            && entry.generation == generation
+        {
+            entry.started = true;
         }
     }
 
-    /// Full process-tree closure (or refused/unsent start, or verified
-    /// executor forgotten-process response): clears both the in-memory live
-    /// entry and the durable `active_processes` recovery obligation.
-    pub fn closed(&self, process: &str) {
+    /// Generation of `process` if and only if its `process/start` was already
+    /// confirmed by the target. Captured BEFORE issuing `process/read` or
+    /// `process/terminate` so a read overtaking an in-flight/ambiguous start
+    /// can never erase the start obligation.
+    fn confirmed_start_gen(&self, process: &str) -> Option<u64> {
+        self.state
+            .lock()
+            .processes
+            .get(process)
+            .filter(|entry| entry.started)
+            .map(|entry| entry.generation)
+    }
+
+    /// Whether the exact `(process, generation)` tree is still awaiting closure.
+    fn is_tracked(&self, process: &str, generation: u64) -> bool {
+        self.state
+            .lock()
+            .processes
+            .get(process)
+            .is_some_and(|entry| entry.generation == generation)
+    }
+
+    /// Leader exit evidence (`exited=true, closed=false` or `process/exited`):
+    /// records leader exit while KEEPING the process tree in `state.processes`
+    /// and durable `active_processes` so `finish_turn`, `settle_all`, and the
+    /// teardown timeout check still settle descendants through confirmed closure.
+    pub fn exited(&self, process: &str) {
         let mut state = self.state.lock();
-        let removed_live = state.processes.remove(process).is_some();
+        if let Some(entry) = state.processes.get_mut(process) {
+            entry.leader_exited = true;
+        }
+    }
+
+    /// Full process-tree closure (or refused/unsent start, or confirmed-start
+    /// forgotten-process response): clears both the in-memory live entry and
+    /// the durable `active_processes` recovery obligation.
+    pub fn closed(&self, process: &str) {
+        self.closed_inner(process, None);
+    }
+
+    fn closed_gen(&self, process: &str, expected_gen: u64) {
+        self.closed_inner(process, Some(expected_gen));
+    }
+
+    /// Accept executor `unknown process id` ONLY for a start that was already
+    /// confirmed when the read/terminate was issued (and is still the same
+    /// tracked generation). Pending and ambiguous starts are retained.
+    fn closed_if_confirmed(&self, process: &str, confirmed_gen: Option<u64>) {
+        let Some(expected_gen) = confirmed_gen else {
+            return;
+        };
+        let mut state = self.state.lock();
+        let matches = state
+            .processes
+            .get(process)
+            .is_some_and(|entry| entry.generation == expected_gen && entry.started);
+        if !matches {
+            return;
+        }
+        state.processes.remove(process);
+        state.starting.remove(process);
         if state.record.active_processes.remove(process)
             && let Err(error) = self.persist(&state.record)
         {
@@ -494,9 +600,86 @@ impl Ledger {
             state.unwritable = true;
         }
         drop(state);
-        if removed_live {
+        self.changed.send_modify(|value| *value += 1);
+    }
+
+    fn closed_inner(&self, process: &str, expected_gen: Option<u64>) {
+        let mut state = self.state.lock();
+        if let Some(expected) = expected_gen
+            && state
+                .processes
+                .get(process)
+                .is_none_or(|entry| entry.generation != expected)
+        {
+            return;
+        }
+        let removed_live = state.processes.remove(process).is_some();
+        state.starting.remove(process);
+        let removed_durable = state.record.active_processes.remove(process);
+        if removed_durable && let Err(error) = self.persist(&state.record) {
+            tracing::warn!(%error, "execution ledger process close write failed");
+            state.unwritable = true;
+        }
+        drop(state);
+        if removed_live || removed_durable {
             self.changed.send_modify(|value| *value += 1);
         }
+    }
+
+    /// Atomically check under the ledger lock whether `(process, generation)` is still
+    /// tracked before recording termination uncertainty (prevents a race where
+    /// `process/closed` cleared the process right as `TERMINATE_BOUND` fired).
+    fn mark_termination_uncertain_if_tracked(&self, process: &str, generation: u64) -> bool {
+        let mut state = self.state.lock();
+        if !state
+            .processes
+            .get(process)
+            .is_some_and(|entry| entry.generation == generation)
+        {
+            return false;
+        }
+        let sequence = self.record_uncertain_locked(&mut state, "process/terminate");
+        drop(state);
+        if let Some(observer) = self.observer.get() {
+            observer("process/terminate", sequence);
+        }
+        true
+    }
+
+    /// Durably park the session if ANY unclosed process tree, in-flight start,
+    /// admitted mutation, or open extension call remains when a SIGTERM cutoff
+    /// forces exit before `settle_all` completes.
+    pub fn mark_unresolved_effects_uncertain(&self) -> bool {
+        let mut state = self.state.lock();
+        let has_processes = !state.processes.is_empty()
+            || !state.record.active_processes.is_empty()
+            || !state.starting.is_empty();
+        let has_effects = !state.admitted.is_empty() || state.calls > 0;
+        if !has_processes && !has_effects {
+            return false;
+        }
+        let method = if has_processes {
+            "process/terminate"
+        } else {
+            "request"
+        };
+        let sequence = self.record_uncertain_locked(&mut state, method);
+        drop(state);
+        if let Some(observer) = self.observer.get() {
+            observer(method, sequence);
+        }
+        true
+    }
+
+    fn record_uncertain_locked(&self, state: &mut State, method: &str) -> u64 {
+        state.record.uncertain_effect = Some(method.to_owned());
+        state.record.uncertain_sequence = next_sequence(state.record.uncertain_sequence);
+        let sequence = state.record.uncertain_sequence;
+        if let Err(error) = self.persist(&state.record) {
+            tracing::warn!(%error, "execution ledger update failed; effects refused");
+            state.unwritable = true;
+        }
+        sequence
     }
 
     /// Whether `process` was not a readiness probe: its output may carry a
@@ -534,8 +717,8 @@ impl Ledger {
     }
 
     /// Refuse every later effect of `turn` (every turn when `None`);
-    /// returns the processes to end.
-    fn fence(&self, turn: Option<&str>) -> Vec<String> {
+    /// returns the unclosed process trees (with exact start generation) to end.
+    fn fence(&self, turn: Option<&str>) -> Vec<(String, u64)> {
         let mut state = self.state.lock();
         match turn {
             Some(turn) => {
@@ -555,8 +738,8 @@ impl Ledger {
         state
             .processes
             .iter()
-            .filter(|(_, owner)| turn.is_none_or(|turn| *owner == turn))
-            .map(|(process, _)| process.clone())
+            .filter(|(_, entry)| turn.is_none_or(|turn| entry.turn == turn))
+            .map(|(process, entry)| (process.clone(), entry.generation))
             .collect()
     }
 
@@ -788,6 +971,17 @@ impl Client {
         let start = (method == "process/start")
             .then(|| process.clone())
             .flatten();
+        let start_gen = admitted.as_ref().and_then(|admitted| admitted.start_gen);
+        // Snapshot confirmed start generation BEFORE sending so a concurrent
+        // `process/read` or `process/terminate` overtaking an in-flight/ambiguous
+        // `process/start` can never erase its live or durable obligation.
+        let confirmed_gen = if matches!(method.as_str(), "process/read" | "process/terminate") {
+            process
+                .as_deref()
+                .and_then(|process| ledger.confirmed_start_gen(process))
+        } else {
+            None
+        };
         let result_carrying = self.carries_result(&method, &params);
         let result = self.invoke_classified(method.clone(), params).await;
         if let Some(admitted) = &admitted {
@@ -796,12 +990,18 @@ impl Client {
         match result {
             Ok(reply) => {
                 if let Some(process) = &process {
-                    if (start.is_some() && reply.get("error").is_some())
-                        || (method == "process/read" && closed(&reply))
-                        || (matches!(method.as_str(), "process/read" | "process/terminate")
-                            && forgotten_process(&reply, process))
-                    {
+                    if let (Some(_), Some(generation)) = (&start, start_gen) {
+                        if reply.get("error").is_some() {
+                            ledger.closed_gen(process, generation);
+                        } else {
+                            ledger.mark_started(process, generation);
+                        }
+                    } else if method == "process/read" && closed(&reply) {
                         ledger.closed(process);
+                    } else if matches!(method.as_str(), "process/read" | "process/terminate")
+                        && forgotten_process(&reply, process)
+                    {
+                        ledger.closed_if_confirmed(process, confirmed_gen);
                     } else if method == "process/read" && exited(&reply) {
                         ledger.exited(process);
                     }
@@ -811,8 +1011,8 @@ impl Client {
             Err(admitted) => {
                 if !admitted {
                     // Refused before it was sent: nothing can have happened.
-                    if let Some(process) = &start {
-                        ledger.closed(process);
+                    if let (Some(process), Some(generation)) = (&start, start_gen) {
+                        ledger.closed_gen(process, generation);
                     }
                     return refused("Execution unavailable; the request was not sent");
                 }
@@ -949,25 +1149,37 @@ impl Client {
         }
     }
 
-    async fn terminate_all(self: &Arc<Self>, processes: Vec<String>, park_on_unconfirmed: bool) {
+    async fn terminate_all(
+        self: &Arc<Self>,
+        processes: Vec<(String, u64)>,
+        park_on_unconfirmed: bool,
+    ) {
         futures::future::join_all(
-            processes
-                .into_iter()
-                .map(|process| self.terminate(process, park_on_unconfirmed)),
+            processes.into_iter().map(|(process, generation)| {
+                self.terminate(process, generation, park_on_unconfirmed)
+            }),
         )
         .await;
     }
 
-    /// Ask the target to terminate `process` and observe its end, within a
-    /// bound. On terminal turn-end/teardown barriers (`park_on_unconfirmed`),
-    /// an unconfirmed exit durably marks `process/terminate` uncertain so the
-    /// session stays parked across worker replacement until acknowledged.
-    async fn terminate(self: &Arc<Self>, process: String, park_on_unconfirmed: bool) {
+    /// Ask the target to terminate `process` (exact start `generation`) and observe
+    /// its full closure, within a bound. Closure notifications (`process/closed`)
+    /// complete the wait immediately, and timeout uncertainty is recorded only
+    /// if the exact tracked obligation still remains under the ledger lock.
+    async fn terminate(
+        self: &Arc<Self>,
+        process: String,
+        generation: u64,
+        park_on_unconfirmed: bool,
+    ) {
         let Some(ledger) = self.ledger().cloned() else {
             return;
         };
         let attempt = async {
             ledger.wait_until(|ledger| !ledger.starting(&process)).await;
+            if !ledger.is_tracked(&process, generation) {
+                return;
+            }
             let _ = self
                 .invoke(
                     "process/terminate".to_owned(),
@@ -975,6 +1187,10 @@ impl Client {
                 )
                 .await;
             loop {
+                if !ledger.is_tracked(&process, generation) {
+                    return;
+                }
+                let confirmed_gen = ledger.confirmed_start_gen(&process);
                 let read = self
                     .invoke(
                         "process/read".to_owned(),
@@ -982,8 +1198,15 @@ impl Client {
                     )
                     .await;
                 match read {
-                    Ok(reply) if closed(&reply) || forgotten_process(&reply, &process) => {
-                        ledger.closed(&process);
+                    Ok(reply) if closed(&reply) => {
+                        ledger.closed_gen(&process, generation);
+                        return;
+                    }
+                    Ok(reply)
+                        if confirmed_gen == Some(generation)
+                            && forgotten_process(&reply, &process) =>
+                    {
+                        ledger.closed_gen(&process, generation);
                         return;
                     }
                     Ok(_) => {}
@@ -991,13 +1214,20 @@ impl Client {
                 }
             }
         };
-        if tokio::time::timeout(TERMINATE_BOUND, attempt)
-            .await
-            .is_err()
-        {
-            tracing::warn!(event_name = "cowboy.execution.terminate_unconfirmed", session = %self.session, %process, park_on_unconfirmed, "target process end unconfirmed; the keeper's reap is the backstop");
-            if park_on_unconfirmed {
-                ledger.mark_uncertain("process/terminate");
+        let observed_closed = ledger.wait_until(|ledger| !ledger.is_tracked(&process, generation));
+        let finished = tokio::time::timeout(TERMINATE_BOUND, async {
+            tokio::select! {
+                () = observed_closed => {}
+                () = attempt => {}
+            }
+        })
+        .await
+        .is_ok();
+        if !finished {
+            let parked = park_on_unconfirmed
+                && ledger.mark_termination_uncertain_if_tracked(&process, generation);
+            if parked || ledger.is_tracked(&process, generation) {
+                tracing::warn!(event_name = "cowboy.execution.terminate_unconfirmed", session = %self.session, %process, park_on_unconfirmed, parked, "target process end unconfirmed; the keeper's reap is the backstop");
             }
         }
     }

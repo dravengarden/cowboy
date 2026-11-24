@@ -467,6 +467,11 @@ async fn relayed_exit_evidence_retires_a_process() {
     target
         .client
         .observe_event(&json!({"method": "process/exited", "params": {"processId": "p1"}}));
+    // Leader exit alone keeps the process tree in live settlement until closed.
+    assert_eq!(ledger.live(), ["p1", "p2"]);
+    target
+        .client
+        .observe_event(&json!({"method": "process/closed", "params": {"processId": "p1"}}));
     assert_eq!(ledger.live(), ["p2"]);
     target
         .client
@@ -1614,4 +1619,128 @@ async fn durable_process_obligation_survives_exited_until_closed_and_mints_fresh
         seq2,
         "process/closed cleared obligation so clean reopen does not bump sequence"
     );
+}
+
+#[tokio::test]
+async fn forgotten_process_read_never_erases_in_flight_start_obligation() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.json");
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "process/start" => Reply::Hold,
+        "process/read" => completed(json!({
+            "error": {"code": -32001, "message": "unknown process id p-race"}
+        })),
+        _ => completed(json!({"result": {}})),
+    }));
+    let ledger = ledger(&target.client, Some(path.clone()));
+    ledger.begin_turn("turn-1");
+
+    let client = Arc::clone(&target.client);
+    let start_task =
+        tokio::spawn(async move { client.relay("process/start".into(), start("p-race")).await });
+    eventually(|| !target.held.lock().is_empty()).await;
+
+    // Concurrent process/read arrives before process/start and gets genuine unknown-id.
+    let read_reply = target
+        .client
+        .relay(
+            "process/read".into(),
+            json!({"processId": "p-race", "afterSeq": null, "maxBytes": 1, "waitMs": 0}),
+        )
+        .await;
+    assert_eq!(read_reply["error"]["message"], "unknown process id p-race");
+    // In-flight start MUST remain tracked in BOTH live map and durable file.
+    assert_eq!(ledger.live(), ["p-race"]);
+
+    // Now the start completes on the target.
+    target.release(json!({"result": {"processId": "p-race"}}));
+    let start_reply = start_task.await.unwrap();
+    assert_eq!(start_reply["result"]["processId"], "p-race");
+    assert_eq!(ledger.live(), ["p-race"]);
+
+    // Reopening after crash proves the durable active_processes entry survived.
+    let reopened = Ledger::open("session", Some(path)).unwrap();
+    assert_eq!(
+        reopened.uncertain_effect().as_deref(),
+        Some("process/terminate")
+    );
+    assert!(reopened.uncertain_sequence() > 0);
+}
+
+#[tokio::test]
+async fn leader_exit_keeps_tree_in_finish_turn_until_confirmed_closed() {
+    let terminated = Arc::new(Mutex::new(false));
+    let terminated_flag = Arc::clone(&terminated);
+    let target = Target::new(Arc::new(move |invocation| {
+        match invocation.method.as_str() {
+            "process/start" => completed(json!({"result": {"processId": "p-desc"}})),
+            "process/terminate" => {
+                *terminated_flag.lock() = true;
+                completed(json!({"result": {}}))
+            }
+            "process/read" => {
+                let done = *terminated_flag.lock();
+                completed(json!({"result": {"chunks": [], "exited": true, "closed": done}}))
+            }
+            _ => completed(json!({"result": {}})),
+        }
+    }));
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    target
+        .client
+        .relay("process/start".into(), start("p-desc"))
+        .await;
+    target
+        .client
+        .relay(
+            "process/read".into(),
+            json!({"processId": "p-desc", "afterSeq": null, "maxBytes": 1, "waitMs": 0}),
+        )
+        .await;
+    // Leader exited (exited=true, closed=false), descendants still alive!
+    assert_eq!(ledger.live(), ["p-desc"]);
+    let settle = target
+        .client
+        .finish_turn("turn-1")
+        .expect("finish_turn must settle unclosed process tree");
+    tokio::time::timeout(Duration::from_secs(5), settle)
+        .await
+        .unwrap();
+    assert!(*terminated.lock());
+    assert!(ledger.live().is_empty());
+}
+
+#[tokio::test]
+async fn process_closed_event_wakes_terminate_wait_without_recording_uncertainty() {
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "process/start" => completed(json!({"result": {"processId": "p-evt"}})),
+        "process/terminate" => completed(json!({"result": {}})),
+        "process/read" => Reply::Hold,
+        _ => completed(json!({"result": {}})),
+    }));
+    let ledger = ledger(&target.client, None);
+    ledger.begin_turn("turn-1");
+    target
+        .client
+        .relay("process/start".into(), start("p-evt"))
+        .await;
+
+    let settle = target
+        .client
+        .finish_turn("turn-1")
+        .expect("finish_turn barrier");
+    let settle_task = tokio::spawn(settle);
+    eventually(|| !target.held.lock().is_empty()).await;
+
+    // Executor delivers process/closed while process/read is stalled.
+    target
+        .client
+        .observe_event(&json!({"method": "process/closed", "params": {"processId": "p-evt"}}));
+    tokio::time::timeout(Duration::from_secs(2), settle_task)
+        .await
+        .expect("process/closed must wake terminate immediately")
+        .unwrap();
+    assert!(ledger.live().is_empty());
+    assert_eq!(ledger.uncertain_effect(), None);
 }

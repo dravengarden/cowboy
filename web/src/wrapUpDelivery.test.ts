@@ -237,3 +237,47 @@ describe("isCurrentContextReady", () => {
     ).toBe(false);
   });
 });
+
+describe("resolveDeliveryPickerState reopen cache isolation (R3-L1)", () => {
+  test("ignores stale cached paused and editing flags on reopen until fresh read", () => {
+    const staleCachedOptions = {
+      target: { worker_epoch: "e1", turn_id: "t1" },
+      controls: { next_checkpoint: false },
+      steer: false,
+      wrap_up_steering: true,
+      editing: true,
+      status: "Busy",
+      paused: true,
+      hold: null,
+      policy: { mode: "steer" as const, updated_at_ms: 1 },
+    };
+    const reopened = resolveDeliveryPickerState({
+      busy: true,
+      paused: false,
+      queued: false,
+      steerReady: false,
+      wrapUpReady: true,
+      contextReady: true,
+      fresh: false,
+      error: null,
+      options: staleCachedOptions,
+    });
+    expect(reopened.showWrapUp).toBe(true);
+    expect(reopened.wrapUp).toBe(false);
+    expect(reopened.wrapUpUnavailable).toBe("Checking runtime…");
+
+    const refreshedPaused = resolveDeliveryPickerState({
+      busy: true,
+      paused: false,
+      queued: false,
+      steerReady: false,
+      wrapUpReady: true,
+      contextReady: true,
+      fresh: true,
+      error: null,
+      options: { ...staleCachedOptions, editing: false, paused: true },
+    });
+    expect(refreshedPaused.wrapUp).toBe(false);
+    expect(refreshedPaused.wrapUpUnavailable).toBe("Queue is paused");
+  });
+});

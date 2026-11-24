@@ -87,7 +87,10 @@ pub(super) fn queue_persisted_config(
 
 pub(super) fn sync_config_for_worker(shared: &Shared, worker: &WorkerSnapshot) {
     if let Some(reason) = unacknowledged_uncertain_effect(&shared.hub, worker) {
-        let rejected = take_pending_prompts(shared, &worker.session_id);
+        // Requeue ONLY provably unsent prompts. Already-attempted sends are
+        // rejected explicitly by the broker/worker via CommandAck(accepted=false)
+        // when epoch or acknowledged_uncertain_sequence mismatches.
+        let rejected = take_unsent_pending_prompts(shared, &worker.session_id);
         for command in rejected {
             notice_recovery::requeue_rejected_command(
                 shared,
@@ -135,7 +138,7 @@ pub(super) fn sync_config_for_worker(shared: &Shared, worker: &WorkerSnapshot) {
     };
     if released_startup || released_recovery {
         if let Some(reason) = unacknowledged_uncertain_effect(&shared.hub, worker) {
-            let rejected = take_pending_prompts(shared, &worker.session_id);
+            let rejected = take_unsent_pending_prompts(shared, &worker.session_id);
             for command in rejected {
                 notice_recovery::requeue_rejected_command(
                     shared,
@@ -153,31 +156,57 @@ pub(super) fn sync_config_for_worker(shared: &Shared, worker: &WorkerSnapshot) {
 /// Check whether `worker` reports a newer `uncertain_effect` than the owner has
 /// acknowledged in Hub settings, so a replacement worker reviving on a prompt
 /// never runs an already-admitted prompt ahead of owner acknowledgment.
+pub(super) fn acknowledged_uncertain_sequence_for(hub: &crate::core::Hub, session_id: &str) -> u64 {
+    let key = format!(
+        "{}{}",
+        crate::core::settings_keys::SESSION_UNCERTAIN_EFFECT_ACK_PREFIX,
+        session_id
+    );
+    hub.setting(&key)
+        .and_then(|value| {
+            value
+                .get("acknowledged")
+                .and_then(serde_json::Value::as_u64)
+        })
+        .unwrap_or(0)
+}
+
 pub(super) fn unacknowledged_uncertain_effect(
     hub: &crate::core::Hub,
     worker: &WorkerSnapshot,
 ) -> Option<String> {
     let effect = worker.uncertain_effect.as_ref()?;
     let required = effect.sequence.max(1);
-    let key = format!(
-        "{}{}",
-        crate::core::settings_keys::SESSION_UNCERTAIN_EFFECT_ACK_PREFIX,
-        worker.session_id
-    );
-    let acknowledged = hub
-        .setting(&key)
-        .and_then(|value| {
-            value
-                .get("acknowledged")
-                .and_then(serde_json::Value::as_u64)
-        })
-        .unwrap_or(0);
+    let acknowledged = acknowledged_uncertain_sequence_for(hub, &worker.session_id);
     (required > acknowledged).then(|| {
         format!(
             "Target {} outcome is uncertain (sequence {required}); review and acknowledge before continuing",
             effect.method
         )
     })
+}
+
+/// Remove and return ONLY pending prompts for `session_id` that have never been
+/// handed off to the transport (`!sent && !attempted_sends`). Commands whose
+/// send was already attempted must settle via explicit `CommandAck` or turn
+/// lifecycle so the Controller never causes duplicate execution.
+pub(super) fn take_unsent_pending_prompts(shared: &Shared, session_id: &str) -> Vec<CoreCommand> {
+    let mut pending = shared.pending.lock();
+    let sent = shared.sent.lock();
+    let attempted = shared.attempted_sends.lock();
+    let mut rejected = Vec::new();
+    pending.retain(|key, command| {
+        if matches!(command, CoreCommand::Prompt { session_id: owner, .. } if owner == session_id)
+            && !sent.contains(key)
+            && !attempted.contains(key)
+        {
+            rejected.push(command.clone());
+            false
+        } else {
+            true
+        }
+    });
+    rejected
 }
 
 // Completion proves admission when the separate CommandAck was lost. Start
@@ -303,4 +332,57 @@ fn config_current_value(option: &serde_json::Value) -> Option<&serde_json::Value
     option
         .get("currentValue")
         .or_else(|| option.get("current_value"))
+}
+
+/// Check whether `command` (when `CoreCommand::Prompt`) is gated by an
+/// unacknowledged `uncertain_effect` on the current worker — withdrawing and
+/// requeuing it ONLY if provably unsent — and stamp its epoch + acknowledged
+/// sequence binding before transport handoff. Returns `false` if dispatch
+/// should be skipped.
+pub(super) fn prepare_prompt_for_send(
+    shared: &Shared,
+    key: &str,
+    command: &mut CoreCommand,
+) -> bool {
+    let CoreCommand::Prompt {
+        session_id,
+        expected_worker_epoch,
+        acknowledged_uncertain_sequence,
+        ..
+    } = command
+    else {
+        return true;
+    };
+    let worker_snapshot = shared.workers.lock().get(session_id).cloned();
+    if let Some(worker) = worker_snapshot.as_ref()
+        && let Some(reason) = unacknowledged_uncertain_effect(&shared.hub, worker)
+    {
+        if !shared.attempted_sends.lock().contains(key)
+            && let Some(removed) = shared.pending.lock().remove(key)
+        {
+            notice_recovery::requeue_rejected_command(
+                shared,
+                session_id,
+                Some(removed),
+                Some(reason),
+            );
+        }
+        return false;
+    }
+    if acknowledged_uncertain_sequence.is_none() {
+        *acknowledged_uncertain_sequence =
+            Some(acknowledged_uncertain_sequence_for(&shared.hub, session_id));
+    }
+    if expected_worker_epoch.is_none() {
+        *expected_worker_epoch = worker_snapshot
+            .filter(|worker| {
+                !worker.drain_requested
+                    && matches!(
+                        worker.state,
+                        super::WorkerState::Running | super::WorkerState::Busy
+                    )
+            })
+            .map(|worker| worker.worker_epoch);
+    }
+    true
 }

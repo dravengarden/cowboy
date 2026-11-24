@@ -1302,6 +1302,8 @@ mod tests {
                 trace: None,
                 echo_artifacts: false,
                 observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
             },
         );
         abort_failed_execution_recovery(&rt.shared, "sess-r2", 1, &HashMap::new(), "old abort")
@@ -1334,6 +1336,8 @@ mod tests {
                 trace: None,
                 echo_artifacts: false,
                 observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
             },
         );
         let saw_exited_in_wake = Arc::new(std::sync::atomic::AtomicBool::new(false));

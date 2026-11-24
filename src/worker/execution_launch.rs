@@ -169,3 +169,92 @@ pub(super) fn observe(shared: &Arc<super::Shared>) {
         }
     }));
 }
+
+pub(super) fn observe_with_slot(
+    shared: &Arc<super::Shared>,
+    ledger_slot: Option<Arc<Mutex<Option<Arc<Ledger>>>>>,
+) {
+    observe(shared);
+    if let (Some(slot), Some(ledger)) = (
+        ledger_slot,
+        shared
+            .execution
+            .as_ref()
+            .and_then(|client| client.ledger())
+            .cloned(),
+    ) {
+        *slot.lock() = Some(ledger);
+    }
+}
+
+/// Fence new target effects, start full execution settlement in parallel with
+/// ACP shutdown (whose relay drain can run up to 10s), cancel any active turn,
+/// and arm a bounded settlement deadline without severing broker IPC.
+pub(super) fn trigger_sigterm_settlement(
+    shared: &Arc<super::Shared>,
+    cmd_tx: &mut Option<mpsc::UnboundedSender<crate::acp::AgentCommand>>,
+    shutdown_deadline: &mut Option<tokio::time::Instant>,
+) {
+    if shutdown_deadline.is_some() {
+        return;
+    }
+    if let Some(execution) = shared.execution.clone() {
+        tokio::spawn(async move {
+            execution.settle_all().await;
+        });
+    }
+    if let Some(tx) = cmd_tx.take() {
+        let _ = tx.send(crate::acp::AgentCommand::Cancel);
+    }
+    *shutdown_deadline = Some(tokio::time::Instant::now() + std::time::Duration::from_secs(12));
+}
+
+pub(super) fn finalize_sigterm_cutoff(shared: &super::Shared) {
+    if let Some(ledger) = shared.execution.as_ref().and_then(|client| client.ledger()) {
+        ledger.mark_unresolved_effects_uncertain();
+    }
+}
+
+pub(super) fn prompt_admission_refusal(
+    shared: &super::Shared,
+    expected_worker_epoch: Option<&str>,
+    acknowledged_uncertain_sequence: Option<u64>,
+) -> Option<String> {
+    if let Some(expected) = expected_worker_epoch
+        && expected != shared.worker_epoch
+    {
+        return Some("worker epoch changed before prompt admission".to_owned());
+    }
+    let acknowledged = acknowledged_uncertain_sequence.unwrap_or(0);
+    let snapshot_effect = shared.snapshot.lock().uncertain_effect.clone();
+    let ledger_effect = shared
+        .execution
+        .as_ref()
+        .and_then(|client| client.ledger())
+        .and_then(|ledger| {
+            ledger
+                .uncertain_effect()
+                .map(|method| (method, ledger.uncertain_sequence()))
+        });
+    let highest = match (snapshot_effect, ledger_effect) {
+        (Some(snap), Some((method, seq))) => {
+            if seq >= snap.sequence {
+                Some((method, seq))
+            } else {
+                Some((snap.method, snap.sequence))
+            }
+        }
+        (Some(snap), None) => Some((snap.method, snap.sequence)),
+        (None, Some(pair)) => Some(pair),
+        (None, None) => None,
+    };
+    if let Some((method, sequence)) = highest {
+        let required = sequence.max(1);
+        if required > acknowledged {
+            return Some(format!(
+                "Target {method} outcome is uncertain (sequence {required}); review and acknowledge before continuing"
+            ));
+        }
+    }
+    None
+}

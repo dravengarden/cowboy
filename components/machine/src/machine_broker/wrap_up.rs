@@ -486,6 +486,238 @@ impl super::Broker {
     }
 }
 
+/// Narrowly scoped target-cleanup authority retained for a departing worker
+/// epoch during `reset_session` so `process/terminate`, `process/read`,
+/// `Observe`, `Events`, and `UNCERTAIN_EFFECT_UPDATE` can settle before stop.
+#[derive(Clone)]
+pub(super) struct DepartingCleanup {
+    pub(super) epoch: String,
+    pub(super) binding: crate::execution_environment::BindingV1,
+}
+
+pub(super) struct DepartingCleanupGuard {
+    map: Arc<parking_lot::Mutex<std::collections::HashMap<String, DepartingCleanup>>>,
+    session_id: String,
+    epoch: String,
+}
+
+impl Drop for DepartingCleanupGuard {
+    fn drop(&mut self) {
+        let mut map = self.map.lock();
+        if map
+            .get(&self.session_id)
+            .is_some_and(|entry| entry.epoch == self.epoch)
+        {
+            map.remove(&self.session_id);
+        }
+    }
+}
+
+pub(super) fn capture_departing_cleanup(
+    broker: &super::Broker,
+    session_id: &str,
+) -> Option<DepartingCleanupGuard> {
+    let (epoch, worker_binding) = {
+        let workers = broker.workers.lock();
+        let worker = workers.get(session_id)?;
+        let binding = worker
+            .snapshot
+            .launch
+            .as_ref()
+            .and_then(|launch| launch.execution_binding.as_ref())
+            .and_then(|binding| binding.decode().ok());
+        (worker.epoch.clone(), binding)
+    };
+    let binding = worker_binding.or_else(|| {
+        broker
+            .sessions
+            .lock()
+            .get(session_id)
+            .and_then(|launch| launch.execution_binding.as_ref())
+            .and_then(|binding| binding.decode().ok())
+    })?;
+    broker.departing_cleanup.lock().insert(
+        session_id.to_owned(),
+        DepartingCleanup {
+            epoch: epoch.clone(),
+            binding,
+        },
+    );
+    Some(DepartingCleanupGuard {
+        map: Arc::clone(&broker.departing_cleanup),
+        session_id: session_id.to_owned(),
+        epoch,
+    })
+}
+
+pub(super) fn is_departing_cleanup_command(command: &crate::execution_protocol::Command) -> bool {
+    match command {
+        crate::execution_protocol::Command::Invoke { invocation, .. } => {
+            matches!(
+                invocation.method.as_str(),
+                "process/terminate" | "process/read"
+            )
+        }
+        crate::execution_protocol::Command::Observe { .. }
+        | crate::execution_protocol::Command::Events { .. } => true,
+        crate::execution_protocol::Command::Describe
+        | crate::execution_protocol::Command::Shutdown => false,
+    }
+}
+
+pub(super) fn departing_cleanup_allows(
+    broker: &super::Broker,
+    session_id: &str,
+    epoch: &str,
+    request: &crate::execution_protocol::RuntimeRequest,
+) -> bool {
+    is_departing_cleanup_command(&request.command)
+        && broker
+            .departing_cleanup
+            .lock()
+            .get(session_id)
+            .is_some_and(|entry| entry.epoch == epoch && entry.binding == request.binding)
+}
+
+pub(super) fn departing_uncertainty_event(
+    broker: &super::Broker,
+    session_id: &str,
+    worker_epoch: &str,
+    event: &crate::runtime_wire::RuntimeEvent,
+) -> bool {
+    matches!(
+        event,
+        crate::runtime_wire::RuntimeEvent::Update { update, .. }
+            if crate::runtime_wire::uncertain_effect(update).is_some()
+    ) && broker
+        .departing_cleanup
+        .lock()
+        .get(session_id)
+        .is_some_and(|entry| entry.epoch == worker_epoch)
+}
+
+/// Reject a `WorkerCommand::Prompt` before sending it to `worker` when its
+/// bound `expected_worker_epoch` no longer matches or when the worker reports
+/// an `uncertain_effect` newer than the prompt's `acknowledged_uncertain_sequence`.
+pub(super) fn prompt_admission_refusal(
+    worker_epoch: &str,
+    worker_uncertain: Option<&crate::runtime_wire::UncertainEffect>,
+    command: &WorkerCommand,
+) -> Option<(String, String)> {
+    let WorkerCommand::Prompt {
+        command_id,
+        expected_worker_epoch,
+        acknowledged_uncertain_sequence,
+        ..
+    } = command
+    else {
+        return None;
+    };
+    if let Some(expected) = expected_worker_epoch
+        && expected != worker_epoch
+    {
+        return Some((
+            command_id.clone(),
+            "worker epoch changed before prompt admission".to_owned(),
+        ));
+    }
+    if let Some(effect) = worker_uncertain {
+        let required = effect.sequence.max(1);
+        let acknowledged = acknowledged_uncertain_sequence.unwrap_or(0);
+        if required > acknowledged {
+            return Some((
+                command_id.clone(),
+                format!(
+                    "Target {} outcome is uncertain (sequence {required}); review and acknowledge before continuing",
+                    effect.method
+                ),
+            ));
+        }
+    }
+    None
+}
+
+impl super::Broker {
+    pub(super) fn route_prompt_guarded(&self, session_id: &str, command: WorkerCommand) {
+        if let WorkerCommand::Prompt {
+            command_id,
+            trace: Some(trace),
+            ..
+        } = &command
+        {
+            self.trace_spans.lock().start(session_id, command_id, trace);
+        }
+        let worker_gate = self.workers.lock().get(session_id).map(|worker| {
+            (
+                worker.snapshot.drain_requested,
+                prompt_admission_refusal(
+                    &worker.epoch,
+                    worker.snapshot.uncertain_effect.as_ref(),
+                    &command,
+                ),
+            )
+        });
+        if let Some((false, Some((command_id, reason)))) = worker_gate {
+            self.send_controller(Frame::CommandAck {
+                session_id: session_id.to_owned(),
+                command_id,
+                accepted: false,
+                reason: Some(reason),
+            });
+            return;
+        }
+        if worker_gate.is_some_and(|(draining, _)| draining) {
+            self.queue_pending(session_id, command);
+        } else {
+            self.route_worker(session_id, command);
+        }
+    }
+
+    pub(super) fn flush_pending_guarded(&self, session_id: &str) {
+        let worker = self.workers.lock().get(session_id).map(|worker| {
+            (
+                worker.tx.clone(),
+                worker.epoch.clone(),
+                worker.snapshot.drain_requested,
+                worker.snapshot.uncertain_effect.clone(),
+            )
+        });
+        let Some((tx, epoch, draining, uncertain)) = worker else {
+            return;
+        };
+        let commands = self.pending_commands.lock().remove(session_id);
+        if let Some(mut commands) = commands {
+            let mut held_prompts = std::collections::VecDeque::new();
+            while let Some(command) = commands.pop_front() {
+                if draining && matches!(command, WorkerCommand::Prompt { .. }) {
+                    held_prompts.push_back(command);
+                    continue;
+                }
+                if let Some((command_id, reason)) =
+                    prompt_admission_refusal(&epoch, uncertain.as_ref(), &command)
+                {
+                    self.send_controller(Frame::CommandAck {
+                        session_id: session_id.to_owned(),
+                        command_id,
+                        accepted: false,
+                        reason: Some(reason),
+                    });
+                    continue;
+                }
+                let _ = tx.send(Frame::WorkerCommand {
+                    session_id: session_id.to_owned(),
+                    command: self.trace_worker_dispatch(session_id, command),
+                });
+            }
+            if !held_prompts.is_empty() {
+                self.pending_commands
+                    .lock()
+                    .insert(session_id.to_owned(), held_prompts);
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -941,5 +1173,83 @@ mod tests {
         assert!(!codex.wrap_up_steering);
         assert!(codex.supports_current_turn);
         assert!(codex.delivery_controls.next_checkpoint);
+    }
+
+    #[test]
+    fn departing_cleanup_allows_only_terminate_read_observe_events_and_rejects_mutations() {
+        let terminate = crate::execution_protocol::Command::Invoke {
+            invocation: crate::execution_protocol::Invocation {
+                operation_id: "op-1".into(),
+                method: "process/terminate".into(),
+                params: serde_json::json!({"processId": "p1"}),
+            },
+            wait_ms: 1000,
+        };
+        let read = crate::execution_protocol::Command::Invoke {
+            invocation: crate::execution_protocol::Invocation {
+                operation_id: "op-2".into(),
+                method: "process/read".into(),
+                params: serde_json::json!({"processId": "p1"}),
+            },
+            wait_ms: 1000,
+        };
+        let start = crate::execution_protocol::Command::Invoke {
+            invocation: crate::execution_protocol::Invocation {
+                operation_id: "op-3".into(),
+                method: "process/start".into(),
+                params: serde_json::json!({"processId": "p2"}),
+            },
+            wait_ms: 1000,
+        };
+        let write = crate::execution_protocol::Command::Invoke {
+            invocation: crate::execution_protocol::Invocation {
+                operation_id: "op-4".into(),
+                method: "fs/writeFile".into(),
+                params: serde_json::json!({"path": "a"}),
+            },
+            wait_ms: 1000,
+        };
+        assert!(is_departing_cleanup_command(&terminate));
+        assert!(is_departing_cleanup_command(&read));
+        assert!(is_departing_cleanup_command(
+            &crate::execution_protocol::Command::Observe {
+                operation_id: "op-1".into(),
+                wait_ms: 1000,
+            }
+        ));
+        assert!(is_departing_cleanup_command(
+            &crate::execution_protocol::Command::Events {
+                after: 0,
+                wait_ms: 1000,
+            }
+        ));
+        assert!(!is_departing_cleanup_command(&start));
+        assert!(!is_departing_cleanup_command(&write));
+    }
+
+    #[test]
+    fn broker_prompt_admission_refusal_blocks_stale_epoch_and_unacknowledged_uncertainty() {
+        let prompt = WorkerCommand::Prompt {
+            command_id: "cmd-1".into(),
+            turn_id: "t-1".into(),
+            content: vec![],
+            cmid: None,
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            expected_worker_epoch: Some("e-old".into()),
+            acknowledged_uncertain_sequence: Some(5),
+        };
+        assert!(prompt_admission_refusal("e-new", None, &prompt).is_some());
+        let effect = crate::runtime_wire::UncertainEffect {
+            method: "process/terminate".into(),
+            sequence: 6,
+        };
+        assert!(prompt_admission_refusal("e-old", Some(&effect), &prompt).is_some());
+        let acked = crate::runtime_wire::UncertainEffect {
+            method: "process/terminate".into(),
+            sequence: 5,
+        };
+        assert!(prompt_admission_refusal("e-old", Some(&acked), &prompt).is_none());
     }
 }
