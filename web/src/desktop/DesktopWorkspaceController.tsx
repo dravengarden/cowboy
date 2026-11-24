@@ -1,4 +1,5 @@
 import { isDesktopSplitterId } from "./desktopSplitterKeyboard";
+import { activeDesktopComposerScope } from "./editorInsert";
 import {
   createContext,
   useCallback,
@@ -134,11 +135,14 @@ function focusElement(element: HTMLElement | null): void {
     "[data-desktop-item][data-desktop-current='true']",
   );
   const firstItem = element.querySelector<HTMLElement>("[data-desktop-item]");
-  const composerCommandSink = element.dataset.desktopRegion === "prompt.composer"
-    ? element.querySelector<HTMLElement>("[data-vim-command-sink]")
+  const composerScope = element.dataset.desktopRegion === "prompt.composer"
+    ? activeDesktopComposerScope(element)
     : null;
-  const composer = element.dataset.desktopRegion === "prompt.composer"
-    ? element.querySelector<HTMLElement>(".cm-content[contenteditable='true']")
+  const composerCommandSink = composerScope
+    ? composerScope.querySelector<HTMLElement>("[data-vim-command-sink]")
+    : null;
+  const composer = composerScope
+    ? composerScope.querySelector<HTMLElement>(".cm-content[contenteditable='true']")
     : null;
   const planToggle = element.dataset.desktopRegion === "prompt.plan"
     ? element.querySelector<HTMLElement>(

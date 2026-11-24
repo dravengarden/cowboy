@@ -1851,8 +1851,7 @@ export function ComposerWorkspace({
                 ...(touchInput ? { nativeValue: text } : {})
               }
               onChange={setText}
-              onSubmit={submitAndNotify}
-              onSaveDraft={saveDraft}
+              {...(!desktop ? { onSubmit: submitAndNotify, onSaveDraft: saveDraft } : {})}
               borderless
               expanded={inlineExpanded}
               heightPx={inlineExpanded ? composerHeight : 0}

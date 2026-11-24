@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { type MutableRefObject, useEffect, useMemo, useRef } from "react";
 import {
   type DesktopCommand,
   useDesktopCommandActions,
@@ -12,26 +12,10 @@ import { COMPOSER_COMMANDS } from "../../composerCommands";
 import { formatChord } from "./formatChord";
 import { toggleComposerSourceMode } from "../../composerSourceMode";
 
-export function DesktopComposerCommandBindings({
-  sendable,
-  canInsert,
-  canAttach,
-  canJumpFront,
-  canForce,
-  canCurrentTurn = false,
-  onCurrentTurn,
-  canMore,
-  onSlash,
-  onReference,
-  onAttach,
-  onSaveDraft,
-  onSchedule,
-  onJumpFront,
-  onForce,
-  onMore,
-  onFormat,
-}: {
+export interface DesktopComposerCommandProps {
   sendable: boolean;
+  canSave?: boolean;
+  canSchedule?: boolean;
   canInsert: boolean;
   canAttach: boolean;
   canJumpFront: boolean;
@@ -39,6 +23,7 @@ export function DesktopComposerCommandBindings({
   canCurrentTurn?: boolean;
   onCurrentTurn?: () => void;
   canMore: boolean;
+  onSubmit: () => void;
   onSlash: () => void;
   onReference: () => void;
   onAttach: () => void;
@@ -48,46 +33,42 @@ export function DesktopComposerCommandBindings({
   onForce: () => void;
   onMore: () => void;
   onFormat: (id: string) => void;
-}): null {
-  const state = useRef({
-    sendable,
-    canInsert,
-    canAttach,
-    canJumpFront,
-    canForce,
-    canCurrentTurn,
-    onCurrentTurn,
-    canMore,
-    onSlash,
-    onReference,
-    onAttach,
-    onSaveDraft,
-    onSchedule,
-    onJumpFront,
-    onForce,
-    onMore,
-    onFormat,
-  });
-  state.current = {
-    sendable,
-    canInsert,
-    canAttach,
-    canJumpFront,
-    canForce,
-    canCurrentTurn,
-    onCurrentTurn,
-    canMore,
-    onSlash,
-    onReference,
-    onAttach,
-    onSaveDraft,
-    onSchedule,
-    onJumpFront,
-    onForce,
-    onMore,
-    onFormat,
-  };
-  const commands = useMemo<DesktopCommand[]>(() => [
+}
+
+function buildFormatCommands(
+  state: MutableRefObject<DesktopComposerCommandProps>,
+): DesktopCommand[] {
+  return COMPOSER_COMMANDS.filter((command) =>
+    !["slash", "mention", "attach", "sourceMode"].includes(command.id)
+  ).map((command): DesktopCommand => ({
+    id: `composer.format.${command.id}`,
+    title: command.label,
+    group: "Prompt formatting",
+    allowInEditor: true,
+    ...formatChord(command.id),
+    contexts: ["prompt"],
+    regions: ["prompt.composer"],
+    run: () => state.current.onFormat(command.id),
+  }));
+}
+
+function buildComposerCommands(
+  state: MutableRefObject<DesktopComposerCommandProps>,
+): DesktopCommand[] {
+  return [
+    {
+      id: "composer.submit",
+      title: "Send or finish prompt",
+      group: "Prompt actions",
+      shortcut: "Mod+Enter",
+      consumeWhenDisabled: true,
+      allowInEditor: true,
+      contexts: ["prompt"],
+      regions: ["prompt.composer"],
+      when: () => state.current.sendable,
+      disabledReason: "The composer is empty",
+      run: () => state.current.onSubmit(),
+    },
     {
       id: "composer.slash",
       title: "Insert slash command",
@@ -127,13 +108,14 @@ export function DesktopComposerCommandBindings({
     },
     {
       id: "composer.saveDraft",
-      title: "Save prompt as draft",
+      title: "Save prompt or draft",
       group: "Prompt actions",
       shortcut: DESKTOP_SHORTCUTS.saveDraft,
+      consumeWhenDisabled: true,
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
-      when: () => state.current.sendable,
+      when: () => state.current.canSave ?? state.current.sendable,
       disabledReason: "The composer is empty",
       run: () => state.current.onSaveDraft(),
     },
@@ -147,7 +129,7 @@ export function DesktopComposerCommandBindings({
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
-      when: () => state.current.sendable,
+      when: () => (state.current.canSchedule ?? true) && state.current.sendable,
       disabledReason: "The composer is empty",
       run: () => state.current.onSchedule(),
     },
@@ -186,7 +168,7 @@ export function DesktopComposerCommandBindings({
       allowInEditor: true,
       contexts: ["prompt"],
       regions: ["prompt.composer"],
-      when: () => state.current.sendable && state.current.canCurrentTurn,
+      when: () => state.current.sendable && (state.current.canCurrentTurn ?? false),
       disabledReason: "The running worker must support current-turn delivery",
       run: () => state.current.onCurrentTurn?.(),
     },
@@ -203,11 +185,6 @@ export function DesktopComposerCommandBindings({
       run: () => state.current.onMore(),
     },
     {
-      // Obsidian's "Toggle Live Preview/Source mode", scoped to the Prompt pane
-      // because that is where every composer mount lives (the editor, plus the
-      // queue and draft edit surfaces). The preference itself is global, so this
-      // needs no editor handle and is never disabled — there is no state in
-      // which the user may not choose how their own markdown is displayed.
       id: "composer.toggleSourceMode",
       title: "Toggle Source mode",
       description:
@@ -218,20 +195,16 @@ export function DesktopComposerCommandBindings({
       contexts: ["prompt"],
       run: () => void toggleComposerSourceMode(),
     },
-    ...COMPOSER_COMMANDS.filter((command) =>
-      !["slash", "mention", "attach", "sourceMode"].includes(command.id)
-    ).map((command): DesktopCommand => ({
-      id: `composer.format.${command.id}`,
-      title: command.label,
-      group: "Prompt formatting",
-      allowInEditor: true,
-      ...formatChord(command.id),
-      contexts: ["prompt"],
-      regions: ["prompt.composer"],
-      run: () => state.current.onFormat(command.id),
-    })),
-  ], []);
+    ...buildFormatCommands(state),
+  ];
+}
 
+export function DesktopComposerCommandBindings(
+  props: DesktopComposerCommandProps,
+): null {
+  const state = useRef(props);
+  state.current = props;
+  const commands = useMemo(() => buildComposerCommands(state), []);
   const { register } = useDesktopCommandActions();
   useEffect(() => {
     const unregister = commands.map(register);

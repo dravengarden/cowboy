@@ -51,7 +51,7 @@ import { seedInlineAttachments } from "../inlineImages";
 import { useVimSetting } from "../vimSetting";
 import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import { imeOwnsEditable, isImeKeyEvent } from "../imeKey";
-import { getVimMode } from "../vimModeStore";
+import { getVimMode, publishDocumentVimMode } from "../vimModeStore";
 import { vimSinkAwaitsInput } from "../desktop/vim/vimSinkInput";
 import { LeaderKeycap } from "../desktop/commands/DesktopKeycap";
 import {
@@ -1393,14 +1393,14 @@ function DraftEditingSession(
                   ? { initialSelection: positions.get(initial.id)!.head }
                   : {})}
                 onPasteFiles={attach}
-                // In Trash the server refuses every write, and each refused
-                // autosave would keep the text as one more conflicted copy.
+                // Trash refuses writes; avoid refused-save copies.
                 disabled={current.deleted}
                 placeholder="Start writing…"
                 borderless
                 fill={!focusLayout}
                 flushRightScrollbar={desktop}
                 vim={vim}
+                onVimMode={(m) => publishDocumentVimMode(initial.id, m)}
               />
             </Box>
           </Box>
