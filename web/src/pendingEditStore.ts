@@ -611,38 +611,33 @@ export function recoverPendingEditId(
  * calls `finishOrphanedPendingEdit`; the in-memory claim prevents duplicate
  * recovery attempts between adjacent queue patches. */
 export function claimOrphanedPendingEdits(
-  sessionId: string,
-  queueIds: ReadonlySet<string>,
-  draftIds: ReadonlySet<string>,
+  sessionId: string, queueIds: ReadonlySet<string>, draftIds: ReadonlySet<string>,
 ): PendingEditRecord[] {
   const claimed: PendingEditRecord[] = [];
   for (const [key, record] of records) {
-    if (record.sessionId !== sessionId || recovering.has(key)) continue;
-    // Parking it now would park it without its images. A later queue patch
-    // claims it once the bytes are back.
-    if (awaitingDatabase.has(key)) continue;
-    // An image still encoding settles into the record first; the settlement
-    // asks for this claim again.
-    if (encodes.has(key)) continue;
+    if (record.sessionId !== sessionId || recovering.has(key) || awaitingDatabase.has(key) || encodes.has(key)) {
+      continue;
+    }
     if (retiredByAnotherTab(key)) {
       forgetLocally(key);
       continue;
     }
-    const ids = record.kind === "queued" ? queueIds : draftIds;
-    if (ids.has(record.id)) continue;
+    if ((record.kind === "queued" ? queueIds : draftIds).has(record.id)) continue;
     recovering.add(key);
     claimed.push(record);
   }
   return claimed;
 }
 
-export function finishOrphanedPendingEdit(
-  record: PendingEditRecord,
-  recovered: boolean,
-): void {
+export function finishOrphanedPendingEdit(record: PendingEditRecord, recovered: boolean): void {
   const key = recordKey(record.sessionId, record.kind, record.id);
   recovering.delete(key);
-  if (recovered) clearPendingEdit(record.sessionId, record.kind, record.id);
+  const current = recovered && !encodes.has(key) ? records.get(key) : undefined;
+  if (
+    current !== undefined &&
+    pendingEditFingerprint(current.text, current.attachments) ===
+      pendingEditFingerprint(record.text, record.attachments)
+  ) clearPendingEdit(record.sessionId, record.kind, record.id);
 }
 
 export function prunePendingEdits(liveSessionIds: ReadonlySet<string>): void {

@@ -948,7 +948,11 @@ pub fn queue_command(
                 .hub
                 .client_edit(&session_id, &id, text, content, caller)
             {
-                report_stale_row(state, &session_id, cmid.as_deref());
+                if state.hub.is_steer_reserved(&session_id, &id) {
+                    report_reserved_row(state, &session_id, cmid.as_deref());
+                } else {
+                    report_stale_row(state, &session_id, cmid.as_deref());
+                }
             }
             Ok(())
         }
@@ -973,9 +977,11 @@ pub fn queue_command(
             state.hub.queued_to_draft(&session_id, &id, caller);
             Ok(())
         }
-        Inbound::SetQueueEditing { session_id, id } => {
-            set_queue_editing_command(state, held, session_id, id)
-        }
+        Inbound::SetQueueEditing {
+            session_id,
+            id,
+            token,
+        } => set_queue_editing_command(state, held, session_id, id, token),
         Inbound::ReorderQueue { session_id, order } => {
             state.hub.reorder_queue(&session_id, &order);
             Ok(())
@@ -1012,7 +1018,11 @@ fn draft_command(
                 .hub
                 .edit_draft(&session_id, &id, text, content, caller)
             {
-                report_stale_row(state, &session_id, cmid.as_deref());
+                if state.hub.is_steer_reserved(&session_id, &id) {
+                    report_reserved_row(state, &session_id, cmid.as_deref());
+                } else {
+                    report_stale_row(state, &session_id, cmid.as_deref());
+                }
             }
         }
         Inbound::RemoveDraft {

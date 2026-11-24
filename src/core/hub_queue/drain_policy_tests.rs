@@ -412,3 +412,145 @@ fn steer_reservation_blocks_timer_and_concurrent_edits_and_fails_closed_on_misma
     hub.commit_steer_reservation("s", "op-2");
     assert!(hub.queue_and_drafts("s", |_| true).unwrap().0.is_empty());
 }
+
+#[test]
+fn steer_reservations_persist_across_restore_and_block_draft_and_queue_transitions() {
+    let hub = session_with_queue("s");
+    hub.create_local_session(
+        "other".to_owned(),
+        "claude-code".to_owned(),
+        "/tmp".to_owned(),
+        "o".to_owned(),
+        SessionOrigin::Web,
+        false,
+    );
+    hub.set_paused("s", true);
+    let caller = crate::prompt_origin::RequestCaller::Person;
+    hub.add_draft(
+        "s",
+        "reserved draft".into(),
+        vec![],
+        Some("d-res".into()),
+        &caller,
+    );
+    hub.add_draft(
+        "s",
+        "free draft".into(),
+        vec![],
+        Some("d-free".into()),
+        &caller,
+    );
+    let (q0, d0) = hub.queue_and_drafts("s", |_| true).unwrap();
+    let q_id = q0[0].id.clone();
+    let d_res_id = d0[0].id.clone();
+
+    assert!(
+        hub.reserve_steer_source(
+            "s",
+            "op-d",
+            &SteerSource {
+                kind: SteerSourceKind::Draft,
+                id: d_res_id.clone(),
+            },
+            "reserved draft",
+            &[],
+        )
+        .is_ok()
+    );
+    assert!(
+        hub.reserve_steer_source(
+            "s",
+            "op-q",
+            &SteerSource {
+                kind: SteerSourceKind::Queued,
+                id: q_id.clone(),
+            },
+            "first",
+            &[],
+        )
+        .is_ok()
+    );
+    assert!(hub.is_steer_reserved("s", &d_res_id));
+    assert!(hub.is_steer_reserved("s", &q_id));
+
+    // Simulate a Controller restart by restoring settings + session rows into a fresh Hub.
+    let setting_key = format!("{}s", settings_keys::SESSION_STEER_RESERVATIONS_PREFIX);
+    let persisted = hub
+        .setting(&setting_key)
+        .expect("steer reservations persisted");
+    let (q_snap, d_snap) = hub.queue_and_drafts("s", |_| true).unwrap();
+    let restored = Hub::new();
+    restored.load_settings(vec![(setting_key.clone(), persisted)]);
+    let mut restored_session = super::super::runtime_reconciliation_tests::restored_busy("s");
+    restored_session.meta.status = Status::Running;
+    restored_session.queue = q_snap;
+    restored_session.drafts = d_snap;
+    restored.restore_impl(vec![restored_session], &[], false);
+    restored.set_paused("s", true);
+    restored.create_local_session(
+        "other".to_owned(),
+        "claude-code".to_owned(),
+        "/tmp".to_owned(),
+        "o".to_owned(),
+        SessionOrigin::Web,
+        false,
+    );
+    assert!(restored.is_steer_reserved("s", &d_res_id));
+    assert!(restored.is_steer_reserved("s", &q_id));
+
+    // Reserved rows refuse move, activate, queued_to_draft, promote, and bulk clear;
+    // unreserved drafts still activate normally.
+    restored.move_draft("s", &d_res_id, "other", &caller);
+    restored.activate_draft_with_front("s", &d_res_id, None, true, &caller);
+    restored.activate_all_drafts("s", &caller);
+    restored.clear_drafts("s");
+    restored.queued_to_draft("s", &q_id, &caller);
+    assert!(!restored.promote_queued("s", &q_id, &caller));
+    restored.clear_queue("s");
+
+    let (q_after, d_after) = restored.queue_and_drafts("s", |_| true).unwrap();
+    assert_eq!(d_after.len(), 1);
+    assert_eq!(d_after[0].id, d_res_id);
+    // Reserved queued row remained untouched; unreserved draft was activated then cleared by clear_queue.
+    assert_eq!(q_after.len(), 1);
+    assert_eq!(q_after[0].id, q_id);
+    assert!(
+        restored
+            .queue_and_drafts("other", |_| true)
+            .unwrap()
+            .1
+            .is_empty()
+    );
+
+    // Committing both clears the persisted setting.
+    restored.commit_steer_reservation("s", "op-d");
+    restored.commit_steer_reservation("s", "op-q");
+    assert!(!restored.is_steer_reserved("s", &d_res_id));
+    assert!(!restored.is_steer_reserved("s", &q_id));
+    assert!(
+        restored
+            .setting(&setting_key)
+            .is_none_or(|value| value.is_null())
+    );
+}
+
+#[test]
+fn editing_token_is_emitted_in_queue_resync_and_cleared_on_release() {
+    let hub = session_with_queue("s");
+    let head = hub.queue_and_drafts("s", |_| true).unwrap().0[0].id.clone();
+    let epoch = hub.set_queue_editing_with_token("s", Some(head.clone()), Some("tok-1".into()));
+    let Outbound::SyncPatch { value, .. } = hub.queue_resync("s").expect("resync while held")
+    else {
+        panic!("expected SyncPatch");
+    };
+    assert_eq!(value["editing"], serde_json::json!(head));
+    assert_eq!(value["editing_token"], serde_json::json!("tok-1"));
+
+    assert!(hub.release_queue_editing_if_epoch("s", &head, epoch));
+    let Outbound::SyncPatch { value, .. } = hub.queue_resync("s").expect("resync after release")
+    else {
+        panic!("expected SyncPatch");
+    };
+    assert!(value["editing"].is_null());
+    assert!(value["editing_token"].is_null());
+}

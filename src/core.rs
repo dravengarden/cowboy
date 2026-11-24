@@ -668,6 +668,7 @@ struct Session {
     /// grace. One hold per session (matches the original single client-side
     /// `editingHold` model).
     editing: Option<String>,
+    editing_token: Option<String>,
     editing_epoch: u64,
     /// Scheduled drafts whose fire timer elapsed while held open for editing.
     deferred_scheduled_drafts: Vec<String>,
@@ -988,6 +989,8 @@ pub enum Inbound {
         session_id: String,
         #[serde(default)]
         id: Option<String>,
+        #[serde(default)]
+        token: Option<String>,
     },
     /// Park the composer's content as a new draft.
     AddDraft {
@@ -2298,9 +2301,10 @@ impl Hub {
                         queue,
                         drafts,
                         editing: None,
+                        editing_token: None,
                         editing_epoch: 0,
                         deferred_scheduled_drafts: Vec::new(),
-                        steer_reservations: HashMap::new(),
+                        steer_reservations: self.restored_steer_reservations(&id),
                         in_flight: (defer_missing_busy && was_busy)
                             || runtime.is_some_and(|worker| {
                                 worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
@@ -3111,6 +3115,7 @@ impl Hub {
                     queue: Vec::new(),
                     drafts: Vec::new(),
                     editing: None,
+                    editing_token: None,
                     editing_epoch: 0,
                     deferred_scheduled_drafts: Vec::new(),
                     steer_reservations: HashMap::new(),

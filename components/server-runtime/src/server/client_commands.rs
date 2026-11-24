@@ -205,12 +205,16 @@ pub fn set_queue_editing_command(
     held: &mut HashMap<String, (String, u64)>,
     session_id: String,
     id: Option<String>,
+    token: Option<String>,
 ) -> Result<(), String> {
     // Track the hold per-connection so a mid-edit disconnect releases it
     // (the hold is global server state — see handle_ws teardown).
     match &id {
         Some(mid) => {
-            let epoch = state.hub.set_queue_editing(&session_id, Some(mid.clone()));
+            let epoch =
+                state
+                    .hub
+                    .set_queue_editing_with_token(&session_id, Some(mid.clone()), token);
             held.insert(session_id.clone(), (mid.clone(), epoch));
         }
         None => {
@@ -608,6 +612,20 @@ pub fn report_stale_row(state: &AppState, session_id: &str, cmid: Option<&str>) 
             cmid,
             CommandOutcome::Stale,
             "this message no longer exists",
+        );
+    }
+}
+
+/// Address an edit blocked by an in-flight steer reservation on that row.
+/// Keeps the row alive and reports `rejected` (never `stale`) so the client
+/// retains the edit for retry instead of parking a duplicate draft.
+pub fn report_reserved_row(state: &AppState, session_id: &str, cmid: Option<&str>) {
+    if let Some(cmid) = cmid {
+        state.hub.command_result(
+            session_id,
+            cmid,
+            CommandOutcome::Rejected,
+            "this message is currently being delivered; try again once delivery settles",
         );
     }
 }

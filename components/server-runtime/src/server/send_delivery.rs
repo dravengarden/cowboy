@@ -519,9 +519,11 @@ pub async fn submit(
         if request.consume_source.is_some() {
             if receipt["status"] == "submitted" || receipt["status"] == "injected" {
                 state.hub.commit_steer_reservation(&session, &operation);
-            } else {
+            } else if receipt["status"] == "not_delivered" {
                 state.hub.release_steer_reservation(&session, &operation);
             }
+            // Keep the reservation held on "unknown" so neither timers nor
+            // drains can duplicate a steer that may have reached the worker.
         }
         if store
             .finish_agent_operation(&owner, &session, &operation, &receipt)

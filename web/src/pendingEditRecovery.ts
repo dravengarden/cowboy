@@ -132,6 +132,17 @@ onPendingEditEncodesSettled((sessionId) => {
   if (authoritative.has(sessionId)) recover(sessionId);
 });
 
+function completeOrphanRecovery(
+  sessionId: string,
+  record: PendingEditRecord,
+  recovered: boolean,
+): void {
+  finishOrphanedPendingEdit(record, recovered);
+  if (recovered && getPendingEdit(sessionId, record.kind, record.id) !== null) {
+    recover(sessionId);
+  }
+}
+
 function recover(sessionId: string): void {
   const value = authoritative.get(sessionId);
   const pending = hooks?.pendingMutationIds(sessionId);
@@ -157,7 +168,7 @@ function recover(sessionId: string): void {
       pending.includes(record.recoveryCmid)
     ) {
       completedParks.add(key);
-      finishOrphanedPendingEdit(record, true);
+      completeOrphanRecovery(sessionId, record, true);
       continue;
     }
     if (!record.text.trim() && record.attachments.length === 0) {
@@ -167,7 +178,7 @@ function recover(sessionId: string): void {
     const existingWork = inFlightParks.get(key);
     if (existingWork !== undefined) {
       void existingWork
-        .then(() => finishOrphanedPendingEdit(record, true))
+        .then(() => completeOrphanRecovery(sessionId, record, true))
         .catch(() => finishOrphanedPendingEdit(record, false));
       continue;
     }
@@ -176,7 +187,7 @@ function recover(sessionId: string): void {
     });
     inFlightParks.set(key, work);
     void work
-      .then(() => finishOrphanedPendingEdit(record, true))
+      .then(() => completeOrphanRecovery(sessionId, record, true))
       .catch(() => finishOrphanedPendingEdit(record, false))
       .finally(() => {
         if (inFlightParks.get(key) === work) inFlightParks.delete(key);

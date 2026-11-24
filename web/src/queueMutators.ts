@@ -123,10 +123,20 @@ export const queueMutators = {
   }),
   editDraft: <R extends QueueItem>(
     value: QueueValue<R>,
-    args: { id: string; row: R },
+    args: { id: string; sourceCmid?: string; row: R },
   ): QueueValue<R> => ({
     ...value,
-    drafts: replaceById(value.drafts, args.id, args.row),
+    drafts: value.drafts.some((candidate) =>
+        candidate.id === args.id ||
+        (args.sourceCmid !== undefined && candidate.cmid === args.sourceCmid)
+      )
+      ? value.drafts.map((candidate) =>
+        candidate.id === args.id ||
+          (args.sourceCmid !== undefined && candidate.cmid === args.sourceCmid)
+          ? { ...args.row, id: candidate.id }
+          : candidate
+      )
+      : value.drafts,
   }),
   editQueue: <R extends QueueItem>(
     value: QueueValue<R>,
@@ -276,9 +286,21 @@ export function settledTransitionIds<R extends QueueItem>(
       mutation.name === "rescheduleDraft" ||
       mutation.name === "unscheduleDraft"
     ) {
-      const args = mutation.args as { id: string; row: R };
+      const args = mutation.args as { id: string; sourceCmid?: string; row: R };
+      if (
+        mutation.name === "editDraft" &&
+        args.sourceCmid !== undefined &&
+        pending.some((candidate) => candidate.id === args.sourceCmid)
+      ) {
+        continue;
+      }
       const rows = mutation.name === "editQueue" ? next.queue : next.drafts;
-      const authoritative = rows.find((row) => row.id === args.id);
+      const authoritative = rows.find((row) =>
+        row.id === args.id ||
+        (mutation.name === "editDraft" &&
+          args.sourceCmid !== undefined &&
+          row.cmid === args.sourceCmid)
+      );
       if (
         authoritative !== undefined &&
         sameContent(authoritative, args.row) &&

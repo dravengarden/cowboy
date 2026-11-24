@@ -19,7 +19,7 @@ pub struct SteerSource {
     pub id: String,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(super) struct SteerReservation {
     pub kind: SteerSourceKind,
     pub row_id: String,
@@ -874,6 +874,7 @@ impl Hub {
                 "queue": &s.queue,
                 "drafts": &s.drafts,
                 "editing": &s.editing,
+                "editing_token": &s.editing_token,
             });
             (version, value, confirmed)
         };
@@ -915,7 +916,7 @@ impl Hub {
 
     /// Drop one queued prompt. Returns whether the row was still queued.
     pub fn remove_queued(&self, session_id: &str, id: &str) -> bool {
-        let (removed, settled) = {
+        let (removed, settled, dropped_reservation) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
@@ -923,11 +924,21 @@ impl Hub {
             let settled = submit::extract_notice_settlements(s.queue.iter().filter(|m| m.id == id));
             let before = s.queue.len();
             s.queue.retain(|m| m.id != id);
+            let res_before = s.steer_reservations.len();
+            s.steer_reservations.retain(|_, r| r.row_id != id);
             if s.editing.as_deref() == Some(id) {
                 s.editing = None;
+                s.editing_token = None;
             }
-            (before != s.queue.len(), settled)
+            (
+                before != s.queue.len(),
+                settled,
+                res_before != s.steer_reservations.len(),
+            )
         };
+        if dropped_reservation {
+            self.persist_steer_reservations(session_id);
+        }
         self.emit_pending_with_notice_ops(session_id, settled, Vec::new());
         self.try_drain(session_id);
         removed
@@ -947,7 +958,10 @@ impl Hub {
                 return false;
             };
             let before = s.queue.len();
-            s.queue.retain(|m| m.cmid.as_deref() != Some(cmid));
+            let res = &s.steer_reservations;
+            s.queue.retain(|m| {
+                m.cmid.as_deref() != Some(cmid) || res.values().any(|r| r.row_id == m.id)
+            });
             before != s.queue.len()
         };
         if removed {
@@ -983,6 +997,7 @@ impl Hub {
                 s.queue.retain(|m| m.id != id);
                 if s.editing.as_deref() == Some(id) {
                     s.editing = None;
+                    s.editing_token = None;
                 }
                 (before != s.queue.len(), settled)
             } else if let Some(m) = s.queue.iter_mut().find(|m| m.id == id) {
@@ -1006,23 +1021,27 @@ impl Hub {
         found
     }
 
-    /// Drop a session's whole queue.
+    /// Drop a session's whole queue (preserving rows held by active steer reservations).
     pub fn clear_queue(&self, session_id: &str) {
         let settled = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            let settled = submit::extract_notice_settlements(s.queue.iter());
-            s.queue.clear();
-            // Only drop queue edit holds; a scheduled-draft hold belongs to
-            // `s.drafts` and must stay intact so its deferred timer still fires.
-            let editing_draft = s
-                .editing
-                .as_deref()
-                .is_some_and(|id| s.drafts.iter().any(|m| m.id == id));
-            if !editing_draft {
+            let settled = submit::extract_notice_settlements(
+                s.queue
+                    .iter()
+                    .filter(|m| !s.steer_reservations.values().any(|r| r.row_id == m.id)),
+            );
+            let res = &s.steer_reservations;
+            s.queue.retain(|m| res.values().any(|r| r.row_id == m.id));
+            // Keep scheduled-draft holds and holds on retained steer-reserved rows.
+            let editing_kept = s.editing.as_deref().is_some_and(|id| {
+                s.drafts.iter().any(|m| m.id == id) || s.queue.iter().any(|m| m.id == id)
+            });
+            if !editing_kept {
                 s.editing = None;
+                s.editing_token = None;
             }
             settled
         };
@@ -1087,6 +1106,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
+            if s.steer_reservations.values().any(|r| r.row_id == id) {
+                return false;
+            }
             let Some(pos) = s.queue.iter().position(|m| m.id == id) else {
                 return false;
             };
@@ -1115,6 +1137,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            if s.steer_reservations.values().any(|r| r.row_id == id) {
+                return;
+            }
             if let Some(pos) = s.queue.iter().position(|m| m.id == id) {
                 let mut m = s.queue.remove(pos);
                 let settled = submit::extract_notice_settlements(std::iter::once(&m));
@@ -1130,6 +1155,7 @@ impl Hub {
                 m.initiator = None;
                 if s.editing.as_deref() == Some(id) {
                     s.editing = None;
+                    s.editing_token = None;
                 }
                 s.drafts.push(m);
                 settled
@@ -1165,6 +1191,47 @@ impl Hub {
         due
     }
 
+    pub(super) fn restored_steer_reservations(
+        &self,
+        session_id: &str,
+    ) -> HashMap<String, SteerReservation> {
+        let key = format!(
+            "{}{session_id}",
+            settings_keys::SESSION_STEER_RESERVATIONS_PREFIX
+        );
+        self.setting(&key)
+            .and_then(|v| serde_json::from_value(v).ok())
+            .unwrap_or_default()
+    }
+
+    pub(super) fn persist_steer_reservations(&self, session_id: &str) {
+        let snapshot = {
+            let sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get(session_id) else {
+                return;
+            };
+            s.steer_reservations.clone()
+        };
+        let key = format!(
+            "{}{session_id}",
+            settings_keys::SESSION_STEER_RESERVATIONS_PREFIX
+        );
+        let value = if snapshot.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::to_value(&snapshot).unwrap_or(serde_json::Value::Null)
+        };
+        self.set_setting(key, value);
+    }
+
+    pub fn is_steer_reserved(&self, session_id: &str, row_id: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|s| s.steer_reservations.values().any(|r| r.row_id == row_id))
+    }
+
     /// Reserve one exact draft or queued row before dispatching a current-turn
     /// steer so neither auto-drain, scheduled timers, nor concurrent edits can
     /// race the delivery. Fails closed if the row vanished, is already
@@ -1177,35 +1244,38 @@ impl Hub {
         expected_text: &str,
         expected_content: &[serde_json::Value],
     ) -> Result<(), &'static str> {
-        let mut sessions = self.inner.sessions.lock();
-        let Some(s) = sessions.get_mut(session_id) else {
-            return Err("This session no longer exists.");
-        };
-        if s.steer_reservations
-            .iter()
-            .any(|(op, r)| op != operation && r.row_id == source.id)
         {
-            return Err("The source message is already being delivered.");
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return Err("This session no longer exists.");
+            };
+            if s.steer_reservations
+                .iter()
+                .any(|(op, r)| op != operation && r.row_id == source.id)
+            {
+                return Err("The source message is already being delivered.");
+            }
+            let rows = match source.kind {
+                SteerSourceKind::Draft => &s.drafts,
+                SteerSourceKind::Queued => &s.queue,
+            };
+            let Some(row) = rows.iter().find(|m| m.id == source.id) else {
+                return Err("The source message is no longer available.");
+            };
+            if row.text.trim_end() != expected_text.trim_end() || row.content != expected_content {
+                return Err("The source message was edited elsewhere.");
+            }
+            s.steer_reservations.insert(
+                operation.to_owned(),
+                SteerReservation {
+                    kind: source.kind,
+                    row_id: row.id.clone(),
+                    text: row.text.clone(),
+                    content: row.content.clone(),
+                },
+            );
         }
-        let rows = match source.kind {
-            SteerSourceKind::Draft => &s.drafts,
-            SteerSourceKind::Queued => &s.queue,
-        };
-        let Some(row) = rows.iter().find(|m| m.id == source.id) else {
-            return Err("The source message is no longer available.");
-        };
-        if row.text.trim_end() != expected_text.trim_end() || row.content != expected_content {
-            return Err("The source message was edited elsewhere.");
-        }
-        s.steer_reservations.insert(
-            operation.to_owned(),
-            SteerReservation {
-                kind: source.kind,
-                row_id: row.id.clone(),
-                text: row.text.clone(),
-                content: row.content.clone(),
-            },
-        );
+        self.persist_steer_reservations(session_id);
         Ok(())
     }
 
@@ -1232,6 +1302,7 @@ impl Hub {
                     s.deferred_scheduled_drafts.retain(|d| d != &res.row_id);
                     if s.editing.as_deref() == Some(res.row_id.as_str()) {
                         s.editing = None;
+                        s.editing_token = None;
                     }
                     (pos.is_some(), had_schedule, res.row_id, Vec::new(), false)
                 }
@@ -1247,11 +1318,13 @@ impl Hub {
                     }
                     if s.editing.as_deref() == Some(res.row_id.as_str()) {
                         s.editing = None;
+                        s.editing_token = None;
                     }
                     (pos.is_some(), false, res.row_id, settled, true)
                 }
             }
         };
+        self.persist_steer_reservations(session_id);
         let (removed, had_schedule, row_id, settled, is_queued) = outcome;
         if removed {
             if is_queued {
@@ -1267,7 +1340,7 @@ impl Hub {
         }
     }
 
-    /// Release a steer reservation after a non-delivered or unknown outcome so
+    /// Release a steer reservation after a definitive non-delivered outcome so
     /// the untouched source row resumes normal queue/timer eligibility.
     pub fn release_steer_reservation(&self, session_id: &str, operation: &str) {
         let (was_queued, deferred_due) = {
@@ -1282,6 +1355,7 @@ impl Hub {
             let due = Self::take_due_deferred_drafts(s, keep.as_deref());
             (res.kind == SteerSourceKind::Queued, due)
         };
+        self.persist_steer_reservations(session_id);
         if was_queued {
             self.try_drain(session_id);
         }
@@ -1291,10 +1365,19 @@ impl Hub {
     }
 
     /// Hold (`Some`) or release (`None`) a queued message or scheduled draft for
-    /// editing. Broadcasts `editing` to every client; releasing or displacing a
-    /// hold retries auto-drain when the queue is unblocked and fires any
-    /// scheduled draft whose fire time elapsed while it was held.
+    /// editing. Broadcasts `editing` and `editing_token` to every client;
+    /// releasing or displacing a hold retries auto-drain when the queue is
+    /// unblocked and fires any scheduled draft whose fire time elapsed while held.
     pub fn set_queue_editing(&self, session_id: &str, id: Option<String>) -> u64 {
+        self.set_queue_editing_with_token(session_id, id, None)
+    }
+
+    pub fn set_queue_editing_with_token(
+        &self,
+        session_id: &str,
+        id: Option<String>,
+        token: Option<String>,
+    ) -> u64 {
         let (epoch, unblock_queue, deferred_due) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -1302,6 +1385,7 @@ impl Hub {
             };
             s.editing_epoch = s.editing_epoch.wrapping_add(1);
             s.editing = id;
+            s.editing_token = s.editing.as_ref().and(token);
             let editing_draft = s
                 .editing
                 .as_deref()
@@ -1333,6 +1417,7 @@ impl Hub {
                 return false;
             }
             s.editing = None;
+            s.editing_token = None;
             s.editing_epoch = s.editing_epoch.wrapping_add(1);
             Some(Self::take_due_deferred_drafts(s, None))
         };

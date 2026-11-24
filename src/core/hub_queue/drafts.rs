@@ -331,6 +331,7 @@ impl Hub {
                 s.deferred_scheduled_drafts.retain(|d| d != id);
                 if s.editing.as_deref() == Some(id) {
                     s.editing = None;
+                    s.editing_token = None;
                 }
                 (before != s.drafts.len(), had)
             } else if let Some(m) = s.drafts.iter_mut().find(|m| m.id == id) {
@@ -376,10 +377,21 @@ impl Hub {
                 return false;
             };
             let row = &session.drafts[index];
-            if row.schedule.is_some() || row.text != text || row.content != content {
+            if session
+                .steer_reservations
+                .values()
+                .any(|r| r.row_id == row.id)
+                || row.schedule.is_some()
+                || row.text != text
+                || row.content != content
+            {
                 return false;
             }
-            session.drafts.remove(index);
+            let removed_id = session.drafts.remove(index).id;
+            if session.editing.as_deref() == Some(removed_id.as_str()) {
+                session.editing = None;
+                session.editing_token = None;
+            }
         }
         self.emit_pending(session_id);
         true
@@ -387,7 +399,7 @@ impl Hub {
 
     /// Drop one draft. Returns whether the draft still existed.
     pub fn remove_draft(&self, session_id: &str, id: &str) -> bool {
-        let (removed, unscheduled) = {
+        let (removed, unscheduled, dropped_reservation) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
@@ -396,11 +408,21 @@ impl Hub {
             let before = s.drafts.len();
             s.drafts.retain(|m| m.id != id);
             s.deferred_scheduled_drafts.retain(|d| d != id);
+            let res_before = s.steer_reservations.len();
+            s.steer_reservations.retain(|_, r| r.row_id != id);
             if s.editing.as_deref() == Some(id) {
                 s.editing = None;
+                s.editing_token = None;
             }
-            (before != s.drafts.len(), had)
+            (
+                before != s.drafts.len(),
+                had,
+                res_before != s.steer_reservations.len(),
+            )
         };
+        if dropped_reservation {
+            self.persist_steer_reservations(session_id);
+        }
         self.emit_pending(session_id);
         if unscheduled {
             self.cancel_draft_timer(session_id, id);
@@ -429,9 +451,13 @@ impl Hub {
             let mut sessions = self.inner.sessions.lock();
             let Some(mut msg) = (if sessions.contains_key(to) {
                 sessions.get_mut(from).and_then(|s| {
+                    if s.steer_reservations.values().any(|r| r.row_id == id) {
+                        return None;
+                    }
                     s.deferred_scheduled_drafts.retain(|d| d != id);
                     if s.editing.as_deref() == Some(id) {
                         s.editing = None;
+                        s.editing_token = None;
                     }
                     s.drafts
                         .iter()
@@ -467,27 +493,33 @@ impl Hub {
         }
     }
 
-    /// Drop a session's whole draft list.
+    /// Drop a session's whole draft list (preserving drafts held by active steer reservations).
     pub fn clear_drafts(&self, session_id: &str) {
         let scheduled_ids: Vec<String> = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            let is_reserved = |id: &str, res: &HashMap<String, SteerReservation>| {
+                res.values().any(|r| r.row_id == id)
+            };
             let ids = s
                 .drafts
                 .iter()
-                .filter(|m| m.schedule.is_some())
+                .filter(|m| m.schedule.is_some() && !is_reserved(&m.id, &s.steer_reservations))
                 .map(|m| m.id.clone())
                 .collect();
-            if s.editing
-                .as_deref()
-                .is_some_and(|id| s.drafts.iter().any(|m| m.id == id))
-            {
+            let editing_cleared = s.editing.as_deref().is_some_and(|id| {
+                s.drafts.iter().any(|m| m.id == id) && !is_reserved(id, &s.steer_reservations)
+            });
+            if editing_cleared {
                 s.editing = None;
+                s.editing_token = None;
             }
-            s.deferred_scheduled_drafts.clear();
-            s.drafts.clear();
+            let res = &s.steer_reservations;
+            s.deferred_scheduled_drafts
+                .retain(|d| res.values().any(|r| r.row_id == *d));
+            s.drafts.retain(|m| res.values().any(|r| r.row_id == m.id));
             ids
         };
         self.emit_pending(session_id);
@@ -531,9 +563,13 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            if s.steer_reservations.values().any(|r| r.row_id == id) {
+                return;
+            }
             s.deferred_scheduled_drafts.retain(|d| d != id);
             if s.editing.as_deref() == Some(id) {
                 s.editing = None;
+                s.editing_token = None;
             }
             s.drafts
                 .iter()
@@ -576,14 +612,27 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            let mut kept = Vec::new();
+            let mut activated = Vec::new();
+            for m in std::mem::take(&mut s.drafts) {
+                if s.steer_reservations.values().any(|r| r.row_id == m.id) {
+                    kept.push(m);
+                } else {
+                    activated.push(m);
+                }
+            }
             if s.editing
                 .as_deref()
-                .is_some_and(|id| s.drafts.iter().any(|m| m.id == id))
+                .is_some_and(|id| activated.iter().any(|m| m.id == id))
             {
                 s.editing = None;
+                s.editing_token = None;
             }
-            s.deferred_scheduled_drafts.clear();
-            std::mem::take(&mut s.drafts)
+            let res = &s.steer_reservations;
+            s.deferred_scheduled_drafts
+                .retain(|d| res.values().any(|r| r.row_id == *d));
+            s.drafts = kept;
+            activated
         };
         if msgs.is_empty() {
             return;

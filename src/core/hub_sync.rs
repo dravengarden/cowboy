@@ -697,6 +697,7 @@ impl Hub {
             "queue": &s.queue,
             "drafts": &s.drafts,
             "editing": &s.editing,
+            "editing_token": &s.editing_token,
         });
         Some(Outbound::SyncPatch {
             state,

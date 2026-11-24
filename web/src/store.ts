@@ -1952,7 +1952,7 @@ async function hydrateSession(
         if (retryableFailure && needsDraftSource(sessionId) && retryAttempt >= SESSION_HYDRATION_RETRY_DELAYS_MS.length) {
           let newlyFailed = false;
           for (const mutation of qClients.get(sessionId)?.pending() ?? []) {
-            if (mutation.name === "activateDraft" && commandForQueueMutation(sessionId, mutation) === null && qStatus.get(mutation.id) !== "failed") {
+            if (awaitsDraftSource(sessionId, mutation) && qStatus.get(mutation.id) !== "failed") {
               qStatus.set(mutation.id, "failed");
               newlyFailed = true;
             }
@@ -3500,7 +3500,7 @@ const qMut = {
     queueMutators.scheduleDraft(v, a),
   rescheduleDraft: (v: QValue, a: { id: string; row: QueuedMessage }): QValue =>
     queueMutators.rescheduleDraft(v, a),
-  editDraft: (v: QValue, a: { id: string; row: QueuedMessage }): QValue =>
+  editDraft: (v: QValue, a: { id: string; sourceCmid?: string; row: QueuedMessage }): QValue =>
     queueMutators.editDraft(v, a),
   editQueue: (v: QValue, a: { id: string; row: QueuedMessage }): QValue =>
     queueMutators.editQueue(v, a),
@@ -3812,10 +3812,16 @@ function commandForQueueMutation(sessionId: string, m: { name: string; id: strin
     args.id !== undefined &&
     args.row !== undefined
   ) {
-    return {
+    const targetId = m.name === "editDraft"
+      ? draftActivationSourceId(
+        m.args as { id: string; sourceCmid?: string },
+        qClients.get(sessionId)?.baseValue().drafts ?? [],
+      )
+      : args.id;
+    return targetId === null ? null : {
       type: m.name === "editDraft" ? "edit_draft" : "edit_queued",
       session_id: sessionId,
-      id: args.id,
+      id: targetId,
       text: args.row.text,
       content: contentOf(args.row.text, args.row.attachments),
       cmid: m.id,
@@ -3924,6 +3930,7 @@ function transmitQueueMutation(
       if (sent) armQTimers(sessionId, m.id, mutationRow.cmid);
       commitQueue(sessionId);
     }
+    if (command === null && isConnected()) void hydrateSession(sessionId);
     return;
   }
   const attempt = QUEUE_TRANSITION_MUTATORS.has(m.name)
@@ -4309,7 +4316,7 @@ function awaitsDraftSource(
   sessionId: string,
   m: { name: string; id: string; args: unknown },
 ): boolean {
-  return m.name === "activateDraft" &&
+  return (m.name === "activateDraft" || m.name === "editDraft") &&
     commandForQueueMutation(sessionId, m) === null;
 }
 
@@ -4674,7 +4681,12 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
   if (generation !== undefined && generation !== socketGeneration) return;
   const store = qClient(sessionId);
   if (resync && qLiveGeneration.get(sessionId) === socketGeneration && version < store.version()) return;
-  const wire = value as { queue?: WireQueued[]; drafts?: WireQueued[]; editing?: string | null };
+  const wire = value as {
+    queue?: WireQueued[];
+    drafts?: WireQueued[];
+    editing?: string | null;
+    editing_token?: string | null;
+  };
   const next: QValue = {
     queue: fromWire(wire.queue ?? []),
     drafts: fromWire(wire.drafts ?? []),
@@ -4716,7 +4728,7 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
   store.applyPatch(snapshotPatch(version, next, confirmed), { force: resync });
   if (acceptsValue) {
     qLiveGeneration.set(sessionId, socketGeneration);
-    if (wire.editing !== undefined) syncRemoteQueueEditing(sessionId, wire.editing);
+    if (wire.editing !== undefined) syncRemoteQueueEditing(sessionId, wire.editing, wire.editing_token);
     recoverPendingEditsFrom(sessionId, next);
   }
   const delivered = deliveryConfirmations(confirmed, store.pending());
@@ -4729,12 +4741,11 @@ function applyQueuePatch(sessionId: string, version: number, value: unknown, con
     suppressedInFlight.delete(cmid);
   }
   for (const cmid of settledSuppressed) suppressedInFlight.delete(cmid);
-  // A local draft can be sent before its add_draft acknowledgement. Its durable
-  // activation already owns the visible row; now deliver the original server
-  // move using the assigned id. Never mint a second submit/cmid for its content.
+  // A local draft can be sent or edited before its add_draft acknowledgement.
+  // Once the server assigns an id, deliver the pending mutation using it.
   for (const mutation of store.pending()) {
     if (
-      mutation.name === "activateDraft" &&
+      (mutation.name === "activateDraft" || mutation.name === "editDraft") &&
       qStatus.get(mutation.id) === "pending" &&
       commandForQueueMutation(sessionId, mutation) !== null
     ) dispatchQueueMutation(sessionId, mutation);
@@ -5179,12 +5190,15 @@ async function editPendingRow(
     text: text.trimEnd(),
     attachments,
   };
+  const sourceCmid = target === "draft" && source.cmid !== undefined && id === `opt-${source.cmid}`
+    ? source.cmid
+    : undefined;
   const opId = newCmid();
   qStatus.set(opId, "committing");
   try {
     await mutateQueueDurably(sessionId,
       target === "draft" ? "editDraft" : "editQueue",
-      { id, row },
+      sourceCmid !== undefined ? { id, sourceCmid, row } : { id, row },
       opId,
     );
   } catch (error) {
@@ -5197,7 +5211,9 @@ async function editPendingRow(
       const rows = target === "draft"
         ? snapshot.drafts.get(sessionId)
         : snapshot.queues.get(sessionId);
-      const current = rows?.find((message) => message.id === id);
+      const current = rows?.find((message) =>
+        message.id === id || (sourceCmid !== undefined && message.cmid === sourceCmid)
+      );
       return current !== undefined && sameQueuedContent(current, row);
     },
     target === "draft" ? "Save draft edit" : "Save queued edit",
@@ -5555,11 +5571,20 @@ export async function unscheduleDraft(sessionId: string, id: string): Promise<vo
 }
 
 export async function waitForPendingEdit(sessionId: string, id: string): Promise<void> {
-  if (!isConnected()) return;
-  await waitForState(() =>
-    !(qClients.get(sessionId)?.pending() ?? []).some(
-      (m) => (m.name === "editQueue" || m.name === "editDraft") && (m.args as { id?: string }).id === id,
-    ), "Confirm edit");
+  const pendingForRow = (): boolean => {
+    const baseDraft = qClients.get(sessionId)?.baseValue().drafts.find((r) => r.id === id);
+    return (qClients.get(sessionId)?.pending() ?? []).some((m) => {
+      if (m.name !== "editQueue" && m.name !== "editDraft") return false;
+      const a = m.args as { id?: string; sourceCmid?: string };
+      return a.id === id || (a.sourceCmid !== undefined &&
+        (id === `opt-${a.sourceCmid}` || baseDraft?.cmid === a.sourceCmid));
+    });
+  };
+  if (!pendingForRow()) return;
+  if (!isConnected()) {
+    throw new Error("Reconnect before leaving so your saved edit reaches the server, or discard to abandon it.");
+  }
+  await waitForState(() => !pendingForRow(), "Confirm edit");
 }
 
 // Move a queued prompt back to drafts.

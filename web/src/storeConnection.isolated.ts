@@ -254,7 +254,9 @@ test("active queue edit holds re-declare after socket reconnect until cleared", 
   store.setQueueEditing("s-hold", "q-42");
   const initialFrames = first.sent.map((raw) => JSON.parse(raw))
     .filter((f) => f.type === "set_queue_editing" && f.session_id === "s-hold");
-  expect(initialFrames).toEqual([{ type: "set_queue_editing", session_id: "s-hold", id: "q-42" }]);
+  expect(initialFrames).toEqual([
+    expect.objectContaining({ type: "set_queue_editing", session_id: "s-hold", id: "q-42", token: expect.any(String) }),
+  ]);
 
   // Drop and reconnect: the store must automatically re-declare the active hold.
   const before = FakeSocket.all.length;
@@ -267,7 +269,10 @@ test("active queue edit holds re-declare after socket reconnect until cleared", 
   await until(() => store.getSyncStatus().phase === "live");
   const replayedFrames = reconnected.sent.map((raw) => JSON.parse(raw))
     .filter((f) => f.type === "set_queue_editing" && f.session_id === "s-hold");
-  expect(replayedFrames).toEqual([{ type: "set_queue_editing", session_id: "s-hold", id: "q-42" }]);
+  expect(replayedFrames).toEqual([
+    expect.objectContaining({ type: "set_queue_editing", session_id: "s-hold", id: "q-42", token: expect.any(String) }),
+  ]);
+  expect(replayedFrames[0].token).not.toBe(initialFrames[0].token);
 
   // Clearing the hold stops future replays.
   store.setQueueEditing("s-hold", null);

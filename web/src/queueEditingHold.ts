@@ -6,22 +6,31 @@ export type QueueEditHoldStatus = "none" | "confirmed" | "unconfirmed";
 type SendInbound = (cmd: Inbound) => boolean;
 
 const activeHolds = new Map<string, string>();
-// Sessions whose current socket actually transmitted `set_queue_editing` for
-// `activeHolds.get(sessionId)`. Prevents another terminal's cached `editing` id
-// or an unsent offline acquire from confirming a lease this socket never acquired.
-const transmittedHolds = new Map<string, string>();
+// Per-acquire client lease token sent with `set_queue_editing`. A snapshot
+// confirms our hold ONLY when both `editing` and `editing_token` match this
+// socket's latest transmitted lease, so another terminal's hold on the same
+// row never false-confirms and an intervening snapshot before our ack never
+// breaks confirmation once our own echo arrives.
+const holdTokens = new Map<string, string>();
 const confirmedHolds = new Set<string>();
 const remoteEditingBySession = new Map<string, string>();
 const listeners = new Set<() => void>();
+let nextHoldToken = 0;
+
+function mintHoldToken(): string {
+  nextHoldToken += 1;
+  return `hold-${Date.now()}-${nextHoldToken}`;
+}
 
 function notifyListeners(): void {
   for (const listener of listeners) listener();
 }
 
-/** Adopt the server's authoritative `editing` id for a session from `queue:<sid>`. */
+/** Adopt the server's authoritative `editing` id and lease token for a session from `queue:<sid>`. */
 export function syncRemoteQueueEditing(
   sessionId: string,
   editing: string | null | undefined,
+  editingToken?: string | null,
 ): void {
   if (editing === undefined) return;
   const prev = remoteEditingBySession.get(sessionId) ?? null;
@@ -36,21 +45,19 @@ export function syncRemoteQueueEditing(
     changed = true;
   }
   const desired = activeHolds.get(sessionId);
-  const transmitted = transmittedHolds.get(sessionId);
+  const token = holdTokens.get(sessionId);
   const matchesLocal =
-    desired !== undefined && transmitted === desired && editing === desired;
+    desired !== undefined &&
+    token !== undefined &&
+    editing === desired &&
+    editingToken === token;
   if (matchesLocal) {
     if (!confirmedHolds.has(sessionId)) {
       confirmedHolds.add(sessionId);
       changed = true;
     }
-  } else {
-    if (confirmedHolds.delete(sessionId)) changed = true;
-    // Another terminal superseded or cleared our lease; do not let a later
-    // unrelated echo re-confirm without a fresh acquire from this socket.
-    if (desired !== undefined && transmitted === desired && editing !== desired) {
-      transmittedHolds.delete(sessionId);
-    }
+  } else if (confirmedHolds.delete(sessionId)) {
+    changed = true;
   }
   if (changed) notifyListeners();
 }
@@ -77,19 +84,20 @@ export function setQueueEditHold(
 ): void {
   if (id === null) {
     const had = activeHolds.delete(sessionId);
-    const hadTx = transmittedHolds.delete(sessionId);
+    const hadToken = holdTokens.delete(sessionId);
     const wasConfirmed = confirmedHolds.delete(sessionId);
     send({ type: "set_queue_editing", session_id: sessionId, id: null });
-    if (had || hadTx || wasConfirmed) notifyListeners();
+    if (had || hadToken || wasConfirmed) notifyListeners();
     return;
   }
   const previous = activeHolds.get(sessionId);
   const wasConfirmed = confirmedHolds.has(sessionId);
   activeHolds.set(sessionId, id);
   confirmedHolds.delete(sessionId);
-  const sent = send({ type: "set_queue_editing", session_id: sessionId, id });
-  if (sent) transmittedHolds.set(sessionId, id);
-  else transmittedHolds.delete(sessionId);
+  const token = mintHoldToken();
+  const sent = send({ type: "set_queue_editing", session_id: sessionId, id, token });
+  if (sent) holdTokens.set(sessionId, token);
+  else holdTokens.delete(sessionId);
   if (previous !== id || wasConfirmed) notifyListeners();
 }
 
@@ -98,9 +106,10 @@ export function replayQueueEditHolds(send: SendInbound): void {
   let changed = false;
   for (const [sessionId, id] of activeHolds) {
     if (confirmedHolds.delete(sessionId)) changed = true;
-    const sent = send({ type: "set_queue_editing", session_id: sessionId, id });
-    if (sent) transmittedHolds.set(sessionId, id);
-    else transmittedHolds.delete(sessionId);
+    const token = mintHoldToken();
+    const sent = send({ type: "set_queue_editing", session_id: sessionId, id, token });
+    if (sent) holdTokens.set(sessionId, token);
+    else holdTokens.delete(sessionId);
   }
   if (changed) notifyListeners();
 }
@@ -108,7 +117,7 @@ export function replayQueueEditHolds(send: SendInbound): void {
 export function markQueueEditHoldsUnconfirmed(): void {
   const changed = confirmedHolds.size > 0 || remoteEditingBySession.size > 0;
   confirmedHolds.clear();
-  transmittedHolds.clear();
+  holdTokens.clear();
   remoteEditingBySession.clear();
   if (changed) notifyListeners();
 }
