@@ -20,6 +20,10 @@ export interface BrowserModel {
   /** The first read answered (successfully or not). */
   loaded: boolean;
   error: string;
+  /** Why the open whose failure `error` shows was refused (the Machine's
+   * reason), kept apart from the latest observation: the next state read
+   * replaces `read.state`, the refusal stands until the banner goes. */
+  refusal?: string | undefined;
   notice: string;
   busy?: BrowserAction | undefined;
   /** The viewer mounts while this is set; `generation` remounts it. It
@@ -191,6 +195,8 @@ export function issuedBefore(model: BrowserModel, issued: number | undefined): b
 export function pinnedMachine(model: BrowserModel): string | undefined {
   if (model.viewer) return model.viewer.target.machine_id;
   if (model.awaitingOpen) return model.awaitingOpen.machine_id;
+  // A reconnect asks the Machine of the browser it lost, never another.
+  if (model.resume) return model.resume.target.machine_id;
   const state = model.read?.state?.state;
   return state && state !== "hibernated" ? (model.read?.machine_id ?? undefined) : undefined;
 }
@@ -364,14 +370,27 @@ export type ResumeStep =
   | "wait"
   /** Another device holds the display: never taken over by itself. */
   | "other_device"
+  /** The browser was stopped on purpose: never reopened by itself. */
+  | "stopped"
   /** Outside the window or out of attempts. */
   | "give_up";
+
+/** Whether a reconnect reopens a browser that hibernated with `reason`:
+ * only when this viewer's absence explains the stop (its grace ran out
+ * while the stream was down) or the Machine names no reason. A stop made on
+ * purpose (the owner's, the runtime cap, the Machine taking the browser
+ * back for other work, a failure or a confinement finding) is never undone
+ * by itself: reopening it would defeat the cap and fight the reclaim. */
+export function reopensByItself(reason: string | undefined): boolean {
+  return reason === undefined || reason === "grace";
+}
 
 /** What the panel does next to reconnect after a dropped viewer, or
  * `undefined` when it is not reconnecting. It only ever attaches to a
  * browser nobody views, reclaims the display from this device's own
- * dropped attachment, or reopens the hibernated browser of the same
- * Machine; another device's display is left alone. */
+ * dropped attachment, or reopens the browser of the same Machine that
+ * hibernated for being left (`reopensByItself`); another device's display
+ * is left alone. */
 export function resumeStep(model: BrowserModel, now: number): ResumeStep | undefined {
   const resume = model.resume;
   if (!resume) return undefined;
@@ -383,7 +402,10 @@ export function resumeStep(model: BrowserModel, now: number): ResumeStep | undef
   const machine = resume.target.machine_id;
   const read = model.read;
   const state = read?.state;
-  if (read?.machine_id !== machine || !state || state.state === "hibernated") return "open";
+  // Reopening needs that Machine's own word that the browser hibernated;
+  // no answer, or another Machine's, is not it (`resumeObserved` counts it).
+  if (read?.machine_id !== machine || !state) return "wait";
+  if (state.state === "hibernated") return reopensByItself(state.reason) ? "open" : "stopped";
   if (state.state === "detached") return "attach";
   if (state.state === "attached") {
     return resume.attachmentId !== undefined && state.attachment_id === resume.attachmentId
@@ -544,6 +566,16 @@ function countFailure(model: BrowserModel, event: BrowserEvent, next: BrowserMod
   return failed ? { ...next, failures: (model.failures ?? 0) + 1 } : next;
 }
 
+/** A read applied while reconnecting is the new observation the next step
+ * needs. One that says nothing about the lost browser's Machine (no state,
+ * or another Machine's answer) uses up an attempt instead of permitting a
+ * step, so a Machine that does not answer ends the reconnect rather than
+ * being reopened on blindly or polled for the whole window. */
+function resumeObserved(resume: BrowserResume, read: BrowserRead): BrowserResume {
+  const known = read.machine_id === resume.target.machine_id && read.state !== null;
+  return { ...resume, fresh: true, attempts: known ? resume.attempts : resume.attempts + 1 };
+}
+
 /** An automatic step was taken: it needs a new observation before the
  * next one. */
 function stepTaken(resume: BrowserResume | undefined): BrowserResume | undefined {
@@ -585,7 +617,7 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
           : { ...model, observedIdentity: event.read.browser_identity };
       if (staleForViewer(observed, event.read, event.issued)) return { ...observed, loaded: true };
       const read = withRead(observed, event.read, event.now);
-      return read.resume ? { ...read, resume: { ...read.resume, fresh: true } } : read;
+      return read.resume ? { ...read, resume: resumeObserved(read.resume, event.read) } : read;
     }
     case "read_failed":
       if (issuedBefore(model, event.issued)) return model;
@@ -597,6 +629,7 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
         ...model,
         busy: event.action,
         error: "",
+        refusal: undefined,
         notice: "",
         resume: event.action === "open" ? stepTaken(model.resume) : undefined,
       };
@@ -613,6 +646,7 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
             ...next,
             awaitingOpen: undefined,
             resume: undefined,
+            refusal: state.reason,
             error: `The browser was not opened. ${browserReasonText(state.reason) ?? ""}`.trim(),
           };
         }
@@ -627,6 +661,7 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
           return {
             ...next,
             resume: undefined,
+            refusal: state.reason,
             error: browserReasonText(state.reason) ?? "The browser did not start.",
           };
         }
@@ -648,6 +683,7 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
         busy: undefined,
         awaitingOpen: undefined,
         resume: undefined,
+        refusal: undefined,
         error: event.message,
       };
     case "attach": {
@@ -662,6 +698,7 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
         viewer: { takeover: event.takeover, generation: nextGeneration(model), target },
         resume: stepTaken(model.resume),
         error: "",
+        refusal: undefined,
         notice: "",
       };
     }
@@ -702,7 +739,7 @@ function reduceEvent(model: BrowserModel, event: BrowserEvent): BrowserModel {
     case "notice":
       return { ...model, notice: event.message };
     case "dismiss":
-      return { ...model, error: "", notice: "" };
+      return { ...model, error: "", refusal: undefined, notice: "" };
     case "identity":
       return { ...model, observedIdentity: event.identity };
     default:

@@ -18,6 +18,8 @@ pub const SUBPROTOCOL: &str = "cowboy-browser-v1";
 const ATTACH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(25);
 const FRAME_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(25);
+/// How long the close handshake of the Machine's half may take.
+const MACHINE_CLOSE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -378,6 +380,53 @@ where
         Err(_) => return "pairing_timeout",
     };
     let (mut machine_sink, mut machine_stream) = machine.split();
+    let end = relay_paired(
+        state,
+        session,
+        (viewer_sink, viewer_stream),
+        (&mut machine_sink, &mut machine_stream),
+        cancelled,
+    )
+    .await;
+    // The Machine's half ends with a close handshake: a socket that is only
+    // dropped reads there as a failed connection, which a broken Controller
+    // link looks like too. Never awaited: the viewer's own cleanup (its
+    // registration, the Machine's detach) does not wait on this socket.
+    // Not after an end on the Machine's own half: the Machine closed or
+    // failed it already, and a send that timed out may still hold a frame
+    // of input the handshake would flush to the display after all.
+    if closes_machine_half(end) {
+        tokio::spawn(async move {
+            let _ = tokio::time::timeout(
+                MACHINE_CLOSE_TIMEOUT,
+                machine_sink.send(Message::Close(None)),
+            )
+            .await;
+        });
+    }
+    end
+}
+
+/// Whether a relay that ended with `end` owes the Machine's half a close
+/// handshake: every end but those of that half itself.
+fn closes_machine_half(end: &str) -> bool {
+    !end.starts_with("machine_")
+}
+
+/// The paired stream: the attachment's first use, then the relay.
+async fn relay_paired<S, R, MS, MR>(
+    state: &Arc<AppState>,
+    session: &ViewerSession,
+    (viewer_sink, viewer_stream): (&mut S, &mut R),
+    (machine_sink, machine_stream): (&mut MS, &mut MR),
+    cancelled: &mut tokio::sync::watch::Receiver<bool>,
+) -> &'static str
+where
+    S: SinkExt<Message> + Unpin,
+    R: StreamExt<Item = Result<Message, axum::Error>> + Unpin,
+    MS: SinkExt<Message> + Unpin,
+    MR: StreamExt<Item = Result<Message, axum::Error>> + Unpin,
+{
     // Pairing is the first use of the attachment: everything is checked
     // again, the principal included, before a frame is relayed.
     if !principal_valid(state, session).await {
@@ -407,7 +456,7 @@ where
         state,
         session,
         (viewer_sink, viewer_stream),
-        (&mut machine_sink, &mut machine_stream),
+        (machine_sink, machine_stream),
         cancelled,
         initial_deadline_ms,
     )
@@ -783,6 +832,35 @@ mod tests {
             Err("browser_not_running")
         );
         assert_eq!(target(None), Err("browser_not_running"));
+    }
+
+    #[test]
+    fn only_an_end_outside_the_machine_s_half_closes_it_with_a_handshake() {
+        // The viewer left, was replaced, or lost its admission.
+        for end in [
+            "viewer_closed",
+            "viewer_error",
+            "viewer_stalled",
+            "viewer_frame_too_large",
+            "replaced",
+            "auth_required",
+            "admission_withdrawn",
+        ] {
+            assert!(closes_machine_half(end), "{end}");
+        }
+        // A send to the Machine that timed out may still hold input: the
+        // socket is dropped, never flushed by a handshake. A Machine whose
+        // connection changed tore its streams down itself.
+        for end in [
+            "machine_stalled",
+            "machine_closed",
+            "machine_error",
+            "machine_frame_too_large",
+            "machine_protocol_error",
+            "machine_connection_changed",
+        ] {
+            assert!(!closes_machine_half(end), "{end}");
+        }
     }
 
     #[tokio::test]

@@ -58,21 +58,24 @@ fn an_idle_stop_requires_the_same_expired_detached_interval() {
     ));
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn an_attach_while_a_grace_stop_waits_keeps_the_instance_running() {
-    let fixture = fixture().await;
-    fixture.instance.live.lock().detached_since = Some(expired_since(&fixture.instance));
-    // The stop waits for the account lifecycle lock (as it would behind a
-    // snapshot publication).
+#[tokio::test]
+async fn a_grace_stop_never_waits_for_the_lifecycle_lock_and_an_attach_renews_it() {
+    let mut fixture = fixture().await;
+    fixture.units.make_stoppable("cowboy-browser-inst-1");
+    let since = expired_since(&fixture.instance);
+    fixture.instance.live.lock().detached_since = Some(since);
+    // The account lifecycle lock is held (a snapshot being published, a
+    // reset): supervision puts the stop off instead of waiting for it.
     let slot = fixture.manager.slot(&fixture.account);
     let held = slot.lifecycle.lock().await;
-    let supervised = {
-        let manager = Arc::clone(&fixture.manager);
-        let instance = Arc::clone(&fixture.instance);
-        tokio::spawn(async move { manager.supervise(&instance).await })
-    };
-    tokio::time::sleep(Duration::from_millis(200)).await;
-    assert!(!supervised.is_finished());
+    let gone = tokio::time::timeout(
+        Duration::from_secs(5),
+        fixture.manager.supervise(&fixture.instance),
+    )
+    .await
+    .expect("supervision waited for the lifecycle lock");
+    assert!(!gone);
+    assert_eq!(fixture.instance.live.lock().phase, Phase::Detached);
     // A viewer attaches meanwhile (attach does not take the lifecycle lock).
     {
         let mut live = fixture.instance.live.lock();
@@ -85,20 +88,36 @@ async fn an_attach_while_a_grace_stop_waits_keeps_the_instance_running() {
         live.detached_since = None;
     }
     drop(held);
-    let gone = tokio::time::timeout(Duration::from_secs(5), supervised)
-        .await
-        .expect("supervision did not resume")
-        .unwrap();
-    assert!(!gone, "the abandoned idle stop must keep supervising");
-    let live = fixture.instance.live.lock();
-    assert_eq!(live.phase, Phase::Attached);
-    assert_eq!(
-        live.attachment
-            .as_ref()
-            .map(|attachment| attachment.id.as_str()),
-        Some("a1")
-    );
-    drop(live);
+    // The idle stop that had been due is abandoned at its transition: the
+    // detached interval it was decided for is over.
+    let renewed = fixture
+        .manager
+        .stop_between_copies(
+            &fixture.instance,
+            Reason::Grace,
+            LifecycleWait::Never,
+            || Ok(()),
+            |live| {
+                if supervision::still_idle(live, fixture.instance.settings.hibernate_after, since) {
+                    Ok(())
+                } else {
+                    Err(supervision::IdleRenewed)
+                }
+            },
+        )
+        .await;
+    assert!(matches!(renewed, Err(supervision::IdleRenewed)));
+    assert!(!fixture.manager.supervise(&fixture.instance).await);
+    {
+        let live = fixture.instance.live.lock();
+        assert_eq!(live.phase, Phase::Attached);
+        assert_eq!(
+            live.attachment
+                .as_ref()
+                .map(|attachment| attachment.id.as_str()),
+            Some("a1")
+        );
+    }
     assert!(
         fixture
             .manager
@@ -108,6 +127,16 @@ async fn an_attach_while_a_grace_stop_waits_keeps_the_instance_running() {
             .as_ref()
             .is_some_and(|current| Arc::ptr_eq(current, &fixture.instance))
     );
+    // Nothing reached the launcher.
+    let mut probe = [0_u8; 1];
+    assert!(!matches!(
+        tokio::time::timeout(
+            Duration::from_millis(200),
+            tokio::io::AsyncReadExt::read(&mut fixture.launcher, &mut probe),
+        )
+        .await,
+        Ok(Ok(1))
+    ));
 }
 
 /// Answer the next launcher command, which must be a navigation to `url`.

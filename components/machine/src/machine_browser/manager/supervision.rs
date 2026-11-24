@@ -68,17 +68,19 @@ impl BrowserManager {
         if let Some(since) = grace_expired
             && instance.live.lock().phase == Phase::Detached
         {
-            // The graceful stop waits for a running copy and the lifecycle
-            // lock; a viewer attaching meanwhile renews the instance, so the
+            // Supervision never blocks on a snapshot copy or on the
+            // account lifecycle lock (a publication, a reset, another
+            // stop): while a copy runs or the lock is held, the grace stop
+            // is put off to a later tick (the cap above still ends it). A
+            // viewer attaching meanwhile renews the instance, so the
             // detached interval that expired is re-checked atomically with
-            // the transition to `Stopping`. The deadline is not idleness and
-            // stops unconditionally above.
+            // the transition to `Stopping`. The deadline is not idleness
+            // and stops unconditionally.
             let stopped = self
-                .stop_instance_when(
+                .stop_between_copies(
                     instance,
                     Reason::Grace,
-                    true,
-                    None,
+                    LifecycleWait::Never,
                     || Ok(()),
                     |live| {
                         if still_idle(live, instance.settings.hibernate_after, since) {
@@ -90,10 +92,11 @@ impl BrowserManager {
                 )
                 .await;
             match stopped {
-                Ok(event) => {
+                Ok(Some(event)) => {
                     self.send_state(event);
                     return true;
                 }
+                Ok(None) => {}
                 Err(IdleRenewed) => {
                     tracing::info!(event_name = "browser.grace.renewed", browser_instance = %instance.instance_id, "browser grace stop abandoned: the instance was attached meanwhile");
                 }
@@ -105,6 +108,27 @@ impl BrowserManager {
             let event = self.stop_instance(instance, reason, false, None).await;
             self.send_state(event);
             return true;
+        }
+        // Shortly before the cap the instance stops gracefully: the browser
+        // flushes and its profile is snapshotted, where the cap itself only
+        // kills and loses everything since the last published generation.
+        // It comes after this tick's lease expiry and due scan and, like
+        // the grace stop, is put off while a copy runs; the stop-time copy
+        // itself ends at the cap (`stop_with_snapshot`).
+        if now >= instance.graceful_deadline() {
+            let stopped = self
+                .stop_between_copies(
+                    instance,
+                    Reason::Deadline,
+                    LifecycleWait::Never,
+                    || Ok::<(), std::convert::Infallible>(()),
+                    |_| Ok(()),
+                )
+                .await;
+            if let Ok(Some(event)) = stopped {
+                self.send_state(event);
+                return true;
+            }
         }
         if let Ok(mut control) = instance.control.try_lock() {
             match control.next_event(Duration::from_millis(20)).await {
@@ -132,7 +156,10 @@ impl BrowserManager {
                 }
             }
         }
-        if snapshot_due && !instance.copy_running() {
+        // None once the graceful stop ahead of the cap is due, which makes
+        // its own copy (the admission of a periodic copy refuses it too, on
+        // the time it has under the lifecycle lock).
+        if snapshot_due && !instance.copy_running() && now < instance.graceful_deadline() {
             // The copy runs as its own job; a failure waits a full interval.
             instance.live.lock().last_periodic = now;
             self.spawn_snapshot(instance);

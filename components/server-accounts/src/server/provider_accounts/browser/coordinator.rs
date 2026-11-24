@@ -125,6 +125,24 @@ pub struct Coordinator {
     inventories: parking_lot::Mutex<HashMap<String, Inventory>>,
 }
 
+/// What the cache keeps of a state event. A reason on a running instance's
+/// state is the outcome of the command that state answers (a detach of an
+/// attachment that had already ended is `superseded`, a refused resize
+/// `failed`, an attach during a recheck `busy`), never a condition of the
+/// instance: kept with it, every later read would report that command's
+/// outcome as the browser's own state. The command's caller still receives
+/// it with the answer itself.
+fn observation(state: &StateEvent) -> StateEvent {
+    let mut event = state.clone();
+    if matches!(
+        event.state,
+        State::Starting | State::Detached | State::Attached
+    ) {
+        event.reason = None;
+    }
+    event
+}
+
 fn lock_for(locks: &Locks, account_id: &str) -> Arc<tokio::sync::Mutex<()>> {
     Arc::clone(locks.lock().entry(account_id.to_owned()).or_default())
 }
@@ -273,7 +291,7 @@ impl Coordinator {
                             Observed {
                                 machine_id: machine_id.to_owned(),
                                 connection: connection.clone(),
-                                event: state.clone(),
+                                event: observation(state),
                                 observed_at: Instant::now(),
                             },
                         );
@@ -707,6 +725,45 @@ mod tests {
         assert!(*cancelled.borrow_and_update());
         assert!(!coordinator.state_on("ovh", ACCOUNT).unwrap().running());
         assert!(coordinator.running_on("ovh").is_empty());
+    }
+
+    #[test]
+    fn a_command_s_outcome_is_never_cached_as_a_running_browser_s_state() {
+        use crate::machine_protocol::machine_browser::Reason;
+        let control = MachineControl::default();
+        let coordinator = Coordinator::default();
+        let connection = connect(&control, &coordinator, "one");
+        let answer = |state, reason| {
+            let mut event = state_event(7, state, None);
+            event.request_id = Some("browser-detach-1".into());
+            event.reason = Some(reason);
+            Event::State(event)
+        };
+        // The viewer's stream ended first, so the Controller's detach of that
+        // attachment is a no-op the Machine answers `superseded`; a refused
+        // resize or attach likewise answers with the running state.
+        for (state, reason) in [
+            (State::Detached, Reason::Superseded),
+            (State::Attached, Reason::Failed),
+            (State::Starting, Reason::Busy),
+        ] {
+            coordinator.observe(&connection, &answer(state, reason));
+            let cached = coordinator.state_on("ovh", ACCOUNT).unwrap().event;
+            assert_eq!(cached.state, state);
+            assert_eq!(cached.reason, None, "{state:?} kept {reason:?}");
+            assert_eq!(cached.request_id.as_deref(), Some("browser-detach-1"));
+        }
+        // Why an instance is stopping or stopped is its own state.
+        coordinator.observe(&connection, &answer(State::Stopping, Reason::Grace));
+        assert_eq!(
+            coordinator.state_on("ovh", ACCOUNT).unwrap().event.reason,
+            Some(Reason::Grace)
+        );
+        coordinator.observe(&connection, &answer(State::Hibernated, Reason::Deadline));
+        assert_eq!(
+            coordinator.state_on("ovh", ACCOUNT).unwrap().event.reason,
+            Some(Reason::Deadline)
+        );
     }
 
     #[test]
