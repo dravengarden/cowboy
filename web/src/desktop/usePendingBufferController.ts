@@ -25,6 +25,7 @@ import {
   subscribePendingEditRestore,
 } from "../pendingEditStore";
 import {
+  addDraft,
   confirmedPending,
   copyDocumentToSession,
   editDraft,
@@ -37,18 +38,13 @@ import { isImeComposing } from "./vim/imeStatusStore";
 
 const AUTOSAVE_DEBOUNCE_MS = 600;
 
-export interface MaterializedCarry {
-  text: string;
-  attachments: Attachment[];
-}
-
 export interface PendingBufferState {
   sessionId: string;
   kind: "queued" | "draft" | "new-draft";
   row: QueuedMessage | null;
-  initialCarry?: MaterializedCarry | null | undefined;
+  draftCmid?: string | undefined;
   editorRef: RefObject<ComposerEditorHandle | null>;
-  onMaterializedDraft: (rowId: string, cmid?: string, carry?: MaterializedCarry) => void;
+  onMaterializedDraft: (rowId: string, cmid?: string) => void;
   onSourceVanished: (recovered?: { id?: string; cmid: string }) => void;
 }
 
@@ -80,6 +76,31 @@ export function computeEditHoldId(
   return null;
 }
 
+function isBufferEncoding(
+  sessionId: string,
+  kind: "queued" | "draft" | "new-draft",
+  row: QueuedMessage | null,
+  atts: readonly Attachment[],
+): boolean {
+  return atts.some((a) => a.pending) ||
+    (kind !== "new-draft" && row !== null && (
+      pendingEditEncoding(sessionId, kind, row.id) ||
+      pendingEditAwaitingBytes(sessionId, kind, row.id)
+    ));
+}
+
+function initialBufferDirty(
+  sessionId: string,
+  kind: "queued" | "draft" | "new-draft",
+  row: QueuedMessage | null,
+  recovery: PendingEditRecord | null,
+): boolean {
+  if (recovery === null || !row || kind === "new-draft") return false;
+  return isBufferEncoding(sessionId, kind, row, recovery.attachments) ||
+    pendingEditFingerprint(recovery.text.trimEnd(), recovery.attachments) !==
+      pendingEditFingerprint(row.text.trimEnd(), row.attachments);
+}
+
 interface PendingBufferEffectsArgs {
   sessionId: string;
   kind: "queued" | "draft" | "new-draft";
@@ -96,21 +117,13 @@ interface PendingBufferEffectsArgs {
 }
 
 function usePendingBufferEffects({
-  sessionId,
-  kind,
-  row,
-  editorRef,
-  textRef,
-  attachmentsRef,
-  committedTextRef,
-  committedAttachmentsRef,
-  lastRecordRef,
-  setAttachments,
-  recomputeDirty,
-  onSourceVanished,
+  sessionId, kind, row, editorRef, textRef, attachmentsRef,
+  committedTextRef, committedAttachmentsRef, lastRecordRef,
+  setAttachments, recomputeDirty, onSourceVanished,
 }: PendingBufferEffectsArgs): void {
   const isNewDraft = kind === "new-draft";
   const initialRowRef = useRef(row);
+  if (initialRowRef.current === null && row !== null) initialRowRef.current = row;
   const vanishedHandledRef = useRef(false);
   const heldIdRef = useRef<string | null>(null);
 
@@ -143,22 +156,18 @@ function usePendingBufferEffects({
       });
       editorRef.current?.refreshImages();
     });
-  }, [
-    attachmentsRef,
-    editorRef,
-    isNewDraft,
-    kind,
-    recomputeDirty,
-    rowId,
-    sessionId,
-    setAttachments,
-    textRef,
-  ]);
+  }, [attachmentsRef, editorRef, isNewDraft, kind, recomputeDirty, rowId, sessionId, setAttachments, textRef]);
 
   useEffect(() => {
     if (isNewDraft || row !== null || vanishedHandledRef.current || !initialRowRef.current) return;
-    vanishedHandledRef.current = true;
     const vanishedId = initialRowRef.current.id;
+    // Do not close or release hold while the row is only hidden by a local
+    // optimistic transition (activation/move) awaiting server acceptance.
+    const authList = kind === "queued"
+      ? confirmedPending(sessionId)?.queue
+      : confirmedPending(sessionId)?.drafts;
+    if (authList?.some((m) => m.id === vanishedId)) return;
+    vanishedHandledRef.current = true;
     const live = editorRef.current?.getValue() ?? textRef.current;
     const atts = attachmentsRef.current.filter((a) => !a.pending);
     const hasChanges =
@@ -190,29 +199,13 @@ function usePendingBufferEffects({
       onSourceVanished();
     });
   }, [
-    attachmentsRef,
-    committedAttachmentsRef,
-    committedTextRef,
-    editorRef,
-    isNewDraft,
-    kind,
-    lastRecordRef,
-    onSourceVanished,
-    row,
-    sessionId,
-    textRef,
+    attachmentsRef, committedAttachmentsRef, committedTextRef, editorRef,
+    isNewDraft, kind, lastRecordRef, onSourceVanished, row, sessionId, textRef,
   ]);
 }
 
 function usePendingBufferFiles({
-  sessionId,
-  kind,
-  rowRef,
-  editorRef,
-  textRef,
-  attachmentsRef,
-  setAttachments,
-  onMutate,
+  sessionId, kind, rowRef, editorRef, textRef, attachmentsRef, setAttachments, onMutate,
 }: {
   sessionId: string;
   kind: "queued" | "draft" | "new-draft";
@@ -292,29 +285,11 @@ function usePendingBufferFiles({
   return { addFiles, removeAttachment };
 }
 
-async function commitPendingBufferSave({
-  sessionId,
-  kind,
-  target,
-  liveText,
-  liveAtts,
-  saveRev,
-  editRevisionRef,
-  mountedRef,
-  textRef,
-  attachmentsRef,
-  recomputeDirty,
-  persistLocal,
-  committedTextRef,
-  committedAttachmentsRef,
-  lastRecordRef,
-  setDirty,
-  flashSaved,
-  silent,
-  onMaterializedDraft,
-}: {
+interface CommitSaveArgs {
   sessionId: string;
   kind: "queued" | "draft" | "new-draft";
+  draftCmid?: string | undefined;
+  materializedRef: MutableRefObject<boolean>;
   target: QueuedMessage | null;
   liveText: string;
   liveAtts: Attachment[];
@@ -331,37 +306,42 @@ async function commitPendingBufferSave({
   setDirty: React.Dispatch<React.SetStateAction<boolean>>;
   flashSaved: (label: string) => void;
   silent: boolean;
-  onMaterializedDraft: (rowId: string, cmid?: string, carry?: MaterializedCarry) => void;
-}): Promise<boolean> {
-  if (kind === "new-draft") {
-    const receipt = await copyDocumentToSession(sessionId, liveText, liveAtts);
+  onMaterializedDraft: (rowId: string, cmid?: string) => void;
+}
+
+async function commitPendingBufferSave(args: CommitSaveArgs): Promise<boolean> {
+  const {
+    sessionId, kind, draftCmid, materializedRef, target, liveText, liveAtts,
+    saveRev, editRevisionRef, mountedRef, textRef, attachmentsRef,
+    recomputeDirty, persistLocal, committedTextRef, committedAttachmentsRef,
+    lastRecordRef, setDirty, flashSaved, silent, onMaterializedDraft,
+  } = args;
+  if (!materializedRef.current) {
+    // Materialize once under the buffer's stable cmid; retries stay idempotent
+    // and never mint a second draft.
+    await addDraft(sessionId, liveText, liveAtts, draftCmid);
+    materializedRef.current = true;
     committedTextRef.current = liveText;
     committedAttachmentsRef.current = liveAtts;
-    const typedMore = editRevisionRef.current !== saveRev;
-    if (!typedMore) setDirty(false);
+    if (editRevisionRef.current === saveRev) setDirty(false);
     if (!silent && mountedRef.current) flashSaved("Saved");
-    if (mountedRef.current) {
-      onMaterializedDraft(
-        "",
-        receipt.cmid,
-        typedMore
-          ? { text: textRef.current, attachments: [...attachmentsRef.current] }
-          : undefined,
-      );
-    }
+    if (mountedRef.current) onMaterializedDraft("", draftCmid);
     return true;
   }
-  if (!target || !recomputeDirty(liveText, liveAtts)) return Boolean(target);
-  if (kind === "draft") await editDraft(sessionId, target.id, liveText, liveAtts);
-  else await editQueued(sessionId, target.id, liveText, liveAtts);
+  const editId = target?.id ?? (draftCmid ? `opt-${draftCmid}` : undefined);
+  if (!editId) return false;
+  if (!recomputeDirty(liveText, liveAtts)) return true;
+  if (kind === "queued") await editQueued(sessionId, editId, liveText, liveAtts);
+  else await editDraft(sessionId, editId, liveText, liveAtts);
   committedTextRef.current = liveText;
   committedAttachmentsRef.current = liveAtts;
   if (editRevisionRef.current === saveRev) {
-    clearPendingEdit(sessionId, kind, target.id);
+    if (kind !== "new-draft" && target && !target.id.startsWith("opt-")) {
+      clearPendingEdit(sessionId, kind, target.id);
+    }
     lastRecordRef.current = null;
     setDirty(false);
   } else {
-    // Keep newer edits typed while this save was in flight instead of wiping recovery.
     persistLocal(textRef.current, attachmentsRef.current);
     recomputeDirty(textRef.current, attachmentsRef.current);
   }
@@ -372,6 +352,7 @@ async function commitPendingBufferSave({
 interface PendingBufferSaveArgs {
   sessionId: string;
   kind: "queued" | "draft" | "new-draft";
+  draftCmid?: string | undefined;
   autosaveEligible: boolean;
   editorRef: RefObject<ComposerEditorHandle | null>;
   rowRef: MutableRefObject<QueuedMessage | null>;
@@ -383,49 +364,20 @@ interface PendingBufferSaveArgs {
   editRevisionRef: MutableRefObject<number>;
   mountedRef: MutableRefObject<boolean>;
   setDirty: React.Dispatch<React.SetStateAction<boolean>>;
-  onMaterializedDraft: (rowId: string, cmid?: string, carry?: MaterializedCarry) => void;
-}
-
-function isBufferEncoding(
-  sessionId: string,
-  kind: "queued" | "draft" | "new-draft",
-  row: QueuedMessage | null,
-  atts: readonly Attachment[],
-): boolean {
-  return atts.some((a) => a.pending) ||
-    (kind !== "new-draft" && row !== null && (
-      pendingEditEncoding(sessionId, kind, row.id) ||
-      pendingEditAwaitingBytes(sessionId, kind, row.id)
-    ));
-}
-
-function initialBufferDirty(
-  sessionId: string,
-  kind: "queued" | "draft" | "new-draft",
-  row: QueuedMessage | null,
-  recovery: PendingEditRecord | null,
-  initialCarry?: MaterializedCarry | null,
-): boolean {
-  if (initialCarry) {
-    return pendingEditFingerprint(initialCarry.text.trimEnd(), initialCarry.attachments) !==
-      pendingEditFingerprint((row?.text ?? "").trimEnd(), row?.attachments ?? []);
-  }
-  if (recovery === null || !row || kind === "new-draft") return false;
-  return isBufferEncoding(sessionId, kind, row, recovery.attachments) ||
-    pendingEditFingerprint(recovery.text.trimEnd(), recovery.attachments) !==
-      pendingEditFingerprint(row.text.trimEnd(), row.attachments);
+  onMaterializedDraft: (rowId: string, cmid?: string) => void;
 }
 
 function usePendingBufferSave(args: PendingBufferSaveArgs) {
   const {
-    sessionId, kind, autosaveEligible, editorRef, rowRef, textRef,
+    sessionId, kind, draftCmid, autosaveEligible, editorRef, rowRef, textRef,
     attachmentsRef, committedTextRef, committedAttachmentsRef, lastRecordRef,
     editRevisionRef, mountedRef, setDirty, onMaterializedDraft,
   } = args;
   const [saving, setSaving] = useState(false);
   const [savedLabel, setSavedLabel] = useState<string | null>(null);
   const inFlightRef = useRef<Promise<boolean> | null>(null);
-  const queuedSaveRef = useRef(false);
+  const materializedRef = useRef(kind !== "new-draft");
+  const lastCommittedRevRef = useRef(0);
   const autosaveTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const savedBadgeTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
@@ -455,44 +407,54 @@ function usePendingBufferSave(args: PendingBufferSaveArgs) {
   }, [committedAttachmentsRef, committedTextRef, kind, lastRecordRef, rowRef, sessionId]);
 
   const saveNow = useCallback(async (opts?: { silent?: boolean }): Promise<boolean> => {
+    // Wait for any active write, then loop until the latest edit revision is
+    // durably saved (so closing/switching during a save never drops newer text).
     if (inFlightRef.current) {
-      queuedSaveRef.current = true;
-      return inFlightRef.current;
+      const priorOk = await inFlightRef.current;
+      if (!mountedRef.current) return priorOk;
+      if (materializedRef.current && lastCommittedRevRef.current >= editRevisionRef.current) {
+        return priorOk;
+      }
+      return saveNow(opts);
     }
     const run = async (): Promise<boolean> => {
-      const liveText = editorRef.current?.getValue() ?? textRef.current;
-      textRef.current = liveText;
-      const liveAtts = [...attachmentsRef.current];
-      const target = rowRef.current;
-      const saveRev = editRevisionRef.current;
-      if (isBufferEncoding(sessionId, kind, target, liveAtts) || pendingContentCleared(liveText, liveAtts)) {
-        return false;
+      let ok = true;
+      while (mountedRef.current) {
+        const liveText = editorRef.current?.getValue() ?? textRef.current;
+        textRef.current = liveText;
+        const liveAtts = [...attachmentsRef.current];
+        const saveRev = editRevisionRef.current;
+        if (isBufferEncoding(sessionId, kind, rowRef.current, liveAtts) || pendingContentCleared(liveText, liveAtts)) {
+          return false;
+        }
+        if (materializedRef.current && lastCommittedRevRef.current >= saveRev && !recomputeDirty(liveText, liveAtts)) {
+          return ok;
+        }
+        setSaving(true);
+        try {
+          ok = await commitPendingBufferSave({
+            sessionId, kind, draftCmid, materializedRef, target: rowRef.current,
+            liveText, liveAtts, saveRev, editRevisionRef, mountedRef, textRef,
+            attachmentsRef, recomputeDirty, persistLocal, committedTextRef,
+            committedAttachmentsRef, lastRecordRef, setDirty, flashSaved,
+            silent: opts?.silent === true, onMaterializedDraft,
+          });
+          if (ok) lastCommittedRevRef.current = saveRev;
+        } finally {
+          if (mountedRef.current) setSaving(false);
+        }
+        if (!ok || editRevisionRef.current === saveRev) break;
       }
-      setSaving(true);
-      try {
-        return await commitPendingBufferSave({
-          sessionId, kind, target, liveText, liveAtts, saveRev, editRevisionRef,
-          mountedRef, textRef, attachmentsRef, recomputeDirty, persistLocal,
-          committedTextRef, committedAttachmentsRef, lastRecordRef, setDirty,
-          flashSaved, silent: opts?.silent === true, onMaterializedDraft,
-        });
-      } finally {
-        if (mountedRef.current) setSaving(false);
-      }
+      return ok;
     };
-    const promise = run().finally(() => {
-      inFlightRef.current = null;
-      if (queuedSaveRef.current && mountedRef.current) {
-        queuedSaveRef.current = false;
-        void saveNow({ silent: true }).catch(() => undefined);
-      }
-    });
+    const promise = run().finally(() => { inFlightRef.current = null; });
     inFlightRef.current = promise;
     return promise;
   }, [
-    attachmentsRef, committedAttachmentsRef, committedTextRef, editRevisionRef,
-    editorRef, flashSaved, kind, lastRecordRef, mountedRef, onMaterializedDraft,
-    persistLocal, recomputeDirty, rowRef, sessionId, setDirty, textRef,
+    attachmentsRef, committedAttachmentsRef, committedTextRef, draftCmid,
+    editRevisionRef, editorRef, flashSaved, kind, lastRecordRef, mountedRef,
+    onMaterializedDraft, persistLocal, recomputeDirty, rowRef, sessionId,
+    setDirty, textRef,
   ]);
 
   const scheduleAutosave = useCallback((): void => {
@@ -515,23 +477,18 @@ function usePendingBufferSave(args: PendingBufferSaveArgs) {
 }
 
 export function usePendingBufferController({
-  sessionId, kind, row, initialCarry, editorRef, onMaterializedDraft, onSourceVanished,
+  sessionId, kind, row, draftCmid, editorRef, onMaterializedDraft, onSourceVanished,
 }: PendingBufferState) {
   const isNewDraft = kind === "new-draft";
   const recovery = row && kind !== "new-draft" ? getPendingEdit(sessionId, kind, row.id) : null;
-  const seedAttachments = initialCarry?.attachments ?? recovery?.attachments ?? row?.attachments ?? [];
-  const seedText = promoteUnplacedImageTokens(
-    initialCarry?.text ?? recovery?.text ?? row?.text ?? "",
-    seedAttachments,
-  );
+  const seedAttachments = recovery?.attachments ?? row?.attachments ?? [];
+  const seedText = promoteUnplacedImageTokens(recovery?.text ?? row?.text ?? "", seedAttachments);
   const [mountSeed] = useState(seedText);
   const [attachments, setAttachments] = useState<Attachment[]>(() => {
     seedInlineAttachments(seedAttachments);
     return seedAttachments;
   });
-  const [dirty, setDirty] = useState(() =>
-    initialBufferDirty(sessionId, kind, row, recovery, initialCarry)
-  );
+  const [dirty, setDirty] = useState(() => initialBufferDirty(sessionId, kind, row, recovery));
   const textRef = useRef(seedText);
   const attachmentsRef = useRef(seedAttachments);
   const committedTextRef = useRef(row?.text ?? "");
@@ -553,18 +510,10 @@ export function usePendingBufferController({
   const autosaveEligible = (kind === "draft" && !scheduled) || isNewDraft;
 
   const saver = usePendingBufferSave({
-    sessionId, kind, autosaveEligible, editorRef, rowRef, textRef,
+    sessionId, kind, draftCmid, autosaveEligible, editorRef, rowRef, textRef,
     attachmentsRef, committedTextRef, committedAttachmentsRef, lastRecordRef,
     editRevisionRef, mountedRef, setDirty, onMaterializedDraft,
   });
-
-  const carryAppliedRef = useRef(false);
-  useEffect(() => {
-    if (!initialCarry || carryAppliedRef.current || !row || kind === "new-draft") return;
-    carryAppliedRef.current = true;
-    saver.persistLocal(textRef.current, attachmentsRef.current);
-    saver.scheduleAutosave();
-  }, [initialCarry, kind, row, saver]);
 
   usePendingBufferEffects({
     sessionId, kind, row, editorRef, textRef, attachmentsRef,

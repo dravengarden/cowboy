@@ -20,6 +20,7 @@ import { useDesktopWorkspace } from "./DesktopWorkspaceController";
 import { requestDesktopEditorInsert } from "./editorInsert";
 import {
   getLastSubmittedPending,
+  newDraftBufferCmid,
   resolveLastSubmittedRow,
 } from "./promptBuffer";
 import {
@@ -113,15 +114,11 @@ export function DesktopPromptWorkbench(
   const bufferKey = state.activeBuffer.kind === "new"
     ? "new"
     : state.activeBuffer.kind === "new-draft"
-    ? "new-draft"
+    ? `draft:${state.activeBuffer.cmid}`
     : `${state.activeBuffer.kind}:${state.activeBuffer.cmid ?? state.activeBuffer.id}`;
   const bufferKeyRef = useRef(bufferKey);
   bufferKeyRef.current = bufferKey;
-  const deliveryRestoreRef = useRef<{
-    bufferKey: string;
-    vimMode: string;
-    selection: ComposerEditorSelection | undefined;
-  } | null>(null);
+  const deliveryRestoreRef = useRef<{ bufferKey: string; vimMode: string; selection: ComposerEditorSelection | undefined } | null>(null);
   const prevDeliveryAnchorRef = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (actions.deliveryAnchor && !prevDeliveryAnchorRef.current) {
@@ -152,7 +149,12 @@ export function DesktopPromptWorkbench(
           })}
         onNewDraft={() => {
           state.setEmptyDraftOpen(false);
-          state.openBuffer({ kind: "new-draft", origin: "list", entryMode: "insert" });
+          state.openBuffer({
+            kind: "new-draft",
+            cmid: newDraftBufferCmid(),
+            origin: "list",
+            entryMode: "insert",
+          });
         }}
       />
       {beforeCanvas}
@@ -164,7 +166,6 @@ export function DesktopPromptWorkbench(
         commands={commands} activeBuffer={state.activeBuffer} bufferKey={bufferKey}
         resolved={state.resolved} bufferMeta={state.bufferMeta}
         setBufferMeta={state.setBufferMeta} setActiveBuffer={state.setActiveBuffer}
-        materializedCarryRef={state.materializedCarryRef}
         closeBuffer={state.closeBuffer} newPrompt={newPrompt}
         newPromptCanvas={newPromptCanvas} actions={actions}
         onMoveDraft={onMoveDraft} onCanvasKeyDownCapture={onCanvasKeyDownCapture}

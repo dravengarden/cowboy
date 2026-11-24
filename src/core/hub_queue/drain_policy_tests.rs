@@ -347,3 +347,68 @@ fn activate_draft_with_front_atomically_removes_scheduled_draft_and_prepends_que
     assert_eq!(q[0].text, "jump ahead");
     assert_eq!(q[1].text, "existing");
 }
+
+#[test]
+fn steer_reservation_blocks_timer_and_concurrent_edits_and_fails_closed_on_mismatch() {
+    let hub = session_with_queue("s");
+    hub.clear_queue("s");
+    hub.set_paused("s", true);
+    let past_ms = chrono::Utc::now().timestamp_millis() - 5_000;
+    hub.schedule_draft(
+        "s",
+        None,
+        Some("d-steer".into()),
+        "original text".into(),
+        vec![],
+        past_ms,
+        Delivery::Back,
+        &crate::prompt_origin::RequestCaller::Person,
+    );
+    let draft_id = hub.queue_and_drafts("s", |_| true).unwrap().1[0].id.clone();
+    let source = SteerSource {
+        kind: SteerSourceKind::Draft,
+        id: draft_id.clone(),
+    };
+
+    // Stale text must fail closed without touching the draft.
+    assert!(
+        hub.reserve_steer_source("s", "op-stale", &source, "different text", &[])
+            .is_err()
+    );
+    assert_eq!(hub.queue_and_drafts("s", |_| true).unwrap().1.len(), 1);
+
+    // Matching reservation defers elapsed timers and blocks concurrent edits.
+    assert!(
+        hub.reserve_steer_source("s", "op-1", &source, "original text", &[])
+            .is_ok()
+    );
+    hub.fire_scheduled_draft("s", &draft_id);
+    assert!(hub.queue_and_drafts("s", |_| true).unwrap().0.is_empty());
+    assert!(!hub.edit_draft(
+        "s",
+        &draft_id,
+        "clobber".into(),
+        vec![],
+        &crate::prompt_origin::RequestCaller::Person,
+    ));
+
+    // Releasing after not_delivered fires the overdue deferred draft.
+    hub.release_steer_reservation("s", "op-1");
+    let (q_after_release, d_after_release) = hub.queue_and_drafts("s", |_| true).unwrap();
+    assert_eq!(q_after_release.len(), 1);
+    assert_eq!(q_after_release[0].text, "original text");
+    assert!(d_after_release.is_empty());
+
+    // Committing a queued steer reservation atomically consumes the queued row.
+    let q_id = q_after_release[0].id.clone();
+    let q_source = SteerSource {
+        kind: SteerSourceKind::Queued,
+        id: q_id,
+    };
+    assert!(
+        hub.reserve_steer_source("s", "op-2", &q_source, "original text", &[])
+            .is_ok()
+    );
+    hub.commit_steer_reservation("s", "op-2");
+    assert!(hub.queue_and_drafts("s", |_| true).unwrap().0.is_empty());
+}

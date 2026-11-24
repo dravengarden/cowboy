@@ -354,7 +354,7 @@ async function runDeliverBuffer({
     // Server atomically removes the source draft/queued row (cancelling any
     // schedule timer) once steer is admitted under this single operation id.
     const consume = row
-      ? (kind === "queued" ? { queuedId: row.id } : { draftId: row.id })
+      ? { kind: kind === "queued" ? ("queued" as const) : ("draft" as const), id: row.id }
       : undefined;
     await currentTurnPrompt(sessionId, text, atts, target, nextCheckpoint, consume);
   } else if (mode === "front") {

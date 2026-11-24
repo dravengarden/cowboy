@@ -103,6 +103,10 @@ impl Hub {
             });
             match pos {
                 Some(p) => {
+                    let did = s.drafts[p].id.clone();
+                    if s.steer_reservations.values().any(|r| r.row_id == did) {
+                        return;
+                    }
                     let m = &mut s.drafts[p];
                     if !text.trim().is_empty() || !content.is_empty() {
                         m.text = text;
@@ -111,7 +115,6 @@ impl Hub {
                     }
                     m.initiator = None;
                     m.schedule = schedule;
-                    let did = m.id.clone();
                     s.deferred_scheduled_drafts.retain(|d| d != &did);
                     did
                 }
@@ -143,6 +146,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            if s.steer_reservations.values().any(|r| r.row_id == id) {
+                return;
+            }
             match s.drafts.iter_mut().find(|m| m.id == id) {
                 Some(m) if m.schedule.is_some() => {
                     m.schedule = None;
@@ -204,9 +210,12 @@ impl Hub {
                 s.deferred_scheduled_drafts.retain(|id| id != draft_id);
                 return;
             }
-            // Do not fire stale text out from under an active editor. Record the
-            // elapsed timer so releasing the edit fires the updated draft if still due.
-            if s.editing.as_deref() == Some(draft_id) {
+            // Do not fire stale text out from under an active editor or an
+            // in-flight steer reservation. Record the elapsed timer so releasing
+            // the hold or reservation fires the draft if still due.
+            if s.editing.as_deref() == Some(draft_id)
+                || s.steer_reservations.values().any(|r| r.row_id == draft_id)
+            {
                 if !s.deferred_scheduled_drafts.iter().any(|id| id == draft_id) {
                     s.deferred_scheduled_drafts.push(draft_id.to_owned());
                 }
@@ -312,6 +321,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
+            if s.steer_reservations.values().any(|r| r.row_id == id) {
+                return false;
+            }
             if text.trim().is_empty() && content.is_empty() {
                 let had = s.drafts.iter().any(|m| m.id == id && m.schedule.is_some());
                 let before = s.drafts.len();

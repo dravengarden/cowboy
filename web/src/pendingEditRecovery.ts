@@ -6,17 +6,18 @@
 // its record, and then rechecked against the last authoritative value: never
 // a cached or optimistic one, which cannot prove the row is gone.
 
+import type { Attachment } from "./attachments";
 import {
   claimOrphanedPendingEdits,
   clearPendingEdit,
   finishOrphanedPendingEdit,
   getPendingEdit,
   onPendingEditEncodesSettled,
+  pendingEditEncoding,
   pendingEditFingerprint,
   type PendingEditKind,
   type PendingEditRecord,
 } from "./pendingEditStore";
-import type { Attachment } from "./attachments";
 
 export interface AuthoritativeQueue {
   readonly queue: readonly { readonly id: string }[];
@@ -36,26 +37,44 @@ export interface PendingEditRecoveryHooks {
 }
 
 const authoritative = new Map<string, AuthoritativeQueue>();
-// Dedup map shared between orphan recovery and stale-row outbox settlement:
-// key = `${sessionId}\0${kind}\0${id}\0${fingerprint}` -> parked draft cmid.
-const parkedEdits = new Map<string, string>();
+// Shared dedup state between orphan recovery and stale-row outbox settlement:
+// keyed by `${sessionId}\0${kind}\0${id}\0${fingerprint}`.
+// Entries enter `completedParks` ONLY after durable persistence succeeds;
+// concurrent callers await `inFlightParks` and failures clear the claim.
+const inFlightParks = new Map<string, Promise<void>>();
+const completedParks = new Set<string>();
 let hooks: PendingEditRecoveryHooks | undefined;
 
 function parkedKey(
   sessionId: string,
   kind: PendingEditKind,
   id: string,
-  text: string,
-  attachments: readonly Attachment[],
+  fingerprint: string,
 ): string {
-  return `${sessionId}\0${kind}\0${id}\0${pendingEditFingerprint(text, attachments)}`;
+  return `${sessionId}\0${kind}\0${id}\0${fingerprint}`;
 }
 
-/** Claim a single content-scoped recovery cmid for a stale edit mutation, or
- *  return `null` if orphan recovery (or an earlier settlement) already parked
- *  this exact edit. Retires any matching live recovery record so it cannot park
- *  a second copy later. */
-export function claimStaleEditRecoveryCmid(
+function retireMatchingRecovery(
+  sessionId: string,
+  kind: PendingEditKind,
+  rowId: string,
+  fingerprint: string,
+): void {
+  if (pendingEditEncoding(sessionId, kind, rowId)) return;
+  const current = getPendingEdit(sessionId, kind, rowId);
+  if (
+    current !== null &&
+    pendingEditFingerprint(current.text, current.attachments) === fingerprint
+  ) {
+    clearPendingEdit(sessionId, kind, rowId);
+  }
+}
+
+/** Park a stale edit mutation durably at most once for its exact content.
+ *  Shares any in-flight park with orphan recovery, records completion ONLY
+ *  after durability succeeds, and retires local recovery ONLY if it still
+ *  holds the same content (never erasing a newer revision or active encode). */
+export async function parkStaleEditOnce(
   sessionId: string,
   kind: PendingEditKind,
   rowId: string,
@@ -63,17 +82,40 @@ export function claimStaleEditRecoveryCmid(
   attachments: readonly Attachment[],
   drafts: readonly { readonly cmid?: string }[],
   pendingIds: readonly string[],
-): string | null {
-  const key = parkedKey(sessionId, kind, rowId, text, attachments);
+  park: (cmid: string) => Promise<void>,
+): Promise<void> {
+  const fingerprint = pendingEditFingerprint(text, attachments);
+  const key = parkedKey(sessionId, kind, rowId, fingerprint);
   const existing = getPendingEdit(sessionId, kind, rowId);
-  const cmid = parkedEdits.get(key) ??
-    (existing !== null ? pendingEditParkCmid({ ...existing, text, attachments: [...attachments] }) : `stale-edit-${rowId}.${fnv64(pendingEditFingerprint(text, attachments))}`);
-  const alreadyParked = parkedEdits.has(key) ||
+  const cmid = existing !== null &&
+      pendingEditFingerprint(existing.text, existing.attachments) === fingerprint
+    ? pendingEditParkCmid(existing)
+    : `stale-edit-${rowId}.${fnv64(fingerprint)}`;
+  if (
+    completedParks.has(key) ||
     drafts.some((row) => row.cmid === cmid) ||
-    pendingIds.includes(cmid);
-  parkedEdits.set(key, cmid);
-  if (existing !== null) clearPendingEdit(sessionId, kind, rowId);
-  return alreadyParked ? null : cmid;
+    pendingIds.includes(cmid)
+  ) {
+    completedParks.add(key);
+    retireMatchingRecovery(sessionId, kind, rowId, fingerprint);
+    return;
+  }
+  const active = inFlightParks.get(key);
+  if (active !== undefined) {
+    await active;
+    retireMatchingRecovery(sessionId, kind, rowId, fingerprint);
+    return;
+  }
+  const work = park(cmid).then(() => {
+    completedParks.add(key);
+    retireMatchingRecovery(sessionId, kind, rowId, fingerprint);
+  });
+  inFlightParks.set(key, work);
+  try {
+    await work;
+  } finally {
+    if (inFlightParks.get(key) === work) inFlightParks.delete(key);
+  }
 }
 
 export function bindPendingEditRecovery(next: PendingEditRecoveryHooks): void {
@@ -100,11 +142,12 @@ function recover(sessionId: string): void {
     new Set(value.drafts.map((row) => row.id)),
   );
   for (const record of orphaned) {
+    const fingerprint = pendingEditFingerprint(record.text, record.attachments);
+    const key = parkedKey(sessionId, record.kind, record.id, fingerprint);
     // Only a draft of exactly this content is its receipt.
     const cmid = pendingEditParkCmid(record);
-    const key = parkedKey(sessionId, record.kind, record.id, record.text, record.attachments);
     if (
-      parkedEdits.has(key) ||
+      completedParks.has(key) ||
       value.drafts.some((row) =>
         row.cmid === cmid ||
         // Parked by an earlier client under the bare recovery identity.
@@ -113,6 +156,7 @@ function recover(sessionId: string): void {
       pending.includes(cmid) ||
       pending.includes(record.recoveryCmid)
     ) {
+      completedParks.add(key);
       finishOrphanedPendingEdit(record, true);
       continue;
     }
@@ -120,12 +164,22 @@ function recover(sessionId: string): void {
       finishOrphanedPendingEdit(record, false);
       continue;
     }
-    parkedEdits.set(key, cmid);
-    void hooks.park(sessionId, record, cmid)
+    const existingWork = inFlightParks.get(key);
+    if (existingWork !== undefined) {
+      void existingWork
+        .then(() => finishOrphanedPendingEdit(record, true))
+        .catch(() => finishOrphanedPendingEdit(record, false));
+      continue;
+    }
+    const work = hooks.park(sessionId, record, cmid).then(() => {
+      completedParks.add(key);
+    });
+    inFlightParks.set(key, work);
+    void work
       .then(() => finishOrphanedPendingEdit(record, true))
-      .catch(() => {
-        parkedEdits.delete(key);
-        finishOrphanedPendingEdit(record, false);
+      .catch(() => finishOrphanedPendingEdit(record, false))
+      .finally(() => {
+        if (inFlightParks.get(key) === work) inFlightParks.delete(key);
       });
   }
 }

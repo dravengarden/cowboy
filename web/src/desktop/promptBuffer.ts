@@ -14,9 +14,15 @@ export type DesktopPromptBuffer =
   }
   | {
     kind: "new-draft";
+    cmid: string;
     origin: "list" | "new";
     entryMode: "insert" | "normal";
   };
+
+export function newDraftBufferCmid(): string {
+  return globalThis.crypto?.randomUUID?.() ??
+    `draft-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
 
 export interface LastSubmittedPending {
   kind: "queued" | "draft";

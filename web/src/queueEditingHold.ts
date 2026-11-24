@@ -6,6 +6,10 @@ export type QueueEditHoldStatus = "none" | "confirmed" | "unconfirmed";
 type SendInbound = (cmd: Inbound) => boolean;
 
 const activeHolds = new Map<string, string>();
+// Sessions whose current socket actually transmitted `set_queue_editing` for
+// `activeHolds.get(sessionId)`. Prevents another terminal's cached `editing` id
+// or an unsent offline acquire from confirming a lease this socket never acquired.
+const transmittedHolds = new Map<string, string>();
 const confirmedHolds = new Set<string>();
 const remoteEditingBySession = new Map<string, string>();
 const listeners = new Set<() => void>();
@@ -32,14 +36,21 @@ export function syncRemoteQueueEditing(
     changed = true;
   }
   const desired = activeHolds.get(sessionId);
-  const matchesLocal = desired !== undefined && editing === desired;
+  const transmitted = transmittedHolds.get(sessionId);
+  const matchesLocal =
+    desired !== undefined && transmitted === desired && editing === desired;
   if (matchesLocal) {
     if (!confirmedHolds.has(sessionId)) {
       confirmedHolds.add(sessionId);
       changed = true;
     }
-  } else if (confirmedHolds.delete(sessionId)) {
-    changed = true;
+  } else {
+    if (confirmedHolds.delete(sessionId)) changed = true;
+    // Another terminal superseded or cleared our lease; do not let a later
+    // unrelated echo re-confirm without a fresh acquire from this socket.
+    if (desired !== undefined && transmitted === desired && editing !== desired) {
+      transmittedHolds.delete(sessionId);
+    }
   }
   if (changed) notifyListeners();
 }
@@ -66,21 +77,20 @@ export function setQueueEditHold(
 ): void {
   if (id === null) {
     const had = activeHolds.delete(sessionId);
+    const hadTx = transmittedHolds.delete(sessionId);
     const wasConfirmed = confirmedHolds.delete(sessionId);
     send({ type: "set_queue_editing", session_id: sessionId, id: null });
-    if (had || wasConfirmed) notifyListeners();
+    if (had || hadTx || wasConfirmed) notifyListeners();
     return;
   }
   const previous = activeHolds.get(sessionId);
   const wasConfirmed = confirmedHolds.has(sessionId);
   activeHolds.set(sessionId, id);
-  // Only an authoritative server snapshot echoing `editing === id` confirms
-  // the lease; sending a WebSocket frame alone never proves admission.
-  const alreadyConfirmed = remoteEditingBySession.get(sessionId) === id;
-  if (alreadyConfirmed) confirmedHolds.add(sessionId);
-  else confirmedHolds.delete(sessionId);
-  send({ type: "set_queue_editing", session_id: sessionId, id });
-  if (previous !== id || wasConfirmed !== alreadyConfirmed) notifyListeners();
+  confirmedHolds.delete(sessionId);
+  const sent = send({ type: "set_queue_editing", session_id: sessionId, id });
+  if (sent) transmittedHolds.set(sessionId, id);
+  else transmittedHolds.delete(sessionId);
+  if (previous !== id || wasConfirmed) notifyListeners();
 }
 
 export function replayQueueEditHolds(send: SendInbound): void {
@@ -88,15 +98,19 @@ export function replayQueueEditHolds(send: SendInbound): void {
   let changed = false;
   for (const [sessionId, id] of activeHolds) {
     if (confirmedHolds.delete(sessionId)) changed = true;
-    send({ type: "set_queue_editing", session_id: sessionId, id });
+    const sent = send({ type: "set_queue_editing", session_id: sessionId, id });
+    if (sent) transmittedHolds.set(sessionId, id);
+    else transmittedHolds.delete(sessionId);
   }
   if (changed) notifyListeners();
 }
 
 export function markQueueEditHoldsUnconfirmed(): void {
-  if (confirmedHolds.size === 0) return;
+  const changed = confirmedHolds.size > 0 || remoteEditingBySession.size > 0;
   confirmedHolds.clear();
-  notifyListeners();
+  transmittedHolds.clear();
+  remoteEditingBySession.clear();
+  if (changed) notifyListeners();
 }
 
 export function getQueueEditHoldId(sessionId: string): string | null {

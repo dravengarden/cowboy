@@ -22,10 +22,7 @@ import {
 import { useVimSetting } from "../vimSetting";
 import { requestDesktopEditorInsert } from "./editorInsert";
 import { DesktopPromptBufferBar } from "./DesktopPromptBufferBar";
-import {
-  type MaterializedCarry,
-  usePendingBufferController,
-} from "./usePendingBufferController";
+import { usePendingBufferController } from "./usePendingBufferController";
 
 export interface DesktopPendingBufferHandle {
   editor: () => ComposerEditorHandle | null;
@@ -46,7 +43,7 @@ export interface DesktopPendingBufferEditorProps {
   sessionId: string;
   kind: "queued" | "draft" | "new-draft";
   row: QueuedMessage | null;
-  initialCarry?: MaterializedCarry | null | undefined;
+  draftCmid?: string | undefined;
   index?: number | undefined;
   total?: number | undefined;
   entryMode: "insert" | "normal";
@@ -58,7 +55,7 @@ export interface DesktopPendingBufferEditorProps {
     scheduled: boolean;
     holdStatus: import("../queueEditingHold").QueueEditHoldStatus;
   }) => void;
-  onMaterializedDraft: (rowId: string, cmid?: string, carry?: MaterializedCarry) => void;
+  onMaterializedDraft: (rowId: string, cmid?: string) => void;
   onSourceVanished: (recovered?: { id?: string; cmid: string }) => void;
   onEscape: () => void;
   onBack: () => void;
@@ -277,7 +274,7 @@ export const DesktopPendingBufferEditor = forwardRef<
     sessionId,
     kind,
     row,
-    initialCarry,
+    draftCmid,
     index,
     total,
     entryMode,
@@ -296,13 +293,15 @@ export const DesktopPendingBufferEditor = forwardRef<
   const editorRef = useRef<ComposerEditorHandle | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const holdStatus = useQueueEditHoldStatus(sessionId);
-  const vimOwnerId = `${kind}:${row?.id ?? "new"}`;
+  const vimOwnerId = kind === "new-draft" || (kind === "draft" && draftCmid)
+    ? `draft:${draftCmid ?? row?.id ?? "new"}`
+    : `${kind}:${row?.id ?? "new"}`;
 
   const ctrl = usePendingBufferController({
     sessionId,
     kind,
     row,
-    initialCarry,
+    draftCmid,
     editorRef,
     onMaterializedDraft,
     onSourceVanished,

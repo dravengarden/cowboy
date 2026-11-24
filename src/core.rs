@@ -49,6 +49,7 @@ mod hub_peer_notice;
 pub use hub_peer_notice::PromptProgress;
 mod hub_provider_pins;
 mod hub_queue;
+pub use hub_queue::{SteerSource, SteerSourceKind};
 mod hub_superagent;
 mod hub_sync;
 mod mobile_review;
@@ -670,6 +671,7 @@ struct Session {
     editing_epoch: u64,
     /// Scheduled drafts whose fire timer elapsed while held open for editing.
     deferred_scheduled_drafts: Vec<String>,
+    steer_reservations: HashMap<String, hub_queue::SteerReservation>,
     /// True while a queue-dispatched prompt of ours is in flight but the session
     /// hasn't yet flipped back to idle. Guards the dispatch-before-`Busy` window
     /// so a same-tick re-drain can't double-send and overlap turns. Cleared once
@@ -2298,6 +2300,7 @@ impl Hub {
                         editing: None,
                         editing_epoch: 0,
                         deferred_scheduled_drafts: Vec::new(),
+                        steer_reservations: HashMap::new(),
                         in_flight: (defer_missing_busy && was_busy)
                             || runtime.is_some_and(|worker| {
                                 worker.current_turn_id.is_some() || worker.pending_prompt_count > 0
@@ -3110,6 +3113,7 @@ impl Hub {
                     editing: None,
                     editing_epoch: 0,
                     deferred_scheduled_drafts: Vec::new(),
+                    steer_reservations: HashMap::new(),
                     in_flight: false,
                     in_flight_epoch: 0,
                     delivery_hold: None,
