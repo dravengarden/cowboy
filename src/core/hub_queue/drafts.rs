@@ -406,7 +406,11 @@ impl Hub {
                 return false;
             };
             let row = &session.drafts[index];
-            if row.schedule.is_some() || row.text != text || row.content != content {
+            if self.is_row_withdrawing(session_id, &row.id)
+                || row.schedule.is_some()
+                || row.text != text
+                || row.content != content
+            {
                 return false;
             }
             session.drafts.remove(index);
@@ -499,13 +503,16 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            let ids = s
-                .drafts
-                .iter()
-                .filter(|m| m.schedule.is_some())
-                .map(|m| m.id.clone())
-                .collect();
-            s.drafts.clear();
+            let mut ids = Vec::new();
+            s.drafts.retain(|m| {
+                if self.is_row_withdrawing(session_id, &m.id) {
+                    return true;
+                }
+                if m.schedule.is_some() {
+                    ids.push(m.id.clone());
+                }
+                false
+            });
             ids
         };
         self.emit_pending(session_id);
@@ -588,7 +595,7 @@ impl Hub {
             let mut retained = Vec::new();
             let mut activated = Vec::new();
             for m in std::mem::take(&mut s.drafts) {
-                if m.id.starts_with("recovery-") {
+                if m.id.starts_with("recovery-") || self.is_row_withdrawing(session_id, &m.id) {
                     retained.push(m);
                 } else {
                     activated.push(m);

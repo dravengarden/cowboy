@@ -519,6 +519,7 @@ pub(in crate::remote_runtime) fn replacement_worker_superseded_epoch(
 /// Returns `true` only once the draft is durable (or in-memory test mode has no
 /// store writer); returns `false` on store failure so callers keep the command
 /// fenced rather than losing the payload.
+#[allow(clippy::too_many_lines)]
 pub(in crate::remote_runtime) async fn park_ambiguous_prompt_durable(
     shared: &Arc<Shared>,
     session_id: &str,
@@ -577,18 +578,29 @@ pub(in crate::remote_runtime) async fn park_ambiguous_prompt_durable(
             let weak_shared = Arc::downgrade(shared);
             let retry_sid = session_id.to_owned();
             let retry_cmd_id = command_id.clone();
+            let retry_version = shared.pending.lock().version(&retry_cmd_id);
             let retry_cmd = command.clone();
             let on_committed: Arc<dyn Fn() + Send + Sync> = Arc::new(move || {
                 let Some(shared) = weak_shared.upgrade() else {
                     return;
                 };
-                let mut pending = shared.pending.lock();
-                pending.remove(&retry_cmd_id);
-                shared.sent.lock().remove(&retry_cmd_id);
-                shared.attempted_sends.lock().remove(&retry_cmd_id);
-                shared.retransmitted_sends.lock().remove(&retry_cmd_id);
-                shared.fenced_commands.lock().remove(&retry_cmd_id);
-                drop(pending);
+                let removed = {
+                    let mut pending = shared.pending.lock();
+                    let removed = match retry_version {
+                        Some(v) => pending.remove_if_version(&retry_cmd_id, v).is_some(),
+                        None => pending.remove(&retry_cmd_id).is_some(),
+                    };
+                    if removed {
+                        shared.sent.lock().remove(&retry_cmd_id);
+                        shared.attempted_sends.lock().remove(&retry_cmd_id);
+                        shared.retransmitted_sends.lock().remove(&retry_cmd_id);
+                        shared.fenced_commands.lock().remove(&retry_cmd_id);
+                    }
+                    removed
+                };
+                if !removed {
+                    return;
+                }
                 shared
                     .in_flight_prompts
                     .lock()

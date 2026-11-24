@@ -321,7 +321,9 @@ impl Hub {
             self.activate_recovery_draft_in_memory(session_id, id, cmid, trigger);
             return;
         }
-        let staged = {
+        // Reserve op + fence draft row synchronously under sessions->notice_claims,
+        // then serialize against other acknowledged commits via pending_commit_lock.
+        let reserved = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
@@ -346,7 +348,50 @@ impl Hub {
                 );
                 return;
             };
-            let m = target.clone();
+            let mut claims = self.inner.notice_claims.lock();
+            if !claims
+                .withdrawing_row_ids
+                .insert((session_id.to_owned(), id.to_owned()))
+            {
+                return;
+            }
+            s.pending_recovery_cmids.insert(op.clone());
+            op
+        };
+        let hub = self.clone();
+        let sid = session_id.to_owned();
+        let draft_id = id.to_owned();
+        self.spawn_teardown_requeue(async move {
+            hub.commit_activated_recovery_draft(sid, draft_id, reserved, trigger)
+                .await;
+        });
+    }
+
+    async fn commit_activated_recovery_draft(
+        &self,
+        sid: String,
+        draft_id: String,
+        op: String,
+        trigger: crate::prompt_origin::DeliveryOrigin,
+    ) {
+        let _commit_guard = self.pending_commit_lock(&sid).await;
+        let staged = {
+            let mut sessions = self.inner.sessions.lock();
+            let mut claims = self.inner.notice_claims.lock();
+            let Some(s) = sessions.get_mut(&sid) else {
+                claims
+                    .withdrawing_row_ids
+                    .remove(&(sid.clone(), draft_id.clone()));
+                return;
+            };
+            let Some(pos) = s.drafts.iter().position(|m| m.id == draft_id) else {
+                s.pending_recovery_cmids.remove(&op);
+                claims
+                    .withdrawing_row_ids
+                    .remove(&(sid.clone(), draft_id.clone()));
+                return;
+            };
+            let m = s.drafts[pos].clone();
             let new_row = QueuedMessage {
                 id: self.next_qid(),
                 text: m.text,
@@ -361,7 +406,7 @@ impl Hub {
             let mut next_drafts = s.drafts.clone();
             next_drafts.remove(pos);
             let Some(rx) = self.send_acked_update_pending_with_recovery(
-                session_id,
+                &sid,
                 next_queue,
                 next_drafts,
                 Vec::new(),
@@ -369,83 +414,77 @@ impl Hub {
                 Self::sorted_recovery_cmids(s),
                 false,
             ) else {
+                s.pending_recovery_cmids.remove(&op);
+                claims
+                    .withdrawing_row_ids
+                    .remove(&(sid.clone(), draft_id.clone()));
+                drop(claims);
                 drop(sessions);
                 self.broadcast_error(
-                    Some(session_id.to_owned()),
+                    Some(sid),
                     "Could not persist recovery draft activation; draft retained".to_owned(),
                 );
                 return;
             };
-            s.pending_recovery_cmids.insert(op.clone());
-            let mut claims = self.inner.notice_claims.lock();
-            claims
-                .withdrawing_row_ids
-                .insert((session_id.to_owned(), id.to_owned()));
             claims
                 .in_flight_pending_commits
-                .insert(session_id.to_owned(), DeferredPendingFlush::default());
+                .insert(sid.clone(), DeferredPendingFlush::default());
             let dispatch_origin =
                 crate::prompt_origin::compute_dispatch_origin(m.origin.as_ref(), Some(&trigger));
             (
                 rx,
-                op,
                 new_row,
                 m.schedule.is_some(),
                 dispatch_origin.is_owner(),
             )
         };
-        let (rx, op, new_row, had_schedule, is_owner) = staged;
-        let hub = self.clone();
-        let sid = session_id.to_owned();
-        let draft_id = id.to_owned();
-        self.spawn_teardown_requeue(async move {
-            let committed = matches!(rx.await, Ok(Ok(true)));
-            let broadcast = {
-                let mut sessions = hub.inner.sessions.lock();
-                let mut claims = hub.inner.notice_claims.lock();
-                claims
-                    .withdrawing_row_ids
-                    .remove(&(sid.clone(), draft_id.clone()));
-                if let Some(s) = sessions.get_mut(&sid) {
-                    s.pending_recovery_cmids.remove(&op);
-                    if committed {
-                        s.drafts.retain(|m| m.id != draft_id);
-                        s.queue.push(new_row.clone());
-                    }
-                    let queue = s.queue.clone();
-                    let drafts = s.drafts.clone();
-                    hub.finish_in_flight_pending_commit(
-                        &sid,
-                        &queue,
-                        &drafts,
-                        Self::sorted_recovery_cmids(s),
-                        &mut claims,
-                    );
-                    Some((queue, drafts))
-                } else {
-                    claims.in_flight_pending_commits.remove(&sid);
-                    None
+        let (rx, new_row, had_schedule, is_owner) = staged;
+        let committed = matches!(rx.await, Ok(Ok(true)));
+        let broadcast = {
+            let mut sessions = self.inner.sessions.lock();
+            let mut claims = self.inner.notice_claims.lock();
+            claims
+                .withdrawing_row_ids
+                .remove(&(sid.clone(), draft_id.clone()));
+            if let Some(s) = sessions.get_mut(&sid) {
+                s.pending_recovery_cmids.remove(&op);
+                if committed {
+                    s.drafts.retain(|m| m.id != draft_id);
+                    s.queue.push(new_row.clone());
                 }
-            };
-            if committed {
-                if let Some((queue, drafts)) = broadcast {
-                    hub.broadcast_pending_snapshot(&sid, &queue, &drafts);
-                }
-                if had_schedule {
-                    hub.cancel_draft_timer(&sid, &draft_id);
-                    hub.broadcast_sessions();
-                }
-                if is_owner {
-                    hub.notify_human_turn(&sid);
-                }
-                hub.drain_activated_recovery_row(&sid, &new_row.id);
-            } else {
-                hub.broadcast_error(
-                    Some(sid),
-                    "Could not persist recovery draft activation; draft retained".to_owned(),
+                let queue = s.queue.clone();
+                let drafts = s.drafts.clone();
+                self.finish_in_flight_pending_commit(
+                    &sid,
+                    &queue,
+                    &drafts,
+                    Self::sorted_recovery_cmids(s),
+                    &mut claims,
                 );
+                Some((queue, drafts))
+            } else {
+                claims.in_flight_pending_commits.remove(&sid);
+                None
             }
-        });
+        };
+        if committed {
+            if let Some((queue, drafts)) = broadcast {
+                self.broadcast_pending_snapshot(&sid, &queue, &drafts);
+            }
+            if had_schedule {
+                self.cancel_draft_timer(&sid, &draft_id);
+                self.broadcast_sessions();
+            }
+            if is_owner {
+                self.notify_human_turn(&sid);
+            }
+            self.drain_activated_recovery_row(&sid, &new_row.id);
+        } else {
+            self.broadcast_error(
+                Some(sid),
+                "Could not persist recovery draft activation; draft retained".to_owned(),
+            );
+        }
     }
 
     /// Commit an acknowledged ordinary recovery draft park + atomic tombstone
