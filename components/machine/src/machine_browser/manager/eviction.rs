@@ -40,7 +40,19 @@ impl BrowserManager {
         let idle = self.idle_instances(account_id);
         let limit = usize::try_from(max_instances).unwrap_or(usize::MAX);
         let excess = (self.capacity.used() + 1).saturating_sub(limit);
+        let refused = |idle: usize| {
+            tracing::info!(
+                event_name = "browser.open.refused",
+                browser_account = %account_id.as_str(),
+                reason = "Capacity",
+                slots_used = self.capacity.used(),
+                max_instances,
+                idle_instances = idle,
+                "browser open refused: every instance slot is in use"
+            );
+        };
         if limit == 0 || idle.len() < excess {
+            refused(idle.len());
             return None;
         }
         for (victim, since) in idle {
@@ -76,6 +88,7 @@ impl BrowserManager {
                 return Some(slot);
             }
         }
+        refused(0);
         None
     }
 
