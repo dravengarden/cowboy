@@ -33,14 +33,11 @@
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/"><strong>官网</strong></a>
   · <a href="#快速开始">快速开始</a>
+  · <a href="#支持的-agent">Agent</a>
   · <a href="#架构">架构</a>
   · <a href="#插件生态">插件</a>
   · <a href="docs/INDEX.md">文档</a>
 </p>
-
-默认采用 **Lilac Flow**。在“设置 → 外观”中切换 **50 套图标配色**；明暗模式偏好和语义状态色保持一致。
-
-<p align="center"><img src="site/assets/cowboy-colorways-v10.svg" width="760" alt="Cowboy icon colorways"></p>
 
 <p align="center">
   <a href="https://dravengarden.github.io/cowboy/">
@@ -55,7 +52,7 @@
 
 Cowboy 让长时间运行的编码 Agent 始终贴近实际工作。自托管一个 Hub，加入
 Linux 和 macOS Machine，再从键盘优先的桌面工作区或触控优先的移动工作区调度
-Codex、Claude Code、Grok、DeepSeek 或你自己的插件。稍后重新连接时，
+Codex、Claude Code、Antigravity、Grok、DeepSeek 或你自己的插件。稍后重新连接时，
 无需把 worktree、凭据或 Agent 进程移出它最初运行的 Machine。
 
 > [!IMPORTANT]
@@ -79,15 +76,15 @@ Codex、Claude Code、Grok、DeepSeek 或你自己的插件。稍后重新连接
 
 ## 快速开始
 
-官方默认图标为 **Neon（103 号）**。在 **Settings → Appearance → Icon & theme** 中可选择
-20 套精选风格，每套都有对应的明暗界面主题色，并支持应用前预览。
-主屏幕安装与原生切换方式见[图标与平台说明](docs/branding-and-app-icons.md)。
+三步完成：构建并启动一个 Hub，通过 HTTPS 提供服务，再加入实际工作所在的 Machine。
 
 ### 先决条件
 
 - 已启用 flakes 的 [Nix](https://nixos.org/download/)
 - Linux 或 macOS
 - Git
+
+### 1. 构建
 
 克隆 Cowboy，进入固定版本的开发环境，安装当前 checkout 的前端依赖并构建发布：
 
@@ -98,6 +95,8 @@ nix develop
 just install
 just build
 ```
+
+### 2. 启动 Hub
 
 使用 SQLite 持久化启动本地 Hub：
 
@@ -111,6 +110,8 @@ HTTPS 地址。产品登录和设备签名认证均为必选；参见[通信安�
 Controller 需要数据库持久化设备绑定。SQLite 是零运维的存储方案；规模更大的部署
 可以通过同一个 Store API 使用 PostgreSQL。
 
+### 3. 加入 Machine
+
 如需加入另一台 Linux 或 macOS 主机，请运行
 <code>just build-machine-bootstrap</code> 构建目标平台的 bootstrap。在 Cowboy 中
 创建一次性 enrollment code，然后在那台 Machine 上运行生成的命令：
@@ -121,6 +122,24 @@ cowboy register https://cowboy.example --background
 
 Token 通过掩码提示输入，无需出现在 shell history 中。安装、身份验证、后台服务和
 多 Service 隔离方式请参阅 [Machine 运维](docs/machine-operations.md)。
+
+## 支持的 Agent
+
+每个 Agent 都是独立版本化、已签名的 Provider 插件。只需安装到需要运行它的
+Machine 上；Session 始终固定到精确的已安装 release。
+
+| Agent                    | 厂商      | 运行方式                                   | 本地 + 远端执行 |
+| ------------------------ | --------- | ------------------------------------------ | :-------------: |
+| Codex                    | OpenAI    | 使用你的标准 OpenAI 账号与配置             | ✓               |
+| Claude Code              | Anthropic | 使用你的标准 Anthropic 账号与配置          | ✓               |
+| Antigravity              | Google    | 官方 CLI 搭配个人 Google 账号¹             | 本地            |
+| Grok Build               | xAI       | 官方 Agent，使用标准 xAI 认证              | 本地            |
+| Codex · DeepSeek         | DeepSeek  | 在隔离的 DeepSeek runtime 中运行 Codex     | 本地            |
+| Claude Code · DeepSeek   | DeepSeek  | 在隔离的 DeepSeek runtime 中运行 Claude Code | 本地          |
+| DeepSeek Harness         | DeepSeek  | DeepSeek 原生 Agent harness                | 本地            |
+| 你的插件                 | 你        | 任何打包为 `.cowboy-plugin` 的 ACP Agent   | 可选支持        |
+
+<sub>¹ 在 Cowboy 中使用 Antigravity 不属于 Google 官方支持的配置。</sub>
 
 ## 架构
 
@@ -189,6 +208,14 @@ Cowboy 负责目标绑定、传输、重连、取消与目标 worktree；各 Pro
 两个客户端观察同一个由服务端权威管理的模型，同时不会把桌面 IDE 拉伸成移动布局，
 也不会让移动工作流背负桌面端的界面负担。
 
+### 个性化
+
+默认采用 **Lilac Flow**。在 **设置 → 外观 → 图标与主题** 中可选择 **50 套图标配色**
+（25 套纯色、25 套渐变），每套都配有对应的明暗主题点缀色。主屏幕安装与原生图标切换
+方式见[图标与平台说明](docs/branding-and-app-icons.md)。
+
+<p align="center"><img src="site/assets/cowboy-colorways-v10.svg" width="760" alt="Cowboy 五十套图标配色中的部分方案"></p>
+
 ## 插件生态
 
 **插件（Plugin）** 是 Cowboy 中唯一可发现、可安装、可升级、可回滚和可卸载的
@@ -199,10 +226,17 @@ Cowboy 负责目标绑定、传输、重连、取消与目标 worktree；各 Pro
 源码 → 已签名的 .cowboy-plugin → Catalog → 暂存 + 探测 → 原子启用 → 固定版本的 Session
 ```
 
-| 类型              | 第一方插件                                                          |
-| ----------------- | ------------------------------------------------------------------- |
-| Agent Provider    | Codex、Claude Code、Grok、Codex + DeepSeek、Claude + DeepSeek         |
-| 代码智能          | Zed                                                                 |
+| 类型           | 第一方插件                                                                                    |
+| -------------- | --------------------------------------------------------------------------------------------- |
+| Agent Provider | Codex、Claude Code、Antigravity、Grok Build、Codex · DeepSeek、Claude Code · DeepSeek、DeepSeek Harness |
+| 代码智能       | Zed —— 进程隔离的符号、悬停、定义与引用                                                       |
+| Agent 调用     | Review —— 由另一个 Agent 家族执行的只读代码与设计评审                                          |
+| 记忆           | Matrix —— 跨 Session 共享、有证据支撑的长期记忆                                                 |
+| 工作区扩展     | GitHub —— 通过 Machine 现有的 GitHub CLI 会话处理 PR、Issue 与 Actions                          |
+| Machine 浏览器 | Machine browser —— 由所有者操作的 Chromium，用于账号登录，按账号隔离                             |
+| 遥测           | [Victoria](examples/telemetry/victoria/README.md) —— 可选的日志、指标与追踪 OTLP 导出            |
+
+在[官网](https://dravengarden.github.io/cowboy/#ecosystem)浏览所有插件及其实时版本。
 
 扩展边界被刻意限制在很小的范围内：
 
@@ -251,10 +285,11 @@ terminal 中分别运行 <code>just dev</code> 和 <code>just dev-web</code>。
 
 | 路径                               | 职责                                                                 |
 | ---------------------------------- | -------------------------------------------------------------------- |
-| <code>src/</code>                  | Rust Hub、API、持久化、Machine 路由、worker 和 CLI                    |
+| <code>src/</code>                  | 核心 Rust 库：ACP runtime、Machine 传输、插件启用                     |
+| <code>components/</code>           | Rust Hub、存储、Machine 与 wire crate；带版本的 Plugin、Provider、状态和 UI 包 |
 | <code>web/</code>                  | React Desktop、Mobile、Agent、Code、setup 和 admin 界面               |
-| <code>plugins/</code>              | 第一方 Agent Provider 与代码智能插件                                  |
-| <code>components/</code>           | 带版本的 Plugin、Provider、状态、UI 和代码智能契约                     |
+| <code>plugins/</code>              | 第一方 Agent Provider、代码智能与扩展插件                             |
+| <code>apps/native-shell/</code>    | Tauri 桌面与移动端产品外壳                                            |
 | <code>apps/macos-installer/</code> | 原生 macOS 菜单栏安装器与 Machine 管理器                              |
 | <code>site/</code>                 | 公共产品官网与不包含私有信息的插图                                   |
 | <code>docs/</code>                 | 架构、产品契约、部署和运维文档                                       |
