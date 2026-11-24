@@ -416,15 +416,26 @@ export function DesktopCommandHost({
     },
     {
       id: "prompt.focusPlan",
-      title: "Focus Plan",
-      description: "Move keyboard focus to the current task plan",
+      title: "Open or Close Plan",
+      description: "Open and focus the current task plan, or close it when Plan already owns focus",
       group: "Prompt",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusPlan),
       when: () => document.querySelector("[data-desktop-region='prompt.plan']") !== null,
       disabledReason: "The agent has not published a plan",
       // The prefix continuation is stable even while Plan is absent.
       consumeWhenDisabled: true,
-      run: () => workspace.focusRegion("prompt.plan"),
+      run: () => {
+        const toggle = document.querySelector<HTMLElement>(
+          "[data-desktop-region='prompt.plan'] button[aria-label='Expand plan'], [data-desktop-region='prompt.plan'] button[aria-label='Collapse plan']",
+        );
+        if (workspace.focusedRegion === "prompt.plan") {
+          if (toggle?.getAttribute("aria-label") === "Collapse plan") toggle.click();
+          requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
+          return;
+        }
+        if (toggle?.getAttribute("aria-label") === "Expand plan") toggle.click();
+        requestAnimationFrame(() => workspace.focusRegion("prompt.plan"));
+      },
     },
     {
       id: "prompt.focusCalls",
@@ -492,8 +503,8 @@ export function DesktopCommandHost({
     },
     {
       id: "prompt.focusDrafts",
-      title: "Focus Drafts",
-      description: "Move keyboard focus to parked drafts",
+      title: "Open or Close Drafts",
+      description: "Open and focus parked drafts, or close them when Drafts already owns focus",
       group: "Prompt",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusDrafts),
       when: () => document.querySelector("[data-desktop-region='prompt.draft']") !== null,
@@ -502,7 +513,13 @@ export function DesktopCommandHost({
         const toggle = document.querySelector<HTMLElement>(
           "[data-desktop-collapse-toggle='draft']",
         );
-        if (toggle?.getAttribute("aria-expanded") === "false") toggle.click();
+        if (!toggle) return;
+        if (workspace.focusedRegion === "prompt.draft") {
+          if (toggle.getAttribute("aria-expanded") === "true") toggle.click();
+          requestAnimationFrame(() => workspace.focusRegion("prompt.composer"));
+          return;
+        }
+        if (toggle.getAttribute("aria-expanded") === "false") toggle.click();
         requestAnimationFrame(() => workspace.focusRegion("prompt.draft"));
       },
     },

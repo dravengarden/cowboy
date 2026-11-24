@@ -4,6 +4,7 @@ import { Sheet } from "./Sheet";
 import { SegmentedTabs } from "./SegmentedTabs";
 import { confirmationHaptic, navigationHaptic } from "./haptic";
 import { isImeKeyEvent } from "./imeKey";
+import { desktopCompositionActive } from "./desktop/commands/keyIntent";
 import { Kbd } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import type { Delivery, DraftSchedule } from "./protocol";
@@ -58,7 +59,7 @@ export function ScheduleSheet({
       const mod = navigator.platform.toLowerCase().includes("mac")
         ? event.metaKey && !event.ctrlKey
         : event.ctrlKey && !event.metaKey;
-      if (!mod || event.repeat || isImeKeyEvent(event)) return;
+      if (!mod || event.repeat || isImeKeyEvent(event) || desktopCompositionActive()) return;
       if (event.key === "Enter" && valid) {
         event.preventDefault();
         event.stopPropagation();

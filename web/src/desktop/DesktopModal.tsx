@@ -17,8 +17,10 @@ import {
   type Ref,
   useCallback,
   useEffect,
+  useId,
 } from "react";
 import { isImeKeyEvent } from "../imeKey";
+import { desktopCompositionActive } from "./commands/keyIntent";
 import { HintTooltip } from "../HintTooltip";
 import {
   desktopModalBackdropSx,
@@ -41,21 +43,57 @@ function assignRef<T>(target: Ref<T> | undefined, value: T | null): void {
 }
 
 /** Desktop dialogs open immediately without MUI Fade's synchronous
- *  `node.scrollTop` reflow on mount. */
-const InstantModalTransition = forwardRef<
+ *  `node.scrollTop` reflow on mount. Forward all remaining MUI Modal /
+ *  FocusTrap props (such as `tabIndex`, `onFocus`, `style`) so focus trapping
+ *  and focus restoration remain intact. */
+interface InstantModalTransitionProps {
+  in?: boolean;
+  children: ReactElement<{
+    ref?: Ref<HTMLElement>;
+    onFocus?: (event: unknown) => void;
+    tabIndex?: number;
+  }>;
+  onEnter?: () => void;
+  onEntered?: () => void;
+  onExit?: () => void;
+  onExited?: () => void;
+  tabIndex?: number;
+  onFocus?: (event: unknown) => void;
+  style?: Record<string, unknown>;
+  className?: string;
+  appear?: boolean;
+  timeout?: unknown;
+  unmountOnExit?: boolean;
+  mountOnEnter?: boolean;
+  addEndListener?: unknown;
+  nodeRef?: unknown;
+  onEntering?: unknown;
+  onExiting?: unknown;
+  easing?: unknown;
+}
+
+export const InstantModalTransition = forwardRef<
   HTMLElement,
-  {
-    in?: boolean;
-    children: ReactElement<{ ref?: Ref<HTMLElement> }>;
-    onEnter?: () => void;
-    onEntered?: () => void;
-    onExit?: () => void;
-    onExited?: () => void;
-  }
->(function InstantModalTransition(
-  { in: open, children, onEnter, onEntered, onExit, onExited },
-  ref,
-) {
+  InstantModalTransitionProps
+>(function InstantModalTransition(props, ref) {
+  const {
+    in: open,
+    children,
+    onEnter,
+    onEntered,
+    onExit,
+    onExited,
+    appear: _appear,
+    timeout: _timeout,
+    unmountOnExit: _unmountOnExit,
+    mountOnEnter: _mountOnEnter,
+    addEndListener: _addEndListener,
+    nodeRef: _nodeRef,
+    onEntering: _onEntering,
+    onExiting: _onExiting,
+    easing: _easing,
+    ...rest
+  } = props;
   const childRef = children.props.ref;
   const mergedRef = useCallback(
     (node: HTMLElement | null): void => {
@@ -73,7 +111,20 @@ const InstantModalTransition = forwardRef<
       onExited?.();
     }
   }, [open, onEnter, onEntered, onExit, onExited]);
-  return open ? cloneElement(children, { ref: mergedRef }) : null;
+  if (!open) return null;
+  const childOnFocus = children.props.onFocus;
+  const restOnFocus = rest.onFocus;
+  const mergedOnFocus = childOnFocus && restOnFocus
+    ? (event: unknown): void => {
+      restOnFocus(event);
+      childOnFocus(event);
+    }
+    : restOnFocus ?? childOnFocus;
+  return cloneElement(children, {
+    ...rest,
+    ...(mergedOnFocus ? { onFocus: mergedOnFocus } : {}),
+    ref: mergedRef,
+  });
 });
 
 export function DesktopModal({
@@ -103,16 +154,18 @@ export function DesktopModal({
    *  and let the content lay out its own scrolling regions. */
   fill?: boolean;
 }): React.JSX.Element | null {
+  const titleId = useId();
   if (!open) return null;
   return (
     <Dialog
       open={open}
+      aria-labelledby={titleId}
       onClose={(event, reason): void => {
         if (reason === "escapeKeyDown") {
           const keyEvent = "nativeEvent" in event
             ? event.nativeEvent as KeyboardEvent
             : event as KeyboardEvent;
-          if (isImeKeyEvent(keyEvent)) return;
+          if (isImeKeyEvent(keyEvent) || desktopCompositionActive()) return;
         }
         onClose();
       }}
@@ -151,7 +204,7 @@ export function DesktopModal({
       <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 2.25, py: 1.55 }}>
         {icon}
         <Box sx={{ minWidth: 0 }}>
-          <Typography variant="subtitle1" fontWeight={780}>{title}</Typography>
+          <Typography id={titleId} variant="subtitle1" fontWeight={780}>{title}</Typography>
           {description && <Typography variant="caption" color="text.secondary">{description}</Typography>}
         </Box>
         <Box sx={{ flex: 1 }} />

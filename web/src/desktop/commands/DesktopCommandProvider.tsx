@@ -341,6 +341,19 @@ function nearestConversationWidget(
   });
 }
 
+function interceptImeEscape(
+  event: KeyboardEvent,
+  armed: boolean,
+  clearLeader: () => void,
+  clearJump: () => void,
+): boolean {
+  if (event.key !== "Escape" || desktopKeyIntent(event).owner !== "ime") return false;
+  if (!event.isComposing) event.stopPropagation();
+  if (armed) clearLeader();
+  clearJump();
+  return true;
+}
+
 function isModifierKey(key: string): boolean {
   return [
     "Alt",
@@ -385,8 +398,8 @@ export function DesktopCommandProvider(
     setHintsState(next);
   }, []);
   const workspace = useDesktopWorkspace();
-  const focusRef = useRef({ focusedPane: workspace.focusedPane, focusedRegion: workspace.focusedRegion });
-  focusRef.current = { focusedPane: workspace.focusedPane, focusedRegion: workspace.focusedRegion };
+  const workspaceRef = useRef(workspace);
+  workspaceRef.current = workspace;
   const clearWorkspaceCommand = useCallback((): void => {
     unlockEditableForLeader();
     leaderArmed.current = false;
@@ -448,7 +461,7 @@ export function DesktopCommandProvider(
     if (!command || command.when?.() === false) return false;
     if (
       !anyScope &&
-      !desktopCommandInScope(command, focusRef.current.focusedPane, focusRef.current.focusedRegion)
+      !desktopCommandInScope(command, workspaceRef.current.focusedPane, workspaceRef.current.focusedRegion)
     ) return false;
     command.run();
     return true;
@@ -495,15 +508,16 @@ export function DesktopCommandProvider(
     }
   }, [clearPendingJumpChord, workspace.focusedRegion, workspace.mode]);
 
+  const handlersRef = useRef({ armPendingJumpChord, armWorkspaceCommand, clearPendingJumpChord, clearWorkspaceCommand, setHints });
+  handlersRef.current = { armPendingJumpChord, armWorkspaceCommand, clearPendingJumpChord, clearWorkspaceCommand, setHints };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent): void => {
-      if (remoteViewerOwnsKey(event)) return; // The remote page owns every key.
-      // Vim in a native text field (inputVim) goes first: its Insert Esc and
-      // Normal motions belong to the field. An armed leader keeps its continuation; a composition keeps every key.
-      if (
-        !leaderArmed.current && desktopKeyIntent(event).owner !== "ime" &&
-        handleInputVimKey(event)
-      ) {
+      if (remoteViewerOwnsKey(event)) return;
+      const workspace = workspaceRef.current;
+      const { armPendingJumpChord, armWorkspaceCommand, clearPendingJumpChord, clearWorkspaceCommand, setHints } = handlersRef.current;
+      if (interceptImeEscape(event, leaderArmed.current, clearWorkspaceCommand, clearPendingJumpChord)) return;
+      // inputVim owns native text fields (Insert Esc & Normal motions) unless leader/IME is active.
+      if (!leaderArmed.current && desktopKeyIntent(event).owner !== "ime" && handleInputVimKey(event)) {
         clearPendingJumpChord();
         return;
       }
@@ -1404,14 +1418,7 @@ export function DesktopCommandProvider(
         itemChord.current = null;
       }
     };
-  }, [
-    armPendingJumpChord,
-    armWorkspaceCommand,
-    clearPendingJumpChord,
-    clearWorkspaceCommand,
-    setHints,
-    workspace,
-  ]);
+  }, []);
 
   const leader = useMemo<DesktopLeaderState>(() => ({
     armed: workspace.mode === "command",

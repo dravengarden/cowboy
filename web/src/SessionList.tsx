@@ -2673,14 +2673,14 @@ export function SessionList({
                     <Stack data-desktop-folder-actions spacing={0.5} sx={{ p: 2 }}>
                         <Typography variant="overline" color="text.secondary" sx={{ px: 1 }}>Actions</Typography>
                         {allowNewSession && onNewInFolder && (
-                            <Button data-folder-shortcut="n" autoFocus fullWidth startIcon={<Add />} onClick={(): void => { if (folderMenuFolder) onNewInFolder(folderMenuFolder.id); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
+                            <Button data-folder-shortcut="a" autoFocus fullWidth startIcon={<Add />} onClick={(): void => { if (folderMenuFolder) onNewInFolder(folderMenuFolder.id); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
                                 <Box component="span" sx={{ flex: 1, textAlign: "left" }}>New session here</Box>
-                                <Kbd keys="N" />
+                                <Kbd keys="A" />
                             </Button>
                         )}
-                        <Button data-folder-shortcut="f" fullWidth startIcon={<CreateNewFolderOutlined />} onClick={(): void => { if (folderMenuFolder) openFolderName({ mode: "create", parent: folderMenuFolder.id }); }} sx={{ justifyContent: "flex-start" }}>
+                        <Button data-folder-shortcut="n" fullWidth startIcon={<CreateNewFolderOutlined />} onClick={(): void => { if (folderMenuFolder) openFolderName({ mode: "create", parent: folderMenuFolder.id }); }} sx={{ justifyContent: "flex-start" }}>
                             <Box component="span" sx={{ flex: 1, textAlign: "left" }}>New folder inside</Box>
-                            <Kbd keys="F" />
+                            <Kbd keys="N" />
                         </Button>
                         <Button data-folder-shortcut="r" fullWidth startIcon={<DriveFileRenameOutline />} onClick={(): void => { if (folderMenuFolder) openFolderName({ mode: "rename", folder: folderMenuFolder }); }} sx={{ justifyContent: "flex-start" }}>
                             <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Rename</Box>

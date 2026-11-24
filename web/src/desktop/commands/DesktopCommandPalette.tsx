@@ -105,7 +105,7 @@ export function DesktopCommandPalette({
       width={680}
       shortcutGroups={paletteShortcutGroups(entries.length > 0, selectedAvailable)}
     >
-      <Box sx={{ px: 1.5, pb: 1.5, pt: 1.25 }}>
+      <Box data-desktop-modal-keys="own" sx={{ px: 1.5, pb: 1.5, pt: 1.25 }}>
         <Box
           sx={{
             minHeight: desktopSize(44),

@@ -40,6 +40,9 @@ export function desktopMenuNavigationKey(
     (focused?.matches(".MuiPopover-paper, .MuiPaper-root")
       ? focused.querySelector<HTMLElement>(DESKTOP_MENU_SELECTOR)
       : null);
+  if (menu?.closest("[data-desktop-keys='own'], [data-desktop-modal-keys='own']")) {
+    return false;
+  }
   const target = menu && focused && menu.contains(focused) ? focused : menu;
   if (!target || !menu || event.shiftKey && event.code !== "KeyG") return false;
   const intent = desktopKeyIntent(event);

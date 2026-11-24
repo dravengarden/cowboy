@@ -111,7 +111,7 @@ const NAVIGATION: ShortcutRow[] = [
   {
     keys: ["Ctrl+H/J/K/L"],
     title: "Move to the region left / below / above / right",
-    description: "By on-screen position, as LazyVim's window keys. Works from Vim Normal and every list, reader and bar, and inside dialogs; a field in Vim Insert keeps Ctrl+H/J/K",
+    description: "By on-screen position, as LazyVim's window keys. Works from Vim Normal, Insert, and every list, reader, bar, and dialog; only a pending Vim command keeps its next key",
   },
   { keys: [DESKTOP_SHORTCUTS.cycleRegion], title: "Cycle visible workspace regions" },
   {
@@ -489,6 +489,63 @@ function ShortcutsFilterBar({
   );
 }
 
+function handleShortcutsDialogKeyDown(
+  event: React.KeyboardEvent<HTMLDivElement>,
+  searchRef: React.RefObject<HTMLInputElement | null>,
+  bodyRef: React.RefObject<HTMLDivElement | null>,
+  pendingGo: React.MutableRefObject<number>,
+): void {
+  if (document.activeElement === searchRef.current) return;
+  const native = event.nativeEvent;
+  if (desktopImeOwnsKey(native) || event.metaKey || event.altKey) return;
+  const key = workspaceCommandKey(native);
+  const scroller = bodyRef.current?.parentElement ?? null;
+  if (event.ctrlKey && !event.shiftKey) {
+    const lower = key.toLowerCase();
+    if (scroller && ["d", "u", "f", "b"].includes(lower)) {
+      const dir = lower === "d" || lower === "f" ? 1 : -1;
+      const share = lower === "d" || lower === "u" ? 0.5 : 0.9;
+      scroller.scrollBy({ top: dir * scroller.clientHeight * share });
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    pendingGo.current = 0;
+    return;
+  }
+  if (event.ctrlKey) return;
+  if (key === "/") {
+    pendingGo.current = 0;
+    event.preventDefault();
+    event.stopPropagation();
+    searchRef.current?.focus();
+    return;
+  }
+  if (!scroller) return;
+  if (key === "g" && !event.shiftKey) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.repeat) return;
+    const now = Date.now();
+    if (pendingGo.current && now - pendingGo.current <= 1200) {
+      pendingGo.current = 0;
+      scroller.scrollTo({ top: 0 });
+    } else {
+      pendingGo.current = now;
+    }
+    return;
+  }
+  pendingGo.current = 0;
+  if (key === "G") {
+    scroller.scrollTo({ top: scroller.scrollHeight });
+    event.preventDefault();
+    event.stopPropagation();
+  } else if (key === "j" || key === "k") {
+    scroller.scrollBy({ top: key === "j" ? 64 : -64 });
+    event.preventDefault();
+    event.stopPropagation();
+  }
+}
+
 function DesktopShortcutsDialogContent({
   onClose,
 }: {
@@ -498,6 +555,8 @@ function DesktopShortcutsDialogContent({
   const registry = useDesktopCommands();
   const [query, setQuery] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
+  const bodyRef = useRef<HTMLDivElement>(null);
+  const pendingGo = useRef(0);
   const paneCommands = useMemo<ShortcutRow[]>(() =>
     registry.commands
       .filter((command) =>
@@ -558,16 +617,8 @@ function DesktopShortcutsDialogContent({
       description={`Vim-first navigation · ${workspace.focusedRegion ?? workspace.focusedPane}`}
       icon={<Keyboard color="primary" />}
       width={920}
-      onShortcutKeyDown={(event): void => {
-        if (document.activeElement === searchRef.current) return;
-        const native = event.nativeEvent;
-        if (desktopImeOwnsKey(native) || event.metaKey || event.ctrlKey || event.altKey) return;
-        if (workspaceCommandKey(native) === "/") {
-          event.preventDefault();
-          event.stopPropagation();
-          searchRef.current?.focus();
-        }
-      }}
+      onShortcutKeyDown={(event): void =>
+        handleShortcutsDialogKeyDown(event, searchRef, bodyRef, pendingGo)}
       shortcutGroups={[
         {
           slots: [{
@@ -576,10 +627,18 @@ function DesktopShortcutsDialogContent({
             availability: "active",
           }],
         },
-        { slots: [{ shortcut: "/", label: "Search" }] },
-        { slots: [{ shortcut: "Esc", label: "Close" }] },
+        {
+          label: "Scroll",
+          slots: [
+            { shortcut: "J/K", label: "Line" },
+            { shortcut: "Ctrl+D/U", label: "Half" },
+            { shortcut: "gg/G", label: "Top · Bottom" },
+          ],
+        },
+        { slots: [{ shortcut: "/", label: "Search" }, { shortcut: "Esc", label: "Close" }] },
       ]}
     >
+      <Box ref={bodyRef} data-desktop-modal-keys="own">
       <ShortcutsFilterBar inputRef={searchRef} query={query} onChange={setQuery} />
       <Box
         sx={{
@@ -606,6 +665,7 @@ function DesktopShortcutsDialogContent({
             active={section.active === true}
           />
         ))}
+      </Box>
       </Box>
     </DesktopModal>
   );

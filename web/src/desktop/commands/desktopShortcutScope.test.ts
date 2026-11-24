@@ -68,3 +68,63 @@ test("a leader Space's keyup is swallowed, never one the remote viewer received"
   assertEquals(machineBrowserOwnsKeys({ target: inside as unknown as EventTarget }, root(false)), true);
   assertEquals(machineBrowserOwnsKeys({ target: outside as unknown as EventTarget }, root(false)), false);
 });
+
+test("desktopOverlayOwnsShortcuts detects both portaled dialogs and in-root #root dialogs", () => {
+  class FakeDocNode {
+    constructor(
+      public readonly hasOverlay: boolean,
+      public readonly isSelf = false,
+    ) {}
+    matches(): boolean {
+      return this.isSelf;
+    }
+    querySelector(): unknown {
+      return this.hasOverlay ? {} : null;
+    }
+    closest(): unknown {
+      return null;
+    }
+  }
+  class FakeDocument {
+    readonly activeElement = null;
+    readonly body: { children: FakeDocNode[] };
+    constructor(
+      private readonly appRoot: FakeDocNode,
+      portals: FakeDocNode[] = [],
+    ) {
+      this.body = { children: [appRoot, ...portals] };
+    }
+    getElementById(id: string): FakeDocNode | null {
+      return id === "root" ? this.appRoot : null;
+    }
+    querySelector(): unknown {
+      return null;
+    }
+  }
+  const g = globalThis as Record<string, unknown>;
+  const savedDoc = g.Document;
+  const savedEl = g.Element;
+  g.Document = FakeDocument;
+  g.Element = FakeDocNode;
+  try {
+    assertEquals(
+      desktopOverlayOwnsShortcuts(new FakeDocument(new FakeDocNode(false)) as unknown as Document),
+      false,
+    );
+    // In-root dialog inside #root (F3: narrow Desktop DeleteSessionShell / ObsidianSheet)
+    assertEquals(
+      desktopOverlayOwnsShortcuts(new FakeDocument(new FakeDocNode(true)) as unknown as Document),
+      true,
+    );
+    // Portaled dialog directly under document.body
+    assertEquals(
+      desktopOverlayOwnsShortcuts(
+        new FakeDocument(new FakeDocNode(false), [new FakeDocNode(false, true)]) as unknown as Document,
+      ),
+      true,
+    );
+  } finally {
+    g.Document = savedDoc;
+    g.Element = savedEl;
+  }
+});

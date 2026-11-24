@@ -1,5 +1,5 @@
 import { Dialog, DialogContent, useMediaQuery, useTheme } from "@mui/material";
-import type { ReactNode } from "react";
+import { type ReactNode, useContext } from "react";
 import { createPortal } from "react-dom";
 import { BottomSheet, type BottomSheetProps } from "@cowboy/app-shell";
 import {
@@ -7,7 +7,7 @@ import {
   desktopModalPaperSx,
 } from "./desktop/DesktopEmbeddedControl";
 import { ObsidianSheet } from "./ObsidianSheet";
-import { useSurfaceProfile } from "./surface/SurfaceProfile";
+import { SurfaceContext, useSurfaceProfile } from "./surface/SurfaceProfile";
 
 function maybePortal(sheet: ReactNode, portal: boolean): ReactNode {
   // A picker nested inside a full-screen sheet otherwise inherits iOS
@@ -38,6 +38,12 @@ export function Sheet(
 ): ReactNode {
   const theme = useTheme();
   const widthIsMobile = useMediaQuery(theme.breakpoints.down("sm"));
+  // Desktop always keeps modal Dialog surfaces even in narrow (<1200px or
+  // <600px) windows; a width-derived `forceSheet={navbarAtBottom}` must never
+  // downgrade a Desktop confirmation into a non-modal touch sheet.
+  const desktopSurface = useContext(SurfaceContext)?.kind === "desktop";
+  const effectiveForceSheet = Boolean(props.forceSheet) && !desktopSurface;
+  const effectiveMobile = widthIsMobile && !desktopSurface;
   const {
     desktopMaxWidth,
     desktopFill = false,
@@ -49,7 +55,7 @@ export function Sheet(
   // Cover sheets stay on DetentSheet; compact phone/tablet sheets use the
   // flush bottom card.
   if (
-    desktopMaxWidth !== undefined && !widthIsMobile && !props.forceSheet
+    desktopMaxWidth !== undefined && !effectiveMobile && !effectiveForceSheet
   ) {
     return (
       <Dialog
@@ -113,7 +119,7 @@ export function Sheet(
       </Dialog>
     );
   }
-  const useCompactCard = (props.forceSheet || widthIsMobile) && !props.cover;
+  const useCompactCard = (effectiveForceSheet || effectiveMobile) && !props.cover;
   if (useCompactCard) {
     return maybePortal(
       <ObsidianSheet

@@ -265,6 +265,7 @@ function useRunConfigDraft(
   options: readonly ConfigOption[],
   configOpen: boolean,
   onClose: () => void,
+  panelRef: React.RefObject<HTMLDivElement | null>,
 ) {
   // Agent options are edited as a draft and sent together on Apply: stepping
   // through choices must not switch the live agent (and its context or
@@ -341,6 +342,7 @@ function useRunConfigDraft(
     suppressBareEnter: false,
     // Replace or fork submits its own form.
     ignoreWithin: "[data-new-session-editor]",
+    owner: panelRef,
   });
   const savedNames = new Map(
     draftChanges.map(({ configId }) => {
@@ -485,7 +487,7 @@ function RunConfigurationDialogContent({
     applyConfig,
     closeConfig,
     savedNames,
-  } = useRunConfigDraft(sessionId, options, true, onClose);
+  } = useRunConfigDraft(sessionId, options, true, onClose, panelRef);
   return (
     <DesktopModal
       open

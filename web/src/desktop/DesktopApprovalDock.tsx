@@ -375,7 +375,10 @@ function ApprovalDock({
               <CircularProgress size={desktopSize(12)} thickness={5} color="inherit" />
             )}
             {choice.label}
-            <DesktopApprovalKeycap index={index} available={!busy} />
+            <DesktopApprovalKeycap
+              index={index}
+              available={!busy && choice.disabled !== true}
+            />
           </Button>
         ))}
         {notice && (

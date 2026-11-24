@@ -38,7 +38,8 @@ import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { InfoContent } from "./InfoSheet";
 import { UsageLogs } from "./UsageLogs";
 import { desktopFocusBoundary, type Mode as ThemeMode } from "./theme";
-import { pageBelowBrowserSkipsKey } from "./desktop/commands/desktopShortcutScope";
+import { modalHandlerShouldSkip } from "./desktop/commands/modalGuard";
+import { isInputVimNormal } from "./desktop/vim/inputVim";
 import { workspaceCommandKey } from "./desktop/commands/workspaceCommandKey";
 import { sequentialShortcutAvailability } from "./desktop/commands/shortcutAvailability";
 import { DesktopPanel } from "./desktop/DesktopPanel";
@@ -1087,10 +1088,8 @@ export function MachinesContent({ embedded = false }: { embedded?: boolean } = {
 }
 
 export function isSettingsEditableTarget(target: EventTarget | null): target is HTMLElement {
-    return target instanceof HTMLElement && (
-        target.matches("input, textarea, select, [contenteditable='true']") ||
-        target.closest("[contenteditable='true']") !== null
-    );
+    return target instanceof HTMLElement && !isInputVimNormal(target) &&
+        (target.matches("input, textarea, select, [contenteditable='true']") || target.closest("[contenteditable='true']") !== null);
 }
 
 export function isSettingsTextEntryTarget(target: EventTarget | null): target is HTMLElement {
@@ -1420,7 +1419,7 @@ export function SettingsShell({
             )?.focus();
         });
         const onKeyDown = (event: KeyboardEvent): void => {
-            if (pageBelowBrowserSkipsKey(event)) return;
+            if (modalHandlerShouldSkip(event, settingsPanelRef.current, { allowEditable: true, allowPopup: true })) return;
             const target = event.target;
             if (isSettingsEditableTarget(target)) {
                 if (event.key === "Escape") {

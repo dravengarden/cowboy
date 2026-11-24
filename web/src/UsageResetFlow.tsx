@@ -76,6 +76,9 @@ export function useUsageResetFlow(
   const [waitingUntil, setWaitingUntil] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const pacing = useRef<AbortController | null>(null);
+  useEffect(() => () => {
+    pacing.current?.abort();
+  }, []);
   useEffect(() => {
     if (waitingUntil === null) return;
     const timer = setInterval(() => setNow(Date.now()), 1_000);
