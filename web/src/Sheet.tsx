@@ -10,7 +10,7 @@ import {
 import { type ReactNode, type Ref, useContext, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { BottomSheet, type BottomSheetProps, ScrollEdges } from "@cowboy/app-shell";
-import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
+
 import {
   desktopDialogSlotProps,
   InstantModalTransition,
@@ -96,6 +96,7 @@ function DesktopTitledSheet({
       slots={{ transition: InstantModalTransition }}
       slotProps={desktopDialogSlotProps({
         paperRef: desktopPaperRef,
+        onClose: () => onClose({}, "escapeKeyDown"),
         paperSx: {
           maxWidth: desktopDialogWidth !== undefined
             ? `min(${desktopDialogWidth}px, calc(100vw - 64px))`
@@ -182,6 +183,7 @@ export function Sheet(
         slots={{ transition: InstantModalTransition }}
         slotProps={desktopDialogSlotProps({
           paperRef: desktopPaperRef,
+          onClose: props.onClose,
           paperSx: workbenchPaperSx(
             desktopMaxWidth,
             desktopFill,
@@ -301,7 +303,10 @@ export function ConfirmSheet({
     if (!confirmReady || !activeConfirm) return;
     void activeConfirm.onConfirm();
   };
-  useConfirmEnter(confirmReady, triggerConfirm, { owner: dialogRef });
+  // On Desktop, bind the topmost-dialog owner ref; on touch/tablet (where
+  // ObsidianSheet renders instead of a Dialog paper), rely on the confirm stack
+  // so hardware keyboards keep Mod+Enter and bare-Enter protection.
+  useConfirmEnter(confirmReady, triggerConfirm, !forceSheet ? { owner: dialogRef } : {});
   const actions = explicitActions ?? (activeConfirm
     ? (
       <>
@@ -321,10 +326,13 @@ export function ConfirmSheet({
           disabled={!confirmReady}
           startIcon={activeConfirm.startIcon}
           onKeyDown={(e): void => {
-            // Block ALL native Enter activation (bare, repeat, Shift, Mod,
-            // repeat-Mod, Shift+Mod) on the affirmative button on Desktop;
-            // only the scoped capture handler accepts fresh unshifted Mod+Enter.
-            if (!forceSheet && e.key === "Enter" && !desktopImeOwnsKey(e.nativeEvent)) {
+            // Unconditionally suppress native button Enter activation on
+            // Desktop (even during post-composition hold — a button never
+            // hosts IME composition); only useConfirmEnter accepts fresh Mod+Enter.
+            if (
+              !forceSheet &&
+              (e.key === "Enter" || e.code === "Enter" || e.code === "NumpadEnter")
+            ) {
               e.preventDefault();
             }
           }}

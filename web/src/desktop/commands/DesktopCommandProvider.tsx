@@ -317,9 +317,17 @@ function visibleRegionItems(region: HTMLElement | null): HTMLElement[] {
 }
 
 function conversationWidgets(region: HTMLElement | null, includeActions = false): HTMLElement[] {
-  const selector = includeActions ? "[data-desktop-widget-toggle], [data-desktop-transcript-stop]" : "[data-desktop-widget-toggle]";
+  const selector = includeActions
+    ? "[data-desktop-widget-toggle], [data-desktop-transcript-stop], a[href], button, input:not([type='hidden']), select, textarea, summary, [contenteditable='true'], [tabindex]:not([tabindex='-1'])"
+    : "[data-desktop-widget-toggle]";
   return [...(region?.querySelectorAll<HTMLElement>(selector) ?? [])]
-    .filter((element) => element.offsetParent !== null && !element.matches(":disabled, [aria-disabled='true']"))
+    .filter((element) => {
+      if (element.offsetParent === null || element.matches(":disabled, [aria-disabled='true']")) return false;
+      if (element.hasAttribute("data-desktop-transcript-scroller")) return false;
+      const marked = element.matches("[data-desktop-widget-toggle], [data-desktop-transcript-stop]");
+      if (!marked && element.tabIndex < 0) return false;
+      return !element.closest("[aria-hidden='true'], [inert]");
+    })
     .sort((left, right) => {
       const a = left.getBoundingClientRect();
       const b = right.getBoundingClientRect();
@@ -928,9 +936,9 @@ export function DesktopCommandProvider(
       const activeWidget = activeEl?.closest<HTMLElement>("[data-desktop-widget-toggle]") ?? null;
       const activeActionStop = activeEl?.closest<HTMLElement>("[data-desktop-transcript-stop]") ?? null;
       const activeOtherControl = activeEl !== null && !activeWidget && !activeActionStop && isInteractiveControl(activeEl);
-      if (workspace.mode === "normal" && scrollNavigation && region && !activeOtherControl && workspaceCommandKey(event) === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      if (workspace.mode === "normal" && scrollNavigation && region && workspaceCommandKey(event) === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey) {
         const stops = conversationWidgets(region, true);
-        const activeStop = activeWidget ?? activeActionStop;
+        const activeStop = activeWidget ?? activeActionStop ?? (activeEl && stops.includes(activeEl) ? activeEl : null);
         const current = activeStop ? stops.indexOf(activeStop) : -1;
         const nearest = nearestConversationWidget(region, stops);
         const next = current >= 0 ? current + (event.shiftKey ? -1 : 1) : (nearest ? stops.indexOf(nearest) : -1);

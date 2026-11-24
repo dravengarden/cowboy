@@ -11,6 +11,7 @@ import { Close } from "@mui/icons-material";
 import {
   cloneElement,
   forwardRef,
+  type KeyboardEvent as ReactKeyboardEvent,
   type KeyboardEventHandler,
   type ReactElement,
   type ReactNode,
@@ -22,7 +23,9 @@ import {
   useState,
 } from "react";
 import { useVimSetting } from "../vimSetting";
-import { desktopImeOwnsKey } from "./commands/imeShortcut";
+import { popupOwnsKeys } from "./commands/hintTargets";
+import { desktopImeOwnsKey, shortcutKey } from "./commands/imeShortcut";
+import { isTopmostDialog, owningDialog } from "./commands/modalGuard";
 import { HintTooltip } from "../HintTooltip";
 import {
   desktopModalBackdropSx,
@@ -83,15 +86,52 @@ export function isImeBlockedEscape(event: object, reason: string): boolean {
   return desktopImeOwnsKey(keyEvent);
 }
 
+/** Close a Desktop dialog when an idle CJK input source reports physical
+ *  `Escape` as `Process` (which MUI's raw `event.key === "Escape"` misses).
+ *  Ordinary `Escape` is still handled once by MUI `onClose`. */
+export function handleIdleCjkDialogEscape(
+  event: ReactKeyboardEvent<HTMLElement>,
+  onClose: () => void,
+): void {
+  const native = event.nativeEvent;
+  if (event.defaultPrevented || native.defaultPrevented) return;
+  if (event.key === "Escape" || desktopImeOwnsKey(native)) return;
+  if (shortcutKey(native) !== "Escape") return;
+  const dialogNode = owningDialog(event.currentTarget)
+    ?? (typeof event.currentTarget.querySelector === "function"
+      ? event.currentTarget.querySelector<HTMLElement>("[role='dialog'][aria-modal='true']")
+      : null);
+  if (popupOwnsKeys() || !isTopmostDialog(dialogNode)) return;
+  event.preventDefault();
+  event.stopPropagation();
+  onClose();
+}
+
 /** Shared MUI Dialog `slotProps` for Desktop frosted modals: unified glass
- *  material, backdrop scrim, and zero-reflow InstantModalTransition. */
+ *  material, backdrop scrim, zero-reflow InstantModalTransition, and idle-CJK
+ *  Escape close parity. */
 export function desktopDialogSlotProps(options?: {
   paperSx?: Record<string, unknown> | undefined;
   paperRef?: Ref<HTMLDivElement> | undefined;
-  root?: Record<string, unknown> | undefined;
+  root?: (Record<string, unknown> & { onKeyDown?: KeyboardEventHandler<HTMLDivElement> | undefined }) | undefined;
+  onClose?: (() => void) | undefined;
 }) {
+  const existingOnKeyDown = options?.root?.onKeyDown;
+  const onClose = options?.onClose;
+  const rootOnKeyDown: KeyboardEventHandler<HTMLDivElement> | undefined =
+    existingOnKeyDown || onClose
+      ? (event): void => {
+        existingOnKeyDown?.(event);
+        if (onClose && !event.isPropagationStopped()) {
+          handleIdleCjkDialogEscape(event, onClose);
+        }
+      }
+      : undefined;
+  const root = options?.root || rootOnKeyDown
+    ? { ...(options?.root), ...(rootOnKeyDown ? { onKeyDown: rootOnKeyDown } : {}) }
+    : undefined;
   return {
-    ...(options?.root ? { root: options.root } : {}),
+    ...(root ? { root } : {}),
     paper: {
       ...(options?.paperRef ? { ref: options.paperRef } : {}),
       sx: {
@@ -202,33 +242,23 @@ export function DesktopModal({
       maxWidth={false}
       disableScrollLock
       slots={{ transition: InstantModalTransition }}
-      slotProps={{
-        ...(onShortcutKeyDown
-          ? { root: { onKeyDown: onShortcutKeyDown } }
-          : {}),
-        paper: {
-          sx: {
-            ...desktopModalPaperSx(),
-            ...(fill
-              ? {
-                width: "min(1760px, calc(100vw - 48px))",
-                height: "calc(100vh - 48px)",
-                maxWidth: "none",
-                maxHeight: "none",
-                m: 3,
-              }
-              : {
-                width: `min(${width}px, calc(100vw - 64px))`,
-                maxHeight: "min(860px, calc(100vh - 64px))",
-                m: 4,
-              }),
+      slotProps={desktopDialogSlotProps({
+        root: { onKeyDown: onShortcutKeyDown },
+        onClose,
+        paperSx: fill
+          ? {
+            width: "min(1760px, calc(100vw - 48px))",
+            height: "calc(100vh - 48px)",
+            maxWidth: "none",
+            maxHeight: "none",
+            m: 3,
+          }
+          : {
+            width: `min(${width}px, calc(100vw - 64px))`,
+            maxHeight: "min(860px, calc(100vh - 64px))",
+            m: 4,
           },
-        },
-        backdrop: {
-          slots: { transition: InstantModalTransition },
-          sx: desktopModalBackdropSx(),
-        },
-      }}
+      })}
     >
       <Stack direction="row" alignItems="center" spacing={1.25} sx={{ px: 2.25, py: 1.55 }}>
         {icon}

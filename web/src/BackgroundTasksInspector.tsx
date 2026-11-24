@@ -574,6 +574,7 @@ export function BackgroundTasksInspector({
         slots={{ transition: InstantModalTransition }}
         slotProps={desktopDialogSlotProps({
           root: { onKeyDown: keys },
+          onClose: close,
           paperSx: {
             width: "calc(100vw - 32px)",
             maxWidth: 1600,

@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../../../tools/test-assert.ts";
 import {
+  focusAdjacentOutsideRegion,
   isInteractiveControl,
   isModalEditableTarget,
   isTopmostDialog,
@@ -128,5 +129,46 @@ test("isInteractiveControl recognizes native buttons and links", () => {
     span.parent = btn;
     assertEquals(isInteractiveControl(span as unknown as EventTarget), true);
     assertEquals(isInteractiveControl(new FakeDomElement(["div"]) as unknown as EventTarget), false);
+  });
+});
+
+test("focusAdjacentOutsideRegion skips tabindex=-1 controls such as status-line buttons", () => {
+  withDomGlobals(() => {
+    const g = globalThis as Record<string, unknown>;
+    const savedDoc = g.document;
+    const savedNode = g.Node;
+    g.Node = {
+      DOCUMENT_POSITION_PRECEDING: 2,
+      DOCUMENT_POSITION_FOLLOWING: 4,
+    };
+    let focused: string | null = null;
+    const makeBtn = (id: string, tabIndex: number, pos: number) => ({
+      id,
+      tabIndex,
+      pos,
+      matches: () => false,
+      closest: () => null,
+      getClientRects: () => [{ width: 40, height: 20 }],
+      focus: () => { focused = id; },
+    });
+    const before = makeBtn("sessions-row", 0, 2);
+    const statusBtn = makeBtn("status-commands", -1, 4);
+    const composer = makeBtn("composer-input", 0, 4);
+    const region = {
+      contains: () => false,
+      compareDocumentPosition: (el: { pos: number }) => el.pos,
+    } as unknown as HTMLElement;
+    g.document = {
+      querySelectorAll: () => [before, statusBtn, composer],
+    };
+    try {
+      assertEquals(focusAdjacentOutsideRegion(region, 1), true);
+      assertEquals(focused, "composer-input");
+      assertEquals(focusAdjacentOutsideRegion(region, -1), true);
+      assertEquals(focused, "sessions-row");
+    } finally {
+      g.document = savedDoc;
+      g.Node = savedNode;
+    }
   });
 });

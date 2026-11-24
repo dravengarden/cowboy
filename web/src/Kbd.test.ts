@@ -1,6 +1,6 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../tools/test-assert.ts";
-import { confirmEnterIntent } from "./confirmShortcut";
+import { confirmEnterIntent, desktopConfirmEnterIntent } from "./confirmShortcut";
 import { isMac } from "./platform";
 
 function keyEvent(
@@ -31,4 +31,29 @@ test("confirm modals accept only the platform Command chord", () => {
   assertEquals(confirmEnterIntent(keyEvent({ shiftKey: true })), "ignore");
   assertEquals(confirmEnterIntent(keyEvent({ isComposing: true })), "ignore");
   assertEquals(confirmEnterIntent(keyEvent({ keyCode: 229 })), "ignore");
+});
+
+test("desktopConfirmEnterIntent accepts idle CJK Mod+Enter and ignores composition", () => {
+  const mod = isMac ? { metaKey: true } : { ctrlKey: true };
+  assertEquals(
+    desktopConfirmEnterIntent(
+      keyEvent({ key: "Process", code: "Enter", keyCode: 229, ...mod }),
+      { composing: false },
+    ),
+    "confirm",
+  );
+  assertEquals(
+    desktopConfirmEnterIntent(
+      keyEvent({ key: "Process", code: "Enter", keyCode: 229, isComposing: true, ...mod }),
+      { composing: false },
+    ),
+    "ignore",
+  );
+  assertEquals(
+    desktopConfirmEnterIntent(
+      keyEvent({ key: "Enter", code: "Enter", ...mod }),
+      { composing: true },
+    ),
+    "ignore",
+  );
 });

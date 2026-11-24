@@ -6,7 +6,7 @@ import {
   type ShortcutKeycapVariant,
 } from "./ShortcutKeycap";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
-import { confirmEnterIntent } from "./confirmShortcut";
+import { desktopConfirmEnterIntent } from "./confirmShortcut";
 import { popupOwnsKeys } from "./desktop/commands/hintTargets";
 import { desktopImeOwnsKey } from "./desktop/commands/imeShortcut";
 import { desktopCompositionActive } from "./desktop/commands/keyIntent";
@@ -90,12 +90,13 @@ export function useConfirmEnter(
         return;
       }
       if (ignoreWithin && e.target instanceof Element && e.target.closest(ignoreWithin)) return;
-      const intent = confirmEnterIntent(e);
+      const intent = desktopConfirmEnterIntent(e);
       if (intent === "ignore") {
         // Never allow repeat Enter/Mod+Enter or Shift+Enter/Shift+Mod+Enter to
         // fall through to native button activation inside confirmation dialogs.
+        const isEnter = e.key === "Enter" || e.code === "Enter" || e.code === "NumpadEnter";
         if (
-          suppressBareEnter && e.key === "Enter" && !desktopImeOwnsKey(e) &&
+          suppressBareEnter && isEnter && !desktopImeOwnsKey(e) &&
           e.target instanceof Element &&
           e.target.closest("button, [role='button']") !== null
         ) {

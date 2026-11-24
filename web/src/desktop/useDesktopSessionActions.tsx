@@ -174,7 +174,7 @@ export function useDesktopSessionActions(sessionId: string, status: Status): Des
   const provider = session?.provider ?? "the agent";
   const dialogs = (
     <>
-      {open === "compact" && <Dialog open onClose={(e, r) => { if (!isImeBlockedEscape(e, r)) close(); }} maxWidth="xs" fullWidth disableScrollLock slots={{ transition: InstantModalTransition }} slotProps={desktopDialogSlotProps()}>
+      {open === "compact" && <Dialog open onClose={(e, r) => { if (!isImeBlockedEscape(e, r)) close(); }} maxWidth="xs" fullWidth disableScrollLock slots={{ transition: InstantModalTransition }} slotProps={desktopDialogSlotProps({ onClose: close })}>
         <DialogTitle>Compact conversation?</DialogTitle>
         <DialogContent>
           <DialogContentText>{compactAction?.detail}</DialogContentText>
@@ -208,7 +208,7 @@ export function useDesktopSessionActions(sessionId: string, status: Status): Des
           </Button>
         </DialogActions>
       </Dialog>}
-      {open === "clear" && <Dialog open onClose={(e, r) => { if (!isImeBlockedEscape(e, r)) close(); }} maxWidth="xs" fullWidth disableScrollLock slots={{ transition: InstantModalTransition }} slotProps={desktopDialogSlotProps()}>
+      {open === "clear" && <Dialog open onClose={(e, r) => { if (!isImeBlockedEscape(e, r)) close(); }} maxWidth="xs" fullWidth disableScrollLock slots={{ transition: InstantModalTransition }} slotProps={desktopDialogSlotProps({ onClose: close })}>
         <DialogTitle>Clear conversation?</DialogTitle>
         <DialogContent>
           <DialogContentText>{clearAction?.detail}</DialogContentText>

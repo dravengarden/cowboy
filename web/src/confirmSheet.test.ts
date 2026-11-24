@@ -89,5 +89,6 @@ test("Desktop Sheet and ConfirmSheet share frosted DesktopModal material and opt
   assert(sheetSource.includes("useConfirmEnter(confirmReady"));
   assert(sheetSource.includes("owner: dialogRef"));
   assert(sheetSource.includes("const activeConfirm = explicitActions == null ? confirm : undefined"));
-  assert(sheetSource.includes("!desktopImeOwnsKey(e.nativeEvent)"));
+  assert(sheetSource.includes('e.code === "NumpadEnter"'));
+  assert(sheetSource.includes("!forceSheet ? { owner: dialogRef } : {}"));
 });

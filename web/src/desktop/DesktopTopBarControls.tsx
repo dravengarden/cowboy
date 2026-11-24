@@ -651,7 +651,7 @@ function DesktopUsageExtras(
         maxWidth="xs"
         disableScrollLock
         slots={{ transition: InstantModalTransition }}
-        slotProps={desktopDialogSlotProps()}
+        slotProps={desktopDialogSlotProps({ onClose: reset.close })}
       >
         <DialogTitle>
           {reset.mode === "schedule"

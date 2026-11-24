@@ -833,6 +833,7 @@ export function ToolDetailsBrowser({
           disableScrollLock
           slots={{ transition: InstantModalTransition }}
           slotProps={desktopDialogSlotProps({
+            onClose,
             paperSx: {
               width: "calc(100vw - 32px)",
               maxWidth: 1600,

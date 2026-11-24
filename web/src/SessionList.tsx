@@ -3529,7 +3529,10 @@ export function CreateDialog({
                     <Button
                         onClick={create}
                         onKeyDown={(e): void => {
-                            if (desktop && e.key === "Enter" && !desktopImeOwnsKey(e.nativeEvent)) {
+                            if (
+                                desktop &&
+                                (e.key === "Enter" || e.code === "Enter" || e.code === "NumpadEnter")
+                            ) {
                                 e.preventDefault();
                             }
                         }}

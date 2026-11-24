@@ -108,6 +108,7 @@ export function focusAdjacentOutsideRegion(
   const candidates = [...document.querySelectorAll<HTMLElement>(TABBABLE_SELECTOR)]
     .filter((element) => {
       if (region.contains(element)) return false;
+      if (element.tabIndex < 0) return false;
       if (element.matches(":disabled, [aria-disabled='true']")) return false;
       if (element.closest("[aria-hidden='true'], [inert]")) return false;
       if (typeof element.getClientRects === "function" && element.getClientRects().length === 0) {
