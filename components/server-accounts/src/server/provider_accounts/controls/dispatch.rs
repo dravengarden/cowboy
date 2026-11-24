@@ -66,11 +66,26 @@ impl Controls {
                             && control.until_ms.is_some_and(|until| until <= now_ms())
                     })
                     .ok_or_else(|| wait("the account's state changed; send again"))?;
+                // A quota group whose usage still shows an exhausted window
+                // stays limited until that window resets, instead of
+                // spending a dispatch on a certain refusal.
+                let extended = match policy::rate_limit_scope(&control.reason) {
+                    Some(group) => {
+                        let owner = meta.owner_user_id.clone().unwrap_or_default();
+                        self.group_reset_ms(owner, &meta.provider_account_id, group)
+                            .await
+                    }
+                    None => None,
+                };
+                let (next, reason) = match extended {
+                    Some(_) => (AccountState::RateLimited, control.reason.as_str()),
+                    None => (AccountState::Ok, "rate_limit_ended"),
+                };
                 self.enter(
                     &control,
-                    AccountState::Ok,
-                    "rate_limit_ended",
-                    None,
+                    next,
+                    reason,
+                    extended,
                     Some(control.revision),
                     false,
                 )

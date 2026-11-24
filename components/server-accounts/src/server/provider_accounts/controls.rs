@@ -48,6 +48,15 @@ pub trait Env: Send + Sync + 'static {
     fn worker(&self, session: &str) -> Option<crate::runtime_wire::WorkerSnapshot>;
     fn machine_connected(&self, machine: &str) -> bool;
     fn admitted(&self, account: &ProviderAccountId) -> bool;
+    /// The model a session's next turn uses: its durable selection, else
+    /// the agent's last advertised value.
+    fn model(&self, session: &str) -> Option<String>;
+    /// The `rate_limits` of the account's last usage observation, if any.
+    fn rate_limits(
+        &self,
+        owner: String,
+        account: ProviderAccountId,
+    ) -> futures::future::BoxFuture<'static, Option<Value>>;
     fn setting(&self, key: &str) -> Option<Value>;
     /// Publish a setting the caller already wrote durably (in memory only:
     /// every writer persists first, under the controls' writer lock).
@@ -99,6 +108,28 @@ impl Env for AppEnv {
 
     fn admitted(&self, account: &ProviderAccountId) -> bool {
         admitted(&self.0, account)
+    }
+
+    fn model(&self, session: &str) -> Option<String> {
+        self.0
+            .hub
+            .current_config_value(session, "model")?
+            .as_str()
+            .map(str::to_owned)
+    }
+
+    fn rate_limits(
+        &self,
+        owner: String,
+        account: ProviderAccountId,
+    ) -> futures::future::BoxFuture<'static, Option<Value>> {
+        let state = Arc::clone(&self.0);
+        Box::pin(async move {
+            let value = super::usage::read_one(&state, &owner, &account)
+                .await
+                .ok()?;
+            Some(value["usage"]["rate_limits"].clone()).filter(Value::is_object)
+        })
     }
 
     fn setting(&self, key: &str) -> Option<Value> {
@@ -410,12 +441,14 @@ impl Controls {
         }
         let control = self.cache.control(meta.provider_account_id.as_str());
         let uncertain = self.uncertain(&meta.id);
+        let model = self.env.model(&meta.id);
         policy::gate(&GateInput {
             admitted: self.env.admitted(&meta.provider_account_id),
             control: control.as_ref(),
             uncertain: uncertain
                 .as_ref()
                 .map(|(method, sequence)| (method.as_str(), *sequence)),
+            quota_group: model.as_deref().and_then(policy::quota_group),
             now_ms: now_ms(),
         })
     }
@@ -446,9 +479,11 @@ impl Controls {
             return Err(wait(SIGNAL_PENDING));
         }
         let control = self.cache.control(meta.provider_account_id.as_str());
+        let model = self.env.model(&meta.id);
         policy::revival_allowed(
             self.env.admitted(&meta.provider_account_id),
             control.as_ref(),
+            model.as_deref().and_then(policy::quota_group),
             now_ms(),
         )
         .map_err(|reason| wait(&reason))
@@ -557,8 +592,11 @@ impl Controls {
         provider: &str,
         transition: &policy::Transition,
     ) -> Result<bool, &'static str> {
-        let until = (transition.state == AccountState::RateLimited)
-            .then(|| now_ms().saturating_add(policy::DEFAULT_RATE_LIMIT_MS));
+        let until = (transition.state == AccountState::RateLimited).then(|| {
+            transition
+                .until_ms
+                .unwrap_or_else(|| now_ms().saturating_add(policy::DEFAULT_RATE_LIMIT_MS))
+        });
         let write = self.cache.writes.lock().await;
         let machines = if transition.stop_units {
             self.account_machines(account).await?

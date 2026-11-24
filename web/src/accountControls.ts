@@ -135,9 +135,40 @@ const STATE_LABELS: Record<string, string> = {
   needs_attention: "Needs attention",
 };
 
+const RATE_LIMIT_SCOPE_PREFIX = "rate_limited:";
+const QUOTA_GROUP_LABELS: Record<string, string> = { gemini: "Gemini", claude_gpt: "Claude/GPT" };
+
+/** The quota group a model draws on (`account_controls::quota_group`):
+ * Antigravity meters Gemini and third-party (Claude, GPT) models separately. */
+export function quotaGroup(model: string | undefined): string | undefined {
+  const value = model?.trim().toLowerCase() ?? "";
+  if (value.startsWith("gemini")) return "gemini";
+  if (value.startsWith("claude") || value.startsWith("gpt")) return "claude_gpt";
+  return undefined;
+}
+
+/** The quota group a rate limit's reason holds for; undefined account-wide. */
+export function rateLimitScope(reason: string | null | undefined): string | undefined {
+  return reason?.startsWith(RATE_LIMIT_SCOPE_PREFIX) ? reason.slice(RATE_LIMIT_SCOPE_PREFIX.length) || undefined : undefined;
+}
+
+/** Whether a running rate limit of another quota group leaves a session of
+ * `model` free to send (the Controller's dispatch gate decides the same). */
+function otherGroupLimited(control: AccountControl, model: string | undefined, now: number): boolean {
+  const scope = rateLimitScope(control.reason);
+  const group = quotaGroup(model);
+  const running = control.until_ms === null || control.until_ms === undefined || control.until_ms > now;
+  return control.state === "rate_limited" && running && scope !== undefined && group !== undefined && group !== scope;
+}
+
 /** The owner-facing text of a control reason code. */
 export function controlReasonText(reason: string | null | undefined): string | undefined {
   if (!reason) return undefined;
+  if (reason === "rate_limited") return "All models of this account";
+  const scope = rateLimitScope(reason);
+  if (scope === "gemini") return "Claude and GPT models still run";
+  if (scope === "claude_gpt") return "Gemini models still run";
+  if (scope) return `${scope.replaceAll("_", " ")} models only`;
   if (reason.startsWith("policy_violation:")) return `A built-in tool ran (${reason.slice("policy_violation:".length)})`;
   const known: Record<string, string> = {
     owner_block: "Blocked by the owner",
@@ -166,8 +197,10 @@ export function accountStateBadge(control: AccountControl, signIn: "signed_in" |
   }
   if (control.state === "rate_limited") {
     const until = control.until_ms ?? undefined;
+    const scope = rateLimitScope(control.reason);
+    const subject = scope ? `${QUOTA_GROUP_LABELS[scope] ?? scope} rate limited` : "Rate limited";
     return until !== undefined && until > now
-      ? { label: `Rate limited until ${controlTime(until)}`, tone: "warning", detail }
+      ? { label: `${subject} until ${controlTime(until)}`, tone: "warning", detail }
       : { label: "Rate limit ended · resumes with the next prompt", tone: "warning", detail };
   }
   const label = STATE_LABELS[control.state] ?? "Unknown refusal";
@@ -216,6 +249,8 @@ export function logoutStatus(logout: AccountLogout | null | undefined): string |
 export function pickerUnavailableReason(control: AccountControl | undefined, loginReason: string | undefined, now = Date.now()): string | undefined {
   if (!control) return "Account state not loaded";
   if (!control.admitted) return "Not admitted for sessions";
+  // A rate limit of one quota group leaves the account usable for the other.
+  if (control.state === "rate_limited" && rateLimitScope(control.reason) !== undefined) return loginReason;
   if (control.state !== "ok") {
     const badge = accountStateBadge(control, undefined, now);
     return badge.detail && control.state !== "blocked" ? `${badge.label} · ${badge.detail}` : badge.label;
@@ -250,14 +285,16 @@ export function uncertainEffectGuidance(method: string): { what: string; check: 
 
 /** Why a session of a governed account cannot send now. `wait` is the
  * session's server-reported resource wait (the parked queue's reason). */
-export function sessionParkedReason(control: AccountControl | undefined, session: string, wait: string | undefined, now = Date.now()): ParkedReason | undefined {
+export function sessionParkedReason(
+  control: AccountControl | undefined, session: string, wait: string | undefined, now = Date.now(), model?: string,
+): ParkedReason | undefined {
   const uncertain = control?.uncertain_effects.find((effect) => effect.session_id === session);
   if (uncertain) {
     const { what, check } = uncertainEffectGuidance(uncertain.method);
     return { text: `The outcome of ${what} (${uncertain.method}) is unknown. ${check} Then acknowledge it to resume.`, uncertain };
   }
   if (control && !control.admitted) return { text: "This account is not admitted for sessions." };
-  if (control && control.state !== "ok") {
+  if (control && control.state !== "ok" && !otherGroupLimited(control, model, now)) {
     const badge = accountStateBadge(control, undefined, now);
     return { text: badge.detail ? `${badge.label} · ${badge.detail}` : badge.label };
   }

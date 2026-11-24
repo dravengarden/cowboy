@@ -864,7 +864,8 @@ query and force release of "Controller account controls (step 5a)" and the
   arrives as `unknown_refusal`. The raise is one transaction compared with
   the stored state: it never lowers a more severe state and never replaces
   `blocked`. `suspended`, `blocked` and `needs_attention` write stop fences.
-  A rate limit holds one hour and the first dispatch after it resumes it,
+  A rate limit holds until its quota group resets (default one hour; see
+  "Rate limits per quota group") and the first dispatch after it resumes it,
   and only the expired rate limit that admitted that dispatch (compared by
   revision in the write) is cleared. A signal is registered before the
   turn ending is acknowledged; the account's dispatches and revivals park
@@ -1032,8 +1033,36 @@ part of the "Daemon" decision; everything else in Revision 5 holds.
   concurrent writers to shared state is the vendor's, and an `agy` failure
   there would surface as an ordinary turn error (`unknown_refusal`, owner
   clears it).
-- A rate limit is account-wide: the first dispatch after it ends, in any
-  session of the account, resumes all of them.
+- A rate limit holds for the quota group of the refused session's model
+  (see "Rate limits per quota group"); the first dispatch after it ends, in
+  any session of the account, resumes it.
+
+## Rate limits per quota group (2026-11-24)
+
+Google meters an Antigravity account's Gemini models ("Gemini Models") and
+third-party models ("Claude and GPT models") in separate quotas. On
+2026-11-24 four parallel Claude review sessions used up Husky's Claude and GPT
+five-hour window; their `429 RESOURCE_EXHAUSTED` parked the whole account for
+the default hour, although Gemini had its full quota and the Claude window
+reset four hours later. The rate limit is therefore scoped:
+
+- **Scope.** The raise records the quota group of the refused session's
+  model (`gemini-*` → `gemini`; `claude-*`, `gpt-*` → `claude_gpt`) in the
+  control's reason, `rate_limited:<group>`. A model of no known group, or a
+  second group refusing while one limit runs, makes it account-wide
+  (`rate_limited`), merged in the raise transaction with the later end.
+- **Gate.** A running scoped limit parks dispatches and revivals of
+  sessions whose model is in that group or unknown; a session of the other
+  group proceeds and leaves the limit in place. The model is the session's
+  durable selection, else its last advertised value.
+- **End.** The limit holds until the group's latest exhausted window resets,
+  from the account's last usage observation; without one (the observation
+  predates the refusal) it holds the default hour. When it ends, the
+  resuming dispatch checks usage again and extends a group that is still
+  used up instead of spending a turn on a certain refusal.
+- **UX.** The card and composer name the group ("Claude/GPT rate limited
+  until …", "Gemini models still run"); a scoped limit does not make the
+  account unchoosable for a new session.
 
 ## Antigravity features (0.2.1)
 

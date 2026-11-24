@@ -18,6 +18,7 @@ fn input(control: Option<&Control>, now_ms: i64) -> GateInput<'_> {
         admitted: true,
         control,
         uncertain: None,
+        quota_group: None,
         now_ms,
     }
 }
@@ -70,7 +71,7 @@ fn every_non_ok_state_parks_dispatch_and_admission_comes_first() {
             matches!(gate(&input(Some(&record), 0)), Gate::Park(_)),
             "{state:?}"
         );
-        assert!(revival_allowed(true, Some(&record), 0).is_err());
+        assert!(revival_allowed(true, Some(&record), None, 0).is_err());
     }
     let uncertain = GateInput {
         uncertain: Some(("fs/writeFile", 2)),
@@ -91,8 +92,103 @@ fn a_rate_limit_parks_until_it_ends_then_the_next_dispatch_resumes() {
             clears_rate_limit: true
         }
     );
-    assert!(revival_allowed(true, Some(&limited), 1_000).is_ok());
-    assert!(revival_allowed(true, Some(&limited), 999).is_err());
+    assert!(revival_allowed(true, Some(&limited), None, 1_000).is_ok());
+    assert!(revival_allowed(true, Some(&limited), None, 999).is_err());
+}
+
+#[test]
+fn models_map_to_their_quota_groups() {
+    assert_eq!(quota_group("gemini-4-neon"), Some(GEMINI_GROUP));
+    assert_eq!(quota_group("Gemini-4-Hydrogen"), Some(GEMINI_GROUP));
+    assert_eq!(quota_group("claude-opus-5-5"), Some(CLAUDE_GPT_GROUP));
+    assert_eq!(quota_group("gpt-oss-120b"), Some(CLAUDE_GPT_GROUP));
+    assert_eq!(quota_group("default"), None);
+    assert_eq!(rate_limit_reason(Some(GEMINI_GROUP)), "rate_limited:gemini");
+    assert_eq!(rate_limit_reason(None), "rate_limited");
+    assert_eq!(
+        rate_limit_scope("rate_limited:claude_gpt"),
+        Some(CLAUDE_GPT_GROUP)
+    );
+    assert_eq!(rate_limit_scope("rate_limited"), None);
+    assert_eq!(rate_limit_scope("rate_limited:"), None);
+}
+
+#[test]
+fn a_scoped_rate_limit_parks_only_its_own_and_unknown_groups() {
+    let mut limited = control(AccountState::RateLimited, Some(1_000));
+    limited.reason = "rate_limited:claude_gpt".into();
+    let group = |quota_group| GateInput {
+        quota_group,
+        ..input(Some(&limited), 999)
+    };
+    assert!(
+        matches!(gate(&group(Some(CLAUDE_GPT_GROUP))), Gate::Park(r) if r.contains("Claude and GPT"))
+    );
+    assert!(matches!(gate(&group(None)), Gate::Park(_)));
+    assert_eq!(
+        gate(&group(Some(GEMINI_GROUP))),
+        Gate::Proceed {
+            clears_rate_limit: false
+        }
+    );
+    assert!(revival_allowed(true, Some(&limited), Some(GEMINI_GROUP), 999).is_ok());
+    assert!(revival_allowed(true, Some(&limited), Some(CLAUDE_GPT_GROUP), 999).is_err());
+    // An account-wide limit parks every group.
+    let wide = control(AccountState::RateLimited, Some(1_000));
+    let gemini = GateInput {
+        quota_group: Some(GEMINI_GROUP),
+        ..input(Some(&wide), 999)
+    };
+    assert!(matches!(gate(&gemini), Gate::Park(_)));
+}
+
+#[test]
+fn a_groups_reset_is_its_latest_exhausted_window() {
+    let limits = serde_json::json!({"rateLimitsByLimitId": {
+        "0000-gemini-models": {"limitName": "Gemini Models", "primary": {"usedPercent": 3.5, "resetsAt": 9_000}},
+        "0001-gemini-models": {"limitName": "Gemini Models", "primary": {"usedPercent": 0, "resetsAt": 8_000}},
+        "0100-claude-and-gpt-models": {"limitName": "Claude and GPT models", "primary": {"usedPercent": 100, "resetsAt": 7_000}},
+        "0101-claude-and-gpt-models": {"limitName": "Claude and GPT models", "primary": {"usedPercent": 100.0, "resetsAt": 5_000.5}},
+        "0200-argon": {"limitName": "Gemini 4 Argon", "primary": {"usedPercent": 100, "resetsAt": 9_500}},
+    }});
+    assert_eq!(
+        group_reset_ms(&limits, CLAUDE_GPT_GROUP, 0),
+        Some(7_000_000)
+    );
+    // A window that already reset no longer holds.
+    assert_eq!(group_reset_ms(&limits, CLAUDE_GPT_GROUP, 7_000_000), None);
+    assert_eq!(
+        group_reset_ms(&limits, CLAUDE_GPT_GROUP, 6_000_000),
+        Some(7_000_000)
+    );
+    assert_eq!(group_reset_ms(&limits, GEMINI_GROUP, 0), None);
+    assert_eq!(
+        group_reset_ms(&serde_json::json!({}), GEMINI_GROUP, 0),
+        None
+    );
+}
+
+#[test]
+fn a_second_groups_rate_limit_widens_a_running_one_to_the_account() {
+    let claude = "rate_limited:claude_gpt";
+    let gemini = "rate_limited:gemini";
+    assert_eq!(
+        merge_rate_limit((claude, Some(5)), (claude, Some(9)), 0),
+        (claude.to_owned(), Some(9))
+    );
+    assert_eq!(
+        merge_rate_limit((claude, Some(9)), (gemini, Some(5)), 0),
+        ("rate_limited".to_owned(), Some(9))
+    );
+    assert_eq!(
+        merge_rate_limit(("rate_limited", Some(9)), (gemini, Some(5)), 0),
+        ("rate_limited".to_owned(), Some(9))
+    );
+    // An ended limit is simply replaced.
+    assert_eq!(
+        merge_rate_limit((claude, Some(5)), (gemini, Some(9)), 5),
+        (gemini.to_owned(), Some(9))
+    );
 }
 
 /// The worker's stop reason of a proxy error: `error: <message>: <data>`.
