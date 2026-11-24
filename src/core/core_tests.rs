@@ -785,6 +785,48 @@ fn requeue_prompt_restores_and_dedupes() {
     );
 }
 
+// A Send now that its account parks keeps the row in the queue as it is: a
+// dispatch would take it out and requeue it under a new id, which a client
+// editing the row reads as a sent message (its edit then became a draft beside
+// the returned original).
+#[tokio::test]
+async fn a_held_send_promotes_the_row_without_taking_it_out() {
+    let hub = hub_with_session("held");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    hub.set_dispatch_tx(tx);
+    hub.set_status("held", Status::Running, None);
+    hub.set_paused("held", true);
+    let person = crate::prompt_origin::RequestCaller::Person;
+    hub.submit(
+        "held",
+        "first".into(),
+        vec![],
+        Some("c-first".into()),
+        &person,
+    );
+    hub.submit(
+        "held",
+        "edited".into(),
+        vec![],
+        Some("c-edited".into()),
+        &person,
+    );
+    let ids: Vec<String> = hub.inner.sessions.lock()["held"]
+        .queue
+        .iter()
+        .map(|row| row.id.clone())
+        .collect();
+    assert!(hub.promote_queued("held", &ids[1], &person));
+    assert!(rx.try_recv().is_err(), "a held send dispatches nothing");
+    let queue: Vec<String> = hub.inner.sessions.lock()["held"]
+        .queue
+        .iter()
+        .map(|row| row.id.clone())
+        .collect();
+    assert_eq!(queue, vec![ids[1].clone(), ids[0].clone()]);
+    assert!(!hub.promote_queued("held", "missing", &person));
+}
+
 #[tokio::test]
 async fn pending_context_holds_schedules_drafts_and_manual_queue_until_cleared() {
     let hub = hub_with_session("context-hold");

@@ -1,7 +1,17 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../../tools/test-assert.ts";
 import type { BrowserRead, BrowserStateEvent } from "./api";
-import { chromeState, parseAddress, retryOffered } from "./browserChrome";
+import {
+  CAP_WARNING_MS,
+  attachedStopTime,
+  browserStateSummary,
+  capWarningDelay,
+  capWarningText,
+  chromeState,
+  parseAddress,
+  remainingText,
+  retryOffered,
+} from "./browserChrome";
 import { type BrowserModel, INITIAL_BROWSER_MODEL, reduceBrowser } from "./browserModel";
 
 const account = "11111111-2222-4333-8444-555555555555";
@@ -85,23 +95,119 @@ test("a running browser enables navigation only with a connected viewer", () => 
   assertEquals(during.hibernate || during.snapshot || during.address || during.refresh, false);
 });
 
+/** An open the Machine refused with `reason`, as the panel holds it. */
+function refusedOpen(reason: string): BrowserModel {
+  const opening = reduceBrowser(shown("hibernated"), { type: "busy", action: "open" });
+  return reduceBrowser(opening, {
+    type: "result",
+    action: "open",
+    result: { machine_id: "ovh", state: state("hibernated", { reason }) },
+    now: 2,
+  });
+}
+
 test("a refused open for lack of memory offers Retry unless a Machine must be chosen", () => {
-  const refused: BrowserModel = {
-    ...shown("hibernated", { reason: "memory" }),
-    error: "The Machine has no memory headroom for a browser right now.",
-  };
+  const refused = refusedOpen("memory");
+  assertEquals(refused.refusal, "memory");
   assertEquals(retryOffered(refused, false), true);
   assertEquals(retryOffered({ ...refused, error: "" }, false), false);
   assertEquals(retryOffered({ ...refused, busy: "open" }, false), false);
-  const failed = {
-    ...refused,
-    read: { ...refused.read!, state: state("hibernated", { reason: "failed" }) },
-  };
-  assertEquals(retryOffered(failed, false), false);
+  // A failure that does not free up by itself offers none.
+  assertEquals(retryOffered(refusedOpen("failed"), false), false);
   const choose: BrowserModel = {
     ...refused,
     read: { ...refused.read!, choose_machine: true, capable_machines: [{ machine_id: "ovh" }] },
   };
   assertEquals(retryOffered(choose, false), false);
   assertEquals(retryOffered(choose, true), true);
+});
+
+test("Retry stays with the refusal while state reads report the last stop", () => {
+  const refused = refusedOpen("capacity");
+  assertEquals(retryOffered(refused, false), true);
+  // The next poll says why the browser last stopped, not why the open was
+  // refused: the banner and its Retry stay.
+  const polled = reduceBrowser(refused, {
+    type: "read",
+    read: {
+      machine_id: "ovh",
+      state: state("hibernated", { reason: "grace" }),
+      placements: [],
+      admission: null,
+    },
+    now: 3,
+    issued: refused.epoch,
+  });
+  assertEquals(polled.read?.state?.reason, "grace");
+  assertEquals(polled.refusal, "capacity");
+  assertEquals(polled.error.length > 0, true);
+  assertEquals(retryOffered(polled, false), true);
+  // Dismissing the banner, or retrying, lets the refusal go with it.
+  assertEquals(reduceBrowser(polled, { type: "dismiss" }).refusal, undefined);
+  assertEquals(retryOffered(reduceBrowser(polled, { type: "dismiss" }), false), false);
+  assertEquals(reduceBrowser(polled, { type: "busy", action: "open" }).refusal, undefined);
+});
+
+test("a detached browser's summary counts down to the end of its grace", () => {
+  const now = 1_000_000;
+  // The Machine reports when it stops if nothing changes: the grace's end.
+  assertEquals(
+    browserStateSummary(state("detached", { deadline_ms: now + 95_400 }), now),
+    "Running, not attached · Hibernates in about 2 min unless attached",
+  );
+  assertEquals(
+    browserStateSummary(state("detached", { deadline_ms: now + 42_000 }), now),
+    "Running, not attached · Hibernates in 42 s unless attached",
+  );
+  // Already due, or a clock ahead of the Machine's: never negative.
+  assertEquals(
+    browserStateSummary(state("detached", { deadline_ms: now - 5_000 }), now),
+    "Running, not attached · Hibernates in 0 s unless attached",
+  );
+  // An attached browser's stop time is its runtime cap, not a grace.
+  assertEquals(
+    browserStateSummary(state("attached", { deadline_ms: now + 42_000 }), now),
+    "Attached",
+  );
+  assertEquals(
+    browserStateSummary(state("hibernated", { reason: "reclaim", unsaved_state_lost: true }), now),
+    "Hibernated · The Machine needed this browser’s resources for other work and hibernated it. · The last stop lost unsaved page state",
+  );
+  assertEquals(remainingText(89_400), "89 s");
+  assertEquals(remainingText(90_000), "about 2 min");
+  assertEquals(remainingText(28 * 60_000), "about 28 min");
+});
+
+test("an attached viewer is warned two minutes ahead of the runtime cap", () => {
+  const now = 5_000_000;
+  const stopsAt = now + 30 * 60_000;
+  const mine = state("attached", { deadline_ms: stopsAt, attachment_id: "att-me" });
+  assertEquals(attachedStopTime(mine, "att-me"), stopsAt);
+  // Not before the stream confirmed this device's attachment, and never for
+  // the display another device still holds while a takeover is requested.
+  assertEquals(attachedStopTime(mine, undefined), undefined);
+  assertEquals(attachedStopTime(mine, "att-other"), undefined);
+  assertEquals(attachedStopTime(state("attached", { deadline_ms: stopsAt }), "att-me"), undefined);
+  // Nothing to warn about while nobody views it, or without a stop time.
+  assertEquals(
+    attachedStopTime(
+      state("detached", { deadline_ms: stopsAt, attachment_id: "att-me" }),
+      "att-me",
+    ),
+    undefined,
+  );
+  assertEquals(
+    attachedStopTime(state("attached", { attachment_id: "att-me" }), "att-me"),
+    undefined,
+  );
+  assertEquals(attachedStopTime(null, "att-me"), undefined);
+  assertEquals(capWarningDelay(stopsAt, now), 30 * 60_000 - CAP_WARNING_MS);
+  // Attached (or reattached) inside the last two minutes: told at once.
+  assertEquals(capWarningDelay(stopsAt, stopsAt - 45_000), 0);
+  assertEquals(capWarningDelay(stopsAt, stopsAt + 1), 0);
+  assertEquals(
+    capWarningText(stopsAt, stopsAt - CAP_WARNING_MS),
+    "This browser reaches its running-time limit in about 2 min and is then hibernated. Finish the step you are on: opening it again starts on a new tab, with your sign-ins as last saved.",
+  );
+  assertEquals(capWarningText(stopsAt, stopsAt - 45_000).includes("in 45 s"), true);
 });

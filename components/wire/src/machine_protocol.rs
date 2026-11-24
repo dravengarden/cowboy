@@ -37,7 +37,7 @@ pub use challenge_proof::{challenge_proof_v1, challenge_proof_v2, challenge_proo
 /// banked usage limit (`ConsumeNativeReset`), sent only by that account's
 /// signed collector inside its verified native home.
 pub const NATIVE_RESET_PROTOCOL_VERSION: u16 = 49;
-pub const MACHINE_PROTOCOL_VERSION: u16 = 51;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 52;
 
 /// The conservative reading of a `PluginHostResponse` that omits `started`.
 const fn started_unless_proven() -> bool {
@@ -658,6 +658,9 @@ pub enum PluginHostOperation {
     DecorateActivity,
     ExportTelemetry,
     ExportOtlp,
+    /// A named portable account's idle renewal; only ever started by
+    /// `RenewPortableCredential` (protocol 52).
+    RenewCredential,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -871,6 +874,12 @@ pub enum MachineCommand {
     ConsumePortableReset {
         request_id: String,
         request: Box<portable_usage::PortableResetRequest>,
+    },
+    /// Answered only by `PluginHostResponse`; see
+    /// [`portable_usage::PortableRenewalRequest`].
+    RenewPortableCredential {
+        request_id: String,
+        request: Box<portable_usage::PortableRenewalRequest>,
     },
     NativeLogout {
         request_id: String,

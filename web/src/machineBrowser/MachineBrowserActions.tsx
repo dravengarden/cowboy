@@ -45,7 +45,7 @@ const CONFIRM_TEXT: Record<
   },
   hibernate: {
     title: "Hibernate the browser?",
-    body: "The profile is snapshotted and the process stops. Open it again later to continue where it left off.",
+    body: "The browser saves its profile and stops. Opening it again starts on a new tab, with your sign-ins as last saved.",
     action: "Hibernate",
     destructive: false,
   },

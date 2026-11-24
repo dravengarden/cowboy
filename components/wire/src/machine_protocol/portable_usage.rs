@@ -63,7 +63,16 @@ pub const REFRESH_FREE_DECLARATION: &str = "collector/portable-account.json";
 pub struct RefreshFree {
     pub usage: bool,
     pub reset: bool,
+    /// The collector also offers an explicit idle renewal
+    /// (`"idle_renewal": "cli_startup"`): asked to `renew`, it starts the
+    /// Provider CLI in the account's session home so the CLI's own startup
+    /// refresh runs exactly as a session's would; see
+    /// [`PortableRenewalRequest`]. Only with refresh-free usage.
+    pub renewal: bool,
 }
+
+/// The idle renewal modes a declaration may name.
+pub const IDLE_RENEWAL_MODES: [&str; 1] = ["cli_startup"];
 
 /// The guards a refresh-free declaration may name.
 pub const REFRESH_FREE_GUARDS: [&str; 2] = ["refresh_endpoint_refused", "cli_not_started"];
@@ -86,6 +95,9 @@ impl RefreshFree {
         Self {
             usage,
             reset: usage && field("reset_token_refresh").as_deref() == Some("request"),
+            renewal: usage
+                && field("idle_renewal")
+                    .is_some_and(|mode| IDLE_RENEWAL_MODES.contains(&mode.as_str())),
         }
     }
 }
@@ -113,6 +125,38 @@ pub struct PortableResetRequest {
     /// Absolute Unix ms after which the Machine never starts the reset.
     pub expires_at_ms: i64,
 }
+
+/// Machine protocol of `RenewPortableCredential`.
+pub const PORTABLE_RENEWAL_PROTOCOL_VERSION: u16 = 52;
+
+/// One idle renewal of a named portable account's sign-in. Usage never
+/// redeems a refresh token, so an account no session uses keeps an expired
+/// access token and its usage reads report authentication required. The
+/// Controller sends this only while no worker of the account runs anywhere:
+/// the Machine starts the exact release's collector with `"operation":
+/// "renew"` in the account's own session home (never a private copy), under
+/// the account's credential guard, and the Provider CLI refreshes there as a
+/// session's would. A refreshed credential leaves only through the Machine's
+/// ordinary refresh observation and the Service compare-and-swap; the reply
+/// carries only a closed outcome (`{"outcome": "renewed" | "unchanged"}`).
+/// Answered only by `MachineEvent::PluginHostResponse`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PortableRenewalRequest {
+    pub account_id: crate::provider_account::ProviderAccountId,
+    /// The exact selected release; the Machine refuses any other, and one
+    /// whose signed declaration does not offer idle renewal.
+    pub plugin_id: String,
+    pub plugin_version: String,
+    pub generation_digest: String,
+    /// The vault generation the Controller admitted under the account lock.
+    pub auth_generation: u64,
+    /// Absolute Unix ms after which the Machine never starts the renewal.
+    pub expires_at_ms: i64,
+}
+
+/// Closed outcomes of an idle renewal.
+pub const RENEWAL_OUTCOMES: [&str; 2] = ["renewed", "unchanged"];
 
 /// Message of a reset whose result is indeterminate.
 pub const RESET_UNKNOWN_MESSAGE: &str =
@@ -208,8 +252,9 @@ pub enum UsageFailureKind {
 /// credentials never leave the Machine; only one of these codes does.
 #[must_use]
 pub fn portable_usage_error_code(detail: &str) -> &'static str {
-    const CLOSED: [&str; 11] = [
+    const CLOSED: [&str; 12] = [
         "machine_usage_update_required",
+        "portable_renewal_unsupported",
         "machine_connection_changed",
         "portable_usage_account_required",
         "portable_usage_busy",
@@ -472,6 +517,7 @@ mod tests {
     const CODEX_DECLARATION: &str = r#"{"schema":1,"token_refresh":"request","token_refresh_guard":"refresh_endpoint_refused","reset_token_refresh":"request"}"#;
     const GROK_DECLARATION: &str =
         r#"{"schema":1,"token_refresh":"request","token_refresh_guard":"cli_not_started"}"#;
+    const GROK_RENEWAL_DECLARATION: &str = r#"{"schema":1,"token_refresh":"request","token_refresh_guard":"cli_not_started","idle_renewal":"cli_startup"}"#;
 
     #[test]
     fn only_a_guarded_refresh_free_declaration_is_admitted() {
@@ -486,14 +532,16 @@ mod tests {
             free(CODEX_DECLARATION),
             RefreshFree {
                 usage: true,
-                reset: true
+                reset: true,
+                renewal: false
             }
         );
         assert_eq!(
             free(GROK_DECLARATION),
             RefreshFree {
                 usage: true,
-                reset: false
+                reset: false,
+                renewal: false
             }
         );
         assert_eq!(
@@ -508,6 +556,58 @@ mod tests {
             RefreshFree::default()
         );
         assert_eq!(free("not json"), RefreshFree::default());
+        assert_eq!(
+            free(GROK_RENEWAL_DECLARATION),
+            RefreshFree {
+                usage: true,
+                reset: false,
+                renewal: true
+            }
+        );
+        // Renewal is never offered without refresh-free usage, nor in an
+        // unknown mode.
+        assert_eq!(
+            free(r#"{"schema":1,"idle_renewal":"cli_startup"}"#),
+            RefreshFree::default()
+        );
+        assert!(
+            !free(r#"{"schema":1,"token_refresh":"request","token_refresh_guard":"cli_not_started","idle_renewal":"always"}"#)
+                .renewal
+        );
+    }
+
+    #[test]
+    fn a_portable_renewal_needs_protocol_52() {
+        let command: super::super::MachineCommand = serde_json::from_value(serde_json::json!({
+            "command": "renew_portable_credential", "request_id": "r",
+            "request": {"account_id": "11111111-1111-4111-8111-111111111111",
+                "plugin_id": "grok", "plugin_version": "3.2.22",
+                "generation_digest": "sha256:x", "auth_generation": 3,
+                "expires_at_ms": 1},
+        }))
+        .unwrap();
+        assert_eq!(
+            command.minimum_protocol(),
+            PORTABLE_RENEWAL_PROTOCOL_VERSION
+        );
+        const { assert!(PORTABLE_RENEWAL_PROTOCOL_VERSION <= super::super::MACHINE_PROTOCOL_VERSION) };
+        let generic: super::super::MachineCommand = serde_json::from_value(serde_json::json!({
+            "command": "invoke_plugin_host", "request_id": "r", "plugin_id": "grok",
+            "plugin_version": "3.2.36", "generation_digest": "sha256:x", "auth_generation": 3,
+            "operation": "renew_credential", "payload": {},
+        }))
+        .unwrap();
+        assert_eq!(
+            generic.minimum_protocol(),
+            u16::MAX,
+            "never through the generic route"
+        );
+        let mut extra = serde_json::json!({"account_id": "11111111-1111-4111-8111-111111111111",
+            "plugin_id": "grok", "plugin_version": "3.2.22", "generation_digest": "sha256:x",
+            "auth_generation": 3, "expires_at_ms": 1});
+        assert!(serde_json::from_value::<PortableRenewalRequest>(extra.clone()).is_ok());
+        extra["home"] = serde_json::json!("/tmp");
+        assert!(serde_json::from_value::<PortableRenewalRequest>(extra).is_err());
     }
 
     #[test]

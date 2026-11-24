@@ -21,6 +21,8 @@
 //! Service account's configured usage query Machine.
 use super::*;
 use crate::machine_protocol::portable_usage::PortableUsageRequest;
+
+pub mod renewal;
 use crate::store::provider_accounts::portable::Use;
 use crate::usage::native::{PortableScope, Scope, Slot};
 
@@ -334,6 +336,10 @@ pub async fn refresh(
     };
     state.hub.broadcast_account_usage_changed(owner);
     let result = collect(state, owner, id, target, placed).await;
+    // An expired sign-in no session renews: schedule one idle renewal.
+    if result == Err("portable_usage_authentication_required") {
+        renewal::schedule(state, owner, id, target);
+    }
     let outcome = collection_outcome(result.as_ref().err().copied());
     let succeeded = result.is_ok();
     cache.data.lock().finish(&scope, result);

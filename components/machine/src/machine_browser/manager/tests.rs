@@ -13,6 +13,7 @@ mod legacy_keys;
 mod memory_budget;
 mod reset_receipts;
 mod retention;
+mod room_and_deadline;
 
 use fake_units::{FakeUnit, FakeUnits};
 
@@ -29,7 +30,7 @@ struct Fixture {
     instance: Arc<Instance>,
 }
 
-fn plan() -> MachineBrowserRuntimePlan {
+pub(super) fn plan() -> MachineBrowserRuntimePlan {
     let contract: cowboy_plugin_sdk::MachineBrowserContract = serde_json::from_str(
         &std::fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -55,6 +56,11 @@ async fn fixture() -> Fixture {
 
 /// The fixture on a Device whose configuration file reads `device_toml`.
 async fn fixture_on(device_toml: Option<&str>) -> Fixture {
+    fixture_with(device_toml, Duration::from_secs(600)).await
+}
+
+/// The fixture with its instance's runtime cap `runtime_left` from now.
+async fn fixture_with(device_toml: Option<&str>, runtime_left: Duration) -> Fixture {
     let device_config = device_toml.map(|text| {
         let report = crate::config::check_text(crate::config::Scope::Device, text, None);
         crate::config::Handle::new(report.config.expect("valid Device configuration"))
@@ -108,7 +114,7 @@ async fn fixture_on(device_toml: Option<&str>) -> Fixture {
         account_id: account.clone(),
         instance_id: "inst-1".into(),
         incarnation: 7,
-        deadline_ms: unix_ms() + 600_000,
+        deadline_ms: unix_ms() + i64::try_from(runtime_left.as_millis()).unwrap(),
         unit: "cowboy-browser-inst-1".into(),
         runtime_dir,
         cgroup_dir: cgroup.clone(),

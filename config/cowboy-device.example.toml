@@ -87,7 +87,8 @@ schema = 1
 # target_temp_max_age = "1h"
 
 [browser]
-# Machine browser instances that may run at once on this Device. Zero
+# Machine browser instances that may run at once on this Device. An open
+# on a full Device first hibernates an instance nobody is viewing. Zero
 # refuses every open while leaving installed snapshots in place.
 # integer from 0 to 4; applies live.
 # max_instances = 1
@@ -120,7 +121,8 @@ schema = 1
 # duration string such as "6h", from 30s to 30m; applies live.
 # hibernate_after = "2m"
 # Hard cap on one browser run (RuntimeMaxSec of the unit and the Machine's
-# own deadline).
+# own deadline). The Machine stops the browser gracefully, with its snapshot,
+# 30 s ahead of it.
 # duration string such as "6h", from 5m to 4h; applies live.
 # max_runtime = "30m"
 # Size of the profile tmpfs and of /dev/shm inside one browser instance, and

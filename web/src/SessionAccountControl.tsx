@@ -23,11 +23,15 @@ export function useSessionAccountControl(session: SessionMeta | undefined): {
   const scoped = session && data?.dataset.user_id === session.owner_user_id ? data : undefined;
   const control = session ? accountControl(scoped, session.provider_account_id) : undefined;
   const wait = session?.resource_wait;
+  const model = useStoreSelector((state) => {
+    const value = session ? state.configOptions.get(session.id)?.find((option) => option.id === "model")?.currentValue : undefined;
+    return typeof value === "string" ? value : undefined;
+  });
   // The queue's wait is pushed with the session; the controls are not.
   useEffect(() => { if (control && wait !== undefined) void refresh(); }, [wait, control !== undefined, refresh]);
   // Only a queued prompt is parked; an uncertain effect parks the session
   // even before the owner sends again.
-  const reason = control && session ? sessionParkedReason(control, session.id, wait) : undefined;
+  const reason = control && session ? sessionParkedReason(control, session.id, wait, Date.now(), model) : undefined;
   const parked = reason && (wait || reason.uncertain) ? reason : undefined;
   const identity = session ? sessionAccountIdentity(data, session) : undefined;
   const provider = session ? providerName(session.provider, session.provider_version, session.provider_generation_digest) : "";

@@ -313,7 +313,19 @@ macro_rules! implementation {
                 if !raised && !raise.stop_units {
                     return Ok(false);
                 }
-                let (state, reason, until) = if raised {
+                let (state, reason, until) = if raised
+                    && current_state == AccountState::RateLimited
+                    && next == AccountState::RateLimited
+                {
+                    // A second rate limit while one runs: another quota
+                    // group's refusal widens it to the whole account.
+                    let (reason, until) = crate::account_controls::merge_rate_limit(
+                        (&current_reason, current_until),
+                        (reason, until),
+                        raise.now_ms,
+                    );
+                    (next, bounded(&reason, 256), until)
+                } else if raised {
                     (next, bounded(reason, 256), until)
                 } else {
                     (current_state, current_reason, current_until)

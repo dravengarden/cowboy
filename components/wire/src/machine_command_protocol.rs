@@ -10,25 +10,12 @@ impl MachineCommand {
     #[allow(clippy::too_many_lines)] // One exhaustive table keeps mixed-generation admission auditable.
     pub fn minimum_protocol(&self) -> u16 {
         match self {
-            Self::McpTransport {
-                request:
-                    crate::mcp_binding::TransportRequest::PrepareNative { .. }
-                    | crate::mcp_binding::TransportRequest::ConfirmNative { .. },
-                ..
-            } => MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION,
-            Self::McpTransport { .. } => MCP_TRANSPORT_PROTOCOL_VERSION,
-            Self::Browser {
-                browser:
-                    machine_browser::Command::Open {
-                        network: Some(_), ..
-                    },
-                ..
-            } => MACHINE_BROWSER_NETWORK_PROTOCOL_VERSION,
-            Self::Browser { .. } => MACHINE_BROWSER_PROTOCOL_VERSION,
+            Self::McpTransport { .. } | Self::Browser { .. } => self.relay_protocol(),
             Self::CollectNativeUsage { .. }
             | Self::ConsumeNativeReset { .. }
             | Self::CollectPortableUsage { .. }
             | Self::ConsumePortableReset { .. }
+            | Self::RenewPortableCredential { .. }
             | Self::AccountSandboxFence { .. }
             | Self::AccountSandboxRemove { .. }
             | Self::BeginNativeLogin { .. }
@@ -139,6 +126,12 @@ impl MachineCommand {
                 operation: PluginHostOperation::ExportTelemetry,
                 ..
             } => TELEMETRY_PLUGIN_PROTOCOL_VERSION,
+            // Renewal runs only through `RenewPortableCredential`'s admission;
+            // the generic host route never carries it to any peer.
+            Self::InvokePluginHost {
+                operation: PluginHostOperation::RenewCredential,
+                ..
+            } => u16::MAX,
             // Uninstall is destructive and its Controller saga relies on
             // exact-generation reactivation for compensation. Never let a
             // protocol-three Machine begin removal that it cannot undo.
@@ -159,6 +152,28 @@ impl MachineCommand {
         }
     }
 
+    /// MCP transport and Machine Browser relays.
+    fn relay_protocol(&self) -> u16 {
+        match self {
+            Self::McpTransport {
+                request:
+                    crate::mcp_binding::TransportRequest::PrepareNative { .. }
+                    | crate::mcp_binding::TransportRequest::ConfirmNative { .. },
+                ..
+            } => MCP_NATIVE_CONFIRMATION_PROTOCOL_VERSION,
+            Self::McpTransport { .. } => MCP_TRANSPORT_PROTOCOL_VERSION,
+            Self::Browser {
+                browser:
+                    machine_browser::Command::Open {
+                        network: Some(_), ..
+                    },
+                ..
+            } => MACHINE_BROWSER_NETWORK_PROTOCOL_VERSION,
+            // The caller routes nothing else here.
+            _ => MACHINE_BROWSER_PROTOCOL_VERSION,
+        }
+    }
+
     /// Named account commands: native logins, their usage and resets,
     /// account-sandbox controls and portable account usage and resets.
     fn named_account_protocol(&self) -> u16 {
@@ -168,6 +183,9 @@ impl MachineCommand {
             Self::ConsumeNativeReset { .. } => NATIVE_RESET_SPACING_PROTOCOL_VERSION,
             Self::CollectPortableUsage { .. } => PORTABLE_USAGE_PROTOCOL_VERSION,
             Self::ConsumePortableReset { .. } => portable_usage::PORTABLE_RESET_PROTOCOL_VERSION,
+            Self::RenewPortableCredential { .. } => {
+                portable_usage::PORTABLE_RENEWAL_PROTOCOL_VERSION
+            }
             Self::AccountSandboxFence { .. } | Self::AccountSandboxRemove { .. } => {
                 ACCOUNT_FENCE_PROTOCOL_VERSION
             }

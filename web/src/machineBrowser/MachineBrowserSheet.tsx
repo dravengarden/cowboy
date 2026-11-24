@@ -13,12 +13,16 @@ import { useSurfaceProfile } from "../surface/SurfaceProfile";
 import {
   type BrowserViewport,
   PREFERRED_SCALE,
+  browserReasonText,
   browserStateLabel,
   browserViewport,
 } from "./api";
 import {
   type BrowserChromeState,
   type ViewerControls,
+  attachedStopTime,
+  capWarningDelay,
+  capWarningText,
   chromeState,
   controlsFor,
   retryOffered,
@@ -169,6 +173,9 @@ function useResume(
   const step = open && visible ? resumeStep(model, Date.now()) : undefined;
   const machine = model.resume?.target.machine_id;
   const identity = model.observedIdentity ?? model.read?.browser_identity;
+  // Why the browser is not reopened: the stop's own reason.
+  const stopped = useRef("");
+  stopped.current = browserReasonText(model.read?.state?.reason) ?? "The browser was hibernated.";
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
   useEffect(() => {
@@ -185,6 +192,9 @@ function useResume(
       case "other_device":
         dispatch({ type: "resume_end", message: RESUME_OTHER_DEVICE });
         break;
+      case "stopped":
+        dispatch({ type: "resume_end", message: stopped.current });
+        break;
       case "give_up":
         dispatch({ type: "resume_end", message: RESUME_FAILED });
         break;
@@ -192,6 +202,36 @@ function useResume(
         break;
     }
   }, [step, machine, identity, dispatch]);
+}
+
+/** Tell the owner shortly before the browser this device is attached to
+ * reaches its runtime cap, once per attachment and stop time; the notice
+ * goes with the attachment (Stop viewing, a takeover, the panel closing). */
+function useCapWarning(open: boolean, browser: MachineBrowserController): void {
+  const { model, dispatch } = browser;
+  const stopsAt = open
+    ? attachedStopTime(model.read?.state ?? null, model.viewer?.attachmentId)
+    : undefined;
+  const notice = useRef(model.notice);
+  notice.current = model.notice;
+  useEffect(() => {
+    if (stopsAt === undefined) return undefined;
+    let shown: string | undefined;
+    const timer = setTimeout(
+      () => {
+        shown = capWarningText(stopsAt, Date.now());
+        dispatch({ type: "notice", message: shown });
+      },
+      capWarningDelay(stopsAt, Date.now()),
+    );
+    return () => {
+      clearTimeout(timer);
+      // Only this warning is withdrawn, never a notice that replaced it.
+      if (shown !== undefined && notice.current === shown) {
+        dispatch({ type: "notice", message: "" });
+      }
+    };
+  }, [stopsAt, dispatch]);
 }
 
 function browserMenuItems({
@@ -382,6 +422,7 @@ function MachineBrowserPanel(
   const commands = browserCommands(browser, areaRef, touch, link?.machine);
   useAutoEntry(props, browser, commands);
   useResume(open, browser, commands);
+  useCapWarning(open, browser);
   const ui = useBrowserChrome(account.id, model);
   const paste = useDevicePaste(ui.controls);
   const clipboard = useRemoteClipboard(model, browser.dispatch);

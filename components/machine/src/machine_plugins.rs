@@ -1283,12 +1283,15 @@ impl MachinePluginStore {
             &environment,
             || {
                 // Read-only observations may finish after a lifecycle change,
-                // but their result must pass the fence below. Reset is a
-                // mutation: retain its existing serialization until completion.
-                // Legacy slots have no incarnation fence, so they also retain
-                // serialization across same-bytes uninstall/reinstallation.
-                if operation != PluginHostOperation::ResetUsage
-                    && resolved.installation_revision.is_some()
+                // but their result must pass the fence below. Reset and
+                // renewal are mutations: retain their serialization until
+                // completion. Legacy slots have no incarnation fence, so they
+                // also retain serialization across same-bytes
+                // uninstall/reinstallation.
+                if !matches!(
+                    operation,
+                    PluginHostOperation::ResetUsage | PluginHostOperation::RenewCredential
+                ) && resolved.installation_revision.is_some()
                 {
                     drop(lifecycle.take());
                 }
@@ -1394,6 +1397,7 @@ impl MachinePluginStore {
             PluginHostOperation::CollectUsage => (&usage.collector_argv, "collect"),
             PluginHostOperation::ResetUsage => (&usage.reset_argv, "consume_reset"),
             PluginHostOperation::DecorateActivity => (&usage.collector_argv, "decorate_activity"),
+            PluginHostOperation::RenewCredential => (&usage.collector_argv, "renew"),
             PluginHostOperation::ExportTelemetry | PluginHostOperation::ExportOtlp => {
                 bail!("telemetry cannot use executable Plugin hosts")
             }
@@ -6696,6 +6700,35 @@ mod tests {
         };
         let (reset, ()) = tokio::join!(reset, serialized);
         assert_eq!(reset.unwrap()["operation"], "consume_reset");
+        // An idle renewal rewrites the session home: it runs `renew` there
+        // and keeps the lifecycle lock like a reset.
+        let renewal = store.invoke_host_for_test(
+            "grok",
+            &package.manifest.version,
+            &release.artifact_digest,
+            Some(1),
+            PluginHostOperation::RenewCredential,
+            serde_json::json!({"delay_ms": 350}),
+        );
+        let serialized = async {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            tokio::time::timeout(Duration::from_millis(150), store.lifecycle.lock())
+                .await
+                .is_err()
+        };
+        let (renewal, held) = tokio::join!(renewal, serialized);
+        let renewal = renewal.unwrap();
+        assert!(
+            held,
+            "an idle renewal must retain lifecycle authority while mutating the home"
+        );
+        assert_eq!(renewal["operation"], "renew");
+        assert!(
+            renewal["home"]
+                .as_str()
+                .is_some_and(|home| home.ends_with("/runtime/generations/1/home")),
+            "the session home, never a private copy"
+        );
         assert!(
             collected["command"].as_str().is_some_and(
                 |command| command.contains("/generations/") && command.ends_with("/bin")
@@ -6967,6 +7000,28 @@ mod tests {
         };
         let (reset, ()) = tokio::join!(reset, serialized);
         assert_eq!(reset.unwrap()["operation"], "consume_reset");
+        // An idle renewal rewrites the session home: like a reset it retains
+        // lifecycle authority even for a journaled installation.
+        let renewal = store.invoke_host_for_test(
+            "grok",
+            &package.manifest.version,
+            &release.artifact_digest,
+            Some(2),
+            PluginHostOperation::RenewCredential,
+            serde_json::json!({"delay_ms": 1000}),
+        );
+        let serialized = async {
+            tokio::time::sleep(Duration::from_millis(100)).await;
+            tokio::time::timeout(Duration::from_millis(200), store.lifecycle.lock())
+                .await
+                .is_err()
+        };
+        let (renewal, held) = tokio::join!(renewal, serialized);
+        assert_eq!(renewal.unwrap()["operation"], "renew");
+        assert!(
+            held,
+            "journaled idle renewal must retain lifecycle authority"
+        );
         let next_envelope =
             seal_auth_for_test(&store, &package, &service_signer, 3, &refreshed_bundle);
         let slow = store.invoke_host_for_test(

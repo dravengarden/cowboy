@@ -553,11 +553,12 @@ const REASON_TEXT: Record<string, string> = {
   login_mismatch: "An older Machine refused this browser for a sign-in.",
   deadline: "The browser reached its maximum running time.",
   grace: "Nobody was attached, so the browser was hibernated.",
-  reclaim: "The Machine reclaimed memory and hibernated the browser.",
+  reclaim: "The Machine needed this browser’s resources for other work and hibernated it.",
   revoked: "The account was revoked.",
   disabled: "The browser was disabled for this account.",
   owner_request: "Hibernated on request.",
-  capacity: "The Machine already runs its maximum number of browsers.",
+  capacity:
+    "Every browser slot on this Machine is in use. Close a browser that is open there, or retry in a moment.",
   memory:
     "The Machine has no memory headroom for a browser right now. It frees up as other work on that Machine finishes; retry in a moment.",
   busy: "Another browser operation for this account is still in progress.",

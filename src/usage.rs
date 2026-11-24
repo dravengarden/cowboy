@@ -173,6 +173,14 @@ impl UsageBindingSource {
 }
 
 impl UsageService {
+    /// A Service state file beside the usage cache, if usage persists.
+    #[must_use]
+    pub fn state_file(&self, name: &str) -> Option<PathBuf> {
+        self.cache_path
+            .as_ref()
+            .map(|path| path.with_file_name(name))
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub fn new(store: Option<crate::store::Store>, cache_path: Option<PathBuf>) -> Self {
         Self::with_bindings(store, cache_path, Vec::new())
@@ -347,7 +355,9 @@ impl UsageService {
             .iter()
             .filter(|host| {
                 host.usage.as_ref().is_some_and(|usage| match operation {
-                    PluginHostOperation::ExportTelemetry | PluginHostOperation::ExportOtlp => false,
+                    PluginHostOperation::ExportTelemetry
+                    | PluginHostOperation::ExportOtlp
+                    | PluginHostOperation::RenewCredential => false,
                     PluginHostOperation::CollectUsage => !usage.collector_argv.is_empty(),
                     PluginHostOperation::ResetUsage => !usage.reset_argv.is_empty(),
                     PluginHostOperation::DecorateActivity => {

@@ -6,6 +6,7 @@ import {
   envelopeCompletesPromptEcho,
   promptEchoReadyToReplaceOptimistic,
   promptEchoText,
+  promptsEchoedBeforeReceipt,
   rememberSendImagePreviews,
   retainUnpresentedOptimistic,
 } from "./sendImagePreviews.ts";
@@ -211,4 +212,37 @@ test("the echoed text of a tagged prompt is recovered for draft retirement", () 
   const events = [envelope(1, "text", "c1"), envelope(2, "image", "c1"), envelope(3, "text", "c2")];
   assertEquals(promptEchoText(events, "c1"), "caption");
   assertEquals(promptEchoText(events, "missing"), undefined);
+});
+
+const emptyQueue = { queue: [], drafts: [] };
+
+test("a resend receipt retires a prompt whose echo predates the loaded window", () => {
+  // The phone slept through the live echo; the reconnect snapshot tail starts
+  // after it, and the outbox resend is acknowledged as a duplicate.
+  const tail = [envelope(400, "text")];
+  assertEquals(
+    [...promptsEchoedBeforeReceipt(["c1"], emptyQueue, [{ cmid: "c1", text: "caption" }], tail)],
+    ["c1"],
+  );
+});
+
+test("a receipt for a held queue row is not an echo", () => {
+  assertEquals(
+    promptsEchoedBeforeReceipt(["c1"], { queue: [{ cmid: "c1" }], drafts: [] }, [{ cmid: "c1" }], []).size,
+    0,
+  );
+  assertEquals(
+    promptsEchoedBeforeReceipt(["c1"], { queue: [], drafts: [{ cmid: "c1" }] }, [{ cmid: "c1" }], []).size,
+    0,
+  );
+});
+
+test("a loaded echo still missing its image keeps the readiness wait", () => {
+  const partial = [envelope(1, "text", "c1")];
+  assertEquals(promptsEchoedBeforeReceipt(["c1"], emptyQueue, [imageMessage], partial).size, 0);
+  const complete = [...partial, envelope(2, "image")];
+  assertEquals(
+    [...promptsEchoedBeforeReceipt(["c1"], emptyQueue, [imageMessage], complete)],
+    ["c1"],
+  );
 });

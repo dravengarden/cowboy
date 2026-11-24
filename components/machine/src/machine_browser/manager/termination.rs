@@ -365,6 +365,15 @@ impl BrowserManager {
                 .is_some_and(|current| Arc::ptr_eq(current, instance))
             {
                 *current = None;
+                // With the slot cleared, under the same lock: a query that
+                // finds no instance finds how the last one stopped.
+                if let Some((reason, unsaved)) = *instance.outcome.lock() {
+                    *slot.last_stop.lock() = Some(LastStop {
+                        profile_revision: instance.profile_revision,
+                        reason,
+                        unsaved,
+                    });
+                }
             }
         }
         let abandoned = instance.abandoned.lock().take();

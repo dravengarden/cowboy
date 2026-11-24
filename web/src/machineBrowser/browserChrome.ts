@@ -152,24 +152,61 @@ export function chromeState(
 const RETRYABLE = new Set(["memory", "capacity", "busy"]);
 
 /** A refused open that frees up by itself (memory, capacity, another
- * operation) offers Retry, unless the owner must first choose a Machine. */
+ * operation) offers Retry for as long as its banner shows, unless the owner
+ * must first choose a Machine. The refusal is the open's own answer
+ * (`model.refusal`), not the latest observation: a state read replaces
+ * that with why the browser last stopped. */
 export function retryOffered(model: BrowserModel, pinned: boolean): boolean {
-  const state = model.read?.state;
-  if (!model.error || model.busy || model.viewer || !state?.reason) return false;
-  if (!RETRYABLE.has(state.reason) || browserRunning(state.state)) return false;
+  if (!model.error || model.busy || model.viewer || !model.refusal) return false;
+  if (!RETRYABLE.has(model.refusal) || browserRunning(model.read?.state?.state)) return false;
   return pinned || !needsMachineChoice(model.read);
 }
 
-/** State line for the chrome and the empty page: label, reason and grace
- * deadline. */
+/** A remaining time for the owner: seconds while it is short, else whole
+ * minutes. */
+export function remainingText(ms: number): string {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  return seconds < 90 ? `${seconds} s` : `about ${Math.round(seconds / 60)} min`;
+}
+
+/** State line for the chrome and the empty page: label, reason and, for a
+ * browser nobody views, when its grace ends. `deadline_ms` is when the
+ * Machine stops the instance if nothing changes: the end of the detached
+ * grace while detached, the graceful stop ahead of the runtime cap while
+ * attached. */
 export function browserStateSummary(state: BrowserStateEvent | null, now = Date.now()): string {
   const parts = [browserStateLabel(state?.state)];
   const reason = browserReasonText(state?.reason);
   if (reason) parts.push(reason);
   if (state?.state === "detached" && state.deadline_ms !== undefined) {
-    const seconds = Math.max(0, Math.round((state.deadline_ms - now) / 1000));
-    parts.push(`Hibernates in ${seconds} s unless attached`);
+    parts.push(`Hibernates in ${remainingText(state.deadline_ms - now)} unless attached`);
   }
   if (state?.unsaved_state_lost) parts.push("The last stop lost unsaved page state");
   return parts.join(" · ");
+}
+
+/** How long before its runtime cap an attached viewer is told. */
+export const CAP_WARNING_MS = 120_000;
+
+/** When the Machine stops the browser this viewer shows (the graceful stop
+ * ahead of its runtime cap): only once the stream confirmed this device's
+ * attachment and while the state still names it, never for another
+ * device's display a takeover has yet to replace. */
+export function attachedStopTime(
+  state: BrowserStateEvent | null,
+  attachmentId: string | undefined,
+): number | undefined {
+  if (attachmentId === undefined || state?.state !== "attached") return undefined;
+  return state.attachment_id === attachmentId ? state.deadline_ms : undefined;
+}
+
+/** How long from `now` until the viewer is told; zero once it is that close. */
+export function capWarningDelay(stopsAt: number, now: number): number {
+  return Math.max(0, stopsAt - CAP_WARNING_MS - now);
+}
+
+/** The cap hibernates the browser after a last save of its profile; the
+ * panel never reopens it by itself (`reopensByItself`). */
+export function capWarningText(stopsAt: number, now: number): string {
+  return `This browser reaches its running-time limit in ${remainingText(stopsAt - now)} and is then hibernated. Finish the step you are on: opening it again starts on a new tab, with your sign-ins as last saved.`;
 }

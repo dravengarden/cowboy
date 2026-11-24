@@ -159,6 +159,37 @@ export function promptEchoReadyToReplaceOptimistic(
   return renderable && images >= needed && files >= neededFiles && textLength >= neededText;
 }
 
+/**
+ * Optimistic prompts a queue receipt proves were already echoed.
+ *
+ * Every Hub queue emission confirms the cmids its own value holds. The one
+ * addition is the duplicate-resend receipt, which the Hub sends only once the
+ * prompt's user echo exists. That echo can predate the transcript this device
+ * has loaded: a phone that slept through the live echo reconnects to a bounded
+ * snapshot tail and resends its outbox. No later event will retire such a
+ * bubble, so it must not wait for one and then time out as undelivered. An
+ * echo that is loaded but still missing blocks keeps the ordinary readiness
+ * wait.
+ */
+export function promptsEchoedBeforeReceipt(
+  confirmed: readonly string[],
+  value: { readonly queue: readonly { cmid?: string }[]; readonly drafts: readonly { cmid?: string }[] },
+  rows: readonly { cmid?: string; text?: string; attachments?: readonly { isImage?: boolean }[] }[],
+  timeline: readonly Envelope[],
+): Set<string> {
+  const held = new Set([...value.queue, ...value.drafts].map((row) => row.cmid));
+  const echoed = new Set<string>();
+  for (const cmid of confirmed) {
+    if (held.has(cmid)) continue;
+    const row = rows.find((candidate) => candidate.cmid === cmid);
+    if (
+      !timeline.some((env) => env.cmid === cmid) ||
+      (row !== undefined && promptEchoReadyToReplaceOptimistic(row, timeline))
+    ) echoed.add(cmid);
+  }
+  return echoed;
+}
+
 /** The text a tagged prompt echo carried, or undefined when `events` hold no
  * user echo for `cmid`. */
 export function promptEchoText(

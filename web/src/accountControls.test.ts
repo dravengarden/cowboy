@@ -4,7 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { assert, assertEquals, assertStringIncludes } from "../../tools/test-assert.ts";
 import {
   type AccountControl, accountPlanLabel, accountStateBadge, accountUsageSummary, acknowledgementTarget, acknowledgeUncertainEffect, controlActions, controlRequest, logoutStatus,
-  pickerUnavailableReason, postAccountControl, sessionParkedReason, sessionPlanKey, signInObservation, validAccountControls, withoutNamedOnly,
+  pickerUnavailableReason, postAccountControl, quotaGroup, rateLimitScope, sessionParkedReason, sessionPlanKey, signInObservation, validAccountControls, withoutNamedOnly,
 } from "./accountControls";
 import { AccountControlsPanel } from "./AccountControlsPanel";
 import { UncertainEffectAcknowledge } from "./SessionAccountControl";
@@ -154,6 +154,33 @@ test("a parked session says why: uncertain effect or account state, never anothe
   assertEquals(sessionParkedReason(legacy, "s1", "x")?.text, "x");
   assertEquals(sessionParkedReason(control(), "s1", "Waiting for resources: account controls are loading")?.text,
     "account controls are loading");
+});
+
+test("a rate limit of one quota group leaves the other group's sessions and new sessions free", () => {
+  assertEquals(quotaGroup("gemini-4-neon"), "gemini");
+  assertEquals(quotaGroup("claude-opus-5-5"), "claude_gpt");
+  assertEquals(quotaGroup("gpt-oss-120b"), "claude_gpt");
+  assertEquals(quotaGroup(undefined), undefined);
+  assertEquals(quotaGroup("gemini-4-argon"), undefined);
+  assertEquals(rateLimitScope("rate_limited:claude_gpt"), "claude_gpt");
+  assertEquals(rateLimitScope("rate_limited"), undefined);
+  const until = Date.UTC(2026, 10, 24, 6, 31);
+  const claude = control({ state: "rate_limited", reason: "rate_limited:claude_gpt", until_ms: until });
+  const badge = accountStateBadge(claude, "signed_in", until - 1000);
+  assertStringIncludes(badge.label, "Claude/GPT rate limited until");
+  assertEquals(badge.detail, "Gemini models still run");
+  assertEquals(accountStateBadge(control({ state: "rate_limited", reason: "rate_limited", until_ms: until }), undefined, until - 1).detail,
+    "All models of this account");
+  // A Gemini session is not parked by it; a Claude or unknown-model session is.
+  assertEquals(sessionParkedReason(claude, "s1", "x", until - 1, "gemini-4-neon")?.text, "x");
+  assertEquals(sessionParkedReason(claude, "s1", undefined, until - 1, "gemini-4-neon"), undefined);
+  assertStringIncludes(sessionParkedReason(claude, "s1", "x", until - 1, "claude-sonnet-5-5")!.text, "Claude/GPT rate limited until");
+  assertStringIncludes(sessionParkedReason(claude, "s1", "x", until - 1)!.text, "Claude/GPT rate limited until");
+  // An ended limit leaves the queue's own wait visible.
+  assertEquals(sessionParkedReason(claude, "s1", "Machine capacity", until + 1, "gemini-4-neon")?.text, "Machine capacity");
+  // A new session may still choose the account; an account-wide limit refuses it.
+  assertEquals(pickerUnavailableReason(claude, undefined, until - 1), undefined);
+  assertStringIncludes(pickerUnavailableReason(control({ state: "rate_limited", reason: "rate_limited", until_ms: until }), undefined, until - 1)!, "Rate limited until");
 });
 
 test("acknowledging posts exactly the current sequence; a refusal is explained", async () => {

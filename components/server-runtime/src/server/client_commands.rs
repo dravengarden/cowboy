@@ -671,12 +671,40 @@ pub fn force_cancel_grace(state: &AppState, session_id: &str) -> std::time::Dura
     }
 }
 
+/// A queued row's Send now. While the session's account parks dispatch (a
+/// rate limit, a block, an unacknowledged effect), the row only moves to the
+/// front and waits there, retried as an explicit send once the account
+/// admits it. Dispatching it would take the row out of the queue just to
+/// requeue it under a new id, which a client editing the row reads as a sent
+/// message and saves the edit as a draft beside the returned original.
+/// Whether the send was held.
+pub fn request_send_queued(
+    state: &Arc<AppState>,
+    caller: &crate::prompt_origin::RequestCaller,
+    session_id: &str,
+    id: &str,
+) -> bool {
+    let parked = state
+        .hub
+        .session_info(session_id)
+        .and_then(|info| provider_accounts::controls::parked_reason(&state.accounts, &info.meta));
+    let Some(reason) = parked else {
+        state.hub.request_send_queued(session_id, id, caller);
+        return false;
+    };
+    if state.hub.promote_queued(session_id, id, caller) {
+        session_maintenance::wait(&state.hub, session_id, &reason);
+        state.hub.set_explicit_wait(session_id, true);
+    }
+    true
+}
+
 /// A queued row's force push: promote it and interrupt the running turn so
 /// it runs next; on an idle session there's nothing to cancel, so it is just
 /// sent now. A retired session's row stays where it is and no turn is
-/// cancelled.
+/// cancelled, and a row its account parks never cancels the running turn.
 pub fn force_push_queued(
-    state: &AppState,
+    state: &Arc<AppState>,
     caller: &crate::prompt_origin::RequestCaller,
     session_id: &str,
     id: &str,
@@ -686,7 +714,10 @@ pub fn force_push_queued(
     {
         return Err(refusal.to_owned());
     }
-    state.hub.request_send_queued(session_id, id, caller); // promote to front either way
+    // Promote to front either way.
+    if request_send_queued(state, caller, session_id, id) {
+        return Ok(());
+    }
     if matches!(
         state.hub.status(session_id),
         Some(Status::Busy | Status::Starting)

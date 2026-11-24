@@ -957,7 +957,7 @@ pub fn queue_command(
             Ok(())
         }
         Inbound::RequestSendQueued { session_id, id, .. } => {
-            state.hub.request_send_queued(&session_id, &id, caller);
+            request_send_queued(state, caller, &session_id, &id);
             Ok(())
         }
         Inbound::ForcePushQueued { session_id, id, .. } => {

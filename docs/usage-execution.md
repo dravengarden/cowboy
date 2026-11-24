@@ -67,6 +67,80 @@ pinned CLI's `_x.ai/billing`), plan and resets directly. No
 Machine speaking protocol 50 was released before this, so no other capability
 negotiation is needed. An entered DeepSeek key is never refreshed.
 
+**Idle renewal (Grok 3.2.36, Machine protocol 52).** Refresh-free usage
+leaves an account whose sessions all ended with an access token that expires
+a few hours later (about four for Grok), after which every read reports
+authentication required although the sign-in is intact. Such a read schedules
+one idle renewal (`renewal.rs` in the Controller's portable usage) bound to
+that read's account binding and vault generation (a new sign-in or a
+session's refresh since then cancels it). It takes its own paced start from
+the Provider's usage budget, never sooner than the account's collection
+interval after the failed read, and, at dispatch and again under the account
+lock that worker sends also take, requires:
+
+- a **quiet account**: every session of the account, trashed ones included,
+  stopped (exited, crashed or interrupted, not closing, no live worker) on a
+  connected Machine. A starting, running or closing worker, or any session on
+  a disconnected Machine (a detached worker may still run there, or its
+  rotated credential may not have reached the vault), defers renewal;
+- the placed Machine speaking protocol 52 with an exact collector release
+  whose declaration names `"idle_renewal": "cli_startup"`;
+- the account's **affinity**: a renewal that renewed or may have started is
+  recorded durably (`usage-renewals.json`, directory-synced; an unreadable
+  journal turns renewals off) with its Machine and vault generation, and until
+  the vault advances past that generation only that Machine may renew again,
+  so no other Machine presents the spent token. An attempt proven never to
+  have started restores the earlier record;
+- its spacing: 30 minutes after a renewal, 6 hours after one that changed
+  nothing or failed after starting (leaving "sign in again" for the owner).
+  A proven pre-start refusal releases the attempt.
+
+From the durable record until the vault advances (at most 60 seconds after
+the dispatch deadline or a renewal, and kept when the outcome is uncertain),
+the Controller's launch gate holds new workers of the account as a resource
+wait (and, while the journal is unreadable, every named launch for one
+dispatch window and settle period after it was first read), so no worker starts from another generation's home with the token being
+rotated and a queued prompt resumes on its own. `RenewPortableCredential` is the only route: the generic
+`InvokePluginHost` never carries `renew_credential` (its minimum protocol is
+unreachable and the Machine refuses it). The Machine admits the renewal like
+a read (account credential guard, replica generation, refresh-free
+declaration plus `idle_renewal`) and refuses before start unless every
+session home of the account holds exactly the sealed credential (an
+uncommitted refresh or another sign-in is the refresh observation's to
+reconcile). It then runs the collector's `renew` in the account's own
+session home, never a private copy, holding the lifecycle lock like a reset;
+the collector starts the pinned Grok CLI and makes one billing read through
+it, so the CLI refreshes exactly as a session's startup would. The renewed
+credential leaves only through the Machine's ordinary refresh observation and
+the Service compare-and-swap (which validates its identity); the reply is
+only `renewed` (a home now holds a credential the vault does not, which no
+home did before the run) or `unchanged`, decided from the homes even if the
+billing read failed after the CLI refreshed; a throttled billing read after a
+rotation is reported beside `renewed` so the Provider is still paced. The
+Machine's check of the homes is strict: an account credential root or session
+home that cannot be enumerated refuses before start and is indeterminate
+after it. A renewal is followed by usage
+reads, each once the account's budget allows, until one reads past the
+pending distribution. Codex declares no idle renewal: its CLI does not
+serialize concurrent refreshes even in one home.
+
+Known residual (owner decision, 2026-11-24): the Controller cannot see a
+worker launch already past the gate whose status has not changed yet, a
+reconnecting Machine whose worker snapshots have not arrived, a session
+refresh whose observation has not reached the vault, or a Machine that has
+not applied a renewed generation yet. Each is the same exposure as the owner
+starting a session, whose CLI performs the same startup refresh with none of
+the checks above; closing them needs every Machine to confirm and reconcile
+its credential state (the paused custody design).
+
+Offline acceptance (2026-11-24, pinned Grok CLI 1.0.92, user and network
+namespace with loopback only, a fake IdP issuing single-use refresh tokens
+that rejects reuse): a renewal of a token expiring in 30 s or expired ten
+hours earlier redeemed exactly once and rewrote the home's `auth.json`; a
+token valid for two hours redeemed nothing; two concurrent renewals in one
+home, and a renewal concurrent with a session's CLI start in that home,
+redeemed exactly once in each of three runs.
+
 Placement: among Machines with an exact released active collector generation
 that host runtime policy admits for the collector and every sidecar Plugin it
 starts, Cowboy picks the one running most of the owner's live sessions on the

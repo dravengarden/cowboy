@@ -7,6 +7,7 @@ use crate::store::provider_accounts::logins::NativeCompletion;
 use crate::usage::native::Scope;
 
 mod portable;
+pub use portable::renewal::launch_hold;
 
 pub mod reset;
 

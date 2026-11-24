@@ -18,6 +18,13 @@ pub const REFUSAL_PREFIX: &str = "antigravity_backend_refusal:";
 pub const VIOLATION_PREFIX: &str = "antigravity_policy_violation:";
 /// How long a rate limit holds when the backend gave no reset time.
 pub const DEFAULT_RATE_LIMIT_MS: i64 = 60 * 60 * 1000;
+/// The reason prefix of a rate limit that holds for one model quota group
+/// (`rate_limited:<group>`); a bare `rate_limited` holds account-wide.
+pub const RATE_LIMIT_SCOPE_PREFIX: &str = "rate_limited:";
+/// The quota group of Gemini models.
+pub const GEMINI_GROUP: &str = "gemini";
+/// The quota group of third-party (Claude and GPT) models.
+pub const CLAUDE_GPT_GROUP: &str = "claude_gpt";
 
 /// Whether a session's native conversation may survive a re-login of the
 /// same account: a named-only Provider's account sandbox keeps one
@@ -219,6 +226,151 @@ pub fn fence_revision(fence: &Fence, current: i64) -> Option<u64> {
         .and_then(|revision| u64::try_from(revision).ok())
 }
 
+/// The quota group a model draws on. Antigravity meters Gemini models and
+/// third-party (Claude and GPT) models in separate quotas of one account, so
+/// a rate limit of one group leaves the other usable. `None` for a model of
+/// no known group, whose rate limit holds account-wide.
+#[must_use]
+pub fn quota_group(model: &str) -> Option<&'static str> {
+    let model = model.trim().to_ascii_lowercase();
+    // Pro's Argon models draw on a separate "Gemini 4 Argon" quota, which no
+    // group here tracks.
+    if model.contains("argon") {
+        None
+    } else if model.starts_with("gemini") {
+        Some(GEMINI_GROUP)
+    } else if model.starts_with("claude") || model.starts_with("gpt") {
+        Some(CLAUDE_GPT_GROUP)
+    } else {
+        None
+    }
+}
+
+/// The quota group a usage bucket meters, from its `limitName` ("Gemini
+/// Models", "Claude and GPT models"). Other buckets (Pro's separate "Gemini 4
+/// Argon") belong to no group.
+fn bucket_group(limit_name: &str) -> Option<&'static str> {
+    let name = limit_name.trim().to_ascii_lowercase();
+    if name == "gemini models" {
+        Some(GEMINI_GROUP)
+    } else if name.contains("claude") || name.contains("gpt") {
+        Some(CLAUDE_GPT_GROUP)
+    } else {
+        None
+    }
+}
+
+/// The quota group a rate limit's reason holds for; `None` account-wide.
+#[must_use]
+pub fn rate_limit_scope(reason: &str) -> Option<&str> {
+    reason
+        .strip_prefix(RATE_LIMIT_SCOPE_PREFIX)
+        .filter(|group| !group.is_empty())
+}
+
+/// The reason of a rate limit of `group` (`None`: account-wide).
+#[must_use]
+pub fn rate_limit_reason(group: Option<&str>) -> String {
+    group.map_or_else(
+        || AccountState::RateLimited.as_str().to_owned(),
+        |group| format!("{RATE_LIMIT_SCOPE_PREFIX}{group}"),
+    )
+}
+
+/// When an exhausted quota group resets, from the account's usage
+/// observation (`rate_limits.rateLimitsByLimitId`): the latest reset still
+/// ahead of `now_ms` among the group's exhausted windows (a used-up weekly
+/// window outlasts the five-hour one). `None` when the observation shows no
+/// exhausted window of the group, for example because it predates the
+/// refusal.
+#[must_use]
+pub fn group_reset_ms(rate_limits: &serde_json::Value, group: &str, now_ms: i64) -> Option<i64> {
+    rate_limits
+        .get("rateLimitsByLimitId")?
+        .as_object()?
+        .values()
+        .filter(|bucket| {
+            bucket
+                .get("limitName")
+                .and_then(serde_json::Value::as_str)
+                .and_then(bucket_group)
+                == Some(group)
+        })
+        .filter_map(|bucket| {
+            let primary = bucket.get("primary")?;
+            let used = primary.get("usedPercent")?.as_f64()?;
+            let resets = primary.get("resetsAt")?.as_f64()?;
+            // A reset beyond the longest quota window is not believed: the
+            // limit then holds its default hour instead of indefinitely.
+            let latest = now_ms.saturating_add(MAX_QUOTA_RESET_MS);
+            #[allow(clippy::cast_precision_loss)]
+            let plausible = resets.is_finite() && resets * 1000.0 <= latest as f64;
+            #[allow(clippy::cast_possible_truncation)]
+            let resets_ms = (resets * 1000.0) as i64;
+            (used >= 100.0 && plausible && resets_ms > now_ms).then_some(resets_ms)
+        })
+        .max()
+}
+
+/// The longest wait a usage reset may set: Antigravity's longest window is
+/// weekly, with a day of slack.
+pub const MAX_QUOTA_RESET_MS: i64 = 8 * 24 * 60 * 60 * 1000;
+
+/// The hold an ended rate limit of `scope` still needs by the account's
+/// usage observation: its quota group's exhausted windows, or for an
+/// account-wide limit each group's (both: account-wide until the first
+/// resets; one: that group only). `None` resumes the account.
+#[must_use]
+pub fn hold_after_expiry(
+    scope: Option<&str>,
+    rate_limits: Option<&serde_json::Value>,
+    now_ms: i64,
+) -> Option<(String, i64)> {
+    let limits = rate_limits?;
+    let reset = |group| group_reset_ms(limits, group, now_ms);
+    match scope {
+        Some(group) => reset(group).map(|until| (rate_limit_reason(Some(group)), until)),
+        None => match (reset(GEMINI_GROUP), reset(CLAUDE_GPT_GROUP)) {
+            (Some(gemini), Some(claude)) => Some((rate_limit_reason(None), gemini.min(claude))),
+            (Some(gemini), None) => Some((rate_limit_reason(Some(GEMINI_GROUP)), gemini)),
+            (None, Some(claude)) => Some((rate_limit_reason(Some(CLAUDE_GPT_GROUP)), claude)),
+            (None, None) => None,
+        },
+    }
+}
+
+/// The reason and end of a rate limit raised over the current one. A limit
+/// that is still running and holds for another quota group (or the whole
+/// account) widens to account-wide: both groups refused. The later end wins.
+#[must_use]
+pub fn merge_rate_limit(
+    current: (&str, Option<i64>),
+    next: (&str, Option<i64>),
+    now_ms: i64,
+) -> (String, Option<i64>) {
+    let running = current.1.is_none_or(|until| until > now_ms);
+    if !running {
+        return (next.0.to_owned(), next.1);
+    }
+    let current_scope = rate_limit_scope(current.0);
+    let scope = (current_scope == rate_limit_scope(next.0))
+        .then_some(current_scope)
+        .flatten();
+    let until = current.1.zip(next.1).map(|(a, b)| a.max(b));
+    (rate_limit_reason(scope), until)
+}
+
+/// The owner-facing explanation of a running rate limit of `scope`.
+fn describe_rate_limit(scope: Option<&str>) -> String {
+    match scope {
+        Some(GEMINI_GROUP) => "this Antigravity account's Gemini quota is rate-limited".into(),
+        Some(CLAUDE_GPT_GROUP) => {
+            "this Antigravity account's Claude and GPT quota is rate-limited".into()
+        }
+        _ => AccountState::RateLimited.describe().into(),
+    }
+}
+
 /// What a dispatch of an account's prompt may do now.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Gate {
@@ -236,6 +388,10 @@ pub struct GateInput<'a> {
     pub control: Option<&'a Control>,
     /// The method and sequence of an unacknowledged uncertain effect.
     pub uncertain: Option<(&'a str, u64)>,
+    /// The quota group of the model the session's next turn uses
+    /// ([`quota_group`]); `None` when unknown, which a scoped rate limit
+    /// parks like an account-wide one.
+    pub quota_group: Option<&'a str>,
     pub now_ms: i64,
 }
 
@@ -253,14 +409,24 @@ pub fn gate(input: &GateInput<'_>) -> Gate {
             AccountState::Ok => {}
             AccountState::RateLimited => {
                 let until = control.until_ms.unwrap_or(i64::MAX);
-                if input.now_ms < until {
-                    return Gate::Park(format!(
-                        "{} until {}",
-                        control.state.describe(),
-                        format_utc(until)
-                    ));
+                if input.now_ms >= until {
+                    clears_rate_limit = true;
+                } else {
+                    // A limit of one quota group holds only for sessions of
+                    // that group; another group's session proceeds and leaves
+                    // the running limit in place.
+                    let scope = rate_limit_scope(&control.reason);
+                    let other_group = scope
+                        .zip(input.quota_group)
+                        .is_some_and(|(scope, group)| scope != group);
+                    if !other_group {
+                        return Gate::Park(format!(
+                            "{} until {}",
+                            describe_rate_limit(scope),
+                            format_utc(until)
+                        ));
+                    }
                 }
-                clears_rate_limit = true;
             }
             state => return Gate::Park(state.describe().into()),
         }
@@ -274,16 +440,23 @@ pub fn gate(input: &GateInput<'_>) -> Gate {
 }
 
 /// A worker revival of a named-only session: admitted, not rate-limited
-/// beyond its end, and otherwise `ok`.
+/// account-wide beyond its end, and otherwise `ok`. A running limit of one
+/// quota group admits every revival: a launch sends no prompt, and a session
+/// must be able to apply a switch to the other group (the dispatch gate
+/// still holds its prompts).
 pub fn revival_allowed(
     admitted: bool,
     control: Option<&Control>,
     now_ms: i64,
 ) -> Result<(), String> {
+    let scoped = control.is_some_and(|control| {
+        control.state == AccountState::RateLimited && rate_limit_scope(&control.reason).is_some()
+    });
     match gate(&GateInput {
         admitted,
-        control,
+        control: control.filter(|_| !scoped),
         uncertain: None,
+        quota_group: None,
         now_ms,
     }) {
         Gate::Proceed { .. } => Ok(()),
@@ -382,6 +555,7 @@ pub fn signal_transition(signal: &Signal) -> Option<Transition> {
         state,
         reason,
         stop_units: state.stops_units(),
+        until_ms: None,
     })
 }
 
@@ -391,6 +565,9 @@ pub struct Transition {
     pub state: AccountState,
     pub reason: String,
     pub stop_units: bool,
+    /// The end of a rate limit when the account's usage names it; `None`
+    /// holds it [`DEFAULT_RATE_LIMIT_MS`].
+    pub until_ms: Option<i64>,
 }
 
 /// Owner actions on an account's controls.
