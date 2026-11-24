@@ -386,6 +386,70 @@ pub(super) fn portable_reset(
     });
 }
 
+/// Idle renewal of a named portable account's sign-in (protocol 52). Only a
+/// closed outcome or a closed code leaves the Machine; a refreshed credential
+/// leaves through the ordinary refresh observation.
+pub(super) fn portable_renewal(
+    command: MachineCommand,
+    context: MachineCommandContext,
+    execution: &PluginExecutionScope,
+) {
+    let MachineCommand::RenewPortableCredential {
+        request_id,
+        request,
+    } = command
+    else {
+        return;
+    };
+    let MachineCommandContext {
+        protocol,
+        events,
+        providers,
+        ..
+    } = context;
+    let account = request.account_id.clone();
+    let provider = request.plugin_id.clone();
+    let invocation = execution.portable_renewal(*request);
+    tokio::spawn(async move {
+        let result = if protocol
+            >= crate::machine_protocol::portable_usage::PORTABLE_RENEWAL_PROTOCOL_VERSION
+        {
+            providers.renew_portable_credential(invocation).await
+        } else {
+            Err(anyhow::anyhow!("machine_usage_update_required").into())
+        };
+        let event = match result {
+            Ok(payload) => {
+                tracing::info!(account = account.as_str(), %provider,
+                    outcome = payload["outcome"].as_str().unwrap_or_default(),
+                    "Portable account renewal finished");
+                MachineEvent::PluginHostResponse {
+                    request_id,
+                    accepted: true,
+                    started: true,
+                    payload: Some(payload),
+                    detail: None,
+                }
+            }
+            Err(failure) => {
+                let code = crate::machine_protocol::portable_usage::portable_usage_error_code(
+                    &failure.error.to_string(),
+                );
+                tracing::warn!(account = account.as_str(), %provider, started = failure.started,
+                    reason = code, "Portable account renewal failed");
+                MachineEvent::PluginHostResponse {
+                    request_id,
+                    accepted: false,
+                    started: failure.started,
+                    payload: None,
+                    detail: Some(code.to_owned()),
+                }
+            }
+        };
+        let _ = events.send(event);
+    });
+}
+
 /// A named envelope carries an account vault's Service-held credential (an
 /// entered key or a subscription sign-in), applied into that account's own
 /// scope. Named credentials of a native-only Provider (Claude) live solely in

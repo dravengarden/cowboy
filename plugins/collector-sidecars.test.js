@@ -425,10 +425,64 @@ test("Grok refresh-free usage reports authentication required and never retries"
   equal(failed.calls, 1, "503 is not retried");
 });
 
+test("Grok renews only on an explicit renewal, through one CLI billing read", async () => {
+  const methods = [];
+  let closed = 0;
+  const startRpc = async () => ({
+    request: async (method) => {
+      methods.push(method);
+      return { config: null };
+    },
+    close: () => {
+      closed += 1;
+    },
+  });
+  equal(
+    await handleGrok(
+      { operation: "renew", token_refresh: "renew" },
+      { startRpc, fetch: () => assert.fail("a renewal reads no usage endpoint") },
+    ),
+    { renewal: "attempted" },
+    "closed reply",
+  );
+  equal(methods, ["_x.ai/billing"], "one billing read through the CLI");
+  equal(closed, 1, "the CLI is closed");
+  for (const request of [{ operation: "renew" }, { operation: "renew", token_refresh: false }]) {
+    let failure;
+    try {
+      await handleGrok(request, { startRpc: () => assert.fail("started without renewal") });
+    } catch (error) {
+      failure = error;
+    }
+    equal(failure instanceof Error, true, `${JSON.stringify(request)} is refused`);
+  }
+  const rejected = async () => ({
+    request: async () => {
+      throw new Error('_x.ai/billing: {"code":-32000,"message":"Billing service error: HTTP 401"}');
+    },
+    close: () => {
+      closed += 1;
+    },
+  });
+  let failure;
+  try {
+    await handleGrok({ operation: "renew", token_refresh: "renew" }, { startRpc: rejected });
+  } catch (error) {
+    failure = error;
+  }
+  equal(failure.message.includes("401"), true, "a rejected renewal keeps its status");
+  equal(closed, 2, "a failed renewal closes the CLI");
+});
+
 test("Grok declares refresh-free usage and reaches only its read endpoints", () => {
   equal(
     grokDeclaration,
-    { schema: 1, token_refresh: "request", token_refresh_guard: "cli_not_started" },
+    {
+      schema: 1,
+      token_refresh: "request",
+      token_refresh_guard: "cli_not_started",
+      idle_renewal: "cli_startup",
+    },
     "declaration",
   );
   for (const argv of [grokHost.usage.collector_argv, grokHost.usage.reset_argv]) {
@@ -584,7 +638,12 @@ test("The refresh-free declarations match the wire crate's tested copies", () =>
   );
   equal(
     grokDeclaration,
-    { schema: 1, token_refresh: "request", token_refresh_guard: "cli_not_started" },
+    {
+      schema: 1,
+      token_refresh: "request",
+      token_refresh_guard: "cli_not_started",
+      idle_renewal: "cli_startup",
+    },
     "grok",
   );
 });

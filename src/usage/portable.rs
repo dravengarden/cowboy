@@ -5,7 +5,8 @@
 use super::{PluginUsageSpec, UsageService};
 use crate::machine_control::{MachineControl, Reply, ReplyKind, RequestBinding};
 use crate::machine_protocol::portable_usage::{
-    PortableSidecar, PortableUsageRequest, portable_usage_error_code,
+    PortableRenewalRequest, PortableSidecar, PortableUsageRequest, RENEWAL_OUTCOMES,
+    portable_usage_error_code,
 };
 use crate::machine_protocol::{
     MachineCommand, PluginHostOperation, PluginInstallationState, PluginInventory,
@@ -45,6 +46,26 @@ impl UsageService {
                     &plugin.generation_digest,
                 )
                 .is_some_and(|host| host.refresh_free_reset)
+        })
+    }
+
+    /// Whether exactly this installed release's collector declares an idle
+    /// renewal (`PortableRenewalRequest`).
+    #[must_use]
+    pub fn idle_renewal(&self, plugin: &PluginInventory) -> bool {
+        let catalog = match &self.bindings {
+            super::UsageBindingSource::Catalog(catalog) => catalog,
+            #[cfg(any(test, feature = "test-support"))]
+            super::UsageBindingSource::Static(_) => return false,
+        };
+        catalog.runtime().is_some_and(|runtime| {
+            runtime
+                .exact_host(
+                    &plugin.plugin_id,
+                    &plugin.plugin_version,
+                    &plugin.generation_digest,
+                )
+                .is_some_and(|host| host.idle_renewal)
         })
     }
 
@@ -225,6 +246,51 @@ pub fn begin_collect<'a>(
                 payload: Some(value),
                 ..
             })) if !value.is_null() => Ok(value),
+            Ok(Ok(Reply::PluginHost {
+                detail: Some(code), ..
+            })) => Err(portable_usage_error_code(&code)),
+            Ok(Err(_)) => Err("portable_usage_machine_unavailable"),
+            Err(_) => Err("portable_usage_temporarily_unavailable"),
+            Ok(Ok(_)) => Err("portable_usage_collector_failed"),
+        }
+    })
+}
+
+/// Enqueue an idle renewal (synchronously, like [`begin_collect`]); the
+/// future awaits its closed outcome (`renewed` or `unchanged`).
+pub fn begin_renewal<'a>(
+    machine_control: &'a MachineControl,
+    machine_id: &str,
+    plugin: &PluginInventory,
+    request: PortableRenewalRequest,
+) -> Result<impl Future<Output = Result<&'static str, &'static str>> + 'a, &'static str> {
+    let binding = machine_control
+        .bind_plugin_host(machine_id, plugin, PluginHostOperation::RenewCredential)
+        .map_err(|_| "portable_usage_machine_unavailable")?;
+    let request_id = format!("portable-renewal-{}", uuid::Uuid::new_v4());
+    let (reply, pending) = machine_control
+        .begin_request(
+            machine_id,
+            &request_id,
+            MachineCommand::RenewPortableCredential {
+                request_id: request_id.clone(),
+                request: Box::new(request),
+            },
+            ReplyKind::PluginHost,
+            Some(RequestBinding::Plugin(&binding)),
+        )
+        .map_err(|error| dispatch_error(&error))?;
+    Ok(async move {
+        let _pending = pending;
+        match tokio::time::timeout(REPLY_TIMEOUT, reply).await {
+            Ok(Ok(Reply::PluginHost {
+                accepted: true,
+                payload: Some(value),
+                ..
+            })) => RENEWAL_OUTCOMES
+                .into_iter()
+                .find(|outcome| value["outcome"].as_str() == Some(outcome))
+                .ok_or("portable_usage_collector_failed"),
             Ok(Ok(Reply::PluginHost {
                 detail: Some(code), ..
             })) => Err(portable_usage_error_code(&code)),

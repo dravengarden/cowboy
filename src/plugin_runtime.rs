@@ -54,6 +54,8 @@ pub struct ActivatedHostPlugin {
     pub refresh_free_collector: bool,
     /// The same declaration also covers its banked reset (`consume_reset`).
     pub refresh_free_reset: bool,
+    /// Its collector declares an idle renewal (`"idle_renewal"`).
+    pub idle_renewal: bool,
 }
 
 /// Least-privilege projection served to Cowboy Web.
@@ -625,6 +627,7 @@ fn build_activated_host(
         native_capabilities: spec.native_capabilities.clone(),
         refresh_free_collector: refresh_free(files).usage,
         refresh_free_reset: refresh_free(files).reset,
+        idle_renewal: refresh_free(files).renewal,
     })
 }
 
@@ -888,6 +891,7 @@ mod tests {
             native_capabilities: Vec::new(),
             refresh_free_collector: false,
             refresh_free_reset: false,
+            idle_renewal: false,
         };
         let grok = ActivatedHostPlugin {
             id: "grok".to_owned(),
@@ -905,6 +909,7 @@ mod tests {
             native_capabilities: Vec::new(),
             refresh_free_collector: false,
             refresh_free_reset: false,
+            idle_renewal: false,
         };
         assert!(login.public_auth_surface());
         assert!(!grok.public_auth_surface());
@@ -1003,6 +1008,7 @@ mod tests {
             native_capabilities: spec.native_capabilities,
             refresh_free_collector: false,
             refresh_free_reset: false,
+            idle_renewal: false,
         };
 
         let public = serde_json::to_value(host.public_descriptor(true)).expect("public descriptor");

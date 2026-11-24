@@ -15,8 +15,8 @@
 //! starts.
 use super::*;
 use crate::machine_protocol::portable_usage::{
-    PortableResetRequest, PortableUsageRequest, REFRESH_FREE_DECLARATION, RefreshFree,
-    portable_usage_error_code,
+    PortableRenewalRequest, PortableResetRequest, PortableUsageRequest, REFRESH_FREE_DECLARATION,
+    RefreshFree, portable_usage_error_code,
 };
 
 /// Every portable invocation must start within this bound of its receipt: the
@@ -185,6 +185,19 @@ impl Drop for PrivateHome {
             tracing::error!(path = %path.display(), %error,
                 "a private credential copy could not be removed; it is removed at Machine start");
         }
+    }
+}
+
+/// One idle renewal of a named portable account's sign-in; see
+/// [`MachinePluginStore::renew_portable_credential`].
+pub struct PortableRenewalInvocation {
+    request: PortableRenewalRequest,
+    connected: Arc<AtomicBool>,
+}
+
+impl PortableRenewalInvocation {
+    pub fn new(request: PortableRenewalRequest, connected: Arc<AtomicBool>) -> Self {
+        Self { request, connected }
     }
 }
 
@@ -473,6 +486,110 @@ impl MachinePluginStore {
             })
     }
 
+    /// Renew one named portable account's sign-in while no session of it
+    /// runs (the Controller admits it only then). The exact selected release
+    /// must declare idle renewal; its collector runs `renew` in the account's
+    /// own session home (the writable runtime projection a session launches
+    /// with, never a private copy) under the account's credential guard and
+    /// the lifecycle lock, so the Provider CLI refreshes exactly as a
+    /// session's startup would, and with the same file lock a concurrent
+    /// session on this Machine shares. A refreshed credential leaves only
+    /// through the ordinary refresh observation and the Service
+    /// compare-and-swap, which validates its identity; this reply carries only
+    /// `renewed` (the session home now holds a credential the vault does not)
+    /// or `unchanged`. Nothing starts after `expires_at_ms`.
+    pub async fn renew_portable_credential(
+        &self,
+        invocation: PortableRenewalInvocation,
+    ) -> std::result::Result<serde_json::Value, PluginHostInvocationFailure> {
+        let PortableRenewalInvocation { request, connected } = invocation;
+        let refuse = |code: &'static str| PluginHostInvocationFailure {
+            started: false,
+            error: anyhow::anyhow!(code),
+        };
+        let remaining = request.expires_at_ms.saturating_sub(super::unix_ms());
+        if remaining <= 0 {
+            return Err(refuse("portable_usage_busy"));
+        }
+        let mut admission = HostAdmission::new(connected);
+        admission.deadline = admission
+            .deadline
+            .min(Instant::now() + Duration::from_millis(u64::try_from(remaining).unwrap_or(0)));
+        admission.expires_at_unix_ms = Some(request.expires_at_ms);
+        let usage = PortableUsageRequest {
+            account_id: request.account_id.clone(),
+            plugin_id: request.plugin_id.clone(),
+            plugin_version: request.plugin_version.clone(),
+            generation_digest: request.generation_digest.clone(),
+            auth_generation: request.auth_generation,
+            payload: serde_json::Value::Null,
+            sidecars: Vec::new(),
+        };
+        let (scoped, _guard) = self
+            .admit_portable(&usage, &admission)
+            .await
+            .map_err(|error| refuse(portable_usage_error_code(&format!("{error:#}"))))?;
+        if !self
+            .refresh_free(&request.plugin_id, &request.generation_digest)
+            .renewal
+        {
+            return Err(refuse("portable_renewal_unsupported"));
+        }
+        // No sidecar and no private home: the session environment.
+        admission.sidecars = Some(BTreeMap::new());
+        let ran = scoped
+            .invoke_executable_host_admitted(
+                PluginHostRequest {
+                    plugin_id: request.plugin_id.clone(),
+                    plugin_version: request.plugin_version,
+                    generation_digest: request.generation_digest,
+                    auth_generation: Some(request.auth_generation),
+                    operation: PluginHostOperation::RenewCredential,
+                    payload: serde_json::json!({"token_refresh": "renew"}),
+                },
+                Some(&admission),
+            )
+            .await
+            .map_err(|failure| PluginHostInvocationFailure {
+                started: failure.started,
+                error: anyhow::anyhow!(portable_usage_error_code(&format!("{:#}", failure.error))),
+            });
+        if let Err(failure) = &ran
+            && !failure.started
+        {
+            return ran;
+        }
+        // Whatever the collector reported once it started, the session home
+        // decides: the CLI may have renewed before a later read failed, and
+        // that credential reaches the vault through the refresh observation
+        // either way.
+        let (account, plugin) = (request.account_id, request.plugin_id);
+        let observer = scoped.clone();
+        let renewed = tokio::task::spawn_blocking(move || {
+            observer
+                .auth_refresh_observations()
+                .candidates
+                .iter()
+                .any(|candidate| candidate.account_id == account && candidate.provider_id == plugin)
+        })
+        .await
+        .map_err(|error| PluginHostInvocationFailure {
+            started: true,
+            error: error.into(),
+        })?;
+        match ran {
+            _ if renewed => Ok(serde_json::json!({"outcome": "renewed"})),
+            Ok(reply) if reply["renewal"] == "attempted" => {
+                Ok(serde_json::json!({"outcome": "unchanged"}))
+            }
+            Ok(_) => Err(PluginHostInvocationFailure {
+                started: true,
+                error: anyhow::anyhow!("portable_usage_collector_failed"),
+            }),
+            Err(failure) => Err(failure),
+        }
+    }
+
     /// Collect one named portable account's usage. Errors are closed codes
     /// from [`portable_usage_error_code`]; collector output never leaves.
     pub async fn collect_portable_usage(
@@ -665,6 +782,34 @@ mod tests {
                 .expect("independent accounts never wait for each other")
                 .unwrap_err();
         assert_eq!(error.to_string(), "portable_usage_replica_pending");
+    }
+
+    /// A renewal that expired, is not a vault account or lacks the account's
+    /// current replica never starts the collector.
+    #[tokio::test]
+    async fn a_portable_renewal_that_cannot_be_admitted_never_starts() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = MachinePluginStore::new(dir.path(), Platform::Linux, "x86_64".into()).unwrap();
+        let renewal = |plugin: &str, expires_at_ms: i64| -> PortableRenewalRequest {
+            serde_json::from_value(serde_json::json!({
+                "account_id": "11111111-1111-4111-8111-111111111111", "plugin_id": plugin,
+                "plugin_version": "3.2.36", "generation_digest": "sha256:x",
+                "auth_generation": 3, "expires_at_ms": expires_at_ms,
+            }))
+            .unwrap()
+        };
+        let later = super::super::unix_ms() + 60_000;
+        for (request, code) in [
+            (renewal("grok", 1), "portable_usage_busy"),
+            (renewal("claude-code", later), "portable_usage_account_required"),
+            (renewal("grok", later), "portable_usage_replica_pending"),
+        ] {
+            let invocation =
+                PortableRenewalInvocation::new(request, Arc::new(AtomicBool::new(true)));
+            let failure = store.renew_portable_credential(invocation).await.unwrap_err();
+            assert!(!failure.started, "{code}");
+            assert_eq!(failure.error.to_string(), code);
+        }
     }
 
     /// A reset that is invalid, expired, not a vault account or without the

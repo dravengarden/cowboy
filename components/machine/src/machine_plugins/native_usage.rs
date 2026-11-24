@@ -6,7 +6,9 @@ use std::sync::{Arc, Weak};
 
 mod portable;
 mod sandbox;
-pub use portable::{HostAdmission, PortableInvocation, PortableResetInvocation};
+pub use portable::{
+    HostAdmission, PortableInvocation, PortableRenewalInvocation, PortableResetInvocation,
+};
 pub(in crate::machine_plugins) use portable::{PRIVATE_HOMES, remove_private_home};
 
 /// Native processes share a home only within one account. They must not hold

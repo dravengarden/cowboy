@@ -29,6 +29,7 @@ impl MachineCommand {
             | Self::ConsumeNativeReset { .. }
             | Self::CollectPortableUsage { .. }
             | Self::ConsumePortableReset { .. }
+            | Self::RenewPortableCredential { .. }
             | Self::AccountSandboxFence { .. }
             | Self::AccountSandboxRemove { .. }
             | Self::BeginNativeLogin { .. }
@@ -168,6 +169,9 @@ impl MachineCommand {
             Self::ConsumeNativeReset { .. } => NATIVE_RESET_SPACING_PROTOCOL_VERSION,
             Self::CollectPortableUsage { .. } => PORTABLE_USAGE_PROTOCOL_VERSION,
             Self::ConsumePortableReset { .. } => portable_usage::PORTABLE_RESET_PROTOCOL_VERSION,
+            Self::RenewPortableCredential { .. } => {
+                portable_usage::PORTABLE_RENEWAL_PROTOCOL_VERSION
+            }
             Self::AccountSandboxFence { .. } | Self::AccountSandboxRemove { .. } => {
                 ACCOUNT_FENCE_PROTOCOL_VERSION
             }

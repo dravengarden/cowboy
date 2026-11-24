@@ -21,6 +21,8 @@
 //! Service account's configured usage query Machine.
 use super::*;
 use crate::machine_protocol::portable_usage::PortableUsageRequest;
+
+mod renewal;
 use crate::store::provider_accounts::portable::Use;
 use crate::usage::native::{PortableScope, Scope, Slot};
 
@@ -333,8 +335,21 @@ pub async fn refresh(
         permit
     };
     state.hub.broadcast_account_usage_changed(owner);
-    let result = collect(state, owner, id, target, placed).await;
-    let outcome = collection_outcome(result.as_ref().err().copied());
+    let result = collect(state, owner, id, target, placed.clone()).await;
+    // An expired sign-in no session renews: renew it once, idle.
+    let renewed = result == Err("portable_usage_authentication_required")
+        && renewal::renew(state, owner, id, target, &placed).await == renewal::Outcome::Renewed;
+    let (result, outcome) = if renewed {
+        // The renewal reached the Provider and succeeded; the renewed
+        // credential is on its way to the vault and every Machine.
+        (
+            Err("portable_usage_replica_pending"),
+            crate::usage::limiter::Outcome::Success,
+        )
+    } else {
+        let outcome = collection_outcome(result.as_ref().err().copied());
+        (result, outcome)
+    };
     let succeeded = result.is_ok();
     cache.data.lock().finish(&scope, result);
     if succeeded {
@@ -343,11 +358,32 @@ pub async fn refresh(
     permit.finish(outcome, now_ms());
     drop(collection);
     state.hub.broadcast_account_usage_changed(owner);
+    if renewed {
+        follow_up(state, owner, id, &target.binding.account, &key);
+    }
     tracing::debug!(
         account_id = id.as_str(),
         "portable account usage refresh settled"
     );
     Ok(())
+}
+
+/// Read the renewed account's usage once its budget allows the next read,
+/// without waiting for an owner surface to ask.
+fn follow_up(state: &Arc<AppState>, owner: &str, id: &ProviderAccountId, provider: &str, key: &str) {
+    let now = now_ms();
+    let retry_at = state.usage.limiter.view(provider, key, now).retry_at_ms(now);
+    let wait = u64::try_from(retry_at.saturating_sub(now))
+        .unwrap_or(0)
+        .clamp(0, 3_600_000);
+    let (state, owner, id) = (Arc::clone(state), owner.to_owned(), id.clone());
+    tokio::spawn(async move {
+        tokio::time::sleep(
+            std::time::Duration::from_millis(wait) + renewal::FOLLOW_UP_MARGIN,
+        )
+        .await;
+        let _ = super::refresh_one(&state, &owner, &id).await;
+    });
 }
 
 /// Run `enqueue` under the owner's account lock after rechecking that the

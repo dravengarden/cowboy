@@ -67,6 +67,44 @@ pinned CLI's `_x.ai/billing`), plan and resets directly. No
 Machine speaking protocol 50 was released before this, so no other capability
 negotiation is needed. An entered DeepSeek key is never refreshed.
 
+**Idle renewal (Grok 3.2.36, Machine protocol 52).** Refresh-free usage
+leaves an account whose sessions all ended with an access token that expires
+a few hours later (about four for Grok), after which every read reports
+authentication required although the sign-in is intact. When a named
+account's read reports that, no worker of the account runs on any Machine,
+and the placed Machine speaks protocol 52 with an exact collector release
+whose declaration names `"idle_renewal": "cli_startup"`, the Controller sends
+`RenewPortableCredential` under the account lock with the exact vault
+generation. The Machine admits it like a read (account credential guard,
+replica generation, refresh-free declaration plus `idle_renewal`) and runs
+the collector's `renew` in the account's own session home, never a private
+copy, holding the lifecycle lock like a reset. The collector starts the
+pinned Grok CLI and makes one billing read through it, so the CLI refreshes
+exactly as a session's startup would, under the same file lock a concurrent
+session in that home shares. The renewed credential leaves only through the
+Machine's ordinary refresh observation and the Service compare-and-swap
+(which validates its identity); the reply is only `renewed` (the session home
+holds a credential the vault does not) or `unchanged`, decided from the home
+even if the billing read failed after the CLI refreshed. A `renewed` read
+reports `portable_usage_replica_pending`, settles its budget as a success and
+schedules one follow-up read once the budget allows it. Renewals are spaced
+per account (30 minutes after a renewal, 6 hours after one that failed or
+changed nothing, which leaves "sign in again" for the owner); the spacing is
+in memory, so a Controller restart allows at most one extra attempt. A worker
+that starts between the check and the dispatch is rechecked under the
+account lock; one starting on another Machine while the renewal runs is the
+same concurrent redeemer two sessions on two Machines already are. Codex
+declares no idle renewal: its CLI does not serialize concurrent refreshes
+even in one home.
+
+Offline acceptance (2026-11-24, pinned Grok CLI 1.0.92, user and network
+namespace with loopback only, a fake IdP issuing single-use refresh tokens
+that rejects reuse): a renewal of a token expiring in 30 s or expired ten
+hours earlier redeemed exactly once and rewrote the home's `auth.json`; a
+token valid for two hours redeemed nothing; two concurrent renewals in one
+home, and a renewal concurrent with a session's CLI start in that home,
+redeemed exactly once in each of three runs.
+
 Placement: among Machines with an exact released active collector generation
 that host runtime policy admits for the collector and every sidecar Plugin it
 starts, Cowboy picks the one running most of the owner's live sessions on the
