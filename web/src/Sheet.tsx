@@ -10,14 +10,16 @@ import {
 import { type ReactNode, type Ref, useContext, useId, useRef } from "react";
 import { createPortal } from "react-dom";
 import { BottomSheet, type BottomSheetProps, ScrollEdges } from "@cowboy/app-shell";
+import { desktopCompositionActive } from "./desktop/commands/keyIntent";
 import {
   desktopDialogSlotProps,
   InstantModalTransition,
   isImeBlockedEscape,
 } from "./desktop/DesktopModal";
+import { isImeKeyEvent } from "./imeKey";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ObsidianSheet } from "./ObsidianSheet";
-import { ENTER_LABEL, MOD_LABEL } from "./platform";
+import { ENTER_LABEL, hasSendMod, MOD_LABEL } from "./platform";
 import { SurfaceContext, useSurfaceProfile } from "./surface/SurfaceProfile";
 
 function maybePortal(sheet: ReactNode, portal: boolean): ReactNode {
@@ -163,9 +165,14 @@ export function Sheet(
     if (isImeBlockedEscape(event, reason)) return;
     props.onClose();
   };
-  if (
-    desktopMaxWidth !== undefined && !effectiveMobile && !effectiveForceSheet
-  ) {
+  // Titled non-fill Desktop dialogs (filters, details, confirmations) use the
+  // scrollable titled dialog so actions stay reachable in short/narrow windows.
+  // Untitled or fill/full-screen workbenches (Settings, Calls) own their own
+  // internal scroller and bottom rail.
+  const useWorkbenchBody = desktopMaxWidth !== undefined && !effectiveMobile &&
+    !effectiveForceSheet &&
+    !(desktopSurface && props.title != null && !desktopFill && !desktopFullScreen);
+  if (useWorkbenchBody) {
     return (
       <Dialog
         open={props.open}
@@ -205,7 +212,7 @@ export function Sheet(
         title={props.title}
         actions={props.actions}
         wide={props.wide}
-        desktopDialogWidth={desktopDialogWidth}
+        desktopDialogWidth={desktopDialogWidth ?? desktopMaxWidth}
         desktopPaperRef={desktopPaperRef}
       >
         {props.children}
@@ -259,7 +266,7 @@ export interface ConfirmSheetAction {
   readonly busy?: boolean;
   readonly cancelLabel?: ReactNode;
   readonly startIcon?: ReactNode;
-  readonly confirmProps?: Record<string, string>;
+  readonly confirmProps?: Record<`data-${string}`, string>;
 }
 
 export function ConfirmSheet({
@@ -277,9 +284,9 @@ export function ConfirmSheet({
   title?: ReactNode;
   children: ReactNode;
   actions?: ReactNode;
-  /** Explicit opt-in primary action: renders Cancel (Esc) + Confirm
-   *  (Mod+Enter) and binds stack-aware `useConfirmEnter` from one source of
-   *  truth so `disabled`/`busy` can never diverge from the shortcut. */
+  /** Explicit opt-in primary action (mutually exclusive with `actions`):
+   *  renders Cancel (Esc) + Confirm (Mod+Enter) and binds stack-aware
+   *  `useConfirmEnter` from one source of truth. */
   confirm?: ConfirmSheetAction | undefined;
   wide?: boolean;
   /** Folder sheets already live in the keyboard-resized App host. */
@@ -287,34 +294,48 @@ export function ConfirmSheet({
 }): ReactNode {
   const forceSheet = useConfirmSheetSurface();
   const dialogRef = useRef<HTMLDivElement>(null);
-  const confirmReady = Boolean(open && confirm && !confirm.disabled && !confirm.busy);
-  useConfirmEnter(confirmReady, () => {
-    void confirm?.onConfirm();
-  }, { owner: dialogRef });
-  const actions = explicitActions ?? (confirm
+  const activeConfirm = explicitActions == null ? confirm : undefined;
+  const confirmReady = Boolean(
+    open && activeConfirm && !activeConfirm.disabled && !activeConfirm.busy,
+  );
+  const triggerConfirm = (): void => {
+    if (!confirmReady || !activeConfirm) return;
+    void activeConfirm.onConfirm();
+  };
+  useConfirmEnter(confirmReady, triggerConfirm, { owner: dialogRef });
+  const actions = explicitActions ?? (activeConfirm
     ? (
       <>
         <Button
           color="inherit"
-          disabled={Boolean(confirm.busy)}
+          disabled={Boolean(activeConfirm.busy)}
           onClick={onClose}
           sx={{ textTransform: "none" }}
         >
-          {confirm.cancelLabel ?? "Cancel"}
+          {activeConfirm.cancelLabel ?? "Cancel"}
           {!forceSheet && <Kbd keys="Esc" />}
         </Button>
         <Button
+          {...activeConfirm.confirmProps}
           variant="contained"
-          color={confirm.color ?? "primary"}
-          disabled={Boolean(confirm.disabled || confirm.busy)}
-          startIcon={confirm.startIcon}
-          onClick={(): void => {
-            void confirm.onConfirm();
+          color={activeConfirm.color ?? "primary"}
+          disabled={!confirmReady}
+          startIcon={activeConfirm.startIcon}
+          onKeyDown={(e): void => {
+            // Block native bare/repeat/Shift+Enter activation on the
+            // affirmative button on Desktop so holding Enter or pressing
+            // Shift+Enter can never confirm an irreversible action.
+            if (
+              !forceSheet && e.key === "Enter" && !hasSendMod(e.nativeEvent) &&
+              !isImeKeyEvent(e.nativeEvent) && !desktopCompositionActive()
+            ) {
+              e.preventDefault();
+            }
           }}
+          onClick={triggerConfirm}
           sx={{ textTransform: "none" }}
-          {...confirm.confirmProps}
         >
-          {confirm.label}
+          {activeConfirm.label}
           {!forceSheet && (
             <Kbd
               keys={`${MOD_LABEL}${ENTER_LABEL}`}

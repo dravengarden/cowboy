@@ -7,8 +7,9 @@ import {
 } from "./ShortcutKeycap";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 import { confirmEnterIntent } from "./confirmShortcut";
+import { popupOwnsKeys } from "./desktop/commands/hintTargets";
 import { desktopCompositionActive } from "./desktop/commands/keyIntent";
-import { isTopmostDialog } from "./desktop/commands/modalGuard";
+import { isTopmostDialog, owningDialog } from "./desktop/commands/modalGuard";
 
 /** Most recently opened active confirm hook sits at the top of the stack. */
 const activeConfirmStack: symbol[] = [];
@@ -77,10 +78,13 @@ export function useConfirmEnter(
     const token = Symbol("confirm-enter");
     activeConfirmStack.push(token);
     const onKey = (e: KeyboardEvent): void => {
-      if (desktopCompositionActive()) return;
+      if (desktopCompositionActive() || popupOwnsKeys()) return;
       const ownElement = ownerRef.current?.current ?? null;
       if (ownElement !== null) {
         if (!isTopmostDialog(ownElement)) return;
+        const ownDialog = owningDialog(ownElement);
+        const targetDialog = e.target instanceof Element ? owningDialog(e.target) : null;
+        if (ownDialog && targetDialog && targetDialog !== ownDialog) return;
       } else if (activeConfirmStack.at(-1) !== token) {
         return;
       }

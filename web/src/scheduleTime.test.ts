@@ -18,3 +18,9 @@ test("scheduleQuickPresets returns future presets including Tomorrow 9:00", () =
   assertEquals(presets.every((p) => p.fireAtMs > now), true);
   assertEquals(toDtLocal(presets[3]!.fireAtMs), "2026-08-21T09:00");
 });
+
+test("computeSchedulePreset computes fresh targets from activation time", () => {
+  const t0 = new Date(2026, 7, 20, 19, 0, 0).getTime();
+  const t1 = t0 + 10 * 60_000;
+  assertEquals(scheduleQuickPresets(t1)[0]!.fireAtMs - t1, 15 * 60_000);
+});

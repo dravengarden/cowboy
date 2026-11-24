@@ -49,25 +49,53 @@ export function fireRel(ms: number, now: number = Date.now()): string {
   return `in ${String(Math.round(s / 86_400))}d`;
 }
 
+export type ScheduleQuickPresetId = "15m" | "1h" | "3h" | "tomorrow-9";
+
 export interface ScheduleQuickPreset {
-  readonly id: string;
+  readonly id: ScheduleQuickPresetId;
   readonly label: string;
   readonly fireAtMs: number;
 }
 
-/** One-click / keyboard-friendly future targets for the schedule sheet. */
-export function scheduleQuickPresets(now: number = Date.now()): ScheduleQuickPreset[] {
-  const tomorrow9 = new Date(now);
-  tomorrow9.setDate(tomorrow9.getDate() + 1);
-  tomorrow9.setHours(9, 0, 0, 0);
+export const SCHEDULE_QUICK_PRESET_LABELS: readonly {
+  readonly id: ScheduleQuickPresetId;
+  readonly label: string;
+}[] = [
+  { id: "15m", label: "+15m" },
+  { id: "1h", label: "+1h" },
+  { id: "3h", label: "+3h" },
+  { id: "tomorrow-9", label: "Tomorrow 9:00" },
+];
+
+/** Compute a preset's unambiguous target epoch-ms at activation time. */
+export function computeSchedulePreset(
+  id: ScheduleQuickPresetId,
+  now: number = Date.now(),
+): number {
   const rounded = (minutes: number): number =>
     Math.ceil((now + minutes * 60_000) / 60_000) * 60_000;
-  return [
-    { id: "15m", label: "+15m", fireAtMs: rounded(15) },
-    { id: "1h", label: "+1h", fireAtMs: rounded(60) },
-    { id: "3h", label: "+3h", fireAtMs: rounded(180) },
-    { id: "tomorrow-9", label: "Tomorrow 9:00", fireAtMs: tomorrow9.getTime() },
-  ];
+  switch (id) {
+    case "15m":
+      return rounded(15);
+    case "1h":
+      return rounded(60);
+    case "3h":
+      return rounded(180);
+    case "tomorrow-9": {
+      const tomorrow9 = new Date(now);
+      tomorrow9.setDate(tomorrow9.getDate() + 1);
+      tomorrow9.setHours(9, 0, 0, 0);
+      return tomorrow9.getTime();
+    }
+  }
+}
+
+/** One-click / keyboard-friendly future targets for the schedule sheet. */
+export function scheduleQuickPresets(now: number = Date.now()): ScheduleQuickPreset[] {
+  return SCHEDULE_QUICK_PRESET_LABELS.map((entry) => ({
+    ...entry,
+    fireAtMs: computeSchedulePreset(entry.id, now),
+  }));
 }
 
 function startOfDay(ms: number): number {

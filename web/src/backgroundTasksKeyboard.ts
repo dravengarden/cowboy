@@ -4,7 +4,6 @@ import { modalHandlerShouldSkip } from "./desktop/commands/modalGuard";
 
 export interface BackgroundTasksKeyContext {
   readonly ownNode: HTMLElement | null;
-  readonly typing: boolean;
   readonly selected: {
     readonly key: string;
     readonly source: string;
@@ -22,7 +21,7 @@ export function handleBackgroundTasksKeyDown(
   event: ReactKeyboardEvent<HTMLElement>,
   ctx: BackgroundTasksKeyContext,
 ): void {
-  if (event.metaKey || event.ctrlKey || event.altKey || ctx.typing) return;
+  if (event.metaKey || event.ctrlKey || event.altKey) return;
   if (modalHandlerShouldSkip(event.nativeEvent, ctx.ownNode)) return;
   if ((event.target as HTMLElement).closest?.("[role='dialog'] [role='dialog']")) return;
   switch (shortcutKey(event.nativeEvent)) {
@@ -69,7 +68,8 @@ export function handleBackgroundTasksKeyDown(
       }
       return;
     case "h":
-    case "Escape":
+      // Escape is handled once by MUI Dialog's IME-guarded onClose so closing
+      // does not double-fire and lose opener focus restoration.
       event.preventDefault();
       ctx.close();
       return;

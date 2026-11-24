@@ -1,4 +1,4 @@
-import { isImeKeyEvent } from "../imeKey";
+import { desktopImeOwnsKey } from "./commands/imeShortcut";
 
 export type DesktopEscapeGuardAction =
   | "ignore"
@@ -48,14 +48,14 @@ export function installDesktopNativeEscapeGuard(): () => void {
   const capture = (event: KeyboardEvent): void => {
     const action = desktopEscapeGuardAction({
       key: event.key,
-      ime: isImeKeyEvent(event),
+      ime: desktopImeOwnsKey(event),
       modalOpen: document.querySelector(".MuiModal-root") !== null,
       editorOwnsEscape: editorOwnsEscape(event.target),
     });
     if (action === "prevent-native") event.preventDefault();
   };
   const bubble = (event: KeyboardEvent): void => {
-    if (event.key === "Escape" && !isImeKeyEvent(event)) {
+    if (event.key === "Escape" && !desktopImeOwnsKey(event)) {
       event.preventDefault();
     }
   };

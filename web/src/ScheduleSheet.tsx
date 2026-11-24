@@ -9,59 +9,60 @@ import { Kbd } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import type { Delivery, DraftSchedule } from "./protocol";
 import {
+  computeSchedulePreset,
   fireLabel,
   fireRel,
   parseDtLocal,
-  scheduleQuickPresets,
+  SCHEDULE_QUICK_PRESET_LABELS,
+  type ScheduleQuickPresetId,
   toDtLocal,
 } from "./scheduleTime";
 import { SurfaceContext } from "./surface/SurfaceProfile";
 
+interface SelectedPreset {
+  readonly id: ScheduleQuickPresetId;
+  readonly fireAtMs: number;
+  readonly inputValue: string;
+}
+
 function ScheduleQuickPresets({
-  now,
-  value,
+  selectedId,
   onSelect,
 }: {
-  now: number;
-  value: string;
-  onSelect: (next: string) => void;
+  selectedId: ScheduleQuickPresetId | null;
+  onSelect: (id: ScheduleQuickPresetId) => void;
 }): React.JSX.Element {
-  const presets = scheduleQuickPresets(now);
   return (
     <Stack spacing={1}>
       <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
         Quick presets
       </Typography>
       <Stack direction="row" spacing={0.75} flexWrap="wrap" useFlexGap>
-        {presets.map((preset) => {
-          const presetValue = toDtLocal(preset.fireAtMs);
-          return (
-            <Button
-              key={preset.id}
-              size="small"
-              variant={value === presetValue ? "contained" : "outlined"}
-              disableElevation
-              data-schedule-preset={preset.id}
-              onClick={(): void => {
-                navigationHaptic();
-                onSelect(presetValue);
-              }}
-              sx={{ textTransform: "none", minWidth: 0, px: 1.25 }}
-            >
-              {preset.label}
-            </Button>
-          );
-        })}
+        {SCHEDULE_QUICK_PRESET_LABELS.map((preset) => (
+          <Button
+            key={preset.id}
+            size="small"
+            variant={selectedId === preset.id ? "contained" : "outlined"}
+            disableElevation
+            data-schedule-preset={preset.id}
+            onClick={(): void => {
+              navigationHaptic();
+              onSelect(preset.id);
+            }}
+            sx={{ textTransform: "none", minWidth: 0, px: 1.25 }}
+          >
+            {preset.label}
+          </Button>
+        ))}
       </Stack>
     </Stack>
   );
 }
 
 // The schedule picker: quick presets + custom datetime-local input, queue
-// position (back/front), and a live human confirm line. Used both to schedule
-// a fresh draft (from the composer clock) and to reschedule/cancel an existing
-// one (its chip). Both positions wait for a running turn to finish and respect
-// a paused queue.
+// position (back/front), and a live human confirm line. Relative presets are
+// computed at activation time and keep their exact UTC epoch-ms until the user
+// edits the field, avoiding stale render clocks and DST fall-back ambiguity.
 export function ScheduleSheet({
   open,
   onClose,
@@ -81,20 +82,25 @@ export function ScheduleSheet({
 }): React.JSX.Element {
   const desktop = useContext(SurfaceContext)?.kind === "desktop";
   const [value, setValue] = useState("");
+  const [selectedPreset, setSelectedPreset] = useState<SelectedPreset | null>(null);
   const [delivery, setDelivery] = useState<Delivery>("back");
 
   useEffect(() => {
     if (!open) return;
     setValue(initial ? toDtLocal(initial.fire_at_ms) : "");
+    setSelectedPreset(null);
     setDelivery(initial?.delivery ?? "back");
   }, [open, initial]);
 
   const now = Date.now();
-  const fireAt = parseDtLocal(value);
+  const activePreset = selectedPreset && selectedPreset.inputValue === value
+    ? selectedPreset
+    : null;
+  const fireAt = activePreset ? activePreset.fireAtMs : parseDtLocal(value);
   const valid = fireAt !== null && fireAt > now;
 
   const commit = (): void => {
-    if (!valid || fireAt === null) return;
+    if (fireAt === null || fireAt <= Date.now()) return;
     confirmationHaptic();
     onCommit(fireAt, delivery);
     onClose();
@@ -106,7 +112,7 @@ export function ScheduleSheet({
         ? event.metaKey && !event.ctrlKey
         : event.ctrlKey && !event.metaKey;
       if (!mod || event.repeat || isImeKeyEvent(event) || desktopCompositionActive()) return;
-      if (event.key === "Enter" && valid) {
+      if (event.key === "Enter" && fireAt !== null && fireAt > Date.now()) {
         event.preventDefault();
         event.stopPropagation();
         commit();
@@ -122,12 +128,20 @@ export function ScheduleSheet({
     globalThis.addEventListener("keydown", onKeyDown, true);
     return (): void =>
       globalThis.removeEventListener("keydown", onKeyDown, true);
-  }, [delivery, editing, fireAt, onClose, onCommit, onUnschedule, open, valid]);
+  }, [delivery, editing, fireAt, onClose, onCommit, onUnschedule, open]);
 
   return (
     <Sheet open={open} onClose={onClose} title="Schedule send">
       <Stack spacing={2} sx={{ pt: 0.5, pb: 1 }}>
-        <ScheduleQuickPresets now={now} value={value} onSelect={setValue} />
+        <ScheduleQuickPresets
+          selectedId={activePreset?.id ?? null}
+          onSelect={(id): void => {
+            const fireAtMs = computeSchedulePreset(id, Date.now());
+            const inputValue = toDtLocal(fireAtMs);
+            setValue(inputValue);
+            setSelectedPreset({ id, fireAtMs, inputValue });
+          }}
+        />
         <Box>
           <Typography variant="caption" color="text.secondary" sx={{ display: "block", mb: 0.75, fontWeight: 600 }}>
             Send time
@@ -137,7 +151,10 @@ export function ScheduleSheet({
             size="small"
             fullWidth
             value={value}
-            onChange={(e): void => setValue(e.target.value)}
+            onChange={(e): void => {
+              setSelectedPreset(null);
+              setValue(e.target.value);
+            }}
             inputProps={{ "aria-label": "Send time" }}
           />
         </Box>

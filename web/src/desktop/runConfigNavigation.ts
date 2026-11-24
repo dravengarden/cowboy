@@ -362,12 +362,14 @@ export function runConfigKey(
   action: RunConfigKeyAction,
 ): boolean {
   if (action.type !== "go") goPending = false;
+  const panes = runConfigPanes(panel);
+  if (panes.length === 0) return false;
   const active = cursorIn(panel);
-  // Presets and option letters act on the pane holding the cursor (the Agent
-  // pane, or Replace or fork's new agent), else the first pane that has one.
+  const pane = active?.closest<HTMLElement>(PANE) ?? panes[0]!;
+  // Presets and option letters act strictly within the focused pane, matching
+  // the active/inactive keycap state advertised on each pane's controls.
   const scoped = (selector: string): HTMLElement | null =>
-    active?.closest<HTMLElement>(PANE)?.querySelector<HTMLElement>(selector) ??
-      panel.querySelector<HTMLElement>(selector);
+    pane.querySelector<HTMLElement>(selector);
   if (action.type === "preset") {
     const preset = scoped(`[data-config-preset="${String(action.index)}"]`);
     if (!preset || !usable(preset)) return false;
@@ -385,9 +387,6 @@ export function runConfigKey(
     }
     return changeConfig(row, 1, true);
   }
-  const panes = runConfigPanes(panel);
-  if (panes.length === 0) return false;
-  const pane = active?.closest<HTMLElement>(PANE) ?? panes[0]!;
   if (action.type === "pane") {
     const index = panes.indexOf(pane);
     const target = action.wrap

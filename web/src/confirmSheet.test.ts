@@ -88,4 +88,6 @@ test("Desktop Sheet and ConfirmSheet share frosted DesktopModal material and opt
   assert(sheetSource.includes("disableScrollLock"));
   assert(sheetSource.includes("useConfirmEnter(confirmReady"));
   assert(sheetSource.includes("owner: dialogRef"));
+  assert(sheetSource.includes("const activeConfirm = explicitActions == null ? confirm : undefined"));
+  assert(sheetSource.includes("!hasSendMod(e.nativeEvent)"));
 });

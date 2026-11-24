@@ -76,11 +76,13 @@ import {
 import {
   activateHint,
   type DesktopHint,
+  isHintActionable,
   listHints,
   modalHints,
   popupOwnsKeys,
   topmostModal,
 } from "./hintTargets";
+import { isInteractiveControl } from "./modalGuard";
 import { handleDesktopModalKey } from "./modalNavigation";
 import { handleDeliveryPickerKey } from "../../deliveryPickerCommands";
 import { desktopMenuNavigationKey } from "./menuNavigation";
@@ -653,10 +655,10 @@ export function DesktopCommandProvider(
             if (event.code === "Space") swallowSpaceKeyUp.current = true;
             if (event.repeat) return;
             const target = hintsRef.current.find((hint) =>
-              hint.label === key.toLowerCase()
+              hint.label === key.toLowerCase() && isHintActionable(hint.element, modal)
             );
             clearWorkspaceCommand();
-            if (target) afterLeaderKey(event, () => activateHint(target.element));
+            if (target) afterLeaderKey(event, () => { if (isHintActionable(target.element, modal)) activateHint(target.element); });
             return;
           }
         }
@@ -925,13 +927,14 @@ export function DesktopCommandProvider(
       const activeEl = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       const activeWidget = activeEl?.closest<HTMLElement>("[data-desktop-widget-toggle]") ?? null;
       const activeActionStop = activeEl?.closest<HTMLElement>("[data-desktop-transcript-stop]") ?? null;
-      if (workspace.mode === "normal" && scrollNavigation && region && workspaceCommandKey(event) === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey) {
+      const activeOtherControl = activeEl !== null && !activeWidget && !activeActionStop && isInteractiveControl(activeEl);
+      if (workspace.mode === "normal" && scrollNavigation && region && !activeOtherControl && workspaceCommandKey(event) === "Tab" && !event.ctrlKey && !event.metaKey && !event.altKey) {
         const stops = conversationWidgets(region, true);
         const activeStop = activeWidget ?? activeActionStop;
         const current = activeStop ? stops.indexOf(activeStop) : -1;
         const nearest = nearestConversationWidget(region, stops);
-        const next = current >= 0 ? (current + (event.shiftKey ? -1 : 1) + stops.length) % stops.length : (nearest ? stops.indexOf(nearest) : -1);
-        const stop = stops[next];
+        const next = current >= 0 ? current + (event.shiftKey ? -1 : 1) : (nearest ? stops.indexOf(nearest) : -1);
+        const stop = next >= 0 && next < stops.length ? stops[next] : undefined;
         if (stop) {
           event.preventDefault();
           event.stopPropagation();
@@ -967,7 +970,7 @@ export function DesktopCommandProvider(
           }
         }
         if (action === null) {
-          if (!event.ctrlKey && !activeActionStop && (key === "h" || key === "l" || key === "Enter")) {
+          if (!event.ctrlKey && !activeActionStop && !activeOtherControl && (key === "h" || key === "l" || key === "Enter")) {
             const widget = activeWidget ?? (region
               ? nearestConversationWidget(region, widgets)
               : null);

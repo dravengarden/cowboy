@@ -213,6 +213,22 @@ export function listHints(items: readonly HTMLElement[]): DesktopHint[] {
   }));
 }
 
+/** True when a previously labelled hint target is still connected, visible,
+ *  enabled, unclipped in its scroll chain, and owned by the current topmost
+ *  modal (with no popup above it). */
+export function isHintActionable(
+  element: HTMLElement,
+  modal?: HTMLElement | null,
+): boolean {
+  if (!element.isConnected || !visible(element) || disabled(element)) return false;
+  if (modal !== undefined) {
+    if (!modal || popupOwnsKeys() || topmostModal() !== modal || !modal.contains(element)) {
+      return false;
+    }
+  }
+  return !isClippedOutsideScrollContainer(element, modal ?? undefined);
+}
+
 /** Activate a labelled target the way a pointer would. */
 export function activateHint(element: HTMLElement): void {
   element.focus({ preventScroll: false });

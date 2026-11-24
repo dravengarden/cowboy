@@ -64,12 +64,6 @@ import {
   useStopStates,
 } from "./useBackgroundTasks";
 
-function typingTarget(event: ReactKeyboardEvent): boolean {
-  if (event.nativeEvent.isComposing || event.keyCode === 229) return true;
-  const target = event.target as HTMLElement | null;
-  return !!target?.closest?.("input, textarea, select, [contenteditable='true'], [contenteditable='']");
-}
-
 function Diagnostics({ task }: { task: TaskSummary }): React.JSX.Element {
   const rows: [string, string][] = [
     ["source", task.diag.source],
@@ -523,7 +517,6 @@ export function BackgroundTasksInspector({
   const keys = (event: ReactKeyboardEvent<HTMLElement>): void =>
     handleBackgroundTasksKeyDown(event, {
       ownNode: inspectorRef.current,
-      typing: typingTarget(event),
       selected,
       step,
       openConversation: () => { if (selected) openConversation(selected); },

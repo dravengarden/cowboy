@@ -94,20 +94,23 @@ function handleRecentDialogKeyDown(
   if (desktopImeOwnsKey(native) || event.metaKey || event.ctrlKey || event.altKey) return;
   const digit = desktopRecentDigit(event.code);
   const key = workspaceCommandKey(native);
-  if (key === "g") {
+  const now = Date.now();
+  const armed = pendingGo.current > 0 && now - pendingGo.current <= 1200;
+  if (armed) {
+    if (["Shift", "Control", "Meta", "Alt", "AltGraph"].includes(key)) return;
+    pendingGo.current = 0;
     event.preventDefault();
     event.stopPropagation();
-    if (event.repeat) return;
-    const now = Date.now();
-    if (pendingGo.current && now - pendingGo.current <= 1200) {
-      pendingGo.current = 0;
-      if (count > 0) setSelected(0);
-    } else {
-      pendingGo.current = now;
-    }
+    if (!event.repeat && key === "g" && count > 0) setSelected(0);
     return;
   }
   pendingGo.current = 0;
+  if (key === "g") {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!event.repeat) pendingGo.current = now;
+    return;
+  }
   let handled = true;
   if (key === "/") onStartFilter();
   else if (key === "h") onClose();
