@@ -330,6 +330,8 @@ test("a prompt agy refused before dispatching it is not a refusal", async () => 
     { code: -32603, message: text, status: "UNAUTHENTICATED" },
     { code: "-32603", message: text },
     { message: text },
+    { code: -32603, data: text },
+    { code: -32603, data: { error: text } },
   ]) {
     assert.equal(localRejection(stated, clean, image), undefined);
   }

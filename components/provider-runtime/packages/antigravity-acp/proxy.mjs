@@ -1535,13 +1535,14 @@ const plainObject = (value) => value !== null && typeof value === "object" && !A
 
 function statedRejection(error) {
   // Only the JSON-RPC envelope, with an integer code that is not ACP's
-  // auth_required, and data absent, a string, or an object holding only the
+  // auth_required, a string message, and data absent, a string, or an object holding only the
   // text fields: anything else may carry a status this matcher cannot read.
   if (
     !plainObject(error) ||
     Object.keys(error).some((key) => !ERROR_KEYS.has(key)) ||
     !Number.isInteger(error.code) ||
-    error.code === -32000
+    error.code === -32000 ||
+    typeof error.message !== "string"
   ) {
     return undefined;
   }
