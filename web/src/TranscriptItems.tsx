@@ -1139,11 +1139,9 @@ export const ItemView = memo(function ItemView({
             py: 0.5,
             borderRadius: 999,
             color: "text.secondary",
-            bgcolor: alpha(theme.palette.background.paper, 0.66),
+            bgcolor: alpha(theme.palette.background.paper, 0.88),
             border: `1px solid ${alpha(theme.palette.divider, 0.72)}`,
             boxShadow: `0 4px 14px ${alpha(theme.palette.common.black, 0.045)}`,
-            backdropFilter: "blur(10px) saturate(120%)",
-            WebkitBackdropFilter: "blur(10px) saturate(120%)",
           })}
         >
           <Box

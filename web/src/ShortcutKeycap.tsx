@@ -97,7 +97,7 @@ export function ShortcutKeycap({
             if (variant === "context") {
               return alpha(
                 theme.palette.background.paper,
-                0.9,
+                0.94,
               );
             }
             if (accent) {
@@ -106,7 +106,7 @@ export function ShortcutKeycap({
                 quiet ? 0.055 : 0.1,
               );
             }
-            return alpha(theme.palette.background.paper, quiet ? 0.24 : 0.72);
+            return alpha(theme.palette.background.paper, quiet ? 0.24 : 0.88);
           },
           color: inactive
             ? "text.disabled"
@@ -129,7 +129,6 @@ export function ShortcutKeycap({
                   theme.palette.mode === "dark" ? 0.22 : 0.09,
                 )
               }`,
-          backdropFilter: quiet ? "none" : "blur(8px)",
           pointerEvents: "none",
           userSelect: "none",
           fontFamily:

@@ -1624,6 +1624,8 @@ export function SessionList({
                     // keyboard cursor row and in Order mode, without a halo.
                     // Folder chevrons share the class and stay visible.
                     ...(desktop && {
+                        // Prevent animated spinners from overlap-promoting every sibling row to an IOSurface.
+                        "& > *": { contain: "layout" },
                         "& .cowboy-session-grip:not(.cowboy-folder-chevron)": {
                             opacity: pinned ? 1 : 0,
                             transition: "opacity 120ms ease",

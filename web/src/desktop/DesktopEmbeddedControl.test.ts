@@ -111,3 +111,8 @@ test("desktop shortcut keycap geometry follows root font size", () => {
   );
   assertEquals(shortcutKeycapSource.includes('px: compact ? "0.175rem" : "0.25rem"'), true);
 });
+
+test("repeated desktop shortcut keycaps do not allocate backdrop blur layers", () => {
+  assertEquals(shortcutKeycapSource.includes("backdropFilter"), false);
+  assertEquals(shortcutKeycapSource.includes("WebkitBackdropFilter"), false);
+});

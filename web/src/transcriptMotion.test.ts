@@ -177,3 +177,24 @@ test("desktop transcript scroller contains every direct child at layout level wi
     ),
   );
 });
+
+test("transcript items do not allocate backdrop blur layers inside the scroller", async () => {
+  const transcriptItemsSource = await readFile(
+    new URL("./TranscriptItems.tsx", import.meta.url),
+    "utf8",
+  );
+  assertEquals(transcriptItemsSource.includes("backdropFilter"), false);
+  assertEquals(transcriptItemsSource.includes("WebkitBackdropFilter"), false);
+});
+
+test("desktop sessions list contains direct children at layout level", async () => {
+  const sessionListSource = await readFile(
+    new URL("./SessionList.tsx", import.meta.url),
+    "utf8",
+  );
+  assert(
+    /\.\.\.\(desktop && \{\s*(?:\/\/[^\n]*\n\s*)*"& > \*": \{ contain: "layout" \},/.test(
+      sessionListSource,
+    ),
+  );
+});
