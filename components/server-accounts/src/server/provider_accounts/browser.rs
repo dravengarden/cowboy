@@ -205,9 +205,9 @@ async fn owned_account(
         None if legacy::retained(state, owner, account_id).await? => BrowserAccount::RetiredCard,
         None => return Err("account_unavailable"),
     };
-    // A revoking account whose share-leave was deferred for a pending
-    // navigation keeps its membership row only to fence share edits; its own
-    // cleanup (`Authority::Stop`) never routes to the shared browser.
+    // Defense-in-depth: a revoking account leaves shared browsers on
+    // `BeginRevocation`, and its cleanup (`Authority::Stop`) always targets
+    // its own browser key rather than any shared browser.
     let (key, share) = if account.revoking() {
         (account_id.clone(), None)
     } else {

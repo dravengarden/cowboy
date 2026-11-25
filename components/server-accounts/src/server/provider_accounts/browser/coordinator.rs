@@ -127,18 +127,29 @@ pub struct Coordinator {
     share_locks: Locks,
     /// Per Machine: placements its current connection has not answered for.
     inventories: parking_lot::Mutex<HashMap<String, Inventory>>,
-    /// Identity-bound navigations dispatched to a Machine and not yet settled
-    /// (including those whose Controller wait timed out, whose transport
-    /// dropped, or that were reloaded after a Controller restart). Keyed by
-    /// `request_id`.
+    /// Navigations dispatched to a Machine and not yet settled (including
+    /// those whose Controller wait timed out, whose transport dropped, or that
+    /// were reloaded after a Controller restart). Keyed by `request_id`.
     pending_navigations: parking_lot::Mutex<HashMap<String, PendingNavigation>>,
-    /// Request ids settled in memory by synchronous observation callbacks and
-    /// waiting to be deleted from `browser_pending_navigations` in the store.
-    settled_navigation_ids: parking_lot::Mutex<HashSet<String>>,
+    /// Tombstones of request ids settled in memory, retained for
+    /// `PENDING_NAVIGATION_TTL_MS` even after SQL deletion commits so neither a
+    /// stale reconciler snapshot nor a late-landing cancelled SQL insert can
+    /// re-seed and hibernate a live browser.
+    settled_navigation_tombstones: parking_lot::Mutex<HashMap<String, Instant>>,
+    /// Request ids settled in memory and still awaiting deletion from
+    /// `browser_pending_navigations` in the store.
+    pending_delete_navigation_ids: parking_lot::Mutex<HashSet<String>>,
     /// Signalled whenever any pending navigation settles so durable fence
-    /// deletions and deferred revocation share-membership removals run promptly.
+    /// deletions run promptly.
     navigation_settled: Arc<tokio::sync::Notify>,
 }
+
+/// How long settled navigation tombstones are retained in memory after
+/// settlement to block re-seeding from stale reconciler snapshots or late
+/// cancelled SQL inserts.
+const SETTLED_TOMBSTONE_TTL: Duration = Duration::from_millis(
+    crate::store::provider_accounts::browser_pending_navigations::PENDING_NAVIGATION_TTL_MS as u64,
+);
 
 #[derive(Clone, Debug)]
 pub struct PendingNavigation {
@@ -151,6 +162,7 @@ pub struct PendingNavigation {
     pub connection: Option<ConnectionToken>,
     pub instance: InstanceRef,
     pub observed_at_ms: i64,
+    pub started_at_ms: i64,
 }
 
 /// What the cache keeps of a state event. A reason on a running instance's
@@ -569,42 +581,35 @@ impl Coordinator {
         Arc::clone(&self.navigation_settled)
     }
 
-    /// Record an identity-bound navigation dispatched on `connection` so share
-    /// membership changes remain fenced across Controller wait timeouts and
+    fn mark_navigation_settled(&self, request_id: String) -> bool {
+        let now = Instant::now();
+        let mut tombstones = self.settled_navigation_tombstones.lock();
+        tombstones.retain(|_, at| now.saturating_duration_since(*at) < SETTLED_TOMBSTONE_TTL);
+        let newly_tombstoned = tombstones.insert(request_id.clone(), now).is_none();
+        drop(tombstones);
+        let newly_queued = self.pending_delete_navigation_ids.lock().insert(request_id);
+        newly_tombstoned || newly_queued
+    }
+
+    /// Record a navigation dispatched on `connection` so share membership
+    /// changes and resets remain fenced across Controller wait timeouts and
     /// transport drops until the Machine settles it or confirms instance exit.
-    pub fn begin_navigation(
-        &self,
-        request_id: String,
-        owner: &str,
-        browser_key: ProviderAccountId,
-        connection: &ConnectionToken,
-        instance: InstanceRef,
-        observed_at_ms: i64,
-    ) {
-        let machine_id = connection.machine_id().to_owned();
-        self.settled_navigation_ids.lock().remove(&request_id);
-        self.pending_navigations.lock().insert(
-            request_id.clone(),
-            PendingNavigation {
-                request_id,
-                owner: owner.to_owned(),
-                browser_key,
-                machine_id,
-                connection: Some(connection.clone()),
-                instance,
-                observed_at_ms,
-            },
-        );
+    pub fn begin_navigation(&self, entry: PendingNavigation) {
+        self.settled_navigation_tombstones
+            .lock()
+            .remove(&entry.request_id);
+        self.pending_delete_navigation_ids
+            .lock()
+            .remove(&entry.request_id);
+        self.pending_navigations
+            .lock()
+            .insert(entry.request_id.clone(), entry);
     }
 
     /// Seed a durable pre-restart pending navigation into memory so live
     /// Machine observations can settle it promptly once its Machine connects.
     pub fn seed_durable_navigation(&self, entry: PendingNavigation) {
-        if self
-            .settled_navigation_ids
-            .lock()
-            .contains(&entry.request_id)
-        {
+        if self.is_navigation_settled(&entry.request_id) {
             return;
         }
         self.pending_navigations
@@ -614,15 +619,12 @@ impl Coordinator {
     }
 
     /// Clear a tracked navigation fence once the command definitely failed,
-    /// was cancelled before dispatch, or finished on the Machine. Keeps a
-    /// settled tombstone in memory until the durable row deletion commits so
-    /// the orphan reconciler never re-seeds and hibernates a live browser.
+    /// was cancelled before dispatch, or finished on the Machine. Retains a
+    /// settled tombstone for `SETTLED_TOMBSTONE_TTL` so neither a stale
+    /// reconciler snapshot nor a late cancelled SQL insert can re-seed it.
     pub fn settle_navigation(&self, request_id: &str) {
         let removed = self.pending_navigations.lock().remove(request_id).is_some();
-        let tombstoned = self
-            .settled_navigation_ids
-            .lock()
-            .insert(request_id.to_owned());
+        let tombstoned = self.mark_navigation_settled(request_id.to_owned());
         if removed || tombstoned {
             self.navigation_settled.notify_one();
         }
@@ -641,9 +643,7 @@ impl Coordinator {
         }) {
             pending.remove(request_id);
             drop(pending);
-            self.settled_navigation_ids
-                .lock()
-                .insert(request_id.to_owned());
+            self.mark_navigation_settled(request_id.to_owned());
             self.navigation_settled.notify_one();
             return true;
         }
@@ -651,28 +651,47 @@ impl Coordinator {
     }
 
     /// Snapshot settled navigation request ids awaiting durable deletion
-    /// without removing their tombstones yet.
+    /// without removing them yet.
     pub fn settled_navigation_ids(&self) -> Vec<String> {
-        self.settled_navigation_ids.lock().iter().cloned().collect()
+        self.pending_delete_navigation_ids
+            .lock()
+            .iter()
+            .cloned()
+            .collect()
     }
 
-    /// Remove settled tombstones only after their durable rows have been
-    /// deleted from `browser_pending_navigations`.
+    /// Remove request ids from the SQL-delete queue only after their durable
+    /// rows have been deleted. The in-memory settled tombstones stay active
+    /// until `SETTLED_TOMBSTONE_TTL` elapses.
     pub fn confirm_settled_navigations_deleted(&self, ids: &[String]) {
-        let mut settled = self.settled_navigation_ids.lock();
+        let mut pending_delete = self.pending_delete_navigation_ids.lock();
         for id in ids {
-            settled.remove(id);
+            pending_delete.remove(id);
         }
     }
 
-    /// Whether `request_id` has a settled tombstone awaiting durable deletion.
+    /// Whether `request_id` has an active settled tombstone.
     pub fn is_navigation_settled(&self, request_id: &str) -> bool {
-        self.settled_navigation_ids.lock().contains(request_id)
+        let now = Instant::now();
+        let mut tombstones = self.settled_navigation_tombstones.lock();
+        tombstones.retain(|_, at| now.saturating_duration_since(*at) < SETTLED_TOMBSTONE_TTL);
+        tombstones.contains_key(request_id)
     }
 
     /// Whether `request_id` is still tracked as an unsettled navigation.
     pub fn is_navigation_pending(&self, request_id: &str) -> bool {
         self.pending_navigations.lock().contains_key(request_id)
+    }
+
+    fn entry_live_on_current(
+        connections: &HashMap<String, ConnectionToken>,
+        entry: &PendingNavigation,
+    ) -> bool {
+        entry.connection.as_ref().is_some_and(|conn| {
+            connections
+                .get(&entry.machine_id)
+                .is_some_and(|current| current.same(conn))
+        })
     }
 
     /// Whether `request_id` was dispatched in this Controller process on a
@@ -683,43 +702,38 @@ impl Coordinator {
         self.pending_navigations
             .lock()
             .get(request_id)
-            .is_some_and(|entry| {
-                entry.connection.as_ref().is_some_and(|conn| {
-                    connections
-                        .get(&entry.machine_id)
-                        .is_some_and(|current| current.same(conn))
-                })
-            })
+            .is_some_and(|entry| Self::entry_live_on_current(&connections, entry))
     }
 
-    /// Whether `browser_key` has any unsettled identity-bound navigation in
-    /// flight in memory (callers also check durable storage).
+    /// Whether `browser_key` has any unsettled, unexpired navigation in memory
+    /// (entries live on their dispatching connection stay active regardless of
+    /// age; disconnected or seeded entries expire after `PENDING_NAVIGATION_TTL_MS`).
     pub fn has_pending_navigation(&self, owner: &str, browser_key: &ProviderAccountId) -> bool {
-        self.pending_navigations
-            .lock()
-            .values()
-            .any(|pending| pending.owner == owner && pending.browser_key == *browser_key)
+        let now_ms = super::now_ms();
+        let ttl_ms =
+            crate::store::provider_accounts::browser_pending_navigations::PENDING_NAVIGATION_TTL_MS;
+        let connections = self.connections.read();
+        self.pending_navigations.lock().values().any(|pending| {
+            pending.owner == owner
+                && pending.browser_key == *browser_key
+                && (Self::entry_live_on_current(&connections, pending)
+                    || now_ms.saturating_sub(pending.started_at_ms) < ttl_ms)
+        })
     }
 
-    /// Unsettled in-memory navigations whose dispatching connection has been
-    /// replaced by a newer live connection on the same Machine (or that were
-    /// seeded after restart with `connection: None`).
-    pub fn orphaned_navigations(&self, machine_id: Option<&str>) -> Vec<PendingNavigation> {
+    /// Prune expired non-live in-memory navigation fences and expired settled
+    /// tombstones so disconnected/seeded entries never wedge share edits/resets.
+    pub fn prune_expired_navigations(&self, now_ms: i64, ttl_ms: i64) {
         let connections = self.connections.read();
-        self.pending_navigations
+        self.pending_navigations.lock().retain(|_, entry| {
+            Self::entry_live_on_current(&connections, entry)
+                || now_ms.saturating_sub(entry.started_at_ms) < ttl_ms
+        });
+        drop(connections);
+        let now = Instant::now();
+        self.settled_navigation_tombstones
             .lock()
-            .values()
-            .filter(|entry| {
-                machine_id.is_none_or(|id| entry.machine_id == id)
-                    && connections.get(&entry.machine_id).is_some_and(|current| {
-                        entry
-                            .connection
-                            .as_ref()
-                            .is_none_or(|conn| !current.same(conn))
-                    })
-            })
-            .cloned()
-            .collect()
+            .retain(|_, at| now.saturating_duration_since(*at) < SETTLED_TOMBSTONE_TTL);
     }
 
     fn settle_navigations_from_state(
@@ -793,7 +807,9 @@ impl Coordinator {
         });
         drop(pending);
         if !settled_ids.is_empty() {
-            self.settled_navigation_ids.lock().extend(settled_ids);
+            for id in settled_ids {
+                self.mark_navigation_settled(id);
+            }
             self.navigation_settled.notify_one();
         }
     }

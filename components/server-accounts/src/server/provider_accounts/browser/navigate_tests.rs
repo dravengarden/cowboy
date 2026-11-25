@@ -2293,14 +2293,42 @@ async fn settled_tombstone_prevents_orphan_reconciler_from_hibernating_live_brow
             browser_key: grok.clone(),
             machine_id: "hawk".into(),
             connection: None,
-            instance: running,
+            instance: running.clone(),
             observed_at_ms: 100,
+            started_at_ms: now_ms(),
         });
     assert!(!state.browsers.is_navigation_pending("nav-tombstone"));
     // Reconciler drains the settled row without ever sending Query or Hibernate.
     shares::reconcile_orphaned_navigations(&state, Some("hawk")).await;
     assert!(rx.try_recv().is_err());
-    assert!(!state.browsers.is_navigation_settled("nav-tombstone"));
+    assert!(
+        !store
+            .has_pending_browser_navigation_request("nav-tombstone")
+            .await
+            .unwrap()
+    );
+    // The tombstone stays retained for SETTLED_TOMBSTONE_TTL even after the SQL
+    // DELETE commits, so a late-landing cancelled INSERT is deleted cleanly on
+    // the next pass without seeding or hibernating the live browser.
+    assert!(state.browsers.is_navigation_settled("nav-tombstone"));
+    store
+        .record_browser_pending_navigation(
+            &crate::store::provider_accounts::browser_pending_navigations::PendingNavigationRecord {
+                request_id: "nav-tombstone".into(),
+                owner_user_id: OWNER.into(),
+                browser_key: grok.clone(),
+                machine_id: "hawk".into(),
+                instance_id: running.instance_id.clone(),
+                incarnation: running.incarnation,
+                observed_at_ms: 100,
+                started_at_ms: now_ms(),
+            },
+        )
+        .await
+        .unwrap();
+    shares::reconcile_orphaned_navigations(&state, Some("hawk")).await;
+    assert!(rx.try_recv().is_err());
+    assert!(!state.browsers.is_navigation_pending("nav-tombstone"));
     assert!(
         !store
             .has_pending_browser_navigation_request("nav-tombstone")
@@ -2378,7 +2406,31 @@ async fn pending_navigation_expires_on_ttl_and_clears_when_machine_revoked_or_pl
             .await
             .unwrap()
     );
+    // An expired in-memory seeded entry (with no SQL row left) also obeys TTL
+    // and is pruned by reconciler without wedging share edits or resets.
+    state
+        .browsers
+        .seed_durable_navigation(coordinator::PendingNavigation {
+            request_id: "nav-mem-expired".into(),
+            owner: OWNER.into(),
+            browser_key: share_account.clone(),
+            machine_id: "offline-gone".into(),
+            connection: None,
+            instance: InstanceRef {
+                account_id: share_account.clone(),
+                instance_id: "b-heron".into(),
+                incarnation: 1,
+            },
+            observed_at_ms: 100,
+            started_at_ms: expired_started,
+        });
+    assert!(
+        !shares::has_pending_navigation(&state, OWNER, &share_account)
+            .await
+            .unwrap()
+    );
     shares::reconcile_orphaned_navigations(&state, None).await;
+    assert!(!state.browsers.is_navigation_pending("nav-mem-expired"));
     assert!(
         !store
             .has_pending_browser_navigation_request("nav-expired")

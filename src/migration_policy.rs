@@ -244,7 +244,7 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
     ),
     (
         "0092_browser_pending_navigations.sql",
-        "0a25f4f9057b508b3c8e431888fcf7c6e3aa1791f5c876e31b8c00272d2a6906",
+        "759d4d29d8f7d02c5878c6fe345085b1f29f043c01f79c53f3dc095f9ea9a5fb",
     ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
@@ -482,7 +482,7 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     ),
     (
         "0066_browser_pending_navigations.sql",
-        "0a25f4f9057b508b3c8e431888fcf7c6e3aa1791f5c876e31b8c00272d2a6906",
+        "759d4d29d8f7d02c5878c6fe345085b1f29f043c01f79c53f3dc095f9ea9a5fb",
     ),
 ];
 

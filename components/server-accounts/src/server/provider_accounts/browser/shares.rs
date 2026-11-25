@@ -406,6 +406,7 @@ pub async fn begin_durable_navigation(
     request_id: &str,
 ) -> Result<(), &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
+    let started_at_ms = super::now_ms();
     let record =
         crate::store::provider_accounts::browser_pending_navigations::PendingNavigationRecord {
             request_id: request_id.to_owned(),
@@ -415,16 +416,20 @@ pub async fn begin_durable_navigation(
             instance_id: observed.event.instance.instance_id.clone(),
             incarnation: observed.event.instance.incarnation,
             observed_at_ms: observed.event.observed_at_ms,
-            started_at_ms: super::now_ms(),
+            started_at_ms,
         };
-    state.browsers.begin_navigation(
-        request_id.to_owned(),
-        owner,
-        browser_key.clone(),
-        &observed.connection,
-        observed.event.instance.clone(),
-        observed.event.observed_at_ms,
-    );
+    state
+        .browsers
+        .begin_navigation(super::coordinator::PendingNavigation {
+            request_id: request_id.to_owned(),
+            owner: owner.to_owned(),
+            browser_key: browser_key.clone(),
+            machine_id: observed.machine_id.clone(),
+            connection: Some(observed.connection.clone()),
+            instance: observed.event.instance.clone(),
+            observed_at_ms: observed.event.observed_at_ms,
+            started_at_ms,
+        });
     let mut guard = PendingInsertGuard {
         browsers: &state.browsers,
         request_id,
@@ -504,12 +509,20 @@ pub async fn reconcile_orphaned_navigations(state: &Arc<AppState>, machine_id: O
     let now = super::now_ms();
     let ttl =
         crate::store::provider_accounts::browser_pending_navigations::PENDING_NAVIGATION_TTL_MS;
+    state.browsers.prune_expired_navigations(now, ttl);
     for row in rows {
         if state
             .browsers
             .is_navigation_live_on_current(&row.request_id)
-            || state.browsers.is_navigation_settled(&row.request_id)
         {
+            continue;
+        }
+        if state.browsers.is_navigation_settled(&row.request_id) {
+            // Re-delete in case a cancelled SQL INSERT committed after an
+            // earlier drain finished, without ever seeding or hibernating.
+            let _ = store
+                .delete_browser_pending_navigation(&row.request_id)
+                .await;
             continue;
         }
         if now.saturating_sub(row.started_at_ms) >= ttl
@@ -519,6 +532,19 @@ pub async fn reconcile_orphaned_navigations(state: &Arc<AppState>, machine_id: O
                 .unwrap_or(false)
         {
             clear_durable_navigation(state, &row.request_id).await;
+            continue;
+        }
+        let Ok(connection) = super::connection_for(state, &row.machine_id) else {
+            continue;
+        };
+        // Re-verify the durable row still exists (earlier `query_machine` awaits
+        // in this loop may have allowed the row to settle and delete) before
+        // seeding an in-memory entry.
+        if !store
+            .has_pending_browser_navigation_request(&row.request_id)
+            .await
+            .unwrap_or(false)
+        {
             continue;
         }
         let instance = crate::machine_protocol::machine_browser::InstanceRef {
@@ -536,10 +562,8 @@ pub async fn reconcile_orphaned_navigations(state: &Arc<AppState>, machine_id: O
                 connection: None,
                 instance: instance.clone(),
                 observed_at_ms: row.observed_at_ms,
+                started_at_ms: row.started_at_ms,
             });
-        let Ok(connection) = super::connection_for(state, &row.machine_id) else {
-            continue;
-        };
         let Some(event) = super::query_machine(state, &row.machine_id, &row.browser_key).await
         else {
             continue;
@@ -826,8 +850,8 @@ impl DeletionRetries {
 /// a human step.
 pub fn start_deletion_reconciler(state: &Arc<AppState>) {
     // Dedicated notification task so frequent navigation settlements flush
-    // durable fences and deferred revocation leaves promptly without ever
-    // postponing the periodic share-recovery interval below.
+    // durable fences promptly without ever postponing the periodic
+    // share-recovery interval below.
     let weak_notify = Arc::downgrade(state);
     let nav_settled = state.browsers.navigation_settled_notify();
     tokio::spawn(async move {
