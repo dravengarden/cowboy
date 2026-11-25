@@ -2,7 +2,6 @@ use super::*;
 use crate::machine_protocol::{MachineCommand, MachineEvent};
 use crate::store::provider_accounts::browser_shares::{Member, share_key};
 use crate::store::provider_accounts::{Change, Mutation, MutationResult};
-use std::pin::pin;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
 
@@ -342,24 +341,33 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
     // the fence across dispatch until the Machine answers.
     let fence = state.browsers.share_lock(OWNER);
     let external_guard = fence.lock().await;
-    let mut nav = pin!(instance_command(
-        &state,
-        OWNER,
-        (&grok, Authority::Launch),
-        ("hawk", &client_instance),
-        Some(&identity_after),
-        |instance| Command::Navigate {
-            instance,
-            url: "https://grok.com/?_s=usage".into(),
-            attachment_id: Some("att-1".into()),
-        },
-        Duration::from_secs(5),
-    ));
-    assert!(futures::poll!(&mut nav).is_pending());
+    let nav = {
+        let state = Arc::clone(&state);
+        let grok = grok.clone();
+        let client_instance = client_instance.clone();
+        let expected = identity_after.clone();
+        tokio::spawn(async move {
+            instance_command(
+                &state,
+                OWNER,
+                (&grok, Authority::Launch),
+                ("hawk", &client_instance),
+                Some(&expected),
+                |instance| Command::Navigate {
+                    instance,
+                    url: "https://grok.com/?_s=usage".into(),
+                    attachment_id: Some("att-1".into()),
+                },
+                Duration::from_secs(5),
+            )
+            .await
+        })
+    };
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert!(!nav.is_finished());
     assert!(rx.try_recv().is_err());
 
     drop(external_guard);
-    assert!(futures::poll!(&mut nav).is_pending());
     let MachineCommand::Browser {
         request_id,
         browser:
@@ -368,7 +376,10 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
                 url,
                 attachment_id,
             },
-    } = rx.try_recv().expect("dispatched navigate command")
+    } = tokio::time::timeout(Duration::from_secs(2), rx.recv())
+        .await
+        .expect("dispatched navigate command within timeout")
+        .expect("channel open")
     else {
         panic!("expected Command::Navigate");
     };
@@ -387,7 +398,7 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
             }),
         },
     );
-    let reply = nav.await.expect("matching navigate succeeds");
+    let reply = nav.await.unwrap().expect("matching navigate succeeds");
     assert_eq!(reply["browser_identity"], identity_after);
     // Fence is released once Navigate completes.
     assert!(fence.try_lock().is_ok());
@@ -395,23 +406,32 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
     // 4. Unbound commands (`expected_browser: None`) still succeed without
     // blocking on the share fence.
     let _held = fence.lock().await;
-    let mut unbound = pin!(instance_command(
-        &state,
-        OWNER,
-        (&grok, Authority::Launch),
-        ("hawk", &client_instance),
-        None,
-        |instance| Command::Navigate {
-            instance,
-            url: "https://grok.com/?_s=usage".into(),
-            attachment_id: Some("att-1".into()),
-        },
-        Duration::from_secs(5),
-    ));
-    assert!(futures::poll!(&mut unbound).is_pending());
-    let MachineCommand::Browser { request_id, .. } = rx
-        .try_recv()
-        .expect("unbound navigate dispatches without fence")
+    let unbound = {
+        let state = Arc::clone(&state);
+        let grok = grok.clone();
+        let client_instance = client_instance.clone();
+        tokio::spawn(async move {
+            instance_command(
+                &state,
+                OWNER,
+                (&grok, Authority::Launch),
+                ("hawk", &client_instance),
+                None,
+                |instance| Command::Navigate {
+                    instance,
+                    url: "https://grok.com/?_s=usage".into(),
+                    attachment_id: Some("att-1".into()),
+                },
+                Duration::from_secs(5),
+            )
+            .await
+        })
+    };
+    let MachineCommand::Browser { request_id, .. } =
+        tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .expect("unbound navigate dispatches without fence")
+            .expect("channel open")
     else {
         panic!("expected Browser command");
     };
@@ -424,5 +444,5 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
             }),
         },
     );
-    assert!(unbound.await.is_ok());
+    assert!(unbound.await.unwrap().is_ok());
 }
