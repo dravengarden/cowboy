@@ -426,7 +426,7 @@ Out of scope for R4 as well: shell-made writes (no baseline for a session's firs
 foreground command) and background commands (D3). The earlier 48 KiB inline-only
 edit limit is explicitly superseded by
 [`antigravity-post-edit-r4-design.md`](antigravity-post-edit-r4-design.md)
-(Revision 7 direct pull hashes facade write bytes up to the 3 MiB `WriteFile`/
+(Revision 8 independent HTTPS pull hashes facade write bytes up to the 3 MiB `WriteFile`/
 `EditFile` bound, covering both inline `--request` and `--request-file` applies).
 
 ## Other deferred items and their requirements
