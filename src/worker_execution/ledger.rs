@@ -43,6 +43,8 @@ const READINESS_TURN: &str = "cowboy-readiness";
 /// and the folder's bindings): the worker starts them itself, they outlive
 /// turns and end at teardown. The unit can neither start nor reach them.
 const SERVER_TURN: &str = "cowboy-session-servers";
+/// A tracked process and its exact start generation.
+type Tracked = (String, u64);
 /// Process ids of worker-run servers (and their probes), in every worker of
 /// the session: the unit may never name one, also one a previous worker
 /// left running.
@@ -368,10 +370,7 @@ impl Ledger {
     }
 
     /// `processes` split into the worker's own servers and the rest.
-    fn split_servers(
-        &self,
-        processes: Vec<(String, u64)>,
-    ) -> (Vec<(String, u64)>, Vec<(String, u64)>) {
+    fn split_servers(&self, processes: Vec<Tracked>) -> (Vec<Tracked>, Vec<Tracked>) {
         let state = self.state.lock();
         processes
             .into_iter()
