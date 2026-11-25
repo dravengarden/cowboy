@@ -36489,7 +36489,7 @@
                 "version": "0.2.2"
               }
             ],
-            "source_digest": "sha256:3ae382afe163f11a2b8d3eed1351aa1c1449175023fb11b0efd38865a56b009e"
+            "source_digest": "sha256:56a06df22ba8f886bb2ad88a402aab1fa48a792c2f148b7f0b03eba6b5df3d1a"
           },
           "claude-deepseek": {
             "component_release": "3.151.0",

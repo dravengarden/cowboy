@@ -371,11 +371,9 @@ test("stale native-* stages sweep ONLY verified ECONNREFUSED dead sockets and ke
     });
   });
   const deadStageName = deadStage.split("/").pop();
-  await writeFile(
-    join(deadOwnerDir, "stage.json"),
-    JSON.stringify({ stage: deadStageName }),
-    { mode: 0o600 },
-  );
+  await writeFile(join(deadOwnerDir, "stage.json"), JSON.stringify({ stage: deadStageName }), {
+    mode: 0o600,
+  });
   await utimes(deadOwnerDir, old, old);
   await writeFile(
     join(deadStage, "owner.json"),

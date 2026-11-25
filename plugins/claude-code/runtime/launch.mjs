@@ -370,7 +370,8 @@ export async function sweepStaleNativeStages(
       if (!dirStat.isDirectory() || dirStat.uid !== uid || dirStat.mode & 0o077) continue;
       const stageMetaPath = join(ownerDir, "stage.json");
       const stageMetaStat = await lstat(stageMetaPath);
-      if (!stageMetaStat.isFile() || stageMetaStat.uid !== uid || stageMetaStat.size > 512) continue;
+      if (!stageMetaStat.isFile() || stageMetaStat.uid !== uid || stageMetaStat.size > 512)
+        continue;
       const stageMeta = JSON.parse(await readFile(stageMetaPath, "utf8"));
       if (stageMeta?.stage !== name) continue;
       const socketPath = join(ownerDir, "s");

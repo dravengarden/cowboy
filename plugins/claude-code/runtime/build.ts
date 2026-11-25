@@ -134,10 +134,10 @@ try {
       '  cowboy_node="$cowboy_root/runtime/node"\n' +
       'elif [ -x "$cowboy_root/../../acp_runtime-node/bin" ]; then\n' +
       '  cowboy_node="$cowboy_root/../../acp_runtime-node/bin"\n' +
-      'else\n' +
+      "else\n" +
       '  echo "Cowboy Node.js runtime missing" >&2\n' +
-      '  exit 127\n' +
-      'fi\n' +
+      "  exit 127\n" +
+      "fi\n" +
       'if [ -z "${LD_PRELOAD-}" ] && [ -z "${MALLOC_CONF-}" ]; then\n' +
       "  for cowboy_jemalloc in /usr/lib/x86_64-linux-gnu/libjemalloc.so.2 /usr/lib/aarch64-linux-gnu/libjemalloc.so.2; do\n" +
       '    if [ -r "$cowboy_jemalloc" ]; then\n' +
