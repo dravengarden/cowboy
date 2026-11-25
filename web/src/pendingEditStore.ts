@@ -31,6 +31,7 @@ import {
 } from "./pendingEditMirror";
 import { mergeStoredEdits, SlotLedger, slotMirrored, type StoredEdits } from "./pendingEditRecord";
 import type { ProductCache, ProductCacheScope } from "./productSyncDatabase";
+import { isSessionRemoved, markSessionRemoved } from "./removedSessionFence";
 import { newUuid } from "./uuid";
 
 export {
@@ -81,7 +82,6 @@ const awaitingDatabase = new Map<string, string>();
 // Edits whose bytes the session's database record holds (or was asked to).
 // Only a change to one of them needs the record rewritten.
 const databaseOwners = new Set<string>();
-const removedSessions = new Set<string>();
 const slots = new SlotLedger();
 // Edits this tab ended whose removal is not persisted yet.
 const retiredRecords = new Map<string, PendingEditRecord>();
@@ -124,7 +124,7 @@ function writeDatabase(sessionId: string, write: () => Promise<void>): Promise<v
 /** Merge this tab's changed slots into the session's record in one transaction
  * (promised bytes stay as stored). False: keep the bytes in localStorage. */
 function saveSessionEdits(sessionId: string): boolean {
-  if (removedSessions.has(sessionId)) return true;
+  if (isSessionRemoved(sessionId)) return true;
   const cache = editsCache(sessionId);
   if (cache === undefined) return false;
   const changed = slots.takeChanged(sessionId);
@@ -154,8 +154,13 @@ function saveSessionEdits(sessionId: string): boolean {
   const mirrored = (slot: string): boolean =>
     slotMirrored(storage(), slot, (kind, id) => KEY_PREFIX + recordKey(sessionId, kind, id));
   void writeDatabase(sessionId, () =>
-    cache.update((stored) => mergeStoredEdits(stored, { owned, released, mirrored })),
+    cache.update((stored) =>
+      isSessionRemoved(sessionId)
+        ? null
+        : mergeStoredEdits(stored, { owned, released, mirrored }),
+    ),
   ).catch((): void => {
+    if (isSessionRemoved(sessionId)) return;
     // Retried later; a copy too big for localStorage keeps the mirror's promise.
     owners.forEach((key, index) => {
       if (records.get(key) !== snapshot[index]) return void databaseOwners.delete(key);
@@ -169,6 +174,7 @@ function saveSessionEdits(sessionId: string): boolean {
 
 function hydrate(): void {
   for (const { key, record, promised } of readHydratedPendingEditMirrors()) {
+    if (isSessionRemoved(record.sessionId)) continue;
     records.set(key, record);
     mirrored.add(key);
     if (promised) {
@@ -194,6 +200,7 @@ function persist(key: string): void {
     }
     return;
   }
+  if (isSessionRemoved(record.sessionId)) return;
   // A late flush of an older copy never replaces another tab's newer one.
   if (mirrorNewerThan(key, record.updatedAt)) return;
   const promised = awaitingDatabase.has(key);
@@ -315,7 +322,7 @@ async function restoreOnce(): Promise<void> {
       // An unreadable record is not an absent one. Its edits stay promised.
       continue;
     }
-    if (removedSessions.has(sessionId)) {
+    if (isSessionRemoved(sessionId)) {
       for (const [key, record] of records) {
         if (record.sessionId === sessionId) forgetLocally(key);
       }
@@ -404,7 +411,7 @@ export function setPendingEdit(input: {
   baseText: string;
   baseAttachments: readonly Attachment[];
 }): void {
-  if (removedSessions.has(input.sessionId)) return;
+  if (isSessionRemoved(input.sessionId)) return;
   const key = recordKey(input.sessionId, input.kind, input.id);
   const existing = records.get(key);
   // A paste placeholder has no durable bytes yet and its blob preview URL dies
@@ -544,7 +551,7 @@ export function finishOrphanedPendingEdit(record: PendingEditRecord, recovered: 
 /** Drop pending edit buffers for one explicitly removed session without
  *  scanning or removing buffers belonging to other sessions. */
 export function discardPendingEdits(sessionId: string): void {
-  removedSessions.add(sessionId);
+  markSessionRemoved(sessionId);
   for (const [key, record] of records) {
     if (record.sessionId !== sessionId) continue;
     records.delete(key);
@@ -632,7 +639,7 @@ export function beginPendingEditEncoding(
   id: string,
   placeholders: readonly Attachment[],
 ): PendingEditEncode {
-  if (removedSessions.has(sessionId)) {
+  if (isSessionRemoved(sessionId)) {
     return Object.assign(() => undefined, { alive: () => false });
   }
   const key = recordKey(sessionId, kind, id);
@@ -642,7 +649,7 @@ export function beginPendingEditEncoding(
   encodes.set(key, entry);
   let settled = false;
   const settle = (completed: readonly Attachment[]): void => {
-    if (settled || removedSessions.has(sessionId)) return;
+    if (settled || isSessionRemoved(sessionId)) return;
     settled = true;
     // The edit was saved, discarded or recovered meanwhile: these bytes
     // belong to none of the row's later edits.

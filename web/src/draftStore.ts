@@ -22,6 +22,7 @@
 // the composer adopts them through `subscribeDraftRestore`. Without a database
 // (no product dataset yet) the old text-only quota fallback still applies.
 
+import { isSessionRemoved, markSessionRemoved } from "./removedSessionFence";
 import {
   type Attachment,
   dropOrphanImageTokens,
@@ -59,7 +60,6 @@ let database: DraftDatabase | undefined;
 // known to own a database record.
 const awaitingDatabase = new Map<string, string>();
 const databaseDrafts = new Set<string>();
-const removedSessions = new Set<string>();
 // The database's own list of records has been read. Until then a record this
 // page never wrote may still exist, so a discard is remembered, not skipped.
 let databaseListed = false;
@@ -101,6 +101,7 @@ function hydrate(): void {
           ? [...parsed.attachments]
           : [];
         const sessionId = k.slice(KEY_PREFIX.length);
+        if (isSessionRemoved(sessionId)) continue;
         if (parsed.attachmentsInDatabase === true && attachments.length === 0) {
           // The bytes live in IndexedDB; keep the tokens so the restore can
           // put the images back exactly where they were.
@@ -168,7 +169,7 @@ function discardDatabaseDraft(sessionId: string, force = false): void {
 }
 
 function persist(sessionId: string, draft: Draft | null): void {
-  if (removedSessions.has(sessionId)) return;
+  if (isSessionRemoved(sessionId)) return;
   const ls = globalThis.localStorage;
   if (!ls) return;
   const key = KEY_PREFIX + sessionId;
@@ -213,10 +214,13 @@ function persist(sessionId: string, draft: Draft | null): void {
       const stored: StoredDraft = { text: draft.text, attachments, savedAt: Date.now() };
       databaseDrafts.add(sessionId);
       pendingDiscards.delete(sessionId);
-      void writeDatabase(sessionId, () => cache.save(stored)).catch((): void => {
+      void writeDatabase(sessionId, async () => {
+        if (isSessionRemoved(sessionId)) return;
+        await cache.save(stored);
+      }).catch((): void => {
         databaseDrafts.delete(sessionId);
         // Only if nothing newer replaced this draft while the write failed.
-        if (!removedSessions.has(sessionId) && drafts.get(sessionId) === draft) {
+        if (!isSessionRemoved(sessionId) && drafts.get(sessionId) === draft) {
           persistLegacy(ls, key, draft);
         }
       });
@@ -378,7 +382,7 @@ async function restoreOnce(): Promise<void> {
     const promised = awaitingDatabase.has(sessionId);
     const hydratedText = awaitingDatabase.get(sessionId);
     awaitingDatabase.delete(sessionId);
-    if (removedSessions.has(sessionId)) {
+    if (isSessionRemoved(sessionId)) {
       drafts.delete(sessionId);
       dirty.delete(sessionId);
       continue;
@@ -486,7 +490,7 @@ export function subscribeDraftRestore(
 // so it never sits on the typing path. An empty draft (e.g. just sent) is cleared
 // from disk immediately — a clear is cheap, and a pending write for it is cancelled.
 export function setDraft(sessionId: string, draft: Draft): void {
-  if (removedSessions.has(sessionId)) return;
+  if (isSessionRemoved(sessionId)) return;
   if (!draft.text && draft.attachments.length === 0) {
     drafts.delete(sessionId);
     dirty.delete(sessionId);
@@ -518,7 +522,7 @@ function sameStoredAttachments(previous: Draft | undefined, next: Draft): boolea
 /** Drop the local composer draft for one explicitly removed session without
  *  pruning drafts belonging to other sessions in shared localStorage. */
 export function discardDraft(sessionId: string): void {
-  removedSessions.add(sessionId);
+  markSessionRemoved(sessionId);
   drafts.delete(sessionId);
   dirty.delete(sessionId);
   awaitingDatabase.delete(sessionId);

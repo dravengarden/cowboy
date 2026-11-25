@@ -281,10 +281,13 @@ test("discardDraft deletes IndexedDB attachment drafts immediately before listin
   assertEquals(database.records.has("cross-tab-removed"), false);
   assertEquals(storage.records.has(KEY + "cross-tab-removed"), false);
 
-  // Late in-tab setDraft for a removed session is rejected without creating keys.
+  // Both the receiving tab and a stale peer tab sharing localStorage are
+  // fenced from recreating the removed session's draft without IndexedDB tombstones.
   tabA.setDraft("cross-tab-removed", { text: `${TEXT} late`, attachments: [image("a2")] });
+  tabB.setDraft("cross-tab-removed", { text: `${TEXT} peer-late`, attachments: [image("a3")] });
   await settle();
   assertEquals(database.records.has("cross-tab-removed"), false);
+  assertEquals(storage.records.has(KEY + "cross-tab-removed"), false);
 
   // A reloaded page sees no restored draft.
   const reloaded = await loadPage(storage);

@@ -9,6 +9,7 @@ import {
   removeSessionById,
   upsertSession,
 } from "./sessionDelta";
+import { applyEnvelope } from "./storeTimeline";
 
 function session(id: string, status: SessionMeta["status"] = "running"): SessionMeta {
   return {
@@ -85,20 +86,45 @@ test("classifyReplicaSnapshot and dropStaleReplicaPrefix evict stale caches with
 
   const withLive = [...stale, message(500, "live"), message(502, "newer")];
   expect(dropStaleReplicaPrefix(withLive, stale).map((e) => e.seq)).toEqual([500, 502]);
+
+  // A cached tool row that absorbed a live tool_call_update after replicaMax
+  // survives prefix trimming even though its anchor seq <= replicaMax.
+  const cachedTool: Envelope = {
+    session_id: "s1",
+    seq: 10,
+    kind: "update",
+    update: { sessionUpdate: "tool_call", toolCallId: "t-1", status: "in_progress" },
+  };
+  const liveToolDone: Envelope = {
+    session_id: "s1",
+    seq: 505,
+    kind: "update",
+    update: { sessionUpdate: "tool_call_update", toolCallId: "t-1", status: "completed" },
+  };
+  const cachedReplica = [cachedTool, message(11, "old")];
+  const afterLiveUpdate = applyEnvelope(new Map([["s1", cachedReplica]]), liveToolDone).get("s1")!;
+  const kept = dropStaleReplicaPrefix(afterLiveUpdate, cachedReplica);
+  expect(kept.map((e) => e.seq)).toEqual([10]);
+  expect(kept[0]?.kind === "update" ? kept[0].update.status : "").toBe("completed");
 });
 
-test("authoritativeLinkMetaMap and diffAuthoritativeLinkMeta track trashed sessions and authoritative titles", () => {
+test("authoritativeLinkMetaMap and diffAuthoritativeLinkMeta track trashed sessions, Web titles, and session_updated titles", () => {
   const a = session("a");
   const trashedB: SessionMeta = { ...session("b"), trashed_at_ms: 1_700_000_000_000 };
-  const prev = authoritativeLinkMetaMap([a, trashedB], { a: "Old Title" });
-  // Authoritative title update + closing a trashed session + removing nothing.
+  const prev = authoritativeLinkMetaMap([a, trashedB], { a: "Seeded Title" });
+  // Auto/legacy rename via session_updated changes SessionMeta.title even when
+  // titleSync.base() still holds "Seeded Title".
+  const autoRenamedA: SessionMeta = { ...a, title: "Auto Renamed" };
+  const afterAuto = authoritativeLinkMetaMap([autoRenamedA, trashedB], { a: "Seeded Title" });
+  expect(diffAuthoritativeLinkMeta(prev, afterAuto)).toEqual(["a"]);
+  // Authoritative Web title update + closing a trashed session.
   const next = authoritativeLinkMetaMap(
-    [a, { ...trashedB, closing: true }],
+    [autoRenamedA, { ...trashedB, closing: true }],
     { a: "Committed Title" },
   );
-  expect(diffAuthoritativeLinkMeta(prev, next).sort()).toEqual(["a", "b"]);
+  expect(diffAuthoritativeLinkMeta(afterAuto, next).sort()).toEqual(["a", "b"]);
   expect(diffAuthoritativeLinkMeta(next, next)).toEqual([]);
   // Removing a trashed session is detected too.
-  const afterPurge = authoritativeLinkMetaMap([a], { a: "Committed Title" });
+  const afterPurge = authoritativeLinkMetaMap([autoRenamedA], { a: "Committed Title" });
   expect(diffAuthoritativeLinkMeta(next, afterPurge)).toEqual(["b"]);
 });

@@ -185,6 +185,24 @@ test("discardPendingEdits removes only the target session from memory and localS
     assertEquals(fakeStorage.getItem(otherTabKey), null);
     assertEquals(getPendingEdit(kept, "queued", "q1")?.text, "keep me");
     assertEquals(fakeStorage.getItem(keptKey) !== null, true);
+
+    // A stale peer tab with a buffered dirty edit must not rewrite localStorage
+    // after another tab records permanent removal in the shared fence.
+    const gonePeer = `sess-gone-peer-${Date.now()}`;
+    setPendingEdit({
+      sessionId: gonePeer,
+      kind: "draft",
+      id: "d-peer",
+      text: "stale peer edit",
+      attachments: [],
+      baseText: "before",
+      baseAttachments: [],
+    });
+    fakeStorage.setItem("cowboy:removed-sessions", JSON.stringify([gone, gonePeer]));
+    flushPendingEdits();
+    const gonePeerKey = `cowboy:pending-edit:${JSON.stringify([gonePeer, "draft", "d-peer"])}`;
+    assertEquals(fakeStorage.getItem(gonePeerKey), null);
+
     clearPendingEdit(kept, "queued", "q1");
   } finally {
     globals.localStorage = previousStorage;

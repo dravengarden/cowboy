@@ -229,6 +229,45 @@ export interface ProductCache<T> {
   update(merge: (stored: T | null) => T | null): Promise<void>;
 }
 
+async function readQueueHasPending(
+  owner: IdbPersistenceOwner,
+  resolvePrefix: () => Promise<string>,
+  assertCurrent: () => void,
+  sessionId: string,
+): Promise<boolean> {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) return false;
+  try {
+    const key = `${await resolvePrefix()}session:${sessionId}:queue`;
+    assertCurrent();
+    const snapshot = await owner
+      .persistence<{ pending?: unknown[] }>(key, { strictReads: true })
+      .load();
+    assertCurrent();
+    if (snapshot === null) return false;
+    return !Array.isArray(snapshot.pending) || snapshot.pending.length > 0;
+  } catch {
+    return true;
+  }
+}
+
+async function listScopedIds(
+  owner: IdbPersistenceOwner,
+  resolvePrefix: () => Promise<string>,
+  assertAdmission: () => void,
+  kind: string,
+  suffixText: string,
+  limit: number,
+): Promise<string[]> {
+  const start = `${await resolvePrefix()}${kind}:`;
+  assertAdmission();
+  const keys = await owner.listKeys({ strict: true, limit });
+  assertAdmission();
+  return keys
+    .filter((key) => key.startsWith(start) && key.endsWith(suffixText))
+    .map((key) => key.slice(start.length, -suffixText.length))
+    .filter((id) => /^[A-Za-z0-9_-]{1,128}$/.test(id));
+}
+
 export function createProductSyncDatabase(
   currentPrincipal: () => string | undefined,
   discover = discoverSyncDataset,
@@ -373,28 +412,12 @@ export function createProductSyncDatabase(
         },
       };
     },
-    async draftDocumentIds(): Promise<string[]> {
-      const identity = await ready();
-      assertAdmission();
-      const keys = await owner.listKeys({ strict: true, limit: 20000 });
-      assertAdmission();
-      const start = `${prefix(identity)}document:`;
-      return keys
-        .filter((key) => key.startsWith(start) && key.endsWith(":entry"))
-        .map((key) => key.slice(start.length, -6))
-        .filter((id) => /^[A-Za-z0-9_-]{1,128}$/.test(id));
-    },
-    async queueSessions(): Promise<string[]> {
-      const identity = await ready();
-      assertAdmission();
-      const keys = await owner.listKeys({ strict: true, limit: 4096 });
-      assertAdmission();
-      const start = `${prefix(identity)}session:`;
-      return keys
-        .filter((key) => key.startsWith(start) && key.endsWith(":queue"))
-        .map((key) => key.slice(start.length, -6))
-        .filter((id) => /^[A-Za-z0-9_-]{1,128}$/.test(id));
-    },
+    draftDocumentIds: (): Promise<string[]> =>
+      listScopedIds(owner, async () => prefix(await ready()), assertAdmission, "document", ":entry", 20000),
+    queueSessions: (): Promise<string[]> =>
+      listScopedIds(owner, async () => prefix(await ready()), assertAdmission, "session", ":queue", 4096),
+    queueHasPending: (sessionId: string): Promise<boolean> =>
+      readQueueHasPending(owner, async () => prefix(dataset ?? (await ready())), assertCurrent, sessionId),
     /** Borrow one paint cache. Like an outbox, an already-borrowed cache may
      * finish its original dataset's writes after admission ends; it never
      * rediscovers or adopts a new dataset. */

@@ -3,6 +3,7 @@
 import { snapshotJoinGap } from "./canonicalTimeline";
 import type { Envelope, SessionMeta } from "./protocol";
 import { replicaTailConflicts } from "./replicaTail";
+import { absorbedSeqs } from "./storeTimeline";
 
 /** Build the authenticated `/ws` URL with lazy bootstrap and incremental
  *  session-delta opt-in. Older Controllers ignore `session_deltas=1`. */
@@ -78,25 +79,36 @@ export function classifyReplicaSnapshot(
 }
 
 /** Drop only events belonging to a stale IndexedDB replica prefix while
- *  preserving newer live WebSocket events that arrived after the replica. */
+ *  preserving newer live WebSocket events — including cached tool rows that
+ *  absorbed a live `tool_call_update` after the replica watermark. */
 export function dropStaleReplicaPrefix(
   existing: readonly Envelope[],
   cachedReplicaTail: readonly Envelope[],
 ): Envelope[] {
   const replicaMax = cachedReplicaTail.at(-1)?.seq;
   if (replicaMax === undefined) return [...existing];
-  return existing.filter((event) => event.seq > replicaMax);
+  return existing.filter((event) => {
+    if (event.seq > replicaMax) return true;
+    const absorbed = absorbedSeqs.get(event);
+    if (absorbed === undefined) return false;
+    for (const seq of absorbed) {
+      if (seq > replicaMax) return true;
+    }
+    return false;
+  });
 }
 
 export interface AuthoritativeLinkMeta {
   readonly closing: boolean;
   readonly trashed: boolean;
-  readonly title: string;
+  readonly rawTitle: string;
+  readonly syncTitle: string;
 }
 
 /** Build an authoritative link-metadata map across EVERY known session
- *  (including Trash), using only authoritative titles (`titleSync.baseValue()`)
- *  rather than local optimistic overlays. */
+ *  (including Trash), tracking both `SessionMeta.title` (auto/legacy renames
+ *  via `session_updated`) and `titleSync.base()` (committed Web renames) so
+ *  neither masks the other while local optimistic overlays stay excluded. */
 export function authoritativeLinkMetaMap(
   rawSessions: readonly SessionMeta[],
   authoritativeTitles: Readonly<Record<string, string>>,
@@ -106,7 +118,8 @@ export function authoritativeLinkMetaMap(
     map.set(session.id, {
       closing: Boolean(session.closing),
       trashed: session.trashed_at_ms !== undefined && session.trashed_at_ms !== null,
-      title: authoritativeTitles[session.id] ?? session.title,
+      rawTitle: session.title,
+      syncTitle: authoritativeTitles[session.id] ?? "",
     });
   }
   return map;
@@ -125,7 +138,8 @@ export function diffAuthoritativeLinkMeta(
       before === undefined ||
       before.closing !== after.closing ||
       before.trashed !== after.trashed ||
-      before.title !== after.title
+      before.rawTitle !== after.rawTitle ||
+      before.syncTitle !== after.syncTitle
     ) {
       changed.push(id);
     }

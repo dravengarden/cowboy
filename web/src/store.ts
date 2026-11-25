@@ -1456,6 +1456,12 @@ function applySnapshot(msg: Extract<Outbound, { type: "snapshot" }>): void {
   } else if (reconciliation === "reseed_empty") {
     reseedPagination = true;
   }
+  if (reseedPagination) {
+    // Supersede any in-flight history page request started against the old
+    // replica cursor so it cannot overwrite the reseeded pagination cursor.
+    transcriptEpoch.set(msg.session_id, (transcriptEpoch.get(msg.session_id) ?? 0) + 1);
+    completeQuestionPages.delete(msg.session_id);
+  }
   replicaTails.delete(msg.session_id);
   // Clear is destructive: every row before the newest boundary in either the
   // fresh tail or the live timeline was deleted durably. Drop pre-clear rows
@@ -1473,7 +1479,9 @@ function applySnapshot(msg: Extract<Outbound, { type: "snapshot" }>): void {
   const incomingEvents = clearedBefore !== null
     ? msg.events.filter((event) => event.seq >= clearedBefore)
     : msg.events;
-  const joinGap = snapshotJoinGap(existingTimeline, incomingEvents);
+  const joinGap = reconciliation === "stale_prefix"
+    ? null
+    : snapshotJoinGap(existingTimeline, incomingEvents);
   const timelines = mergeEvents(baseTimelines, msg.session_id, incomingEvents);
   const finalTimeline = timelines.get(msg.session_id) ?? [];
   const hydrated = state.hydrated.has(msg.session_id)
@@ -1910,6 +1918,7 @@ async function hydrateSession(
   }, 30_000);
   const startedAt = performance.now();
   const bootstrapGen = socketGeneration;
+  const epochAtRequestStart = transcriptEpoch.get(sessionId) ?? 0;
   const configOptionsRevisionAtRequestStart =
     configOptionsRevisions.get(sessionId) ?? 0;
   const promise = (async (): Promise<void> => {
@@ -1929,6 +1938,22 @@ async function hydrateSession(
       }
       const bootstrap = (await response.json()) as SessionBootstrapResponse;
       if (controller.signal.aborted) { if (strict) throw new Error("Conversation sync was interrupted; nothing was cleared."); return; }
+      if ((transcriptEpoch.get(sessionId) ?? 0) !== epochAtRequestStart) {
+        if (strict) throw new Error("Conversation sync was interrupted; nothing was cleared.");
+        // A live Clear (or eviction) advanced the transcript epoch while this
+        // bootstrap was in flight; reject stale pre-clear messages and subagents.
+        if (
+          state.connected &&
+          (openedSessionId === sessionId ||
+            peekedSessions.has(sessionId) ||
+            needsDraftSource(sessionId))
+        ) {
+          void hydrateSession(sessionId, true);
+        } else {
+          retryableFailure = true;
+        }
+        return;
+      }
       const applyHydratedConfigOptions = shouldApplyHydratedConfigOptions(
         configOptionsRevisionAtRequestStart,
         configOptionsRevisions.get(sessionId) ?? 0,
@@ -2692,17 +2717,11 @@ function scheduleReplicaTail(sessionId: string, immediate: boolean): void {
 }
 
 async function retainReplicaWithOutboxGuard(valid: ReadonlySet<string>): Promise<void> {
-  // Check durable IndexedDB outboxes (not tab-local `qClients`), preserving
-  // every held-delivery decision if storage cannot be read or an outbox exists.
-  let outboxes: ReadonlySet<string> | null = null;
-  try {
-    outboxes = new Set(await syncDatabase.queueSessions());
-  } catch {
-    outboxes = null;
-  }
-  if (productSessionAbandoned) return;
+  // Check durable IndexedDB outbox pending arrays (not tab-local `qClients` and
+  // not settled empty `:queue` keys): preserve a hold while any pending
+  // mutation exists or storage is unreadable, and retire settled delivery keys.
   await replica.retainSessions(valid, {
-    keepDelivery: (sessionId) => outboxes === null || outboxes.has(sessionId),
+    keepDelivery: (sessionId) => syncDatabase.queueHasPending(sessionId),
   });
 }
 
