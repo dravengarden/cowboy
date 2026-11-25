@@ -274,6 +274,8 @@ pub const ACTION_SDK: &str = r#"// cowboy_execute({action,arguments,operation});
 //   purpose?:"review"|"design_review"|"analysis",capability?:"image.generate"|"image.edit",
 //   files?:string[],root?:string,sessions?:{session_id:string,after?:number,before?:number}[],
 //   child_session_id?:string,preset?:string,title?:string,reason?:string,notify?:boolean}
+// instruction is a task in text: one starting with a native slash command (/speckit..., /compact)
+//   is refused invalid_instruction; write "Follow the /<command> workflow: ..." instead.
 // Context ask: calls.start({instruction:<one question>,sessions:[{session_id,after?,before?}],
 //   provider:<cheap>,preset:<light/medium>,notify:true}) searches exported history (no worktree/tools)
 //   and returns checked [session#seq] "quote" citations (calls.result.citations). Pick a cheap preset

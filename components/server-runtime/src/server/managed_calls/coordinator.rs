@@ -109,6 +109,14 @@ async fn images_run(
     .available
 }
 
+const NATIVE_COMMAND_HINT: &str = "a managed call instruction is a task, not a native slash command: start it with text, for example \"Follow the /<command> workflow: ...\", and say what the reviewer or agent should do";
+
+/// Whether an instruction begins (after whitespace) with a native slash
+/// command, which no managed call may run.
+fn native_command_instruction(instruction: &str) -> bool {
+    instruction.trim_start().starts_with('/')
+}
+
 pub fn error(code: &str, admission: &str) -> Value {
     json!({"schema":1,"state":"error","error":{"code":code,"admission":admission}})
 }
@@ -882,6 +890,15 @@ async fn start(
         Ok(None) => {}
         Err(_) => return error("capacity", "not_submitted"),
     }
+    // A task, never a native slash command: Claude's managed runtime ends its
+    // process on one (the child crashes and the call fails as provider_error),
+    // and no Provider may run a native command for a managed call. Refused
+    // before anything starts, with a fixed hint that echoes no input.
+    if native_command_instruction(&request.instruction) {
+        let mut refused = error("invalid_instruction", "not_submitted");
+        refused["error"]["hint"] = json!(NATIVE_COMMAND_HINT);
+        return refused;
+    }
     // What the caller submitted: the replay of a repeated request id matches
     // against it, not against the agent a continuation resolves below.
     let submitted = requested;
@@ -1437,6 +1454,25 @@ mod tests {
         ));
         // An active call keeps its child however old it is.
         assert!(!child_expired(&record("running", Some(0), 0), now));
+    }
+
+    #[test]
+    fn a_native_slash_command_instruction_is_refused_before_start() {
+        // sess-1795490077099: a continued Claude review sent
+        // "/speckit.review-pr Round 3 ..."; the managed runtime ended its
+        // process and the call failed as provider_error.
+        for instruction in ["/speckit.review-pr Round 3", "  \n/compact", "/"] {
+            assert!(native_command_instruction(instruction), "{instruction:?}");
+        }
+        for instruction in [
+            "Follow the /speckit.review-pr workflow: round 3",
+            "Review this round.",
+            "path a/b",
+        ] {
+            assert!(!native_command_instruction(instruction), "{instruction:?}");
+        }
+        // The hint is fixed text: it never echoes the instruction.
+        assert!(!NATIVE_COMMAND_HINT.contains("speckit"));
     }
 }
 
