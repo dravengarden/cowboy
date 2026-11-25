@@ -56,8 +56,8 @@ pub use hub_peer_notice::PromptProgress;
 mod hub_provider_pins;
 mod hub_queue;
 pub use hub_queue::{
-    HELD_SEND_REPLAY_HORIZON_MS, SteerSource, SteerSourceKind, TARGET_RETRY_FIELD,
-    TARGET_WAIT_REASON, next_wait, wait_awaits_target,
+    HELD_SEND_CLOCK_SKEW_MS, HELD_SEND_REPLAY_HORIZON_MS, HoldOutcome, SteerSource,
+    SteerSourceKind, TARGET_RETRY_FIELD, TARGET_WAIT_REASON, next_wait, wait_awaits_target,
 };
 mod hub_superagent;
 mod hub_sync;
@@ -1218,6 +1218,12 @@ pub struct HubMemoryStats {
 /// [`crate::store::Store`] call.
 #[derive(Debug, Clone, Serialize)]
 pub enum StoreWrite {
+    /// Writes nothing. Acknowledged once every write admitted before it was
+    /// applied: a reply that must not precede durability waits for it.
+    Barrier {
+        #[serde(skip)]
+        ack_id: Option<u64>,
+    },
     InsertSession(Box<SessionMeta>),
     AppendEvent(Envelope),
     UpdateStatus {

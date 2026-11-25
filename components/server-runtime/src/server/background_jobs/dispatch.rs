@@ -110,8 +110,7 @@ async fn prepare_dispatch_preflight(
     };
     // A failed or interrupted Web workspace preparation left this session on
     // its source checkout; prepare it again before any worker can start.
-    // Completion drains the queue; an explicit intent would re-drain it on
-    // every maintenance tick while the Machine is still preparing.
+    // Maintenance leaves a held send alone until the workspace is ready.
     if let Some(wait) = workspace_preparation::resume(state, session_id) {
         return PreflightOutcome::WorkspaceWait(wait);
     }
@@ -194,10 +193,10 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
             return;
         }
         PreflightOutcome::WorkspaceWait(wait) => {
-            // Preparation drains the queue itself; an explicit intent would
-            // re-drain it on every maintenance tick meanwhile.
+            // An explicit send keeps its intent through Pause; maintenance
+            // retries it once the workspace is prepared, not meanwhile.
             retain_failed_dispatch(
-                hub, session_id, text, content, cmid, origin, initiator, &wait, false,
+                hub, session_id, text, content, cmid, origin, initiator, &wait, explicit,
             );
             return;
         }

@@ -442,6 +442,7 @@ impl Hub {
                 };
                 if front {
                     s.queue.insert(0, msg);
+                    self.settle_explicit_locked(session_id, s);
                 } else {
                     s.queue.push(msg);
                 }
@@ -823,6 +824,7 @@ impl Hub {
                 let new_qid = new_row.id.clone();
                 if front {
                     s.queue.insert(0, new_row);
+                    self.settle_explicit_locked(&sid, s);
                 } else {
                     s.queue.push(new_row);
                 }
@@ -836,6 +838,8 @@ impl Hub {
                 let mut preview_queue = s.queue.clone();
                 if front {
                     preview_queue.insert(0, new_row.clone());
+                    // The commit below settles the displaced command.
+                    super::explicit_intent::strip_displaced_intents(&mut preview_queue);
                 } else {
                     preview_queue.push(new_row.clone());
                 }
@@ -907,6 +911,7 @@ impl Hub {
                 }
                 if commit.front {
                     s.queue.insert(0, commit.new_row.clone());
+                    self.settle_explicit_locked(&sid, s);
                 } else {
                     s.queue.push(commit.new_row.clone());
                 }
@@ -1164,6 +1169,7 @@ impl Hub {
             };
             if front {
                 s.queue.insert(0, row);
+                self.settle_explicit_locked(session_id, s);
             } else {
                 s.queue.push(row);
             }

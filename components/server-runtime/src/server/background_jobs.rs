@@ -613,6 +613,11 @@ async fn apply_non_event_write(
         return ok;
     }
     let succeeded = retry_store_write(store, write).await;
+    if let StoreWrite::Barrier { ack_id: Some(id) } = write
+        && let Some(acks) = acks
+    {
+        acks.complete(*id, Ok(true));
+    }
     if let StoreWrite::UpdatePending {
         ack_id: Some(id), ..
     } = write
@@ -836,6 +841,7 @@ pub async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Res
         } => store.upsert_wakeup(session_id, *fire_at_ms, prompt).await,
         StoreWrite::DeleteWakeup { session_id } => store.delete_wakeup(session_id).await,
         StoreWrite::PutSetting { key, value } => store.put_setting(key, value).await,
+        StoreWrite::Barrier { .. } => Ok(()),
     }
 }
 

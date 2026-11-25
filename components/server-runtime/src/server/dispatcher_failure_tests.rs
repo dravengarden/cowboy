@@ -109,7 +109,9 @@ fn an_explicit_send_keeps_its_intent_across_a_transient_machine_wait() {
         true,
     );
     assert!(hub.explicit_wait("s"));
-    // ...and a permanent refusal ends both the wait and the intent.
+    // ...and a permanent refusal of that send (taken out again first) ends
+    // both the wait and the intent.
+    assert!(hub.remove_queued_by_cmid("s", "c1"));
     let refused =
         "Execution target unavailable or identity changed; retained prompt was not delivered";
     retain_failed_dispatch(

@@ -70,6 +70,13 @@ function fakeDatabase() {
         await tick();
         state.records.delete(scope.session!);
       },
+      update: async (merge: (stored: T | null) => T | null): Promise<void> => {
+        admit();
+        await tick();
+        const next = merge((state.records.get(scope.session!) ?? null) as T | null);
+        if (next === null) state.records.delete(scope.session!);
+        else state.records.set(scope.session!, next);
+      },
     }),
     cacheSessions: async (): Promise<string[]> => {
       admit();
@@ -524,4 +531,32 @@ test("bytes no tab mirrors any more are swept on the next write", async () => {
   first.flushPendingEdits();
   await settle();
   assertEquals(slots(database, "sweep"), ["draft:row-1"]);
+});
+
+test("a stale copy never brings back bytes another tab removed", async () => {
+  const storage = fakeStorage();
+  const database = fakeDatabase();
+  const first = await loadPage(storage);
+  first.attachPendingEditDatabase(database as never);
+  await settle();
+  first.setPendingEdit(edit("gone"));
+  first.flushPendingEdits();
+  await settle();
+  const second = await loadPage(storage);
+  second.attachPendingEditDatabase(database as never);
+  await settle();
+  // The first tab removes the image; the second still holds it.
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  first.setPendingEdit(edit("gone", "    indented  edit tail", []));
+  first.flushPendingEdits();
+  await settle();
+  assertEquals(slots(database, "gone"), []);
+  // An unrelated flush of the second tab writes only what it changed.
+  second.setPendingEdit({
+    ...edit("gone", "other ![o](cowboy-att:o1)", [image("o1")]),
+    id: "row-9",
+  });
+  second.flushPendingEdits();
+  await settle();
+  assertEquals(slots(database, "gone"), ["draft:row-9"]);
 });

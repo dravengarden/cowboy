@@ -74,7 +74,14 @@ impl Hub {
                     text,
                     content,
                     cmid: Some(dispatch_cmid),
-                    explicit: !managed, // never an owner send (account gates)
+                    // Never an owner send (account gates); a prompt Cowboy
+                    // submitted by itself (a wakeup, a notice) is no user
+                    // request either and never gains a Pause bypass.
+                    explicit: !managed
+                        && !matches!(
+                            initiator,
+                            crate::prompt_origin::DeliveryOrigin::Cowboy { .. }
+                        ),
                     origin: content_origin,
                     initiator: Some(initiator.clone()),
                     dispatch_origin,
@@ -94,6 +101,7 @@ impl Hub {
                 };
                 if front {
                     s.queue.insert(0, message);
+                    self.settle_explicit_locked(session_id, s);
                 } else {
                     s.queue.push(message);
                 }
@@ -162,7 +170,7 @@ impl Hub {
             let dispatch_origin =
                 crate::prompt_origin::compute_dispatch_origin(head.origin.as_ref(), Some(&trigger));
             let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(head.cmid.take());
-            s.take_dispatch_intent(&mut head, &dispatch_cmid);
+            s.take_dispatch_intent(&mut head, &dispatch_cmid, None);
             Self::note_dispatched(s, Some(&dispatch_cmid));
             DispatchReq {
                 ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),

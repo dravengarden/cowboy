@@ -680,3 +680,19 @@ test("IDB forced connection close still retains its transaction until terminal a
   assertEquals(owner.lifecycle.connections, 0);
   assertEquals(db.listenerCount, 0);
 });
+
+test("a value record's update merges into what is stored, in one transaction", async () => {
+  const factory = new FakeIndexedDb();
+  const owner = createIdbPersistenceOwner({ factory });
+  const record = owner.persistence<{ slots: string[] }>("edits", {
+    strictReads: true,
+    strictWrites: true,
+  });
+  await record.update((stored) => ({ slots: [...(stored?.slots ?? []), "a"] }));
+  await record.update((stored) => ({ slots: [...(stored?.slots ?? []), "b"] }));
+  assertEquals(await record.load(), { slots: ["a", "b"] });
+  await record.update(() => null);
+  assertEquals(await record.load(), null);
+  assertEquals(factory.data.has("edits"), false);
+  await owner.dispose();
+});

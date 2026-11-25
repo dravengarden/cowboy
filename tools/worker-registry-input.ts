@@ -1,5 +1,7 @@
 // Derive the component-registry input that can affect detached workers.
-// A tail changing only the unconsumed Web app shell is not a worker rollout.
+// A tail changing only Web-only components no worker, component or Plugin
+// consumes (the app shell, the browser IndexedDB adapter) is not a worker
+// rollout.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import {
@@ -34,20 +36,22 @@ function canonical(value: unknown): string {
   return encoded;
 }
 
+/** Components only the Web app bundles. While nothing in the registry depends
+ * on one, its releases never change what a worker is built from. */
+const WEB_ONLY = new Set(["cowboy.app-shell", "cowboy.state-sync-idb"]);
+
 function workerRecord(release: Release): unknown {
   const record: Record<string, unknown> = { ...release };
   delete record.version;
   delete record.component_additions;
   delete record.plugin_additions;
   delete record.plugin_removals;
-  record.components = release.components.filter((entry) => entry.id !== "cowboy.app-shell");
+  record.components = release.components.filter((entry) => !WEB_ONLY.has(entry.id));
   if (release.closure) {
     record.closure = {
       ...release.closure,
       component_dependencies: Object.fromEntries(
-        Object.entries(release.closure.component_dependencies).filter(
-          ([id]) => id !== "cowboy.app-shell",
-        ),
+        Object.entries(release.closure.component_dependencies).filter(([id]) => !WEB_ONLY.has(id)),
       ),
     };
   }
@@ -65,10 +69,10 @@ export function workerRegistryProjection(source: string): { release: string; sou
   const shellConsumed =
     latest.closure === undefined ||
     Object.values(latest.closure.component_dependencies).some((edges) =>
-      edges.includes("cowboy.app-shell"),
+      edges.some((id) => WEB_ONLY.has(id)),
     ) ||
     Object.values(latest.closure.plugins).some((plugin) =>
-      plugin.components.some((entry) => entry.id === "cowboy.app-shell"),
+      plugin.components.some((entry) => WEB_ONLY.has(entry.id)),
     );
   let selected = registry.releases.length - 1;
   if (!shellConsumed) {

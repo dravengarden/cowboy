@@ -13,8 +13,8 @@ mod submit;
 
 pub(super) use explicit_intent::ExplicitIntent;
 pub use explicit_intent::{
-    HELD_SEND_REPLAY_HORIZON_MS, TARGET_RETRY_FIELD, TARGET_WAIT_REASON, next_wait,
-    wait_awaits_target,
+    HELD_SEND_CLOCK_SKEW_MS, HELD_SEND_REPLAY_HORIZON_MS, HoldOutcome, TARGET_RETRY_FIELD,
+    TARGET_WAIT_REASON, next_wait, wait_awaits_target,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -296,9 +296,10 @@ impl Hub {
         manual: bool,
         trigger: Option<&crate::prompt_origin::RequestCaller>,
     ) {
-        self.drain_head_inner(session_id, allow_revive, manual, trigger, None, false);
+        self.drain_head_inner(session_id, allow_revive, manual, trigger, None, false, None);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn drain_head_inner(
         &self,
         session_id: &str,
@@ -307,6 +308,7 @@ impl Hub {
         trigger: Option<&crate::prompt_origin::RequestCaller>,
         expected_head_id: Option<&str>,
         retry: bool,
+        command: Option<&str>,
     ) {
         if self.inner.dispatch_tx.lock().is_none() {
             return;
@@ -374,7 +376,7 @@ impl Hub {
                 .clone()
                 .unwrap_or_else(|| crate::prompt_origin::DeliveryOrigin::cowboy("legacy_queue"));
             let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(head.cmid.take());
-            let carried = s.take_dispatch_intent(&mut head, &dispatch_cmid);
+            let carried = s.take_dispatch_intent(&mut head, &dispatch_cmid, command);
             s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);
@@ -419,6 +421,7 @@ impl Hub {
             trigger,
             Some(target_row_id),
             false,
+            None,
         );
     }
 
@@ -437,7 +440,7 @@ impl Hub {
     /// Maintenance's retry of a waiting session whose execution Machine it
     /// found connected: the only automatic drain a target wait lets through.
     pub fn retry_connected_wait(&self, session_id: &str) {
-        self.drain_head_inner(session_id, true, false, None, None, true);
+        self.drain_head_inner(session_id, true, false, None, None, true, None);
     }
 
     /// Retry a previously explicit send parked on a resource wait, preserving
@@ -819,6 +822,7 @@ impl Hub {
                         explicit: None,
                     },
                 );
+                self.settle_explicit_locked(session_id, s);
                 interrupt = interrupt_on_busy && context_allows;
             }
         }
@@ -977,12 +981,35 @@ impl Hub {
         id: &str,
         caller: &crate::prompt_origin::RequestCaller,
     ) {
-        if self.is_managed_child(session_id) {
-            return;
+        self.request_send_queued_as(session_id, id, caller, None);
+    }
+
+    /// [`Self::request_send_queued`] for the client command `command`. Only
+    /// the requested row is sent: another terminal may remove or reorder it
+    /// between the promotion and the dispatch, and the replacement head is not
+    /// sent under this caller's authority. If the dispatch comes back for a
+    /// transient wait, the row is held under `command`, so a replay finds it.
+    /// Whether the row was still queued.
+    pub fn request_send_queued_as(
+        &self,
+        session_id: &str,
+        id: &str,
+        caller: &crate::prompt_origin::RequestCaller,
+        command: Option<&str>,
+    ) -> bool {
+        if self.is_managed_child(session_id) || !self.promote_queued(session_id, id, caller) {
+            return false;
         }
-        if self.promote_queued(session_id, id, caller) {
-            self.drain_head(session_id, true, true, Some(caller));
-        }
+        self.drain_head_inner(
+            session_id,
+            true,
+            true,
+            Some(caller),
+            Some(id),
+            false,
+            command,
+        );
+        true
     }
 
     /// Move a queued prompt to the front under `caller`'s send intent. A
@@ -1011,6 +1038,7 @@ impl Hub {
             let mut m = s.queue.remove(pos);
             m.initiator = Some(trigger);
             s.queue.insert(0, m);
+            self.settle_explicit_locked(session_id, s);
         }
         self.emit_pending(session_id);
         true
@@ -1337,6 +1365,7 @@ impl Hub {
                 return;
             };
             sort_by_id_order(&mut s.queue, order, |m| &m.id);
+            self.settle_explicit_locked(session_id, s);
         }
         // A held row moved off the head no longer carries its Send now.
         self.emit_pending(session_id);

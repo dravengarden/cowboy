@@ -1,9 +1,9 @@
 // The per-session IndexedDB record of pending row edits' attachment bytes,
 // shared by every tab of the origin. A tab only knows the edits it loaded or
-// made, so it never writes the record from its own view: it reads the record,
-// changes only the slots of edits it holds (a newer stamp from another tab
-// wins) or released, drops slots no tab mirrors any more, and writes it back,
-// under a cross-tab lock where the browser has one.
+// made, so it never writes the record from its own view: in one readwrite
+// transaction it reads the record, changes only the slots of edits it changed
+// (a newer stamp from another tab wins) or released, drops slots no tab
+// mirrors any more, and writes it back.
 
 import type { Attachment } from "./attachments";
 
@@ -17,7 +17,7 @@ export interface StoredEdits {
 
 /** One tab's view of a session's slots for one merge. */
 export interface OwnedSlots {
-  /** Edits this tab holds with their bytes in memory. */
+  /** Edits this tab changed, with their bytes and the revision they are. */
   readonly owned: ReadonlyMap<string, { attachments: Attachment[]; updatedAt: number }>;
   /** Slots this tab took its bytes out of, with the edit's stamp then. */
   readonly released: ReadonlyMap<string, number>;
@@ -33,9 +33,8 @@ export function mergeStoredEdits(stored: StoredEdits | null, view: OwnedSlots): 
     if (view.owned.has(slot)) continue;
     const release = view.released.get(slot);
     // A release never removes a newer revision another tab wrote since.
-    const keep = release !== undefined
-      ? (stamps[slot] ?? -Infinity) > release
-      : view.mirrored(slot);
+    const keep =
+      release !== undefined ? (stamps[slot] ?? -Infinity) > release : view.mirrored(slot);
     if (keep) continue;
     delete edits[slot];
     delete stamps[slot];
@@ -48,38 +47,57 @@ export function mergeStoredEdits(stored: StoredEdits | null, view: OwnedSlots): 
   return Object.keys(edits).length === 0 ? null : { edits, stamps, savedAt: Date.now() };
 }
 
-/** Run one read-modify-write of a session's record while no other tab of the
- * origin runs one. Without Web Locks the caller's in-tab chain still orders
- * this tab's writes. */
-export function acrossTabs(sessionId: string, write: () => Promise<void>): Promise<void> {
-  const locks = (globalThis.navigator as { locks?: LockManager } | undefined)?.locks;
-  if (locks === undefined || typeof locks.request !== "function") return write();
-  return locks.request("cowboy:pending-edit:" + sessionId, write) as Promise<void>;
-}
+/** One tab's bookkeeping between writes of the shared records, by session:
+ * the edits it changed (only those slots are written, so a stale copy of
+ * another tab's edit never overwrites or resurrects its bytes), the revision
+ * of bytes a restore found older than their text, and the slots it took its
+ * bytes out of with their revision (removed unless another tab wrote a newer
+ * one since). */
+export class SlotLedger {
+  private readonly changed = new Map<string, Set<string>>();
+  private readonly bytes = new Map<string, number>();
+  private readonly released = new Map<string, Map<string, number>>();
 
-/** Slots a tab took its bytes out of (the edit ended or lost its last image),
- * by session, with the edit's stamp then: the next merge removes them unless
- * another tab wrote a newer edit there since. */
-export class ReleasedSlots {
-  private readonly bySession = new Map<string, Map<string, number>>();
-
-  add(sessionId: string, slot: string, stamp: number): void {
-    const released = this.bySession.get(sessionId) ?? new Map<string, number>();
-    released.set(slot, stamp);
-    this.bySession.set(sessionId, released);
+  /** `key` (an edit of `sessionId`) holds a new revision of its own. */
+  change(sessionId: string, key: string): void {
+    this.bytes.delete(key);
+    this.changed.set(sessionId, (this.changed.get(sessionId) ?? new Set()).add(key));
   }
 
-  take(sessionId: string): Map<string, number> {
-    const released = this.bySession.get(sessionId) ?? new Map<string, number>();
-    this.bySession.delete(sessionId);
+  takeChanged(sessionId: string): Set<string> {
+    const changed = this.changed.get(sessionId) ?? new Set<string>();
+    this.changed.delete(sessionId);
+    return changed;
+  }
+
+  /** The bytes `key` holds are revision `stamp`, older than its text. */
+  olderBytes(key: string, stamp: number): void {
+    this.bytes.set(key, stamp);
+  }
+
+  /** The revision of the bytes `key` holds; its text's by default. */
+  stamp(key: string, text: number): number {
+    return this.bytes.get(key) ?? text;
+  }
+
+  release(sessionId: string, key: string, slot: string, text: number): void {
+    const released = this.released.get(sessionId) ?? new Map<string, number>();
+    released.set(slot, this.stamp(key, text));
+    this.released.set(sessionId, released);
+    this.bytes.delete(key);
+  }
+
+  takeReleased(sessionId: string): Map<string, number> {
+    const released = this.released.get(sessionId) ?? new Map<string, number>();
+    this.released.delete(sessionId);
     return released;
   }
 
   /** A merge that failed hands its releases on to the next one. */
-  restore(sessionId: string, released: ReadonlyMap<string, number>): void {
-    for (const [slot, stamp] of released) {
-      if (!this.bySession.get(sessionId)?.has(slot)) this.add(sessionId, slot, stamp);
-    }
+  restoreReleased(sessionId: string, released: ReadonlyMap<string, number>): void {
+    const pending = this.released.get(sessionId) ?? new Map<string, number>();
+    for (const [slot, stamp] of released) if (!pending.has(slot)) pending.set(slot, stamp);
+    if (pending.size > 0) this.released.set(sessionId, pending);
   }
 }
 

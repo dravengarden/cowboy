@@ -112,24 +112,12 @@ impl Hub {
         settled_notices: Vec<(String, String)>,
         released_claims: Vec<NoticeClaimRelease>,
     ) {
-        let (queue, drafts, receipts) = {
+        let (queue, drafts) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            // The intent commits with the order that ended it, and the held
-            // commands it ended commit first (same FIFO): a replay after a
-            // crash never finds a displaced row without its receipt.
-            s.normalize_explicit_intents();
-            let receipts = Self::settled_receipts_write(session_id, s);
-            if let Some((key, value)) = &receipts
-                && let Some(tx) = self.inner.store_tx.as_ref()
-            {
-                let _ = tx.send(StoreWrite::PutSetting {
-                    key: key.clone(),
-                    value: value.clone(),
-                });
-            }
+            self.settle_explicit_locked(session_id, s);
             let queue = s.queue.clone();
             let drafts = s.drafts.clone();
             let retired_dispatches = s.pending_retired_dispatches.clone();
@@ -155,13 +143,8 @@ impl Hub {
                     ack_id: None,
                 });
             }
-            (queue, drafts, receipts)
+            (queue, drafts)
         };
-        if let Some((key, value)) = receipts {
-            // Already written above; the in-memory copy is what a later
-            // restore of this session reads.
-            self.with_settings_mut(|settings| settings.insert(key, value));
-        }
         self.broadcast_pending_snapshot(session_id, &queue, &drafts);
     }
 
@@ -792,6 +775,20 @@ impl Hub {
                 completion_id.to_owned(),
                 undelivered_key.to_owned(),
             ));
+    }
+
+    /// Acknowledged once every store write admitted before it was applied.
+    /// `None` without a store writer (nothing is durable to wait for).
+    pub fn store_barrier(&self) -> Option<StoreAckRx> {
+        let tx = self.inner.store_tx.as_ref()?;
+        let (ack_id, rx) = self.inner.store_acks.allocate();
+        if !tx.send(StoreWrite::Barrier {
+            ack_id: Some(ack_id),
+        }) {
+            self.inner.store_acks.cancel(ack_id);
+            return None;
+        }
+        Some(rx)
     }
 
     /// Enqueue an acknowledged `StoreWrite::UpdatePending` through the same FIFO

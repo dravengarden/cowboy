@@ -186,6 +186,7 @@ impl Hub {
                         explicit: None,
                     },
                 );
+                self.settle_explicit_locked(session_id, s);
             }
         }
         if let Some(cmid) = duplicate {

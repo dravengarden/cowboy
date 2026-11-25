@@ -14,9 +14,7 @@ import {
   promoteUnplacedImageTokens,
 } from "./attachments";
 import { mergeRestoredDraft } from "./draftRestore";
-import {
-  acrossTabs, mergeStoredEdits, ReleasedSlots, slotMirrored, type StoredEdits,
-} from "./pendingEditRecord";
+import { mergeStoredEdits, SlotLedger, slotMirrored, type StoredEdits } from "./pendingEditRecord";
 import type { ProductCache, ProductCacheScope } from "./productSyncDatabase";
 import { newUuid } from "./uuid";
 
@@ -70,11 +68,10 @@ let flushTimer: ReturnType<typeof setTimeout> | undefined;
 // only the text. Same contract as composer drafts (draftStore.ts): a failed
 // read is not an absent record, and an edit still waiting for its bytes never
 // overwrites or discards them.
-// Every tab shares that record; pendingEditRecord.ts merges into it.
 
 /** The slice of the product database this store borrows. */
 export interface PendingEditDatabase {
-  cache<T>(scope: ProductCacheScope): ProductCache<T>;
+  cache<T>(scope: ProductCacheScope, opts?: { strict?: boolean }): ProductCache<T>;
   cacheSessions(state: "edits"): Promise<string[]>;
 }
 
@@ -90,20 +87,20 @@ const awaitingDatabase = new Map<string, string>();
 // Edits whose bytes the session's database record holds (or was asked to).
 // Only a change to one of them needs the record rewritten.
 const databaseOwners = new Set<string>();
-const releasedSlots = new ReleasedSlots();
+const slots = new SlotLedger();
 // Edits this tab ended whose removal is not persisted yet.
 const retiredRecords = new Map<string, PendingEditRecord>();
 const databaseChains = new Map<string, Promise<void>>();
 let databaseWritesInFlight = 0;
-const restoreListeners = new Map<
-  string,
-  Set<(edit: RestoredPendingEdit) => void>
->();
+const restoreListeners = new Map<string, Set<(edit: RestoredPendingEdit) => void>>();
 
 function editsCache(sessionId: string): ProductCache<StoredEdits> | undefined {
   if (database === undefined) return undefined;
   try {
-    return database.cache<StoredEdits>({ kind: "session", session: sessionId, state: "edits" });
+    return database.cache<StoredEdits>(
+      { kind: "session", session: sessionId, state: "edits" },
+      { strict: true },
+    );
   } catch {
     // Admission ended (sign-out) or the id cannot name a cache.
     return undefined;
@@ -114,69 +111,63 @@ function editSlot(record: PendingEditRecord): string {
   return record.kind + ":" + record.id;
 }
 
-function releaseSlot(record: PendingEditRecord): void {
-  releasedSlots.add(record.sessionId, editSlot(record), record.updatedAt);
-}
-
 function writeDatabase(sessionId: string, write: () => Promise<void>): Promise<void> {
   databaseWritesInFlight += 1;
   const chained = (databaseChains.get(sessionId) ?? Promise.resolve())
     .catch(() => undefined)
-    .then(() => acrossTabs(sessionId, write));
-  const settled = chained.catch(() => undefined).then((): void => {
-    databaseWritesInFlight -= 1;
-    if (databaseChains.get(sessionId) === settled) databaseChains.delete(sessionId);
-  });
+    .then(write);
+  const settled = chained
+    .catch(() => undefined)
+    .then((): void => {
+      databaseWritesInFlight -= 1;
+      if (databaseChains.get(sessionId) === settled) databaseChains.delete(sessionId);
+    });
   databaseChains.set(sessionId, settled);
   return chained;
 }
 
-/** Merge this tab's slots of the session into its record. Returns false when
- * the bytes cannot go to the database, so the caller keeps them in
- * localStorage instead. Edits whose bytes are still promised are not in
- * memory: their slots stay exactly as stored. */
+/** Merge this tab's changed slots into the session's record in one transaction
+ * (promised bytes stay as stored). False: keep the bytes in localStorage. */
 function saveSessionEdits(sessionId: string): boolean {
   const cache = editsCache(sessionId);
   if (cache === undefined) return false;
+  const changed = slots.takeChanged(sessionId);
   const owned = new Map<string, { attachments: Attachment[]; updatedAt: number }>();
   const owners: string[] = [];
   for (const [key, record] of records) {
     if (record.sessionId !== sessionId || awaitingDatabase.has(key)) continue;
     if (record.attachments.length === 0) {
-      if (databaseOwners.delete(key)) releaseSlot(record);
+      if (databaseOwners.delete(key))
+        slots.release(sessionId, key, editSlot(record), record.updatedAt);
       continue;
     }
-    owned.set(editSlot(record), { attachments: record.attachments, updatedAt: record.updatedAt });
-    owners.push(key);
     databaseOwners.add(key);
+    if (!changed.has(key)) continue;
+    owned.set(editSlot(record), {
+      attachments: record.attachments,
+      updatedAt: slots.stamp(key, record.updatedAt),
+    });
+    owners.push(key);
   }
-  const released = releasedSlots.take(sessionId);
+  const released = slots.takeReleased(sessionId);
   const snapshot = owners.map((key) => records.get(key));
-  void writeDatabase(sessionId, async () => {
-    const stored = await cache.load();
-    const mirrored = (slot: string): boolean =>
-      slotMirrored(storage(), slot, (kind, id) => KEY_PREFIX + recordKey(sessionId, kind, id));
-    const merged = mergeStoredEdits(stored, { owned, released, mirrored });
-    if (merged !== null) await cache.save(merged);
-    else if (stored !== null) await cache.discard();
-  }).catch((): void => {
-    // The database refused the bytes (or could not be read to merge them):
-    // the old localStorage policy for every edit this write carried and
-    // nothing newer replaced; released slots go with the next write.
+  const mirrored = (slot: string): boolean =>
+    slotMirrored(storage(), slot, (kind, id) => KEY_PREFIX + recordKey(sessionId, kind, id));
+  void writeDatabase(sessionId, () =>
+    cache.update((stored) => mergeStoredEdits(stored, { owned, released, mirrored })),
+  ).catch((): void => {
+    // Refused or unreadable: localStorage for every edit this write carried
+    // and nothing newer replaced; released slots go with the next write.
     owners.forEach((key, index) => {
       databaseOwners.delete(key);
       if (records.get(key) === snapshot[index]) persistLegacy(key);
     });
-    releasedSlots.restore(sessionId, released);
+    slots.restoreReleased(sessionId, released);
   });
   return true;
 }
 
-function recordKey(
-  sessionId: string,
-  kind: PendingEditKind,
-  id: string,
-): string {
+function recordKey(sessionId: string, kind: PendingEditKind, id: string): string {
   return JSON.stringify([sessionId, kind, id]);
 }
 
@@ -191,17 +182,11 @@ function storage(): Storage | null {
 /** Compare only server-delivered content. Preview URLs and local presentation
  * metadata are deliberately excluded so reload-created object URLs do not make
  * identical edits look different. */
-export function pendingEditFingerprint(
-  text: string,
-  attachments: readonly Attachment[],
-): string {
+export function pendingEditFingerprint(text: string, attachments: readonly Attachment[]): string {
   return JSON.stringify([text, attachments.map((attachment) => attachment.block)]);
 }
 
-function parseRecord(
-  value: unknown,
-  keepTokens = false,
-): PendingEditRecord | null {
+function parseRecord(value: unknown, keepTokens = false): PendingEditRecord | null {
   if (!value || typeof value !== "object") return null;
   const candidate = value as Partial<PendingEditRecord>;
   if (
@@ -212,7 +197,8 @@ function parseRecord(
     !Array.isArray(candidate.attachments) ||
     typeof candidate.baseFingerprint !== "string" ||
     typeof candidate.updatedAt !== "number"
-  ) return null;
+  )
+    return null;
   const attachments = candidate.attachments as Attachment[];
   const ids = new Set(attachments.map((attachment) => attachment.id));
   return {
@@ -222,9 +208,10 @@ function parseRecord(
     text: keepTokens ? candidate.text : dropOrphanImageTokens(candidate.text, ids),
     attachments,
     baseFingerprint: candidate.baseFingerprint,
-    recoveryCmid: typeof candidate.recoveryCmid === "string"
-      ? candidate.recoveryCmid
-      : `pending-edit-${newUuid()}`,
+    recoveryCmid:
+      typeof candidate.recoveryCmid === "string"
+        ? candidate.recoveryCmid
+        : `pending-edit-${newUuid()}`,
     updatedAt: candidate.updatedAt,
   };
 }
@@ -241,7 +228,9 @@ function hydrate(): void {
         const stored: unknown = raw === null ? null : JSON.parse(raw);
         // The bytes live in IndexedDB; keep the tokens so the restore can put
         // the images back exactly where they were.
-        const promised = stored !== null && typeof stored === "object" &&
+        const promised =
+          stored !== null &&
+          typeof stored === "object" &&
           (stored as { attachmentsInDatabase?: unknown }).attachmentsInDatabase === true &&
           Array.isArray((stored as { attachments?: unknown }).attachments) &&
           (stored as { attachments: unknown[] }).attachments.length === 0;
@@ -279,11 +268,13 @@ function persist(key: string): void {
     const released = retiredRecords.get(key);
     retiredRecords.delete(key);
     if (databaseOwners.delete(key) && released !== undefined) {
-      releaseSlot(released);
+      slots.release(released.sessionId, key, editSlot(released), released.updatedAt);
       saveSessionEdits(released.sessionId);
     }
     return;
   }
+  // A late flush of an older copy never replaces another tab's newer one.
+  if (mirrorNewerThan(key, record.updatedAt)) return;
   const promised = awaitingDatabase.has(key);
   if (promised || (record.attachments.length > 0 && saveSessionEdits(record.sessionId))) {
     // The text is the precious part: mirror it synchronously, so a page that
@@ -308,7 +299,7 @@ function persistLegacy(key: string): void {
   const local = storage();
   if (local === null) return;
   const record = records.get(key);
-  if (record === undefined) return;
+  if (record === undefined || mirrorNewerThan(key, record.updatedAt)) return;
   const storageKey = KEY_PREFIX + key;
   try {
     local.setItem(storageKey, JSON.stringify(record));
@@ -435,6 +426,9 @@ async function restoreOnce(): Promise<void> {
       const hydratedText = awaitingDatabase.get(key);
       awaitingDatabase.delete(key);
       const bytes = found?.edits?.[editSlot(record)];
+      // Bytes older than the hydrated text are never claimed as its revision.
+      const stamp = found?.stamps?.[editSlot(record)];
+      if (stamp !== undefined && stamp < record.updatedAt) slots.olderBytes(key, stamp);
       const merged = mergeRestoredDraft(
         { text: record.text, attachments: record.attachments, attachmentsInDatabase: true },
         bytes === undefined ? null : { text: record.text, attachments: bytes, savedAt: 0 },
@@ -447,13 +441,13 @@ async function restoreOnce(): Promise<void> {
       }
       schedulePersist(key);
     }
-    // The merge touches only this tab's slots: an edit retired elsewhere (and
-    // any other tab's edit) keeps whatever that tab wrote.
+    // The merge touches only this tab's slots; other tabs' edits keep theirs.
     saveSessionEdits(sessionId);
     for (const [key, edit] of restored) {
       for (const listener of restoreListeners.get(key) ?? []) listener(edit);
     }
-    if (awaitingDatabase.size < awaiting) for (const listener of encodeListeners) listener(sessionId);
+    if (awaitingDatabase.size < awaiting)
+      for (const listener of encodeListeners) listener(sessionId);
   }
 }
 
@@ -522,7 +516,8 @@ export function setPendingEdit(input: {
   // The stamp dates the content: a rerender that rewrites the same buffer
   // (a queue patch replacing the row's arrays) must not make it look newer
   // than another tab's later edit.
-  const unchanged = existing !== undefined &&
+  const unchanged =
+    existing !== undefined &&
     pendingEditFingerprint(existing.text, existing.attachments) ===
       pendingEditFingerprint(text, attachments);
   records.set(key, {
@@ -531,22 +526,18 @@ export function setPendingEdit(input: {
     id: input.id,
     text,
     attachments,
-    baseFingerprint: pendingEditFingerprint(
-      input.baseText,
-      input.baseAttachments,
-    ),
+    baseFingerprint: pendingEditFingerprint(input.baseText, input.baseAttachments),
     recoveryCmid: existing?.recoveryCmid ?? `pending-edit-${newUuid()}`,
     updatedAt: unchanged ? existing.updatedAt : Date.now(),
   });
   // Nor rewrite the shared mirror, which may hold that later edit.
-  if (!unchanged) schedulePersist(key);
+  if (!unchanged) {
+    slots.change(input.sessionId, key);
+    schedulePersist(key);
+  }
 }
 
-export function clearPendingEdit(
-  sessionId: string,
-  kind: PendingEditKind,
-  id: string,
-): void {
+export function clearPendingEdit(sessionId: string, kind: PendingEditKind, id: string): void {
   const key = recordKey(sessionId, kind, id);
   const retired = records.get(key);
   records.delete(key);
@@ -598,7 +589,8 @@ export function recoverPendingEditId(
     if (
       // Without its bytes an edit cannot be compared with the row yet, and a
       // file still being read does not show in it.
-      !awaitingDatabase.has(key) && !encodes.has(key) &&
+      !awaitingDatabase.has(key) &&
+      !encodes.has(key) &&
       pendingEditFingerprint(record.text, record.attachments) ===
         pendingEditFingerprint(target.text, target.attachments)
     ) {
@@ -615,11 +607,18 @@ export function recoverPendingEditId(
  * calls `finishOrphanedPendingEdit`; the in-memory claim prevents duplicate
  * recovery attempts between adjacent queue patches. */
 export function claimOrphanedPendingEdits(
-  sessionId: string, queueIds: ReadonlySet<string>, draftIds: ReadonlySet<string>,
+  sessionId: string,
+  queueIds: ReadonlySet<string>,
+  draftIds: ReadonlySet<string>,
 ): PendingEditRecord[] {
   const claimed: PendingEditRecord[] = [];
   for (const [key, record] of records) {
-    if (record.sessionId !== sessionId || recovering.has(key) || awaitingDatabase.has(key) || encodes.has(key)) {
+    if (
+      record.sessionId !== sessionId ||
+      recovering.has(key) ||
+      awaitingDatabase.has(key) ||
+      encodes.has(key)
+    ) {
       continue;
     }
     if (retiredByAnotherTab(key)) {
@@ -641,7 +640,8 @@ export function finishOrphanedPendingEdit(record: PendingEditRecord, recovered: 
     current !== undefined &&
     pendingEditFingerprint(current.text, current.attachments) ===
       pendingEditFingerprint(record.text, record.attachments)
-  ) clearPendingEdit(record.sessionId, record.kind, record.id);
+  )
+    clearPendingEdit(record.sessionId, record.kind, record.id);
 }
 
 export function prunePendingEdits(liveSessionIds: ReadonlySet<string>): void {
@@ -736,11 +736,7 @@ export type PendingEditEncode = ((completed: readonly Attachment[]) => void) & {
 /** Whether an attachment encode for this edit is still running, possibly
  * started by an editor that has since unmounted. Saving now would keep an
  * image token without its bytes. */
-export function pendingEditEncoding(
-  sessionId: string,
-  kind: PendingEditKind,
-  id: string,
-): boolean {
+export function pendingEditEncoding(sessionId: string, kind: PendingEditKind, id: string): boolean {
   return encodes.has(recordKey(sessionId, kind, id));
 }
 
@@ -765,9 +761,9 @@ function settleEncodedAttachments(
   const held = new Set(record.attachments.map((attachment) => attachment.id));
   // A placed image counts only while its token survives: the user may have
   // deleted it meanwhile. An unplaced file is new to the record.
-  const added = completed.filter((attachment) =>
-    !held.has(attachment.id) &&
-    (placeholders.length === 0 || tokens.has(attachment.id))
+  const added = completed.filter(
+    (attachment) =>
+      !held.has(attachment.id) && (placeholders.length === 0 || tokens.has(attachment.id)),
   );
   const failed = new Set(
     placeholders
@@ -780,6 +776,7 @@ function settleEncodedAttachments(
   if (added.length === 0 && text === record.text) return;
   const attachments = [...record.attachments, ...added];
   records.set(key, { ...record, text, attachments, updatedAt: Date.now() });
+  slots.change(record.sessionId, key);
   schedulePersist(key);
   // An editor reopened on this edit meanwhile adopts the bytes.
   for (const listener of restoreListeners.get(key) ?? []) listener({ text, attachments });
@@ -787,9 +784,7 @@ function settleEncodedAttachments(
 
 /** Called with a session whose edits finished every attachment encode or a
  * database restore, so deferred orphan recovery can run against the queue. */
-export function onPendingEditEncodesSettled(
-  listener: (sessionId: string) => void,
-): () => void {
+export function onPendingEditEncodesSettled(listener: (sessionId: string) => void): () => void {
   encodeListeners.add(listener);
   return () => {
     encodeListeners.delete(listener);

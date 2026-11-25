@@ -190,9 +190,12 @@ impl Hub {
                 if !changed {
                     return OwnerQueueMutation::AppliedSync(false);
                 }
-                s.queue = queue.clone();
+                s.queue = queue;
                 s.drafts = drafts.clone();
                 s.editing = editing;
+                // A withdrawn held row's command ends with this write.
+                self.settle_explicit_locked(session_id, s);
+                let queue = s.queue.clone();
                 let mut claims = self.inner.notice_claims.lock();
                 if let Some(deferred) = claims.in_flight_pending_commits.get_mut(session_id) {
                     deferred.dirty = true;
@@ -412,6 +415,7 @@ impl Hub {
                 op,
                 &preview.clear_ids,
             );
+            self.settle_explicit_locked(&preview.session_id, s);
             let queue = s.queue.clone();
             let drafts = s.drafts.clone();
             let mut claims = self.inner.notice_claims.lock();
