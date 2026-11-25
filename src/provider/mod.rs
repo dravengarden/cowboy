@@ -1009,6 +1009,20 @@ pub fn uses_yolo_session_mode(id: &str) -> bool {
     behavior(id).permission == cowboy_provider_sdk::PermissionBehavior::AcpSessionModeYoloV1
 }
 
+/// Whether a prompt error is a governed Provider proxy's structured terminal
+/// result: JSON-RPC data carrying a `cowboy` object (the Antigravity proxy's
+/// refusal, violation and unproven-outcome endings). A Stop that raced it must
+/// not erase it: the Controller derives the account's state from that error,
+/// and `Cancelled` raises nothing.
+#[must_use]
+pub fn governed_terminal_error(error: &agent_client_protocol::Error) -> bool {
+    error
+        .data
+        .as_ref()
+        .and_then(|data| data.get("cowboy"))
+        .is_some_and(serde_json::Value::is_object)
+}
+
 #[must_use]
 pub fn keeps_worker_alive_for_behavior(
     behavior: &cowboy_provider_sdk::ProviderBehaviorContract,
