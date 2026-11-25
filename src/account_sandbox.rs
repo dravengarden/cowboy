@@ -293,6 +293,12 @@ impl RelayQuiet {
         self.drain_state.borrow().generation
     }
 
+    /// Single atomic snapshot of `{ generation, draining }`.
+    #[must_use]
+    pub fn drain_state(&self) -> DrainState {
+        *self.drain_state.borrow()
+    }
+
     /// Subscribe to drain transitions and generation changes.
     #[must_use]
     pub fn subscribe_drain(&self) -> tokio::sync::watch::Receiver<DrainState> {

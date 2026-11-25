@@ -18,9 +18,9 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::account_sandbox::RelayQuiet;
 use crate::post_edit_inspect::{
-    POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION, PostEditInspectOutcome, PostEditInspectReply,
-    PostEditInspectRequest, PostEditScope, clamp_remaining_ms, valid_inspect_id,
-    valid_relative_posix_path, valid_sha256_hex,
+    MAX_POST_EDIT_REQUEST_BYTES, POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION,
+    PostEditInspectOutcome, PostEditInspectReply, PostEditInspectRequest, PostEditScope,
+    clamp_remaining_ms, valid_inspect_id, valid_relative_posix_path, valid_sha256_hex,
 };
 use crate::runtime_wire::Frame;
 
@@ -31,6 +31,7 @@ const MIN_UNIX_HEADROOM_BYTES: usize = 32_768;
 struct ActiveTurn {
     turn_id: String,
     nonce: String,
+    attempt_gen: u64,
 }
 
 struct BrokerLink {
@@ -43,6 +44,7 @@ struct PendingEntry {
     waiter: oneshot::Sender<PostEditInspectReply>,
     broker_connection_id: u64,
     turn_id: String,
+    attempt_gen: u64,
     unit_generation: u64,
     expires_at: Instant,
 }
@@ -110,12 +112,16 @@ impl PostEditBrokerSession {
         if let Some(execution) = &self.execution
             && execution.prepare_post_edit_send(&mut item, self.conn_id)
         {
-            if let Ok(encoded) = serde_json::to_vec(&item.frame)
-                && unix_socket_has_post_edit_headroom(writer, encoded.len() + 4)
-            {
-                crate::runtime_wire::write_frame(writer, &item.frame).await?;
-            } else {
-                execution.refuse_post_edit_local(&item.request_id, "capacity");
+            match serde_json::to_vec(&item.frame) {
+                Ok(encoded) if encoded.len() > MAX_POST_EDIT_REQUEST_BYTES => {
+                    execution.refuse_post_edit_local(&item.request_id, "invalid_request");
+                }
+                Ok(encoded) if unix_socket_has_post_edit_headroom(writer, encoded.len() + 4) => {
+                    crate::runtime_wire::write_frame(writer, &item.frame).await?;
+                }
+                _ => {
+                    execution.refuse_post_edit_local(&item.request_id, "capacity");
+                }
             }
         }
         Ok(())
@@ -126,6 +132,7 @@ pub struct QueuedPostEdit {
     pub request_id: String,
     pub broker_connection_id: u64,
     pub turn_id: String,
+    pub attempt_gen: u64,
     pub unit_generation: u64,
     pub expires_at: Instant,
     pub frame: Frame,
@@ -134,6 +141,7 @@ pub struct QueuedPostEdit {
 #[derive(Default)]
 pub(crate) struct State {
     next_conn_id: AtomicU64,
+    next_attempt_gen: AtomicU64,
     broker: Mutex<Option<BrokerLink>>,
     active_turn: Mutex<Option<ActiveTurn>>,
     pending: Mutex<HashMap<String, PendingEntry>>,
@@ -181,12 +189,13 @@ impl State {
     }
 
     pub(crate) fn set_active_turn(&self, turn: Option<(String, String)>) {
-        let next = turn.map(|(turn_id, nonce)| ActiveTurn { turn_id, nonce });
-        let current_id = next.as_ref().map(|t| t.turn_id.clone());
-        *self.active_turn.lock() = next;
-        self.pending
-            .lock()
-            .retain(|_, entry| current_id.as_deref() == Some(entry.turn_id.as_str()));
+        let attempt_gen = self.next_attempt_gen.fetch_add(1, Ordering::Relaxed) + 1;
+        *self.active_turn.lock() = turn.map(|(turn_id, nonce)| ActiveTurn {
+            turn_id,
+            nonce,
+            attempt_gen,
+        });
+        self.pending.lock().clear();
     }
 
     /// Re-verify every invariant immediately before writing byte 0 to the
@@ -198,18 +207,17 @@ impl State {
         current_conn_id: u64,
         relays: &RelayQuiet,
     ) -> bool {
+        let drain = relays.drain_state();
         if item.broker_connection_id != current_conn_id
-            || relays.draining()
-            || relays.drain_generation() != item.unit_generation
+            || drain.draining
+            || drain.generation != item.unit_generation
         {
             self.pending.lock().remove(&item.request_id);
             return false;
         }
-        let active_matches = self
-            .active_turn
-            .lock()
-            .as_ref()
-            .is_some_and(|turn| turn.turn_id == item.turn_id);
+        let active_matches = self.active_turn.lock().as_ref().is_some_and(|turn| {
+            turn.turn_id == item.turn_id && turn.attempt_gen == item.attempt_gen
+        });
         if !active_matches {
             self.pending.lock().remove(&item.request_id);
             return false;
@@ -275,13 +283,20 @@ impl State {
         {
             return;
         }
-        let active_turn_id = self.active_turn.lock().as_ref().map(|t| t.turn_id.clone());
+        let active = self
+            .active_turn
+            .lock()
+            .as_ref()
+            .map(|t| (t.turn_id.clone(), t.attempt_gen));
+        let drain = relays.drain_state();
         let mut pending = self.pending.lock();
         let valid = pending.get(&reply.request_id).is_some_and(|entry| {
             entry.broker_connection_id == current_conn_id
-                && active_turn_id.as_deref() == Some(entry.turn_id.as_str())
-                && !relays.draining()
-                && relays.drain_generation() == entry.unit_generation
+                && active.as_ref().is_some_and(|(id, attempt_gen)| {
+                    id == &entry.turn_id && *attempt_gen == entry.attempt_gen
+                })
+                && !drain.draining
+                && drain.generation == entry.unit_generation
                 && Instant::now() < entry.expires_at
         });
         if !valid {
@@ -306,7 +321,8 @@ impl State {
         if managed {
             return refused("restricted");
         }
-        if relays.draining() || relays.drain_generation() != unit_generation {
+        let drain = relays.drain_state();
+        if drain.draining || drain.generation != unit_generation {
             return refused("unavailable");
         }
         let Some(path) = params.get("path").and_then(Value::as_str) else {
@@ -333,12 +349,12 @@ impl State {
         let Some(remaining_ms) = clamp_remaining_ms(timeout_ms) else {
             return refused("timeout");
         };
-        let Some(turn_id) = self
+        let Some((turn_id, attempt_gen)) = self
             .active_turn
             .lock()
             .as_ref()
             .filter(|turn| constant_time_eq(turn.nonce.as_bytes(), turn_nonce.as_bytes()))
-            .map(|turn| turn.turn_id.clone())
+            .map(|turn| (turn.turn_id.clone(), turn.attempt_gen))
         else {
             return refused("unavailable");
         };
@@ -374,6 +390,7 @@ impl State {
                 waiter: waiter_tx,
                 broker_connection_id: conn_id,
                 turn_id: turn_id.clone(),
+                attempt_gen,
                 unit_generation,
                 expires_at,
             },
@@ -386,6 +403,7 @@ impl State {
             request_id,
             broker_connection_id: conn_id,
             turn_id,
+            attempt_gen,
             unit_generation,
             expires_at,
             frame: Frame::PostEditInspectRequest {

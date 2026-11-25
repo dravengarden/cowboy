@@ -15,11 +15,12 @@
 //! diagnostic.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::LazyLock;
+use std::sync::{Arc, LazyLock, Weak};
 use std::time::Instant;
 
 use parking_lot::Mutex;
 use serde_json::{Value, json};
+use tokio::sync::Mutex as AsyncMutex;
 
 use super::super::super::{BufferSnapshot, CodeDiagnostic, ServerAnalysis};
 use crate::core::SessionCodeScope;
@@ -116,6 +117,26 @@ struct Record {
 static RECORDS: LazyLock<Mutex<HashMap<(SessionCodeScope, String), Record>>> =
     LazyLock::new(Mutex::default);
 
+type FileLockMap = HashMap<(SessionCodeScope, String), Weak<AsyncMutex<()>>>;
+static FILE_LOCKS: LazyLock<Mutex<FileLockMap>> = LazyLock::new(Mutex::default);
+
+/// Shared per-`(SessionCodeScope, path)` lock serializing observation through
+/// authorized baseline commit across public `code.diagnostics`, public
+/// `code.post_edit`, and private R4 `/api/machine/post-edit-inspect`.
+pub(super) fn file_lock(scope: &SessionCodeScope, path: &str) -> Arc<AsyncMutex<()>> {
+    let mut map = FILE_LOCKS.lock();
+    if map.len() > 512 {
+        map.retain(|_, weak| weak.strong_count() > 0);
+    }
+    let key = (scope.clone(), path.to_owned());
+    if let Some(existing) = map.get(&key).and_then(Weak::upgrade) {
+        return existing;
+    }
+    let created = Arc::new(AsyncMutex::new(()));
+    map.insert(key, Arc::downgrade(&created));
+    created
+}
+
 /// A pending capture, recorded only after the read passed its trust fence.
 pub(super) struct Pending {
     capture: Capture,
@@ -190,58 +211,59 @@ pub(super) fn record(
     let key = (scope.clone(), path.to_owned());
     enum Outcome {
         Compare(Option<Capture>),
-        Stale,
+        BufferReplaced,
+        OutOfOrder,
+        Unorderable,
     }
     let outcome = match records.get_mut(&key) {
         Some(record) => {
-            // R2-M10: Controller-local monotonic connection epoch boundary.
+            // R2-M10 / M-Ctrl-8: Connection-epoch transitions clear baseline with buffer_replaced.
             if capture.conn_epoch < record.latest.conn_epoch {
-                Outcome::Stale
+                Outcome::OutOfOrder
             } else if capture.conn_epoch > record.latest.conn_epoch {
                 record.baseline = None;
                 record.latest = capture.clone();
                 record.touched = Instant::now();
-                Outcome::Compare(None)
+                Outcome::BufferReplaced
             } else {
                 let same_buffer = record.latest.stream.0 == capture.stream.0
                     && record.latest.stream.1 == capture.stream.1;
                 if same_buffer && capture.buffer_epoch_num < record.latest.buffer_epoch_num {
-                    // R2-M11: Numeric buffer_epoch regression is stale.
-                    Outcome::Stale
-                } else if same_buffer && capture.buffer_epoch_num == record.latest.buffer_epoch_num
+                    Outcome::OutOfOrder
+                } else if !same_buffer || capture.buffer_epoch_num > record.latest.buffer_epoch_num
                 {
+                    // Any new buffer lifetime clears the prior baseline with buffer_replaced.
+                    record.baseline = None;
+                    record.latest = capture.clone();
+                    record.touched = Instant::now();
+                    Outcome::BufferReplaced
+                } else {
                     let same_text = record.latest.sha256 == capture.sha256
                         && record.latest.utf8_bytes == capture.utf8_bytes;
-                    let has_clocks =
-                        !record.latest.version.is_empty() || !capture.version.is_empty();
                     if same_text {
                         // M18: Equal or strictly newer version on identical text refreshes latest.
-                        if !has_clocks
-                            || capture.version == record.latest.version
+                        if capture.version == record.latest.version
                             || version_dominates(&capture.version, &record.latest.version)
                         {
                             record.latest = capture.clone();
                             record.touched = Instant::now();
                             Outcome::Compare(record.baseline.clone())
+                        } else if version_dominates(&record.latest.version, &capture.version) {
+                            Outcome::OutOfOrder
                         } else {
-                            Outcome::Stale
+                            Outcome::Unorderable
                         }
-                    } else if !has_clocks
-                        || version_dominates(&capture.version, &record.latest.version)
-                    {
+                    } else if version_dominates(&capture.version, &record.latest.version) {
+                        // M-Ctrl-8: Changed text ALWAYS requires strict vector-clock dominance.
                         record.baseline =
                             Some(std::mem::replace(&mut record.latest, capture.clone()));
                         record.touched = Instant::now();
                         Outcome::Compare(record.baseline.clone())
+                    } else if version_dominates(&record.latest.version, &capture.version) {
+                        Outcome::OutOfOrder
                     } else {
-                        // R2-M11: Changed text without strict vector-clock dominance is stale.
-                        Outcome::Stale
+                        Outcome::Unorderable
                     }
-                } else {
-                    // Different (instance, buffer) or strictly greater numeric buffer_epoch.
-                    record.baseline = Some(std::mem::replace(&mut record.latest, capture.clone()));
-                    record.touched = Instant::now();
-                    Outcome::Compare(record.baseline.clone())
                 }
             }
         }
@@ -260,7 +282,9 @@ pub(super) fn record(
     };
     drop(records);
     match outcome {
-        Outcome::Stale => unknown("stale_observation"),
+        Outcome::OutOfOrder => unknown("out_of_order_observation"),
+        Outcome::Unorderable => unknown("unorderable_observation"),
+        Outcome::BufferReplaced => unknown("buffer_replaced"),
         Outcome::Compare(Some(baseline)) => compare(&baseline, &capture, diagnostics),
         Outcome::Compare(None) => unknown("no_baseline"),
     }

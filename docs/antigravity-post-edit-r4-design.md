@@ -909,3 +909,51 @@ against a Hawk worktree:
      nonce.
 3. Verify subagent edits and cancelled-turn edits deliver zero diagnostics and
    zero `UncertainEffect`.
+
+## 9. Rev 10 Code-Review Hardening Summary
+
+Round 1 code review (`call-ec15ade1b49e1b2ce442a9ed`, Codex Astra Max) identified
+10 High and 19 Medium findings, all resolved prior to fix-confirmation review:
+
+- **Wire & Broker (`cowboy-wire`, `cowboy-machine`)**: Strict
+  `#[serde(deny_unknown_fields)]` envelopes and raw encoded byte caps (`8 KiB`
+  request / `16 KiB` reply) on both read and write; pure leaf `PostEditScope`
+  in `cowboy_wire::post_edit_inspect`; structural validation before
+  `clamp_remaining_ms` so `< 250 ms` returns `"timeout"` and `> 6000 ms` clamps;
+  deadline captured before spawn and serialized immediately before HTTP send;
+  superseded worker pending entries invalidated on re-registration and replies
+  verified against live `connection_id`, `epoch`, and `negotiated_protocol >= 9`;
+  controller primary + diagnostic lease installed atomically; wrong-direction
+  and primary-WS local-only frames dropped.
+- **Worker (`src/worker_execution`, `src/account_sandbox.rs`)**: Single-mutex
+  `AdmissionState` unifying pre-auth eviction, mutation promotion, and
+  diagnostics admission (strict 3-slot cap while mutation is live, 4th slot
+  reserved strictly when vacant); 4 KiB / 1 s handshake cap on both `/` and
+  `/diagnostics`; atomic `RelayQuiet::drain_state` racing all diagnostics steps
+  and peer-close wakeup releasing `WaiterGuard`; monotonic `attempt_gen`
+  invalidating prior-attempt waiters on turn nonce rotation; narrowly scoped
+  non-fencing `cowboy/cleanupStagedPayload` for verified session-written staged
+  payload URLs.
+- **Controller (`components/server-agent-api/.../code_reads/`)**:
+  Header-first authentication before `to_bytes` body read; `CallerDisconnectGuard`
+  aborting sync fence, auth, and backoff sleeps while holding `_target_permit`
+  until in-flight I/O settles; deadline-bounded `read_parent` and
+  `superagent::restricted`; per-path `baselines::file_lock` spanning observation
+  through authorized `baselines::record` in both `diagnostics.rs` and
+  `post_edit_inspect.rs`; strict `version_dominates` clock ordering and
+  epoch/lifetime-change baseline invalidation; `returned_path == path`,
+  `document_current`, and `ordering_admissible` gating in `project_for_inspect`;
+  `current_errors` and severity-escalation-only delivery; no `touch_code_observation`
+  or redundant `acquire` on matching open buffers; refresh sleeps before
+  re-authorizing; refusal canary telemetry logged with `canary_inspect_id`.
+- **Antigravity ACP Proxy (`components/provider-runtime/packages/antigravity-acp`)**:
+  Pre-lock `queuedObserved` and `queuedInvalidationGen` re-checked in every
+  `beforeSend`; `fileObservation` (`gen`, `rawDigest`) verified in `isFresh()`;
+  `PreDispatchRefusal` limiting `cowboy/cleanupStagedPayload` to confirmed
+  pre-dispatch failures; `AbortSignal.any` tying inspect calls to `turn.abort`;
+  `<system-reminder>` untrusted wrapper with `&`/`<`/`>`/`"` escaping, control
+  and bidi stripping, count-only summary rendering, and 16 KiB post-escape UTF-8
+  cap; composite dedupe key without pending eviction and synchronous
+  `commitReply` latch; full live-entry collision tainting in `PlanGate`; clean
+  diff attachment gated on uniquely bound non-error completion; relay stdout
+  canary hash computed from actual serialized output bytes.

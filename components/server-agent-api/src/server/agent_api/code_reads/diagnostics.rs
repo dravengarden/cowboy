@@ -229,12 +229,19 @@ pub(super) fn build_observed_file(
 ) -> ObservedFile {
     match reply {
         Ok(ZedAdapterResponse::BufferLanguage {
+            path: returned_path,
             diagnostics,
             analysis,
             buffer_snapshot,
             source_state,
             ..
         }) => {
+            if returned_path != path {
+                return ObservedFile {
+                    file: json!({"path":path,"state":"unavailable"}),
+                    pending: None,
+                };
+            }
             let analysis = analysis.filter(|servers| servers.len() <= MAX_SERVERS);
             let buffer_snapshot = buffer_snapshot.filter(|value| value.bounded());
             // A conflicting identity invalidates the entire observation,
@@ -327,10 +334,13 @@ async fn read_with_acquisition(
         .observe_language_server_trust(observed.session().session_id())
         .filter(|trust| trust.scope() == observed.session());
     let mut files = Vec::with_capacity(paths.len());
-    // Baselines are captured only from explicit reads, after the trust fence.
-    let mut captures = Vec::new();
     let conn_epoch = observed.conn_epoch();
     for path in paths {
+        // Hold the shared per-(SessionCodeScope, path) lock from observation
+        // through authorized baseline commit so delayed public reads cannot
+        // overwrite newer R4 captures (H-Ctrl-4).
+        let lock = super::baselines::file_lock(observed.session(), &path);
+        let _file_guard = lock.lock().await;
         if trust
             .as_ref()
             .is_none_or(|trust| !trust.current(&state.hub))
@@ -352,24 +362,22 @@ async fn read_with_acquisition(
                 false,
             )
         };
-        let built = build_observed_file(&path, reply, acquired, conn_epoch, acquire);
-        if let Some((pending, diagnostics)) = built.pending {
-            captures.push((files.len(), path.clone(), pending, diagnostics));
+        let mut built = build_observed_file(&path, reply, acquired, conn_epoch, acquire);
+        if trust
+            .as_ref()
+            .is_none_or(|trust| !trust.current(&state.hub))
+        {
+            files.push(json!({"path":path,"state":"restricted"}));
+            continue;
+        }
+        if let Some((pending, diagnostics)) = built.pending.take() {
+            built.file["comparison"] =
+                super::baselines::record(observed.session(), &path, pending, &diagnostics);
         }
         files.push(built.file);
     }
-    // Revocation during an asynchronous query discards its observation even
-    // when the owner re-enabled language servers before the reply arrived.
+    // Revocation during any later path query discards all returned files.
     fence_files(&state.hub, trust.as_ref(), &mut files);
-    if trust
-        .as_ref()
-        .is_some_and(|trust| trust.current(&state.hub))
-    {
-        for (index, path, pending, diagnostics) in captures {
-            files[index]["comparison"] =
-                super::baselines::record(observed.session(), &path, pending, &diagnostics);
-        }
-    }
     json!({
         "coverage": "open_buffers",
         "files": files,

@@ -1,33 +1,32 @@
 //! Controller handler for `POST /api/machine/post-edit-inspect` (Decision 2A / R4).
 //!
 //! Authenticates the calling runtime Machine via its per-primary-connection
-//! secret token (`x-cowboy-machine-post-edit-token`), enforces per-target
-//! bounded concurrency (`POST_EDIT_TARGET_SLOTS = 4` held through target
-//! settlement, R3-H5), serializes per-`(SessionCodeScope, path)` observation +
-//! baseline commit (R3-H2), rechecks async owner/superagent authorization and
-//! synchronous live worker/turn/trust/scope/deadline fences at every step
-//! (R3-H1, R3-M14), and commits the baseline ONCE synchronously under the
-//! per-file lock.
+//! secret token (`x-cowboy-machine-post-edit-token`) BEFORE reading body bytes,
+//! enforces per-target bounded concurrency (`POST_EDIT_TARGET_CONCURRENCY = 4`
+//! held through target settlement, R3-H5), shares per-`(SessionCodeScope, path)`
+//! locking with public `code.diagnostics`/`code.post_edit` (H-Ctrl-4), rechecks
+//! deadline-bounded async owner/superagent authorization and synchronous live
+//! worker/turn/trust/scope/caller/deadline fences immediately before every target
+//! read and before the sole synchronous baseline commit.
 
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock, Weak};
+use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 use axum::{
-    body::Bytes,
-    extract::State,
-    http::{HeaderMap, StatusCode},
+    extract::{Request, State},
+    http::StatusCode,
     response::{IntoResponse, Response},
 };
 use parking_lot::Mutex;
-use tokio::sync::{Mutex as AsyncMutex, Semaphore};
+use tokio::sync::{Semaphore, watch};
 
 use super::super::super::code_reads::{language, session};
 use super::super::super::{
     AnalysisState, AppState, CodeReadScope, SourceState, ZedAdapterResponse, agent_api_bridge,
-    execution, machine_post_edit, managed_calls, superagent,
+    execution, machine_post_edit, superagent,
 };
-use crate::core::{LanguageServerTrust, SessionCodeScope};
+use crate::core::LanguageServerTrust;
 use crate::machine_control::{ConnectionToken, SessionReadScope};
 use crate::post_edit_inspect::{
     MAX_POST_EDIT_REQUEST_BYTES, MIN_POST_EDIT_COLD_START_MS, POST_EDIT_INSPECT_TOKEN_HEADER,
@@ -39,8 +38,6 @@ const POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 static TARGET_SLOTS: LazyLock<Mutex<HashMap<String, Arc<Semaphore>>>> =
     LazyLock::new(Mutex::default);
-type FileLockMap = HashMap<(SessionCodeScope, String), Weak<AsyncMutex<()>>>;
-static FILE_LOCKS: LazyLock<Mutex<FileLockMap>> = LazyLock::new(Mutex::default);
 
 fn target_semaphore(machine_id: &str) -> Arc<Semaphore> {
     let mut map = TARGET_SLOTS.lock();
@@ -50,18 +47,13 @@ fn target_semaphore(machine_id: &str) -> Arc<Semaphore> {
     )
 }
 
-fn file_lock(scope: &SessionCodeScope, path: &str) -> Arc<AsyncMutex<()>> {
-    let mut map = FILE_LOCKS.lock();
-    if map.len() > 512 {
-        map.retain(|_, weak| weak.strong_count() > 0);
+/// Signals caller HTTP disconnection when dropped (e.g. client timeout or close).
+struct CallerDisconnectGuard(watch::Sender<bool>);
+
+impl Drop for CallerDisconnectGuard {
+    fn drop(&mut self) {
+        let _ = self.0.send(true);
     }
-    let key = (scope.clone(), path.to_owned());
-    if let Some(existing) = map.get(&key).and_then(Weak::upgrade) {
-        return existing;
-    }
-    let created = Arc::new(AsyncMutex::new(()));
-    map.insert(key, Arc::downgrade(&created));
-    created
 }
 
 fn reply_response(reply: PostEditInspectReply) -> Response {
@@ -76,7 +68,22 @@ fn reply_response(reply: PostEditInspectReply) -> Response {
     }
 }
 
+fn log_canary_refusal(request: &PostEditInspectRequest, reason: &str) {
+    if let Some(canary_id) = &request.canary_inspect_id {
+        tracing::info!(
+            event_name = "cowboy.code.post_edit_inspect",
+            session_id = %request.session_id,
+            canary_inspect_id = %canary_id,
+            path = %request.path,
+            outcome = "refused",
+            reason = %reason,
+            "canary post-edit inspection refused"
+        );
+    }
+}
+
 fn refused_reply(request: &PostEditInspectRequest, reason: &'static str) -> PostEditInspectReply {
+    log_canary_refusal(request, reason);
     PostEditInspectReply::refused(
         request.session_id.clone(),
         request.worker_epoch.clone(),
@@ -91,8 +98,9 @@ struct AuthorizedContext {
     trust: LanguageServerTrust,
 }
 
-/// Synchronous zero-await check verifying runtime connection, worker/turn/scope,
-/// language-server trust, target SessionReadScope, and deadline.
+/// Synchronous zero-await check verifying caller liveness, runtime connection,
+/// worker/turn/scope, language-server trust, target SessionReadScope, and deadline.
+#[allow(clippy::too_many_arguments)]
 fn verify_sync_fence(
     state: &AppState,
     runtime_connection: &ConnectionToken,
@@ -100,8 +108,12 @@ fn verify_sync_fence(
     request: &PostEditInspectRequest,
     observed: &SessionReadScope,
     trust: &LanguageServerTrust,
+    caller_gone: &watch::Receiver<bool>,
     deadline: Instant,
 ) -> Result<(), &'static str> {
+    if *caller_gone.borrow() {
+        return Err("unavailable");
+    }
     if Instant::now() >= deadline {
         return Err("timeout");
     }
@@ -162,8 +174,9 @@ fn verify_sync_fence(
     Ok(())
 }
 
-/// Async owner + superagent authorization followed immediately by the zero-await
-/// synchronous fence (R3-H1).
+/// Deadline-bounded async owner + superagent authorization followed immediately
+/// by the zero-await synchronous fence (R3-H1, M-Ctrl-6).
+#[allow(clippy::too_many_arguments)]
 async fn authorize_step(
     state: &AppState,
     runtime_connection: &ConnectionToken,
@@ -171,21 +184,35 @@ async fn authorize_step(
     request: &PostEditInspectRequest,
     observed: &SessionReadScope,
     trust: &LanguageServerTrust,
+    caller_gone: &watch::Receiver<bool>,
     deadline: Instant,
 ) -> Result<(), &'static str> {
+    if *caller_gone.borrow() {
+        return Err("unavailable");
+    }
+    if Instant::now() >= deadline {
+        return Err("timeout");
+    }
     let Some(info) = state.hub.session_info(&request.session_id) else {
         return Err("permission_denied");
     };
     if info.meta.system || info.meta.closing || state.hub.is_managed_child(&request.session_id) {
         return Err("restricted");
     }
-    agent_api_bridge::read_parent(&state.hub, state.store.as_ref(), &info.meta)
-        .await
-        .map_err(|_| "permission_denied")?;
-    if superagent::restricted(state, &info.meta)
-        .await
-        .map_err(|_| "unavailable")?
-    {
+    let deadline_at = tokio::time::Instant::from_std(deadline);
+    tokio::time::timeout_at(
+        deadline_at,
+        agent_api_bridge::read_parent(&state.hub, state.store.as_ref(), &info.meta),
+    )
+    .await
+    .map_err(|_| "timeout")?
+    .map_err(|_| "permission_denied")?;
+    let is_restricted =
+        tokio::time::timeout_at(deadline_at, superagent::restricted(state, &info.meta))
+            .await
+            .map_err(|_| "timeout")?
+            .map_err(|_| "unavailable")?;
+    if is_restricted {
         return Err("superagent_scope_denied");
     }
     verify_sync_fence(
@@ -195,6 +222,7 @@ async fn authorize_step(
         request,
         observed,
         trust,
+        caller_gone,
         deadline,
     )
 }
@@ -204,6 +232,7 @@ async fn resolve_and_authorize_initial(
     runtime_connection: &ConnectionToken,
     runtime_machine_id: &str,
     request: &PostEditInspectRequest,
+    caller_gone: &watch::Receiver<bool>,
     deadline: Instant,
 ) -> Result<AuthorizedContext, &'static str> {
     let Some(scope) = session::resolve(
@@ -231,6 +260,7 @@ async fn resolve_and_authorize_initial(
         request,
         &observed,
         &trust,
+        caller_gone,
         deadline,
     )
     .await?;
@@ -277,12 +307,27 @@ fn is_analysed(reply: &anyhow::Result<ZedAdapterResponse>) -> bool {
     )
 }
 
+async fn sleep_fenced(
+    duration: Duration,
+    caller_gone: &mut watch::Receiver<bool>,
+) -> Result<(), &'static str> {
+    if *caller_gone.borrow() {
+        return Err("unavailable");
+    }
+    tokio::select! {
+        biased;
+        _ = caller_gone.wait_for(|gone| *gone) => Err("unavailable"),
+        () = tokio::time::sleep(duration) => Ok(()),
+    }
+}
+
 pub async fn api_machine_post_edit_inspect(
     State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    body: Bytes,
+    request: Request,
 ) -> Response {
-    let Some(target) = headers
+    // M-Ctrl-7: Authenticate from headers BEFORE buffering any request body bytes.
+    let Some(target) = request
+        .headers()
         .get(POST_EDIT_INSPECT_TOKEN_HEADER)
         .and_then(|value| value.to_str().ok())
         .and_then(machine_post_edit::lookup)
@@ -292,25 +337,29 @@ pub async fn api_machine_post_edit_inspect(
     if !state.machine_control.is_current(&target.connection) {
         return StatusCode::FORBIDDEN.into_response();
     }
-    if body.len() > MAX_POST_EDIT_REQUEST_BYTES {
+    let Ok(body) = axum::body::to_bytes(request.into_body(), MAX_POST_EDIT_REQUEST_BYTES).await
+    else {
         return StatusCode::PAYLOAD_TOO_LARGE.into_response();
-    }
+    };
     let Ok(request) = serde_json::from_slice::<PostEditInspectRequest>(&body) else {
         return StatusCode::BAD_REQUEST.into_response();
     };
-    if !request.validate() {
+    if !request.validate_structure() {
         return reply_response(refused_reply(&request, "invalid_request"));
     }
     let Some(clamped_ms) = clamp_remaining_ms(request.remaining_ms) else {
         return reply_response(refused_reply(&request, "timeout"));
     };
     let deadline = Instant::now() + Duration::from_millis(clamped_ms);
+    let (caller_tx, caller_rx) = watch::channel(false);
+    let _caller_guard = CallerDisconnectGuard(caller_tx);
 
     let ctx = match resolve_and_authorize_initial(
         &state,
         &target.connection,
         &target.machine_id,
         &request,
+        &caller_rx,
         deadline,
     )
     .await
@@ -339,7 +388,7 @@ pub async fn api_machine_post_edit_inspect(
     let task_req = request.clone();
     let work = tokio::spawn(async move {
         let _target_permit = target_permit;
-        run_inspect_fenced(task_state, task_target, task_req, ctx, deadline).await
+        run_inspect_fenced(task_state, task_target, task_req, ctx, caller_rx, deadline).await
     });
 
     match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), work).await {
@@ -354,9 +403,10 @@ async fn run_inspect_fenced(
     target: machine_post_edit::PostEditTarget,
     request: PostEditInspectRequest,
     ctx: AuthorizedContext,
+    mut caller_gone: watch::Receiver<bool>,
     deadline: Instant,
 ) -> PostEditInspectReply {
-    let lock = file_lock(ctx.observed.session(), &request.path);
+    let lock = super::baselines::file_lock(ctx.observed.session(), &request.path);
     let _file_guard = match tokio::time::timeout_at(
         tokio::time::Instant::from_std(deadline),
         lock.lock(),
@@ -367,8 +417,9 @@ async fn run_inspect_fenced(
         Err(_) => return refused_reply(&request, "timeout"),
     };
 
-    // R3-H1: Recheck async + sync authorization AFTER target-permit and
-    // per-file-lock waits before touching code observation or target I/O.
+    // R3-H1 / H-Ctrl-2: Recheck async + sync authorization AFTER target-permit and
+    // per-file-lock waits, then dispatch the first scoped Zed read immediately
+    // with ZERO intervening awaits (no touch_code_observation).
     if let Err(reason) = authorize_step(
         &state,
         &target.connection,
@@ -376,14 +427,13 @@ async fn run_inspect_fenced(
         &request,
         &ctx.observed,
         &ctx.trust,
+        &caller_gone,
         deadline,
     )
     .await
     {
         return refused_reply(&request, reason);
     }
-
-    managed_calls::touch_code_observation(&state, &ctx.observed).await;
 
     let (reply, acquired) = match observe_target_file(
         &state,
@@ -392,6 +442,7 @@ async fn run_inspect_fenced(
         &request,
         &ctx.observed,
         &ctx.trust,
+        &mut caller_gone,
         deadline,
     )
     .await
@@ -400,7 +451,6 @@ async fn run_inspect_fenced(
         Err(reason) => return refused_reply(&request, reason),
     };
 
-    // Build observation WITHOUT mutating global baselines yet (R3-H2).
     let mut observed_file = super::diagnostics::build_observed_file(
         &request.path,
         reply,
@@ -409,8 +459,8 @@ async fn run_inspect_fenced(
         true,
     );
 
-    // Final fence (R3-H1 + R3-H2): async auth first, then zero-await sync fence
-    // immediately before the sole synchronous baseline commit while holding `_file_guard`.
+    // Final async + zero-await sync fence immediately before the sole baseline
+    // commit under the per-(SessionCodeScope, path) lock (R3-H1, R3-H2, M-Ctrl-5).
     if let Err(reason) = authorize_step(
         &state,
         &target.connection,
@@ -418,6 +468,7 @@ async fn run_inspect_fenced(
         &request,
         &ctx.observed,
         &ctx.trust,
+        &caller_gone,
         deadline,
     )
     .await
@@ -430,14 +481,19 @@ async fn run_inspect_fenced(
             super::baselines::record(ctx.observed.session(), &request.path, pending, &diagnostics);
     }
 
-    let (payload, matches_expected) =
-        super::post_edit::project_for_inspect(&observed_file.file, &request.expected_lf_sha256);
+    let (payload, matches_expected) = super::post_edit::project_for_inspect(
+        &observed_file.file,
+        &request.path,
+        &request.expected_lf_sha256,
+    );
 
-    if let Some(canary_id) = request.canary_inspect_id.as_deref() {
+    if let Some(canary_id) = &request.canary_inspect_id {
         tracing::info!(
-            event_name = "cowboy.post_edit.canary_inspected",
+            event_name = "cowboy.code.post_edit_inspect",
+            session_id = %request.session_id,
             canary_inspect_id = %canary_id,
-            session = %request.session_id,
+            path = %request.path,
+            outcome = "projected",
             deliver = payload["deliver"].as_bool().unwrap_or(false),
             matches_expected,
             state = observed_file.file["state"].as_str().unwrap_or("unknown"),
@@ -457,6 +513,7 @@ async fn run_inspect_fenced(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn observe_target_file(
     state: &AppState,
     runtime_connection: &ConnectionToken,
@@ -464,9 +521,66 @@ async fn observe_target_file(
     request: &PostEditInspectRequest,
     observed: &SessionReadScope,
     trust: &LanguageServerTrust,
+    caller_gone: &mut watch::Receiver<bool>,
     deadline: Instant,
 ) -> Result<(anyhow::Result<ZedAdapterResponse>, bool), &'static str> {
     let first = language::observe_open_buffer(&state.code, observed, &request.path).await;
+    let not_open = matches!(&first, Err(error) if error.to_string().contains("not open"));
+    if !not_open {
+        // M-Ctrl-10: An already-open buffer that is NOT Changed needs no acquisition lease.
+        if !is_changed(&first) {
+            return Ok((first, false));
+        }
+        authorize_step(
+            state,
+            runtime_connection,
+            runtime_machine_id,
+            request,
+            observed,
+            trust,
+            caller_gone,
+            deadline,
+        )
+        .await?;
+        if remaining_ms_until(deadline) < MIN_POST_EDIT_COLD_START_MS {
+            return Ok((first, false));
+        }
+        if super::acquire::acquire_on_scope(state, observed, &request.path, trust)
+            .await
+            .is_err()
+        {
+            return Ok((first, false));
+        }
+        authorize_step(
+            state,
+            runtime_connection,
+            runtime_machine_id,
+            request,
+            observed,
+            trust,
+            caller_gone,
+            deadline,
+        )
+        .await?;
+        if remaining_ms_until(deadline) < MIN_POST_EDIT_COLD_START_MS {
+            return Ok((first, false));
+        }
+        let refreshed = refresh_with_fence(
+            state,
+            runtime_connection,
+            runtime_machine_id,
+            request,
+            observed,
+            trust,
+            first,
+            caller_gone,
+            deadline,
+        )
+        .await?;
+        return Ok((refreshed, false));
+    }
+
+    // Cold acquire path: authorize and check >= 500 ms remaining AFTER async auth (R3-M14).
     authorize_step(
         state,
         runtime_connection,
@@ -474,49 +588,10 @@ async fn observe_target_file(
         request,
         observed,
         trust,
+        caller_gone,
         deadline,
     )
     .await?;
-
-    let not_open = matches!(&first, Err(error) if error.to_string().contains("not open"));
-    if !not_open {
-        if first.is_ok() {
-            // R3-M14: Check remaining >= 500 ms AFTER async auth before acquire/refresh.
-            if remaining_ms_until(deadline) >= MIN_POST_EDIT_COLD_START_MS {
-                let held =
-                    super::acquire::acquire_on_scope(state, observed, &request.path, trust).await;
-                if held.is_ok() && is_changed(&first) {
-                    authorize_step(
-                        state,
-                        runtime_connection,
-                        runtime_machine_id,
-                        request,
-                        observed,
-                        trust,
-                        deadline,
-                    )
-                    .await?;
-                    if remaining_ms_until(deadline) >= MIN_POST_EDIT_COLD_START_MS {
-                        let refreshed = refresh_with_fence(
-                            state,
-                            runtime_connection,
-                            runtime_machine_id,
-                            request,
-                            observed,
-                            trust,
-                            first,
-                            deadline,
-                        )
-                        .await?;
-                        return Ok((refreshed, false));
-                    }
-                }
-            }
-        }
-        return Ok((first, false));
-    }
-
-    // Cold acquire path: require >= 500 ms remaining AFTER async auth (R3-M14).
     if remaining_ms_until(deadline) < MIN_POST_EDIT_COLD_START_MS {
         return Err("timeout");
     }
@@ -538,6 +613,7 @@ async fn observe_target_file(
             request,
             observed,
             trust,
+            caller_gone,
             deadline,
         )
         .await?;
@@ -549,7 +625,7 @@ async fn observe_target_file(
         if sleep_for.is_zero() {
             return Ok((reply, true));
         }
-        tokio::time::sleep(sleep_for).await;
+        sleep_fenced(sleep_for, caller_gone).await?;
     }
 }
 
@@ -562,6 +638,7 @@ async fn refresh_with_fence(
     observed: &SessionReadScope,
     trust: &LanguageServerTrust,
     original: anyhow::Result<ZedAdapterResponse>,
+    caller_gone: &mut watch::Receiver<bool>,
     deadline: Instant,
 ) -> Result<anyhow::Result<ZedAdapterResponse>, &'static str> {
     let query = language::Query::RefreshedLanguage {
@@ -580,16 +657,6 @@ async fn refresh_with_fence(
     }
     let mut latest = reply;
     loop {
-        authorize_step(
-            state,
-            runtime_connection,
-            runtime_machine_id,
-            request,
-            observed,
-            trust,
-            deadline,
-        )
-        .await?;
         if is_settled(&latest) || Instant::now() >= deadline {
             return Ok(latest);
         }
@@ -597,7 +664,20 @@ async fn refresh_with_fence(
         if sleep_for.is_zero() {
             return Ok(latest);
         }
-        tokio::time::sleep(sleep_for).await;
+        // H-Ctrl-3: Sleep FIRST (fenced on caller liveness), THEN run authorize_step
+        // immediately before issuing the next observe_open_buffer read.
+        sleep_fenced(sleep_for, caller_gone).await?;
+        authorize_step(
+            state,
+            runtime_connection,
+            runtime_machine_id,
+            request,
+            observed,
+            trust,
+            caller_gone,
+            deadline,
+        )
+        .await?;
         latest = language::observe_open_buffer(&state.code, observed, &request.path).await;
     }
 }
@@ -647,7 +727,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn target_slots_cap_concurrency_at_four_and_file_locks_serialize_same_path() {
+    async fn target_slots_cap_concurrency_at_four_and_shared_file_locks_serialize() {
         let machine = format!("target-{}", uuid::Uuid::new_v4().simple());
         let sem = target_semaphore(&machine);
         let mut permits = Vec::new();
@@ -668,13 +748,12 @@ mod tests {
             false,
         );
         let scope = hub.session_code_scope("lock-sess").unwrap();
-        let lock_a1 = file_lock(&scope, "src/lib.rs");
-        let lock_a2 = file_lock(&scope, "src/lib.rs");
-        let lock_b = file_lock(&scope, "src/other.rs");
+        let lock_a1 = super::super::baselines::file_lock(&scope, "src/lib.rs");
+        let lock_a2 = super::super::baselines::file_lock(&scope, "src/lib.rs");
+        let lock_b = super::super::baselines::file_lock(&scope, "src/main.rs");
         assert!(Arc::ptr_eq(&lock_a1, &lock_a2));
         assert!(!Arc::ptr_eq(&lock_a1, &lock_b));
-
-        let resp = reply_response(refused_reply(&sample_req(), "restricted"));
-        assert_eq!(resp.status(), StatusCode::OK);
+        let req = sample_req();
+        assert!(req.validate());
     }
 }

@@ -173,12 +173,36 @@ pub(super) fn attach_writes(
 ///   `document_current` (never `stale_observation`).
 /// - Strict 12 KiB serialized payload cap via tail-trimming, recomputing
 ///   `deliver` AFTER trimming (`R2-M12`).
-pub(super) fn project_for_inspect(file: &Value, expected_lf_sha256: &str) -> (Value, bool) {
+pub(super) fn project_for_inspect(
+    file: &Value,
+    expected_path: &str,
+    expected_lf_sha256: &str,
+) -> (Value, bool) {
+    let path_ok = file["path"].as_str() == Some(expected_path);
+    let is_current = file["state"].as_str() == Some("document_current");
+    let comparison = &file["comparison"];
+    let reason = comparison["reason"].as_str();
+    let ordering_admissible = !matches!(
+        reason,
+        Some("out_of_order_observation" | "unorderable_observation" | "stale_observation")
+    );
     let analyzed_sha = file
         .pointer("/bufferSnapshot/content/sha256")
         .and_then(Value::as_str);
-    let matches_expected = analyzed_sha == Some(expected_lf_sha256);
-    let is_current = file["state"].as_str() == Some("document_current");
+    let matches_expected =
+        path_ok && is_current && ordering_admissible && analyzed_sha == Some(expected_lf_sha256);
+    if !matches_expected {
+        // H-Ctrl-1: Never disclose diagnostics, counts, or file metadata on mismatch or stale/unorderable observations.
+        return (
+            json!({
+                "deliver": false,
+                "files": [],
+                "truncated": false,
+            }),
+            false,
+        );
+    }
+
     let mut budget = Budget {
         errors: MAX_ERRORS,
         warnings: MAX_WARNINGS,
@@ -186,11 +210,11 @@ pub(super) fn project_for_inspect(file: &Value, expected_lf_sha256: &str) -> (Va
         truncated: false,
     };
     let mut item = json!({
-        "path": file["path"],
-        "state": file["state"],
+        "path": expected_path,
+        "state": "document_current",
     });
-    let comparison = &file["comparison"];
     let compared = matches!(comparison["state"].as_str(), Some("complete" | "partial"));
+    let mut current_errors: u64 = 0;
     let mut listed: Vec<Value> = if compared {
         item["comparison"] = json!({
             "state": comparison["state"],
@@ -200,18 +224,26 @@ pub(super) fn project_for_inspect(file: &Value, expected_lf_sha256: &str) -> (Va
         });
         introduced(file, comparison, &mut budget)
     } else {
-        let reason = comparison["reason"].as_str();
         if comparison.is_object() {
             item["comparison"] = json!({"state": "unknown", "reason": comparison["reason"]});
         }
-        let fallback_allowed =
-            is_current && matches!(reason, None | Some("no_baseline" | "buffer_replaced"));
+        let fallback_allowed = matches!(reason, None | Some("no_baseline" | "buffer_replaced"));
         if fallback_allowed {
-            file["diagnostics"]
+            let error_diags: Vec<&Value> = file["diagnostics"]
                 .as_array()
                 .into_iter()
                 .flatten()
                 .filter(|value| value["severity"] == "error")
+                .collect();
+            current_errors = file
+                .pointer("/counts/error")
+                .and_then(Value::as_u64)
+                .unwrap_or(error_diags.len() as u64);
+            if current_errors > 0 {
+                item["current_errors"] = json!(current_errors);
+            }
+            error_diags
+                .into_iter()
                 .filter_map(|value| budget.admit(value))
                 .collect()
         } else {
@@ -224,15 +256,16 @@ pub(super) fn project_for_inspect(file: &Value, expected_lf_sha256: &str) -> (Va
         if !listed.is_empty() {
             f["diagnostics"] = Value::Array(listed.to_vec());
         }
+        // M-Ctrl-9: Pure severity escalations (escalated > 0 with empty rows) and
+        // positive current_errors still deliver even if rows were trimmed or absent.
         let has_findings = if compared {
             let changed = counted(comparison, "introduced") + counted(comparison, "escalated");
-            changed > 0 && !listed.is_empty()
+            changed > 0 || !listed.is_empty()
         } else {
-            !listed.is_empty()
+            !listed.is_empty() || current_errors > 0
         };
-        let deliver = matches_expected && is_current && has_findings;
         json!({
-            "deliver": deliver,
+            "deliver": has_findings,
             "files": [f],
             "truncated": truncated,
         })
@@ -248,7 +281,7 @@ pub(super) fn project_for_inspect(file: &Value, expected_lf_sha256: &str) -> (Va
         truncated = true;
         payload = build_payload(&listed, truncated);
     }
-    (payload, matches_expected)
+    (payload, true)
 }
 
 #[cfg(test)]

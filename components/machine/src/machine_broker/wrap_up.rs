@@ -468,6 +468,7 @@ impl super::Broker {
             protocol,
             Some(crate::machine_protocol::MACHINE_PROTOCOL_VERSION),
             tx,
+            None,
         )
     }
 
@@ -1255,10 +1256,9 @@ impl super::Broker {
     /// under `controller -> workers` so an old lease's `Ack` can never overtake
     /// the replacement's `Replay` and no unwelcomed worker receives `Replay`
     /// ahead of `Welcome` (Findings 2, 3, 12).
-    pub(super) fn install_controller_and_arm_replays(&self, controller: super::Controller) {
-        let mut ctrl_guard = self.controller.lock();
-        let mut workers = self.workers.lock();
-        ctrl_guard.replace(controller);
+    pub(super) fn arm_all_worker_replays_locked(
+        workers: &mut std::collections::HashMap<String, super::WorkerPeer>,
+    ) {
         for worker in workers.values_mut() {
             if worker.welcomed {
                 worker.replay_deferred = false;
@@ -1912,7 +1912,7 @@ mod tests {
             memory_relay: None,
         }));
         let (ctrl_tx, _ctrl_rx) = mpsc::unbounded_channel();
-        let lease = broker.attach_controller_with_outer(8, Some(53), &ctrl_tx);
+        let lease = broker.attach_controller_with_outer(8, Some(53), &ctrl_tx, None);
         let (worker_tx, _worker_rx) = mpsc::unbounded_channel();
         let (hint_tx, mut hint_rx) = mpsc::channel(WORKER_HINT_CAPACITY);
         let snap = sample_snapshot(Some("antigravity"));
@@ -2271,12 +2271,16 @@ mod tests {
         );
 
         let (ctrl_tx, _ctrl_rx) = mpsc::unbounded_channel();
-        broker.install_controller_and_arm_replays(super::super::Controller {
-            lease: 1,
-            tx: ctrl_tx,
-            protocol: 8,
-            outer_machine_protocol: Some(53),
-        });
+        super::super::post_edit::install_controller_and_arm_replays(
+            &broker,
+            super::super::Controller {
+                lease: 1,
+                tx: ctrl_tx,
+                protocol: 8,
+                outer_machine_protocol: Some(53),
+            },
+            None,
+        );
 
         assert!(
             broker
@@ -2297,12 +2301,16 @@ mod tests {
         // Finding 2: A second reconnect BEFORE seq 9..10 are ACKed must STILL
         // arm replay_gate at floor 9 (never fall back to pruned seq 1).
         let (ctrl_tx2, _ctrl_rx2) = mpsc::unbounded_channel();
-        broker.install_controller_and_arm_replays(super::super::Controller {
-            lease: 2,
-            tx: ctrl_tx2,
-            protocol: 8,
-            outer_machine_protocol: Some(53),
-        });
+        super::super::post_edit::install_controller_and_arm_replays(
+            &broker,
+            super::super::Controller {
+                lease: 2,
+                tx: ctrl_tx2,
+                protocol: 8,
+                outer_machine_protocol: Some(53),
+            },
+            None,
+        );
         assert!(
             broker
                 .admit_and_bind_controller_for_event("s1", 1, 10)

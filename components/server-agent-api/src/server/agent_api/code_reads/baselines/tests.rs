@@ -1,11 +1,16 @@
 use super::*;
 
-fn snapshot(sha: char, buffer: &str) -> BufferSnapshot {
+fn snapshot_ver(sha: char, buffer: &str, ts: u32) -> BufferSnapshot {
     serde_json::from_value(
         json!({"instance":"a".repeat(32),"buffer":buffer,"bufferEpoch":"1",
-        "version":[],"content":{"sha256":sha.to_string().repeat(64),"utf8Bytes":10}}),
+        "version":[{"replicaId":1,"timestamp":ts}],
+        "content":{"sha256":sha.to_string().repeat(64),"utf8Bytes":10}}),
     )
     .unwrap()
+}
+
+fn snapshot(sha: char, buffer: &str) -> BufferSnapshot {
+    snapshot_ver(sha, buffer, u32::from(sha as u8))
 }
 
 fn diagnostic(row: u32, severity: i32, code: Option<&str>, buffer: &str) -> CodeDiagnostic {
@@ -188,15 +193,15 @@ fn connection_epoch_transition_clears_baseline_and_rejects_stale_epochs() {
     let p1 = capture(&d1, Some(&snapshot('a', "7")), &servers(&[3]), 1).unwrap();
     assert_eq!(record(&scope, "a.rs", p1, &d1), unknown("no_baseline"));
 
-    // Advancing conn_epoch clears baseline instead of diffing across reconnects (R2-M10).
+    // Advancing conn_epoch clears baseline with buffer_replaced (R2-M10 / M-Ctrl-8).
     let p2 = capture(&d1, Some(&snapshot('b', "7")), &servers(&[3]), 2).unwrap();
-    assert_eq!(record(&scope, "a.rs", p2, &d1), unknown("no_baseline"));
+    assert_eq!(record(&scope, "a.rs", p2, &d1), unknown("buffer_replaced"));
 
-    // Late observation from conn_epoch 1 is stale and does not overwrite conn_epoch 2.
+    // Late observation from conn_epoch 1 is out_of_order_observation.
     let stale = capture(&d1, Some(&snapshot('c', "7")), &servers(&[3]), 1).unwrap();
     assert_eq!(
         record(&scope, "a.rs", stale, &d1),
-        unknown("stale_observation")
+        unknown("out_of_order_observation")
     );
 }
 
@@ -244,10 +249,10 @@ fn numeric_buffer_epoch_and_vector_clock_reject_out_of_order_observations() {
     .unwrap();
     assert_eq!(
         record(&scope, "a.rs", p2, &d2),
-        unknown("stale_observation")
+        unknown("out_of_order_observation")
     );
 
-    // Same epoch 10, changed text, older vector clock -> stale_observation (R2-M11).
+    // Same epoch 10, changed text, older vector clock -> out_of_order_observation (R2-M11).
     let older = capture(
         &d10,
         Some(&versioned_snapshot(
@@ -262,7 +267,51 @@ fn numeric_buffer_epoch_and_vector_clock_reject_out_of_order_observations() {
     .unwrap();
     assert_eq!(
         record(&scope, "a.rs", older, &d10),
-        unknown("stale_observation")
+        unknown("out_of_order_observation")
+    );
+
+    // Same epoch 10, changed text, empty/incomparable clocks -> unorderable_observation (M-Ctrl-8).
+    let empty_scope = super::tests::scope("baseline-empty-clocks");
+    let e1 = capture(
+        &d10,
+        Some(&versioned_snapshot('a', "7", "10", json!([]))),
+        &servers(&[3]),
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        record(&empty_scope, "a.rs", e1, &d10),
+        unknown("no_baseline")
+    );
+    let e2 = capture(
+        &d10,
+        Some(&versioned_snapshot('b', "7", "10", json!([]))),
+        &servers(&[3]),
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        record(&empty_scope, "a.rs", e2, &d10),
+        unknown("unorderable_observation")
+    );
+
+    // New numeric buffer_epoch clears baseline with buffer_replaced.
+    let d11 = [diag("11")];
+    let p11 = capture(
+        &d11,
+        Some(&versioned_snapshot(
+            'd',
+            "7",
+            "11",
+            json!([{"replicaId":1,"timestamp":1}]),
+        )),
+        &servers(&[3]),
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        record(&empty_scope, "a.rs", p11, &d11),
+        unknown("buffer_replaced")
     );
 
     // Same epoch 10, same text, equal vector clock -> refresh allowed (M18).

@@ -162,7 +162,7 @@ function describe(tool, input, root) {
  * recorded for this call ID (an update omits the name). Anything that is
  * not a facade call is returned unchanged.
  */
-export function presentToolCall(toolCall, { root, known } = {}) {
+export function presentToolCall(toolCall, { root, known, includeDiff = true } = {}) {
   if (!isObject(toolCall)) return toolCall;
   const tool = presentedTool(toolCall.name) ?? known;
   if (tool === undefined) return toolCall;
@@ -193,7 +193,7 @@ export function presentToolCall(toolCall, { root, known } = {}) {
       ? { ...rest, description: toolSummary.trim() }
       : rest;
   if (typeof described.path === "string") shown.locations = [{ path: described.path }];
-  if (described.diff && typeof described.path === "string") {
+  if (includeDiff && described.diff && typeof described.path === "string") {
     const diff = { type: "diff", path: described.path, ...described.diff };
     shown.content = [diff, ...(Array.isArray(toolCall.content) ? toolCall.content : [])];
   }

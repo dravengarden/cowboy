@@ -118,25 +118,52 @@ fn project_for_inspect_checks_sha_and_recomputes_deliver_after_12kib_trim() {
             "message": "mismatched types"
         }]
     });
-    // Matching SHA + no_baseline on document_current -> deliver true.
-    let (payload, matches) = project_for_inspect(&file, &sha);
+    // Matching SHA + no_baseline on document_current -> deliver true + current_errors.
+    let (payload, matches) = project_for_inspect(&file, "src/lib.rs", &sha);
     assert!(matches);
     assert_eq!(payload["deliver"], true);
+    assert_eq!(payload["files"][0]["current_errors"], 1);
     assert_eq!(
         payload["files"][0]["diagnostics"].as_array().unwrap().len(),
         1
     );
 
-    // Non-matching SHA -> matches_expected false, deliver false.
-    let (payload, matches) = project_for_inspect(&file, &other_sha);
+    // Non-matching SHA -> matches_expected false, deliver false, empty files (zero leak).
+    let (payload, matches) = project_for_inspect(&file, "src/lib.rs", &other_sha);
     assert!(!matches);
     assert_eq!(payload["deliver"], false);
+    assert_eq!(payload["files"].as_array().unwrap().len(), 0);
 
-    // stale_observation -> never falls back to current errors.
-    let mut stale = file.clone();
-    stale["comparison"] = json!({"state": "unknown", "reason": "stale_observation"});
-    let (payload, matches) = project_for_inspect(&stale, &sha);
+    // Path mismatch -> matches_expected false, empty files.
+    let (payload, matches) = project_for_inspect(&file, "src/other.rs", &sha);
+    assert!(!matches);
+    assert_eq!(payload["files"].as_array().unwrap().len(), 0);
+
+    // out_of_order_observation / unorderable_observation -> matches_expected false, empty files.
+    for reason in [
+        "out_of_order_observation",
+        "unorderable_observation",
+        "stale_observation",
+    ] {
+        let mut stale = file.clone();
+        stale["comparison"] = json!({"state": "unknown", "reason": reason});
+        let (payload, matches) = project_for_inspect(&stale, "src/lib.rs", &sha);
+        assert!(!matches, "reason {reason} must not match");
+        assert_eq!(payload["deliver"], false);
+        assert_eq!(payload["files"].as_array().unwrap().len(), 0);
+    }
+
+    // Pure severity escalation (escalated=1, empty candidates) still delivers (M-Ctrl-9).
+    let mut escalated = file.clone();
+    escalated["comparison"] = json!({
+        "state": "complete",
+        "introduced": 0,
+        "resolved": 0,
+        "escalated": 1,
+        "candidates": []
+    });
+    let (payload, matches) = project_for_inspect(&escalated, "src/lib.rs", &sha);
     assert!(matches);
-    assert_eq!(payload["deliver"], false);
-    assert!(payload["files"][0].get("diagnostics").is_none());
+    assert_eq!(payload["deliver"], true);
+    assert_eq!(payload["files"][0]["comparison"]["escalated"], 1);
 }

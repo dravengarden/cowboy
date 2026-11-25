@@ -76,6 +76,9 @@ pub(super) fn route_inbound_runtime_frame(
                 let _ = hint_tx.try_send(frame);
             }
         }
+        Frame::PostEditInspectRequest { .. } | Frame::PostEditInspectReply { .. } => {
+            tracing::warn!("dropping local-only post-edit frame received on primary Machine WS");
+        }
         _ => {
             reliable_tx
                 .send(frame)
@@ -331,5 +334,37 @@ mod tests {
         drop(reliable_tx);
         drop(hint_tx);
         write_task.await.unwrap();
+    }
+
+    #[test]
+    fn inbound_primary_ws_drops_local_only_post_edit_frames() {
+        let (reliable_tx, mut reliable_rx) = mpsc::unbounded_channel();
+        let (hint_tx, _hint_rx) = mpsc::channel(HINT_RUNTIME_CAPACITY);
+        let scope = crate::post_edit_inspect::PostEditScope::new("b1".into(), 1, "inc-1".into());
+        let req = Frame::PostEditInspectRequest {
+            request: Box::new(crate::post_edit_inspect::PostEditInspectRequest {
+                session_id: "s1".into(),
+                worker_epoch: "e1".into(),
+                request_id: "r1".into(),
+                turn_id: "t1".into(),
+                scope: scope.clone(),
+                path: "src/lib.rs".into(),
+                expected_lf_sha256: "a".repeat(64),
+                remaining_ms: 4_000,
+                canary_inspect_id: None,
+            }),
+        };
+        let rep = Frame::PostEditInspectReply {
+            reply: Box::new(crate::post_edit_inspect::PostEditInspectReply::refused(
+                "s1".into(),
+                "e1".into(),
+                "r1".into(),
+                scope,
+                "unavailable",
+            )),
+        };
+        route_inbound_runtime_frame(req, 53, true, &reliable_tx, &hint_tx).unwrap();
+        route_inbound_runtime_frame(rep, 53, true, &reliable_tx, &hint_tx).unwrap();
+        assert!(reliable_rx.try_recv().is_err());
     }
 }

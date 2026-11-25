@@ -1607,10 +1607,13 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
                     let Some(frame) = frame? else {
                         bail!("Machine broker runtime tunnel closed");
                     };
-                    if let crate::runtime_wire::Frame::PostEditInspectRequest { request } = frame {
-                        post_edit::dispatch_or_refuse(post_edit_client.as_ref(), *request, &diag_runtime_tx);
+                    let Some(frame) = post_edit::intercept_local_frame(
+                        frame,
+                        post_edit_client.as_ref(),
+                        &diag_runtime_tx,
+                    ) else {
                         continue;
-                    }
+                    };
                     let request_id = match &frame {
                         crate::runtime_wire::Frame::ExecutionRequest { request } => {
                             Some(request.request_id.clone())

@@ -912,8 +912,9 @@ export class AcpProxy {
     const shown =
       route && tool === undefined
         ? presentExtension(toolCall, route, { preserveInput: preserveExtensionInput })
-        : presentToolCall(toolCall, { root: this.root, known });
+        : presentToolCall(toolCall, { root: this.root, known, includeDiff: false });
     // The facade's answer, which `agy` never reports for an MCP tool.
+    // M-Proxy-7: Attach diffs ONLY to a uniquely bound `completed` update with a successful facade result.
     if (key !== undefined && TERMINAL.has(toolCall?.status) && this.results.has(key)) {
       const entry = this.results.get(key);
       this.results.delete(key);
@@ -924,7 +925,11 @@ export class AcpProxy {
         ? this.planGate.isBindingConsistent(entry.call, currentTurn)
         : true;
       if (!isTainted && matchesAttempt && bindingOk && entry.content.length) {
-        return { ...shown, content: entry.content };
+        const allowDiff = toolCall?.status === "completed" && !entry.isError;
+        const content = allowDiff
+          ? entry.content
+          : entry.content.filter((item) => item?.type !== "diff");
+        if (content.length) return { ...shown, content };
       }
     }
     return shown;
@@ -980,7 +985,11 @@ export class AcpProxy {
   track(sessionId, update) {
     const turn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
     const outcome = this.planGate.trackUpdate(sessionId, update, turn);
-    if (
+    if (typeof sessionId === "string" && Array.isArray(outcome?.contradictedIds)) {
+      for (const badId of outcome.contradictedIds) {
+        this.results.delete(callKey(sessionId, badId));
+      }
+    } else if (
       outcome?.contradicted &&
       typeof sessionId === "string" &&
       typeof update?.toolCallId === "string"
@@ -1031,6 +1040,7 @@ export class AcpProxy {
       turn,
       attempt: turn?.attempt,
       call,
+      isError: result?.isError === true,
       content: resultContent(call.name, call.args, result, this.root),
     });
   }

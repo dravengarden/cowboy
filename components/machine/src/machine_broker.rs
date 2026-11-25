@@ -681,6 +681,7 @@ impl Broker {
         protocol: u16,
         outer_machine_protocol: Option<u16>,
         tx: &mpsc::UnboundedSender<Frame>,
+        post_edit: Option<(bool, mpsc::Sender<post_edit::QueuedControllerPostEdit>)>,
     ) -> u64 {
         let lease = self.next_lease.fetch_add(1, Ordering::Relaxed);
         let welcome = self.sanitized_snapshots(outer_machine_protocol, protocol);
@@ -689,15 +690,18 @@ impl Broker {
             controller_epoch: lease,
             workers: welcome.clone(),
         });
-        // Atomically install the new Controller lease, arm contiguous replay
-        // gating on every welcomed worker, and queue Replay in total order
-        // under controller->workers (Findings 2, 3, 12).
-        self.install_controller_and_arm_replays(Controller {
-            lease,
-            tx: tx.clone(),
-            protocol,
-            outer_machine_protocol,
-        });
+        // Atomically install primary and diagnostic leases under controller->workers.
+        let orphaned = post_edit::install_controller_and_arm_replays(
+            self,
+            Controller {
+                lease,
+                tx: tx.clone(),
+                protocol,
+                outer_machine_protocol,
+            },
+            post_edit,
+        );
+        post_edit::notify_orphaned(orphaned);
         for current in self.snapshots() {
             if !welcome.contains(&current) {
                 self.send_controller(Frame::Snapshot {
@@ -822,15 +826,17 @@ impl Broker {
     }
 
     fn remove_controller(&self, lease: u64) {
-        let mut controller = self.controller.lock();
-        if controller
-            .as_ref()
-            .is_some_and(|current| current.lease == lease)
-        {
-            controller.take();
-        }
-        drop(controller);
-        self.post_edit.remove_controller(lease);
+        let orphaned = {
+            let mut controller = self.controller.lock();
+            if controller
+                .as_ref()
+                .is_some_and(|current| current.lease == lease)
+            {
+                controller.take();
+            }
+            self.post_edit.remove_controller_collect(lease)
+        };
+        post_edit::notify_orphaned(orphaned);
     }
 
     fn route_worker(&self, session_id: &str, command: WorkerCommand) {
@@ -1337,6 +1343,8 @@ impl Broker {
             },
         );
         drop(workers);
+        self.post_edit
+            .remove_worker_except(&session_id, connection_id);
         if !self.cancelled_sessions.lock().contains(&session_id) {
             self.session_states
                 .lock()
@@ -4342,7 +4350,7 @@ async fn handle_core(
             }
             match frame {
                 Frame::PostEditInspectReply { reply } => {
-                    broker.post_edit.route_reply_from_controller(lease, *reply);
+                    post_edit::route_reply_to_live_worker(&broker, lease, *reply);
                 }
                 Frame::ExecutionReply { reply } => {
                     if let Some(worker) = broker.workers.lock().get(&reply.session_id)

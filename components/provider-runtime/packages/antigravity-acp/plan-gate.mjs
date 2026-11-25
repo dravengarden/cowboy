@@ -257,17 +257,48 @@ export class PlanGate {
       }
       if (existing.ambiguous) contradicted = true;
     }
+    const isDiffBearing = (toolName) => toolName === "WriteFile" || toolName === "EditFile";
+    const detectDiffCollisions = (target) => {
+      const affected = [];
+      if (!target || !isDiffBearing(target.toolName)) return affected;
+      const peers = list.filter(
+        (item) =>
+          item.id !== target.id &&
+          item.name === target.name &&
+          item.turn === target.turn &&
+          item.attempt === target.attempt,
+      );
+      const collides = (a, b) =>
+        !a.hasInput || !b.hasInput || (a.digest !== undefined && a.digest === b.digest);
+      const hits = peers.filter((peer) => collides(target, peer));
+      if (hits.length > 0) {
+        for (const item of [target, ...hits]) {
+          item.ambiguous = true;
+          if (item.boundCall) {
+            this.bound.delete(item.boundCall);
+            item.boundCall = undefined;
+          }
+          affected.push(item.id);
+        }
+      }
+      return affected;
+    };
     if (TERMINAL.has(update.status)) {
       const left = list.filter((entry) => entry.id !== id);
       if (left.length) this.waiting.set(sessionId, left);
       else this.waiting.delete(sessionId);
-      return { contradicted };
+      return { contradicted, contradictedIds: contradicted ? [id] : [] };
     }
-    if (existing) return { contradicted };
-    if (turn !== undefined && !isTurnLive(turn)) return { contradicted: false };
+    if (existing) {
+      const affected = detectDiffCollisions(existing);
+      const contradictedIds = contradicted ? [...new Set([id, ...affected])] : affected;
+      return { contradicted: contradictedIds.length > 0, contradictedIds };
+    }
+    if (turn !== undefined && !isTurnLive(turn))
+      return { contradicted: false, contradictedIds: [] };
     const name = update.name;
     const toolName = stripFacadePrefix(name);
-    if (toolName === undefined) return { contradicted: false };
+    if (toolName === undefined) return { contradicted: false, contradictedIds: [] };
     const stripSummary = isBuiltinFacadeTool(toolName);
     const hasRaw = update.rawInput !== undefined;
     const digest = hasRaw ? argsDigest(update.rawInput, { stripSummary }) : undefined;
@@ -282,7 +313,7 @@ export class PlanGate {
         if (turn && typeof turn === "object") turn.announcementEvicted = true;
       }
     }
-    list.push({
+    const added = {
       id,
       name,
       toolName,
@@ -293,9 +324,11 @@ export class PlanGate {
       ambiguous: tainted || (hasRaw && digest === undefined),
       boundCall: undefined,
       boundDigest: undefined,
-    });
+    };
+    list.push(added);
+    const affected = detectDiffCollisions(added);
     this.waiting.set(sessionId, list);
-    return { contradicted: false, evictedId };
+    return { contradicted: affected.length > 0, contradictedIds: affected, evictedId };
   }
 
   /**
@@ -317,30 +350,40 @@ export class PlanGate {
     const name = `${FACADE_PREFIX}${call.name}`;
     const stripSummary = isBuiltinFacadeTool(call.name);
     const digest = argsDigest(call.args === undefined ? {} : call.args, { stripSummary });
-    const unbound = list.filter(
-      (item) =>
-        !item.boundCall &&
-        !item.ambiguous &&
-        item.name === name &&
-        item.turn === turn &&
-        item.attempt === attempt,
+    const liveSameTool = list.filter(
+      (item) => item.name === name && item.turn === turn && item.attempt === attempt,
     );
+    const unbound = liveSameTool.filter((item) => !item.boundCall && !item.ambiguous);
     let entry;
     const isDiffBearing = call.name === "WriteFile" || call.name === "EditFile";
     if (digest !== undefined) {
-      const exactMatches = unbound.filter((item) => item.hasInput && item.digest === digest);
-      if (exactMatches.length > 1 && isDiffBearing) {
-        // R2-M14: Overlapping identical-argument write/edit announcements are ambiguous.
-        for (const item of exactMatches) item.ambiguous = true;
-      } else if (exactMatches.length >= 1) {
-        // R3-M18: Suppress binding after MAX_WAITING eviction in this attempt.
-        if (!turn?.announcementEvicted) entry = exactMatches[0];
+      const exactLive = liveSameTool.filter((item) => item.hasInput && item.digest === digest);
+      const inputlessLive = liveSameTool.filter((item) => !item.hasInput);
+      const exactUnbound = unbound.filter((item) => item.hasInput && item.digest === digest);
+      if (
+        isDiffBearing &&
+        (exactLive.length > 1 || (exactLive.length >= 1 && inputlessLive.length > 0))
+      ) {
+        // M-Proxy-6: Collisions across bound/unbound/inputless edit announcements taint all affected entries.
+        for (const item of [...exactLive, ...inputlessLive]) {
+          item.ambiguous = true;
+          if (item.boundCall) {
+            this.bound.delete(item.boundCall);
+            item.boundCall = undefined;
+          }
+        }
+      } else if (exactUnbound.length >= 1) {
+        if (!turn?.announcementEvicted) entry = exactUnbound[0];
       } else if (!turn?.announcementEvicted) {
-        const inputless = unbound.filter((item) => !item.hasInput);
-        if (inputless.length === 1) entry = inputless[0];
+        if (isDiffBearing && liveSameTool.length > 1) {
+          for (const item of inputlessLive) item.ambiguous = true;
+        } else {
+          const inputless = unbound.filter((item) => !item.hasInput);
+          if (inputless.length === 1) entry = inputless[0];
+        }
       }
     } else if (!turn?.announcementEvicted && unbound.length === 1) {
-      entry = unbound[0];
+      if (!isDiffBearing || liveSameTool.length === 1) entry = unbound[0];
     }
     if (!entry) return undefined;
     entry.boundCall = call;

@@ -1940,3 +1940,95 @@ async fn an_unconfirmed_turn_process_beside_a_server_still_parks_teardown() {
     target.client.settle_all().await;
     assert_eq!(l.uncertain_effect().as_deref(), Some("process/terminate"));
 }
+
+#[tokio::test]
+async fn staged_payload_cleanup_is_narrowly_scoped_and_non_fencing() {
+    let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
+        "fs/writeFile" => completed(json!({"result": {}})),
+        "fs/remove" => completed(json!({"result": {}})),
+        _ => completed(json!({"result": {}})),
+    }));
+    let l = ledger(&target.client, None);
+    l.begin_turn("turn-1");
+    let staged = format!(
+        "file:///home/draven/.cache/cowboy/file-buffers/payload-{}.json",
+        "a".repeat(32)
+    );
+    // Unwritten staged path is refused.
+    let refused = target
+        .client
+        .relay(
+            super::ledger::STAGED_PAYLOAD_CLEANUP.into(),
+            json!({"path": staged}),
+        )
+        .await;
+    assert!(refused.get("error").is_some());
+    // Arbitrary workspace path is refused.
+    let arbitrary = target
+        .client
+        .relay(
+            super::ledger::STAGED_PAYLOAD_CLEANUP.into(),
+            json!({"path": "file:///srv/repo/src/lib.rs"}),
+        )
+        .await;
+    assert!(arbitrary.get("error").is_some());
+    // Write the staged payload during turn-1, then clean it via STAGED_PAYLOAD_CLEANUP.
+    let wrote = target
+        .client
+        .relay(
+            "fs/writeFile".into(),
+            json!({"path": staged, "dataBase64": "e30="}),
+        )
+        .await;
+    assert!(wrote.get("result").is_some());
+    let cleaned = target
+        .client
+        .relay(
+            super::ledger::STAGED_PAYLOAD_CLEANUP.into(),
+            json!({"path": staged}),
+        )
+        .await;
+    assert!(cleaned.get("result").is_some());
+    // Replaying cleanup after removal is refused.
+    let second = target
+        .client
+        .relay(
+            super::ledger::STAGED_PAYLOAD_CLEANUP.into(),
+            json!({"path": staged}),
+        )
+        .await;
+    assert!(second.get("error").is_some());
+    assert!(l.uncertain_effect().is_none());
+}
+
+#[tokio::test]
+async fn rotating_active_turn_nonce_invalidates_prior_attempt_post_edit_waiters() {
+    let target = Target::new(Arc::new(|_| completed(json!({"result": {}}))));
+    let (conn_id, mut rx) = target.client.attach_post_edit_broker(9);
+    target
+        .client
+        .set_active_turn_nonce(Some(("turn-1".into(), "nonce-attempt-1".into())));
+    let client = Arc::clone(&target.client);
+    let inspect_task = tokio::spawn(async move {
+        client
+            .inspect_post_edit(
+                0,
+                &json!({
+                    "path": "src/lib.rs",
+                    "expectedLfSha256": "a".repeat(64),
+                    "turnNonce": "nonce-attempt-1",
+                    "timeoutMs": 3000,
+                }),
+            )
+            .await
+    });
+    let mut queued = rx.recv().await.expect("queued post-edit request");
+    // Rotate nonce for an ACP retry on the exact same turn_id (M-Worker-5).
+    target
+        .client
+        .set_active_turn_nonce(Some(("turn-1".into(), "nonce-attempt-2".into())));
+    // Earlier attempt's queued request must be dropped at prepare_post_edit_send!
+    assert!(!target.client.prepare_post_edit_send(&mut queued, conn_id));
+    let outcome = inspect_task.await.unwrap();
+    assert_eq!(outcome["state"], "refused");
+}

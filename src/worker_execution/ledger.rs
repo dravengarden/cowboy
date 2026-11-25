@@ -66,6 +66,34 @@ const OBSERVATION_GRACE: Duration = Duration::from_secs(120);
 /// it detected (`UNCERTAIN_REPORT` in the Antigravity facade). Never
 /// forwarded to the target.
 pub const UNCERTAIN_REPORT: &str = "cowboy/uncertainEffect";
+/// Narrowly scoped, non-fencing cleanup for verified private staged apply payloads.
+pub const STAGED_PAYLOAD_CLEANUP: &str = "cowboy/cleanupStagedPayload";
+const MAX_TRACKED_STAGED_PAYLOADS: usize = 32;
+
+fn is_staged_payload_url(url: &str) -> bool {
+    let Some(path) = url.strip_prefix("file:///") else {
+        return false;
+    };
+    if path.is_empty() || path.contains("..") || path.contains('%') || path.contains('\0') {
+        return false;
+    }
+    let Some((dir, file)) = path.rsplit_once('/') else {
+        return false;
+    };
+    if !dir.ends_with("/.cache/cowboy/file-buffers") && dir != ".cache/cowboy/file-buffers" {
+        return false;
+    }
+    let Some(hex) = file
+        .strip_prefix("payload-")
+        .and_then(|s| s.strip_suffix(".json"))
+    else {
+        return false;
+    };
+    hex.len() == 32
+        && hex
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
 
 /// The only command the readiness window admits, byte for byte the
 /// projection's Git probe (`READINESS_PROBE` in the Antigravity proxy's
@@ -187,6 +215,8 @@ struct State {
     probes: HashSet<String>,
     /// Target processes the worker started as the session's MCP servers.
     servers: HashSet<String>,
+    /// Verified private staged apply payload URLs written by this session.
+    staged_payloads: VecDeque<String>,
     /// Extension calls admitted and not yet settled.
     calls: usize,
     /// The durable record could not be written: an uncertain effect may be
@@ -533,6 +563,15 @@ impl Ledger {
                 "no Cowboy turn is running; the filesystem change was refused"
             };
             let turn = state.active_turn().ok_or(err_msg)?;
+            if method == "fs/writeFile"
+                && let Some(path) = params.get("path").and_then(Value::as_str)
+                && is_staged_payload_url(path)
+            {
+                if state.staged_payloads.len() >= MAX_TRACKED_STAGED_PAYLOADS {
+                    state.staged_payloads.pop_front();
+                }
+                state.staged_payloads.push_back(path.to_owned());
+            }
             *state.admitted.entry(turn.clone()).or_default() += 1;
             return Ok(Some(Admitted {
                 turn: Some(turn),
@@ -1105,6 +1144,9 @@ impl Client {
             ledger.mark_uncertain(reported);
             return (json!({"result": {}}), None);
         }
+        if method == STAGED_PAYLOAD_CLEANUP {
+            return (self.cleanup_staged_payload(&ledger, &params).await, None);
+        }
         let admitted = match ledger.admit(&method, &params) {
             Ok(admitted) => admitted,
             Err(reason) => return (refused(reason), None),
@@ -1172,6 +1214,32 @@ impl Client {
             }
         };
         (response, guard)
+    }
+
+    async fn cleanup_staged_payload(&self, ledger: &Ledger, params: &Value) -> Value {
+        let Some(path) = params
+            .get("path")
+            .and_then(Value::as_str)
+            .filter(|path| is_staged_payload_url(path))
+        else {
+            return refused("invalid staged payload path");
+        };
+        let verified = {
+            let mut state = ledger.state.lock();
+            if let Some(pos) = state.staged_payloads.iter().position(|p| p == path) {
+                state.staged_payloads.remove(pos);
+                true
+            } else {
+                false
+            }
+        };
+        if !verified {
+            return refused("staged payload was not created by this session");
+        }
+        let _ = self
+            .invoke("fs/remove".to_owned(), json!({"path": path, "force": true}))
+            .await;
+        json!({"result": {}})
     }
 
     /// Whether a lost reply of this request hides a result the agent acts

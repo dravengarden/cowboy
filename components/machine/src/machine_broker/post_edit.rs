@@ -105,11 +105,12 @@ pub(super) async fn run_core_peer(
     let (tx, rx) = mpsc::unbounded_channel::<Frame>();
     let (diag_req_tx, diag_req_rx) =
         mpsc::channel::<QueuedControllerPostEdit>(CONTROLLER_DIAG_REQ_CAPACITY);
-    let lease =
-        broker.attach_controller_with_outer(hello.protocol, hello.outer_machine_protocol, &tx);
-    broker
-        .post_edit
-        .attach_controller(lease, hello.protocol, hello.post_edit_http, diag_req_tx);
+    let lease = broker.attach_controller_with_outer(
+        hello.protocol,
+        hello.outer_machine_protocol,
+        &tx,
+        Some((hello.post_edit_http, diag_req_tx)),
+    );
     let writer_task = tokio::spawn(run_controller_unix_writer(
         writer,
         rx,
@@ -144,6 +145,47 @@ pub(super) fn start_worker_writer(
     (tx, hint_tx, diag_reply_tx, writer_task)
 }
 
+/// Atomically install primary and diagnostic Controller leases under
+/// `controller -> workers` and arm worker replays so overlapping reconnects
+/// can never install mismatched primary/diagnostic leases (M-Mach-2).
+pub(super) fn install_controller_and_arm_replays(
+    broker: &super::Broker,
+    controller: super::Controller,
+    post_edit: Option<(bool, mpsc::Sender<QueuedControllerPostEdit>)>,
+) -> Vec<OrphanedInspect> {
+    let mut ctrl_guard = broker.controller.lock();
+    let mut workers = broker.workers.lock();
+    let orphaned = post_edit.map_or_else(Vec::new, |(http, tx)| {
+        broker
+            .post_edit
+            .attach_controller_collect(controller.lease, controller.protocol, http, tx)
+    });
+    ctrl_guard.replace(controller);
+    super::Broker::arm_all_worker_replays_locked(&mut workers);
+    orphaned
+}
+
+pub(super) fn route_reply_to_live_worker(
+    broker: &super::Broker,
+    lease: u64,
+    reply: PostEditInspectReply,
+) {
+    broker
+        .post_edit
+        .route_reply_with_live_check(lease, reply, |entry| {
+            let workers = broker.workers.lock();
+            let worker = workers.get(&entry.session_id)?;
+            if worker.connection_id == entry.connection_id
+                && worker.epoch == entry.worker_epoch
+                && worker.negotiated_protocol >= POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION
+            {
+                worker.diag_reply_tx.clone()
+            } else {
+                None
+            }
+        });
+}
+
 pub(super) fn handle_worker_request(
     broker: &super::Broker,
     session_id: &str,
@@ -164,6 +206,9 @@ pub(super) fn handle_worker_request(
     let Some((worker_protocol, diag_reply_tx)) = worker_info else {
         return;
     };
+    if worker_protocol < POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION {
+        return;
+    }
     let binding = (!broker.cancelled_sessions.lock().contains(session_id))
         .then(|| {
             broker
@@ -231,7 +276,30 @@ struct ActiveController {
     diag_tx: mpsc::Sender<QueuedControllerPostEdit>,
 }
 
-struct PendingInspect {
+pub(super) struct OrphanedInspect {
+    session_id: String,
+    worker_epoch: String,
+    scope: PostEditScope,
+    worker_request_id: String,
+    worker_protocol: u16,
+    worker_diag_reply_tx: mpsc::Sender<Frame>,
+}
+
+pub(super) fn notify_orphaned(entries: Vec<OrphanedInspect>) {
+    for entry in entries {
+        try_send_worker_refusal(
+            entry.worker_protocol,
+            &entry.worker_diag_reply_tx,
+            entry.session_id,
+            entry.worker_epoch,
+            entry.worker_request_id,
+            entry.scope,
+            "unavailable",
+        );
+    }
+}
+
+pub(super) struct PendingInspect {
     session_id: String,
     connection_id: u64,
     worker_epoch: String,
@@ -241,6 +309,19 @@ struct PendingInspect {
     worker_diag_reply_tx: mpsc::Sender<Frame>,
     controller_lease: u64,
     expires_at: Instant,
+}
+
+impl From<PendingInspect> for OrphanedInspect {
+    fn from(entry: PendingInspect) -> Self {
+        Self {
+            session_id: entry.session_id,
+            worker_epoch: entry.worker_epoch,
+            scope: entry.scope,
+            worker_request_id: entry.worker_request_id,
+            worker_protocol: entry.worker_protocol,
+            worker_diag_reply_tx: entry.worker_diag_reply_tx,
+        }
+    }
 }
 
 struct PostEditRouting {
@@ -279,9 +360,14 @@ fn try_send_worker_refusal(
         return;
     }
     let reply = PostEditInspectReply::refused(session_id, worker_epoch, request_id, scope, reason);
-    let _ = worker_diag_reply_tx.try_send(Frame::PostEditInspectReply {
+    let frame = Frame::PostEditInspectReply {
         reply: Box::new(reply),
-    });
+    };
+    if encoded_frame_bytes(&frame)
+        .is_some_and(|bytes| bytes <= crate::post_edit_inspect::MAX_POST_EDIT_REPLY_BYTES + 4)
+    {
+        let _ = worker_diag_reply_tx.try_send(frame);
+    }
 }
 
 fn expire_stale_locked(state: &mut PostEditRouting, now: Instant) {
@@ -289,6 +375,7 @@ fn expire_stale_locked(state: &mut PostEditRouting, now: Instant) {
 }
 
 impl PostEditState {
+    #[cfg(test)]
     pub(super) fn attach_controller(
         &self,
         lease: u64,
@@ -296,80 +383,77 @@ impl PostEditState {
         post_edit_http: bool,
         diag_tx: mpsc::Sender<QueuedControllerPostEdit>,
     ) {
-        let mut stale = Vec::new();
-        {
-            let mut state = self.inner.lock();
-            expire_stale_locked(&mut state, Instant::now());
-            state.active_controller = Some(ActiveController {
-                lease,
-                protocol,
-                post_edit_http,
-                diag_tx,
-            });
-            let drop_keys: Vec<String> = state
-                .pending
-                .iter()
-                .filter(|(_, entry)| entry.controller_lease != lease)
-                .map(|(k, _)| k.clone())
-                .collect();
-            for key in drop_keys {
-                if let Some(entry) = state.pending.remove(&key) {
-                    stale.push(entry);
-                }
-            }
-        }
-        for entry in stale {
-            try_send_worker_refusal(
-                entry.worker_protocol,
-                &entry.worker_diag_reply_tx,
-                entry.session_id,
-                entry.worker_epoch,
-                entry.worker_request_id,
-                entry.scope,
-                "unavailable",
-            );
-        }
+        notify_orphaned(self.attach_controller_collect(lease, protocol, post_edit_http, diag_tx));
     }
 
+    pub(super) fn attach_controller_collect(
+        &self,
+        lease: u64,
+        protocol: u16,
+        post_edit_http: bool,
+        diag_tx: mpsc::Sender<QueuedControllerPostEdit>,
+    ) -> Vec<OrphanedInspect> {
+        let mut stale = Vec::new();
+        let mut state = self.inner.lock();
+        expire_stale_locked(&mut state, Instant::now());
+        state.active_controller = Some(ActiveController {
+            lease,
+            protocol,
+            post_edit_http,
+            diag_tx,
+        });
+        let drop_keys: Vec<String> = state
+            .pending
+            .iter()
+            .filter(|(_, entry)| entry.controller_lease != lease)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in drop_keys {
+            if let Some(entry) = state.pending.remove(&key) {
+                stale.push(entry.into());
+            }
+        }
+        stale
+    }
+
+    #[cfg(test)]
     pub(super) fn remove_controller(&self, lease: u64) {
+        notify_orphaned(self.remove_controller_collect(lease));
+    }
+
+    pub(super) fn remove_controller_collect(&self, lease: u64) -> Vec<OrphanedInspect> {
         let mut orphaned = Vec::new();
+        let mut state = self.inner.lock();
+        if state
+            .active_controller
+            .as_ref()
+            .is_some_and(|current| current.lease == lease)
         {
-            let mut state = self.inner.lock();
-            if state
-                .active_controller
-                .as_ref()
-                .is_some_and(|current| current.lease == lease)
-            {
-                state.active_controller = None;
-            }
-            let drop_keys: Vec<String> = state
-                .pending
-                .iter()
-                .filter(|(_, entry)| entry.controller_lease == lease)
-                .map(|(k, _)| k.clone())
-                .collect();
-            for key in drop_keys {
-                if let Some(entry) = state.pending.remove(&key) {
-                    orphaned.push(entry);
-                }
+            state.active_controller = None;
+        }
+        let drop_keys: Vec<String> = state
+            .pending
+            .iter()
+            .filter(|(_, entry)| entry.controller_lease == lease)
+            .map(|(k, _)| k.clone())
+            .collect();
+        for key in drop_keys {
+            if let Some(entry) = state.pending.remove(&key) {
+                orphaned.push(entry.into());
             }
         }
-        for entry in orphaned {
-            try_send_worker_refusal(
-                entry.worker_protocol,
-                &entry.worker_diag_reply_tx,
-                entry.session_id,
-                entry.worker_epoch,
-                entry.worker_request_id,
-                entry.scope,
-                "unavailable",
-            );
-        }
+        orphaned
     }
 
     pub(super) fn remove_worker(&self, session_id: &str, connection_id: u64) {
         self.inner.lock().pending.retain(|_, entry| {
             !(entry.session_id == session_id && entry.connection_id == connection_id)
+        });
+    }
+
+    pub(super) fn remove_worker_except(&self, session_id: &str, live_connection_id: u64) {
+        self.inner.lock().pending.retain(|_, entry| {
+            !(entry.session_id == session_id && entry.connection_id != live_connection_id)
         });
     }
 
@@ -395,7 +479,10 @@ impl PostEditState {
         worker_protocol: u16,
         worker_diag_reply_tx: &mpsc::Sender<Frame>,
     ) {
-        if !request.validate() {
+        if worker_protocol < POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION {
+            return;
+        }
+        if !request.validate_structure() {
             try_send_worker_refusal(
                 worker_protocol,
                 worker_diag_reply_tx,
@@ -553,7 +640,22 @@ impl PostEditState {
         }
     }
 
-    pub(super) fn route_reply_from_controller(&self, lease: u64, mut reply: PostEditInspectReply) {
+    #[cfg(test)]
+    pub(super) fn route_reply_from_controller(&self, lease: u64, reply: PostEditInspectReply) {
+        self.route_reply_with_live_check(lease, reply, |entry| {
+            (entry.worker_protocol >= POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION)
+                .then(|| entry.worker_diag_reply_tx.clone())
+        });
+    }
+
+    pub(super) fn route_reply_with_live_check<F>(
+        &self,
+        lease: u64,
+        mut reply: PostEditInspectReply,
+        live_worker_tx: F,
+    ) where
+        F: FnOnce(&PendingInspect) -> Option<mpsc::Sender<Frame>>,
+    {
         if !reply.validate() {
             return;
         }
@@ -574,14 +676,17 @@ impl PostEditState {
             state.pending.remove(&reply.request_id)
         };
         if let Some(entry) = matched
-            && entry.worker_protocol >= POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION
+            && let Some(tx) = live_worker_tx(&entry)
         {
             reply.request_id = entry.worker_request_id;
-            let _ = entry
-                .worker_diag_reply_tx
-                .try_send(Frame::PostEditInspectReply {
-                    reply: Box::new(reply),
-                });
+            let frame = Frame::PostEditInspectReply {
+                reply: Box::new(reply),
+            };
+            if encoded_frame_bytes(&frame).is_some_and(|bytes| {
+                bytes <= crate::post_edit_inspect::MAX_POST_EDIT_REPLY_BYTES + 4
+            }) {
+                let _ = tx.try_send(frame);
+            }
         }
     }
 }

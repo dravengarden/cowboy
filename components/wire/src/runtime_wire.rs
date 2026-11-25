@@ -1132,13 +1132,91 @@ pub fn negotiate(local_min: u16, local_max: u16, peer_min: u16, peer_max: u16) -
 ///
 /// Returns an error when serialization, frame-size validation, or writing to
 /// the transport fails.
+#[derive(Deserialize)]
+struct FrameTypePeek<'a> {
+    #[serde(rename = "type")]
+    kind: Option<&'a str>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrictPostEditRequestFrame {
+    #[serde(rename = "type")]
+    _kind: String,
+    request: Box<PostEditInspectRequest>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StrictPostEditReplyFrame {
+    #[serde(rename = "type")]
+    _kind: String,
+    reply: Box<PostEditInspectReply>,
+}
+
+fn max_encoded_bytes_for_frame(frame: &Frame) -> usize {
+    match frame {
+        Frame::PostEditInspectRequest { .. } => {
+            crate::post_edit_inspect::MAX_POST_EDIT_REQUEST_BYTES
+        }
+        Frame::PostEditInspectReply { .. } => crate::post_edit_inspect::MAX_POST_EDIT_REPLY_BYTES,
+        _ => MAX_FRAME_BYTES,
+    }
+}
+
+fn decode_runtime_frame(payload: &[u8]) -> io::Result<Frame> {
+    if let Ok(peek) = serde_json::from_slice::<FrameTypePeek<'_>>(payload) {
+        match peek.kind {
+            Some("post_edit_inspect_request") => {
+                if payload.len() > crate::post_edit_inspect::MAX_POST_EDIT_REQUEST_BYTES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "post_edit_inspect_request frame too large: {} bytes",
+                            payload.len()
+                        ),
+                    ));
+                }
+                let strict: StrictPostEditRequestFrame = serde_json::from_slice(payload)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                return Ok(Frame::PostEditInspectRequest {
+                    request: strict.request,
+                });
+            }
+            Some("post_edit_inspect_reply") => {
+                if payload.len() > crate::post_edit_inspect::MAX_POST_EDIT_REPLY_BYTES {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!(
+                            "post_edit_inspect_reply frame too large: {} bytes",
+                            payload.len()
+                        ),
+                    ));
+                }
+                let strict: StrictPostEditReplyFrame = serde_json::from_slice(payload)
+                    .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+                return Ok(Frame::PostEditInspectReply {
+                    reply: strict.reply,
+                });
+            }
+            _ => {}
+        }
+    }
+    serde_json::from_slice(payload)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+}
+
 pub async fn write_frame<W: AsyncWrite + Unpin>(writer: &mut W, frame: &Frame) -> io::Result<()> {
     let payload = serde_json::to_vec(frame)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-    if payload.len() > MAX_FRAME_BYTES {
+    let limit = max_encoded_bytes_for_frame(frame);
+    if payload.len() > limit {
         return Err(io::Error::new(
             io::ErrorKind::InvalidData,
-            format!("runtime frame too large: {} bytes", payload.len()),
+            format!(
+                "runtime frame too large: {} bytes (limit {limit})",
+                payload.len()
+            ),
         ));
     }
     let len = u32::try_from(payload.len())
@@ -1171,9 +1249,7 @@ pub async fn read_frame<R: AsyncRead + Unpin>(reader: &mut R) -> io::Result<Opti
     }
     let mut payload = vec![0; len];
     reader.read_exact(&mut payload).await?;
-    serde_json::from_slice(&payload)
-        .map(Some)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    decode_runtime_frame(&payload).map(Some)
 }
 
 /// Stateful frame decoder for reads that participate in `tokio::select!` or a
@@ -1254,9 +1330,7 @@ impl<R: AsyncRead + Unpin> FrameReader<R> {
         let payload = std::mem::take(&mut self.payload);
         self.header_read = 0;
         self.payload_read = 0;
-        serde_json::from_slice(&payload)
-            .map(Some)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+        decode_runtime_frame(&payload).map(Some)
     }
 }
 
@@ -1744,5 +1818,68 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[tokio::test]
+    async fn post_edit_envelopes_reject_unknown_sibling_fields_and_oversized_frames() {
+        let req = PostEditInspectRequest {
+            session_id: "sess-1".into(),
+            worker_epoch: "epoch-1".into(),
+            request_id: "req-1".into(),
+            turn_id: "turn-1".into(),
+            scope: crate::post_edit_inspect::PostEditScope {
+                binding_id: "bind-1".into(),
+                revision: 1,
+                incarnation: "inc-1".into(),
+            },
+            path: "src/main.rs".into(),
+            expected_lf_sha256: "b".repeat(64),
+            remaining_ms: 4_000,
+            canary_inspect_id: None,
+        };
+        // Unknown sibling field at Frame envelope level must be rejected (M-Wire-1).
+        let with_extra = serde_json::json!({
+            "type": "post_edit_inspect_request",
+            "request": req,
+            "unexpected_sibling": true
+        });
+        let raw = serde_json::to_vec(&with_extra).unwrap();
+        assert!(decode_runtime_frame(&raw).is_err());
+
+        // Oversized raw request envelope (> 8 KiB) must be rejected on read and write.
+        let mut oversized_req = req.clone();
+        oversized_req.path = "a".repeat(crate::post_edit_inspect::MAX_POST_EDIT_REQUEST_BYTES);
+        let mut sink = Vec::new();
+        assert!(
+            write_frame(
+                &mut sink,
+                &Frame::PostEditInspectRequest {
+                    request: Box::new(oversized_req.clone()),
+                },
+            )
+            .await
+            .is_err()
+        );
+        let oversized_raw = serde_json::to_vec(&Frame::PostEditInspectRequest {
+            request: Box::new(oversized_req),
+        })
+        .unwrap();
+        assert!(decode_runtime_frame(&oversized_raw).is_err());
+
+        // Oversized refusal reply (> 16 KiB) must be rejected on write.
+        let oversized_reply = Frame::PostEditInspectReply {
+            reply: Box::new(PostEditInspectReply::refused(
+                "s".repeat(crate::post_edit_inspect::MAX_POST_EDIT_REPLY_BYTES),
+                "epoch-1".into(),
+                "req-1".into(),
+                crate::post_edit_inspect::PostEditScope {
+                    binding_id: "bind-1".into(),
+                    revision: 1,
+                    incarnation: "inc-1".into(),
+                },
+                "unavailable",
+            )),
+        };
+        assert!(write_frame(&mut sink, &oversized_reply).await.is_err());
     }
 }

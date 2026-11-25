@@ -213,8 +213,10 @@ pub fn valid_refusal_reason(reason: &str) -> bool {
 }
 
 impl PostEditInspectRequest {
+    /// Validate structural fields independent of `remaining_ms` bounds so ingress
+    /// layers can return `"timeout"` for `< 250 ms` and clamp `> 6000 ms` downward.
     #[must_use]
-    pub fn validate(&self) -> bool {
+    pub fn validate_structure(&self) -> bool {
         valid_inspect_id(&self.session_id)
             && !self.worker_epoch.is_empty()
             && self.worker_epoch.len() <= 128
@@ -225,13 +227,18 @@ impl PostEditInspectRequest {
             && !self.scope.incarnation.is_empty()
             && valid_relative_posix_path(&self.path)
             && valid_sha256_hex(&self.expected_lf_sha256)
-            && clamp_remaining_ms(self.remaining_ms) == Some(self.remaining_ms)
             && self
                 .canary_inspect_id
                 .as_deref()
                 .is_none_or(valid_inspect_id)
             && serde_json::to_vec(self)
                 .is_ok_and(|bytes| bytes.len() <= MAX_POST_EDIT_REQUEST_BYTES)
+    }
+
+    #[must_use]
+    pub fn validate(&self) -> bool {
+        self.validate_structure()
+            && clamp_remaining_ms(self.remaining_ms) == Some(self.remaining_ms)
     }
 }
 

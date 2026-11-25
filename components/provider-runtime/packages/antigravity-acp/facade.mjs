@@ -44,12 +44,22 @@ import {
   url,
 } from "./facade-tools.mjs";
 import { MANAGED_FACADE_TOOLS } from "./managed.mjs";
-import { formatPostEditNote, lfSha256, PostEditDedupe } from "./post-edit-notes.mjs";
+import {
+  formatPostEditNote,
+  lfSha256,
+  PostEditDedupe,
+  postEditDedupeKey,
+} from "./post-edit-notes.mjs";
 import { planUpdate } from "./presentation.mjs";
 
 /** The worker endpoint's own request recording an uncertain effect the
  * facade detected (`src/worker_execution/ledger.rs`); never forwarded. */
 export const UNCERTAIN_REPORT = "cowboy/uncertainEffect";
+/** Narrowly scoped non-fencing cleanup for verified private staged payloads (H-Proxy-4). */
+const STAGED_PAYLOAD_CLEANUP = "cowboy/cleanupStagedPayload";
+
+/** Thrown ONLY when `beforeSend` refuses a request positively before `socket.send()`. */
+class PreDispatchRefusal extends ToolError {}
 
 /** Fixed Cowboy-authored advisory note appended once per root turn on wrap-up hint. */
 export const WRAP_UP_NOTE =
@@ -141,6 +151,8 @@ export class Facade {
     this.writeDispatchGen = new Map();
     /** Per canonical path monotonic committed publish revision. */
     this.committedRevision = new Map();
+    /** Per canonical path latest observation generation + raw SHA-256 digest (H-Proxy-3). */
+    this.fileObservation = new Map();
     /** Tokenized deduplication of delivered post-edit diagnostic notes. */
     this.postEditDedupe = new PostEditDedupe();
     /** Active `endTurn` promises kept visible to `settled()` even after turn detach. */
@@ -617,20 +629,40 @@ export class Facade {
     }
   }
 
-  /** Synchronous pre-effect authorization guard run immediately before socket.send() (R3-H3). */
-  assertAuthorizedBeforeEffect(session, turn, decision, signal) {
+  /** Record a file observation generation + raw SHA-256 across reads, conflicts, and publishes (H-Proxy-3). */
+  recordFileObservation(file, rawDigest) {
+    const prev = this.fileObservation.get(file)?.gen ?? 0;
+    const entry = { gen: prev + 1, rawDigest };
+    this.fileObservation.set(file, entry);
+    return entry;
+  }
+
+  /** Synchronous pre-effect authorization guard run immediately before socket.send() (R3-H3, H-Proxy-4). */
+  assertAuthorizedBeforeEffect(session, turn, decision, signal, fileCheck = undefined) {
     if (
       this.closing ||
       signal?.aborted ||
+      turn.abort?.signal?.aborted ||
       session.turn !== turn ||
       turn.cancelled ||
       turn.ended ||
       turn.uncertain !== undefined ||
       (typeof decision?.confirm === "function" && !decision.confirm())
     ) {
-      throw new ToolError(
+      throw new PreDispatchRefusal(
         "The tool request was cancelled because the session's mode or turn changed.",
       );
+    }
+    if (fileCheck) {
+      const { file, path, queuedObserved, queuedInvalidationGen } = fileCheck;
+      if ((this.invalidations.get(file) ?? 0) !== queuedInvalidationGen) {
+        throw new PreDispatchRefusal(
+          `${path} became uncertain since it was read; read it again first.`,
+        );
+      }
+      if (session.observed.get(file) !== queuedObserved) {
+        throw new PreDispatchRefusal(`${path} changed since it was read; read it again first.`);
+      }
     }
   }
 
@@ -648,31 +680,39 @@ export class Facade {
       turn.uncertain !== undefined ||
       !turn.turnNonce ||
       signal?.aborted ||
+      turn.abort?.signal?.aborted ||
       !this.diagnostics
     ) {
       return null;
     }
-    const { file, relPath, expectedLfSha256, rev } = postEditMeta;
-    const isFresh = () =>
-      !this.closing &&
-      !signal?.aborted &&
-      session.turn === turn &&
-      !turn.cancelled &&
-      !turn.ended &&
-      turn.uncertain === undefined &&
-      (this.activeWrites.get(file) ?? 0) === 0 &&
-      this.committedRevision.get(file) === rev;
+    const { file, relPath, expectedLfSha256, rawDigest, rev, obsGen, writeGen, invalidationGen } =
+      postEditMeta;
+    const signals = [turn.abort?.signal, signal].filter(Boolean);
+    const combinedSignal = signals.length > 1 ? AbortSignal.any(signals) : signals[0];
+    const isFresh = () => {
+      const obs = this.fileObservation.get(file);
+      return (
+        !this.closing &&
+        !combinedSignal?.aborted &&
+        session.turn === turn &&
+        !turn.cancelled &&
+        !turn.ended &&
+        turn.uncertain === undefined &&
+        (this.activeWrites.get(file) ?? 0) === 0 &&
+        this.committedRevision.get(file) === rev &&
+        (this.writeDispatchGen.get(file) ?? 0) === writeGen &&
+        (this.invalidations.get(file) ?? 0) === invalidationGen &&
+        obs?.gen === obsGen &&
+        obs?.rawDigest === rawDigest
+      );
+    };
 
     if (!isFresh()) return null;
     const canaryInspectId = this.canaryTrace
       ? `canary-${randomUUID().replaceAll("-", "")}`
       : undefined;
-    const canaryMeta = canaryInspectId
-      ? {
-          inspectId: canaryInspectId,
-          nonceSha256: createHash("sha256").update(turn.turnNonce, "utf8").digest("hex"),
-        }
-      : undefined;
+    const makeCanaryMeta = (expectedNoteDigest = null) =>
+      canaryInspectId ? { inspectId: canaryInspectId, expectedNoteDigest } : undefined;
 
     const reply = await this.diagnostics.postEdit({
       path: relPath,
@@ -680,10 +720,11 @@ export class Facade {
       turnNonce: turn.turnNonce,
       timeoutMs: 4000,
       canaryInspectId,
-      signal,
+      signal: combinedSignal,
     });
     if (!isFresh() || reply?.state !== "projected") {
-      return canaryMeta ? { note: null, dedupeToken: null, isFresh, canaryMeta } : null;
+      const canaryMeta = makeCanaryMeta(null);
+      return canaryMeta ? { note: null, dedupeKey: null, isFresh, canaryMeta } : null;
     }
     const formatted = formatPostEditNote({
       payload: reply.payload,
@@ -691,13 +732,16 @@ export class Facade {
       expectedPath: relPath,
     });
     if (!formatted) {
-      return canaryMeta ? { note: null, dedupeToken: null, isFresh, canaryMeta } : null;
+      const canaryMeta = makeCanaryMeta(null);
+      return canaryMeta ? { note: null, dedupeKey: null, isFresh, canaryMeta } : null;
     }
-    const dedupeToken = this.postEditDedupe.reserve(relPath, formatted.digest);
-    if (dedupeToken === null) {
-      return canaryMeta ? { note: null, dedupeToken: null, isFresh, canaryMeta } : null;
-    }
-    return { note: formatted.note, dedupeToken, isFresh, canaryMeta };
+    const dedupeKey = postEditDedupeKey(turn.sessionId, file, expectedLfSha256, formatted.digest);
+    return {
+      note: formatted.note,
+      dedupeKey,
+      isFresh,
+      canaryMeta: makeCanaryMeta(formatted.digest),
+    };
   }
 
   appendTextNote(result, note) {
@@ -740,11 +784,12 @@ export class Facade {
     let result = cleanResult;
     if (!result?.isError && postEditMeta) {
       const pulled = await this.pullPostEditNote(session, callTurn, postEditMeta, { signal });
-      if (pulled?.note && pulled.isFresh()) {
-        result = this.appendTextNote(result, pulled.note);
-        this.postEditDedupe.commit(pulled.dedupeToken);
-      } else if (pulled?.dedupeToken != null) {
-        this.postEditDedupe.release(pulled.dedupeToken);
+      if (pulled?.note && pulled.dedupeKey && pulled.isFresh()) {
+        const token = this.postEditDedupe.reserve(pulled.dedupeKey);
+        if (token !== null) {
+          result = this.appendTextNote(result, pulled.note);
+          this.postEditDedupe.commit(token);
+        }
       }
     }
     return this.maybeAttachWrapUpNote(session, callTurn, name, result, relayId);
@@ -781,11 +826,16 @@ export class Facade {
       pulled = await this.pullPostEditNote(session, callTurn, postEditMeta, { signal });
     }
     let noteAttached = false;
+    let dedupeToken = null;
     const delivered = await commitReply((entry) => {
       let finalResult = cleanResult;
-      if (pulled?.note && !entry.cancelled && pulled.isFresh()) {
-        finalResult = this.appendTextNote(finalResult, pulled.note);
-        noteAttached = true;
+      if (pulled?.note && pulled.dedupeKey && !entry.cancelled && pulled.isFresh()) {
+        // M-Proxy-5: Reserve synchronously inside the !entry.committed handoff latch.
+        dedupeToken = this.postEditDedupe.reserve(pulled.dedupeKey);
+        if (dedupeToken !== null) {
+          finalResult = this.appendTextNote(finalResult, pulled.note);
+          noteAttached = true;
+        }
       }
       finalResult = this.maybeAttachWrapUpNote(session, callTurn, name, finalResult, relayId);
       const envelope = { result: finalResult };
@@ -794,9 +844,9 @@ export class Facade {
       }
       return envelope;
     });
-    if (pulled?.dedupeToken != null) {
-      if (delivered && noteAttached) this.postEditDedupe.commit(pulled.dedupeToken);
-      else this.postEditDedupe.release(pulled.dedupeToken);
+    if (dedupeToken !== null) {
+      if (delivered && noteAttached) this.postEditDedupe.commit(dedupeToken);
+      else this.postEditDedupe.release(dedupeToken);
     }
     return delivered;
   }
@@ -1168,7 +1218,9 @@ ${WRAP_UP_NOTE}`,
     let bytes;
     if (size <= LIMITS.wholeFile) {
       const data = (await this.current(file, metadata)) ?? Buffer.alloc(0);
-      session.observed.set(file, sha256(data));
+      const digest = sha256(data);
+      session.observed.set(file, digest);
+      this.recordFileObservation(file, digest);
       size = data.length;
       // A whole image the model can see, as Claude's Read shows one, for an
       // unpaged read; its type follows the name asked for (a symlink's
@@ -1188,6 +1240,7 @@ ${WRAP_UP_NOTE}`,
       bytes = data.subarray(offset, offset + length);
     } else {
       bytes = await this.readBlock(file, offset, length);
+      this.recordFileObservation(file, undefined);
     }
     const end = offset + bytes.length;
     const body = bytes.includes(0) ? `[binary content, ${bytes.length} bytes]` : bytes.toString();
@@ -1281,16 +1334,23 @@ ${WRAP_UP_NOTE}`,
     const bytes = Buffer.from(content);
     if (bytes.length > LIMITS.writeBytes) throw new ToolError("content is larger than 3 MiB");
     const file = await this.resolve(path, { allowMissing: true });
-    const beforeSend = () => this.assertAuthorizedBeforeEffect(session, turn, decision, signal);
+    // H-Proxy-1: Capture observed digest and invalidation generation BEFORE queuing
+    // on `fileLocks` so a second queued write can never silently overwrite the first.
+    const queuedObserved = session.observed.get(file);
+    const queuedInvalidationGen = this.invalidations.get(file) ?? 0;
+    const fileCheck = { file, path, queuedObserved, queuedInvalidationGen };
+    const beforeSend = () =>
+      this.assertAuthorizedBeforeEffect(session, turn, decision, signal, fileCheck);
     return await this.withFileLock(file, async () => {
       beforeSend();
       const current = await this.current(file, undefined, { beforeSend });
-      const observed = session.observed.get(file);
-      if (current && observed === undefined) {
+      if (current && queuedObserved === undefined) {
+        this.recordFileObservation(file, sha256(current));
         throw new ToolError(`${path} exists; read it with ReadFile before replacing it.`);
       }
       const base = current ? sha256(current) : "absent";
-      if (observed !== undefined && observed !== base) {
+      if (queuedObserved !== undefined && queuedObserved !== base) {
+        this.recordFileObservation(file, current ? base : undefined);
         throw new ToolError(`${path} changed since it was read; read it again first.`);
       }
       const published = await this.publish(session, turn, file, current, bytes, { beforeSend });
@@ -1307,17 +1367,27 @@ ${WRAP_UP_NOTE}`,
       throw new ToolError("old_string must be non-empty and differ from new_string");
     }
     const file = await this.resolve(path);
-    const beforeSend = () => this.assertAuthorizedBeforeEffect(session, turn, decision, signal);
+    const queuedObserved = session.observed.get(file);
+    const queuedInvalidationGen = this.invalidations.get(file) ?? 0;
+    const fileCheck = { file, path, queuedObserved, queuedInvalidationGen };
+    const beforeSend = () =>
+      this.assertAuthorizedBeforeEffect(session, turn, decision, signal, fileCheck);
     return await this.withFileLock(file, async () => {
       beforeSend();
       const current = await this.current(file, undefined, { beforeSend });
-      if (!current) throw new ToolError(`No such file: ${path}`);
+      if (!current) {
+        this.recordFileObservation(file, undefined);
+        throw new ToolError(`No such file: ${path}`);
+      }
       const base = sha256(current);
-      const observed = session.observed.get(file);
-      if (observed === undefined)
+      if (queuedObserved === undefined) {
+        this.recordFileObservation(file, base);
         throw new ToolError(`Read ${path} with ReadFile before editing it.`);
-      if (observed !== base)
+      }
+      if (queuedObserved !== base) {
+        this.recordFileObservation(file, base);
         throw new ToolError(`${path} changed since it was read; read it again.`);
+      }
       // Editing as text must never rewrite bytes that are not valid UTF-8.
       const text = decodeText(current);
       if (text === undefined) throw new ToolError(`${path} is not valid UTF-8 text; edit refused`);
@@ -1353,7 +1423,8 @@ ${WRAP_UP_NOTE}`,
    */
   async publish(session, turn, file, base, bytes, { beforeSend } = {}) {
     const generation = this.invalidations.get(file) ?? 0;
-    this.writeDispatchGen.set(file, (this.writeDispatchGen.get(file) ?? 0) + 1);
+    const writeGen = (this.writeDispatchGen.get(file) ?? 0) + 1;
+    this.writeDispatchGen.set(file, writeGen);
     this.activeWrites.set(file, (this.activeWrites.get(file) ?? 0) + 1);
     try {
       const verified = await this.publishOnce(turn, file, base, bytes, { beforeSend });
@@ -1361,13 +1432,24 @@ ${WRAP_UP_NOTE}`,
       // uncertain meanwhile is never undone by this one.
       let postEdit = null;
       if ((this.invalidations.get(file) ?? 0) === generation) {
-        session.observed.set(file, sha256(bytes));
+        const rawDigest = sha256(bytes);
+        session.observed.set(file, rawDigest);
+        const obs = this.recordFileObservation(file, rawDigest);
         const rev = (this.committedRevision.get(file) ?? 0) + 1;
         this.committedRevision.set(file, rev);
         const relPath = this.relativeWorkspacePath(file);
         const expectedLfSha256 = lfSha256(bytes);
         if (relPath !== null && expectedLfSha256 !== null) {
-          postEdit = { file, relPath, expectedLfSha256, rev };
+          postEdit = {
+            file,
+            relPath,
+            expectedLfSha256,
+            rawDigest,
+            rev,
+            obsGen: obs.gen,
+            writeGen,
+            invalidationGen: generation,
+          };
         }
       }
       return { verified, postEdit };
@@ -1377,6 +1459,7 @@ ${WRAP_UP_NOTE}`,
       if (error instanceof UncertainEffect) {
         this.invalidations.set(file, (this.invalidations.get(file) ?? 0) + 1);
         this.committedRevision.set(file, (this.committedRevision.get(file) ?? 0) + 1);
+        this.recordFileObservation(file, undefined);
         for (const each of this.sessions.values()) each.observed.delete(file);
       }
       throw error;
@@ -1426,11 +1509,11 @@ ${WRAP_UP_NOTE}`,
         beforeSend,
       });
     } catch (error) {
-      if (payload && error instanceof ToolError) {
-        // R3-M17: process/start was refused before dispatch; clean up the
-        // confirmed-unconsumed staged payload without fencing the turn.
+      if (payload && (error instanceof PreDispatchRefusal || notSent(error))) {
+        // H-Proxy-4: process/start positively did NOT dispatch; clean up ONLY
+        // the verified private staged payload via the non-fencing worker method.
         this.connection
-          .call("fs/remove", { path: url(payload), force: true }, { timeoutMs: 2000 })
+          .call(STAGED_PAYLOAD_CLEANUP, { path: url(payload) }, { timeoutMs: 2000 })
           .catch(() => {});
       }
       throw error;
@@ -1447,6 +1530,7 @@ ${WRAP_UP_NOTE}`,
     }
     if (outcome?.status === "applied") return false;
     if (outcome?.status === "conflict") {
+      this.recordFileObservation(file, undefined);
       throw new ToolError("The file changed on the target since it was read; read it again.");
     }
     if (result.timedOut) {

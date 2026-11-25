@@ -52,15 +52,25 @@ pub(super) fn negotiate_client(
     PostEditHttpClient::from_ws_endpoint(ws_endpoint, token).ok()
 }
 
-pub(super) fn dispatch_or_refuse(
+pub(super) fn intercept_local_frame(
+    frame: Frame,
     client: Option<&PostEditHttpClient>,
-    request: PostEditInspectRequest,
     reply_tx: &mpsc::Sender<Frame>,
-) {
-    if let Some(client) = client {
-        client.dispatch(request, reply_tx.clone());
-    } else {
-        send_refusal(reply_tx, &request, "unsupported");
+) -> Option<Frame> {
+    match frame {
+        Frame::PostEditInspectRequest { request } => {
+            if let Some(client) = client {
+                client.dispatch(*request, reply_tx.clone());
+            } else {
+                send_refusal(reply_tx, &request, "unsupported");
+            }
+            None
+        }
+        Frame::PostEditInspectReply { .. } => {
+            tracing::warn!("dropping wrong-direction PostEditInspectReply from local broker");
+            None
+        }
+        other => Some(other),
     }
 }
 const MAX_CONCURRENT_POST_EDIT_HTTP: usize = 4;
@@ -112,12 +122,8 @@ impl PostEditHttpClient {
         })
     }
 
-    pub(super) fn dispatch(
-        &self,
-        mut request: PostEditInspectRequest,
-        reply_tx: mpsc::Sender<Frame>,
-    ) {
-        if !request.validate() {
+    pub(super) fn dispatch(&self, request: PostEditInspectRequest, reply_tx: mpsc::Sender<Frame>) {
+        if !request.validate_structure() {
             send_refusal(&reply_tx, &request, "invalid_request");
             return;
         }
@@ -125,37 +131,53 @@ impl PostEditHttpClient {
             send_refusal(&reply_tx, &request, "timeout");
             return;
         };
-        request.remaining_ms = clamped_ms;
+        let deadline = Instant::now() + Duration::from_millis(clamped_ms);
         let Ok(permit) = Arc::clone(&self.slots).try_acquire_owned() else {
             send_refusal(&reply_tx, &request, "capacity");
             return;
         };
-        let Ok(body) = serde_json::to_vec(&request) else {
-            send_refusal(&reply_tx, &request, "invalid_request");
-            return;
-        };
-        if body.len() > MAX_POST_EDIT_REQUEST_BYTES {
-            send_refusal(&reply_tx, &request, "invalid_request");
-            return;
-        }
-
         let http = self.http.clone();
         let url = self.endpoint_url.clone();
         let token = self.token.clone();
         let mut cancel_rx = self.cancel_tx.subscribe();
         tokio::spawn(async move {
             let _permit = permit;
-            let deadline = Instant::now() + Duration::from_millis(clamped_ms);
             let outcome = tokio::select! {
                 biased;
                 _ = cancel_rx.wait_for(|cancelled| *cancelled) => return,
-                reply = execute_http(http, url, token, body, &request, deadline) => reply,
+                reply = execute_http_at_deadline(http, url, token, request, deadline) => reply,
             };
             let _ = reply_tx.try_send(Frame::PostEditInspectReply {
                 reply: Box::new(outcome),
             });
         });
     }
+}
+
+async fn execute_http_at_deadline(
+    http: reqwest::Client,
+    url: url::Url,
+    token: String,
+    mut request: PostEditInspectRequest,
+    deadline: Instant,
+) -> PostEditInspectReply {
+    let rem = u64::try_from(
+        deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis(),
+    )
+    .unwrap_or(u64::MAX);
+    let Some(send_ms) = clamp_remaining_ms(rem) else {
+        return refusal_for(&request, "timeout");
+    };
+    request.remaining_ms = send_ms;
+    let Ok(body) = serde_json::to_vec(&request) else {
+        return refusal_for(&request, "invalid_request");
+    };
+    if body.len() > MAX_POST_EDIT_REQUEST_BYTES {
+        return refusal_for(&request, "invalid_request");
+    }
+    execute_http(http, url, token, body, &request, deadline).await
 }
 
 async fn execute_http(

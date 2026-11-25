@@ -525,32 +525,35 @@ fn bearer_token() -> String {
 }
 
 const MAX_PRE_AUTH_SOCKETS: usize = 4;
+const MAX_NON_MUTATION_PRE_AUTH_SOCKETS: usize = 3;
 const PRE_AUTH_UPGRADE_TIMEOUT: Duration = Duration::from_millis(500);
 const PRE_AUTH_STALL_EVICT_AFTER: Duration = Duration::from_millis(200);
 const MAX_PRE_AUTH_HEADER_BYTES: usize = 4 * 1024;
+const MAX_INIT_FRAME_BYTES: usize = 4 * 1024;
+const MAX_INIT_WIRE_BYTES: usize = MAX_INIT_FRAME_BYTES + 128;
+const INIT_FRAME_TIMEOUT: Duration = Duration::from_secs(1);
 const DIAGNOSTICS_MAX_FRAME_BYTES: usize = 64 * 1024;
 const DIAGNOSTICS_PATH: &str = "/diagnostics";
 
-struct PreAuthEntry {
-    id: u64,
+struct PreAuthSlot {
     started_at: Instant,
-    abort: tokio::task::AbortHandle,
+    abort: Option<tokio::task::AbortHandle>,
+}
+
+#[derive(Default)]
+struct AdmissionState {
+    next_id: u64,
+    pre_auth: std::collections::HashMap<u64, PreAuthSlot>,
 }
 
 struct PreAuthCleanup {
-    active: Arc<Mutex<HashSet<u64>>>,
+    state: Arc<Mutex<AdmissionState>>,
     id: u64,
-}
-
-impl PreAuthCleanup {
-    fn release(&self) {
-        self.active.lock().remove(&self.id);
-    }
 }
 
 impl Drop for PreAuthCleanup {
     fn drop(&mut self) {
-        self.release();
+        self.state.lock().pre_auth.remove(&self.id);
     }
 }
 
@@ -576,7 +579,9 @@ struct PrefixedHandshakeStream<S> {
     prefix: Vec<u8>,
     prefix_pos: usize,
     pre_auth_remaining: usize,
+    init_remaining: usize,
     upgraded: Arc<std::sync::atomic::AtomicBool>,
+    initialized: Arc<std::sync::atomic::AtomicBool>,
 }
 
 impl<S: AsyncRead + Unpin> AsyncRead for PrefixedHandshakeStream<S> {
@@ -592,16 +597,28 @@ impl<S: AsyncRead + Unpin> AsyncRead for PrefixedHandshakeStream<S> {
             this.prefix_pos += take;
             return std::task::Poll::Ready(Ok(()));
         }
-        if this.upgraded.load(std::sync::atomic::Ordering::Acquire) {
+        if this.initialized.load(std::sync::atomic::Ordering::Acquire) {
             return std::pin::Pin::new(&mut this.inner).poll_read(cx, buf);
         }
-        if this.pre_auth_remaining == 0 {
+        let upgraded = this.upgraded.load(std::sync::atomic::Ordering::Acquire);
+        let (remaining, err_msg) = if upgraded {
+            (
+                &mut this.init_remaining,
+                "WebSocket initialization frame exceeded 4 KiB limit",
+            )
+        } else {
+            (
+                &mut this.pre_auth_remaining,
+                "pre-auth HTTP handshake exceeded 4 KiB limit",
+            )
+        };
+        if *remaining == 0 {
             return std::task::Poll::Ready(Err(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                "pre-auth HTTP handshake exceeded 4 KiB limit",
+                err_msg,
             )));
         }
-        let max = buf.remaining().min(this.pre_auth_remaining);
+        let max = buf.remaining().min(*remaining);
         let read_res = {
             let mut sub = buf.take(max);
             let before = sub.filled().len();
@@ -616,7 +633,7 @@ impl<S: AsyncRead + Unpin> AsyncRead for PrefixedHandshakeStream<S> {
         match read_res {
             std::task::Poll::Ready(Ok(n)) => {
                 buf.advance(n);
-                this.pre_auth_remaining = this.pre_auth_remaining.saturating_sub(n);
+                *remaining = remaining.saturating_sub(n);
                 std::task::Poll::Ready(Ok(()))
             }
             std::task::Poll::Ready(Err(e)) => std::task::Poll::Ready(Err(e)),
@@ -658,9 +675,7 @@ struct Admission {
     client: Arc<Client>,
     mutation_slot: Arc<Semaphore>,
     diagnostics_slot: Arc<Semaphore>,
-    next_pre_auth_id: u64,
-    pre_auth_active: Arc<Mutex<HashSet<u64>>>,
-    pre_auth_tasks: Vec<PreAuthEntry>,
+    state: Arc<Mutex<AdmissionState>>,
     tasks: tokio::task::JoinSet<()>,
 }
 
@@ -671,9 +686,7 @@ impl Admission {
             client,
             mutation_slot: Arc::new(Semaphore::new(1)),
             diagnostics_slot: Arc::new(Semaphore::new(1)),
-            next_pre_auth_id: 0,
-            pre_auth_active: Arc::new(Mutex::new(HashSet::new())),
-            pre_auth_tasks: Vec::new(),
+            state: Arc::new(Mutex::new(AdmissionState::default())),
             tasks: tokio::task::JoinSet::new(),
         }
     }
@@ -682,72 +695,76 @@ impl Admission {
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        {
-            let active = self.pre_auth_active.lock();
-            self.pre_auth_tasks
-                .retain(|entry| active.contains(&entry.id));
-        }
-        if self.pre_auth_tasks.len() >= MAX_PRE_AUTH_SOCKETS {
-            if self.mutation_slot.available_permits() > 0
-                && let Some(idx) = self
-                    .pre_auth_tasks
+        let mut guard = self.state.lock();
+        let mutation_vacant = self.mutation_slot.available_permits() > 0;
+        let cap = if mutation_vacant {
+            MAX_PRE_AUTH_SOCKETS
+        } else {
+            MAX_NON_MUTATION_PRE_AUTH_SOCKETS
+        };
+        if guard.pre_auth.len() >= cap {
+            if mutation_vacant
+                && let Some((&evict_id, _)) = guard
+                    .pre_auth
                     .iter()
-                    .position(|entry| entry.started_at.elapsed() >= PRE_AUTH_STALL_EVICT_AFTER)
+                    .filter(|(_, slot)| slot.started_at.elapsed() >= PRE_AUTH_STALL_EVICT_AFTER)
+                    .min_by_key(|(_, slot)| slot.started_at)
             {
-                let evicted = self.pre_auth_tasks.remove(idx);
-                self.pre_auth_active.lock().remove(&evicted.id);
-                evicted.abort.abort();
+                if let Some(evicted) = guard.pre_auth.remove(&evict_id)
+                    && let Some(abort) = evicted.abort
+                {
+                    abort.abort();
+                }
             } else {
                 return;
             }
         }
-        self.next_pre_auth_id = self.next_pre_auth_id.saturating_add(1);
-        let id = self.next_pre_auth_id;
-        self.pre_auth_active.lock().insert(id);
-        let pre_auth_cleanup = PreAuthCleanup {
-            active: Arc::clone(&self.pre_auth_active),
-            id,
-        };
+        guard.next_id = guard.next_id.saturating_add(1);
+        let id = guard.next_id;
+        let state = Arc::clone(&self.state);
         let client = Arc::clone(&self.client);
         let token = self.token.clone();
         let mutation_slot = Arc::clone(&self.mutation_slot);
         let diagnostics_slot = Arc::clone(&self.diagnostics_slot);
+        let cleanup = PreAuthCleanup {
+            state: Arc::clone(&state),
+            id,
+        };
         let abort = self.tasks.spawn(async move {
+            let _cleanup = cleanup;
             let session = client.session.clone();
             match upgrade_and_classify(
                 socket,
                 &token,
                 Arc::clone(&client),
                 unit_generation,
+                id,
+                Arc::clone(&state),
                 mutation_slot,
                 diagnostics_slot,
             )
             .await
             {
-                Ok(UpgradedConnection::Mutation { websocket, _guard }) => {
-                    pre_auth_cleanup.release();
-                    if serve_mutation(websocket, client).await.is_err() {
-                        // Do not log frames, capabilities or arbitrary
-                        // native error text from the private endpoint.
+                Ok(UpgradedConnection::Mutation { websocket, initialized, _guard }) => {
+                    if serve_mutation(websocket, initialized, client).await.is_err() {
                         tracing::warn!(event_name = "cowboy.execution.disconnected", %session, reason = "endpoint_failed", "execution endpoint disconnected");
                     }
                     drop(_guard);
                 }
-                Ok(UpgradedConnection::Diagnostics { websocket, _permit }) => {
-                    pre_auth_cleanup.release();
-                    let _ = serve_diagnostics(websocket, client, unit_generation).await;
+                Ok(UpgradedConnection::Diagnostics { websocket, initialized, _permit }) => {
+                    let _ = serve_diagnostics(websocket, initialized, client, unit_generation).await;
                     drop(_permit);
                 }
-                Err(_) => {
-                    // Never notify `relays.socket_ended()` for failed pre-auth or rejected sockets.
-                }
+                Err(_) => {}
             }
         });
-        self.pre_auth_tasks.push(PreAuthEntry {
+        guard.pre_auth.insert(
             id,
-            started_at: Instant::now(),
-            abort,
-        });
+            PreAuthSlot {
+                started_at: Instant::now(),
+                abort: Some(abort),
+            },
+        );
     }
 
     async fn reap(&mut self) {
@@ -904,10 +921,12 @@ async fn accept_unix(
 enum UpgradedConnection<S> {
     Mutation {
         websocket: tokio_tungstenite::WebSocketStream<PrefixedHandshakeStream<S>>,
+        initialized: Arc<std::sync::atomic::AtomicBool>,
         _guard: MutationSocketGuard,
     },
     Diagnostics {
         websocket: tokio_tungstenite::WebSocketStream<PrefixedHandshakeStream<S>>,
+        initialized: Arc<std::sync::atomic::AtomicBool>,
         _permit: tokio::sync::OwnedSemaphorePermit,
     },
 }
@@ -946,11 +965,14 @@ where
     clippy::result_large_err,
     reason = "Tungstenite fixes the callback HTTP error response type"
 )]
+#[allow(clippy::too_many_arguments)]
 async fn upgrade_and_classify<S>(
     mut socket: S,
     token: &str,
     client: Arc<Client>,
     unit_generation: u64,
+    pre_auth_id: u64,
+    admission_state: Arc<Mutex<AdmissionState>>,
     mutation_slot: Arc<Semaphore>,
     diagnostics_slot: Arc<Semaphore>,
 ) -> Result<UpgradedConnection<S>>
@@ -962,12 +984,15 @@ where
         tokio::time::timeout_at(deadline, peek_request_line(&mut socket)).await??;
     let remaining_header = MAX_PRE_AUTH_HEADER_BYTES.saturating_sub(prefix.len());
     let upgraded = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let initialized = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let prefixed = PrefixedHandshakeStream {
         inner: socket,
         prefix,
         prefix_pos: 0,
         pre_auth_remaining: remaining_header,
+        init_remaining: MAX_INIT_WIRE_BYTES,
         upgraded: Arc::clone(&upgraded),
+        initialized: Arc::clone(&initialized),
     };
     let max_frame = if peeked_diagnostics {
         DIAGNOSTICS_MAX_FRAME_BYTES
@@ -996,16 +1021,22 @@ where
                     .expect("constant response"));
             }
             let path = request.uri().path();
+            let mut adm = admission_state.lock();
+            if adm.pre_auth.remove(&pre_auth_id).is_none() {
+                return Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                    .status(503)
+                    .body(Some("Evicted".to_owned()))
+                    .expect("constant response"));
+            }
             if path == DIAGNOSTICS_PATH {
+                let drain = client_cb.relays.drain_state();
                 if !peeked_diagnostics || client_cb.binding.managed.is_some() {
                     return Err(tokio_tungstenite::tungstenite::http::Response::builder()
                         .status(403)
                         .body(Some("Forbidden".to_owned()))
                         .expect("constant response"));
                 }
-                if client_cb.relays.draining()
-                    || client_cb.relays.drain_generation() != unit_generation
-                {
+                if drain.draining || drain.generation != unit_generation {
                     return Err(tokio_tungstenite::tungstenite::http::Response::builder()
                         .status(503)
                         .body(Some("Draining".to_owned()))
@@ -1048,10 +1079,12 @@ where
     match acquired.lock().take() {
         Some(SlotKind::Mutation(guard)) => Ok(UpgradedConnection::Mutation {
             websocket,
+            initialized,
             _guard: guard,
         }),
         Some(SlotKind::Diagnostics(permit)) => Ok(UpgradedConnection::Diagnostics {
             websocket,
+            initialized,
             _permit: permit,
         }),
         None => bail!("execution websocket upgraded without a slot"),
@@ -1060,19 +1093,26 @@ where
 
 async fn serve_mutation<S>(
     mut socket: tokio_tungstenite::WebSocketStream<S>,
+    initialized: Arc<std::sync::atomic::AtomicBool>,
     client: Arc<Client>,
 ) -> Result<()>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
-    let first = tokio::time::timeout(Duration::from_secs(30), socket.next())
+    let first = tokio::time::timeout(INIT_FRAME_TIMEOUT, socket.next())
         .await?
         .context("execution initialization missing")??;
-    let first: Value = serde_json::from_slice(&first.into_data())?;
+    let first_bytes = first.into_data();
+    ensure!(
+        first_bytes.len() <= MAX_INIT_FRAME_BYTES,
+        "execution initialization frame exceeded 4 KiB limit"
+    );
+    let first: Value = serde_json::from_slice(&first_bytes)?;
     ensure!(
         first["method"] == "initialize" && valid_id(&first["id"]),
         "execution initialization required"
     );
+    initialized.store(true, std::sync::atomic::Ordering::Release);
     let Response::Ready {
         scope,
         initialization,
@@ -1182,7 +1222,8 @@ where
 }
 
 async fn serve_diagnostics<S>(
-    mut socket: tokio_tungstenite::WebSocketStream<S>,
+    socket: tokio_tungstenite::WebSocketStream<S>,
+    initialized: Arc<std::sync::atomic::AtomicBool>,
     client: Arc<Client>,
     unit_generation: u64,
 ) -> Result<()>
@@ -1196,31 +1237,40 @@ where
     if client.binding.managed.is_some() || is_fenced(&drain.borrow()) {
         return Ok(());
     }
-    let first = tokio::select! {
+    tokio::select! {
         biased;
-        _ = drain.wait_for(is_fenced) => return Ok(()),
-        msg = tokio::time::timeout(Duration::from_secs(5), socket.next()) => {
-            msg?.context("diagnostics initialization missing")??
-        }
-    };
-    let first: Value = serde_json::from_slice(&first.into_data())?;
+        _ = drain.wait_for(is_fenced) => Ok(()),
+        res = serve_diagnostics_inner(socket, initialized, client, unit_generation) => res,
+    }
+}
+
+async fn serve_diagnostics_inner<S>(
+    mut socket: tokio_tungstenite::WebSocketStream<S>,
+    initialized: Arc<std::sync::atomic::AtomicBool>,
+    client: Arc<Client>,
+    unit_generation: u64,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let first = tokio::time::timeout(INIT_FRAME_TIMEOUT, socket.next())
+        .await?
+        .context("diagnostics initialization missing")??;
+    let first_bytes = first.into_data();
+    ensure!(
+        first_bytes.len() <= MAX_INIT_FRAME_BYTES,
+        "diagnostics initialization frame exceeded 4 KiB limit"
+    );
+    let first: Value = serde_json::from_slice(&first_bytes)?;
     ensure!(
         first["method"] == "initialize" && valid_id(&first["id"]),
         "diagnostics initialization required"
     );
-    if client.binding.managed.is_some() || is_fenced(&drain.borrow()) {
-        return Ok(());
-    }
+    initialized.store(true, std::sync::atomic::Ordering::Release);
     let init_frame = json!({"id": first["id"], "result": {"schema": 1}}).to_string();
     send_bounded(&mut socket, Message::Text(init_frame.into())).await?;
 
-    loop {
-        let next_msg = tokio::select! {
-            biased;
-            _ = drain.wait_for(is_fenced) => break,
-            message = socket.next() => message,
-        };
-        let Some(message) = next_msg else { break };
+    while let Some(message) = socket.next().await {
         match message? {
             Message::Close(_) => break,
             Message::Ping(data) => {
@@ -1244,7 +1294,10 @@ where
                     let params = native_params(&message);
                     let result = tokio::select! {
                         biased;
-                        _ = drain.wait_for(is_fenced) => break,
+                        peer = socket.next() => {
+                            let _ = peer;
+                            return Ok(());
+                        }
                         result = client.inspect_post_edit(unit_generation, &params) => result,
                     };
                     json!({"id": id, "result": result})
