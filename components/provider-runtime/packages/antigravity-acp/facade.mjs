@@ -1904,7 +1904,7 @@ ${WRAP_UP_NOTE}`,
 
   /** Terminate `process`; `true` only once the target confirmed it closed
    * within `confirmMs`. */
-  async terminate(process, confirmMs = 5000) {
+  async terminate(process, confirmMs = 5000, { retryNotSent = false } = {}) {
     if (process.closed) return true;
     // One stop per process: after a stop that may have been delivered (its
     // reply lost included), later attempts only observe, so a process
@@ -1919,28 +1919,39 @@ ${WRAP_UP_NOTE}`,
     // outstanding) and never sends a second signal to a process handling the
     // first. Only a stop refused before it was sent (no connection, or no
     // request slot) is sent again later; a reply lost after sending keeps it.
-    if (!process.stopping) {
-      process.stopping = this.connection
-        .call("process/terminate", { processId: process.processId })
-        .catch((error) => {
-          // Callers joined on this stop see its failure; a later caller only
-          // observes (the stop may have been delivered) or, if it was never
-          // sent, sends it.
-          process.stopping = notSent(error) ? undefined : Promise.resolve();
-          throw error;
-        });
-      process.stopping.catch(() => {});
-    }
-    let stopTimer;
-    const stopExpired = new Promise((resolve) => {
-      stopTimer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
-    });
-    try {
-      if ((await Promise.race([process.stopping.then(() => true), stopExpired])) === false) {
-        return process.closed;
+    for (;;) {
+      if (!process.stopping) {
+        process.stopping = this.connection
+          .call("process/terminate", { processId: process.processId })
+          .catch((error) => {
+            // Callers joined on this stop see its failure; a later caller only
+            // observes (the stop may have been delivered) or, if it was never
+            // sent, sends it.
+            process.stopping = notSent(error) ? undefined : Promise.resolve();
+            throw error;
+          });
+        process.stopping.catch(() => {});
       }
-    } finally {
-      clearTimeout(stopTimer);
+      let stopTimer;
+      const stopExpired = new Promise((resolve) => {
+        stopTimer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
+      });
+      try {
+        if ((await Promise.race([process.stopping.then(() => true), stopExpired])) === false) {
+          return process.closed;
+        }
+        break;
+      } catch (error) {
+        if (retryNotSent && notSent(error)) {
+          const left = deadline - Date.now();
+          if (left <= 0) return process.closed;
+          await new Promise((resolve) => setTimeout(resolve, Math.min(25, left)));
+          continue;
+        }
+        throw error;
+      } finally {
+        clearTimeout(stopTimer);
+      }
     }
     while (!process.closed) {
       const remaining = deadline - Date.now();
@@ -1956,6 +1967,14 @@ ${WRAP_UP_NOTE}`,
           this.read(process, Math.min(500, remaining), { lostIsUncertain: false, deadline }),
           expired,
         ]);
+      } catch (error) {
+        if (retryNotSent && notSent(error)) {
+          const left = deadline - Date.now();
+          if (left <= 0) break;
+          await new Promise((resolve) => setTimeout(resolve, Math.min(25, left)));
+          continue;
+        }
+        throw error;
       } finally {
         clearTimeout(timer);
       }
@@ -2140,7 +2159,9 @@ ${WRAP_UP_NOTE}`,
     if (!process.closed) {
       // A slow-exiting process tree is observed for a bounded while before
       // its outcome counts as unknown.
-      const closed = await this.terminate(process, LIMITS.stopConfirmMs).catch(() => false);
+      const closed = await this.terminate(process, LIMITS.stopConfirmMs, {
+        retryNotSent: true,
+      }).catch(() => false);
       if (!closed && !readiness) throw new UncertainEffect("process/terminate");
     }
     if (failure !== undefined) throw failure;

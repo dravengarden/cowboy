@@ -7,6 +7,8 @@ import WebSocket from "ws";
 // the same executor session. A lost reply is never resubmitted here.
 /** Requests still sent while a connection drains (`idle`). */
 const DRAIN_REQUESTS = new Set(["cowboy/uncertainEffect", "cowboy/drained"]);
+/** Cleanup requests get one reserved slot above the 15 ordinary slots (R14-M4). */
+const CLEANUP_REQUESTS = new Set(["process/terminate"]);
 
 export class Connection {
   pending = new Map();
@@ -171,20 +173,22 @@ export class Connection {
     if (this.closed || this.stopped || draining) {
       return Promise.reject(new Error("Execution unavailable; no replay"));
     }
+    // Abandoned requests may still run on the executor, so they count.
+    // Check capacity BEFORE running `beforeSend` so a capacity refusal never
+    // marks a request dispatched; reserve slot 16 for `process/terminate`
+    // cleanup and keep drain/uncertainty notifications uncapped (R14-M4).
+    const limit = CLEANUP_REQUESTS.has(method) ? 16 : 15;
+    if (!DRAIN_REQUESTS.has(method) && this.pending.size + this.abandoned.size >= limit) {
+      return Promise.reject(new Error("Too many execution requests"));
+    }
     // R3-H3: Run synchronous pre-send authorization guard AFTER ensureConnected()
-    // resolves and immediately BEFORE pending registration or socket.send().
+    // and capacity checks, immediately BEFORE pending registration or socket.send().
     if (typeof beforeSend === "function") {
       try {
         beforeSend();
       } catch (error) {
         return Promise.reject(error);
       }
-    }
-    // Abandoned requests may still run on the executor, so they count.
-    // Reserve dedicated reporting headroom for drain/uncertainty notifications
-    // so full tool-request slots can never block `cowboy/uncertainEffect`.
-    if (!DRAIN_REQUESTS.has(method) && this.pending.size + this.abandoned.size >= 15) {
-      return Promise.reject(new Error("Too many execution requests"));
     }
     return new Promise((resolve, reject) => {
       const id = randomUUID();
