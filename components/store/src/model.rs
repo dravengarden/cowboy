@@ -538,6 +538,15 @@ pub fn local_machine_id() -> String {
 }
 
 impl SessionMeta {
+    /// Strip Controller-internal Provider behavior metadata before sending
+    /// session metadata to product clients. Product clients never read this
+    /// contract, while shipping it on every session inflates wire payloads.
+    #[must_use]
+    pub fn for_client(mut self) -> Self {
+        self.provider_behavior = None;
+        self
+    }
+
     /// Whether the context reading predates a completed compaction: the
     /// compacted context's size is unknown until the agent reports again, so
     /// nothing may act on `context_used` as a current measurement.

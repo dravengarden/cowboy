@@ -49,7 +49,7 @@ export function useAnnouncedSessionContext(
       window.removeEventListener(PREFERENCES_CHANGED, check);
     };
   }, [sessionId]);
-  return useSessionContext(sessionId, known || linked).data;
+  return useSessionContext(sessionId, known || linked, false).data;
 }
 
 /** Where a context cue renders. A pending choice changes the next send, so

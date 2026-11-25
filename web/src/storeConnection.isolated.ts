@@ -156,6 +156,7 @@ test("a user retry opens one socket bound to the dataset and device proof", asyn
   expect(url.pathname).toBe("/ws");
   expect(url.searchParams.get("dataset")).toBe(dataset.dataset_id);
   expect(url.searchParams.get("bootstrap")).toBe("lazy");
+  expect(url.searchParams.get("session_deltas")).toBe("1");
   expect(socket!.protocols).toEqual([realDatabase.PRODUCT_SYNC_SUBPROTOCOL, "cowboy-device-test"]);
   await settle(50);
   expect(FakeSocket.all.length).toBe(1);
@@ -288,6 +289,95 @@ test("active queue edit holds re-declare after socket reconnect until cleared", 
     .filter((f) => f.type === "set_queue_editing" && f.session_id === "s-hold");
   expect(clearedFrames).toEqual([]);
 }, 15_000);
+
+test("session_updated and session_removed incrementally update live store sessions", async () => {
+  const socket = FakeSocket.all.at(-1)!;
+  socket.accept();
+  const base = {
+    provider: "codex",
+    machine_id: "hawk",
+    cwd: "/tmp",
+    origin: "web",
+    paused: false,
+    context_used: 0,
+    context_size: 0,
+  };
+  socket.receive({
+    type: "sessions",
+    sessions: [
+      { ...base, id: "delta-1", title: "First", status: "running" },
+      { ...base, id: "delta-2", title: "Second", status: "running" },
+    ],
+  });
+  socket.receive({ type: "bootstrap_complete" });
+  await until(() => store.getSyncStatus().phase === "live");
+  await settle(25);
+  expect(store.currentSessions().map((s) => `${s.id}:${s.status}`)).toEqual([
+    "delta-1:running",
+    "delta-2:running",
+  ]);
+
+  socket.receive({
+    type: "session_updated",
+    session: { ...base, id: "delta-1", title: "First", status: "busy", context_used: 4200, context_size: 200000 },
+  });
+  socket.receive({
+    type: "session_updated",
+    session: { ...base, id: "delta-3", title: "Third", status: "starting" },
+  });
+  await settle(25);
+  expect(store.currentSessions().map((s) => `${s.id}:${s.status}:${s.context_used}`)).toEqual([
+    "delta-1:busy:4200",
+    "delta-2:running:0",
+    "delta-3:starting:0",
+  ]);
+
+  const records = new Map<string, string>();
+  const fakeStorage: Storage = {
+    get length() {
+      return records.size;
+    },
+    key: (index: number) => [...records.keys()][index] ?? null,
+    getItem: (key: string) => records.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      records.set(key, value);
+    },
+    removeItem: (key: string) => {
+      records.delete(key);
+    },
+    clear: () => {
+      records.clear();
+    },
+  };
+  const previousStorage = globals.localStorage;
+  globals.localStorage = fakeStorage;
+  try {
+    fakeStorage.setItem(
+      "cowboy:composer-draft:delta-2",
+      JSON.stringify({ text: "bye", attachments: [] }),
+    );
+    fakeStorage.setItem(
+      "cowboy:composer-draft:other-tab-unseen",
+      JSON.stringify({ text: "keep me", attachments: [] }),
+    );
+    const goneEditKey = `cowboy:pending-edit:${JSON.stringify(["delta-2", "draft", "row-1"])}`;
+    const keptEditKey = `cowboy:pending-edit:${JSON.stringify(["other-tab-unseen", "draft", "row-2"])}`;
+    fakeStorage.setItem(goneEditKey, JSON.stringify({ text: "drop" }));
+    fakeStorage.setItem(keptEditKey, JSON.stringify({ text: "preserve" }));
+
+    socket.receive({ type: "session_removed", session_id: "delta-2" });
+    await settle(25);
+    expect(store.currentSessions().map((s) => s.id)).toEqual(["delta-1", "delta-3"]);
+    // Individual removal deletes only the removed session's draft and pending
+    // edits, never another tab's buffers for a session this tab has not seen.
+    expect(fakeStorage.getItem("cowboy:composer-draft:delta-2")).toBeNull();
+    expect(fakeStorage.getItem("cowboy:composer-draft:other-tab-unseen")).not.toBeNull();
+    expect(fakeStorage.getItem(goneEditKey)).toBeNull();
+    expect(fakeStorage.getItem(keptEditKey)).not.toBeNull();
+  } finally {
+    globals.localStorage = previousStorage;
+  }
+});
 
 // Last: an auth-required close pauses the product socket until the sign-in
 // cookie changes, which this harness never signals.

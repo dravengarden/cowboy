@@ -7,6 +7,8 @@ use std::ops::ControlFlow;
 
 mod fanout;
 use fanout::*;
+#[cfg(test)]
+pub(crate) use fanout::{FanoutDelivery, resolve_fanout_delivery};
 
 pub fn websocket_capacity_identity(
     product_auth_enabled: bool,
@@ -141,6 +143,7 @@ pub async fn ws_upgrade(
         Err(status) => return status.into_response(),
     };
     let lazy_bootstrap = query.bootstrap.as_deref() == Some("lazy");
+    let supports_session_deltas = query.session_deltas.as_deref() == Some("1");
     let via_cookie = state.product_auth_enabled
         && crate::product_auth::user_cookie_token(&headers).is_some()
         && crate::product_auth::bearer_token(&headers).is_none();
@@ -153,6 +156,7 @@ pub async fn ws_upgrade(
             socket,
             state,
             lazy_bootstrap,
+            supports_session_deltas,
             WebSocketAuthentication {
                 principal,
                 caller,
@@ -193,6 +197,12 @@ pub fn project_outbound(
                 .filter(|meta| principal.can_see(meta.owner_user_id.as_deref()))
                 .collect(),
         }),
+        Outbound::SessionUpdated { ref session } => principal
+            .can_see(session.owner_user_id.as_deref())
+            .then_some(message),
+        // Without a FanoutFrame's detached owner metadata, fail closed for
+        // non-owners; live fan-out uses `resolve_fanout_delivery` with owner info.
+        Outbound::SessionRemoved { .. } => principal.sees_every_session().then_some(message),
         Outbound::Snapshot { ref session_id, .. }
         | Outbound::ConfigOptions { ref session_id, .. }
         | Outbound::CallApproval { ref session_id, .. } => {
@@ -317,6 +327,7 @@ pub async fn handle_ws(
     socket: WebSocket,
     state: Arc<AppState>,
     lazy_bootstrap: bool,
+    supports_session_deltas: bool,
     authentication: WebSocketAuthentication,
 ) {
     let (mut sink, mut stream) = socket.split();
@@ -417,7 +428,10 @@ pub async fn handle_ws(
             None
         }
     };
-    for message in connect_bootstrap(&state.hub, lazy_bootstrap, &principal, machine_snapshot) {
+    let (bootstrap_messages, bootstrap_sessions_seq) =
+        connect_bootstrap_with_seq(&state.hub, lazy_bootstrap, &principal, machine_snapshot);
+    let legacy_sessions = legacy_bootstrap_sessions(&bootstrap_messages, supports_session_deltas);
+    for message in bootstrap_messages {
         if send_json(&mut sink, &message).await.is_err() {
             return;
         }
@@ -429,6 +443,9 @@ pub async fn handle_ws(
     let fanout_identity = ClientFanout {
         state: Arc::clone(&state),
         principal: principal.clone(),
+        supports_session_deltas,
+        bootstrap_sessions_seq,
+        legacy_sessions,
         via_cookie,
         cookie: cookie_token.clone(),
         bearer: bearer.clone(),

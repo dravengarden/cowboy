@@ -1008,6 +1008,7 @@ pub const HEARTBEAT: std::time::Duration = std::time::Duration::from_secs(25);
 #[derive(Debug, Default, Deserialize)]
 pub struct WebSocketQuery {
     pub bootstrap: Option<String>,
+    pub session_deltas: Option<String>,
     pub client_id: Option<String>,
     pub client_kind: Option<String>,
     pub dataset: Option<String>,
@@ -1033,8 +1034,9 @@ pub struct WebSocketCapacityIdentity {
     pub client_kind: String,
 }
 
-pub fn global_bootstrap(hub: &Hub, principal: &ProductPrincipal) -> Vec<Outbound> {
-    let sessions = hub.session_list_filtered(|owner| principal.can_see(owner));
+pub fn global_bootstrap_with_seq(hub: &Hub, principal: &ProductPrincipal) -> (Vec<Outbound>, u64) {
+    let (sessions, sessions_seq) =
+        hub.session_list_for_client_with_seq(|owner| principal.can_see(owner));
     let visible = sessions.iter().map(|meta| meta.id.clone()).collect();
     let mut messages = vec![
         Outbound::Sessions { sessions },
@@ -1049,16 +1051,20 @@ pub fn global_bootstrap(hub: &Hub, principal: &ProductPrincipal) -> Vec<Outbound
             .into_iter()
             .filter_map(|message| project_outbound(hub, principal, &visible, message)),
     );
-    messages
+    (messages, sessions_seq)
 }
 
-pub fn connect_bootstrap(
+pub fn global_bootstrap(hub: &Hub, principal: &ProductPrincipal) -> Vec<Outbound> {
+    global_bootstrap_with_seq(hub, principal).0
+}
+
+pub fn connect_bootstrap_with_seq(
     hub: &Hub,
     lazy: bool,
     principal: &ProductPrincipal,
     machine_snapshot: Option<Outbound>,
-) -> Vec<Outbound> {
-    let mut messages = global_bootstrap(hub, principal);
+) -> (Vec<Outbound>, u64) {
+    let (mut messages, sessions_seq) = global_bootstrap_with_seq(hub, principal);
     if !lazy {
         for session in hub.session_list_filtered(|owner| principal.can_see(owner)) {
             if let Some(session_messages) = focused_session_bootstrap(hub, &session.id) {
@@ -1068,7 +1074,16 @@ pub fn connect_bootstrap(
     }
     messages.extend(machine_snapshot);
     messages.push(Outbound::BootstrapComplete);
-    messages
+    (messages, sessions_seq)
+}
+
+pub fn connect_bootstrap(
+    hub: &Hub,
+    lazy: bool,
+    principal: &ProductPrincipal,
+    machine_snapshot: Option<Outbound>,
+) -> Vec<Outbound> {
+    connect_bootstrap_with_seq(hub, lazy, principal, machine_snapshot).0
 }
 
 pub fn principal_owned_sync_state(state: &str) -> bool {

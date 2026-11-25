@@ -70,6 +70,7 @@ mod clear_conversation;
 mod lost_execution;
 mod owner_turn_loss;
 mod runtime_epoch_fence;
+mod session_broadcast;
 pub use clear_conversation::ClearCommit;
 pub use runtime_epoch_fence::RuntimeEpoch;
 mod runtime_reconciliation;
@@ -1085,8 +1086,16 @@ pub enum Outbound {
     /// directly while a client waits for, acquires, or loses an active seat;
     /// it is never broadcast to another account or client.
     ClientCapacity { capacity: serde_json::Value },
-    /// Full session list (sent on connect and whenever it changes).
+    /// Full session list (sent on connect and on global order / bulk changes).
     Sessions { sessions: Vec<SessionMeta> },
+    /// Incremental metadata update for one created or modified session.
+    /// Sent only to WebSockets that negotiate `session_deltas=1`; legacy
+    /// clients receive a translated full `Sessions` list instead.
+    SessionUpdated { session: Box<SessionMeta> },
+    /// Incremental removal of one deleted/purged session. Sent only to
+    /// WebSockets that negotiate `session_deltas=1`; legacy clients receive a
+    /// translated full `Sessions` list instead.
+    SessionRemoved { session_id: String },
     /// Full enrolled-Machine projection. `resync` marks the deterministic
     /// connect snapshot; live revisions are monotonic within one Controller
     /// process so a delayed async projection cannot overwrite newer state.
@@ -1517,7 +1526,7 @@ struct HubInner {
     /// snapshot from flipping the selection back. Lock after `sessions`.
     config_in_flight: Mutex<HashMap<String, InFlightConfig>>,
     /// Newer installed Provider releases sessions may adopt, republished by
-    /// the Provider update pass. Never held together with `sessions`.
+    /// the Provider update pass. Lock after `sessions`.
     provider_update_offers: Mutex<HashMap<String, ProviderUpdateOffer>>,
     /// When an unattended Provider update last left a session crashed, by
     /// (Machine, Provider, generation digest). Never held with `sessions`.
@@ -1561,6 +1570,7 @@ struct HubInner {
     /// cloning an `Outbound` per receiver would otherwise duplicate a
     /// multi-megabyte tool result once per connected device.
     tx: broadcast::Sender<Arc<FanoutFrame>>,
+    session_fanout_seq: AtomicU64,
     broadcast_last_bytes: AtomicUsize,
     /// Optional write-behind channel to the DB writer. `None` ⇒ in-memory
     /// only (no `--database-url` configured).
@@ -1802,6 +1812,7 @@ impl Hub {
                 draft_announcements: Mutex::new(HashMap::new()),
                 preference_announcements: Mutex::new(HashMap::new()),
                 tx,
+                session_fanout_seq: AtomicU64::new(0),
                 broadcast_last_bytes: AtomicUsize::new(0),
                 store_tx,
                 dispatch_tx: Mutex::new(None),
@@ -2614,57 +2625,6 @@ impl Hub {
         self.inner.tx.subscribe()
     }
 
-    /// Current session list (insertion order).
-    #[must_use]
-    pub fn session_list(&self) -> Vec<SessionMeta> {
-        self.session_list_filtered(|_| true)
-    }
-
-    /// Session list after applying `keep` to each row's `owner_user_id`.
-    #[must_use]
-    pub fn session_list_filtered(&self, keep: impl Fn(Option<&str>) -> bool) -> Vec<SessionMeta> {
-        let offers = self.inner.provider_update_offers.lock().clone();
-        let now = now_ms();
-        let sessions = self.inner.sessions.lock();
-        let order = self.inner.order.lock();
-        order
-            .iter()
-            .filter_map(|id| {
-                sessions.get(id).and_then(|s| {
-                    keep(s.meta.owner_user_id.as_deref()).then(|| {
-                        let mut meta = s.meta.clone();
-                        // Surface the soonest scheduled-draft fire so the session-row
-                        // clock badge can show it, without shipping the drafts here.
-                        meta.next_schedule_ms = s
-                            .drafts
-                            .iter()
-                            .filter_map(|m| m.schedule.as_ref().map(|sc| sc.fire_at_ms))
-                            .min();
-                        meta.provider_update_available = offers
-                            .get(id)
-                            .filter(|offer| {
-                                meta.provider_update.is_none()
-                                    && offer.digest != meta.provider_generation_digest
-                            })
-                            .map(|offer| ProviderUpdateAvailable {
-                                version: offer.version.clone(),
-                                digest: offer.digest.clone(),
-                                when_idle: offer.when_idle,
-                                on_open: offer.on_open,
-                                automatic_at_ms: offer.automatic_after.map(|after| {
-                                    let remaining = after.saturating_sub(s.last_activity.elapsed());
-                                    now.saturating_add(
-                                        i64::try_from(remaining.as_millis()).unwrap_or(i64::MAX),
-                                    )
-                                }),
-                            });
-                        meta
-                    })
-                })
-            })
-            .collect()
-    }
-
     /// Product user id stamped on this session. `None` if the session is
     /// unknown or still in the unowned shared pool.
     #[must_use]
@@ -2703,20 +2663,6 @@ impl Hub {
     pub fn session_is_system(&self, session_id: &str) -> bool {
         let sessions = self.inner.sessions.lock();
         sessions.get(session_id).is_some_and(|s| s.meta.system)
-    }
-
-    /// Replace every session's Provider update offer. Clients see the change
-    /// through the ordinary session list broadcast.
-    pub fn publish_provider_update_offers(&self, offers: HashMap<String, ProviderUpdateOffer>) {
-        let changed = {
-            let mut current = self.inner.provider_update_offers.lock();
-            let changed = *current != offers;
-            *current = offers;
-            changed
-        };
-        if changed {
-            self.broadcast_sessions();
-        }
     }
 
     /// Drop one offer after its update was applied, together with the
@@ -2763,7 +2709,7 @@ impl Hub {
                 changed
             });
         if changed {
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
     }
 
@@ -3143,22 +3089,25 @@ impl Hub {
                 },
             );
             order.push(id.clone());
-        }
-        if let Some(tx) = self.inner.store_tx.as_ref() {
-            if persist {
-                let _ = tx.send(StoreWrite::InsertSession(Box::new(meta)));
+            drop(order);
+            if let Some(tx) = self.inner.store_tx.as_ref() {
+                if persist {
+                    let _ = tx.send(StoreWrite::InsertSession(Box::new(meta)));
+                }
+                if config_preferences
+                    .as_object()
+                    .is_some_and(|preferences| !preferences.is_empty())
+                {
+                    let _ = tx.send(StoreWrite::UpdateConfigPreferences {
+                        session_id: id.clone(),
+                        preferences: config_preferences,
+                    });
+                }
             }
-            if config_preferences
-                .as_object()
-                .is_some_and(|preferences| !preferences.is_empty())
-            {
-                let _ = tx.send(StoreWrite::UpdateConfigPreferences {
-                    session_id: id,
-                    preferences: config_preferences,
-                });
-            }
+            // Publish inside the insertion critical section so concurrent
+            // creations always fan out in exact Hub insertion order.
+            self.broadcast_session_locked(&sessions, &id);
         }
-        self.broadcast_sessions();
         true
     }
 
@@ -3179,21 +3128,21 @@ impl Hub {
     }
 
     fn remove_session(&self, session_id: &str, persist: bool) -> bool {
-        let removed = {
+        let removed_owner = {
             let mut sessions = self.inner.sessions.lock();
             let mut order = self.inner.order.lock();
-            let removed = sessions.remove(session_id).is_some();
+            let removed_owner = sessions
+                .remove(session_id)
+                .map(|session| session.meta.owner_user_id);
             order.retain(|id| id != session_id);
             self.inner.folders.lock().forget_session(session_id);
-            if removed {
+            if removed_owner.is_some() {
                 self.inner.history_reducer.lock().clear_session(session_id);
             }
-            removed
+            removed_owner
         };
-        if removed {
+        if let Some(owner_user_id) = removed_owner {
             self.inner.background.lock().remove(session_id);
-        }
-        if removed {
             // The per-session sync states die with the session. Their dedupe
             // sets must not keep growing for ids no client can replay any more.
             {
@@ -3210,9 +3159,11 @@ impl Hub {
                     self.set_setting(key, serde_json::Value::Null);
                 }
             }
-            self.broadcast_sessions();
+            self.broadcast_session_removed(session_id, owner_user_id);
+            true
+        } else {
+            false
         }
-        removed
     }
 
     /// Mark `session_id` as continuing `source` (or restore that mark).
@@ -3227,7 +3178,7 @@ impl Hub {
             }
             s.meta.continued_from = source;
         }
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
     }
 
     pub fn rename_session(&self, session_id: &str, title: String) {
@@ -3244,7 +3195,7 @@ impl Hub {
                 title,
             });
         }
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
     }
 
     /// Run `f` while holding the internal settings mutex. Callers must not await
@@ -3377,7 +3328,7 @@ impl Hub {
             }
         };
         if changed {
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
     }
 
@@ -3395,7 +3346,7 @@ impl Hub {
             }
         };
         if changed {
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
     }
 
@@ -3422,7 +3373,7 @@ impl Hub {
             }
         };
         if changed {
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
             // Resuming → try to advance now (an idle session with a queue drains
             // immediately; a busy one drains on the next turn-end as usual).
             if !paused {
@@ -3444,7 +3395,7 @@ impl Hub {
             }
         };
         if changed {
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
     }
 
@@ -3462,7 +3413,7 @@ impl Hub {
             }
         };
         if changed {
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
     }
 
@@ -3495,7 +3446,7 @@ impl Hub {
                 title,
             });
         }
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
     }
 
     /// Record the downstream agent's own session id for a session. Codex creates
@@ -3505,13 +3456,14 @@ impl Hub {
     pub fn set_agent_session_id(&self, session_id: &str, agent_session_id: String) {
         // A fork's first thread holds the copied conversation before any prompt.
         let forking = self.native_fork_pending(session_id);
-        let persist = {
+        let (changed, persist) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            let changed = s.meta.agent_session_id.as_deref() != Some(agent_session_id.as_str());
             s.meta.agent_session_id = Some(agent_session_id.clone());
-            forking || current_context_has_user_message(s)
+            (changed, forking || current_context_has_user_message(s))
         };
         if persist && let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::SetAgentSessionId {
@@ -3523,6 +3475,9 @@ impl Hub {
         // leaves a pending fork whose ID is already saved, which never re-forks.
         if forking {
             self.settle_native_fork(session_id);
+        }
+        if changed {
+            self.broadcast_session(session_id);
         }
     }
 
@@ -3560,7 +3515,7 @@ impl Hub {
                 title,
             });
         }
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
         Ok(())
     }
 
@@ -3602,7 +3557,7 @@ impl Hub {
             session.meta = candidate;
             session.code_incarnation = code_scope::CodeIncarnation::default();
         }
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
         Ok(())
     }
 
@@ -3638,7 +3593,7 @@ impl Hub {
             session.meta.execution_binding = Some(next);
             session.code_incarnation = code_scope::CodeIncarnation::default();
         }
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
         Ok(())
     }
 
@@ -3692,6 +3647,7 @@ impl Hub {
                 changed
             })
         };
+        let cleared_native_id = discarded.is_some();
         let (fence_key, fence) = self.record_cleared_native(session_id, discarded);
         if persist && let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::ClearAgentSession {
@@ -3701,8 +3657,8 @@ impl Hub {
             });
         }
         drop(guard);
-        if usage_changed {
-            self.broadcast_sessions();
+        if usage_changed || cleared_native_id {
+            self.broadcast_session(session_id);
         }
         (fence_key, fence)
     }
@@ -3879,7 +3835,7 @@ impl Hub {
             });
         }
         self.push(session_id, Event::Lifecycle { status, detail });
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
         // A turn-end / death may make the session drainable — try the next
         // queued prompt now (no-op if still busy, held, or nothing queued).
         self.try_drain(session_id);
@@ -4078,12 +4034,6 @@ impl Hub {
             incarnation: ledger.and_then(|ledger| ledger.incarnation.clone()),
             memory_only: self.inner.store_tx.is_none(),
         })
-    }
-
-    fn broadcast_sessions(&self) {
-        self.fanout(Outbound::Sessions {
-            sessions: self.session_list(),
-        });
     }
 
     /// Record a session-scoped failure without changing the transcript or

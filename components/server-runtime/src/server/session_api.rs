@@ -8,7 +8,10 @@ pub async fn api_session_info(
     Path(session_id): Path<String>,
 ) -> Response {
     match state.hub.session_info(&session_id) {
-        Some(info) => Json(info).into_response(),
+        Some(mut info) => {
+            info.meta = info.meta.for_client();
+            Json(info).into_response()
+        }
         None => (StatusCode::NOT_FOUND, "unknown session").into_response(),
     }
 }

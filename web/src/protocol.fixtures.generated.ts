@@ -25,6 +25,8 @@ export const outboundFixtures = {
   "auth_session": {"type":"auth_session","session":{"authenticated":true}},
   "client_capacity": {"type":"client_capacity","capacity":{"status":"waiting","position":2,"retry_after_ms":5000,"channel_limit":4}},
   "sessions": {"type":"sessions","sessions":[{"id":"sess-1","provider":"codex","provider_account_id":"default","provider_version":"","provider_generation_digest":"","machine_id":"local","cwd":"/tmp","title":"owner stamp","status":"starting","origin":"web","agent_session_id":null,"paused":false,"system":false,"context_used":0,"context_size":0},{"id":"sess-1","provider":"codex","provider_account_id":"default","provider_version":"","provider_generation_digest":"","machine_id":"local","cwd":"/tmp","title":"owner stamp","status":"starting","origin":"web","agent_session_id":null,"paused":false,"system":false,"context_used":0,"context_size":0,"owner_user_id":"0123456789abcdef0123456789abcdef","owner_username":"draven"}]},
+  "session_updated": {"type":"session_updated","session":{"id":"sess-1","provider":"codex","provider_account_id":"default","provider_version":"","provider_generation_digest":"","machine_id":"local","cwd":"/tmp","title":"owner stamp","status":"starting","origin":"web","agent_session_id":null,"paused":false,"system":false,"context_used":0,"context_size":0}},
+  "session_removed": {"type":"session_removed","session_id":"sess-1"},
   "machines": {"type":"machines","revision":7,"machines":[],"resync":false},
   "bootstrap_complete": {"type":"bootstrap_complete"},
   "snapshot": {"type":"snapshot","session_id":"sess-1","events":[{"session_id":"sess-1","seq":1,"kind":"lifecycle","status":"running","detail":null}],"reached_start":true},

@@ -26,7 +26,7 @@ fn replayed(state: &AppState, returned: &crate::session_context::Returned) -> Ca
         session: state
             .hub
             .session_info(&returned.source_session_id)
-            .map(|info| info.meta),
+            .map(|info| info.meta.for_client()),
         source_session_id: returned.source_session_id.clone(),
         text: returned.text.clone(),
         content: returned.content.clone(),
@@ -172,7 +172,10 @@ async fn take_back(
         tracing::warn!(session = %source, %reason, "cancelled handoff source receipt not recorded");
     }
     Ok(Cancelled {
-        session: state.hub.session_info(&source).map(|info| info.meta),
+        session: state
+            .hub
+            .session_info(&source)
+            .map(|info| info.meta.for_client()),
         source_session_id: source,
         text,
         content,

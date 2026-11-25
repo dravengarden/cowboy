@@ -14,34 +14,33 @@ import {
   promoteUnplacedImageTokens,
 } from "./attachments";
 import { mergeRestoredDraft } from "./draftRestore";
+import {
+  mirrorNewerThan,
+  PENDING_EDIT_KEY_PREFIX as KEY_PREFIX,
+  pendingEditFingerprint,
+  type PendingEditKind,
+  type PendingEditRecord,
+  pendingEditRecordKey as recordKey,
+  pendingEditStorage as storage,
+  type PendingEditTarget,
+  readHydratedPendingEditMirrors,
+  removePendingEditMirror,
+  removeSessionPendingEditMirrors,
+  type RestoredPendingEdit,
+  writeLegacyPendingEditMirror,
+} from "./pendingEditMirror";
 import { mergeStoredEdits, SlotLedger, slotMirrored, type StoredEdits } from "./pendingEditRecord";
 import type { ProductCache, ProductCacheScope } from "./productSyncDatabase";
 import { newUuid } from "./uuid";
 
-export type PendingEditKind = "queued" | "draft";
+export {
+  pendingEditFingerprint,
+  type PendingEditKind,
+  type PendingEditRecord,
+  type PendingEditTarget,
+  type RestoredPendingEdit,
+};
 
-export interface PendingEditRecord {
-  sessionId: string;
-  kind: PendingEditKind;
-  id: string;
-  text: string;
-  attachments: Attachment[];
-  /** Content the server row had when this transaction began. Retained for
-   * future conflict presentation; recovery never silently discards on mismatch. */
-  baseFingerprint: string;
-  /** Stable idempotency key used only if the edited server row disappears while
-   * this client is offline and the buffer must be recovered as a parked draft. */
-  recoveryCmid: string;
-  updatedAt: number;
-}
-
-export interface PendingEditTarget {
-  id: string;
-  text: string;
-  attachments: Attachment[];
-}
-
-const KEY_PREFIX = "cowboy:pending-edit:";
 const PERSIST_DEBOUNCE_MS = 400;
 const records = new Map<string, PendingEditRecord>();
 const dirty = new Set<string>();
@@ -73,11 +72,6 @@ let flushTimer: ReturnType<typeof setTimeout> | undefined;
 export interface PendingEditDatabase {
   cache<T>(scope: ProductCacheScope, opts?: { strict?: boolean }): ProductCache<T>;
   cacheSessions(state: "edits"): Promise<string[]>;
-}
-
-export interface RestoredPendingEdit {
-  readonly text: string;
-  readonly attachments: Attachment[];
 }
 
 let database: PendingEditDatabase | undefined;
@@ -171,89 +165,14 @@ function saveSessionEdits(sessionId: string): boolean {
   return true;
 }
 
-function recordKey(sessionId: string, kind: PendingEditKind, id: string): string {
-  return JSON.stringify([sessionId, kind, id]);
-}
-
-function storage(): Storage | null {
-  try {
-    return globalThis.localStorage ?? null;
-  } catch {
-    return null;
-  }
-}
-
-/** Compare only server-delivered content. Preview URLs and local presentation
- * metadata are deliberately excluded so reload-created object URLs do not make
- * identical edits look different. */
-export function pendingEditFingerprint(text: string, attachments: readonly Attachment[]): string {
-  return JSON.stringify([text, attachments.map((attachment) => attachment.block)]);
-}
-
-function parseRecord(value: unknown, keepTokens = false): PendingEditRecord | null {
-  if (!value || typeof value !== "object") return null;
-  const candidate = value as Partial<PendingEditRecord>;
-  if (
-    typeof candidate.sessionId !== "string" ||
-    (candidate.kind !== "queued" && candidate.kind !== "draft") ||
-    typeof candidate.id !== "string" ||
-    typeof candidate.text !== "string" ||
-    !Array.isArray(candidate.attachments) ||
-    typeof candidate.baseFingerprint !== "string" ||
-    typeof candidate.updatedAt !== "number"
-  )
-    return null;
-  const attachments = candidate.attachments as Attachment[];
-  const ids = new Set(attachments.map((attachment) => attachment.id));
-  return {
-    sessionId: candidate.sessionId,
-    kind: candidate.kind,
-    id: candidate.id,
-    text: keepTokens ? candidate.text : dropOrphanImageTokens(candidate.text, ids),
-    attachments,
-    baseFingerprint: candidate.baseFingerprint,
-    recoveryCmid:
-      typeof candidate.recoveryCmid === "string"
-        ? candidate.recoveryCmid
-        : `pending-edit-${newUuid()}`,
-    updatedAt: candidate.updatedAt,
-  };
-}
-
 function hydrate(): void {
-  const local = storage();
-  if (local === null) return;
-  try {
-    for (let index = 0; index < local.length; index += 1) {
-      const key = local.key(index);
-      if (!key?.startsWith(KEY_PREFIX)) continue;
-      try {
-        const raw = local.getItem(key);
-        const stored: unknown = raw === null ? null : JSON.parse(raw);
-        // The bytes live in IndexedDB; keep the tokens so the restore can put
-        // the images back exactly where they were.
-        const promised =
-          stored !== null &&
-          typeof stored === "object" &&
-          (stored as { attachmentsInDatabase?: unknown }).attachmentsInDatabase === true &&
-          Array.isArray((stored as { attachments?: unknown }).attachments) &&
-          (stored as { attachments: unknown[] }).attachments.length === 0;
-        const parsed = parseRecord(stored, promised);
-        if (parsed !== null) {
-          const recovered = recordKey(parsed.sessionId, parsed.kind, parsed.id);
-          records.set(recovered, parsed);
-          mirrored.add(recovered);
-          if (promised) {
-            awaitingDatabase.set(recovered, parsed.text);
-            databaseOwners.add(recovered);
-          }
-        }
-      } catch {
-        // Skip one corrupt entry without hiding later recovery records.
-      }
+  for (const { key, record, promised } of readHydratedPendingEditMirrors()) {
+    records.set(key, record);
+    mirrored.add(key);
+    if (promised) {
+      awaitingDatabase.set(key, record.text);
+      databaseOwners.add(key);
     }
-  } catch {
-    // An unavailable localStorage must not prevent the app shell.
   }
 }
 
@@ -264,11 +183,7 @@ function persist(key: string): void {
   if (record === undefined) {
     awaitingDatabase.delete(key);
     mirrored.delete(key);
-    try {
-      local?.removeItem(storageKey);
-    } catch {
-      // The in-memory delete already succeeded.
-    }
+    removePendingEditMirror(key);
     const released = retiredRecords.get(key);
     retiredRecords.delete(key);
     if (databaseOwners.delete(key) && released !== undefined) {
@@ -301,34 +216,11 @@ function persist(key: string): void {
 
 /** Mirror the record (`strip`: only its text if too big); whether all fit. */
 function persistLegacy(key: string, strip = true): boolean {
-  const local = storage();
-  if (local === null) return false;
   const record = records.get(key);
   if (record === undefined || mirrorNewerThan(key, record.updatedAt)) return false;
-  const storageKey = KEY_PREFIX + key;
-  try {
-    local.setItem(storageKey, JSON.stringify(record));
-    mirrored.add(key);
-    return true;
-  } catch {
-    if (!strip) return false;
-    // Large embedded images can exceed the browser quota. Keep the irreplaceable
-    // text and strip now-orphaned inline-image tokens; files can be reattached.
-    try {
-      local.setItem(
-        storageKey,
-        JSON.stringify({
-          ...record,
-          text: dropOrphanImageTokens(record.text, new Set()),
-          attachments: [],
-        }),
-      );
-      mirrored.add(key);
-    } catch {
-      // The mounted editor and in-memory mirror remain the last-resort source.
-    }
-    return false;
-  }
+  const outcome = writeLegacyPendingEditMirror(key, record, strip);
+  if (outcome !== "failed") mirrored.add(key);
+  return outcome === "full";
 }
 
 export function flushPendingEdits(): void {
@@ -566,18 +458,6 @@ export function clearPendingEdit(sessionId: string, kind: PendingEditKind, id: s
   persist(key);
 }
 
-function mirrorNewerThan(key: string, updatedAt: number): boolean {
-  try {
-    const raw = storage()?.getItem(KEY_PREFIX + key);
-    if (raw === null || raw === undefined) return false;
-    const mirror: unknown = JSON.parse(raw);
-    const stamp = (mirror as { updatedAt?: unknown } | null)?.updatedAt;
-    return typeof stamp === "number" && stamp > updatedAt;
-  } catch {
-    return false;
-  }
-}
-
 /** Select the newest unresolved edit for a mounted panel. If the authoritative
  * row (or a hydrated durable outbox mutation) already equals the recovery
  * buffer, the edit was safely committed before the crash and can be retired. */
@@ -650,6 +530,33 @@ export function finishOrphanedPendingEdit(record: PendingEditRecord, recovered: 
       pendingEditFingerprint(record.text, record.attachments)
   )
     clearPendingEdit(record.sessionId, record.kind, record.id);
+}
+
+/** Drop pending edit buffers for one explicitly removed session without
+ *  scanning or removing buffers belonging to other sessions. */
+export function discardPendingEdits(sessionId: string): void {
+  for (const [key, record] of records) {
+    if (record.sessionId !== sessionId) continue;
+    records.delete(key);
+    retiredRecords.delete(key);
+    dirty.delete(key);
+    recovering.delete(key);
+    mirrored.delete(key);
+    awaitingDatabase.delete(key);
+    databaseOwners.delete(key);
+    encodes.delete(key);
+    removePendingEditMirror(key);
+  }
+  for (const [key, record] of retiredRecords) {
+    if (record.sessionId === sessionId) retiredRecords.delete(key);
+  }
+  slots.takeChanged(sessionId);
+  slots.takeReleased(sessionId);
+  removeSessionPendingEditMirrors(sessionId);
+  const cache = editsCache(sessionId);
+  if (cache !== undefined) {
+    void writeDatabase(sessionId, () => cache.discard()).catch(() => undefined);
+  }
 }
 
 export function prunePendingEdits(liveSessionIds: ReadonlySet<string>): void {

@@ -280,7 +280,7 @@ impl Hub {
             }
         };
         self.emit_pending(session_id);
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
         self.arm_draft_timer(session_id, &draft_id, fire_at_ms);
     }
 
@@ -308,7 +308,7 @@ impl Hub {
         };
         if cleared {
             self.emit_pending(session_id);
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
             self.cancel_draft_timer(session_id, id);
         }
     }
@@ -378,7 +378,7 @@ impl Hub {
         // The draft left the drafts list → refresh the pending panel and the
         // session list (its next_schedule_ms just changed).
         self.emit_pending(session_id);
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
 
         let front = m
             .schedule
@@ -502,7 +502,7 @@ impl Hub {
         self.emit_pending(session_id);
         if unscheduled {
             self.cancel_draft_timer(session_id, id);
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
         found
     }
@@ -582,7 +582,7 @@ impl Hub {
         self.emit_pending(session_id);
         if unscheduled {
             self.cancel_draft_timer(session_id, id);
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
         removed
     }
@@ -647,7 +647,8 @@ impl Hub {
         if let Some(fire_at_ms) = scheduled {
             self.cancel_draft_timer(from, id);
             self.arm_draft_timer(to, id, fire_at_ms);
-            self.broadcast_sessions();
+            self.broadcast_session(from);
+            self.broadcast_session(to);
         }
     }
 
@@ -697,7 +698,7 @@ impl Hub {
             self.cancel_draft_timer(session_id, did);
         }
         if !scheduled_ids.is_empty() {
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
     }
 
@@ -885,7 +886,7 @@ impl Hub {
         self.emit_pending(&sid);
         if sync_had_scheduled {
             self.cancel_draft_timer(&sid, &draft_id);
-            self.broadcast_sessions();
+            self.broadcast_session(&sid);
         }
         if let Some(new_qid) = sync_row {
             self.drain_specific_head(&sid, &new_qid, true, Some(caller));
@@ -937,7 +938,7 @@ impl Hub {
             self.broadcast_pending_snapshot(&sid, &q, &d);
             if commit.had_scheduled {
                 self.cancel_draft_timer(&sid, &draft_id);
-                self.broadcast_sessions();
+                self.broadcast_session(&sid);
             }
             self.drain_specific_head(&sid, &new_qid, true, Some(caller));
         }
@@ -1066,7 +1067,7 @@ impl Hub {
         self.emit_pending(session_id);
         if had_scheduled {
             self.cancel_draft_timer(session_id, id);
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
         if let Some(req) = dispatch {
             self.send_dispatch(req);
@@ -1256,7 +1257,7 @@ impl Hub {
             );
         }
         if had_scheduled {
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
     }
 }

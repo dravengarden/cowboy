@@ -164,7 +164,7 @@ impl Hub {
             ),
             serde_json::json!(operation),
         )]);
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
         if operation.is_none() {
             self.try_drain(session_id);
         }
@@ -1269,7 +1269,7 @@ impl Hub {
                 self.emit_pending(session_id);
                 if had_schedule {
                     self.cancel_draft_timer(session_id, &row_id);
-                    self.broadcast_sessions();
+                    self.broadcast_session(session_id);
                 }
             }
         }

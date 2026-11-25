@@ -20,6 +20,10 @@ pub async fn run(state: Arc<AppState>) {
                     .session_info(session_id)
                     .and_then(|i| i.meta.owner_user_id),
                 Outbound::AccountUsageChanged { owner_user_id } => Some(owner_user_id.clone()),
+                Outbound::SessionUpdated { session } => session.owner_user_id.clone(),
+                Outbound::SessionRemoved { .. } => {
+                    frame.session_owner().flatten().map(str::to_owned)
+                }
                 Outbound::Sessions { .. } | Outbound::SyncPatch { .. } | Outbound::Usage { .. } => {
                     None
                 }

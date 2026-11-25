@@ -1,7 +1,10 @@
 import { afterEach, expect, test } from "bun:test";
+import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { derive } from "./derive";
 import {
   announceContext,
+  CONTEXT_CHANGED,
+  evictSessionContext,
   loadSessionContext,
   saveSessionContext,
   sendWithContext,
@@ -169,4 +172,62 @@ test("going back from a staged agent keeps independent links", () => {
     sources: ["other"],
     next_agent: null,
   });
+});
+
+test("unchanged preferences resync skips only after a successful read and retries failures", async () => {
+  const announced: (string | null)[] = [];
+  const listener = (event: Event) => {
+    announced.push((event as CustomEvent<string | null>).detail);
+  };
+  let failNext = true;
+  globalThis.fetch = (() => {
+    if (failNext) return Promise.reject(new TypeError("offline"));
+    return Promise.resolve(Response.json({
+      revision: 1,
+      applied_revision: 1,
+      sources: [],
+      next_agent: null,
+      delivery: {
+        operation: "op-1",
+        session_id: "s-dest",
+        state: "cancelled",
+        returned: { source_session_id: "resync-dedupe", text: "huge", content: [{ type: "image" }] },
+      },
+    }));
+  }) as typeof fetch;
+  globalThis.addEventListener(CONTEXT_CHANGED, listener);
+  try {
+    globalThis.dispatchEvent(
+      new CustomEvent(PREFERENCES_CHANGED, {
+        detail: { "session_context:resync-dedupe": 4 },
+      }),
+    );
+    await expect(loadSessionContext("resync-dedupe")).rejects.toThrow("offline");
+    // Reconnect announcing the same revision must retry because the prior GET failed.
+    globalThis.dispatchEvent(
+      new CustomEvent(PREFERENCES_CHANGED, {
+        detail: { "session_context:resync-dedupe": 4 },
+      }),
+    );
+    failNext = false;
+    await loadSessionContext("resync-dedupe");
+    // Now that rev 4 succeeded, another reconnect announcing rev 4 is skipped.
+    globalThis.dispatchEvent(
+      new CustomEvent(PREFERENCES_CHANGED, {
+        detail: { "session_context:resync-dedupe": 4 },
+      }),
+    );
+    // A newer revision announces a real change.
+    globalThis.dispatchEvent(
+      new CustomEvent(PREFERENCES_CHANGED, {
+        detail: { "session_context:resync-dedupe": 8 },
+      }),
+    );
+    // Blanket invalidation (undefined detail) refreshes every listener.
+    globalThis.dispatchEvent(new CustomEvent(PREFERENCES_CHANGED));
+    evictSessionContext("resync-dedupe");
+  } finally {
+    globalThis.removeEventListener(CONTEXT_CHANGED, listener);
+  }
+  expect(announced).toEqual(["resync-dedupe", "resync-dedupe", "resync-dedupe", null]);
 });

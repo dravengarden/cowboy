@@ -24,6 +24,24 @@ import { IdbPersistenceError } from "@cowboy/state-sync-idb";
 import { createSyncShutdown } from "./syncShutdown";
 import { createReplica, type ReplicaTail } from "./replica";
 import { replicaTailConflicts, trimReplicaTail } from "./replicaTail";
+import {
+  fetchHistoryPage as fetchHistoryPageVersioned,
+  fetchPreviousQuestionPage as fetchPreviousQuestionPageVersioned,
+  fetchQuestionPage as fetchQuestionPageVersioned,
+  HISTORY_FETCH_TIMEOUT_MS,
+  SNAPSHOT_GAP_FILL_PAGES,
+} from "./historyFetch";
+import {
+  boundSocketUrl,
+  liveEventsAfterSnapshot,
+  removeSessionById,
+  shouldDiscardStaleReplica,
+  upsertSession,
+} from "./sessionDelta";
+import {
+  interactiveClientKind,
+  stableInteractiveClientId,
+} from "./productSocketClient";
 import { deriveSyncStatus, type SyncStatus, type SyncStatusInput } from "./syncStatus";
 import { ProductSessionEndEvent, productSessionSignal } from "./productSessionEnd";
 import { productSyncPrincipal } from "./productSyncIdentity";
@@ -91,6 +109,7 @@ import {
 } from "./providerCatalogRegistry";
 import {
   attachDraftDatabase,
+  discardDraft,
   draftsDurable,
   getDraft,
   pruneDrafts,
@@ -101,6 +120,7 @@ import { createCurrentTurnRegistry, type CurrentTurnConsumeSource, type CurrentT
 import { bindPendingEditRecovery, parkStaleEditOnce, recoverPendingEditsFrom } from "./pendingEditRecovery";
 import {
   attachPendingEditDatabase,
+  discardPendingEdits,
   pendingEditsDurable,
   prunePendingEdits,
   retryPendingEditRestore,
@@ -115,7 +135,7 @@ import { notifyHaptic } from "./haptic";
 import { reportClientDuration, reportClientLog, reportClientMetric, startClientSpan } from "./observability";
 import { ClientOperations } from "./otelOperations.ts";
 import { isTurnActivityUpdate } from "./turnWaiting.ts";
-import { ContextNavigationNotice, loadSessionContext, requireCurrentAgentContext, sendWithContext, stagedNextAgent } from "./sessionContext";
+import { ContextNavigationNotice, evictSessionContext, loadSessionContext, requireCurrentAgentContext, sendWithContext, stagedNextAgent } from "./sessionContext";
 import { bulkActivatableDrafts, wrapUpOutboxPatch, wrapUpQueueAddOptions, wrapUpSubmitFields, type WrapUpOutboxFields } from "./wrapUpDelivery";
 import { composeDraftForStagedAgent } from "./contextPendingPrompt";
 
@@ -439,6 +459,7 @@ function evictTranscriptSessions(sessionIds: readonly string[]): void {
     if (retry !== undefined) clearTimeout(retry);
     sessionHydrationRetryTimers.delete(sessionId);
     completeQuestionPages.delete(sessionId);
+    replicaTails.delete(sessionId);
     transcriptEpoch.set(sessionId, (transcriptEpoch.get(sessionId) ?? 0) + 1);
   }
 
@@ -505,6 +526,11 @@ function touchTranscriptSession(sessionId: string): void {
   );
   transcriptSessionCache = update.order;
   evictTranscriptSessions(update.evicted);
+}
+
+function dropTranscriptSession(sessionId: string): void {
+  transcriptSessionCache = transcriptSessionCache.filter((id) => id !== sessionId);
+  evictTranscriptSessions([sessionId]);
 }
 
 function retainTranscriptSessions(valid: ReadonlySet<string>): void {
@@ -1065,45 +1091,12 @@ function sameQueuedContent(
       JSON.stringify(contentOf(right.text, right.attachments));
 }
 
-// Fetch the next OLDER page of a session's history and prepend it. Pages come
-// from the immutable HTTP route (GET /api/history/:id) so a re-fetch
-// (scroll back, reload, post-recycle) is a cache hit — zero network. One fetch
-// at a time per session; no-op once the window already reaches the first event.
-//
-// VERSION-SCOPED url (`?v=<build>`): the cache is `immutable`, so without this a
-// redeploy could keep serving pages cached under the OLD build (if a future
-// version ever changes the event shape, that's stale/incompatible). Keying the
-// url on the build id means a new version's pages are fresh fetches, while
-// reloads of the SAME build stay cache hits. (`conn.version()` is the id the tab
-// loaded against; until the first /version probe lands it's a harmless "0".)
-const HISTORY_FETCH_TIMEOUT_MS = 6_000;
-const SNAPSHOT_GAP_FILL_PAGES = 32;
-
-type HistoryPage = {
-  events: Envelope[];
-  next_before_seq: number | null;
-  reached_start: boolean;
-};
-
-function historyPageUrl(sessionId: string, beforeSeq: number): string {
-  return `/api/history/${encodeURIComponent(sessionId)}?before_seq=${String(beforeSeq)}&v=${encodeURIComponent(conn.version() ?? "0")}`;
-}
-
-async function fetchHistoryPage(
+function fetchHistoryPage(
   sessionId: string,
   beforeSeq: number,
   signal?: AbortSignal,
-): Promise<HistoryPage | null> {
-  try {
-    const res = await fetch(
-      historyPageUrl(sessionId, beforeSeq),
-      signal === undefined ? undefined : { signal },
-    );
-    if (!res.ok) return null;
-    return (await res.json()) as HistoryPage;
-  } catch {
-    return null;
-  }
+) {
+  return fetchHistoryPageVersioned(sessionId, beforeSeq, conn.version() ?? "0", signal);
 }
 
 const snapshotGapFills = new Map<string, number>();
@@ -1226,11 +1219,11 @@ export async function loadOlder(sessionId: string): Promise<boolean> {
   setPagination(sessionId, { ...pg, loadingOlder: true });
   try {
     const data = await fetchHistoryPage(sessionId, beforeSeq, controller.signal);
+    if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
     if (!data) {
       setPagination(sessionId, { ...pg, loadingOlder: false });
       return false;
     }
-    if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
     setState({ ...state, timelines: mergeEvents(state.timelines, sessionId, data.events) });
     // Always step to the next OLDER page (don't recompute from the oldest seq —
     // a gap at a boundary would re-request the same page forever). Page 0 was
@@ -1243,7 +1236,9 @@ export async function loadOlder(sessionId: string): Promise<boolean> {
     return data.reached_start || data.next_before_seq !== beforeSeq ||
       data.events.length > 0;
   } catch {
-    setPagination(sessionId, { ...pg, loadingOlder: false });
+    if ((transcriptEpoch.get(sessionId) ?? 0) === epoch) {
+      setPagination(sessionId, { ...pg, loadingOlder: false });
+    }
     return false;
   } finally {
     globalThis.clearTimeout(timeout);
@@ -1256,34 +1251,19 @@ export async function loadPreviousQuestionPage(sessionId: string): Promise<boole
   const epoch = transcriptEpoch.get(sessionId) ?? 0;
   const beforeSeq = pg.beforeSeq;
   setPagination(sessionId, { ...pg, loadingOlder: true });
-  try {
-    const res = await fetch(
-      `/api/history/${encodeURIComponent(sessionId)}?before_seq=${String(beforeSeq)}&question_page=true&v=${encodeURIComponent(conn.version() ?? "0")}`,
-    );
-    if (!res.ok) {
-      setPagination(sessionId, { ...pg, loadingOlder: false });
-      return false;
-    }
-    const data = (await res.json()) as {
-      events: Envelope[];
-      next_before_seq: number | null;
-      reached_start: boolean;
-    };
-    if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
-    setState({
-      ...state,
-      timelines: mergeEvents(state.timelines, sessionId, data.events),
-    });
-    setPagination(sessionId, {
-      reachedStart: data.reached_start,
-      loadingOlder: false,
-      beforeSeq: data.next_before_seq,
-    });
-    return data.events.length > 0;
-  } catch {
+  const data = await fetchPreviousQuestionPageVersioned(sessionId, beforeSeq, conn.version() ?? "0");
+  if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
+  if (!data) {
     setPagination(sessionId, { ...pg, loadingOlder: false });
     return false;
   }
+  setState({ ...state, timelines: mergeEvents(state.timelines, sessionId, data.events) });
+  setPagination(sessionId, {
+    reachedStart: data.reached_start,
+    loadingOlder: false,
+    beforeSeq: data.next_before_seq,
+  });
+  return data.events.length > 0;
 }
 
 export async function loadQuestionPage(
@@ -1295,36 +1275,20 @@ export async function loadQuestionPage(
   const rootSeq = Number(pageId);
   if (!Number.isSafeInteger(rootSeq) || rootSeq < 0) return false;
   if (completeQuestionPages.get(sessionId)?.has(pageId)) return true;
-  try {
-    const response = await fetch(
-      `/api/sessions/${encodeURIComponent(sessionId)}/question-pages/${encodeURIComponent(pageId)}?v=${
-        encodeURIComponent(conn.version() ?? "0")
-      }`,
-      // The newest page may still be growing. Never let WebKit reuse a partial
-      // response captured between the user prompt and the agent answer.
-      { cache: "no-store" },
-    );
-    if (!response.ok) return false;
-    const data = (await response.json()) as { events: Envelope[] };
-    if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
-    const complete = data.events.some((event) => event.seq === rootSeq);
-    if (complete) {
-      const pages = completeQuestionPages.get(sessionId) ?? new Set<string>();
-      pages.add(pageId);
-      completeQuestionPages.set(sessionId, pages);
-    }
-    // Publish completeness before notifying store subscribers. Page View reads
-    // this side cache during the render caused by setState; doing it afterwards
-    // left the completed response behind an eternal skeleton until some
-    // unrelated state change (most visibly switching sessions) rendered again.
-    setState({
-      ...state,
-      timelines: mergeEvents(state.timelines, sessionId, data.events),
-    });
-    return complete;
-  } catch {
-    return false;
+  const data = await fetchQuestionPageVersioned(sessionId, pageId, conn.version() ?? "0");
+  if (!data || (transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
+  const complete = data.events.some((event) => event.seq === rootSeq);
+  if (complete) {
+    const pages = completeQuestionPages.get(sessionId) ?? new Set<string>();
+    pages.add(pageId);
+    completeQuestionPages.set(sessionId, pages);
   }
+  // Publish completeness before notifying store subscribers. Page View reads
+  // this side cache during the render caused by setState; doing it afterwards
+  // left the completed response behind an eternal skeleton until some
+  // unrelated state change (most visibly switching sessions) rendered again.
+  setState({ ...state, timelines: mergeEvents(state.timelines, sessionId, data.events) });
+  return complete;
 }
 
 const completeQuestionPages = new Map<string, Set<string>>();
@@ -1406,6 +1370,76 @@ function setPagination(
   const pagination = new Map(state.pagination);
   pagination.set(sessionId, value);
   setState({ ...state, pagination });
+}
+
+function syncSessionDelta(next: SessionMeta[], removed: boolean): void {
+  rawSessions = next;
+  if (!removed && (!state.sessionsLoaded || state.sessionsSource !== "live")) {
+    setState({ ...withoutReplicaSyncedAt(state), sessionsLoaded: true, sessionsSource: "live" });
+  }
+  commitSessions();
+  reportRetainedClosures(rawSessions);
+  replica.recordSessions(rawSessions);
+  const machines = projectMachineOccupancy(state.machines, rawSessions);
+  if (machines !== state.machines) setState({ ...state, machines });
+}
+
+function applySessionUpdated(session: SessionMeta): void {
+  const { sessions, previous } = upsertSession(rawSessions, session);
+  unlistedCreatedSessions.delete(session.id);
+  syncSessionDelta(sessions, false);
+  if (previous === undefined || previous.status !== session.status) schedulePrefetch();
+  if (
+    openedSessionId === session.id && !state.hydrated.has(openedSessionId) &&
+    !sessionHydrations.has(openedSessionId) && !sessionHydrationRetryTimers.has(openedSessionId) &&
+    state.connected && globalThis.document?.visibilityState !== "hidden"
+  ) {
+    touchTranscriptSession(openedSessionId);
+    void hydrateSession(openedSessionId);
+  }
+  if (state.connected && peekedSessions.has(session.id)) ensurePeeked(session.id);
+}
+
+function applySessionRemoved(sessionId: string): void {
+  unlistedCreatedSessions.delete(sessionId);
+  prefetch.drop(sessionId);
+  syncSessionDelta(removeSessionById(rawSessions, sessionId).sessions, true);
+  // Targeted deletion only: an individual removal never prunes unrelated
+  // drafts or caches in shared storage (whole-list pruning stays on `sessions`).
+  discardDraft(sessionId);
+  discardPendingEdits(sessionId);
+  dropTranscriptSession(sessionId);
+  dropReplicaSession(sessionId);
+  evictSessionContext(sessionId);
+  schedulePrefetch();
+}
+
+function applyCommandResult(
+  msg: Extract<Outbound, { type: "command_result" }>,
+): void {
+  // A refusal only changes the outbox that owns its operation ID.
+  const client = qClients.get(msg.session_id);
+  const pending = client?.pending().find((mutation) => {
+    const args = mutation.args as { row?: QueuedMessage };
+    return mutation.id === msg.cmid || args.row?.cmid === msg.cmid;
+  });
+  if (client === undefined || pending === undefined) return;
+  clearOptTimers(pending.id);
+  if (msg.outcome === "stale") {
+    // The session is fine; only the targeted row is gone. Keep an edit's
+    // text, retire the mutation, and say what happened once.
+    void settleStaleRowMutation(msg.session_id, pending);
+    return;
+  }
+  const reason = msg.outcome === "not_found" ? "This session no longer exists" : msg.message;
+  for (const id of deliveryStatusIds(pending.id, (pending.args as { row?: QueuedMessage }).row?.cmid)) {
+    qStatus.set(id, "failed");
+    qFailure.set(id, reason);
+  }
+  commitQueue(msg.session_id);
+  persistHeld(msg.session_id);
+  if (msg.outcome === "not_found") void rescueOrphanedDelivery(msg.session_id, pending);
+  else if (msg.outcome === "rejected" && isQueuedSend(pending.name)) void restoreRefusedQueuedSend(msg.session_id, pending.id, reason);
 }
 
 function handle(msg: Outbound): void {
@@ -1520,6 +1554,12 @@ function handle(msg: Outbound): void {
       reconcileProviderCatalog(msg.machines.map((machine) => machine.plugins));
       break;
     }
+    case "session_updated":
+      applySessionUpdated(msg.session);
+      break;
+    case "session_removed":
+      applySessionRemoved(msg.session_id);
+      break;
     case "snapshot": {
       // A hydration response can race an LRU eviction. Reopening the session
       // starts a fresh bootstrap; retaining this stale response would defeat the
@@ -1531,17 +1571,25 @@ function handle(msg: Outbound): void {
         if (msg.session_id !== openedSessionId) break;
         touchTranscriptSession(msg.session_id);
       }
+      const cachedReplicaTail = replicaTails.get(msg.session_id);
       let existingTimeline = state.timelines.get(msg.session_id) ?? [];
+      let liveAfterReplica: Envelope[] = [];
       if (
-        state.transcriptSources.get(msg.session_id)?.source === "replica" &&
-        replicaTailConflicts(existingTimeline, msg.events)
+        shouldDiscardStaleReplica(
+          state.transcriptSources.get(msg.session_id)?.source,
+          cachedReplicaTail ?? existingTimeline,
+          msg.events,
+        )
       ) {
-        // The cached tail belongs to another transcript epoch (cleared or
-        // restored elsewhere while this device was away). Never interleave two
-        // histories: drop the replica and start from the live snapshot.
+        liveAfterReplica = liveEventsAfterSnapshot(
+          existingTimeline,
+          cachedReplicaTail ?? existingTimeline,
+          msg.events,
+        );
         discardReplicaTimeline(msg.session_id);
-        existingTimeline = [];
+        existingTimeline = liveAfterReplica;
       }
+      replicaTails.delete(msg.session_id);
       // Clear is destructive: every row before the newest boundary in the fresh
       // tail was deleted durably while this device was away. Drop that prefix
       // here instead of paging history for a hole that can never be filled.
@@ -1552,9 +1600,13 @@ function handle(msg: Outbound): void {
       ) {
         dropClearedPrefix(msg.session_id, clearedBefore);
         existingTimeline = state.timelines.get(msg.session_id) ?? [];
+        liveAfterReplica = liveAfterReplica.filter((event) => event.seq >= clearedBefore);
       }
       const joinGap = snapshotJoinGap(existingTimeline, msg.events);
-      const timelines = mergeEvents(state.timelines, msg.session_id, msg.events);
+      const baseTimelines = liveAfterReplica.length > 0
+        ? mergeEvents(state.timelines, msg.session_id, liveAfterReplica)
+        : state.timelines;
+      const timelines = mergeEvents(baseTimelines, msg.session_id, msg.events);
       // Mark hydrated even when `events` is empty: the snapshot's arrival IS the
       // "history loaded" signal. Reconnects re-send snapshots but the flag stays
       // set (cached history shown, no skeleton flash). Reuse the same Set when
@@ -1799,32 +1851,9 @@ function handle(msg: Outbound): void {
       // Compatibility tombstone from controllers spanning the rollout.
       break;
     }
-    case "command_result": {
-      // A refusal only changes the outbox that owns its operation ID.
-      const client = qClients.get(msg.session_id);
-      const pending = client?.pending().find((mutation) => {
-        const rowCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid;
-        return mutation.id === msg.cmid || rowCmid === msg.cmid;
-      });
-      if (client === undefined || pending === undefined) break;
-      clearOptTimers(pending.id);
-      if (msg.outcome === "stale") {
-        // The session is fine; only the targeted row is gone. Keep an edit's
-        // text, retire the mutation, and say what happened once.
-        void settleStaleRowMutation(msg.session_id, pending);
-        break;
-      }
-      const reason = msg.outcome === "not_found" ? "This session no longer exists" : msg.message;
-      for (const id of deliveryStatusIds(pending.id, (pending.args as { row?: QueuedMessage }).row?.cmid)) {
-        qStatus.set(id, "failed");
-        qFailure.set(id, reason);
-      }
-      commitQueue(msg.session_id);
-      persistHeld(msg.session_id);
-      if (msg.outcome === "not_found") void rescueOrphanedDelivery(msg.session_id, pending);
-      else if (msg.outcome === "rejected" && isQueuedSend(pending.name)) void restoreRefusedQueuedSend(msg.session_id, pending.id, reason);
+    case "command_result":
+      applyCommandResult(msg);
       break;
-    }
     case "error": {
       errorSeq += 1;
       // exactOptionalPropertyTypes: only include sessionId if non-undefined.
@@ -2021,33 +2050,21 @@ export function notify(message: string, severity: "error" | "warning" | "info" =
 // Schedule the next reconnect after `delay` ms (the backoff `conn.connectionLost`
 // computed off the consecutive-failure count). One pending attempt at a time.
 const PRODUCT_AUTH_LOST_EVENT = "cowboy:product-auth-lost";
-
 type MeHandshake = "reconnect" | "logout" | "keep";
-
 function classifyMeHandshake(status: number | "network"): MeHandshake {
   if (status === 200) return "reconnect";
   if (status === 401 || status === 403) return "logout";
   return "keep";
 }
-
 async function probeProductAuth(): Promise<MeHandshake> {
   try {
     const response = await fetch("/api/auth/me", {
-      signal: AbortSignal.timeout(4_000),
-      cache: "no-store",
-      credentials: "same-origin",
-      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(4_000), cache: "no-store", credentials: "same-origin", headers: { accept: "application/json" },
     });
-    if (response.status === 200) {
-      // The cookie may have changed in another tab. Ask the auth owner to
-      // compare immutable principal identity, not just the HTTP success code.
-      globalThis.dispatchEvent(new Event(PRODUCT_AUTH_LOST_EVENT));
-    }
+    if (response.status === 200) globalThis.dispatchEvent(new Event(PRODUCT_AUTH_LOST_EVENT));
     await response.body?.cancel();
     return classifyMeHandshake(response.status);
-  } catch {
-    return classifyMeHandshake("network");
-  }
+  } catch { return classifyMeHandshake("network"); }
 }
 
 function logoutProductSession(): void {
@@ -2156,35 +2173,6 @@ function connect(): void {
   })();
 }
 
-function stableInteractiveClientId(): string {
-  const key = "cowboy:interactive-client-id";
-  try {
-    const existing = globalThis.localStorage.getItem(key);
-    if (existing !== null && existing.length >= 16 && existing.length <= 128) {
-      return existing;
-    }
-    const created = newUuid();
-    globalThis.localStorage.setItem(key, created);
-    return created;
-  } catch {
-    // Storage may be unavailable in a private or transient WebView. The server
-    // still namespaces this ephemeral id to the authenticated account.
-    return `ephemeral-${newUuid()}`;
-  }
-}
-
-function interactiveClientKind(): "browser" | "native_shell" {
-  const runtime = globalThis as typeof globalThis & { __TAURI_INTERNALS__?: unknown };
-  const navigator = globalThis.navigator;
-  return isAppleTouchWebView(
-      navigator?.userAgent ?? "",
-      navigator?.platform ?? "",
-      navigator?.maxTouchPoints ?? 0,
-    ) || runtime.__TAURI_INTERNALS__ !== undefined
-    ? "native_shell"
-    : "browser";
-}
-
 let openingDataset = false;
 function openSocket(): void {
   if (productSessionAbandoned || productSessionPausedForAuth || openingDataset) return;
@@ -2228,7 +2216,6 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
   ) {
     return;
   }
-  const proto = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
   const connectStartedAt = performance.now();
   const connectReason = nextConnectReason;
   const reconnecting = outage.active;
@@ -2242,13 +2229,12 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     visibility: document.visibilityState,
   });
   nextConnectReason = "unspecified";
-  const params = new URLSearchParams({
-    bootstrap: "lazy",
-    client_id: stableInteractiveClientId(),
-    client_kind: interactiveClientKind(),
-    dataset: dataset.dataset_id,
-  });
-  const socketUrl = `${proto}//${globalThis.location.host}/ws?${params.toString()}`;
+  const socketUrl = boundSocketUrl(
+    globalThis.location,
+    dataset.dataset_id,
+    stableInteractiveClientId(),
+    interactiveClientKind(),
+  );
   let deviceProtocol: string;
   try {
     deviceProtocol = await browserDeviceProtocol(socketUrl);
@@ -2635,11 +2621,15 @@ async function restoreReplicaTail(sessionId: string): Promise<void> {
     source: "replica",
     syncedAt: tail.receivedAt,
   });
+  replicaTails.set(sessionId, [...tail.events]);
   setState({ ...state, timelines, hydrated, pagination, configOptions, transcriptSources });
 }
 
+const replicaTails = new Map<string, readonly Envelope[]>();
+
 function discardReplicaTimeline(sessionId: string): void {
   forgetSessionAuthority(sessionId);
+  replicaTails.delete(sessionId);
   transcriptEpoch.set(sessionId, (transcriptEpoch.get(sessionId) ?? 0) + 1);
   completeQuestionPages.delete(sessionId);
   const timelines = new Map(state.timelines);
@@ -2695,6 +2685,16 @@ function scheduleReplicaTail(sessionId: string, immediate: boolean): void {
   ) noteCachedTail(sessionId);
 }
 
+function dropReplicaSession(sessionId: string): void {
+  retainedReplicaKey = "";
+  void replica.session(sessionId).discard();
+  if (cachedTailSessions.has(sessionId)) {
+    const next = new Set(cachedTailSessions);
+    next.delete(sessionId);
+    setCachedTailSessions(next);
+  }
+}
+
 function retainReplicaSessions(valid: ReadonlySet<string>): void {
   const key = [...valid].sort().join("\n");
   if (key === retainedReplicaKey) return;
@@ -2744,6 +2744,7 @@ export function useCachedTailSessions(): ReadonlySet<string> {
 const prefetch = createPrefetchRunner({
   concurrency: 2,
   start: (sessionId): Promise<void> => {
+    if (!state.sessions.some((session) => session.id === sessionId)) return Promise.resolve();
     touchTranscriptSession(sessionId);
     return hydrateSession(sessionId);
   },
@@ -5691,6 +5692,10 @@ if (typeof globalThis.addEventListener === "function") {
 
 export function useStore(): State {
   return useSyncExternalStore(subscribe, () => presentedState);
+}
+
+export function currentSessions(): readonly SessionMeta[] {
+  return state.sessions;
 }
 
 /** Subscribe to one stable slice instead of re-rendering for every unrelated

@@ -35,15 +35,16 @@ use tokio::net::TcpStream;
 use tokio::sync::{Notify, mpsc, oneshot};
 use tokio_tungstenite::{
     MaybeTlsStream, WebSocketStream, connect_async,
-    tungstenite::{
-        Error as WsError, Message, client::IntoClientRequest as _, http::header::AUTHORIZATION,
-    },
+    tungstenite::{Message, client::IntoClientRequest as _, http::header::AUTHORIZATION},
 };
 
 use crate::acp::STARTUP_PHASE_TIMEOUT;
 use crate::core::{Envelope, Event, Inbound, Outbound, SessionMeta, Status};
 use crate::serve_args::ServeAcpArgs;
 
+#[path = "acp_bridge_auth.rs"]
+mod auth;
+use auth::*;
 #[path = "acp_bridge_subagents.rs"]
 mod subagents;
 
@@ -1983,6 +1984,8 @@ impl Bridge {
                 ..
             } => self.fail_prompt(&session_id, &cmid, message),
             Outbound::BootstrapComplete
+            | Outbound::SessionUpdated { .. }
+            | Outbound::SessionRemoved { .. }
             | Outbound::AuthSession { .. }
             | Outbound::ClientCapacity { .. }
             | Outbound::Machines { .. }
@@ -2411,6 +2414,8 @@ fn apply_bootstrap_outbound(state: &Arc<Mutex<BridgeState>>, outbound: Outbound)
             }
         }
         Outbound::Event { .. }
+        | Outbound::SessionUpdated { .. }
+        | Outbound::SessionRemoved { .. }
         | Outbound::BootstrapComplete
         | Outbound::AuthSession { .. }
         | Outbound::ClientCapacity { .. }
@@ -2425,61 +2430,6 @@ fn apply_bootstrap_outbound(state: &Arc<Mutex<BridgeState>>, outbound: Outbound)
         | Outbound::CommandResult { .. }
         | Outbound::Error { .. } => {}
     }
-}
-
-fn approval_required_message(pending: &crate::client_auth_client::PendingApproval) -> String {
-    format!(
-        "Cowboy is waiting for you to approve this computer. Open {} in a browser, check that \
-         the client fingerprint is {}, approve it, then try again.",
-        pending.url, pending.fingerprint
-    )
-}
-
-fn is_fatal_auth_status(status: u16) -> bool {
-    status == 401 || status == 403
-}
-
-fn websocket_handshake_status(error: &WsError) -> Option<u16> {
-    match error {
-        WsError::Http(response) => Some(response.status().as_u16()),
-        _ => None,
-    }
-}
-
-fn websocket_auth_rejected(error: &WsError) -> bool {
-    websocket_handshake_status(error).is_some_and(is_fatal_auth_status)
-}
-
-fn daemon_auth_rejection_message(context: &str) -> String {
-    format!("{context}. Run `cowboy login <Cowboy URL>` and try again.")
-}
-
-fn daemon_auth_rejected(error: &anyhow::Error) -> bool {
-    error.chain().any(|cause| {
-        cause
-            .downcast_ref::<WsError>()
-            .is_some_and(websocket_auth_rejected)
-            || cause.to_string().contains("rejected this computer login")
-            // A person refused this computer. Retrying would file a new
-            // approval request every few seconds for them to refuse again.
-            || cause.to_string().contains("device authorization was denied")
-    })
-}
-
-fn websocket_url(base: &Url) -> anyhow::Result<Url> {
-    let mut url = base.join("ws")?;
-    let scheme = if base.scheme() == "https" {
-        "wss"
-    } else {
-        "ws"
-    };
-    url.set_scheme(scheme)
-        .map_err(|()| anyhow!("cannot convert daemon URL to WebSocket URL"))?;
-    // Only the global session index: with the complete bootstrap every
-    // connection downloaded every session's transcript tail and had to finish
-    // within BOOTSTRAP_TIMEOUT. One session is hydrated when it is loaded.
-    url.query_pairs_mut().append_pair("bootstrap", "lazy");
-    Ok(url)
 }
 
 fn url_request_target(url: &Url) -> String {

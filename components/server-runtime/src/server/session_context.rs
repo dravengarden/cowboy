@@ -913,7 +913,7 @@ pub async fn send(
             let session = response_state
                 .hub
                 .session_info(&receipt.session_id)
-                .map(|info| info.meta);
+                .map(|info| info.meta.for_client());
             let mut value = serde_json::to_value(receipt).expect("receipt serializes");
             value["session"] = serde_json::to_value(session).expect("session serializes");
             (StatusCode::ACCEPTED, Json(value)).into_response()
@@ -950,7 +950,7 @@ pub async fn continue_here(
         });
     match result {
         Ok(()) => Json(serde_json::json!({
-            "session": state.hub.session_info(&id).map(|info| info.meta),
+            "session": state.hub.session_info(&id).map(|info| info.meta.for_client()),
         }))
         .into_response(),
         Err(error) => failure(error),

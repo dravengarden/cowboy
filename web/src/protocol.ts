@@ -413,6 +413,8 @@ export type Outbound =
   | { type: "auth_session"; session: unknown }
   | { type: "client_capacity"; capacity: ClientCapacity }
   | { type: "sessions"; sessions: SessionMeta[] }
+  | { type: "session_updated"; session: SessionMeta }
+  | { type: "session_removed"; session_id: string }
   | {
     type: "machines";
     revision: number;

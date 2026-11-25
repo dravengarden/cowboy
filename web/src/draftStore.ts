@@ -493,6 +493,21 @@ function sameStoredAttachments(previous: Draft | undefined, next: Draft): boolea
     before.every((attachment, index) => attachment === after[index]);
 }
 
+/** Drop the local composer draft for one explicitly removed session without
+ *  pruning drafts belonging to other sessions in shared localStorage. */
+export function discardDraft(sessionId: string): void {
+  drafts.delete(sessionId);
+  dirty.delete(sessionId);
+  awaitingDatabase.delete(sessionId);
+  cleared.add(sessionId);
+  discardDatabaseDraft(sessionId);
+  try {
+    globalThis.localStorage?.removeItem(KEY_PREFIX + sessionId);
+  } catch {
+    /* tolerant — leave stale entry rather than throw */
+  }
+}
+
 // Drop drafts whose session no longer exists (deleted here or on another
 // terminal). Called when an authoritative session list arrives. Fully tolerant:
 // a missing localStorage or a failed removeItem is swallowed, never thrown — a

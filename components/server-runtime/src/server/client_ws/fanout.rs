@@ -9,6 +9,9 @@ use super::*;
 pub struct ClientFanout {
     pub state: Arc<AppState>,
     pub principal: ProductPrincipal,
+    pub supports_session_deltas: bool,
+    pub bootstrap_sessions_seq: u64,
+    pub legacy_sessions: Option<Vec<crate::core::SessionMeta>>,
     pub via_cookie: bool,
     pub cookie: Option<String>,
     pub bearer: Option<String>,
@@ -38,6 +41,9 @@ pub async fn run_client_fanout(
     let ClientFanout {
         state: fanout_state,
         principal: fanout_principal,
+        supports_session_deltas,
+        bootstrap_sessions_seq,
+        mut legacy_sessions,
         via_cookie,
         cookie: fanout_cookie,
         bearer: fanout_bearer,
@@ -138,21 +144,18 @@ pub async fn run_client_fanout(
             }
             msg = rx.recv() => match msg {
                 Ok(msg) => {
-                    let result = if fanout_sends_shared_frame(&fanout_principal, msg.outbound()) {
-                        send_frame(&mut sink, msg.as_ref()).await
-                    } else {
-                        let visible = visible_session_ids(&fanout_state.hub, &fanout_principal);
-                        let Some(projected) = project_outbound(
-                            &fanout_state.hub,
-                            &fanout_principal,
-                            &visible,
-                            msg.outbound().clone(),
-                        ) else {
-                            continue;
-                        };
-                        send_json(&mut sink, &projected).await
-                    };
-                    if result.is_err() {
+                    if forward_fanout_frame(
+                        &mut sink,
+                        &fanout_state.hub,
+                        &fanout_principal,
+                        supports_session_deltas,
+                        bootstrap_sessions_seq,
+                        &mut legacy_sessions,
+                        msg.as_ref(),
+                    )
+                    .await
+                    .is_err()
+                    {
                         break;
                     }
                 }
@@ -229,5 +232,133 @@ pub async fn run_client_fanout(
                 }
             }
         }
+    }
+}
+
+pub(super) fn legacy_bootstrap_sessions(
+    bootstrap: &[Outbound],
+    supports_session_deltas: bool,
+) -> Option<Vec<crate::core::SessionMeta>> {
+    if supports_session_deltas {
+        return None;
+    }
+    bootstrap.iter().find_map(|message| match message {
+        Outbound::Sessions { sessions } => Some(sessions.clone()),
+        _ => None,
+    })
+}
+
+pub(crate) enum FanoutDelivery<'a> {
+    Skip,
+    Shared(&'a FanoutFrame),
+    Owned(Box<Outbound>),
+}
+
+/// Resolve how one broadcast `FanoutFrame` reaches a connected WebSocket:
+/// skips frames already covered by the connect bootstrap watermark, enforces
+/// per-session owner visibility (including on `SessionRemoved`), reuses the
+/// shared pre-serialized delta for opted-in clients, and applies deltas in
+/// sequence onto a per-connection session list seeded from bootstrap for
+/// legacy clients (never querying live Hub state out of order).
+pub(crate) fn resolve_fanout_delivery<'a>(
+    hub: &Hub,
+    principal: &ProductPrincipal,
+    supports_session_deltas: bool,
+    bootstrap_sessions_seq: u64,
+    legacy_sessions: &mut Option<Vec<crate::core::SessionMeta>>,
+    frame: &'a FanoutFrame,
+) -> FanoutDelivery<'a> {
+    if frame
+        .sessions_seq()
+        .is_some_and(|seq| seq <= bootstrap_sessions_seq)
+    {
+        return FanoutDelivery::Skip;
+    }
+    match frame.outbound() {
+        Outbound::Sessions { sessions } => {
+            if let Some(tracked) = legacy_sessions.as_mut() {
+                let filtered: Vec<_> = sessions
+                    .iter()
+                    .filter(|meta| principal.can_see(meta.owner_user_id.as_deref()))
+                    .cloned()
+                    .collect();
+                *tracked = filtered.clone();
+                return if fanout_sends_shared_frame(principal, frame.outbound()) {
+                    FanoutDelivery::Shared(frame)
+                } else {
+                    FanoutDelivery::Owned(Box::new(Outbound::Sessions { sessions: filtered }))
+                };
+            }
+        }
+        Outbound::SessionUpdated { session } => {
+            if !principal.can_see(session.owner_user_id.as_deref()) {
+                return FanoutDelivery::Skip;
+            }
+            if supports_session_deltas {
+                // Single-session frames carry no other user's metadata; once
+                // visibility passes, reuse the cached serialized JSON directly.
+                return FanoutDelivery::Shared(frame);
+            }
+            let tracked = legacy_sessions.get_or_insert_with(Vec::new);
+            if let Some(existing) = tracked.iter_mut().find(|meta| meta.id == session.id) {
+                *existing = (**session).clone();
+            } else {
+                tracked.push((**session).clone());
+            }
+            return FanoutDelivery::Owned(Box::new(Outbound::Sessions {
+                sessions: tracked.clone(),
+            }));
+        }
+        Outbound::SessionRemoved { session_id } => {
+            let visible = frame.session_owner().map_or_else(
+                || principal.sees_every_session(),
+                |owner| principal.can_see(owner),
+            );
+            if !visible {
+                return FanoutDelivery::Skip;
+            }
+            if supports_session_deltas {
+                return FanoutDelivery::Shared(frame);
+            }
+            let tracked = legacy_sessions.get_or_insert_with(Vec::new);
+            tracked.retain(|meta| meta.id != *session_id);
+            return FanoutDelivery::Owned(Box::new(Outbound::Sessions {
+                sessions: tracked.clone(),
+            }));
+        }
+        _ => {}
+    }
+    if fanout_sends_shared_frame(principal, frame.outbound()) {
+        FanoutDelivery::Shared(frame)
+    } else {
+        let visible = visible_session_ids(hub, principal);
+        project_outbound(hub, principal, &visible, frame.outbound().clone())
+            .map_or(FanoutDelivery::Skip, |outbound| {
+                FanoutDelivery::Owned(Box::new(outbound))
+            })
+    }
+}
+
+#[allow(clippy::result_unit_err)]
+async fn forward_fanout_frame(
+    sink: &mut futures::stream::SplitSink<WebSocket, Message>,
+    hub: &Hub,
+    principal: &ProductPrincipal,
+    supports_session_deltas: bool,
+    bootstrap_sessions_seq: u64,
+    legacy_sessions: &mut Option<Vec<crate::core::SessionMeta>>,
+    frame: &FanoutFrame,
+) -> Result<(), ()> {
+    match resolve_fanout_delivery(
+        hub,
+        principal,
+        supports_session_deltas,
+        bootstrap_sessions_seq,
+        legacy_sessions,
+        frame,
+    ) {
+        FanoutDelivery::Skip => Ok(()),
+        FanoutDelivery::Shared(frame) => send_frame(sink, frame).await,
+        FanoutDelivery::Owned(projected) => send_json(sink, projected.as_ref()).await,
     }
 }

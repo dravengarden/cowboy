@@ -144,7 +144,7 @@ impl Hub {
                 detail: Some("reloading synchronized Provider credentials".to_owned()),
             },
         );
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
         Ok(true)
     }
 
@@ -282,7 +282,7 @@ impl Hub {
             session.provider_generation_missing = false;
             session.lifecycle_epoch = session.lifecycle_epoch.wrapping_add(1);
         }
-        self.broadcast_sessions();
+        self.broadcast_session(&expected.id);
         Ok(())
     }
 
@@ -360,7 +360,7 @@ impl Hub {
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::ReloadProvider(Box::new(meta)));
         }
-        self.broadcast_sessions();
+        self.broadcast_session(&expected.id);
         Ok(())
     }
 
@@ -474,7 +474,7 @@ impl Hub {
                 )),
             },
         );
-        self.broadcast_sessions();
+        self.broadcast_session(&expected.id);
         Ok(())
     }
 
@@ -571,6 +571,6 @@ impl Hub {
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::ReloadProvider(Box::new(reconciled)));
         }
-        self.broadcast_sessions();
+        self.broadcast_session(&worker.session_id);
     }
 }

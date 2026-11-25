@@ -305,6 +305,18 @@ fn outbound_session_fixtures() -> Vec<(&'static str, crate::core::Outbound)> {
             },
         ),
         (
+            "session_updated",
+            Outbound::SessionUpdated {
+                session: Box::new(sample_session_meta()),
+            },
+        ),
+        (
+            "session_removed",
+            Outbound::SessionRemoved {
+                session_id: "sess-1".to_owned(),
+            },
+        ),
+        (
             "machines",
             Outbound::Machines {
                 revision: 7,

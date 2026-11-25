@@ -52,7 +52,7 @@ impl Hub {
             }
         };
         if changed {
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
     }
 
