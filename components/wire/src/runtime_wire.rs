@@ -1133,9 +1133,9 @@ pub fn negotiate(local_min: u16, local_max: u16, peer_min: u16, peer_max: u16) -
 /// Returns an error when serialization, frame-size validation, or writing to
 /// the transport fails.
 #[derive(Deserialize)]
-struct FrameTypePeek<'a> {
+struct FrameTypePeek {
     #[serde(rename = "type")]
-    kind: Option<&'a str>,
+    kind: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1164,9 +1164,16 @@ fn max_encoded_bytes_for_frame(frame: &Frame) -> usize {
     }
 }
 
-fn decode_runtime_frame(payload: &[u8]) -> io::Result<Frame> {
-    if let Ok(peek) = serde_json::from_slice::<FrameTypePeek<'_>>(payload) {
-        match peek.kind {
+/// Decode one length-prefixed runtime frame payload using strict
+/// `deny_unknown_fields` and raw-byte caps for post-edit diagnostic frames.
+///
+/// # Errors
+///
+/// Returns `InvalidData` when the payload exceeds its variant cap, contains
+/// unknown diagnostic envelope fields, or is invalid JSON.
+pub fn decode_runtime_frame(payload: &[u8]) -> io::Result<Frame> {
+    if let Ok(peek) = serde_json::from_slice::<FrameTypePeek>(payload) {
+        match peek.kind.as_deref() {
             Some("post_edit_inspect_request") => {
                 if payload.len() > crate::post_edit_inspect::MAX_POST_EDIT_REQUEST_BYTES {
                     return Err(io::Error::new(
@@ -1202,8 +1209,18 @@ fn decode_runtime_frame(payload: &[u8]) -> io::Result<Frame> {
             _ => {}
         }
     }
-    serde_json::from_slice(payload)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    let frame: Frame = serde_json::from_slice(payload)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+    if matches!(
+        frame,
+        Frame::PostEditInspectRequest { .. } | Frame::PostEditInspectReply { .. }
+    ) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "post-edit diagnostic frame bypassed strict envelope decoder",
+        ));
+    }
+    Ok(frame)
 }
 
 pub async fn write_frame<W: AsyncWrite + Unpin>(writer: &mut W, frame: &Frame) -> io::Result<()> {
@@ -1881,5 +1898,17 @@ mod tests {
             )),
         };
         assert!(write_frame(&mut sink, &oversized_reply).await.is_err());
+
+        // M2: Escaped JSON discriminator string must still hit strict validation & raw size cap.
+        let escaped_unknown = format!(
+            r#"{{"type":"post_edit\u005finspect_request","extra":1,"request":{}}}"#,
+            serde_json::to_string(&req).unwrap()
+        );
+        assert!(decode_runtime_frame(escaped_unknown.as_bytes()).is_err());
+        let escaped_oversized = format!(
+            r#"{{"type":"post_edit\u005finspect_request","request":{}}}"#,
+            " ".repeat(crate::post_edit_inspect::MAX_POST_EDIT_REQUEST_BYTES + 32)
+        );
+        assert!(decode_runtime_frame(escaped_oversized.as_bytes()).is_err());
     }
 }

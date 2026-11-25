@@ -199,19 +199,21 @@ async fn authorize_step(
     if info.meta.system || info.meta.closing || state.hub.is_managed_child(&request.session_id) {
         return Err("restricted");
     }
-    let deadline_at = tokio::time::Instant::from_std(deadline);
-    tokio::time::timeout_at(
-        deadline_at,
+    let mut gone = caller_gone.clone();
+    race_caller_gone(
+        &mut gone,
+        deadline,
         agent_api_bridge::read_parent(&state.hub, state.store.as_ref(), &info.meta),
     )
-    .await
-    .map_err(|_| "timeout")?
+    .await?
     .map_err(|_| "permission_denied")?;
-    let is_restricted =
-        tokio::time::timeout_at(deadline_at, superagent::restricted(state, &info.meta))
-            .await
-            .map_err(|_| "timeout")?
-            .map_err(|_| "unavailable")?;
+    let is_restricted = race_caller_gone(
+        &mut gone,
+        deadline,
+        superagent::restricted(state, &info.meta),
+    )
+    .await?
+    .map_err(|_| "unavailable")?;
     if is_restricted {
         return Err("superagent_scope_denied");
     }
@@ -286,25 +288,55 @@ fn is_changed(reply: &anyhow::Result<ZedAdapterResponse>) -> bool {
     )
 }
 
-fn is_settled(reply: &anyhow::Result<ZedAdapterResponse>) -> bool {
+/// M9: Analysis is settled ONLY when source matches disk AND every active
+/// language server reports `DocumentCurrent` (not `Stale` or `Unknown`).
+fn is_document_current(reply: &anyhow::Result<ZedAdapterResponse>) -> bool {
     matches!(
         reply,
         Ok(ZedAdapterResponse::BufferLanguage {
             source_state: SourceState::Matching,
             analysis: Some(servers),
             ..
-        }) if !servers.is_empty() && servers.iter().all(|s| s.state != AnalysisState::Unknown)
+        }) if !servers.is_empty()
+            && servers
+                .iter()
+                .all(|s| s.state == AnalysisState::DocumentCurrent)
     )
 }
 
-fn is_analysed(reply: &anyhow::Result<ZedAdapterResponse>) -> bool {
+/// Whether an already-open matching buffer has servers in `Stale`/`Unknown`
+/// state that can still advance to `DocumentCurrent` during fenced polling.
+fn can_advance_analysis(reply: &anyhow::Result<ZedAdapterResponse>) -> bool {
     matches!(
         reply,
         Ok(ZedAdapterResponse::BufferLanguage {
+            source_state: SourceState::Matching,
             analysis: Some(servers),
             ..
-        }) if !servers.is_empty() && servers.iter().all(|s| s.state != AnalysisState::Unknown)
+        }) if !servers.is_empty()
+            && servers
+                .iter()
+                .any(|s| matches!(s.state, AnalysisState::Stale | AnalysisState::Unknown))
     )
+}
+
+async fn race_caller_gone<F, T>(
+    caller_gone: &mut watch::Receiver<bool>,
+    deadline: Instant,
+    future: F,
+) -> Result<T, &'static str>
+where
+    F: std::future::Future<Output = T>,
+{
+    if *caller_gone.borrow() {
+        return Err("unavailable");
+    }
+    let deadline_at = tokio::time::Instant::from_std(deadline);
+    tokio::select! {
+        biased;
+        _ = caller_gone.wait_for(|gone| *gone) => Err("unavailable"),
+        res = tokio::time::timeout_at(deadline_at, future) => res.map_err(|_| "timeout"),
+    }
 }
 
 async fn sleep_fenced(
@@ -387,8 +419,16 @@ pub async fn api_machine_post_edit_inspect(
     let task_target = target.clone();
     let task_req = request.clone();
     let work = tokio::spawn(async move {
-        let _target_permit = target_permit;
-        run_inspect_fenced(task_state, task_target, task_req, ctx, caller_rx, deadline).await
+        run_inspect_fenced(
+            task_state,
+            task_target,
+            task_req,
+            ctx,
+            caller_rx,
+            deadline,
+            target_permit,
+        )
+        .await
     });
 
     match tokio::time::timeout_at(tokio::time::Instant::from_std(deadline), work).await {
@@ -405,16 +445,14 @@ async fn run_inspect_fenced(
     ctx: AuthorizedContext,
     mut caller_gone: watch::Receiver<bool>,
     deadline: Instant,
+    target_permit: tokio::sync::OwnedSemaphorePermit,
 ) -> PostEditInspectReply {
     let lock = super::baselines::file_lock(ctx.observed.session(), &request.path);
-    let _file_guard = match tokio::time::timeout_at(
-        tokio::time::Instant::from_std(deadline),
-        lock.lock(),
-    )
-    .await
-    {
+    // M7: Race file-lock wait against caller disconnect so queued disconnected
+    // callers release target permits immediately before any target I/O starts.
+    let _file_guard = match race_caller_gone(&mut caller_gone, deadline, lock.lock()).await {
         Ok(guard) => guard,
-        Err(_) => return refused_reply(&request, "timeout"),
+        Err(reason) => return refused_reply(&request, reason),
     };
 
     // R3-H1 / H-Ctrl-2: Recheck async + sync authorization AFTER target-permit and
@@ -448,14 +486,36 @@ async fn run_inspect_fenced(
     .await
     {
         Ok(pair) => pair,
-        Err(reason) => return refused_reply(&request, reason),
+        Err(reason) => {
+            // M8: If target connection dropped mid-adapter I/O, keep the target
+            // permit charged until the bounded inspection deadline so reconnects
+            // cannot stack >4 overlapping adapter jobs on the target.
+            if !state.machine_control.is_current(&target.connection) && Instant::now() < deadline {
+                tokio::spawn(async move {
+                    let _permit = target_permit;
+                    tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
+                });
+            }
+            return refused_reply(&request, reason);
+        }
     };
+    if reply.is_err()
+        && !state.machine_control.is_current(&target.connection)
+        && Instant::now() < deadline
+    {
+        tokio::spawn(async move {
+            let _permit = target_permit;
+            tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
+        });
+        return refused_reply(&request, "unavailable");
+    }
 
     let mut observed_file = super::diagnostics::build_observed_file(
         &request.path,
         reply,
         acquired,
         ctx.observed.conn_epoch(),
+        true,
         true,
     );
 
@@ -527,8 +587,25 @@ async fn observe_target_file(
     let first = language::observe_open_buffer(&state.code, observed, &request.path).await;
     let not_open = matches!(&first, Err(error) if error.to_string().contains("not open"));
     if !not_open {
-        // M-Ctrl-10: An already-open buffer that is NOT Changed needs no acquisition lease.
+        // M-Ctrl-10 & M9: An already-open buffer that is NOT Changed needs no
+        // acquisition lease; if its analysis is still Stale/Unknown, keep fenced
+        // polling until `DocumentCurrent` or deadline.
         if !is_changed(&first) {
+            if can_advance_analysis(&first) && Instant::now() < deadline {
+                let settled = poll_until_current(
+                    state,
+                    runtime_connection,
+                    runtime_machine_id,
+                    request,
+                    observed,
+                    trust,
+                    first,
+                    caller_gone,
+                    deadline,
+                )
+                .await?;
+                return Ok((settled, false));
+            }
             return Ok((first, false));
         }
         authorize_step(
@@ -618,7 +695,7 @@ async fn observe_target_file(
         )
         .await?;
         let reply = language::observe_open_buffer(&state.code, observed, &request.path).await;
-        if is_analysed(&reply) || reply.is_err() || Instant::now() >= deadline {
+        if is_document_current(&reply) || reply.is_err() || Instant::now() >= deadline {
             return Ok((reply, true));
         }
         let sleep_for = POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now()));
@@ -655,9 +732,35 @@ async fn refresh_with_fence(
     if !reloaded {
         return Ok(if reply.is_ok() { reply } else { original });
     }
-    let mut latest = reply;
+    poll_until_current(
+        state,
+        runtime_connection,
+        runtime_machine_id,
+        request,
+        observed,
+        trust,
+        reply,
+        caller_gone,
+        deadline,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn poll_until_current(
+    state: &AppState,
+    runtime_connection: &ConnectionToken,
+    runtime_machine_id: &str,
+    request: &PostEditInspectRequest,
+    observed: &SessionReadScope,
+    trust: &LanguageServerTrust,
+    initial: anyhow::Result<ZedAdapterResponse>,
+    caller_gone: &mut watch::Receiver<bool>,
+    deadline: Instant,
+) -> Result<anyhow::Result<ZedAdapterResponse>, &'static str> {
+    let mut latest = initial;
     loop {
-        if is_settled(&latest) || Instant::now() >= deadline {
+        if is_document_current(&latest) || latest.is_err() || Instant::now() >= deadline {
             return Ok(latest);
         }
         let sleep_for = POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now()));

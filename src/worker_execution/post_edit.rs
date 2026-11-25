@@ -139,12 +139,17 @@ pub struct QueuedPostEdit {
 }
 
 #[derive(Default)]
+struct TurnPendingState {
+    next_attempt_gen: u64,
+    active_turn: Option<ActiveTurn>,
+    pending: HashMap<String, PendingEntry>,
+}
+
+#[derive(Default)]
 pub(crate) struct State {
     next_conn_id: AtomicU64,
-    next_attempt_gen: AtomicU64,
     broker: Mutex<Option<BrokerLink>>,
-    active_turn: Mutex<Option<ActiveTurn>>,
-    pending: Mutex<HashMap<String, PendingEntry>>,
+    turns: Mutex<TurnPendingState>,
 }
 
 struct WaiterGuard<'a> {
@@ -154,7 +159,7 @@ struct WaiterGuard<'a> {
 
 impl Drop for WaiterGuard<'_> {
     fn drop(&mut self) {
-        self.state.pending.lock().remove(&self.request_id);
+        self.state.turns.lock().pending.remove(&self.request_id);
     }
 }
 
@@ -168,8 +173,9 @@ impl State {
             tx,
         });
         // Drop any waiters belonging to an older broker connection.
-        self.pending
+        self.turns
             .lock()
+            .pending
             .retain(|_, entry| entry.broker_connection_id == conn_id);
         (conn_id, rx)
     }
@@ -183,19 +189,24 @@ impl State {
             *broker = None;
         }
         drop(broker);
-        self.pending
+        self.turns
             .lock()
+            .pending
             .retain(|_, entry| entry.broker_connection_id != conn_id);
     }
 
+    /// Atomically rotate `active_turn` + `attempt_gen` and drop all prior-attempt
+    /// waiters under one mutex so `complete_reply` cannot race rotation (M6).
     pub(crate) fn set_active_turn(&self, turn: Option<(String, String)>) {
-        let attempt_gen = self.next_attempt_gen.fetch_add(1, Ordering::Relaxed) + 1;
-        *self.active_turn.lock() = turn.map(|(turn_id, nonce)| ActiveTurn {
+        let mut state = self.turns.lock();
+        state.next_attempt_gen = state.next_attempt_gen.saturating_add(1);
+        let attempt_gen = state.next_attempt_gen;
+        state.active_turn = turn.map(|(turn_id, nonce)| ActiveTurn {
             turn_id,
             nonce,
             attempt_gen,
         });
-        self.pending.lock().clear();
+        state.pending.clear();
     }
 
     /// Re-verify every invariant immediately before writing byte 0 to the
@@ -207,19 +218,20 @@ impl State {
         current_conn_id: u64,
         relays: &RelayQuiet,
     ) -> bool {
+        let mut state = self.turns.lock();
         let drain = relays.drain_state();
         if item.broker_connection_id != current_conn_id
             || drain.draining
             || drain.generation != item.unit_generation
         {
-            self.pending.lock().remove(&item.request_id);
+            state.pending.remove(&item.request_id);
             return false;
         }
-        let active_matches = self.active_turn.lock().as_ref().is_some_and(|turn| {
+        let active_matches = state.active_turn.as_ref().is_some_and(|turn| {
             turn.turn_id == item.turn_id && turn.attempt_gen == item.attempt_gen
         });
         if !active_matches {
-            self.pending.lock().remove(&item.request_id);
+            state.pending.remove(&item.request_id);
             return false;
         }
         let remaining_ms = item
@@ -228,17 +240,18 @@ impl State {
             .as_millis();
         let Some(clamped) = clamp_remaining_ms(u64::try_from(remaining_ms).unwrap_or(u64::MAX))
         else {
-            self.pending.lock().remove(&item.request_id);
+            state.pending.remove(&item.request_id);
             return false;
         };
-        let waiter_live = self.pending.lock().get(&item.request_id).is_some_and(|e| {
+        let waiter_live = state.pending.get(&item.request_id).is_some_and(|e| {
             e.broker_connection_id == current_conn_id
                 && e.turn_id == item.turn_id
+                && e.attempt_gen == item.attempt_gen
                 && e.unit_generation == item.unit_generation
                 && !e.waiter.is_closed()
         });
         if !waiter_live {
-            self.pending.lock().remove(&item.request_id);
+            state.pending.remove(&item.request_id);
             return false;
         }
         if let Frame::PostEditInspectRequest { request } = &mut item.frame {
@@ -250,7 +263,7 @@ impl State {
     }
 
     pub(crate) fn refuse_local(&self, request_id: &str, reason: &str) {
-        if let Some(entry) = self.pending.lock().remove(request_id) {
+        if let Some(entry) = self.turns.lock().pending.remove(request_id) {
             let _ = entry.waiter.send(PostEditInspectReply {
                 session_id: String::new(),
                 worker_epoch: String::new(),
@@ -283,17 +296,12 @@ impl State {
         {
             return;
         }
-        let active = self
-            .active_turn
-            .lock()
-            .as_ref()
-            .map(|t| (t.turn_id.clone(), t.attempt_gen));
+        let mut state = self.turns.lock();
         let drain = relays.drain_state();
-        let mut pending = self.pending.lock();
-        let valid = pending.get(&reply.request_id).is_some_and(|entry| {
+        let valid = state.pending.get(&reply.request_id).is_some_and(|entry| {
             entry.broker_connection_id == current_conn_id
-                && active.as_ref().is_some_and(|(id, attempt_gen)| {
-                    id == &entry.turn_id && *attempt_gen == entry.attempt_gen
+                && state.active_turn.as_ref().is_some_and(|active| {
+                    active.turn_id == entry.turn_id && active.attempt_gen == entry.attempt_gen
                 })
                 && !drain.draining
                 && drain.generation == entry.unit_generation
@@ -302,7 +310,7 @@ impl State {
         if !valid {
             return;
         }
-        if let Some(entry) = pending.remove(&reply.request_id) {
+        if let Some(entry) = state.pending.remove(&reply.request_id) {
             let _ = entry.waiter.send(reply);
         }
     }
@@ -350,8 +358,9 @@ impl State {
             return refused("timeout");
         };
         let Some((turn_id, attempt_gen)) = self
-            .active_turn
+            .turns
             .lock()
+            .active_turn
             .as_ref()
             .filter(|turn| constant_time_eq(turn.nonce.as_bytes(), turn_nonce.as_bytes()))
             .map(|turn| (turn.turn_id.clone(), turn.attempt_gen))
@@ -383,18 +392,28 @@ impl State {
         }
 
         let (waiter_tx, waiter_rx) = oneshot::channel();
-        // Register waiter BEFORE enqueue; WaiterGuard guarantees removal on Drop/cancel.
-        self.pending.lock().insert(
-            request_id.clone(),
-            PendingEntry {
-                waiter: waiter_tx,
-                broker_connection_id: conn_id,
-                turn_id: turn_id.clone(),
-                attempt_gen,
-                unit_generation,
-                expires_at,
-            },
-        );
+        // Atomically recheck active attempt and register waiter BEFORE enqueue.
+        {
+            let mut state = self.turns.lock();
+            if !state
+                .active_turn
+                .as_ref()
+                .is_some_and(|t| t.turn_id == turn_id && t.attempt_gen == attempt_gen)
+            {
+                return refused("unavailable");
+            }
+            state.pending.insert(
+                request_id.clone(),
+                PendingEntry {
+                    waiter: waiter_tx,
+                    broker_connection_id: conn_id,
+                    turn_id: turn_id.clone(),
+                    attempt_gen,
+                    unit_generation,
+                    expires_at,
+                },
+            );
+        }
         let _guard = WaiterGuard {
             state: self,
             request_id: request_id.clone(),
@@ -402,7 +421,7 @@ impl State {
         let queued = QueuedPostEdit {
             request_id,
             broker_connection_id: conn_id,
-            turn_id,
+            turn_id: turn_id.clone(),
             attempt_gen,
             unit_generation,
             expires_at,
@@ -414,23 +433,45 @@ impl State {
             return refused("capacity");
         }
         match tokio::time::timeout_at(tokio::time::Instant::from_std(expires_at), waiter_rx).await {
-            Ok(Ok(reply)) => match reply.outcome {
-                PostEditInspectOutcome::Projected {
-                    payload,
-                    matches_expected,
-                } => json!({
-                    "state": "projected",
-                    "payload": payload,
-                    "matchesExpected": matches_expected,
-                }),
-                PostEditInspectOutcome::Refused { reason } => json!({
-                    "state": "refused",
-                    "reason": reason,
-                }),
-            },
+            Ok(Ok(reply)) => {
+                // M6: Recheck attempt generation and drain state AFTER receiving
+                // the oneshot reply so a reply settled just before rotation never
+                // outlives its attempt nonce into the /diagnostics socket.
+                let still_current = {
+                    let state = self.turns.lock();
+                    let drain = relays.drain_state();
+                    !drain.draining
+                        && drain.generation == unit_generation
+                        && state
+                            .active_turn
+                            .as_ref()
+                            .is_some_and(|t| t.turn_id == turn_id && t.attempt_gen == attempt_gen)
+                };
+                if !still_current {
+                    return refused("unavailable");
+                }
+                project_outcome(reply.outcome)
+            }
             Ok(Err(_)) => refused("unavailable"),
             Err(_) => refused("timeout"),
         }
+    }
+}
+
+fn project_outcome(outcome: PostEditInspectOutcome) -> Value {
+    match outcome {
+        PostEditInspectOutcome::Projected {
+            payload,
+            matches_expected,
+        } => json!({
+            "state": "projected",
+            "payload": payload,
+            "matchesExpected": matches_expected,
+        }),
+        PostEditInspectOutcome::Refused { reason } => json!({
+            "state": "refused",
+            "reason": reason,
+        }),
     }
 }
 

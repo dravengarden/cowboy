@@ -227,28 +227,27 @@ pub(super) fn project_for_inspect(
         if comparison.is_object() {
             item["comparison"] = json!({"state": "unknown", "reason": comparison["reason"]});
         }
-        let fallback_allowed = matches!(reason, None | Some("no_baseline" | "buffer_replaced"));
-        if fallback_allowed {
-            let error_diags: Vec<&Value> = file["diagnostics"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter(|value| value["severity"] == "error")
-                .collect();
-            current_errors = file
-                .pointer("/counts/error")
-                .and_then(Value::as_u64)
-                .unwrap_or(error_diags.len() as u64);
-            if current_errors > 0 {
-                item["current_errors"] = json!(current_errors);
-            }
-            error_diags
-                .into_iter()
-                .filter_map(|value| budget.admit(value))
-                .collect()
-        } else {
-            Vec::new()
+        // M14: Stale and unorderable comparisons were already rejected by
+        // `ordering_admissible` above. Apply the current-error fallback to all
+        // remaining admissible unknown comparisons (including `servers_changed`
+        // and `over_capture_bound`).
+        let error_diags: Vec<&Value> = file["diagnostics"]
+            .as_array()
+            .into_iter()
+            .flatten()
+            .filter(|value| value["severity"] == "error")
+            .collect();
+        current_errors = file
+            .pointer("/counts/error")
+            .and_then(Value::as_u64)
+            .unwrap_or(error_diags.len() as u64);
+        if current_errors > 0 {
+            item["current_errors"] = json!(current_errors);
         }
+        error_diags
+            .into_iter()
+            .filter_map(|value| budget.admit(value))
+            .collect()
     };
 
     let build_payload = |listed: &[Value], truncated: bool| -> Value {

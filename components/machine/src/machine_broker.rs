@@ -979,8 +979,8 @@ impl Broker {
     }
 
     fn remove_worker(&self, session_id: &str, connection_id: u64) -> Option<WorkerPeer> {
-        self.post_edit.remove_worker(session_id, connection_id);
         let mut workers = self.workers.lock();
+        self.post_edit.remove_worker(session_id, connection_id);
         if workers
             .get(session_id)
             .is_some_and(|worker| worker.connection_id == connection_id)
@@ -1292,7 +1292,7 @@ impl Broker {
                 existing.epoch
             );
         }
-        workers.insert(
+        let replaced = workers.insert(
             session_id.clone(),
             WorkerPeer {
                 connection_id,
@@ -1342,9 +1342,10 @@ impl Broker {
                 last_hinted_target: None,
             },
         );
+        if let Some(old) = replaced {
+            self.post_edit.remove_worker(&session_id, old.connection_id);
+        }
         drop(workers);
-        self.post_edit
-            .remove_worker_except(&session_id, connection_id);
         if !self.cancelled_sessions.lock().contains(&session_id) {
             self.session_states
                 .lock()

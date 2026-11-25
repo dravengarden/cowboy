@@ -539,12 +539,12 @@ impl MachineControl {
         protocol: u16,
         tx: mpsc::UnboundedSender<MachineCommand>,
     ) -> ConnectionToken {
+        let mut live = self.live.write();
         let token = ConnectionToken(Arc::new(ConnectionIdentity {
             machine_id: machine_id.clone(),
             epoch,
             conn_epoch: NEXT_CONNECTION_EPOCH.fetch_add(1, Ordering::Relaxed),
         }));
-        let mut live = self.live.write();
         live.disconnect(&machine_id);
         live.connections.insert(
             machine_id,

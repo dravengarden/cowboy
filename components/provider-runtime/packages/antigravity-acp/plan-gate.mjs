@@ -168,6 +168,7 @@ export class PlanGate {
     this.callAttempts = new WeakMap();
     /** Facade call object -> `{ entry, id, turn, attempt, digest }` bound for UI callbacks. */
     this.bound = new WeakMap();
+    this.taintedCalls = new WeakSet();
   }
 
   /** Current mode generation for `ownerId`. */
@@ -275,6 +276,7 @@ export class PlanGate {
         for (const item of [target, ...hits]) {
           item.ambiguous = true;
           if (item.boundCall) {
+            this.taintedCalls.add(item.boundCall);
             this.bound.delete(item.boundCall);
             item.boundCall = undefined;
           }
@@ -309,7 +311,10 @@ export class PlanGate {
       if (evicted) {
         evicted.ambiguous = true;
         evictedId = evicted.id;
-        if (evicted.boundCall) this.bound.delete(evicted.boundCall);
+        if (evicted.boundCall) {
+          this.taintedCalls.add(evicted.boundCall);
+          this.bound.delete(evicted.boundCall);
+        }
         if (turn && typeof turn === "object") turn.announcementEvicted = true;
       }
     }
@@ -337,7 +342,7 @@ export class PlanGate {
    * attempt.
    */
   admitCall(call, turn) {
-    if (!call || typeof call !== "object") return;
+    if (!call || typeof call !== "object" || this.taintedCalls.has(call)) return;
     const attempt = attemptOf(turn);
     this.callAttempts.set(call, { turn, attempt });
     if (turn !== undefined && !isTurnLive(turn)) return;
@@ -364,10 +369,12 @@ export class PlanGate {
         isDiffBearing &&
         (exactLive.length > 1 || (exactLive.length >= 1 && inputlessLive.length > 0))
       ) {
-        // M-Proxy-6: Collisions across bound/unbound/inputless edit announcements taint all affected entries.
+        // M-Proxy-6 & M13: Collisions across bound/unbound/inputless edit announcements taint all affected entries and calls permanently.
+        this.taintedCalls.add(call);
         for (const item of [...exactLive, ...inputlessLive]) {
           item.ambiguous = true;
           if (item.boundCall) {
+            this.taintedCalls.add(item.boundCall);
             this.bound.delete(item.boundCall);
             item.boundCall = undefined;
           }
@@ -399,7 +406,7 @@ export class PlanGate {
    * omits ambiguous matches.
    */
   bind(call, currentTurn) {
-    if (!call || typeof call !== "object") return undefined;
+    if (!call || typeof call !== "object" || this.taintedCalls.has(call)) return undefined;
     const currentAttempt = attemptOf(currentTurn);
     if (this.callAttempts.has(call)) {
       const admitted = this.callAttempts.get(call);

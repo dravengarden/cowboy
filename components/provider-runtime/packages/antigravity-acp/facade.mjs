@@ -55,9 +55,6 @@ import { planUpdate } from "./presentation.mjs";
 /** The worker endpoint's own request recording an uncertain effect the
  * facade detected (`src/worker_execution/ledger.rs`); never forwarded. */
 export const UNCERTAIN_REPORT = "cowboy/uncertainEffect";
-/** Narrowly scoped non-fencing cleanup for verified private staged payloads (H-Proxy-4). */
-const STAGED_PAYLOAD_CLEANUP = "cowboy/cleanupStagedPayload";
-
 /** Thrown ONLY when `beforeSend` refuses a request positively before `socket.send()`. */
 class PreDispatchRefusal extends ToolError {}
 
@@ -131,6 +128,8 @@ export class Facade {
     this.stopConfirmMs = stopConfirmMs;
     this.diagnostics = diagnostics;
     this.canaryTrace = Boolean(canaryTrace);
+    this.canaryNonce =
+      typeof canaryNonce === "string" && canaryNonce.length > 0 ? canaryNonce : undefined;
     this.startWaitMs = 10_000;
     this.root = root;
     this.shell = shell;
@@ -630,9 +629,18 @@ export class Facade {
   }
 
   /** Record a file observation generation + raw SHA-256 across reads, conflicts, and publishes (H-Proxy-3). */
-  recordFileObservation(file, rawDigest) {
-    const prev = this.fileObservation.get(file)?.gen ?? 0;
-    const entry = { gen: prev + 1, rawDigest };
+  recordFileObservation(file, rawDigest, { forceAdvance = false } = {}) {
+    const prev = this.fileObservation.get(file);
+    if (
+      !forceAdvance &&
+      prev !== undefined &&
+      typeof rawDigest === "string" &&
+      prev.rawDigest === rawDigest
+    ) {
+      return prev;
+    }
+    const gen = (prev?.gen ?? 0) + 1;
+    const entry = { gen, rawDigest };
     this.fileObservation.set(file, entry);
     return entry;
   }
@@ -712,7 +720,13 @@ export class Facade {
       ? `canary-${randomUUID().replaceAll("-", "")}`
       : undefined;
     const makeCanaryMeta = (expectedNoteDigest = null) =>
-      canaryInspectId ? { inspectId: canaryInspectId, expectedNoteDigest } : undefined;
+      canaryInspectId
+        ? {
+            inspectId: canaryInspectId,
+            expectedNoteDigest,
+            ...(this.canaryNonce ? { expectedDiagnosticNonce: this.canaryNonce } : {}),
+          }
+        : undefined;
 
     const reply = await this.diagnostics.postEdit({
       path: relPath,
@@ -1195,13 +1209,46 @@ ${WRAP_UP_NOTE}`,
     try {
       metadata ??= await this.connection.call("fs/getMetadata", { path: url(file) }, callOpts);
     } catch (error) {
-      if (missing(error)) return undefined;
+      if (missing(error)) {
+        this.recordFileObservation(file, null);
+        return undefined;
+      }
       throw error;
     }
     if (!metadata.isFile) throw new ToolError(`Not a regular file: ${file}`);
     if (metadata.size > LIMITS.wholeFile) throw new ToolError("The file is larger than 8 MiB");
-    const read = await this.connection.call("fs/readFile", { path: url(file) }, callOpts);
-    return Buffer.from(read.dataBase64, "base64");
+    let read;
+    try {
+      read = await this.connection.call("fs/readFile", { path: url(file) }, callOpts);
+    } catch (error) {
+      if (missing(error)) {
+        this.recordFileObservation(file, null);
+        return undefined;
+      }
+      throw error;
+    }
+    const buf = Buffer.from(read.dataBase64, "base64");
+    this.recordFileObservation(file, sha256(buf));
+    return buf;
+  }
+
+  recordMissingPath(session, path, resolvedFile = undefined) {
+    const candidates = new Set();
+    if (typeof resolvedFile === "string" && resolvedFile.length > 0) candidates.add(resolvedFile);
+    if (typeof path === "string" && path.length > 0) {
+      const normalized = posix.isAbsolute(path)
+        ? posix.normalize(path)
+        : this.root
+          ? posix.resolve(this.root, path)
+          : undefined;
+      if (normalized) candidates.add(normalized);
+    }
+    for (const candidate of candidates) {
+      if (this.fileObservation.has(candidate) || session?.observed?.has(candidate)) {
+        this.recordFileObservation(candidate, null);
+        session?.observed?.delete(candidate);
+      }
+    }
   }
 
   async readFile(session, { path, offset = 0, length: asked }) {
@@ -1211,8 +1258,24 @@ ${WRAP_UP_NOTE}`,
     if (!Number.isInteger(length) || length < 1 || length > LIMITS.readBytes) {
       throw new ToolError(`length must be between 1 and ${LIMITS.readBytes}`);
     }
-    const file = await this.resolve(path, { outside: true });
-    const metadata = await this.rpc("fs/getMetadata", { path: url(file) });
+    let file;
+    try {
+      file = await this.resolve(path, { outside: true });
+    } catch (error) {
+      if (missing(error) || /No such file/i.test(String(error?.message ?? ""))) {
+        this.recordMissingPath(session, path);
+      }
+      throw error;
+    }
+    let metadata;
+    try {
+      metadata = await this.rpc("fs/getMetadata", { path: url(file) });
+    } catch (error) {
+      if (missing(error) || /No such file/i.test(String(error?.message ?? ""))) {
+        this.recordMissingPath(session, path, file);
+      }
+      throw error;
+    }
     if (!metadata.isFile) throw new ToolError(`Not a regular file: ${path}`);
     let size = metadata.size;
     let bytes;
@@ -1434,7 +1497,7 @@ ${WRAP_UP_NOTE}`,
       if ((this.invalidations.get(file) ?? 0) === generation) {
         const rawDigest = sha256(bytes);
         session.observed.set(file, rawDigest);
-        const obs = this.recordFileObservation(file, rawDigest);
+        const obs = this.recordFileObservation(file, rawDigest, { forceAdvance: true });
         const rev = (this.committedRevision.get(file) ?? 0) + 1;
         this.committedRevision.set(file, rev);
         const relPath = this.relativeWorkspacePath(file);
@@ -1500,24 +1563,12 @@ ${WRAP_UP_NOTE}`,
       );
       args = ["--request-file", payload];
     }
-    let result;
-    try {
-      result = await this.runBounded(turn, ["/bin/sh", "-c", APPLY, "sh", ...args], {
-        timeoutMs: LIMITS.publishTimeoutMs,
-        maxBytes: 64 * 1024,
-        lostIsUncertain: true,
-        beforeSend,
-      });
-    } catch (error) {
-      if (payload && (error instanceof PreDispatchRefusal || notSent(error))) {
-        // H-Proxy-4: process/start positively did NOT dispatch; clean up ONLY
-        // the verified private staged payload via the non-fencing worker method.
-        this.connection
-          .call(STAGED_PAYLOAD_CLEANUP, { path: url(payload) }, { timeoutMs: 2000 })
-          .catch(() => {});
-      }
-      throw error;
-    }
+    const result = await this.runBounded(turn, ["/bin/sh", "-c", APPLY, "sh", ...args], {
+      timeoutMs: LIMITS.publishTimeoutMs,
+      maxBytes: 64 * 1024,
+      lostIsUncertain: true,
+      beforeSend,
+    });
     let outcome;
     try {
       outcome = JSON.parse(result.stdout);

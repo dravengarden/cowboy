@@ -521,6 +521,17 @@ impl MachineLink<'_> {
     }
 
     fn route_runtime_frame(&self, frame: crate::runtime_wire::Frame) -> ControlFlow<()> {
+        if matches!(
+            frame,
+            crate::runtime_wire::Frame::PostEditInspectRequest { .. }
+                | crate::runtime_wire::Frame::PostEditInspectReply { .. }
+        ) {
+            tracing::warn!(
+                machine = %self.hello.machine_id,
+                "dropping local-only post-edit diagnostic frame from primary Machine WebSocket"
+            );
+            return ControlFlow::Continue(());
+        }
         if let crate::runtime_wire::Frame::ExecutionRequest { request } = frame {
             machine_lanes::spawn_execution_request(
                 self.state,

@@ -212,8 +212,21 @@ pub(super) async fn read_existing(
 /// Observation-only projection of one file read with an optional pending
 /// baseline capture. Callers must commit `pending` via `baselines::record`
 /// ONLY after passing their final authorization/trust fence (`R3-H2`).
+fn valid_workspace_relative_path(path: &str) -> bool {
+    !path.is_empty()
+        && path.len() <= 4096
+        && !path.starts_with('/')
+        && !path.ends_with('/')
+        && !path.contains(' ')
+        && !path.contains('\\')
+        && path
+            .split('/')
+            .all(|seg| !seg.is_empty() && seg != "." && seg != "..")
+}
+
 pub(super) struct ObservedFile {
     pub(super) file: Value,
+    pub(super) canonical_path: Option<String>,
     pub(super) pending: Option<(
         super::baselines::Pending,
         Vec<super::super::super::CodeDiagnostic>,
@@ -226,6 +239,7 @@ pub(super) fn build_observed_file(
     acquired: bool,
     conn_epoch: u64,
     capture_baseline: bool,
+    strict_canonical_path: bool,
 ) -> ObservedFile {
     match reply {
         Ok(ZedAdapterResponse::BufferLanguage {
@@ -236,9 +250,15 @@ pub(super) fn build_observed_file(
             source_state,
             ..
         }) => {
-            if returned_path != path {
+            let path_valid = if strict_canonical_path {
+                returned_path == path
+            } else {
+                valid_workspace_relative_path(&returned_path)
+            };
+            if !path_valid {
                 return ObservedFile {
                     file: json!({"path":path,"state":"unavailable"}),
+                    canonical_path: None,
                     pending: None,
                 };
             }
@@ -250,6 +270,7 @@ pub(super) fn build_observed_file(
             if !identities_match(&diagnostics, buffer_snapshot.as_deref()) {
                 return ObservedFile {
                     file: json!({"path":path,"state":"unavailable"}),
+                    canonical_path: None,
                     pending: None,
                 };
             }
@@ -301,23 +322,28 @@ pub(super) fn build_observed_file(
             }
             ObservedFile {
                 file,
+                canonical_path: Some(returned_path),
                 pending: pending_out,
             }
         }
         Ok(_) => ObservedFile {
             file: json!({"path":path,"state":"unavailable"}),
+            canonical_path: None,
             pending: None,
         },
         Err(error) if error.to_string().contains("not open") => ObservedFile {
             file: json!({"path":path,"state":"not_open"}),
+            canonical_path: None,
             pending: None,
         },
         Err(error) if error.to_string().contains("outside this session") => ObservedFile {
             file: json!({"path":path,"state":"refused"}),
+            canonical_path: None,
             pending: None,
         },
         Err(_) => ObservedFile {
             file: json!({"path":path,"state":"unavailable"}),
+            canonical_path: None,
             pending: None,
         },
     }
@@ -362,7 +388,18 @@ async fn read_with_acquisition(
                 false,
             )
         };
-        let mut built = build_observed_file(&path, reply, acquired, conn_epoch, acquire);
+        let mut built = build_observed_file(&path, reply, acquired, conn_epoch, acquire, false);
+        let canonical = built.canonical_path.as_deref().unwrap_or(&path);
+        // M11: If caller passed an in-worktree symlink alias whose canonical buffer
+        // path differs, switch the per-file lock to the resolved buffer identity
+        // before authorizing and committing the baseline (strict lock drop first).
+        let _canonical_guard = if canonical != path {
+            drop(_file_guard);
+            let canonical_lock = super::baselines::file_lock(observed.session(), canonical);
+            Some(canonical_lock.lock_owned().await)
+        } else {
+            None
+        };
         if trust
             .as_ref()
             .is_none_or(|trust| !trust.current(&state.hub))
@@ -372,7 +409,7 @@ async fn read_with_acquisition(
         }
         if let Some((pending, diagnostics)) = built.pending.take() {
             built.file["comparison"] =
-                super::baselines::record(observed.session(), &path, pending, &diagnostics);
+                super::baselines::record(observed.session(), canonical, pending, &diagnostics);
         }
         files.push(built.file);
     }

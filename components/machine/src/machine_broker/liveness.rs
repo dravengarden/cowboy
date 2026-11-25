@@ -662,9 +662,7 @@ pub(super) async fn read_frame<R: AsyncRead + Unpin>(
     connection
         .phase
         .store(Phase::Decode as u8, Ordering::Relaxed);
-    let frame = serde_json::from_slice(&payload)
-        .map(Some)
-        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
+    let frame = crate::runtime_wire::decode_runtime_frame(&payload).map(Some);
     connection.frame_done();
     frame
 }

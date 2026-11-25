@@ -170,20 +170,26 @@ pub(super) fn route_reply_to_live_worker(
     lease: u64,
     reply: PostEditInspectReply,
 ) {
-    broker
-        .post_edit
-        .route_reply_with_live_check(lease, reply, |entry| {
-            let workers = broker.workers.lock();
-            let worker = workers.get(&entry.session_id)?;
-            if worker.connection_id == entry.connection_id
-                && worker.epoch == entry.worker_epoch
-                && worker.negotiated_protocol >= POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION
-            {
-                worker.diag_reply_tx.clone()
-            } else {
-                None
-            }
+    // M3: Always acquire `workers` BEFORE `post_edit` (matching registration,
+    // removal, and admission) so reply routing and worker replacement share
+    // one total lock order (`controller -> sessions -> workers -> post_edit`).
+    let outbound = {
+        let workers = broker.workers.lock();
+        let live = workers.get(&reply.session_id).and_then(|worker| {
+            (worker.negotiated_protocol >= POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION)
+                .then(|| {
+                    worker
+                        .diag_reply_tx
+                        .clone()
+                        .map(|tx| (worker.connection_id, worker.epoch.clone(), tx))
+                })
+                .flatten()
         });
+        broker.post_edit.take_validated_reply(lease, reply, live)
+    };
+    if let Some((tx, frame)) = outbound {
+        let _ = tx.try_send(frame);
+    }
 }
 
 pub(super) fn handle_worker_request(
@@ -193,22 +199,9 @@ pub(super) fn handle_worker_request(
     connection_id: u64,
     request: PostEditInspectRequest,
 ) {
-    let worker_info = broker
-        .workers
-        .lock()
-        .get(session_id)
-        .filter(|w| w.connection_id == connection_id && w.epoch == epoch)
-        .and_then(|w| {
-            w.diag_reply_tx
-                .clone()
-                .map(|tx| (w.negotiated_protocol, tx))
-        });
-    let Some((worker_protocol, diag_reply_tx)) = worker_info else {
-        return;
-    };
-    if worker_protocol < POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION {
-        return;
-    }
+    // Read cancelled/binding first, then hold `workers -> post_edit` together
+    // during admission so an old connection can never enqueue after replacement
+    // invalidated its entries (M3).
     let binding = (!broker.cancelled_sessions.lock().contains(session_id))
         .then(|| {
             broker
@@ -219,6 +212,21 @@ pub(super) fn handle_worker_request(
                 .and_then(|binding| binding.decode().ok())
         })
         .flatten();
+    let workers = broker.workers.lock();
+    let Some((worker_protocol, diag_reply_tx)) = workers
+        .get(session_id)
+        .filter(|w| w.connection_id == connection_id && w.epoch == epoch)
+        .and_then(|w| {
+            w.diag_reply_tx
+                .clone()
+                .map(|tx| (w.negotiated_protocol, tx))
+        })
+    else {
+        return;
+    };
+    if worker_protocol < POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION {
+        return;
+    }
     match binding {
         Some(b)
             if request.session_id == session_id
@@ -451,12 +459,6 @@ impl PostEditState {
         });
     }
 
-    pub(super) fn remove_worker_except(&self, session_id: &str, live_connection_id: u64) {
-        self.inner.lock().pending.retain(|_, entry| {
-            !(entry.session_id == session_id && entry.connection_id != live_connection_id)
-        });
-    }
-
     pub(super) fn expire_one(&self, broker_request_id: &str) {
         let mut state = self.inner.lock();
         let now = Instant::now();
@@ -533,32 +535,40 @@ impl PostEditState {
                     let scope = request.scope.clone();
                     request.request_id = broker_id.clone();
                     request.remaining_ms = clamped_ms;
-                    let queued = QueuedControllerPostEdit {
-                        broker_request_id: broker_id.clone(),
-                        controller_lease,
-                        expires_at,
-                        frame: Frame::PostEditInspectRequest {
-                            request: Box::new(request.clone()),
-                        },
+                    let frame = Frame::PostEditInspectRequest {
+                        request: Box::new(request.clone()),
                     };
-                    if diag_tx.try_send(queued).is_ok() {
-                        state.pending.insert(
-                            broker_id.clone(),
-                            PendingInspect {
-                                session_id,
-                                connection_id,
-                                worker_epoch,
-                                scope,
-                                worker_request_id: worker_request_id.clone(),
-                                worker_protocol,
-                                worker_diag_reply_tx: worker_diag_reply_tx.clone(),
-                                controller_lease,
-                                expires_at,
-                            },
-                        );
-                        (Some(broker_id), None)
+                    let fits_cap = encoded_frame_bytes(&frame).is_some_and(|bytes| {
+                        bytes <= crate::post_edit_inspect::MAX_POST_EDIT_REQUEST_BYTES + 4
+                    });
+                    if !fits_cap {
+                        (None, Some("invalid_request"))
                     } else {
-                        (None, Some("capacity"))
+                        let queued = QueuedControllerPostEdit {
+                            broker_request_id: broker_id.clone(),
+                            controller_lease,
+                            expires_at,
+                            frame,
+                        };
+                        if diag_tx.try_send(queued).is_ok() {
+                            state.pending.insert(
+                                broker_id.clone(),
+                                PendingInspect {
+                                    session_id,
+                                    connection_id,
+                                    worker_epoch,
+                                    scope,
+                                    worker_request_id: worker_request_id.clone(),
+                                    worker_protocol,
+                                    worker_diag_reply_tx: worker_diag_reply_tx.clone(),
+                                    controller_lease,
+                                    expires_at,
+                                },
+                            );
+                            (Some(broker_id), None)
+                        } else {
+                            (None, Some("capacity"))
+                        }
                     }
                 }
             } else {
@@ -642,51 +652,63 @@ impl PostEditState {
 
     #[cfg(test)]
     pub(super) fn route_reply_from_controller(&self, lease: u64, reply: PostEditInspectReply) {
-        self.route_reply_with_live_check(lease, reply, |entry| {
-            (entry.worker_protocol >= POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION)
-                .then(|| entry.worker_diag_reply_tx.clone())
-        });
+        let entry_snapshot = {
+            let state = self.inner.lock();
+            state.pending.get(&reply.request_id).and_then(|entry| {
+                (entry.worker_protocol >= POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION).then(|| {
+                    (
+                        entry.connection_id,
+                        entry.worker_epoch.clone(),
+                        entry.worker_diag_reply_tx.clone(),
+                    )
+                })
+            })
+        };
+        if let Some((tx, frame)) = self.take_validated_reply(lease, reply, entry_snapshot) {
+            let _ = tx.try_send(frame);
+        }
     }
 
-    pub(super) fn route_reply_with_live_check<F>(
+    /// Validate a controller reply against both pending state and the live
+    /// worker snapshot already read under `broker.workers`.
+    pub(super) fn take_validated_reply(
         &self,
         lease: u64,
         mut reply: PostEditInspectReply,
-        live_worker_tx: F,
-    ) where
-        F: FnOnce(&PendingInspect) -> Option<mpsc::Sender<Frame>>,
-    {
+        live_worker: Option<(u64, String, mpsc::Sender<Frame>)>,
+    ) -> Option<(mpsc::Sender<Frame>, Frame)> {
         if !reply.validate() {
-            return;
+            return None;
         }
-        let matched = {
+        let (live_conn_id, live_epoch, tx) = live_worker?;
+        let now = Instant::now();
+        let entry = {
             let mut state = self.inner.lock();
-            let now = Instant::now();
             expire_stale_locked(&mut state, now);
             let valid = state.pending.get(&reply.request_id).is_some_and(|entry| {
                 entry.controller_lease == lease
                     && entry.session_id == reply.session_id
                     && entry.worker_epoch == reply.worker_epoch
+                    && entry.connection_id == live_conn_id
+                    && entry.worker_epoch == live_epoch
                     && entry.scope == reply.scope
                     && entry.expires_at > now
             });
             if !valid {
-                return;
+                return None;
             }
-            state.pending.remove(&reply.request_id)
+            state.pending.remove(&reply.request_id)?
         };
-        if let Some(entry) = matched
-            && let Some(tx) = live_worker_tx(&entry)
+        reply.request_id = entry.worker_request_id;
+        let frame = Frame::PostEditInspectReply {
+            reply: Box::new(reply),
+        };
+        if encoded_frame_bytes(&frame)
+            .is_some_and(|bytes| bytes <= crate::post_edit_inspect::MAX_POST_EDIT_REPLY_BYTES + 4)
         {
-            reply.request_id = entry.worker_request_id;
-            let frame = Frame::PostEditInspectReply {
-                reply: Box::new(reply),
-            };
-            if encoded_frame_bytes(&frame).is_some_and(|bytes| {
-                bytes <= crate::post_edit_inspect::MAX_POST_EDIT_REPLY_BYTES + 4
-            }) {
-                let _ = tx.try_send(frame);
-            }
+            Some((tx, frame))
+        } else {
+            None
         }
     }
 }
@@ -739,7 +761,9 @@ pub(super) async fn run_controller_unix_writer(
                     post_edit.drop_controller_send(&item.broker_request_id);
                     continue;
                 };
-                if !unix_socket_has_hint_headroom(&writer, frame_bytes) {
+                if frame_bytes > crate::post_edit_inspect::MAX_POST_EDIT_REQUEST_BYTES + 4
+                    || !unix_socket_has_hint_headroom(&writer, frame_bytes)
+                {
                     post_edit.drop_controller_send(&item.broker_request_id);
                     continue;
                 }
@@ -882,5 +906,50 @@ mod tests {
         // No controller attached, worker protocol 8 -> zero frames emitted.
         state.admit_from_worker(sample_req("wpe-legacy", 1000), 10, 8, &worker_tx);
         assert!(worker_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn rewritten_oversized_request_is_refused_without_breaking_controller_tunnel() {
+        let state = Arc::new(PostEditState::default());
+        let (ctrl_tx, mut ctrl_rx) = mpsc::channel(CONTROLLER_DIAG_REQ_CAPACITY);
+        let (worker_tx, mut worker_rx) = mpsc::channel(WORKER_DIAG_REPLY_CAPACITY);
+        state.attach_controller(1, 9, true, ctrl_tx);
+
+        let mut req = sample_req("a", 4000);
+        let seg = "a".repeat(200);
+        req.path = (0..18).map(|_| seg.as_str()).collect::<Vec<_>>().join("/");
+        req.scope.binding_id = "b".repeat(2000);
+        req.scope.incarnation = "c".repeat(2000);
+        let base_len = serde_json::to_vec(&Frame::PostEditInspectRequest {
+            request: Box::new(req.clone()),
+        })
+        .unwrap()
+        .len();
+        let target = crate::post_edit_inspect::MAX_POST_EDIT_REQUEST_BYTES - 4;
+        if base_len < target {
+            req.scope
+                .incarnation
+                .push_str(&"d".repeat(target - base_len));
+        } else if base_len > target {
+            req.scope
+                .incarnation
+                .truncate(req.scope.incarnation.len() - (base_len - target));
+        }
+        let orig_len = serde_json::to_vec(&Frame::PostEditInspectRequest {
+            request: Box::new(req.clone()),
+        })
+        .unwrap()
+        .len();
+        assert!(orig_len <= crate::post_edit_inspect::MAX_POST_EDIT_REQUEST_BYTES);
+
+        state.admit_from_worker(req, 10, 9, &worker_tx);
+        assert!(ctrl_rx.try_recv().is_err());
+        let Frame::PostEditInspectReply { reply } = worker_rx.recv().await.unwrap() else {
+            panic!("expected refusal reply");
+        };
+        assert!(matches!(
+            reply.outcome,
+            PostEditInspectOutcome::Refused { ref reason } if reason == "invalid_request"
+        ));
     }
 }

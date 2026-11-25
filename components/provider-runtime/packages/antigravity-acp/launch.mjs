@@ -221,6 +221,7 @@ export async function prepareRuntime({
   launchManaged = false,
   descriptor: validated,
   canaryTraceFile = undefined,
+  canaryNonce = undefined,
 }) {
   await checkPolicy(home, paths);
   // `runProxy` validates the descriptor before it starts `agy`; the same
@@ -240,6 +241,7 @@ export async function prepareRuntime({
       descriptor,
       connection,
       canaryTraceFile,
+      canaryNonce,
     });
   } catch (error) {
     connection.close();
@@ -259,6 +261,7 @@ async function connectedRuntime({
   descriptor,
   connection,
   canaryTraceFile = undefined,
+  canaryNonce = undefined,
 }) {
   // The binding, the target's keeper and `agy`'s hook policy must agree.
   const managed = managedMode(descriptor.binding, connection.managed);
@@ -286,6 +289,7 @@ async function connectedRuntime({
     managed,
     diagnostics,
     canaryTrace: Boolean(canaryTraceFile),
+    canaryNonce: canaryTraceFile ? canaryNonce : undefined,
   });
   const listed = facade.tools().map((tool) => tool.name);
   if (JSON.stringify(listed) !== JSON.stringify(managed ? MANAGED_FACADE_TOOLS : EXPECTED_TOOLS)) {
@@ -359,7 +363,14 @@ async function connectedRuntime({
       name: "cowboy",
       command: node,
       args: canaryTraceFile
-        ? [paths.relay, socketPath, channel, "--canary-trace-file", canaryTraceFile]
+        ? [
+            paths.relay,
+            socketPath,
+            channel,
+            "--canary-trace-file",
+            canaryTraceFile,
+            ...(canaryNonce ? ["--canary-nonce", canaryNonce] : []),
+          ]
         : [paths.relay, socketPath, channel],
       env: [],
     }),
@@ -473,6 +484,14 @@ export async function runProxy({
     canaryIdx >= 0 && typeof args[canaryIdx + 1] === "string" && isAbsolute(args[canaryIdx + 1])
       ? args[canaryIdx + 1]
       : undefined;
+  const nonceIdx = Array.isArray(args) ? args.indexOf("--canary-nonce") : -1;
+  const canaryNonce =
+    canaryTraceFile &&
+    nonceIdx >= 0 &&
+    typeof args[nonceIdx + 1] === "string" &&
+    args[nonceIdx + 1].length > 0
+      ? args[nonceIdx + 1]
+      : undefined;
   const runtime = prepareRuntime({
     paths,
     home: env.HOME,
@@ -485,6 +504,7 @@ export async function runProxy({
     launchManaged,
     descriptor,
     canaryTraceFile,
+    canaryNonce,
   });
   runtime.catch((error) =>
     process.stderr.write(`cowboy: Antigravity unavailable: ${error.message}\n`),

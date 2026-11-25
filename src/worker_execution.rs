@@ -538,6 +538,9 @@ const DIAGNOSTICS_PATH: &str = "/diagnostics";
 struct PreAuthSlot {
     started_at: Instant,
     abort: Option<tokio::task::AbortHandle>,
+    /// True when admitted into the reserved 4th reconnect slot while the
+    /// mutation slot is vacant; `/diagnostics` is rejected on this ticket (M5).
+    mutation_only: bool,
 }
 
 #[derive(Default)]
@@ -719,6 +722,7 @@ impl Admission {
                 return;
             }
         }
+        let mutation_only = guard.pre_auth.len() >= MAX_NON_MUTATION_PRE_AUTH_SOCKETS;
         guard.next_id = guard.next_id.saturating_add(1);
         let id = guard.next_id;
         let state = Arc::clone(&self.state);
@@ -763,6 +767,7 @@ impl Admission {
             PreAuthSlot {
                 started_at: Instant::now(),
                 abort: Some(abort),
+                mutation_only,
             },
         );
     }
@@ -1022,13 +1027,19 @@ where
             }
             let path = request.uri().path();
             let mut adm = admission_state.lock();
-            if adm.pre_auth.remove(&pre_auth_id).is_none() {
+            let Some(slot) = adm.pre_auth.remove(&pre_auth_id) else {
                 return Err(tokio_tungstenite::tungstenite::http::Response::builder()
                     .status(503)
                     .body(Some("Evicted".to_owned()))
                     .expect("constant response"));
-            }
+            };
             if path == DIAGNOSTICS_PATH {
+                if slot.mutation_only {
+                    return Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                        .status(503)
+                        .body(Some("Reserved".to_owned()))
+                        .expect("constant response"));
+                }
                 let drain = client_cb.relays.drain_state();
                 if !peeked_diagnostics || client_cb.binding.managed.is_some() {
                     return Err(tokio_tungstenite::tungstenite::http::Response::builder()

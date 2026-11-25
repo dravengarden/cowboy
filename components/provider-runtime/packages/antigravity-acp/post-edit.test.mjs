@@ -406,13 +406,13 @@ test("Later ReadFile observing changed bytes invalidates an in-flight diagnostic
   assert.equal(await pullPromise, null);
 });
 
-test("Pre-dispatch refusal of large staged edit cleans up via cowboy/cleanupStagedPayload, never raw fs/remove (H-Proxy-4)", async () => {
+test("Pre-dispatch refusal of large staged edit dispatches neither apply nor post-fence removal (H1/M4)", async () => {
   const calls = [];
   let allowApply = true;
   const conn = {
     async call(method, params, opts) {
-      calls.push({ method, params });
       opts?.beforeSend?.();
+      calls.push({ method, params });
       if (method === "process/start" && params.argv?.[2]?.includes("mkdir -p")) {
         return { processId: params.processId };
       }
@@ -434,7 +434,6 @@ test("Pre-dispatch refusal of large staged edit cleans up via cowboy/cleanupStag
         allowApply = false;
         return {};
       }
-      if (method === "cowboy/cleanupStagedPayload") return {};
       throw new Error(`unexpected ${method}`);
     },
   };
@@ -451,17 +450,14 @@ test("Pre-dispatch refusal of large staged edit cleans up via cowboy/cleanupStag
   );
   await new Promise((r) => setTimeout(r, 10));
   assert.equal(
-    calls.some((c) => c.method === "fs/remove"),
+    calls.some((c) => c.method === "fs/remove" || c.method === "cowboy/cleanupStagedPayload"),
     false,
-    "must never call effectful fs/remove",
+    "must never execute post-fence removal or bypass RPC",
   );
   assert.equal(
-    calls.some(
-      (c) =>
-        c.method === "cowboy/cleanupStagedPayload" &&
-        c.params.path.startsWith("file:///home/u/.cache/cowboy/file-buffers/payload-"),
-    ),
-    true,
+    calls.some((c) => c.method === "process/start" && c.params.argv?.includes("--request-file")),
+    false,
+    "apply process/start must not dispatch after pre-dispatch refusal",
   );
 });
 
@@ -736,6 +732,212 @@ test("facade-relay proves diagnostic note reached native stdout and rejects fals
     assert.equal(traces[1].inspectId, "canary-missing");
     assert.equal(traces[1].stdoutNoteMatched, false);
     assert.equal(traces[1].stdoutNoteSha256, null);
+  } finally {
+    server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("formatPostEditNote strips U+061C Arabic Letter Mark and all Bidi_Control chars (L1)", () => {
+  const formatted = formatPostEditNote({
+    matchesExpected: true,
+    expectedPath: "src/a.rs",
+    payload: {
+      deliver: true,
+      truncated: false,
+      files: [
+        {
+          path: "src/a.rs",
+          state: "document_current",
+          comparison: { state: "complete", introduced: 1, escalated: 0, resolved: 0 },
+          diagnostics: [
+            {
+              severity: "error",
+              line: 2,
+              column: 1,
+              message: "left\u061cright\u202eend",
+            },
+          ],
+        },
+      ],
+    },
+  });
+  assert.ok(formatted);
+  assert.equal(formatted.note.includes("\u061c"), false);
+  assert.equal(formatted.note.includes("\u202e"), false);
+});
+
+test("ReadFile discovering a deleted file invalidates pending diagnostic notes (M12)", async () => {
+  let exists = true;
+  let resolveDiag;
+  const diag = {
+    async postEdit() {
+      return await new Promise((resolve) => {
+        resolveDiag = resolve;
+      });
+    },
+  };
+  const conn = {
+    async call(method, params, opts) {
+      opts?.beforeSend?.();
+      if (!exists && (method === "fs/canonicalize" || method === "fs/getMetadata")) {
+        throw Object.assign(new Error("No such file or directory"), { code: -32002 });
+      }
+      if (method === "fs/canonicalize") return { path: params.path };
+      if (method === "fs/getMetadata") return { isFile: true, size: 3 };
+      if (method === "fs/readFile") return { dataBase64: Buffer.from("v1\n").toString("base64") };
+      throw new Error(`unexpected ${method}`);
+    },
+  };
+  const facade = new Facade(conn, { root: "/repo", shell: "/bin/sh", diagnostics: diag });
+  facade.beginTurn("s1", { turnNonce: "n1" });
+  const session = facade.session("s1");
+  const turn = session.turn;
+  const rawDigest = createHash("sha256").update(Buffer.from("v1\n")).digest("hex");
+  const obs = facade.recordFileObservation("/repo/del.rs", rawDigest, { forceAdvance: true });
+  facade.committedRevision.set("/repo/del.rs", 1);
+  facade.writeDispatchGen.set("/repo/del.rs", 1);
+  const pull = facade.pullPostEditNote(session, turn, {
+    file: "/repo/del.rs",
+    relPath: "del.rs",
+    expectedLfSha256: lfSha256(Buffer.from("v1\n")),
+    rawDigest,
+    rev: 1,
+    obsGen: obs.gen,
+    writeGen: 1,
+    invalidationGen: 0,
+  });
+  exists = false;
+  await assert.rejects(() => facade.readFile(session, { path: "del.rs" }), /No such file/);
+  resolveDiag({
+    state: "projected",
+    matchesExpected: true,
+    payload: {
+      deliver: true,
+      truncated: false,
+      files: [
+        {
+          path: "del.rs",
+          state: "document_current",
+          comparison: { state: "complete", introduced: 1, escalated: 0, resolved: 0 },
+          diagnostics: [{ severity: "error", line: 1, column: 1, message: "stale" }],
+        },
+      ],
+    },
+  });
+  assert.equal(await pull, null);
+});
+
+test("PlanGate permanently taints collided edit calls so they cannot rebind to a third card (M13)", () => {
+  const gate = new PlanGate();
+  const turn = { attempt: Symbol("att") };
+  const c1 = {
+    sessionId: "s",
+    name: "EditFile",
+    args: { path: "x.rs", old_string: "a", new_string: "b" },
+  };
+  gate.trackUpdate(
+    "s",
+    {
+      toolCallId: "e1",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "x.rs", old_string: "a", new_string: "b" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  gate.admitCall(c1, turn);
+  assert.equal(gate.bind(c1, turn), "e1");
+  // Second identical edit collides and taints c1 permanently.
+  gate.trackUpdate(
+    "s",
+    {
+      toolCallId: "e2",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "x.rs", old_string: "a", new_string: "b" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  // Both colliding cards terminate.
+  gate.trackUpdate("s", { toolCallId: "e1", status: "completed" }, turn);
+  gate.trackUpdate("s", { toolCallId: "e2", status: "completed" }, turn);
+  // Third identical edit arrives in the same attempt; old c1 must NEVER rebind to e3!
+  gate.trackUpdate(
+    "s",
+    {
+      toolCallId: "e3",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "x.rs", old_string: "a", new_string: "b" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  assert.equal(gate.bind(c1, turn), undefined);
+});
+
+test("facade-relay verifies independent --canary-nonce on native stdout for positive and wrong-fixture controls (M15)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "cowboy-relay-nonce-"));
+  const sockPath = join(dir, "f.sock");
+  const traceFile = join(dir, "trace.jsonl");
+  const channel = "11111111-2222-3333-4444-555555555555";
+  const fixtureNonce = "fixture-nonce-unique-77";
+  const rightNote = `<system-reminder>\nAdvisory: ${fixtureNonce}\n</system-reminder>`;
+  const wrongNote = `<system-reminder>\nAdvisory: other-nonce-00\n</system-reminder>`;
+  const rightDigest = createHash("sha256").update(rightNote, "utf8").digest("hex");
+  const wrongDigest = createHash("sha256").update(wrongNote, "utf8").digest("hex");
+
+  const server = createServer((socket) => {
+    let buf = "";
+    socket.on("data", (chunk) => {
+      buf += chunk.toString();
+      if (buf.includes("\n")) {
+        const right = {
+          jsonrpc: "2.0",
+          id: 1,
+          result: { content: [{ type: "text", text: `Edited a.rs\n\n${rightNote}` }] },
+          _cowboyCanary: { inspectId: "pos", noteAttached: true, expectedNoteDigest: rightDigest },
+        };
+        const wrong = {
+          jsonrpc: "2.0",
+          id: 2,
+          result: { content: [{ type: "text", text: `Edited a.rs\n\n${wrongNote}` }] },
+          _cowboyCanary: {
+            inspectId: "wrong",
+            noteAttached: true,
+            expectedNoteDigest: wrongDigest,
+          },
+        };
+        socket.write(`${JSON.stringify(right)}\n${JSON.stringify(wrong)}\n`);
+        socket.end();
+      }
+    });
+  });
+  await new Promise((resolve) => server.listen(sockPath, resolve));
+  try {
+    const child = spawn(
+      process.execPath,
+      [
+        join(here, "facade-relay.mjs"),
+        sockPath,
+        channel,
+        "--canary-trace-file",
+        traceFile,
+        "--canary-nonce",
+        fixtureNonce,
+      ],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    await new Promise((resolve) => child.once("close", resolve));
+    const traces = (await readFile(traceFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    assert.equal(traces.length, 2);
+    assert.equal(traces[0].nonceInStdout, true);
+    assert.equal(traces[0].stdoutNoteMatched, true);
+    assert.equal(traces[1].nonceInStdout, false);
+    assert.equal(traces[1].stdoutNoteMatched, false);
   } finally {
     server.close();
     await rm(dir, { recursive: true, force: true });

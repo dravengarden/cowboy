@@ -167,3 +167,28 @@ fn project_for_inspect_checks_sha_and_recomputes_deliver_after_12kib_trim() {
     assert_eq!(payload["deliver"], true);
     assert_eq!(payload["files"][0]["comparison"]["escalated"], 1);
 }
+
+#[test]
+fn project_for_inspect_keeps_current_errors_on_admissible_unknown_comparisons() {
+    for reason in ["servers_changed", "over_capture_bound"] {
+        let file = json!({
+            "path": "src/a.rs",
+            "state": "document_current",
+            "bufferSnapshot": { "content": { "sha256": "a".repeat(64) } },
+            "counts": { "error": 2 },
+            "diagnostics": [
+                { "severity": "error", "line": 4, "column": 1, "message": "boom" }
+            ],
+            "comparison": { "state": "unknown", "reason": reason }
+        });
+        let (payload, matched) = project_for_inspect(&file, "src/a.rs", &"a".repeat(64));
+        assert!(matched, "{reason}");
+        assert_eq!(payload["deliver"], json!(true), "{reason}");
+        assert_eq!(payload["files"][0]["current_errors"], json!(2), "{reason}");
+        assert_eq!(
+            payload["files"][0]["diagnostics"].as_array().unwrap().len(),
+            1,
+            "{reason}"
+        );
+    }
+}

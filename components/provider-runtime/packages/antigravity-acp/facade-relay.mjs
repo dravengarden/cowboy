@@ -9,8 +9,23 @@ import { connect } from "node:net";
 const argv = process.argv.slice(2);
 const [socketPath, channel] = argv;
 let canaryTraceFile;
-if (argv[2] === "--canary-trace-file" && typeof argv[3] === "string" && argv[3].length > 0) {
-  canaryTraceFile = argv[3];
+let canaryNonce;
+for (let i = 2; i < argv.length; i += 1) {
+  if (
+    argv[i] === "--canary-trace-file" &&
+    typeof argv[i + 1] === "string" &&
+    argv[i + 1].length > 0
+  ) {
+    canaryTraceFile = argv[i + 1];
+    i += 1;
+  } else if (
+    argv[i] === "--canary-nonce" &&
+    typeof argv[i + 1] === "string" &&
+    argv[i + 1].length > 0
+  ) {
+    canaryNonce = argv[i + 1];
+    i += 1;
+  }
 }
 if (!socketPath || !/^[a-f0-9-]{36}$/.test(channel ?? "")) {
   process.stderr.write("cowboy facade relay: invalid arguments\n");
@@ -38,9 +53,10 @@ function verifyStdoutNote(parsed, outLine, canaryMeta) {
   const expected =
     typeof canaryMeta?.expectedNoteDigest === "string" ? canaryMeta.expectedNoteDigest : null;
   const expectedDiagnosticNonce =
-    typeof canaryMeta?.expectedDiagnosticNonce === "string"
+    typeof canaryMeta?.expectedDiagnosticNonce === "string" &&
+    canaryMeta.expectedDiagnosticNonce.length > 0
       ? canaryMeta.expectedDiagnosticNonce
-      : null;
+      : (canaryNonce ?? null);
   const nonceInStdout = expectedDiagnosticNonce
     ? Boolean(
         matchedNote &&

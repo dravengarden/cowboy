@@ -755,6 +755,29 @@ where
     Ok(())
 }
 
+fn queue_outbound_runtime_frame(
+    machine_write_tx: &mpsc::UnboundedSender<Message>,
+    machine_id: &str,
+    frame: crate::runtime_wire::Frame,
+) -> Result<(), ()> {
+    if matches!(
+        frame,
+        crate::runtime_wire::Frame::PostEditInspectRequest { .. }
+            | crate::runtime_wire::Frame::PostEditInspectReply { .. }
+    ) {
+        tracing::warn!(
+            machine = %machine_id,
+            "dropping local-only post-edit diagnostic frame on Controller primary WebSocket egress"
+        );
+        return Ok(());
+    }
+    queue_machine_json(
+        machine_write_tx,
+        &crate::machine_protocol::MachineFrame::Runtime { frame },
+    )
+    .map_err(|_| ())
+}
+
 pub async fn handle_machine_ws(
     mut socket: WebSocket,
     state: Arc<AppState>,
@@ -930,10 +953,7 @@ pub async fn handle_machine_ws(
             message = socket_stream.next() => Some(message),
             frame = runtime_frame_rx.recv() => {
                 let Some(frame) = frame else { break };
-                if queue_machine_json(
-                    &machine_write_tx,
-                    &crate::machine_protocol::MachineFrame::Runtime { frame },
-                ).is_err() {
+                if queue_outbound_runtime_frame(&machine_write_tx, &hello.machine_id, frame).is_err() {
                     break;
                 }
                 continue;

@@ -949,11 +949,10 @@ Round 1 code review (`call-ec15ade1b49e1b2ce442a9ed`, Codex Astra Max) identifie
 - **Antigravity ACP Proxy (`components/provider-runtime/packages/antigravity-acp`)**:
   Pre-lock `queuedObserved` and `queuedInvalidationGen` re-checked in every
   `beforeSend`; `fileObservation` (`gen`, `rawDigest`) verified in `isFresh()`;
-  `PreDispatchRefusal` limiting `cowboy/cleanupStagedPayload` to confirmed
-  pre-dispatch failures; `AbortSignal.any` tying inspect calls to `turn.abort`;
+  `PreDispatchRefusal` keeping pre-dispatch failures free of post-fence removal and post-start failures on `runBounded` settlement; `AbortSignal.any` tying inspect calls to `turn.abort`;
   `<system-reminder>` untrusted wrapper with `&`/`<`/`>`/`"` escaping, control
   and bidi stripping, count-only summary rendering, and 16 KiB post-escape UTF-8
   cap; composite dedupe key without pending eviction and synchronous
   `commitReply` latch; full live-entry collision tainting in `PlanGate`; clean
   diff attachment gated on uniquely bound non-error completion; relay stdout
-  canary hash computed from actual serialized output bytes.
+  canary hash + independent `--canary-nonce` verified directly on serialized output bytes; `\p{Bidi_Control}` stripping (`U+061C` included); permanent `PlanGate` collision tainting; centralized deletion/verification observation invalidation.

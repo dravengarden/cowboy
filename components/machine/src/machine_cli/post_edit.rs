@@ -147,9 +147,14 @@ impl PostEditHttpClient {
                 _ = cancel_rx.wait_for(|cancelled| *cancelled) => return,
                 reply = execute_http_at_deadline(http, url, token, request, deadline) => reply,
             };
-            let _ = reply_tx.try_send(Frame::PostEditInspectReply {
+            let frame = Frame::PostEditInspectReply {
                 reply: Box::new(outcome),
-            });
+            };
+            if serde_json::to_vec(&frame)
+                .is_ok_and(|bytes| bytes.len() <= MAX_POST_EDIT_REPLY_BYTES)
+            {
+                let _ = reply_tx.try_send(frame);
+            }
         });
     }
 }

@@ -1942,7 +1942,7 @@ async fn an_unconfirmed_turn_process_beside_a_server_still_parks_teardown() {
 }
 
 #[tokio::test]
-async fn staged_payload_cleanup_is_narrowly_scoped_and_non_fencing() {
+async fn ledger_grants_no_out_of_turn_filesystem_removal_bypass() {
     let target = Target::new(Arc::new(|invocation| match invocation.method.as_str() {
         "fs/writeFile" => completed(json!({"result": {}})),
         "fs/remove" => completed(json!({"result": {}})),
@@ -1954,25 +1954,6 @@ async fn staged_payload_cleanup_is_narrowly_scoped_and_non_fencing() {
         "file:///home/draven/.cache/cowboy/file-buffers/payload-{}.json",
         "a".repeat(32)
     );
-    // Unwritten staged path is refused.
-    let refused = target
-        .client
-        .relay(
-            super::ledger::STAGED_PAYLOAD_CLEANUP.into(),
-            json!({"path": staged}),
-        )
-        .await;
-    assert!(refused.get("error").is_some());
-    // Arbitrary workspace path is refused.
-    let arbitrary = target
-        .client
-        .relay(
-            super::ledger::STAGED_PAYLOAD_CLEANUP.into(),
-            json!({"path": "file:///srv/repo/src/lib.rs"}),
-        )
-        .await;
-    assert!(arbitrary.get("error").is_some());
-    // Write the staged payload during turn-1, then clean it via STAGED_PAYLOAD_CLEANUP.
     let wrote = target
         .client
         .relay(
@@ -1981,23 +1962,13 @@ async fn staged_payload_cleanup_is_narrowly_scoped_and_non_fencing() {
         )
         .await;
     assert!(wrote.get("result").is_some());
-    let cleaned = target
+    // Once turn-1 is fenced, ordinary fs/remove is refused and no bypass exists (H1).
+    target.client.cancel_turn();
+    let removed = target
         .client
-        .relay(
-            super::ledger::STAGED_PAYLOAD_CLEANUP.into(),
-            json!({"path": staged}),
-        )
+        .relay("fs/remove".into(), json!({"path": staged, "force": true}))
         .await;
-    assert!(cleaned.get("result").is_some());
-    // Replaying cleanup after removal is refused.
-    let second = target
-        .client
-        .relay(
-            super::ledger::STAGED_PAYLOAD_CLEANUP.into(),
-            json!({"path": staged}),
-        )
-        .await;
-    assert!(second.get("error").is_some());
+    assert!(removed.get("error").is_some());
     assert!(l.uncertain_effect().is_none());
 }
 
@@ -2031,4 +2002,51 @@ async fn rotating_active_turn_nonce_invalidates_prior_attempt_post_edit_waiters(
     assert!(!target.client.prepare_post_edit_send(&mut queued, conn_id));
     let outcome = inspect_task.await.unwrap();
     assert_eq!(outcome["state"], "refused");
+}
+
+#[tokio::test]
+async fn rotating_active_turn_nonce_discards_settled_reply_before_projection() {
+    let target = Target::new(Arc::new(|_| completed(json!({"result": {}}))));
+    let (conn_id, mut rx) = target.client.attach_post_edit_broker(9);
+    target
+        .client
+        .set_active_turn_nonce(Some(("turn-1".into(), "nonce-1".into())));
+    let client = Arc::clone(&target.client);
+    let inspect_task = tokio::spawn(async move {
+        client
+            .inspect_post_edit(
+                0,
+                &json!({
+                    "path": "src/lib.rs",
+                    "expectedLfSha256": "a".repeat(64),
+                    "turnNonce": "nonce-1",
+                    "timeoutMs": 3000,
+                }),
+            )
+            .await
+    });
+    let queued = rx.recv().await.expect("queued post-edit request");
+    let crate::runtime_wire::Frame::PostEditInspectRequest { request } = queued.frame else {
+        panic!("expected post edit request");
+    };
+    // Deliver reply and immediately rotate nonce before inspect_task can project it (M6).
+    target.client.complete_post_edit_reply(
+        crate::post_edit_inspect::PostEditInspectReply {
+            session_id: request.session_id,
+            worker_epoch: request.worker_epoch,
+            request_id: request.request_id,
+            scope: request.scope,
+            outcome: crate::post_edit_inspect::PostEditInspectOutcome::Projected {
+                payload: json!({"deliver": true, "files": [], "truncated": false}),
+                matches_expected: true,
+            },
+        },
+        conn_id,
+    );
+    target
+        .client
+        .set_active_turn_nonce(Some(("turn-1".into(), "nonce-2".into())));
+    let outcome = inspect_task.await.unwrap();
+    assert_eq!(outcome["state"], "refused");
+    assert_eq!(outcome["reason"], "unavailable");
 }

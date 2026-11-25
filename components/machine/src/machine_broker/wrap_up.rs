@@ -160,6 +160,11 @@ pub(super) async fn run_worker_writer_with_headroom_and_diag<W, F>(
             let Some(frame_bytes) = encoded_frame_bytes(&frame) else {
                 continue;
             };
+            if matches!(frame, Frame::PostEditInspectReply { .. })
+                && frame_bytes > crate::post_edit_inspect::MAX_POST_EDIT_REPLY_BYTES + 4
+            {
+                continue;
+            }
             if !has_headroom(writer, frame_bytes) {
                 continue;
             }
