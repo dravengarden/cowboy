@@ -107,6 +107,7 @@ export class Facade {
       onLost = () => {},
       onResult = () => {},
       onProgress = () => {},
+      authorize = () => ({ allowed: true }),
       managed = false,
       stopConfirmMs = LIMITS.stopConfirmMs,
     },
@@ -121,6 +122,7 @@ export class Facade {
     this.onLost = onLost;
     this.onResult = onResult;
     this.onProgress = onProgress;
+    this.authorize = authorize;
     this.sessions = new Map();
     /** Per canonical path, how often a publish of it became uncertain. */
     this.invalidations = new Map();
@@ -151,6 +153,11 @@ export class Facade {
       throw new Error("Execution environment has no shell");
     }
     return new Facade(connection, { root, shell, ...options });
+  }
+
+  /** Attach or replace the synchronous dispatch authorizer (e.g. `AcpProxy`). */
+  setAuthorizer(authorize) {
+    this.authorize = typeof authorize === "function" ? authorize : () => ({ allowed: true });
   }
 
   tools() {
@@ -660,6 +667,7 @@ ${WRAP_UP_NOTE}`,
       return failure(`The turn ended: an earlier ${turn.uncertain} has an unknown outcome.`);
     }
     if (turn.cancelled || turn.ended) return failure("The turn was cancelled.");
+    const rawArgs = args === undefined ? {} : args;
     if (args === null || typeof args !== "object" || Array.isArray(args)) args = {};
     if (this.managed && !MANAGED_FACADE_TOOLS.includes(name)) {
       return failure(`${String(name)} is not available in a read-only Cowboy managed call.`);
@@ -696,6 +704,13 @@ ${WRAP_UP_NOTE}`,
     const extension = !Object.hasOwn(handlers, name) && this.extensions?.has(name);
     if (!Object.hasOwn(handlers, name) && !extension)
       return failure(`Unknown tool ${String(name)}`);
+    // Enforce confirmed mode (plan / unknown / switching fail closed) synchronously
+    // before any tool handler or extension RPC runs. Pass the exact `call` object
+    // so PlanGate can bind its WeakMap identity for onProgress/onResult.
+    const decision = this.authorize(call, { extension, rawArgs });
+    if (decision?.allowed !== true) {
+      return failure(decision?.reason ?? `${String(name)} is not available in the current mode.`);
+    }
     try {
       if (extension) {
         // Tracked via answer() through UncertainEffect reporting in catch below.

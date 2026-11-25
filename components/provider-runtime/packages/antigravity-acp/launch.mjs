@@ -270,6 +270,10 @@ async function connectedRuntime({
     onLost: (sessionId, method) => proxy?.lost(sessionId, method),
     onResult: (call, result) => proxy?.toolResult(call, result),
     onProgress: (call, text) => proxy?.toolProgress(call, text),
+    authorize: (call, meta) =>
+      proxy
+        ? proxy.authorizeFacadeCall(call, meta)
+        : { allowed: false, reason: "Antigravity proxy is not ready." },
     managed,
   });
   const listed = facade.tools().map((tool) => tool.name);

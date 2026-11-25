@@ -196,13 +196,15 @@ test("agent requests other than permission are refused; permission replies are r
     client.filter((message) => message.method === "session/request_permission").length,
     0,
   );
-  // Plan mode asks the owner, with the call presented.
+  // Plan mode rejects WriteFile directly (dispatch refuses edits in plan mode)
+  // and asks the owner for correlated RunCommand calls, with the call presented.
   await proxy.fromClient(
     request(9, "session/set_config_option", { sessionId: "s", configId: "mode", value: "plan" }),
   );
   await proxy.fromAgent({ jsonrpc: "2.0", id: 9, result: {} });
+  await proxy.fromClient(request(10, "session/prompt", { sessionId: "s", prompt: [] }));
   await proxy.fromAgent(
-    request(72, "session/request_permission", {
+    request(71, "session/request_permission", {
       sessionId: "s",
       toolCall: {
         toolCallId: "w1",
@@ -213,17 +215,35 @@ test("agent requests other than permission are refused; permission replies are r
       options,
     }),
   );
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: 71,
+    result: { outcome: { outcome: "selected", optionId: "deny" } },
+  });
+  await proxy.fromAgent(
+    request(72, "session/request_permission", {
+      sessionId: "s",
+      toolCall: {
+        toolCallId: "r1",
+        name: "mcp_cowboy_RunCommand",
+        title: "Run mcp_cowboy_RunCommand",
+        rawInput: { command: "git status" },
+      },
+      options,
+    }),
+  );
   assert.equal(client.at(-1).method, "session/request_permission");
-  assert.equal(client.at(-1).params.toolCall.title, "Write a.txt");
-  assert.equal(client.at(-1).params.toolCall.kind, "edit");
+  assert.equal(client.at(-1).params.toolCall.title, "git status");
+  assert.equal(client.at(-1).params.toolCall.kind, "execute");
   await proxy.fromClient({ jsonrpc: "2.0", id: 72, result: { outcome: { outcome: "cancelled" } } });
   assert.deepEqual(agent.at(-1), {
     jsonrpc: "2.0",
     id: 72,
     result: { outcome: { outcome: "cancelled" } },
   });
+  const countBeforeUnknownReply = agent.length;
   await proxy.fromClient({ jsonrpc: "2.0", id: 999, result: {} });
-  assert.equal(agent.length, 8);
+  assert.equal(agent.length, countBeforeUnknownReply);
   await proxy.fromAgent({ jsonrpc: "2.0", method: "session/update", params: { sessionId: "s" } });
   await proxy.fromAgent({ jsonrpc: "2.0", method: "_antigravity/internal", params: {} });
   assert.equal(client.at(-1).method, "session/update");
@@ -1060,63 +1080,107 @@ test("permissions auto-approve only in a mode agy confirmed", async () => {
   const options = [
     { optionId: "allow", name: "Allow", kind: "allow_once" },
     { optionId: "always", name: "Always", kind: "allow_always" },
+    { optionId: "deny", name: "Deny", kind: "reject_once" },
   ];
-  const ask = (id) =>
+  await proxy.runtime;
+  await proxy.fromClient(request(1, "session/prompt", { sessionId: "s", prompt: [] }));
+  const askRun = (id) =>
     proxy.fromAgent(
       request(id, "session/request_permission", {
         sessionId: "s",
-        toolCall: { name: "mcp_cowboy_WriteFile" },
+        toolCall: {
+          toolCallId: `rc-${id}`,
+          name: "mcp_cowboy_RunCommand",
+          rawInput: { command: `echo ${id}` },
+        },
         options,
       }),
     );
-  // Unknown mode, once the runtime set the unit's policy: the owner decides.
-  await proxy.runtime;
-  await ask(70);
+  const askWrite = (id) =>
+    proxy.fromAgent(
+      request(id, "session/request_permission", {
+        sessionId: "s",
+        toolCall: {
+          toolCallId: `wf-${id}`,
+          name: "mcp_cowboy_WriteFile",
+          rawInput: { path: "a.txt", content: "x" },
+        },
+        options,
+      }),
+    );
+  // Unknown mode fails closed like plan: WriteFile rejected, RunCommand asks
+  // the owner with standing `allow_always` stripped.
+  await askWrite(69);
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: 69,
+    result: { outcome: { outcome: "selected", optionId: "deny" } },
+  });
+  await askRun(70);
   assert.equal(client.at(-1).id, 70);
+  assert.deepEqual(
+    client.at(-1).params.options.map((o) => o.kind),
+    ["allow_once", "reject_once"],
+  );
   // A session result reports its mode.
   await proxy.fromClient(
     request(3, "session/load", { sessionId: "s", cwd: "/work/repo", mcpServers: [] }),
   );
   await proxy.fromAgent({ jsonrpc: "2.0", id: 3, result: { modes: { currentModeId: "default" } } });
-  await ask(71);
+  await askWrite(71);
   assert.deepEqual(agent.at(-1), {
     jsonrpc: "2.0",
     id: 71,
     result: { outcome: { outcome: "selected", optionId: "allow" } },
   });
-  // A switch to plan reported by agy stops the approvals.
+  // A switch to plan reported by agy stops approvals for RunCommand and rejects WriteFile.
   await proxy.fromAgent(updateIn("current_mode_update", { currentModeId: "plan" }));
-  await ask(72);
+  await askWrite(711);
+  assert.deepEqual(agent.at(-1).result, { outcome: { outcome: "selected", optionId: "deny" } });
+  await askRun(72);
   assert.equal(client.at(-1).id, 72);
   // A requested switch is unknown until agy answers it.
   await proxy.fromClient(request(4, "session/set_mode", { sessionId: "s", modeId: "default" }));
-  await ask(73);
+  await askRun(73);
   assert.equal(client.at(-1).id, 73);
   await proxy.fromAgent({ jsonrpc: "2.0", id: 4, error: { code: 1, message: "no" } });
-  await ask(74);
+  await askRun(74);
   assert.equal(client.at(-1).id, 74);
-  // A plan checklist never needs the owner, whatever the mode.
-  await proxy.fromAgent(
-    request(75, "session/request_permission", {
-      sessionId: "s",
-      toolCall: { name: "mcp_cowboy_UpdatePlan" },
-      options,
-    }),
-  );
-  assert.deepEqual(agent.at(-1), {
-    jsonrpc: "2.0",
-    id: 75,
-    result: { outcome: { outcome: "selected", optionId: "allow" } },
-  });
+  // Reads and UpdatePlan never need the owner, whatever the mode.
+  for (const [id, name] of [
+    [75, "mcp_cowboy_UpdatePlan"],
+    [76, "mcp_cowboy_ReadFile"],
+    [77, "mcp_cowboy_ListDirectory"],
+    [78, "mcp_cowboy_SearchFiles"],
+  ]) {
+    await proxy.fromAgent(
+      request(id, "session/request_permission", {
+        sessionId: "s",
+        toolCall: { name },
+        options,
+      }),
+    );
+    assert.deepEqual(agent.at(-1), {
+      jsonrpc: "2.0",
+      id,
+      result: { outcome: { outcome: "selected", optionId: "allow" } },
+    });
+  }
 });
 
 test("an older switch's answer cannot reopen approvals while a newer one is pending", async () => {
   const { proxy, client } = harness();
+  await proxy.runtime;
+  await proxy.fromClient(request(1, "session/prompt", { sessionId: "s", prompt: [] }));
   const ask = (id) =>
     proxy.fromAgent(
       request(id, "session/request_permission", {
         sessionId: "s",
-        toolCall: { name: "mcp_cowboy_WriteFile" },
+        toolCall: {
+          toolCallId: `rc-${id}`,
+          name: "mcp_cowboy_RunCommand",
+          rawInput: { command: `echo ${id}` },
+        },
         options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
       }),
     );

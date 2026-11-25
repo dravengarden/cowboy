@@ -16,6 +16,7 @@ places its tree below `proxy/` in the account-sandbox runtime archive and adds
 | `launch.mjs`                  | Proxy entry: readiness, closed `agy` environment, wiring                  |
 | `proxy.mjs`                   | ACP relay: runtime method allow-list, session rewrite, turn settlement    |
 | `extensions.mjs`              | The worker's extension tools (Cowboy MCP, bindings, memory) in `cowboy`   |
+| `plan-gate.mjs`               | Call correlation and plan-mode dispatch enforcement (R3)                  |
 | `memory.mjs`                  | Matrix memory over the worker's `cowboy/memory` bridge                    |
 | `presentation.mjs`            | Facade calls as native tool calls (kind, title, path, diff, result)       |
 | `facade.mjs`                  | MCP tools over the one execution `Connection`                             |

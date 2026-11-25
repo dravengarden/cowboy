@@ -212,6 +212,15 @@ export class Subagents {
     return this.children.get(sessionId);
   }
 
+  /** Native session IDs of every child belonging to `parentId`. */
+  childIdsOf(parentId) {
+    const ids = [];
+    for (const [id, child] of this.children) {
+      if (child.parent === parentId) ids.push(id);
+    }
+    return ids;
+  }
+
   /** A session `agy` opened for the worker: what a child of it repeats. */
   opened(sessionId, { cwd, projection }) {
     if (typeof sessionId !== "string" || this.owns(sessionId)) return;
@@ -410,9 +419,11 @@ export class Subagents {
     if (!setup || !parentTurn || parentTurn.cancelled) {
       throw new ToolError("Subagents can only be started inside a running turn.");
     }
-    const mode = proxy.modes.get(parentId);
+    const mode = proxy.effectiveMode(parentId);
     if (mode === "plan") throw new ToolError("Subagents are not available in plan mode.");
-    if (mode === undefined) throw new ToolError("The session's mode is not known yet.");
+    if (mode === undefined || mode === "switching") {
+      throw new ToolError("The session's mode is not known yet.");
+    }
     const group = this.group(parentId);
     if (group.started >= LIMITS.subagentTurn) {
       throw new ToolError(`At most ${LIMITS.subagentTurn} subagents start per turn.`);
@@ -467,8 +478,10 @@ export class Subagents {
       ) {
         throw new ToolError(TURN_ENDED);
       }
-      const now = proxy.modes.get(parentId);
-      if (now === undefined || now === "plan") throw new ToolError(MODE_CHANGED);
+      const now = proxy.effectiveMode(parentId);
+      if (now === undefined || now === "switching" || now === "plan") {
+        throw new ToolError(MODE_CHANGED);
+      }
     };
     const placeholder = `starting-${randomUUID()}`;
     group.ids.add(placeholder);
@@ -610,6 +623,8 @@ export class Subagents {
         child.settled();
       } else if (RUNNING.has(child.state)) {
         // It exists natively but never ran: close it and its row.
+        const failedTurn = proxy.turns.get(child.id);
+        proxy.planGate?.clearTurn(child.id, failedTurn);
         proxy.turns.delete(child.id);
         this.opening.delete(child.id);
         this.finishChild(child, "failed", { stopReason: "error", error: text });
@@ -683,6 +698,7 @@ export class Subagents {
     const { proxy } = this;
     if (!RUNNING.has(child.state)) return;
     const turn = proxy.turns.get(child.id);
+    proxy.planGate?.clearTurn(child.id, turn);
     // Fenced first, as for any ending turn: no tool call of the child admits
     // anything more and its commands stop.
     await proxy.facade.endTurn(child.id).catch(() => {});
@@ -730,6 +746,7 @@ export class Subagents {
 
   /** End `child` for good: its row, its waiters and its native session. */
   finishChild(child, state, { stopReason, error } = {}) {
+    if (child.id !== undefined) this.proxy.planGate?.clearTurn(child.id);
     if (!RUNNING.has(child.state)) return;
     clearTimeout(child.killTimer);
     child.state = state;
@@ -874,6 +891,7 @@ export class Subagents {
     if (child.id === undefined) return Promise.resolve();
     const turn = this.proxy.turns.get(child.id);
     if (turn) turn.cancelled = true;
+    this.proxy.planGate?.clearTurn(child.id, turn);
     const fence = this.proxy.facade?.endTurn(child.id, { cancelled: true });
     this.proxy.agent({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: child.id } });
     this.armKill(child);
@@ -905,6 +923,7 @@ export class Subagents {
     if (group) group.epoch += 1;
     const turn = this.proxy.turns.get(parentId);
     if (turn) turn.cancelled = true;
+    this.proxy.planGate?.clearTurn(parentId, turn);
     Promise.resolve(this.proxy.facade?.endTurn(parentId, { cancelled: true })).catch(() => {});
     for (const child of this.live(parentId)) this.cancelChild(child);
   }

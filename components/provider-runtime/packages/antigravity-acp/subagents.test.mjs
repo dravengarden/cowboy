@@ -870,12 +870,46 @@ test("a child agy does not confirm stopped ends the unit instead of being report
   assert.equal(client.length >= 0, true);
 });
 
-test("a parent that moves to plan mode stops approving for its children", async () => {
+test("a parent that moves to plan mode enforces plan policy on its children", async () => {
   const made = await parent();
   const { proxy, agent, client } = made;
   const id = await startChild(made);
   await proxy.fromClient(request(30, "session/set_mode", { sessionId: "s", modeId: "plan" }));
   await proxy.fromAgent({ jsonrpc: "2.0", id: 30, result: {} });
+  agent.length = 0;
+  client.length = 0;
+  // WriteFile is rejected directly (dispatch refuses writes in plan mode).
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "perm-w",
+    method: "session/request_permission",
+    params: {
+      sessionId: id,
+      toolCall: {
+        toolCallId: "cw",
+        name: "mcp_cowboy_WriteFile",
+        rawInput: { path: "a.txt", content: "x" },
+      },
+      options: [
+        { optionId: "yes", kind: "allow_once" },
+        { optionId: "no", kind: "reject_once" },
+      ],
+    },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: "perm-w",
+    result: { outcome: { outcome: "selected", optionId: "no" } },
+  });
+  assert.equal(
+    proxy.authorizeFacadeCall({
+      sessionId: id,
+      name: "WriteFile",
+      args: { path: "a.txt", content: "x" },
+    }).allowed,
+    false,
+  );
+  // RunCommand asks the owner under the child's session, and requires exact approval at dispatch.
   agent.length = 0;
   client.length = 0;
   await proxy.fromAgent({
@@ -884,14 +918,55 @@ test("a parent that moves to plan mode stops approving for its children", async 
     method: "session/request_permission",
     params: {
       sessionId: id,
-      toolCall: { toolCallId: "c", name: "mcp_cowboy_WriteFile" },
-      options: [{ optionId: "yes", kind: "allow_once" }],
+      toolCall: {
+        toolCallId: "c",
+        name: "mcp_cowboy_RunCommand",
+        rawInput: { command: "git status" },
+      },
+      options: [
+        { optionId: "yes", kind: "allow_once" },
+        { optionId: "always", kind: "allow_always" },
+      ],
     },
   });
-  // Not approved by the proxy: the owner is asked, under the child's session.
   assert.equal(agent.length, 0);
   assert.equal(client.at(-1).method, "session/request_permission");
   assert.equal(client.at(-1).params.sessionId, id);
+  assert.deepEqual(
+    client.at(-1).params.options.map((o) => o.kind),
+    ["allow_once"],
+  );
+  // Before owner approval, dispatch is refused.
+  assert.equal(
+    proxy.authorizeFacadeCall({
+      sessionId: id,
+      name: "RunCommand",
+      args: { command: "git status" },
+    }).allowed,
+    false,
+  );
+  // Owner approves once -> dispatch succeeds once, then replay is refused.
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: "perm-2",
+    result: { outcome: { outcome: "selected", optionId: "yes" } },
+  });
+  assert.equal(
+    proxy.authorizeFacadeCall({
+      sessionId: id,
+      name: "RunCommand",
+      args: { command: "git status" },
+    }).allowed,
+    true,
+  );
+  assert.equal(
+    proxy.authorizeFacadeCall({
+      sessionId: id,
+      name: "RunCommand",
+      args: { command: "git status" },
+    }).allowed,
+    false,
+  );
 });
 
 test("a session still opening is held until the worker knows the child", async () => {

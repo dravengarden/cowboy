@@ -195,6 +195,7 @@
         "managed.mjs",
         "managed-output.mjs",
         "memory.mjs",
+        "plan-gate.mjs",
         "presentation.mjs",
         "projection.mjs",
         "proxy.mjs",
