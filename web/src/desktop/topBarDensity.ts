@@ -64,8 +64,7 @@ export const USAGE_GROUP_NAME_WIDTH_PX = 56;
 export const USAGE_GROUP_LABEL_WIDTH_PX = 80;
 /** One window cell of a group row: `5h 100%`. */
 export const USAGE_GROUP_WINDOW_WIDTH_PX = 60;
-/** A window that needs attention appends its countdown (`8% 6d1h`); every
- *  window of a group may need it at once. */
+/** Every window that has spent quota appends its countdown (`67% 6d1h`). */
 export const USAGE_GROUP_ATTENTION_WIDTH_PX = 36;
 
 /** Budget for a segment of per-group quotas (Antigravity): the groups stack

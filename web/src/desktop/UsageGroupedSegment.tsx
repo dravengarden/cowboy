@@ -9,9 +9,13 @@ export type UsageGroupCell = {
   period: string;
   primary: string;
   remaining: number;
-  /** The countdown, only for a window that needs attention; the hover
-   *  carries every countdown. */
+  /** Time to reset, beside every window that has spent quota: "when does
+   *  this come back?" is the question a quota cell exists to answer, and the
+   *  segment budget already reserves the room. A full window has nothing to
+   *  recover, so it omits it; the hover still carries every countdown. */
   countdown?: string;
+  /** The window is low enough that its countdown takes the warning colour. */
+  attention: boolean;
 };
 
 /** One quota group as a row of the grouped segment. */
@@ -40,9 +44,8 @@ export function usageGroupRows(groups: readonly UsageWidgetGroup[], now: number)
         period: shortPeriodLabel(window.periodLabel),
         primary: `${String(window.remaining)}%`,
         remaining: window.remaining,
-        ...(countdown !== undefined && usageRemainingTone(window.remaining) !== "normal"
-          ? { countdown }
-          : {}),
+        attention: usageRemainingTone(window.remaining) !== "normal",
+        ...(countdown !== undefined && window.remaining < 100 ? { countdown } : {}),
       };
     }),
     detail: `${group.label}: ${group.windows
@@ -166,9 +169,18 @@ export function UsageGroupedSegment({
               {cell.countdown !== undefined && (
                 <Typography
                   variant="caption"
-                  color="text.secondary"
                   noWrap
-                  sx={{ ...rowSx, fontSize: "0.625rem", fontVariantNumeric: "tabular-nums" }}
+                  sx={{
+                    ...rowSx,
+                    fontSize: "0.625rem",
+                    fontVariantNumeric: "tabular-nums",
+                    // Quiet by default so the percentages stay the first read;
+                    // a window that needs attention lifts its countdown to the
+                    // percentage's tone.
+                    color: cell.attention
+                      ? USAGE_TONE_COLOR[usageRemainingTone(cell.remaining)]
+                      : "text.secondary",
+                  }}
                 >
                   {cell.countdown}
                 </Typography>
