@@ -116,8 +116,16 @@ test("the growing row stays in the scroller paint flow", () => {
   assertEquals(transcriptRowContainment(true), "none");
   assertEquals(transcriptRowContainment(false), "layout paint");
   assertEquals(transcriptRowContainment(false, true), "layout");
+  assertEquals(transcriptRowContainment(true, false, false), "none");
+  assertEquals(transcriptRowContainment(false, false, false), "layout paint");
+  assertEquals(transcriptRowContainment(false, true, false), "layout");
+  // Desktop rows stay at constant layout containment so macOS WebKit never
+  // toggles a row's stacking-context boundary on turn/tool settlement.
+  assertEquals(transcriptRowContainment(true, false, true), "layout");
+  assertEquals(transcriptRowContainment(false, false, true), "layout");
+  assertEquals(transcriptRowContainment(false, true, true), "layout");
   assert(
-    /contain:\s*transcriptRowContainment\(\s*item\.key === streamingRowKey \|\| isRunningTool\(item\),\s*item\.kind === "message" &&\s*item\.chunks\.some\(\(chunk\) => chunk\.type === "image"\)/
+    /contain:\s*transcriptRowContainment\(\s*item\.key === streamingRowKey \|\| isRunningTool\(item\),\s*item\.kind === "message" &&\s*item\.chunks\.some\(\(chunk\) => chunk\.type === "image"\),\s*desktopNavigation,\s*\)/
       .test(
         transcriptSource,
       ),

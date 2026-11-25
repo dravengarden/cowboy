@@ -2955,8 +2955,8 @@ export function Transcript({
                       // hide the entire user bubble when it scrolls into view.
                       contain: transcriptRowContainment(
                         item.key === streamingRowKey || isRunningTool(item),
-                        item.kind === "message" &&
-                          item.chunks.some((chunk) => chunk.type === "image"),
+                        item.kind === "message" && item.chunks.some((chunk) => chunk.type === "image"),
+                        desktopNavigation,
                       ),
                       color: locatedToolKey === item.key
                         ? "primary.main"
