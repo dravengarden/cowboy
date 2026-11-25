@@ -454,12 +454,12 @@ async function restoreOnce(): Promise<void> {
       }
       schedulePersist(key);
     }
-    // Also removes a record none of whose edits exist any more.
-    if (retired === 0 || awaiting - awaitingDatabase.size > retired) saveSessionEdits(sessionId);
+    // When only edits retired elsewhere were here, that tab owns the record.
+    const kept = [...records.values()].some((record) => record.sessionId === sessionId);
+    if (retired === 0 || kept) saveSessionEdits(sessionId);
     for (const [key, edit] of restored) {
       for (const listener of restoreListeners.get(key) ?? []) listener(edit);
     }
-    // Deferred orphan recovery may run now; its claim skips encoding edits.
     if (awaitingDatabase.size < awaiting) for (const listener of encodeListeners) listener(sessionId);
   }
 }

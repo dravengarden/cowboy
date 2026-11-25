@@ -944,8 +944,10 @@ impl Hub {
                 s.editing = None;
                 s.editing_token = None;
             }
+            s.end_displaced_explicit_intent();
             settled
         };
+        self.persist_explicit_wait(session_id);
         self.emit_pending_with_notice_ops(session_id, settled, Vec::new());
     }
 
@@ -1022,8 +1024,12 @@ impl Hub {
                 s.explicit_wait = true;
                 s.explicit.row = Some(id.to_owned());
                 s.explicit.cmid = cmid.map(str::to_owned);
+            } else {
+                // A live send of another row displaces a held one.
+                s.end_displaced_explicit_intent();
             }
         }
+        self.persist_explicit_wait(session_id);
         self.emit_pending(session_id);
         true
     }

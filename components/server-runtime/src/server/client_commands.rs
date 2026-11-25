@@ -822,13 +822,20 @@ pub fn request_send_queued(
     };
     // The wait first: once the promoted row is visible, an automatic drain
     // must already find the session waiting. A request for a row another
-    // terminal removed leaves no wait behind for the rest of the queue.
-    let waited = session_maintenance::waiting(&state.hub, session_id).is_some();
+    // terminal removed puts the session's previous wait back unchanged.
+    let previous = state.hub.setting(&format!(
+        "{}{session_id}",
+        crate::core::settings_keys::SESSION_RESOURCE_WAIT_PREFIX
+    ));
     session_maintenance::wait(&state.hub, session_id, &reason);
     if !state.hub.hold_queued(session_id, id, caller, cmid) {
-        if !waited {
-            session_maintenance::clear_wait(&state.hub, session_id);
-        }
+        let reason = previous
+            .as_ref()
+            .and_then(|wait| wait.get("reason"))
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned);
+        state.hub.set_resource_wait(session_id, reason);
+        state.hub.edit_resource_wait(session_id, |_| previous);
     } else {
         state.hub.persist_explicit_wait(session_id);
         // Command results reach every socket: the wait reason stays in the

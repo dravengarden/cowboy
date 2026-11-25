@@ -1056,6 +1056,15 @@ async fn a_held_send_keeps_its_command_through_a_requeue_and_ends_on_reorder() {
         hub.setting(&format!("{}keep", settings_keys::SESSION_HELD_SENDS_PREFIX)),
         Some(serde_json::json!(["send-a"]))
     );
+    // A live send of another row displaces a held one.
+    let rows: Vec<String> = hub.inner.sessions.lock()["keep"]
+        .queue
+        .iter()
+        .map(|row| row.id.clone())
+        .collect();
+    assert!(hub.hold_queued("keep", &rows[0], &person, Some("send-c")));
+    assert!(hub.promote_queued("keep", &rows[1], &person));
+    assert!(!hub.explicit_wait("keep"));
     // Removing a held row ends its intent too.
     let head = hub.inner.sessions.lock()["keep"].queue[0].id.clone();
     assert!(hub.hold_queued("keep", &head, &person, Some("send-b")));

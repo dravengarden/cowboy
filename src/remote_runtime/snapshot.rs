@@ -283,7 +283,7 @@ pub(super) fn project_snapshot_with_protocol(
         notice_recovery::spawn_record_snapshot_worker_epoch_if_notice(shared, &worker);
     }
     if let Some(session) = repaired {
-        resend_declaration(shared, session);
+        resend_declaration(shared, session, &worker.worker_epoch);
     }
     applied
 }
