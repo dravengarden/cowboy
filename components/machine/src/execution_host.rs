@@ -372,16 +372,15 @@ async fn connection(host: Arc<Host>, stream: UnixStream) -> Result<()> {
 
 fn spawn_reaper(
     host: Arc<Host>,
-    pinned_home: Option<Arc<std::os::fd::OwnedFd>>,
+    pinned_payload_dir: Arc<std::os::fd::OwnedFd>,
     owner_uid: u32,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        if let Some(home_fd) = pinned_home.clone() {
-            let _ = tokio::task::spawn_blocking(move || {
-                file_helper::sweep_stale_file_buffer_payloads(&home_fd, owner_uid, 3600);
-            })
-            .await;
-        }
+        let initial_fd = Arc::clone(&pinned_payload_dir);
+        let _ = tokio::task::spawn_blocking(move || {
+            file_helper::sweep_pinned_payload_dir(&initial_fd, owner_uid, 3600);
+        })
+        .await;
         let mut sequence = 0;
         let mut sweep_ticks = 0_u8;
         let mut interval = tokio::time::interval(Duration::from_secs(60));
@@ -389,11 +388,10 @@ fn spawn_reaper(
         loop {
             interval.tick().await;
             sweep_ticks = sweep_ticks.wrapping_add(1);
-            if sweep_ticks.is_multiple_of(10)
-                && let Some(home_fd) = pinned_home.clone()
-            {
+            if sweep_ticks.is_multiple_of(10) {
+                let fd = Arc::clone(&pinned_payload_dir);
                 let _ = tokio::task::spawn_blocking(move || {
-                    file_helper::sweep_stale_file_buffer_payloads(&home_fd, owner_uid, 3600);
+                    file_helper::sweep_pinned_payload_dir(&fd, owner_uid, 3600);
                 })
                 .await;
             }
@@ -471,6 +469,8 @@ pub async fn run(args: Args) -> Result<()> {
     let private_home = args.state_dir.join("executor-home");
     std::fs::create_dir(&private_home)?;
     std::fs::set_permissions(&private_home, std::fs::Permissions::from_mode(0o700))?;
+    let (payload_dir, payload_dir_fd) =
+        file_helper::prepare_keeper_payload_dir(&args.state_dir, contract_metadata.uid())?;
     let mut child = ProcessCommand::new(&contract.executor.command)
         .args(["exec-server", "--listen", "stdio"])
         .current_dir(&physical_cwd)
@@ -478,6 +478,7 @@ pub async fn run(args: Args) -> Result<()> {
         .envs(&contract.environment)
         .env("CODEX_HOME", &private_home)
         .env("COWBOY_EXECUTION_FILE_HELPER", std::env::current_exe()?)
+        .env(file_helper::KEEPER_PAYLOAD_DIR_ENV, &payload_dir)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -569,14 +570,11 @@ pub async fn run(args: Args) -> Result<()> {
         close: tokio::sync::Notify::new(),
         attended: Mutex::new(std::time::Instant::now()),
     });
-    let pinned_home = contract
-        .environment
-        .get("HOME")
-        .and_then(|path| {
-            file_helper::open_pinned_home_dir(Path::new(path), contract_metadata.uid())
-        })
-        .map(Arc::new);
-    let reaper = spawn_reaper(Arc::clone(&host), pinned_home, contract_metadata.uid());
+    let reaper = spawn_reaper(
+        Arc::clone(&host),
+        Arc::new(payload_dir_fd),
+        contract_metadata.uid(),
+    );
     let (messages, mut native_messages) = mpsc::channel(4);
     let reader = tokio::spawn(async move {
         loop {

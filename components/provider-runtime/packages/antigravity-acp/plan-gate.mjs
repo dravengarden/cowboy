@@ -177,9 +177,9 @@ export class PlanGate {
      */
     this.turnAmbiguities = new WeakMap();
     this.unboundAmbiguities = new Map();
-    /** Turn object -> Map<`${sessionId}\0${id}`, { name, toolName, attempt }> evicted diff cards (R7-M3). */
-    this.turnEvictedDiffs = new WeakMap();
-    this.unboundEvictedDiffs = new Map();
+    /** Turn object -> Map<`${sessionId}\0${id}`, { aliasNames: Set<string>, attempt }> all evicted cards (R7-M3, R8-M4). */
+    this.turnEvicted = new WeakMap();
+    this.unboundEvicted = new Map();
   }
 
   ambiguityBucket(sessionId, turn, attempt, name, create = false) {
@@ -233,16 +233,16 @@ export class PlanGate {
     return Math.max(bucket.toolWide, bucket.byDigest.get(digest) ?? 0);
   }
 
-  evictedDiffMap(turn, create = false) {
+  evictedMap(turn, create = false) {
     if (turn && typeof turn === "object") {
-      let map = this.turnEvictedDiffs.get(turn);
+      let map = this.turnEvicted.get(turn);
       if (!map && create) {
         map = new Map();
-        this.turnEvictedDiffs.set(turn, map);
+        this.turnEvicted.set(turn, map);
       }
       return map;
     }
-    return this.unboundEvictedDiffs;
+    return this.unboundEvicted;
   }
 
   /** Current mode generation for `ownerId`. */
@@ -302,10 +302,10 @@ export class PlanGate {
     const list = this.waiting.get(sessionId) ?? [];
     const attempt = attemptOf(turn);
     const isDiffBearing = (toolName) => toolName === "WriteFile" || toolName === "EditFile";
+    const isDiffName = (fullName) => isDiffBearing(stripFacadePrefix(fullName));
     const incomingName = typeof update.name === "string" ? update.name : undefined;
-    const incomingTool = incomingName ? stripFacadePrefix(incomingName) : undefined;
     const existing = list.find((entry) => entry.id === id);
-    const evictedMap = this.evictedDiffMap(turn, false);
+    const evictedMap = this.evictedMap(turn, false);
     const evictedKey = `${sessionId}\0${id}`;
     const evictedRecord = !existing ? evictedMap?.get(evictedKey) : undefined;
     let contradicted = false;
@@ -316,6 +316,9 @@ export class PlanGate {
         contradicted = true;
       }
       if (incomingName !== undefined && incomingName !== existing.name) {
+        // R8-M3: Retain every revised identity on the card so later matching
+        // peers and nameless completions remain tainted until retirement.
+        existing.aliasNames.add(incomingName);
         existing.ambiguous = true;
         existing.inputContradicted = true;
         contradicted = true;
@@ -352,13 +355,12 @@ export class PlanGate {
     }
     const taintToolPeers = (peerName, targetTurn, targetAttempt, excludeId) => {
       const affected = [];
-      const peerTool = stripFacadePrefix(peerName);
-      if (!isDiffBearing(peerTool)) return affected;
+      if (!isDiffName(peerName)) return affected;
       this.recordDiffAmbiguity(sessionId, targetTurn, targetAttempt, peerName);
       for (const item of list) {
         if (
           item.id !== excludeId &&
-          item.name === peerName &&
+          item.aliasNames.has(peerName) &&
           item.turn === targetTurn &&
           item.attempt === targetAttempt
         ) {
@@ -375,75 +377,71 @@ export class PlanGate {
     };
     const detectDiffCollisions = (target) => {
       const affected = [];
-      if (!target || !isDiffBearing(target.toolName)) return affected;
+      if (!target) return affected;
+      const diffNames = [...target.aliasNames].filter(isDiffName);
+      if (diffNames.length === 0) return affected;
       const toolWideTarget =
         Boolean(target.inputContradicted) || (target.ambiguous && !target.hasInput);
-      if (toolWideTarget) {
-        this.recordDiffAmbiguity(sessionId, target.turn, target.attempt, target.name);
-      } else if (target.ambiguous && target.hasInput && target.digest !== undefined) {
-        this.recordDiffAmbiguity(
-          sessionId,
-          target.turn,
-          target.attempt,
-          target.name,
-          target.digest,
+      for (const diffName of diffNames) {
+        if (toolWideTarget) {
+          this.recordDiffAmbiguity(sessionId, target.turn, target.attempt, diffName);
+        } else if (target.ambiguous && target.hasInput && target.digest !== undefined) {
+          this.recordDiffAmbiguity(sessionId, target.turn, target.attempt, diffName, target.digest);
+        }
+        const peers = list.filter(
+          (item) =>
+            item.id !== target.id &&
+            item.aliasNames.has(diffName) &&
+            item.turn === target.turn &&
+            item.attempt === target.attempt,
         );
-      }
-      const peers = list.filter(
-        (item) =>
-          item.id !== target.id &&
-          item.name === target.name &&
-          item.turn === target.turn &&
-          item.attempt === target.attempt,
-      );
-      const collides = (a, b) =>
-        !a.hasInput ||
-        !b.hasInput ||
-        Boolean(a.inputContradicted) ||
-        Boolean(b.inputContradicted) ||
-        (a.digest !== undefined && a.digest === b.digest);
-      const hits = peers.filter((peer) => collides(target, peer));
-      if (hits.length > 0) {
-        const exactOnly =
-          target.hasInput &&
-          !target.inputContradicted &&
-          target.digest !== undefined &&
-          hits.every(
-            (peer) => peer.hasInput && !peer.inputContradicted && peer.digest === target.digest,
+        const collides = (a, b) =>
+          !a.hasInput ||
+          !b.hasInput ||
+          Boolean(a.inputContradicted) ||
+          Boolean(b.inputContradicted) ||
+          (a.digest !== undefined && a.digest === b.digest);
+        const hits = peers.filter((peer) => collides(target, peer));
+        if (hits.length > 0) {
+          const exactOnly =
+            target.hasInput &&
+            !target.inputContradicted &&
+            target.digest !== undefined &&
+            hits.every(
+              (peer) => peer.hasInput && !peer.inputContradicted && peer.digest === target.digest,
+            );
+          this.recordDiffAmbiguity(
+            sessionId,
+            target.turn,
+            target.attempt,
+            diffName,
+            exactOnly ? target.digest : undefined,
           );
-        this.recordDiffAmbiguity(
-          sessionId,
-          target.turn,
-          target.attempt,
-          target.name,
-          exactOnly ? target.digest : undefined,
-        );
-        for (const item of [target, ...hits]) {
-          item.ambiguous = true;
-          if (item.boundCall) {
-            this.taintedCalls.add(item.boundCall);
-            this.bound.delete(item.boundCall);
-            item.boundCall = undefined;
+          for (const item of [target, ...hits]) {
+            item.ambiguous = true;
+            if (item.boundCall) {
+              this.taintedCalls.add(item.boundCall);
+              this.bound.delete(item.boundCall);
+              item.boundCall = undefined;
+            }
+            affected.push(item.id);
           }
-          affected.push(item.id);
         }
       }
       return affected;
     };
-    // R6-M1 / R7-M3: Run diff collision/contradiction propagation on BOTH the
-    // stored identity and any revised incoming identity BEFORE removing terminal
-    // entries; also catch late/terminal updates for previously evicted diff cards.
+    // R6-M1 / R7-M3 / R8-M3 / R8-M4: Propagate collisions across ALL retained
+    // alias identities BEFORE removing terminal entries, and catch late/terminal
+    // revisions on ANY evicted card (including evicted non-edit cards renamed to an edit).
     const existingAffected = existing ? detectDiffCollisions(existing) : [];
-    if (existing && incomingName && incomingName !== existing.name && isDiffBearing(incomingTool)) {
-      existingAffected.push(
-        ...taintToolPeers(incomingName, existing.turn, existing.attempt, existing.id),
-      );
-    }
     if (evictedRecord) {
-      contradicted = true;
-      existingAffected.push(...taintToolPeers(evictedRecord.name, turn, evictedRecord.attempt, id));
-      if (incomingName && incomingName !== evictedRecord.name && isDiffBearing(incomingTool)) {
-        existingAffected.push(...taintToolPeers(incomingName, turn, evictedRecord.attempt, id));
+      if (incomingName !== undefined) evictedRecord.aliasNames.add(incomingName);
+      const evictedDiffNames = [...evictedRecord.aliasNames].filter(isDiffName);
+      if (evictedDiffNames.length > 0) {
+        contradicted = true;
+        for (const diffName of evictedDiffNames) {
+          existingAffected.push(...taintToolPeers(diffName, turn, evictedRecord.attempt, id));
+        }
       }
     }
     if (TERMINAL.has(update.status)) {
@@ -481,22 +479,22 @@ export class PlanGate {
           this.taintedCalls.add(evicted.boundCall);
           this.bound.delete(evicted.boundCall);
         }
-        if (isDiffBearing(evicted.toolName)) {
-          // R7-M3: Retain evicted diff-card identity so any late/terminal update
-          // for the evicted ID can still invalidate surviving peers.
-          const map = this.evictedDiffMap(evicted.turn, true);
-          if (map) {
-            if (map.size >= MAX_WAITING * 2) {
-              const oldest = map.keys().next().value;
-              if (oldest !== undefined) map.delete(oldest);
-            }
-            map.set(`${sessionId}\0${evicted.id}`, {
-              name: evicted.name,
-              toolName: evicted.toolName,
-              attempt: evicted.attempt,
-            });
+        // R7-M3 / R8-M4: Retain ALL evicted card IDs (including non-edit cards)
+        // so a late or terminal revision renaming an evicted card to an edit can
+        // still invalidate surviving peers.
+        const map = this.evictedMap(evicted.turn, true);
+        if (map) {
+          if (map.size >= MAX_WAITING * 4) {
+            const oldest = map.keys().next().value;
+            if (oldest !== undefined) map.delete(oldest);
           }
-          this.recordDiffAmbiguity(sessionId, evicted.turn, evicted.attempt, evicted.name);
+          map.set(`${sessionId}\0${evicted.id}`, {
+            aliasNames: new Set(evicted.aliasNames),
+            attempt: evicted.attempt,
+          });
+        }
+        for (const diffName of [...evicted.aliasNames].filter(isDiffName)) {
+          this.recordDiffAmbiguity(sessionId, evicted.turn, evicted.attempt, diffName);
         }
         if (turn && typeof turn === "object") turn.announcementEvicted = true;
       }
@@ -504,6 +502,7 @@ export class PlanGate {
     const added = {
       id,
       name,
+      aliasNames: new Set([name]),
       toolName,
       turn,
       attempt,
@@ -542,7 +541,7 @@ export class PlanGate {
     const stripSummary = isBuiltinFacadeTool(call.name);
     const digest = argsDigest(call.args === undefined ? {} : call.args, { stripSummary });
     const liveSameTool = list.filter(
-      (item) => item.name === name && item.turn === turn && item.attempt === attempt,
+      (item) => item.aliasNames.has(name) && item.turn === turn && item.attempt === attempt,
     );
     const unbound = liveSameTool.filter((item) => !item.boundCall && !item.ambiguous);
     let entry;
@@ -594,7 +593,8 @@ export class PlanGate {
       } else if (exactUnbound.length >= 1) {
         if (!turn?.announcementEvicted) entry = exactUnbound[0];
       } else if (!turn?.announcementEvicted) {
-        if (isDiffBearing && liveSameTool.length > 1) {
+        // R8-L1: Only taint on inputless fallback when an inputless live card actually exists.
+        if (isDiffBearing && inputlessLive.length > 0 && liveSameTool.length > 1) {
           // R3-M6: Permanently taint the incoming call and colliding entries on inputless ambiguity.
           this.taintedCalls.add(call);
           for (const item of inputlessLive) {

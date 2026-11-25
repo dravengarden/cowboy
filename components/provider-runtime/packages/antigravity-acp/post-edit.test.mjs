@@ -413,7 +413,7 @@ test("Pre-dispatch refusal of large staged edit dispatches neither apply nor pos
     async call(method, params, opts) {
       opts?.beforeSend?.();
       calls.push({ method, params });
-      if (method === "process/start" && params.argv?.[2]?.includes("mkdir -p")) {
+      if (method === "process/start" && params.argv?.[2]?.includes("file-buffers")) {
         return { processId: params.processId };
       }
       if (method === "process/read") {
@@ -959,7 +959,7 @@ test("Exit-127 staged edit skips fs/remove when beforeSend refuses (R3-M1)", asy
     async call(method, params, opts) {
       opts?.beforeSend?.();
       calls.push({ method, params });
-      if (method === "process/start" && params.argv?.[2]?.includes("mkdir -p")) {
+      if (method === "process/start" && params.argv?.[2]?.includes("file-buffers")) {
         return { processId: params.processId };
       }
       if (method === "process/start" && params.argv?.includes("--request-file")) {
@@ -1151,8 +1151,9 @@ test("PlanGate permanently taints incoming edit call when a sole surviving compa
   assert.equal(gate.bind(secondCall, turn), undefined);
 });
 
-test("publishOnce passes payloadDirectory on staged writes so stale payloads expire even after fenced exit-127 (R4-L1)", async () => {
+test("publishOnce stages into keeper payload dir without injecting cached payloadDirectory into apply (R8-M2)", async () => {
   const writes = [];
+  const writePaths = [];
   let starts = 0;
   const conn = {
     async call(method, params) {
@@ -1163,7 +1164,7 @@ test("publishOnce passes payloadDirectory on staged writes so stale payloads exp
       if (method === "process/read") {
         const text =
           starts === 1
-            ? "/home/u/.cache/cowboy/file-buffers"
+            ? "/run/cowboy/keeper-1/file-buffers"
             : JSON.stringify({ status: "applied" });
         return {
           chunks: [{ seq: 1, stream: "stdout", chunk: Buffer.from(text).toString("base64") }],
@@ -1173,6 +1174,7 @@ test("publishOnce passes payloadDirectory on staged writes so stale payloads exp
         };
       }
       if (method === "fs/writeFile") {
+        writePaths.push(params.path);
         writes.push(JSON.parse(Buffer.from(params.dataBase64, "base64").toString("utf8")));
         return {};
       }
@@ -1185,7 +1187,8 @@ test("publishOnce passes payloadDirectory on staged writes so stale payloads exp
   const large = Buffer.alloc(60 * 1024, "x");
   await facade.publishOnce(turn, "/repo/big.txt", undefined, large);
   assert.equal(writes.length, 1);
-  assert.equal(writes[0].payloadDirectory, "/home/u/.cache/cowboy/file-buffers");
+  assert.ok(writePaths[0].startsWith("file:///run/cowboy/keeper-1/file-buffers/payload-"));
+  assert.equal(writes[0].payloadDirectory, undefined);
   assert.equal(writes[0].staleTempSeconds, 3600);
 });
 
@@ -1499,6 +1502,146 @@ test("PlanGate exact collision on a.rs does not taint unrelated unbound edit for
     turn,
   );
   // Unique card for b.rs arrives: callB must still bind cleanly!
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "b-1",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "b.rs", old_string: "1", new_string: "2" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  assert.equal(gate.bind(callB, turn), "b-1");
+});
+
+test("PlanGate retains in-progress EditFile->WriteFile rename across later WriteFile peer and nameless completion (R8-M3)", () => {
+  const gate = new PlanGate();
+  const turn = { attempt: Symbol("att") };
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "edit-1",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "a.rs", old_string: "1", new_string: "2" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "edit-1",
+      name: "mcp_cowboy_WriteFile",
+      rawInput: { path: "b.rs", content: "v2" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  const peerRes = gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "write-2",
+      name: "mcp_cowboy_WriteFile",
+      rawInput: { path: "b.rs", content: "v2" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  assert.equal(peerRes.contradicted, true);
+  assert.ok(peerRes.contradictedIds.includes("write-2"));
+  const writeCall = { sessionId: "s1", name: "WriteFile", args: { path: "b.rs", content: "v2" } };
+  gate.admitCall(writeCall, turn);
+  assert.equal(gate.bind(writeCall, turn), undefined);
+  const doneRes = gate.trackUpdate("s1", { toolCallId: "edit-1", status: "completed" }, turn);
+  assert.equal(doneRes.contradicted, true);
+  assert.ok(doneRes.contradictedIds.includes("write-2"));
+});
+
+test("PlanGate taints surviving WriteFile peer when an evicted ReadFile card completes renamed to WriteFile (R8-M4)", () => {
+  const gate = new PlanGate();
+  const turn = { attempt: Symbol("att") };
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "evicted-read",
+      name: "mcp_cowboy_ReadFile",
+      rawInput: { path: "a.rs" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "write-peer",
+      name: "mcp_cowboy_WriteFile",
+      rawInput: { path: "b.rs", content: "hi" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  const writeCall = { sessionId: "s1", name: "WriteFile", args: { path: "b.rs", content: "hi" } };
+  gate.admitCall(writeCall, turn);
+  assert.equal(gate.bind(writeCall, turn), "write-peer");
+  for (let i = 0; i < 63; i += 1) {
+    gate.trackUpdate(
+      "s1",
+      {
+        toolCallId: `pad-${i}`,
+        name: "mcp_cowboy_ReadFile",
+        rawInput: { path: `p${i}.rs` },
+        status: "in_progress",
+      },
+      turn,
+    );
+  }
+  const late = gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "evicted-read",
+      name: "mcp_cowboy_WriteFile",
+      rawInput: { path: "b.rs", content: "hi" },
+      status: "completed",
+    },
+    turn,
+  );
+  assert.equal(late.contradicted, true);
+  assert.ok(late.contradictedIds.includes("evicted-read"));
+  assert.ok(late.contradictedIds.includes("write-peer"));
+  assert.equal(gate.isBindingConsistent(writeCall, turn), false);
+});
+
+test("PlanGate admitting unrelated edit B while two exact colliding A cards are live preserves B binding (R8-L1)", () => {
+  const gate = new PlanGate();
+  const turn = { attempt: Symbol("att") };
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "a-1",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "a.rs", old_string: "x", new_string: "y" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "a-2",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "a.rs", old_string: "x", new_string: "y" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  const callB = {
+    sessionId: "s1",
+    name: "EditFile",
+    args: { path: "b.rs", old_string: "1", new_string: "2" },
+  };
+  gate.admitCall(callB, turn);
+  assert.equal(gate.bind(callB, turn), undefined);
   gate.trackUpdate(
     "s1",
     {

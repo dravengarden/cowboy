@@ -1535,28 +1535,22 @@ ${WRAP_UP_NOTE}`,
    * report, show the result. */
   async publishOnce(turn, file, base, bytes, { beforeSend } = {}) {
     const expect = sha256(bytes);
-    const baseRequest = {
+    // R8-M2: Leave abandoned-payload cleanup strictly to the keeper's pinned
+    // directory descriptor reaper; never pass a cached pathname to apply.
+    const request = JSON.stringify({
       schema: 1,
       path: file,
       base: base === undefined ? "absent" : sha256(base),
       expect,
       splices: splice(base ?? Buffer.alloc(0), bytes),
       staleTempSeconds: 3600,
-    };
-    const inlineRequest = JSON.stringify(
-      this.resolvedPayloadDirectory
-        ? { ...baseRequest, payloadDirectory: this.resolvedPayloadDirectory }
-        : baseRequest,
-    );
+    });
     let args;
     let payload;
-    if (Buffer.byteLength(inlineRequest) <= INLINE_APPLY) {
-      args = ["--request", Buffer.from(inlineRequest).toString("base64")];
+    if (Buffer.byteLength(request) <= INLINE_APPLY) {
+      args = ["--request", Buffer.from(request).toString("base64")];
     } else {
       const directory = await this.payloadDirectory(turn, { beforeSend });
-      // R4-L1: Pass payloadDirectory so file_helper sweeps stale staged
-      // payloads even when an earlier exit-127 cleanup was fenced by beforeSend.
-      const request = JSON.stringify({ ...baseRequest, payloadDirectory: directory });
       payload = posix.join(directory, `payload-${randomUUID().replaceAll("-", "")}.json`);
       await this.mutate(
         turn,
@@ -1625,31 +1619,25 @@ ${WRAP_UP_NOTE}`,
     );
   }
 
-  /** The target's private directory for large helper requests. */
+  /** The target's private directory for large helper requests (re-validated per staged write, R8-M2). */
   async payloadDirectory(turn, { beforeSend } = {}) {
     if (typeof beforeSend === "function") beforeSend();
-    this.payloads ??= this.runBounded(turn, ["/bin/sh", "-c", PAYLOAD_DIRECTORY], {
+    const result = await this.runBounded(turn, ["/bin/sh", "-c", PAYLOAD_DIRECTORY], {
       timeoutMs: LIMITS.publishTimeoutMs,
       maxBytes: 4096,
       beforeSend,
-    }).then((result) => {
-      const directory = result.stdout.trim();
-      if (
-        result.exitCode !== 0 ||
-        result.forgotten ||
-        result.timedOut ||
-        result.truncated ||
-        !posix.isAbsolute(directory)
-      ) {
-        throw new ToolError("The workspace Machine has no private request directory");
-      }
-      this.resolvedPayloadDirectory = directory;
-      return directory;
     });
-    this.payloads.catch(() => {
-      this.payloads = undefined;
-    });
-    return this.payloads;
+    const directory = result.stdout.trim();
+    if (
+      result.exitCode !== 0 ||
+      result.forgotten ||
+      result.timedOut ||
+      result.truncated ||
+      !posix.isAbsolute(directory)
+    ) {
+      throw new ToolError("The workspace Machine has no private request directory");
+    }
+    return directory;
   }
 
   /**
