@@ -126,7 +126,6 @@ class Candidate:
         require(self.manifest["id"] == self.id and self.manifest["version"] == self.version,
                 "release and Provider identity disagree")
         self.package_path = root / "provider.json"
-        self.package_path.write_text(json.dumps(package))
         os_name = {"Linux": "linux", "Darwin": "macos"}.get(platform.system())
         architecture = {"x86_64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64"}.get(platform.machine())
         matches = [target for target in self.release["runtime_artifacts"]
@@ -135,35 +134,87 @@ class Candidate:
         self.target = matches[0]
         self.commands = {}
         self.probes = []
+        kind_map = {
+            "agent_cli": "provider_cli",
+            "agent_adapter": "provider_adapter",
+            "agent_gateway": "provider_gateway",
+            "provider_cli": "provider_cli",
+            "provider_adapter": "provider_adapter",
+            "provider_gateway": "provider_gateway",
+            "acp_runtime": "acp_runtime",
+        }
+        resolved_components = []
         for component in self.target["components"]:
             name = component["command"]
-            require(name and all(c.isalnum() or c in "-_." for c in name), "unsafe command")
+            slot = component["slot"]
+            private_kind = kind_map.get(component["kind"])
+            require(private_kind is not None, f"unsupported component kind: {component['kind']}")
+            require(name and name not in (".", "..") and all(c.isalnum() or c in "-_." for c in name), "unsafe command")
+            require(slot and slot not in (".", "..") and all(c.isalnum() or c in "-_." for c in slot), "unsafe slot")
             relative = f"{name}.tar.gz" if component["artifact_format"] == "tar_gz" else name
             source = artifacts / "runtime" / f"{os_name}-{architecture}" / relative
             if not source.exists():
                 url_name = PurePosixPath(urlparse(component["artifact_url"]).path).name
                 source = artifacts / "artifacts" / component["artifact_digest"].removeprefix("sha256:") / url_name
             require(digest(source) == component["artifact_digest"], f"runtime digest mismatch: {name}")
-            destination = root / name
-            destination.mkdir(mode=0o700)
+            resolved_components.append((component, private_kind, slot, name, source))
+
+        def materialize_one(runtime_dir, component, private_kind, slot, name, source):
+            component_dir = runtime_dir / f"{private_kind}-{slot}"
+            component_dir.mkdir(mode=0o700)
             if component["artifact_format"] == "tar_gz":
-                extract_archive(source, destination)
+                staged_archive = component_dir / "artifact.tar.gz"
+                shutil.copyfile(source, staged_archive)
+                require(digest(staged_archive) == component["artifact_digest"], f"runtime digest mismatch: {name}")
+                staged_archive.chmod(0o400)
+                destination = component_dir / "content"
+                destination.mkdir(mode=0o700)
+                extract_archive(staged_archive, destination)
                 entrypoint = component["entrypoint"]
                 require(not PurePosixPath(entrypoint).is_absolute()
                         and ".." not in PurePosixPath(entrypoint).parts, "unsafe entrypoint")
                 executable = destination / entrypoint
             else:
-                executable = destination / name
+                executable = component_dir / "bin"
                 shutil.copyfile(source, executable)
-                executable.chmod(0o700)
+                require(digest(executable) == component["artifact_digest"], f"runtime digest mismatch: {name}")
+                executable.chmod(0o500)
             require(executable.is_file() and not executable.is_symlink(), "missing executable")
-            self.commands[name] = str(executable)
-            private_home = root / f"probe-{name}"
-            closed_environment(private_home)
-            probe(executable, component["probe"]["args"], private_home,
-                  min(component["probe"]["timeout_ms"] / 1000, 120))
-            self.probes.append({"command": name, "version": component["version"],
-                                "artifact_digest": component["artifact_digest"], "status": "passed"})
+            return executable
+
+        node_entry = next(
+            (entry for entry in resolved_components
+             if entry[1] == "acp_runtime" and entry[2] == "node" and entry[0]["artifact_format"] == "raw"),
+            None,
+        )
+        # Run each probe in its own fresh verified runtime tree so no earlier
+        # probe can alter bytes validated by a later probe or the worker.
+        for entry in resolved_components:
+            component, private_kind, slot, name, source = entry
+            probe_tree = root / f"probe-tree-{name}"
+            probe_runtime = probe_tree / "runtime"
+            probe_runtime.mkdir(parents=True, mode=0o700)
+            try:
+                if node_entry is not None and node_entry is not entry:
+                    materialize_one(probe_runtime, *node_entry)
+                executable = materialize_one(probe_runtime, *entry)
+                private_home = root / f"probe-{name}"
+                closed_environment(private_home)
+                probe(executable, component["probe"]["args"], private_home,
+                      min(component["probe"]["timeout_ms"] / 1000, 120))
+                self.probes.append({"command": name, "version": component["version"],
+                                    "artifact_digest": component["artifact_digest"], "status": "passed"})
+            finally:
+                shutil.rmtree(probe_tree, ignore_errors=True)
+
+        # Materialize a clean, freshly verified runtime tree and package JSON
+        # AFTER all probes have finished so no probe can alter worker inputs.
+        self.package_path.write_text(json.dumps(package))
+        runtime_root = root / "runtime"
+        runtime_root.mkdir(mode=0o700)
+        for entry in resolved_components:
+            executable = materialize_one(runtime_root, *entry)
+            self.commands[entry[3]] = str(executable)
 
 
 def write_frame(connection, frame):

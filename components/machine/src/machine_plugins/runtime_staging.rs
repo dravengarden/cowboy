@@ -57,6 +57,7 @@ fn verify_child_dir(
 
 enum PendingArchive {
     Inline,
+    CachedRaw(artifact_cache::CachedArtifact),
     Cached(artifact_cache::CachedArtifact),
     Bytes(Vec<u8>),
 }
@@ -91,7 +92,7 @@ impl StagedRuntimeComponent {
             "runtime component probe replaced or removed execute permission on staged executable"
         );
         match &self.pending_archive {
-            PendingArchive::Inline => {
+            PendingArchive::Inline | PendingArchive::CachedRaw(_) => {
                 ensure!(
                     digest_file(&self.executable)? == artifact.artifact_digest.to_ascii_lowercase(),
                     "runtime component probe changed signed artifact bytes"
@@ -461,7 +462,16 @@ async fn materialize_runtime_component(
         ProviderArtifactFormat::Raw => {
             let executable = component_root.join("bin");
             atomic_write(&executable, &bytes, 0o700)?;
-            (executable.clone(), executable, PendingArchive::Inline)
+            let pending = if let Some(state) = cache_state {
+                PendingArchive::CachedRaw(artifact_cache::ensure_cached_executable(
+                    state,
+                    &artifact.artifact_digest,
+                    &bytes,
+                )?)
+            } else {
+                PendingArchive::Inline
+            };
+            (executable.clone(), executable, pending)
         }
         ProviderArtifactFormat::TarGz => {
             let stored_artifact = component_root.join("artifact.tar.gz");
@@ -522,6 +532,36 @@ fn attach_and_verify_staged_component(
     }
     match &staged.pending_archive {
         PendingArchive::Inline => {}
+        PendingArchive::CachedRaw(cached) => {
+            // Verify the probed private `bin` BEFORE replacing it so probe
+            // tampering is never masked.
+            staged.verify_staged_bytes(temp_dir_fd, artifact)?;
+            // Only immutable runtime interpreters and gateways share a 0o500
+            // cache inode; other raw binaries and unconfirmed probes always
+            // publish a fresh private 0o500 inode via `copy_verified_at` so a
+            // surviving probe descendant holding an open writable FD to the
+            // probed `bin` cannot mutate the published executable.
+            let shareable_kind = matches!(
+                artifact.kind,
+                cowboy_provider_sdk::PrivateComponentKind::AcpRuntime
+                    | cowboy_provider_sdk::PrivateComponentKind::ProviderGateway
+            );
+            if allow_shared_hardlink && shareable_kind {
+                artifact_cache::link_verified_at(
+                    cached,
+                    &artifact.artifact_digest,
+                    staged.component_dir_fd.as_fd(),
+                    "bin",
+                )?;
+            } else {
+                artifact_cache::copy_verified_at(
+                    cached,
+                    &artifact.artifact_digest,
+                    staged.component_dir_fd.as_fd(),
+                    "bin",
+                )?;
+            }
+        }
         PendingArchive::Cached(cached) => {
             if allow_shared_hardlink {
                 artifact_cache::link_verified_at(
@@ -583,4 +623,134 @@ fn attach_and_verify_staged_component(
         "Provider runtime component verified"
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cowboy_provider_sdk::{
+        PrivateComponentKind, ProviderArtifactFormat, ProviderArtifactProbe,
+    };
+    use std::io::Write as _;
+    use std::os::unix::fs::MetadataExt as _;
+
+    fn raw_component(digest: String, url: String) -> ReleasedPrivateComponent {
+        ReleasedPrivateComponent {
+            kind: PrivateComponentKind::AcpRuntime,
+            slot: "node".into(),
+            dependency: "nodejs".into(),
+            version: "24.21.0".into(),
+            command: "node".into(),
+            artifact_url: url,
+            artifact_digest: digest,
+            artifact_format: ProviderArtifactFormat::Raw,
+            entrypoint: None,
+            probe: ProviderArtifactProbe {
+                args: vec!["--version".into()],
+                timeout_ms: 5_000,
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn raw_component_hardlinks_0o500_when_confirmed_and_falls_back_when_unconfirmed() {
+        let state = tempfile::tempdir().unwrap();
+        let bytes = b"#!/bin/sh\necho v24.21.0\n";
+        let digest = format!("sha256:{:x}", Sha256::digest(bytes));
+        let hash = digest.strip_prefix("sha256:").unwrap();
+        let src = state.path().join("node");
+        fs::write(&src, bytes).unwrap();
+        MachinePluginStore::cache_runtime_artifact(state.path(), &src, &digest).unwrap();
+
+        let artifacts = PlatformRuntimeArtifacts {
+            os: cowboy_provider_sdk::OperatingSystem::Linux,
+            architecture: cowboy_provider_sdk::Architecture::X86_64,
+            components: vec![raw_component(
+                digest.clone(),
+                "http://127.0.0.1:9/node".into(),
+            )],
+        };
+        let guard = InstallGuard::Legacy;
+
+        // Confirmed probe (sealed_probe = true) hardlinks both generations to one 0o500 cache inode.
+        let gen1 = state.path().join("gen1/content");
+        let gen2 = state.path().join("gen2/content");
+        fs::create_dir_all(&gen1).unwrap();
+        fs::create_dir_all(&gen2).unwrap();
+        stage_provider_runtime(&gen1, &artifacts, &guard, Some(state.path()), true)
+            .await
+            .unwrap();
+        stage_provider_runtime(&gen2, &artifacts, &guard, Some(state.path()), true)
+            .await
+            .unwrap();
+
+        let cached = state.path().join("artifact-cache").join(hash);
+        let b1 = gen1.join("runtime/acp_runtime-node/bin");
+        let b2 = gen2.join("runtime/acp_runtime-node/bin");
+        let m_cache = cached.symlink_metadata().unwrap();
+        assert_eq!(m_cache.permissions().mode() & 0o777, 0o500);
+        assert_eq!(b1.symlink_metadata().unwrap().ino(), m_cache.ino());
+        assert_eq!(b2.symlink_metadata().unwrap().ino(), m_cache.ino());
+        assert_eq!(m_cache.nlink(), 3);
+
+        // Unconfirmed outer probe replaces the probed 0o700 inode with a fresh
+        // private 0o500 copy so a surviving descendant holding an open writable
+        // FD to the probed inode cannot alter the published binary.
+        let gen3 = state.path().join("gen3/content");
+        fs::create_dir_all(&gen3).unwrap();
+        let mut prepared =
+            prepare_provider_runtime(&gen3, &artifacts, &guard, Some(state.path()), true)
+                .await
+                .unwrap();
+        let probed_bin = prepared.command_path("node").unwrap();
+        let probed_ino = probed_bin.symlink_metadata().unwrap().ino();
+        let mut leaked_fd = OpenOptions::new().write(true).open(&probed_bin).unwrap();
+        prepared.record_outer_probe_exit_confirmed(false);
+        prepared.finalize(&guard).unwrap();
+
+        leaked_fd.write_all(b"post-finalize-tamper").unwrap();
+        leaked_fd.sync_all().unwrap();
+
+        let b3 = gen3.join("runtime/acp_runtime-node/bin");
+        let m3 = b3.symlink_metadata().unwrap();
+        assert_ne!(m3.ino(), m_cache.ino());
+        assert_ne!(m3.ino(), probed_ino);
+        assert_eq!(m3.permissions().mode() & 0o7777, 0o500);
+        assert_eq!(fs::read(&b3).unwrap(), bytes);
+        assert_eq!(cached.symlink_metadata().unwrap().nlink(), 3);
+    }
+
+    #[tokio::test]
+    async fn raw_component_tampering_during_probe_is_rejected_before_hardlink() {
+        let state = tempfile::tempdir().unwrap();
+        let bytes = b"#!/bin/sh\necho v24.21.0\n";
+        let digest = format!("sha256:{:x}", Sha256::digest(bytes));
+        let src = state.path().join("node");
+        fs::write(&src, bytes).unwrap();
+        MachinePluginStore::cache_runtime_artifact(state.path(), &src, &digest).unwrap();
+
+        let artifacts = PlatformRuntimeArtifacts {
+            os: cowboy_provider_sdk::OperatingSystem::Linux,
+            architecture: cowboy_provider_sdk::Architecture::X86_64,
+            components: vec![raw_component(
+                digest.clone(),
+                "http://127.0.0.1:9/node".into(),
+            )],
+        };
+        let guard = InstallGuard::Legacy;
+        let generation = state.path().join("gen/content");
+        fs::create_dir_all(&generation).unwrap();
+        let prepared =
+            prepare_provider_runtime(&generation, &artifacts, &guard, Some(state.path()), true)
+                .await
+                .unwrap();
+        let staged_bin = prepared.command_path("node").unwrap();
+        // Simulate an outer probe tampering with the private staged binary.
+        fs::write(&staged_bin, b"#!/bin/sh\necho tampered\n").unwrap();
+        let err = prepared.finalize(&guard).unwrap_err();
+        assert!(
+            err.to_string().contains("changed signed artifact bytes"),
+            "unexpected error: {err:#}"
+        );
+    }
 }

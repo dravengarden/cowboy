@@ -13,7 +13,10 @@ type Architecture = "x86_64" | "aarch64";
 type TargetKey = `${OperatingSystem}-${Architecture}`;
 
 interface PrivateComponent {
+  kind: string;
+  slot: string;
   dependency: string;
+  command: string;
 }
 
 interface ProviderSource {
@@ -43,6 +46,12 @@ interface NpmArchiveRecipe {
   targets: Partial<Record<TargetKey, DownloadTarget>>;
 }
 
+interface NodeRuntimeRecipe {
+  kind: "node_runtime";
+  version: string;
+  probe?: string[];
+}
+
 interface NodeNpmRecipe extends OwnedNodeRecipe {
   kind: "node_npm";
   version: string;
@@ -50,6 +59,7 @@ interface NodeNpmRecipe extends OwnedNodeRecipe {
   script: string;
   launcher?: string;
   include_optional?: boolean;
+  bundle_node?: boolean;
 }
 
 interface GitGoRecipe {
@@ -79,6 +89,7 @@ interface OwnedArchiveRecipe {
 
 type ComponentRecipe =
   | NpmArchiveRecipe
+  | NodeRuntimeRecipe
   | NodeNpmRecipe
   | GitGoRecipe
   | VendorArchiveRecipe
@@ -196,6 +207,16 @@ for (const pluginRoot of pluginRoots) {
             "sri",
           );
           break;
+        case "node_runtime":
+          validateDownloadTarget(
+            `${providerId}: Node.js ${target}`,
+            required(
+              runtimeLock.node.targets[target],
+              "missing Node.js archive",
+            ),
+            "sha256",
+          );
+          break;
         case "node_npm":
           validateDownloadTarget(
             `${providerId}: Node.js ${target}`,
@@ -205,6 +226,28 @@ for (const pluginRoot of pluginRoots) {
             ),
             "sha256",
           );
+          if (recipe.bundle_node === false) {
+            const platform = required(
+              source.runtime.platforms.find(
+                (entry) => `${entry.os}-${entry.architecture}` === target,
+              ),
+              `${providerId}: missing platform ${target}`,
+            );
+            const nodeIdx = platform.private_components.findIndex(
+              (entry) =>
+                entry.kind === "acp_runtime" &&
+                entry.slot === "node" &&
+                entry.command === "node" &&
+                runtimeLock.components[entry.dependency]?.kind === "node_runtime",
+            );
+            const adapterIdx = platform.private_components.findIndex(
+              (entry) => entry.dependency === dependencyId,
+            );
+            assert(
+              nodeIdx >= 0 && adapterIdx >= 0 && nodeIdx < adapterIdx,
+              `${providerId}: ${target} split ${dependencyId} requires acp_runtime slot=node command=node before it`,
+            );
+          }
           if (!validatedNpmRecipes.has(dependencyId)) {
             await validateNpmRecipe(providerId, dependency, recipe);
             validatedNpmRecipes.add(dependencyId);
@@ -304,6 +347,21 @@ async function validateDependencySource(
     );
     return;
   }
+  if (recipe.kind === "node_runtime") {
+    assert(
+      recipe.version === runtimeLock.node.version,
+      `${providerId}: Node.js runtime recipe version mismatch for ${dependency.id}`,
+    );
+    assert(
+      dependency.source === `https://nodejs.org/dist/v${runtimeLock.node.version}/`,
+      `${providerId}: Node.js runtime source mismatch for ${dependency.id}`,
+    );
+    assert(
+      dependency.integrity === nodeRuntimeIntegrity(runtimeLock.node),
+      `${providerId}: Node.js runtime integrity mismatch for ${dependency.id}`,
+    );
+    return;
+  }
   if (recipe.kind === "vendor_archive") {
     // The vendor's versioned release directory is the source; the integrity
     // binds every pinned target, so a lock edit cannot drift from the
@@ -376,6 +434,10 @@ async function validateNpmRecipe(
   assert(
     recipe.include_optional === undefined || recipe.include_optional === true,
     `${providerId}: ${dependency.id} include_optional must be true or absent`,
+  );
+  assert(
+    recipe.bundle_node === undefined || typeof recipe.bundle_node === "boolean",
+    `${providerId}: ${dependency.id} bundle_node must be boolean or absent`,
   );
   if (recipe.launcher !== undefined) {
     assert(
@@ -504,6 +566,7 @@ function assert(condition: unknown, message: string): asserts condition {
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
+  nodeRuntimeIntegrity,
   ownedArchiveIntegrity,
   ownedNodeInputs,
   ownedNodeIntegrity,

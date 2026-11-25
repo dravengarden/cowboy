@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "deepseek-harness",
-  "version": "1.0.53",
+  "version": "1.0.54",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {
@@ -33,8 +33,8 @@
   "configuration_presets": [
     {
       "id": "deepseek-flash-max",
-      "name": "Flash · Max",
-      "detail": "DeepSeek-V4.1-Flash · Max reasoning",
+      "name": "Flash \u00b7 Max",
+      "detail": "DeepSeek-V4.1-Flash \u00b7 Max reasoning",
       "is_default": true,
       "values": {
         "model": "[\"deepseek-official\",\"deepseek-flash\"]",
@@ -61,7 +61,7 @@
         "Working"
       ],
       "interval_ms": 4200,
-      "suffix": "…",
+      "suffix": "\u2026",
       "effect": "shimmer"
     },
     "accessible_label": "DeepSeek Harness is working"
@@ -213,6 +213,13 @@
         "source": "git+ssh://git@github.com/dravengarden/columbus.git#920a18efe145a6873d6815a8c24159938daa1a13:projects/claude-deepseek",
         "integrity": "sha256:4a39f971c6f68f9a6de37ff548a181229348522ddd9a0fba245a527b912d52bf",
         "private": true
+      },
+      {
+        "id": "nodejs",
+        "version": "24.21.0",
+        "source": "https://nodejs.org/dist/v24.21.0/",
+        "integrity": "sha256:d9b4b85b5f62c81463503e58ec20e314509293caa5938fecefd7d0b5a4274c2b",
+        "private": true
       }
     ],
     "platforms": [
@@ -222,6 +229,12 @@
         "payload_digest": "",
         "launch_command": "dsh",
         "private_components": [
+          {
+            "kind": "acp_runtime",
+            "slot": "node",
+            "dependency": "nodejs",
+            "command": "node"
+          },
           {
             "kind": "provider_cli",
             "slot": "deepseek-harness",
@@ -242,6 +255,12 @@
         "payload_digest": "",
         "launch_command": "dsh",
         "private_components": [
+          {
+            "kind": "acp_runtime",
+            "slot": "node",
+            "dependency": "nodejs",
+            "command": "node"
+          },
           {
             "kind": "provider_cli",
             "slot": "deepseek-harness",

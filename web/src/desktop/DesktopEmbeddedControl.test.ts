@@ -116,3 +116,13 @@ test("repeated desktop shortcut keycaps do not allocate backdrop blur layers", (
   assertEquals(shortcutKeycapSource.includes("backdropFilter"), false);
   assertEquals(shortcutKeycapSource.includes("WebkitBackdropFilter"), false);
 });
+
+test("desktop shortcut keycaps and context badges avoid compositor-promoted opacity/filter/transform transitions", async () => {
+  const contextShortcutSource = await readFile(
+    new URL("./commands/DesktopContextShortcut.tsx", import.meta.url), "utf8",
+  );
+  assertEquals(shortcutKeycapSource.includes("filter:"), false);
+  assertEquals(shortcutKeycapSource.includes("opacity 120ms"), false);
+  assertEquals(shortcutKeycapSource.includes("filter 120ms"), false);
+  assertEquals(contextShortcutSource.includes("transition:"), false);
+});

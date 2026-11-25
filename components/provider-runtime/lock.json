@@ -21,6 +21,13 @@
     }
   },
   "components": {
+    "nodejs": {
+      "kind": "node_runtime",
+      "version": "24.21.0",
+      "probe": [
+        "--version"
+      ]
+    },
     "anthropic-claude-code": {
       "kind": "npm_archive",
       "version": "2.1.330",
@@ -100,7 +107,8 @@
       "script": "node_modules/@agentclientprotocol/claude-agent-acp/dist/index.js",
       "probe": [
         "--version"
-      ]
+      ],
+      "bundle_node": false
     },
     "codex-acp": {
       "kind": "node_npm",
@@ -110,7 +118,8 @@
       "launcher": "packages/codex-acp/launch.mjs",
       "probe": [
         "--version"
-      ]
+      ],
+      "bundle_node": false
     },
     "deepseek-harness": {
       "kind": "node_npm",
@@ -121,7 +130,8 @@
       "include_optional": true,
       "probe": [
         "--version"
-      ]
+      ],
+      "bundle_node": false
     },
     "claude-deepseek-gateway": {
       "kind": "git_go_static",

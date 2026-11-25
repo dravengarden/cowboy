@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "../../tools/test-assert.ts";
 import {
+  transcriptFrameIsolationSx,
   transcriptRowContainment,
   transcriptScrollerChildSx,
 } from "./transcriptMotion.ts";
@@ -197,4 +198,23 @@ test("desktop sessions list contains direct children at layout level", async () 
       sessionListSource,
     ),
   );
+});
+
+test("desktop transcript outer frame isolates stacking context without changing mobile", () => {
+  assertEquals(transcriptFrameIsolationSx(true), { isolation: "isolate" });
+  assertEquals(transcriptFrameIsolationSx(false), {});
+  assert(
+    transcriptSource.includes(
+      "...transcriptFrameIsolationSx(desktopNavigation),",
+    ),
+  );
+  // Isolation belongs on the outer overflow:hidden frame, never on the
+  // column-reverse scroller itself.
+  const frameIdx = transcriptSource.indexOf(
+    "...transcriptFrameIsolationSx(desktopNavigation),",
+  );
+  const scrollerIdx = transcriptSource.indexOf(
+    "data-desktop-transcript-scroller={desktopNavigation",
+  );
+  assert(frameIdx > 0 && frameIdx < scrollerIdx);
 });

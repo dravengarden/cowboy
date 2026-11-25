@@ -68,3 +68,26 @@ export function transcriptScrollerChildSx(
     ? { flex: "0 0 auto", contain: "layout" }
     : { flex: "0 0 auto" };
 }
+
+export type TranscriptFrameIsolationSx = {
+  readonly isolation?: "isolate";
+};
+
+/**
+ * Isolate the Desktop transcript's outer `overflow: hidden` frame in its own
+ * stacking context without setting `isolation: isolate` on the scroller itself.
+ *
+ * On macOS 26.6.2 WebKit (21624.5.1.11.3), compositor-driven `opacity` or
+ * `filter` transitions elsewhere in the Desktop workspace (such as PaneHeader
+ * shortcut keycaps, tooltips, or sibling panes) otherwise trigger overlap
+ * promotion and teardown of the `column-reverse` scroller's tiled
+ * `"scrolled contents"` `WKCompositingLayer` and `<CAIOSurface>` tree. Placing
+ * `isolation: "isolate"` on the outer wrapper (parent of the scroller) blocks
+ * cross-pane overlap promotion without creating a containing block for
+ * `position: fixed` descendants or interfering with Mobile's drawer/scroller.
+ */
+export function transcriptFrameIsolationSx(
+  desktop: boolean,
+): TranscriptFrameIsolationSx {
+  return desktop ? { isolation: "isolate" } : {};
+}

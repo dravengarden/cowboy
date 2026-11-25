@@ -194,14 +194,16 @@ pub(super) struct Retired {
     pub bytes: u64,
 }
 
-/// A verified read-only (`0o400`) cache entry pinned open by file descriptor so
-/// its `(dev, ino)` cannot be reused before hardlinking completes, without
-/// retaining a second in-memory copy of the archive bytes.
+/// A verified read-only (`0o400` archive or `0o500` executable) cache entry
+/// pinned open by file descriptor so its `(dev, ino)` cannot be reused before
+/// hardlinking completes, without retaining a second in-memory copy of the
+/// artifact bytes.
 pub(super) struct CachedArtifact {
     cache_dir: fs::File,
     name: String,
     file: fs::File,
     id: FileId,
+    mode: u32,
 }
 
 impl CachedArtifact {
@@ -212,7 +214,7 @@ impl CachedArtifact {
         let (id, uid, mode) = verify_open_file(&mut cloned, expected_digest)?;
         let expected_uid = rustix::process::geteuid().as_raw();
         ensure!(
-            id == self.id && uid == expected_uid && (mode & 0o222) == 0,
+            id == self.id && uid == expected_uid && (mode & 0o7777) == self.mode,
             "cached runtime artifact changed or became writable before verification"
         );
         cloned.seek(SeekFrom::Start(0))?;
@@ -224,6 +226,7 @@ fn open_verified_readonly_cached(
     directory: &Path,
     name: &str,
     digest: &str,
+    expected_mode: Option<u32>,
 ) -> Result<Option<CachedArtifact>> {
     let path = directory.join(name);
     let mut file = match OpenOptions::new()
@@ -237,9 +240,14 @@ fn open_verified_readonly_cached(
     };
     let (id, uid, mode) = verify_open_file(&mut file, digest)?;
     let expected_uid = rustix::process::geteuid().as_raw();
+    let perm = mode & 0o7777;
+    let mode_ok = match expected_mode {
+        Some(expected) => perm == expected,
+        None => perm == 0o400 || perm == 0o500,
+    };
     ensure!(
-        uid == expected_uid && (mode & 0o222) == 0,
-        "artifact cache entry is writable or owned by another user"
+        uid == expected_uid && (mode & 0o222) == 0 && mode_ok,
+        "artifact cache entry has unexpected mode or owner"
     );
     let cache_dir = OpenOptions::new()
         .read(true)
@@ -250,13 +258,21 @@ fn open_verified_readonly_cached(
         name: name.to_owned(),
         file,
         id,
+        mode: perm,
     }))
 }
 
-/// Ensure `bytes` (already verified against `digest`) exists once under
-/// `<state>/artifact-cache/<hex>` with mode `0o400` using a single locked
-/// create-if-absent path shared by preload and installation.
-pub(super) fn ensure_cached(state: &Path, digest: &str, bytes: &[u8]) -> Result<CachedArtifact> {
+fn ensure_cached_with_mode(
+    state: &Path,
+    digest: &str,
+    bytes: &[u8],
+    expected_mode: Option<u32>,
+) -> Result<CachedArtifact> {
+    let create_mode = expected_mode.unwrap_or(0o400);
+    ensure!(
+        create_mode == 0o400 || create_mode == 0o500,
+        "artifact cache mode must be 0o400 or 0o500"
+    );
     let hash = parse_sha256_hex(digest)?;
     let directory = state.join("artifact-cache");
     match fs::DirBuilder::new().mode(0o700).create(&directory) {
@@ -267,7 +283,9 @@ pub(super) fn ensure_cached(state: &Path, digest: &str, bytes: &[u8]) -> Result<
     validate_directory(&directory)?;
     let _lock = CacheLock::acquire(&directory)?;
 
-    if let Ok(Some(existing)) = open_verified_readonly_cached(&directory, &hash, digest) {
+    if let Ok(Some(existing)) =
+        open_verified_readonly_cached(&directory, &hash, digest, expected_mode)
+    {
         return Ok(existing);
     }
 
@@ -280,7 +298,7 @@ pub(super) fn ensure_cached(state: &Path, digest: &str, bytes: &[u8]) -> Result<
     let mut created = OpenOptions::new()
         .write(true)
         .create_new(true)
-        .mode(0o400)
+        .mode(create_mode)
         .open(&temp)?;
     let write_result = (|| -> Result<()> {
         created.write_all(bytes)?;
@@ -314,7 +332,26 @@ pub(super) fn ensure_cached(state: &Path, digest: &str, bytes: &[u8]) -> Result<
         name: hash,
         file: pinned,
         id,
+        mode: create_mode,
     })
+}
+
+/// Ensure `bytes` (already verified against `digest`) exists once under
+/// `<state>/artifact-cache/<hex>` with mode `0o400`.
+pub(super) fn ensure_cached(state: &Path, digest: &str, bytes: &[u8]) -> Result<CachedArtifact> {
+    ensure_cached_with_mode(state, digest, bytes, Some(0o400))
+}
+
+/// Ensure raw executable `bytes` (already verified against `digest`) exists
+/// once under `<state>/artifact-cache/<hex>` with read-only executable mode
+/// `0o500` so generations share one inode safely without mutating any prior
+/// `0o400` inode in place.
+pub(super) fn ensure_cached_executable(
+    state: &Path,
+    digest: &str,
+    bytes: &[u8],
+) -> Result<CachedArtifact> {
+    ensure_cached_with_mode(state, digest, bytes, Some(0o500))
 }
 
 /// Stream a private standalone copy of a verified [`CachedArtifact`] into
@@ -339,7 +376,11 @@ pub(super) fn copy_verified_at(
             | rustix::fs::OFlags::CREATE
             | rustix::fs::OFlags::EXCL
             | rustix::fs::OFlags::NOFOLLOW,
-        rustix::fs::Mode::from_raw_mode(0o400),
+        if cached.mode == 0o500 {
+            rustix::fs::Mode::from_raw_mode(0o500)
+        } else {
+            rustix::fs::Mode::from_raw_mode(0o400)
+        },
     )?;
     let mut file = fs::File::from(fd);
     let result = (|| -> Result<()> {
@@ -395,7 +436,7 @@ pub(super) fn link_verified_at(
                     is_reg
                         && linked_id == cached.id
                         && stat.st_uid == rustix::process::geteuid().as_raw()
-                        && (u32::from(stat.st_mode) & 0o222) == 0,
+                        && (u32::from(stat.st_mode) & 0o7777) == cached.mode,
                     "cached runtime artifact changed during hardlink"
                 );
                 rustix::fs::renameat(dest_dir, temp_name.as_str(), dest_dir, dest_name)?;
@@ -782,7 +823,7 @@ impl MachinePluginStore {
             "existing absolute Service state directory required"
         );
         let bytes = read_verified(source, digest)?;
-        ensure_cached(state, digest, &bytes)?;
+        ensure_cached_with_mode(state, digest, &bytes, None)?;
         Ok(bytes.len())
     }
 }
@@ -1181,5 +1222,78 @@ mod tests {
         assert_eq!(retired.files, 1);
         assert_eq!(retired.bytes, expected_blocks);
         assert!(!cached.exists());
+    }
+
+    #[test]
+    fn ensure_cached_executable_uses_0o500_migrates_preloaded_0o400_and_preserves_existing_inode() {
+        let state = tempfile::tempdir().unwrap();
+        let bytes = b"#!/bin/sh\necho ok\n";
+        let digest = format!("sha256:{:x}", Sha256::digest(bytes));
+        let hash = digest.strip_prefix("sha256:").unwrap();
+
+        // Preload creates a 0o400 entry initially.
+        let preload_src = state.path().join("preload.bin");
+        fs::write(&preload_src, bytes).unwrap();
+        MachinePluginStore::cache_runtime_artifact(state.path(), &preload_src, &digest).unwrap();
+        let cached_path = state.path().join("artifact-cache").join(hash);
+        let preloaded_meta = cached_path.symlink_metadata().unwrap();
+        assert_eq!(preloaded_meta.permissions().mode() & 0o777, 0o400);
+        let preloaded_ino = preloaded_meta.ino();
+
+        // Keep an external hardlink to the 0o400 inode to prove migration never
+        // mutates existing inodes in place.
+        let old_link = state.path().join("old-0o400");
+        fs::hard_link(&cached_path, &old_link).unwrap();
+
+        // Requesting an executable cache entry atomically replaces with a fresh 0o500 inode.
+        let exec_cached = ensure_cached_executable(state.path(), &digest, bytes).unwrap();
+        let exec_meta = cached_path.symlink_metadata().unwrap();
+        assert_eq!(exec_meta.permissions().mode() & 0o777, 0o500);
+        assert_ne!(exec_meta.ino(), preloaded_ino);
+        assert_eq!(
+            old_link.symlink_metadata().unwrap().permissions().mode() & 0o777,
+            0o400
+        );
+        assert_eq!(old_link.symlink_metadata().unwrap().ino(), preloaded_ino);
+
+        // Subsequent preload keeps the existing 0o500 inode intact.
+        MachinePluginStore::cache_runtime_artifact(state.path(), &preload_src, &digest).unwrap();
+        assert_eq!(
+            cached_path.symlink_metadata().unwrap().ino(),
+            exec_meta.ino()
+        );
+        assert_eq!(
+            cached_path.symlink_metadata().unwrap().permissions().mode() & 0o777,
+            0o500
+        );
+
+        // Hardlinking into two generation component directories shares one 0o500 inode.
+        let d1 = state.path().join("gen1");
+        let d2 = state.path().join("gen2");
+        fs::create_dir_all(&d1).unwrap();
+        fs::create_dir_all(&d2).unwrap();
+        link_at(&exec_cached, &digest, &d1.join("bin")).unwrap();
+        let exec_cached2 = ensure_cached_executable(state.path(), &digest, bytes).unwrap();
+        link_at(&exec_cached2, &digest, &d2.join("bin")).unwrap();
+        assert_eq!(
+            d1.join("bin").symlink_metadata().unwrap().ino(),
+            exec_meta.ino()
+        );
+        assert_eq!(
+            d2.join("bin").symlink_metadata().unwrap().ino(),
+            exec_meta.ino()
+        );
+        assert_eq!(cached_path.symlink_metadata().unwrap().nlink(), 3);
+
+        // Special permission bits (e.g. sticky/set-ID) must never pass as 0o500:
+        // ensure_cached_executable replaces with a fresh clean 0o500 inode.
+        fs::set_permissions(&cached_path, fs::Permissions::from_mode(0o1500)).unwrap();
+        let sticky_ino = cached_path.symlink_metadata().unwrap().ino();
+        let clean = ensure_cached_executable(state.path(), &digest, bytes).unwrap();
+        let clean_meta = cached_path.symlink_metadata().unwrap();
+        assert_ne!(clean_meta.ino(), sticky_ino);
+        assert_eq!(clean_meta.permissions().mode() & 0o7777, 0o500);
+        assert_eq!(clean.id.ino, clean_meta.ino());
+        assert_eq!(d1.join("bin").symlink_metadata().unwrap().ino(), sticky_ino);
     }
 }

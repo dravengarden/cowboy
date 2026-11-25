@@ -19,6 +19,8 @@ import {
   STARTUP_TRACE,
   startupPhase,
   startupTrace,
+  acquireStageOwner,
+  sweepStaleNativeStages,
   sweepStaleRuntimeDirectories,
   taskWaitCommand,
   TOOL_STREAMING,
@@ -332,4 +334,115 @@ test("the shell prefix sends only registered hook commands to the proxy", async 
     execFileSync(join(directory, "none.sh"), [hook], { encoding: "utf8" }),
     "it's a hook",
   );
+});
+
+test("stale native-* stages sweep ONLY verified ECONNREFUSED dead sockets and keep owner dirs out of global sweep", async (t) => {
+  const { spawn } = await import("node:child_process");
+  const root = await mkdtemp(join(tmpdir(), "cowboy-native-root-"));
+  const sockRoot = await mkdtemp(join("/tmp", "cby-ns-"));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  t.after(() => rm(sockRoot, { recursive: true, force: true }));
+  const old = new Date(Date.now() - 60 * 60 * 1000);
+
+  // 1. Live owned stage: socket accepts connections -> kept.
+  const liveStage = await mkdtemp(join(root, "native-"));
+  const liveOwner = await acquireStageOwner(liveStage, sockRoot);
+  t.after(() => liveOwner.close());
+
+  // 2. Dead owned stage: spawn a real listener and SIGKILL it so the Unix
+  //    socket inode stays on disk and returns genuine ECONNREFUSED -> swept.
+  const deadStage = await mkdtemp(join(root, "native-"));
+  const deadOwnerDir = await mkdtemp(join(sockRoot, "cowboy-claude-stage-"));
+  const deadSock = join(deadOwnerDir, "s");
+  await new Promise((resolveReady, rejectReady) => {
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        'require("node:net").createServer().listen(process.argv[1], () => process.stdout.write("R"))',
+        deadSock,
+      ],
+      { stdio: ["ignore", "pipe", "inherit"] },
+    );
+    child.once("error", rejectReady);
+    child.stdout.once("data", () => {
+      child.kill("SIGKILL");
+      child.once("exit", () => resolveReady());
+    });
+  });
+  const deadStageName = deadStage.split("/").pop();
+  await writeFile(
+    join(deadOwnerDir, "stage.json"),
+    JSON.stringify({ stage: deadStageName }),
+    { mode: 0o600 },
+  );
+  await utimes(deadOwnerDir, old, old);
+  await writeFile(
+    join(deadStage, "owner.json"),
+    JSON.stringify({ dir: deadOwnerDir.split("/").pop(), stage: deadStageName }),
+    { mode: 0o600 },
+  );
+
+  // 2b. Stage with a misplaced marker pointing to another stage's dead socket -> retained.
+  const mismatchedStage = await mkdtemp(join(root, "native-"));
+  await writeFile(
+    join(mismatchedStage, "owner.json"),
+    JSON.stringify({ dir: deadOwnerDir.split("/").pop(), stage: mismatchedStage.split("/").pop() }),
+    { mode: 0o600 },
+  );
+
+  // Global tmpdir sweep MUST NOT remove stage-owner socket dirs before the
+  // stage sweep runs (otherwise the proof of death would be lost).
+  assert.equal(await sweepStaleRuntimeDirectories([sockRoot]), 0);
+
+  // 3. Marked stage whose socket file is missing (ENOENT) -> retained.
+  const missingSockStage = await mkdtemp(join(root, "native-"));
+  const missingOwnerDir = await mkdtemp(join(sockRoot, "cowboy-claude-stage-"));
+  await writeFile(
+    join(missingSockStage, "owner.json"),
+    JSON.stringify({ dir: missingOwnerDir.split("/").pop() }),
+    { mode: 0o600 },
+  );
+  await utimes(missingSockStage, old, old);
+
+  // 4. Legacy pre-upgrade unmarked stage older than grace period -> retained.
+  const legacyOld = await mkdtemp(join(root, "native-"));
+  await utimes(legacyOld, old, old);
+
+  // 5. Corrupt/interrupted old owner.json -> retained.
+  const corruptOld = await mkdtemp(join(root, "native-"));
+  await writeFile(join(corruptOld, "owner.json"), "", { mode: 0o600 });
+  await utimes(corruptOld, old, old);
+
+  // 6. Fresh stage without owner.json -> retained.
+  const fresh = await mkdtemp(join(root, "native-"));
+
+  // 7. Excluded current stage -> retained.
+  const current = await mkdtemp(join(root, "native-"));
+  await utimes(current, old, old);
+
+  // 8. Unrelated sibling state.json -> untouched.
+  await writeFile(join(root, "state.json"), "{}");
+
+  const exists = (p) =>
+    stat(p).then(
+      () => true,
+      () => false,
+    );
+
+  const removed = await sweepStaleNativeStages(root, {
+    exclude: current.split("/").pop(),
+    socketRoot: sockRoot,
+  });
+  assert.equal(removed, 1);
+  assert.equal(await exists(deadStage), false);
+  assert.equal(await exists(deadOwnerDir), false);
+  assert.equal(await exists(mismatchedStage), true);
+  assert.equal(await exists(liveStage), true);
+  assert.equal(await exists(missingSockStage), true);
+  assert.equal(await exists(legacyOld), true);
+  assert.equal(await exists(corruptOld), true);
+  assert.equal(await exists(fresh), true);
+  assert.equal(await exists(current), true);
+  assert.equal(await exists(join(root, "state.json")), true);
 });

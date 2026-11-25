@@ -61,9 +61,10 @@ try {
   await rm(matrixPath);
   for (const target of matrix) {
     const name = `${target.os}-${target.architecture}`;
-    const destination = `${stage}/${name}`;
+    const runtimeStage = `${stage}/${name}`;
+    const destination = `${runtimeStage}/provider_adapter-claude/content`;
     const archive = `${output}/${name}/claude-agent-acp.tar.gz`;
-    await mkdir(destination);
+    await mkdir(destination, { recursive: true });
     await run("tar", ["-xzf", archive, "-C", destination]);
     const sources = [
       "launch.mjs",
@@ -128,7 +129,15 @@ try {
     // instead of keeping glibc's fragmented peak. launch.mjs removes the
     // preload again, so nothing either process starts inherits it.
     const prefix =
-      '#!/bin/sh\nset -eu\ncowboy_dir=${0%/*}\ncowboy_root=$(CDPATH= cd -- "$cowboy_dir/.." && pwd)\n' +
+      '#!/bin/sh\nset -eu\ncase "$0" in */*) cowboy_dir=${0%/*} ;; *) cowboy_dir=. ;; esac\ncowboy_root=$(CDPATH= cd -- "$cowboy_dir/.." && pwd)\n' +
+      'if [ -x "$cowboy_root/runtime/node" ]; then\n' +
+      '  cowboy_node="$cowboy_root/runtime/node"\n' +
+      'elif [ -x "$cowboy_root/../../acp_runtime-node/bin" ]; then\n' +
+      '  cowboy_node="$cowboy_root/../../acp_runtime-node/bin"\n' +
+      'else\n' +
+      '  echo "Cowboy Node.js runtime missing" >&2\n' +
+      '  exit 127\n' +
+      'fi\n' +
       'if [ -z "${LD_PRELOAD-}" ] && [ -z "${MALLOC_CONF-}" ]; then\n' +
       "  for cowboy_jemalloc in /usr/lib/x86_64-linux-gnu/libjemalloc.so.2 /usr/lib/aarch64-linux-gnu/libjemalloc.so.2; do\n" +
       '    if [ -r "$cowboy_jemalloc" ]; then\n' +
@@ -141,13 +150,13 @@ try {
     await writeFile(
       `${destination}/bin/claude-agent-acp`,
       prefix +
-        'exec "$cowboy_root/runtime/node" --optimize-for-size "$cowboy_root/app/cowboy-launch.mjs" "$@"\n',
+        'exec "$cowboy_node" --optimize-for-size "$cowboy_root/app/cowboy-launch.mjs" "$@"\n',
       { mode: 0o755 },
     );
     await writeFile(
       `${destination}/bin/cowboy-configured-cli`,
       prefix +
-        'exec "$cowboy_root/runtime/node" --optimize-for-size "$cowboy_root/app/cowboy-launch.mjs" --cowboy-private-cli "$@"\n',
+        'exec "$cowboy_node" --optimize-for-size "$cowboy_root/app/cowboy-launch.mjs" --cowboy-private-cli "$@"\n',
       { mode: 0o755 },
     );
     if (name === "linux-x86_64") {
@@ -194,7 +203,51 @@ try {
     component.artifact_digest = `sha256:${digest}`;
     component.artifact_url = `${base}/${digest}/claude-agent-acp.tar.gz`;
     if (name === "linux-x86_64") {
-      await run(`${destination}/bin/claude-agent-acp`, ["--version"]);
+      const nodeBin = `${output}/${name}/node`;
+      const nodeComponent = target.components.find(
+        (item: { kind: string; slot: string }) =>
+          item.kind === "acp_runtime" && item.slot === "node",
+      );
+      if (!nodeComponent) throw new Error("Claude split Node component missing");
+      const probeSpec = `${stage}/probe-spec.json`;
+      await writeFile(
+        probeSpec,
+        JSON.stringify({
+          temporary: stage,
+          items: [
+            {
+              requirement: {
+                kind: "acp_runtime",
+                slot: "node",
+                dependency: nodeComponent.dependency,
+                command: nodeComponent.command,
+              },
+              path: nodeBin,
+              digest: nodeComponent.artifact_digest.replace(/^sha256:/, ""),
+              format: "raw",
+              probe: nodeComponent.probe.args,
+            },
+            {
+              requirement: {
+                kind: "provider_adapter",
+                slot: component.slot,
+                dependency: component.dependency,
+                command: component.command,
+              },
+              path: archive,
+              digest,
+              format: "tar_gz",
+              entrypoint: component.entrypoint,
+              probe: component.probe.args,
+            },
+          ],
+        }),
+      );
+      await run(
+        process.execPath,
+        ["components/provider-runtime/build-helpers.ts", "--probe", probeSpec],
+        repository,
+      );
     }
   }
   await writeFile(matrixPath, JSON.stringify(matrix, null, 2) + "\n");

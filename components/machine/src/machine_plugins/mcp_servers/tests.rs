@@ -163,9 +163,9 @@ async fn signed_mcp_installation_resolves_only_the_exact_verified_generation() {
     assert!(store.prepare_mcp_binding(&unsigned_source).is_err());
     binding.tools.push("unsigned_execute".into());
     assert!(store.prepare_mcp_binding(&binding).is_err());
-    std::fs::write(&prepared.executable, b"tampered").unwrap();
+    crate::machine_plugins::atomic_write(&prepared.executable, b"tampered", 0o700).unwrap();
     assert!(store.prepare_mcp_server(&selection).is_err());
-    std::fs::write(&prepared.executable, script).unwrap();
+    crate::machine_plugins::atomic_write(&prepared.executable, script, 0o500).unwrap();
     store
         .uninstall(&selection.plugin_id, &selection.generation_digest)
         .await
