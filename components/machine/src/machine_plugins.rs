@@ -48,6 +48,7 @@ mod platform_match;
 mod remove_projection;
 mod retirement;
 mod runtime_probe;
+mod runtime_staging;
 use runtime_probe::probe_provider_runtime;
 mod session_extensions;
 mod telemetry;
@@ -637,8 +638,8 @@ impl MachinePluginStore {
         )?;
 
         let started = Instant::now();
-        let runtime = guard
-            .bounded(stage_provider_runtime(
+        let mut prepared = guard
+            .bounded(runtime_staging::prepare_provider_runtime(
                 &content,
                 runtime_artifacts,
                 guard,
@@ -647,20 +648,20 @@ impl MachinePluginStore {
             ))
             .await?;
         let runtime_ms = started.elapsed().as_millis();
-        let launch_command = runtime
-            .commands
-            .get(&payload.launch_command)
-            .context("staged Provider runtime does not export its launch command")?;
-        let launch_command = content.join(&launch_command.executable);
-        ensure_within(&content, &launch_command)?;
         let probe_started = Instant::now();
-        guard
-            .bounded(probe_provider_runtime(
-                &package.manifest.runtime,
-                &launch_command,
-            ))
-            .await?;
+        if !prepared.is_already_installed() {
+            let launch_command = prepared.command_path(&payload.launch_command)?;
+            prepared.verify_before_outer_probe()?;
+            let exit_confirmed = guard
+                .bounded(probe_provider_runtime(
+                    &package.manifest.runtime,
+                    &launch_command,
+                ))
+                .await?;
+            prepared.record_outer_probe_exit_confirmed(exit_confirmed);
+        }
         let probe_ms = probe_started.elapsed().as_millis();
+        let _runtime = prepared.finalize(guard)?;
         let flush_started = Instant::now();
         guard.flush_staging(&content)?;
         tracing::info!(
@@ -750,8 +751,8 @@ impl MachinePluginStore {
             0o600,
         )?;
         stage_plugin_host_bundle(&content, host_bundle, host_bundle_bytes)?;
-        guard
-            .bounded(stage_provider_runtime(
+        let mut prepared = guard
+            .bounded(runtime_staging::prepare_provider_runtime(
                 &content,
                 &runtime_artifacts,
                 guard,
@@ -759,12 +760,18 @@ impl MachinePluginStore {
                 false,
             ))
             .await?;
-        if matches!(package.payload, PluginPayload::CodeIntelligence(_))
-            && let Some(plan) =
-                self.code_launch_plan(package, &desired.release.artifact_digest, &content)?
-        {
-            guard.bounded(probe_code_runtime(&plan)).await?;
+        if !prepared.is_already_installed() {
+            let exit_confirmed = self
+                .probe_staged_code_runtime(
+                    package,
+                    &desired.release.artifact_digest,
+                    &prepared,
+                    guard,
+                )
+                .await?;
+            prepared.record_outer_probe_exit_confirmed(exit_confirmed);
         }
+        prepared.finalize(guard)?;
         let inventory = PluginInventory {
             plugin_id: package.manifest.id.clone(),
             plugin_version: package.manifest.version.clone(),
@@ -858,8 +865,7 @@ impl MachinePluginStore {
             installed_runtime_matches(content, runtime_artifacts, &runtime_metadata)?,
             "retained Provider runtime failed integrity verification"
         );
-        let launch_command = runtime_command(&package_path, &payload.launch_command)?;
-        probe_provider_runtime(&package.manifest.runtime, &launch_command).await?;
+        let _launch_command = runtime_command(&package_path, &payload.launch_command)?;
         let auth_envelope = self.latest_auth_envelope(provider_id)?;
         let prepared_auth = auth_envelope
             .as_ref()
@@ -915,8 +921,8 @@ impl MachinePluginStore {
                 .context("no Machine browser manager reports its generation pins");
         }
         ensure!(
-            installed.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider,
-            "only Agent Provider and Machine browser generations are retired; Code runtimes own their leases"
+            retirement::is_retainable_non_browser_kind(installed.plugin_kind),
+            "generation retirement is not supported for this Plugin kind"
         );
         let root = self.plugin_root(plugin_id);
         let mut keep: BTreeSet<String> = referenced
@@ -925,28 +931,32 @@ impl MachinePluginStore {
             .collect();
         keep.extend(read_link_name(&root.join("active")));
         keep.extend(read_link_name(&root.join("rollback")));
-        let _profiles = self.auth_candidates.lock();
-        keep.extend(self.retained_native_generations(plugin_id)?);
         let generations = root.join("generations");
         let mut retention = crate::generation_retention::Outcome {
             plugin_id: plugin_id.to_owned(),
             ..crate::generation_retention::Outcome::default()
         };
-        self.retire_unkept(&generations, &keep, &mut retention)?;
-        // Same lock as installation, so no install can be reading the cache.
-        if let (Some(config), Some(state)) = (self.device_config.get(), self.root.parent()) {
-            let unreferenced_after =
-                config.get(&crate::config::schema::DEVICE_ARTIFACT_CACHE_UNREFERENCED_AFTER);
-            match artifact_cache::retire_unreferenced(state, &self.root, unreferenced_after) {
-                Ok(retired) if retired.files > 0 => tracing::info!(
-                    files = retired.files,
-                    freed_bytes = retired.bytes,
-                    "retired unreferenced runtime artifact cache entries"
-                ),
-                Ok(_) => {}
-                Err(error) => tracing::warn!(%error, "artifact cache retention failed"),
-            }
-        }
+        let tombstones = self
+            .code_runtimes
+            .with_generation_pins(plugin_id, |pinned| {
+                let _profiles = self.auth_candidates.lock();
+                keep.extend(self.retained_native_generations(plugin_id)?);
+                keep.extend(
+                    pinned
+                        .iter()
+                        .map(|digest| digest.trim_start_matches("sha256:").to_owned()),
+                );
+                self.tombstone_unkept_matching(
+                    plugin_id,
+                    &generations,
+                    &keep,
+                    retirement::is_retainable_non_browser_kind,
+                    &mut retention,
+                )
+            })
+            .await?;
+        Self::remove_tombstones(&tombstones, &mut retention)?;
+        self.retire_artifact_cache_locked();
         retention.retained.sort();
         retention.retired.sort();
         Ok(retention)
@@ -1068,7 +1078,9 @@ impl MachinePluginStore {
                 fs::rename(&path, &tombstone).with_context(|| {
                     format!("retiring credential generation {}", path.display())
                 })?;
-                outcome.freed_bytes = outcome.freed_bytes.saturating_add(tree_bytes(&tombstone));
+                outcome.freed_bytes = outcome
+                    .freed_bytes
+                    .saturating_add(retirement::tree_bytes(&tombstone));
                 remove_projection::remove(&tombstone)
                     .with_context(|| format!("removing {}", tombstone.display()))?;
             }
@@ -1120,6 +1132,45 @@ impl MachinePluginStore {
             return Err(error);
         }
         Ok(())
+    }
+
+    async fn probe_staged_code_runtime(
+        &self,
+        package: &PluginPackage,
+        digest: &str,
+        prepared: &runtime_staging::PreparedRuntime,
+        guard: &mut InstallGuard<'_>,
+    ) -> Result<bool> {
+        let PluginPayload::CodeIntelligence(contract) = &package.payload else {
+            return Ok(true);
+        };
+        let Some(runtime) = &contract.runtime else {
+            return Ok(true);
+        };
+        let commands = runtime
+            .components
+            .iter()
+            .map(|component| {
+                Ok((
+                    component.command.clone(),
+                    prepared.command_path(&component.command)?,
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let plan = CodeLaunchPlan {
+            plugin_id: package.manifest.id.clone(),
+            generation_digest: digest.to_owned(),
+            runtime: runtime.clone(),
+            commands,
+            home: self
+                .plugin_root(&package.manifest.id)
+                .join("runtime")
+                .join(digest_generation_name(digest)?)
+                .join("home"),
+        };
+        prepared.verify_before_outer_probe()?;
+        guard.bounded(probe_code_runtime(&plan)).await?;
+        Ok(false)
     }
 
     fn code_launch_plan(
@@ -3894,11 +3945,6 @@ struct InstalledRuntimeCommand {
     artifact_digest: String,
 }
 
-struct StagedRuntimeComponent {
-    executable: PathBuf,
-    artifact: PathBuf,
-}
-
 pub fn provider_auth_aad(envelope: &SealedProviderAuth) -> Vec<u8> {
     envelope.authentication_aad()
 }
@@ -3940,94 +3986,6 @@ fn write_provider_generation_files(
     )?;
     stage_plugin_host_bundle(content, host_bundle, host_bundle_bytes)?;
     Ok(())
-}
-
-/// `sealed_probe`: no component runs on the host (see `runtime_probe`).
-async fn stage_provider_runtime(
-    content: &Path,
-    artifacts: &PlatformRuntimeArtifacts,
-    guard: &InstallGuard<'_>,
-    cache_state: Option<&Path>,
-    sealed_probe: bool,
-) -> Result<InstalledRuntimeMetadata> {
-    guard.check()?;
-    let active = content.join("runtime");
-    if active.exists() {
-        let metadata = read_installed_runtime(content)
-            .context("existing Provider runtime metadata is invalid")?;
-        ensure!(
-            installed_runtime_matches(content, artifacts, &metadata)?,
-            "existing content-addressed Provider runtime failed integrity verification"
-        );
-        return Ok(metadata);
-    }
-    let temporary = content.join(format!(
-        ".runtime.{}.{}.partial",
-        std::process::id(),
-        ATOMIC_WRITE_SEQUENCE.fetch_add(1, Ordering::Relaxed)
-    ));
-    let result = async {
-        fs::create_dir_all(&temporary)?;
-        fs::set_permissions(&temporary, fs::Permissions::from_mode(0o700))?;
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let client = reqwest::Client::new();
-        let mut commands = BTreeMap::new();
-        for artifact in &artifacts.components {
-            guard.check()?;
-            let staged = stage_runtime_component(
-                &client,
-                &temporary,
-                artifact,
-                guard,
-                cache_state,
-                Some(content),
-                sealed_probe,
-            )
-            .await?;
-            let executable = staged
-                .executable
-                .strip_prefix(&temporary)
-                .context("staged Provider runtime escaped its staging directory")?;
-            let stored_artifact = staged
-                .artifact
-                .strip_prefix(&temporary)
-                .context("staged Provider artifact escaped its staging directory")?;
-            let installed = InstalledRuntimeCommand {
-                executable: Path::new("runtime")
-                    .join(executable)
-                    .to_string_lossy()
-                    .into_owned(),
-                artifact: Path::new("runtime")
-                    .join(stored_artifact)
-                    .to_string_lossy()
-                    .into_owned(),
-                artifact_digest: artifact.artifact_digest.to_ascii_lowercase(),
-            };
-            ensure!(
-                commands
-                    .insert(artifact.command.clone(), installed)
-                    .is_none(),
-                "duplicate staged Provider command"
-            );
-        }
-        let metadata = InstalledRuntimeMetadata {
-            schema_version: 2,
-            commands,
-        };
-        guard.check()?;
-        atomic_write(
-            &temporary.join("metadata.json"),
-            &serde_json::to_vec(&metadata)?,
-            0o600,
-        )?;
-        fs::rename(&temporary, &active)?;
-        Ok(metadata)
-    }
-    .await;
-    if result.is_err() {
-        let _ = fs::remove_dir_all(&temporary);
-    }
-    result
 }
 
 /// Entries changed less than this long ago are not remembered as proven:
@@ -4193,7 +4151,11 @@ fn digest_file_with_limit(path: &Path, limit: u64, label: &str) -> Result<String
 }
 
 fn archive_runtime_matches(archive_path: &Path, extracted: &Path) -> Result<bool> {
-    let decoder = flate2::read::GzDecoder::new(fs::File::open(archive_path)?);
+    archive_runtime_matches_reader(fs::File::open(archive_path)?, extracted)
+}
+
+fn archive_runtime_matches_reader(reader: impl std::io::Read, extracted: &Path) -> Result<bool> {
+    let decoder = flate2::read::GzDecoder::new(reader);
     let mut archive = tar::Archive::new(decoder);
     let mut expanded_bytes = 0_u64;
     let mut entries = 0_usize;
@@ -4316,111 +4278,6 @@ async fn download_runtime_artifact(
     Ok(bytes)
 }
 
-async fn stage_runtime_component(
-    client: &reqwest::Client,
-    runtime_root: &Path,
-    artifact: &ReleasedPrivateComponent,
-    guard: &InstallGuard<'_>,
-    cache_state: Option<&Path>,
-    generation_content: Option<&Path>,
-    sealed_probe: bool,
-) -> Result<StagedRuntimeComponent> {
-    guard.check()?;
-    let url = reqwest::Url::parse(&artifact.artifact_url)?;
-    let loopback = matches!(url.host_str(), Some("127.0.0.1" | "::1" | "localhost"));
-    ensure!(
-        url.scheme() == "https" || (url.scheme() == "http" && loopback),
-        "Provider runtime artifact must use HTTPS"
-    );
-    let started = Instant::now();
-    let cached = cache_state
-        .map(|state| artifact_cache::read(state, &artifact.artifact_digest))
-        .transpose()?
-        .flatten();
-    let (bytes, source) = if let Some(bytes) = cached {
-        (bytes, "cache")
-    } else if let Some(bytes) = generation_content
-        .and_then(|content| artifact_cache::read_retained(content, &artifact.artifact_digest))
-    {
-        (bytes, "retained_generation")
-    } else {
-        (
-            download_runtime_artifact(client, url, guard).await?,
-            "download",
-        )
-    };
-    let fetch_ms = started.elapsed().as_millis();
-    let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
-    ensure!(
-        digest == artifact.artifact_digest.to_ascii_lowercase(),
-        "Provider runtime artifact digest mismatch"
-    );
-    guard.check()?;
-    let unpack_started = Instant::now();
-    // Stable installed layout: `plugins/antigravity`'s `agy-launch` finds its
-    // sibling `provider_cli-antigravity/content/` component through it.
-    let component_root = runtime_root.join(format!("{}-{}", artifact.kind.as_str(), artifact.slot));
-    fs::create_dir_all(&component_root)?;
-    let (executable, stored_artifact) = match artifact.artifact_format {
-        ProviderArtifactFormat::Raw => {
-            let executable = component_root.join("bin");
-            atomic_write(&executable, &bytes, 0o700)?;
-            (executable.clone(), executable)
-        }
-        ProviderArtifactFormat::TarGz => {
-            let stored_artifact = component_root.join("artifact.tar.gz");
-            atomic_write(&stored_artifact, &bytes, 0o600)?;
-            let archive_root = component_root.join("content");
-            fs::create_dir_all(&archive_root)?;
-            extract_provider_tar_gz(&archive_root, &bytes)?;
-            let entrypoint = artifact
-                .entrypoint
-                .as_deref()
-                .context("Provider runtime archive has no entrypoint")?;
-            let executable = archive_root.join(entrypoint);
-            ensure_within(&archive_root, &executable)?;
-            ensure!(
-                executable.is_file(),
-                "Provider runtime entrypoint is missing"
-            );
-            fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))?;
-            (executable, stored_artifact)
-        }
-    };
-    let unpack_ms = unpack_started.elapsed().as_millis();
-    let probe_started = Instant::now();
-    // A sandboxed Provider's vendor code never runs as the Machine user.
-    if !sealed_probe {
-        probe_released_component(&executable, artifact).await?;
-    }
-    let probe_ms = probe_started.elapsed().as_millis();
-    let verify_started = Instant::now();
-    ensure!(
-        digest_file(&stored_artifact)? == artifact.artifact_digest.to_ascii_lowercase(),
-        "runtime component probe changed signed artifact bytes"
-    );
-    if artifact.artifact_format == ProviderArtifactFormat::TarGz {
-        ensure!(
-            archive_runtime_matches(&stored_artifact, &component_root.join("content"))?,
-            "runtime component probe changed extracted runtime bytes"
-        );
-    }
-    tracing::info!(
-        command = %artifact.command,
-        source,
-        bytes = bytes.len(),
-        fetch_ms,
-        unpack_ms,
-        probe_ms,
-        verify_ms = verify_started.elapsed().as_millis(),
-        "Provider runtime component staged"
-    );
-    Ok(StagedRuntimeComponent {
-        executable,
-        artifact: stored_artifact,
-    })
-}
-
 fn extract_provider_tar_gz(destination: &Path, bytes: &[u8]) -> Result<()> {
     let decoder = flate2::read::GzDecoder::new(bytes);
     let mut archive = tar::Archive::new(decoder);
@@ -4471,7 +4328,7 @@ impl Drop for StagedProbeHome {
 async fn probe_released_component(
     executable: &Path,
     artifact: &ReleasedPrivateComponent,
-) -> Result<()> {
+) -> Result<bool> {
     let directory = std::env::temp_dir().join(format!(
         "cowboy-component-probe-{:032x}",
         rand::random::<u128>()
@@ -4479,6 +4336,7 @@ async fn probe_released_component(
     fs::DirBuilder::new().mode(0o700).create(&directory)?;
     let home = StagedProbeHome(directory);
     let mut child = None;
+    let mut containment = None;
     for attempt in 0..=4 {
         let mut command = tokio::process::Command::new(executable);
         command
@@ -4500,16 +4358,15 @@ async fn probe_released_component(
             }
         }
         command.as_std_mut().process_group(0);
+        let prepared_containment =
+            crate::cgroup::containment::Containment::prepare(&mut command).ok();
         match command.spawn() {
             Ok(spawned) => {
                 child = Some(spawned);
+                containment = prepared_containment;
                 break;
             }
             Err(error) if error.raw_os_error() == Some(libc::ETXTBSY) && attempt < 4 => {
-                // Some Linux filesystems briefly retain the writer exclusion
-                // after the atomic rename even though Cowboy closed and synced
-                // its descriptor. Retry only ETXTBSY; every other exec failure
-                // remains an immediate trust-gate failure.
                 tokio::time::sleep(Duration::from_millis(5_u64 << attempt)).await;
             }
             Err(error) => {
@@ -4518,7 +4375,7 @@ async fn probe_released_component(
         }
     }
     let mut child = child.context("starting staged Provider component probe")?;
-    let _process_group = child
+    let process_group = child
         .id()
         .map(crate::plugin_process::PluginProcessGroup::new);
     let status = if let Ok(status) = tokio::time::timeout(
@@ -4530,13 +4387,22 @@ async fn probe_released_component(
         status.context("waiting for staged Provider component probe")?
     } else {
         let _ = child.kill().await;
+        drop(process_group);
+        if let Some(group) = containment {
+            let _ = group.finish().await;
+        }
         bail!("staged Provider component probe timed out");
+    };
+    drop(process_group);
+    let tree_exit_confirmed = match containment {
+        Some(group) => group.finish().await.is_ok(),
+        None => false,
     };
     ensure!(
         status.success(),
         "staged Provider component probe exited {status}"
     );
-    Ok(())
+    Ok(tree_exit_confirmed)
 }
 
 fn runtime_command(package_path: &Path, command: &str) -> Result<PathBuf> {
@@ -4909,7 +4775,22 @@ fn collect_installed_host_files(
 }
 
 fn read_installed_runtime(content: &Path) -> Result<InstalledRuntimeMetadata> {
-    let metadata_path = content.join("runtime/metadata.json");
+    let runtime_dir = content.join("runtime");
+    ensure!(
+        runtime_dir
+            .symlink_metadata()
+            .with_context(|| format!("inspecting {}", runtime_dir.display()))?
+            .is_dir(),
+        "installed Provider runtime directory must not be a symlink"
+    );
+    let metadata_path = runtime_dir.join("metadata.json");
+    ensure!(
+        metadata_path
+            .symlink_metadata()
+            .with_context(|| format!("inspecting {}", metadata_path.display()))?
+            .is_file(),
+        "installed Provider runtime metadata must be a regular file"
+    );
     let metadata: InstalledRuntimeMetadata = serde_json::from_slice(
         &fs::read(&metadata_path)
             .with_context(|| format!("reading {}", metadata_path.display()))?,
@@ -5072,22 +4953,6 @@ fn is_generation_name(name: &str) -> bool {
         && name
             .bytes()
             .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
-}
-
-/// Bytes under `path` without following symlinks; unreadable entries count 0.
-fn tree_bytes(path: &Path) -> u64 {
-    let Ok(metadata) = fs::symlink_metadata(path) else {
-        return 0;
-    };
-    if !metadata.is_dir() {
-        return metadata.len();
-    }
-    fs::read_dir(path).map_or(0, |entries| {
-        entries
-            .flatten()
-            .map(|entry| tree_bytes(&entry.path()))
-            .fold(0, u64::saturating_add)
-    })
 }
 
 fn decode_fixed<const N: usize>(value: &str, label: &str) -> Result<[u8; N]> {
@@ -7522,9 +7387,15 @@ mod tests {
             }],
         };
 
-        let error = stage_provider_runtime(&root, &artifacts, &InstallGuard::Legacy, None, false)
-            .await
-            .unwrap_err();
+        let error = runtime_staging::stage_provider_runtime(
+            &root,
+            &artifacts,
+            &InstallGuard::Legacy,
+            None,
+            false,
+        )
+        .await
+        .unwrap_err();
         assert!(error.to_string().contains("must use HTTPS"));
         assert!(fs::read_dir(&root).unwrap().all(|entry| {
             !entry
@@ -7534,6 +7405,114 @@ mod tests {
                 .starts_with(".runtime.")
         }));
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn later_probe_cannot_tamper_earlier_component_or_shared_cache_blob() {
+        use cowboy_provider_sdk::{
+            Architecture, OperatingSystem, PlatformRuntimeArtifacts, PrivateComponentKind,
+            ProviderArtifactFormat, ProviderArtifactProbe, ReleasedPrivateComponent,
+        };
+        use flate2::Compression;
+        use flate2::write::GzEncoder;
+
+        let state = tempfile::tempdir().unwrap();
+        let make_tar_gz = |script: &[u8]| {
+            let mut tar_bytes = Vec::new();
+            {
+                let mut builder = tar::Builder::new(&mut tar_bytes);
+                let mut header = tar::Header::new_gnu();
+                header.set_size(script.len() as u64);
+                header.set_mode(0o755);
+                header.set_cksum();
+                builder.append_data(&mut header, "bin/run", script).unwrap();
+                builder.finish().unwrap();
+            }
+            let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+            std::io::Write::write_all(&mut encoder, &tar_bytes).unwrap();
+            let gz = encoder.finish().unwrap();
+            let digest = format!("sha256:{:x}", Sha256::digest(&gz));
+            (gz, digest)
+        };
+
+        let (first_gz, first_digest) = make_tar_gz(b"#!/bin/sh\nexit 0\n");
+        let first_src = state.path().join("first.tar.gz");
+        fs::write(&first_src, &first_gz).unwrap();
+        MachinePluginStore::cache_runtime_artifact(state.path(), &first_src, &first_digest)
+            .unwrap();
+
+        let tamper_script = b"#!/bin/sh\n\
+set -eu\n\
+root=$(dirname \"$0\")/../../..
+chmod u+w \"$root/provider_cli-first/content\" \"$root/provider_cli-first/content/bin\" \"$root/provider_cli-first/content/bin/run\"\n\
+printf tampered >> \"$root/provider_cli-first/content/bin/run\"\n\
+exit 0\n";
+        let (second_gz, second_digest) = make_tar_gz(tamper_script);
+        let second_src = state.path().join("second.tar.gz");
+        fs::write(&second_src, &second_gz).unwrap();
+        MachinePluginStore::cache_runtime_artifact(state.path(), &second_src, &second_digest)
+            .unwrap();
+
+        let artifacts = PlatformRuntimeArtifacts {
+            os: OperatingSystem::Linux,
+            architecture: Architecture::X86_64,
+            components: vec![
+                ReleasedPrivateComponent {
+                    kind: PrivateComponentKind::ProviderCli,
+                    slot: "first".to_owned(),
+                    dependency: "first".to_owned(),
+                    version: "1.0.0".to_owned(),
+                    command: "first".to_owned(),
+                    artifact_url: "https://example.invalid/first.tar.gz".to_owned(),
+                    artifact_digest: first_digest.clone(),
+                    artifact_format: ProviderArtifactFormat::TarGz,
+                    entrypoint: Some("bin/run".to_owned()),
+                    probe: ProviderArtifactProbe {
+                        args: Vec::new(),
+                        timeout_ms: 2_000,
+                    },
+                },
+                ReleasedPrivateComponent {
+                    kind: PrivateComponentKind::ProviderAdapter,
+                    slot: "second".to_owned(),
+                    dependency: "second".to_owned(),
+                    version: "1.0.0".to_owned(),
+                    command: "second".to_owned(),
+                    artifact_url: "https://example.invalid/second.tar.gz".to_owned(),
+                    artifact_digest: second_digest,
+                    artifact_format: ProviderArtifactFormat::TarGz,
+                    entrypoint: Some("bin/run".to_owned()),
+                    probe: ProviderArtifactProbe {
+                        args: Vec::new(),
+                        timeout_ms: 2_000,
+                    },
+                },
+            ],
+        };
+
+        let content = state.path().join("gen-content");
+        fs::create_dir_all(&content).unwrap();
+        let error = runtime_staging::stage_provider_runtime(
+            &content,
+            &artifacts,
+            &InstallGuard::Legacy,
+            Some(state.path()),
+            false,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("changed extracted runtime bytes"),
+            "{error:#}"
+        );
+        assert!(!content.join("runtime").exists());
+        assert!(fs::read_dir(&content).unwrap().next().is_none());
+        let cached_bytes = artifact_cache::read(state.path(), &first_digest)
+            .unwrap()
+            .unwrap();
+        assert_eq!(cached_bytes, first_gz);
     }
 
     #[test]
@@ -8363,23 +8342,22 @@ mod tests {
             MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".to_owned()).unwrap();
         let generations = store.plugin_root("claude-code").join("generations");
         for name in ["a", "b", "c", "d"] {
-            fs::create_dir_all(generations.join(name.repeat(64)).join("content")).unwrap();
+            let content = generations.join(name.repeat(64)).join("content");
+            fs::create_dir_all(&content).unwrap();
+            let inventory = serde_json::json!({
+                "plugin_id": "claude-code",
+                "plugin_version": "3.4.7",
+                "plugin_kind": kind,
+                "generation_digest": format!("sha256:{}", name.repeat(64)),
+                "contract_fingerprint": "sha256:fixture",
+                "state": PluginInstallationState::Active,
+            });
+            fs::write(
+                content.join("plugin-inventory.json"),
+                serde_json::to_vec(&inventory).unwrap(),
+            )
+            .unwrap();
         }
-        let inventory = serde_json::json!({
-            "plugin_id": "claude-code",
-            "plugin_version": "3.4.7",
-            "plugin_kind": kind,
-            "generation_digest": format!("sha256:{}", "a".repeat(64)),
-            "contract_fingerprint": "sha256:fixture",
-            "state": PluginInstallationState::Active,
-        });
-        fs::write(
-            generations
-                .join("a".repeat(64))
-                .join("content/plugin-inventory.json"),
-            serde_json::to_vec(&inventory).unwrap(),
-        )
-        .unwrap();
         let plugin = store.plugin_root("claude-code");
         restore_generation_link(&plugin.join("active"), Some(&"a".repeat(64))).unwrap();
         restore_generation_link(&plugin.join("rollback"), Some(&"b".repeat(64))).unwrap();
@@ -8567,8 +8545,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn uninstalled_retention_never_infers_a_code_runtime() {
-        let (_root, store) = retention_fixture(cowboy_plugin_sdk::PluginKind::CodeIntelligence);
+    async fn uninstalled_retention_never_infers_unsupported_or_unrecorded_kinds() {
+        let (_root, store) = retention_fixture(cowboy_plugin_sdk::PluginKind::TelemetryBackend);
         let plugin = store.plugin_root("claude-code");
         fs::remove_file(plugin.join("active")).unwrap();
         assert!(
@@ -8582,13 +8560,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retention_never_touches_code_runtime_generations() {
-        let (_root, store) = retention_fixture(cowboy_plugin_sdk::PluginKind::CodeIntelligence);
+    async fn retention_refuses_unsupported_plugin_kinds() {
+        let (_root, store) = retention_fixture(cowboy_plugin_sdk::PluginKind::TelemetryBackend);
         let error = store
             .retire_generations("claude-code", &BTreeSet::new())
             .await
             .unwrap_err();
-        assert!(error.to_string().contains("only Agent Provider"));
+        assert!(
+            error
+                .to_string()
+                .contains("not supported for this Plugin kind")
+        );
         assert!(
             store
                 .plugin_root("claude-code")

@@ -225,9 +225,8 @@ fn receive_and_install(
     };
     tar::unpack(&mut archive, target.as_fd(), limits)
         .map_err(|error| fail(Code::RuntimeRejected, format!("{error:#}")))?;
-    verify_tree(target.as_fd(), &config.agy_allow_list)?;
+    let manifest = verify_tree(target.as_fd(), &config.agy_allow_list)?;
     tar::sync_dirs(target.as_fd()).context("fsync runtime")?;
-    drop(target);
     let _guard = lock
         .write()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -245,10 +244,173 @@ fn receive_and_install(
         }
         safefs::remove_tree(store, sha256)?;
     }
+    // Reuse identical immutable large binaries (`agy` and bundled `node`) from
+    // an already-verified root-owned sibling under the store write lock. The
+    // last runtime unlink reclaims the shared inode with no separate blob GC.
+    // Pre-rename mismatches or link failures leave the unpacked tree untouched,
+    // while a post-rename directory fsync failure MUST fail registration so a
+    // non-durable replacement never evicts siblings or acknowledges success.
+    deduplicate_from_siblings(store, target.as_fd(), &manifest)
+        .context("deduplicate runtime binaries")?;
+    drop(target);
     evict(store, config.max_runtimes.saturating_sub(1), &live()?)?;
     rustix::fs::renameat(store, unpacked, store, sha256).context("install runtime")?;
     rustix::fs::fsync(store).context("fsync store")?;
     Ok(false)
+}
+
+/// Relink exact byte-and-mode matches of the large runtime binaries from any
+/// already-installed sibling runtime under the store write lock.
+fn deduplicate_from_siblings(
+    store: BorrowedFd<'_>,
+    unpacked: BorrowedFd<'_>,
+    manifest: &Manifest,
+) -> Result<()> {
+    let Ok(siblings) = digests(store) else {
+        return Ok(());
+    };
+    if siblings.is_empty() {
+        return Ok(());
+    }
+    let mut candidates = vec![manifest.agy.as_str()];
+    if manifest.agy != "proxy/runtime/node" {
+        candidates.push("proxy/runtime/node");
+    }
+    for rel_path in candidates {
+        deduplicate_path(store, unpacked, &siblings, rel_path)?;
+    }
+    Ok(())
+}
+
+fn sha256_file(file: &mut std::fs::File) -> Result<[u8; 32]> {
+    let mut hasher = Sha256::new();
+    io::copy(file, &mut hasher).context("hash runtime file")?;
+    Ok(hasher.finalize().into())
+}
+
+fn open_parent_dir<'a>(
+    root: BorrowedFd<'_>,
+    rel_path: &'a str,
+) -> Result<(Option<OwnedFd>, &'a str)> {
+    match rel_path.rsplit_once('/') {
+        Some((parent, name)) => Ok((Some(safefs::open_dir(root, parent, safefs::STRICT)?), name)),
+        None => Ok((None, rel_path)),
+    }
+}
+
+/// Create a fresh hardlink to `sibling_name` under `target_parent`, retrying
+/// `EEXIST` with a fresh name and never unlinking a colliding pre-existing entry.
+fn link_unique_temp(
+    sibling_parent: BorrowedFd<'_>,
+    sibling_name: &str,
+    target_parent: BorrowedFd<'_>,
+) -> Result<String> {
+    for _ in 0..8 {
+        let temp = format!(".dedup-{}", safefs::nonce(8)?);
+        match rustix::fs::linkat(
+            sibling_parent,
+            sibling_name,
+            target_parent,
+            &temp,
+            rustix::fs::AtFlags::empty(),
+        ) {
+            Ok(()) => return Ok(temp),
+            Err(rustix::io::Errno::EXIST) => {}
+            Err(error) => return Err(error).context("hardlink sibling runtime file"),
+        }
+    }
+    anyhow::bail!("could not allocate unique deduplication link name")
+}
+
+fn deduplicate_path(
+    store: BorrowedFd<'_>,
+    unpacked: BorrowedFd<'_>,
+    siblings: &[String],
+    rel_path: &str,
+) -> Result<()> {
+    let Ok(Some((mut target_file, target_mode))) = safefs::open_regular(unpacked, rel_path) else {
+        return Ok(());
+    };
+    let Ok(target_stat) = rustix::fs::fstat(&target_file) else {
+        return Ok(());
+    };
+    let expected_uid = rustix::process::geteuid().as_raw();
+    if target_stat.st_size == 0 || target_stat.st_uid != expected_uid {
+        return Ok(());
+    }
+    let Ok(target_digest) = sha256_file(&mut target_file) else {
+        return Ok(());
+    };
+    drop(target_file);
+
+    for sibling_digest in siblings {
+        let Ok(sibling_dir) = safefs::open_dir(store, sibling_digest, safefs::STRICT) else {
+            continue;
+        };
+        let Ok(Some((mut sibling_file, sibling_mode))) =
+            safefs::open_regular(sibling_dir.as_fd(), rel_path)
+        else {
+            continue;
+        };
+        let Ok(sibling_stat) = rustix::fs::fstat(&sibling_file) else {
+            continue;
+        };
+        if sibling_stat.st_uid != expected_uid
+            || sibling_stat.st_size != target_stat.st_size
+            || (sibling_mode & 0o7777) != (target_mode & 0o7777)
+            || (sibling_stat.st_dev, sibling_stat.st_ino)
+                == (target_stat.st_dev, target_stat.st_ino)
+        {
+            continue;
+        }
+        let Ok(candidate_digest) = sha256_file(&mut sibling_file) else {
+            continue;
+        };
+        if candidate_digest != target_digest {
+            continue;
+        }
+        let Ok((target_parent_owned, file_name)) = open_parent_dir(unpacked, rel_path) else {
+            return Ok(());
+        };
+        let Ok((sibling_parent_owned, sibling_name)) =
+            open_parent_dir(sibling_dir.as_fd(), rel_path)
+        else {
+            continue;
+        };
+        let target_parent = target_parent_owned
+            .as_ref()
+            .map_or(unpacked, |fd| fd.as_fd());
+        let sibling_parent = sibling_parent_owned
+            .as_ref()
+            .map_or(sibling_dir.as_fd(), |fd| fd.as_fd());
+        let Ok(temp) = link_unique_temp(sibling_parent, sibling_name, target_parent) else {
+            continue;
+        };
+        // Only unlink `temp` because `linkat` created it; disarm once `renameat`
+        // moves it into `file_name`.
+        let renamed = (|| -> Result<()> {
+            let linked_stat =
+                rustix::fs::statat(target_parent, &temp, rustix::fs::AtFlags::SYMLINK_NOFOLLOW)
+                    .context("stat linked runtime file")?;
+            ensure!(
+                (linked_stat.st_dev, linked_stat.st_ino)
+                    == (sibling_stat.st_dev, sibling_stat.st_ino),
+                "sibling runtime file inode changed during link"
+            );
+            rustix::fs::renameat(target_parent, &temp, target_parent, file_name)
+                .context("replace unpacked file with sibling hardlink")?;
+            Ok(())
+        })();
+        if renamed.is_err() {
+            let _ = rustix::fs::unlinkat(target_parent, &temp, rustix::fs::AtFlags::empty());
+            continue;
+        }
+        // `renameat` replaced the unpacked entry; fsync must succeed before
+        // registration can evict siblings or report durability.
+        rustix::fs::fsync(target_parent).context("fsync deduplicated directory")?;
+        return Ok(());
+    }
+    Ok(())
 }
 
 /// Evict the oldest runtimes not in `live` until at most `keep` remain.
@@ -464,5 +626,112 @@ pub mod tests {
         let mut expected = vec![shas[1].clone(), sha];
         expected.sort();
         assert_eq!(digests(store.as_fd()).unwrap(), expected);
+    }
+    #[test]
+    fn sibling_deduplication_hardlinks_identical_binaries_and_survives_eviction() {
+        use std::os::unix::fs::MetadataExt as _;
+        let temp = tempfile::tempdir().unwrap();
+        let config = test_config(temp.path());
+        let store = store_in(temp.path());
+        let lock = RwLock::new(());
+        let none = || Ok(HashSet::new());
+        let live: LiveDigests<'_> = &none;
+
+        let manifest =
+            br#"{"agy":"bin/agy","hooks":"policy/hooks.json","settings":"policy/settings.json"}"#;
+        let build_rt = |proxy_script: &[u8], node_mode: u32| {
+            let bytes = tar::build(&[
+                ("cowboy-runtime.json", b'0', manifest, 0o644),
+                ("bin/agy", b'0', AGY, 0o755),
+                ("bin/agy-proxy", b'0', proxy_script, 0o755),
+                (
+                    "proxy/runtime/node",
+                    b'0',
+                    b"identical-node-binary",
+                    node_mode,
+                ),
+                ("policy/hooks.json", b'0', b"{}", 0o644),
+                ("policy/settings.json", b'0', b"{}", 0o644),
+            ]);
+            let sha = hex::encode(Sha256::digest(&bytes));
+            (bytes, sha)
+        };
+
+        let (rt1, sha1) = build_rt(b"proxy-v1", 0o755);
+        let (rt2, sha2) = build_rt(b"proxy-v2", 0o755);
+        assert!(
+            !register(
+                store.as_fd(),
+                &config,
+                &sha1,
+                rt1.len() as u64,
+                &mut &rt1[..],
+                &lock,
+                live
+            )
+            .unwrap()
+        );
+        assert!(
+            !register(
+                store.as_fd(),
+                &config,
+                &sha2,
+                rt2.len() as u64,
+                &mut &rt2[..],
+                &lock,
+                live
+            )
+            .unwrap()
+        );
+
+        let st_root = temp.path().join("state/runtime");
+        let agy1 = std::fs::symlink_metadata(st_root.join(&sha1).join("bin/agy")).unwrap();
+        let agy2 = std::fs::symlink_metadata(st_root.join(&sha2).join("bin/agy")).unwrap();
+        assert_eq!((agy1.dev(), agy1.ino()), (agy2.dev(), agy2.ino()));
+        assert_eq!(agy1.nlink(), 2);
+
+        let node1 =
+            std::fs::symlink_metadata(st_root.join(&sha1).join("proxy/runtime/node")).unwrap();
+        let node2 =
+            std::fs::symlink_metadata(st_root.join(&sha2).join("proxy/runtime/node")).unwrap();
+        assert_eq!((node1.dev(), node1.ino()), (node2.dev(), node2.ino()));
+        assert_eq!(node1.nlink(), 2);
+
+        // Changed file stays distinct.
+        let p1 = std::fs::symlink_metadata(st_root.join(&sha1).join("bin/agy-proxy")).unwrap();
+        let p2 = std::fs::symlink_metadata(st_root.join(&sha2).join("bin/agy-proxy")).unwrap();
+        assert_ne!(p1.ino(), p2.ino());
+
+        // Different normalized mode on node (0o444 vs 0o555) does NOT share inode; evicting sha1 keeps sha2 intact.
+        let (rt3, sha3) = build_rt(b"proxy-v3", 0o644);
+        // Make sha1 oldest so eviction removes sha1 (max_runtimes = 2).
+        std::thread::sleep(std::time::Duration::from_millis(1100));
+        let keep_sha2 = || Ok(HashSet::from([sha2.clone()]));
+        assert!(
+            !register(
+                store.as_fd(),
+                &config,
+                &sha3,
+                rt3.len() as u64,
+                &mut &rt3[..],
+                &lock,
+                &keep_sha2
+            )
+            .unwrap()
+        );
+        assert!(!st_root.join(&sha1).exists());
+
+        // sha2 survives eviction intact and shares agy with sha3, while node mode differs so stays separate.
+        assert_eq!(
+            load(store.as_fd(), &sha2, &config.agy_allow_list)
+                .unwrap()
+                .agy,
+            "bin/agy"
+        );
+        let agy3 = std::fs::symlink_metadata(st_root.join(&sha3).join("bin/agy")).unwrap();
+        assert_eq!((agy2.dev(), agy2.ino()), (agy3.dev(), agy3.ino()));
+        let node3 =
+            std::fs::symlink_metadata(st_root.join(&sha3).join("proxy/runtime/node")).unwrap();
+        assert_ne!(node2.ino(), node3.ino());
     }
 }

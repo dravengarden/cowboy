@@ -1,6 +1,5 @@
 //! The installed Machine browser Plugin as core launches it: its verified
 //! runtime plan and the account root its instances are isolated under.
-use super::retirement::uninstalled_generations_of;
 use super::*;
 
 /// The Machine browser manager as the Plugin store reaches it: uninstalling
@@ -96,14 +95,24 @@ impl MachinePluginStore {
                 continue;
             }
             let installed = entry.path().join("active").symlink_metadata().is_ok();
-            let browser = if installed {
-                self.is_browser_plugin(&plugin_id)
-            } else {
-                uninstalled_generations_of(
-                    &entry.path().join("generations"),
-                    cowboy_plugin_sdk::PluginKind::MachineBrowser,
-                )
-            };
+            let generations_dir = entry.path().join("generations");
+            let has_browser_generation = fs::read_dir(&generations_dir)
+                .ok()
+                .into_iter()
+                .flatten()
+                .flatten()
+                .any(|gen_entry| {
+                    let name = gen_entry.file_name();
+                    let name = name.to_string_lossy();
+                    is_generation_name(&name)
+                        && retirement::classify_generation_kind(
+                            &plugin_id,
+                            &name,
+                            &gen_entry.path(),
+                        ) == Some(cowboy_plugin_sdk::PluginKind::MachineBrowser)
+                });
+            let browser =
+                (installed && self.is_browser_plugin(&plugin_id)) || has_browser_generation;
             if browser {
                 candidates.push((plugin_id, entry.path(), installed));
             }
@@ -112,6 +121,7 @@ impl MachinePluginStore {
         if candidates.is_empty() {
             return Ok(outcomes);
         }
+        let mut pending_removals = Vec::new();
         pins.with_generation_pins(&mut |pinned| {
             let pinned: BTreeSet<String> = pinned
                 .iter()
@@ -128,20 +138,37 @@ impl MachinePluginStore {
                     plugin_id: plugin_id.clone(),
                     ..crate::generation_retention::Outcome::default()
                 };
-                self.retire_unkept(&generations, &keep, &mut retention)?;
-                // A rollback link has nothing to roll back to once uninstalled.
-                if !*installed
-                    && read_link_name(&root.join("rollback"))
-                        .is_some_and(|name| !generations.join(&name).exists())
-                {
-                    fs::remove_file(root.join("rollback"))?;
-                }
-                retention.retained.sort();
-                retention.retired.sort();
-                outcomes.push(retention);
+                // Only retire generations individually classified as MachineBrowser,
+                // never historical Code/Agent generations sharing the same ID.
+                let tombstones = self.tombstone_unkept_matching(
+                    plugin_id,
+                    &generations,
+                    &keep,
+                    |kind| kind == cowboy_plugin_sdk::PluginKind::MachineBrowser,
+                    &mut retention,
+                )?;
+                pending_removals.push((
+                    root.clone(),
+                    generations,
+                    *installed,
+                    tombstones,
+                    retention,
+                ));
             }
             Ok(())
         })?;
+        for (root, generations, installed, tombstones, mut retention) in pending_removals {
+            Self::remove_tombstones(&tombstones, &mut retention)?;
+            if !installed
+                && read_link_name(&root.join("rollback"))
+                    .is_some_and(|name| !generations.join(&name).exists())
+            {
+                fs::remove_file(root.join("rollback"))?;
+            }
+            retention.retained.sort();
+            retention.retired.sort();
+            outcomes.push(retention);
+        }
         Ok(outcomes)
     }
 
