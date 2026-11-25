@@ -339,7 +339,9 @@ export interface MachineBrowserApi {
   ): Promise<BrowserResult>;
   /** Navigate exactly `target` to an owner-supplied `https` URL. With
    * `attachmentId`, the Machine navigates only while that attachment is the
-   * instance's current one (never a replacement viewer's page). */
+   * instance's current one (never a replacement viewer's page). With
+   * `expectedBrowser`, the Service also checks the card's browser identity
+   * under the share fence before dispatch (`browser_identity_changed`). */
   navigate(
     account: string,
     dataset: string,
@@ -347,6 +349,7 @@ export interface MachineBrowserApi {
     url: string,
     signal: AbortSignal,
     attachmentId?: string,
+    expectedBrowser?: string,
   ): Promise<BrowserResult>;
   hibernate(
     account: string,
@@ -448,7 +451,7 @@ export function createMachineBrowserApi(
         },
         signal,
       ),
-    navigate: (account, dataset, target, url, signal, attachmentId) =>
+    navigate: (account, dataset, target, url, signal, attachmentId, expectedBrowser) =>
       post(
         `${accountPath(account)}/browser/navigate`,
         {
@@ -456,6 +459,7 @@ export function createMachineBrowserApi(
           ...targetBody(target),
           url,
           ...(attachmentId === undefined ? {} : { attachment_id: attachmentId }),
+          ...(expectedBrowser === undefined ? {} : { expected_browser: expectedBrowser }),
         },
         signal,
       ),

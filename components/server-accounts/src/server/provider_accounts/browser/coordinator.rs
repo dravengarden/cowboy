@@ -118,8 +118,8 @@ pub struct Coordinator {
     attach_locks: Locks,
     /// Per account: open dispatch against revocation dispatch.
     lifecycle_locks: Locks,
-    /// Per owner: share membership changes against a share reset, so a
-    /// reset acts on exactly the browser identity its caller observed.
+    /// Per owner: share membership changes against share resets, opens, and
+    /// identity-bound instance commands (`expected_browser`).
     share_locks: Locks,
     /// Per Machine: placements its current connection has not answered for.
     inventories: parking_lot::Mutex<HashMap<String, Inventory>>,
@@ -528,7 +528,8 @@ impl Coordinator {
         lock_for(&self.lifecycle_locks, account_id)
     }
 
-    /// Serializes an owner's share membership changes with share resets.
+    /// Serializes an owner's share membership changes with share resets,
+    /// opens, and identity-bound instance commands (`expected_browser`).
     pub fn share_lock(&self, owner: &str) -> Arc<tokio::sync::Mutex<()>> {
         lock_for(&self.share_locks, owner)
     }

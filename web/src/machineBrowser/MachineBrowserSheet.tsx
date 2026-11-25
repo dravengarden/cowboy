@@ -165,10 +165,12 @@ function useAutoEntry(
   }, [readyToAutoOpen, latch, link, model.read, state]);
   const shownLink =
     link && !model.busy ? linkTarget(model, link.machine, link.expectedBrowser) : undefined;
+  const navigateIdentity =
+    link?.expectedBrowser ?? model.observedIdentity ?? model.read?.browser_identity;
   useEffect(() => {
     if (!link || !shownLink || !takeLatch(latch, "linked")) return;
-    browser.navigate(link.url, shownLink.target, shownLink.attachmentId);
-  }, [browser, latch, link, shownLink]);
+    browser.navigate(link.url, shownLink.target, shownLink.attachmentId, navigateIdentity);
+  }, [browser, latch, link, navigateIdentity, shownLink]);
 }
 
 function usePageVisible(): boolean {

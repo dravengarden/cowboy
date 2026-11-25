@@ -20,6 +20,8 @@ use serde_json::{Value, json};
 pub mod coordinator;
 pub mod legacy;
 pub mod machine_stream;
+#[cfg(test)]
+mod navigate_tests;
 mod network;
 pub mod revocation;
 pub mod shares;
@@ -934,10 +936,21 @@ pub async fn instance_command(
     owner: &str,
     (account_id, authority): (&ProviderAccountId, Authority),
     (machine_id, instance): (&str, &InstanceRef),
+    expected_browser: Option<&str>,
     command: impl FnOnce(InstanceRef) -> Command,
     timeout: std::time::Duration,
 ) -> Result<Value, &'static str> {
+    // When bound to an observed browser identity (such as a link navigation),
+    // hold the owner's share fence across the identity check and Machine
+    // dispatch so no share membership change lands between them while the
+    // running instance and attachment stay valid.
+    let fence = expected_browser.map(|_| state.browsers.share_lock(owner));
+    let _fence = match &fence {
+        Some(lock) => Some(lock.lock().await),
+        None => None,
+    };
     let resolved = authorize(state, owner, account_id, authority).await?;
+    expected_identity(expected_browser, &resolved)?;
     let instance = resolved.inbound(instance)?;
     let observed = named_instance(state, &resolved.key, machine_id, &instance)?;
     if authority == Authority::Launch {
@@ -1201,6 +1214,9 @@ pub struct NavigateBody {
     /// When present, the Machine navigates only while this attachment is
     /// the instance's current one (a quick link bound to its viewer).
     attachment_id: Option<String>,
+    /// When present, navigate only while the card still uses this browser
+    /// identity (`browser_identity`), checked under the owner's share fence.
+    expected_browser: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1290,6 +1306,7 @@ pub async fn http_navigate(
             &auth.principal.user_id,
             (&account, Authority::Launch),
             (&body.machine_id, &body.instance),
+            body.expected_browser.as_deref(),
             |instance| Command::Navigate {
                 instance,
                 url: body.url,
@@ -1316,6 +1333,7 @@ pub async fn http_resize(
             &auth.principal.user_id,
             (&account, Authority::Launch),
             (&body.machine_id, &body.instance),
+            None,
             |instance| Command::Resize {
                 instance,
                 attachment_id: body.attachment_id,
@@ -1343,6 +1361,7 @@ pub async fn http_snapshot(
             &auth.principal.user_id,
             (&account, Authority::Launch),
             (&body.machine_id, &body.instance),
+            None,
             |instance| Command::Snapshot { instance },
             HIBERNATE_TIMEOUT,
         )
@@ -1365,6 +1384,7 @@ pub async fn http_hibernate(
             &auth.principal.user_id,
             (&account, Authority::Stop),
             (&body.machine_id, &body.instance),
+            None,
             |instance| Command::Hibernate { instance },
             HIBERNATE_TIMEOUT,
         )

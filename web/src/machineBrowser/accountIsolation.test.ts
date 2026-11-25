@@ -386,6 +386,7 @@ test("a link opens and navigates only this account's browser on the login's Mach
     "https://claude.ai/oauth/x",
     signal,
     confirmed.attachmentId,
+    "own",
   );
   assertEquals(
     calls.map((call) => call.path),
@@ -404,6 +405,7 @@ test("a link opens and navigates only this account's browser on the login's Mach
     instance: openA.state.instance,
     url: "https://claude.ai/oauth/x",
     attachment_id: "att-hawk-1",
+    expected_browser: "own",
   });
   assertEquals("openSignIn" in api, false);
 });

@@ -284,6 +284,15 @@ test("lifecycle calls hit their routes with the dataset and exact wire bodies", 
   await api.open(account, "dataset-1", viewport, signal, "hawk");
   const target = { machine_id: "hawk", instance: { ...state.instance, extra: "dropped" } };
   await api.navigate(account, "dataset-1", target, "https://example.com/device", signal);
+  await api.navigate(
+    account,
+    "dataset-1",
+    target,
+    "https://grok.com/?_s=usage",
+    signal,
+    "att-1",
+    "share:s1:2",
+  );
   await api.hibernate(account, "dataset-1", target, signal);
   await api.snapshot(account, "dataset-1", target, signal);
   await api.reset(account, "dataset-1", "hawk", 3, signal);
@@ -300,6 +309,7 @@ test("lifecycle calls hit their routes with the dataset and exact wire bodies", 
   assertEquals(paths, [
     `/api/provider-accounts/${account}/browser/open`,
     `/api/provider-accounts/${account}/browser/open`,
+    `/api/provider-accounts/${account}/browser/navigate`,
     `/api/provider-accounts/${account}/browser/navigate`,
     `/api/provider-accounts/${account}/browser/hibernate`,
     `/api/provider-accounts/${account}/browser/snapshot`,
@@ -323,9 +333,17 @@ test("lifecycle calls hit their routes with the dataset and exact wire bodies", 
     instance: state.instance,
     url: "https://example.com/device",
   });
-  assertEquals(bodies[3], { dataset: "dataset-1", machine_id: "hawk", instance: state.instance });
+  assertEquals(bodies[3], {
+    dataset: "dataset-1",
+    machine_id: "hawk",
+    instance: state.instance,
+    url: "https://grok.com/?_s=usage",
+    attachment_id: "att-1",
+    expected_browser: "share:s1:2",
+  });
   assertEquals(bodies[4], { dataset: "dataset-1", machine_id: "hawk", instance: state.instance });
-  assertEquals(bodies[5], {
+  assertEquals(bodies[5], { dataset: "dataset-1", machine_id: "hawk", instance: state.instance });
+  assertEquals(bodies[6], {
     dataset: "dataset-1",
     machine_id: "hawk",
     expected_profile_revision: 3,
