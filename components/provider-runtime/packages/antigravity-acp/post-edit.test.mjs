@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -12,6 +23,7 @@ import { WebSocketServer } from "ws";
 import { Connection } from "../../execution-connection.mjs";
 import { DiagnosticsClient } from "./diagnostics-client.mjs";
 import { Facade, serveMcp } from "./facade.mjs";
+import { UncertainEffect } from "./facade-tools.mjs";
 import { MAX_WAITING, PlanGate } from "./plan-gate.mjs";
 import {
   formatPostEditNote,
@@ -1806,4 +1818,388 @@ test("PlanGate caps retained collision digests, folds overflow into tool-wide wa
     gate.ambiguityBucket("s1", closedTurn, closedTurn.attempt, "mcp_cowboy_EditFile", false),
     undefined,
   );
+});
+
+test("Large stdin-fed edit rejects symlinked or world-writable scratch parent without creating payload (R11-H1)", async () => {
+  for (const mode of [
+    "symlink-file-buffers",
+    "symlink-cowboy-world-writable-parent",
+    "group-writable-cowboy",
+    "world-writable-cache",
+  ]) {
+    const dir = await mkdtemp(join(tmpdir(), "r11-"));
+    const repo = join(dir, "repo");
+    const home = join(dir, "home");
+    const attacker = join(dir, "attacker");
+    await mkdir(repo);
+    await mkdir(home);
+    await mkdir(attacker);
+    if (mode === "symlink-file-buffers") {
+      await mkdir(join(home, ".cache", "cowboy"), { recursive: true });
+      await symlink(attacker, join(home, ".cache", "cowboy", "file-buffers"));
+    } else if (mode === "symlink-cowboy-world-writable-parent") {
+      await chmod(attacker, 0o777);
+      const sub = join(attacker, "cowboy");
+      await mkdir(sub, { mode: 0o700 });
+      await mkdir(join(home, ".cache"), { recursive: true });
+      await symlink(sub, join(home, ".cache", "cowboy"));
+    } else if (mode === "group-writable-cowboy") {
+      await mkdir(join(home, ".cache", "cowboy"), { recursive: true });
+      await chmod(join(home, ".cache", "cowboy"), 0o775);
+    } else {
+      await mkdir(join(home, ".cache"), { recursive: true });
+      await chmod(join(home, ".cache"), 0o777);
+    }
+    const socket = join(dir, "exec.sock");
+    const endpoint = await fakeEndpoint(socket, repo, { home });
+    const conn = await Connection.open(
+      {
+        schema: 1,
+        endpoint: `unix:${socket}`,
+        bearer_token: "a".repeat(64),
+        binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+      },
+      { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+    );
+    try {
+      const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+      facade.beginTurn("s1", { turnNonce: "n1" });
+      const turn = facade.session("s1").turn;
+      const large = Buffer.from("q".repeat(64 * 1024), "utf8");
+      await assert.rejects(
+        () => facade.publishOnce(turn, join(repo, "blocked.txt"), undefined, large),
+        /failed/i,
+      );
+      const expectedAttacker = mode === "symlink-cowboy-world-writable-parent" ? ["cowboy"] : [];
+      assert.deepEqual(
+        await readdir(attacker),
+        expectedAttacker,
+        `${mode}: attacker directory must remain untouched`,
+      );
+      if (mode === "symlink-cowboy-world-writable-parent") {
+        assert.deepEqual(await readdir(join(attacker, "cowboy")), []);
+      }
+      assert.deepEqual(await readdir(repo), [], `${mode}: target file must not be created`);
+    } finally {
+      conn.close();
+      endpoint.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
+});
+
+test("Large stdin-fed writes preserve inherited umask modes identically to inline writes (R11-M1)", async () => {
+  const prevUmask = process.umask(0o022);
+  const dir = await mkdtemp(join(tmpdir(), "cowboy-r11-umask-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const turn = facade.session("s1").turn;
+    const smallFile = join(repo, "small-dir", "small.txt");
+    const largeFile = join(repo, "large-dir", "large.txt");
+    await facade.publishOnce(turn, smallFile, undefined, Buffer.from("small\n", "utf8"));
+    await facade.publishOnce(
+      turn,
+      largeFile,
+      undefined,
+      Buffer.from("L".repeat(64 * 1024), "utf8"),
+    );
+    const smallMode = (await stat(smallFile)).mode & 0o777;
+    const largeMode = (await stat(largeFile)).mode & 0o777;
+    const smallDirMode = (await stat(join(repo, "small-dir"))).mode & 0o777;
+    const largeDirMode = (await stat(join(repo, "large-dir"))).mode & 0o777;
+    assert.equal(largeMode, smallMode, "large write file mode must match inline write mode");
+    assert.equal(largeDirMode, smallDirMode, "large write parent dir mode must match inline write");
+    assert.equal(largeMode, 0o644);
+    assert.equal(largeDirMode, 0o755);
+  } finally {
+    process.umask(prevUmask);
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Stdin delivery bounds both pre-send and post-dispatch waits by publish deadline and fences uncertain writes without replay (R11-M2)", async () => {
+  // Case A: Post-dispatch stalled process/write hits timeoutMs -> fences uncertain write & terminates helper without replay.
+  {
+    const calls = [];
+    let writeCount = 0;
+    const conn = {
+      async call(method, params, opts) {
+        calls.push({ method, params, timeoutMs: opts?.timeoutMs });
+        if (method === "process/start") {
+          opts?.beforeSend?.();
+          return { processId: params.processId };
+        }
+        if (method === "process/write") {
+          writeCount += 1;
+          opts?.beforeSend?.();
+          assert.ok(
+            typeof opts?.timeoutMs === "number" && opts.timeoutMs <= 200,
+            `process/write timeoutMs must be bounded by remaining publish budget, got ${opts?.timeoutMs}`,
+          );
+          return await new Promise(() => {});
+        }
+        if (method === "process/terminate") return { running: true };
+        if (method === "process/read")
+          return { chunks: [], exited: true, exitCode: 143, closed: true };
+        if (method === "cowboy/uncertainEffect") return {};
+        throw new Error(`unexpected ${method}`);
+      },
+    };
+    const facade = new Facade(conn, { root: "/repo", shell: "/bin/sh" });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const turn = facade.session("s1").turn;
+    const started = Date.now();
+    await assert.rejects(
+      () =>
+        facade.runUntracked(turn, ["/bin/sh", "-c", "true"], {
+          timeoutMs: 120,
+          maxBytes: 4096,
+          lostIsUncertain: true,
+          pipeStdin: true,
+          stdinPayload: Buffer.from("{}", "utf8"),
+        }),
+      (err) => err instanceof UncertainEffect && err.method === "process/write",
+    );
+    assert.ok(
+      Date.now() - started < 2000,
+      "stalled write must not wait for 185s connection timeout",
+    );
+    assert.equal(writeCount, 1, "timed-out dispatched write must never replay");
+    assert.equal(
+      turn.uncertain,
+      "process/write",
+      "turn must be fenced on post-dispatch write timeout",
+    );
+    assert.equal(
+      calls.some((c) => c.method === "process/terminate"),
+      true,
+      "existing helper must be terminated after write timeout",
+    );
+  }
+
+  // Case B: Delay before pre-send guard exceeds publish deadline -> process/write is never dispatched & turn stays unfenced.
+  {
+    const calls = [];
+    let sentWrite = false;
+    const conn = {
+      async call(method, params, opts) {
+        calls.push({ method, params });
+        if (method === "process/start") {
+          opts?.beforeSend?.();
+          return { processId: params.processId };
+        }
+        if (method === "process/write") {
+          await new Promise((r) => setTimeout(r, 140));
+          opts?.beforeSend?.();
+          sentWrite = true;
+          return { status: "accepted" };
+        }
+        if (method === "process/terminate") return { running: true };
+        if (method === "process/read")
+          return { chunks: [], exited: true, exitCode: 143, closed: true };
+        throw new Error(`unexpected ${method}`);
+      },
+    };
+    const facade = new Facade(conn, { root: "/repo", shell: "/bin/sh" });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const turn = facade.session("s1").turn;
+    const res = await facade.runUntracked(turn, ["/bin/sh", "-c", "true"], {
+      timeoutMs: 80,
+      maxBytes: 4096,
+      lostIsUncertain: true,
+      pipeStdin: true,
+      stdinPayload: Buffer.from("{}", "utf8"),
+    });
+    assert.equal(res.timedOut, true);
+    assert.equal(sentWrite, false, "pre-send deadline check must block late dispatch");
+    assert.equal(
+      turn.uncertain,
+      undefined,
+      "pre-dispatch timeout must not fence turn as uncertain write",
+    );
+    assert.equal(
+      calls.some((c) => c.method === "process/terminate"),
+      true,
+    );
+  }
+});
+
+test("Large stdin-fed wrapper sweeps stale abandoned payload files while keeping fresh ones (R11-L1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "cowboy-r11-sweep-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  const fb = join(home, ".cache", "cowboy", "file-buffers");
+  await mkdir(repo);
+  await mkdir(fb, { recursive: true });
+  const stale = join(fb, "payload-deadbeef");
+  const fresh = join(fb, "payload-fresh123");
+  const unrelated = join(fb, "notes.txt");
+  await writeFile(stale, "old-orphan");
+  await writeFile(fresh, "active-edit");
+  await writeFile(unrelated, "keep-me");
+  const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  await utimes(stale, twoHoursAgo, twoHoursAgo);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const turn = facade.session("s1").turn;
+    await facade.publishOnce(
+      turn,
+      join(repo, "big.txt"),
+      undefined,
+      Buffer.from("s".repeat(64 * 1024), "utf8"),
+    );
+    const remaining = (await readdir(fb)).sort();
+    assert.deepEqual(remaining, ["notes.txt", "payload-fresh123"]);
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("PlanGate skips inserting out-of-turn cards and scopes eviction latch to evicted turn and attempt (R11-L2)", () => {
+  const gate = new PlanGate();
+  // Flood MAX_WAITING + 5 out-of-turn cards; none may enter waiting.
+  for (let i = 0; i < MAX_WAITING + 5; i += 1) {
+    gate.trackUpdate(
+      "s1",
+      {
+        toolCallId: `oot-${i}`,
+        name: "mcp_cowboy_EditFile",
+        rawInput: { path: `oot${i}.rs`, old_string: "a", new_string: "b" },
+        status: "in_progress",
+      },
+      undefined,
+    );
+  }
+  assert.equal(gate.waiting.get("s1"), undefined, "out-of-turn cards must not populate waiting");
+
+  // Real live turn binds unambiguously on its very first edit card.
+  const turn1 = { attempt: Symbol("att-1") };
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "real-1",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "real.rs", old_string: "a", new_string: "b" },
+      status: "in_progress",
+    },
+    turn1,
+  );
+  assert.equal(turn1.announcementEvicted, undefined);
+  const call1 = {
+    sessionId: "s1",
+    name: "EditFile",
+    args: { path: "real.rs", old_string: "a", new_string: "b" },
+  };
+  gate.admitCall(call1, turn1);
+  assert.equal(gate.bind(call1, turn1), "real-1");
+
+  // Fill waiting to MAX_WAITING in attempt-1 of turn2, then open attempt-2 on the
+  // SAME turn object: evicting an attempt-1 card must only latch attempt-1, NOT attempt-2!
+  const gate2 = new PlanGate();
+  const att1 = Symbol("att-1");
+  const att2 = Symbol("att-2");
+  const turn2 = { attempt: att1 };
+  for (let i = 0; i < MAX_WAITING; i += 1) {
+    gate2.trackUpdate(
+      "s2",
+      {
+        toolCallId: `a1-${i}`,
+        name: "mcp_cowboy_WriteFile",
+        rawInput: { path: `f${i}.rs`, content: "v1" },
+        status: "in_progress",
+      },
+      turn2,
+    );
+  }
+  turn2.attempt = att2;
+  gate2.trackUpdate(
+    "s2",
+    {
+      toolCallId: "a2-0",
+      name: "mcp_cowboy_WriteFile",
+      rawInput: { path: "fresh.rs", content: "v2" },
+      status: "in_progress",
+    },
+    turn2,
+  );
+  assert.equal(gate2.hasEvictedAttempt(turn2, att1), true);
+  assert.equal(gate2.hasEvictedAttempt(turn2, att2), false);
+  const call2 = {
+    sessionId: "s2",
+    name: "WriteFile",
+    args: { path: "fresh.rs", content: "v2" },
+  };
+  gate2.admitCall(call2, turn2);
+  assert.equal(gate2.bind(call2, turn2), "a2-0");
+});
+
+test("Large stdin-fed edit allows owner-controlled symlinked .cache/cowboy storage target (Hawk layout)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "cowboy-r11-hawk-link-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  const storageTarget = join(dir, "fast0-cowboy");
+  await mkdir(repo);
+  await mkdir(join(home, ".cache"), { recursive: true });
+  await mkdir(storageTarget, { mode: 0o755 });
+  await chmod(home, 0o700);
+  await chmod(join(home, ".cache"), 0o755);
+  await symlink(storageTarget, join(home, ".cache", "cowboy"));
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const turn = facade.session("s1").turn;
+    const content = "h".repeat(64 * 1024);
+    await facade.publishOnce(turn, join(repo, "ok.txt"), undefined, Buffer.from(content, "utf8"));
+    assert.equal(await readFile(join(repo, "ok.txt"), "utf8"), content);
+    const fb = join(storageTarget, "file-buffers");
+    assert.equal((await stat(fb)).mode & 0o777, 0o700);
+    assert.deepEqual(await readdir(fb), []);
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });

@@ -180,6 +180,24 @@ export class PlanGate {
     this.turnAmbiguities = new WeakMap();
     /** Live turn object -> Map<`${sessionId}\0${id}`, { diffNames: Set<string>, attempt }> all evicted cards (R7-M3, R8-M4, R9-L1). */
     this.turnEvicted = new WeakMap();
+    /** Live turn object -> Set<attempt> whose announcements experienced MAX_WAITING eviction (R11-L2). */
+    this.evictedAttempts = new WeakMap();
+  }
+
+  markEvictedAttempt(turn, attempt) {
+    if (!turn || typeof turn !== "object") return;
+    let attempts = this.evictedAttempts.get(turn);
+    if (!attempts) {
+      attempts = new Set();
+      this.evictedAttempts.set(turn, attempts);
+    }
+    attempts.add(attempt);
+    turn.announcementEvicted = true;
+  }
+
+  hasEvictedAttempt(turn, attempt) {
+    if (!turn || typeof turn !== "object") return false;
+    return this.evictedAttempts.get(turn)?.has(attempt) ?? false;
   }
 
   ambiguityBucket(sessionId, turn, attempt, name, create = false) {
@@ -465,8 +483,9 @@ export class PlanGate {
         : [...new Set(existingAffected)];
       return { contradicted: contradictedIds.length > 0, contradictedIds };
     }
-    if (turn !== undefined && !isTurnLive(turn))
+    if (!turn || typeof turn !== "object" || !isTurnLive(turn)) {
       return { contradicted: false, contradictedIds: [] };
+    }
     const name = update.name;
     const toolName = stripFacadePrefix(name);
     if (toolName === undefined) return { contradicted: false, contradictedIds: [] };
@@ -501,7 +520,7 @@ export class PlanGate {
         for (const diffName of evicted.diffNames) {
           this.recordDiffAmbiguity(sessionId, evicted.turn, evicted.attempt, diffName);
         }
-        if (turn && typeof turn === "object") turn.announcementEvicted = true;
+        this.markEvictedAttempt(evicted.turn, evicted.attempt);
       }
     }
     const added = {
@@ -599,8 +618,8 @@ export class PlanGate {
           }
         }
       } else if (exactUnbound.length >= 1) {
-        if (!turn?.announcementEvicted) entry = exactUnbound[0];
-      } else if (!turn?.announcementEvicted) {
+        if (!this.hasEvictedAttempt(turn, attempt)) entry = exactUnbound[0];
+      } else if (!this.hasEvictedAttempt(turn, attempt)) {
         // R8-L1: Only taint on inputless fallback when an inputless live card actually exists.
         if (isDiffBearing && inputlessLive.length > 0 && liveSameTool.length > 1) {
           // R3-M6: Permanently taint the incoming call and colliding entries on inputless ambiguity.
@@ -618,7 +637,7 @@ export class PlanGate {
           if (inputless.length === 1) entry = inputless[0];
         }
       }
-    } else if (!turn?.announcementEvicted && unbound.length === 1) {
+    } else if (!this.hasEvictedAttempt(turn, attempt) && unbound.length === 1) {
       if (!isDiffBearing || liveSameTool.length === 1) {
         entry = unbound[0];
       } else {

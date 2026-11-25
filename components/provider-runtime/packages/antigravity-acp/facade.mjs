@@ -80,7 +80,35 @@ const APPLY_STDIN = [
   'len="$1"',
   "case \"$len\" in ''|*[!0-9]*) exit 2 ;; esac",
   `[ "$len" -ge 1 ] && [ "$len" -le ${MAX_STDIN_APPLY_BYTES} ] || exit 2`,
-  'case "${HOME:-}" in /*) ;; *) exit 2 ;; esac',
+  'h="${HOME:-}"',
+  'while [ "$h" != "/" ] && [ "${h%/}" != "$h" ]; do h="${h%/}"; done',
+  'case "$h" in /*) [ "$h" != "/" ] || exit 2 ;; *) exit 2 ;; esac',
+  "check_ancestors() {",
+  '  cur="$1"',
+  '  while [ "$cur" != "/" ]; do',
+  '    [ -d "$cur" ] || exit 2',
+  '    p=$(LC_ALL=C ls -ld -- "$cur" 2>/dev/null) || exit 2',
+  '    case "$p" in',
+  "      d????-??-?*) ;;",
+  "      d????????t*|d????????T*) ;;",
+  "      *) exit 2 ;;",
+  "    esac",
+  '    cur=$(dirname -- "$cur")',
+  "  done",
+  "}",
+  "check_owner_dir() {",
+  '  [ -d "$1" ] || exit 2',
+  '  [ ! -L "$1" ] || exit 2',
+  '  [ -O "$1" ] || exit 2',
+  '  p=$(LC_ALL=C ls -ld -- "$1" 2>/dev/null) || exit 2',
+  '  case "$p" in d????-??-?*) ;; *) exit 2 ;; esac',
+  "}",
+  "check_private_dir() {",
+  '  check_owner_dir "$1"',
+  '  chmod 700 -- "$1" || exit 2',
+  '  p=$(LC_ALL=C ls -ld -- "$1" 2>/dev/null) || exit 2',
+  '  case "$p" in drwx------*) ;; *) exit 2 ;; esac',
+  "}",
   'raw=$(LC_ALL=C head -c "$((len + 1))"; printf x)',
   "nl='\n'",
   'case "$raw" in *"${nl}x") ;; *) exit 2 ;; esac',
@@ -88,19 +116,42 @@ const APPLY_STDIN = [
   "req=${req%?}",
   "unset raw",
   '(LC_ALL=C; [ "${#req}" -eq "$len" ]) || exit 2',
+  "orig_umask=$(umask)",
   "umask 077",
-  'd="$HOME/.cache/cowboy/file-buffers"',
-  'mkdir -p -- "$d"',
-  'test -d "$d" && test ! -L "$d" && test -O "$d" && chmod 700 -- "$d"',
+  'check_owner_dir "$h"',
+  'h_real=$(cd -P -- "$h" && pwd -P) || exit 2',
+  'check_ancestors "$h_real"',
+  'c="$h_real/.cache"',
+  'if [ ! -e "$c" ] && [ ! -L "$c" ]; then mkdir -- "$c" 2>/dev/null || true; fi',
+  'check_owner_dir "$c"',
+  'cb="$c/cowboy"',
+  'if [ ! -e "$cb" ] && [ ! -L "$cb" ]; then mkdir -- "$cb" 2>/dev/null || true; fi',
+  'if [ -L "$cb" ]; then',
+  '  [ -d "$cb" ] || exit 2',
+  '  cb_real=$(cd -P -- "$cb" && pwd -P) || exit 2',
+  '  check_owner_dir "$cb_real"',
+  '  check_ancestors "$cb_real"',
+  "else",
+  '  check_owner_dir "$cb"',
+  '  cb_real="$cb"',
+  "fi",
+  'd="$cb_real/file-buffers"',
+  'if [ ! -e "$d" ] && [ ! -L "$d" ]; then mkdir -- "$d" 2>/dev/null || true; fi',
+  'check_private_dir "$d"',
+  "find \"$d\" -maxdepth 1 -type f -name 'payload-*' -mmin +60 -exec rm -f -- {} + 2>/dev/null || true",
   'tmp=""',
   'cleanup() { [ -n "$tmp" ] && rm -f -- "$tmp" || true; }',
   "trap cleanup EXIT",
   "trap 'cleanup; trap - HUP; kill -HUP $$' HUP",
   "trap 'cleanup; trap - INT; kill -INT $$' INT",
   "trap 'cleanup; trap - TERM; kill -TERM $$' TERM",
-  'tmp=$(mktemp "$d/payload-XXXXXXXX")',
-  'printf \'%s\' "$req" > "$tmp"',
+  'tmp=$(mktemp "$d/payload-XXXXXXXX") || exit 2',
+  '[ -f "$tmp" ] || exit 2',
+  '[ ! -L "$tmp" ] || exit 2',
+  '[ -O "$tmp" ] || exit 2',
+  `printf '%s' "$req" > "$tmp" || exit 2`,
   "unset req",
+  'umask "$orig_umask"',
   '"$COWBOY_EXECUTION_FILE_HELPER" apply --request-file "$tmp"',
 ].join("\n");
 /** A publish settled by the file's bytes alone (E1, see `publishOnce`). */
@@ -1114,11 +1165,18 @@ ${WRAP_UP_NOTE}`,
    * turn is open; an unknown outcome fences the turn at once, so a
    * concurrent tool call of the same turn admits nothing after it.
    */
-  async mutate(turn, method, params, { beforeSend } = {}) {
+  async mutate(turn, method, params, { beforeSend, timeoutMs } = {}) {
     if (turn.cancelled || turn.ended || turn.uncertain) {
       throw new ToolError("The turn was cancelled.");
     }
-    const call = this.connection.call(method, params, beforeSend ? { beforeSend } : undefined);
+    const callOpts =
+      beforeSend || timeoutMs !== undefined
+        ? {
+            ...(beforeSend ? { beforeSend } : {}),
+            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+          }
+        : undefined;
+    const call = this.connection.call(method, params, callOpts);
     turn.inflight?.add(call);
     try {
       return await call;
@@ -1902,21 +1960,58 @@ ${WRAP_UP_NOTE}`,
       if (stdinPayload !== undefined) {
         const chunk = Buffer.concat([stdinPayload, Buffer.from("\n")]).toString("base64");
         const writeId = randomUUID();
+        const deadlineSentinel = Symbol("stdin-write-deadline");
         for (;;) {
           const remaining = deadline - Date.now();
           if (remaining <= 0) {
             timedOut = true;
             break;
           }
+          let dispatched = false;
+          let preSendExpired = false;
+          const writeBeforeSend = () => {
+            if (typeof beforeSend === "function") beforeSend();
+            if (Date.now() >= deadline) {
+              preSendExpired = true;
+              throw new ToolError("Timed out before delivering apply request to workspace helper.");
+            }
+            dispatched = true;
+          };
           let reply;
+          let timer;
           try {
-            reply = await this.mutate(
+            const writeCall = this.mutate(
               turn,
               "process/write",
               { processId: process.processId, chunk, writeId },
-              { beforeSend },
+              { beforeSend: writeBeforeSend, timeoutMs: Math.max(1, Math.ceil(remaining)) },
             );
+            writeCall.catch(() => {});
+            const expired = new Promise((resolve) => {
+              timer = setTimeout(
+                () => resolve(deadlineSentinel),
+                Math.max(1, Math.ceil(remaining)),
+              );
+            });
+            const raced = await Promise.race([writeCall, expired]);
+            if (raced === deadlineSentinel) {
+              if (dispatched) {
+                turn.uncertain ??= "process/write";
+                throw new UncertainEffect("process/write");
+              }
+              timedOut = true;
+              break;
+            }
+            reply = raced;
           } catch (error) {
+            if (preSendExpired && !dispatched) {
+              timedOut = true;
+              break;
+            }
+            if (dispatched && !notSent(error) && error?.message === "Target request timed out") {
+              turn.uncertain ??= "process/write";
+              throw new UncertainEffect("process/write");
+            }
             // If the target executor itself reports the process already closed
             // (e.g. exit 127 when the helper is absent), poll to observe its
             // exit status rather than masking it. Local fence refusals and
@@ -1929,15 +2024,20 @@ ${WRAP_UP_NOTE}`,
               break;
             }
             throw error;
+          } finally {
+            clearTimeout(timer);
           }
           if (reply?.status === "accepted") {
             stdinDelivered = true;
             break;
           }
           if (reply?.status === "starting") {
-            await new Promise((resolve) =>
-              setTimeout(resolve, Math.min(100, Math.max(1, remaining))),
-            );
+            const pause = Math.min(100, deadline - Date.now());
+            if (pause <= 0) {
+              timedOut = true;
+              break;
+            }
+            await new Promise((resolve) => setTimeout(resolve, pause));
             continue;
           }
           break;
