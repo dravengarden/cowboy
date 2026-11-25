@@ -175,11 +175,13 @@ export class Connection {
     }
     // Abandoned requests may still run on the executor, so they count.
     // Check capacity BEFORE running `beforeSend` so a capacity refusal never
-    // marks a request dispatched; reserve slot 16 for `process/terminate`
-    // cleanup and keep drain/uncertainty notifications uncapped (R14-M4).
-    const isCleanup =
-      CLEANUP_REQUESTS.has(method) || (cleanup === true && method === "process/read");
-    const limit = isCleanup ? 16 : 15;
+    // marks a request dispatched; reserve slot 15 for `process/terminate` and
+    // slot 16 for confirming `process/read` so a stalled stop in pending never
+    // starves closure confirmation, while staying within the worker's 16-slot
+    // cap and keeping drain/uncertainty notifications uncapped (R14-M4, R19-M1).
+    const isConfirmRead = cleanup === true && method === "process/read";
+    const isStop = CLEANUP_REQUESTS.has(method);
+    const limit = isConfirmRead ? 16 : isStop ? 15 : 14;
     if (!DRAIN_REQUESTS.has(method) && this.pending.size + this.abandoned.size >= limit) {
       return Promise.reject(new Error("Too many execution requests"));
     }

@@ -1638,6 +1638,12 @@ export class AcpProxy {
       const params = forwarded.params ?? {};
       try {
         if (typeof params.cwd !== "string") throw new Error("session cwd is required");
+        if (
+          method !== "session/new" &&
+          (typeof params.sessionId !== "string" || params.sessionId.length === 0)
+        ) {
+          throw new Error("session sessionId is required");
+        }
         params.cwd = runtime.sessionCwd(params.cwd);
         record.cwd = params.cwd;
         runtime.checkMirror(params.cwd);
@@ -2469,9 +2475,8 @@ export class AcpProxy {
           malformedExplicitId ||
           (record.method === "session/new"
             ? !hasExplicitSessionId
-            : requestedSessionId !== undefined
-              ? hasExplicitSessionId && repliedSessionId !== requestedSessionId
-              : !hasExplicitSessionId));
+            : requestedSessionId === undefined ||
+              (hasExplicitSessionId && repliedSessionId !== requestedSessionId)));
 
       let reopenSessionId;
       let isCurrentReopen = false;

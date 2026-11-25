@@ -1877,6 +1877,7 @@ ${WRAP_UP_NOTE}`,
           ? Math.min(waitMs, remaining <= 50 ? 0 : Math.max(0, remaining - 50))
           : Math.min(waitMs, remaining);
     }
+    const readWaitMs = Math.max(0, Math.floor(Number.isFinite(waitMs) ? waitMs : 0));
     const hardDeadline = deadline !== undefined && (enforceDeadline || cleanup);
     let dispatched = false;
     let closedBeforeDispatch = false;
@@ -1902,7 +1903,7 @@ ${WRAP_UP_NOTE}`,
           processId: process.processId,
           afterSeq: process.afterSeq,
           maxBytes: 65536,
-          waitMs,
+          waitMs: readWaitMs,
         },
         callOpts,
       );
@@ -2331,6 +2332,18 @@ ${WRAP_UP_NOTE}`,
               throw new ToolError(
                 "Execution unavailable before delivering the edit request to the workspace helper; nothing was written.",
               );
+            }
+            // Enforce the monotonic deadline before interpreting any other rejected
+            // executor reply; a dispatched write preserves uncertainty unless the
+            // reply proved non-admission above (R19-L1).
+            if (nowMs() >= deadline) {
+              writeClosed = true;
+              if (dispatched) {
+                turn.uncertain ??= "process/write";
+                throw new UncertainEffect("process/write");
+              }
+              stdinTimedOutBeforeDispatch = true;
+              break;
             }
             if (dispatched && !notSent(error) && error?.message === "Target request timed out") {
               turn.uncertain ??= "process/write";

@@ -186,6 +186,9 @@ export async function fakeEndpoint(
       return { processId: params.processId };
     },
     "process/read": async (params) => {
+      if (!Number.isInteger(params.waitMs) || params.waitMs < 0) {
+        throw { code: -32602, message: "waitMs must be a non-negative integer" };
+      }
       const entry = processes.get(params.processId);
       if (!entry) throw { code: -32600, message: `unknown process id ${params.processId}` };
       const after = params.afterSeq ?? 0;
