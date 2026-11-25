@@ -446,3 +446,270 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
     );
     assert!(unbound.await.unwrap().is_ok());
 }
+
+#[tokio::test]
+async fn timed_out_navigate_fences_share_membership_until_machine_settles() {
+    let root = tempfile::tempdir().unwrap();
+    let (state, store) = fixture_state(root.path()).await;
+    // Install the production browser observers (State + late CommandResult).
+    install_observer(&state);
+    let grok = add_account(&store, "acc-grok", "grok", "Fox").await;
+    let codex = add_account(&store, "acc-codex", "codex", "Pika").await;
+    let deepseek = add_account(&store, "acc-ds", "claude-deepseek", "Mole").await;
+
+    // Browser state read advertises identity-fenced navigation support.
+    let read = state_value(&state, OWNER, &grok, None).await.unwrap();
+    assert_eq!(read["navigate_identity_fenced"], true);
+
+    let rev = store.provider_accounts(OWNER).await.unwrap().revision;
+    let MutationResult::Applied(created) = store
+        .mutate_browser_shares(
+            OWNER,
+            "share-create",
+            &Mutation {
+                expected_revision: rev,
+                change: Change::CreateBrowserShare {
+                    label: "Heron".into(),
+                },
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected share creation");
+    };
+    let share_id = created.browser_share_id.clone().expect("created share id");
+    let MutationResult::Applied(joined_fox) = store
+        .mutate_browser_shares(
+            OWNER,
+            "share-join-fox",
+            &Mutation {
+                expected_revision: created.registry.revision,
+                change: Change::SetBrowserShare {
+                    member: Member::account(grok.clone()),
+                    share_id: Some(share_id.clone()),
+                },
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("expected Fox to join share");
+    };
+    let rev_fox = store
+        .browser_shares(OWNER)
+        .await
+        .unwrap()
+        .share(&share_id)
+        .unwrap()
+        .revision;
+    let identity_fox = format!("share:{share_id}:{rev_fox}");
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let connection = state.machine_control.install(
+        "hawk".into(),
+        "epoch".into(),
+        false,
+        crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+        tx,
+    );
+    state.browsers.connected(
+        &connection,
+        Some(crate::machine_protocol::machine_browser::Capability {
+            plugin_id: "machine-browser".into(),
+            plugin_version: "1.0.1".into(),
+            generation_digest: "digest".into(),
+            available: true,
+            reason: None,
+            max_instances: 2,
+            network: Some(crate::machine_protocol::machine_browser::BrowserNetwork::Ipv4OnlyV1),
+        }),
+    );
+    let share_account = share_key(OWNER, &share_id);
+    let running_share = InstanceRef {
+        account_id: share_account,
+        instance_id: "b-heron".into(),
+        incarnation: 3,
+    };
+    let observed_event = StateEvent {
+        request_id: None,
+        instance: running_share.clone(),
+        state: BrowserState::Attached,
+        reason: None,
+        geometry: None,
+        scale: None,
+        deadline_ms: None,
+        attachment_id: Some("att-1".into()),
+        snapshot_generation: None,
+        snapshot_at_ms: None,
+        profile_revision: Some(1),
+        unsaved_state_lost: false,
+        observed_at_ms: 100,
+    };
+    state.browsers.observe(
+        &connection,
+        &crate::machine_protocol::machine_browser::Event::State(observed_event.clone()),
+    );
+    let client_instance = InstanceRef {
+        account_id: grok.clone(),
+        instance_id: "b-heron".into(),
+        incarnation: 3,
+    };
+
+    // 1. Controller wait times out while Machine is still busy with a snapshot.
+    let timed_out = instance_command(
+        &state,
+        OWNER,
+        (&grok, Authority::Launch),
+        ("hawk", &client_instance),
+        Some(&identity_fox),
+        |instance| Command::Navigate {
+            instance,
+            url: "https://grok.com/?_s=usage".into(),
+            attachment_id: Some("att-1".into()),
+        },
+        Duration::from_millis(30),
+    )
+    .await;
+    assert_eq!(timed_out, Err("browser_command_failed"));
+    let MachineCommand::Browser {
+        request_id: timed_out_req,
+        ..
+    } = rx.try_recv().expect("command was sent before timeout")
+    else {
+        panic!("expected Browser command");
+    };
+
+    // Share membership mutations (join, leave, delete) stay fenced until the
+    // Machine settles `timed_out_req`.
+    let join_blocked = shares::update(
+        &state,
+        OWNER,
+        "join-pika-while-fenced",
+        &Mutation {
+            expected_revision: joined_fox.registry.revision,
+            change: Change::SetBrowserShare {
+                member: Member::account(codex.clone()),
+                share_id: Some(share_id.clone()),
+            },
+        },
+    )
+    .await;
+    assert_eq!(join_blocked, Err("browser_navigation_pending"));
+
+    let delete_blocked = shares::update(
+        &state,
+        OWNER,
+        "delete-while-fenced",
+        &Mutation {
+            expected_revision: joined_fox.registry.revision,
+            change: Change::DeleteBrowserShare {
+                share_id: share_id.clone(),
+            },
+        },
+    )
+    .await;
+    assert_eq!(delete_blocked, Err("browser_navigation_pending"));
+
+    // Delayed Machine state reply settles the fence and unblocks membership.
+    state.machine_control.record_remote(
+        &connection,
+        MachineEvent::Browser {
+            browser: crate::machine_protocol::machine_browser::Event::State(StateEvent {
+                request_id: Some(timed_out_req),
+                ..observed_event.clone()
+            }),
+        },
+    );
+    let (join_ok, noop) = shares::update(
+        &state,
+        OWNER,
+        "join-pika-after-settle",
+        &Mutation {
+            expected_revision: joined_fox.registry.revision,
+            change: Change::SetBrowserShare {
+                member: Member::account(codex.clone()),
+                share_id: Some(share_id.clone()),
+            },
+        },
+    )
+    .await
+    .expect("share join succeeds after Machine settles timed-out navigation");
+    assert!(!noop);
+    let MutationResult::Applied(joined_pika) = join_ok else {
+        panic!("expected Applied receipt, got {join_ok:?}");
+    };
+    let rev_pika = store
+        .browser_shares(OWNER)
+        .await
+        .unwrap()
+        .share(&share_id)
+        .unwrap()
+        .revision;
+    let identity_pika = format!("share:{share_id}:{rev_pika}");
+
+    // 2. A second timed-out navigation is settled by a late Machine
+    // `CommandResult` refusal (e.g. superseded attachment after snapshot).
+    let timed_out_2 = instance_command(
+        &state,
+        OWNER,
+        (&grok, Authority::Launch),
+        ("hawk", &client_instance),
+        Some(&identity_pika),
+        |instance| Command::Navigate {
+            instance,
+            url: "https://grok.com/?_s=usage".into(),
+            attachment_id: Some("att-1".into()),
+        },
+        Duration::from_millis(30),
+    )
+    .await;
+    assert_eq!(timed_out_2, Err("browser_command_failed"));
+    let MachineCommand::Browser {
+        request_id: refused_req,
+        ..
+    } = rx.try_recv().expect("second command sent before timeout")
+    else {
+        panic!("expected Browser command");
+    };
+    assert_eq!(
+        shares::update(
+            &state,
+            OWNER,
+            "join-mole-while-fenced",
+            &Mutation {
+                expected_revision: joined_pika.registry.revision,
+                change: Change::SetBrowserShare {
+                    member: Member::account(deepseek.clone()),
+                    share_id: Some(share_id.clone()),
+                },
+            },
+        )
+        .await,
+        Err("browser_navigation_pending")
+    );
+    // Late CommandResult arrives after the HTTP waiter already dropped.
+    state.machine_control.record_remote(
+        &connection,
+        MachineEvent::CommandResult {
+            request_id: refused_req,
+            accepted: false,
+            detail: Some("browser_attachment_superseded".into()),
+        },
+    );
+    let (join_mole_ok, _) = shares::update(
+        &state,
+        OWNER,
+        "join-mole-after-refusal",
+        &Mutation {
+            expected_revision: joined_pika.registry.revision,
+            change: Change::SetBrowserShare {
+                member: Member::account(deepseek.clone()),
+                share_id: Some(share_id.clone()),
+            },
+        },
+    )
+    .await
+    .expect("share join succeeds after late CommandResult refusal settles fence");
+    assert!(matches!(join_mole_ok, MutationResult::Applied(_)));
+}

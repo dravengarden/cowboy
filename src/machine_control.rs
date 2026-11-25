@@ -44,7 +44,7 @@ mod telemetry_recovery;
 mod telemetry_resolution;
 mod workspace;
 
-pub use browser::BrowserObserver;
+pub use browser::{BrowserCommandError, BrowserObserver, BrowserResultObserver};
 pub use reply::{Reply, ReplyKind};
 pub use session_reads::SessionReadScope;
 pub use telemetry_resolution::TelemetryInstallationLease;
@@ -441,6 +441,7 @@ pub struct MachineControl {
     /// offline Machine still shows when it was last observed.
     host_resources: RwLock<HashMap<String, crate::machine_protocol::ObservedHostResources>>,
     browser_observer: RwLock<Option<BrowserObserver>>,
+    browser_result_observer: RwLock<Option<BrowserResultObserver>>,
     /// Test-only replacement for the binding and recovery commit ACK waits.
     telemetry_commit_timeout: Option<std::time::Duration>,
 }
@@ -469,6 +470,7 @@ impl MachineControl {
             next_request: AtomicU64::new(0),
             host_resources: RwLock::default(),
             browser_observer: RwLock::new(None),
+            browser_result_observer: RwLock::new(None),
             telemetry_commit_timeout: None,
         }
     }
@@ -691,7 +693,20 @@ impl MachineControl {
                 detail,
             } => {
                 if live.refuse_browser(token, &request_id, detail.as_deref()) {
+                    drop(live);
+                    let _ = self.notify_browser_result(token, &request_id);
                     return;
+                }
+                // Even after a browser command's HTTP wait timed out and its
+                // waiter dropped, a delayed Machine refusal still settles any
+                // coordinator fence tracking that request ID (without dropping
+                // unrelated async login CommandResults).
+                if !live.pending.contains_key(&request_id) {
+                    drop(live);
+                    if self.notify_browser_result(token, &request_id) {
+                        return;
+                    }
+                    live = self.live.write();
                 }
                 // A generic ACK addressed to a different connection or typed
                 // RPC is not an asynchronous login status. Drop its payload

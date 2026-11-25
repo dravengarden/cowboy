@@ -342,19 +342,49 @@ pub async fn update(
 ) -> Result<(MutationResult, bool), &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
     let mut noop = false;
-    if let Change::SetBrowserShare { member, share_id } = &input.change
-        && fresh_join(store, owner, operation, input.expected_revision).await?
-    {
-        let shares = store
-            .browser_shares(owner)
-            .await
-            .map_err(|_| "unavailable")?;
-        noop = shares.membership(member).map(|row| &row.share_id) == share_id.as_ref();
-        if let Some(share_id) = share_id
-            && !noop
+    match &input.change {
+        Change::SetBrowserShare { member, share_id }
+            if fresh_join(store, owner, operation, input.expected_revision).await? =>
         {
-            super::network::join_refusal(state, owner, (member, share_id)).await?;
+            let shares = store
+                .browser_shares(owner)
+                .await
+                .map_err(|_| "unavailable")?;
+            let current = shares.membership(member).map(|row| row.share_id.as_str());
+            noop = current == share_id.as_deref();
+            if !noop {
+                if state
+                    .browsers
+                    .has_pending_navigation(owner, &member.own_key(owner))
+                    || current.is_some_and(|id| {
+                        state
+                            .browsers
+                            .has_pending_navigation(owner, &browser_shares::share_key(owner, id))
+                    })
+                    || share_id.as_deref().is_some_and(|id| {
+                        state
+                            .browsers
+                            .has_pending_navigation(owner, &browser_shares::share_key(owner, id))
+                    })
+                {
+                    return Err("browser_navigation_pending");
+                }
+                if let Some(share_id) = share_id {
+                    super::network::join_refusal(state, owner, (member, share_id)).await?;
+                }
+            }
         }
+        Change::DeleteBrowserShare { share_id }
+            if fresh_join(store, owner, operation, input.expected_revision).await? =>
+        {
+            if state
+                .browsers
+                .has_pending_navigation(owner, &browser_shares::share_key(owner, share_id))
+            {
+                return Err("browser_navigation_pending");
+            }
+        }
+        _ => {}
     }
     let result = store
         .mutate_browser_shares(owner, operation, input)

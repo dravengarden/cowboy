@@ -13,11 +13,89 @@ use crate::machine_protocol::{MachineCommand, machine_browser};
 /// connection's lifetime. Invoked outside every correlation lock; the events
 /// name accounts and never enter the shared diagnostics history.
 pub type BrowserObserver = Arc<dyn Fn(&ConnectionToken, &machine_browser::Event) + Send + Sync>;
+/// Consumer notified when a Machine answers a browser request with a
+/// `CommandResult` (including late refusals after the caller's HTTP timeout).
+/// Returns `true` if `request_id` belonged to a tracked browser command so
+/// its payload never enters shared diagnostics history.
+pub type BrowserResultObserver = Arc<dyn Fn(&ConnectionToken, &str) -> bool + Send + Sync>;
+
+/// Why [`MachineControl::browser_command_checked`] did not receive a browser
+/// state event: either the Controller wait timed out while the Machine may
+/// still execute the dispatched command, or dispatch/execution definitely failed.
+#[derive(Debug)]
+pub enum BrowserCommandError {
+    TimedOut,
+    Failed(String),
+}
+
+impl BrowserCommandError {
+    pub fn into_message(self) -> String {
+        match self {
+            Self::TimedOut => "Machine browser command timed out".into(),
+            Self::Failed(detail) => detail,
+        }
+    }
+}
+
+impl std::fmt::Display for BrowserCommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TimedOut => f.write_str("Machine browser command timed out"),
+            Self::Failed(detail) => f.write_str(detail),
+        }
+    }
+}
 
 impl MachineControl {
     /// Install the consumer of Machine browser observations.
     pub fn set_browser_observer(&self, observer: BrowserObserver) {
         *self.browser_observer.write() = Some(observer);
+    }
+
+    /// Install the consumer of Machine `CommandResult` replies that settle
+    /// tracked browser request fences.
+    pub fn set_browser_result_observer(&self, observer: BrowserResultObserver) {
+        *self.browser_result_observer.write() = Some(observer);
+    }
+
+    pub(super) fn notify_browser_result(&self, token: &ConnectionToken, request_id: &str) -> bool {
+        let observer = self.browser_result_observer.read().clone();
+        observer.is_some_and(|observer| observer(token, request_id))
+    }
+
+    /// One Machine browser command on the exact authenticated connection,
+    /// distinguishing a wait timeout (command still in flight on the Machine)
+    /// from a definite send/refusal/disconnect failure.
+    pub async fn browser_command_checked(
+        &self,
+        connection: &ConnectionToken,
+        request_id: String,
+        command: machine_browser::Command,
+        timeout: std::time::Duration,
+    ) -> Result<machine_browser::StateEvent, BrowserCommandError> {
+        let (rx, _pending) = self
+            .begin_request(
+                &connection.0.machine_id,
+                &request_id,
+                MachineCommand::Browser {
+                    request_id: request_id.clone(),
+                    browser: command,
+                },
+                ReplyKind::Browser,
+                Some(RequestBinding::Connection(connection)),
+            )
+            .map_err(BrowserCommandError::Failed)?;
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(Reply::Browser(Ok(state)))) => Ok(*state),
+            Ok(Ok(Reply::Browser(Err(detail)))) => Err(BrowserCommandError::Failed(detail)),
+            Ok(Ok(_)) => Err(BrowserCommandError::Failed(
+                "Machine browser reply kind mismatch".into(),
+            )),
+            Ok(Err(_)) => Err(BrowserCommandError::Failed(
+                "Machine browser response channel closed".into(),
+            )),
+            Err(_) => Err(BrowserCommandError::TimedOut),
+        }
     }
 
     /// One Machine browser command on the exact authenticated connection,
@@ -29,23 +107,9 @@ impl MachineControl {
         command: machine_browser::Command,
         timeout: std::time::Duration,
     ) -> Result<machine_browser::StateEvent, String> {
-        let (rx, _pending) = self.begin_request(
-            &connection.0.machine_id,
-            &request_id,
-            MachineCommand::Browser {
-                request_id: request_id.clone(),
-                browser: command,
-            },
-            ReplyKind::Browser,
-            Some(RequestBinding::Connection(connection)),
-        )?;
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(Reply::Browser(Ok(state)))) => Ok(*state),
-            Ok(Ok(Reply::Browser(Err(detail)))) => Err(detail),
-            Ok(Ok(_)) => Err("Machine browser reply kind mismatch".into()),
-            Ok(Err(_)) => Err("Machine browser response channel closed".into()),
-            Err(_) => Err("Machine browser command timed out".into()),
-        }
+        self.browser_command_checked(connection, request_id, command, timeout)
+            .await
+            .map_err(BrowserCommandError::into_message)
     }
 
     /// Fire-and-forget attachment lease renewal; the Machine answers only a

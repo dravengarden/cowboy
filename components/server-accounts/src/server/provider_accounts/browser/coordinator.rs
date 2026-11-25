@@ -123,6 +123,18 @@ pub struct Coordinator {
     share_locks: Locks,
     /// Per Machine: placements its current connection has not answered for.
     inventories: parking_lot::Mutex<HashMap<String, Inventory>>,
+    /// Identity-bound navigations dispatched to a Machine and not yet settled
+    /// (including those whose Controller HTTP wait timed out while the Machine
+    /// was still busy with a snapshot). Keyed by `request_id`.
+    pending_navigations: parking_lot::Mutex<HashMap<String, PendingNavigation>>,
+}
+
+#[derive(Clone)]
+struct PendingNavigation {
+    owner: String,
+    browser_key: ProviderAccountId,
+    connection: ConnectionToken,
+    instance: InstanceRef,
 }
 
 /// What the cache keeps of a state event. A reason on a running instance's
@@ -170,6 +182,9 @@ impl Coordinator {
         self.cancel_viewers_where(|(machine, _), viewer| {
             *machine == machine_id && !viewer.connection.same(connection)
         });
+        self.pending_navigations.lock().retain(|_, pending| {
+            pending.connection.machine_id() != machine_id || pending.connection.same(connection)
+        });
     }
 
     /// A Machine connection ended: drop what it reported and end its viewers.
@@ -200,6 +215,9 @@ impl Coordinator {
             .write()
             .retain(|_, observed| !observed.connection.same(connection));
         self.cancel_viewers_where(|_, viewer| viewer.connection.same(connection));
+        self.pending_navigations
+            .lock()
+            .retain(|_, pending| !pending.connection.same(connection));
     }
 
     fn is_current(&self, connection: &ConnectionToken) -> bool {
@@ -298,6 +316,7 @@ impl Coordinator {
                     }
                 }
                 self.end_mismatched_viewer(&key, state);
+                self.settle_navigations_from_state(connection, state);
             }
             Event::Capability(capability) => {
                 self.observe_capability(connection, Some(capability.clone()));
@@ -305,6 +324,9 @@ impl Coordinator {
             Event::CapabilityLost => {
                 self.observe_capability(connection, None);
                 self.cancel_viewers_where(|(machine, _), _| machine == machine_id);
+                self.pending_navigations
+                    .lock()
+                    .retain(|_, pending| !pending.connection.same(connection));
             }
         }
     }
@@ -532,6 +554,86 @@ impl Coordinator {
     /// opens, and identity-bound instance commands (`expected_browser`).
     pub fn share_lock(&self, owner: &str) -> Arc<tokio::sync::Mutex<()>> {
         lock_for(&self.share_locks, owner)
+    }
+
+    /// Record an identity-bound navigation dispatched on `connection` so share
+    /// membership changes remain fenced even if the Controller wait times out
+    /// before the Machine confirms completion or cancellation.
+    pub fn begin_navigation(
+        &self,
+        request_id: String,
+        owner: &str,
+        browser_key: ProviderAccountId,
+        connection: &ConnectionToken,
+        instance: InstanceRef,
+    ) {
+        self.pending_navigations.lock().insert(
+            request_id,
+            PendingNavigation {
+                owner: owner.to_owned(),
+                browser_key,
+                connection: connection.clone(),
+                instance,
+            },
+        );
+    }
+
+    /// Clear a tracked navigation fence once the command definitely failed or
+    /// finished on the Machine.
+    pub fn settle_navigation(&self, request_id: &str) {
+        self.pending_navigations.lock().remove(request_id);
+    }
+
+    /// Clear a tracked navigation fence when the exact Machine connection
+    /// answers that `request_id` (for example a delayed `CommandResult` refusal).
+    /// Returns `true` when a matching browser navigation was settled.
+    pub fn settle_navigation_on(&self, connection: &ConnectionToken, request_id: &str) -> bool {
+        let mut pending = self.pending_navigations.lock();
+        if pending
+            .get(request_id)
+            .is_some_and(|entry| entry.connection.same(connection))
+        {
+            pending.remove(request_id);
+            return true;
+        }
+        false
+    }
+
+    /// Whether `browser_key` has any unsettled identity-bound navigation in
+    /// flight on a connected Machine.
+    pub fn has_pending_navigation(&self, owner: &str, browser_key: &ProviderAccountId) -> bool {
+        self.pending_navigations
+            .lock()
+            .values()
+            .any(|pending| pending.owner == owner && pending.browser_key == *browser_key)
+    }
+
+    fn settle_navigations_from_state(&self, connection: &ConnectionToken, state: &StateEvent) {
+        let mut pending = self.pending_navigations.lock();
+        if let Some(request_id) = state.request_id.as_deref()
+            && pending
+                .get(request_id)
+                .is_some_and(|entry| entry.connection.same(connection))
+        {
+            pending.remove(request_id);
+        }
+        let stopped = !matches!(state.state, State::Detached | State::Attached);
+        pending.retain(|_, entry| {
+            if !entry.connection.same(connection) || entry.browser_key != state.instance.account_id
+            {
+                return true;
+            }
+            if stopped {
+                return false;
+            }
+            if !state.instance.instance_id.is_empty()
+                && (state.instance.instance_id != entry.instance.instance_id
+                    || state.instance.incarnation > entry.instance.incarnation)
+            {
+                return false;
+            }
+            true
+        });
     }
 
     /// Whether the Controller holds a viewer for the account's instance on

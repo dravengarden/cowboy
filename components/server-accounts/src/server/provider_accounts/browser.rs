@@ -61,6 +61,14 @@ pub fn install_observer(state: &Arc<AppState>) {
                 state.browsers.observe(connection, event);
             }
         }));
+    let weak_results = Arc::downgrade(state);
+    state
+        .machine_control
+        .set_browser_result_observer(Arc::new(move |connection, request_id| {
+            weak_results
+                .upgrade()
+                .is_some_and(|state| state.browsers.settle_navigation_on(connection, request_id))
+        }));
     shares::start_deletion_reconciler(state);
 }
 
@@ -639,7 +647,8 @@ pub async fn state_value(
     }
     let mut value = json!({"machine_id": Value::Null, "state": Value::Null, "placements": placements, "admission": gate,
         "choose_machine": choose, "capable_machines": capable,
-        "share": resolved.shared().map(|share| share.value(owner)), "browser_identity": resolved.identity()});
+        "share": resolved.shared().map(|share| share.value(owner)), "browser_identity": resolved.identity(),
+        "navigate_identity_fenced": true});
     if let Some(observed) = &observed {
         value["machine_id"] = json!(observed.machine_id);
         value["state"] = json!(resolved.present(&observed.event));
@@ -956,19 +965,48 @@ pub async fn instance_command(
     if authority == Authority::Launch {
         network::admitted_on(state, &resolved, &observed.connection).await?;
     }
+    let tracked_instance = expected_browser.is_some().then(|| instance.clone());
     let command = command(instance);
     let request = request_id("browser");
     if let Command::Hibernate { instance } = &command {
         hibernate_sent(&observed.machine_id, instance, &request, "owner_request");
     }
-    let event = state
+    if let Some(tracked) = tracked_instance {
+        state.browsers.begin_navigation(
+            request.clone(),
+            owner,
+            resolved.key.clone(),
+            &observed.connection,
+            tracked,
+        );
+    }
+    let event = match state
         .machine_control
-        .browser_command(&observed.connection, request, command, timeout)
+        .browser_command_checked(&observed.connection, request.clone(), command, timeout)
         .await
-        .map_err(|error| {
+    {
+        Ok(event) => {
+            if expected_browser.is_some() {
+                state.browsers.settle_navigation(&request);
+            }
+            event
+        }
+        Err(crate::machine_control::BrowserCommandError::TimedOut) => {
+            tracing::warn!(
+                request_id = %request,
+                fenced = expected_browser.is_some(),
+                "browser command timed out; keeping navigation fence until Machine settles"
+            );
+            return Err("browser_command_failed");
+        }
+        Err(crate::machine_control::BrowserCommandError::Failed(error)) => {
+            if expected_browser.is_some() {
+                state.browsers.settle_navigation(&request);
+            }
             tracing::warn!(%error, "browser command failed");
-            "browser_command_failed"
-        })?;
+            return Err("browser_command_failed");
+        }
+    };
     Ok(resolved.state_json(&observed.machine_id, &event))
 }
 

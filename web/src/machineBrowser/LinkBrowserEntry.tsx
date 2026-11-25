@@ -12,6 +12,7 @@ import { productSessionSignal } from "../productSessionEnd";
 import { productSyncPrincipal } from "../productSyncIdentity";
 import { browserErrorText, type MachineBrowserApi, machineBrowserApi } from "./api";
 import { linkBrowserOffered } from "./entryRules";
+import { linkRequiresControllerUpgrade } from "./linkNavigation";
 import { MachineBrowserSheet } from "./MachineBrowserSheet";
 
 export function LinkBrowserEntry({
@@ -53,10 +54,19 @@ export function LinkBrowserEntry({
       .then(
         (read) => {
           if (!abort.signal.aborted && productSyncPrincipal() === owner) {
-            const ok = linkBrowserOffered(read, machine);
+            const upgrade = linkRequiresControllerUpgrade(read, read.browser_identity);
+            const ok = !upgrade && linkBrowserOffered(read, machine);
             setOffered(ok);
             setExpectedBrowser(ok ? read.browser_identity : undefined);
-            if (!ok) setReason(read.admission ? browserErrorText(read.admission) : `This account’s Machine browser cannot run on ${machine} now.`);
+            if (!ok) {
+              setReason(
+                upgrade
+                  ? browserErrorText("browser_navigate_identity_unsupported")
+                  : read.admission
+                    ? browserErrorText(read.admission)
+                    : `This account’s Machine browser cannot run on ${machine} now.`,
+              );
+            }
           }
         },
         () => {

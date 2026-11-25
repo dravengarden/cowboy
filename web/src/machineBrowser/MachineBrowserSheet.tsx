@@ -48,6 +48,7 @@ import {
   type BrowserLink,
   activeBrowserLink,
   linkEntry,
+  linkRequiresControllerUpgrade,
   linkTarget,
   resumeBlockedByIdentity,
 } from "./linkNavigation";
@@ -137,16 +138,17 @@ function browserCommands(
 /** Open or attach once when asked to, and show a link once in the running
  * browser on its Machine only. */
 function useAutoEntry(
-  props: MachineBrowserSheetProps & { entry: EntryLatch },
+  props: MachineBrowserSheetProps & { entry: EntryLatch; boundIdentity: string | undefined },
   browser: MachineBrowserController,
   commands: BrowserCommands,
 ): void {
-  const { open, link, autoOpen = false } = props;
+  const { open, link, autoOpen = false, boundIdentity } = props;
   const { model } = browser;
   const state = model.read?.state ?? null;
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
   const latch = props.entry;
+  const expectedIdentity = link?.expectedBrowser ?? boundIdentity;
   const readyToAutoOpen =
     (autoOpen || link !== undefined) &&
     open &&
@@ -157,20 +159,18 @@ function useAutoEntry(
   useEffect(() => {
     if (!readyToAutoOpen) return;
     const entry = link
-      ? linkEntry(model.read, link.machine, link.expectedBrowser)
+      ? linkEntry(model.read, link.machine, expectedIdentity)
       : autoEntry(state?.state);
     if (entry === undefined || !takeLatch(latch, "autoOpened")) return;
     if (entry === "attach") commandsRef.current.attach(false);
     else commandsRef.current.open();
-  }, [readyToAutoOpen, latch, link, model.read, state]);
+  }, [readyToAutoOpen, expectedIdentity, latch, link, model.read, state]);
   const shownLink =
-    link && !model.busy ? linkTarget(model, link.machine, link.expectedBrowser) : undefined;
-  const navigateIdentity =
-    link?.expectedBrowser ?? model.observedIdentity ?? model.read?.browser_identity;
+    link && !model.busy ? linkTarget(model, link.machine, expectedIdentity) : undefined;
   useEffect(() => {
     if (!link || !shownLink || !takeLatch(latch, "linked")) return;
-    browser.navigate(link.url, shownLink.target, shownLink.attachmentId, navigateIdentity);
-  }, [browser, latch, link, navigateIdentity, shownLink]);
+    browser.navigate(link.url, shownLink.target, shownLink.attachmentId, expectedIdentity);
+  }, [browser, expectedIdentity, latch, link, shownLink]);
 }
 
 function usePageVisible(): boolean {
@@ -491,6 +491,9 @@ function MachineBrowserPanel(props: MachineBrowserPanelProps): React.JSX.Element
     machineLabel,
     touch,
     link: link !== undefined,
+    linkUpgradeRequired:
+      link !== undefined &&
+      linkRequiresControllerUpgrade(model.read, link.expectedBrowser ?? props.boundIdentity),
     pinned,
     retry: retryOffered(model, pinned),
     commands: uiCommands,

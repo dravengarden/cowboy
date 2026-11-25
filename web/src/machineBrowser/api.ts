@@ -74,6 +74,9 @@ export interface BrowserRead {
   browser_identity?: string;
   /** The shared profile the card uses, with every member it serves. */
   share?: BrowserReadShare | null;
+  /** Whether this Controller accepts `expected_browser` on `/browser/navigate`
+   * and enforces it under the share fence. */
+  navigate_identity_fenced?: boolean;
 }
 
 export interface BrowserReadShare {
@@ -201,7 +204,9 @@ export function validBrowserRead(value: unknown): value is BrowserRead {
       (Array.isArray(value.capable_machines) &&
         value.capable_machines.every((machine) => record(machine) && text(machine.machine_id)))) &&
     (value.browser_identity === undefined || text(value.browser_identity)) &&
-    (value.share === undefined || value.share === null || validReadShare(value.share))
+    (value.share === undefined || value.share === null || validReadShare(value.share)) &&
+    (value.navigate_identity_fenced === undefined ||
+      typeof value.navigate_identity_fenced === "boolean")
   );
 }
 
@@ -531,6 +536,10 @@ const ERROR_TEXT: Record<string, string> = {
     "A reset of this group's browser profile has not finished yet. Membership changes wait until it does; try again shortly.",
   browser_identity_changed:
     "This card's browser changed (it joined or left a shared group) since you confirmed. Check it and retry.",
+  browser_navigation_pending:
+    "A browser navigation on this profile has not finished yet. Membership changes wait until it settles; try again shortly.",
+  browser_navigate_identity_unsupported:
+    "Update the Cowboy Controller before opening account-bound links in this browser.",
   invalid_response: "The Service answered in an unexpected shape.",
 };
 

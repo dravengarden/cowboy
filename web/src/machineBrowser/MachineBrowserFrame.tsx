@@ -36,6 +36,7 @@ function BrowserEmptyPage({
   state,
   machineLabel,
   link,
+  linkUpgradeRequired,
   pinned,
   commands,
   enabling,
@@ -47,6 +48,7 @@ function BrowserEmptyPage({
   state: BrowserStateEvent | null;
   machineLabel: string;
   link: boolean;
+  linkUpgradeRequired: boolean;
   pinned: boolean;
   commands: BrowserCommands;
   enabling: boolean;
@@ -54,7 +56,9 @@ function BrowserEmptyPage({
   onConfirm: (kind: ConfirmKind) => void;
   shared: SharedBrowser | undefined;
 }): React.JSX.Element {
-  const admission = model.read?.admission;
+  const admission =
+    model.read?.admission ??
+    (linkUpgradeRequired ? "browser_navigate_identity_unsupported" : null);
   const stateTitle = !model.loaded
     ? "Reading the browser state…"
     : admission
@@ -106,14 +110,16 @@ function BrowserEmptyPage({
           Enable browser for this account
         </Button>
       )}
-      <BrowserPrimaryAction
-        model={model}
-        state={state}
-        pinned={pinned}
-        commands={commands}
-        onConfirm={onConfirm}
-      />
-      {link && (
+      {!linkUpgradeRequired && (
+        <BrowserPrimaryAction
+          model={model}
+          state={state}
+          pinned={pinned}
+          commands={commands}
+          onConfirm={onConfirm}
+        />
+      )}
+      {link && !linkUpgradeRequired && (
         <Typography variant="caption" color="text.secondary" sx={{ maxWidth: 420 }}>
           {pinned
             ? "The link opens in this account’s browser once it runs. Anything the page shows you (such as a code) stays yours to copy back."
@@ -178,6 +184,7 @@ export interface BrowserFrameProps {
   /** Touch input (`useTouchInput`), not the panel layout. */
   touch: boolean;
   link: boolean;
+  linkUpgradeRequired?: boolean | undefined;
   pinned: boolean;
   retry: boolean;
   commands: BrowserCommands;
@@ -243,6 +250,7 @@ export function BrowserFrame(props: BrowserFrameProps): React.JSX.Element {
           state={state}
           machineLabel={props.machineLabel}
           link={props.link}
+          linkUpgradeRequired={props.linkUpgradeRequired === true}
           pinned={props.pinned}
           commands={commands}
           enabling={props.enabling}
