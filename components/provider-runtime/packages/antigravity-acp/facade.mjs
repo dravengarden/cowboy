@@ -67,6 +67,8 @@ export const READINESS_PREFIX = "cowboy-agy-readiness-";
 
 /** Maximum byte length of one JSON apply request fed to `APPLY_STDIN`. */
 const MAX_STDIN_APPLY_BYTES = 5 * 1024 * 1024;
+/** Private Symbol channel for trusted WriteFile/EditFile post-edit receipts (unforgeable by JSON MCP results). */
+const POST_EDIT_META = Symbol("postEditMeta");
 /**
  * Exact worker-side `-32000` messages that definitively prove a request was
  * refused before transport admission (never matches `unavailable()` unknown outcomes).
@@ -925,9 +927,9 @@ export class Facade {
     } finally {
       if (callTurn && callTurn.openCalls > 0) callTurn.openCalls -= 1;
     }
-    const postEditMeta = rawResult?._postEditMeta;
+    const postEditMeta = rawResult?.[POST_EDIT_META];
     const cleanResult =
-      rawResult && Object.hasOwn(rawResult, "_postEditMeta")
+      rawResult && Object.hasOwn(rawResult, POST_EDIT_META)
         ? { content: rawResult.content, ...(rawResult.isError ? { isError: true } : {}) }
         : rawResult;
     // Presentation only: it never changes the answer `agy` receives.
@@ -966,9 +968,9 @@ export class Facade {
     } finally {
       if (callTurn && callTurn.openCalls > 0) callTurn.openCalls -= 1;
     }
-    const postEditMeta = rawResult?._postEditMeta;
+    const postEditMeta = rawResult?.[POST_EDIT_META];
     const cleanResult =
-      rawResult && Object.hasOwn(rawResult, "_postEditMeta")
+      rawResult && Object.hasOwn(rawResult, POST_EDIT_META)
         ? { content: rawResult.content, ...(rawResult.isError ? { isError: true } : {}) }
         : rawResult;
     try {
@@ -1572,7 +1574,7 @@ ${WRAP_UP_NOTE}`,
       const text = published.verified
         ? `${current ? "Replaced" : "Created"} ${file}: ${VERIFIED}`
         : `${current ? "Replaced" : "Created"} ${file} (${bytes.length} bytes)`;
-      return { content: [{ type: "text", text }], _postEditMeta: published.postEdit };
+      return { content: [{ type: "text", text }], [POST_EDIT_META]: published.postEdit };
     });
   }
 
@@ -1626,7 +1628,7 @@ ${WRAP_UP_NOTE}`,
       const summary = published.verified
         ? `Edited ${file}: ${VERIFIED}`
         : `Edited ${file} (${replaced} replacement${replaced === 1 ? "" : "s"})`;
-      return { content: [{ type: "text", text: summary }], _postEditMeta: published.postEdit };
+      return { content: [{ type: "text", text: summary }], [POST_EDIT_META]: published.postEdit };
     });
   }
 
@@ -1713,6 +1715,7 @@ ${WRAP_UP_NOTE}`,
       timeoutMs: this.publishTimeoutMs,
       maxBytes: 64 * 1024,
       lostIsUncertain: true,
+      fenceOnTimeout: true,
       pipeStdin: stdinPayload !== undefined,
       stdinPayload,
       beforeSend,
@@ -1807,18 +1810,51 @@ ${WRAP_UP_NOTE}`,
     return read;
   }
 
-  async readOnce(process, waitMs, { lostIsUncertain = true, deadline, cleanup = false } = {}) {
+  async readOnce(
+    process,
+    waitMs,
+    {
+      lostIsUncertain = true,
+      deadline,
+      cleanup = false,
+      retryPreDispatch = false,
+      enforceDeadline = false,
+    } = {},
+  ) {
     // Checked when this read's turn in the chain comes: a reader ahead of
     // it may have confirmed the close or used the caller's remaining time.
     if (process.closed) return [];
+    let remaining;
     if (deadline !== undefined) {
-      const remaining = deadline - Date.now();
+      remaining = deadline - Date.now();
       if (remaining <= 0) return [];
-      waitMs = Math.min(waitMs, remaining);
+      // Leave headroom before the absolute deadline on publish/cleanup reads
+      // so normal quiet waits finish before the transport timeout fires (R16-M3).
+      waitMs =
+        enforceDeadline || cleanup
+          ? Math.min(waitMs, remaining <= 50 ? 0 : Math.max(0, remaining - 50))
+          : Math.min(waitMs, remaining);
     }
+    const hardDeadline = deadline !== undefined && (enforceDeadline || cleanup);
+    let dispatched = false;
+    let closedBeforeDispatch = false;
+    let timer;
+    const deadlineSentinel = Symbol("read-deadline");
     let result;
     try {
-      result = await this.connection.call(
+      const callOpts = hardDeadline
+        ? {
+            ...(cleanup ? { cleanup: true } : {}),
+            timeoutMs: Math.max(1, Math.ceil(remaining)),
+            beforeSend: () => {
+              if (closedBeforeDispatch || process.closed || Date.now() >= deadline) {
+                throw new Error("Execution unavailable; read deadline expired before dispatch");
+              }
+              dispatched = true;
+            },
+          }
+        : undefined;
+      const call = this.connection.call(
         "process/read",
         {
           processId: process.processId,
@@ -1826,8 +1862,29 @@ ${WRAP_UP_NOTE}`,
           maxBytes: 65536,
           waitMs,
         },
-        cleanup ? { cleanup: true } : undefined,
+        callOpts,
       );
+      if (hardDeadline) {
+        call.catch(() => {});
+        const expired = new Promise((resolve) => {
+          timer = setTimeout(
+            () => {
+              closedBeforeDispatch = true;
+              resolve(deadlineSentinel);
+            },
+            Math.max(1, Math.ceil(remaining)),
+          );
+        });
+        const raced = await Promise.race([call, expired]);
+        if (raced === deadlineSentinel) {
+          closedBeforeDispatch = true;
+          if (dispatched && lostIsUncertain) throw new UncertainEffect("process/read");
+          return [];
+        }
+        result = raced;
+      } else {
+        result = await call;
+      }
     } catch (error) {
       if (forgotten(error, process.processId)) {
         // E1: the executor forgot it, so it ended; its exit status and any
@@ -1837,14 +1894,26 @@ ${WRAP_UP_NOTE}`,
         process.wake?.();
         return [];
       }
+      if (!dispatched && closedBeforeDispatch) {
+        return [];
+      }
+      if (retryPreDispatch && !dispatched && retryablePreAdmission(error)) {
+        throw error;
+      }
       // A started process whose state cannot be read, because the reply was
-      // lost or the connection could not be opened again, has an unknown
-      // outcome: a quiet reader waits with no read in flight, so a close
-      // reaches it as a reconnect failure rather than a lost reply.
-      if (lostIsUncertain && (unknownOutcome(error) || unreachable(error))) {
+      // lost, stalled past the publish deadline, or the connection could not
+      // be opened again, has an unknown outcome.
+      if (
+        lostIsUncertain &&
+        (unknownOutcome(error) ||
+          unreachable(error) ||
+          (dispatched && error?.message === "Target request timed out"))
+      ) {
         throw new UncertainEffect("process/read");
       }
       throw error;
+    } finally {
+      clearTimeout(timer);
     }
     const chunks = [];
     for (const chunk of result.chunks ?? []) {
@@ -1944,21 +2013,53 @@ ${WRAP_UP_NOTE}`,
     // first. Only a stop refused before it was sent (no connection, or no
     // request slot) is sent again later; a reply lost after sending keeps it.
     for (;;) {
+      if (process.closed) return true;
+      const leftBefore = deadline - Date.now();
+      if (leftBefore <= 0) return process.closed;
+      let ownStopClosed = false;
       if (!process.stopping) {
-        process.stopping = this.connection
-          .call("process/terminate", { processId: process.processId })
+        let stopDispatched = false;
+        const stopCall = this.connection
+          .call(
+            "process/terminate",
+            { processId: process.processId },
+            {
+              timeoutMs: Math.max(1, Math.ceil(leftBefore)),
+              beforeSend: () => {
+                if (ownStopClosed || process.closed || Date.now() >= deadline) {
+                  throw new Error(
+                    "Execution unavailable; terminate deadline expired before dispatch",
+                  );
+                }
+                stopDispatched = true;
+              },
+            },
+          )
           .catch((error) => {
             // Callers joined on this stop see its failure; a later caller only
             // observes (the stop may have been delivered) or, if it was never
-            // sent, sends it.
-            process.stopping = retryablePreAdmission(error) ? undefined : Promise.resolve();
+            // sent/admitted, sends it.
+            process.stopping =
+              (!stopDispatched && (ownStopClosed || retryablePreAdmission(error))) ||
+              workerNotAdmitted(error)
+                ? undefined
+                : Promise.resolve();
             throw error;
           });
-        process.stopping.catch(() => {});
+        stopCall.catch(() => {});
+        process.stopping = stopCall;
+      }
+      const remainingStop = deadline - Date.now();
+      if (remainingStop <= 0) {
+        ownStopClosed = true;
+        return process.closed;
       }
       let stopTimer;
       const stopExpired = new Promise((resolve) => {
-        stopTimer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
+        stopTimer = setTimeout(() => {
+          ownStopClosed = true;
+          resolve(false);
+        }, remainingStop);
       });
       try {
         if ((await Promise.race([process.stopping.then(() => true), stopExpired])) === false) {
@@ -1968,8 +2069,9 @@ ${WRAP_UP_NOTE}`,
       } catch (error) {
         if (retryNotSent && retryablePreAdmission(error)) {
           const left = deadline - Date.now();
-          if (left <= 0) return process.closed;
+          if (left <= 0 || process.closed) return process.closed;
           await new Promise((resolve) => setTimeout(resolve, Math.min(25, left)));
+          if (process.closed || Date.now() >= deadline) return process.closed;
           continue;
         }
         throw error;
@@ -1998,8 +2100,9 @@ ${WRAP_UP_NOTE}`,
       } catch (error) {
         if (retryNotSent && retryablePreAdmission(error)) {
           const left = deadline - Date.now();
-          if (left <= 0) break;
+          if (left <= 0 || process.closed) break;
           await new Promise((resolve) => setTimeout(resolve, Math.min(25, left)));
+          if (process.closed || Date.now() >= deadline) break;
           continue;
         }
         throw error;
@@ -2032,6 +2135,7 @@ ${WRAP_UP_NOTE}`,
       maxBytes,
       maxLines,
       lostIsUncertain = true,
+      fenceOnTimeout = false,
       readiness = false,
       pipeStdin = false,
       stdinPayload = undefined,
@@ -2048,9 +2152,9 @@ ${WRAP_UP_NOTE}`,
     let truncated = false;
     let timedOut = false;
     let stdinTimedOutBeforeDispatch = false;
+    let stdinDelivered = stdinPayload === undefined;
     let failure;
     try {
-      let stdinDelivered = stdinPayload === undefined;
       if (stdinPayload !== undefined) {
         const chunk = Buffer.concat([stdinPayload, Buffer.from("\n")]).toString("base64");
         const writeId = randomUUID();
@@ -2164,6 +2268,8 @@ ${WRAP_UP_NOTE}`,
         try {
           chunks = await this.poll(process, remaining, {
             lostIsUncertain,
+            retryPreDispatch: true,
+            enforceDeadline: fenceOnTimeout,
           });
           readRefusedByCapacity = false;
         } catch (error) {
@@ -2211,6 +2317,20 @@ ${WRAP_UP_NOTE}`,
       !stdinTimedOutBeforeDispatch &&
       !truncated &&
       process.forgotten === true;
+    // Fence an unproven publish before awaiting stop confirmation (which can
+    // wait up to stopConfirmMs), so concurrent turn calls cannot mutate files
+    // during cleanup — even after a capacity refusal followed by an empty final
+    // poll (R16-M2).
+    if (
+      fenceOnTimeout &&
+      turn &&
+      !process.closed &&
+      !stdinTimedOutBeforeDispatch &&
+      (stdinDelivered || !stdinPayload) &&
+      (timedOut || truncated)
+    ) {
+      this.fenceLost(turn, "file publish");
+    }
     // Whatever ended the loop, the process is not left running unconfirmed: a
     // helper that may still publish is an effect of unknown outcome.
     if (!process.closed) {

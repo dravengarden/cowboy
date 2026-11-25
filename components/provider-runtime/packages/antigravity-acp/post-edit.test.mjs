@@ -3588,3 +3588,404 @@ test("Replay tool provenance is isolated per child turn so sibling churn cannot 
     false,
   );
 });
+
+test("Evicted mode switch reply cannot settle a re-admitted session's newer plan switch (R16-M1)", async () => {
+  const agentFrames = [];
+  const clientFrames = [];
+  const runtime = {
+    managed: false,
+    facade: { beginTurn() {}, async endTurn() {} },
+    sessionCwd: (cwd) => cwd,
+    checkMirror() {},
+    projection: async () => "PROJ",
+    newChannel: () => "ch-0",
+    bindChannel() {},
+    mcpServer: () => ({ name: "cowboy", command: "/node", args: [], env: [] }),
+    evidence: { mark: async () => 1, settle: async () => ({ class: "ok", successes: 1 }) },
+  };
+  const proxy = new AcpProxy({
+    agent: (frame) => agentFrames.push(frame),
+    client: (frame) => clientFrames.push(frame),
+    runtime: Promise.resolve(runtime),
+  });
+  await proxy.runtime;
+  // Start a switch to default on s-0 (seq 1, incarnation A), leave it in flight.
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 101,
+    method: "session/set_mode",
+    params: { sessionId: "s-0", modeId: "default" },
+  });
+  // Make all 1024 sessions busy so fallback evicts s-0 while switch 101 is still in flight.
+  for (let i = 1; i <= 1024; i += 1) {
+    const sid = `s-busy-${i}`;
+    proxy.rememberSession(sid);
+    proxy.turns.set(sid, { attempt: Symbol("t"), tools: new Map() });
+  }
+  assert.equal(proxy.knownSessions.has("s-0"), false);
+  // Re-admit s-0 with a NEW switch to plan (seq 1, incarnation B).
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 102,
+    method: "session/set_mode",
+    params: { sessionId: "s-0", modeId: "plan" },
+  });
+  assert.equal(proxy.isSwitching("s-0"), true);
+  // Delayed reply to the evicted default switch (101) arrives: MUST NOT settle switch 102 or restore default!
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 101, result: {} });
+  assert.equal(proxy.isSwitching("s-0"), true, "evicted reply must not clear newer switch");
+  assert.equal(proxy.effectiveMode("s-0"), "switching");
+  // Write permission MUST still be denied while plan switch 102 is pending.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "perm-r16-m1",
+    method: "session/request_permission",
+    params: {
+      sessionId: "s-0",
+      toolCall: { toolCallId: "w1", name: "mcp_cowboy_WriteFile" },
+      options: [
+        { optionId: "allow", name: "Allow", kind: "allow_once" },
+        { optionId: "deny", name: "Deny", kind: "reject_once" },
+      ],
+    },
+  });
+  assert.deepEqual(agentFrames.at(-1), {
+    jsonrpc: "2.0",
+    id: "perm-r16-m1",
+    result: { outcome: { outcome: "selected", optionId: "deny" } },
+  });
+  // Real plan switch 102 completes cleanly.
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 102, result: {} });
+  assert.equal(proxy.effectiveMode("s-0"), "plan");
+});
+
+test("Refused reopen discards staged config updates and never leaves failed session admitted (R16-M5)", async () => {
+  const agentFrames = [];
+  const clientFrames = [];
+  const runtime = {
+    managed: false,
+    facade: { beginTurn() {}, async endTurn() {} },
+    sessionCwd: (cwd) => cwd,
+    checkMirror() {},
+    projection: async () => "PROJ",
+    newChannel: () => "ch-0",
+    bindChannel() {},
+    mcpServer: () => ({ name: "cowboy", command: "/node", args: [], env: [] }),
+    evidence: { mark: async () => 1, settle: async () => ({ class: "ok", successes: 1 }) },
+  };
+  const proxy = new AcpProxy({
+    agent: (frame) => agentFrames.push(frame),
+    client: (frame) => clientFrames.push(frame),
+    runtime: Promise.resolve(runtime),
+  });
+  await proxy.runtime;
+  // Case 1: session/load is refused by agy -> staged update discarded & session stays unadmitted.
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 201,
+    method: "session/load",
+    params: { sessionId: "s-fail-load", cwd: "/repo", mcpServers: [] },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-fail-load",
+      update: {
+        sessionUpdate: "config_option_update",
+        configOptions: [{ id: "mode", currentValue: "plan" }],
+      },
+    },
+  });
+  assert.equal(clientFrames.length, 0, "mid-load update for unadmitted ID must be staged");
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 201, error: { code: -32004, message: "not found" } });
+  assert.equal(proxy.knownSessions.has("s-fail-load"), false);
+  clientFrames.length = 0;
+  // A subsequent direct config_option_update for the failed ID must still be dropped.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-fail-load",
+      update: {
+        sessionUpdate: "config_option_update",
+        configOptions: [{ id: "mode", currentValue: "plan" }],
+      },
+    },
+  });
+  assert.equal(clientFrames.length, 0, "failed reopen ID must remain unadmitted");
+
+  // Case 2: session/load succeeds -> staged update releases AFTER the load reply without clobbering authoritative mode.
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 202,
+    method: "session/load",
+    params: { sessionId: "s-ok-load", cwd: "/repo", mcpServers: [] },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-ok-load",
+      update: {
+        sessionUpdate: "config_option_update",
+        configOptions: [{ id: "mode", currentValue: "default" }],
+      },
+    },
+  });
+  assert.equal(clientFrames.length, 0);
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 202,
+    result: { modes: { currentModeId: "plan" } },
+  });
+  assert.equal(proxy.knownSessions.has("s-ok-load"), true);
+  assert.equal(
+    proxy.effectiveMode("s-ok-load"),
+    "plan",
+    "staged update must not overwrite load result mode",
+  );
+  assert.equal(clientFrames.length, 2, "load reply then released staged update");
+  assert.equal(clientFrames[0].id, 202);
+  assert.equal(clientFrames[1].params?.update?.sessionUpdate, "config_option_update");
+});
+
+test("Capacity refusal followed by empty final poll fences unproven edit BEFORE cleanup runs (R16-M2)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r16-empty-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home, notifications: false });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const origCall = conn.call.bind(conn);
+  let ordinaryReads = 0;
+  let fencedBeforeTerminate = false;
+  let observedTurn;
+  conn.call = async (method, params, opts) => {
+    if (method === "process/read" && !opts?.cleanup) {
+      ordinaryReads += 1;
+      if (ordinaryReads === 1) {
+        throw new Error("Too many execution requests");
+      }
+      // Return empty still-open result consuming the rest of the 150ms publish budget.
+      await new Promise((r) => setTimeout(r, 170));
+      return { chunks: [], exited: false, closed: false };
+    }
+    if (method === "process/terminate") {
+      fencedBeforeTerminate = observedTurn?.uncertain !== undefined;
+    }
+    return await origCall(method, params, opts);
+  };
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh", publishTimeoutMs: 150 });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const session = facade.session("s1");
+    observedTurn = session.turn;
+    const large = "e".repeat(64 * 1024);
+    await assert.rejects(
+      () => facade.writeFile(session, observedTurn, { path: "empty-poll.txt", content: large }),
+      (err) => err instanceof UncertainEffect,
+    );
+    assert.equal(
+      fencedBeforeTerminate,
+      true,
+      "unproven edit must be fenced BEFORE terminate awaits cleanup",
+    );
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Stalled post-stdin result read honors absolute publish deadline instead of 185s timeout (R16-M3)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r16-stall-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  let stallRead = false;
+  const endpoint = await fakeEndpoint(socket, repo, {
+    home,
+    notifications: false,
+    // Stall the first ordinary process/read far beyond the 200ms publish deadline.
+    lose: (method) => {
+      if (method === "process/read" && stallRead) {
+        stallRead = false;
+        return true;
+      }
+      return false;
+    },
+  });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 60000 },
+  );
+  const origCall = conn.call.bind(conn);
+  let fencedBeforeTerminate = false;
+  let observedTurn;
+  conn.call = async (method, params, opts) => {
+    const res = await origCall(method, params, opts);
+    if (method === "process/write" && res?.status === "accepted") {
+      stallRead = true;
+    }
+    return res;
+  };
+  const origTerm = conn.call;
+  conn.call = async (method, params, opts) => {
+    if (method === "process/terminate") {
+      fencedBeforeTerminate = observedTurn?.uncertain !== undefined;
+    }
+    return await origTerm(method, params, opts);
+  };
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh", publishTimeoutMs: 200 });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const session = facade.session("s1");
+    observedTurn = session.turn;
+    const started = Date.now();
+    await assert.rejects(
+      () =>
+        facade.writeFile(session, observedTurn, {
+          path: "stall.txt",
+          content: "s".repeat(64 * 1024),
+        }),
+      (err) => err instanceof UncertainEffect && err.method === "process/read",
+    );
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 4000, `stalled read must expire at publish deadline, took ${elapsed}ms`);
+    assert.equal(fencedBeforeTerminate, true, "stalled read expiry must fence BEFORE cleanup");
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Transient pre-dispatch reconnect refusal on post-stdin read retries cleanly without parking (R16-M4)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r16-reconn-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home, notifications: false });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const origCall = conn.call.bind(conn);
+  let reconnectFailures = 0;
+  conn.call = async (method, params, opts) => {
+    if (method === "process/read" && !opts?.cleanup && reconnectFailures < 2) {
+      reconnectFailures += 1;
+      // Simulate a definite pre-dispatch reconnect failure (beforeSend was NOT called).
+      throw new Error("Execution unavailable; reconnect initialization failed before dispatch");
+    }
+    return await origCall(method, params, opts);
+  };
+  const lostEvents = [];
+  try {
+    const facade = new Facade(conn, {
+      root: repo,
+      shell: "/bin/sh",
+      onUncertain: (sid, method) => lostEvents.push([sid, method]),
+      onLost: (sid, method) => lostEvents.push([sid, method]),
+    });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const session = facade.session("s1");
+    const turn = session.turn;
+    const large = "r".repeat(64 * 1024);
+    await facade.writeFile(session, turn, { path: "reconn-ok.txt", content: large });
+    assert.equal(reconnectFailures, 2, "must retry pre-dispatch reconnect failure");
+    assert.equal(
+      turn.uncertain,
+      undefined,
+      "transient pre-dispatch reconnect failure must not park",
+    );
+    assert.deepEqual(lostEvents, []);
+    assert.equal(await readFile(join(repo, "reconn-ok.txt"), "utf8"), large);
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Cleanup terminate retry never dispatches a new stop after its confirmation deadline expires (R16-L1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r16-term-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home, notifications: false });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const origCall = conn.call.bind(conn);
+  let termCalls = 0;
+  let dispatchedAfterDeadline = false;
+  let testDeadline = 0;
+  conn.call = async (method, params, opts) => {
+    if (method === "process/terminate") {
+      termCalls += 1;
+      if (Date.now() > testDeadline + 5) dispatchedAfterDeadline = true;
+      if (termCalls === 1) {
+        // Consume almost the entire 40ms budget (leave ~10ms < 25ms) before refusing.
+        await new Promise((r) => setTimeout(r, 30));
+        throw new Error("Too many execution requests");
+      }
+    }
+    return await origCall(method, params, opts);
+  };
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const turn = facade.session("s1").turn;
+    const proc = await facade.start(turn, ["/bin/sh", "-c", "sleep 30"]);
+    testDeadline = Date.now() + 40;
+    const closed = await facade.terminate(proc, 40, { retryNotSent: true });
+    assert.equal(closed, false);
+    assert.equal(
+      termCalls,
+      1,
+      "must not start a second terminate after sleeping past the deadline",
+    );
+    assert.equal(dispatchedAfterDeadline, false);
+    // Clean up helper process.
+    conn.call = origCall;
+    await facade.terminate(proc, 5000);
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

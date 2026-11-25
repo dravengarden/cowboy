@@ -337,6 +337,8 @@ export class AcpProxy {
     this.calls = new Map();
     /** Root sessions admitted by the client (LRU-bounded); guards mode/permission state (R14-M2). */
     this.knownSessions = new Set();
+    /** In-flight load/resume reopens for previously unadmitted sessions: sessionId -> { count, staged } (R16-M5). */
+    this.openingReopens = new Map();
     /** Per-turn nonterminal tool announcements seen only via stale replay, outside live state (R14-M3, R15-M6). */
     this.staleReplayTools = new WeakMap();
     /** The canonical workspace root on the target, once the runtime is ready. */
@@ -559,6 +561,7 @@ export class AcpProxy {
     let state = this.switchState.get(sessionId);
     if (!state) {
       state = {
+        incarnation: Symbol("mode-state"),
         nextSeq: 0,
         latestSeq: 0,
         active: new Set(),
@@ -580,15 +583,15 @@ export class AcpProxy {
     state.activeReopens.add(seq);
     this.modes.delete(sessionId);
     this.invalidateModeFamily(sessionId, "The session is reloading.");
-    return seq;
+    return { seq, incarnation: state.incarnation };
   }
 
   /** Complete one tracked session reopen (`load`/`resume`), on either result or error. */
-  finishModeReopen(sessionId, seq) {
-    if (typeof sessionId !== "string" || seq === undefined) return;
+  finishModeReopen(sessionId, op) {
+    if (typeof sessionId !== "string" || op === undefined) return;
     const state = this.switchState.get(sessionId);
-    if (!state) return;
-    state.activeReopens.delete(seq);
+    if (!state || state.incarnation !== op.incarnation) return;
+    state.activeReopens.delete(op.seq);
     if (state.active.size === 0 && state.activeReopens.size === 0) {
       state.overlapped = false;
     }
@@ -604,7 +607,7 @@ export class AcpProxy {
     state.active.add(seq);
     this.modes.delete(sessionId);
     this.invalidateModeFamily(sessionId, "The session's mode is changing.");
-    return seq;
+    return { seq, incarnation: state.incarnation };
   }
 
   /**
@@ -612,9 +615,10 @@ export class AcpProxy {
    * replies without an authoritative mode, or empty `session/set_config_option`
    * replies requesting an unrestricted mode.
    */
-  finishModeSwitch(sessionId, seq, requestedMode, result, { allowEmptyUnrestricted = false } = {}) {
+  finishModeSwitch(sessionId, op, requestedMode, result, { allowEmptyUnrestricted = false } = {}) {
     const state = this.switchState.get(sessionId);
-    if (!state) return;
+    if (!state || !op || state.incarnation !== op.incarnation) return;
+    const seq = op.seq;
     state.active.delete(seq);
     if (state.active.size > 0) {
       // Intermediate switch errors still invalidate switching-era prompts while
@@ -1604,16 +1608,16 @@ export class AcpProxy {
     }
     const requested = this.requestedMode(method, forwarded.params);
     if (requested) {
-      requested.seq = this.beginModeSwitch(requested.sessionId);
+      requested.op = this.beginModeSwitch(requested.sessionId);
     }
     // Reopening a session clears any cached mode so a load/resume omitting
     // `modes` cannot retain an earlier unrestricted mode.
-    let modeOpSeq;
+    let modeOp;
     if (SESSION_REQUESTS.has(method) && typeof forwarded.params?.sessionId === "string") {
-      modeOpSeq = this.beginModeReopen(forwarded.params.sessionId);
+      modeOp = this.beginModeReopen(forwarded.params.sessionId);
     }
     // The reply is handled with this runtime, without awaiting it again.
-    const record = { method, runtime, mode: requested, modeOpSeq, params: forwarded.params };
+    const record = { method, runtime, mode: requested, modeOp, params: forwarded.params };
     if (method === "session/cancel") {
       return await this.cancel(forwarded);
     }
@@ -1642,7 +1646,12 @@ export class AcpProxy {
         record.session = params.sessionId;
         if (typeof params.sessionId === "string") {
           runtime.bindChannel(record.channel, params.sessionId);
-          this.rememberSession(params.sessionId);
+          if (!this.subagents.owns(params.sessionId) && !this.knownSessions.has(params.sessionId)) {
+            const entry = this.openingReopens.get(params.sessionId) ?? { count: 0, staged: [] };
+            entry.count += 1;
+            this.openingReopens.set(params.sessionId, entry);
+            record.stagedReopenSession = params.sessionId;
+          }
         }
         delete params.additionalDirectories;
         params.mcpServers = [runtime.mcpServer(record.channel)];
@@ -1650,8 +1659,15 @@ export class AcpProxy {
         forwarded.params = params;
       } catch (error) {
         if (method === "session/new") this.managedOpening = false;
-        if (modeOpSeq !== undefined) {
-          this.finishModeReopen(forwarded.params?.sessionId, modeOpSeq);
+        if (record.stagedReopenSession !== undefined) {
+          const entry = this.openingReopens.get(record.stagedReopenSession);
+          if (entry) {
+            entry.count -= 1;
+            if (entry.count <= 0) this.openingReopens.delete(record.stagedReopenSession);
+          }
+        }
+        if (modeOp !== undefined) {
+          this.finishModeReopen(forwarded.params?.sessionId, modeOp);
         }
         return refuseClient(id, `cowboy_antigravity_unavailable: ${error.message}`, -32603);
       }
@@ -2193,6 +2209,11 @@ export class AcpProxy {
               update?.sessionUpdate === "current_mode_update") &&
             !this.isAdmittedConfigSession(message.params?.sessionId)
           ) {
+            const opening = this.openingReopens.get(message.params?.sessionId);
+            if (opening) {
+              if (opening.staged.length < MAX_TOOL_CALLS) opening.staged.push(message);
+              return;
+            }
             return this.log(`dropped ${update.sessionUpdate} for unclaimed session`);
           }
           const staleReplay = this.isStaleReplay(message.params?.sessionId, replayOptions?.arrival);
@@ -2433,31 +2454,53 @@ export class AcpProxy {
     // worker never sees it.
     if (record.internal) return record.internal(message);
     const { runtime } = record;
-    if (record.mode && record.mode.seq !== undefined) {
+    if (record.mode && record.mode.op !== undefined) {
       this.finishModeSwitch(
         record.mode.sessionId,
-        record.mode.seq,
+        record.mode.op,
         record.mode.mode,
         message.result,
         { allowEmptyUnrestricted: record.method === "session/set_mode" },
       );
     }
-    if (SESSION_REQUESTS.has(record.method) && message.result !== undefined) {
-      const openedSessionId = message.result?.sessionId ?? record.session;
-      this.rememberSession(openedSessionId);
-      this.clearStaleReplayTools(openedSessionId);
+    let stagedToRelease;
+    if (SESSION_REQUESTS.has(record.method)) {
+      if (message.result !== undefined) {
+        const openedSessionId = message.result?.sessionId ?? record.session;
+        this.rememberSession(openedSessionId);
+        this.clearStaleReplayTools(openedSessionId);
+        if (record.stagedReopenSession !== undefined) {
+          const entry = this.openingReopens.get(record.stagedReopenSession);
+          if (entry) {
+            if (openedSessionId === record.stagedReopenSession) {
+              stagedToRelease = entry.staged;
+              this.openingReopens.delete(record.stagedReopenSession);
+            } else {
+              entry.count -= 1;
+              if (entry.count <= 0) this.openingReopens.delete(record.stagedReopenSession);
+            }
+          }
+        }
+      } else if (record.stagedReopenSession !== undefined) {
+        const entry = this.openingReopens.get(record.stagedReopenSession);
+        if (entry) {
+          entry.count -= 1;
+          if (entry.count <= 0) this.openingReopens.delete(record.stagedReopenSession);
+        }
+      }
     }
-    if (SESSION_REQUESTS.has(record.method) && record.modeOpSeq !== undefined) {
+    if (SESSION_REQUESTS.has(record.method) && record.modeOp !== undefined) {
       const reopenSessionId =
         record.session ?? record.params?.sessionId ?? message.result?.sessionId;
       const sw =
         typeof reopenSessionId === "string" ? this.switchState.get(reopenSessionId) : undefined;
       const isCurrentReopen =
-        sw?.latestSeq === record.modeOpSeq &&
+        sw?.incarnation === record.modeOp.incarnation &&
+        sw?.latestSeq === record.modeOp.seq &&
         !this.isSwitching(reopenSessionId) &&
         sw.activeReopens.size === 1 &&
-        sw.activeReopens.has(record.modeOpSeq);
-      this.finishModeReopen(reopenSessionId, record.modeOpSeq);
+        sw.activeReopens.has(record.modeOp.seq);
+      this.finishModeReopen(reopenSessionId, record.modeOp);
       if (message.result !== undefined) {
         const sessionId = message.result?.sessionId ?? record.session;
         if (
@@ -2475,7 +2518,7 @@ export class AcpProxy {
     if (message.result !== undefined) {
       if (SESSION_REQUESTS.has(record.method)) {
         const sessionId = message.result?.sessionId ?? record.session;
-        if (record.modeOpSeq === undefined) {
+        if (record.modeOp === undefined) {
           const sw = typeof sessionId === "string" ? this.switchState.get(sessionId) : undefined;
           if (
             typeof sessionId === "string" &&
@@ -2531,7 +2574,18 @@ export class AcpProxy {
       else delete result._meta;
       return this.client({ ...message, result });
     }
-    if (record.method !== "session/prompt") return this.client(message);
+    if (record.method !== "session/prompt") {
+      const forwarded = this.client(message);
+      if (stagedToRelease && stagedToRelease.length > 0) {
+        for (const frame of stagedToRelease) {
+          const presented = this.presentUpdate(this.annotateUsage(stripTier(frame)), false, {
+            staleReplay: true,
+          });
+          if (presented !== undefined) this.client(presented);
+        }
+      }
+      return forwarded;
+    }
     // A prompt reply is never forwarded at once. The turn's facade calls
     // are fenced now, but the turn stays observed until its evidence has
     // settled: a built-in tool reported in the same chunk as this result,
