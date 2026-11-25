@@ -6,10 +6,12 @@
 mod extension_broker;
 mod ledger;
 mod memory_bridge;
+mod post_edit;
 mod relay;
 pub use extension_broker::{Broker as ExtensionBroker, Plan as ExtensionPlan, ServerPlan};
 pub use ledger::{LEDGER_ENV, Ledger, MAX_PROCESSES};
 pub use memory_bridge::MemoryBridge;
+pub use post_edit::{PostEditBrokerSession, QueuedPostEdit, unix_socket_has_post_edit_headroom};
 
 use std::collections::{BTreeMap, HashSet};
 use std::os::fd::OwnedFd;
@@ -71,6 +73,8 @@ pub struct Client {
     extensions: OnceLock<Arc<ExtensionBroker>>,
     /// Relays whose reply the unit is still owed (design L1c).
     relays: Arc<crate::account_sandbox::RelayQuiet>,
+    /// Unsequenced Antigravity post-edit diagnostic pull state (R4).
+    post_edit: post_edit::State,
 }
 
 /// Wire calls at least this slow are logged individually.
@@ -94,7 +98,68 @@ impl Client {
             memory: OnceLock::new(),
             extensions: OnceLock::new(),
             relays: Arc::default(),
+            post_edit: post_edit::State::default(),
         })
+    }
+
+    pub fn attach_post_edit_broker(&self, protocol: u16) -> (u64, mpsc::Receiver<QueuedPostEdit>) {
+        self.post_edit.attach_broker(protocol)
+    }
+
+    pub fn detach_post_edit_broker(&self, conn_id: u64) {
+        self.post_edit.detach_broker(conn_id);
+    }
+
+    pub fn set_active_turn_nonce(&self, turn: Option<(String, String)>) {
+        self.post_edit.set_active_turn(turn);
+    }
+
+    pub fn prepare_post_edit_send(&self, item: &mut QueuedPostEdit, current_conn_id: u64) -> bool {
+        self.post_edit
+            .prepare_send(item, current_conn_id, &self.relays)
+    }
+
+    pub fn refuse_post_edit_local(&self, request_id: &str, reason: &str) {
+        self.post_edit.refuse_local(request_id, reason);
+    }
+
+    pub fn complete_post_edit_reply(
+        &self,
+        reply: crate::post_edit_inspect::PostEditInspectReply,
+        current_conn_id: u64,
+    ) {
+        let scope = crate::post_edit_inspect::PostEditScope::new(
+            self.binding.id.clone(),
+            self.binding.revision,
+            self.binding.environment.incarnation.clone(),
+        );
+        self.post_edit.complete_reply(
+            reply,
+            &self.session,
+            &self.epoch,
+            &scope,
+            current_conn_id,
+            &self.relays,
+        );
+    }
+
+    pub async fn inspect_post_edit(&self, unit_generation: u64, params: &Value) -> Value {
+        let scope = crate::post_edit_inspect::PostEditScope::new(
+            self.binding.id.clone(),
+            self.binding.revision,
+            self.binding.environment.incarnation.clone(),
+        );
+        self.post_edit
+            .inspect(
+                &self.session,
+                &self.epoch,
+                scope,
+                self.binding.managed.is_some(),
+                unit_generation,
+                &self.relays,
+                params,
+            )
+            .await
     }
 
     pub fn frames(&self, reconnect: bool) -> Vec<Frame> {
@@ -459,11 +524,143 @@ fn bearer_token() -> String {
     )
 }
 
-/// One connection at a time: a second is closed while the first is served.
+const MAX_PRE_AUTH_SOCKETS: usize = 4;
+const PRE_AUTH_UPGRADE_TIMEOUT: Duration = Duration::from_millis(500);
+const PRE_AUTH_STALL_EVICT_AFTER: Duration = Duration::from_millis(200);
+const MAX_PRE_AUTH_HEADER_BYTES: usize = 4 * 1024;
+const DIAGNOSTICS_MAX_FRAME_BYTES: usize = 64 * 1024;
+const DIAGNOSTICS_PATH: &str = "/diagnostics";
+
+struct PreAuthEntry {
+    id: u64,
+    started_at: Instant,
+    abort: tokio::task::AbortHandle,
+}
+
+struct PreAuthCleanup {
+    active: Arc<Mutex<HashSet<u64>>>,
+    id: u64,
+}
+
+impl PreAuthCleanup {
+    fn release(&self) {
+        self.active.lock().remove(&self.id);
+    }
+}
+
+impl Drop for PreAuthCleanup {
+    fn drop(&mut self) {
+        self.release();
+    }
+}
+
+/// Drops an authenticated mutation socket permit and notifies `RelayQuiet`
+/// (`socket_ended`) exclusively for mutation sockets — never for `/diagnostics`
+/// or unauthenticated/pre-auth sockets.
+struct MutationSocketGuard {
+    relays: Arc<crate::account_sandbox::RelayQuiet>,
+    _permit: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl Drop for MutationSocketGuard {
+    fn drop(&mut self) {
+        self.relays.socket_ended();
+    }
+}
+
+/// Limits pre-upgrade HTTP header reads to `MAX_PRE_AUTH_HEADER_BYTES` and
+/// replays the peeked request-line prefix so `/diagnostics` gets its tight
+/// 64 KiB `WebSocketConfig` at the tungstenite parser boundary.
+struct PrefixedHandshakeStream<S> {
+    inner: S,
+    prefix: Vec<u8>,
+    prefix_pos: usize,
+    pre_auth_remaining: usize,
+    upgraded: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl<S: AsyncRead + Unpin> AsyncRead for PrefixedHandshakeStream<S> {
+    fn poll_read(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        let this = self.get_mut();
+        if this.prefix_pos < this.prefix.len() {
+            let take = (this.prefix.len() - this.prefix_pos).min(buf.remaining());
+            buf.put_slice(&this.prefix[this.prefix_pos..this.prefix_pos + take]);
+            this.prefix_pos += take;
+            return std::task::Poll::Ready(Ok(()));
+        }
+        if this.upgraded.load(std::sync::atomic::Ordering::Acquire) {
+            return std::pin::Pin::new(&mut this.inner).poll_read(cx, buf);
+        }
+        if this.pre_auth_remaining == 0 {
+            return std::task::Poll::Ready(Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                "pre-auth HTTP handshake exceeded 4 KiB limit",
+            )));
+        }
+        let max = buf.remaining().min(this.pre_auth_remaining);
+        let read_res = {
+            let mut sub = buf.take(max);
+            let before = sub.filled().len();
+            match std::pin::Pin::new(&mut this.inner).poll_read(cx, &mut sub) {
+                std::task::Poll::Ready(Ok(())) => {
+                    std::task::Poll::Ready(Ok(sub.filled().len() - before))
+                }
+                std::task::Poll::Ready(Err(e)) => std::task::Poll::Ready(Err(e)),
+                std::task::Poll::Pending => std::task::Poll::Pending,
+            }
+        };
+        match read_res {
+            std::task::Poll::Ready(Ok(n)) => {
+                buf.advance(n);
+                this.pre_auth_remaining = this.pre_auth_remaining.saturating_sub(n);
+                std::task::Poll::Ready(Ok(()))
+            }
+            std::task::Poll::Ready(Err(e)) => std::task::Poll::Ready(Err(e)),
+            std::task::Poll::Pending => std::task::Poll::Pending,
+        }
+    }
+}
+
+impl<S: AsyncWrite + Unpin> AsyncWrite for PrefixedHandshakeStream<S> {
+    fn poll_write(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+        buf: &[u8],
+    ) -> std::task::Poll<std::io::Result<usize>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
+    }
+
+    fn poll_flush(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
+    }
+
+    fn poll_shutdown(
+        self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        std::pin::Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
+    }
+}
+
+/// Separate single-slot admission for `/` (mutation) and `/diagnostics`
+/// (post-edit pull), with a bounded pre-auth pool that evicts a stalled
+/// pre-auth socket when the mutation slot is vacant so reconnect / `cowboy/drained`
+/// can never be starved (R3-H8).
 struct Admission {
     token: String,
     client: Arc<Client>,
-    connections: Arc<Semaphore>,
+    mutation_slot: Arc<Semaphore>,
+    diagnostics_slot: Arc<Semaphore>,
+    next_pre_auth_id: u64,
+    pre_auth_active: Arc<Mutex<HashSet<u64>>>,
+    pre_auth_tasks: Vec<PreAuthEntry>,
     tasks: tokio::task::JoinSet<()>,
 }
 
@@ -472,32 +669,84 @@ impl Admission {
         Self {
             token,
             client,
-            connections: Arc::new(Semaphore::new(1)),
+            mutation_slot: Arc::new(Semaphore::new(1)),
+            diagnostics_slot: Arc::new(Semaphore::new(1)),
+            next_pre_auth_id: 0,
+            pre_auth_active: Arc::new(Mutex::new(HashSet::new())),
+            pre_auth_tasks: Vec::new(),
             tasks: tokio::task::JoinSet::new(),
         }
     }
 
-    fn admit<S>(&mut self, socket: S)
+    fn admit<S>(&mut self, socket: S, unit_generation: u64)
     where
         S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
     {
-        let Ok(permit) = Arc::clone(&self.connections).try_acquire_owned() else {
-            return;
+        {
+            let active = self.pre_auth_active.lock();
+            self.pre_auth_tasks
+                .retain(|entry| active.contains(&entry.id));
+        }
+        if self.pre_auth_tasks.len() >= MAX_PRE_AUTH_SOCKETS {
+            if self.mutation_slot.available_permits() > 0
+                && let Some(idx) = self
+                    .pre_auth_tasks
+                    .iter()
+                    .position(|entry| entry.started_at.elapsed() >= PRE_AUTH_STALL_EVICT_AFTER)
+            {
+                let evicted = self.pre_auth_tasks.remove(idx);
+                self.pre_auth_active.lock().remove(&evicted.id);
+                evicted.abort.abort();
+            } else {
+                return;
+            }
+        }
+        self.next_pre_auth_id = self.next_pre_auth_id.saturating_add(1);
+        let id = self.next_pre_auth_id;
+        self.pre_auth_active.lock().insert(id);
+        let pre_auth_cleanup = PreAuthCleanup {
+            active: Arc::clone(&self.pre_auth_active),
+            id,
         };
         let client = Arc::clone(&self.client);
         let token = self.token.clone();
-        self.tasks.spawn(async move {
-            let _permit = permit;
+        let mutation_slot = Arc::clone(&self.mutation_slot);
+        let diagnostics_slot = Arc::clone(&self.diagnostics_slot);
+        let abort = self.tasks.spawn(async move {
             let session = client.session.clone();
-            let relays = Arc::clone(&client.relays);
-            if serve(socket, &token, client).await.is_err() {
-                // Do not log frames, capabilities or arbitrary
-                // native error text from the private endpoint.
-                tracing::warn!(event_name = "cowboy.execution.disconnected", %session, reason = "endpoint_failed", "execution endpoint disconnected");
+            match upgrade_and_classify(
+                socket,
+                &token,
+                Arc::clone(&client),
+                unit_generation,
+                mutation_slot,
+                diagnostics_slot,
+            )
+            .await
+            {
+                Ok(UpgradedConnection::Mutation { websocket, _guard }) => {
+                    pre_auth_cleanup.release();
+                    if serve_mutation(websocket, client).await.is_err() {
+                        // Do not log frames, capabilities or arbitrary
+                        // native error text from the private endpoint.
+                        tracing::warn!(event_name = "cowboy.execution.disconnected", %session, reason = "endpoint_failed", "execution endpoint disconnected");
+                    }
+                    drop(_guard);
+                }
+                Ok(UpgradedConnection::Diagnostics { websocket, _permit }) => {
+                    pre_auth_cleanup.release();
+                    let _ = serve_diagnostics(websocket, client, unit_generation).await;
+                    drop(_permit);
+                }
+                Err(_) => {
+                    // Never notify `relays.socket_ended()` for failed pre-auth or rejected sockets.
+                }
             }
-            // Receipts belong to this socket: another one can never
-            // acknowledge what this one wrote (design L1c).
-            relays.socket_ended();
+        });
+        self.pre_auth_tasks.push(PreAuthEntry {
+            id,
+            started_at: Instant::now(),
+            abort,
         });
     }
 
@@ -521,6 +770,9 @@ impl Endpoint {
             .open(&descriptor)?;
         let mut descriptor_value = json!({"schema": 1, "binding": client.binding,
             "endpoint": format!("ws://{address}"), "bearer_token": token});
+        if client.binding.managed.is_none() {
+            descriptor_value["diagnostics"] = json!({"schema": 1, "path": DIAGNOSTICS_PATH});
+        }
         // The Machine's file-buffer settings; absent on older Machines.
         if let Some(policy) = std::env::var_os(crate::config::file_buffers::POLICY_ENV)
             .and_then(|path| path.into_string().ok())
@@ -536,7 +788,8 @@ impl Endpoint {
                 tokio::select! {
                     accepted = listener.accept() => {
                         let Ok((socket, _)) = accepted else { break; };
-                        admission.admit(socket);
+                        let unit_generation = admission.client.relays.drain_generation();
+                        admission.admit(socket, unit_generation);
                     }
                     () = admission.reap() => {}
                 }
@@ -563,6 +816,9 @@ impl Endpoint {
         let mut descriptor = json!({"schema": 1, "binding": client.binding,
             "endpoint": format!("unix:{}", crate::account_sandbox::UNIT_EXEC_SOCKET),
             "bearer_token": token});
+        if client.binding.managed.is_none() {
+            descriptor["diagnostics"] = json!({"schema": 1, "path": DIAGNOSTICS_PATH});
+        }
         // What the session's extensions offer the unit; never a relay
         // address, token or host path (`extensions::unit_summary`).
         if let Some(extensions) = extensions {
@@ -579,20 +835,23 @@ impl Endpoint {
         let (listeners, mut received) = mpsc::unbounded_channel::<OwnedFd>();
         let mut admission = Admission::new(token, Arc::clone(&client));
         let listener = tokio::spawn(async move {
-            let mut listener: Option<UnixListener> = None;
+            let mut listener: Option<(UnixListener, u64)> = None;
             let mut open = true;
             loop {
                 tokio::select! {
                     next = received.recv(), if open => match next {
                         Some(fd) => match unix_listener(fd) {
-                            Ok(next) => listener = Some(next),
+                            Ok(next) => {
+                                let unit_generation = admission.client.relays.drain_generation();
+                                listener = Some((next, unit_generation));
+                            }
                             Err(error) => tracing::warn!(%error, "unusable execution socket from the account sandbox"),
                         },
                         None => open = false,
                     },
                     accepted = accept_unix(listener.as_ref()) => {
                         match accepted {
-                            Ok(socket) => admission.admit(socket),
+                            Ok((socket, unit_generation)) => admission.admit(socket, unit_generation),
                             Err(error) => {
                                 tracing::warn!(%error, "execution socket accept failed");
                                 tokio::time::sleep(Duration::from_millis(100)).await;
@@ -630,47 +889,182 @@ fn unix_listener(fd: OwnedFd) -> Result<UnixListener> {
     Ok(UnixListener::from_std(listener)?)
 }
 
-async fn accept_unix(listener: Option<&UnixListener>) -> std::io::Result<tokio::net::UnixStream> {
+async fn accept_unix(
+    listener: Option<&(UnixListener, u64)>,
+) -> std::io::Result<(tokio::net::UnixStream, u64)> {
     match listener {
-        Some(listener) => listener.accept().await.map(|(socket, _)| socket),
+        Some((listener, unit_generation)) => listener
+            .accept()
+            .await
+            .map(|(socket, _)| (socket, *unit_generation)),
         None => std::future::pending().await,
     }
+}
+
+enum UpgradedConnection<S> {
+    Mutation {
+        websocket: tokio_tungstenite::WebSocketStream<PrefixedHandshakeStream<S>>,
+        _guard: MutationSocketGuard,
+    },
+    Diagnostics {
+        websocket: tokio_tungstenite::WebSocketStream<PrefixedHandshakeStream<S>>,
+        _permit: tokio::sync::OwnedSemaphorePermit,
+    },
+}
+
+enum SlotKind {
+    Mutation(MutationSocketGuard),
+    Diagnostics(tokio::sync::OwnedSemaphorePermit),
+}
+
+async fn peek_request_line<S>(socket: &mut S) -> Result<(Vec<u8>, bool)>
+where
+    S: AsyncRead + Unpin,
+{
+    use tokio::io::AsyncReadExt as _;
+    let mut prefix = Vec::with_capacity(128);
+    let mut byte = [0_u8; 1];
+    while prefix.len() < 256 {
+        let n = socket.read(&mut byte).await?;
+        if n == 0 {
+            bail!("execution socket closed before HTTP request line");
+        }
+        prefix.push(byte[0]);
+        if prefix.ends_with(b"\r\n") {
+            let is_diagnostics = std::str::from_utf8(&prefix)
+                .ok()
+                .and_then(|line| line.split_whitespace().nth(1))
+                .and_then(|target| target.split('?').next())
+                == Some(DIAGNOSTICS_PATH);
+            return Ok((prefix, is_diagnostics));
+        }
+    }
+    bail!("execution HTTP request line exceeded 256 bytes");
 }
 
 #[expect(
     clippy::result_large_err,
     reason = "Tungstenite fixes the callback HTTP error response type"
 )]
-async fn serve<S>(socket: S, token: &str, client: Arc<Client>) -> Result<()>
+async fn upgrade_and_classify<S>(
+    mut socket: S,
+    token: &str,
+    client: Arc<Client>,
+    unit_generation: u64,
+    mutation_slot: Arc<Semaphore>,
+    diagnostics_slot: Arc<Semaphore>,
+) -> Result<UpgradedConnection<S>>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    let deadline = tokio::time::Instant::now() + PRE_AUTH_UPGRADE_TIMEOUT;
+    let (prefix, peeked_diagnostics) =
+        tokio::time::timeout_at(deadline, peek_request_line(&mut socket)).await??;
+    let remaining_header = MAX_PRE_AUTH_HEADER_BYTES.saturating_sub(prefix.len());
+    let upgraded = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let prefixed = PrefixedHandshakeStream {
+        inner: socket,
+        prefix,
+        prefix_pos: 0,
+        pre_auth_remaining: remaining_header,
+        upgraded: Arc::clone(&upgraded),
+    };
+    let max_frame = if peeked_diagnostics {
+        DIAGNOSTICS_MAX_FRAME_BYTES
+    } else {
+        wire::MAX_FRAME_BYTES
+    };
     let expected = format!("Bearer {token}");
+    let acquired: Arc<Mutex<Option<SlotKind>>> = Arc::new(Mutex::new(None));
+    let acquired_cb = Arc::clone(&acquired);
+    let upgraded_cb = Arc::clone(&upgraded);
+    let client_cb = Arc::clone(&client);
     let websocket = tokio_tungstenite::accept_hdr_async_with_config(
-        socket,
+        prefixed,
         move |request: &tokio_tungstenite::tungstenite::handshake::server::Request, response| {
-            if request
+            let auth_ok = request
                 .headers()
                 .get("authorization")
                 .and_then(|value| value.to_str().ok())
-                == Some(expected.as_str())
-                && !request.headers().contains_key("origin")
-            {
-                Ok(response)
-            } else {
-                Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                .is_some_and(|value| {
+                    post_edit::constant_time_eq(value.as_bytes(), expected.as_bytes())
+                });
+            if !auth_ok || request.headers().contains_key("origin") {
+                return Err(tokio_tungstenite::tungstenite::http::Response::builder()
                     .status(401)
                     .body(Some("Unauthorized".to_owned()))
-                    .expect("constant response"))
+                    .expect("constant response"));
             }
+            let path = request.uri().path();
+            if path == DIAGNOSTICS_PATH {
+                if !peeked_diagnostics || client_cb.binding.managed.is_some() {
+                    return Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                        .status(403)
+                        .body(Some("Forbidden".to_owned()))
+                        .expect("constant response"));
+                }
+                if client_cb.relays.draining()
+                    || client_cb.relays.drain_generation() != unit_generation
+                {
+                    return Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                        .status(503)
+                        .body(Some("Draining".to_owned()))
+                        .expect("constant response"));
+                }
+                let Ok(permit) = Arc::clone(&diagnostics_slot).try_acquire_owned() else {
+                    return Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                        .status(503)
+                        .body(Some("Busy".to_owned()))
+                        .expect("constant response"));
+                };
+                *acquired_cb.lock() = Some(SlotKind::Diagnostics(permit));
+            } else if !peeked_diagnostics {
+                let Ok(permit) = Arc::clone(&mutation_slot).try_acquire_owned() else {
+                    return Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                        .status(503)
+                        .body(Some("Busy".to_owned()))
+                        .expect("constant response"));
+                };
+                *acquired_cb.lock() = Some(SlotKind::Mutation(MutationSocketGuard {
+                    relays: Arc::clone(&client_cb.relays),
+                    _permit: permit,
+                }));
+            } else {
+                return Err(tokio_tungstenite::tungstenite::http::Response::builder()
+                    .status(400)
+                    .body(Some("Bad Request".to_owned()))
+                    .expect("constant response"));
+            }
+            upgraded_cb.store(true, std::sync::atomic::Ordering::Release);
+            Ok(response)
         },
         Some(
             WebSocketConfig::default()
-                .max_message_size(Some(wire::MAX_FRAME_BYTES))
-                .max_frame_size(Some(wire::MAX_FRAME_BYTES)),
+                .max_message_size(Some(max_frame))
+                .max_frame_size(Some(max_frame)),
         ),
     );
-    let mut socket = tokio::time::timeout(Duration::from_secs(10), websocket).await??;
+    let websocket = tokio::time::timeout_at(deadline, websocket).await??;
+    match acquired.lock().take() {
+        Some(SlotKind::Mutation(guard)) => Ok(UpgradedConnection::Mutation {
+            websocket,
+            _guard: guard,
+        }),
+        Some(SlotKind::Diagnostics(permit)) => Ok(UpgradedConnection::Diagnostics {
+            websocket,
+            _permit: permit,
+        }),
+        None => bail!("execution websocket upgraded without a slot"),
+    }
+}
+
+async fn serve_mutation<S>(
+    mut socket: tokio_tungstenite::WebSocketStream<S>,
+    client: Arc<Client>,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
     let first = tokio::time::timeout(Duration::from_secs(30), socket.next())
         .await?
         .context("execution initialization missing")??;
@@ -782,6 +1176,84 @@ where
                 }
                 events = Box::pin(client.call(Command::Events { after: cursor, wait_ms: wire::MAX_WAIT_MS }));
             }
+        }
+    }
+    Ok(())
+}
+
+async fn serve_diagnostics<S>(
+    mut socket: tokio_tungstenite::WebSocketStream<S>,
+    client: Arc<Client>,
+    unit_generation: u64,
+) -> Result<()>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    let mut drain = client.relays.subscribe_drain();
+    let is_fenced = |state: &crate::account_sandbox::DrainState| {
+        state.draining || state.generation != unit_generation
+    };
+    if client.binding.managed.is_some() || is_fenced(&drain.borrow()) {
+        return Ok(());
+    }
+    let first = tokio::select! {
+        biased;
+        _ = drain.wait_for(is_fenced) => return Ok(()),
+        msg = tokio::time::timeout(Duration::from_secs(5), socket.next()) => {
+            msg?.context("diagnostics initialization missing")??
+        }
+    };
+    let first: Value = serde_json::from_slice(&first.into_data())?;
+    ensure!(
+        first["method"] == "initialize" && valid_id(&first["id"]),
+        "diagnostics initialization required"
+    );
+    if client.binding.managed.is_some() || is_fenced(&drain.borrow()) {
+        return Ok(());
+    }
+    let init_frame = json!({"id": first["id"], "result": {"schema": 1}}).to_string();
+    send_bounded(&mut socket, Message::Text(init_frame.into())).await?;
+
+    loop {
+        let next_msg = tokio::select! {
+            biased;
+            _ = drain.wait_for(is_fenced) => break,
+            message = socket.next() => message,
+        };
+        let Some(message) = next_msg else { break };
+        match message? {
+            Message::Close(_) => break,
+            Message::Ping(data) => {
+                send_bounded(&mut socket, Message::Pong(data)).await?;
+            }
+            Message::Pong(_) => {}
+            Message::Text(text) => {
+                let message: Value = serde_json::from_str(&text)?;
+                if message["method"] == "initialized" && message.get("id").is_none() {
+                    continue;
+                }
+                let id = message
+                    .get("id")
+                    .context("diagnostics request id missing")?
+                    .clone();
+                ensure!(valid_id(&id), "invalid diagnostics request id");
+                let method = message["method"]
+                    .as_str()
+                    .context("diagnostics method missing")?;
+                let reply = if method == "diagnostics/post_edit" {
+                    let params = native_params(&message);
+                    let result = tokio::select! {
+                        biased;
+                        _ = drain.wait_for(is_fenced) => break,
+                        result = client.inspect_post_edit(unit_generation, &params) => result,
+                    };
+                    json!({"id": id, "result": result})
+                } else {
+                    json!({"id": id, "error": {"code": -32601, "message": "method not found"}})
+                };
+                send_bounded(&mut socket, Message::Text(reply.to_string().into())).await?;
+            }
+            _ => bail!("unsupported diagnostics frame"),
         }
     }
     Ok(())

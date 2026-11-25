@@ -205,6 +205,7 @@ async fn peer(
             executable: Some("/no-fixture-worker".into()),
             fallback_for: None,
             outer_machine_protocol: None,
+            post_edit_http: false,
         },
     )
     .await

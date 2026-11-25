@@ -371,6 +371,7 @@ async fn serve_axum(
         .merge(cowboy_server_routes::session_routes(&state))
         .merge(cowboy_server_routes::code_routes(&state))
         .merge(cowboy_server_agent_api::server::routes::widget_routes())
+        .merge(cowboy_server_agent_api::server::routes::machine_post_edit_routes())
         // Everything else: the separately deployed SPA, with index.html
         // fallback for client-side routes.
         .fallback(static_handler)

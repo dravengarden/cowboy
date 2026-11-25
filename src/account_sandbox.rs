@@ -167,18 +167,46 @@ struct Receipts {
     forced: bool,
 }
 
+/// Snapshot of a sandboxed unit's drain lifecycle.
+///
+/// `generation` increments on each `end_drain()` so diagnostic sockets accepted
+/// on a previous unit listener are fenced even after a new unit starts.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DrainState {
+    pub generation: u64,
+    pub draining: bool,
+}
+
 /// Relays of one unit's execution endpoint whose reply has not yet been
 /// written to the unit or recorded undelivered, and the unit's drain at a
 /// graceful stop (design L1c).
-#[derive(Default)]
 pub struct RelayQuiet {
     count: std::sync::atomic::AtomicUsize,
     idle: tokio::sync::Notify,
     /// The unit is being stopped: only cleanup requests relay.
     draining: std::sync::atomic::AtomicBool,
+    drain_state: tokio::sync::watch::Sender<DrainState>,
     receipts: parking_lot::Mutex<Receipts>,
     acknowledged: tokio::sync::Notify,
     recorder: std::sync::OnceLock<Recorder>,
+}
+
+impl Default for RelayQuiet {
+    fn default() -> Self {
+        let (drain_state, _) = tokio::sync::watch::channel(DrainState {
+            generation: 0,
+            draining: false,
+        });
+        Self {
+            count: std::sync::atomic::AtomicUsize::default(),
+            idle: tokio::sync::Notify::default(),
+            draining: std::sync::atomic::AtomicBool::default(),
+            drain_state,
+            receipts: parking_lot::Mutex::default(),
+            acknowledged: tokio::sync::Notify::default(),
+            recorder: std::sync::OnceLock::new(),
+        }
+    }
 }
 
 impl std::fmt::Debug for RelayQuiet {
@@ -239,6 +267,7 @@ impl RelayQuiet {
         *self.receipts.lock() = Receipts::default();
         self.draining
             .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.drain_state.send_modify(|state| state.draining = true);
     }
 
     /// A new unit starts: it relays everything again.
@@ -246,12 +275,28 @@ impl RelayQuiet {
         self.draining
             .store(false, std::sync::atomic::Ordering::SeqCst);
         *self.receipts.lock() = Receipts::default();
+        self.drain_state.send_modify(|state| {
+            state.generation = state.generation.saturating_add(1);
+            state.draining = false;
+        });
     }
 
     /// Whether the unit is being stopped.
     #[must_use]
     pub fn draining(&self) -> bool {
         self.draining.load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Current drain generation (incremented when a new unit starts).
+    #[must_use]
+    pub fn drain_generation(&self) -> u64 {
+        self.drain_state.borrow().generation
+    }
+
+    /// Subscribe to drain transitions and generation changes.
+    #[must_use]
+    pub fn subscribe_drain(&self) -> tokio::sync::watch::Receiver<DrainState> {
+        self.drain_state.subscribe()
     }
 
     /// Where unread effects are recorded.

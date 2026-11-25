@@ -1026,6 +1026,7 @@ fn finish_prompt_state(
     } else if !terminal_reply {
         sink.record_unconfirmed_exit_if_sandboxed(sid);
     }
+    sink.set_active_turn_nonce(sid, None);
     state.clear_prompt(prompt);
     state.subagents.lock().parent_turn_ended(Instant::now());
     if !recycled_by_watchdog
@@ -4583,7 +4584,8 @@ async fn run_session(
                             Some(gate) => gate,
                             None => state.steering_gate.lock().await,
                         };
-                        let attempt_nonce = prompt.wrap_up.begin_attempt(raw_wrap_up_eligible);
+                        let (attempt_nonce, active_turn_nonce) = crate::acp_wrap_up::begin_attempt_for_diagnostics(&prompt.wrap_up, raw_wrap_up_eligible);
+                        sink.set_active_turn_nonce(&sid, active_turn_nonce);
                         let prompt_request = crate::acp_wrap_up::attach_prompt_meta(PromptRequest::new(acp.clone(), blocks.clone()), managed_meta.as_ref().ok().and_then(Option::as_ref), attempt_nonce.as_deref());
                         let request = cx.send_request(prompt_request);
                         drop(gate);
@@ -4593,6 +4595,7 @@ async fn run_session(
                         // behind this exact request instead of letting an idle
                         // session/cancel get consumed before the retry exists.
                         if *cancellation.borrow_and_update() != cancellation_generation {
+                            sink.set_active_turn_nonce(&sid, None);
                             cancelled_during_retry = true;
                             let _ = request.cancel();
                             let _ = cx.send_notification(CancelNotification::new(acp.clone()));
@@ -4842,6 +4845,7 @@ async fn run_session(
                         && state.sink.delivery_target_is_current(&session_id, &target)
                         && !state.sink.session_is_managed_read_only(&session_id)
                     {
+                        state.sink.set_active_turn_nonce(&session_id, None);
                         state
                             .prompt_cancellation
                             .send_modify(|generation| *generation = generation.wrapping_add(1));
@@ -4869,9 +4873,10 @@ async fn run_session(
                 })?;
             }
             AgentCommand::Cancel => {
-                if let Some(p) = state.current_prompt() {
-                    p.wrap_up.mark_cancelled();
-                }
+                crate::acp_wrap_up::fence_cancel_session(
+                    state.current_prompt().as_ref().map(|p| &p.wrap_up),
+                    || state.sink.set_active_turn_nonce(&session_id, None),
+                );
                 state
                     .prompt_cancellation
                     .send_modify(|generation| *generation = generation.wrapping_add(1));

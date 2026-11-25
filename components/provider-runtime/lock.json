@@ -190,12 +190,13 @@
     },
     "cowboy-antigravity-acp": {
       "kind": "node_npm",
-      "version": "1.0.28",
+      "version": "1.0.29",
       "package_dir": "packages/antigravity-acp",
       "script": "cowboy-launch.mjs",
       "launcher": "packages/antigravity-acp/launch.mjs",
       "files": [
         "compaction.mjs",
+        "diagnostics-client.mjs",
         "evidence.mjs",
         "extensions.mjs",
         "facade.mjs",
@@ -206,6 +207,7 @@
         "managed-output.mjs",
         "memory.mjs",
         "plan-gate.mjs",
+        "post-edit-notes.mjs",
         "presentation.mjs",
         "projection.mjs",
         "proxy.mjs",

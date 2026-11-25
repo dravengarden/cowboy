@@ -96,6 +96,7 @@ pub mod execution;
 #[cfg(unix)]
 pub mod local_operator;
 pub mod machine_lanes;
+pub mod machine_post_edit;
 pub mod managed_calls;
 pub mod native_configuration;
 pub mod notifications;

@@ -25,6 +25,7 @@ mod deliveries;
 mod diagnostics;
 mod hover;
 mod post_edit;
+pub(in crate::server) mod post_edit_inspect;
 mod summary;
 
 pub async fn maintain_holdings(state: std::sync::Arc<AppState>) {

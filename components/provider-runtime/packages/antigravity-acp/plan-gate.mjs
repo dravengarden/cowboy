@@ -272,7 +272,16 @@ export class PlanGate {
     const hasRaw = update.rawInput !== undefined;
     const digest = hasRaw ? argsDigest(update.rawInput, { stripSummary }) : undefined;
     const tainted = Boolean(turn?.taintedToolCallIds?.has(id));
-    if (list.length >= MAX_WAITING) list.shift();
+    let evictedId;
+    if (list.length >= MAX_WAITING) {
+      const evicted = list.shift();
+      if (evicted) {
+        evicted.ambiguous = true;
+        evictedId = evicted.id;
+        if (evicted.boundCall) this.bound.delete(evicted.boundCall);
+        if (turn && typeof turn === "object") turn.announcementEvicted = true;
+      }
+    }
     list.push({
       id,
       name,
@@ -286,7 +295,7 @@ export class PlanGate {
       boundDigest: undefined,
     });
     this.waiting.set(sessionId, list);
-    return { contradicted: false };
+    return { contradicted: false, evictedId };
   }
 
   /**
@@ -317,13 +326,20 @@ export class PlanGate {
         item.attempt === attempt,
     );
     let entry;
+    const isDiffBearing = call.name === "WriteFile" || call.name === "EditFile";
     if (digest !== undefined) {
-      entry = unbound.find((item) => item.hasInput && item.digest === digest);
-      if (!entry) {
+      const exactMatches = unbound.filter((item) => item.hasInput && item.digest === digest);
+      if (exactMatches.length > 1 && isDiffBearing) {
+        // R2-M14: Overlapping identical-argument write/edit announcements are ambiguous.
+        for (const item of exactMatches) item.ambiguous = true;
+      } else if (exactMatches.length >= 1) {
+        // R3-M18: Suppress binding after MAX_WAITING eviction in this attempt.
+        if (!turn?.announcementEvicted) entry = exactMatches[0];
+      } else if (!turn?.announcementEvicted) {
         const inputless = unbound.filter((item) => !item.hasInput);
         if (inputless.length === 1) entry = inputless[0];
       }
-    } else if (unbound.length === 1) {
+    } else if (!turn?.announcementEvicted && unbound.length === 1) {
       entry = unbound[0];
     }
     if (!entry) return undefined;

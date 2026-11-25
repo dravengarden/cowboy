@@ -493,13 +493,20 @@ pub async fn machine_ws_upgrade(
             .is_some_and(|value| value == crate::machine_lanes::LANES))
     .then(random_machine_token)
     .and_then(Result::ok);
+    let post_edit_token = headers
+        .get(crate::post_edit_inspect::POST_EDIT_INSPECT_HEADER)
+        .is_some_and(|value| value == crate::post_edit_inspect::POST_EDIT_INSPECT_PROTOCOL)
+        .then(random_machine_token)
+        .and_then(Result::ok);
     let upgrade_token = lane_token.clone();
+    let upgrade_post_edit_token = post_edit_token.clone();
     let mut response = ws.on_upgrade(move |socket| {
         handle_machine_ws(
             socket,
             state,
             (chunked, compressed, paced, stream),
             upgrade_token,
+            upgrade_post_edit_token,
         )
     });
     if let Some(token) = lane_token.as_deref()
@@ -512,6 +519,20 @@ pub async fn machine_ws_upgrade(
         response
             .headers_mut()
             .insert(crate::machine_lanes::LANE_TOKEN_HEADER, value);
+    }
+    if let Some(token) = post_edit_token.as_deref()
+        && let Ok(value) = axum::http::HeaderValue::from_str(token)
+    {
+        response.headers_mut().insert(
+            crate::post_edit_inspect::POST_EDIT_INSPECT_HEADER,
+            axum::http::HeaderValue::from_static(
+                crate::post_edit_inspect::POST_EDIT_INSPECT_PROTOCOL,
+            ),
+        );
+        response.headers_mut().insert(
+            crate::post_edit_inspect::POST_EDIT_INSPECT_TOKEN_HEADER,
+            value,
+        );
     }
     if chunked {
         response.headers_mut().insert(

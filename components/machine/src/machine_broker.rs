@@ -22,9 +22,11 @@ use tokio::process::Command;
 use tokio::sync::{Mutex as AsyncMutex, mpsc, oneshot};
 
 use crate::runtime_wire::{
-    CoreCommand, Frame, MIN_PROTOCOL_VERSION, PROTOCOL_VERSION, PeerRole, RuntimeEvent,
-    StartSession, WorkerCommand, WorkerSnapshot, WorkerState, negotiate, read_frame, write_frame,
+    CoreCommand, Frame, MIN_PROTOCOL_VERSION, PeerRole, RuntimeEvent, StartSession, WorkerCommand,
+    WorkerSnapshot, WorkerState, read_frame,
 };
+#[cfg(test)]
+use crate::runtime_wire::{PROTOCOL_VERSION, write_frame};
 
 mod account_unit;
 mod account_worker;
@@ -36,6 +38,7 @@ pub mod liveness;
 mod liveness_counters;
 mod mcp_launch;
 mod namespace;
+mod post_edit;
 mod readmission;
 mod systemd_exit;
 mod worker_environment;
@@ -318,6 +321,7 @@ struct WorkerPeer {
     negotiated_protocol: u16,
     raw_wrap_up_steering: bool,
     hint_tx: Option<mpsc::Sender<Frame>>,
+    diag_reply_tx: Option<mpsc::Sender<Frame>>,
     last_hinted_target: Option<crate::runtime_wire::DeliveryTarget>,
 }
 
@@ -447,6 +451,7 @@ struct Broker {
     /// session that was genuinely deleted while the old worker was stopping.
     resetting_sessions: Mutex<HashMap<String, String>>,
     departing_cleanup: Arc<Mutex<HashMap<String, wrap_up::DepartingCleanup>>>,
+    post_edit: Arc<post_edit::PostEditState>,
     replacing: Mutex<HashMap<String, String>>,
     /// Session-local rollback pins. A healthy fallback must remain available
     /// even though the global desired generation is still marked unhealthy.
@@ -564,6 +569,7 @@ impl Broker {
             session_lifecycle_gates: Mutex::new(HashMap::new()),
             resetting_sessions: Mutex::new(HashMap::new()),
             departing_cleanup: Arc::new(Mutex::new(HashMap::new())),
+            post_edit: Arc::new(post_edit::PostEditState::default()),
             replacing: Mutex::new(HashMap::new()),
             fallback_pins: Mutex::new(HashMap::new()),
             fallback_targets: Mutex::new(HashMap::new()),
@@ -823,6 +829,8 @@ impl Broker {
         {
             controller.take();
         }
+        drop(controller);
+        self.post_edit.remove_controller(lease);
     }
 
     fn route_worker(&self, session_id: &str, command: WorkerCommand) {
@@ -965,6 +973,7 @@ impl Broker {
     }
 
     fn remove_worker(&self, session_id: &str, connection_id: u64) -> Option<WorkerPeer> {
+        self.post_edit.remove_worker(session_id, connection_id);
         let mut workers = self.workers.lock();
         if workers
             .get(session_id)
@@ -1323,6 +1332,7 @@ impl Broker {
                 negotiated_protocol: 0,
                 raw_wrap_up_steering: false,
                 hint_tx: None,
+                diag_reply_tx: None,
                 last_hinted_target: None,
             },
         );
@@ -4203,57 +4213,24 @@ async fn remove_stale_socket(path: &Path) -> Result<()> {
 async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
     let connection_id = broker.next_connection.fetch_add(1, Ordering::Relaxed);
     let (mut reader, mut writer) = stream.into_split();
-    let hello = read_frame(&mut reader)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("peer closed before hello"))?;
-    let Frame::Hello {
-        role,
-        min_protocol,
-        max_protocol,
-        session_id,
-        worker_epoch,
-        generation,
-        executable,
-        fallback_for,
-        outer_machine_protocol,
-        ..
-    } = hello
-    else {
-        anyhow::bail!("first runtime frame was not hello");
-    };
-    let Some(protocol) = negotiate(
-        MIN_PROTOCOL_VERSION,
-        PROTOCOL_VERSION,
-        min_protocol,
-        max_protocol,
-    ) else {
-        write_frame(
-            &mut writer,
-            &Frame::Reject {
-                reason: format!(
-                    "no protocol overlap: Machine broker {MIN_PROTOCOL_VERSION}..={PROTOCOL_VERSION}, peer {min_protocol}..={max_protocol}"
-                ),
-            },
-        )
-        .await?;
+    let Some(hello) = post_edit::read_and_negotiate_hello(&mut reader, &mut writer).await? else {
         return Ok(());
     };
-    let (tx, rx) = mpsc::unbounded_channel::<Frame>();
-    let (hint_tx, hint_rx) = mpsc::channel::<Frame>(wrap_up::WORKER_HINT_CAPACITY);
-    let writer_task = tokio::spawn(wrap_up::run_worker_unix_writer(writer, rx, hint_rx));
-    match role {
+    let protocol = hello.protocol;
+    match hello.role {
         PeerRole::Core => {
-            drop(hint_tx);
-            let lease = broker.attach_controller_with_outer(protocol, outer_machine_protocol, &tx);
-            handle_core(Arc::clone(&broker), lease, &mut reader).await?;
-            broker.remove_controller(lease);
+            return post_edit::run_core_peer(broker, hello, reader, writer).await;
         }
         PeerRole::Worker => {
-            let session_id =
-                session_id.ok_or_else(|| anyhow::anyhow!("worker hello missing session"))?;
-            let epoch =
-                worker_epoch.ok_or_else(|| anyhow::anyhow!("worker hello missing epoch"))?;
-            let generation = generation.unwrap_or_else(|| "unknown".to_owned());
+            let (tx, hint_tx, diag_reply_tx, writer_task) = post_edit::start_worker_writer(writer);
+            let session_id = hello
+                .session_id
+                .ok_or_else(|| anyhow::anyhow!("worker hello missing session"))?;
+            let epoch = hello
+                .worker_epoch
+                .ok_or_else(|| anyhow::anyhow!("worker hello missing epoch"))?;
+            let generation = hello.generation.unwrap_or_else(|| "unknown".to_owned());
+            let (executable, fallback_for) = (hello.executable, hello.fallback_for);
             // A retained worker may silently discard additive launch fields.
             // Refuse it before it can acquire ownership of a named subscription.
             let minimum_protocol = broker
@@ -4300,7 +4277,13 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
                 peer_pid.and_then(|pid| u32::try_from(pid).ok()),
             );
             let fd = reader.as_ref().as_fd();
-            broker.attach_worker_wrap_up(&session_id, connection_id, protocol, hint_tx);
+            broker.attach_worker_wrap_up(
+                &session_id,
+                connection_id,
+                protocol,
+                hint_tx,
+                diag_reply_tx,
+            );
             broker.attach_worker_receive_probe(
                 &session_id,
                 connection_id,
@@ -4335,11 +4318,11 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
             if let Some(peer) = broker.remove_worker(&session_id, connection_id) {
                 broker.worker_disconnected(session_id, peer, None).await;
             }
+            drop(tx);
+            writer_task.abort();
             worker_result?;
         }
     }
-    drop(tx);
-    writer_task.abort();
     Ok(())
 }
 
@@ -4358,6 +4341,9 @@ async fn handle_core(
                 continue;
             }
             match frame {
+                Frame::PostEditInspectReply { reply } => {
+                    broker.post_edit.route_reply_from_controller(lease, *reply);
+                }
                 Frame::ExecutionReply { reply } => {
                     if let Some(worker) = broker.workers.lock().get(&reply.session_id)
                         && worker.epoch == reply.worker_epoch
@@ -4872,6 +4858,15 @@ async fn handle_worker(
             continue;
         }
         match frame {
+            Frame::PostEditInspectRequest { request } => {
+                post_edit::handle_worker_request(
+                    &broker,
+                    session_id,
+                    epoch,
+                    connection_id,
+                    *request,
+                );
+            }
             Frame::ExecutionRequest { request } => {
                 let allowed = request.session_id == session_id
                     && request.worker_epoch == epoch
@@ -5248,6 +5243,7 @@ mod tests {
                 executable: Some("/bin/false".to_owned()),
                 fallback_for: None,
                 outer_machine_protocol: None,
+                post_edit_http: false,
             },
         )
         .await
@@ -9375,6 +9371,7 @@ mod tests {
                 executable: Some("/bin/false".to_owned()),
                 fallback_for: None,
                 outer_machine_protocol: None,
+                post_edit_http: false,
             },
         )
         .await
@@ -9438,6 +9435,7 @@ mod tests {
                 executable: Some("/bin/false".into()),
                 fallback_for: None,
                 outer_machine_protocol: None,
+                post_edit_http: false,
             },
         )
         .await

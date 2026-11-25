@@ -17,6 +17,7 @@ import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { Connection } from "../../execution-connection.mjs";
 import { AgyLog } from "./evidence.mjs";
+import { DiagnosticsClient } from "./diagnostics-client.mjs";
 import { Extensions } from "./extensions.mjs";
 import { Facade, serveMcp } from "./facade.mjs";
 import {
@@ -219,6 +220,7 @@ export async function prepareRuntime({
   hookManaged = false,
   launchManaged = false,
   descriptor: validated,
+  canaryTraceFile = undefined,
 }) {
   await checkPolicy(home, paths);
   // `runProxy` validates the descriptor before it starts `agy`; the same
@@ -237,6 +239,7 @@ export async function prepareRuntime({
       launchManaged,
       descriptor,
       connection,
+      canaryTraceFile,
     });
   } catch (error) {
     connection.close();
@@ -255,6 +258,7 @@ async function connectedRuntime({
   launchManaged,
   descriptor,
   connection,
+  canaryTraceFile = undefined,
 }) {
   // The binding, the target's keeper and `agy`'s hook policy must agree.
   const managed = managedMode(descriptor.binding, connection.managed);
@@ -264,6 +268,10 @@ async function connectedRuntime({
   if (managed !== hookManaged) {
     throw new Error("Antigravity's tool gate differs from its managed execution binding");
   }
+  const diagnostics =
+    !managed && DiagnosticsClient.isSupported(descriptor)
+      ? new DiagnosticsClient(descriptor)
+      : undefined;
   let proxy;
   const facade = await Facade.create(connection, {
     onUncertain: (sessionId, method) => proxy?.uncertain(sessionId, method),
@@ -276,6 +284,8 @@ async function connectedRuntime({
         ? proxy.authorizeFacadeCall(call, meta)
         : { allowed: false, reason: "Antigravity proxy is not ready." },
     managed,
+    diagnostics,
+    canaryTrace: Boolean(canaryTraceFile),
   });
   const listed = facade.tools().map((tool) => tool.name);
   if (JSON.stringify(listed) !== JSON.stringify(managed ? MANAGED_FACADE_TOOLS : EXPECTED_TOOLS)) {
@@ -348,7 +358,9 @@ async function connectedRuntime({
     mcpServer: (channel) => ({
       name: "cowboy",
       command: node,
-      args: [paths.relay, socketPath, channel],
+      args: canaryTraceFile
+        ? [paths.relay, socketPath, channel, "--canary-trace-file", canaryTraceFile]
+        : [paths.relay, socketPath, channel],
       env: [],
     }),
     // A turn settles on a barrier request written to `agy` like the
@@ -456,6 +468,11 @@ export async function runProxy({
     env,
     stdio: ["pipe", "pipe", "inherit"],
   });
+  const canaryIdx = Array.isArray(args) ? args.indexOf("--canary-trace-file") : -1;
+  const canaryTraceFile =
+    canaryIdx >= 0 && typeof args[canaryIdx + 1] === "string" && isAbsolute(args[canaryIdx + 1])
+      ? args[canaryIdx + 1]
+      : undefined;
   const runtime = prepareRuntime({
     paths,
     home: env.HOME,
@@ -467,6 +484,7 @@ export async function runProxy({
     hookManaged,
     launchManaged,
     descriptor,
+    canaryTraceFile,
   });
   runtime.catch((error) =>
     process.stderr.write(`cowboy: Antigravity unavailable: ${error.message}\n`),

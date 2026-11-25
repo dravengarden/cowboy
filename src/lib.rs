@@ -219,6 +219,8 @@ pub mod send_delivery;
 #[cfg(feature = "full")]
 pub mod serve_args;
 #[cfg(any(feature = "full", feature = "machine-host"))]
+pub use cowboy_wire::post_edit_inspect;
+#[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::service_identity;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::wrap_up;

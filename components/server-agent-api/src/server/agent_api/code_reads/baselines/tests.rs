@@ -42,7 +42,7 @@ fn scope(id: &str) -> SessionCodeScope {
 }
 
 fn observe(scope: &SessionCodeScope, sha: char, diagnostics: &[CodeDiagnostic]) -> Value {
-    let pending = capture(diagnostics, Some(&snapshot(sha, "7")), &servers(&[3])).unwrap();
+    let pending = capture(diagnostics, Some(&snapshot(sha, "7")), &servers(&[3]), 1).unwrap();
     record(scope, "a.rs", pending, diagnostics)
 }
 
@@ -119,13 +119,13 @@ fn incompatible_baselines_are_unknown() {
     let scope = scope("baseline-incompatible");
     let base = [diagnostic(0, 1, Some("E1"), "7")];
     observe(&scope, 'b', &base);
-    let pending = capture(&base, Some(&snapshot('c', "7")), &servers(&[3, 4])).unwrap();
+    let pending = capture(&base, Some(&snapshot('c', "7")), &servers(&[3, 4]), 1).unwrap();
     assert_eq!(
         record(&scope, "a.rs", pending, &base),
         unknown("servers_changed")
     );
     let replaced = [diagnostic(0, 1, Some("E1"), "8")];
-    let pending = capture(&replaced, Some(&snapshot('d', "8")), &servers(&[3, 4])).unwrap();
+    let pending = capture(&replaced, Some(&snapshot('d', "8")), &servers(&[3, 4]), 1).unwrap();
     assert_eq!(
         record(&scope, "a.rs", pending, &replaced),
         unknown("buffer_replaced")
@@ -133,7 +133,7 @@ fn incompatible_baselines_are_unknown() {
     let many: Vec<_> = (0..=MAX_CAPTURED as u32)
         .map(|row| diagnostic(row, 1, Some("E1"), "8"))
         .collect();
-    let pending = capture(&many, Some(&snapshot('e', "8")), &servers(&[3, 4])).unwrap();
+    let pending = capture(&many, Some(&snapshot('e', "8")), &servers(&[3, 4]), 1).unwrap();
     assert_eq!(
         record(&scope, "a.rs", pending, &many),
         unknown("over_capture_bound")
@@ -149,7 +149,7 @@ fn incompatible_baselines_are_unknown() {
 fn records_are_bounded_per_session() {
     let scope = scope("baseline-bounded");
     for index in 0..=MAX_FILES_PER_SESSION {
-        let pending = capture(&[], Some(&snapshot('b', "7")), &servers(&[3])).unwrap();
+        let pending = capture(&[], Some(&snapshot('b', "7")), &servers(&[3]), 1).unwrap();
         record(&scope, &format!("f{index}.rs"), pending, &[]);
     }
     let records = RECORDS.lock();
@@ -162,10 +162,141 @@ fn records_are_bounded_per_session() {
 
 #[test]
 fn unbound_or_unbounded_snapshots_cannot_be_captured() {
-    assert!(capture(&[], None, &servers(&[3])).is_none());
+    assert!(capture(&[], None, &servers(&[3]), 1).is_none());
     let invalid: BufferSnapshot = serde_json::from_value(json!({"instance":"short","buffer":"7",
         "bufferEpoch":"1","version":[],"content":{"sha256":"b".repeat(64),"utf8Bytes":10}}))
     .unwrap();
-    assert!(capture(&[], Some(&invalid), &servers(&[3])).is_none());
+    assert!(capture(&[], Some(&invalid), &servers(&[3]), 1).is_none());
     assert_eq!(rank(0), i32::MAX);
+}
+
+fn versioned_snapshot(sha: char, buffer: &str, epoch: &str, version: Value) -> BufferSnapshot {
+    serde_json::from_value(json!({
+        "instance": "a".repeat(32),
+        "buffer": buffer,
+        "bufferEpoch": epoch,
+        "version": version,
+        "content": {"sha256": sha.to_string().repeat(64), "utf8Bytes": 10},
+    }))
+    .unwrap()
+}
+
+#[test]
+fn connection_epoch_transition_clears_baseline_and_rejects_stale_epochs() {
+    let scope = scope("baseline-conn-epoch");
+    let d1 = [diagnostic(0, 1, Some("E1"), "7")];
+    let p1 = capture(&d1, Some(&snapshot('a', "7")), &servers(&[3]), 1).unwrap();
+    assert_eq!(record(&scope, "a.rs", p1, &d1), unknown("no_baseline"));
+
+    // Advancing conn_epoch clears baseline instead of diffing across reconnects (R2-M10).
+    let p2 = capture(&d1, Some(&snapshot('b', "7")), &servers(&[3]), 2).unwrap();
+    assert_eq!(record(&scope, "a.rs", p2, &d1), unknown("no_baseline"));
+
+    // Late observation from conn_epoch 1 is stale and does not overwrite conn_epoch 2.
+    let stale = capture(&d1, Some(&snapshot('c', "7")), &servers(&[3]), 1).unwrap();
+    assert_eq!(
+        record(&scope, "a.rs", stale, &d1),
+        unknown("stale_observation")
+    );
+}
+
+#[test]
+fn numeric_buffer_epoch_and_vector_clock_reject_out_of_order_observations() {
+    let scope = scope("baseline-vclock");
+    let diag = |epoch: &str| -> CodeDiagnostic {
+        serde_json::from_value(json!({
+            "start":{"row":0,"column":0},"end":{"row":0,"column":1},
+            "severity":1,"source":"compiler","message":"m","code":"E1",
+            "provenance":{"instance":"a".repeat(32),"buffer":"7","bufferEpoch":epoch,
+                "server":"3","sourceKind":1,"registration":null}
+        }))
+        .unwrap()
+    };
+
+    // Numeric bufferEpoch 10 followed by 2 must reject 2 as stale (lexicographic "2" > "10" bug).
+    let d10 = [diag("10")];
+    let p10 = capture(
+        &d10,
+        Some(&versioned_snapshot(
+            'a',
+            "7",
+            "10",
+            json!([{"replicaId":1,"timestamp":5}]),
+        )),
+        &servers(&[3]),
+        1,
+    )
+    .unwrap();
+    assert_eq!(record(&scope, "a.rs", p10, &d10), unknown("no_baseline"));
+
+    let d2 = [diag("2")];
+    let p2 = capture(
+        &d2,
+        Some(&versioned_snapshot(
+            'b',
+            "7",
+            "2",
+            json!([{"replicaId":1,"timestamp":9}]),
+        )),
+        &servers(&[3]),
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        record(&scope, "a.rs", p2, &d2),
+        unknown("stale_observation")
+    );
+
+    // Same epoch 10, changed text, older vector clock -> stale_observation (R2-M11).
+    let older = capture(
+        &d10,
+        Some(&versioned_snapshot(
+            'c',
+            "7",
+            "10",
+            json!([{"replicaId":1,"timestamp":4}]),
+        )),
+        &servers(&[3]),
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        record(&scope, "a.rs", older, &d10),
+        unknown("stale_observation")
+    );
+
+    // Same epoch 10, same text, equal vector clock -> refresh allowed (M18).
+    let equal_same = capture(
+        &d10,
+        Some(&versioned_snapshot(
+            'a',
+            "7",
+            "10",
+            json!([{"replicaId":1,"timestamp":5}]),
+        )),
+        &servers(&[3]),
+        1,
+    )
+    .unwrap();
+    assert_eq!(
+        record(&scope, "a.rs", equal_same, &d10),
+        unknown("no_baseline")
+    );
+
+    // Strictly dominating vector clock advances baseline cleanly.
+    let newer = capture(
+        &[],
+        Some(&versioned_snapshot(
+            'd',
+            "7",
+            "10",
+            json!([{"replicaId":1,"timestamp":6}]),
+        )),
+        &servers(&[3]),
+        1,
+    )
+    .unwrap();
+    let cmp = record(&scope, "a.rs", newer, &[]);
+    assert_eq!(cmp["state"], "complete");
+    assert_eq!(cmp["resolved"], 1);
 }

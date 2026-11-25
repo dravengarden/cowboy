@@ -892,6 +892,7 @@ async fn handshake_broker(
             executable: shared.executable.clone(),
             fallback_for: shared.fallback_for.clone(),
             outer_machine_protocol: None,
+            post_edit_http: false,
         },
     )
     .await?;
@@ -934,6 +935,11 @@ async fn connected(
     if let Some(exit) = handshake_broker(&shared, &mut reader, &mut writer).await? {
         return Ok(exit);
     }
+    let peer_protocol = shared.observation.peer_protocol.load(Ordering::Relaxed);
+    let mut post_edit = crate::worker_execution::PostEditBrokerSession::attach(
+        shared.execution.clone(),
+        peer_protocol,
+    );
     let mut reader = FrameReader::new(reader);
     let mut last_sent = 0;
     // `done_rx.recv()` becomes immediately ready forever after its sender is
@@ -950,6 +956,7 @@ async fn connected(
     let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
     loop {
         tokio::select! {
+            biased;
             incoming = reader.next() => {
                 let Some(frame) = incoming? else {
                     return Ok(ConnectedExit::Disconnected);
@@ -958,6 +965,7 @@ async fn connected(
                     Frame::ExecutionReply { reply } => {
                         if let Some(execution) = &shared.execution { execution.complete(*reply); }
                     }
+                    Frame::PostEditInspectReply { reply } => post_edit.complete_reply(*reply),
                     Frame::WorkerCommand { session_id, command: WorkerCommand::WrapUpHint { session_id: hs, target } } if session_id == shared.session_id && hs == shared.session_id => {
                         shared.wrap_up_hint.set(target);
                     }
@@ -1039,6 +1047,10 @@ async fn connected(
                 execution_launch::finalize_sigterm_cutoff(&shared);
                 let _ = send_outbox(&shared, &mut writer, &mut last_sent).await;
                 return Ok(ConnectedExit::WorkerDrained);
+            }
+            maybe_diag = post_edit.recv(), if post_edit.is_active() => match maybe_diag {
+                Some(item) => post_edit.send_or_refuse(item, &mut writer).await?,
+                None => post_edit.close_rx(),
             }
         }
     }

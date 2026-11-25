@@ -1,6 +1,7 @@
 //! CLI for the stable Machine host.
 
 mod connection_extensions;
+mod post_edit;
 mod wrap_up_hint;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -1253,6 +1254,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         crate::machine_lanes::LANES_HEADER,
         crate::machine_lanes::LANES.parse()?,
     );
+    post_edit::attach_upgrade_header(&mut request)?;
     let lane_endpoint = endpoint.clone();
     let (mut socket, response) = reconnect::dial(request, retry.dial_bound()).await?;
     let chunked = response
@@ -1287,6 +1289,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         })
         .flatten()
         .filter(|_| chunked);
+    let post_edit_client = post_edit::negotiate_client(&lane_endpoint, &response);
     let challenge = receive_frame(&mut socket).await?;
     let MachineFrame::Challenge {
         challenge_id,
@@ -1409,16 +1412,15 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
     } else {
         None
     };
-    let (runtime_write_tx, runtime_write_rx) = tokio::sync::mpsc::unbounded_channel();
-    let (hint_runtime_tx, hint_runtime_rx) =
-        tokio::sync::mpsc::channel(wrap_up_hint::HINT_RUNTIME_CAPACITY);
+    let wrap_up_hint::RuntimeWriterChannels {
+        reliable_tx: runtime_write_tx,
+        hint_tx: hint_runtime_tx,
+        diag_tx: diag_runtime_tx,
+        task: mut runtime_writer,
+    } = wrap_up_hint::spawn_runtime_channels(runtime_writer, MACHINE_FRAME_SEND_TIMEOUT);
     let (login_sessions, login_connection, _browser_uplink) =
         config.attach_browsers(&event_tx, &lane_endpoint);
     let (socket_sink, mut socket_stream) = socket.split();
-    // Runtime streams can produce more than a small frame-count bound while the
-    // WebSocket sink is flushing one large message. Keep the read/heartbeat loop
-    // non-blocking and let the writer's per-frame timeout bound a stalled
-    // connection; dropping the connection also drops this short-lived queue.
     let (controller_write_tx, controller_write_rx) = tokio::sync::mpsc::unbounded_channel();
     let credit = Arc::new(crate::machine_transport::Credit::default());
     let mut controller_writer = tokio::spawn(write_controller_messages(
@@ -1426,12 +1428,6 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         controller_write_rx,
         (chunked, compressed, paced, stream),
         Some(Arc::clone(&credit)),
-    ));
-    let mut runtime_writer = tokio::spawn(wrap_up_hint::run_runtime_unix_writer_with_hints(
-        runtime_writer,
-        runtime_write_rx,
-        hint_runtime_rx,
-        MACHINE_FRAME_SEND_TIMEOUT,
     ));
     let lanes = Arc::new(crate::machine_lanes::LaneSet::<Message>::default());
     let (lane_signal_tx, mut lane_signal_rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1580,7 +1576,13 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
                                         )?;
                                         continue;
                                     }
-                                    wrap_up_hint::route_inbound_runtime_frame(frame, protocol, &runtime_write_tx, &hint_runtime_tx)?;
+                                    wrap_up_hint::route_inbound_runtime_frame(
+                                        frame,
+                                        protocol,
+                                        post_edit_client.is_some(),
+                                        &runtime_write_tx,
+                                        &hint_runtime_tx,
+                                    )?;
                                 }
                                 MachineFrame::Command { command } => {
                                     anyhow::ensure!(command.minimum_protocol() <= protocol,
@@ -1605,6 +1607,10 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
                     let Some(frame) = frame? else {
                         bail!("Machine broker runtime tunnel closed");
                     };
+                    if let crate::runtime_wire::Frame::PostEditInspectRequest { request } = frame {
+                        post_edit::dispatch_or_refuse(post_edit_client.as_ref(), *request, &diag_runtime_tx);
+                        continue;
+                    }
                     let request_id = match &frame {
                         crate::runtime_wire::Frame::ExecutionRequest { request } => {
                             Some(request.request_id.clone())

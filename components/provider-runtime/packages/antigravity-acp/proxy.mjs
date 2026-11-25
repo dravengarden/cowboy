@@ -987,6 +987,9 @@ export class AcpProxy {
     ) {
       this.results.delete(callKey(sessionId, update.toolCallId));
     }
+    if (outcome?.evictedId && typeof sessionId === "string") {
+      this.results.delete(callKey(sessionId, outcome.evictedId));
+    }
   }
 
   /**
@@ -1663,7 +1666,10 @@ export class AcpProxy {
               }
             : undefined,
         });
-        runtime.facade.beginTurn(sessionId, { wrapUp: reserved.wrapUp });
+        runtime.facade.beginTurn(sessionId, {
+          wrapUp: reserved.wrapUp,
+          turnNonce: attemptNonce,
+        });
         if (promptRecord.compaction) {
           const started = this.compaction.update(sessionId, promptRecord.compaction, "in_progress");
           if (started) {

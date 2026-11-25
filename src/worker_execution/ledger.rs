@@ -1229,6 +1229,7 @@ impl Client {
     /// Fence the current turn after its cancellation and end its processes
     /// in the background, best-effort.
     pub fn cancel_turn(self: &Arc<Self>) {
+        self.post_edit.set_active_turn(None);
         let Some(ledger) = self.ledger() else {
             return;
         };
@@ -1251,6 +1252,7 @@ impl Client {
         self: &Arc<Self>,
         turn: &str,
     ) -> Option<impl std::future::Future<Output = ()> + Send + 'static> {
+        self.post_edit.set_active_turn(None);
         let ledger = Arc::clone(self.ledger()?);
         let processes = ledger.fence(Some(turn));
         if processes.is_empty() && ledger.drained(Some(turn)) {

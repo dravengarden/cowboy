@@ -101,6 +101,7 @@ pub use cowboy_wire::machine_auth;
 pub use cowboy_wire::machine_protocol;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::mcp_binding;
+pub use cowboy_wire::post_edit_inspect;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 pub use cowboy_wire::provider_account;
 #[cfg(any(feature = "full", feature = "machine-host"))]

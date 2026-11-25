@@ -166,5 +166,90 @@ pub(super) fn attach_writes(
     }
 }
 
+/// Project a single observed file for the R4 `/api/machine/post-edit-inspect`
+/// response. Enforces:
+/// - `matches_expected`: exact match against the caller's LF-normalized SHA-256.
+/// - `current_errors` fallback ONLY for `no_baseline` or `buffer_replaced` on
+///   `document_current` (never `stale_observation`).
+/// - Strict 12 KiB serialized payload cap via tail-trimming, recomputing
+///   `deliver` AFTER trimming (`R2-M12`).
+pub(super) fn project_for_inspect(file: &Value, expected_lf_sha256: &str) -> (Value, bool) {
+    let analyzed_sha = file
+        .pointer("/bufferSnapshot/content/sha256")
+        .and_then(Value::as_str);
+    let matches_expected = analyzed_sha == Some(expected_lf_sha256);
+    let is_current = file["state"].as_str() == Some("document_current");
+    let mut budget = Budget {
+        errors: MAX_ERRORS,
+        warnings: MAX_WARNINGS,
+        chars: 0,
+        truncated: false,
+    };
+    let mut item = json!({
+        "path": file["path"],
+        "state": file["state"],
+    });
+    let comparison = &file["comparison"];
+    let compared = matches!(comparison["state"].as_str(), Some("complete" | "partial"));
+    let mut listed: Vec<Value> = if compared {
+        item["comparison"] = json!({
+            "state": comparison["state"],
+            "introduced": counted(comparison, "introduced"),
+            "resolved": counted(comparison, "resolved"),
+            "escalated": counted(comparison, "escalated"),
+        });
+        introduced(file, comparison, &mut budget)
+    } else {
+        let reason = comparison["reason"].as_str();
+        if comparison.is_object() {
+            item["comparison"] = json!({"state": "unknown", "reason": comparison["reason"]});
+        }
+        let fallback_allowed =
+            is_current && matches!(reason, None | Some("no_baseline" | "buffer_replaced"));
+        if fallback_allowed {
+            file["diagnostics"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|value| value["severity"] == "error")
+                .filter_map(|value| budget.admit(value))
+                .collect()
+        } else {
+            Vec::new()
+        }
+    };
+
+    let build_payload = |listed: &[Value], truncated: bool| -> Value {
+        let mut f = item.clone();
+        if !listed.is_empty() {
+            f["diagnostics"] = Value::Array(listed.to_vec());
+        }
+        let has_findings = if compared {
+            let changed = counted(comparison, "introduced") + counted(comparison, "escalated");
+            changed > 0 && !listed.is_empty()
+        } else {
+            !listed.is_empty()
+        };
+        let deliver = matches_expected && is_current && has_findings;
+        json!({
+            "deliver": deliver,
+            "files": [f],
+            "truncated": truncated,
+        })
+    };
+
+    let mut truncated = budget.truncated;
+    let mut payload = build_payload(&listed, truncated);
+    while serde_json::to_vec(&payload)
+        .is_ok_and(|bytes| bytes.len() > crate::post_edit_inspect::MAX_POST_EDIT_PAYLOAD_BYTES)
+        && !listed.is_empty()
+    {
+        listed.pop();
+        truncated = true;
+        payload = build_payload(&listed, truncated);
+    }
+    (payload, matches_expected)
+}
+
 #[cfg(test)]
 mod tests;

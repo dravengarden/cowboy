@@ -674,6 +674,44 @@ impl RemoteRuntime {
             })
     }
 
+    /// Verify that an unmanaged runtime worker matching `(session_id, worker_epoch,
+    /// turn_id, scope)` is currently alive, not draining, and actively running that
+    /// exact turn.
+    #[must_use]
+    pub fn post_edit_owner_matches(
+        &self,
+        session_id: &str,
+        worker_epoch: &str,
+        turn_id: &str,
+        scope: &crate::post_edit_inspect::PostEditScope,
+    ) -> bool {
+        self.connected()
+            && self
+                .shared
+                .workers
+                .lock()
+                .get(session_id)
+                .is_some_and(|worker| {
+                    worker.worker_epoch == worker_epoch
+                        && !worker.drain_requested
+                        && !matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
+                        && worker.current_turn_id.as_deref() == Some(turn_id)
+                        && worker
+                            .launch
+                            .as_ref()
+                            .and_then(|launch| launch.execution_binding.as_ref())
+                            .and_then(|binding| binding.decode().ok())
+                            .is_some_and(|binding| {
+                                binding.managed.is_none()
+                                    && scope.matches_parts(
+                                        &binding.id,
+                                        binding.revision,
+                                        &binding.environment.incarnation,
+                                    )
+                            })
+                })
+    }
+
     /// `(provider, sha256:<hex>)` Provider generations the Machine's reported
     /// workers were launched with. A worker can outlive its session record's
     /// pin (a cutover relaunch, a surviving worker reconciled only after a
@@ -1572,6 +1610,7 @@ async fn connect_once(
             executable: None,
             fallback_for: None,
             outer_machine_protocol: Some(crate::machine_protocol::MACHINE_PROTOCOL_VERSION),
+            post_edit_http: false,
         },
     )
     .await?;
@@ -1610,6 +1649,7 @@ async fn connect_once_stream(
             executable: None,
             fallback_for: None,
             outer_machine_protocol: None,
+            post_edit_http: false,
         },
     )
     .await?;

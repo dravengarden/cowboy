@@ -60,6 +60,14 @@ impl SessionReadScope {
         self.connection.as_ref()
     }
 
+    /// Controller-local monotonic connection epoch (`0` for local sessions).
+    #[must_use]
+    pub fn conn_epoch(&self) -> u64 {
+        self.connection
+            .as_ref()
+            .map_or(0, ConnectionToken::conn_epoch)
+    }
+
     pub fn string_bytes(&self) -> usize {
         self.session.string_bytes()
             + self.remote_root.as_ref().map_or(0, String::len)

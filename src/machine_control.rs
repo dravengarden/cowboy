@@ -73,10 +73,13 @@ const MAX_PENDING_PER_MACHINE: usize = 256;
 #[derive(Clone, Debug)]
 pub struct ConnectionToken(Arc<ConnectionIdentity>);
 
+static NEXT_CONNECTION_EPOCH: AtomicU64 = AtomicU64::new(1);
+
 #[derive(Debug)]
 struct ConnectionIdentity {
     machine_id: String,
     epoch: String,
+    conn_epoch: u64,
 }
 
 impl ConnectionToken {
@@ -90,6 +93,14 @@ impl ConnectionToken {
         &self.0.epoch
     }
 
+    /// Controller-local monotonic connection epoch (`>= 1`; `0` is reserved for
+    /// local reads) used to invalidate diagnostic baselines across Machine
+    /// reconnects (R2-M10).
+    #[must_use]
+    pub fn conn_epoch(&self) -> u64 {
+        self.0.conn_epoch
+    }
+
     pub fn same(&self, other: &Self) -> bool {
         self.0.epoch == other.0.epoch && Arc::ptr_eq(&self.0, &other.0)
     }
@@ -101,6 +112,7 @@ impl ConnectionToken {
         Self(Arc::new(ConnectionIdentity {
             machine_id: machine_id.to_owned(),
             epoch: epoch.to_owned(),
+            conn_epoch: NEXT_CONNECTION_EPOCH.fetch_add(1, Ordering::Relaxed),
         }))
     }
 }
@@ -530,6 +542,7 @@ impl MachineControl {
         let token = ConnectionToken(Arc::new(ConnectionIdentity {
             machine_id: machine_id.clone(),
             epoch,
+            conn_epoch: NEXT_CONNECTION_EPOCH.fetch_add(1, Ordering::Relaxed),
         }));
         let mut live = self.live.write();
         live.disconnect(&machine_id);

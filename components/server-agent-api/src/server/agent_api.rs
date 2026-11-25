@@ -34,6 +34,7 @@ mod bridge;
 pub use bridge::Bridge;
 mod code_reads;
 pub use code_reads::maintain_holdings;
+pub use code_reads::post_edit_inspect::api_machine_post_edit_inspect;
 mod control;
 mod event_reads;
 mod json_reads;

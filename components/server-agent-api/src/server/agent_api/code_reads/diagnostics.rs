@@ -209,6 +209,113 @@ pub(super) async fn read_existing(
     read_with_acquisition(state, observed, paths, false).await
 }
 
+/// Observation-only projection of one file read with an optional pending
+/// baseline capture. Callers must commit `pending` via `baselines::record`
+/// ONLY after passing their final authorization/trust fence (`R3-H2`).
+pub(super) struct ObservedFile {
+    pub(super) file: Value,
+    pub(super) pending: Option<(
+        super::baselines::Pending,
+        Vec<super::super::super::CodeDiagnostic>,
+    )>,
+}
+
+pub(super) fn build_observed_file(
+    path: &str,
+    reply: anyhow::Result<ZedAdapterResponse>,
+    acquired: bool,
+    conn_epoch: u64,
+    capture_baseline: bool,
+) -> ObservedFile {
+    match reply {
+        Ok(ZedAdapterResponse::BufferLanguage {
+            diagnostics,
+            analysis,
+            buffer_snapshot,
+            source_state,
+            ..
+        }) => {
+            let analysis = analysis.filter(|servers| servers.len() <= MAX_SERVERS);
+            let buffer_snapshot = buffer_snapshot.filter(|value| value.bounded());
+            // A conflicting identity invalidates the entire observation,
+            // including counts. Dropping only provenance could still label
+            // another buffer's diagnostics as document_current.
+            if !identities_match(&diagnostics, buffer_snapshot.as_deref()) {
+                return ObservedFile {
+                    file: json!({"path":path,"state":"unavailable"}),
+                    pending: None,
+                };
+            }
+            let source_state = if buffer_snapshot.is_some() {
+                source_state
+            } else {
+                SourceState::Unavailable
+            };
+            let mut counts = json!({"error":0,"warning":0,"information":0,"hint":0});
+            for diagnostic in &diagnostics {
+                if let Some(count) = counts.get_mut(severity(diagnostic.severity)) {
+                    *count = json!(count.as_u64().unwrap_or(0) + 1);
+                }
+            }
+            let truncated = diagnostics.len() > MAX_PER_PATH;
+            let mut listed: Vec<_> = diagnostics.iter().collect();
+            listed.sort_by_key(|diagnostic| (diagnostic.severity, diagnostic.start.row));
+            let listed: Vec<Value> = listed
+                .into_iter()
+                .take(MAX_PER_PATH)
+                .map(|value| diagnostic(value, buffer_snapshot.as_deref()))
+                .collect();
+            let state = file_state(analysis.as_deref(), source_state);
+            let mut file = json!({"path":path,"state":state,
+                "counts":counts,"diagnostics":listed,"truncated":truncated,
+                "bufferSnapshot":buffer_snapshot,"sourceState":source_state});
+            if acquired {
+                file["acquired"] = json!(true);
+            }
+            if let Some(analysis) = &analysis {
+                file["analysis"] = json!(servers(analysis));
+            }
+            let mut pending_out = None;
+            if capture_baseline {
+                let pending = (state == "document_current")
+                    .then(|| {
+                        super::baselines::capture(
+                            &diagnostics,
+                            buffer_snapshot.as_deref(),
+                            analysis.as_deref().unwrap_or_default(),
+                            conn_epoch,
+                        )
+                    })
+                    .flatten();
+                match pending {
+                    Some(pending) => pending_out = Some((pending, diagnostics)),
+                    None => file["comparison"] = super::baselines::unknown("not_current"),
+                }
+            }
+            ObservedFile {
+                file,
+                pending: pending_out,
+            }
+        }
+        Ok(_) => ObservedFile {
+            file: json!({"path":path,"state":"unavailable"}),
+            pending: None,
+        },
+        Err(error) if error.to_string().contains("not open") => ObservedFile {
+            file: json!({"path":path,"state":"not_open"}),
+            pending: None,
+        },
+        Err(error) if error.to_string().contains("outside this session") => ObservedFile {
+            file: json!({"path":path,"state":"refused"}),
+            pending: None,
+        },
+        Err(_) => ObservedFile {
+            file: json!({"path":path,"state":"unavailable"}),
+            pending: None,
+        },
+    }
+}
+
 async fn read_with_acquisition(
     state: &AppState,
     observed: &SessionReadScope,
@@ -222,6 +329,7 @@ async fn read_with_acquisition(
     let mut files = Vec::with_capacity(paths.len());
     // Baselines are captured only from explicit reads, after the trust fence.
     let mut captures = Vec::new();
+    let conn_epoch = observed.conn_epoch();
     for path in paths {
         if trust
             .as_ref()
@@ -244,80 +352,11 @@ async fn read_with_acquisition(
                 false,
             )
         };
-        files.push(match reply {
-            Ok(ZedAdapterResponse::BufferLanguage {
-                diagnostics,
-                analysis,
-                buffer_snapshot,
-                source_state,
-                ..
-            }) => {
-                let analysis = analysis.filter(|servers| servers.len() <= MAX_SERVERS);
-                let buffer_snapshot = buffer_snapshot.filter(|value| value.bounded());
-                // A conflicting identity invalidates the entire observation,
-                // including counts. Dropping only provenance could still label
-                // another buffer's diagnostics as document_current.
-                if !identities_match(&diagnostics, buffer_snapshot.as_deref()) {
-                    files.push(json!({"path":path,"state":"unavailable"}));
-                    continue;
-                }
-                let source_state = if buffer_snapshot.is_some() {
-                    source_state
-                } else {
-                    SourceState::Unavailable
-                };
-                let mut counts = json!({"error":0,"warning":0,"information":0,"hint":0});
-                for diagnostic in &diagnostics {
-                    if let Some(count) = counts.get_mut(severity(diagnostic.severity)) {
-                        *count = json!(count.as_u64().unwrap_or(0) + 1);
-                    }
-                }
-                let truncated = diagnostics.len() > MAX_PER_PATH;
-                let mut listed: Vec<_> = diagnostics.iter().collect();
-                listed.sort_by_key(|diagnostic| (diagnostic.severity, diagnostic.start.row));
-                let listed: Vec<Value> = listed
-                    .into_iter()
-                    .take(MAX_PER_PATH)
-                    .map(|value| diagnostic(value, buffer_snapshot.as_deref()))
-                    .collect();
-                let state = file_state(analysis.as_deref(), source_state);
-                let mut file = json!({"path":path,"state":state,
-                    "counts":counts,"diagnostics":listed,"truncated":truncated,
-                    "bufferSnapshot":buffer_snapshot,"sourceState":source_state});
-                if acquired {
-                    file["acquired"] = json!(true);
-                }
-                if let Some(analysis) = &analysis {
-                    file["analysis"] = json!(servers(analysis));
-                }
-                if acquire {
-                    let pending = (state == "document_current")
-                        .then(|| {
-                            super::baselines::capture(
-                                &diagnostics,
-                                buffer_snapshot.as_deref(),
-                                analysis.as_deref().unwrap_or_default(),
-                            )
-                        })
-                        .flatten();
-                    match pending {
-                        Some(pending) => {
-                            captures.push((files.len(), path.clone(), pending, diagnostics))
-                        }
-                        None => file["comparison"] = super::baselines::unknown("not_current"),
-                    }
-                }
-                file
-            }
-            Ok(_) => json!({"path":path,"state":"unavailable"}),
-            Err(error) if error.to_string().contains("not open") => {
-                json!({"path":path,"state":"not_open"})
-            }
-            Err(error) if error.to_string().contains("outside this session") => {
-                json!({"path":path,"state":"refused"})
-            }
-            Err(_) => json!({"path":path,"state":"unavailable"}),
-        });
+        let built = build_observed_file(&path, reply, acquired, conn_epoch, acquire);
+        if let Some((pending, diagnostics)) = built.pending {
+            captures.push((files.len(), path.clone(), pending, diagnostics));
+        }
+        files.push(built.file);
     }
     // Revocation during an asynchronous query discards its observation even
     // when the owner re-enabled language servers before the reply arrived.

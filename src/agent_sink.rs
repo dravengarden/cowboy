@@ -38,6 +38,10 @@ pub trait AgentSink: Send + Sync + 'static {
     /// If the agent subprocess exited while a sandboxed prompt remained
     /// unanswered after bounded drain, durably hold the session uncertain.
     fn record_unconfirmed_exit_if_sandboxed(&self, _session_id: &str) {}
+    /// Publish or clear the active Antigravity `(turn_id, attempt_nonce)` used
+    /// to bind proxy-initiated post-edit diagnostic pulls to the exact live
+    /// prompt attempt.
+    fn set_active_turn_nonce(&self, _session_id: &str, _turn: Option<(String, String)>) {}
     /// Explicit execution hooks carry only local correlation, never prompt
     /// content or a Provider credential/environment binding.
     fn prompt_started(&self, _session_id: &str, _cmid: Option<&str>) {}

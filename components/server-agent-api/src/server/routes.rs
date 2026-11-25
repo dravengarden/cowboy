@@ -14,3 +14,12 @@ pub fn widget_routes() -> Router<Arc<AppState>> {
             post(agent_api::api_widget_app_message),
         )
 }
+
+/// Independent authenticated Machine HTTPS route for Antigravity post-edit
+/// diagnostic pulls (Decision 2A / R4).
+pub fn machine_post_edit_routes() -> Router<Arc<AppState>> {
+    Router::new().route(
+        crate::post_edit_inspect::POST_EDIT_INSPECT_PATH,
+        post(agent_api::api_machine_post_edit_inspect),
+    )
+}

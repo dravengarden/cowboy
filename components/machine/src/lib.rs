@@ -19,8 +19,8 @@ pub use cowboy::{
     execution_target_environment, generation_retention, legacy_provider_release, machine_auth,
     machine_lanes, machine_protocol, machine_transport, managed_calls, mcp_binding,
     operation_budget, otlp, owned_json, plugin_auth_probe, plugin_host, plugin_host_bundle,
-    plugin_process, plugin_runtime_args, provider_account, provider_behavior, runtime_trace,
-    runtime_wire, service_identity, session_deletion_admission, telemetry_plugin,
+    plugin_process, plugin_runtime_args, post_edit_inspect, provider_account, provider_behavior,
+    runtime_trace, runtime_wire, service_identity, session_deletion_admission, telemetry_plugin,
     workspace_extensions, workspace_roots, wrap_up,
 };
 #[cfg(feature = "full")]

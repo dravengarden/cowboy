@@ -1,8 +1,46 @@
-# Antigravity Post-Edit Diagnostics (R4) — Design (Revision 8 — Independent HTTPS Pull + Existing Code-Read Parity)
+# Antigravity Post-Edit Diagnostics (R4) — Design (Revision 9 — Implemented)
 
-Status: design, revision 8 (2026-11-25), incorporating owner architectural
-decisions **1A + 2A** and closing all 24 findings (11 High, 11 Medium, 2 Low)
-from Round 2 design review `call-1b04aa9eb938ab942fd9b1be`.
+Status: implemented, revision 9 (2026-11-25), incorporating owner architectural
+decisions **1A + 2A**, all 24 Round 2 findings (`call-1b04aa9eb938ab942fd9b1be`),
+and all 20 Round 3 implementation refinements (`call-a3786da36d6cd20f44ba1423`):
+- **R3-H1 / R3-H2:** Split `code_reads::diagnostics::build_observed_file` into
+  observation-only projection (no baseline write inside); `post_edit_inspect`
+  runs async `read_parent` + `superagent::restricted` and zero-await sync
+  worker/turn/trust/scope/deadline fence after target-permit and per-file-lock
+  waits, before cold acquire/refresh/poll, and immediately before the sole
+  synchronous `baselines::record` commit under the per-`(SessionCodeScope, path)` lock.
+- **R3-H3 / R3-M17:** Added synchronous `beforeSend` hook to `Connection.request`
+  running AFTER `ensureConnected()` and immediately BEFORE `socket.send()`;
+  refused large-edit staged payloads clean up via non-fencing `fs/remove`.
+- **R3-H4:** Accurate transport scope — **zero** diagnostic bytes enter the
+  runtime Machine (OVH) <-> Controller primary WebSocket (independent HTTPS
+  `POST /api/machine/post-edit-inspect`), while Controller -> Target Machine
+  reuses Cowboy's existing `SessionReadScope` + `zed` `AdapterRequest`
+  (loopback on Hawk, identical to Claude/Codex `code.post_edit`).
+- **R3-H5 / R3-H6:** `POST_EDIT_TARGET_SLOTS(4)` permit is moved into the
+  spawned target observation task so an HTTP timeout never releases it before
+  target settlement; `acquire::acquire_on_scope` uses `zed_session::agent_buffer_request_on_connection`
+  bound directly to `observed.connection()`.
+- **R3-H7:** Unified `serveMcp` per-`callKey` `activeCalls` ownership + synchronous
+  `committed` latch + `entry.sendPromise` across all ID-bearing replies;
+  `notifications/cancelled` never deletes `activeCalls[callKey]`.
+- **R3-H8:** `/run/cowboy-exec.sock` `Admission` bounds pre-auth sockets to 4,
+  4 KiB HTTP headers, and 500 ms upgrade timeout, evicting the oldest stalled
+  pre-auth socket (> 200 ms) when `mutation_slot` is vacant.
+- **R3-H9:** Rollout fallback verification inventories every selectable fallback
+  executable (`previous.conf`, manual rollback target, and `fallback_pins` /
+  per-session retired predecessors by SHA-256).
+- **R3-M10..M20:** Broker TTL expiry timers + `remove_worker` cleanup; worker
+  `descriptor.diagnostics = { schema: 1, path: "/diagnostics" }` capability gate;
+  `unit_generation` tagged per `UnixListener` at installation; `turnNonce`
+  published from `src/acp.rs` via `AgentSink` and validated in Worker; single
+  `deadlineMs` covering connect+init+inspect with post-auth `>= 500 ms` cold-start
+  floor; workspace-relative POSIX path derivation in `Facade`; `reqwest`
+  `redirect::Policy::none()`; `PlanGate` `MAX_WAITING` eviction latching
+  `turn.announcementEvicted` + overlapping identical-edit ambiguity; explicit
+  UTF-8 BOM (`0xEF 0xBB 0xBF`) exclusion in `lfSha256` matching unchanged
+  Zed adapter; canary-only `--canary-trace-file` argv + relay-private
+  `_cowboyCanary` stripped before native stdout.
 
 - Baseline: `origin/main` at `960c811b6b03673b984ad97e84172d540dca23b6`
   (Machine protocol 53 / Runtime protocol 8, Antigravity Plugin 0.2.38 /
@@ -78,7 +116,7 @@ Cowboy's proven production primitives:
 | 25 | Medium | M19: Terminal completion doesn't prove diff ownership when identical concurrent calls reverse | **Closed in `plan-gate.mjs` + `proxy.mjs` (§6.5):** Mark colliding identical-argument (or inputless-conflicting) concurrent announcements `ambiguous = true`, keep terminal-only diff attachment, and suppress diff attachment whenever attribution is ambiguous. |
 | 26 | Medium | M21: Stalled MCP relay can hold `pendingShown` tokens and `activeCalls` IDs indefinitely | **Closed in `facade.mjs::serveMcp` (§6.2, §6.4):** Bound MCP relay `send()` write handoff (`10 s`); on timeout, destroy the irrecoverably stalled relay stream through its ambiguity path (`markRelayAmbiguous`), settling `sendPromise` as `false` and releasing the token/ID. |
 | 27 | Medium | M25: Pre-write `serveMcp` trace doesn't prove bytes reached relay's native-facing stdout | **Closed in `facade-relay.mjs` + §8.2:** Capture the final serialized reply at `facade-relay.mjs`'s native-facing `process.stdout.write` callback (with write disposition & nonce digest) and link it to Controller's `cowboy.code.post_edit_inspect` log via a canary-only `canary_inspect_id`. |
-| 28 | Low | M24: `TextDecoder` drops leading UTF-8 BOM | **Closed in `extensions.mjs` (§6.2):** Reuse BOM-preserving `decodeText` from `facade-tools.mjs:319` inside `lfSha256` and test BOM + mixed line endings. |
+| 28 | Low | M24 / R3-M19: Leading UTF-8 BOM vs unchanged Zed adapter | **Closed in `post-edit-notes.mjs` (§6.2):** Unchanged Zed `CreateBufferForPeer` strips UTF-8 BOM into `has_bom` while `source_snapshot` keeps it, so BOM files cannot match `document_current`; `lfSha256` explicitly returns `null` for leading `0xEF 0xBB 0xBF` (outside R4's unchanged-adapter scope). |
 | 29 | Low | `docs/INDEX.md` still advertises Revision 6 contracts | **Closed:** `docs/INDEX.md` line 27 updated in the same commit to reflect Revision 8. |
 
 ---
@@ -126,7 +164,7 @@ boundary as public `cowboy.code.diagnostics` and Claude/Codex
 - **In scope**:
   - Parent-session `WriteFile` and `EditFile` calls on non-managed Antigravity
     sessions with `"Project language servers"` enabled.
-  - All bounded valid-UTF-8 (BOM-preserving, NUL-free) facade writes up to
+  - All bounded valid-UTF-8 (BOM-free, NUL-free; leading UTF-8 BOM excluded per R3-M19 on unchanged Zed adapter) facade writes up to
     `LIMITS.writeBytes` (3 MiB), covering **both** inline `--request`
     (`<= 48 KiB`) and `--request-file` (`> 48 KiB .. 3 MiB`) applies. This
     explicitly supersedes the 48 KiB inline-only limit in
@@ -581,7 +619,8 @@ In `components/server-agent-api/src/server/agent_api/code_reads/post_edit.rs`:
 ### 6.1 `DiagnosticsClient` (Dedicated `/diagnostics` WS Client)
 
 Add `components/provider-runtime/packages/antigravity-acp/diagnostics-client.mjs`
-(leaving `execution-connection.mjs` **untouched**):
+(plus the additive synchronous `beforeSend` pre-send hook and `executionDiagnosticsUrl`
+helper in `execution-connection.mjs` for R3-H3):
 
 - Connects lazily to the descriptor's execution socket with HTTP path
   `"/diagnostics"` and the descriptor's `Authorization: Bearer <token>` header
@@ -593,16 +632,16 @@ Add `components/provider-runtime/packages/antigravity-acp/diagnostics-client.mjs
 - Single-flight, zero retries, fail-open (`null` on any transport/timeout/refusal
   error; zero `UncertainEffect`). Closed in `quiesce()` before `Connection.idle()`.
 
-### 6.2 `Extensions`: BOM-Preserving `lfSha256`, Strict Eligibility & Tokenized Dedupe (M21, M22, R2-M12, R2-L1)
+### 6.2 `post-edit-notes.mjs`: `lfSha256` (BOM-Excluded per R3-M19), Strict Eligibility & Tokenized Dedupe (M21, M22, R2-M12, R3-M19)
 
-In `components/provider-runtime/packages/antigravity-acp/extensions.mjs`:
+In `components/provider-runtime/packages/antigravity-acp/post-edit-notes.mjs`:
 
-1. **`lfSha256(bytes)` (R2-L1)**: Rejects `bytes.length > 4 * 1024 * 1024` or
-   `bytes.includes(0)`, decodes via the existing BOM-preserving
-   `decodeText(bytes)` from `facade-tools.mjs:319` (`new TextDecoder("utf-8", {
-   fatal: true, ignoreBOM: true })`), normalizes `\r\n` and `\r` to `\n`, and
-   returns lowercase 64-hex SHA-256 (exact byte-for-byte parity with
-   `source_snapshot.rs`!).
+1. **`lfSha256(bytes)` (R3-M19)**: Rejects `bytes.length > 4 * 1024 * 1024`,
+   `bytes.includes(0)`, or a leading UTF-8 BOM (`0xEF 0xBB 0xBF`, because the
+   unchanged Zed adapter strips BOM into `has_bom` in `CreateBufferForPeer`
+   while `source_snapshot.rs` keeps it), decodes strict UTF-8
+   (`new TextDecoder("utf-8", { fatal: true })`), normalizes `\r\n` and `\r`
+   to `\n`, and returns lowercase 64-hex SHA-256.
 2. **`postEditFindings(reply, { expectedPath, expectedLfSha256 })` (M22, R2-M12)**:
    - Immediately returns `null` unless `reply?.state === "projected" &&
      reply.matches_expected === true && reply.payload?.deliver === true`.
@@ -735,9 +774,10 @@ In `components/provider-runtime/packages/antigravity-acp/{plan-gate.mjs,proxy.mj
 
 Before any Hawk or OVH Machine rollout carrying R4 (or combined R4 + R2):
 
-1. Pin and test all **three** fallback worker binaries (automatic
-   `previous.conf`, manual release rollback target, and per-session
-   `fallback_targets`) against a populated ledger containing `active_processes`,
+1. Inventory and pin by SHA-256 **every** selectable fallback worker binary
+   (automatic `previous.conf`, manual release rollback target, and every
+   `fallback_pins` / per-session retired predecessor executable, R3-H9) against
+   a populated ledger containing `active_processes`,
    `uncertain_sequence`, and pending effects.
 2. For each fallback binary, assert the real `Ledger::open` recovery contract:
    - `Ledger::open` consumes `active_processes`, records `process/terminate`
@@ -830,15 +870,17 @@ Before any Hawk or OVH Machine rollout carrying R4 (or combined R4 + R2):
 
 ### 8.2 Live Canary Acceptance With Native-Facing Relay Stdout Evidence (M25, R2-M16)
 
-Gated strictly on an explicit canary-only env flag
-(`COWBOY_CANARY_POST_EDIT_TRACE_FILE`, unset and forbidden in all production
-units/configs):
+Gated strictly on an explicit canary-only CLI flag (`--canary-trace-file <path>`
+passed on isolated canary launch argv to `facade-relay.mjs`, never via
+`agyEnvironment` and never set in production, R3-M20):
 
-- `facade-relay.mjs` line-frames outbound JSON-RPC replies written to its
-  **native-facing `process.stdout`**, records `{ event: "canary.relay.stdout",
-  mcp_call_id, write_ok, bytes, note_attached, nonce_sha256_match,
-  canary_inspect_id }` in the `process.stdout.write` callback, proving the
-  exact serialized bytes left the relay into `agy`'s stdin!
+- `serveMcp` attaches relay-private `_cowboyCanary: { inspectId, noteAttached,
+  nonceSha256 }` on the socket JSON-RPC response in canary mode;
+  `facade-relay.mjs` strips `_cowboyCanary` before writing to its
+  **native-facing `process.stdout`** and appends `{ inspectId, noteAttached,
+  nonceSha256, written, ts }` inside the `process.stdout.write` callback for
+  both positive and negative controls, proving the exact serialized bytes left
+  the relay into `agy`'s stdin!
 - Each canary edit generates a unique `canary_inspect_id` forwarded on
   `POST /api/machine/post-edit-inspect` and logged on Controller's
   `cowboy.code.post_edit_inspect` event (absent in production).

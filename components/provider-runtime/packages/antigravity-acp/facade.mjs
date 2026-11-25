@@ -16,7 +16,7 @@
 // A process the executor itself reports forgotten has ended (evidence rule
 // E1, docs/uncertain-effect-recovery.md); that answered request is not a
 // lost one.
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { posix } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -44,6 +44,7 @@ import {
   url,
 } from "./facade-tools.mjs";
 import { MANAGED_FACADE_TOOLS } from "./managed.mjs";
+import { formatPostEditNote, lfSha256, PostEditDedupe } from "./post-edit-notes.mjs";
 import { planUpdate } from "./presentation.mjs";
 
 /** The worker endpoint's own request recording an uncertain effect the
@@ -111,11 +112,15 @@ export class Facade {
       authorize = () => ({ allowed: true }),
       managed = false,
       stopConfirmMs = LIMITS.stopConfirmMs,
+      diagnostics = undefined,
+      canaryTrace = false,
     },
   ) {
     this.connection = connection;
     this.managed = managed;
     this.stopConfirmMs = stopConfirmMs;
+    this.diagnostics = diagnostics;
+    this.canaryTrace = Boolean(canaryTrace);
     this.startWaitMs = 10_000;
     this.root = root;
     this.shell = shell;
@@ -128,6 +133,16 @@ export class Facade {
     this.sessions = new Map();
     /** Per canonical path, how often a publish of it became uncertain. */
     this.invalidations = new Map();
+    /** Per canonical path serialization locks for WriteFile/EditFile. */
+    this.fileLocks = new Map();
+    /** Per canonical path count of in-flight writes. */
+    this.activeWrites = new Map();
+    /** Per canonical path monotonic write dispatch generation. */
+    this.writeDispatchGen = new Map();
+    /** Per canonical path monotonic committed publish revision. */
+    this.committedRevision = new Map();
+    /** Tokenized deduplication of delivered post-edit diagnostic notes. */
+    this.postEditDedupe = new PostEditDedupe();
     /** Active `endTurn` promises kept visible to `settled()` even after turn detach. */
     this.activeCleanups = new Set();
     /** Active root `endTurn` command-stop deadlines for shutdown drain budgeting. */
@@ -284,13 +299,14 @@ export class Facade {
     }
   }
 
-  beginTurn(sessionId, { wrapUp = null } = {}) {
+  beginTurn(sessionId, { wrapUp = null, turnNonce = undefined } = {}) {
     this.session(sessionId).turn = {
       sessionId,
       cancelled: false,
       ended: false,
       uncertain: undefined,
       wrapUp,
+      turnNonce,
       inflight: new Set(),
       openCalls: 0,
       // Aborted when the turn ends or is cancelled: a call waiting on a
@@ -430,6 +446,7 @@ export class Facade {
    */
   quiesce() {
     this.closing = true;
+    this.diagnostics?.close?.();
     for (const session of this.sessions.values()) {
       if (session.turn) {
         session.turn.ended = true;
@@ -563,25 +580,225 @@ export class Facade {
     session.commands.delete(command.processId);
   }
 
+  /** Convert canonical absolute target path into a validated workspace-relative POSIX path (R3-M15). */
+  relativeWorkspacePath(file) {
+    if (typeof file !== "string" || !inside(this.root, file)) return null;
+    const rel = posix.relative(this.root, file);
+    if (
+      !rel ||
+      rel === "." ||
+      rel === ".." ||
+      rel.startsWith("/") ||
+      rel.startsWith("../") ||
+      rel.includes("\0") ||
+      rel.includes("//") ||
+      rel.split("/").some((part) => part === "" || part === "." || part === "..")
+    ) {
+      return null;
+    }
+    return rel;
+  }
+
+  /** Serialize concurrent WriteFile/EditFile operations on the same canonical file. */
+  async withFileLock(file, fn) {
+    const prev = this.fileLocks.get(file) ?? Promise.resolve();
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    const next = prev.catch(() => {}).then(() => gate);
+    this.fileLocks.set(file, next);
+    await prev.catch(() => {});
+    try {
+      return await fn();
+    } finally {
+      release();
+      if (this.fileLocks.get(file) === next) this.fileLocks.delete(file);
+    }
+  }
+
+  /** Synchronous pre-effect authorization guard run immediately before socket.send() (R3-H3). */
+  assertAuthorizedBeforeEffect(session, turn, decision, signal) {
+    if (
+      this.closing ||
+      signal?.aborted ||
+      session.turn !== turn ||
+      turn.cancelled ||
+      turn.ended ||
+      turn.uncertain !== undefined ||
+      (typeof decision?.confirm === "function" && !decision.confirm())
+    ) {
+      throw new ToolError(
+        "The tool request was cancelled because the session's mode or turn changed.",
+      );
+    }
+  }
+
+  /** Pull post-edit diagnostics over the separate `/diagnostics` channel when admissible. */
+  async pullPostEditNote(session, turn, postEditMeta, { signal = undefined } = {}) {
+    if (
+      this.managed ||
+      !postEditMeta ||
+      !session ||
+      session.parent !== undefined ||
+      !turn ||
+      session.turn !== turn ||
+      turn.cancelled ||
+      turn.ended ||
+      turn.uncertain !== undefined ||
+      !turn.turnNonce ||
+      signal?.aborted ||
+      !this.diagnostics
+    ) {
+      return null;
+    }
+    const { file, relPath, expectedLfSha256, rev } = postEditMeta;
+    const isFresh = () =>
+      !this.closing &&
+      !signal?.aborted &&
+      session.turn === turn &&
+      !turn.cancelled &&
+      !turn.ended &&
+      turn.uncertain === undefined &&
+      (this.activeWrites.get(file) ?? 0) === 0 &&
+      this.committedRevision.get(file) === rev;
+
+    if (!isFresh()) return null;
+    const canaryInspectId = this.canaryTrace
+      ? `canary-${randomUUID().replaceAll("-", "")}`
+      : undefined;
+    const canaryMeta = canaryInspectId
+      ? {
+          inspectId: canaryInspectId,
+          nonceSha256: createHash("sha256").update(turn.turnNonce, "utf8").digest("hex"),
+        }
+      : undefined;
+
+    const reply = await this.diagnostics.postEdit({
+      path: relPath,
+      expectedLfSha256,
+      turnNonce: turn.turnNonce,
+      timeoutMs: 4000,
+      canaryInspectId,
+      signal,
+    });
+    if (!isFresh() || reply?.state !== "projected") {
+      return canaryMeta ? { note: null, dedupeToken: null, isFresh, canaryMeta } : null;
+    }
+    const formatted = formatPostEditNote({
+      payload: reply.payload,
+      matchesExpected: reply.matchesExpected,
+      expectedPath: relPath,
+    });
+    if (!formatted) {
+      return canaryMeta ? { note: null, dedupeToken: null, isFresh, canaryMeta } : null;
+    }
+    const dedupeToken = this.postEditDedupe.reserve(relPath, formatted.digest);
+    if (dedupeToken === null) {
+      return canaryMeta ? { note: null, dedupeToken: null, isFresh, canaryMeta } : null;
+    }
+    return { note: formatted.note, dedupeToken, isFresh, canaryMeta };
+  }
+
+  appendTextNote(result, note) {
+    if (!note || !Array.isArray(result?.content)) return result;
+    const firstTextIndex = result.content.findIndex(
+      (block) => block?.type === "text" && typeof block.text === "string",
+    );
+    const content =
+      firstTextIndex >= 0
+        ? result.content.map((block, index) =>
+            index === firstTextIndex ? { ...block, text: `${block.text}\n\n${note}` } : block,
+          )
+        : [...result.content, { type: "text", text: note }];
+    return { ...result, content };
+  }
+
   /** One MCP `tools/call`, answered as an MCP tool result. */
   async call(sessionId, name, args, relayId = undefined, { signal = undefined } = {}) {
     const session = sessionId === undefined ? undefined : this.sessions.get(sessionId);
     const callTurn = session?.turn;
     if (callTurn) callTurn.openCalls += 1;
     const call = { sessionId, name, args };
-    let result;
+    let rawResult;
     try {
-      result = await this.answer(call, { signal });
+      rawResult = await this.answer(call, { signal });
     } finally {
       if (callTurn && callTurn.openCalls > 0) callTurn.openCalls -= 1;
     }
+    const postEditMeta = rawResult?._postEditMeta;
+    const cleanResult =
+      rawResult && Object.hasOwn(rawResult, "_postEditMeta")
+        ? { content: rawResult.content, ...(rawResult.isError ? { isError: true } : {}) }
+        : rawResult;
     // Presentation only: it never changes the answer `agy` receives.
     try {
-      this.onResult(call, result);
+      this.onResult(call, cleanResult);
     } catch {
       // A presentation failure must not fail the tool.
     }
+    let result = cleanResult;
+    if (!result?.isError && postEditMeta) {
+      const pulled = await this.pullPostEditNote(session, callTurn, postEditMeta, { signal });
+      if (pulled?.note && pulled.isFresh()) {
+        result = this.appendTextNote(result, pulled.note);
+        this.postEditDedupe.commit(pulled.dedupeToken);
+      } else if (pulled?.dedupeToken != null) {
+        this.postEditDedupe.release(pulled.dedupeToken);
+      }
+    }
     return this.maybeAttachWrapUpNote(session, callTurn, name, result, relayId);
+  }
+
+  /**
+   * `serveMcp` entry point: evaluates `isFresh()` synchronously inside `commitReply`'s
+   * `!entry.committed` latch (R2-M13) and commits dedupe tokens only when the relay
+   * write succeeds.
+   */
+  async callForMcp(sessionId, name, args, relayId, { signal, commitReply }) {
+    const session = sessionId === undefined ? undefined : this.sessions.get(sessionId);
+    const callTurn = session?.turn;
+    if (callTurn) callTurn.openCalls += 1;
+    const call = { sessionId, name, args };
+    let rawResult;
+    try {
+      rawResult = await this.answer(call, { signal });
+    } finally {
+      if (callTurn && callTurn.openCalls > 0) callTurn.openCalls -= 1;
+    }
+    const postEditMeta = rawResult?._postEditMeta;
+    const cleanResult =
+      rawResult && Object.hasOwn(rawResult, "_postEditMeta")
+        ? { content: rawResult.content, ...(rawResult.isError ? { isError: true } : {}) }
+        : rawResult;
+    try {
+      this.onResult(call, cleanResult);
+    } catch {
+      // Presentation only.
+    }
+    let pulled = null;
+    if (!cleanResult?.isError && postEditMeta) {
+      pulled = await this.pullPostEditNote(session, callTurn, postEditMeta, { signal });
+    }
+    let noteAttached = false;
+    const delivered = await commitReply((entry) => {
+      let finalResult = cleanResult;
+      if (pulled?.note && !entry.cancelled && pulled.isFresh()) {
+        finalResult = this.appendTextNote(finalResult, pulled.note);
+        noteAttached = true;
+      }
+      finalResult = this.maybeAttachWrapUpNote(session, callTurn, name, finalResult, relayId);
+      const envelope = { result: finalResult };
+      if (this.canaryTrace && pulled?.canaryMeta) {
+        envelope._cowboyCanary = { ...pulled.canaryMeta, noteAttached };
+      }
+      return envelope;
+    });
+    if (pulled?.dedupeToken != null) {
+      if (delivered && noteAttached) this.postEditDedupe.commit(pulled.dedupeToken);
+      else this.postEditDedupe.release(pulled.dedupeToken);
+    }
+    return delivered;
   }
 
   /**
@@ -664,8 +881,8 @@ ${WRAP_UP_NOTE}`,
       ReadFile: () => this.readFile(session, execArgs),
       ListDirectory: () => this.listDirectory(execArgs),
       SearchFiles: () => this.searchFiles(turn, execArgs),
-      WriteFile: () => this.writeFile(session, turn, execArgs),
-      EditFile: () => this.editFile(session, turn, execArgs),
+      WriteFile: (decision) => this.writeFile(session, turn, execArgs, { decision, signal }),
+      EditFile: (decision) => this.editFile(session, turn, execArgs, { decision, signal }),
       RunCommand: () =>
         this.runCommand(session, turn, execArgs, (text) => {
           try {
@@ -727,7 +944,7 @@ ${WRAP_UP_NOTE}`,
           return await this.extensions.call(this.connection, name, execArgs);
         }
         // A handler answers text, or (an image ReadFile) its own content blocks.
-        const answer = await handlers[name]();
+        const answer = await handlers[name](decision);
         return typeof answer === "string" ? { content: [{ type: "text", text: answer }] } : answer;
       } catch (error) {
         if (error instanceof UncertainEffect) {
@@ -802,11 +1019,11 @@ ${WRAP_UP_NOTE}`,
    * turn is open; an unknown outcome fences the turn at once, so a
    * concurrent tool call of the same turn admits nothing after it.
    */
-  async mutate(turn, method, params) {
+  async mutate(turn, method, params, { beforeSend } = {}) {
     if (turn.cancelled || turn.ended || turn.uncertain) {
       throw new ToolError("The turn was cancelled.");
     }
-    const call = this.connection.call(method, params);
+    const call = this.connection.call(method, params, beforeSend ? { beforeSend } : undefined);
     turn.inflight?.add(call);
     try {
       return await call;
@@ -923,16 +1140,17 @@ ${WRAP_UP_NOTE}`,
    * The whole content of a file, or undefined when it does not exist. A
    * caller that has just read its `metadata` passes it, saving a round trip.
    */
-  async current(file, metadata) {
+  async current(file, metadata, { beforeSend } = {}) {
+    const callOpts = beforeSend ? { beforeSend } : undefined;
     try {
-      metadata ??= await this.connection.call("fs/getMetadata", { path: url(file) });
+      metadata ??= await this.connection.call("fs/getMetadata", { path: url(file) }, callOpts);
     } catch (error) {
       if (missing(error)) return undefined;
       throw error;
     }
     if (!metadata.isFile) throw new ToolError(`Not a regular file: ${file}`);
     if (metadata.size > LIMITS.wholeFile) throw new ToolError("The file is larger than 8 MiB");
-    const read = await this.rpc("fs/readFile", { path: url(file) });
+    const read = await this.connection.call("fs/readFile", { path: url(file) }, callOpts);
     return Buffer.from(read.dataBase64, "base64");
   }
 
@@ -1058,59 +1276,73 @@ ${WRAP_UP_NOTE}`,
     return shown + (notes.length ? `\n[cowboy: ${notes.join("; ")}]` : "");
   }
 
-  async writeFile(session, turn, { path, content }) {
+  async writeFile(session, turn, { path, content }, { decision, signal } = {}) {
     if (typeof content !== "string") throw new ToolError("content must be a string");
     const bytes = Buffer.from(content);
     if (bytes.length > LIMITS.writeBytes) throw new ToolError("content is larger than 3 MiB");
     const file = await this.resolve(path, { allowMissing: true });
-    const current = await this.current(file);
-    const observed = session.observed.get(file);
-    if (current && observed === undefined) {
-      throw new ToolError(`${path} exists; read it with ReadFile before replacing it.`);
-    }
-    const base = current ? sha256(current) : "absent";
-    if (observed !== undefined && observed !== base) {
-      throw new ToolError(`${path} changed since it was read; read it again first.`);
-    }
-    const verified = await this.publish(session, turn, file, current, bytes);
-    if (verified) return `${current ? "Replaced" : "Created"} ${file}: ${VERIFIED}`;
-    return `${current ? "Replaced" : "Created"} ${file} (${bytes.length} bytes)`;
+    const beforeSend = () => this.assertAuthorizedBeforeEffect(session, turn, decision, signal);
+    return await this.withFileLock(file, async () => {
+      beforeSend();
+      const current = await this.current(file, undefined, { beforeSend });
+      const observed = session.observed.get(file);
+      if (current && observed === undefined) {
+        throw new ToolError(`${path} exists; read it with ReadFile before replacing it.`);
+      }
+      const base = current ? sha256(current) : "absent";
+      if (observed !== undefined && observed !== base) {
+        throw new ToolError(`${path} changed since it was read; read it again first.`);
+      }
+      const published = await this.publish(session, turn, file, current, bytes, { beforeSend });
+      const text = published.verified
+        ? `${current ? "Replaced" : "Created"} ${file}: ${VERIFIED}`
+        : `${current ? "Replaced" : "Created"} ${file} (${bytes.length} bytes)`;
+      return { content: [{ type: "text", text }], _postEditMeta: published.postEdit };
+    });
   }
 
-  async editFile(session, turn, args) {
+  async editFile(session, turn, args, { decision, signal } = {}) {
     const { path, old_string: before, new_string: after, replace_all: all = false } = args;
     if (typeof before !== "string" || !before || typeof after !== "string" || before === after) {
       throw new ToolError("old_string must be non-empty and differ from new_string");
     }
     const file = await this.resolve(path);
-    const current = await this.current(file);
-    if (!current) throw new ToolError(`No such file: ${path}`);
-    const base = sha256(current);
-    const observed = session.observed.get(file);
-    if (observed === undefined)
-      throw new ToolError(`Read ${path} with ReadFile before editing it.`);
-    if (observed !== base) throw new ToolError(`${path} changed since it was read; read it again.`);
-    // Editing as text must never rewrite bytes that are not valid UTF-8.
-    const text = decodeText(current);
-    if (text === undefined) throw new ToolError(`${path} is not valid UTF-8 text; edit refused`);
-    let count = 0;
-    for (let at = text.indexOf(before); at >= 0; at = text.indexOf(before, at + before.length)) {
-      count++;
-    }
-    if (count === 0) throw new ToolError("old_string was not found");
-    if (count > 1 && all !== true) {
-      throw new ToolError(`old_string occurs ${count} times; make it unique or set replace_all`);
-    }
-    // The result's size is known before anything is allocated for it.
-    const replaced = all === true ? count : 1;
-    const size = current.length + replaced * (Buffer.byteLength(after) - Buffer.byteLength(before));
-    if (size > LIMITS.writeBytes) throw new ToolError("the result is larger than 3 MiB");
-    const next = Buffer.from(
-      all === true ? text.replaceAll(before, () => after) : text.replace(before, () => after),
-    );
-    const verified = await this.publish(session, turn, file, current, next);
-    if (verified) return `Edited ${file}: ${VERIFIED}`;
-    return `Edited ${file} (${replaced} replacement${replaced === 1 ? "" : "s"})`;
+    const beforeSend = () => this.assertAuthorizedBeforeEffect(session, turn, decision, signal);
+    return await this.withFileLock(file, async () => {
+      beforeSend();
+      const current = await this.current(file, undefined, { beforeSend });
+      if (!current) throw new ToolError(`No such file: ${path}`);
+      const base = sha256(current);
+      const observed = session.observed.get(file);
+      if (observed === undefined)
+        throw new ToolError(`Read ${path} with ReadFile before editing it.`);
+      if (observed !== base)
+        throw new ToolError(`${path} changed since it was read; read it again.`);
+      // Editing as text must never rewrite bytes that are not valid UTF-8.
+      const text = decodeText(current);
+      if (text === undefined) throw new ToolError(`${path} is not valid UTF-8 text; edit refused`);
+      let count = 0;
+      for (let at = text.indexOf(before); at >= 0; at = text.indexOf(before, at + before.length)) {
+        count++;
+      }
+      if (count === 0) throw new ToolError("old_string was not found");
+      if (count > 1 && all !== true) {
+        throw new ToolError(`old_string occurs ${count} times; make it unique or set replace_all`);
+      }
+      // The result's size is known before anything is allocated for it.
+      const replaced = all === true ? count : 1;
+      const size =
+        current.length + replaced * (Buffer.byteLength(after) - Buffer.byteLength(before));
+      if (size > LIMITS.writeBytes) throw new ToolError("the result is larger than 3 MiB");
+      const next = Buffer.from(
+        all === true ? text.replaceAll(before, () => after) : text.replace(before, () => after),
+      );
+      const published = await this.publish(session, turn, file, current, next, { beforeSend });
+      const summary = published.verified
+        ? `Edited ${file}: ${VERIFIED}`
+        : `Edited ${file} (${replaced} replacement${replaced === 1 ? "" : "s"})`;
+      return { content: [{ type: "text", text: summary }], _postEditMeta: published.postEdit };
+    });
   }
 
   /**
@@ -1119,30 +1351,45 @@ ${WRAP_UP_NOTE}`,
    * conditional `apply`: the original stays in place until the replacement
    * is, and a failure leaves the file unchanged or exactly at the result.
    */
-  async publish(session, turn, file, base, bytes) {
+  async publish(session, turn, file, base, bytes, { beforeSend } = {}) {
     const generation = this.invalidations.get(file) ?? 0;
+    this.writeDispatchGen.set(file, (this.writeDispatchGen.get(file) ?? 0) + 1);
+    this.activeWrites.set(file, (this.activeWrites.get(file) ?? 0) + 1);
     try {
-      const verified = await this.publishOnce(turn, file, base, bytes);
+      const verified = await this.publishOnce(turn, file, base, bytes, { beforeSend });
       // Checked and written in one step: a publish of the file that became
       // uncertain meanwhile is never undone by this one.
+      let postEdit = null;
       if ((this.invalidations.get(file) ?? 0) === generation) {
         session.observed.set(file, sha256(bytes));
+        const rev = (this.committedRevision.get(file) ?? 0) + 1;
+        this.committedRevision.set(file, rev);
+        const relPath = this.relativeWorkspacePath(file);
+        const expectedLfSha256 = lfSha256(bytes);
+        if (relPath !== null && expectedLfSha256 !== null) {
+          postEdit = { file, relPath, expectedLfSha256, rev };
+        }
       }
-      return verified;
+      return { verified, postEdit };
     } catch (error) {
       // Its outcome is unknown: no session of this facade (the parent or a
       // subagent) may edit the file before reading it again.
       if (error instanceof UncertainEffect) {
         this.invalidations.set(file, (this.invalidations.get(file) ?? 0) + 1);
+        this.committedRevision.set(file, (this.committedRevision.get(file) ?? 0) + 1);
         for (const each of this.sessions.values()) each.observed.delete(file);
       }
       throw error;
+    } finally {
+      const left = (this.activeWrites.get(file) ?? 1) - 1;
+      if (left <= 0) this.activeWrites.delete(file);
+      else this.activeWrites.set(file, left);
     }
   }
 
   /** `publish`; `true` when only the file's bytes, not the helper's own
    * report, show the result. */
-  async publishOnce(turn, file, base, bytes) {
+  async publishOnce(turn, file, base, bytes, { beforeSend } = {}) {
     const expect = sha256(bytes);
     const request = JSON.stringify({
       schema: 1,
@@ -1157,19 +1404,37 @@ ${WRAP_UP_NOTE}`,
     if (Buffer.byteLength(request) <= INLINE_APPLY) {
       args = ["--request", Buffer.from(request).toString("base64")];
     } else {
-      const directory = await this.payloadDirectory(turn);
+      const directory = await this.payloadDirectory(turn, { beforeSend });
       payload = posix.join(directory, `payload-${randomUUID().replaceAll("-", "")}.json`);
-      await this.mutate(turn, "fs/writeFile", {
-        path: url(payload),
-        dataBase64: Buffer.from(request).toString("base64"),
-      });
+      await this.mutate(
+        turn,
+        "fs/writeFile",
+        {
+          path: url(payload),
+          dataBase64: Buffer.from(request).toString("base64"),
+        },
+        { beforeSend },
+      );
       args = ["--request-file", payload];
     }
-    const result = await this.runBounded(turn, ["/bin/sh", "-c", APPLY, "sh", ...args], {
-      timeoutMs: LIMITS.publishTimeoutMs,
-      maxBytes: 64 * 1024,
-      lostIsUncertain: true,
-    });
+    let result;
+    try {
+      result = await this.runBounded(turn, ["/bin/sh", "-c", APPLY, "sh", ...args], {
+        timeoutMs: LIMITS.publishTimeoutMs,
+        maxBytes: 64 * 1024,
+        lostIsUncertain: true,
+        beforeSend,
+      });
+    } catch (error) {
+      if (payload && error instanceof ToolError) {
+        // R3-M17: process/start was refused before dispatch; clean up the
+        // confirmed-unconsumed staged payload without fencing the turn.
+        this.connection
+          .call("fs/remove", { path: url(payload), force: true }, { timeoutMs: 2000 })
+          .catch(() => {});
+      }
+      throw error;
+    }
     let outcome;
     try {
       outcome = JSON.parse(result.stdout);
@@ -1215,10 +1480,12 @@ ${WRAP_UP_NOTE}`,
   }
 
   /** The target's private directory for large helper requests. */
-  async payloadDirectory(turn) {
+  async payloadDirectory(turn, { beforeSend } = {}) {
+    if (typeof beforeSend === "function") beforeSend();
     this.payloads ??= this.runBounded(turn, ["/bin/sh", "-c", PAYLOAD_DIRECTORY], {
       timeoutMs: LIMITS.publishTimeoutMs,
       maxBytes: 4096,
+      beforeSend,
     }).then((result) => {
       const directory = result.stdout.trim();
       if (
@@ -1243,18 +1510,23 @@ ${WRAP_UP_NOTE}`,
    * state) runs outside any turn: the worker's ledger admits and tracks it
    * by its id prefix, one at a time.
    */
-  async start(turn, argv, { readiness = false } = {}) {
+  async start(turn, argv, { readiness = false, beforeSend } = {}) {
     const processId = `${readiness ? READINESS_PREFIX : "cowboy-agy-"}${randomUUID()}`;
-    const result = await this.mutate(turn, "process/start", {
-      processId,
-      argv,
-      cwd: url(this.root),
-      env: {},
-      tty: false,
-      pipeStdin: false,
-      arg0: null,
-      envPolicy: ENV_POLICY,
-    });
+    const result = await this.mutate(
+      turn,
+      "process/start",
+      {
+        processId,
+        argv,
+        cwd: url(this.root),
+        env: {},
+        tty: false,
+        pipeStdin: false,
+        arg0: null,
+        envPolicy: ENV_POLICY,
+      },
+      { beforeSend },
+    );
     if (result?.processId !== processId) throw new ToolError("Target process identity changed");
     return { processId, afterSeq: null, exitCode: null, closed: false };
   }
@@ -1466,9 +1738,9 @@ ${WRAP_UP_NOTE}`,
   async runUntracked(
     turn,
     argv,
-    { timeoutMs, maxBytes, maxLines, lostIsUncertain = true, readiness = false },
+    { timeoutMs, maxBytes, maxLines, lostIsUncertain = true, readiness = false, beforeSend },
   ) {
-    const process = await this.start(turn, argv, { readiness });
+    const process = await this.start(turn, argv, { readiness, beforeSend });
     const out = { stdout: [], stderr: [], size: 0, lines: 0 };
     const deadline = Date.now() + timeoutMs;
     let truncated = false;
@@ -1781,13 +2053,17 @@ export function renderSubagent(id, outcome) {
  * Serve MCP (newline-delimited JSON-RPC) on one relay stream. `sessionOf`
  * maps the stream's channel to its ACP session when a tool is called.
  */
+const RELAY_WRITE_TIMEOUT_MS = 10_000;
+
 export function serveMcp(stream, facade, sessionOf) {
   const relayId = facade.registerRelay(sessionOf);
   const activeCalls = new Map();
   let streamEnded = false;
   const abortAllCalls = () => {
-    for (const entry of activeCalls.values()) entry.controller.abort();
-    activeCalls.clear();
+    for (const entry of activeCalls.values()) {
+      entry.cancelled = true;
+      entry.controller.abort();
+    }
   };
   stream.once("end", () => {
     streamEnded = true;
@@ -1813,12 +2089,22 @@ export function serveMcp(stream, facade, sessionOf) {
       const done = (ok) => {
         if (settled) return;
         settled = true;
+        clearTimeout(timer);
         stream.off("close", onClose);
         stream.off("error", onError);
         resolve(ok);
       };
       const onClose = () => done(false);
       const onError = () => done(false);
+      // R2-M15: Bound stalled relay writes so an unread pipe cannot hold ownership forever.
+      const timer = setTimeout(() => {
+        try {
+          stream.destroy();
+        } catch {
+          // Ignore destroy errors.
+        }
+        done(false);
+      }, RELAY_WRITE_TIMEOUT_MS);
       stream.once("close", onClose);
       stream.once("error", onError);
       try {
@@ -1827,6 +2113,23 @@ export function serveMcp(stream, facade, sessionOf) {
         done(false);
       }
     });
+
+  // R3-H7 & R2-H14: Every ID-bearing reply (including initialize, ping, tools/list,
+  // tools/call, duplicate -32600, -32601, and -32603) flows through one per-callKey
+  // ownership map with a synchronous `committed` latch and shared `sendPromise`.
+  const commitFor = (entry, id, buildMessage) => {
+    if (entry.committed || entry.suppressed) return Promise.resolve(false);
+    entry.committed = true;
+    let body;
+    try {
+      body = buildMessage(entry);
+    } catch {
+      body = { error: { code: -32603, message: "Internal error" } };
+    }
+    entry.sendPromise = send({ id, ...body });
+    return entry.sendPromise;
+  };
+
   const handle = async (message) => {
     const { id, method, params } = message;
     if (id === undefined || id === null) {
@@ -1839,79 +2142,105 @@ export function serveMcp(stream, facade, sessionOf) {
         const key = JSON.stringify(params.requestId);
         const active = activeCalls.get(key);
         if (active) {
-          activeCalls.delete(key);
+          // R3-H7: Never delete activeCalls[key] on cancellation; mark cancelled & abort only.
+          active.cancelled = true;
           active.controller.abort();
         }
       }
       return;
     }
-    if (method === "initialize") {
-      return await send({
-        id,
-        result: {
-          protocolVersion:
-            typeof params?.protocolVersion === "string" ? params.protocolVersion : "2024-11-05",
-          capabilities: { tools: {} },
-          serverInfo: { name: "cowboy", version: "1.0.0" },
-        },
-      });
-    }
-    if (method === "ping") return await send({ id, result: {} });
-    if (method === "tools/list") return await send({ id, result: { tools: facade.tools() } });
-    if (method === "tools/call") {
-      if (streamEnded || stream.destroyed || stream.writableEnded) {
-        return;
-      }
-      if (facade.closing) {
-        return await send({
-          id,
-          result: {
-            isError: true,
-            content: [{ type: "text", text: "Antigravity proxy is shutting down" }],
-          },
-        });
-      }
-      const callKey = JSON.stringify(id);
-      if (activeCalls.has(callKey)) {
-        const existing = activeCalls.get(callKey);
-        activeCalls.delete(callKey);
+
+    const callKey = JSON.stringify(id);
+    if (activeCalls.has(callKey)) {
+      const existing = activeCalls.get(callKey);
+      existing.cancelled = true;
+      existing.controller.abort();
+      if (!existing.committed) {
+        existing.committed = true;
         existing.suppressed = true;
-        existing.controller.abort();
-        return await send({
+        existing.sendPromise = send({
           id,
           error: { code: -32600, message: "Duplicate active MCP request ID" },
         });
       }
-      const sid = sessionOf();
-      const trackedTurn = facade.beginCall(sid);
-      const entry = { controller: new AbortController(), suppressed: false };
-      activeCalls.set(callKey, entry);
-      let delivered = false;
-      try {
-        let result;
-        try {
-          result = await facade.call(sid, params?.name, params?.arguments, relayId, {
-            signal: entry.controller.signal,
-          });
-        } catch {
-          if (!entry.suppressed) {
-            delivered = await send({ id, error: { code: -32603, message: "Internal error" } });
-          }
-          return;
-        }
-        if (!entry.suppressed) {
-          delivered = await send({ id, result });
-        }
-      } finally {
-        if (activeCalls.get(callKey) === entry) activeCalls.delete(callKey);
-        if (!delivered) {
-          facade.markRelayAmbiguous(sid, relayId);
-        }
-        facade.endCall(trackedTurn);
-      }
       return;
     }
-    await send({ id, error: { code: -32601, message: "Method not found" } });
+
+    const entry = {
+      controller: new AbortController(),
+      cancelled: false,
+      suppressed: false,
+      committed: false,
+      sendPromise: null,
+    };
+    activeCalls.set(callKey, entry);
+
+    try {
+      if (method === "initialize") {
+        await commitFor(entry, id, () => ({
+          result: {
+            protocolVersion:
+              typeof params?.protocolVersion === "string" ? params.protocolVersion : "2024-11-05",
+            capabilities: { tools: {} },
+            serverInfo: { name: "cowboy", version: "1.0.0" },
+          },
+        }));
+        return;
+      }
+      if (method === "ping") {
+        await commitFor(entry, id, () => ({ result: {} }));
+        return;
+      }
+      if (method === "tools/list") {
+        await commitFor(entry, id, () => ({ result: { tools: facade.tools() } }));
+        return;
+      }
+      if (method === "tools/call") {
+        if (streamEnded || stream.destroyed || stream.writableEnded) {
+          return;
+        }
+        if (facade.closing) {
+          await commitFor(entry, id, () => ({
+            result: {
+              isError: true,
+              content: [{ type: "text", text: "Antigravity proxy is shutting down" }],
+            },
+          }));
+          return;
+        }
+        const sid = sessionOf();
+        const trackedTurn = facade.beginCall(sid);
+        let delivered = false;
+        try {
+          try {
+            delivered = await facade.callForMcp(sid, params?.name, params?.arguments, relayId, {
+              signal: entry.controller.signal,
+              commitReply: (buildMessage) => commitFor(entry, id, buildMessage),
+            });
+          } catch {
+            delivered = await commitFor(entry, id, () => ({
+              error: { code: -32603, message: "Internal error" },
+            }));
+          }
+        } finally {
+          if (!delivered) {
+            facade.markRelayAmbiguous(sid, relayId);
+          }
+          facade.endCall(trackedTurn);
+        }
+        return;
+      }
+      await commitFor(entry, id, () => ({
+        error: { code: -32601, message: "Method not found" },
+      }));
+    } catch {
+      await commitFor(entry, id, () => ({
+        error: { code: -32603, message: "Internal error" },
+      }));
+    } finally {
+      if (entry.sendPromise) await entry.sendPromise.catch(() => {});
+      if (activeCalls.get(callKey) === entry) activeCalls.delete(callKey);
+    }
   };
   stream.on("data", (chunk) => {
     buffered += chunk;
@@ -1928,11 +2257,7 @@ export function serveMcp(stream, facade, sessionOf) {
         stream.destroy();
         return;
       }
-      handle(message).catch(() => {
-        if (message.id !== undefined) {
-          send({ id: message.id, error: { code: -32603, message: "Internal error" } });
-        }
-      });
+      handle(message).catch(() => {});
     }
   });
 }

@@ -51,6 +51,33 @@ impl WrapUpHintSlot {
     }
 }
 
+/// Start a prompt attempt and return `(attempt_nonce, active_turn_nonce)` for
+/// Antigravity post-edit diagnostic binding (cleared when compacting or pre-P2).
+pub(crate) fn begin_attempt_for_diagnostics(
+    wrap_up: &ActiveWrapUp,
+    raw_wrap_up_eligible: bool,
+) -> (Option<String>, Option<(String, String)>) {
+    let attempt_nonce = wrap_up.begin_attempt(raw_wrap_up_eligible);
+    let active_turn_nonce = match (
+        wrap_up.turn_id.as_ref(),
+        attempt_nonce.as_ref(),
+        wrap_up.compacting,
+    ) {
+        (Some(turn_id), Some(nonce), false) => Some((turn_id.clone(), nonce.clone())),
+        _ => None,
+    };
+    (attempt_nonce, active_turn_nonce)
+}
+
+/// Synchronously clear active turn-nonce binding and mark the current wrap-up
+/// prompt cancelled when a whole-session `Cancel` arrives.
+pub(crate) fn fence_cancel_session(active: Option<&ActiveWrapUp>, clear_nonce: impl FnOnce()) {
+    clear_nonce();
+    if let Some(p) = active {
+        p.mark_cancelled();
+    }
+}
+
 /// Synchronously fence any active wrap-up attempt and pending hint slot for
 /// `turn_id` upon accepting `CancelTurn`, before the async target-check task runs.
 pub fn fence_cancel_turn_hint(

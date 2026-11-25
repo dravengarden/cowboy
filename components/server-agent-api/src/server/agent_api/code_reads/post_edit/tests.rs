@@ -99,3 +99,44 @@ fn observed_writes_say_whether_the_analysis_saw_that_exact_text() {
     );
     assert!(projected["files"][2].get("write").is_none());
 }
+
+#[test]
+fn project_for_inspect_checks_sha_and_recomputes_deliver_after_12kib_trim() {
+    let sha = "a".repeat(64);
+    let other_sha = "b".repeat(64);
+    let file = json!({
+        "path": "src/lib.rs",
+        "state": "document_current",
+        "bufferSnapshot": {"content": {"sha256": sha, "utf8Bytes": 100}},
+        "comparison": {"state": "unknown", "reason": "no_baseline"},
+        "diagnostics": [{
+            "severity": "error",
+            "line": 10,
+            "column": 2,
+            "source": "rustc",
+            "code": "E0308",
+            "message": "mismatched types"
+        }]
+    });
+    // Matching SHA + no_baseline on document_current -> deliver true.
+    let (payload, matches) = project_for_inspect(&file, &sha);
+    assert!(matches);
+    assert_eq!(payload["deliver"], true);
+    assert_eq!(
+        payload["files"][0]["diagnostics"].as_array().unwrap().len(),
+        1
+    );
+
+    // Non-matching SHA -> matches_expected false, deliver false.
+    let (payload, matches) = project_for_inspect(&file, &other_sha);
+    assert!(!matches);
+    assert_eq!(payload["deliver"], false);
+
+    // stale_observation -> never falls back to current errors.
+    let mut stale = file.clone();
+    stale["comparison"] = json!({"state": "unknown", "reason": "stale_observation"});
+    let (payload, matches) = project_for_inspect(&stale, &sha);
+    assert!(matches);
+    assert_eq!(payload["deliver"], false);
+    assert!(payload["files"][0].get("diagnostics").is_none());
+}

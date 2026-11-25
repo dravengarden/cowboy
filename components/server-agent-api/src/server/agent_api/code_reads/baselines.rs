@@ -48,12 +48,63 @@ struct Entry {
 
 #[derive(Clone, Debug)]
 struct Capture {
+    conn_epoch: u64,
     stream: (String, String, String),
+    buffer_epoch_num: u64,
+    version: Vec<(u32, u32)>,
     sha256: String,
     utf8_bytes: u32,
     servers: BTreeSet<u64>,
     /// `None` when the observation exceeded the capture bound.
     entries: Option<Vec<Entry>>,
+}
+
+/// True iff `newer` strictly dominates `older` in the sorted CRDT vector clock.
+fn version_dominates(newer: &[(u32, u32)], older: &[(u32, u32)]) -> bool {
+    let mut strictly_greater = false;
+    let mut i = 0;
+    let mut j = 0;
+    while i < newer.len() && j < older.len() {
+        let (nr, nt) = newer[i];
+        let (or, ot) = older[j];
+        match nr.cmp(&or) {
+            std::cmp::Ordering::Equal => {
+                if nt < ot {
+                    return false;
+                }
+                if nt > ot {
+                    strictly_greater = true;
+                }
+                i += 1;
+                j += 1;
+            }
+            std::cmp::Ordering::Less => {
+                if nt > 0 {
+                    strictly_greater = true;
+                }
+                i += 1;
+            }
+            std::cmp::Ordering::Greater => {
+                if ot > 0 {
+                    return false;
+                }
+                j += 1;
+            }
+        }
+    }
+    while j < older.len() {
+        if older[j].1 > 0 {
+            return false;
+        }
+        j += 1;
+    }
+    while i < newer.len() {
+        if newer[i].1 > 0 {
+            strictly_greater = true;
+        }
+        i += 1;
+    }
+    strictly_greater
 }
 
 struct Record {
@@ -76,10 +127,17 @@ pub(super) fn capture(
     diagnostics: &[CodeDiagnostic],
     snapshot: Option<&BufferSnapshot>,
     analysis: &[ServerAnalysis],
+    conn_epoch: u64,
 ) -> Option<Pending> {
     let snapshot = snapshot.filter(|value| value.bounded())?;
     let (instance, buffer, epoch) = snapshot.stream();
+    let buffer_epoch_num = epoch.parse::<u64>().ok()?;
     let (sha256, utf8_bytes) = snapshot.content();
+    let version = snapshot
+        .version()
+        .iter()
+        .map(|entry| (entry.replica_id, entry.timestamp))
+        .collect();
     let entries = (diagnostics.len() <= MAX_CAPTURED).then(|| {
         diagnostics
             .iter()
@@ -91,7 +149,10 @@ pub(super) fn capture(
     });
     Some(Pending {
         capture: Capture {
+            conn_epoch,
             stream: (instance.to_owned(), buffer.to_owned(), epoch.to_owned()),
+            buffer_epoch_num,
+            version,
             sha256: sha256.to_owned(),
             utf8_bytes,
             servers: analysis.iter().map(|server| server.server_id).collect(),
@@ -127,19 +188,62 @@ pub(super) fn record(
     let capture = pending.capture;
     let mut records = RECORDS.lock();
     let key = (scope.clone(), path.to_owned());
-    let baseline = match records.get_mut(&key) {
+    enum Outcome {
+        Compare(Option<Capture>),
+        Stale,
+    }
+    let outcome = match records.get_mut(&key) {
         Some(record) => {
-            if record.latest.sha256 != capture.sha256
-                || record.latest.utf8_bytes != capture.utf8_bytes
-            {
-                record.baseline = Some(std::mem::replace(&mut record.latest, capture.clone()));
-            } else {
-                // Same text: later evidence (for example a server that
-                // finished) replaces the capture; the baseline stays.
+            // R2-M10: Controller-local monotonic connection epoch boundary.
+            if capture.conn_epoch < record.latest.conn_epoch {
+                Outcome::Stale
+            } else if capture.conn_epoch > record.latest.conn_epoch {
+                record.baseline = None;
                 record.latest = capture.clone();
+                record.touched = Instant::now();
+                Outcome::Compare(None)
+            } else {
+                let same_buffer = record.latest.stream.0 == capture.stream.0
+                    && record.latest.stream.1 == capture.stream.1;
+                if same_buffer && capture.buffer_epoch_num < record.latest.buffer_epoch_num {
+                    // R2-M11: Numeric buffer_epoch regression is stale.
+                    Outcome::Stale
+                } else if same_buffer && capture.buffer_epoch_num == record.latest.buffer_epoch_num
+                {
+                    let same_text = record.latest.sha256 == capture.sha256
+                        && record.latest.utf8_bytes == capture.utf8_bytes;
+                    let has_clocks =
+                        !record.latest.version.is_empty() || !capture.version.is_empty();
+                    if same_text {
+                        // M18: Equal or strictly newer version on identical text refreshes latest.
+                        if !has_clocks
+                            || capture.version == record.latest.version
+                            || version_dominates(&capture.version, &record.latest.version)
+                        {
+                            record.latest = capture.clone();
+                            record.touched = Instant::now();
+                            Outcome::Compare(record.baseline.clone())
+                        } else {
+                            Outcome::Stale
+                        }
+                    } else if !has_clocks
+                        || version_dominates(&capture.version, &record.latest.version)
+                    {
+                        record.baseline =
+                            Some(std::mem::replace(&mut record.latest, capture.clone()));
+                        record.touched = Instant::now();
+                        Outcome::Compare(record.baseline.clone())
+                    } else {
+                        // R2-M11: Changed text without strict vector-clock dominance is stale.
+                        Outcome::Stale
+                    }
+                } else {
+                    // Different (instance, buffer) or strictly greater numeric buffer_epoch.
+                    record.baseline = Some(std::mem::replace(&mut record.latest, capture.clone()));
+                    record.touched = Instant::now();
+                    Outcome::Compare(record.baseline.clone())
+                }
             }
-            record.touched = Instant::now();
-            record.baseline.clone()
         }
         None => {
             evict(&mut records, scope);
@@ -151,13 +255,14 @@ pub(super) fn record(
                     touched: Instant::now(),
                 },
             );
-            None
+            Outcome::Compare(None)
         }
     };
     drop(records);
-    match baseline {
-        Some(baseline) => compare(&baseline, &capture, diagnostics),
-        None => unknown("no_baseline"),
+    match outcome {
+        Outcome::Stale => unknown("stale_observation"),
+        Outcome::Compare(Some(baseline)) => compare(&baseline, &capture, diagnostics),
+        Outcome::Compare(None) => unknown("no_baseline"),
     }
 }
 

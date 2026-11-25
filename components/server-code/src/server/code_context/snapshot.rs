@@ -44,6 +44,11 @@ impl BufferSnapshot {
         (&self.content.sha256, self.content.utf8_bytes)
     }
 
+    /// Monotonic CRDT vector clock of this buffer incarnation.
+    pub fn version(&self) -> &[CodeBufferVersion] {
+        &self.version
+    }
+
     pub fn identifies(&self, instance: &str, buffer: &str, epoch: &str) -> bool {
         self.bounded()
             && self.instance == instance

@@ -59,6 +59,27 @@ impl<'a> Operation<'a> {
         })
     }
 
+    /// Bind an operation directly to an already-verified target connection
+    /// token instead of reconnecting by Machine ID (R3-H6).
+    pub fn on_connection(
+        hub: &'a Hub,
+        control: &'a MachineControl,
+        scope: &'a SessionCodeScope,
+        connection: ConnectionToken,
+    ) -> anyhow::Result<Self> {
+        anyhow::ensure!(hub.code_scope_is_current(scope), "code context changed");
+        anyhow::ensure!(
+            connection.machine_id() == scope.machine_id() && control.is_current(&connection),
+            "target Machine connection changed"
+        );
+        Ok(Self {
+            hub,
+            control,
+            scope,
+            transport: Some(Transport::Remote(connection)),
+        })
+    }
+
     pub async fn request(
         &mut self,
         request: serde_json::Value,
@@ -169,6 +190,39 @@ pub async fn agent_buffer_request(
         "automatic warming requires Machine resource ownership"
     );
     let mut operation = Operation::connect(hub, control, None, scope).await?;
+    let mut payload = serde_json::json!({
+        "type":"acquireAgentBuffer", "ownerProtocol":2, "worktree":request.worktree,
+        "path":request.path, "leaseId":request.lease_id,
+    });
+    if refresh_only {
+        payload["refreshOnly"] = true.into();
+    }
+    operation.request(payload).await
+}
+
+/// Connection-pinned variant of `agent_buffer_request` using the exact
+/// `ConnectionToken` bound inside `observed` (R3-H6).
+pub async fn agent_buffer_request_on_connection(
+    hub: &Hub,
+    control: &MachineControl,
+    observed: &crate::machine_control::SessionReadScope,
+    request: BufferRequest<'_>,
+    refresh_only: bool,
+) -> anyhow::Result<ZedAdapterResponse> {
+    let scope = observed.session();
+    anyhow::ensure!(
+        request.open && hub.language_servers_allowed(scope.session_id()),
+        "project language servers are off for this session"
+    );
+    anyhow::ensure!(
+        scope.machine_id() != "local",
+        "automatic warming requires Machine resource ownership"
+    );
+    let connection = observed
+        .connection()
+        .cloned()
+        .context("target Machine connection is unavailable")?;
+    let mut operation = Operation::on_connection(hub, control, scope, connection)?;
     let mut payload = serde_json::json!({
         "type":"acquireAgentBuffer", "ownerProtocol":2, "worktree":request.worktree,
         "path":request.path, "leaseId":request.lease_id,

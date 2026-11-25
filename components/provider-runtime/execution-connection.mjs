@@ -159,12 +159,21 @@ export class Connection {
    * request is rejected then, and its late reply is ignored. Use it only for
    * reads whose outcome does not matter.
    */
-  request(method, params, { timeoutMs } = {}) {
+  request(method, params, { timeoutMs, beforeSend } = {}) {
     // While draining only a report of an unknown outcome and the drain's own
     // acknowledgement are sent (answered by the worker, never forwarded).
     const draining = this.draining && !DRAIN_REQUESTS.has(method);
     if (this.closed || this.stopped || draining) {
       return Promise.reject(new Error("Execution unavailable; no replay"));
+    }
+    // R3-H3: Run synchronous pre-send authorization guard AFTER ensureConnected()
+    // resolves and immediately BEFORE pending registration or socket.send().
+    if (typeof beforeSend === "function") {
+      try {
+        beforeSend();
+      } catch (error) {
+        return Promise.reject(error);
+      }
     }
     // Abandoned requests may still run on the executor, so they count.
     // Reserve dedicated reporting headroom for drain/uncertainty notifications
@@ -268,6 +277,25 @@ export function executionUrl(endpoint) {
     throw new Error("Invalid execution endpoint");
   }
   return `ws+unix:${path}:/`;
+}
+
+/** Build the WebSocket URL for the separate `/diagnostics` channel (R4). */
+export function executionDiagnosticsUrl(endpoint, routePath = "/diagnostics") {
+  if (typeof endpoint !== "string" || typeof routePath !== "string" || !routePath.startsWith("/")) {
+    throw new Error("Invalid execution diagnostics endpoint");
+  }
+  if (!endpoint.startsWith("unix:")) {
+    const parsed = new URL(endpoint);
+    parsed.pathname = routePath;
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.href;
+  }
+  const path = endpoint.slice("unix:".length);
+  if (!isAbsolute(path) || path.includes(":") || path.includes("\0") || path.length > 107) {
+    throw new Error("Invalid execution diagnostics endpoint");
+  }
+  return `ws+unix:${path}:${routePath}`;
 }
 
 // Normalize before comparing reconnects; JSON property order is not identity.

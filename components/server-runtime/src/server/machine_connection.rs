@@ -760,6 +760,7 @@ pub async fn handle_machine_ws(
     state: Arc<AppState>,
     (chunked, compressed, paced, stream): (bool, bool, bool, bool),
     lane_token: Option<String>,
+    post_edit_token: Option<String>,
 ) {
     let Some(MachineHandshake {
         store,
@@ -859,6 +860,15 @@ pub async fn handle_machine_ws(
                 primary: machine_write_tx.clone(),
                 lanes: Arc::clone(&lanes),
                 features: (chunked, compressed, paced, stream),
+            },
+        )
+    });
+    let _post_edit_registration = post_edit_token.map(|token| {
+        machine_post_edit::register(
+            token,
+            machine_post_edit::PostEditTarget {
+                connection: connection.clone(),
+                machine_id: hello.machine_id.clone(),
             },
         )
     });

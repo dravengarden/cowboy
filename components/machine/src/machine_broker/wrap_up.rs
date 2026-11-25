@@ -92,20 +92,37 @@ pub(super) async fn run_worker_unix_writer(
     mut writer: tokio::net::unix::OwnedWriteHalf,
     reliable_rx: mpsc::UnboundedReceiver<Frame>,
     hint_rx: mpsc::Receiver<Frame>,
+    diag_reply_rx: mpsc::Receiver<Frame>,
 ) {
-    run_worker_writer_with_headroom(
+    run_worker_writer_with_headroom_and_diag(
         &mut writer,
         reliable_rx,
         hint_rx,
+        Some(diag_reply_rx),
         unix_socket_has_hint_headroom,
     )
     .await;
 }
 
+#[cfg(test)]
 pub(super) async fn run_worker_writer_with_headroom<W, F>(
+    writer: &mut W,
+    reliable_rx: mpsc::UnboundedReceiver<Frame>,
+    hint_rx: mpsc::Receiver<Frame>,
+    has_headroom: F,
+) where
+    W: tokio::io::AsyncWrite + Unpin,
+    F: FnMut(&W, usize) -> bool,
+{
+    run_worker_writer_with_headroom_and_diag(writer, reliable_rx, hint_rx, None, has_headroom)
+        .await;
+}
+
+pub(super) async fn run_worker_writer_with_headroom_and_diag<W, F>(
     writer: &mut W,
     mut reliable_rx: mpsc::UnboundedReceiver<Frame>,
     mut hint_rx: mpsc::Receiver<Frame>,
+    mut diag_reply_rx: Option<mpsc::Receiver<Frame>>,
     mut has_headroom: F,
 ) where
     W: tokio::io::AsyncWrite + Unpin,
@@ -113,28 +130,33 @@ pub(super) async fn run_worker_writer_with_headroom<W, F>(
 {
     let mut hints_open = true;
     loop {
-        let (frame, is_hint) = if hints_open {
-            tokio::select! {
-                biased;
-                frame = reliable_rx.recv() => match frame {
-                    Some(frame) => (frame, false),
-                    None => break,
-                },
-                hint = hint_rx.recv() => match hint {
-                    Some(hint) => (hint, true),
-                    None => {
-                        hints_open = false;
-                        continue;
-                    }
-                },
-            }
-        } else {
-            match reliable_rx.recv().await {
+        let (frame, best_effort) = tokio::select! {
+            biased;
+            frame = reliable_rx.recv() => match frame {
                 Some(frame) => (frame, false),
                 None => break,
-            }
+            },
+            hint = hint_rx.recv(), if hints_open => match hint {
+                Some(hint) => (hint, true),
+                None => {
+                    hints_open = false;
+                    continue;
+                }
+            },
+            diag = async {
+                match diag_reply_rx.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            }, if diag_reply_rx.is_some() => match diag {
+                Some(diag) => (diag, true),
+                None => {
+                    diag_reply_rx = None;
+                    continue;
+                }
+            },
         };
-        if is_hint {
+        if best_effort {
             let Some(frame_bytes) = encoded_frame_bytes(&frame) else {
                 continue;
             };
@@ -467,12 +489,14 @@ impl super::Broker {
         connection_id: u64,
         protocol: u16,
         hint_tx: mpsc::Sender<Frame>,
+        diag_reply_tx: mpsc::Sender<Frame>,
     ) {
         if let Some(worker) = self.workers.lock().get_mut(session_id)
             && worker.connection_id == connection_id
         {
             worker.negotiated_protocol = protocol;
             worker.hint_tx = Some(hint_tx);
+            worker.diag_reply_tx = Some(diag_reply_tx);
         }
     }
 
@@ -1911,6 +1935,7 @@ mod tests {
                 negotiated_protocol: 8,
                 raw_wrap_up_steering: true,
                 hint_tx: Some(hint_tx),
+                diag_reply_tx: None,
                 last_hinted_target: None,
             },
         );
@@ -2092,6 +2117,7 @@ mod tests {
                 negotiated_protocol: crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION,
                 raw_wrap_up_steering: true,
                 hint_tx: None,
+                diag_reply_tx: None,
                 last_hinted_target: None,
             },
         );
@@ -2174,6 +2200,7 @@ mod tests {
                 negotiated_protocol: crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION,
                 raw_wrap_up_steering: true,
                 hint_tx: None,
+                diag_reply_tx: None,
                 last_hinted_target: None,
             },
         );
@@ -2233,6 +2260,7 @@ mod tests {
                 negotiated_protocol: 8,
                 raw_wrap_up_steering: true,
                 hint_tx: None,
+                diag_reply_tx: None,
                 last_hinted_target: None,
             },
         );
@@ -2373,6 +2401,7 @@ mod tests {
                 negotiated_protocol: crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION,
                 raw_wrap_up_steering: true,
                 hint_tx: None,
+                diag_reply_tx: None,
                 last_hinted_target: None,
             },
         );
@@ -2524,6 +2553,7 @@ mod tests {
                 negotiated_protocol: crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION,
                 raw_wrap_up_steering: true,
                 hint_tx: None,
+                diag_reply_tx: None,
                 last_hinted_target: None,
             },
         );

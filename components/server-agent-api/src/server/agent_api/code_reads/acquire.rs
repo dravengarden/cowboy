@@ -145,10 +145,46 @@ pub(super) async fn acquire(
     path: &str,
     trust: &crate::core::LanguageServerTrust,
 ) -> Result<(), &'static str> {
+    acquire_inner(state, session, path, trust, None).await
+}
+
+/// Connection-pinned variant for R4 post-edit inspect (`R3-H6`): never
+/// reconnects by Machine ID.
+pub(super) async fn acquire_on_scope(
+    state: &AppState,
+    observed: &crate::machine_control::SessionReadScope,
+    path: &str,
+    trust: &crate::core::LanguageServerTrust,
+) -> Result<(), &'static str> {
+    acquire_inner(
+        state,
+        observed.session().session_id(),
+        path,
+        trust,
+        Some(observed),
+    )
+    .await
+}
+
+async fn acquire_inner(
+    state: &AppState,
+    session: &str,
+    path: &str,
+    trust: &crate::core::LanguageServerTrust,
+    pinned_scope: Option<&crate::machine_control::SessionReadScope>,
+) -> Result<(), &'static str> {
     if !trust.current(&state.hub) || trust.scope().session_id() != session {
         return Err("restricted");
     }
     let context = session_code_context(&state.code, session).ok_or("unavailable")?;
+    if let Some(observed) = pinned_scope
+        && (&context.scope != observed.session()
+            || observed
+                .connection()
+                .is_none_or(|c| !state.machine_control.is_current(c)))
+    {
+        return Err("unavailable");
+    }
     if trust.scope() != &context.scope {
         return Err("restricted");
     }
@@ -201,19 +237,34 @@ pub(super) async fn acquire(
         opening.touch = false;
         return Err("restricted");
     }
-    let opened = zed_session::agent_buffer_request(
-        &state.hub,
-        &state.machine_control,
-        &context.scope,
-        zed_session::BufferRequest {
-            worktree: &worktree,
-            path: &target,
-            lease_id: &lease,
-            open: true,
-        },
-        refresh_only,
-    )
-    .await;
+    let req = zed_session::BufferRequest {
+        worktree: &worktree,
+        path: &target,
+        lease_id: &lease,
+        open: true,
+    };
+    let opened = match pinned_scope {
+        Some(observed) => {
+            zed_session::agent_buffer_request_on_connection(
+                &state.hub,
+                &state.machine_control,
+                observed,
+                req,
+                refresh_only,
+            )
+            .await
+        }
+        None => {
+            zed_session::agent_buffer_request(
+                &state.hub,
+                &state.machine_control,
+                &context.scope,
+                req,
+                refresh_only,
+            )
+            .await
+        }
+    };
     if refresh_only {
         if matches!(&opened, Ok(ZedAdapterResponse::AgentBufferRefreshed { lease_id, .. }) if lease_id == &lease)
         {

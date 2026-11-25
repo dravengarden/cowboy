@@ -88,6 +88,18 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
+Component release 3.152.0 records provider-runtime 1.3.35, whose
+`cowboy-antigravity-acp` 1.0.29 adds Antigravity post-edit diagnostics
+([design](antigravity-post-edit-r4-design.md)): descriptor-gated `/diagnostics`
+WebSocket pulls (`diagnostics-client.mjs`), BOM-excluded LF-SHA256 hashing and
+16 KiB bounded untrusted-data note formatting with tokenized dedupe
+(`post-edit-notes.mjs`), synchronous `beforeSend` pre-effect authorization in
+`execution-connection.mjs`, serialized per-file edits, unified single-owner
+`serveMcp` reply fencing, `PlanGate` eviction/collision suppression, and
+canary-only `--canary-trace-file` stdout delivery proof. Antigravity 0.2.39
+pins it; the other six Providers pinning provider-runtime advance one patch
+version.
+
 Component release 3.151.0 records provider-runtime 1.3.34, whose
 `cowboy-antigravity-acp` 1.0.28 enforces plan mode directly at facade dispatch
 ([design](antigravity-parity-round-2.md#r3-plan-mode-enforced-at-dispatch)):

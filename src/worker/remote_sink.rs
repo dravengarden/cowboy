@@ -123,6 +123,13 @@ impl AgentSink for RemoteSink {
             && !snapshot.drain_requested
             && !super::snapshot_is_managed_read_only(&snapshot)
     }
+    fn set_active_turn_nonce(&self, session_id: &str, turn: Option<(String, String)>) {
+        if session_id == self.shared.session_id
+            && let Some(execution) = &self.shared.execution
+        {
+            execution.set_active_turn_nonce(turn);
+        }
+    }
     fn record_proxy_uncertain_effect(&self, session_id: &str, method: &str) {
         if session_id != self.shared.session_id {
             return;

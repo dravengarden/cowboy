@@ -14,6 +14,7 @@ pub mod managed_calls;
 pub mod mcp_binding;
 mod opaque_id;
 pub mod otlp;
+pub mod post_edit_inspect;
 pub mod provider_account;
 pub mod runtime_trace;
 pub mod runtime_wire;

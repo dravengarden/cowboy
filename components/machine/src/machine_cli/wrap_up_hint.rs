@@ -14,6 +14,35 @@ use crate::wrap_up::wrap_up_hint_within_size_limit;
 /// Bounded per-connection hint queue capacity from `machine_cli` to broker.
 pub(super) const HINT_RUNTIME_CAPACITY: usize = 32;
 
+pub(super) struct RuntimeWriterChannels {
+    pub(super) reliable_tx: mpsc::UnboundedSender<Frame>,
+    pub(super) hint_tx: mpsc::Sender<Frame>,
+    pub(super) diag_tx: mpsc::Sender<Frame>,
+    pub(super) task: tokio::task::JoinHandle<anyhow::Result<()>>,
+}
+
+pub(super) fn spawn_runtime_channels(
+    runtime_writer: tokio::net::unix::OwnedWriteHalf,
+    timeout: Duration,
+) -> RuntimeWriterChannels {
+    let (reliable_tx, reliable_rx) = mpsc::unbounded_channel();
+    let (hint_tx, hint_rx) = mpsc::channel(HINT_RUNTIME_CAPACITY);
+    let (diag_tx, diag_rx) = mpsc::channel(super::post_edit::DIAG_RUNTIME_REPLY_CAPACITY);
+    let task = tokio::spawn(run_runtime_unix_writer_with_hints(
+        runtime_writer,
+        reliable_rx,
+        hint_rx,
+        diag_rx,
+        timeout,
+    ));
+    RuntimeWriterChannels {
+        reliable_tx,
+        hint_tx,
+        diag_tx,
+        task,
+    }
+}
+
 /// Route an inbound `MachineFrame::Runtime` frame from the Controller WebSocket:
 /// - Stamps authoritative negotiated `outer_machine_protocol` onto `Frame::Hello`.
 /// - Routes `CoreCommand::WrapUpHint` to the bounded drop-on-full `hint_tx`
@@ -22,15 +51,18 @@ pub(super) const HINT_RUNTIME_CAPACITY: usize = 32;
 pub(super) fn route_inbound_runtime_frame(
     mut frame: Frame,
     outer_protocol: u16,
+    post_edit_http_enabled: bool,
     reliable_tx: &mpsc::UnboundedSender<Frame>,
     hint_tx: &mpsc::Sender<Frame>,
 ) -> anyhow::Result<()> {
     match &mut frame {
         Frame::Hello {
             outer_machine_protocol,
+            post_edit_http,
             ..
         } => {
             *outer_machine_protocol = Some(outer_protocol);
+            *post_edit_http = post_edit_http_enabled;
             reliable_tx
                 .send(frame)
                 .map_err(|_| anyhow::anyhow!("Machine runtime writer queue closed"))?;
@@ -55,10 +87,34 @@ pub(super) fn route_inbound_runtime_frame(
 
 /// Write runtime frames to the local broker UnixStream with strict reliable-first
 /// priority (`biased;`) and complete-frame atomic writes under `timeout`.
+#[cfg(test)]
 pub(super) async fn write_runtime_frames_with_headroom<W, F>(
     writer: &mut W,
     reliable: &mut mpsc::UnboundedReceiver<Frame>,
+    hints: Option<mpsc::Receiver<Frame>>,
+    timeout: Duration,
+    has_headroom: F,
+) -> anyhow::Result<()>
+where
+    W: tokio::io::AsyncWrite + Unpin,
+    F: FnMut(&W, usize) -> bool,
+{
+    write_runtime_frames_with_headroom_and_diag(
+        writer,
+        reliable,
+        hints,
+        None,
+        timeout,
+        has_headroom,
+    )
+    .await
+}
+
+pub(super) async fn write_runtime_frames_with_headroom_and_diag<W, F>(
+    writer: &mut W,
+    reliable: &mut mpsc::UnboundedReceiver<Frame>,
     mut hints: Option<mpsc::Receiver<Frame>>,
+    mut diag_replies: Option<mpsc::Receiver<Frame>>,
     timeout: Duration,
     mut has_headroom: F,
 ) -> anyhow::Result<()>
@@ -67,27 +123,38 @@ where
     F: FnMut(&W, usize) -> bool,
 {
     loop {
-        let (frame, is_hint) = match hints.as_mut() {
-            Some(hint_rx) => tokio::select! {
-                biased;
-                frame = reliable.recv() => match frame {
-                    Some(frame) => (frame, false),
-                    None => return Ok(()),
-                },
-                hint = hint_rx.recv() => match hint {
-                    Some(hint) => (hint, true),
-                    None => {
-                        hints = None;
-                        continue;
-                    }
-                },
-            },
-            None => match reliable.recv().await {
+        let (frame, best_effort) = tokio::select! {
+            biased;
+            frame = reliable.recv() => match frame {
                 Some(frame) => (frame, false),
                 None => return Ok(()),
             },
+            hint = async {
+                match hints.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            }, if hints.is_some() => match hint {
+                Some(hint) => (hint, true),
+                None => {
+                    hints = None;
+                    continue;
+                }
+            },
+            diag = async {
+                match diag_replies.as_mut() {
+                    Some(rx) => rx.recv().await,
+                    None => std::future::pending().await,
+                }
+            }, if diag_replies.is_some() => match diag {
+                Some(diag) => (diag, true),
+                None => {
+                    diag_replies = None;
+                    continue;
+                }
+            },
         };
-        if is_hint {
+        if best_effort {
             let Some(frame_bytes) = encoded_frame_bytes(&frame) else {
                 continue;
             };
@@ -118,12 +185,14 @@ pub(super) async fn run_runtime_unix_writer_with_hints(
     mut writer: tokio::net::unix::OwnedWriteHalf,
     mut frames: mpsc::UnboundedReceiver<Frame>,
     hints: mpsc::Receiver<Frame>,
+    diag_replies: mpsc::Receiver<Frame>,
     timeout: Duration,
 ) -> anyhow::Result<()> {
-    write_runtime_frames_with_headroom(
+    write_runtime_frames_with_headroom_and_diag(
         &mut writer,
         &mut frames,
         Some(hints),
+        Some(diag_replies),
         timeout,
         unix_socket_has_hint_headroom,
     )
@@ -151,8 +220,9 @@ mod tests {
             executable: None,
             fallback_for: None,
             outer_machine_protocol: None,
+            post_edit_http: false,
         };
-        route_inbound_runtime_frame(hello, 53, &reliable_tx, &hint_tx).unwrap();
+        route_inbound_runtime_frame(hello, 53, true, &reliable_tx, &hint_tx).unwrap();
         let hint = Frame::CoreCommand {
             command: CoreCommand::WrapUpHint {
                 session_id: "s1".into(),
@@ -163,18 +233,18 @@ mod tests {
             },
         };
         // Pre-53 outer protocol drops hints.
-        route_inbound_runtime_frame(hint.clone(), 52, &reliable_tx, &hint_tx).unwrap();
+        route_inbound_runtime_frame(hint.clone(), 52, false, &reliable_tx, &hint_tx).unwrap();
         assert!(hint_tx.capacity() == HINT_RUNTIME_CAPACITY);
 
         // Protocol 53 admits hint to hint_tx, reliable Cancel still jumps ahead.
-        route_inbound_runtime_frame(hint, 53, &reliable_tx, &hint_tx).unwrap();
+        route_inbound_runtime_frame(hint, 53, true, &reliable_tx, &hint_tx).unwrap();
         let cancel = Frame::CoreCommand {
             command: CoreCommand::Cancel {
                 session_id: "s1".into(),
                 command_id: "cmd-cancel".into(),
             },
         };
-        route_inbound_runtime_frame(cancel, 53, &reliable_tx, &hint_tx).unwrap();
+        route_inbound_runtime_frame(cancel, 53, true, &reliable_tx, &hint_tx).unwrap();
         let (mut client, mut server) = tokio::io::duplex(4096);
         let write_task = tokio::spawn(async move {
             write_runtime_frames_with_hints(
@@ -192,6 +262,7 @@ mod tests {
             f1,
             Frame::Hello {
                 outer_machine_protocol: Some(53),
+                post_edit_http: true,
                 ..
             }
         ));

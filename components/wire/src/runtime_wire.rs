@@ -27,7 +27,11 @@ pub struct DeliveryTarget {
 
 /// Current runtime protocol. Version 1 is additive-only: new optional fields
 /// must use serde defaults and existing meanings must not change in place.
-pub const PROTOCOL_VERSION: u16 = 8;
+pub const PROTOCOL_VERSION: u16 = 9;
+pub use crate::post_edit_inspect::{
+    POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION, PostEditInspectOutcome, PostEditInspectReply,
+    PostEditInspectRequest,
+};
 pub use crate::wrap_up::{MAX_WRAP_UP_HINT_BYTES, WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION};
 /// Controllers that keep observed subagent transcripts. A Machine forwards
 /// [`SUBAGENT_EVENT_UPDATE`] only to a Controller at this version or later and
@@ -1027,6 +1031,14 @@ pub enum Frame {
     ExecutionReply {
         reply: Box<crate::execution_protocol::RuntimeReply>,
     },
+    /// Unsequenced, non-retrying local diagnostic inspection pull (Runtime 9).
+    PostEditInspectRequest {
+        request: Box<PostEditInspectRequest>,
+    },
+    /// Unsequenced, non-retrying local diagnostic inspection reply (Runtime 9).
+    PostEditInspectReply {
+        reply: Box<PostEditInspectReply>,
+    },
     Hello {
         role: PeerRole,
         min_protocol: u16,
@@ -1046,6 +1058,10 @@ pub enum Frame {
         /// Controller (`None` from older peers, failing closed as `< 53`).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         outer_machine_protocol: Option<u16>,
+        /// True when `machine_cli` negotiated Controller support for the
+        /// independent HTTPS post-edit inspection route (`POST /api/machine/post-edit-inspect`).
+        #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+        post_edit_http: bool,
     },
     Welcome {
         protocol: u16,
@@ -1669,5 +1685,64 @@ mod tests {
             raw["provider_account_id"] = id;
             assert!(serde_json::from_value::<StartSession>(raw.clone()).is_err());
         }
+    }
+
+    #[test]
+    fn post_edit_inspect_frames_round_trip_and_hello_defaults_post_edit_http() {
+        let req = Frame::PostEditInspectRequest {
+            request: Box::new(PostEditInspectRequest {
+                session_id: "sess-1".into(),
+                worker_epoch: "epoch-1".into(),
+                request_id: "req-1".into(),
+                turn_id: "turn-1".into(),
+                scope: crate::post_edit_inspect::PostEditScope {
+                    binding_id: "bind-1".into(),
+                    revision: 1,
+                    incarnation: "inc-1".into(),
+                },
+                path: "src/main.rs".into(),
+                expected_lf_sha256: "b".repeat(64),
+                remaining_ms: 4_000,
+                canary_inspect_id: Some("canary-1".into()),
+            }),
+        };
+        let encoded = serde_json::to_vec(&req).unwrap();
+        assert_eq!(serde_json::from_slice::<Frame>(&encoded).unwrap(), req);
+
+        let reply = Frame::PostEditInspectReply {
+            reply: Box::new(PostEditInspectReply::refused(
+                "sess-1".into(),
+                "epoch-1".into(),
+                "req-1".into(),
+                crate::post_edit_inspect::PostEditScope {
+                    binding_id: "bind-1".into(),
+                    revision: 1,
+                    incarnation: "inc-1".into(),
+                },
+                "unsupported",
+            )),
+        };
+        let encoded_reply = serde_json::to_vec(&reply).unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Frame>(&encoded_reply).unwrap(),
+            reply
+        );
+
+        let legacy_hello = serde_json::json!({
+            "type": "hello",
+            "role": "core",
+            "min_protocol": 1,
+            "max_protocol": 8,
+            "build": "legacy"
+        });
+        let decoded: Frame = serde_json::from_value(legacy_hello).unwrap();
+        assert!(matches!(
+            decoded,
+            Frame::Hello {
+                post_edit_http: false,
+                outer_machine_protocol: None,
+                ..
+            }
+        ));
     }
 }
