@@ -1,14 +1,15 @@
-// Mode classification, mode generations, and turn-scoped UI call correlation
+// Mode classification, mode generations, and attempt-scoped UI call correlation
 // for Antigravity (R3).
 //
 // In restricted modes (`plan`, `"switching"`, `undefined`, or any unrecognized
 // mode string), Cowboy enforces mode policy directly inside `Facade.answerOnce`
-// before any tool handler or extension RPC runs:
+// before any tool handler, extension RPC, or inflight tracking runs:
 //   - reads, `UpdatePlan`, `StopCommand` and `StopSubagent` run without asking;
 //   - `WriteFile`, `EditFile` and `Subagent` are refused unconditionally;
 //   - `RunCommand` and extension tools request single-use owner approval
-//     directly from `Facade.answerOnce` using the exact execution payload and a
-//     proxy-allocated JSON-RPC ID bound to that single invocation's Promise.
+//     directly from `Facade.answerOnce` using the exact frozen execution
+//     payload and a proxy-allocated incarnation-scoped JSON-RPC ID bound 1-to-1
+//     to that single invocation's Promise.
 //
 // Only explicitly confirmed unrestricted modes (`default`, `accept-edits`,
 // `auto`) admit writes, subagents, and unprompted commands/extensions.
@@ -49,6 +50,7 @@ export function stripFacadePrefix(name) {
 
 /** Plan-mode policy for one facade or extension tool name. */
 export function planToolPolicy(toolName) {
+  if (typeof toolName !== "string" || toolName.length === 0) return "refuse";
   if (PLAN_ALLOWED_TOOLS.has(toolName)) return "allow";
   if (PLAN_REFUSED_TOOLS.has(toolName)) return "refuse";
   return "approve";
@@ -65,6 +67,15 @@ export function isUnrestrictedMode(mode) {
  */
 export function isPlanEffectiveMode(mode) {
   return !isUnrestrictedMode(mode);
+}
+
+/** Whether top-level `toolSummary` is presentation-only for `toolName`. */
+function isBuiltinFacadeTool(toolName) {
+  return (
+    PLAN_ALLOWED_TOOLS.has(toolName) ||
+    PLAN_REFUSED_TOOLS.has(toolName) ||
+    toolName === "RunCommand"
+  );
 }
 
 /** Recursively feed canonical JSON tokens into `hash`; returns false on invalid/cyclic input. */
@@ -139,8 +150,13 @@ function isTurnLive(turn) {
   return turn !== undefined && !turn.cancelled && !turn.closed;
 }
 
+/** Attempt identity for `turn` (distinguishes correction retries sharing one turn). */
+function attemptOf(turn) {
+  return turn?.attempt;
+}
+
 /**
- * Mode generations and turn-scoped UI call correlation for one `AcpProxy`.
+ * Mode generations and attempt-scoped UI call correlation for one `AcpProxy`.
  */
 export class PlanGate {
   constructor() {
@@ -148,9 +164,9 @@ export class PlanGate {
     this.modeGens = new Map();
     /** Announced active ACP `cowboy` calls per session: sessionId -> Array<Entry>. */
     this.waiting = new Map();
-    /** Facade call object -> captured turn at admission. */
-    this.callTurns = new WeakMap();
-    /** Facade call object -> `{ id, turn }` bound for UI progress/results. */
+    /** Facade call object -> `{ turn, attempt }` captured at admission. */
+    this.callAttempts = new WeakMap();
+    /** Facade call object -> `{ entry, id, turn, attempt, digest }` bound for UI callbacks. */
     this.bound = new WeakMap();
   }
 
@@ -191,7 +207,9 @@ export class PlanGate {
 
   /**
    * Record one `tool_call` or `tool_call_update` emitted by `agy` for UI
-   * progress/result attachment. Terminal updates remove the entry.
+   * progress/result attachment. Terminal updates remove the entry; later
+   * updates that contradict an existing entry or its bound call's digest mark
+   * it ambiguous so `bind()` suppresses mismatched output.
    */
   trackUpdate(sessionId, update, turn) {
     const id = update?.toolCallId;
@@ -203,24 +221,24 @@ export class PlanGate {
       else this.waiting.delete(sessionId);
       return;
     }
-    // Never track new or updated announcements into a cancelled/closed attempt.
     if (turn !== undefined && !isTurnLive(turn)) return;
+    const attempt = attemptOf(turn);
     const existing = list.find((entry) => entry.id === id);
     if (existing) {
-      if (existing.turn !== turn) existing.ambiguous = true;
+      if (existing.turn !== turn || existing.attempt !== attempt) existing.ambiguous = true;
       if (typeof update.name === "string" && update.name !== existing.name) {
         existing.ambiguous = true;
       }
       if (update.rawInput !== undefined) {
-        const stripSummary =
-          PLAN_ALLOWED_TOOLS.has(existing.toolName) ||
-          PLAN_REFUSED_TOOLS.has(existing.toolName) ||
-          existing.toolName === "RunCommand";
+        const stripSummary = isBuiltinFacadeTool(existing.toolName);
         const digest = argsDigest(update.rawInput, { stripSummary });
         if (digest === undefined) existing.ambiguous = true;
         else if (!existing.hasInput) {
           existing.hasInput = true;
           existing.digest = digest;
+          if (existing.boundDigest !== undefined && existing.boundDigest !== digest) {
+            existing.ambiguous = true;
+          }
         } else if (existing.digest !== digest) {
           existing.ambiguous = true;
         }
@@ -230,10 +248,7 @@ export class PlanGate {
     const name = update.name;
     const toolName = stripFacadePrefix(name);
     if (toolName === undefined) return;
-    const stripSummary =
-      PLAN_ALLOWED_TOOLS.has(toolName) ||
-      PLAN_REFUSED_TOOLS.has(toolName) ||
-      toolName === "RunCommand";
+    const stripSummary = isBuiltinFacadeTool(toolName);
     const hasRaw = update.rawInput !== undefined;
     const digest = hasRaw ? argsDigest(update.rawInput, { stripSummary }) : undefined;
     if (list.length >= MAX_WAITING) list.shift();
@@ -242,36 +257,42 @@ export class PlanGate {
       name,
       toolName,
       turn,
+      attempt,
       hasInput: hasRaw && digest !== undefined,
       digest,
       ambiguous: hasRaw && digest === undefined,
       boundCall: undefined,
+      boundDigest: undefined,
     });
     this.waiting.set(sessionId, list);
   }
 
   /**
-   * Capture `call`'s turn lifetime at `Facade` admission and eagerly bind it
-   * to an unambiguous matching announcement in the same live turn.
+   * Capture `call`'s turn and attempt lifetime at `Facade` admission and
+   * eagerly bind it to an unambiguous matching announcement in the same live
+   * attempt.
    */
   admitCall(call, turn) {
     if (!call || typeof call !== "object") return;
-    this.callTurns.set(call, turn);
+    const attempt = attemptOf(turn);
+    this.callAttempts.set(call, { turn, attempt });
     if (turn !== undefined && !isTurnLive(turn)) return;
-    this.matchUnbound(call, turn);
+    this.matchUnbound(call, turn, attempt);
   }
 
-  /** Match `call` to an unbound waiting entry in the exact same `turn`. */
-  matchUnbound(call, turn) {
+  /** Match `call` to an unbound waiting entry in the exact same `(turn, attempt)`. */
+  matchUnbound(call, turn, attempt) {
     const list = this.waiting.get(call.sessionId) ?? [];
     const name = `${FACADE_PREFIX}${call.name}`;
-    const stripSummary =
-      PLAN_ALLOWED_TOOLS.has(call.name) ||
-      PLAN_REFUSED_TOOLS.has(call.name) ||
-      call.name === "RunCommand";
+    const stripSummary = isBuiltinFacadeTool(call.name);
     const digest = argsDigest(call.args === undefined ? {} : call.args, { stripSummary });
     const unbound = list.filter(
-      (item) => !item.boundCall && !item.ambiguous && item.name === name && item.turn === turn,
+      (item) =>
+        !item.boundCall &&
+        !item.ambiguous &&
+        item.name === name &&
+        item.turn === turn &&
+        item.attempt === attempt,
     );
     let entry;
     if (digest !== undefined) {
@@ -285,31 +306,41 @@ export class PlanGate {
     }
     if (!entry) return undefined;
     entry.boundCall = call;
-    this.bound.set(call, { id: entry.id, turn });
+    entry.boundDigest = digest;
+    this.bound.set(call, { entry, id: entry.id, turn, attempt, digest });
     return entry.id;
   }
 
   /**
    * The ACP `toolCallId` one facade `call` answers for UI presentation
-   * (`toolProgress`, `toolResult`). Enforces turn lifetime so late callbacks
-   * after cancellation, turn settlement, or turn rollover never attach to a
-   * different turn's call, and omits ambiguous matches.
+   * (`toolProgress`, `toolResult`). Enforces `(turn, attempt)` lifetime,
+   * suppresses bindings contradicted by later `tool_call_update` input, and
+   * omits ambiguous matches.
    */
   bind(call, currentTurn) {
     if (!call || typeof call !== "object") return undefined;
-    if (this.callTurns.has(call)) {
-      const admittedTurn = this.callTurns.get(call);
-      if (admittedTurn !== currentTurn) return undefined;
-      if (admittedTurn !== undefined && !isTurnLive(admittedTurn)) return undefined;
+    const currentAttempt = attemptOf(currentTurn);
+    if (this.callAttempts.has(call)) {
+      const admitted = this.callAttempts.get(call);
+      if (admitted.turn !== currentTurn || admitted.attempt !== currentAttempt) return undefined;
+      if (admitted.turn !== undefined && !isTurnLive(admitted.turn)) return undefined;
     } else if (currentTurn !== undefined && !isTurnLive(currentTurn)) {
       return undefined;
     }
     if (this.bound.has(call)) {
       const binding = this.bound.get(call);
-      if (binding.turn !== currentTurn) return undefined;
+      if (binding.turn !== currentTurn || binding.attempt !== currentAttempt) return undefined;
       if (binding.turn !== undefined && !isTurnLive(binding.turn)) return undefined;
+      if (binding.entry.ambiguous) return undefined;
+      if (
+        binding.digest !== undefined &&
+        binding.entry.hasInput &&
+        binding.entry.digest !== binding.digest
+      ) {
+        return undefined;
+      }
       return binding.id;
     }
-    return this.matchUnbound(call, currentTurn);
+    return this.matchUnbound(call, currentTurn, currentAttempt);
   }
 }

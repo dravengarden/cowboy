@@ -133,6 +133,47 @@ export const TURN_ERROR_TEXT = Object.freeze({
 const MAX_TOOL_CALLS = 1024;
 /** Bounded concurrent pending worker-facing permission requests per proxy. */
 const MAX_PENDING_PERMISSIONS = 64;
+/** Maximum full approval title length displayed on Cowboy Web controls (no truncation). */
+const MAX_APPROVAL_TITLE_CHARS = 8192;
+
+/**
+ * Build an untruncated owner-facing approval title showing the exact frozen
+ * execution payload (full multi-line RunCommand or complete extension JSON
+ * including `toolSummary`). Returns `undefined` if the payload cannot be
+ * displayed in full within `MAX_APPROVAL_TITLE_CHARS`.
+ */
+function buildApprovalTitle(name, execArgs, route) {
+  let title;
+  if (
+    name === "RunCommand" &&
+    typeof execArgs?.command === "string" &&
+    Object.keys(execArgs).every((key) =>
+      ["command", "wait_seconds", "timeout_seconds", "toolSummary"].includes(key),
+    )
+  ) {
+    const extras = [];
+    if (execArgs.wait_seconds !== undefined) extras.push(`wait=${execArgs.wait_seconds}s`);
+    if (execArgs.timeout_seconds !== undefined) {
+      extras.push(`timeout=${execArgs.timeout_seconds}s`);
+    }
+    if (typeof execArgs.toolSummary === "string" && execArgs.toolSummary.trim()) {
+      extras.push(`summary=${JSON.stringify(execArgs.toolSummary.trim())}`);
+    }
+    const suffix = extras.length ? ` [${extras.join(", ")}]` : "";
+    title = `RunCommand: ${execArgs.command}${suffix}`;
+  } else {
+    const label = route ? `${route.server} · ${route.tool}` : name;
+    let encoded;
+    try {
+      encoded = JSON.stringify(execArgs ?? {});
+    } catch {
+      return undefined;
+    }
+    if (encoded === undefined) return undefined;
+    title = `${label} ${encoded}`;
+  }
+  return title.length <= MAX_APPROVAL_TITLE_CHARS ? title : undefined;
+}
 
 /** Extract an explicit mode string from an ACP session result or update. */
 function extractReportedMode(value) {
@@ -296,6 +337,10 @@ export class AcpProxy {
     this.settling = new Map();
     /** Active worker-facing permission requests keyed by unique proxy-allocated worker ID. */
     this.workerPermissions = new Map();
+    /** Reverse lookup from normalized native `agy` permission request ID -> worker ID. */
+    this.agentPermToWorker = new Map();
+    /** Random incarnation token so permission IDs never collide across proxy restarts. */
+    this.permIncarnation = randomUUID().slice(0, 8);
     /** Monotonic counter for unique worker-facing permission request IDs. */
     this.nextPermId = 0;
     this.turns = new Map();
@@ -448,35 +493,47 @@ export class AcpProxy {
     return isPlanEffectiveMode(this.effectiveMode(sessionId));
   }
 
-  /** Allocate a fresh, collision-free worker-facing JSON-RPC permission ID. */
+  /** Allocate a fresh, incarnation-scoped worker-facing JSON-RPC permission ID. */
   allocateWorkerPermId() {
     this.nextPermId += 1;
-    return `cowboy-perm-${this.nextPermId}`;
+    return `cowboy-perm-${this.permIncarnation}-${this.nextPermId}`;
   }
 
   /** Retire one live worker permission prompt, notifying the worker and resolving/cancelling it. */
   retirePermission(
     workerId,
-    { reason = "Permission request cancelled.", notifyWorker = true } = {},
+    { reason = "Permission request cancelled.", notifyWorker = true, replyAgent = true } = {},
   ) {
     const entry = this.workerPermissions.get(workerId);
     if (!entry) return;
     this.workerPermissions.delete(workerId);
+    if (entry.agyKey !== undefined && this.agentPermToWorker.get(entry.agyKey) === workerId) {
+      this.agentPermToWorker.delete(entry.agyKey);
+    }
+    entry.cleanup?.();
     if (notifyWorker) {
-      this.client({
-        jsonrpc: "2.0",
-        method: "$/cancel_request",
-        params: { requestId: workerId },
-      });
+      try {
+        this.client({
+          jsonrpc: "2.0",
+          method: "$/cancel_request",
+          params: { requestId: workerId },
+        });
+      } catch {
+        // Worker stdout may already be closed during teardown.
+      }
     }
     if (entry.kind === "facade") {
       entry.resolve({ allowed: false, reason });
-    } else if (entry.kind === "agent") {
-      this.agent({
-        jsonrpc: "2.0",
-        id: entry.agyId,
-        result: { outcome: { outcome: "cancelled" } },
-      });
+    } else if (entry.kind === "agent" && replyAgent) {
+      try {
+        this.agent({
+          jsonrpc: "2.0",
+          id: entry.agyId,
+          result: { outcome: { outcome: "cancelled" } },
+        });
+      } catch {
+        // Child stdin may already be closed during teardown.
+      }
     }
   }
 
@@ -504,14 +561,32 @@ export class AcpProxy {
     this.retirePermissions({ ownerId, reason });
   }
 
-  /** Record the start of a mode switch on root owner `sessionId`. */
-  beginModeSwitch(sessionId) {
-    if (typeof sessionId !== "string" || this.subagents.owns(sessionId)) return undefined;
+  /** Ensure per-session mode-operation sequence state exists for root owner `sessionId`. */
+  ensureSwitchState(sessionId) {
     let state = this.switchState.get(sessionId);
     if (!state) {
       state = { nextSeq: 0, latestSeq: 0, active: new Set(), overlapped: false };
       this.switchState.set(sessionId, state);
     }
+    return state;
+  }
+
+  /** Record the start of a session reopen (`load`/`resume`) in the shared mode sequence. */
+  beginModeReopen(sessionId) {
+    if (typeof sessionId !== "string" || this.subagents.owns(sessionId)) return undefined;
+    const state = this.ensureSwitchState(sessionId);
+    const seq = ++state.nextSeq;
+    if (state.active.size > 0) state.overlapped = true;
+    state.latestSeq = seq;
+    this.modes.delete(sessionId);
+    this.invalidateModeFamily(sessionId, "The session is reloading.");
+    return seq;
+  }
+
+  /** Record the start of a mode switch on root owner `sessionId`. */
+  beginModeSwitch(sessionId) {
+    if (typeof sessionId !== "string" || this.subagents.owns(sessionId)) return undefined;
+    const state = this.ensureSwitchState(sessionId);
     const seq = ++state.nextSeq;
     if (state.active.size > 0) state.overlapped = true;
     state.latestSeq = seq;
@@ -526,7 +601,14 @@ export class AcpProxy {
     const state = this.switchState.get(sessionId);
     if (!state) return;
     state.active.delete(seq);
-    if (state.active.size > 0) return;
+    if (state.active.size > 0) {
+      // Intermediate switch errors still invalidate switching-era prompts while
+      // keeping the effective mode restricted until all switches finish.
+      if (result === undefined) {
+        this.invalidateModeFamily(sessionId, "A mode switch failed.");
+      }
+      return;
+    }
     const wasOverlapped = state.overlapped;
     const isLatest = seq === state.latestSeq;
     state.overlapped = false;
@@ -538,12 +620,12 @@ export class AcpProxy {
       return;
     }
     const reported = extractReportedMode(result);
-    if (!wasOverlapped) {
+    if (!wasOverlapped && isLatest) {
       this.modes.set(sessionId, reported ?? requestedMode);
     } else if (isLatest && reported !== undefined) {
       this.modes.set(sessionId, reported);
     } else {
-      // Overlapping switches with out-of-order or empty reply stay unknown (fail closed).
+      // Overlapping switches or newer reopens with out-of-order or empty reply stay unknown.
       this.modes.delete(sessionId);
     }
   }
@@ -568,16 +650,34 @@ export class AcpProxy {
     const sessionId = call?.sessionId;
     const ownerId = this.subagents.parentOf(sessionId) ?? sessionId;
     const mode = this.effectiveMode(sessionId);
-    if (!isPlanEffectiveMode(mode)) return { allowed: true };
+    const initialModeGen = this.planGate.modeGeneration(ownerId);
+    if (!isPlanEffectiveMode(mode)) {
+      return {
+        allowed: true,
+        confirm: () =>
+          !this.closing &&
+          this.planGate.modeGeneration(ownerId) === initialModeGen &&
+          !isPlanEffectiveMode(this.effectiveMode(sessionId)),
+      };
+    }
     const name = call?.name;
     const policy = planToolPolicy(name);
-    if (policy === "allow") return { allowed: true };
+    if (policy === "allow") {
+      return {
+        allowed: true,
+        confirm: () => !this.closing,
+      };
+    }
     if (policy === "refuse") {
       const reason =
         mode === "plan"
           ? `${name} is not available in plan mode.`
           : `${name} is unavailable while the session's mode is ${mode ?? "unknown"}.`;
       return { allowed: false, reason };
+    }
+    const signal = meta?.signal;
+    if (signal?.aborted) {
+      return { allowed: false, reason: "The tool request was cancelled." };
     }
     const turn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
     if (this.closing || !turn || turn.cancelled || turn.closed) {
@@ -593,31 +693,70 @@ export class AcpProxy {
         reason: `${name} refused in plan mode: too many pending permission requests.`,
       };
     }
-    const workerId = this.allocateWorkerPermId();
-    const modeGen = this.planGate.modeGeneration(ownerId);
     const execArgs = meta?.args ?? (call?.args === undefined ? {} : call.args);
+    // Refuse calls whose executable payload contains raw tier metadata that
+    // stripTier would hide from the owner approval surface (Medium #14).
+    if (stripTier(execArgs) !== execArgs) {
+      return {
+        allowed: false,
+        reason: `${name} refused in plan mode: arguments contain redacted metadata.`,
+      };
+    }
+    const route = this.facade?.extensions?.route?.(name);
+    const fullTitle = buildApprovalTitle(name, execArgs, route);
+    if (fullTitle === undefined) {
+      return {
+        allowed: false,
+        reason: `${name} refused in plan mode: arguments are too large to display in full for owner approval.`,
+      };
+    }
+    const workerId = this.allocateWorkerPermId();
+    const modeGen = initialModeGen;
+    const attempt = turn.attempt;
     const rawToolCall = {
       toolCallId: `cowboy-plan-${workerId}`,
       name: `${FACADE_PREFIX}${name}`,
       title: `Run ${FACADE_PREFIX}${name}`,
       rawInput: execArgs,
     };
-    const presented = this.present(rawToolCall, sessionId, { preserveExtensionInput: true });
+    const presented = {
+      ...this.present(rawToolCall, sessionId, { preserveExtensionInput: true }),
+      title: fullTitle,
+    };
     const options = [
       { optionId: "allow_once", name: "Allow once", kind: "allow_once" },
       { optionId: "reject_once", name: "Reject", kind: "reject_once" },
     ];
+    const confirm = () =>
+      !this.closing &&
+      !signal?.aborted &&
+      this.planGate.modeGeneration(ownerId) === modeGen &&
+      this.turns.get(sessionId) === turn &&
+      turn.attempt === attempt &&
+      !turn.cancelled &&
+      !turn.closed &&
+      (child === undefined || this.subagents.isOpen(child));
     return new Promise((resolve) => {
+      let cleanup;
+      if (signal) {
+        const onAbort = () =>
+          this.retirePermission(workerId, { reason: "The tool request was cancelled." });
+        signal.addEventListener("abort", onAbort, { once: true });
+        cleanup = () => signal.removeEventListener("abort", onAbort);
+      }
       this.workerPermissions.set(workerId, {
         kind: "facade",
         sessionId,
         ownerId,
         child,
         turn,
+        attempt,
         modeGen,
         toolName: name,
         offeredOptionIds: new Set(["allow_once", "reject_once"]),
         allowOptionIds: new Set(["allow_once"]),
+        confirm,
+        cleanup,
         resolve,
       });
       this.client({
@@ -635,6 +774,26 @@ export class AcpProxy {
 
   /** Forward one non-facade `agy` permission request under a unique worker ID. */
   forwardAgentPermission(agyId, redactedMessage, { sessionId, ownerId, stripStanding }) {
+    if (this.closing) {
+      return this.rejectPermission(agyId, redactedMessage, "rejected permission: proxy closing");
+    }
+    const turn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
+    if (!turn || turn.cancelled || turn.closed) {
+      return this.rejectPermission(agyId, redactedMessage, "rejected permission: no live turn");
+    }
+    const agyKey = JSON.stringify(agyId);
+    if (this.agentPermToWorker.has(agyKey)) {
+      // Live duplicate native permission ID: retire the existing worker prompt
+      // and refuse the colliding request fail-closed.
+      this.retirePermission(this.agentPermToWorker.get(agyKey), {
+        reason: "Duplicate native permission request ID.",
+      });
+      return this.rejectPermission(
+        agyId,
+        redactedMessage,
+        "rejected permission: duplicate live native request ID",
+      );
+    }
     const rawOptions = Array.isArray(redactedMessage.params?.options)
       ? redactedMessage.params.options
       : [];
@@ -661,17 +820,16 @@ export class AcpProxy {
       );
     }
     const workerId = this.allocateWorkerPermId();
-    const turn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
-    if (turn && (turn.cancelled || turn.closed)) {
-      return this.rejectPermission(agyId, redactedMessage, "rejected permission: turn is closing");
-    }
+    this.agentPermToWorker.set(agyKey, workerId);
     this.workerPermissions.set(workerId, {
       kind: "agent",
       agyId,
+      agyKey,
       sessionId,
       ownerId,
       child: this.subagents.childOf(sessionId),
       turn,
+      attempt: turn.attempt,
       modeGen: this.planGate.modeGeneration(ownerId),
       offeredOptionIds,
     });
@@ -746,9 +904,13 @@ export class AcpProxy {
         : presentToolCall(toolCall, { root: this.root, known });
     // The facade's answer, which `agy` never reports for an MCP tool.
     if (key !== undefined && TERMINAL.has(toolCall?.status) && this.results.has(key)) {
-      const content = this.results.get(key);
+      const entry = this.results.get(key);
       this.results.delete(key);
-      return content.length ? { ...shown, content } : shown;
+      const currentTurn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
+      const matchesAttempt = entry.turn === currentTurn && entry.attempt === currentTurn?.attempt;
+      if (matchesAttempt && entry.content.length) {
+        return { ...shown, content: entry.content };
+      }
     }
     return shown;
   }
@@ -836,11 +998,24 @@ export class AcpProxy {
     }
     const id = this.bind(call);
     if (id === undefined) return;
+    const turn = typeof call.sessionId === "string" ? this.turns.get(call.sessionId) : undefined;
     if (this.results.size >= MAX_TOOL_CALLS) this.results.delete(this.results.keys().next().value);
-    this.results.set(
-      callKey(call.sessionId, id),
-      resultContent(call.name, call.args, result, this.root),
-    );
+    this.results.set(callKey(call.sessionId, id), {
+      sessionId: call.sessionId,
+      turn,
+      attempt: turn?.attempt,
+      content: resultContent(call.name, call.args, result, this.root),
+    });
+  }
+
+  /** Discard buffered undelivered facade tool results for `sessionId` (and optional `turn`). */
+  clearResults(sessionId, turn = undefined) {
+    if (typeof sessionId !== "string") return;
+    for (const [key, entry] of [...this.results]) {
+      if (entry.sessionId !== sessionId) continue;
+      if (turn !== undefined && entry.turn !== turn) continue;
+      this.results.delete(key);
+    }
   }
 
   /** A running command's output so far, shown on its tool call. */
@@ -868,8 +1043,9 @@ export class AcpProxy {
   beginShutdown() {
     if (this.closing) return;
     this.closing = true;
-    this.retirePermissions({ reason: "Antigravity proxy is shutting down.", notifyWorker: false });
+    this.retirePermissions({ reason: "Antigravity proxy is shutting down.", notifyWorker: true });
     this.planGate.clearAll();
+    this.results.clear();
     this.readyRuntime?.facade?.quiesce?.();
     this.abortAllReservations();
   }
@@ -1171,13 +1347,20 @@ export class AcpProxy {
       if (this.workerPermissions.has(id)) {
         const entry = this.workerPermissions.get(id);
         this.workerPermissions.delete(id);
+        if (entry.agyKey !== undefined && this.agentPermToWorker.get(entry.agyKey) === id) {
+          this.agentPermToWorker.delete(entry.agyKey);
+        }
+        entry.cleanup?.();
         const childOpen = entry.child === undefined || this.subagents.isOpen(entry.child);
         const modeValid = this.planGate.modeGeneration(entry.ownerId) === entry.modeGen;
         const currentTurn =
           typeof entry.sessionId === "string" ? this.turns.get(entry.sessionId) : undefined;
         const turnValid =
-          entry.turn === undefined ||
-          (currentTurn === entry.turn && !entry.turn.cancelled && !entry.turn.closed);
+          entry.turn !== undefined &&
+          currentTurn === entry.turn &&
+          currentTurn.attempt === entry.attempt &&
+          !entry.turn.cancelled &&
+          !entry.turn.closed;
         const outcome = message.result?.outcome;
         const selectedValid =
           outcome?.outcome === "selected" &&
@@ -1193,7 +1376,7 @@ export class AcpProxy {
             entry.allowOptionIds.has(outcome.optionId);
           entry.resolve(
             approved
-              ? { allowed: true }
+              ? { allowed: true, confirm: entry.confirm }
               : {
                   allowed: false,
                   reason: `${entry.toolName} was not approved in plan mode.`,
@@ -1243,18 +1426,12 @@ export class AcpProxy {
     }
     // Reopening a session clears any cached mode so a load/resume omitting
     // `modes` cannot retain an earlier unrestricted mode.
+    let modeOpSeq;
     if (SESSION_REQUESTS.has(method) && typeof forwarded.params?.sessionId === "string") {
-      const sid = forwarded.params.sessionId;
-      this.modes.delete(sid);
-      const sw = this.switchState.get(sid);
-      if (sw && sw.active.size > 0) {
-        sw.overlapped = true;
-        sw.latestSeq = ++sw.nextSeq;
-      }
-      this.invalidateModeFamily(sid, "The session is reloading.");
+      modeOpSeq = this.beginModeReopen(forwarded.params.sessionId);
     }
     // The reply is handled with this runtime, without awaiting it again.
-    const record = { method, runtime, mode: requested, params: forwarded.params };
+    const record = { method, runtime, mode: requested, modeOpSeq, params: forwarded.params };
     if (method === "session/cancel") {
       return await this.cancel(forwarded);
     }
@@ -1429,6 +1606,7 @@ export class AcpProxy {
         forwarded.params.prompt = stagedPrompt;
         this.turns.set(sessionId, {
           id,
+          attempt: Symbol("attempt"),
           attemptNonce,
           compacting: Boolean(promptRecord.compaction),
           wrapUp: reserved.wrapUp,
@@ -1495,6 +1673,7 @@ export class AcpProxy {
       reason: cancelled ? "The turn was cancelled." : "The turn ended.",
     });
     this.planGate.clearTurn(sessionId, turn);
+    this.clearResults(sessionId, turn);
     if (turn.attemptCleanup) return turn.attemptCleanup;
     // Synchronously initiate facade cleanup when runtime is already ready so admission fences at once.
     if (this.readyRuntime) {
@@ -1547,6 +1726,7 @@ export class AcpProxy {
         if (turn.wrapUp) turn.wrapUp.pending = false;
         this.retirePermissions({ sessionId, reason: "The turn was cancelled." });
         this.planGate.clearTurn(sessionId, turn);
+        this.clearResults(sessionId, turn);
         this.subagents.cancelled(sessionId);
         const cleanup = this.startAttemptCleanup(sessionId, turn, { cancelled: true });
         const children = this.subagents.owns(sessionId)
@@ -1773,6 +1953,21 @@ export class AcpProxy {
     }
     if (typeof method === "string") {
       if (id === undefined) {
+        if (method === "$/cancel_request" || method === "$/cancelRequest") {
+          const reqId = message.params?.requestId;
+          if (reqId !== undefined) {
+            const agyKey = JSON.stringify(reqId);
+            const workerId = this.agentPermToWorker.get(agyKey);
+            if (workerId !== undefined) {
+              this.retirePermission(workerId, {
+                reason: "Antigravity cancelled the permission request.",
+                notifyWorker: true,
+                replyAgent: false,
+              });
+            }
+          }
+          return;
+        }
         if (method === "session/update") {
           // A managed child hears only its own session.
           if (this.managed !== false && this.foreignSession(message.params)) {
@@ -1840,6 +2035,9 @@ export class AcpProxy {
       }
       // Redact account tier metadata before inspecting or forwarding options.
       const asked = stripTier(message);
+      if (this.closing) {
+        return this.rejectPermission(id, asked, "rejected permission: proxy closing");
+      }
       // Defense in depth beside the PreToolUse hook: a permission request
       // for any tool outside the allow-list is rejected here, never shown; so
       // is a managed child's request for any session but its own.
@@ -1986,11 +2184,16 @@ export class AcpProxy {
     if (message.result !== undefined) {
       if (SESSION_REQUESTS.has(record.method)) {
         const sessionId = message.result?.sessionId ?? record.session;
-        if (typeof sessionId === "string" && !this.subagents.owns(sessionId)) {
+        const sw = typeof sessionId === "string" ? this.switchState.get(sessionId) : undefined;
+        const isCurrentReopen =
+          record.modeOpSeq !== undefined
+            ? sw?.latestSeq === record.modeOpSeq && !this.isSwitching(sessionId)
+            : sw === undefined;
+        if (typeof sessionId === "string" && !this.subagents.owns(sessionId) && isCurrentReopen) {
           this.modes.delete(sessionId);
           this.invalidateModeFamily(sessionId, "The session reopened.");
+          this.reportMode(sessionId, message.result);
         }
-        this.reportMode(sessionId, message.result);
         this.compaction.opened(sessionId, record.projection);
         if (!runtime.managed) {
           this.subagents.opened(sessionId, { cwd: record.cwd, projection: record.projection });
@@ -2353,6 +2556,7 @@ export class AcpProxy {
     const retry = `cowboy-correction-${randomUUID()}`;
     this.pending.set(retry, { ...record, cursor, replyId });
     turn.closed = false;
+    turn.attempt = Symbol("attempt");
     turn.attemptCleanup = null;
     runtime.facade.beginTurn(record.sessionId);
     this.agent({

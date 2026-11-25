@@ -5,7 +5,8 @@ import { join } from "node:path";
 import test from "node:test";
 
 import { Connection } from "../../execution-connection.mjs";
-import { Facade } from "./facade.mjs";
+import { PassThrough } from "node:stream";
+import { Facade, serveMcp } from "./facade.mjs";
 import {
   argsDigest,
   isPlanEffectiveMode,
@@ -91,7 +92,12 @@ async function integratedHarness(t, options = {}) {
     log: () => {},
   });
   await proxy.runtime;
-  await proxy.fromClient(rpcRequest(1, "initialize", { protocolVersion: 1 }));
+  await proxy.fromClient(
+    rpcRequest(1, "initialize", {
+      protocolVersion: 1,
+      clientCapabilities: { subagents: {} },
+    }),
+  );
   await proxy.fromAgent({ jsonrpc: "2.0", id: 1, result: { protocolVersion: 1 } });
   await proxy.fromClient(rpcRequest(2, "session/new", { cwd: dir, mcpServers: [] }));
   await proxy.fromAgent({
@@ -258,7 +264,7 @@ test("end-to-end R3: plan mode allows reads/UpdatePlan, refuses writes/subagent,
     const runPromise = h.facade.call("s", "RunCommand", { command: "echo FACADE_DIRECT_OK" });
     const req = h.client.at(-1);
     assert.equal(req.method, "session/request_permission");
-    assert.equal(req.params.toolCall.title, "echo FACADE_DIRECT_OK");
+    assert.equal(req.params.toolCall.title, "RunCommand: echo FACADE_DIRECT_OK");
     assert.deepEqual(req.params.toolCall.rawInput, { command: "echo FACADE_DIRECT_OK" });
     assert.deepEqual(
       req.params.options.map((o) => o.kind),
@@ -613,6 +619,456 @@ test("end-to-end R3: managed read-only child still runs read-only RunCommand wit
     assert.equal(res.isError, undefined);
     assert.match(res.content[0].text, /MANAGED_RO_OK/);
     assert.equal(h.client.filter((m) => m.method === "session/request_permission").length, 0);
+  } finally {
+    await h.cleanup();
+  }
+});
+
+test("round-2 High #1 & Medium #14: full multi-line command & extension payload appear in approval title; oversized and raw-tier payloads fail closed", async (t) => {
+  const h = await integratedHarness(t, { mode: "plan" });
+  try {
+    // Multi-line command >160 chars whose dangerous line is on line 2.
+    const multiCmd = `echo ${"a".repeat(170)}\necho SECOND_LINE_VISIBLE`;
+    const runPromise = h.facade.call("s", "RunCommand", { command: multiCmd });
+    const req = h.client.at(-1);
+    assert.equal(req.method, "session/request_permission");
+    assert.equal(req.params.toolCall.title, `RunCommand: ${multiCmd}`);
+    await h.proxy.fromClient({
+      jsonrpc: "2.0",
+      id: req.id,
+      result: { outcome: { outcome: "selected", optionId: "reject_once" } },
+    });
+    assert.equal((await runPromise).isError, true);
+
+    // Extension payload including toolSummary appears verbatim in toolCall.title.
+    const extPayload = { target: "prod", toolSummary: "HIDDEN_IF_STRIPPED" };
+    const extPromise = h.facade.call("s", "folder_tool", extPayload);
+    const extReq = h.client.at(-1);
+    assert.equal(extReq.params.toolCall.title, `suger · write_note ${JSON.stringify(extPayload)}`);
+    await h.proxy.fromClient({
+      jsonrpc: "2.0",
+      id: extReq.id,
+      result: { outcome: { outcome: "selected", optionId: "reject_once" } },
+    });
+    assert.equal((await extPromise).isError, true);
+
+    // Oversized command (>8 KiB) fails closed without prompting truncated payload.
+    const huge = await h.facade.call("s", "RunCommand", { command: `echo ${"x".repeat(9000)}` });
+    assert.equal(huge.isError, true);
+    assert.match(huge.content[0].text, /too large to display in full/i);
+
+    // Extension arguments containing nested _meta.antigravity.tier fail closed (Medium #14).
+    const tiered = await h.facade.call("s", "folder_tool", {
+      note: "ok",
+      _meta: { antigravity: { tier: "pro", upgradeUri: "https://example.invalid" } },
+    });
+    assert.equal(tiered.isError, true);
+    assert.match(tiered.content[0].text, /redacted metadata/i);
+    assert.equal(h.extCalls.length, 0);
+  } finally {
+    await h.cleanup();
+  }
+});
+
+test("round-2 High #2: stale session/load reply reporting default cannot overwrite a newer plan switch", async (t) => {
+  const h = await integratedHarness(t, { mode: "plan" });
+  try {
+    // Start session/load (id 200), then immediately issue session/set_mode(plan) (id 201).
+    await h.proxy.fromClient(
+      rpcRequest(200, "session/load", { sessionId: "s", cwd: h.dir, mcpServers: [] }),
+    );
+    await h.proxy.fromClient(
+      rpcRequest(201, "session/set_mode", { sessionId: "s", modeId: "plan" }),
+    );
+    // Newer plan switch succeeds first.
+    await h.proxy.fromAgent({ jsonrpc: "2.0", id: 201, result: {} });
+    assert.equal(h.proxy.effectiveMode("s"), "plan");
+    // Older session/load reply arrives late reporting default -> MUST be ignored!
+    await h.proxy.fromAgent({
+      jsonrpc: "2.0",
+      id: 200,
+      result: { sessionId: "s", modes: { currentModeId: "default" } },
+    });
+    assert.equal(h.proxy.effectiveMode("s"), "plan");
+    assert.equal(
+      (await h.facade.call("s", "WriteFile", { path: "blocked.txt", content: "x" })).isError,
+      true,
+    );
+  } finally {
+    await h.cleanup();
+  }
+});
+
+test("round-2 High #3 & #4: post-await confirm() rechecks owner mode generation; distinct proxies have distinct incarnation IDs", async (t) => {
+  const h = await integratedHarness(t, { mode: "default" });
+  try {
+    // 1. Synchronous unrestricted decision returns confirm(); switching mode before execution fails confirm().
+    const decision = h.proxy.authorizeFacadeCall(
+      { sessionId: "s", name: "WriteFile", args: { path: "a.txt", content: "1" } },
+      { args: { path: "a.txt", content: "1" } },
+    );
+    assert.equal(decision.allowed, true);
+    assert.equal(decision.confirm(), true);
+    // Simulate a synchronous mode change arriving before await this.authorize() resumes!
+    const writePromise = h.facade.call("s", "WriteFile", { path: "race.txt", content: "bad" });
+    h.proxy.reportMode("s", { currentModeId: "plan" });
+    const raceRes = await writePromise;
+    assert.equal(raceRes.isError, true);
+    assert.throws(() => readFileSync(join(h.dir, "race.txt"), "utf8"));
+
+    // Also test a prompted allow_once decision whose mode changes before continuation resumes!
+    const runRace = h.facade.call("s", "RunCommand", { command: "echo RACE_PROMPT" });
+    const permId = h.client.at(-1).id;
+    const replyP = h.proxy.fromClient({
+      jsonrpc: "2.0",
+      id: permId,
+      result: { outcome: { outcome: "selected", optionId: "allow_once" } },
+    });
+    // Mode switches synchronously right after reply queues/resolves -> confirm() blocks dispatch!
+    h.proxy.invalidateModeFamily("s", "mode changed mid-continuation");
+    await replyP;
+    const runRaceRes = await runRace;
+    assert.equal(runRaceRes.isError, true);
+
+    // 2. Incarnation-scoped permission IDs differ across fresh proxy instances (High #4).
+    const p2 = new AcpProxy({
+      runtime: Promise.resolve({ managed: false, facade: {} }),
+      agent: () => {},
+      client: () => {},
+      log: () => {},
+    });
+    assert.notEqual(h.proxy.allocateWorkerPermId(), p2.allocateWorkerPermId());
+  } finally {
+    await h.cleanup();
+  }
+});
+
+test("round-2 High #5: MCP notifications/cancelled and relay disconnect immediately retire waiting facade permissions", async (t) => {
+  const h = await integratedHarness(t, { mode: "plan" });
+  try {
+    const makeRelay = () => {
+      const incoming = new PassThrough();
+      const outgoing = new PassThrough();
+      const feed = incoming.write.bind(incoming);
+      const duplex = Object.assign(incoming, {
+        write: (...args) => outgoing.write(...args),
+        end: (...args) => outgoing.end(...args),
+      });
+      serveMcp(duplex, h.facade, () => "s");
+      return { feed, destroy: () => incoming.destroy() };
+    };
+    // Case A: MCP notifications/cancelled withdraws a waiting RunCommand prompt.
+    const relayA = makeRelay();
+    relayA.feed(
+      `${JSON.stringify({ jsonrpc: "2.0", id: "mcp-1", method: "tools/call", params: { name: "RunCommand", arguments: { command: "echo CANCELLED_MCP" } } })}\n`,
+    );
+    await new Promise((r) => setImmediate(r));
+    const permA = h.client.findLast((m) => m.method === "session/request_permission");
+    assert.ok(permA);
+    relayA.feed(
+      `${JSON.stringify({ jsonrpc: "2.0", method: "notifications/cancelled", params: { requestId: "mcp-1" } })}\n`,
+    );
+    await new Promise((r) => setImmediate(r));
+    assert.equal(
+      h.client.some((m) => m.method === "$/cancel_request" && m.params?.requestId === permA.id),
+      true,
+    );
+    // Late allow_once cannot execute anything.
+    await h.proxy.fromClient({
+      jsonrpc: "2.0",
+      id: permA.id,
+      result: { outcome: { outcome: "selected", optionId: "allow_once" } },
+    });
+
+    // Case B: Relay stream close withdraws a waiting extension prompt so a later Allow executes nothing.
+    const relayB = makeRelay();
+    relayB.feed(
+      `${JSON.stringify({ jsonrpc: "2.0", id: "mcp-2", method: "tools/call", params: { name: "folder_tool", arguments: { note: "disconnect" } } })}\n`,
+    );
+    await new Promise((r) => setImmediate(r));
+    const permB = h.client.findLast((m) => m.method === "session/request_permission");
+    assert.ok(permB && permB.id !== permA.id);
+    relayB.destroy();
+    await new Promise((r) => setImmediate(r));
+    assert.equal(
+      h.client.some((m) => m.method === "$/cancel_request" && m.params?.requestId === permB.id),
+      true,
+    );
+    await h.proxy.fromClient({
+      jsonrpc: "2.0",
+      id: permB.id,
+      result: { outcome: { outcome: "selected", optionId: "allow_once" } },
+    });
+    assert.equal(h.extCalls.length, 0);
+  } finally {
+    await h.cleanup();
+  }
+});
+
+test("round-2 High #6 & Medium #9, #10, #11: native $/cancel_request translation, duplicate live agyId rejection, live-turn requirement, intermediate switch error, and shutdown $/cancel_request", async (t) => {
+  const h = await integratedHarness(t, { mode: "plan" });
+  try {
+    const opts = [{ optionId: "allow", name: "Allow", kind: "allow_once" }];
+    // 1. Native $/cancel_request retires the translated worker ID.
+    await h.proxy.fromAgent(
+      rpcRequest("agy-q1", "session/request_permission", {
+        sessionId: "s",
+        toolCall: { toolCallId: "q1", name: "ask_question" },
+        options: opts,
+      }),
+    );
+    const wId1 = h.client.at(-1).id;
+    await h.proxy.fromAgent({
+      jsonrpc: "2.0",
+      method: "$/cancel_request",
+      params: { requestId: "agy-q1" },
+    });
+    assert.equal(
+      h.client.some((m) => m.method === "$/cancel_request" && m.params?.requestId === wId1),
+      true,
+    );
+    // 2. Duplicate live agyId retires old worker prompt and rejects incoming duplicate.
+    await h.proxy.fromAgent(
+      rpcRequest("agy-dup", "session/request_permission", {
+        sessionId: "s",
+        toolCall: { toolCallId: "q2", name: "search_web", rawInput: { query: "a" } },
+        options: opts,
+      }),
+    );
+    const wIdDup = h.client.at(-1).id;
+    await h.proxy.fromAgent(
+      rpcRequest("agy-dup", "session/request_permission", {
+        sessionId: "s",
+        toolCall: { toolCallId: "q3", name: "search_web", rawInput: { query: "b" } },
+        options: opts,
+      }),
+    );
+    assert.equal(
+      h.client.some((m) => m.method === "$/cancel_request" && m.params?.requestId === wIdDup),
+      true,
+    );
+    assert.deepEqual(h.agent.at(-1), {
+      jsonrpc: "2.0",
+      id: "agy-dup",
+      result: { outcome: { outcome: "cancelled" } },
+    });
+
+    // 3. Intermediate switch error invalidates switching-era permissions while staying switching (Medium #10).
+    await h.proxy.fromClient(
+      rpcRequest(401, "session/set_mode", { sessionId: "s", modeId: "default" }),
+    );
+    await h.proxy.fromClient(
+      rpcRequest(402, "session/set_mode", { sessionId: "s", modeId: "plan" }),
+    );
+    const duringOverlap = h.facade.call("s", "RunCommand", { command: "echo INTERMEDIATE_ERR" });
+    const overlapPermId = h.client.at(-1).id;
+    await h.proxy.fromAgent({ jsonrpc: "2.0", id: 401, error: { code: -32000, message: "err" } });
+    assert.equal((await duringOverlap).isError, true);
+    assert.equal(h.proxy.effectiveMode("s"), "switching");
+    assert.equal(
+      h.client.some(
+        (m) => m.method === "$/cancel_request" && m.params?.requestId === overlapPermId,
+      ),
+      true,
+    );
+    await h.proxy.fromAgent({ jsonrpc: "2.0", id: 402, result: {} });
+
+    // 4. Native permission outside a live turn is rejected fail-closed (Medium #9).
+    await h.proxy.fromAgent({ jsonrpc: "2.0", id: 3, result: { stopReason: "end_turn" } });
+    const beforeClient = h.client.length;
+    await h.proxy.fromAgent(
+      rpcRequest("agy-late", "session/request_permission", {
+        sessionId: "s",
+        toolCall: { toolCallId: "q4", name: "ask_question" },
+        options: opts,
+      }),
+    );
+    assert.equal(h.client.length, beforeClient);
+    assert.deepEqual(h.agent.at(-1), {
+      jsonrpc: "2.0",
+      id: "agy-late",
+      result: { outcome: { outcome: "cancelled" } },
+    });
+
+    // 5. Shutdown sends $/cancel_request for live prompts and rejects new permission frames (Medium #11).
+    await h.proxy.fromClient(
+      rpcRequest(403, "session/prompt", {
+        sessionId: "s",
+        prompt: [{ type: "text", text: "go2" }],
+      }),
+    );
+    const runAtExit = h.facade.call("s", "RunCommand", { command: "echo EXIT" });
+    const exitPermId = h.client.at(-1).id;
+    h.proxy.beginShutdown();
+    assert.equal((await runAtExit).isError, true);
+    assert.equal(
+      h.client.some((m) => m.method === "$/cancel_request" && m.params?.requestId === exitPermId),
+      true,
+    );
+    const clientLenClosing = h.client.length;
+    await h.proxy.fromAgent(
+      rpcRequest("agy-closing", "session/request_permission", {
+        sessionId: "s",
+        toolCall: { toolCallId: "q5", name: "ask_question" },
+        options: opts,
+      }),
+    );
+    assert.equal(h.client.length, clientLenClosing);
+    assert.deepEqual(h.agent.at(-1).result, { outcome: { outcome: "cancelled" } });
+  } finally {
+    await h.cleanup();
+  }
+});
+
+test("round-2 Medium #13, #15, #16, #17, #18: non-string tool names rejected; child pre-auth not in parent inflight; attempt-scoped results & contradicting update revokes UI bind", async (t) => {
+  const h = await integratedHarness(t, { mode: "plan" });
+  try {
+    // Medium #15: non-string tool name ["WriteFile"] cannot bypass plan checks via JS property coercion.
+    const badName = await h.facade.call("s", ["WriteFile"], {
+      path: "coerced.txt",
+      content: "pwn",
+    });
+    assert.equal(badName.isError, true);
+    assert.match(badName.content[0].text, /Unknown tool/);
+    assert.throws(() => readFileSync(join(h.dir, "coerced.txt"), "utf8"));
+
+    // Medium #13: child waiting for owner approval is NOT in parentTurn.inflight yet.
+    h.facade.link("child-x", "s");
+    h.facade.beginTurn("child-x");
+    h.proxy.subagents.children.set("child-x", { id: "child-x", parent: "s", state: "running" });
+    h.proxy.turns.set("child-x", {
+      id: "child-x",
+      child: true,
+      attempt: Symbol("attempt"),
+      cancelled: false,
+      closed: false,
+    });
+    const parentTurn = h.facade.session("s").turn;
+    const childWaiting = h.facade.call("child-x", "RunCommand", { command: "echo CHILD_WAIT" });
+    const childPerm = h.client.at(-1);
+    assert.equal(childPerm.method, "session/request_permission");
+    assert.equal(parentTurn.inflight.size, 0);
+    await h.proxy.fromClient({
+      jsonrpc: "2.0",
+      id: childPerm.id,
+      result: { outcome: { outcome: "selected", optionId: "reject_once" } },
+    });
+    assert.equal((await childWaiting).isError, true);
+
+    // Medium #18: input-less announcement contradicted by later rawInput revokes PlanGate.bind.
+    const gate = new PlanGate();
+    const turnA = { id: "t", attempt: Symbol("a1"), cancelled: false, closed: false };
+    gate.trackUpdate(
+      "s",
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "u1",
+        name: "mcp_cowboy_ReadFile",
+        status: "in_progress",
+      },
+      turnA,
+    );
+    const readCall = { sessionId: "s", name: "ReadFile", args: { path: "hello.txt" } };
+    gate.admitCall(readCall, turnA);
+    assert.equal(gate.bind(readCall, turnA), "u1");
+    // Later update supplies DIFFERENT arguments -> binding must be suppressed!
+    gate.trackUpdate(
+      "s",
+      {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "u1",
+        rawInput: { path: "other.txt" },
+        status: "in_progress",
+      },
+      turnA,
+    );
+    assert.equal(gate.bind(readCall, turnA), undefined);
+
+    // Medium #16: fresh attempt symbol on correction retry invalidates prior attempt bindings.
+    const turnCorr = { id: "t", attempt: Symbol("a1"), cancelled: false, closed: false };
+    gate.trackUpdate(
+      "s",
+      {
+        sessionUpdate: "tool_call",
+        toolCallId: "u2",
+        name: "mcp_cowboy_ReadFile",
+        rawInput: { path: "hello.txt" },
+        status: "in_progress",
+      },
+      turnCorr,
+    );
+    const callCorr = { sessionId: "s", name: "ReadFile", args: { path: "hello.txt" } };
+    gate.admitCall(callCorr, turnCorr);
+    assert.equal(gate.bind(callCorr, turnCorr), "u2");
+    turnCorr.attempt = Symbol("a2");
+    assert.equal(gate.bind(callCorr, turnCorr), undefined);
+
+    // Medium #17: buffered results expire on turn end and never attach to a later turn reusing the same toolCallId.
+    await h.proxy.fromAgent({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "s",
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: "reused-id",
+          name: "mcp_cowboy_ReadFile",
+          rawInput: { path: "hello.txt" },
+          status: "in_progress",
+        },
+      },
+    });
+    h.proxy.toolResult(
+      { sessionId: "s", name: "ReadFile", args: { path: "hello.txt" } },
+      { content: [{ type: "text", text: "OLD_TURN_SECRET" }] },
+    );
+    // End turn WITHOUT terminal tool_call_update -> buffered result must be cleared!
+    await h.proxy.fromAgent({ jsonrpc: "2.0", id: 3, result: { stopReason: "end_turn" } });
+    // Start a fresh turn and reuse "reused-id" -> must NOT receive OLD_TURN_SECRET!
+    await h.proxy.fromClient(
+      rpcRequest(500, "session/prompt", {
+        sessionId: "s",
+        prompt: [{ type: "text", text: "next" }],
+      }),
+    );
+    await h.proxy.fromAgent({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "s",
+        update: { sessionUpdate: "tool_call_update", toolCallId: "reused-id", status: "completed" },
+      },
+    });
+    assert.equal(JSON.stringify(h.client.at(-1)).includes("OLD_TURN_SECRET"), false);
+  } finally {
+    await h.cleanup();
+  }
+});
+
+test("round-2 High #7: subagent startup refuses unrecognized modes at admission and mid-start recheck", async (t) => {
+  const h = await integratedHarness(t, { mode: "experimental-safe" });
+  try {
+    h.proxy.subagents.opened("s", { cwd: h.dir, projection: "" });
+    await assert.rejects(
+      () => h.proxy.subagents.start("s", { prompt: "do work" }),
+      /mode is not known/i,
+    );
+    // Confirm default so initial admission succeeds, then move to unrecognized mode while session/new is pending.
+    await h.proxy.fromClient(
+      rpcRequest(601, "session/set_mode", { sessionId: "s", modeId: "default" }),
+    );
+    await h.proxy.fromAgent({ jsonrpc: "2.0", id: 601, result: {} });
+    const starting = h.proxy.subagents.start("s", { prompt: "mid-start" });
+    await new Promise((r) => setImmediate(r));
+    const newReq = h.agent.findLast((m) => m.method === "session/new");
+    assert.ok(newReq);
+    h.proxy.reportMode("s", { currentModeId: "unrecognized-mode" });
+    await h.proxy.fromAgent({
+      jsonrpc: "2.0",
+      id: newReq.id,
+      result: { sessionId: "child-unrec" },
+    });
+    await assert.rejects(() => starting, /mode changed/i);
   } finally {
     await h.cleanup();
   }

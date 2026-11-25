@@ -244,7 +244,7 @@ test("agent requests other than permission are refused; permission replies are r
     { args: { command: "git status" } },
   );
   assert.equal(client.at(-1).method, "session/request_permission");
-  assert.equal(client.at(-1).params.toolCall.title, "git status");
+  assert.equal(client.at(-1).params.toolCall.title, "RunCommand: git status");
   assert.equal(client.at(-1).params.toolCall.kind, "execute");
   const runWorkerId = client.at(-1).id;
   await proxy.fromClient({

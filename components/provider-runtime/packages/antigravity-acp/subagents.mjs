@@ -18,6 +18,7 @@
 // ends the unit's `agy` process, so no native work can go on unseen.
 import { randomUUID } from "node:crypto";
 import { LIMITS, ToolError } from "./facade-tools.mjs";
+import { isUnrestrictedMode } from "./plan-gate.mjs";
 import { agyNotice } from "./presentation.mjs";
 import { childProjection } from "./projection.mjs";
 
@@ -420,8 +421,8 @@ export class Subagents {
       throw new ToolError("Subagents can only be started inside a running turn.");
     }
     const mode = proxy.effectiveMode(parentId);
-    if (mode === "plan") throw new ToolError("Subagents are not available in plan mode.");
-    if (mode === undefined || mode === "switching") {
+    if (!isUnrestrictedMode(mode)) {
+      if (mode === "plan") throw new ToolError("Subagents are not available in plan mode.");
       throw new ToolError("The session's mode is not known yet.");
     }
     const group = this.group(parentId);
@@ -479,7 +480,7 @@ export class Subagents {
         throw new ToolError(TURN_ENDED);
       }
       const now = proxy.effectiveMode(parentId);
-      if (now === undefined || now === "switching" || now === "plan") {
+      if (!isUnrestrictedMode(now)) {
         throw new ToolError(MODE_CHANGED);
       }
     };
@@ -592,11 +593,22 @@ export class Subagents {
         "session/prompt",
         { sessionId: nativeId, prompt: [{ type: "text", text: prompt }] },
         null,
-        // Synchronously: agy answered, so the child admits nothing more and
-        // the stop watchdog has nothing left to wait for.
+        // Synchronously: agy answered, so the child closes its turn, retires
+        // pending permissions and UI bindings, and disarms the stop watchdog.
         () => {
           child.replied = true;
           clearTimeout(child.killTimer);
+          const childTurn = proxy.turns.get(nativeId);
+          if (childTurn) {
+            childTurn.closed = true;
+            proxy.retirePermissions?.({
+              sessionId: nativeId,
+              turn: childTurn,
+              reason: "The subagent finished.",
+            });
+            proxy.planGate?.clearTurn(nativeId, childTurn);
+            proxy.clearResults?.(nativeId, childTurn);
+          }
         },
       )
         .then((message) => this.settle(child, message))
@@ -639,9 +651,11 @@ export class Subagents {
     return {
       id,
       child: true,
+      attempt: Symbol("attempt"),
       uncertain: undefined,
       violation: undefined,
       cancelled: false,
+      closed: false,
       tools: new Map(),
       prompt,
       said: "",
@@ -749,6 +763,7 @@ export class Subagents {
     if (child.id !== undefined) {
       this.proxy.retirePermissions?.({ sessionId: child.id, reason: "The subagent ended." });
       this.proxy.planGate?.clearTurn(child.id);
+      this.proxy.clearResults?.(child.id);
     }
     if (!RUNNING.has(child.state)) return;
     clearTimeout(child.killTimer);

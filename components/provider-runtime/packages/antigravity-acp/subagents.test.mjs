@@ -929,7 +929,10 @@ test("a parent that moves to plan mode enforces plan policy on its children", as
     id: permId1,
     result: { outcome: { outcome: "selected", optionId: "allow_once" } },
   });
-  assert.deepEqual(await auth1, { allowed: true });
+  const res1 = await auth1;
+  assert.equal(res1.allowed, true);
+  assert.equal(typeof res1.confirm, "function");
+  assert.equal(res1.confirm(), true);
   // A second RunCommand must ask again and is refused when rejected.
   const auth2 = proxy.authorizeFacadeCall(
     { sessionId: id, name: "RunCommand", args: { command: "git status" } },

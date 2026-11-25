@@ -564,24 +564,14 @@ export class Facade {
   }
 
   /** One MCP `tools/call`, answered as an MCP tool result. */
-  async call(sessionId, name, args, relayId = undefined) {
+  async call(sessionId, name, args, relayId = undefined, { signal = undefined } = {}) {
     const session = sessionId === undefined ? undefined : this.sessions.get(sessionId);
     const callTurn = session?.turn;
     if (callTurn) callTurn.openCalls += 1;
     const call = { sessionId, name, args };
     let result;
     try {
-      const running = this.answer(call);
-      // A subagent's call is part of its parent's turn: the parent's end waits
-      // for it, and for the report of an effect it lost.
-      const parentTurn = session?.parentTurn;
-      const tracked = parentTurn?.inflight ? running.catch(() => {}) : undefined;
-      if (tracked) parentTurn.inflight.add(tracked);
-      try {
-        result = await running;
-      } finally {
-        if (tracked) parentTurn.inflight.delete(tracked);
-      }
+      result = await this.answer(call, { signal });
     } finally {
       if (callTurn && callTurn.openCalls > 0) callTurn.openCalls -= 1;
     }
@@ -641,22 +631,28 @@ ${WRAP_UP_NOTE}`,
     return { ...result, content };
   }
 
-  async answer(call) {
+  async answer(call, { signal = undefined } = {}) {
     if (this.closing) throw new ToolError("Antigravity proxy is shutting down");
-    return this.answerOnce(call);
+    return this.answerOnce(call, { signal });
   }
 
-  async answerOnce(call) {
+  async answerOnce(call, { signal = undefined } = {}) {
     const { sessionId, name } = call;
     let { args } = call;
+    const failure = (text) => ({ content: [{ type: "text", text }], isError: true });
+    // Reject non-string tool names before any handler or policy lookup so JS
+    // property coercion (e.g. ["WriteFile"]) cannot bypass plan checks.
+    if (typeof name !== "string" || name.length === 0) {
+      return failure(`Unknown tool ${String(name)}`);
+    }
     const session = sessionId === undefined ? undefined : this.session(sessionId);
     const turn = session?.turn;
-    const failure = (text) => ({ content: [{ type: "text", text }], isError: true });
     if (!turn) return failure("No Cowboy turn is active, so workspace tools are unavailable.");
     if (turn.uncertain) {
       return failure(`The turn ended: an earlier ${turn.uncertain} has an unknown outcome.`);
     }
     if (turn.cancelled || turn.ended) return failure("The turn was cancelled.");
+    if (signal?.aborted) return failure("The tool request was cancelled.");
     if (args === null || typeof args !== "object" || Array.isArray(args)) args = {};
     // Freeze a snapshot of the exact execution arguments before authorization so
     // the owner approves the exact payload that executes.
@@ -706,12 +702,14 @@ ${WRAP_UP_NOTE}`,
     // inflight effect registration. In plan / unknown / switching modes,
     // RunCommand and extensions await single-use owner approval bound directly
     // to this exact invocation and `execArgs`.
-    const decision = await this.authorize(call, { extension, args: execArgs });
+    const decision = await this.authorize(call, { extension, args: execArgs, signal });
     if (decision?.allowed !== true) {
       return failure(decision?.reason ?? `${String(name)} is not available in the current mode.`);
     }
-    // Re-check turn and shutdown fences synchronously after any async approval wait.
+    // Re-check shutdown, request abort, turn, and owner mode generation
+    // synchronously immediately before registering inflight work or executing.
     if (this.closing) throw new ToolError("Antigravity proxy is shutting down");
+    if (signal?.aborted) return failure("The tool request was cancelled.");
     if (session.turn !== turn) {
       return failure("No Cowboy turn is active, so workspace tools are unavailable.");
     }
@@ -719,6 +717,9 @@ ${WRAP_UP_NOTE}`,
       return failure(`The turn ended: an earlier ${turn.uncertain} has an unknown outcome.`);
     }
     if (turn.cancelled || turn.ended) return failure("The turn was cancelled.");
+    if (typeof decision.confirm === "function" && !decision.confirm()) {
+      return failure(`${name} was cancelled because the session's mode or turn changed.`);
+    }
 
     const execute = async () => {
       try {
@@ -747,19 +748,24 @@ ${WRAP_UP_NOTE}`,
         return failure(`The workspace Machine refused the request: ${remoteMessage(error)}`);
       }
     };
-    const trackedEffect = name === "WriteFile" || name === "EditFile" || Boolean(extension);
-    if (!turn.inflight || !trackedEffect) {
+    const trackedSelf =
+      Boolean(turn.inflight) && (name === "WriteFile" || name === "EditFile" || Boolean(extension));
+    const parentInflight = session.parentTurn?.inflight;
+    if (!trackedSelf && !parentInflight) {
       return execute();
     }
-    // A publish, its verification, extension RPC, and report of an unknown
-    // outcome are one admitted effect: the turn's end waits for all of it.
+    // Track admitted mutations, extensions, and child executions on the owning
+    // turn(s) only after authorization succeeds, staying active through any
+    // UncertainEffect report.
     const running = execute();
     const tracked = running.catch(() => {});
-    turn.inflight.add(tracked);
+    if (trackedSelf) turn.inflight.add(tracked);
+    if (parentInflight) parentInflight.add(tracked);
     try {
       return await running;
     } finally {
-      turn.inflight.delete(tracked);
+      if (trackedSelf) turn.inflight.delete(tracked);
+      if (parentInflight) parentInflight.delete(tracked);
     }
   }
 
@@ -1777,7 +1783,18 @@ export function renderSubagent(id, outcome) {
  */
 export function serveMcp(stream, facade, sessionOf) {
   const relayId = facade.registerRelay(sessionOf);
-  stream.once("close", () => facade.unregisterRelay(relayId));
+  const activeCalls = new Map();
+  const abortAllCalls = () => {
+    for (const controller of activeCalls.values()) controller.abort();
+    activeCalls.clear();
+  };
+  stream.once("close", () => {
+    abortAllCalls();
+    facade.unregisterRelay(relayId);
+  });
+  stream.on("error", () => {
+    abortAllCalls();
+  });
   let buffered = "";
   stream.setEncoding("utf8");
   const send = (message) =>
@@ -1805,7 +1822,22 @@ export function serveMcp(stream, facade, sessionOf) {
     });
   const handle = async (message) => {
     const { id, method, params } = message;
-    if (id === undefined || id === null) return;
+    if (id === undefined || id === null) {
+      if (
+        (method === "notifications/cancelled" ||
+          method === "$/cancel_request" ||
+          method === "$/cancelRequest") &&
+        params?.requestId !== undefined
+      ) {
+        const key = JSON.stringify(params.requestId);
+        const controller = activeCalls.get(key);
+        if (controller) {
+          activeCalls.delete(key);
+          controller.abort();
+        }
+      }
+      return;
+    }
     if (method === "initialize") {
       return await send({
         id,
@@ -1831,17 +1863,26 @@ export function serveMcp(stream, facade, sessionOf) {
       }
       const sid = sessionOf();
       const trackedTurn = facade.beginCall(sid);
+      const callKey = JSON.stringify(id);
+      const controller = new AbortController();
+      if (activeCalls.has(callKey)) {
+        activeCalls.get(callKey).abort();
+      }
+      activeCalls.set(callKey, controller);
       let delivered = false;
       try {
         let result;
         try {
-          result = await facade.call(sid, params?.name, params?.arguments, relayId);
+          result = await facade.call(sid, params?.name, params?.arguments, relayId, {
+            signal: controller.signal,
+          });
         } catch {
           delivered = await send({ id, error: { code: -32603, message: "Internal error" } });
           return;
         }
         delivered = await send({ id, result });
       } finally {
+        if (activeCalls.get(callKey) === controller) activeCalls.delete(callKey);
         if (!delivered) {
           facade.markRelayAmbiguous(sid, relayId);
         }
