@@ -1,341 +1,496 @@
-# Antigravity Post-Edit Diagnostics (R4) — Design
+# Antigravity Post-Edit Diagnostics (R4) — Design (Revision 2)
 
-Status: design, revision 1 (2026-11-25), resolving all 3 high and 8 medium
-findings carried into round 3 by
+Status: design, revision 2 (2026-11-25), incorporating all 13 high and 11 medium
+findings from design review `call-c0e04d3ec2bf7e8fa7c499e0` on revision 1, and
+resolving all 3 high and 8 medium findings carried into round 3 by
 [`antigravity-parity-round-2.md`](antigravity-parity-round-2.md) §R4 (from
 design review `call-2061c3702f0dafec842f659e`).
 
-- Baseline: `origin/main` at `87d463ed7` (carrying R1 wrap-up steering in
-  Machine protocol 53 / Runtime protocol 8, and R3 facade-enforced plan mode in
-  Antigravity Plugin 0.2.38 / `cowboy-antigravity-acp` 1.0.28).
+- Baseline: `origin/main` at `87d463ed7aaf7c78175281d637e9972e2837f3ef`
+  (Machine protocol 53 / Runtime protocol 8, Antigravity Plugin 0.2.38 /
+  `cowboy-antigravity-acp` 1.0.28).
 - Companion designs:
   [`antigravity-real-accounts-design.md`](antigravity-real-accounts-design.md),
   [`antigravity-steering-r1-design.md`](antigravity-steering-r1-design.md),
   [`machine-worker-pin-advance-runbook.md`](machine-worker-pin-advance-runbook.md).
 
-## Goals and Scope
+## 1. Goals, Scope, and Trust Model
 
 After a root, non-managed Antigravity session publishes an inline file write or
-edit (`<= 48 KiB`) through Cowboy's apply helper, the Controller observes the
-helper's verified `applied` outcome with immutable admission-time turn
-attribution, runs `code.post_edit` for the edited workspace file(s), verifies
-that the analyzed text matches the exact published digest and has not been
-superseded by a newer edit, and delivers any non-empty bounded untrusted
-diagnostics summary into that exact same active turn through a dedicated,
-authenticated `DiagnosticNote` channel.
+edit (`<= 48 KiB`) through a **keeper-controlled `fs/apply` invocation**, the
+Controller observes the keeper-authenticated applied outcome with immutable
+worker-admission turn attribution and a keeper-assigned monotonic per-path
+publication generation, runs `code.post_edit` raw diagnostics for the edited
+workspace file(s), filters superseded or digest-mismatched files **before**
+projection, and delivers any non-empty bounded untrusted diagnostics summary
+into that exact same active turn through a dedicated, authenticated,
+non-replaying, reliable-first `DiagnosticNote` channel.
+
+### Trust Boundaries (aligned with R1 `docs/antigravity-steering-r1-design.md:15–17`)
+
+- **Trusted:** Controller, Machine broker (`cowboy-machine`), runtime worker
+  (`cowboy-acp-worker`), and target execution keeper (`cowboy-execution-host`).
+- **Untrusted:** `agy` and `agy-proxy` (`cowboy-antigravity-acp`, running
+  inside `account_sandbox_v1` as `cga-<key>`), tool output, agent text,
+  delegated Agent API peers, and legacy components below Machine protocol 54 /
+  Runtime protocol 9.
+- **Consequences enforced by construction:**
+  1. **Keeper authenticates file publication, never proxy argv/env/stdout.**
+     The keeper itself resolves `COWBOY_EXECUTION_FILE_HELPER`, runs the
+     conditional apply helper without trusting proxy-supplied environment or
+     shell wrappers, verifies the written bytes, computes both raw `sha256` and
+     LF-normalized `lfSha256`, and stamps a monotonic per-path `generation`.
+  2. **Worker authenticates root eligibility and turn attribution.**
+     The worker's trusted `Ledger` admits `fs/apply` only inside an active
+     non-managed turn when no subagent is running, and stamps immutable
+     `(turn_id, publish_seq)` at admission.
+  3. **Proxy cannot self-attest authoritative delivery (`Appended`).**
+     Because `agy-proxy` runs inside the untrusted account sandbox and the
+     worker does not terminate `agy`'s internal MCP socket, the worker and
+     Controller **never** promote a proxy-reported write into trusted
+     `State::Appended` and **never** emit an authoritative `user_message_chunk`
+     transcript row from a proxy claim. Any note handed off to `agy-proxy`
+     settles in Controller's `deliveries` ledger (`code.summary`) as
+     `State::Unknown` (with diagnostic reason `"proxy_written"` when the proxy
+     confirms the MCP socket write callback, or `"proxy_unconfirmed"` /
+     `"transport_disconnected"` / `"timeout"` otherwise). Pre-proxy trusted
+     refusals and pre-write proxy rejections settle as `State::Refused`.
+     `State::Unknown` remains eligible for `deliveries.rs` repeat suppression
+     (matching `State::delivered()`), while never forging an unverified
+     authoritative transcript row (matching Claude's non-transcript
+     `Route::Adapter` model).
 
 ### Explicit non-goals
 
-- Shell-made writes (`RunCommand`) — no baseline for a session's first
-  foreground command and out of scope for R4.
-- File-backed edits above `48 KiB` (`--request-file`) — out of scope for R4.
-- Subagent edits (`session.parent !== undefined`) — excluded, matching Claude
-  and Codex.
-- Managed read-only calls — excluded.
-- Background commands (D3).
-- Reopening an ended turn, attaching a note to a later turn, or retrying a
-  refused/expired note.
-- Enabling owner or peer-agent `_session/steering` for Antigravity (remains
-  clamped to `false`).
+- Shell-made writes (`RunCommand`), edits above `48 KiB` (`--request-file`),
+  subagent edits (`session.parent !== undefined` or while any subagent is
+  active), managed read-only sessions, background commands (D3), reopening an
+  ended turn, attaching a note to a later turn, retrying a refused/expired
+  note, or enabling `_session/steering` for Antigravity.
 
-## Architecture Overview
+## 2. Keeper-Controlled Publish (`fs/apply`) and Trusted Attribution
 
-Rather than reusing `_session/steering` (which caused High #3 and Medium #1,
-#3, #4 in the revision-3 design), R4 introduces a dedicated, authenticated
-Controller-to-Proxy `DiagnosticNote` lane modeled on R1's `WrapUpHint` channel:
+### 2.1 Keeper `fs/apply` (`components/machine/src/execution_host.rs`)
 
-```text
-agy WriteFile/EditFile (root, inline <= 48 KiB)
-  -> Facade.publishOnce runs ["/bin/sh", "-c", APPLY, "apply", "--request", b64]
-  -> Worker Ledger admits process/start under immutable active turn_id
-  -> Worker Client stamps RuntimeRequest.turn_id ONCE at admission (never re-sampled on retry)
-  -> Controller execution::forward -> execution::writes::observe
-       verifies exact APPLY argv + stdout {"schema":1,"status":"applied","sha256":expect}
-       dedupes one-shot per (session_id, worker_epoch, process_id)
-       emits PublishReceipt { session_id, worker_epoch, turn_id, process_id, path, sha256, seq }
-  -> Controller antigravity_push (per-session serialized, key-aware freshness batching)
-       runs post_edit read (without advancing shell-change cursor)
-       verifies per-file write.observed && write.matches_analyzed && sha256 == receipt.sha256
-       verifies no newer write_seq arrived for that path during analysis
-       records deliveries::begin(..., Route::AntigravityNote, ...)
-       dispatches CoreCommand::DiagnosticNote (non-replaying, single monotonic ttl_ms)
-  -> Machine Broker -> Worker (DiagnosticNoteSlot, off steering_gate & CancelTurn)
-  -> Worker acp.rs -> Proxy notification cowboy/diagnosticNote (out-of-band, off proxy queue)
-  -> Facade attaches untrusted JSON note to the next SOLE unambiguous root MCP tool result
-  -> Proxy observes exact 1-to-1 ACP tool_call_update(completed) for that sole toolCallId
-  -> Proxy notification cowboy/diagnosticNoteResult -> Worker RuntimeEvent::DiagnosticNoteAck
-  -> Controller settles delivery ledger; ONLY on Appended:
-       persists PromptDispatchRecord(Cowboy("code_intelligence"))
-       emits Controller-authored Event::Update(user_message_chunk, promptOrigin=code_intelligence)
-```
+Add a native keeper method `fs/apply` (admitted alongside `fs/writeFile` /
+`process/start`, refused in read-only managed mode):
 
-## Resolution of Every Round-3 Requirement
+- **Request params** (inline `<= 48 KiB` total JSON):
+  `{ path: string, base: "absent" | <64-hex>, expect: <64-hex>, splices: [...], staleTempSeconds: number }`.
+  Rejects relative paths, non-file URLs, paths outside the keeper's canonical
+  workspace root, invalid digests, or payloads exceeding `48 KiB` before
+  spawning the helper.
+- **Execution:** the keeper spawns its own trusted `COWBOY_EXECUTION_FILE_HELPER`
+  with fixed argv `["apply", "--request", <base64>]` and the keeper's own
+  closed environment (ignoring any proxy-supplied env).
+- **Atomic verified reply:** on helper `{"schema":1,"status":"applied","sha256":expect,"size":n}`:
+  - The keeper computes `lfSha256` (SHA-256 of LF-normalized UTF-8 text,
+    matching Zed's `bufferSnapshot.content.sha256`, or `null` if non-UTF-8)
+    directly from the verified target bytes (or the helper's verified output),
+    closing the CRLF/LF digest mismatch for eligible CRLF edits.
+  - The keeper increments and attaches a monotonic per-path `generation: u64`
+    (held in keeper memory per canonical path, assigned atomically while the
+    apply finishes so `generation` reflects true target publication order, not
+    Controller arrival order).
+  - Returns one atomic JSON-RPC result envelope:
+    ```json
+    {
+      "result": {
+        "status": "applied",
+        "path": "/canonical/workspace/path",
+        "sha256": "<64-hex raw bytes>",
+        "lfSha256": "<64-hex LF-normalized UTF-8 or null>",
+        "size": 1234,
+        "generation": 7
+      }
+    }
+    ```
+  - On conflict, returns `{ "result": { "status": "conflict" } }`.
+- **Legacy keeper fallback (`facade.mjs`):** when `session.parent === undefined
+  && !this.managed` and the request fits in `48 KiB`, `Facade.publishOnce`
+  calls `fs/apply`. If a legacy keeper replies JSON-RPC `-32601` (method not
+  found, zero side effects), `Facade` caches `supportsFsApply = false` for that
+  connection and falls back to the existing `process/start` `APPLY` shell
+  helper (emitting no R4 receipt). Subagents, managed calls, and >48 KiB
+  file-backed requests never call `fs/apply`.
 
-### 1. Immutable admission-time turn attribution & one-shot receipts (High #1, Medium #6)
+### 2.2 Negotiated Admission-Time Turn Attribution & Rollback Safety
 
-- **Wire (`components/wire/src/execution_protocol.rs`)**:
-  - Add `#[serde(default, skip_serializing_if = "Option::is_none")] pub turn_id: Option<String>`
-    to `RuntimeRequest`.
-  - Backward compatible with older workers (which omit `turn_id` -> `None`).
-    `writes::latest()` continues serving Claude/Codex write hints even when
-    `turn_id` is `None`; R4 publish receipts strictly require `turn_id: Some(_)`
-    and non-empty `worker_epoch`, dropping any operation whose originating turn
-    cannot be proven.
-- **Worker (`src/worker_execution.rs`, `src/worker_execution/ledger.rs`)**:
-  - `Ledger::admit` already returns `Admitted { turn: Option<String>, ... }`
-    holding the immutable active turn ID at admission.
-  - `Client::call_counted_for_turn(command, turn_id)` constructs
-    `RuntimeRequest` with that immutable `turn_id` **before** inserting into
-    `Client.pending`. Reconnect retries (`Client::frames`) and Machine bulk-lane
-    resends therefore carry the exact original admission-time `turn_id` and
-    never re-sample `current_turn`.
-- **Facade (`components/provider-runtime/packages/antigravity-acp/facade.mjs`)**:
-  - In `publishOnce`, pass `"apply"` as `$0` only for root, non-managed, inline
-    publishes:
-    `["/bin/sh", "-c", APPLY, "apply", "--request", base64]`
-    (`APPLY` is `'exec "$COWBOY_EXECUTION_FILE_HELPER" apply "$@"'`, so `$0`
-    does not alter `"$@"`). Subagent (`session.parent !== undefined`), managed,
-    and file-backed (`--request-file`) publishes keep `"sh"` and emit no R4
-    receipt.
-- **Controller write observer (`components/server-runtime/src/server/execution/writes.rs`)**:
-  - `observe` takes `(session, worker_epoch, turn_id, command, response)`.
-  - Existing `["apply", "--request"]` matching stays for Claude's `latest()`
-    write hint. R4 publish receipt emission additionally requires the exact
-    Antigravity helper shape:
-    `argv.len() == 6 && argv[0] == "/bin/sh" && argv[1] == "-c" && argv[2] == ANTIGRAVITY_APPLY_SCRIPT && argv[3] == "apply" && argv[4] == "--request"`,
-    plus `turn_id: Some(turn_id)` on `process/start`.
-  - `helpers` is keyed by `(session_id, worker_epoch, process_id)` and stores
-    `{ path, expect, turn_id, is_antigravity_root, output, created_at: Instant }`.
-    `reads` is keyed by `(session_id, worker_epoch, operation_id)` and stores
-    `{ process_id, created_at: Instant }`. `pending` (`fs/writeFile`) similarly
-    stores `created_at: Instant`.
-  - `process/read` and `Observe` correlate strictly within the same
-    `(session_id, worker_epoch)` and NEVER overwrite `turn_id` from a read's
-    turn; the originating `turn_id` captured at `process/start` is immutable.
-  - **Bounded & expiring state (Medium #6)**: on `observe`, expire entries
-    older than `HELPER_TTL` (`120 s`); if still at capacity (`MAX_PENDING = 256`),
-    evict the oldest entry instead of stalling admission across all sessions.
-    Expose `prune_session_epoch(session, worker_epoch)` and
-    `clear_session(session)` invoked by `RemoteRuntime` on epoch change /
-    disconnect / session removal.
-  - **One-shot receipts (High #1)**: maintain a bounded FIFO `completed_receipts`
-    set (`MAX_COMPLETED_RECEIPTS = 1024`, keyed by `(session_id, worker_epoch,
-    process_id)`). Once `applied(output, expect)` succeeds, insert the key
-    before emitting `PublishReceipt`; any replayed `process/read` or `Observe`
-    returning cached stdout for the same process is ignored.
+- **Wire (`components/wire/src/execution_protocol.rs`):**
+  `RuntimeRequest` keeps `#[serde(deny_unknown_fields)]` and adds two optional
+  fields:
+  ```rust
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub turn_id: Option<String>,
+  #[serde(default, skip_serializing_if = "Option::is_none")]
+  pub publish_seq: Option<u64>,
+  ```
+- **Rollback-safe negotiated serialization on every hop:**
+  - Worker (`src/worker_execution.rs` + `src/worker_execution/ledger.rs`):
+    When `Ledger::admit` admits `fs/apply` (requiring `!managed`, active
+    `turn_id`, and zero active subagents observed by the worker), it stamps
+    immutable `turn_id: Some(turn_id)` and monotonic per-epoch
+    `publish_seq: Some(next_seq)` onto the internal `Pending` entry **before**
+    initial send. Reconnect resends retain that exact immutable stamp.
+  - **Worker -> Broker egress (`src/worker.rs`):** serialize `turn_id` and
+    `publish_seq` on `Frame::ExecutionRequest` **only when** negotiated broker
+    `peer_protocol >= DIAGNOSTIC_NOTE_RUNTIME_PROTOCOL_VERSION (9)`; otherwise
+    clone with `turn_id: None, publish_seq: None` so legacy `deny_unknown_fields`
+    brokers decode ordinary execution requests without error!
+  - **Machine -> Controller egress (`components/machine/src/machine_cli.rs`):**
+    strip `turn_id = None, publish_seq = None` whenever negotiated
+    `outer_machine_protocol < DIAGNOSTIC_NOTE_PROTOCOL_VERSION (54)` so a
+    rolled-back legacy Controller decodes every execution request cleanly!
+  - On any downgraded path (`turn_id` or `publish_seq` absent), Controller
+    suppresses R4 publish receipts while ordinary execution succeeds.
 
-### 2. Strict 1-to-1 delivery & receipt proof at Proxy/Facade (High #2, Medium #8)
+### 2.3 Controller Write Observer (`components/server-runtime/src/server/execution/writes.rs`)
 
-The revision-3 failure was correlating ACP stdout `tool_call_update` with MCP
-`tools/call` across concurrent or heuristic matches. R4 closes this with a
-strict **single-open-call barrier**:
+Fix all existing and new `writes.rs` issues together:
 
-- `Proxy` holds at most one `pending` note (and at most one `inFlight` note
-  already written to an MCP reply plus one `queued` replacement) per root turn,
-  bound to `(deliveryId, attemptNonce, deadlineMs)`.
-- After `Facade.call` finishes a tool and `onResult(call, result)` captures the
-  clean un-noted result for UI presentation, `proxy.maybeAttachDiagnosticNote(call,
-  result, relayId)` attaches the note **only if ALL of the following hold**:
-  1. Root session (`session.parent === undefined`), `!this.managed`, `!this.closing`.
-  2. `callTurn` is live (`session.turn === callTurn && !cancelled && !ended &&
-     uncertain === undefined`), matches `turn.attempt` and `note.attemptNonce`,
-     and `!turn.compacting`.
-  3. `name !== "UpdatePlan"`, `!result?.isError`, `Array.isArray(result?.content)`.
-  4. Relay is unambiguous (`session.ambiguousRelays.size === 0` and `relayId`
-     not marked ambiguous).
-  5. Monotonic deadline has not elapsed (`performance.now() <= note.deadlineMs`;
-     if elapsed, drop and emit `cowboy/diagnosticNoteResult("not_delivered", "expired")`).
-  6. **Strict 1-to-1 barrier**:
-     - No other in-flight root MCP call exists (`callTurn.openCalls === 0` after
-       decrementing this call in `finally`, and `activeRootMcpCalls === 1` in
-       `serveMcp` for this call).
-     - `PlanGate.soleOpenBinding(call, currentTurn)` proves there is **exactly
-       one** open ACP announcement in `waiting.get(sessionId)` (`list.length === 1`),
-       and that single entry matches `call`: same `turn`, same `attempt`,
-       `name === "mcp_cowboy_" + call.name`, `!ambiguous`, `!tainted`, AND
-       `hasInput === true && digest === callDigest` (never an inputless
-       announcement).
-- If condition (6) does not hold (e.g., concurrent identical or distinct calls,
-  inputless announcement, ambiguous/tainted announcement), the proxy **skips
-  handoff for this call** and leaves the note pending for the next unambiguous
-  call before `deadlineMs` or turn end.
-- **Attachment format (Medium #8)**: non-mutatingly append `\n\n${note.text}` to
-  the **first text block** of `result.content` (or append a new text block if
-  the result is image-only), matching R1's `WRAP_UP_NOTE` so both real
-  `agy 1.5.14` and fake test harnesses read the appended text.
-- **Receipt state machine**:
-  - Transition note to `inFlight = { deliveryId, attemptNonce, toolCallId, call,
-    written: false, completed: false }`.
-  - In `serveMcp`, when `send({ id, result })` callback finishes:
-    - If `!delivered`: immediately emit `cowboy/diagnosticNoteResult("not_delivered", "relay_write_failed")` and clear `inFlight`.
-    - If `delivered`: set `inFlight.written = true`; if `inFlight.completed` is
-      already true, emit `cowboy/diagnosticNoteResult("appended")` and clear `inFlight`.
-  - In `proxy.track(sessionId, update)` when `TERMINAL.has(update.status)` for
-    `inFlight.toolCallId`:
-    - If `update.status === "completed"` and `!outcome.contradicted` and
-      `this.planGate.isBindingConsistent(inFlight.call, turn)`:
-      - Set `inFlight.completed = true`; if `inFlight.written`, emit
-        `cowboy/diagnosticNoteResult("appended")` and clear `inFlight`.
-    - Otherwise (`failed` or `contradicted`): emit
-      `cowboy/diagnosticNoteResult("unknown", "contradicted_or_failed")` and
-      clear `inFlight`.
-  - On turn end (`startAttemptCleanup`), cancel, shutdown, or `deadlineMs`
-    expiry:
-    - Any unattached `pending`/`queued` note emits `not_delivered`.
-    - An `inFlight` note with `written === false` emits `not_delivered`; with
-      `written === true` (bytes left proxy over Unix socket without proven
-      completion) emits `unknown` (never falsely claims `appended` or
-      `not_delivered`).
+1. **Keeper reply envelope unwrapping:** `execution_host.rs:619–625` retains
+   `{ "result": { ... } }` or `{ "error": { ... } }` inside
+   `Outcome::Completed { reply }`. Unwrap `reply.get("result")` and reject
+   `reply.get("error").is_some()` for BOTH `Invoke` and `Observe` across
+   `fs/writeFile`, `process/read` (`result.chunks`, `result.closed`), and
+   `fs/apply` (`result.status == "applied"`). Update tests to use the real
+   keeper envelope shape.
+2. **Idempotent legacy helper tracking & fair partitioning:**
+   - For Claude's `process/start` + `process/read` hints: matching starts are
+     idempotent (never reset accumulated stdout); reads track `next_chunk_seq`
+     to prevent duplicate chunk concatenation on replay.
+   - Partition `helpers`, `reads`, and `pending` per session (up to 16 live
+     entries per session across up to 256 sessions), raise `HELPER_TTL` to
+     `200 s` (exceeding the worker's `180 s` request timeout), and preserve
+     correlations across transient same-epoch reconnects (prune only on epoch
+     replacement or session removal).
+3. **Watermark-based one-shot `fs/apply` publish receipts (no FIFO amnesia):**
+   - For `Command::Invoke { invocation, .. }` with `method == "fs/apply"` or
+     `Command::Observe { operation_id }` resolving a pending `fs/apply`:
+     - Store `pending_applies` keyed by `(session_id, worker_epoch, operation_id)`
+       carrying immutable `(turn_id, publish_seq, created_at)` from the initial
+       `Invoke`.
+     - When `Outcome::Completed { reply }` unwraps to `result.status == "applied"`
+       with valid `path`, `sha256`, `lfSha256`, `generation`, and immutable
+       `(Some(turn_id), Some(publish_seq))`:
+       - Record `(path, lfSha256 ?? sha256, size)` in `writes` for `latest()`.
+       - Check per-`(session_id, worker_epoch)` sliding watermark
+         `ReceiptWatermark { low: u64, seen_above: BTreeSet<u64> }` (window 256):
+         - If `publish_seq <= low || seen_above.contains(&publish_seq)`:
+           **duplicate replay -> drop!**
+         - Otherwise insert `publish_seq` into `seen_above`, advance `low`
+           across contiguous runs (and conservatively if `seen_above.len() > 256`,
+           advancing `low` past the oldest gap so old replays can never be
+           re-admitted even after >16,384 completions!).
+         - Emit one `PublishReceipt { session_id, worker_epoch, turn_id,
+           publish_seq, path, raw_sha256, lf_sha256, generation }` to
+           `antigravity_push`.
 
-### 3. Authenticated dedicated protocol lane & rollback safety (High #3, Medium #1, #2, #3, #4)
+## 3. Dedicated Authenticated `DiagnosticNote` Protocol (Machine 54 / Runtime 9)
 
-- **Protocol versions (`components/wire/src/`)**:
-  - `DIAGNOSTIC_NOTE_PROTOCOL_VERSION = 54` (`MACHINE_PROTOCOL_VERSION = 54`).
-  - `DIAGNOSTIC_NOTE_RUNTIME_PROTOCOL_VERSION = 9` (`RUNTIME_PROTOCOL_VERSION = 9`).
-  - `ANTIGRAVITY_DIAGNOSTIC_NOTE_MIN_PROVIDER_VERSION = "0.2.39"`.
-  - `DIAGNOSTIC_NOTE_CAPABILITY_KEY = "cowboy.dev/diagnosticNote"` stamped on
-    ACP `initialize` `_meta` as `{ "v": 1, "adapter": "cowboy-antigravity-acp" }`
-    and stripped from upstream `agy` `_meta` and `agentCapabilities._meta`.
-  - `WorkerSnapshot.diagnostic_note: bool` (default `false`), sanitized by
-    `effective_diagnostic_note(provider, raw, outer_machine_protocol, runtime_protocol)`.
-  - `supports_current_turn` and `next_checkpoint` remain permanently clamped to
-    `false` for Antigravity (`clamp_delivery_capabilities_for_provider`
-    unchanged).
-- **Wire frames**:
-  - `CoreCommand::DiagnosticNote { session_id, delivery_id, target: DeliveryTarget, text: String, ttl_ms: u64 }`
-    (`MAX_DIAGNOSTIC_NOTE_TEXT_BYTES = 16 * 1024`,
-    `MAX_DIAGNOSTIC_NOTE_FRAME_BYTES = 24 * 1024`, `MAX_DIAGNOSTIC_NOTE_TTL_MS = 30_000`).
-  - `WorkerCommand::DiagnosticNote { delivery_id, target: DeliveryTarget, text: String, ttl_ms: u64 }`.
-  - `RuntimeEvent::DiagnosticNoteAck { delivery_id: String, target: DeliveryTarget, outcome: DiagnosticNoteOutcome, reason: Option<String> }`
-    where `DiagnosticNoteOutcome` is `Appended | Refused | Unknown`.
-- **Controller rollback immunity (High #3)**:
-  - A rolled-back legacy Controller cannot produce `CoreCommand::DiagnosticNote`
-    and cannot send `_session/steering` to Antigravity (because Antigravity
-    never advertises `steering` / `next_checkpoint`). Mixed-version tests verify
-    that header-shaped owner and peer sends against Antigravity are rejected on
-    both new and legacy Controllers.
-- **Targeted Interrupt priority & independence (Medium #1)**:
-  - `RemoteRuntime::send_diagnostic_note` uses a dedicated
-    `shared.diagnostic_notes` map (never `shared.steering`).
-  - Worker `DiagnosticNoteSlot` never acquires `steering_gate` and never shares
-    admission slots with `CancelTurn`. `CancelTurn` synchronously fences both
-    `wrap_up` and `diagnostic_note` slots for `target.turn_id`.
-- **Single monotonic deadline, no reconnect resend, off proxy queue (Medium #2)**:
-  - Controller sets `ttl_ms = 25_000` (remaining monotonic budget, avoiding
-    cross-host wall-clock skew between Hawk and OVH). Each hop subtracts its
-    local elapsed queue time before forwarding and rejects immediately if `ttl_ms == 0`.
-  - `CoreCommand::DiagnosticNote` is **ephemeral / non-replaying**: sent on a
-    bounded direct lane (never inserted into `pending_commands`, never resent on
-    Controller/Machine/Worker reconnect). On transport drop, Controller's waiter
-    settles as `Unknown` (if written to wire) or `Refused` (if never written).
-  - On the proxy, `cowboy/diagnosticNote` is an ACP notification handled
-    synchronously out-of-band in `fromClient` BEFORE `this.queue`, so Stop /
-    `session/cancel` reaches `agy` immediately without ever queuing behind a
-    note.
-- **Controller-projected transcript row, never `user_message_chunk` echo (Medium #3)**:
-  - Worker never emits a `user_message_chunk` for a diagnostic note.
-  - Only when Controller receives `RuntimeEvent::DiagnosticNoteAck` matching an
-    admitted pending waiter `(session_id, worker_epoch, turn_id, delivery_id)`
-    with `outcome == Appended`:
-    1. Persist `PromptDispatchRecord` (`cmid = format!("{CMID_PREFIX}{delivery_id}")`,
-       `origin = DeliveryOrigin::Cowboy { source: "code_intelligence" }`) through
-       `record_steer_dispatch` (failing closed if store write fails).
-    2. Emit Controller-authored `Event::Update` (`sessionUpdate: "user_message_chunk"`,
-       `content: { type: "text", text }`, `promptOrigin: { actor: "cowboy",
-       source: "code_intelligence" }`) tagged with `cmid` into `Hub` (persisted
-       and verified on reload/replay with exact `code_intelligence` origin).
-    3. Mark `deliveries::finish(session, &delivery_id, State::Appended, None)`.
-  - On `Refused` or `Unknown`: emit no transcript row; finish delivery ledger
-    with `State::Refused` or `State::Unknown`.
-- **Configuration undo window preserved (Medium #4)**:
-  - `antigravity_push` never calls `send_delivery::begin`, so
-    `config_revert::clear` is never called by diagnostic notes.
+### 3.1 Capability & Protocol Constants (`components/wire/src/diagnostic_note.rs`)
 
-### 4. Key-aware freshness batching (Medium #5)
+- `DIAGNOSTIC_NOTE_PROTOCOL_VERSION: u16 = 54` (`MACHINE_PROTOCOL_VERSION = 54`).
+- `DIAGNOSTIC_NOTE_RUNTIME_PROTOCOL_VERSION: u16 = 9` (`RUNTIME_PROTOCOL_VERSION = 9`).
+- `ANTIGRAVITY_DIAGNOSTIC_NOTE_MIN_PROVIDER_VERSION: &str = "0.2.39"`.
+- `DIAGNOSTIC_NOTE_CAPABILITY_KEY: &str = "cowboy.dev/diagnosticNote"`.
+- Tight frame bounds protecting `CancelTurn` latency:
+  - `MAX_DIAGNOSTIC_NOTE_TEXT_BYTES: usize = 4 * 1024` (`post_edit` caps total
+    diagnostic message chars at 2,000, so serialized untrusted JSON fits well
+    inside 4 KiB).
+  - `MAX_DIAGNOSTIC_NOTE_FRAME_BYTES: usize = 6 * 1024`.
+  - `MAX_DIAGNOSTIC_NOTE_TTL_MS: u64 = 20_000`.
+  - `MAX_DIAGNOSTIC_NOTE_PATHS: usize = 5`.
+- `supports_current_turn` and `next_checkpoint` stay permanently clamped to
+  `false` for Antigravity (`clamp_delivery_capabilities_for_provider`
+  unchanged). A rolled-back legacy Controller cannot send `DiagnosticNote` and
+  cannot send `_session/steering` to Antigravity.
 
-In `components/server-agent-api/src/server/agent_api/code_reads/antigravity_push.rs`:
+### 3.2 Wire Frames & Unsequenced ACKs
 
-- Per-session `Pending` tracks `target: DeliveryTarget` and
-  `edits: HashMap<String, (u64, String)>` (`relative_path -> (write_seq, expect_sha256)`),
-  plus `highest_seen: HashMap<String, u64>`.
-- On receiving a `PublishReceipt`:
-  1. Reject immediately if `provider != "antigravity"`, managed child, language
-     servers disabled, or `path` is outside the session's execution worktree.
-  2. Reject immediately if `(receipt.worker_epoch, receipt.turn_id)` does not
-     match the session's live active `delivery_target`, OR if
-     `receipt.sequence <= highest_seen[rel_path]` (stale / out-of-order receipt
-     rejected before mutating `pending`!).
-  3. Update `highest_seen[rel_path] = receipt.sequence` and record
-     `(receipt.sequence, receipt.sha256)` in `pending`.
-- Worker loop serializes one observation per session (`SETTLE = 300 ms`),
-  snapshots up to `MAX_PATHS` (5) `(path, seq, expect_sha256)` entries, runs
-  `post_edit_value_paths(state, &info.meta, relative_paths)` (explicit paths
-  only, never advancing `codex_push::CURSORS`), then filters `value["files"]`:
-  - Drop any file where `highest_seen[path] > snapshot_seq` (a second edit
-    arrived during analysis -> handled by the next loop iteration).
-  - Drop any file where `write.observed != true || write.matches_analyzed != true`
-    or where the analyzed buffer digest (`bufferSnapshot.content.sha256`) does
-    not match `expect_sha256`.
-  - Recompute `value["deliver"]` from the surviving files only; if false,
-    log `nothing_to_deliver` and skip.
-  - Re-verify `delivery_target == snapshot_target` before `deliveries::begin`
-    and dispatch.
+- **Downstream (ephemeral, non-replaying, reliable-first):**
+  ```rust
+  #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+  #[serde(deny_unknown_fields)]
+  pub struct DiagnosticNotePath {
+      pub path: String,
+      pub generation: u64,
+  }
 
-## Release & Deployment Plan (Medium #7)
+  // CoreCommand::DiagnosticNote & WorkerCommand::DiagnosticNote
+  DiagnosticNote {
+      #[serde(default)] // CoreCommand carries session_id
+      delivery_id: String,
+      target: DeliveryTarget,
+      text: String,
+      paths: Vec<DiagnosticNotePath>,
+      ttl_ms: u64,
+  }
 
-R4 modifies `components/wire/src` (`execution_protocol.rs`, `runtime_wire.rs`,
-`machine_protocol.rs`), which is checked by `retained-worker-interface-compatible`
-in `flake.nix`. Per [`machine-worker-pin-advance-runbook.md`](machine-worker-pin-advance-runbook.md):
+  // CoreCommand::DiagnosticNoteInvalidate & WorkerCommand::DiagnosticNoteInvalidate
+  // Sent when a newer edit or all-clear observation supersedes a pending note.
+  DiagnosticNoteInvalidate {
+      target: DeliveryTarget,
+      paths: Vec<DiagnosticNotePath>,
+  }
+  ```
+- **Upstream (connection-scoped, UNSEQUENCED — never enters `outbox` / `runtime_seq`):**
+  ```rust
+  #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+  #[serde(rename_all = "snake_case")]
+  pub enum DiagnosticNoteOutcome {
+      Refused,
+      Unknown,
+  }
 
-1. Keep R4 on feature branch `feat/agy-post-edit-r4` until ready to land
-   together with an approved `cowboy-workers` pin advance (never break
-   `retained-worker-interface-compatible` on `main` ahead of the pin commit).
-2. Component / Plugin release (`components 3.152.0`, `cowboy-antigravity-acp
-   1.0.29`, `antigravity 0.2.39`, plus patch bumps of the 6 other providers
-   pinning `cowboy.provider-runtime`): build, sign, verify, and publish
-   `antigravity 0.2.39` to `/var/lib/cowboy/plugins/catalog` **before**
-   activating any Controller revision carrying the bumped manifests.
-3. Independent worker/session/agent/logs/deletion conformance acceptance on the
-   candidate revision, followed by explicit owner go-ahead for the pin advance
-   and Hawk/OVH Machine maintenance rollout, then install `antigravity 0.2.39`
-   on OVH.
-4. **Live acceptance on OVH with real `agy 1.5.14` (Medium #8)**:
-   - Open a disposable `antigravity 0.2.39` session on a workspace with a live
-     language server (e.g. Rust/TypeScript).
-   - Prompt `agy` to introduce a deliberate diagnostic error containing a unique
-     identifier via `EditFile`, then call `ReadFile` on another file and report
-     any diagnostic surfaced in the tool output.
-   - Verify: (a) `agy`'s reply quotes the unique diagnostic that appeared ONLY
-     in the appended block; (b) `code.summary` delivery ledger records
-     `route: "antigravity_note"`, `state: "appended"`; (c) persisted session
-     history shows the Controller-projected `"Code intelligence after an edit"`
-     row with `promptOrigin: { actor: "cowboy", source: "code_intelligence" }`;
-     (d) subagent edits and >48 KiB edits emit no note.
+  // Top-level Frame variant (outside Frame::WorkerEvent / runtime_seq!)
+  Frame::DiagnosticNoteAck {
+      session_id: String,
+      worker_epoch: String,
+      delivery_id: String,
+      target: DeliveryTarget,
+      outcome: DiagnosticNoteOutcome,
+      #[serde(default, skip_serializing_if = "Option::is_none")]
+      reason: Option<String>,
+  }
+  ```
+  - **Rollback safety:** worker emits `Frame::DiagnosticNoteAck` only when
+    `peer_protocol >= 9`; Machine forwards it to Controller only when
+    `outer_machine_protocol >= 54`. On rollback, dropping the unsequenced frame
+    leaves **zero sequence gap** in `RuntimeEvent` / `runtime_seq`.
+  - **Trust boundary enforcement:** notice `DiagnosticNoteOutcome` has ONLY
+    `Refused` and `Unknown` — **no `Appended` variant even exists on the wire**!
+    Proxy reports `"written"` -> worker translates to
+    `DiagnosticNoteOutcome::Unknown` with `reason: Some("proxy_written")`;
+    proxy or worker pre-write rejection -> `DiagnosticNoteOutcome::Refused`.
 
-## Test Plan
+### 3.3 Reliable-First Scheduling & CancelTurn Priority
 
-- **Wire & protocol (`components/wire`)**: `RuntimeRequest.turn_id` optional
-  serde round-trip (present + absent legacy JSON), `DiagnosticNote` frame
-  limits, `effective_diagnostic_note` matrix across protocols `<54`/`54`,
-  `<9`/`9`, non-antigravity providers, and `clamp_delivery_capabilities_for_provider`
-  unchanged.
-- **Write observer (`writes.rs`)**: exact Antigravity apply helper matching vs
-  subagent `"sh"` vs random shell command, immutable `turn_id` across
-  `process/start` -> `process/read` / `Observe` retries, one-shot receipt dedup,
-  TTL expiry + capacity eviction + epoch pruning.
-- **Controller push (`antigravity_push.rs`)**: reversed-order stale receipt
-  rejection, second edit during analysis superseding stale result, digest
-  mismatch suppression, repeat suppression in `deliveries`, `config_revert` undo
-  window untouched, Controller-projected `code_intelligence` row only on
-  `Appended` (and verified on durable replay), zero row on `Refused`/`Unknown`,
-  legacy Controller header-shaped owner/peer send refusal.
-- **Remote runtime & Worker (`remote_runtime.rs`, `worker.rs`, `acp.rs`,
-  `acp_diagnostic_note.rs`)**: independent admission of `CancelTurn` while a
-  diagnostic note waits, non-replaying disconnect -> `Unknown`/`Refused`, TTL
-  deduction & expiry, pre-0.2.39 / managed / compacting / stale-turn refusal.
-- **Proxy & Facade (`antigravity-acp`)**: strict 1-to-1 single-open-call barrier
-  (concurrent identical calls skipped, sole unambiguous call attached to first
-  text block), `written && completed` -> `appended`, `written && turn_end` ->
-  `unknown`, `!written` -> `not_delivered`, contradicting terminal update ->
-  `unknown`, out-of-band `cowboy/diagnosticNote` never blocks Stop, coexistence
-  with `WRAP_UP_NOTE`, subagent `"sh"` exclusion.
+On EVERY shared transport hop (Controller -> Machine WS, Machine CLI -> Broker
+Unix socket, Broker -> Worker Unix socket, Worker -> Proxy ACP stdin):
+
+1. `DiagnosticNote` and `DiagnosticNoteInvalidate` travel on a dedicated
+   bounded non-replaying channel (`cap = 8`, drop-on-full -> immediate
+   `Refused("backpressure")`), NEVER entering `pending_commands` and NEVER
+   replayed on reconnect.
+2. Writer loops use **biased reliable-first scheduling** (`CancelTurn`,
+   `Cancel`, `Prompt`, `Permission`, etc. always polled before the diagnostic
+   lane) and enforce `unix_socket_has_hint_headroom` (>= 8 KiB free buffer
+   before non-blocking write) and `<= 6 KiB` encoded frame cap, ensuring
+   `CancelTurn` is never stalled behind diagnostic notes even under a stalled
+   reader.
+3. On the worker, `DiagnosticNoteSlot` never acquires `steering_gate` and never
+   shares waiter slots with `CancelTurn`. `CancelTurn` synchronously fences
+   `wrap_up` and `diagnostic_note` slots for `target.turn_id`.
+4. **End-to-end expiry & single-settlement contract:**
+   - Controller computes `ttl_ms = 20_000` and arms a local waiter timer for
+     `ttl_ms + 5_000` (5 s grace for network/ACK return).
+   - Each hop deducts its local monotonic queue duration from `ttl_ms` before
+     forwarding and rejects with `Refused("expired")` if `ttl_ms == 0`.
+   - Controller settles each `delivery_id` **at most once** by atomic removal
+     from `shared.diagnostic_notes`:
+     - Disconnect/epoch-change before wire write -> `State::Refused`.
+     - Disconnect/epoch-change/timeout after wire write -> `State::Unknown`.
+     - Late `Frame::DiagnosticNoteAck` after removal -> logged and ignored.
+
+## 4. Controller Freshness Batching (`antigravity_push.rs`)
+
+New module `components/server-agent-api/src/server/agent_api/code_reads/antigravity_push.rs`,
+spawned alongside `codex_push::run` in `maintain_holdings`:
+
+1. **Per-`(session_id, worker_epoch, turn_id)` keying (no cross-turn relabeling):**
+   - `SessionBatch` holds `target: DeliveryTarget` (`worker_epoch`, `turn_id`),
+     `pending: HashMap<String, ReceiptSnapshot>` (`rel_path -> { generation,
+     lf_sha256 }`), `highest_gen: HashMap<String, u64>`, and `running: bool`.
+   - When a `PublishReceipt` arrives for a **different** `(worker_epoch, turn_id)`
+     than `SessionBatch.target`:
+     - Immediately replace `SessionBatch.target`, **clear** `pending` and
+       `highest_gen` (fence any in-flight task from the old turn by comparing
+       its captured `DeliveryTarget` before and after every await!).
+   - Reject stale receipts where `receipt.generation <= highest_gen[rel_path]`
+     or where `session` is not eligible (`provider != "antigravity"`, managed
+     child, language servers disabled, `diagnostic_note` capability false for
+     `receipt.worker_epoch`, or `path` outside worktree `cwd`) **before**
+     mutating `pending`.
+   - When a newer `generation` arrives for a path that had an active pending
+     note on the same turn, immediately emit `DiagnosticNoteInvalidate` for
+     `[(rel_path, receipt.generation)]` so the proxy discards any waiting stale
+     note immediately!
+2. **Pre-projection raw digest & freshness verification (no budget waste):**
+   - After `SETTLE` (`300 ms`), snapshot up to `MAX_PATHS` (5) entries from
+     `pending` (along with the captured `DeliveryTarget`).
+   - Run **raw** `diagnostics::read(state, observed, relative_paths)` (explicit
+     paths only — NEVER advancing `codex_push::CURSORS`!).
+   - Re-verify `session::current`, `delivery_target == snapshot_target`, and
+     for EVERY file in raw `observation["files"]`:
+     - Drop the file if `highest_gen[path] > snapshot_gen` (a newer edit
+       started during analysis -> handled by the next loop pass).
+     - Drop the file if `snapshot.lf_sha256` is `None` or
+       `file["bufferSnapshot"]["content"]["sha256"].as_str() != snapshot.lf_sha256.as_deref()`
+       (works identically for LF and CRLF files because `fs/apply` derived
+       `lf_sha256` from the exact verified written bytes!).
+   - Call `post_edit::project(&filtered_observation)` ONLY on the surviving
+     fresh files so stale/mismatched files never consume the `10 errors / 5
+     warnings / 2000 chars` budget!
+   - If `projected["deliver"] != true`:
+     - Emit `DiagnosticNoteInvalidate` for the snapshot's `(path, generation)`
+       pairs (so an all-clear fixing edit invalidates any earlier pending note
+       waiting on the proxy!) and log `nothing_to_deliver`.
+   - If `projected["deliver"] == true`:
+     - Record `deliveries::begin(session, Route::AntigravityNote, files,
+       deliveries::digest(&projected))`. If suppressed as repeat, stop cleanly.
+     - Format the bounded untrusted JSON note using `codex_push::note(&projected)`
+       and verify `text.len() <= MAX_DIAGNOSTIC_NOTE_TEXT_BYTES`.
+     - Dispatch via `RemoteRuntime::send_diagnostic_note(...)` (never calling
+       `send_delivery::begin`, so `config_revert::clear` is never called).
+     - Settle `deliveries::finish` once (`State::Refused` or `State::Unknown`
+       with reason). Never emit a Hub `user_message_chunk` transcript row.
+
+## 5. Proxy & Facade Delivery & Invalidation State Machine
+
+### 5.1 Out-of-band notifications (`proxy.mjs`)
+
+- Add `"cowboy/diagnosticNote"` and `"cowboy/diagnosticNoteInvalidate"` to
+  `RUNTIME_NOTIFICATIONS` and handle both **synchronously out-of-band** before
+  `this.queue` (exact R1 `cowboy/wrapUpHint` pattern, never blocking
+  `session/cancel` / Stop).
+- Strip upstream `result._meta["cowboy.dev/diagnosticNote"]` and
+  `result.agentCapabilities._meta["cowboy.dev/diagnosticNote"]` on `initialize`,
+  stamping `{ v: 1, adapter: "cowboy-antigravity-acp" }` only when `!this.managed`.
+- Validate incoming `cowboy/diagnosticNote`: `!this.managed`, `!this.closing`,
+  root session, live non-cancelled non-closed non-compacting turn matching
+  `attemptNonce`, `0 < ttlMs <= 20_000`, `text` <= 4 KiB UTF-8, `paths` non-empty
+  (<= 5 entries with positive integer `generation`), AND no path in `paths` is
+  already superseded by `facade.pathPublishGen(sessionId, path) > generation`.
+  - If invalid or already superseded -> emit `cowboy/diagnosticNoteResult`
+    with `outcome: "refused"` immediately.
+  - Otherwise store as `turn.diagnosticNote` (state `"pending"`, monotonic
+    `deadlineMs = performance.now() + ttlMs`), superseding any older `"pending"`
+    note with `outcome: "refused", reason: "superseded"`.
+- On `cowboy/diagnosticNoteInvalidate`: if `turn.diagnosticNote` is `"pending"`
+  and shares any path whose incoming `generation >= notePath.generation`, clear
+  it and emit `outcome: "refused", reason: "superseded"`.
+- Also tighten `plan-gate.mjs` eviction hygiene: when `list.length >= MAX_WAITING`,
+  mark the evicted entry `evicted.ambiguous = true` so `isBindingConsistent`
+  always returns `false` for evicted entries.
+
+### 5.2 Single-Owner Call Accounting & Synchronous Pre-Write Guard (`facade.mjs`)
+
+- **Fix double-counted `openCalls`:** track in-flight root MCP calls **once**
+  per invocation in `serveMcp` (a `Set` of active call tokens per relay/session;
+  do not double-increment in `Facade.call`).
+- **Per-path local generation fence:** whenever a root `WriteFile` or `EditFile`
+  begins `publishOnce`, increment `session.localPublishGen.get(relPath)` (and
+  record keeper's returned `generation` on `fs/apply` success). Starting ANY
+  new publish of `relPath` synchronously invalidates any `"pending"`
+  `turn.diagnosticNote` referencing `relPath` (`outcome: "refused", reason:
+  "superseded_by_edit"`), closing the post-dispatch freshness window so a
+  fixing edit never receives obsolete advice!
+- **Synchronous pre-write attachment in `serveMcp`:**
+  Right before `stream.write(...)` sends a root tool call's MCP response (after
+  `onResult` captured the clean un-noted result for UI presentation):
+  1. Synchronously check: `!facade.closing`, `!streamEnded`, `!stream.destroyed`,
+     `!stream.writableEnded`, root session (`session.parent === undefined`),
+     `!managed`, `session.ambiguousRelays.size === 0`, live `turn` matching
+     `attemptNonce`, `!cancelled`, `!ended`, `!compacting`, `name !== "UpdatePlan"`,
+     `!result.isError`, `Array.isArray(result.content)`, `note.state === "pending"`,
+     `performance.now() <= note.deadlineMs`, and every path in `note.paths`
+     still matches the latest local/keeper generation.
+  2. If all pass, non-mutatingly append `\n\n${note.text}` to the **first text
+     block** of `result.content` (or append a text block if image-only,
+     composing cleanly with `WRAP_UP_NOTE`).
+  3. Transition `note.state = "write_started"` and remove it from
+     `turn.diagnosticNote` so no second call can touch it.
+  4. Bind the exact delivery's `stream.write(line, cb)` + `close` + `error`
+     handlers with a once-only `settle(outcome, reason)`:
+     - Synchronous throw before kernel submission -> `settle("refused", "write_threw")`.
+     - `cb(null)` -> `settle("written", "proxy_written")` (worker converts to
+       `DiagnosticNoteOutcome::Unknown` with `reason: "proxy_written"`).
+     - `cb(err)`, `close`, `error`, turn cancel, or shutdown after
+       `write_started` -> `settle("unknown", "relay_interrupted")`.
+  5. On `startAttemptCleanup`, `cancel`, `beginShutdown`, or `deadlineMs`
+     expiry: any remaining `"pending"` note settles `refused` (`"turn_ended"` /
+     `"cancelled"` / `"expired"`).
+
+## 6. Release, Conformance, and Acceptance Plan
+
+Because R4 modifies `components/wire/src` (`execution_protocol.rs`,
+`runtime_wire.rs`, `machine_protocol.rs`, `diagnostic_note.rs`), it requires an
+explicit owner-approved `cowboy-workers` pin advance per
+[`machine-worker-pin-advance-runbook.md`](machine-worker-pin-advance-runbook.md):
+
+1. **Branch discipline:** keep all changes on `feat/agy-post-edit-r4` until
+   ready to land together with the pin advance commit (never break
+   `retained-worker-interface-compatible` on `main`).
+2. **All 7 bumped Providers published before Controller activation:**
+   `components 3.152.0` (`cowboy-antigravity-acp 1.0.29`, `@cowboy/provider-runtime
+   1.3.35`, `antigravity 0.2.39`, plus patch bumps of `claude-code`,
+   `claude-deepseek`, `codex`, `codex-deepseek`, `deepseek-harness`, `grok`).
+   Build, sign, verify, and publish **all 7** Provider releases into
+   `/var/lib/cowboy/plugins/catalog` and pass `provider-release-coverage`
+   against the exact candidate revision and catalog **before** activating the
+   Controller.
+3. **Staged worker pin advance & deletion production conformance:**
+   - Run independent acceptance (`execution-worker-conformance`,
+     `execution-session-conformance`, `agent-worker-conformance`,
+     `logs-conformance`) against `.#cowboy-machine-release` of fetchable
+     candidate `R`.
+   - Advance `inputs.cowboy-workers` to `R` in `flake.nix` / `flake.lock`, then
+     build two distinct pinned writer revisions (`cowboy-machine-writer-host-release`
+     at `P1` and `P2` with distinct ELFs), the matching recovery reader
+     (`cowboy-machine-host-release`), and separate default reader, and obtain a
+     passing `just session-deletion-production-conformance` receipt before Hawk
+     activation.
+   - Activate Hawk Machine (`cowboy-machine-activate`) and OVH full worker
+     release (`tools/ovh-machine-host-release.sh` with `.#cowboy-machine-release`)
+     separately with explicit owner maintenance approval, then install
+     `antigravity 0.2.39` on OVH.
+4. **Live acceptance on dedicated free-tier account (unpredictable challenge):**
+   - After `agy` completes an `EditFile` on a workspace file, inject a **fresh
+     randomly generated diagnostic challenge** inside the diagnostic fixture /
+     language-server output that NEVER appears in prompts, repository files, or
+     other tool outputs.
+   - Wait until the `DiagnosticNote` is pending on the proxy, then have `agy`
+     run a probe `ReadFile` on an unrelated file and report the exact diagnostic
+     from the tool output.
+   - Assert: (a) `agy` reproduces the exact unseen challenge token; (b)
+     Controller `code.summary` `deliveries` records `route: "antigravity_note"`,
+     `state: "unknown"`, `reason: "proxy_written"` (never an untrusted
+     `Appended` transcript row); (c) a superseding edit invalidates a pending
+     note; (d) CRLF file edits match and deliver; (e) subagent edits and >48 KiB
+     edits produce zero R4 receipts.
+
+## 7. Test Plan
+
+- **Wire & rollback (`components/wire`, `worker.rs`, `machine_cli.rs`):**
+  already-pending `RuntimeRequest` serialized with `turn_id`/`publish_seq` on
+  `>= 54/9` and stripped on rollback `< 54` or `< 9` (testing both rollback
+  orders against strict `deny_unknown_fields` legacy decoders); unsequenced
+  `Frame::DiagnosticNoteAck` dropped on rollback with zero `runtime_seq` gap;
+  `clamp_delivery_capabilities_for_provider` unchanged and header-shaped
+  owner/peer sends refused.
+- **Keeper `fs/apply` & `writes.rs`:** keeper executes its own
+  `COWBOY_EXECUTION_FILE_HELPER` ignoring proxy env, returns canonical path +
+  raw `sha256` + `lfSha256` + monotonic `generation` for both LF and CRLF
+  files; `writes.rs` unwraps real keeper `{ "result": ... }` envelopes for
+  `Invoke` and `Observe`, rejects `{ "error": ... }`, deduplicates `fs/apply`
+  via sliding `publish_seq` watermark even after >16,384 completions, makes
+  legacy starts idempotent and sequences legacy read chunks, partitions per
+  session with 200 s TTL.
+- **Controller `antigravity_push.rs`:** `(session, epoch, turn)` keying
+  prevents turn A edits from relabeling into turn B; reversed read completions
+  ordered by keeper `generation`; pre-projection raw digest & generation
+  filtering preserves diagnostic budget; CRLF matching; all-clear edit emits
+  `DiagnosticNoteInvalidate`; `config_revert` untouched; single-settlement on
+  timeout/disconnect/late ACK; zero Hub `user_message_chunk` emitted.
+- **Transport priority & Worker:** `CancelTurn` overtakes repeated 6 KiB
+  `DiagnosticNote` frames under a stalled reader; backpressure drops with
+  `Refused("backpressure")`; worker translates proxy `"written"` to
+  `DiagnosticNoteOutcome::Unknown("proxy_written")`; `fs/apply` denied
+  `root_publish` when managed or subagent active.
+- **Proxy & Facade (`antigravity-acp`):** end-to-end attachment through real
+  `serveMcp` socket write (verifying single-counted active calls, first-text-block
+  attachment, coexistence with `WRAP_UP_NOTE`), pre-write cancellation/expiry/
+  local-publish-generation invalidation -> `refused`, post-`write_started`
+  close/error/cancel -> `unknown`, legacy keeper `-32601` fallback to `APPLY`
+  helper, `plan-gate.mjs` eviction marking `ambiguous = true`.
