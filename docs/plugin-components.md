@@ -89,17 +89,26 @@ recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
 Component release 3.149.0 records provider-runtime 1.3.32, whose
-`cowboy-antigravity-acp` 1.0.27 delivers the Antigravity R1 proxy half
-([design](antigravity-steering-r1-design.md)): dual `initialize._meta`
-sanitization and `cowboy.dev/wrapUpSteering` advertisement for unmanaged
-sessions, synchronous `cowboy/wrapUpHint` handling and `attemptNonce`
-stripping across `reservedTurns` and active turns, relay-scoped
-`ambiguousRelays` protection cleared only on verified socket close,
-non-mutating once-per-turn `WRAP_UP_NOTE` attachment after UI presentation,
-full 60 s root Stop confirmation with `UNCERTAIN_REPORT`, and unified
-`COWBOY_WS` `/compact` detection. Antigravity 0.2.35 pins it with zero
-manifest schema changes; the other six Providers pinning provider-runtime
-advance one patch version.
+`cowboy-antigravity-acp` 1.0.27 delivers both:
+
+- the Antigravity R1 wrap-up steering proxy half
+  ([design](antigravity-steering-r1-design.md)): dual `initialize._meta`
+  sanitization and `cowboy.dev/wrapUpSteering` advertisement for unmanaged
+  sessions, synchronous `cowboy/wrapUpHint` handling and `attemptNonce`
+  stripping across `reservedTurns` and active turns, relay-scoped
+  `ambiguousRelays` protection cleared only on verified socket close,
+  non-mutating once-per-turn `WRAP_UP_NOTE` attachment after UI presentation,
+  full 60 s root Stop confirmation with `UNCERTAIN_REPORT`, and unified
+  `COWBOY_WS` `/compact` detection; and
+- local pre-dispatch prompt rejection handling so `agy` refusing a prompt
+  before dispatching it (so far `agy` 1.5.14 refusing images as the answer to a
+  pending `ask_question`, when the turn's log window holds its barrier and no
+  dispatch or backend record) ends as `antigravity_prompt_rejected:<code>`
+  with the reason shown to the owner and leaves the account unchanged
+  ([evidence contract](../components/provider-runtime/packages/antigravity-acp/README.md#backend-evidence)).
+
+Antigravity 0.2.35 pins it and adds the matching error rule. The other six
+Providers pinning provider-runtime advance one patch version.
 
 Component release 3.148.0 records provider-runtime 1.3.31, whose
 `cowboy-antigravity-acp` 1.0.26 carries the uncertain-effect L1c proxy half

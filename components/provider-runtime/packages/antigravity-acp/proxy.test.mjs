@@ -4,6 +4,9 @@ import {
   AcpProxy,
   accountPlan,
   injectedEcho,
+  LOCAL_REJECTIONS,
+  localRejection,
+  PROMPT_REJECTED_PREFIX,
   REFUSAL_PREFIX,
   stripTier,
   TURN_ERROR_CODE,
@@ -265,6 +268,129 @@ test("a turn carries backend evidence; a refusal becomes a fixed error", async (
   assert.equal(error.error.code, TURN_ERROR_CODE);
   assert.notEqual(error.error.code, -32000);
   assert.equal(error.error.data.message, TURN_ERROR_TEXT.verification_required);
+});
+
+test("a prompt agy refused before dispatching it is not a refusal", async () => {
+  // sess-1795490077099: images sent while an `ask_question` was pending.
+  // `agy` answered at once; its log holds the prompt's receipt, the barrier
+  // and nothing else.
+  const text = LOCAL_REJECTIONS[0].text;
+  const clean = {
+    class: "unknown_refusal",
+    successes: 0,
+    barrier: true,
+    prompts: 1,
+    dispatches: 0,
+    transient: 0,
+    refusals: [],
+  };
+  const image = {
+    prompt: [
+      { type: "text", text: "theme?" },
+      { type: "image", data: "x" },
+    ],
+  };
+  for (const error of [
+    { code: -32603, message: text },
+    { code: -32603, message: "Internal error", data: { error: text } },
+    { code: -32603, message: "Internal error", data: text },
+    { code: -32602, message: text, data: { message: text } },
+  ]) {
+    assert.equal(localRejection(error, clean, image)?.code, "image_answer");
+  }
+  const error = { code: -32603, message: text };
+  // Any sign the prompt reached the agent loop or the backend, a window
+  // without this prompt's receipt (truncated) or with another prompt, or
+  // one that could not be read, is not proof.
+  for (const backend of [
+    { ...clean, barrier: false },
+    { ...clean, dispatches: 1 },
+    { ...clean, successes: 1 },
+    { ...clean, transient: 1 },
+    { ...clean, refusals: [{ status: "PERMISSION_DENIED", code: 403, reasons: [] }] },
+    { ...clean, prompts: 0 },
+    { ...clean, prompts: 2 },
+    { ...clean, dispatches: undefined },
+  ]) {
+    assert.equal(localRejection(error, backend, image), undefined);
+  }
+  // Only the exact text in a known shape: never ACP's auth_required, a
+  // wrapper prefix, extra text, or a field that says something else.
+  for (const stated of [
+    { code: -32000, message: "Authentication required", data: { details: text } },
+    { code: -32000, message: text },
+    { code: -32603, message: `Internal error: ${text}` },
+    { code: -32603, message: `${text} (and more)` },
+    { code: -32603, message: "Unknown failure" },
+    { code: -32603, message: text, data: { details: "PERMISSION_DENIED" } },
+    { code: -32603, message: text, data: 403 },
+    { code: -32603, message: text, data: { status: "UNAUTHENTICATED" } },
+    { code: -32603, message: text, data: { message: text, status: "UNAUTHENTICATED" } },
+    { code: -32603, message: text, data: [text] },
+    { code: -32603, message: text, status: "UNAUTHENTICATED" },
+    { code: "-32603", message: text },
+    { message: text },
+    { code: -32603, data: text },
+    { code: -32603, data: { error: text } },
+  ]) {
+    assert.equal(localRejection(stated, clean, image), undefined);
+  }
+  // An image answer needs an image in the prompt.
+  assert.equal(localRejection(error, clean, { prompt: [] }), undefined);
+  assert.equal(localRejection(error, clean, undefined), undefined);
+
+  const { proxy, client } = harness({ backend: clean });
+  await proxy.fromClient(request(9, "session/prompt", { sessionId: "s", ...image }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 9, error });
+  const reply = client.at(-1);
+  assert.equal(reply.id, 9);
+  assert.equal(reply.error.code, TURN_ERROR_CODE);
+  assert.equal(reply.error.message, `${PROMPT_REJECTED_PREFIX}image_answer`);
+  assert.equal(reply.error.data.message, LOCAL_REJECTIONS[0].owner);
+  assert.equal(reply.error.data.cowboy.prompt_rejected, "image_answer");
+  assert.equal(reply.error.data.cowboy.antigravity_backend.class, "not_dispatched");
+
+  const unproven = async (setup, backend = clean, failure = error) => {
+    const made = harness({ backend });
+    await made.proxy.fromClient(request(9, "session/prompt", { sessionId: "s", ...image }));
+    await setup?.(made.proxy);
+    await made.proxy.fromAgent({ jsonrpc: "2.0", id: 9, error: failure });
+    assert.equal(made.client.at(-1).error.message, `${REFUSAL_PREFIX}unknown_refusal`);
+  };
+  // Another error, or the same one after a dispatch, stays unproven.
+  await unproven(undefined, clean, { code: -32603, message: "boom" });
+  await unproven(undefined, { ...clean, dispatches: 1 });
+  // So does a turn with a possible effect, a stop, or a subagent started
+  // (whatever the child settled to).
+  await unproven((p) => p.uncertain("s", "fs/writeFile"));
+  await unproven((p) =>
+    p.fromClient({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: "s" } }),
+  );
+  await unproven((p) => {
+    p.turns.get("s").subagents = true;
+  });
+  // A Stop that arrives while the reply is still settling (the turn has
+  // already left `turns`) also keeps the outcome unproven.
+  let release;
+  const gate = new Promise((done) => {
+    release = done;
+  });
+  const settling = harness({ backend: clean });
+  // Memory settles after the turn has left `turns`, before the reply.
+  settling.proxy.settleMemory = async () => {
+    await gate;
+  };
+  await settling.proxy.fromClient(request(9, "session/prompt", { sessionId: "s", ...image }));
+  const replied = settling.proxy.fromAgent({ jsonrpc: "2.0", id: 9, error });
+  while (settling.proxy.turns.has("s")) await new Promise((done) => setImmediate(done));
+  await settling.proxy.fromClient({
+    jsonrpc: "2.0",
+    method: "session/cancel",
+    params: { sessionId: "s" },
+  });
+  release();
+  await replied;
+  assert.equal(settling.client.at(-1).error.message, `${REFUSAL_PREFIX}unknown_refusal`);
 });
 
 test("cancel and an unknown facade outcome end the turn", async () => {

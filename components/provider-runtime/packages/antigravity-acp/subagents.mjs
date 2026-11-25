@@ -424,6 +424,8 @@ export class Subagents {
     }
     // Counted at once: a concurrent start sees this one before it runs.
     group.started += 1;
+    // Latched whatever the child settles to: its traffic shares the log.
+    parentTurn.subagents = true;
     const epoch = group.epoch;
     const title = titleOf(description, prompt);
     const child = {

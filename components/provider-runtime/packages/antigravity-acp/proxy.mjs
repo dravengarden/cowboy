@@ -76,6 +76,25 @@ export const AGENT_NOTIFICATIONS = Object.freeze(["session/update"]);
 export const REFUSAL_PREFIX = "antigravity_backend_refusal:";
 /** A built-in tool executed despite the gate: the turn ends with this error. */
 export const VIOLATION_PREFIX = "antigravity_policy_violation:";
+/**
+ * A prompt `agy` refused before its agent loop saw it: nothing reached
+ * Google, so the account's state does not change (`localRejection`).
+ */
+export const PROMPT_REJECTED_PREFIX = "antigravity_prompt_rejected:";
+/**
+ * The prompt errors `agy` answers locally, by exact text (`agy` 1.5.14), each
+ * with its closed code and the owner-facing sentence. Only listed texts
+ * qualify: any other error stays an unproven outcome.
+ */
+export const LOCAL_REJECTIONS = Object.freeze([
+  Object.freeze({
+    code: "image_answer",
+    text: "Images can't answer the agent's pending question; reply in text",
+    owner:
+      "Antigravity is waiting for your answer to its question, and images can't answer it. " +
+      "Nothing was sent to Google. Reply in text first, then send the images.",
+  }),
+]);
 /** Tool call states that mean the tool ran (or is running). */
 const EXECUTED = new Set(["in_progress", "completed"]);
 /**
@@ -1137,6 +1156,12 @@ export class AcpProxy {
 
   async cancel(message) {
     const sessionId = message.params?.sessionId;
+    // A prompt whose reply is still settling has left `turns`; its Stop is
+    // latched on the record so the settled reply cannot claim a local
+    // rejection.
+    for (const record of this.settling.values()) {
+      if (record.sessionId === sessionId) record.cancelled = true;
+    }
     if (typeof sessionId === "string") {
       this.bumpCancelGen(sessionId);
       const reserved = this.reservedTurns.get(sessionId);
@@ -1615,7 +1640,8 @@ export class AcpProxy {
     });
     // Every ending is classified, a vendor error too: its log window may
     // hold a refusal; an error without one is `unknown_refusal`, never a
-    // vendor message the Controller cannot attribute.
+    // vendor message the Controller cannot attribute, unless the window
+    // proves a listed local rejection (`localRejection`).
     const settled = await runtime.evidence.settle(
       record.cursor,
       record.sessionId,
@@ -1631,6 +1657,46 @@ export class AcpProxy {
     await this.settleMemory(turn);
     const violation = turn?.violation;
     const uncertain = turn?.uncertain;
+    // A prompt `agy` refused before dispatching it reached no backend: the
+    // owner reads why, and the Controller leaves the account as it is. A
+    // stopped turn, or one with a violation, a possible effect, a subagent
+    // started or an earlier attempt, is never one.
+    const rejection =
+      message.result === undefined &&
+      message.error !== undefined &&
+      violation === undefined &&
+      uncertain === undefined &&
+      turn !== undefined &&
+      turn.cancelled !== true &&
+      turn.subagents !== true &&
+      !turn.childBackends?.length &&
+      !turn.structured?.backends?.length
+        ? localRejection(message.error, backend, record.params)
+        : undefined;
+    // Emitted only while the proxy still runs this turn: a stop or a forced
+    // exit that began meanwhile keeps the unproven outcome.
+    if (
+      rejection &&
+      this.killed === undefined &&
+      turn.cancelled !== true &&
+      record.cancelled !== true
+    ) {
+      return this.endPrompt(record, {
+        jsonrpc: "2.0",
+        id: replyId,
+        error: {
+          code: TURN_ERROR_CODE,
+          message: `${PROMPT_REJECTED_PREFIX}${rejection.code}`,
+          data: {
+            message: rejection.owner,
+            cowboy: {
+              antigravity_backend: { ...backend, class: "not_dispatched" },
+              prompt_rejected: rejection.code,
+            },
+          },
+        },
+      });
+    }
     const cowboy = {};
     cowboy.antigravity_backend =
       message.result || backend.class !== "ok" ? backend : { ...backend, class: "unknown_refusal" };
@@ -1894,9 +1960,86 @@ function attempts(turn, settled) {
     ...settled,
     successes: total("successes"),
     transient: total("transient"),
+    prompts: total("prompts"),
+    dispatches: total("dispatches"),
     refusals: all.flatMap((item) => (Array.isArray(item.refusals) ? item.refusals : [])),
     attempts: all.length,
   };
+}
+
+/** Generic JSON-RPC labels a wrapped local error may carry beside its text. */
+const GENERIC_LABELS = new Set(["Internal error", "Invalid params", "Invalid request"]);
+
+/** Whether a forwarded prompt carries at least one image block. */
+export function promptHasImage(params) {
+  return Array.isArray(params?.prompt) && params.prompt.some((block) => block?.type === "image");
+}
+
+/**
+ * The listed rejection an `agy` prompt error states, else `undefined`: one
+ * of its fields (`message`, a string `data`, or `data.message`, `data.error`,
+ * `data.details`) is exactly the listed text, and every other present field
+ * is that text or a generic JSON-RPC label. ACP's `-32000`
+ * (`auth_required`) is never one.
+ */
+const ERROR_KEYS = new Set(["code", "message", "data"]);
+const DATA_KEYS = new Set(["message", "error", "details"]);
+const plainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
+function statedRejection(error) {
+  // Only the JSON-RPC envelope, with an integer code that is not ACP's
+  // auth_required, a string message, and data absent, a string, or an object holding only the
+  // text fields: anything else may carry a status this matcher cannot read.
+  if (
+    !plainObject(error) ||
+    Object.keys(error).some((key) => !ERROR_KEYS.has(key)) ||
+    !Number.isInteger(error.code) ||
+    error.code === -32000 ||
+    typeof error.message !== "string"
+  ) {
+    return undefined;
+  }
+  const fields = [error.message];
+  const data = error.data;
+  if (typeof data === "string") fields.push(data);
+  else if (plainObject(data)) {
+    if (Object.keys(data).some((key) => !DATA_KEYS.has(key))) return undefined;
+    fields.push(data.message, data.error, data.details);
+  } else if (data !== undefined) return undefined;
+  const present = fields.filter((field) => field !== undefined);
+  if (present.some((field) => typeof field !== "string")) return undefined;
+  return LOCAL_REJECTIONS.find(
+    ({ text }) =>
+      present.includes(text) &&
+      present.every((field) => field === text || GENERIC_LABELS.has(field)),
+  );
+}
+
+/**
+ * The local rejection an `agy` prompt error proves, else `undefined`. Proof
+ * needs all of: the error states a listed rejection exactly
+ * (`statedRejection`); the prompt is the kind that rejection is about (an
+ * image answer needs an image); and the turn's log window, through its
+ * barrier, holds exactly one prompt receipt (this one) and no dispatch to
+ * the agent loop, with no backend success, retry or refusal anywhere in it.
+ * An error after a dispatch, a window that could not be read or a truncated
+ * one (no receipt) is never a local rejection.
+ */
+export function localRejection(error, backend, params) {
+  if (
+    backend?.barrier !== true ||
+    backend.successes !== 0 ||
+    backend.transient !== 0 ||
+    backend.prompts !== 1 ||
+    backend.dispatches !== 0 ||
+    !Array.isArray(backend.refusals) ||
+    backend.refusals.length
+  ) {
+    return undefined;
+  }
+  const rejection = statedRejection(error);
+  if (rejection?.code === "image_answer" && !promptHasImage(params)) return undefined;
+  return rejection;
 }
 
 /**
