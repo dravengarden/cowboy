@@ -252,6 +252,10 @@ test("account manage links are published only for known accounts", () => {
   assertEquals(accountBrowserManageUrl("anthropic"), undefined);
   assertEquals(accountManageUrl("openai"), undefined);
   assertEquals(accountManageUrl("future-labs"), undefined);
+  assertEquals(accountManageUrl("constructor"), undefined);
+  assertEquals(providerManageUrl("__proto__"), undefined);
+  assertEquals(accountBrowserManageUrl("constructor"), undefined);
+  assertEquals(providerBrowserManageUrl("__proto__"), undefined);
 });
 
 test("datetime picker ignores iOS current-minute provisional values", () => {

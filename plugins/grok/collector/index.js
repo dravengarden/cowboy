@@ -30,6 +30,7 @@ const MAX_RESPONSE_BYTES = 1024 * 1024;
 // discards a valid billing result.
 const POLL_BUDGET_MS = 10_000;
 const MIN_METADATA_BUDGET_MS = 250;
+const monotonicNow = () => performance.now();
 const CHILD_ENV_KEYS = [
   "HOME",
   "PATH",
@@ -515,13 +516,16 @@ async function collect(
     credential = loadCredential,
     fetch: fetchImpl = fetch,
     now = Date.now,
+    clock,
     budgetMs = POLL_BUDGET_MS,
+    deadline,
   } = {},
 ) {
-  const deadline = now() + budgetMs;
+  const timer = clock ?? (now === Date.now ? monotonicNow : now);
+  const limit = deadline ?? timer() + budgetMs;
   const billing = await rpc.request("_x.ai/billing", {});
   const current = await credential();
-  const metadata = await accountMetadata(current, fetchImpl, deadline - now());
+  const metadata = await accountMetadata(current, fetchImpl, limit - timer());
   return usage(billing, metadata, now());
 }
 
@@ -641,9 +645,12 @@ export async function collectWithoutRefresh({
   credential = loadCredential,
   fetch: fetchImpl = fetch,
   now = Date.now,
+  clock,
   budgetMs = POLL_BUDGET_MS,
+  deadline,
 } = {}) {
-  const deadline = now() + budgetMs;
+  const timer = clock ?? (now === Date.now ? monotonicNow : now);
+  const limit = deadline ?? timer() + budgetMs;
   const current = await credential();
   if (!current) {
     throw new AuthenticationRequired("Grok usage authentication required: no Grok sign-in.");
@@ -653,8 +660,8 @@ export async function collectWithoutRefresh({
       "Grok usage authentication required: the access token expired.",
     );
   }
-  const billing = await billingWithoutCli(current, fetchImpl, deadline - now());
-  const metadata = await accountMetadata(current, fetchImpl, deadline - now());
+  const billing = await billingWithoutCli(current, fetchImpl, limit - timer());
+  const metadata = await accountMetadata(current, fetchImpl, limit - timer());
   return usage(billing, metadata, now());
 }
 
@@ -716,6 +723,12 @@ async function renew(rpc) {
 
 /** Answer one request. Only a request that may refresh starts the CLI. */
 export async function handle(request, { startRpc = () => AcpRpc.start(), ...direct } = {}) {
+  const timer = direct.clock ?? (direct.now && direct.now !== Date.now ? direct.now : monotonicNow);
+  const pollOptions = {
+    ...direct,
+    clock: timer,
+    deadline: direct.deadline ?? timer() + (direct.budgetMs ?? POLL_BUDGET_MS),
+  };
   if (request.operation === "renew") {
     if (request.token_refresh !== "renew") {
       throw new Error("a renewal must be requested explicitly");
@@ -730,13 +743,13 @@ export async function handle(request, { startRpc = () => AcpRpc.start(), ...dire
   if (request.token_refresh === false) {
     return request.operation === "consume_reset"
       ? await reset(undefined, request)
-      : await collectWithoutRefresh(direct);
+      : await collectWithoutRefresh(pollOptions);
   }
   const rpc = await startRpc();
   try {
     return request.operation === "consume_reset"
       ? await reset(rpc, request)
-      : await collect(rpc, direct);
+      : await collect(rpc, pollOptions);
   } finally {
     rpc.close();
   }

@@ -21,7 +21,7 @@ import {
   resetTarget,
   shownTarget,
 } from "./browserModel";
-import { activeBrowserLink, linkEntry, linkTarget } from "./linkNavigation";
+import { activeBrowserLink, linkEntry, linkTarget, resumeBlockedByIdentity } from "./linkNavigation";
 import { reconcileBinding } from "./shareRules";
 import { type ViewerControls, addressCommand, chromeState, controlsFor } from "./browserChrome";
 import type { KeyboardSink } from "./touchKeyboard";
@@ -353,13 +353,21 @@ test("a link opens and navigates only this account's browser on the login's Mach
   );
   assertEquals(linkTarget(starting), undefined);
 
-  // Rebinding a sheet cancels any pending identity-bound page link.
+  // Rebinding a sheet cancels every pending link (bound or pinned sign-in)
+  // and suppresses reconnect steps before the rebind remounts the panel.
   const boundLink = { url: "https://grok.com/?_s=usage", expectedBrowser: "own" };
+  const pinnedSignInLink = { url: "https://claude.ai/oauth/x", machine: "hawk" };
   const initialBinding = { identity: "own", epoch: 0 };
   assertEquals(activeBrowserLink(boundLink, initialBinding), boundLink);
+  assertEquals(activeBrowserLink(pinnedSignInLink, initialBinding), pinnedSignInLink);
   const rebound = reconcileBinding(initialBinding, "share:s1:1");
   assertEquals(rebound.epoch, 1);
   assertEquals(activeBrowserLink(boundLink, rebound), undefined);
+  assertEquals(activeBrowserLink(pinnedSignInLink, rebound), undefined);
+  assertEquals(resumeBlockedByIdentity("own", "own"), false);
+  assertEquals(resumeBlockedByIdentity("own", undefined), false);
+  assertEquals(resumeBlockedByIdentity(undefined, "share:s1:1"), false);
+  assertEquals(resumeBlockedByIdentity("own", "share:s1:1"), true);
 
   // The calls: a tab open pinned to hawk, then a navigation fenced by this
   // viewer's confirmed attachment_id. No route names a login, and nothing reads a code back.

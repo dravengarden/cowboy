@@ -44,7 +44,13 @@ import {
   resetTarget,
   resumeStep,
 } from "./browserModel";
-import { type BrowserLink, activeBrowserLink, linkEntry, linkTarget } from "./linkNavigation";
+import {
+  type BrowserLink,
+  activeBrowserLink,
+  linkEntry,
+  linkTarget,
+  resumeBlockedByIdentity,
+} from "./linkNavigation";
 import {
   type SharedBrowser,
   browserIdentityKey,
@@ -110,7 +116,7 @@ function browserCommands(
       browser.open(
         viewportNow(),
         link?.machine ?? machine,
-        expected ?? link?.expectedBrowser,
+        link?.expectedBrowser ?? expected,
       );
     },
     attach: (takeover, target) => {
@@ -183,12 +189,14 @@ function useResume(
   open: boolean,
   browser: MachineBrowserController,
   commands: BrowserCommands,
+  boundIdentity: string | undefined,
 ): void {
   const { model, dispatch } = browser;
   const visible = usePageVisible();
-  const step = open && visible ? resumeStep(model, Date.now()) : undefined;
-  const machine = model.resume?.target.machine_id;
   const identity = model.observedIdentity ?? model.read?.browser_identity;
+  const blocked = resumeBlockedByIdentity(boundIdentity, identity);
+  const step = open && visible && !blocked ? resumeStep(model, Date.now()) : undefined;
+  const machine = model.resume?.target.machine_id;
   // Why the browser is not reopened: the stop's own reason.
   const stopped = useRef("");
   stopped.current = browserReasonText(model.read?.state?.reason) ?? "The browser was hibernated.";
@@ -369,6 +377,7 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
       key={binding.epoch}
       {...props}
       link={activeLink}
+      boundIdentity={binding.identity}
       entry={entry}
       shared={shared}
       snapshot={snapshot}
@@ -410,14 +419,15 @@ function usePanelSharing(
   return { shared, confirm, chrome };
 }
 
-function MachineBrowserPanel(
-  props: MachineBrowserSheetProps & {
-    shared: SharedBrowser | undefined;
-    snapshot: SubscriptionSnapshot | undefined;
-    onIdentity: (identity: string | undefined) => void;
-    entry: EntryLatch;
-  },
-): React.JSX.Element {
+interface MachineBrowserPanelProps extends MachineBrowserSheetProps {
+  shared: SharedBrowser | undefined;
+  snapshot: SubscriptionSnapshot | undefined;
+  onIdentity: (identity: string | undefined) => void;
+  boundIdentity: string | undefined;
+  entry: EntryLatch;
+}
+
+function MachineBrowserPanel(props: MachineBrowserPanelProps): React.JSX.Element {
   const { open, onClose, account, owner, dataset, link, enabling = false } = props;
   const surface = useSurfaceProfile();
   const desktop = surface.kind === "desktop";
@@ -440,7 +450,7 @@ function MachineBrowserPanel(
     : "no Machine yet";
   const commands = browserCommands(browser, areaRef, touch, link, props.entry);
   useAutoEntry(props, browser, commands);
-  useResume(open, browser, commands);
+  useResume(open, browser, commands, props.boundIdentity);
   useCapWarning(open, browser);
   const ui = useBrowserChrome(account.id, model);
   const paste = useDevicePaste(ui.controls);

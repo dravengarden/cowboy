@@ -784,3 +784,31 @@ test("Grok boundedBytes cancels an oversized chunked settings stream without los
   equal(result.rate_limits.config.creditUsagePercent, 42, "billing preserved");
   equal(result.account, undefined, "oversized settings discarded");
 });
+
+test("Grok refresh-permitted poll counts CLI startup against the shared deadline before settings", async () => {
+  let clock = 5_000;
+  let settingsCalled = false;
+  const result = await handleGrok(
+    { operation: "collect" },
+    {
+      clock: () => clock,
+      budgetMs: 1_000,
+      credential: async () => ({ key: "k", userId: "u" }),
+      startRpc: async () => {
+        clock += 800; // CLI startup leaves only 200ms (< 250ms minimum)
+        return {
+          request: async () => ({ config: { creditUsagePercent: 33 } }),
+          close() {},
+        };
+      },
+      fetch: async () => {
+        settingsCalled = true;
+        return new Response(JSON.stringify({ subscription_tier_display: "SuperGrok" }), {
+          status: 200,
+        });
+      },
+    },
+  );
+  equal(settingsCalled, false, "settings skipped when CLI startup consumed budget");
+  equal(result.rate_limits.config.creditUsagePercent, 33, "billing preserved");
+});

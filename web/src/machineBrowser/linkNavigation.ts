@@ -17,21 +17,38 @@ export interface ConfirmedLinkTarget {
   attachmentId: string;
 }
 
-/** A pending page link stays active only while the sheet remains bound to
- * the browser identity shown when the owner clicked it. Once the binding
- * re-binds (`epoch > 0`) or mismatches `expectedBrowser`, the link is
- * cancelled so it never opens or navigates a different browser profile. */
+/** A pending link (pinned sign-in or unpinned page shortcut) stays active
+ * only while the sheet remains on its original browser binding (`epoch === 0`)
+ * and matches `expectedBrowser` when captured. Any rebind cancels it so it
+ * never opens or navigates a different browser profile. */
 export function activeBrowserLink(
   link: BrowserLink | undefined,
   binding: IdentityBinding,
 ): BrowserLink | undefined {
   if (!link) return undefined;
-  if (link.expectedBrowser === undefined) return link;
   if (binding.epoch > 0) return undefined;
-  if (binding.identity !== undefined && binding.identity !== link.expectedBrowser) {
+  if (
+    link.expectedBrowser !== undefined &&
+    binding.identity !== undefined &&
+    binding.identity !== link.expectedBrowser
+  ) {
     return undefined;
   }
   return link;
+}
+
+/** Whether a reconnect step must be suppressed because the latest read names
+ * a different browser identity than this panel's bound identity (before React
+ * rebinds the panel). */
+export function resumeBlockedByIdentity(
+  boundIdentity: string | undefined,
+  observedIdentity: string | undefined,
+): boolean {
+  return (
+    boundIdentity !== undefined &&
+    observedIdentity !== undefined &&
+    observedIdentity !== boundIdentity
+  );
 }
 
 /** How a panel asked to show a link enters the browser: when pinned to
