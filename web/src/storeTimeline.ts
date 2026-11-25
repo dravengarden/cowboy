@@ -127,6 +127,51 @@ export function applyEnvelope(timelines: Map<string, Envelope[]>, env: Envelope)
   return next;
 }
 
+function toolStatusRank(status: string | undefined): number {
+  if (status === "completed" || status === "failed") return 2;
+  if (status === "in_progress") return 1;
+  return 0;
+}
+
+function liveEventAheadOfSnapshot(
+  oldEvent: Envelope,
+  newEvent: Envelope,
+  incomingMax: number,
+): boolean {
+  const seen = absorbedSeqs.get(oldEvent);
+  if (seen === undefined) return false;
+  let hasBeyond = false;
+  for (const seq of seen) {
+    if (seq > incomingMax) {
+      hasBeyond = true;
+      break;
+    }
+  }
+  if (!hasBeyond || oldEvent.kind !== "update" || newEvent.kind !== "update") return false;
+  if (
+    oldEvent.update.sessionUpdate === "tool_call" &&
+    newEvent.update.sessionUpdate === "tool_call" &&
+    oldEvent.update.toolCallId !== undefined &&
+    oldEvent.update.toolCallId === newEvent.update.toolCallId
+  ) {
+    return toolStatusRank(oldEvent.update.status) > toolStatusRank(newEvent.update.status);
+  }
+  if (
+    oldEvent.update.sessionUpdate === newEvent.update.sessionUpdate &&
+    (oldEvent.update.sessionUpdate === "agent_message_chunk" ||
+      oldEvent.update.sessionUpdate === "agent_thought_chunk" ||
+      oldEvent.update.sessionUpdate === "user_message_chunk") &&
+    oldEvent.update.messageId === newEvent.update.messageId &&
+    oldEvent.update.content?.type === "text" &&
+    newEvent.update.content?.type === "text"
+  ) {
+    const oldText = oldEvent.update.content.text ?? "";
+    const newText = newEvent.update.content.text ?? "";
+    return oldText.length > newText.length && oldText.startsWith(newText);
+  }
+  return false;
+}
+
 // Merge two seq-ordered runs in linear time while preserving object identity
 // for existing events. Scrollback used to scan the whole window for every
 // incoming event and then sort the combined window on every page, making
@@ -140,14 +185,8 @@ export function mergeEvents(
   const incomingMax = events[events.length - 1]?.seq;
   const preferExisting = incomingMax === undefined
     ? undefined
-    : (oldEvent: Envelope): boolean => {
-        const seen = absorbedSeqs.get(oldEvent);
-        if (seen === undefined) return false;
-        for (const seq of seen) {
-          if (seq > incomingMax) return true;
-        }
-        return false;
-      };
+    : (oldEvent: Envelope, newEvent: Envelope): boolean =>
+        liveEventAheadOfSnapshot(oldEvent, newEvent, incomingMax);
   const merged = mergeCanonicalTimeline(existing, events, preferExisting);
   if (
     merged.length === existing.length &&

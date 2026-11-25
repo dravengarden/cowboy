@@ -36,7 +36,7 @@ export function dropEventsBefore(
 export function mergeCanonicalTimeline(
   existing: readonly Envelope[],
   incoming: readonly Envelope[],
-  preferExisting?: (oldEvent: Envelope) => boolean,
+  preferExisting?: (oldEvent: Envelope, newEvent: Envelope) => boolean,
 ): Envelope[] {
   const merged: Envelope[] = [];
   let current = 0;
@@ -54,7 +54,7 @@ export function mergeCanonicalTimeline(
       merged.push(oldEvent);
       current += 1;
     } else if (oldEvent.seq === newEvent.seq) {
-      merged.push(preferExisting?.(oldEvent) === true ? oldEvent : newEvent);
+      merged.push(preferExisting?.(oldEvent, newEvent) === true ? oldEvent : newEvent);
       current += 1;
       next += 1;
     } else {

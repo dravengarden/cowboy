@@ -248,6 +248,29 @@ async function readQueueHasPending(
   }
 }
 
+async function retireDeliveryWhenQueueSettled(
+  owner: IdbPersistenceOwner,
+  resolvePrefix: () => Promise<string>,
+  assertCurrent: () => void,
+  sessionId: string,
+): Promise<boolean> {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) return false;
+  try {
+    const base = `${await resolvePrefix()}session:${sessionId}:`;
+    assertCurrent();
+    const discarded = await owner.discardIf<{ pending?: unknown[] }>(
+      `${base}delivery`,
+      `${base}queue`,
+      (snapshot) =>
+        snapshot === null || (Array.isArray(snapshot.pending) && snapshot.pending.length === 0),
+    );
+    assertCurrent();
+    return discarded;
+  } catch {
+    return false;
+  }
+}
+
 async function listScopedIds(
   owner: IdbPersistenceOwner,
   resolvePrefix: () => Promise<string>,
@@ -258,16 +281,16 @@ async function listScopedIds(
 ): Promise<string[]> {
   const start = `${await resolvePrefix()}${kind}:`;
   assertAdmission();
-  const keys = await owner.listKeys({
-    strict: true,
-    prefix: start,
-    ...(limit === undefined ? {} : { limit }),
-  });
+  const keys = await owner.listKeys({ strict: true, prefix: start });
   assertAdmission();
-  return keys
+  const matched = keys
     .filter((key) => key.startsWith(start) && key.endsWith(suffixText))
     .map((key) => key.slice(start.length, -suffixText.length))
     .filter((id) => /^[A-Za-z0-9_-]{1,128}$/.test(id));
+  if (limit !== undefined && matched.length > limit) {
+    throw new IdbPersistenceError("key_limit_exceeded");
+  }
+  return matched;
 }
 
 export function createProductSyncDatabase(
@@ -424,6 +447,8 @@ export function createProductSyncDatabase(
       listScopedIds(owner, async () => prefix(await ready()), assertAdmission, "session", ":queue", 4096),
     queueHasPending: (sessionId: string): Promise<boolean> =>
       readQueueHasPending(owner, async () => prefix(dataset ?? (await ready())), assertCurrent, sessionId),
+    retireDeliveryIfSettled: (sessionId: string): Promise<boolean> =>
+      retireDeliveryWhenQueueSettled(owner, async () => prefix(dataset ?? (await ready())), assertCurrent, sessionId),
     /** Borrow one paint cache. Like an outbox, an already-borrowed cache may
      * finish its original dataset's writes after admission ends; it never
      * rediscovers or adopts a new dataset. */

@@ -78,6 +78,13 @@ export interface IdbPersistenceOwner {
   /** Read one stored record in a strict readonly transaction without claiming
    *  value or outbox mode ownership on `key`. */
   peek<S>(key: string): Promise<S | null>;
+  /** Atomically delete `targetKey` in one readwrite transaction when `guardKey`
+   *  satisfies `shouldDiscard`, without claiming record mode on `guardKey`. */
+  discardIf<S>(
+    targetKey: string,
+    guardKey: string,
+    shouldDiscard: (guard: S | null) => boolean,
+  ): Promise<boolean>;
   /** Best-effort by default; use strict + limit for recovery/owned datasets. */
   listKeys(opts?: IdbListKeysOpts): Promise<string[]>;
   /** Delete one stored record, reporting failure rather than swallowing it: a
@@ -128,11 +135,28 @@ interface TransactionRequest<R> extends EventTarget {
 
 const KEY_SCAN_PAGE_SIZE = 1024;
 
-function makeKeyRange(lower: string, upper: string, lowerOpen: boolean): unknown {
-  if (typeof IDBKeyRange !== "undefined" && typeof IDBKeyRange.bound === "function") {
-    return IDBKeyRange.bound(lower, upper, lowerOpen, false);
+function nextPrefix(prefix: string): string | undefined {
+  for (let i = prefix.length - 1; i >= 0; i -= 1) {
+    const code = prefix.charCodeAt(i);
+    if (code < 0xffff) {
+      return prefix.slice(0, i) + String.fromCharCode(code + 1);
+    }
   }
-  return { lower, upper, lowerOpen, upperOpen: false };
+  return undefined;
+}
+
+function makeKeyRange(lower: string, upper: string | undefined, lowerOpen: boolean): unknown {
+  if (typeof IDBKeyRange !== "undefined") {
+    if (upper === undefined && typeof IDBKeyRange.lowerBound === "function") {
+      return IDBKeyRange.lowerBound(lower, lowerOpen);
+    }
+    if (upper !== undefined && typeof IDBKeyRange.bound === "function") {
+      return IDBKeyRange.bound(lower, upper, lowerOpen, true);
+    }
+  }
+  return upper === undefined
+    ? { lower, lowerOpen }
+    : { lower, upper, lowerOpen, upperOpen: true };
 }
 
 async function readScopedKeys(
@@ -156,7 +180,7 @@ async function readScopedKeys(
       }
       return keys.filter((key): key is string => typeof key === "string");
     }
-    const upper = `${prefix}\uffff`;
+    const upper = nextPrefix(prefix);
     const collected: string[] = [];
     let after: string | undefined;
     for (;;) {
@@ -183,6 +207,34 @@ async function readScopedKeys(
     if (strict) throw error;
     return [];
   }
+}
+
+async function discardRecordIf<S>(
+  run: <R>(
+    mode: IDBTransactionMode,
+    make: (store: IDBObjectStore) => TransactionRequest<R>,
+    follow?: (value: R, store: IDBObjectStore) => TransactionRequest<R> | undefined,
+  ) => Promise<R>,
+  recordModes: Map<string, "value" | "outbox">,
+  targetKey: string,
+  guardKey: string,
+  shouldDiscard: (guard: S | null) => boolean,
+): Promise<boolean> {
+  if (recordModes.get(targetKey) === "outbox") {
+    throw new IdbPersistenceError("record_mode_conflict");
+  }
+  let discarded = false;
+  await run<unknown>(
+    "readwrite",
+    (store) => store.get(guardKey),
+    (stored, store) => {
+      if (!shouldDiscard((stored ?? null) as S | null)) return undefined;
+      discarded = true;
+      return store.delete(targetKey);
+    },
+  );
+  if (discarded) recordModes.delete(targetKey);
+  return discarded;
 }
 
 export function createIdbPersistenceOwner(opts: IdbOwnerOpts = {}): IdbPersistenceOwner {
@@ -339,7 +391,7 @@ export function createIdbPersistenceOwner(opts: IdbOwnerOpts = {}): IdbPersisten
   const run = async <R>(
     mode: IDBTransactionMode,
     make: (store: IDBObjectStore) => TransactionRequest<R>,
-    follow?: (value: R, store: IDBObjectStore) => TransactionRequest<R>,
+    follow?: (value: R, store: IDBObjectStore) => TransactionRequest<R> | undefined,
     recoverRead = false,
   ): Promise<R> => {
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -396,9 +448,15 @@ export function createIdbPersistenceOwner(opts: IdbOwnerOpts = {}): IdbPersisten
               request!.removeEventListener("success", success);
               request!.removeEventListener("error", error);
               try {
-                // Enqueue the put synchronously in the get's success callback.
+                // Enqueue the follow-up synchronously in the get's success callback.
                 // No promise/await may split this read-modify-write transaction.
-                request = next(request!.result, transaction.objectStore(storeName));
+                const nextReq = next(request!.result, transaction.objectStore(storeName));
+                if (nextReq === undefined) {
+                  result = request!.result;
+                  hasResult = true;
+                  return;
+                }
+                request = nextReq;
                 request.addEventListener("success", success);
                 request.addEventListener("error", error);
               } catch (error) {
@@ -543,6 +601,12 @@ export function createIdbPersistenceOwner(opts: IdbOwnerOpts = {}): IdbPersisten
           (store) => store.get(key) as IDBRequest<S | undefined>,
         )) ?? null,
       ),
+    discardIf: <S>(
+      targetKey: string,
+      guardKey: string,
+      shouldDiscard: (guard: S | null) => boolean,
+    ): Promise<boolean> =>
+      scope.run(() => discardRecordIf(run, recordModes, targetKey, guardKey, shouldDiscard)),
     listKeys: (opts: IdbListKeysOpts = {}): Promise<string[]> =>
       scope.run(() => readScopedKeys(run, opts)),
     discard: (key: string): Promise<void> =>

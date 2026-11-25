@@ -546,12 +546,10 @@ export function discardDraft(sessionId: string): void {
 // a missing localStorage or a failed removeItem is swallowed, never thrown — a
 // gone session must never surface an error on the input path.
 export function pruneDrafts(liveSessionIds: Set<string>): void {
-  const removedIds = new Set<string>();
   // Deleting the current key during Map iteration is safe (spec-guaranteed), so
   // no snapshot copy is needed.
   for (const id of drafts.keys()) {
     if (!liveSessionIds.has(id)) {
-      removedIds.add(id);
       drafts.delete(id);
       dirty.delete(id);
       awaitingDatabase.delete(id);
@@ -559,31 +557,25 @@ export function pruneDrafts(liveSessionIds: Set<string>): void {
   }
   // Deleting the current entry during Set iteration is spec-safe.
   for (const id of databaseDrafts) {
-    if (!liveSessionIds.has(id)) {
-      removedIds.add(id);
-      discardDatabaseDraft(id);
-    }
+    if (!liveSessionIds.has(id)) discardDatabaseDraft(id);
   }
   const ls = globalThis.localStorage;
-  if (ls) {
-    try {
-      const stale: string[] = [];
-      for (let i = 0; i < ls.length; i += 1) {
-        const k = ls.key(i);
-        if (k?.startsWith(KEY_PREFIX)) {
-          const id = k.slice(KEY_PREFIX.length);
-          if (!liveSessionIds.has(id)) {
-            removedIds.add(id);
-            stale.push(k);
-          }
-        }
+  if (!ls) return;
+  try {
+    const stale: string[] = [];
+    for (let i = 0; i < ls.length; i += 1) {
+      const k = ls.key(i);
+      if (
+        k?.startsWith(KEY_PREFIX) &&
+        !liveSessionIds.has(k.slice(KEY_PREFIX.length))
+      ) {
+        stale.push(k);
       }
-      for (const k of stale) ls.removeItem(k);
-    } catch {
-      /* tolerant — leave stale entries rather than throw */
     }
+    for (const k of stale) ls.removeItem(k);
+  } catch {
+    /* tolerant — leave stale entries rather than throw */
   }
-  for (const id of removedIds) markSessionRemoved(id);
 }
 
 onSessionRemoved((removed) => {

@@ -7,8 +7,10 @@ const REMOVED_SESSIONS_PREFIX = "cowboy:removed-sessions:";
 const MAX_REMOVED_SESSIONS = 256;
 
 let activeDatasetId: string | undefined;
-const fallbackMemoryByKey = new Map<string, string[]>();
-const memoryByStorage = new WeakMap<Storage, Map<string, string[]>>();
+const fallbackRemovedByKey = new Map<string, string[]>();
+// Only unpublished additions waiting to commit under the cross-tab Web Lock;
+// cleared once merged so evicted entries at capacity are never republished.
+const pendingByStorage = new WeakMap<Storage, Map<string, string[]>>();
 const mergeQueuedKeys = new Set<string>();
 const removalListeners = new Set<(removed: ReadonlySet<string>) => void>();
 
@@ -31,24 +33,25 @@ function currentKey(): string {
     : REMOVED_SESSIONS_KEY;
 }
 
-function memoryList(ls: Storage | null, key: string): string[] {
-  if (ls === null) {
-    let list = fallbackMemoryByKey.get(key);
-    if (list === undefined) {
-      list = [];
-      fallbackMemoryByKey.set(key, list);
-    }
-    return list;
-  }
-  let map = memoryByStorage.get(ls);
+function pendingList(ls: Storage, key: string): string[] {
+  let map = pendingByStorage.get(ls);
   if (map === undefined) {
     map = new Map();
-    memoryByStorage.set(ls, map);
+    pendingByStorage.set(ls, map);
   }
   let list = map.get(key);
   if (list === undefined) {
     list = [];
     map.set(key, list);
+  }
+  return list;
+}
+
+function fallbackList(key: string): string[] {
+  let list = fallbackRemovedByKey.get(key);
+  if (list === undefined) {
+    list = [];
+    fallbackRemovedByKey.set(key, list);
   }
   return list;
 }
@@ -100,10 +103,9 @@ function readSharedRemoved(key: string): Set<string> | null {
   }
 }
 
-function writeMergedFence(ls: Storage, key: string): void {
-  const own = memoryList(ls, key);
+function writeFence(ls: Storage, key: string, additions: readonly string[]): boolean {
   const existing = readSharedRemoved(key) ?? new Set<string>();
-  const bounded = appendBounded(existing, own);
+  const bounded = appendBounded(existing, additions);
   try {
     const raw = JSON.stringify(bounded);
     ls.setItem(key, raw);
@@ -111,25 +113,33 @@ function writeMergedFence(ls: Storage, key: string): void {
     cachedKey = key;
     cachedRaw = raw;
     cachedIds = new Set(bounded);
+    return true;
   } catch {
-    // Keep memoryList as fallback when localStorage quota is full.
+    return false;
   }
 }
 
-function scheduleLockedMerge(key: string): void {
+function scheduleLockedCommit(key: string): void {
   const locks = (
     globalThis as {
       navigator?: { locks?: { request?: (name: string, cb: () => Promise<void> | void) => Promise<unknown> } };
     }
   ).navigator?.locks;
-  if (typeof locks?.request !== "function") return;
+  if (typeof locks?.request !== "function") {
+    const ls = localStore();
+    if (ls !== null) pendingList(ls, key).length = 0;
+    return;
+  }
   if (mergeQueuedKeys.has(key)) return;
   mergeQueuedKeys.add(key);
   void locks
     .request(key, () => {
       mergeQueuedKeys.delete(key);
       const ls = localStore();
-      if (ls !== null) writeMergedFence(ls, key);
+      if (ls === null) return;
+      const pending = pendingList(ls, key);
+      if (pending.length === 0) return;
+      if (writeFence(ls, key, pending)) pending.length = 0;
     })
     .catch(() => {
       mergeQueuedKeys.delete(key);
@@ -156,11 +166,9 @@ export function setRemovalFenceDataset(datasetId: string | undefined): void {
   cachedKey = undefined;
   cachedRaw = undefined;
   cachedIds = new Set();
-  const shared = readSharedRemoved(currentKey());
-  if (shared !== null && shared.size > 0) notifyListeners(shared);
 }
 
-/** Observe removals recorded by peer tabs or newly bound datasets. */
+/** Observe removals recorded by peer tabs in the active dataset. */
 export function onSessionRemoved(
   listener: (removed: ReadonlySet<string>) => void,
 ): () => void {
@@ -175,21 +183,59 @@ export function onSessionRemoved(
 export function markSessionRemoved(sessionId: string): void {
   const key = currentKey();
   const ls = localStore();
-  const own = memoryList(ls, key);
-  const nextOwn = appendBounded(own, [sessionId]);
-  own.splice(0, own.length, ...nextOwn);
-  if (ls === null) return;
-  writeMergedFence(ls, key);
-  scheduleLockedMerge(key);
+  if (ls === null) {
+    const own = fallbackList(key);
+    const nextOwn = appendBounded(own, [sessionId]);
+    own.splice(0, own.length, ...nextOwn);
+    return;
+  }
+  const pending = pendingList(ls, key);
+  const nextPending = appendBounded(pending, [sessionId]);
+  pending.splice(0, pending.length, ...nextPending);
+  writeFence(ls, key, pending);
+  scheduleLockedCommit(key);
+}
+
+/** Clear any stale removal fence entry for a session confirmed live by the Hub. */
+export function clearSessionRemoved(sessionId: string): void {
+  const key = currentKey();
+  const ls = localStore();
+  if (ls === null) {
+    const own = fallbackRemovedByKey.get(key);
+    if (own !== undefined) {
+      const index = own.indexOf(sessionId);
+      if (index >= 0) own.splice(index, 1);
+    }
+    return;
+  }
+  const pending = pendingByStorage.get(ls)?.get(key);
+  if (pending !== undefined) {
+    const index = pending.indexOf(sessionId);
+    if (index >= 0) pending.splice(index, 1);
+  }
+  const shared = readSharedRemoved(key);
+  if (shared === null || !shared.has(sessionId)) return;
+  const filtered = [...shared].filter((id) => id !== sessionId);
+  try {
+    const raw = JSON.stringify(filtered);
+    ls.setItem(key, raw);
+    cachedStorage = ls;
+    cachedKey = key;
+    cachedRaw = raw;
+    cachedIds = new Set(filtered);
+  } catch {
+    /* tolerant */
+  }
 }
 
 /** Whether any tab in the active dataset recorded permanent removal for `sessionId`. */
 export function isSessionRemoved(sessionId: string): boolean {
   const key = currentKey();
   const ls = localStore();
+  if (ls === null) return fallbackList(key).includes(sessionId);
   const shared = readSharedRemoved(key);
   if (shared !== null && shared.has(sessionId)) return true;
-  return memoryList(ls, key).includes(sessionId);
+  return pendingList(ls, key).includes(sessionId);
 }
 
 if (typeof globalThis.addEventListener === "function") {
@@ -198,11 +244,6 @@ if (typeof globalThis.addEventListener === "function") {
     if (event.key !== key) return;
     cachedRaw = undefined;
     const shared = readSharedRemoved(key);
-    const ls = localStore();
-    if (shared !== null) {
-      const own = memoryList(ls, key);
-      if (own.some((id) => !shared.has(id))) scheduleLockedMerge(key);
-      notifyListeners(shared);
-    }
+    if (shared !== null && shared.size > 0) notifyListeners(shared);
   });
 }

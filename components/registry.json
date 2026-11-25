@@ -37339,7 +37339,7 @@
           "sources": [
             "components/state-sync-idb"
           ],
-          "digest": "sha256:8cc168fa0e5252280a043e0862b9597f64f2f8d6a1cf1af8a69cf82bbccd4af7",
+          "digest": "sha256:2e027a922fd89da9acf90075ee24912926ec80d3598cbeac49f19e437c728c42",
           "package": {
             "kind": "npm",
             "name": "@cowboy/state-sync-idb",

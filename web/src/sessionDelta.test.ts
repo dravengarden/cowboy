@@ -163,9 +163,29 @@ test("mergeEvents preserves a live tool completion over an overlapping older sna
   const mergedNewer = mergeEvents(liveTimeline, "s1", [canonicalDone, message(60, "done")]).get("s1")!;
   const toolAfterNewer = mergedNewer.find((e) => e.seq === 10);
   expect(toolAfterNewer?.kind === "update" ? toolAfterNewer.update.title : "").toBe("canonical");
+
+  // Streamed message chunks: a canonical snapshot carrying missed chunk 12
+  // ("Hello world!") must beat a shorter live row ("Hello world") even when
+  // the canonical row stays anchored at seq 10.
+  const chunk10 = message(10, "Hello");
+  const chunk11 = message(11, " world");
+  const liveChunks = applyEnvelope(new Map([["s1", [chunk10]]]), chunk11);
+  const canonicalWithMissedChunk = message(10, "Hello world!");
+  const afterMissedChunk = mergeEvents(liveChunks, "s1", [canonicalWithMissedChunk]).get("s1")!;
+  expect(
+    afterMissedChunk[0]?.kind === "update" ? afterMissedChunk[0].update.content?.text : "",
+  ).toBe("Hello world!");
+  // Conversely, an overlapping older snapshot captured at chunk 10 ("Hello")
+  // must not truncate live chunks 10–11 ("Hello world").
+  const afterOlderChunkSnapshot = mergeEvents(liveChunks, "s1", [chunk10]).get("s1")!;
+  expect(
+    afterOlderChunkSnapshot[0]?.kind === "update"
+      ? afterOlderChunkSnapshot[0].update.content?.text
+      : "",
+  ).toBe("Hello world");
 });
 
-test("removedSessionFence scopes entries by dataset and reconciles concurrent overwrites", async () => {
+test("removedSessionFence scopes entries by dataset and clears live sessions without ping-pong", async () => {
   const entries = new Map<string, string>();
   const fakeStorage: Storage = {
     get length() {
@@ -199,14 +219,11 @@ test("removedSessionFence scopes entries by dataset and reconciles concurrent ov
     setRemovalFenceDataset("dataset-old");
     expect(isSessionRemoved("sess-shared-id")).toBe(true);
 
-    // Simulate a peer tab overwriting the shared key without this tab's entry;
-    // a subsequent merge preserves both removals.
+    // Evicting an old entry at capacity does not republish it on a later write.
     fakeStorage.setItem("cowboy:removed-sessions:dataset-old", JSON.stringify(["sess-peer-id"]));
     markSessionRemoved("sess-local-second");
     const stored = JSON.parse(fakeStorage.getItem("cowboy:removed-sessions:dataset-old") ?? "[]") as string[];
-    expect(stored).toContain("sess-shared-id");
-    expect(stored).toContain("sess-peer-id");
-    expect(stored).toContain("sess-local-second");
+    expect(stored).toEqual(["sess-peer-id", "sess-local-second"]);
   } finally {
     setRemovalFenceDataset(undefined);
     globals.localStorage = previousStorage;

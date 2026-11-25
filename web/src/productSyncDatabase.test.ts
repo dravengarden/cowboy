@@ -456,19 +456,28 @@ test("queueHasPending peeks without claiming record mode ownership before or aft
   await db.dispose();
 });
 
-test("cacheSessions enumerates dataset keys in bounded pages beyond 4096 unrelated IndexedDB keys", async () => {
+test("cacheSessions and queueSessions paginate beyond 4096 same-dataset session keys and retireDeliveryIfSettled is atomic", async () => {
   const factory = new FakeIndexedDb();
   const ds = descriptor();
   for (let i = 0; i < 4200; i += 1) {
-    factory.data.set(`cowboy:dataset:dataset-${"b".repeat(64)}:document:doc-${String(i)}:entry`, { i });
+    factory.data.set(`cowboy:dataset:${ds.dataset_id}:session:sess-${String(i)}:tail`, { i });
   }
-  factory.data.set(`cowboy:dataset:${ds.dataset_id}:session:sess-keep:delivery`, { held: [] });
+  factory.data.set(`cowboy:dataset:${ds.dataset_id}:session:sess-keep:delivery`, { held: ["m1"] });
+  factory.data.set(`cowboy:dataset:${ds.dataset_id}:session:sess-keep:queue`, snapshot("m1"));
   factory.data.set(`cowboy:dataset:${ds.dataset_id}:session:sess-gone:delivery`, { held: [] });
+  factory.data.set(`cowboy:dataset:${ds.dataset_id}:session:sess-gone:queue`, {
+    base: { version: 1, value: 0 },
+    pending: [],
+  });
   const db = createProductSyncDatabase(
     () => "user-a",
     () => Promise.resolve(ds),
     { factory: factory as unknown as IDBFactory },
   );
   assertEquals((await db.cacheSessions("delivery")).sort(), ["sess-gone", "sess-keep"]);
+  assertEquals((await db.queueSessions()).sort(), ["sess-gone", "sess-keep"]);
+  assertEquals(await db.retireDeliveryIfSettled("sess-keep"), false);
+  assertEquals(await db.retireDeliveryIfSettled("sess-gone"), true);
+  assertEquals(await db.cacheSessions("delivery"), ["sess-keep"]);
   await db.dispose();
 });

@@ -583,14 +583,16 @@ export function discardPendingEdits(sessionId: string): void {
 }
 
 export function prunePendingEdits(liveSessionIds: ReadonlySet<string>): void {
-  const removed = new Set<string>();
-  for (const record of records.values()) {
-    if (!liveSessionIds.has(record.sessionId)) removed.add(record.sessionId);
+  for (const [key, record] of records) {
+    if (liveSessionIds.has(record.sessionId)) continue;
+    records.delete(key);
+    retiredRecords.set(key, record);
+    dirty.delete(key);
+    recovering.delete(key);
+    awaitingDatabase.delete(key);
+    encodes.delete(key);
+    persist(key);
   }
-  for (const { record } of readHydratedPendingEditMirrors()) {
-    if (!liveSessionIds.has(record.sessionId)) removed.add(record.sessionId);
-  }
-  for (const sessionId of removed) discardPendingEdits(sessionId);
 }
 
 onSessionRemoved((removed) => {

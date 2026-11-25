@@ -14,6 +14,8 @@ import { createAuthoredSendGate } from "./authoredSendGate";
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import {
   type ArgsOf,
+  type ClientSnapshot,
+  type LocalPersistence,
   type Mutators,
   replicatedStore,
   type ReplicatedStore,
@@ -128,7 +130,7 @@ import {
   prunePendingEdits,
   retryPendingEditRestore,
 } from "./pendingEditStore";
-import { setRemovalFenceDataset } from "./removedSessionFence";
+import { clearSessionRemoved, setRemovalFenceDataset } from "./removedSessionFence";
 import { revealPendingArrival } from "./pendingPanelState";
 import { linkTimeline } from "./derive";
 import { acknowledgedCommand, latestClearBoundary } from "./acknowledgedCommand";
@@ -1392,6 +1394,7 @@ function syncSessionDelta(next: SessionMeta[], removed: boolean): void {
 }
 
 function applySessionUpdated(session: SessionMeta): void {
+  clearSessionRemoved(session.id);
   const { sessions, previous } = upsertSession(rawSessions, session);
   unlistedCreatedSessions.delete(session.id);
   syncSessionDelta(sessions, false);
@@ -1638,7 +1641,7 @@ function handle(msg: Outbound): void {
       // order overlays so a synced rename/reorder isn't clobbered by an unrelated
       // `sessions` broadcast (status flip, new/deleted session). The overlays are
       // the client's source of truth for title + order.
-      const previousRaw = rawSessions;
+      const prev = rawSessions;
       rawSessions = msg.sessions;
       if (!state.sessionsLoaded || state.sessionsSource !== "live") {
         setState({ ...withoutReplicaSyncedAt(state), sessionsLoaded: true, sessionsSource: "live" });
@@ -1646,25 +1649,16 @@ function handle(msg: Outbound): void {
       commitSessions();
       reportRetainedClosures(msg.sessions);
       replica.recordSessions(msg.sessions);
-      // A session that just turned busy is the likeliest next switch.
       schedulePrefetch();
       const machines = projectMachineOccupancy(state.machines, msg.sessions);
       if (machines !== state.machines) setState({ ...state, machines });
-      // The list is authoritative: drop composer drafts for sessions that no
-      // longer exist (deleted here or on another terminal). Tolerant + off the
-      // input path.
       const validSessions = listedOrJustCreatedSessions(
         new Set(msg.sessions.map((s) => s.id)),
         unlistedCreatedSessions,
         Date.now(),
       );
-      for (const prev of previousRaw) {
-        if (!validSessions.has(prev.id)) {
-          clearBoundaries.delete(prev.id);
-          discardDraft(prev.id);
-          discardPendingEdits(prev.id);
-        }
-      }
+      for (const s of prev) if (!validSessions.has(s.id)) clearBoundaries.delete(s.id);
+      for (const s of msg.sessions) clearSessionRemoved(s.id);
       pruneDrafts(validSessions);
       prunePendingEdits(validSessions);
       retainTranscriptSessions(validSessions);
@@ -1719,6 +1713,8 @@ function handle(msg: Outbound): void {
       break;
     case "event": {
       const env = msg.envelope;
+      const clearFloor = clearBoundaries.get(env.session_id);
+      if (clearFloor !== undefined && env.seq < clearFloor) break;
       if (!containsSeq(state.timelines.get(env.session_id) ?? [], env.seq)) {
         observeRecoveredSend(env);
         observePromptSuggestion(env);
@@ -1836,8 +1832,9 @@ function handle(msg: Outbound): void {
       }
       // Checkpoint the replica on turn boundaries and lifecycle changes at
       // once; streaming chunks coalesce into the debounced write.
-      if (cached) scheduleReplicaTail(env.session_id, env.kind !== "update" || clearsContext);
-      else if (clearsContext) dropReplicaSession(env.session_id);
+      if (clearsContext && (!cached || state.transcriptSources.get(env.session_id)?.source !== "live")) {
+        dropReplicaSession(env.session_id);
+      } else if (cached) scheduleReplicaTail(env.session_id, env.kind !== "update" || clearsContext);
       break;
     }
     case "config_options": {
@@ -2742,15 +2739,23 @@ async function retainReplicaWithOutboxGuard(valid: ReadonlySet<string>): Promise
   });
 }
 
+function queueOutboxPersistence(sessionId: string): LocalPersistence<ClientSnapshot<QValue>> {
+  const outbox = syncDatabase.outbox<QValue>({ kind: "session", session: sessionId, state: "queue" });
+  return {
+    ...outbox,
+    save: async (snapshot): Promise<void> => {
+      await outbox.save(snapshot);
+      if (snapshot.pending.length === 0 && isRemovedSession(sessionId)) void retireRemovedDelivery(sessionId);
+    },
+  };
+}
+
 function isRemovedSession(sessionId: string): boolean {
   return state.sessionsLoaded && !rawSessions.some((s) => s.id === sessionId) && !unlistedCreatedSessions.has(sessionId);
 }
 
 async function retireRemovedDelivery(sessionId: string): Promise<void> {
-  if (productSessionAbandoned || !isRemovedSession(sessionId)) return;
-  if (!(await syncDatabase.queueHasPending(sessionId)) && isRemovedSession(sessionId)) {
-    await replica.session(sessionId).discardDelivery();
-  }
+  if (!productSessionAbandoned && isRemovedSession(sessionId)) await syncDatabase.retireDeliveryIfSettled(sessionId);
 }
 
 function dropReplicaSession(sessionId: string): void {
@@ -3970,9 +3975,7 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
       // connect()), so a staged/queued message painted instantly survives the
       // reload and re-sends; the per-session `queue_resync` (force) that follows
       // is the authority that corrects any stale cached base.
-      local: syncDatabase.outbox<QValue>(
-        { kind: "session", session: sessionId, state: "queue" },
-      ),
+      local: queueOutboxPersistence(sessionId),
     });
     qClients.set(sessionId, c);
     if (didHydrate) {
@@ -4189,7 +4192,6 @@ function commitQueue(sessionId: string): void {
   // Arms/retires the stall deadlines alongside the statuses just projected, so
   // no phase this function can paint is left without an owner.
   reconcileStallWatchdogs(sessionId);
-  if (pend.size === 0 && isRemovedSession(sessionId)) void retireRemovedDelivery(sessionId);
 }
 
 /** The one way an unconfirmed row reaches its terminal, escapable phase: red
