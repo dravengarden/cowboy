@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -20,6 +20,7 @@ import {
   postEditDedupeKey,
 } from "./post-edit-notes.mjs";
 import { AcpProxy } from "./proxy.mjs";
+import { fakeEndpoint } from "./test-endpoint.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 
@@ -406,59 +407,70 @@ test("Later ReadFile observing changed bytes invalidates an in-flight diagnostic
   assert.equal(await pullPromise, null);
 });
 
-test("Pre-dispatch refusal of large staged edit dispatches neither apply nor post-fence removal (H1/M4)", async () => {
-  const calls = [];
-  let allowApply = true;
-  const conn = {
-    async call(method, params, opts) {
-      opts?.beforeSend?.();
-      calls.push({ method, params });
-      if (method === "process/start" && params.argv?.[2]?.includes("file-buffers")) {
-        return { processId: params.processId };
-      }
-      if (method === "process/read") {
-        return {
-          chunks: [
-            {
-              seq: 1,
-              stream: "stdout",
-              chunk: Buffer.from("/home/u/.cache/cowboy/file-buffers").toString("base64"),
-            },
-          ],
-          exited: true,
-          exitCode: 0,
-          closed: true,
-        };
-      }
-      if (method === "fs/writeFile") {
-        allowApply = false;
-        return {};
-      }
-      throw new Error(`unexpected ${method}`);
+test("Pre-dispatch refusal of large stdin-fed edit terminates helper with zero payload residue (R10-M1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "cowboy-r10-fence-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
     },
-  };
-  const facade = new Facade(conn, { root: "/repo", shell: "/bin/sh" });
-  facade.beginTurn("s1", { turnNonce: "n1" });
-  const session = facade.session("s1");
-  const turn = session.turn;
-  const large = Buffer.from("x".repeat(60 * 1024), "utf8");
-  const beforeSend = () =>
-    facade.assertAuthorizedBeforeEffect(session, turn, { confirm: () => allowApply }, undefined);
-  await assert.rejects(
-    () => facade.publishOnce(turn, "/repo/big.txt", undefined, large, { beforeSend }),
-    /cancelled/,
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
   );
-  await new Promise((r) => setTimeout(r, 10));
-  assert.equal(
-    calls.some((c) => c.method === "fs/remove" || c.method === "cowboy/cleanupStagedPayload"),
-    false,
-    "must never execute post-fence removal or bypass RPC",
-  );
-  assert.equal(
-    calls.some((c) => c.method === "process/start" && c.params.argv?.includes("--request-file")),
-    false,
-    "apply process/start must not dispatch after pre-dispatch refusal",
-  );
+  try {
+    let allowWrite = true;
+    const origCall = conn.call.bind(conn);
+    conn.call = async (method, params, opts) => {
+      const res = await origCall(method, params, opts);
+      if (method === "process/start" && params.pipeStdin) {
+        // Cancel / mode-switch wins after helper spawns, before stdin payload is sent.
+        allowWrite = false;
+      }
+      return res;
+    };
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const session = facade.session("s1");
+    const turn = session.turn;
+    const large = Buffer.from("x".repeat(60 * 1024), "utf8");
+    const beforeSend = () =>
+      facade.assertAuthorizedBeforeEffect(session, turn, { confirm: () => allowWrite }, undefined);
+    await assert.rejects(
+      () => facade.publishOnce(turn, join(repo, "big.txt"), undefined, large, { beforeSend }),
+      /cancelled/,
+    );
+    assert.equal(
+      endpoint.calls.some((c) => c.method === "fs/writeFile" || c.method === "fs/remove"),
+      false,
+      "large edit must never stage or remove via fs RPCs",
+    );
+    assert.equal(
+      endpoint.calls.some((c) => c.method === "process/write"),
+      false,
+      "stdin payload must not be written after fence refusal",
+    );
+    assert.equal(
+      endpoint.calls.some((c) => c.method === "process/terminate"),
+      true,
+      "fenced idle helper must be terminated cleanly",
+    );
+    assert.deepEqual(
+      await readdir(home),
+      [],
+      "pre-write fence refusal must leave zero scratch files or cache dirs in HOME",
+    );
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });
 
 test("serveMcp keeps activeCalls owned across cancellation and enforces single reply per ID (R3-H7)", async () => {
@@ -952,57 +964,66 @@ test("facade-relay verifies independent --canary-nonce on native stdout for posi
   }
 });
 
-test("Exit-127 staged edit skips fs/remove when beforeSend refuses (R3-M1)", async () => {
-  const calls = [];
-  let allow = true;
-  const conn = {
-    async call(method, params, opts) {
-      opts?.beforeSend?.();
-      calls.push({ method, params });
-      if (method === "process/start" && params.argv?.[2]?.includes("file-buffers")) {
-        return { processId: params.processId };
-      }
-      if (method === "process/start" && params.argv?.includes("--request-file")) {
-        allow = false; // Plan-mode switch or cancel occurs while helper runs.
-        return { processId: params.processId };
-      }
-      if (method === "process/read") {
-        const isMkdir = calls.filter((c) => c.method === "process/start").length === 1;
-        return {
-          chunks: isMkdir
-            ? [
-                {
-                  seq: 1,
-                  stream: "stdout",
-                  chunk: Buffer.from("/home/u/.cache/cowboy/file-buffers").toString("base64"),
-                },
-              ]
-            : [],
-          exited: true,
-          exitCode: isMkdir ? 0 : 127,
-          closed: true,
-        };
-      }
-      if (method === "fs/writeFile") return {};
-      throw new Error(`unexpected ${method}`);
-    },
-  };
-  const facade = new Facade(conn, { root: "/repo", shell: "/bin/sh" });
-  facade.beginTurn("s1", { turnNonce: "n1" });
-  const session = facade.session("s1");
-  const turn = session.turn;
-  const large = Buffer.from("x".repeat(60 * 1024), "utf8");
-  const beforeSend = () =>
-    facade.assertAuthorizedBeforeEffect(session, turn, { confirm: () => allow }, undefined);
-  await assert.rejects(
-    () => facade.publishOnce(turn, "/repo/big.txt", undefined, large, { beforeSend }),
-    /helper is unavailable/,
-  );
-  assert.equal(
-    calls.some((c) => c.method === "fs/remove"),
-    false,
-    "exit-127 cleanup must respect beforeSend fence",
-  );
+test("Exit-127 large edit leaves zero scratch payload even when beforeSend refuses (R3-M1/R10-M1)", async () => {
+  for (const scenario of ["missing-helper", "helper-exits-127"]) {
+    const dir = await mkdtemp(join(tmpdir(), `cowboy-r10-127-${scenario}-`));
+    const repo = join(dir, "repo");
+    const home = join(dir, "home");
+    await mkdir(repo);
+    await mkdir(home);
+    let fileHelper = null;
+    if (scenario === "helper-exits-127") {
+      fileHelper = join(dir, "exit127-helper");
+      await writeFile(fileHelper, "#!/bin/sh\nexit 127\n");
+      await chmod(fileHelper, 0o755);
+    }
+    const socket = join(dir, "exec.sock");
+    const endpoint = await fakeEndpoint(socket, repo, { home, fileHelper });
+    const conn = await Connection.open(
+      {
+        schema: 1,
+        endpoint: `unix:${socket}`,
+        bearer_token: "a".repeat(64),
+        binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+      },
+      { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+    );
+    try {
+      let allow = true;
+      const origCall = conn.call.bind(conn);
+      conn.call = async (method, params, opts) => {
+        const res = await origCall(method, params, opts);
+        if (method === "process/write") {
+          // Plan-mode switch or cancel occurs right after stdin is accepted.
+          allow = false;
+        }
+        return res;
+      };
+      const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+      facade.beginTurn("s1", { turnNonce: "n1" });
+      const session = facade.session("s1");
+      const turn = session.turn;
+      const large = Buffer.from("y".repeat(60 * 1024), "utf8");
+      const beforeSend = () =>
+        facade.assertAuthorizedBeforeEffect(session, turn, { confirm: () => allow }, undefined);
+      await assert.rejects(
+        () => facade.publishOnce(turn, join(repo, "big.txt"), undefined, large, { beforeSend }),
+        /helper is unavailable/,
+      );
+      assert.equal(
+        endpoint.calls.some((c) => c.method === "fs/writeFile" || c.method === "fs/remove"),
+        false,
+        `${scenario}: must not invoke fs/writeFile or post-fence fs/remove`,
+      );
+      const fbDir = join(home, ".cache", "cowboy", "file-buffers");
+      const leftovers = await readdir(fbDir).catch(() => []);
+      assert.deepEqual(leftovers, [], `${scenario}: must leave zero payload files in file-buffers`);
+    } finally {
+      conn.close();
+      endpoint.close();
+      await rm(dir, { recursive: true, force: true });
+    }
+  }
 });
 
 test("ReadFile throws No such file and preserves absence when file disappears after getMetadata (R3-M2)", async () => {
@@ -1650,4 +1671,139 @@ test("PlanGate bounds retained rename identities per card to at most the two dif
   const entry = gate.waiting.get("s1")[0];
   assert.equal(entry.diffNames.size, 2);
   assert.equal(entry.name, "mcp_cowboy_EditFile");
+});
+
+test("Large stdin-fed edit publishes cleanly end-to-end with zero scratch residue (R10-M1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "cowboy-r10-ok-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const session = facade.session("s1");
+    const turn = session.turn;
+    const content = `中文头\n${"z".repeat(64 * 1024)}\n`;
+    const target = join(repo, "large-中文.txt");
+    const published = await facade.publishOnce(
+      turn,
+      target,
+      undefined,
+      Buffer.from(content, "utf8"),
+    );
+    assert.equal(published, false);
+    assert.equal(await readFile(target, "utf8"), content);
+    assert.equal(
+      endpoint.calls.some((c) => c.method === "fs/writeFile" || c.method === "fs/remove"),
+      false,
+    );
+    const fbDir = join(home, ".cache", "cowboy", "file-buffers");
+    assert.deepEqual(await readdir(fbDir).catch(() => []), []);
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("PlanGate caps retained collision digests, folds overflow into tool-wide watermark, and skips out-of-turn history (R10-L1)", () => {
+  const gate = new PlanGate();
+  const turn = { attempt: Symbol("att") };
+  const staleCall = {
+    sessionId: "s1",
+    name: "EditFile",
+    args: { path: "f0.rs", old_string: "a", new_string: "b" },
+  };
+  // Admit staleCall unbound BEFORE the first colliding pair for f0.rs.
+  gate.admitCall(staleCall, turn);
+  assert.equal(gate.bind(staleCall, turn), undefined);
+
+  // Trigger MAX_WAITING + 12 distinct overlapping pairs, completing both cards each time.
+  for (let i = 0; i < MAX_WAITING + 12; i += 1) {
+    const input = { path: `f${i}.rs`, old_string: "a", new_string: "b" };
+    gate.trackUpdate(
+      "s1",
+      {
+        toolCallId: `p${i}-a`,
+        name: "mcp_cowboy_EditFile",
+        rawInput: input,
+        status: "in_progress",
+      },
+      turn,
+    );
+    gate.trackUpdate(
+      "s1",
+      {
+        toolCallId: `p${i}-b`,
+        name: "mcp_cowboy_EditFile",
+        rawInput: input,
+        status: "in_progress",
+      },
+      turn,
+    );
+    gate.trackUpdate("s1", { toolCallId: `p${i}-a`, status: "completed" }, turn);
+    gate.trackUpdate("s1", { toolCallId: `p${i}-b`, status: "completed" }, turn);
+  }
+
+  const bucket = gate.ambiguityBucket("s1", turn, turn.attempt, "mcp_cowboy_EditFile", false);
+  assert.ok(bucket, "live turn retains bounded ambiguity bucket");
+  assert.ok(
+    bucket.byDigest.size <= MAX_WAITING,
+    `byDigest must stay capped at MAX_WAITING, got ${bucket.byDigest.size}`,
+  );
+  assert.ok(bucket.toolWide > 0, "overflow must fold into tool-wide watermark");
+
+  // Even though f0.rs's individual digest was evicted from byDigest, the folded
+  // tool-wide watermark still prevents staleCall from binding to a fresh card!
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "fresh-f0",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "f0.rs", old_string: "a", new_string: "b" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  assert.equal(gate.bind(staleCall, turn), undefined);
+
+  // Out-of-turn and closed-turn collisions retain no diff ambiguity history.
+  const outInput = { path: "oot.rs", old_string: "1", new_string: "2" };
+  gate.trackUpdate(
+    "s1",
+    { toolCallId: "oot-a", name: "mcp_cowboy_EditFile", rawInput: outInput, status: "in_progress" },
+    undefined,
+  );
+  gate.trackUpdate(
+    "s1",
+    { toolCallId: "oot-b", name: "mcp_cowboy_EditFile", rawInput: outInput, status: "in_progress" },
+    undefined,
+  );
+  assert.equal(
+    gate.ambiguityBucket("s1", undefined, undefined, "mcp_cowboy_EditFile", false),
+    undefined,
+  );
+  assert.equal(
+    gate.latestDiffAmbiguity("s1", undefined, undefined, "mcp_cowboy_EditFile", undefined),
+    0,
+  );
+
+  const closedTurn = { attempt: Symbol("closed"), closed: true };
+  gate.recordDiffAmbiguity("s1", closedTurn, closedTurn.attempt, "mcp_cowboy_EditFile", "deadbeef");
+  assert.equal(
+    gate.ambiguityBucket("s1", closedTurn, closedTurn.attempt, "mcp_cowboy_EditFile", false),
+    undefined,
+  );
 });

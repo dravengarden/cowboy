@@ -141,8 +141,12 @@ export async function fakeEndpoint(
     "process/start": (params) => {
       const child = spawn(params.argv[0], params.argv.slice(1).map(toReal), {
         cwd: toReal(fileURLToPath(params.cwd)),
-        stdio: ["ignore", "pipe", "pipe"],
-        env: { ...process.env, COWBOY_EXECUTION_FILE_HELPER: fileHelper ?? "" },
+        stdio: [params.pipeStdin ? "pipe" : "ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          ...(home ? { HOME: home } : {}),
+          COWBOY_EXECUTION_FILE_HELPER: fileHelper ?? "",
+        },
       });
       const entry = {
         chunks: [],
@@ -201,8 +205,18 @@ export async function fakeEndpoint(
     },
     // The worker's own requests: a session without extensions.
     "cowboy/extensions": () => ({ tools: [], instructions: "" }),
+    "process/write": (params) => {
+      const entry = processes.get(params.processId);
+      if (!entry) throw { code: -32600, message: `unknown process id ${params.processId}` };
+      if (entry.closed || entry.exited || !entry.child.stdin || entry.child.stdin.destroyed) {
+        return { status: "closed" };
+      }
+      entry.child.stdin.write(Buffer.from(params.chunk, "base64"));
+      return { status: "accepted" };
+    },
     "process/terminate": (params) => {
       const entry = processes.get(params.processId);
+      if (entry?.child.stdin && !entry.child.stdin.destroyed) entry.child.stdin.end();
       entry?.child.kill("SIGTERM");
       return { running: Boolean(entry && !entry.exited) };
     },

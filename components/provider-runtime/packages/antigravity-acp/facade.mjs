@@ -31,7 +31,6 @@ import {
   LIMITS,
   lost,
   missing,
-  PAYLOAD_DIRECTORY,
   Retained,
   remoteMessage,
   sha256,
@@ -66,6 +65,44 @@ export const WRAP_UP_NOTE =
  * authorizes the probe from its own state, never from this id). */
 export const READINESS_PREFIX = "cowboy-agy-readiness-";
 
+/** Maximum byte length of one JSON apply request fed to `APPLY_STDIN`. */
+const MAX_STDIN_APPLY_BYTES = 5 * 1024 * 1024;
+/**
+ * Bounded, stdin-fed large-edit wrapper: confirms the execution helper exists
+ * before reading stdin, reads exactly `len + 1` bytes terminated by a newline
+ * into memory, and only then creates and owns a private 0600 scratch file that
+ * is unconditionally removed on exit or signal. Neither pre-write fencing nor
+ * exit-127 helper unavailability can leave a payload file behind.
+ */
+const APPLY_STDIN = [
+  "set -eu",
+  '[ -n "${COWBOY_EXECUTION_FILE_HELPER:-}" ] && [ -f "$COWBOY_EXECUTION_FILE_HELPER" ] && [ -x "$COWBOY_EXECUTION_FILE_HELPER" ] || exit 127',
+  'len="$1"',
+  "case \"$len\" in ''|*[!0-9]*) exit 2 ;; esac",
+  `[ "$len" -ge 1 ] && [ "$len" -le ${MAX_STDIN_APPLY_BYTES} ] || exit 2`,
+  'case "${HOME:-}" in /*) ;; *) exit 2 ;; esac',
+  'raw=$(LC_ALL=C head -c "$((len + 1))"; printf x)',
+  "nl='\n'",
+  'case "$raw" in *"${nl}x") ;; *) exit 2 ;; esac',
+  "req=${raw%?}",
+  "req=${req%?}",
+  "unset raw",
+  '(LC_ALL=C; [ "${#req}" -eq "$len" ]) || exit 2',
+  "umask 077",
+  'd="$HOME/.cache/cowboy/file-buffers"',
+  'mkdir -p -- "$d"',
+  'test -d "$d" && test ! -L "$d" && test -O "$d" && chmod 700 -- "$d"',
+  'tmp=""',
+  'cleanup() { [ -n "$tmp" ] && rm -f -- "$tmp" || true; }',
+  "trap cleanup EXIT",
+  "trap 'cleanup; trap - HUP; kill -HUP $$' HUP",
+  "trap 'cleanup; trap - INT; kill -INT $$' INT",
+  "trap 'cleanup; trap - TERM; kill -TERM $$' TERM",
+  'tmp=$(mktemp "$d/payload-XXXXXXXX")',
+  'printf \'%s\' "$req" > "$tmp"',
+  "unset req",
+  '"$COWBOY_EXECUTION_FILE_HELPER" apply --request-file "$tmp"',
+].join("\n");
 /** A publish settled by the file's bytes alone (E1, see `publishOnce`). */
 const VERIFIED =
   "the requested content is verified on the target; the write helper's own report was lost";
@@ -1543,28 +1580,24 @@ ${WRAP_UP_NOTE}`,
       splices: splice(base ?? Buffer.alloc(0), bytes),
       staleTempSeconds: 3600,
     });
-    let args;
-    let payload;
-    if (Buffer.byteLength(request) <= INLINE_APPLY) {
-      args = ["--request", Buffer.from(request).toString("base64")];
+    const requestBytes = Buffer.from(request, "utf8");
+    let argv;
+    let stdinPayload;
+    if (requestBytes.length <= INLINE_APPLY) {
+      argv = ["/bin/sh", "-c", APPLY, "sh", "--request", requestBytes.toString("base64")];
     } else {
-      const directory = await this.payloadDirectory(turn, { beforeSend });
-      payload = posix.join(directory, `payload-${randomUUID().replaceAll("-", "")}.json`);
-      await this.mutate(
-        turn,
-        "fs/writeFile",
-        {
-          path: url(payload),
-          dataBase64: Buffer.from(request).toString("base64"),
-        },
-        { beforeSend },
-      );
-      args = ["--request-file", payload];
+      if (requestBytes.length > MAX_STDIN_APPLY_BYTES) {
+        throw new ToolError("Edit request exceeds helper limit");
+      }
+      argv = ["/bin/sh", "-c", APPLY_STDIN, "sh", String(requestBytes.length)];
+      stdinPayload = requestBytes;
     }
-    const result = await this.runBounded(turn, ["/bin/sh", "-c", APPLY, "sh", ...args], {
+    const result = await this.runBounded(turn, argv, {
       timeoutMs: LIMITS.publishTimeoutMs,
       maxBytes: 64 * 1024,
       lostIsUncertain: true,
+      pipeStdin: stdinPayload !== undefined,
+      stdinPayload,
       beforeSend,
     });
     let outcome;
@@ -1594,15 +1627,8 @@ ${WRAP_UP_NOTE}`,
       throw new UncertainEffect("file publish");
     }
     if (result.exitCode === 127) {
-      // No helper ran (the executor exports none): nothing was written.
-      if (payload) {
-        await this.mutate(
-          turn,
-          "fs/remove",
-          { path: url(payload), force: true },
-          { beforeSend },
-        ).catch(() => {});
-      }
+      // No helper ran (the executor exports none): nothing was written and
+      // APPLY_STDIN never staged a persistent payload file.
       throw new ToolError(
         "The workspace Machine's execution helper is unavailable; nothing was written.",
       );
@@ -1617,38 +1643,12 @@ ${WRAP_UP_NOTE}`,
     );
   }
 
-  /** The target's private directory for large helper requests. */
-  async payloadDirectory(turn, { beforeSend } = {}) {
-    if (typeof beforeSend === "function") beforeSend();
-    this.payloads ??= this.runBounded(turn, ["/bin/sh", "-c", PAYLOAD_DIRECTORY], {
-      timeoutMs: LIMITS.publishTimeoutMs,
-      maxBytes: 4096,
-      beforeSend,
-    }).then((result) => {
-      const directory = result.stdout.trim();
-      if (
-        result.exitCode !== 0 ||
-        result.forgotten ||
-        result.timedOut ||
-        result.truncated ||
-        !posix.isAbsolute(directory)
-      ) {
-        throw new ToolError("The workspace Machine has no private request directory");
-      }
-      return directory;
-    });
-    this.payloads.catch(() => {
-      this.payloads = undefined;
-    });
-    return this.payloads;
-  }
-
   /**
    * Start `argv` on the target. A `readiness` probe (the projection's Git
    * state) runs outside any turn: the worker's ledger admits and tracks it
    * by its id prefix, one at a time.
    */
-  async start(turn, argv, { readiness = false, beforeSend } = {}) {
+  async start(turn, argv, { readiness = false, pipeStdin = false, beforeSend } = {}) {
     const processId = `${readiness ? READINESS_PREFIX : "cowboy-agy-"}${randomUUID()}`;
     const result = await this.mutate(
       turn,
@@ -1659,7 +1659,7 @@ ${WRAP_UP_NOTE}`,
         cwd: url(this.root),
         env: {},
         tty: false,
-        pipeStdin: false,
+        pipeStdin: Boolean(pipeStdin),
         arg0: null,
         envPolicy: ENV_POLICY,
       },
@@ -1876,20 +1876,82 @@ ${WRAP_UP_NOTE}`,
   async runUntracked(
     turn,
     argv,
-    { timeoutMs, maxBytes, maxLines, lostIsUncertain = true, readiness = false, beforeSend },
+    {
+      timeoutMs,
+      maxBytes,
+      maxLines,
+      lostIsUncertain = true,
+      readiness = false,
+      pipeStdin = false,
+      stdinPayload = undefined,
+      beforeSend,
+    },
   ) {
-    const process = await this.start(turn, argv, { readiness, beforeSend });
+    const process = await this.start(turn, argv, {
+      readiness,
+      pipeStdin: Boolean(pipeStdin || stdinPayload !== undefined),
+      beforeSend,
+    });
     const out = { stdout: [], stderr: [], size: 0, lines: 0 };
     const deadline = Date.now() + timeoutMs;
     let truncated = false;
     let timedOut = false;
     let failure;
     try {
-      while (!process.closed) {
-        const remaining = deadline - Date.now();
-        if (remaining <= 0) {
-          timedOut = true;
+      let stdinDelivered = stdinPayload === undefined;
+      if (stdinPayload !== undefined) {
+        const chunk = Buffer.concat([stdinPayload, Buffer.from("\n")]).toString("base64");
+        const writeId = randomUUID();
+        for (;;) {
+          const remaining = deadline - Date.now();
+          if (remaining <= 0) {
+            timedOut = true;
+            break;
+          }
+          let reply;
+          try {
+            reply = await this.mutate(
+              turn,
+              "process/write",
+              { processId: process.processId, chunk, writeId },
+              { beforeSend },
+            );
+          } catch (error) {
+            // If the target executor itself reports the process already closed
+            // (e.g. exit 127 when the helper is absent), poll to observe its
+            // exit status rather than masking it. Local fence refusals and
+            // unknown outcomes always fail closed.
+            if (
+              error?.remote !== undefined &&
+              error.remote.code !== -32000 &&
+              !unknownOutcome(error)
+            ) {
+              break;
+            }
+            throw error;
+          }
+          if (reply?.status === "accepted") {
+            stdinDelivered = true;
+            break;
+          }
+          if (reply?.status === "starting") {
+            await new Promise((resolve) =>
+              setTimeout(resolve, Math.min(100, Math.max(1, remaining))),
+            );
+            continue;
+          }
           break;
+        }
+      }
+      const pollDeadline = stdinDelivered ? deadline : Math.min(deadline, Date.now() + 5000);
+      while (!process.closed && !timedOut) {
+        const remaining = pollDeadline - Date.now();
+        if (remaining <= 0) {
+          if (stdinDelivered) {
+            timedOut = true;
+            break;
+          }
+          throw new ToolError("Failed to deliver apply request to workspace helper.");
         }
         for (const { stream, bytes } of await this.poll(process, remaining, {
           lostIsUncertain,

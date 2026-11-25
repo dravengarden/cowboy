@@ -172,27 +172,23 @@ export class PlanGate {
     /** Monotonic sequence for ordering call admissions vs diff-card contradictions (R6-M2). */
     this.seq = 0;
     /**
-     * Turn object -> Map<`${sessionId}\0${name}`, Map<attempt, { toolWide: number, byDigest: Map<string, number> }>>
-     * Exact collisions taint only their digest; inputless/contradicted/evicted cards taint tool-wide (R7-L1).
+     * Live turn object -> Map<`${sessionId}\0${name}`, Map<attempt, { toolWide: number, byDigest: Map<string, number> }>>
+     * Exact collisions taint only their digest up to `MAX_WAITING` per bucket,
+     * folding overflow into `toolWide`; inputless/contradicted/evicted cards
+     * taint tool-wide (R7-L1, R10-L1). Out-of-turn events retain no history.
      */
     this.turnAmbiguities = new WeakMap();
-    this.unboundAmbiguities = new Map();
-    /** Turn object -> Map<`${sessionId}\0${id}`, { diffNames: Set<string>, attempt }> all evicted cards (R7-M3, R8-M4, R9-L1). */
+    /** Live turn object -> Map<`${sessionId}\0${id}`, { diffNames: Set<string>, attempt }> all evicted cards (R7-M3, R8-M4, R9-L1). */
     this.turnEvicted = new WeakMap();
-    this.unboundEvicted = new Map();
   }
 
   ambiguityBucket(sessionId, turn, attempt, name, create = false) {
-    let byKey;
-    if (turn && typeof turn === "object") {
-      byKey = this.turnAmbiguities.get(turn);
-      if (!byKey) {
-        if (!create) return undefined;
-        byKey = new Map();
-        this.turnAmbiguities.set(turn, byKey);
-      }
-    } else {
-      byKey = this.unboundAmbiguities;
+    if (!turn || typeof turn !== "object" || !isTurnLive(turn)) return undefined;
+    let byKey = this.turnAmbiguities.get(turn);
+    if (!byKey) {
+      if (!create) return undefined;
+      byKey = new Map();
+      this.turnAmbiguities.set(turn, byKey);
     }
     const key = `${sessionId}\0${name}`;
     let byAttempt = byKey.get(key);
@@ -211,13 +207,25 @@ export class PlanGate {
   }
 
   recordDiffAmbiguity(sessionId, turn, attempt, name, digest = undefined) {
+    if (!turn || typeof turn !== "object" || !isTurnLive(turn)) return;
     const seq = ++this.seq;
     const bucket = this.ambiguityBucket(sessionId, turn, attempt, name, true);
+    if (!bucket) return;
     if (digest === undefined) {
-      bucket.toolWide = seq;
-    } else {
-      bucket.byDigest.set(digest, seq);
+      if (seq > bucket.toolWide) bucket.toolWide = seq;
+      bucket.byDigest.clear();
+      return;
     }
+    if (bucket.byDigest.has(digest)) {
+      bucket.byDigest.delete(digest);
+    } else if (bucket.byDigest.size >= MAX_WAITING) {
+      const oldest = bucket.byDigest.entries().next().value;
+      if (oldest) {
+        bucket.byDigest.delete(oldest[0]);
+        if (oldest[1] > bucket.toolWide) bucket.toolWide = oldest[1];
+      }
+    }
+    bucket.byDigest.set(digest, seq);
   }
 
   latestDiffAmbiguity(sessionId, turn, attempt, name, digest) {
@@ -234,15 +242,13 @@ export class PlanGate {
   }
 
   evictedMap(turn, create = false) {
-    if (turn && typeof turn === "object") {
-      let map = this.turnEvicted.get(turn);
-      if (!map && create) {
-        map = new Map();
-        this.turnEvicted.set(turn, map);
-      }
-      return map;
+    if (!turn || typeof turn !== "object" || !isTurnLive(turn)) return undefined;
+    let map = this.turnEvicted.get(turn);
+    if (!map && create) {
+      map = new Map();
+      this.turnEvicted.set(turn, map);
     }
-    return this.unboundEvicted;
+    return map;
   }
 
   /** Current mode generation for `ownerId`. */
