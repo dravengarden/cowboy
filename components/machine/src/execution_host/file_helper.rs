@@ -326,36 +326,87 @@ fn lock_directory(directory: &Path) -> Result<File> {
 
 /// Remove only regular files named exactly as this helper names them.
 /// Executor-owned age-based sweep of abandoned staged `payload-<32hex>.json`
-/// files under `$HOME/.cache/cowboy/file-buffers` (R5-L1), running
-/// independently of helper availability and facade lifetime.
+/// files under `$HOME/.cache/cowboy/file-buffers` (R5-L1, R6-M3), opening each
+/// path step without following symlinks, verifying ownership and private mode
+/// on the opened directory handle, and performing enumeration, stat, and unlink
+/// relative to that handle.
 pub(crate) fn sweep_stale_file_buffer_payloads(home: &Path, owner_uid: u32, max_age_secs: u64) {
+    use rustix::fs::{FileType, Mode, OFlags, fstat, open, openat};
     if !home.is_absolute() {
         return;
     }
-    let directory = home.join(".cache").join("cowboy").join("file-buffers");
-    let Ok(meta) = std::fs::symlink_metadata(&directory) else {
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let Ok(mut cur) = open(
+        home,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) else {
         return;
     };
-    if !meta.is_dir() || meta.uid() != owner_uid {
+    for step in [".cache", "cowboy", "file-buffers"] {
+        let Ok(next) = openat(&cur, step, flags, Mode::empty()) else {
+            return;
+        };
+        cur = next;
+    }
+    let Ok(stat) = fstat(&cur) else {
+        return;
+    };
+    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
+        || stat.st_uid != owner_uid
+        || (stat.st_mode & 0o077) != 0
+    {
         return;
     }
-    sweep(&directory, PAYLOAD_PREFIX, PAYLOAD_SUFFIX, max_age_secs);
+    sweep_dir_fd(
+        &cur,
+        PAYLOAD_PREFIX,
+        PAYLOAD_SUFFIX,
+        max_age_secs,
+        Some(owner_uid),
+    );
 }
 
 fn sweep(directory: &Path, prefix: &str, suffix: &str, older_than: u64) {
-    let Ok(entries) = std::fs::read_dir(directory) else {
+    use rustix::fs::{Mode, OFlags, open};
+    let Ok(dir_fd) = open(
+        directory,
+        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
+        Mode::empty(),
+    ) else {
         return;
     };
-    let Some(cutoff) = std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(
-        older_than.max(MIN_STALE_TEMP_SECONDS),
-    )) else {
+    sweep_dir_fd(&dir_fd, prefix, suffix, older_than, None);
+}
+
+fn sweep_dir_fd(
+    dir_fd: &std::os::fd::OwnedFd,
+    prefix: &str,
+    suffix: &str,
+    older_than: u64,
+    required_uid: Option<u32>,
+) {
+    use rustix::fs::{AtFlags, Dir, FileType, statat, unlinkat};
+    let Some(cutoff) = std::time::SystemTime::now()
+        .checked_sub(std::time::Duration::from_secs(
+            older_than.max(MIN_STALE_TEMP_SECONDS),
+        ))
+        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+    else {
         return;
     };
-    for entry in entries.flatten() {
-        let name = entry.file_name();
+    let Ok(mut dir) = Dir::read_from(dir_fd) else {
+        return;
+    };
+    let cutoff_secs = cutoff.as_secs();
+    let cutoff_nanos = cutoff.subsec_nanos();
+    while let Some(Ok(entry)) = dir.next() {
+        let raw_name = entry.file_name();
+        let Ok(name) = raw_name.to_str() else {
+            continue;
+        };
         let Some(middle) = name
-            .to_str()
-            .and_then(|name| name.strip_prefix(prefix))
+            .strip_prefix(prefix)
             .and_then(|rest| rest.strip_suffix(suffix))
         else {
             continue;
@@ -363,11 +414,23 @@ fn sweep(directory: &Path, prefix: &str, suffix: &str, older_than: u64) {
         if middle.len() != 32 || !middle.bytes().all(|b| b.is_ascii_hexdigit()) {
             continue;
         }
-        if let Ok(metadata) = std::fs::symlink_metadata(entry.path())
-            && metadata.is_file()
-            && metadata.modified().is_ok_and(|modified| modified < cutoff)
+        let Ok(stat) = statat(dir_fd, raw_name, AtFlags::SYMLINK_NOFOLLOW) else {
+            continue;
+        };
+        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
+            continue;
+        }
+        if let Some(uid) = required_uid
+            && stat.st_uid != uid
         {
-            let _ = std::fs::remove_file(entry.path());
+            continue;
+        }
+        let Ok(mtime_secs) = u64::try_from(stat.st_mtime) else {
+            continue;
+        };
+        let mtime_nanos = u32::try_from(stat.st_mtime_nsec).unwrap_or(0);
+        if (mtime_secs, mtime_nanos) < (cutoff_secs, cutoff_nanos) {
+            let _ = unlinkat(dir_fd, raw_name, AtFlags::empty());
         }
     }
 }
@@ -1008,9 +1071,11 @@ mod tests {
 
     #[test]
     fn executor_owned_payload_sweep_expires_stale_payloads_without_helper_apply() {
+        use std::os::unix::fs::PermissionsExt as _;
         let home = tempfile::tempdir().unwrap();
         let payloads = home.path().join(".cache/cowboy/file-buffers");
         std::fs::create_dir_all(&payloads).unwrap();
+        std::fs::set_permissions(&payloads, std::fs::Permissions::from_mode(0o700)).unwrap();
         let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
         let stale = payloads.join(format!(
             "{PAYLOAD_PREFIX}{}{PAYLOAD_SUFFIX}",
@@ -1037,5 +1102,48 @@ mod tests {
         assert!(!stale.exists());
         assert!(young.exists());
         assert!(foreign.exists());
+
+        // R6-M3: Refuse group/other-accessible directories and symlinked directories.
+        let non_private_home = tempfile::tempdir().unwrap();
+        let shared_dir = non_private_home.path().join(".cache/cowboy/file-buffers");
+        std::fs::create_dir_all(&shared_dir).unwrap();
+        std::fs::set_permissions(&shared_dir, std::fs::Permissions::from_mode(0o770)).unwrap();
+        let shared_stale = shared_dir.join(format!(
+            "{PAYLOAD_PREFIX}{}{PAYLOAD_SUFFIX}",
+            "f".repeat(32)
+        ));
+        std::fs::write(&shared_stale, b"{}").unwrap();
+        File::options()
+            .write(true)
+            .open(&shared_stale)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        sweep_stale_file_buffer_payloads(non_private_home.path(), uid, 3600);
+        assert!(shared_stale.exists());
+
+        let symlink_home = tempfile::tempdir().unwrap();
+        let target_dir = tempfile::tempdir().unwrap();
+        std::fs::set_permissions(target_dir.path(), std::fs::Permissions::from_mode(0o700))
+            .unwrap();
+        let victim = target_dir.path().join(format!(
+            "{PAYLOAD_PREFIX}{}{PAYLOAD_SUFFIX}",
+            "1".repeat(32)
+        ));
+        std::fs::write(&victim, b"{}").unwrap();
+        File::options()
+            .write(true)
+            .open(&victim)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        std::fs::create_dir_all(symlink_home.path().join(".cache/cowboy")).unwrap();
+        std::os::unix::fs::symlink(
+            target_dir.path(),
+            symlink_home.path().join(".cache/cowboy/file-buffers"),
+        )
+        .unwrap();
+        sweep_stale_file_buffer_payloads(symlink_home.path(), uid, 3600);
+        assert!(victim.exists());
     }
 }

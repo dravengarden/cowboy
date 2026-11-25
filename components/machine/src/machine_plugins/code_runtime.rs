@@ -33,9 +33,12 @@ impl MachinePluginStore {
         payload: &serde_json::Value,
         legacy_socket: Option<&Path>,
     ) -> Result<serde_json::Value> {
-        if plugin_id == "zed_post_edit" {
-            // R4-H1 / R5-H1: Acquire the Machine-owned concurrency slot before
-            // entering CodeRuntimeHost and scope it so any timed-out Unix
+        if matches!(
+            plugin_id,
+            "zed_post_edit" | crate::post_edit_inspect::POST_EDIT_WORKSPACE_ADAPTER
+        ) {
+            // R4-H1 / R5-H1 / R6-H1: Acquire the Machine-owned concurrency slot
+            // before entering CodeRuntimeHost and scope it so any timed-out Unix
             // exchange retains the permit until adapter acknowledgment or exit.
             let slot = self.code_runtimes.try_acquire_post_edit_slot()?;
             return crate::machine_code_plugins::scope_post_edit_slot(

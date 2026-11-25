@@ -164,11 +164,43 @@ export class PlanGate {
     this.modeGens = new Map();
     /** Announced active ACP `cowboy` calls per session: sessionId -> Array<Entry>. */
     this.waiting = new Map();
-    /** Facade call object -> `{ turn, attempt }` captured at admission. */
+    /** Facade call object -> `{ turn, attempt, admittedSeq }` captured at admission. */
     this.callAttempts = new WeakMap();
     /** Facade call object -> `{ entry, id, turn, attempt, digest }` bound for UI callbacks. */
     this.bound = new WeakMap();
     this.taintedCalls = new WeakSet();
+    /** Monotonic sequence for ordering call admissions vs diff-card contradictions (R6-M2). */
+    this.seq = 0;
+    /** Turn object -> Map<`${sessionId}\0${name}`, Map<attempt, number>> latest ambiguity seq. */
+    this.turnAmbiguities = new WeakMap();
+    this.unboundAmbiguities = new Map();
+  }
+
+  recordDiffAmbiguity(sessionId, turn, attempt, name) {
+    const seq = ++this.seq;
+    let byKey;
+    if (turn && typeof turn === "object") {
+      byKey = this.turnAmbiguities.get(turn);
+      if (!byKey) {
+        byKey = new Map();
+        this.turnAmbiguities.set(turn, byKey);
+      }
+    } else {
+      byKey = this.unboundAmbiguities;
+    }
+    const key = `${sessionId}\0${name}`;
+    let byAttempt = byKey.get(key);
+    if (!byAttempt) {
+      byAttempt = new Map();
+      byKey.set(key, byAttempt);
+    }
+    byAttempt.set(attempt, seq);
+  }
+
+  latestDiffAmbiguity(sessionId, turn, attempt, name) {
+    const byKey =
+      turn && typeof turn === "object" ? this.turnAmbiguities.get(turn) : this.unboundAmbiguities;
+    return byKey?.get(`${sessionId}\0${name}`)?.get(attempt) ?? 0;
   }
 
   /** Current mode generation for `ownerId`. */
@@ -259,12 +291,22 @@ export class PlanGate {
           contradicted = true;
         }
       }
-      if (existing.ambiguous) contradicted = true;
+      if (existing.ambiguous) {
+        contradicted = true;
+        if (existing.boundCall) {
+          this.taintedCalls.add(existing.boundCall);
+          this.bound.delete(existing.boundCall);
+          existing.boundCall = undefined;
+        }
+      }
     }
     const isDiffBearing = (toolName) => toolName === "WriteFile" || toolName === "EditFile";
     const detectDiffCollisions = (target) => {
       const affected = [];
       if (!target || !isDiffBearing(target.toolName)) return affected;
+      if (target.ambiguous || target.inputContradicted) {
+        this.recordDiffAmbiguity(sessionId, target.turn, target.attempt, target.name);
+      }
       const peers = list.filter(
         (item) =>
           item.id !== target.id &&
@@ -280,6 +322,7 @@ export class PlanGate {
         (a.digest !== undefined && a.digest === b.digest);
       const hits = peers.filter((peer) => collides(target, peer));
       if (hits.length > 0) {
+        this.recordDiffAmbiguity(sessionId, target.turn, target.attempt, target.name);
         for (const item of [target, ...hits]) {
           item.ambiguous = true;
           if (item.boundCall) {
@@ -292,15 +335,22 @@ export class PlanGate {
       }
       return affected;
     };
+    // R6-M1: Run diff collision/contradiction propagation BEFORE removing a
+    // terminal card so peer edit cards contradicting on completion are tainted.
+    const existingAffected = existing ? detectDiffCollisions(existing) : [];
     if (TERMINAL.has(update.status)) {
       const left = list.filter((entry) => entry.id !== id);
       if (left.length) this.waiting.set(sessionId, left);
       else this.waiting.delete(sessionId);
-      return { contradicted, contradictedIds: contradicted ? [id] : [] };
+      const contradictedIds = contradicted
+        ? [...new Set([id, ...existingAffected])]
+        : existingAffected;
+      return { contradicted: contradictedIds.length > 0, contradictedIds };
     }
     if (existing) {
-      const affected = detectDiffCollisions(existing);
-      const contradictedIds = contradicted ? [...new Set([id, ...affected])] : affected;
+      const contradictedIds = contradicted
+        ? [...new Set([id, ...existingAffected])]
+        : existingAffected;
       return { contradicted: contradictedIds.length > 0, contradictedIds };
     }
     if (turn !== undefined && !isTurnLive(turn))
@@ -351,7 +401,10 @@ export class PlanGate {
   admitCall(call, turn) {
     if (!call || typeof call !== "object" || this.taintedCalls.has(call)) return;
     const attempt = attemptOf(turn);
-    this.callAttempts.set(call, { turn, attempt });
+    const prev = this.callAttempts.get(call);
+    const admittedSeq =
+      prev && prev.turn === turn && prev.attempt === attempt ? prev.admittedSeq : ++this.seq;
+    this.callAttempts.set(call, { turn, attempt, admittedSeq });
     if (turn !== undefined && !isTurnLive(turn)) return;
     this.matchUnbound(call, turn, attempt);
   }
@@ -369,6 +422,17 @@ export class PlanGate {
     let entry;
     const isDiffBearing = call.name === "WriteFile" || call.name === "EditFile";
     if (isDiffBearing) {
+      // R6-M2: If a diff-bearing card for this tool/turn/attempt contradicted
+      // itself or collided AFTER this unbound call was admitted (even if that
+      // card already terminated before result delivery), permanently taint `call`.
+      const admitted = this.callAttempts.get(call);
+      if (
+        admitted &&
+        admitted.admittedSeq < this.latestDiffAmbiguity(call.sessionId, turn, attempt, name)
+      ) {
+        this.taintedCalls.add(call);
+        return undefined;
+      }
       // R4-M5: If ANY compatible live edit announcement is already tainted
       // ambiguous (even if it is the sole remaining live card after a sibling
       // terminated), permanently taint `call` so it cannot later rebind.

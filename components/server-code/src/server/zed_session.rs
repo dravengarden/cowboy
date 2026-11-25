@@ -226,8 +226,13 @@ pub async fn agent_buffer_request_on_connection(
         .connection()
         .cloned()
         .context("target Machine connection is unavailable")?;
-    let mut operation =
-        Operation::on_connection_adapter(hub, control, scope, connection, "zed_post_edit")?;
+    let mut operation = Operation::on_connection_adapter(
+        hub,
+        control,
+        scope,
+        connection,
+        cowboy::post_edit_inspect::POST_EDIT_WORKSPACE_ADAPTER,
+    )?;
     let mut payload = serde_json::json!({
         "type":"acquireAgentBuffer", "ownerProtocol":2, "worktree":request.worktree,
         "path":request.path, "leaseId":request.lease_id,

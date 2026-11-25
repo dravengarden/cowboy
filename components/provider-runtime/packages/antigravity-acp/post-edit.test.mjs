@@ -1234,3 +1234,96 @@ test("PlanGate taints incoming edit call matching revised rawInput of a contradi
   );
   assert.equal(gate.bind(callB, turn), undefined);
 });
+
+test("PlanGate propagates contradiction to peer edit cards when revision arrives on terminal completion (R6-M1)", () => {
+  const gate = new PlanGate();
+  const turn = { attempt: Symbol("att") };
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "card-1",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "a.rs", old_string: "1", new_string: "2" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "card-2",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "b.rs", old_string: "3", new_string: "4" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  const call2 = {
+    sessionId: "s1",
+    name: "EditFile",
+    args: { path: "b.rs", old_string: "3", new_string: "4" },
+  };
+  gate.admitCall(call2, turn);
+  assert.equal(gate.bind(call2, turn), "card-2");
+  // card-1 revises its input to match card-2 in its terminal completed update.
+  const outcome = gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "card-1",
+      rawInput: { path: "b.rs", old_string: "3", new_string: "4" },
+      status: "completed",
+    },
+    turn,
+  );
+  assert.equal(outcome.contradicted, true);
+  assert.ok(outcome.contradictedIds.includes("card-1"));
+  assert.ok(outcome.contradictedIds.includes("card-2"));
+  assert.equal(gate.bind(call2, turn), undefined);
+  assert.equal(gate.isBindingConsistent(call2, turn), false);
+});
+
+test("PlanGate retains contradiction evidence for already-admitted unbound edit across card removal (R6-M2)", () => {
+  const gate = new PlanGate();
+  const turn = { attempt: Symbol("att") };
+  // Only card-a (input A) exists when callB (input B) is admitted unbound.
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "card-a",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "a.rs", old_string: "1", new_string: "2" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  const callB = {
+    sessionId: "s1",
+    name: "EditFile",
+    args: { path: "b.rs", old_string: "3", new_string: "4" },
+  };
+  gate.admitCall(callB, turn);
+  assert.equal(gate.bind(callB, turn), undefined);
+  // card-a contradicts itself to B and completes (removed before callB finishes).
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "card-a",
+      rawInput: { path: "b.rs", old_string: "3", new_string: "4" },
+      status: "completed",
+    },
+    turn,
+  );
+  // A later fresh card-b for input B arrives in the same attempt.
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "card-b",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "b.rs", old_string: "3", new_string: "4" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  // Earlier callB must NOT attach its diff to card-b.
+  assert.equal(gate.bind(callB, turn), undefined);
+});

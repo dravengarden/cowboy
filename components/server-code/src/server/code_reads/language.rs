@@ -150,17 +150,31 @@ pub async fn observe_open_buffer_post_edit(
     session: &crate::machine_control::SessionReadScope,
     path: &str,
 ) -> anyhow::Result<ZedAdapterResponse> {
-    query_open_buffer_adapter(state, session, path, Query::Language, "zed_post_edit").await
+    query_open_buffer_adapter(
+        state,
+        session,
+        path,
+        Query::Language,
+        cowboy::post_edit_inspect::POST_EDIT_WORKSPACE_ADAPTER,
+    )
+    .await
 }
 
-/// Post-edit variant of `query_open_buffer` routed through `"zed_post_edit"`.
+/// Post-edit variant of `query_open_buffer` routed through `POST_EDIT_WORKSPACE_ADAPTER`.
 pub async fn query_open_buffer_post_edit(
     state: &crate::server::AppState,
     session: &crate::machine_control::SessionReadScope,
     path: &str,
     query: Query,
 ) -> anyhow::Result<ZedAdapterResponse> {
-    query_open_buffer_adapter(state, session, path, query, "zed_post_edit").await
+    query_open_buffer_adapter(
+        state,
+        session,
+        path,
+        query,
+        cowboy::post_edit_inspect::POST_EDIT_WORKSPACE_ADAPTER,
+    )
+    .await
 }
 
 async fn query_open_buffer_adapter(

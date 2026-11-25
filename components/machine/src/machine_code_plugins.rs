@@ -16,7 +16,9 @@ use crate::plugin_process::PluginProcessGroup;
 use anyhow::{Context as _, Result, bail, ensure};
 use cowboy_plugin_sdk::{CodeIntelligenceRuntime, CodeRuntimeArgument, CodeRuntimeCommand};
 use serde_json::Value;
-use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
+#[cfg(test)]
+use tokio::io::AsyncReadExt as _;
+use tokio::io::{AsyncBufReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
 use tokio::sync::{Mutex, RwLock};
@@ -60,12 +62,24 @@ impl std::fmt::Display for PostEditCapacityError {
 impl std::error::Error for PostEditCapacityError {}
 
 #[must_use]
+pub fn is_zed_adapter(adapter: &str) -> bool {
+    matches!(
+        adapter,
+        "zed" | "zed_post_edit" | crate::post_edit_inspect::POST_EDIT_WORKSPACE_ADAPTER
+    )
+}
+
+#[must_use]
 pub fn post_edit_refusal(
     adapter: &str,
     error: &anyhow::Error,
 ) -> Option<crate::machine_protocol::AdapterRefusal> {
-    (adapter == "zed_post_edit" && error.downcast_ref::<PostEditCapacityError>().is_some())
-        .then_some(crate::machine_protocol::AdapterRefusal::PostEditCapacity)
+    // R6-H1: Only emit `AdapterRefusal::PostEditCapacity` for Controllers that
+    // negotiated the versioned `zed_post_edit_v2` route so older Controllers
+    // with a single-variant `AdapterRefusal` decoder never drop their WS.
+    (adapter == crate::post_edit_inspect::POST_EDIT_WORKSPACE_ADAPTER
+        && error.downcast_ref::<PostEditCapacityError>().is_some())
+    .then_some(crate::machine_protocol::AdapterRefusal::PostEditCapacity)
 }
 
 tokio::task_local! {
@@ -93,14 +107,41 @@ fn restore_post_edit_slot(slot: tokio::sync::OwnedSemaphorePermit) {
     });
 }
 
+/// Read until a literal newline or true socket EOF, retaining at most
+/// `retain_cap` bytes in `out` while discarding any over-limit tail in fixed
+/// buffer chunks so an oversized response never masquerades as EOF (R6-L1).
+async fn read_line_bounded_and_drain(
+    reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>,
+    out: &mut Vec<u8>,
+    retain_cap: usize,
+) -> std::io::Result<bool> {
+    loop {
+        let buf = reader.fill_buf().await?;
+        if buf.is_empty() {
+            return Ok(false);
+        }
+        let newline = buf.iter().position(|&b| b == b'\n');
+        let take_len = newline.map_or(buf.len(), |idx| idx + 1);
+        let remaining_cap = retain_cap.saturating_sub(out.len());
+        if remaining_cap > 0 {
+            let keep = take_len.min(remaining_cap);
+            out.extend_from_slice(&buf[..keep]);
+        }
+        reader.consume(take_len);
+        if newline.is_some() {
+            return Ok(true);
+        }
+    }
+}
+
 struct InflightExchangeGuard {
-    reader: Option<BufReader<tokio::io::Take<tokio::net::unix::OwnedReadHalf>>>,
+    reader: Option<BufReader<tokio::net::unix::OwnedReadHalf>>,
     slot: Option<tokio::sync::OwnedSemaphorePermit>,
 }
 
 impl InflightExchangeGuard {
     fn arm(
-        reader: BufReader<tokio::io::Take<tokio::net::unix::OwnedReadHalf>>,
+        reader: BufReader<tokio::net::unix::OwnedReadHalf>,
         slot: Option<tokio::sync::OwnedSemaphorePermit>,
     ) -> Self {
         Self {
@@ -109,7 +150,7 @@ impl InflightExchangeGuard {
         }
     }
 
-    fn reader_mut(&mut self) -> &mut BufReader<tokio::io::Take<tokio::net::unix::OwnedReadHalf>> {
+    fn reader_mut(&mut self) -> &mut BufReader<tokio::net::unix::OwnedReadHalf> {
         self.reader.as_mut().expect("exchange reader present")
     }
 
@@ -126,13 +167,13 @@ impl Drop for InflightExchangeGuard {
         if let (Some(mut reader), Some(permit)) = (self.reader.take(), self.slot.take())
             && let Ok(handle) = tokio::runtime::Handle::try_current()
         {
-            // R5-H1: Exchange timed out or was cancelled while the adapter may
-            // still be running its handler independently of this future. Keep
-            // the Machine slot held on the same UnixStream until the adapter
-            // writes its terminal response line or exits/closes (EOF).
+            // R5-H1 / R6-L1: Exchange timed out or was cancelled while the
+            // adapter may still be running its handler independently of this
+            // future. Discard bytes in fixed chunks without allocating until
+            // a real newline or socket EOF before releasing the permit.
             handle.spawn(async move {
-                let mut drain = Vec::new();
-                let _ = reader.read_until(b'\n', &mut drain).await;
+                let mut discard = Vec::new();
+                let _ = read_line_bounded_and_drain(&mut reader, &mut discard, 0).await;
                 drop(permit);
             });
         }
@@ -860,18 +901,20 @@ async fn exchange_with_timeout(socket: &Path, payload: &Value, timeout: Duration
             .await
             .context("code runtime connect timed out")??;
         let (read, mut write) = stream.into_split();
-        let reader = BufReader::new(read.take((MAX_CODE_MESSAGE_BYTES + 1) as u64));
+        let reader = BufReader::new(read);
         let mut guard = InflightExchangeGuard::arm(reader, take_post_edit_slot());
         write.write_all(&request).await?;
         write.write_all(b"\n").await?;
         write.shutdown().await?;
         let mut bytes = Vec::new();
-        let read_res = guard.reader_mut().read_until(b'\n', &mut bytes).await;
-        // Adapter wrote its terminal line or closed/errored: safe to return slot.
+        let read_res =
+            read_line_bounded_and_drain(guard.reader_mut(), &mut bytes, MAX_CODE_MESSAGE_BYTES + 1)
+                .await;
+        // Adapter wrote its real terminal newline or closed/errored: safe to return slot.
         guard.disarm();
-        read_res?;
+        let saw_newline = read_res?;
         ensure!(
-            bytes.len() <= MAX_CODE_MESSAGE_BYTES && bytes.last() == Some(&b'\n'),
+            saw_newline && bytes.len() <= MAX_CODE_MESSAGE_BYTES && bytes.last() == Some(&b'\n'),
             "code runtime response is truncated or exceeds its size limit"
         );
         let response: Value = serde_json::from_slice(&bytes)?;
@@ -1490,13 +1533,96 @@ mod tests {
             .try_acquire_post_edit_slot()
             .expect_err("5th concurrent post-edit slot must fail closed");
         assert!(err.downcast_ref::<PostEditCapacityError>().is_some());
+        // R6-H1: Versioned route carries typed refusal; older zed_post_edit
+        // route stays compatible with single-variant AdapterRefusal decoders.
         assert_eq!(
-            post_edit_refusal("zed_post_edit", &err),
+            post_edit_refusal(crate::post_edit_inspect::POST_EDIT_WORKSPACE_ADAPTER, &err),
             Some(crate::machine_protocol::AdapterRefusal::PostEditCapacity)
         );
+        assert_eq!(post_edit_refusal("zed_post_edit", &err), None);
         assert_eq!(post_edit_refusal("zed", &err), None);
+        #[derive(serde::Deserialize)]
+        #[serde(rename_all = "snake_case")]
+        enum LegacyAdapterRefusal {
+            WorkspaceRootIdentityChanged,
+        }
+        #[derive(serde::Deserialize)]
+        struct LegacyAdapterResponse {
+            accepted: bool,
+            refusal: Option<LegacyAdapterRefusal>,
+        }
+        let legacy_event = crate::machine_protocol::MachineEvent::AdapterResponse {
+            request_id: "req-1".into(),
+            accepted: false,
+            payload: None,
+            detail: Some(format!("{err:#}")),
+            refusal: post_edit_refusal("zed_post_edit", &err),
+        };
+        let encoded = serde_json::to_value(&legacy_event).unwrap();
+        let decoded: LegacyAdapterResponse = serde_json::from_value(encoded).unwrap();
+        assert!(!decoded.accepted && decoded.refusal.is_none());
         drop(held.pop());
         assert!(host.try_acquire_post_edit_slot().is_ok());
+    }
+
+    #[tokio::test]
+    async fn oversized_response_without_newline_keeps_post_edit_slot_until_peer_settles() {
+        let dir = PrivateRuntimeDirectory::create().unwrap();
+        let sock = dir.0.join("oversized.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        let (sent_tx, sent_rx) = tokio::sync::oneshot::channel::<()>();
+        let (close_tx, close_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut line = String::new();
+            BufReader::new(read).read_line(&mut line).await.unwrap();
+            let chunk = vec![b'a'; 64 * 1024];
+            let chunks = (MAX_CODE_MESSAGE_BYTES / chunk.len()) + 2;
+            for _ in 0..chunks {
+                write.write_all(&chunk).await.unwrap();
+            }
+            let _ = sent_tx.send(());
+            let _ = close_rx.await;
+            let _ = write.write_all(b"\n").await;
+        });
+        let host = CodeRuntimeHost::default();
+        let mut others = Vec::new();
+        for _ in 0..(POST_EDIT_CONCURRENCY - 1) {
+            others.push(host.try_acquire_post_edit_slot().unwrap());
+        }
+        let slot = host.try_acquire_post_edit_slot().unwrap();
+        let call = tokio::spawn(async move {
+            scope_post_edit_slot(
+                slot,
+                exchange_with_timeout(&sock, &json!({"type": "health"}), Duration::from_millis(80)),
+            )
+            .await
+        });
+        sent_rx.await.unwrap();
+        // Wait past the 80ms caller timeout: oversized stream without newline
+        // must STILL hold the Machine permit while the peer socket stays open (R6-L1).
+        let err = call.await.unwrap().expect_err("must fail on timeout");
+        assert!(err.to_string().contains("timed out"), "{err:#}");
+        assert!(
+            host.try_acquire_post_edit_slot().is_err(),
+            "oversized response without newline must not release permit early"
+        );
+        let _ = close_tx.send(());
+        server.await.unwrap();
+        let mut freed = false;
+        for _ in 0..40 {
+            if host.try_acquire_post_edit_slot().is_ok() {
+                freed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(
+            freed,
+            "slot was not released after oversized peer sent newline"
+        );
+        drop(others);
     }
 
     #[tokio::test]
