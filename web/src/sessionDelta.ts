@@ -71,19 +71,19 @@ export function shouldDiscardStaleReplica(
   );
 }
 
-/** Retain live WebSocket events that arrived after an IndexedDB replica was
- *  painted and sit at or past the fresh snapshot tail, so discarding a stale
- *  replica never drops newer live events. */
-export function liveEventsAfterSnapshot(
-  existing: readonly Envelope[],
-  cachedReplicaTail: readonly Envelope[],
+/** Select raw live WebSocket events buffered while a replica was painted that
+ *  arrive at or after the snapshot's raw sequence watermark (`next_seq`), so
+ *  replaying them through `applyEnvelope` restores newer chunks/tool updates
+ *  without double-applying chunks already folded into the snapshot. */
+export function liveEventsToReplayAfterSnapshot(
+  bufferedLive: readonly Envelope[],
   incoming: readonly Envelope[],
+  snapshotNextSeq: number | undefined,
+  clearedBefore: number | null,
 ): Envelope[] {
-  if (incoming.length === 0 || replicaTailConflicts(cachedReplicaTail, incoming)) {
-    return [];
-  }
-  const replicaMax = cachedReplicaTail.at(-1)?.seq ?? -1;
-  const incomingMin = incoming[0]!.seq;
-  const cutoff = Math.max(replicaMax + 1, incomingMin);
-  return existing.filter((event) => event.seq >= cutoff);
+  if (bufferedLive.length === 0) return [];
+  const fallbackFloor = (incoming.at(-1)?.seq ?? -1) + 1;
+  const watermarkFloor = snapshotNextSeq ?? fallbackFloor;
+  const floor = clearedBefore !== null ? Math.max(watermarkFloor, clearedBefore) : watermarkFloor;
+  return bufferedLive.filter((event) => event.seq >= floor);
 }

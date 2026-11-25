@@ -249,3 +249,25 @@ test("a reload leaves a text draft exactly as typed", async () => {
   const second = await loadPage(storage);
   assertEquals(second.getDraft("code").text, text);
 });
+
+test("discardDraft removes an attachment draft written by another tab after listing", async () => {
+  const storage = fakeStorage();
+  const database = fakeDatabase();
+  const tabA = await loadPage(storage);
+  tabA.attachDraftDatabase(database);
+  await settle();
+
+  // Tab B saves an attachment draft after Tab A already enumerated IndexedDB.
+  const tabB = await loadPage(storage);
+  tabB.attachDraftDatabase(database);
+  await settle();
+  tabB.setDraft("cross-tab-removed", { text: TEXT, attachments: [image("a1")] });
+  await settle();
+  assertEquals(database.records.has("cross-tab-removed"), true);
+
+  // Tab A receives an explicit session removal and discards without knowing about Tab B's write.
+  tabA.discardDraft("cross-tab-removed");
+  await settle();
+  assertEquals(database.records.has("cross-tab-removed"), false);
+  assertEquals(storage.records.has(KEY + "cross-tab-removed"), false);
+});

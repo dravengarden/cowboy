@@ -902,11 +902,12 @@ pub struct SessionBootstrapQuery {
 }
 
 pub fn focused_session_bootstrap(hub: &Hub, session_id: &str) -> Option<Vec<Outbound>> {
-    let (events, reached_start) = hub.snapshot(session_id)?;
+    let (events, reached_start, next_seq) = hub.snapshot_with_watermark(session_id)?;
     let mut messages = vec![Outbound::Snapshot {
         session_id: session_id.to_owned(),
         events,
         reached_start,
+        next_seq: Some(next_seq),
     }];
     if let Some(options) = hub.config_options(session_id) {
         messages.push(Outbound::ConfigOptions {

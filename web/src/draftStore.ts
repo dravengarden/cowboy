@@ -139,7 +139,7 @@ function writeDatabase(
   return chained;
 }
 
-function discardDatabaseDraft(sessionId: string): void {
+function discardDatabaseDraft(sessionId: string, force = false): void {
   awaitingDatabase.delete(sessionId);
   if (!databaseListed) {
     // The record may exist without this page knowing. Discard it once the
@@ -148,7 +148,8 @@ function discardDatabaseDraft(sessionId: string): void {
     databaseDrafts.delete(sessionId);
     return;
   }
-  if (!databaseDrafts.delete(sessionId)) return;
+  const existed = databaseDrafts.delete(sessionId);
+  if (!existed && !force) return;
   const cache = draftCache(sessionId);
   if (cache === undefined) return;
   void writeDatabase(sessionId, () => cache.discard()).catch(() => undefined);
@@ -500,7 +501,9 @@ export function discardDraft(sessionId: string): void {
   dirty.delete(sessionId);
   awaitingDatabase.delete(sessionId);
   cleared.add(sessionId);
-  discardDatabaseDraft(sessionId);
+  // Another tab may have saved an attachment draft after this tab enumerated
+  // IndexedDB; enqueue an unconditional discard through the per-session chain.
+  discardDatabaseDraft(sessionId, true);
   try {
     globalThis.localStorage?.removeItem(KEY_PREFIX + sessionId);
   } catch {

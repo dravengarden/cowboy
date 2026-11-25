@@ -8,7 +8,7 @@ use std::ops::ControlFlow;
 mod fanout;
 use fanout::*;
 #[cfg(test)]
-pub(crate) use fanout::{FanoutDelivery, resolve_fanout_delivery};
+pub(crate) use fanout::{FanoutDelivery, LegacySessionTracker, resolve_fanout_delivery};
 
 pub fn websocket_capacity_identity(
     product_auth_enabled: bool,
@@ -430,7 +430,8 @@ pub async fn handle_ws(
     };
     let (bootstrap_messages, bootstrap_sessions_seq) =
         connect_bootstrap_with_seq(&state.hub, lazy_bootstrap, &principal, machine_snapshot);
-    let legacy_sessions = legacy_bootstrap_sessions(&bootstrap_messages, supports_session_deltas);
+    let legacy_sessions =
+        LegacySessionTracker::from_bootstrap(&bootstrap_messages, supports_session_deltas);
     for message in bootstrap_messages {
         if send_json(&mut sink, &message).await.is_err() {
             return;

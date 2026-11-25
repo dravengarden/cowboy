@@ -199,6 +199,8 @@ export interface SessionReplica {
   scheduleTail(produce: () => ReplicaTail | null, opts?: { readonly immediate?: boolean }): void;
   loadDelivery(): Promise<ReplicaDelivery | null>;
   saveDelivery(delivery: ReplicaDelivery): Promise<void>;
+  discardTail(): Promise<void>;
+  discardDelivery(): Promise<void>;
   discard(): Promise<void>;
 }
 
@@ -211,7 +213,10 @@ export interface Replica {
   /** Sessions with a cached transcript tail; empty when the store is unreadable. */
   listTailSessions(): Promise<string[]>;
   /** Drop caches for sessions the Hub no longer lists. Throttled by callers. */
-  retainSessions(valid: ReadonlySet<string>): Promise<void>;
+  retainSessions(
+    valid: ReadonlySet<string>,
+    opts?: { readonly keepDelivery?: (sessionId: string) => boolean | Promise<boolean> },
+  ): Promise<void>;
   flush(): Promise<void>;
   /** Stop scheduling writes. Pending producers are dropped. */
   seal(): void;
@@ -265,6 +270,27 @@ function createSessionReplica(
         });
       deliveryWrite = next;
       return next;
+    },
+    discardTail: async () => {
+      await writer.cancel();
+      try {
+        await tailCache.discard();
+      } catch (error) {
+        onError(error);
+      }
+    },
+    discardDelivery: async () => {
+      const next = deliveryWrite
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            await deliveryCache.discard();
+          } catch (error) {
+            onError(error);
+          }
+        });
+      deliveryWrite = next;
+      await next;
     },
     discard: async () => {
       onDiscard();
@@ -362,22 +388,32 @@ export function createReplica(
         return [];
       }
     },
-    retainSessions: async (valid): Promise<void> => {
+    retainSessions: async (valid, retainOpts = {}): Promise<void> => {
       if (sealed) return;
-      let stored: string[];
+      let tails: string[];
+      let deliveries: string[];
       try {
-        const [tails, deliveries] = await Promise.all([
+        [tails, deliveries] = await Promise.all([
           db.cacheSessions("tail"),
           db.cacheSessions("delivery"),
         ]);
-        stored = [...new Set([...tails, ...deliveries])];
       } catch (error) {
         onError(error);
         return;
       }
       if (sealed) return;
+      const stale = [...new Set([...tails, ...deliveries])].filter((id) => !valid.has(id));
       await Promise.all(
-        stored.filter((id) => !valid.has(id)).map((id) => session(id).discard()),
+        stale.map(async (id) => {
+          const keepDelivery = retainOpts.keepDelivery
+            ? await retainOpts.keepDelivery(id)
+            : false;
+          if (keepDelivery) {
+            await session(id).discardTail();
+          } else {
+            await session(id).discard();
+          }
+        }),
       );
     },
     flush: async (): Promise<void> => {

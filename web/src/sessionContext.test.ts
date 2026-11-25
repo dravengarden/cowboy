@@ -5,6 +5,7 @@ import {
   announceContext,
   CONTEXT_CHANGED,
   evictSessionContext,
+  invalidateReferencingContexts,
   loadSessionContext,
   saveSessionContext,
   sendWithContext,
@@ -230,4 +231,37 @@ test("unchanged preferences resync skips only after a successful read and retrie
     globalThis.removeEventListener(CONTEXT_CHANGED, listener);
   }
   expect(announced).toEqual(["resync-dedupe", "resync-dedupe", "resync-dedupe", null]);
+});
+
+test("invalidateReferencingContexts refreshes cached views referencing a changed linked session", async () => {
+  const announced: (string | null)[] = [];
+  const listener = (event: Event) => {
+    announced.push((event as CustomEvent<string | null>).detail);
+  };
+  globalThis.fetch = (() =>
+    Promise.resolve(Response.json({
+      revision: 1,
+      applied_revision: 1,
+      sources: ["linked-src"],
+      source_sessions: [{ id: "linked-src", available: false }],
+      links: [{ id: "linked-src", available: false, title: "Old", before: 42 }],
+      next_agent: null,
+      delivery: null,
+      max_sources: 32,
+    }))) as typeof fetch;
+  globalThis.dispatchEvent(
+    new CustomEvent(PREFERENCES_CHANGED, {
+      detail: { "session_context:reader-sess": 1 },
+    }),
+  );
+  await loadSessionContext("reader-sess");
+  globalThis.addEventListener(CONTEXT_CHANGED, listener);
+  try {
+    invalidateReferencingContexts("unrelated-session");
+    invalidateReferencingContexts("linked-src");
+    evictSessionContext("reader-sess");
+  } finally {
+    globalThis.removeEventListener(CONTEXT_CHANGED, listener);
+  }
+  expect(announced).toEqual(["reader-sess"]);
 });

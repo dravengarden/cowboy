@@ -142,6 +142,20 @@ export function evictSessionContext(id: string): void {
   sends.delete(id);
 }
 
+/** Invalidate cached context views whose linked or source sessions reference
+ *  `targetSessionId` (e.g. when a linked session's availability or closing
+ *  state changes without bumping the referencing session's context revision). */
+export function invalidateReferencingContexts(targetSessionId: string): void {
+  const affected: string[] = [];
+  for (const [id, entry] of cachedContexts) {
+    const referencesTarget =
+      entry.data.links?.some((link) => link.id === targetSessionId) === true ||
+      entry.data.source_sessions?.some((source) => source.id === targetSessionId) === true;
+    if (referencesTarget) affected.push(id);
+  }
+  for (const id of affected) announceContext(id);
+}
+
 globalThis.addEventListener?.(PREFERENCES_CHANGED, (event) => {
   const scopes =
     (event as CustomEvent<Record<string, number> | undefined>).detail;

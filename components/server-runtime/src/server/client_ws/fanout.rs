@@ -4,6 +4,131 @@
 
 use super::*;
 
+/// Ordered per-connection session projection for legacy clients that do not
+/// negotiate `session_deltas=1`. Folds sequenced session deltas AND version-
+/// gated `"title"` / `"order"` `SyncPatch`es so synthesized `Outbound::Sessions`
+/// frames stay ordered without reading live Hub state or regressing to stale
+/// titles/ordering.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct LegacySessionTracker {
+    sessions: Vec<crate::core::SessionMeta>,
+    title_version: u64,
+    order_version: u64,
+}
+
+impl LegacySessionTracker {
+    pub(crate) fn from_bootstrap(
+        bootstrap: &[Outbound],
+        supports_session_deltas: bool,
+    ) -> Option<Self> {
+        if supports_session_deltas {
+            return None;
+        }
+        let sessions = bootstrap.iter().find_map(|message| match message {
+            Outbound::Sessions { sessions } => Some(sessions.clone()),
+            _ => None,
+        })?;
+        let mut tracker = Self {
+            sessions,
+            title_version: 0,
+            order_version: 0,
+        };
+        for message in bootstrap {
+            if let Outbound::SyncPatch {
+                state,
+                version,
+                resync,
+                value,
+                ..
+            } = message
+            {
+                tracker.apply_sync_patch(state, *version, *resync, value);
+            }
+        }
+        Some(tracker)
+    }
+
+    fn apply_sync_patch(
+        &mut self,
+        state: &str,
+        version: u64,
+        resync: bool,
+        value: &serde_json::Value,
+    ) {
+        match state {
+            "title" => {
+                if version < self.title_version || (version == self.title_version && !resync) {
+                    return;
+                }
+                let Some(titles) = value.as_object() else {
+                    return;
+                };
+                self.title_version = version;
+                for meta in &mut self.sessions {
+                    if let Some(title) = titles.get(&meta.id).and_then(serde_json::Value::as_str) {
+                        meta.title = title.to_owned();
+                    }
+                }
+            }
+            "order" => {
+                if version < self.order_version || (version == self.order_version && !resync) {
+                    return;
+                }
+                let Some(entries) = value.as_array() else {
+                    return;
+                };
+                self.order_version = version;
+                let submitted: Vec<String> = entries
+                    .iter()
+                    .filter_map(|item| item.as_str().map(str::to_owned))
+                    .collect();
+                let current_ids: Vec<String> =
+                    self.sessions.iter().map(|meta| meta.id.clone()).collect();
+                let merged = crate::core::merge_session_order(&current_ids, &submitted);
+                let mut by_id: HashMap<String, crate::core::SessionMeta> = self
+                    .sessions
+                    .drain(..)
+                    .map(|meta| (meta.id.clone(), meta))
+                    .collect();
+                for id in merged {
+                    if let Some(meta) = by_id.remove(&id) {
+                        self.sessions.push(meta);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn apply_sessions(
+        &mut self,
+        principal: &ProductPrincipal,
+        sessions: &[crate::core::SessionMeta],
+    ) -> Vec<crate::core::SessionMeta> {
+        let filtered: Vec<_> = sessions
+            .iter()
+            .filter(|meta| principal.can_see(meta.owner_user_id.as_deref()))
+            .cloned()
+            .collect();
+        self.sessions = filtered.clone();
+        filtered
+    }
+
+    fn upsert(&mut self, session: crate::core::SessionMeta) -> Vec<crate::core::SessionMeta> {
+        if let Some(existing) = self.sessions.iter_mut().find(|meta| meta.id == session.id) {
+            *existing = session;
+        } else {
+            self.sessions.push(session);
+        }
+        self.sessions.clone()
+    }
+
+    fn remove(&mut self, session_id: &str) -> Vec<crate::core::SessionMeta> {
+        self.sessions.retain(|meta| meta.id != session_id);
+        self.sessions.clone()
+    }
+}
+
 /// Identity and capacity lease state the fan-out task revalidates while the
 /// client is connected.
 pub struct ClientFanout {
@@ -11,7 +136,7 @@ pub struct ClientFanout {
     pub principal: ProductPrincipal,
     pub supports_session_deltas: bool,
     pub bootstrap_sessions_seq: u64,
-    pub legacy_sessions: Option<Vec<crate::core::SessionMeta>>,
+    pub legacy_sessions: Option<LegacySessionTracker>,
     pub via_cookie: bool,
     pub cookie: Option<String>,
     pub bearer: Option<String>,
@@ -235,19 +360,6 @@ pub async fn run_client_fanout(
     }
 }
 
-pub(super) fn legacy_bootstrap_sessions(
-    bootstrap: &[Outbound],
-    supports_session_deltas: bool,
-) -> Option<Vec<crate::core::SessionMeta>> {
-    if supports_session_deltas {
-        return None;
-    }
-    bootstrap.iter().find_map(|message| match message {
-        Outbound::Sessions { sessions } => Some(sessions.clone()),
-        _ => None,
-    })
-}
-
 pub(crate) enum FanoutDelivery<'a> {
     Skip,
     Shared(&'a FanoutFrame),
@@ -257,15 +369,15 @@ pub(crate) enum FanoutDelivery<'a> {
 /// Resolve how one broadcast `FanoutFrame` reaches a connected WebSocket:
 /// skips frames already covered by the connect bootstrap watermark, enforces
 /// per-session owner visibility (including on `SessionRemoved`), reuses the
-/// shared pre-serialized delta for opted-in clients, and applies deltas in
-/// sequence onto a per-connection session list seeded from bootstrap for
-/// legacy clients (never querying live Hub state out of order).
+/// shared pre-serialized delta for opted-in clients, and applies deltas plus
+/// title/order `SyncPatch`es in sequence onto a per-connection tracker seeded
+/// from bootstrap for legacy clients (never querying live Hub state out of order).
 pub(crate) fn resolve_fanout_delivery<'a>(
     hub: &Hub,
     principal: &ProductPrincipal,
     supports_session_deltas: bool,
     bootstrap_sessions_seq: u64,
-    legacy_sessions: &mut Option<Vec<crate::core::SessionMeta>>,
+    legacy_sessions: &mut Option<LegacySessionTracker>,
     frame: &'a FanoutFrame,
 ) -> FanoutDelivery<'a> {
     if frame
@@ -275,14 +387,20 @@ pub(crate) fn resolve_fanout_delivery<'a>(
         return FanoutDelivery::Skip;
     }
     match frame.outbound() {
+        Outbound::SyncPatch {
+            state,
+            version,
+            resync,
+            value,
+            ..
+        } => {
+            if let Some(tracker) = legacy_sessions.as_mut() {
+                tracker.apply_sync_patch(state, *version, *resync, value);
+            }
+        }
         Outbound::Sessions { sessions } => {
-            if let Some(tracked) = legacy_sessions.as_mut() {
-                let filtered: Vec<_> = sessions
-                    .iter()
-                    .filter(|meta| principal.can_see(meta.owner_user_id.as_deref()))
-                    .cloned()
-                    .collect();
-                *tracked = filtered.clone();
+            if let Some(tracker) = legacy_sessions.as_mut() {
+                let filtered = tracker.apply_sessions(principal, sessions);
                 return if fanout_sends_shared_frame(principal, frame.outbound()) {
                     FanoutDelivery::Shared(frame)
                 } else {
@@ -299,15 +417,10 @@ pub(crate) fn resolve_fanout_delivery<'a>(
                 // visibility passes, reuse the cached serialized JSON directly.
                 return FanoutDelivery::Shared(frame);
             }
-            let tracked = legacy_sessions.get_or_insert_with(Vec::new);
-            if let Some(existing) = tracked.iter_mut().find(|meta| meta.id == session.id) {
-                *existing = (**session).clone();
-            } else {
-                tracked.push((**session).clone());
-            }
-            return FanoutDelivery::Owned(Box::new(Outbound::Sessions {
-                sessions: tracked.clone(),
-            }));
+            let sessions = legacy_sessions
+                .get_or_insert_with(LegacySessionTracker::default)
+                .upsert((**session).clone());
+            return FanoutDelivery::Owned(Box::new(Outbound::Sessions { sessions }));
         }
         Outbound::SessionRemoved { session_id } => {
             let visible = frame.session_owner().map_or_else(
@@ -320,11 +433,10 @@ pub(crate) fn resolve_fanout_delivery<'a>(
             if supports_session_deltas {
                 return FanoutDelivery::Shared(frame);
             }
-            let tracked = legacy_sessions.get_or_insert_with(Vec::new);
-            tracked.retain(|meta| meta.id != *session_id);
-            return FanoutDelivery::Owned(Box::new(Outbound::Sessions {
-                sessions: tracked.clone(),
-            }));
+            let sessions = legacy_sessions
+                .get_or_insert_with(LegacySessionTracker::default)
+                .remove(session_id);
+            return FanoutDelivery::Owned(Box::new(Outbound::Sessions { sessions }));
         }
         _ => {}
     }
@@ -346,7 +458,7 @@ async fn forward_fanout_frame(
     principal: &ProductPrincipal,
     supports_session_deltas: bool,
     bootstrap_sessions_seq: u64,
-    legacy_sessions: &mut Option<Vec<crate::core::SessionMeta>>,
+    legacy_sessions: &mut Option<LegacySessionTracker>,
     frame: &FanoutFrame,
 ) -> Result<(), ()> {
     match resolve_fanout_delivery(

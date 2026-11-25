@@ -1116,6 +1116,12 @@ pub enum Outbound {
         session_id: String,
         events: Vec<Envelope>,
         reached_start: bool,
+        /// Raw sequence watermark (`Session::next_seq`) already reflected in
+        /// `events`. Live WebSocket events with `seq >= next_seq` arrived after
+        /// the snapshot was captured and can be replayed without duplicating
+        /// absorbed chunks.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        next_seq: Option<u64>,
     },
     /// A single live event.
     Event { envelope: Envelope },
@@ -2748,6 +2754,15 @@ impl Hub {
     /// session must not re-send its entire history on every connect/reconnect.
     #[must_use]
     pub fn snapshot(&self, session_id: &str) -> Option<(Vec<Envelope>, bool)> {
+        self.snapshot_with_watermark(session_id)
+            .map(|(events, reached_start, _)| (events, reached_start))
+    }
+
+    /// Snapshot tail plus the session's raw `next_seq` watermark captured under
+    /// the same `sessions` lock, so clients can replay newer live WS chunks
+    /// cleanly without double-applying chunks already absorbed into the tail.
+    #[must_use]
+    pub fn snapshot_with_watermark(&self, session_id: &str) -> Option<(Vec<Envelope>, bool, u64)> {
         let sessions = self.inner.sessions.lock();
         sessions.get(session_id).map(|s| {
             let len = s.log.len();
@@ -2776,7 +2791,11 @@ impl Hub {
                     start -= 1;
                 }
             }
-            (s.log[start..].to_vec(), s.reached_start && start == 0)
+            (
+                s.log[start..].to_vec(),
+                s.reached_start && start == 0,
+                s.next_seq,
+            )
         })
     }
 

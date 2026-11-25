@@ -338,6 +338,7 @@ fn outbound_session_fixtures() -> Vec<(&'static str, crate::core::Outbound)> {
                     None,
                 )],
                 reached_start: true,
+                next_seq: Some(2),
             },
         ),
         (

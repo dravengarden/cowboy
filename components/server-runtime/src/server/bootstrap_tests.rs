@@ -352,7 +352,7 @@ fn focused_bootstrap_does_not_replay_another_session() {
 
 #[test]
 fn fanout_delta_projection_enforces_seq_visibility_and_legacy_fallback() {
-    use super::client_ws::{FanoutDelivery, resolve_fanout_delivery};
+    use super::client_ws::{FanoutDelivery, LegacySessionTracker, resolve_fanout_delivery};
     use super::connect_bootstrap_with_seq;
     use crate::core::SessionRegistration;
 
@@ -406,8 +406,8 @@ fn fanout_delta_projection_enforces_seq_visibility_and_legacy_fallback() {
 
     // Pre-bootstrap frame is skipped regardless of client delta support.
     let mut no_legacy = None;
-    let mut member_legacy = Some(sessions.clone());
-    let mut other_legacy = Some(Vec::new());
+    let mut member_legacy = LegacySessionTracker::from_bootstrap(&bootstrap, false);
+    let mut other_legacy = Some(LegacySessionTracker::default());
     assert!(matches!(
         resolve_fanout_delivery(
             &hub,
@@ -568,5 +568,104 @@ fn fanout_delta_projection_enforces_seq_visibility_and_legacy_fallback() {
             _ => panic!("legacy client must receive translated empty Sessions list after delete"),
         },
         _ => panic!("legacy client must receive translated empty Sessions list after delete"),
+    }
+
+    // Web renames and reorders travel as SyncPatch frames; legacy session lists
+    // fold those patches in version order so a subsequent delta for session B
+    // never synthesizes session A with its stale title or order.
+    register("s-1", Some("member-a"));
+    let _ = rx.try_recv().expect("create s-1");
+    register("s-2", Some("member-a"));
+    let _ = rx.try_recv().expect("create s-2");
+    hub.sync_apply(
+        "title",
+        "m-rename-pre".to_owned(),
+        "rename",
+        &serde_json::json!({ "session_id": "s-1", "title": "Renamed Before Connect" }),
+    )
+    .expect("pre-bootstrap rename");
+    let stale_title_patch = rx.try_recv().expect("pre-bootstrap title patch");
+    hub.sync_apply(
+        "title",
+        "m-rename-latest".to_owned(),
+        "rename",
+        &serde_json::json!({ "session_id": "s-1", "title": "Latest Before Connect" }),
+    )
+    .expect("latest pre-bootstrap rename");
+    let _ = rx.try_recv().expect("latest title patch");
+
+    let (sync_bootstrap, sync_bootstrap_seq) =
+        connect_bootstrap_with_seq(&hub, true, &member, None);
+    let mut synced_legacy = LegacySessionTracker::from_bootstrap(&sync_bootstrap, false);
+
+    // A stale pre-bootstrap title SyncPatch must not overwrite the bootstrap title.
+    let _ = resolve_fanout_delivery(
+        &hub,
+        &member,
+        false,
+        sync_bootstrap_seq,
+        &mut synced_legacy,
+        &stale_title_patch,
+    );
+
+    hub.sync_apply(
+        "title",
+        "m-rename-live".to_owned(),
+        "rename",
+        &serde_json::json!({ "session_id": "s-1", "title": "Renamed Live" }),
+    )
+    .expect("live rename");
+    let live_title_patch = rx.try_recv().expect("live title patch");
+    let _ = resolve_fanout_delivery(
+        &hub,
+        &member,
+        false,
+        sync_bootstrap_seq,
+        &mut synced_legacy,
+        &live_title_patch,
+    );
+
+    hub.sync_apply(
+        "order",
+        "m-reorder-live".to_owned(),
+        "reorder",
+        &serde_json::json!({ "order": ["s-2", "s-1"] }),
+    )
+    .expect("live reorder");
+    let live_order_patch = rx.try_recv().expect("live order patch");
+    let _ = resolve_fanout_delivery(
+        &hub,
+        &member,
+        false,
+        sync_bootstrap_seq,
+        &mut synced_legacy,
+        &live_order_patch,
+    );
+
+    // Mutate only s-2; the synthesized legacy Sessions list must preserve s-1's
+    // live title and the reordered [s-2, s-1] sequence.
+    hub.set_background_tasks("s-2", 1);
+    let s2_delta = rx.try_recv().expect("s-2 delta");
+    match resolve_fanout_delivery(
+        &hub,
+        &member,
+        false,
+        sync_bootstrap_seq,
+        &mut synced_legacy,
+        &s2_delta,
+    ) {
+        FanoutDelivery::Owned(outbound) => match *outbound {
+            Outbound::Sessions { sessions } => {
+                assert_eq!(
+                    sessions
+                        .iter()
+                        .map(|s| (s.id.as_str(), s.title.as_str()))
+                        .collect::<Vec<_>>(),
+                    vec![("s-2", "s-2"), ("s-1", "Renamed Live")]
+                );
+            }
+            _ => panic!("expected translated Sessions list"),
+        },
+        _ => panic!("expected translated Sessions list"),
     }
 }

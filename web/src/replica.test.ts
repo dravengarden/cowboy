@@ -131,3 +131,29 @@ test("replica seal drops pending producers without writing", async () => {
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert(db.data.size === 0);
 });
+
+test("discardTail and retainSessions keep held deliveries while evicting removed tails", async () => {
+  const db = memoryDatabase();
+  const replica = createReplica(db, { debounceMs: 1, maxWaitMs: 5 });
+  await replica.session("held-removed").saveDelivery({ held: ["m-held"] });
+  replica.session("held-removed").scheduleTail(
+    () => ({ receivedAt: 1, lastSeq: 1, reachedStart: true, events: [event(1)] }),
+    { immediate: true },
+  );
+  await replica.session("clean-removed").saveDelivery({ held: ["m-old"] });
+  await replica.flush();
+
+  await replica.session("held-removed").discardTail();
+  assertEquals(await replica.session("held-removed").loadTail(), null);
+  assertEquals((await replica.session("held-removed").loadDelivery())?.held, ["m-held"]);
+
+  // Full-list pruning also keeps deliveries protected by unresolved outbox entries.
+  await replica.retainSessions(new Set(), {
+    keepDelivery: (id) => id === "held-removed",
+  });
+  assertEquals((await replica.session("held-removed").loadDelivery())?.held, ["m-held"]);
+  assertEquals(await replica.session("clean-removed").loadDelivery(), null);
+
+  await replica.session("held-removed").discardDelivery();
+  assertEquals(await replica.session("held-removed").loadDelivery(), null);
+});

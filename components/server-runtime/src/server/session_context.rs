@@ -271,7 +271,7 @@ fn view(
     let links: Vec<_> = context.known_links().iter().filter(|link| link.session_id != id).map(|link| {
         match owned(state, principal, &link.session_id) {
             Ok(info) => serde_json::json!({"id":link.session_id,"available":true,"title":info.meta.title,"provider":info.meta.provider,"provider_account_id":info.meta.provider_account_id,"before":link.before}),
-            Err(_) => serde_json::json!({"id":link.session_id,"available":false,"title":link.title}),
+            Err(_) => serde_json::json!({"id":link.session_id,"available":false,"title":link.title,"before":link.before}),
         }
     }).collect();
     let sources: Vec<_> = context.sources.iter().map(|source| {

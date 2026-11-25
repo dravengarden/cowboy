@@ -2,11 +2,12 @@ import { expect, test } from "bun:test";
 import type { Envelope, SessionMeta } from "./protocol";
 import {
   boundSocketUrl,
-  liveEventsAfterSnapshot,
+  liveEventsToReplayAfterSnapshot,
   removeSessionById,
   shouldDiscardStaleReplica,
   upsertSession,
 } from "./sessionDelta";
+import { applyEnvelope, mergeEvents } from "./storeTimeline";
 
 function session(id: string, status: SessionMeta["status"] = "running"): SessionMeta {
   return {
@@ -88,20 +89,28 @@ test("shouldDiscardStaleReplica discards non-overlapping replicas without disabl
   expect(shouldDiscardStaleReplica("replica", [], freshTail)).toBe(true);
 });
 
-test("liveEventsAfterSnapshot preserves newer live events without hiding the gap behind a replica", () => {
-  const cachedReplica = [message(1, "old-1"), message(2, "old-2")];
-  const existingWithLive = [...cachedReplica, message(100, "live-100"), message(102, "live-102")];
-  const freshSnapshot = [message(100, "snap-100"), message(101, "snap-101")];
+test("liveEventsToReplayAfterSnapshot replays newer absorbed chunks without overwriting or duplicating", () => {
+  const buffered = [message(100, "hello"), message(101, " world")];
+  // Snapshot captured right after seq 100 (`next_seq = 101`): seq 101 must
+  // replay onto row 100 so the absorbed text is preserved.
+  const snapBefore101 = [message(100, "hello")];
+  const toReplay = liveEventsToReplayAfterSnapshot(buffered, snapBefore101, 101, null);
+  expect(toReplay.map((e) => e.seq)).toEqual([101]);
+  let timelines = mergeEvents(new Map(), "s1", snapBefore101);
+  for (const env of toReplay) timelines = applyEnvelope(timelines, env);
+  const row = timelines.get("s1")?.[0];
+  expect(row?.kind === "update" ? row.update.content?.text : "").toBe("hello world");
 
-  // Comparing the original IndexedDB tail still detects the 2..100 gap even after
-  // live event 100 arrived before the HTTP snapshot.
-  expect(shouldDiscardStaleReplica("replica", cachedReplica, freshSnapshot)).toBe(true);
-  // Newer live events at or after the snapshot start survive the replica discard.
-  expect(
-    liveEventsAfterSnapshot(existingWithLive, cachedReplica, freshSnapshot).map((e) => e.seq),
-  ).toEqual([100, 102]);
-  // Conflicting epochs drop everything from the old epoch.
-  expect(
-    liveEventsAfterSnapshot([message(20, "old"), message(21, "old")], [message(20, "old")], [message(5, "new")]),
-  ).toEqual([]);
+  // Snapshot captured after seq 101 (`next_seq = 102`): seq 101 is already
+  // folded into row 100 and must NOT be replayed again.
+  const snapAfter101 = [message(100, "hello world")];
+  expect(liveEventsToReplayAfterSnapshot(buffered, snapAfter101, 102, null)).toEqual([]);
+
+  // Older Controller without next_seq falls back to strictly past incoming max.
+  expect(liveEventsToReplayAfterSnapshot(buffered, snapBefore101, undefined, null).map((e) => e.seq))
+    .toEqual([101]);
+
+  // Cleared boundary drops earlier buffered events.
+  expect(liveEventsToReplayAfterSnapshot([message(99, "old"), message(105, "new")], [], 90, 102).map((e) => e.seq))
+    .toEqual([105]);
 });
