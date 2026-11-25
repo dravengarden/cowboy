@@ -337,8 +337,8 @@ export class AcpProxy {
     this.calls = new Map();
     /** Root sessions admitted by the client (LRU-bounded); guards mode/permission state (R14-M2). */
     this.knownSessions = new Set();
-    /** Nonterminal tool announcements seen only via stale replay, outside live state (R14-M3). */
-    this.staleReplayTools = new Map();
+    /** Per-turn nonterminal tool announcements seen only via stale replay, outside live state (R14-M3, R15-M6). */
+    this.staleReplayTools = new WeakMap();
     /** The canonical workspace root on the target, once the runtime is ready. */
     this.root = undefined;
     /** `/compact` turns and the context restated after them. */
@@ -953,14 +953,43 @@ export class AcpProxy {
     return !(arrival.turn && current === arrival.turn && current.attempt === arrival.attempt);
   }
 
-  /** Record a client-admitted root session ID (bounded LRU) for mode/permission guards (R14-M2). */
+  /** Invalidate cached authorization state for a root session evicted from `knownSessions` (R15-M3). */
+  evictSessionAuthority(sessionId) {
+    if (typeof sessionId !== "string" || this.subagents.owns(sessionId)) return;
+    this.modes.delete(sessionId);
+    this.switchState.delete(sessionId);
+    this.invalidateModeFamily(sessionId, "The session's cached mode was evicted.");
+    this.clearStaleReplayTools(sessionId);
+  }
+
+  /** Record a client-admitted root session ID (bounded LRU) for mode/permission guards (R14-M2, R15-M3). */
   rememberSession(sessionId) {
     if (typeof sessionId !== "string" || this.subagents.owns(sessionId)) return;
     this.knownSessions.delete(sessionId);
     if (this.knownSessions.size >= MAX_TOOL_CALLS) {
-      this.knownSessions.delete(this.knownSessions.values().next().value);
+      let evicted;
+      for (const candidate of this.knownSessions) {
+        if (
+          !this.turns.has(candidate) &&
+          !this.reservedTurns.has(candidate) &&
+          !this.hasActiveModeOps(candidate)
+        ) {
+          evicted = candidate;
+          break;
+        }
+      }
+      evicted ??= this.knownSessions.values().next().value;
+      this.knownSessions.delete(evicted);
+      this.evictSessionAuthority(evicted);
     }
     this.knownSessions.add(sessionId);
+  }
+
+  /** Whether `sessionId` is an admitted root or announced child allowed to emit config/mode updates (R15-M4). */
+  isAdmittedConfigSession(sessionId) {
+    if (typeof sessionId !== "string") return false;
+    if (this.knownSessions.has(sessionId)) return true;
+    return Boolean(this.subagents.childOf(sessionId)?.announced);
   }
 
   /** Whether `sessionId` is a known live session eligible for automatic permission approval (R14-M2). */
@@ -978,39 +1007,70 @@ export class AcpProxy {
     return true;
   }
 
-  /** Record nonterminal tool announcements observed only via stale replay outside live state (R14-M3). */
-  trackStaleReplayTool(sessionId, update) {
+  /** Record a policy violation on `turn`, cancel `agy`, and propagate subagent violation. */
+  recordViolation(sessionId, turn, name) {
+    if (turn.violation !== undefined) return;
+    turn.violation = name === undefined ? "unknown" : toolCode(name);
+    this.log(`built-in tool ${turn.violation} executed; ending the turn`);
+    this.agent({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
+    // A subagent's violation ends its parent's turn as well.
+    this.subagents.violated(sessionId, turn.violation);
+  }
+
+  /**
+   * Track per-turn nonterminal tool announcements observed only via stale replay
+   * outside live state (R14-M3, R15-M6) and still catch attributable forbidden
+   * built-in execution buffered inside a claimed child's opening replay (R15-M2).
+   */
+  observeStaleReplayTool(sessionId, update) {
     if (
       typeof sessionId !== "string" ||
       !["tool_call", "tool_call_update"].includes(update?.sessionUpdate)
     ) {
       return;
     }
+    const turn = this.turns.get(sessionId);
+    if (!turn) return;
     const id = update.toolCallId;
-    if (typeof id !== "string") return;
-    const key = callKey(sessionId, id);
-    if (TERMINAL.has(update.status)) {
-      this.staleReplayTools.delete(key);
-      return;
-    }
-    if (typeof update.name === "string") {
-      this.staleReplayTools.delete(key);
-      if (this.staleReplayTools.size >= MAX_TOOL_CALLS) {
-        this.staleReplayTools.delete(this.staleReplayTools.keys().next().value);
+    let map = this.staleReplayTools.get(turn);
+    const prevName = typeof id === "string" ? map?.get(id) : undefined;
+    const resolvedName = typeof update.name === "string" ? update.name : prevName;
+    if (typeof id === "string") {
+      if (TERMINAL.has(update.status)) {
+        map?.delete(id);
+      } else if (typeof update.name === "string") {
+        if (!map) {
+          map = new Map();
+          this.staleReplayTools.set(turn, map);
+        }
+        map.delete(id);
+        if (map.size >= MAX_TOOL_CALLS) {
+          map.delete(map.keys().next().value);
+        }
+        map.set(id, update.name);
+      } else if (update.sessionUpdate === "tool_call") {
+        map?.delete(id);
       }
-      this.staleReplayTools.set(key, update.name);
-    } else if (update.sessionUpdate === "tool_call") {
-      this.staleReplayTools.delete(key);
+    }
+    if (
+      this.subagents.owns(sessionId) &&
+      EXECUTED.has(update.status) &&
+      !(update.sessionUpdate === "tool_call" && update.status === "in_progress") &&
+      typeof resolvedName === "string" &&
+      !this.allows(resolvedName)
+    ) {
+      this.recordViolation(sessionId, turn, resolvedName);
     }
   }
 
-  /** Drop stale-replay tool provenance entries belonging to `sessionId` (R14-M3). */
-  clearStaleReplayTools(sessionId) {
-    if (typeof sessionId !== "string" || this.staleReplayTools.size === 0) return;
-    const prefix = `${sessionId}\u0000`;
-    for (const key of this.staleReplayTools.keys()) {
-      if (key.startsWith(prefix)) this.staleReplayTools.delete(key);
+  /** Drop per-turn stale-replay tool provenance entries (R14-M3, R15-M6). */
+  clearStaleReplayTools(sessionId, turn = undefined) {
+    if (turn) {
+      this.staleReplayTools.delete(turn);
+      return;
     }
+    const active = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
+    if (active) this.staleReplayTools.delete(active);
   }
 
   presentUpdate(message, answer = false, { staleReplay = false } = {}) {
@@ -1582,6 +1642,7 @@ export class AcpProxy {
         record.session = params.sessionId;
         if (typeof params.sessionId === "string") {
           runtime.bindChannel(record.channel, params.sessionId);
+          this.rememberSession(params.sessionId);
         }
         delete params.additionalDirectories;
         params.mcpServers = [runtime.mcpServer(record.channel)];
@@ -1907,28 +1968,27 @@ export class AcpProxy {
     const turn = this.turns.get(sessionId);
     if (!turn || !["tool_call", "tool_call_update"].includes(update?.sessionUpdate)) return;
     const id = update.toolCallId;
-    const key =
-      typeof sessionId === "string" && typeof id === "string" ? callKey(sessionId, id) : undefined;
+    const replayMap = this.staleReplayTools.get(turn);
     // A fresh live announcement or named update claims ownership of the call ID
     // and clears any stale-replay provenance (R14-M3).
     if (
-      key !== undefined &&
+      typeof id === "string" &&
       (update.sessionUpdate === "tool_call" || typeof update.name === "string")
     ) {
-      this.staleReplayTools.delete(key);
+      replayMap?.delete(id);
     }
     if (typeof update.name === "string" && typeof id === "string") {
       if (turn.tools.size < MAX_TOOL_CALLS || turn.tools.has(id)) turn.tools.set(id, update.name);
     }
     const replayName =
-      key !== undefined &&
+      typeof id === "string" &&
       update.sessionUpdate === "tool_call_update" &&
       typeof update.name !== "string" &&
       !turn.tools.has(id)
-        ? this.staleReplayTools.get(key)
+        ? replayMap?.get(id)
         : undefined;
     if (replayName !== undefined && TERMINAL.has(update.status)) {
-      this.staleReplayTools.delete(key);
+      replayMap?.delete(id);
     }
     const name = typeof update.name === "string" ? update.name : (turn.tools.get(id) ?? replayName);
     if (!EXECUTED.has(update.status)) return;
@@ -1941,12 +2001,7 @@ export class AcpProxy {
     // name, with an unknown call ID or past the per-turn name bound cannot
     // be, so it is a violation like a named built-in.
     if (this.allows(name)) return;
-    if (turn.violation !== undefined) return;
-    turn.violation = name === undefined ? "unknown" : toolCode(name);
-    this.log(`built-in tool ${turn.violation} executed; ending the turn`);
-    this.agent({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
-    // A subagent's violation ends its parent's turn as well.
-    this.subagents.violated(sessionId, turn.violation);
+    this.recordViolation(sessionId, turn, name);
   }
 
   /**
@@ -2133,6 +2188,13 @@ export class AcpProxy {
           ) {
             return this.log("dropped a config_option_update of a child with replayed settings");
           }
+          if (
+            (update?.sessionUpdate === "config_option_update" ||
+              update?.sessionUpdate === "current_mode_update") &&
+            !this.isAdmittedConfigSession(message.params?.sessionId)
+          ) {
+            return this.log(`dropped ${update.sessionUpdate} for unclaimed session`);
+          }
           const staleReplay = this.isStaleReplay(message.params?.sessionId, replayOptions?.arrival);
           if (!staleReplay) {
             if (update?.sessionUpdate === "current_mode_update") {
@@ -2167,7 +2229,7 @@ export class AcpProxy {
             return;
           }
           if (staleReplay) {
-            this.trackStaleReplayTool(message.params?.sessionId, update);
+            this.observeStaleReplayTool(message.params?.sessionId, update);
             const presented = this.presentUpdate(this.annotateUsage(stripTier(message)), false, {
               staleReplay: true,
             });
@@ -2529,8 +2591,8 @@ export class AcpProxy {
     const backend = withChildren(turn, attempts(turn, settled));
     if (this.turns.get(record.sessionId) === turn) {
       this.planGate.clearTurn(record.sessionId, turn);
+      this.clearStaleReplayTools(record.sessionId, turn);
       this.turns.delete(record.sessionId);
-      this.clearStaleReplayTools(record.sessionId);
     }
     await this.settleMemory(turn);
     const violation = turn?.violation;

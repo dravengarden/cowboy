@@ -659,6 +659,7 @@ export class Subagents {
         // It exists natively but never ran: close it and its row.
         const failedTurn = proxy.turns.get(child.id);
         proxy.planGate?.clearTurn(child.id, failedTurn);
+        proxy.clearStaleReplayTools?.(child.id, failedTurn);
         proxy.turns.delete(child.id);
         this.opening.delete(child.id);
         this.finishChild(child, "failed", { stopReason: "error", error: text });
@@ -742,7 +743,10 @@ export class Subagents {
     let settled = await runtime.evidence
       .settle(child.cursor, child.id, message.result?.stopReason)
       .catch(() => ({ class: "unknown_refusal" }));
-    if (proxy.turns.get(child.id) === turn) proxy.turns.delete(child.id);
+    if (proxy.turns.get(child.id) === turn) {
+      proxy.clearStaleReplayTools?.(child.id, turn);
+      proxy.turns.delete(child.id);
+    }
     if (!RUNNING.has(child.state)) return;
     const violation = turn?.violation;
     // As for the parent: an errored prompt whose evidence reads clean is an
@@ -785,6 +789,7 @@ export class Subagents {
     if (child.id !== undefined) {
       this.proxy.retirePermissions?.({ sessionId: child.id, reason: "The subagent ended." });
       this.proxy.planGate?.clearTurn(child.id);
+      this.proxy.clearStaleReplayTools?.(child.id);
       this.proxy.clearResults?.(child.id);
     }
     if (!RUNNING.has(child.state)) return;
@@ -1008,6 +1013,7 @@ export class Subagents {
       ]);
     }
     for (const child of running.filter((item) => RUNNING.has(item.state))) {
+      this.proxy.clearStaleReplayTools?.(child.id);
       this.proxy.turns.delete(child.id);
       this.finishChild(child, "failed", {
         stopReason: "error",
@@ -1022,6 +1028,7 @@ export class Subagents {
   exited() {
     for (const child of [...this.children.values()]) {
       if (!RUNNING.has(child.state)) continue;
+      this.proxy.clearStaleReplayTools?.(child.id);
       this.proxy.turns.delete(child.id);
       this.finishChild(child, "failed", {
         stopReason: "error",

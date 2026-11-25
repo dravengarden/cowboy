@@ -3088,3 +3088,503 @@ test("Full 15 ordinary slots reject process/write pre-dispatch and reserved slot
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("Post-stdin read hitting capacity retries within budget and escalates to UncertainEffect when unproven (R15-M1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r15-readcap-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home, notifications: false });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const origCall = conn.call.bind(conn);
+  let blockReads = true;
+  let readAttempts = 0;
+  conn.call = async (method, params, opts) => {
+    if (method === "process/read" && !opts?.cleanup && blockReads) {
+      readAttempts += 1;
+      // On case 1, fail first 2 reads with capacity then succeed; on case 2, keep failing.
+      if (blockReads === "transient" && readAttempts >= 3) {
+        return await origCall(method, params, opts);
+      }
+      throw new Error("Too many execution requests");
+    }
+    return await origCall(method, params, opts);
+  };
+  const lostEvents = [];
+  try {
+    const facade = new Facade(conn, {
+      root: repo,
+      shell: "/bin/sh",
+      publishTimeoutMs: 250,
+      onUncertain: (sid, method) => lostEvents.push([sid, method]),
+      onLost: (sid, method) => lostEvents.push([sid, method]),
+    });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const session = facade.session("s1");
+    const turn = session.turn;
+    const large = "a".repeat(64 * 1024);
+
+    // Case 1: transient capacity refusal on ordinary result read retries and succeeds.
+    blockReads = "transient";
+    readAttempts = 0;
+    await facade.writeFile(session, turn, { path: "ok.txt", content: large });
+    assert.ok(readAttempts >= 3, "ordinary read must retry capacity refusal within budget");
+    assert.equal(turn.uncertain, undefined);
+    assert.deepEqual(lostEvents, []);
+    assert.equal(await readFile(join(repo, "ok.txt"), "utf8"), large);
+
+    // Case 2: persistent capacity refusal after helper accepted stdin escalates to UncertainEffect.
+    blockReads = true;
+    readAttempts = 0;
+    await assert.rejects(
+      () => facade.writeFile(session, turn, { path: "may-apply.txt", content: large }),
+      (err) =>
+        err instanceof UncertainEffect &&
+        (err.method === "process/read" || err.method === "file publish"),
+    );
+    assert.ok(readAttempts >= 2, "must retry before escalating to uncertainty");
+    assert.ok(
+      turn.uncertain === "process/read" || turn.uncertain === "file publish",
+      "session must be fenced/parked on unproven edit",
+    );
+    assert.equal(lostEvents.length, 1);
+    assert.equal(lostEvents[0][0], "s1");
+    assert.ok((facade.invalidations.get(join(repo, "may-apply.txt")) ?? 0) > 0);
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Helper cleanup retries definite worker capacity refusals without parking and never replays unknown outcomes (R15-M5)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r15-wcap-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home, notifications: false });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const origCall = conn.call.bind(conn);
+  let termRefusals = 0;
+  let readRefusals = 0;
+  let mode = "worker-capacity";
+  const makeRemoteError = (message, data) => {
+    const err = new Error(message);
+    err.remote = data ? { code: -32000, message, data } : { code: -32000, message };
+    return err;
+  };
+  conn.call = async (method, params, opts) => {
+    if (mode === "worker-capacity") {
+      if (method === "process/write") {
+        throw makeRemoteError("Execution request capacity reached; this request was not admitted");
+      }
+      if (method === "process/terminate" && termRefusals < 2) {
+        termRefusals += 1;
+        throw makeRemoteError(
+          termRefusals === 1
+            ? "Execution request capacity reached; this request was not admitted"
+            : "Execution unavailable; the request was not sent",
+        );
+      }
+      if (method === "process/read" && opts?.cleanup && readRefusals < 2) {
+        readRefusals += 1;
+        throw makeRemoteError("Execution unavailable; the request was not sent");
+      }
+    } else if (mode === "unknown-terminate") {
+      if (method === "process/write") {
+        throw new Error("Too many execution requests");
+      }
+      if (method === "process/terminate") {
+        termRefusals += 1;
+        throw makeRemoteError(
+          "Execution unavailable or result unknown; no local fallback and no replay",
+          { outcome: "unknown" },
+        );
+      }
+    }
+    return await origCall(method, params, opts);
+  };
+  const lostEvents = [];
+  try {
+    const facade = new Facade(conn, {
+      root: repo,
+      shell: "/bin/sh",
+      onUncertain: (sid, method) => lostEvents.push([sid, method]),
+      onLost: (sid, method) => lostEvents.push([sid, method]),
+    });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const session = facade.session("s1");
+    const turn = session.turn;
+    const large = "w".repeat(64 * 1024);
+
+    // Case 1: definite worker pre-admission refusals on write, terminate, and confirming read
+    // retry cleanup cleanly and never park the session.
+    await assert.rejects(
+      () => facade.writeFile(session, turn, { path: "a.txt", content: large }),
+      (err) =>
+        !(err instanceof UncertainEffect) &&
+        /Execution unavailable before delivering the edit request/i.test(err.message),
+    );
+    assert.equal(termRefusals, 2);
+    assert.equal(readRefusals, 2);
+    assert.equal(turn.uncertain, undefined, "worker pre-admission refusal must not park session");
+    assert.deepEqual(lostEvents, []);
+    assert.deepEqual(await readdir(repo), []);
+
+    // Case 2: an unknown-outcome terminate reply must NEVER replay.
+    mode = "unknown-terminate";
+    termRefusals = 0;
+    await assert.rejects(
+      () => facade.writeFile(session, turn, { path: "b.txt", content: large }),
+      (err) => err instanceof UncertainEffect && err.method === "process/terminate",
+    );
+    assert.equal(termRefusals, 1, "unknown terminate outcome must never replay");
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Buffered forbidden tool announcement + completion inside claimed child replay triggers policy violation (R15-M2)", async () => {
+  const agentFrames = [];
+  const clientFrames = [];
+  const runtime = {
+    managed: false,
+    facade: { beginTurn() {}, async endTurn() {} },
+    sessionCwd: (cwd) => cwd,
+    checkMirror() {},
+    projection: async () => "PROJ",
+    newChannel: () => "ch-0",
+    bindChannel() {},
+    mcpServer: () => ({ name: "cowboy", command: "/node", args: [], env: [] }),
+    evidence: { mark: async () => 1, settle: async () => ({ class: "ok", successes: 1 }) },
+  };
+  const proxy = new AcpProxy({
+    agent: (frame) => agentFrames.push(frame),
+    client: (frame) => clientFrames.push(frame),
+    runtime: Promise.resolve(runtime),
+  });
+  await proxy.runtime;
+  proxy.root = "/repo";
+  const childId = "child-r15-buf-deny";
+  proxy.subagents.adopt(childId);
+  proxy.subagents.children.set(childId, {
+    id: childId,
+    parent: "parent-r15",
+    state: "running",
+    announced: true,
+    cancelled: false,
+    replied: false,
+  });
+  // Buffer BOTH forbidden built-in announcement AND its nameless completion before child prompt starts.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: childId,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "bad-1",
+        name: "read_file",
+        status: "in_progress",
+      },
+    },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: childId,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "bad-1",
+        status: "completed",
+      },
+    },
+  });
+  const childTurn = {
+    attempt: Symbol("child-buf-att"),
+    tools: new Map(),
+    events: new Set(),
+    violations: [],
+    calls: new Map(),
+    cancelled: false,
+  };
+  proxy.turns.set(childId, childTurn);
+  proxy.subagents.release(childId);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(childTurn.violation, "read_file", "buffered forbidden completion must be caught");
+  assert.equal(
+    agentFrames.some((f) => f.method === "session/cancel" && f.params?.sessionId === childId),
+    true,
+  );
+});
+
+test("Session eviction invalidates cached unrestricted mode and requires fresh mode confirmation on re-admission (R15-M3)", async () => {
+  const agentFrames = [];
+  const clientFrames = [];
+  const runtime = {
+    managed: false,
+    facade: { beginTurn() {}, async endTurn() {} },
+    sessionCwd: (cwd) => cwd,
+    checkMirror() {},
+    projection: async () => "PROJ",
+    newChannel: () => "ch-0",
+    bindChannel() {},
+    mcpServer: () => ({ name: "cowboy", command: "/node", args: [], env: [] }),
+    evidence: { mark: async () => 1, settle: async () => ({ class: "ok", successes: 1 }) },
+  };
+  const proxy = new AcpProxy({
+    agent: (frame) => agentFrames.push(frame),
+    client: (frame) => clientFrames.push(frame),
+    runtime: Promise.resolve(runtime),
+  });
+  await proxy.runtime;
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "session/load",
+    params: { sessionId: "s-evict-0", cwd: "/repo", mcpServers: [] },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 1,
+    result: { modes: { currentModeId: "default" } },
+  });
+  assert.equal(proxy.effectiveMode("s-evict-0"), "default");
+  const genBefore = proxy.planGate.modeGeneration("s-evict-0");
+  // Fill knownSessions past MAX_TOOL_CALLS (1024) to evict idle s-evict-0.
+  for (let i = 1; i <= 1024; i += 1) {
+    proxy.rememberSession(`s-fill-${i}`);
+  }
+  assert.equal(proxy.knownSessions.has("s-evict-0"), false);
+  assert.equal(proxy.effectiveMode("s-evict-0"), undefined, "eviction must drop cached mode");
+  assert.ok(
+    proxy.planGate.modeGeneration("s-evict-0") > genBefore,
+    "eviction must advance modeGen",
+  );
+  // Even after re-admission via session/prompt, mode stays undefined (fail-closed) until freshly confirmed!
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "session/prompt",
+    params: { sessionId: "s-evict-0", prompt: [] },
+  });
+  assert.equal(proxy.effectiveMode("s-evict-0"), undefined);
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "perm-evicted",
+    method: "session/request_permission",
+    params: {
+      sessionId: "s-evict-0",
+      toolCall: { toolCallId: "w1", name: "mcp_cowboy_WriteFile" },
+      options: [
+        { optionId: "allow", name: "Allow", kind: "allow_once" },
+        { optionId: "deny", name: "Deny", kind: "reject_once" },
+      ],
+    },
+  });
+  assert.deepEqual(agentFrames.at(-1), {
+    jsonrpc: "2.0",
+    id: "perm-evicted",
+    result: { outcome: { outcome: "selected", optionId: "deny" } },
+  });
+});
+
+test("Direct config_option_update from unclaimed session is dropped before reaching worker (R15-M4)", async () => {
+  const agentFrames = [];
+  const clientFrames = [];
+  const runtime = {
+    managed: false,
+    facade: { beginTurn() {}, async endTurn() {} },
+    sessionCwd: (cwd) => cwd,
+    checkMirror() {},
+    projection: async () => "PROJ",
+    newChannel: () => "ch-0",
+    bindChannel() {},
+    mcpServer: () => ({ name: "cowboy", command: "/node", args: [], env: [] }),
+    evidence: { mark: async () => 1, settle: async () => ({ class: "ok", successes: 1 }) },
+  };
+  const proxy = new AcpProxy({
+    agent: (frame) => agentFrames.push(frame),
+    client: (frame) => clientFrames.push(frame),
+    runtime: Promise.resolve(runtime),
+  });
+  await proxy.runtime;
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "session/load",
+    params: { sessionId: "root-r15", cwd: "/repo", mcpServers: [] },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 1,
+    result: { modes: { currentModeId: "default" } },
+  });
+  clientFrames.length = 0;
+  // Direct config_option_update and current_mode_update for unclaimed session must NOT reach worker.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "unclaimed-ghost",
+      update: {
+        sessionUpdate: "config_option_update",
+        configOptions: [{ id: "mode", currentValue: "plan" }],
+      },
+    },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "unclaimed-ghost",
+      update: { sessionUpdate: "current_mode_update", currentModeId: "plan" },
+    },
+  });
+  assert.equal(clientFrames.length, 0, "unclaimed config/mode updates must never reach worker");
+  // Admitted root session's config_option_update still forwards normally.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "root-r15",
+      update: {
+        sessionUpdate: "config_option_update",
+        configOptions: [{ id: "mode", currentValue: "plan" }],
+      },
+    },
+  });
+  assert.equal(clientFrames.length, 1);
+  assert.equal(proxy.effectiveMode("root-r15"), "plan");
+});
+
+test("Replay tool provenance is isolated per child turn so sibling churn cannot displace a running child's allowed tool (R15-M6)", async () => {
+  const agentFrames = [];
+  const clientFrames = [];
+  const runtime = {
+    managed: false,
+    facade: { beginTurn() {}, async endTurn() {} },
+    sessionCwd: (cwd) => cwd,
+    checkMirror() {},
+    projection: async () => "PROJ",
+    newChannel: () => "ch-0",
+    bindChannel() {},
+    mcpServer: () => ({ name: "cowboy", command: "/node", args: [], env: [] }),
+    evidence: { mark: async () => 1, settle: async () => ({ class: "ok", successes: 1 }) },
+  };
+  const proxy = new AcpProxy({
+    agent: (frame) => agentFrames.push(frame),
+    client: (frame) => clientFrames.push(frame),
+    runtime: Promise.resolve(runtime),
+  });
+  await proxy.runtime;
+  proxy.root = "/repo";
+  // Running child A buffers an allowed tool announcement.
+  const childA = "child-r15-a";
+  proxy.subagents.adopt(childA);
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: childA,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "a-read-1",
+        name: "mcp_cowboy_ReadFile",
+        status: "in_progress",
+      },
+    },
+  });
+  const turnA = {
+    attempt: Symbol("a-att"),
+    tools: new Map(),
+    events: new Set(),
+    violations: [],
+    calls: new Map(),
+    cancelled: false,
+  };
+  proxy.turns.set(childA, turnA);
+  proxy.subagents.release(childA);
+  await new Promise((r) => setTimeout(r, 20));
+  // Sibling B runs 1100 unfinished buffered announcements and settles.
+  const childB = "child-r15-b";
+  const turnB = {
+    attempt: Symbol("b-att"),
+    tools: new Map(),
+    events: new Set(),
+    violations: [],
+    calls: new Map(),
+    cancelled: false,
+  };
+  proxy.turns.set(childB, turnB);
+  for (let i = 0; i < 1100; i += 1) {
+    proxy.observeStaleReplayTool(childB, {
+      sessionUpdate: "tool_call",
+      toolCallId: `b-tool-${i}`,
+      name: "mcp_cowboy_ReadFile",
+      status: "in_progress",
+    });
+  }
+  proxy.subagents.finishChild(
+    {
+      id: childB,
+      parent: "parent-r15",
+      state: "running",
+      announced: false,
+      text: "",
+      settled() {},
+    },
+    "completed",
+    { stopReason: "end_turn" },
+  );
+  assert.equal(
+    proxy.staleReplayTools.has(turnB),
+    false,
+    "settled child provenance must be cleared",
+  );
+  // Child A's late nameless completion still resolves cleanly without false violation!
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: childA,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "a-read-1",
+        status: "completed",
+      },
+    },
+  });
+  assert.equal(
+    turnA.violation,
+    undefined,
+    "sibling churn must not displace child A's allowed tool",
+  );
+  assert.equal(
+    agentFrames.some((f) => f.method === "session/cancel"),
+    false,
+  );
+});

@@ -68,6 +68,26 @@ export const READINESS_PREFIX = "cowboy-agy-readiness-";
 /** Maximum byte length of one JSON apply request fed to `APPLY_STDIN`. */
 const MAX_STDIN_APPLY_BYTES = 5 * 1024 * 1024;
 /**
+ * Exact worker-side `-32000` messages that definitively prove a request was
+ * refused before transport admission (never matches `unavailable()` unknown outcomes).
+ */
+const WORKER_PRE_ADMISSION_MESSAGES = new Set([
+  "Execution request capacity reached; this request was not admitted",
+  "Execution unavailable; the request was not sent",
+]);
+
+function workerNotAdmitted(error) {
+  return (
+    error?.remote?.code === -32000 &&
+    WORKER_PRE_ADMISSION_MESSAGES.has(error.remote.message) &&
+    !unknownOutcome(error)
+  );
+}
+
+function retryablePreAdmission(error) {
+  return notSent(error) || workerNotAdmitted(error);
+}
+/**
  * Bounded, stdin-fed large-edit wrapper: confirms the execution helper exists
  * before reading stdin, reads exactly `len + 1` bytes terminated by a newline
  * into memory, and only then creates and owns a private 0600 scratch file that
@@ -1931,7 +1951,7 @@ ${WRAP_UP_NOTE}`,
             // Callers joined on this stop see its failure; a later caller only
             // observes (the stop may have been delivered) or, if it was never
             // sent, sends it.
-            process.stopping = notSent(error) ? undefined : Promise.resolve();
+            process.stopping = retryablePreAdmission(error) ? undefined : Promise.resolve();
             throw error;
           });
         process.stopping.catch(() => {});
@@ -1946,7 +1966,7 @@ ${WRAP_UP_NOTE}`,
         }
         break;
       } catch (error) {
-        if (retryNotSent && notSent(error)) {
+        if (retryNotSent && retryablePreAdmission(error)) {
           const left = deadline - Date.now();
           if (left <= 0) return process.closed;
           await new Promise((resolve) => setTimeout(resolve, Math.min(25, left)));
@@ -1976,7 +1996,7 @@ ${WRAP_UP_NOTE}`,
           expired,
         ]);
       } catch (error) {
-        if (retryNotSent && notSent(error)) {
+        if (retryNotSent && retryablePreAdmission(error)) {
           const left = deadline - Date.now();
           if (left <= 0) break;
           await new Promise((resolve) => setTimeout(resolve, Math.min(25, left)));
@@ -2085,7 +2105,7 @@ ${WRAP_UP_NOTE}`,
               stdinTimedOutBeforeDispatch = true;
               break;
             }
-            if (!dispatched && notSent(error)) {
+            if (workerNotAdmitted(error) || (!dispatched && notSent(error))) {
               writeClosed = true;
               throw new ToolError(
                 "Execution unavailable before delivering the edit request to the workspace helper; nothing was written.",
@@ -2127,18 +2147,47 @@ ${WRAP_UP_NOTE}`,
         }
       }
       const pollDeadline = stdinDelivered ? deadline : Math.min(deadline, Date.now() + 5000);
+      let readRefusedByCapacity = false;
       while (!process.closed && !timedOut && !stdinTimedOutBeforeDispatch) {
         const remaining = pollDeadline - Date.now();
         if (remaining <= 0) {
+          if (readRefusedByCapacity && lostIsUncertain && (stdinDelivered || !stdinPayload)) {
+            throw new UncertainEffect("process/read");
+          }
           if (stdinDelivered) {
             timedOut = true;
             break;
           }
           throw new ToolError("Failed to deliver apply request to workspace helper.");
         }
-        for (const { stream, bytes } of await this.poll(process, remaining, {
-          lostIsUncertain,
-        })) {
+        let chunks;
+        try {
+          chunks = await this.poll(process, remaining, {
+            lostIsUncertain,
+          });
+          readRefusedByCapacity = false;
+        } catch (error) {
+          if (retryablePreAdmission(error)) {
+            readRefusedByCapacity = true;
+            const left = pollDeadline - Date.now();
+            if (left > 0) {
+              await new Promise((resolve) => setTimeout(resolve, Math.min(25, left)));
+              continue;
+            }
+            if (lostIsUncertain && (stdinDelivered || !stdinPayload)) {
+              throw new UncertainEffect("process/read");
+            }
+          }
+          if (
+            lostIsUncertain &&
+            !(error instanceof UncertainEffect) &&
+            (stdinDelivered || !stdinPayload)
+          ) {
+            throw new UncertainEffect("process/read");
+          }
+          throw error;
+        }
+        for (const { stream, bytes } of chunks) {
           const room = Math.max(0, maxBytes - out.size);
           const kept = bytes.subarray(0, room);
           out.size += kept.length;
