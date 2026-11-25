@@ -370,6 +370,45 @@ async fn connection(host: Arc<Host>, stream: UnixStream) -> Result<()> {
     }
 }
 
+fn spawn_reaper(
+    host: Arc<Host>,
+    payload_home: Option<PathBuf>,
+    owner_uid: u32,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        if let Some(home) = payload_home.clone() {
+            let _ = tokio::task::spawn_blocking(move || {
+                file_helper::sweep_stale_file_buffer_payloads(&home, owner_uid, 3600);
+            })
+            .await;
+        }
+        let mut sequence = 0;
+        let mut sweep_ticks = 0_u8;
+        let mut interval = tokio::time::interval(Duration::from_secs(60));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            sweep_ticks = sweep_ticks.wrapping_add(1);
+            if sweep_ticks.is_multiple_of(10)
+                && let Some(home) = payload_home.clone()
+            {
+                let _ = tokio::task::spawn_blocking(move || {
+                    file_helper::sweep_stale_file_buffer_payloads(&home, owner_uid, 3600);
+                })
+                .await;
+            }
+            let reaped = host.reap_unattended(&mut sequence);
+            if reaped > 0 {
+                tracing::info!(
+                    event_name = "cowboy.execution.unattended_reaped",
+                    processes = reaped,
+                    "terminated native processes of a worker that is gone"
+                );
+            }
+        }
+    })
+}
+
 /// Start exactly one target executor. The Machine must supply an owned pinned
 /// component; using another Plugin's installed private CLI is not a launch path.
 pub async fn run(args: Args) -> Result<()> {
@@ -530,23 +569,12 @@ pub async fn run(args: Args) -> Result<()> {
         close: tokio::sync::Notify::new(),
         attended: Mutex::new(std::time::Instant::now()),
     });
-    let reaper_host = Arc::clone(&host);
-    let reaper = tokio::spawn(async move {
-        let mut sequence = 0;
-        let mut interval = tokio::time::interval(Duration::from_secs(60));
-        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        loop {
-            interval.tick().await;
-            let reaped = reaper_host.reap_unattended(&mut sequence);
-            if reaped > 0 {
-                tracing::info!(
-                    event_name = "cowboy.execution.unattended_reaped",
-                    processes = reaped,
-                    "terminated native processes of a worker that is gone"
-                );
-            }
-        }
-    });
+    let payload_home = contract
+        .environment
+        .get("HOME")
+        .map(PathBuf::from)
+        .filter(|path| path.is_absolute());
+    let reaper = spawn_reaper(Arc::clone(&host), payload_home, contract_metadata.uid());
     let (messages, mut native_messages) = mpsc::channel(4);
     let reader = tokio::spawn(async move {
         loop {

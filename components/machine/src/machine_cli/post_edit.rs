@@ -16,7 +16,8 @@ use tokio::sync::{Semaphore, mpsc, watch};
 use crate::post_edit_inspect::{
     MAX_POST_EDIT_REPLY_BYTES, MAX_POST_EDIT_REQUEST_BYTES, POST_EDIT_INSPECT_HEADER,
     POST_EDIT_INSPECT_PATH, POST_EDIT_INSPECT_PROTOCOL, POST_EDIT_INSPECT_TOKEN_HEADER,
-    PostEditInspectReply, PostEditInspectRequest, clamp_remaining_ms,
+    POST_EDIT_WORKSPACE_HEADER, POST_EDIT_WORKSPACE_PROTOCOL, PostEditInspectReply,
+    PostEditInspectRequest, clamp_remaining_ms,
 };
 use crate::runtime_wire::Frame;
 
@@ -28,6 +29,10 @@ pub(super) fn attach_upgrade_header(
     request.headers_mut().insert(
         POST_EDIT_INSPECT_HEADER,
         POST_EDIT_INSPECT_PROTOCOL.parse()?,
+    );
+    request.headers_mut().insert(
+        POST_EDIT_WORKSPACE_HEADER,
+        POST_EDIT_WORKSPACE_PROTOCOL.parse()?,
     );
     Ok(())
 }

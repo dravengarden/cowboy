@@ -46,6 +46,99 @@ const MAX_WORKTREE_ROUTES: usize = 4096;
 /// Enforced on the workspace Machine across Controller WebSocket reconnects.
 const POST_EDIT_CONCURRENCY: usize = 4;
 
+/// Typed pre-dispatch capacity refusal returned ONLY before any Code runtime
+/// route or buffer open is entered (R5-M1).
+#[derive(Debug, Clone, Copy)]
+pub struct PostEditCapacityError;
+
+impl std::fmt::Display for PostEditCapacityError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("post-edit concurrency capacity reached")
+    }
+}
+
+impl std::error::Error for PostEditCapacityError {}
+
+#[must_use]
+pub fn post_edit_refusal(
+    adapter: &str,
+    error: &anyhow::Error,
+) -> Option<crate::machine_protocol::AdapterRefusal> {
+    (adapter == "zed_post_edit" && error.downcast_ref::<PostEditCapacityError>().is_some())
+        .then_some(crate::machine_protocol::AdapterRefusal::PostEditCapacity)
+}
+
+tokio::task_local! {
+    static ACTIVE_POST_EDIT_SLOT: Arc<parking_lot::Mutex<Option<tokio::sync::OwnedSemaphorePermit>>>;
+}
+
+pub async fn scope_post_edit_slot<F, T>(slot: tokio::sync::OwnedSemaphorePermit, future: F) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    let cell = Arc::new(parking_lot::Mutex::new(Some(slot)));
+    ACTIVE_POST_EDIT_SLOT.scope(cell, future).await
+}
+
+fn take_post_edit_slot() -> Option<tokio::sync::OwnedSemaphorePermit> {
+    ACTIVE_POST_EDIT_SLOT
+        .try_with(|cell| cell.lock().take())
+        .ok()
+        .flatten()
+}
+
+fn restore_post_edit_slot(slot: tokio::sync::OwnedSemaphorePermit) {
+    let _ = ACTIVE_POST_EDIT_SLOT.try_with(|cell| {
+        *cell.lock() = Some(slot);
+    });
+}
+
+struct InflightExchangeGuard {
+    reader: Option<BufReader<tokio::io::Take<tokio::net::unix::OwnedReadHalf>>>,
+    slot: Option<tokio::sync::OwnedSemaphorePermit>,
+}
+
+impl InflightExchangeGuard {
+    fn arm(
+        reader: BufReader<tokio::io::Take<tokio::net::unix::OwnedReadHalf>>,
+        slot: Option<tokio::sync::OwnedSemaphorePermit>,
+    ) -> Self {
+        Self {
+            reader: Some(reader),
+            slot,
+        }
+    }
+
+    fn reader_mut(&mut self) -> &mut BufReader<tokio::io::Take<tokio::net::unix::OwnedReadHalf>> {
+        self.reader.as_mut().expect("exchange reader present")
+    }
+
+    fn disarm(&mut self) {
+        self.reader = None;
+        if let Some(slot) = self.slot.take() {
+            restore_post_edit_slot(slot);
+        }
+    }
+}
+
+impl Drop for InflightExchangeGuard {
+    fn drop(&mut self) {
+        if let (Some(mut reader), Some(permit)) = (self.reader.take(), self.slot.take())
+            && let Ok(handle) = tokio::runtime::Handle::try_current()
+        {
+            // R5-H1: Exchange timed out or was cancelled while the adapter may
+            // still be running its handler independently of this future. Keep
+            // the Machine slot held on the same UnixStream until the adapter
+            // writes its terminal response line or exits/closes (EOF).
+            handle.spawn(async move {
+                let mut drain = Vec::new();
+                let _ = reader.read_until(b'\n', &mut drain).await;
+                drop(permit);
+            });
+        }
+    }
+}
+
 struct PostEditSlots(Arc<tokio::sync::Semaphore>);
 
 impl Default for PostEditSlots {
@@ -238,7 +331,7 @@ impl CodeRuntimeHost {
     pub fn try_acquire_post_edit_slot(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
         Arc::clone(&self.post_edit_slots.0)
             .try_acquire_owned()
-            .map_err(|_| anyhow::anyhow!("post_edit_capacity"))
+            .map_err(|_| anyhow::Error::new(PostEditCapacityError))
     }
 
     pub(super) async fn reap_retired_processes(&self) -> Result<()> {
@@ -753,23 +846,30 @@ fn runtime_command(
 }
 
 pub async fn exchange(socket: &Path, payload: &Value) -> Result<Value> {
+    exchange_with_timeout(socket, payload, Duration::from_secs(35)).await
+}
+
+async fn exchange_with_timeout(socket: &Path, payload: &Value, timeout: Duration) -> Result<Value> {
     let request = serde_json::to_vec(payload)?;
     ensure!(
         request.len() <= MAX_CODE_MESSAGE_BYTES,
         "code request exceeds its size limit"
     );
-    let response = tokio::time::timeout(Duration::from_secs(35), async {
+    let response = tokio::time::timeout(timeout, async {
         let stream = tokio::time::timeout(Duration::from_secs(2), UnixStream::connect(socket))
             .await
             .context("code runtime connect timed out")??;
         let (read, mut write) = stream.into_split();
+        let reader = BufReader::new(read.take((MAX_CODE_MESSAGE_BYTES + 1) as u64));
+        let mut guard = InflightExchangeGuard::arm(reader, take_post_edit_slot());
         write.write_all(&request).await?;
         write.write_all(b"\n").await?;
         write.shutdown().await?;
         let mut bytes = Vec::new();
-        BufReader::new(read.take((MAX_CODE_MESSAGE_BYTES + 1) as u64))
-            .read_until(b'\n', &mut bytes)
-            .await?;
+        let read_res = guard.reader_mut().read_until(b'\n', &mut bytes).await;
+        // Adapter wrote its terminal line or closed/errored: safe to return slot.
+        guard.disarm();
+        read_res?;
         ensure!(
             bytes.len() <= MAX_CODE_MESSAGE_BYTES && bytes.last() == Some(&b'\n'),
             "code runtime response is truncated or exceeds its size limit"
@@ -1389,8 +1489,64 @@ mod tests {
         let err = host
             .try_acquire_post_edit_slot()
             .expect_err("5th concurrent post-edit slot must fail closed");
-        assert!(err.to_string().contains("post_edit_capacity"), "{err:#}");
+        assert!(err.downcast_ref::<PostEditCapacityError>().is_some());
+        assert_eq!(
+            post_edit_refusal("zed_post_edit", &err),
+            Some(crate::machine_protocol::AdapterRefusal::PostEditCapacity)
+        );
+        assert_eq!(post_edit_refusal("zed", &err), None);
         drop(held.pop());
         assert!(host.try_acquire_post_edit_slot().is_ok());
+    }
+
+    #[tokio::test]
+    async fn post_edit_exchange_timeout_retains_slot_until_adapter_acknowledges() {
+        let dir = PrivateRuntimeDirectory::create().unwrap();
+        let sock = dir.0.join("slow.sock");
+        let listener = tokio::net::UnixListener::bind(&sock).unwrap();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (read, mut write) = stream.into_split();
+            let mut line = String::new();
+            BufReader::new(read).read_line(&mut line).await.unwrap();
+            let _ = release_rx.await;
+            write
+                .write_all(br#"{"type":"health","api_version":1}"#)
+                .await
+                .unwrap();
+            write.write_all(b"\n").await.unwrap();
+        });
+        let host = CodeRuntimeHost::default();
+        let mut others = Vec::new();
+        for _ in 0..(POST_EDIT_CONCURRENCY - 1) {
+            others.push(host.try_acquire_post_edit_slot().unwrap());
+        }
+        let slot = host.try_acquire_post_edit_slot().unwrap();
+        let err = scope_post_edit_slot(
+            slot,
+            exchange_with_timeout(&sock, &json!({"type": "health"}), Duration::from_millis(25)),
+        )
+        .await
+        .expect_err("slow adapter must time out");
+        assert!(err.to_string().contains("timed out"), "{err:#}");
+        // R5-H1: Slot MUST remain occupied while slow adapter is still working!
+        assert!(
+            host.try_acquire_post_edit_slot().is_err(),
+            "timed-out post-edit slot leaked before adapter settled"
+        );
+        let _ = release_tx.send(());
+        server.await.unwrap();
+        // Once adapter writes its terminal response line, drainer releases the slot.
+        let mut freed = false;
+        for _ in 0..40 {
+            if host.try_acquire_post_edit_slot().is_ok() {
+                freed = true;
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        assert!(freed, "slot was not released after adapter acknowledgment");
+        drop(others);
     }
 }

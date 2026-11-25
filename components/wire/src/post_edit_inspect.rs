@@ -61,6 +61,10 @@ pub const POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION: u16 = 9;
 /// independent authenticated HTTPS post-edit inspection route.
 pub const POST_EDIT_INSPECT_HEADER: &str = "x-cowboy-machine-post-edit";
 pub const POST_EDIT_INSPECT_PROTOCOL: &str = "post-edit-v1";
+/// Separate workspace capability header proving this Machine implements the
+/// Machine-capped `"zed_post_edit"` adapter route (R5-M2).
+pub const POST_EDIT_WORKSPACE_HEADER: &str = "x-cowboy-machine-post-edit-workspace";
+pub const POST_EDIT_WORKSPACE_PROTOCOL: &str = "post-edit-zed-v1";
 /// Per-primary-connection secret token returned on `/api/machine/connect`
 /// upgrade, registered only after Machine Ed25519 challenge acceptance, and
 /// revoked automatically when that primary connection ends.

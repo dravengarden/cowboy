@@ -498,15 +498,18 @@ pub async fn machine_ws_upgrade(
         .is_some_and(|value| value == crate::post_edit_inspect::POST_EDIT_INSPECT_PROTOCOL)
         .then(random_machine_token)
         .and_then(Result::ok);
+    let post_edit_workspace = headers
+        .get(crate::post_edit_inspect::POST_EDIT_WORKSPACE_HEADER)
+        .is_some_and(|value| value == crate::post_edit_inspect::POST_EDIT_WORKSPACE_PROTOCOL);
     let upgrade_token = lane_token.clone();
-    let upgrade_post_edit_token = post_edit_token.clone();
+    let upgrade_post_edit = (post_edit_token.clone(), post_edit_workspace);
     let mut response = ws.on_upgrade(move |socket| {
         handle_machine_ws(
             socket,
             state,
             (chunked, compressed, paced, stream),
             upgrade_token,
-            upgrade_post_edit_token,
+            upgrade_post_edit,
         )
     });
     if let Some(token) = lane_token.as_deref()

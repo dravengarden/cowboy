@@ -200,7 +200,19 @@ impl AdapterFailure {
     pub fn workspace_root_identity_changed(&self) -> bool {
         self.refusal == Some(crate::machine_protocol::AdapterRefusal::WorkspaceRootIdentityChanged)
     }
+
+    pub fn post_edit_capacity(&self) -> bool {
+        self.refusal == Some(crate::machine_protocol::AdapterRefusal::PostEditCapacity)
+    }
 }
+
+impl std::fmt::Display for AdapterFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.detail)
+    }
+}
+
+impl std::error::Error for AdapterFailure {}
 
 impl From<AdapterFailure> for String {
     fn from(failure: AdapterFailure) -> Self {

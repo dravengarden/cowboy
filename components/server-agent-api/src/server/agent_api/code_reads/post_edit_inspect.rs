@@ -248,11 +248,11 @@ async fn resolve_and_authorize_initial(
     let CodeReadScope::Session(observed) = scope else {
         return Err("unavailable");
     };
-    // R4-H1: Require a target workspace Machine that registered post-edit
-    // support (enforcing Machine-owned `"zed_post_edit"` concurrency slots).
+    // R4-H1 / R5-M2: Require a target workspace Machine that explicitly
+    // announced workspace-capped `"zed_post_edit"` support on its handshake.
     if !observed
         .connection()
-        .is_some_and(machine_post_edit::supports_connection)
+        .is_some_and(machine_post_edit::supports_workspace_connection)
     {
         return Err("unsupported");
     }
@@ -301,7 +301,13 @@ fn is_not_open(reply: &anyhow::Result<ZedAdapterResponse>) -> bool {
 }
 
 fn is_post_edit_capacity(reply: &anyhow::Result<ZedAdapterResponse>) -> bool {
-    matches!(reply, Err(error) if error.to_string().contains("post_edit_capacity"))
+    matches!(
+        reply,
+        Err(error)
+            if error
+                .downcast_ref::<crate::machine_control::AdapterFailure>()
+                .is_some_and(crate::machine_control::AdapterFailure::post_edit_capacity)
+    )
 }
 
 fn map_acquire_error(reason: &'static str, cold_open: bool) -> &'static str {
@@ -753,25 +759,37 @@ mod tests {
         let conn = crate::machine_control::ConnectionToken::for_test("m-runtime", "ep-1");
         let tok = format!("tok-{}", uuid::Uuid::new_v4().simple());
         assert!(machine_post_edit::lookup(&tok).is_none());
-        let reg = machine_post_edit::register(
+        let reg = machine_post_edit::register_connection(
             tok.clone(),
-            machine_post_edit::PostEditTarget {
-                connection: conn.clone(),
-                machine_id: "m-runtime".into(),
-            },
+            conn.clone(),
+            "m-runtime".into(),
+            true,
         );
         let found = machine_post_edit::lookup(&tok).expect("registered token must resolve");
         assert_eq!(found.machine_id, "m-runtime");
         assert!(found.connection.same(&conn));
-        assert!(machine_post_edit::supports_connection(&conn));
+        assert!(machine_post_edit::supports_workspace_connection(&conn));
+        // An older Machine announcing only post-edit-v1 without the workspace
+        // capability must NOT satisfy supports_workspace_connection (R5-M2).
+        let legacy_conn = crate::machine_control::ConnectionToken::for_test("m-legacy", "ep-old");
+        let legacy_tok = format!("tok-{}", uuid::Uuid::new_v4().simple());
+        let _legacy_reg = machine_post_edit::register_connection(
+            legacy_tok,
+            legacy_conn.clone(),
+            "m-legacy".into(),
+            false,
+        );
+        assert!(!machine_post_edit::supports_workspace_connection(
+            &legacy_conn
+        ));
         let other = crate::machine_control::ConnectionToken::for_test("m-runtime", "ep-2");
-        assert!(!machine_post_edit::supports_connection(&other));
+        assert!(!machine_post_edit::supports_workspace_connection(&other));
         drop(reg);
         assert!(
             machine_post_edit::lookup(&tok).is_none(),
             "dropping primary WS registration must revoke post-edit token"
         );
-        assert!(!machine_post_edit::supports_connection(&conn));
+        assert!(!machine_post_edit::supports_workspace_connection(&conn));
     }
 
     #[test]
@@ -781,7 +799,8 @@ mod tests {
         assert_eq!(map_acquire_error("capacity", false), "capacity");
         assert_eq!(map_acquire_error("unavailable", false), "unavailable");
         assert_eq!(map_acquire_error("unavailable", true), "not_open");
-        assert!(is_post_edit_capacity(&Err(anyhow::anyhow!(
+        // Free-form error strings must NOT be classified as typed post_edit_capacity (R5-M1).
+        assert!(!is_post_edit_capacity(&Err(anyhow::anyhow!(
             "post_edit_capacity"
         ))));
         let matching_empty = Ok(ZedAdapterResponse::BufferLanguage {

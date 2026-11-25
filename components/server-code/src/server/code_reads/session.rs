@@ -64,9 +64,9 @@ pub async fn adapter_request_named(
     anyhow::ensure!(current(hub, control, scope), "code context changed");
     let response = if let Some(connection) = scope.connection() {
         let value = control
-            .adapter_request_on_connection(connection, adapter, request)
+            .adapter_request_on_connection_typed(connection, adapter, request)
             .await
-            .map_err(anyhow::Error::msg)?;
+            .map_err(anyhow::Error::new)?;
         validate_zed_adapter_response(serde_json::from_value(value)?)?
     } else {
         anyhow::ensure!(

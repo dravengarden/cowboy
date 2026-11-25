@@ -276,6 +276,17 @@ impl super::MachineControl {
         adapter: &str,
         payload: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
+        self.adapter_request_on_connection_typed(connection, adapter, payload)
+            .await
+            .map_err(String::from)
+    }
+
+    pub async fn adapter_request_on_connection_typed(
+        &self,
+        connection: &ConnectionToken,
+        adapter: &str,
+        payload: serde_json::Value,
+    ) -> Result<serde_json::Value, super::AdapterFailure> {
         let response = self
             .adapter_request_bound(
                 &connection.0.machine_id,
@@ -291,8 +302,10 @@ impl super::MachineControl {
         // A reply can be completed just before replacement, while its receiver
         // is still parked. Correlation alone does not cover that handoff.
         if !self.is_current(connection) {
-            return Err("Machine operation connection is no longer current".to_owned());
+            return Err(super::AdapterFailure::local(
+                "Machine operation connection is no longer current",
+            ));
         }
-        response.map_err(String::from)
+        response
     }
 }

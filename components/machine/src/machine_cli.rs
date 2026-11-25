@@ -2958,9 +2958,7 @@ async fn run_adapter_request(
             accepted: false,
             payload: None,
             detail: Some(format!("{error:#}")),
-            // Ordinary read failures are diagnostics, never evidence that a
-            // Controller observation ended.
-            refusal: None,
+            refusal: crate::machine_code_plugins::post_edit_refusal(&adapter, &error),
         },
     };
     let _ = events.send(event);

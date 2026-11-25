@@ -2085,4 +2085,54 @@ fn classify_request_line_parses_uri_path_and_rejects_absolute_form_diagnostics()
         classify_request_line(b"GET /bad target HTTP/1.1\r\n"),
         RequestLineRoute::Invalid
     );
+    assert_eq!(
+        classify_request_line(b"GET / HTTP/1.0\r\n"),
+        RequestLineRoute::Invalid
+    );
+    assert_eq!(
+        classify_request_line(b"GET / HTTP/1.9\r\n"),
+        RequestLineRoute::Invalid
+    );
+    assert_eq!(
+        classify_request_line(b"GET / HTTP/1.foo\r\n"),
+        RequestLineRoute::Invalid
+    );
+    assert_eq!(
+        classify_request_line(b"GET / HTTP/2.0\r\n"),
+        RequestLineRoute::Invalid
+    );
+}
+
+#[tokio::test]
+async fn malformed_http_version_cannot_occupy_mutation_reserve_slot() {
+    use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+    let fixture = UnixFixture::new();
+    let sock_path = &fixture.socket;
+    // Occupy all 3 general pre-auth slots with silent stalled peers.
+    let mut stalled = Vec::new();
+    for _ in 0..3 {
+        stalled.push(tokio::net::UnixStream::connect(sock_path).await.unwrap());
+    }
+    tokio::time::sleep(Duration::from_millis(20)).await;
+    // A 4th peer sending a malformed HTTP version must receive 400 and never
+    // hold the 4th mutation-only pre-auth reserve slot (R5-M3).
+    let mut bad = tokio::net::UnixStream::connect(sock_path).await.unwrap();
+    bad.write_all(b"GET / HTTP/1.foo\r\n").await.unwrap();
+    let mut reply = vec![0_u8; 64];
+    let n = tokio::time::timeout(Duration::from_secs(2), bad.read(&mut reply))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        std::str::from_utf8(&reply[..n])
+            .unwrap_or("")
+            .starts_with("HTTP/1.1 400"),
+        "expected 400 response, got {:?}",
+        String::from_utf8_lossy(&reply[..n])
+    );
+    // A real mutation client must still succeed through the 4th reserve slot.
+    let _valid = tokio::time::timeout(Duration::from_secs(3), fixture.initialized())
+        .await
+        .expect("mutation client must not be starved by malformed HTTP version");
+    drop(stalled);
 }

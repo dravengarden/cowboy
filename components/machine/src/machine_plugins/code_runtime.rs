@@ -33,19 +33,27 @@ impl MachinePluginStore {
         payload: &serde_json::Value,
         legacy_socket: Option<&Path>,
     ) -> Result<serde_json::Value> {
-        // Post-edit diagnostic inspection shares the `"zed"` Code runtime while
-        // holding a Machine-owned bounded concurrency permit through settlement
-        // across any Controller WebSocket disconnect/reconnect (R4-H1).
-        let _post_edit_slot = if plugin_id == "zed_post_edit" {
-            Some(self.code_runtimes.try_acquire_post_edit_slot()?)
-        } else {
-            None
-        };
-        let plugin_id = if plugin_id == "zed_post_edit" {
-            "zed"
-        } else {
-            plugin_id
-        };
+        if plugin_id == "zed_post_edit" {
+            // R4-H1 / R5-H1: Acquire the Machine-owned concurrency slot before
+            // entering CodeRuntimeHost and scope it so any timed-out Unix
+            // exchange retains the permit until adapter acknowledgment or exit.
+            let slot = self.code_runtimes.try_acquire_post_edit_slot()?;
+            return crate::machine_code_plugins::scope_post_edit_slot(
+                slot,
+                self.code_request_inner("zed", payload, legacy_socket),
+            )
+            .await;
+        }
+        self.code_request_inner(plugin_id, payload, legacy_socket)
+            .await
+    }
+
+    async fn code_request_inner(
+        &self,
+        plugin_id: &str,
+        payload: &serde_json::Value,
+        legacy_socket: Option<&Path>,
+    ) -> Result<serde_json::Value> {
         validate_plugin_id(plugin_id)?;
         let root = self.plugin_root(plugin_id);
         let active = read_link_name(&root.join("active")).map(|g| format!("sha256:{g}"));

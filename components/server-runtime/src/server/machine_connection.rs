@@ -783,7 +783,7 @@ pub async fn handle_machine_ws(
     state: Arc<AppState>,
     (chunked, compressed, paced, stream): (bool, bool, bool, bool),
     lane_token: Option<String>,
-    post_edit_token: Option<String>,
+    post_edit: (Option<String>, bool),
 ) {
     let Some(MachineHandshake {
         store,
@@ -886,13 +886,12 @@ pub async fn handle_machine_ws(
             },
         )
     });
-    let _post_edit_registration = post_edit_token.map(|token| {
-        machine_post_edit::register(
+    let _post_edit_registration = post_edit.0.map(|token| {
+        machine_post_edit::register_connection(
             token,
-            machine_post_edit::PostEditTarget {
-                connection: connection.clone(),
-                machine_id: hello.machine_id.clone(),
-            },
+            connection.clone(),
+            hello.machine_id.clone(),
+            post_edit.1,
         )
     });
     state.machine_control.record_remote(

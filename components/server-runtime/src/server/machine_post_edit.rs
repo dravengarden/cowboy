@@ -16,6 +16,7 @@ use crate::machine_control::ConnectionToken;
 pub struct PostEditTarget {
     pub connection: ConnectionToken,
     pub machine_id: String,
+    pub workspace_capped: bool,
 }
 
 static TARGETS: LazyLock<parking_lot::Mutex<HashMap<String, PostEditTarget>>> =
@@ -34,18 +35,34 @@ pub fn register(token: String, target: PostEditTarget) -> Registration {
     Registration(token)
 }
 
+pub fn register_connection(
+    token: String,
+    connection: ConnectionToken,
+    machine_id: String,
+    workspace_capped: bool,
+) -> Registration {
+    register(
+        token,
+        PostEditTarget {
+            connection,
+            machine_id,
+            workspace_capped,
+        },
+    )
+}
+
 #[must_use]
 pub fn lookup(token: &str) -> Option<PostEditTarget> {
     TARGETS.lock().get(token).cloned()
 }
 
-/// Whether the Machine owning `connection` announced post-edit support on its
-/// primary handshake (meaning it enforces Machine-owned `"zed_post_edit"`
-/// concurrency slots across WebSocket disconnects/reconnects).
+/// Whether the workspace Machine owning `connection` explicitly announced
+/// `POST_EDIT_WORKSPACE_HEADER` (proving it supports the Machine-capped
+/// `"zed_post_edit"` adapter route, R5-M2).
 #[must_use]
-pub fn supports_connection(connection: &ConnectionToken) -> bool {
+pub fn supports_workspace_connection(connection: &ConnectionToken) -> bool {
     TARGETS
         .lock()
         .values()
-        .any(|target| target.connection.same(connection))
+        .any(|target| target.workspace_capped && target.connection.same(connection))
 }

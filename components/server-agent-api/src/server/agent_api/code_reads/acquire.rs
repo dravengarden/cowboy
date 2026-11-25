@@ -265,11 +265,15 @@ async fn acquire_inner(
             .await
         }
     };
-    if let Err(error) = &opened
-        && error.to_string().contains("post_edit_capacity")
+    if pinned_scope.is_some()
+        && let Err(error) = &opened
+        && error
+            .downcast_ref::<crate::machine_control::AdapterFailure>()
+            .is_some_and(crate::machine_control::AdapterFailure::post_edit_capacity)
     {
-        // Refused on the workspace Machine before entering CodeRuntimeHost:
-        // no native open or side effect occurred.
+        // R5-M1: Typed pre-dispatch capacity refusal on the zed_post_edit route
+        // proves no native open or side effect occurred; free-form errors never
+        // clear a live HELD reservation.
         if !refresh_only {
             opening.possibly_open = false;
         }

@@ -415,6 +415,9 @@ pub enum AdapterRefusal {
     /// The advertised root no longer holds the object that minted the carried
     /// incarnation. Nothing was read, so nothing needs to be reversed.
     WorkspaceRootIdentityChanged,
+    /// The workspace Machine's bounded post-edit concurrency slots were
+    /// saturated before any Code runtime or buffer open was dispatched (R5-M1).
+    PostEditCapacity,
 }
 
 impl WorkspaceRootIdentity {

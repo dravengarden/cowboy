@@ -1188,3 +1188,49 @@ test("publishOnce passes payloadDirectory on staged writes so stale payloads exp
   assert.equal(writes[0].payloadDirectory, "/home/u/.cache/cowboy/file-buffers");
   assert.equal(writes[0].staleTempSeconds, 3600);
 });
+
+test("PlanGate taints incoming edit call matching revised rawInput of a contradicted card (R5-M4)", () => {
+  const gate = new PlanGate();
+  const turn = { attempt: Symbol("att") };
+  // Card announces input A, then contradicts itself with input B.
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "card-orig",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "a.rs", old_string: "1", new_string: "2" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "card-orig",
+      rawInput: { path: "b.rs", old_string: "3", new_string: "4" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  // Incoming call matches revised input B while card-orig is live: must be tainted!
+  const callB = {
+    sessionId: "s1",
+    name: "EditFile",
+    args: { path: "b.rs", old_string: "3", new_string: "4" },
+  };
+  gate.admitCall(callB, turn);
+  assert.equal(gate.bind(callB, turn), undefined);
+  // After card-orig terminates and a later card for B appears, callB stays tainted.
+  gate.trackUpdate("s1", { toolCallId: "card-orig", status: "completed" }, turn);
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "card-later",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "b.rs", old_string: "3", new_string: "4" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  assert.equal(gate.bind(callB, turn), undefined);
+});

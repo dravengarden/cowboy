@@ -98,9 +98,9 @@ impl<'a> Operation<'a> {
             Transport::Remote(connection) => {
                 let value = self
                     .control
-                    .adapter_request_on_connection(connection, self.adapter, request)
+                    .adapter_request_on_connection_typed(connection, self.adapter, request)
                     .await
-                    .map_err(anyhow::Error::msg)?;
+                    .map_err(anyhow::Error::new)?;
                 validate_zed_adapter_response(serde_json::from_value(value)?)?
             }
         };

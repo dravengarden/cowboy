@@ -243,16 +243,19 @@ export class PlanGate {
         const digest = argsDigest(update.rawInput, { stripSummary });
         if (digest === undefined) {
           existing.ambiguous = true;
+          existing.inputContradicted = true;
           contradicted = true;
         } else if (!existing.hasInput) {
           existing.hasInput = true;
           existing.digest = digest;
           if (existing.boundDigest !== undefined && existing.boundDigest !== digest) {
             existing.ambiguous = true;
+            existing.inputContradicted = true;
             contradicted = true;
           }
         } else if (existing.digest !== digest) {
           existing.ambiguous = true;
+          existing.inputContradicted = true;
           contradicted = true;
         }
       }
@@ -270,7 +273,11 @@ export class PlanGate {
           item.attempt === target.attempt,
       );
       const collides = (a, b) =>
-        !a.hasInput || !b.hasInput || (a.digest !== undefined && a.digest === b.digest);
+        !a.hasInput ||
+        !b.hasInput ||
+        Boolean(a.inputContradicted) ||
+        Boolean(b.inputContradicted) ||
+        (a.digest !== undefined && a.digest === b.digest);
       const hits = peers.filter((peer) => collides(target, peer));
       if (hits.length > 0) {
         for (const item of [target, ...hits]) {
@@ -367,7 +374,9 @@ export class PlanGate {
       // terminated), permanently taint `call` so it cannot later rebind.
       const compatibleLive =
         digest !== undefined
-          ? liveSameTool.filter((item) => !item.hasInput || item.digest === digest)
+          ? liveSameTool.filter(
+              (item) => !item.hasInput || Boolean(item.inputContradicted) || item.digest === digest,
+            )
           : liveSameTool;
       if (compatibleLive.some((item) => item.ambiguous)) {
         this.taintedCalls.add(call);

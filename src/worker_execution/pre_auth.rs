@@ -28,7 +28,7 @@ pub(super) fn classify_request_line(prefix: &[u8]) -> RequestLineRoute {
     else {
         return RequestLineRoute::Invalid;
     };
-    if method != "GET" || target.is_empty() || !version.starts_with("HTTP/1.") {
+    if method != "GET" || target.is_empty() || version != "HTTP/1.1" {
         return RequestLineRoute::Invalid;
     }
     let Ok(uri) = target.parse::<tokio_tungstenite::tungstenite::http::Uri>() else {

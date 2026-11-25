@@ -325,6 +325,23 @@ fn lock_directory(directory: &Path) -> Result<File> {
 }
 
 /// Remove only regular files named exactly as this helper names them.
+/// Executor-owned age-based sweep of abandoned staged `payload-<32hex>.json`
+/// files under `$HOME/.cache/cowboy/file-buffers` (R5-L1), running
+/// independently of helper availability and facade lifetime.
+pub(crate) fn sweep_stale_file_buffer_payloads(home: &Path, owner_uid: u32, max_age_secs: u64) {
+    if !home.is_absolute() {
+        return;
+    }
+    let directory = home.join(".cache").join("cowboy").join("file-buffers");
+    let Ok(meta) = std::fs::symlink_metadata(&directory) else {
+        return;
+    };
+    if !meta.is_dir() || meta.uid() != owner_uid {
+        return;
+    }
+    sweep(&directory, PAYLOAD_PREFIX, PAYLOAD_SUFFIX, max_age_secs);
+}
+
 fn sweep(directory: &Path, prefix: &str, suffix: &str, older_than: u64) {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return;
@@ -987,5 +1004,38 @@ mod tests {
         let unknown =
             base64::engine::general_purpose::STANDARD.encode(br#"{"schema":1,"extra":1}"#);
         assert!(apply_request(Some(unknown), None).is_err());
+    }
+
+    #[test]
+    fn executor_owned_payload_sweep_expires_stale_payloads_without_helper_apply() {
+        let home = tempfile::tempdir().unwrap();
+        let payloads = home.path().join(".cache/cowboy/file-buffers");
+        std::fs::create_dir_all(&payloads).unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
+        let stale = payloads.join(format!(
+            "{PAYLOAD_PREFIX}{}{PAYLOAD_SUFFIX}",
+            "d".repeat(32)
+        ));
+        let young = payloads.join(format!(
+            "{PAYLOAD_PREFIX}{}{PAYLOAD_SUFFIX}",
+            "e".repeat(32)
+        ));
+        let foreign = payloads.join("keep.json");
+        for file in [&stale, &young, &foreign] {
+            std::fs::write(file, b"{}").unwrap();
+        }
+        for file in [&stale, &foreign] {
+            File::options()
+                .write(true)
+                .open(file)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        let uid = std::fs::metadata(&payloads).unwrap().uid();
+        sweep_stale_file_buffer_payloads(home.path(), uid, 3600);
+        assert!(!stale.exists());
+        assert!(young.exists());
+        assert!(foreign.exists());
     }
 }
