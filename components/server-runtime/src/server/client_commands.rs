@@ -778,6 +778,8 @@ const HELD_SEND_REPLY: &str =
     "This session cannot send yet. The message stays first in the queue and sends once it can.";
 const SEND_NOW_EXPIRED_REPLY: &str = "This Send now was made too long ago (or the device clock is off) to resend. The message stays in the queue; send it again.";
 const SEND_NOW_HANDLED_REPLY: &str = "This Send now was already handled.";
+const SEND_NOW_REFUSED_REPLY: &str =
+    "This session cannot take another Send now right now. The message stays in the queue.";
 
 /// A queued row's Send now. While the session's account parks dispatch (a
 /// rate limit, a block, an unacknowledged effect) or its execution Machine is
@@ -820,6 +822,14 @@ pub fn request_send_queued(
     }
     if send_now_outside_window(issued_ms, chrono::Utc::now().timestamp_millis()) {
         reply(SEND_NOW_EXPIRED_REPLY);
+        return true;
+    }
+    // Every command may end as a receipt: an oversized id or a full ledger
+    // would make the ledger a write the store refuses.
+    if cmid.is_some_and(|cmid| {
+        cmid.len() > crate::core::MAX_HELD_COMMAND_BYTES || !state.hub.held_sends_admit(session_id)
+    }) {
+        reply(SEND_NOW_REFUSED_REPLY);
         return true;
     }
     let held = state.hub.session_info(session_id).and_then(|info| {

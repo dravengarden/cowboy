@@ -214,21 +214,7 @@ impl Hub {
             Some(tx) => match tx.try_send(req) {
                 Ok(()) => true,
                 Err(error) => {
-                    let req = error.into_inner();
-                    tracing::error!(session = %req.session_id, "dispatch queue rejected a prompt");
-                    self.requeue_dispatch(
-                        &req.session_id,
-                        req.text,
-                        req.content,
-                        req.cmid,
-                        req.origin,
-                        req.initiator,
-                        req.explicit,
-                    );
-                    self.broadcast_error(
-                        Some(req.session_id),
-                        "dispatch queue is full; prompt remains queued".to_owned(),
-                    );
+                    self.retain_rejected_dispatch(error.into_inner());
                     false
                 }
             },

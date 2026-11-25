@@ -29,6 +29,13 @@ pub const HELD_SEND_REPLAY_HORIZON_MS: i64 = 24 * 60 * 60 * 1000;
 /// further ahead is refused, so no replay can outlive the receipts.
 pub const HELD_SEND_CLOCK_SKEW_MS: i64 = 60 * 60 * 1000;
 
+/// The longest Send now command id a receipt records (client ids are ~40).
+pub const MAX_HELD_COMMAND_BYTES: usize = 128;
+
+/// Unexpired receipts one session may hold. Never evicted: past this a new
+/// Send now command is refused, so the ledger stays one bounded store write.
+const MAX_RECEIPTS: usize = 4096;
+
 /// How long an ended held command is remembered: every replay the window
 /// admits finds its receipt. Never evicted by count.
 const RECEIPT_RETENTION_MS: i64 = HELD_SEND_REPLAY_HORIZON_MS + HELD_SEND_CLOCK_SKEW_MS;
@@ -52,6 +59,9 @@ pub(in crate::core) struct ExplicitIntent {
     settled: VecDeque<(String, i64)>,
     /// `settled` changed since it was last written.
     settled_dirty: bool,
+    /// A dispatch ended a command: its receipt follows the queue write that
+    /// takes the row out, so a crash between them leaves it replayable.
+    receipts_after_queue: bool,
     /// The held command the head carried at the last queue write. Once no
     /// row carries it (the row was removed, cleared or edited away), it ended.
     held: Option<String>,
@@ -125,6 +135,7 @@ impl ExplicitIntent {
         let mut intent = Self {
             settled,
             settled_dirty: false,
+            receipts_after_queue: false,
             held: None,
             dispatched: None,
             awaits_target: wait.as_ref().is_some_and(wait_awaits_target),
@@ -151,10 +162,16 @@ impl ExplicitIntent {
             .and_then(serde_json::Value::as_bool)
             .unwrap_or(false);
         if legacy && field("cmid").is_none_or(|command| !intent.is_settled(&command)) {
+            let named = |head: &QueuedMessage| field("row").is_none_or(|row| row == head.id);
             match queue.first_mut() {
+                // An earlier restore already moved it onto this head.
                 Some(head)
-                    if head.explicit.is_none() && field("row").is_none_or(|row| row == head.id) =>
-                {
+                    if named(head)
+                        && head
+                            .explicit
+                            .as_ref()
+                            .is_some_and(|held| held.command == field("cmid")) => {}
+                Some(head) if head.explicit.is_none() && named(head) => {
                     head.explicit = Some(ExplicitSend {
                         command: field("cmid"),
                     });
@@ -240,6 +257,19 @@ impl Session {
         }
     }
 
+    /// Record the head's held command as ended while its row keeps the intent
+    /// in memory: a previewed commit that displaces it is in flight.
+    pub(in crate::core) fn settle_head_command(&mut self) {
+        if let Some(command) = self
+            .queue
+            .first()
+            .and_then(|head| head.explicit.as_ref())
+            .and_then(|held| held.command.clone())
+        {
+            self.explicit.settle(command);
+        }
+    }
+
     /// End the head row's explicit send intent.
     pub(in crate::core) fn end_explicit_intent(&mut self) {
         if let Some(head) = self.queue.first_mut() {
@@ -291,6 +321,7 @@ impl Session {
             .or_else(|| live.map(str::to_owned))
         {
             self.explicit.settle(command.clone());
+            self.explicit.receipts_after_queue = true;
             self.explicit.dispatched = Some((dispatch_cmid.to_owned(), command));
         }
         carried
@@ -369,6 +400,15 @@ impl Hub {
     /// never finds an intent whose command already settled.
     pub(in crate::core) fn settle_explicit_locked(&self, session_id: &str, s: &mut Session) {
         s.normalize_explicit_intents();
+        if !s.explicit.receipts_after_queue {
+            self.write_receipts_locked(session_id, s);
+        }
+    }
+
+    /// Write the session's remembered held commands if they changed. A
+    /// dispatch's receipts are written here, after its queue snapshot.
+    pub(in crate::core) fn write_receipts_locked(&self, session_id: &str, s: &mut Session) {
+        s.explicit.receipts_after_queue = false;
         let Some(value) = s.take_settled_receipts() else {
             return;
         };
@@ -399,6 +439,16 @@ impl Hub {
             return Some(true);
         }
         s.explicit.is_settled(cmid).then_some(false)
+    }
+
+    /// Whether the session may admit another Send now command: its receipt
+    /// ledger has room within [`MAX_RECEIPTS`].
+    pub fn held_sends_admit(&self, session_id: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_none_or(|s| s.explicit.settled.len() < MAX_RECEIPTS)
     }
 
     /// Whether an edit holds back what a retry of this wait would send: the

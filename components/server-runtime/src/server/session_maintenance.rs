@@ -215,9 +215,10 @@ fn retry_blocked(state: &Arc<AppState>, meta: &crate::core::SessionMeta, explici
     !execution_target_connected(state, meta)
         || account_parked(state, meta)
         || provider_fenced(state, &meta.id)
-        // A held send waits for its workspace; retrying it meanwhile would
-        // pop and return the row on every tick.
-        || (explicit && meta.awaits_workspace_preparation())
+        // A held send waits for a running workspace preparation; retrying it
+        // meanwhile would pop and return the row on every tick. Without one
+        // running, the retry's preflight starts it.
+        || (explicit && state.workspace_preparations.lock().contains(&meta.id))
         || state.hub.retry_held_for_editing(&meta.id, explicit)
 }
 

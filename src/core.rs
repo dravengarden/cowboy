@@ -56,8 +56,9 @@ pub use hub_peer_notice::PromptProgress;
 mod hub_provider_pins;
 mod hub_queue;
 pub use hub_queue::{
-    HELD_SEND_CLOCK_SKEW_MS, HELD_SEND_REPLAY_HORIZON_MS, HoldOutcome, SteerSource,
-    SteerSourceKind, TARGET_RETRY_FIELD, TARGET_WAIT_REASON, next_wait, wait_awaits_target,
+    HELD_SEND_CLOCK_SKEW_MS, HELD_SEND_REPLAY_HORIZON_MS, HoldOutcome, MAX_HELD_COMMAND_BYTES,
+    SteerSource, SteerSourceKind, TARGET_RETRY_FIELD, TARGET_WAIT_REASON, next_wait,
+    wait_awaits_target,
 };
 mod hub_superagent;
 mod hub_sync;

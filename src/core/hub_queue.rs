@@ -12,9 +12,12 @@ mod retry;
 mod submit;
 
 pub(super) use explicit_intent::ExplicitIntent;
+
+/// The wait of a prompt the full dispatch channel returned.
+const DISPATCH_FULL_WAIT: &str = "the dispatch queue is full";
 pub use explicit_intent::{
-    HELD_SEND_CLOCK_SKEW_MS, HELD_SEND_REPLAY_HORIZON_MS, HoldOutcome, TARGET_RETRY_FIELD,
-    TARGET_WAIT_REASON, next_wait, wait_awaits_target,
+    HELD_SEND_CLOCK_SKEW_MS, HELD_SEND_REPLAY_HORIZON_MS, HoldOutcome, MAX_HELD_COMMAND_BYTES,
+    TARGET_RETRY_FIELD, TARGET_WAIT_REASON, next_wait, wait_awaits_target,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -92,22 +95,33 @@ impl Hub {
         if let Some(tx) = self.inner.dispatch_tx.lock().as_ref()
             && let Err(error) = tx.try_send(req)
         {
-            let req = error.into_inner();
-            tracing::error!(session = %req.session_id, "dispatch queue rejected a prompt");
-            self.requeue_dispatch(
-                &req.session_id,
-                req.text,
-                req.content,
-                req.cmid,
-                req.origin,
-                req.initiator,
-                req.explicit,
-            );
-            self.broadcast_error(
-                Some(req.session_id),
-                "dispatch queue is full; prompt remains queued".to_owned(),
-            );
+            self.retain_rejected_dispatch(error.into_inner());
         }
+    }
+
+    /// A prompt the full dispatch channel refused goes back to the queue
+    /// under a wait, so maintenance retries it once the channel drains: an
+    /// idle session has no other event that would (a fired wakeup is gone
+    /// from the scheduler). An explicit one keeps its intent.
+    pub(super) fn retain_rejected_dispatch(&self, req: DispatchReq) {
+        tracing::error!(session = %req.session_id, "dispatch queue rejected a prompt");
+        self.set_resource_wait(&req.session_id, Some(DISPATCH_FULL_WAIT.to_owned()));
+        self.edit_resource_wait(&req.session_id, |current| {
+            Some(next_wait(current.as_ref(), DISPATCH_FULL_WAIT))
+        });
+        self.requeue_dispatch(
+            &req.session_id,
+            req.text,
+            req.content,
+            req.cmid,
+            req.origin,
+            req.initiator,
+            req.explicit,
+        );
+        self.broadcast_error(
+            Some(req.session_id),
+            "dispatch queue is full; prompt remains queued".to_owned(),
+        );
     }
 
     /// Whether a queued prompt can be dispatched now. `allow_revive` is the

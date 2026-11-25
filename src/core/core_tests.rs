@@ -1421,6 +1421,60 @@ fn a_legacy_wait_binding_moves_onto_its_head_row() {
     );
 }
 
+// A restart before maintenance rewrote a legacy wait finds the binding again
+// on a head that already carries it: that is the migrated hold, not a
+// superseded one.
+#[test]
+fn a_second_restore_keeps_a_migrated_legacy_hold() {
+    let hub = hub_with_session("twice");
+    hub.load_settings(vec![(
+        format!("{}twice", settings_keys::SESSION_RESOURCE_WAIT_PREFIX),
+        serde_json::json!({"reason": "r", "since_ms": 1, "explicit": true, "row": "q7", "cmid": "send-7"}),
+    )]);
+    let mut queue = vec![crate::core::QueuedMessage {
+        id: "q7".into(),
+        text: "t".into(),
+        content: vec![],
+        cmid: None,
+        schedule: None,
+        origin: None,
+        initiator: None,
+        explicit: Some(crate::core::ExplicitSend {
+            command: Some("send-7".into()),
+        }),
+    }];
+    let mut migrated = false;
+    let intent =
+        super::hub_queue::ExplicitIntent::restored(&hub, "twice", &mut queue, &mut migrated);
+    assert!(queue[0].explicit.is_some());
+    hub.inner.sessions.lock().get_mut("twice").unwrap().explicit = intent;
+    assert_eq!(hub.held_send_replay("twice", "send-7"), None);
+}
+
+// A prompt the full dispatch channel returns waits under a resource wait, so
+// maintenance retries it even when nothing else would drain an idle session.
+#[tokio::test]
+async fn a_prompt_the_full_dispatch_channel_returns_gets_a_retry() {
+    let hub = hub_with_session("full");
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    hub.set_dispatch_tx(tx);
+    drop(rx);
+    hub.set_status("full", Status::Running, None);
+    hub.submit_automatic("full", "wake".into(), "c-wake".into(), "schedule");
+    assert_eq!(queue_texts(&hub, "full"), vec!["wake"]);
+    let wait = hub
+        .setting(&format!(
+            "{}full",
+            settings_keys::SESSION_RESOURCE_WAIT_PREFIX
+        ))
+        .expect("a wait retries it");
+    assert_eq!(wait["reason"], "the dispatch queue is full");
+    assert!(
+        !hub.explicit_wait("full"),
+        "an automatic prompt is not held"
+    );
+}
+
 // Maintenance reads the intent before it retries. If another terminal sent the
 // held row in between, the stale retry must not send the next row through
 // Pause.

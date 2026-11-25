@@ -143,6 +143,8 @@ impl Hub {
                     ack_id: None,
                 });
             }
+            drop(claims);
+            self.write_receipts_locked(session_id, s);
             (queue, drafts)
         };
         self.broadcast_pending_snapshot(session_id, &queue, &drafts);

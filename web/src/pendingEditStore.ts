@@ -135,7 +135,11 @@ function saveSessionEdits(sessionId: string): boolean {
   const owned = new Map<string, { attachments: Attachment[]; updatedAt: number }>();
   const owners: string[] = [];
   for (const [key, record] of records) {
-    if (record.sessionId !== sessionId || awaitingDatabase.has(key)) continue;
+    if (record.sessionId !== sessionId) continue;
+    if (awaitingDatabase.has(key)) {
+      if (changed.has(key)) slots.keep(sessionId, key);
+      continue;
+    }
     if (record.attachments.length === 0) {
       if (databaseOwners.delete(key))
         slots.release(sessionId, key, editSlot(record), record.updatedAt);
@@ -160,7 +164,9 @@ function saveSessionEdits(sessionId: string): boolean {
     // and nothing newer replaced; released slots go with the next write.
     owners.forEach((key, index) => {
       databaseOwners.delete(key);
-      if (records.get(key) === snapshot[index]) persistLegacy(key);
+      if (records.get(key) !== snapshot[index]) return;
+      slots.keep(sessionId, key); // the next write (a restore, a flush) retries
+      persistLegacy(key);
     });
     slots.restoreReleased(sessionId, released);
   });

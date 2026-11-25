@@ -64,6 +64,12 @@ export class SlotLedger {
     this.changed.set(sessionId, (this.changed.get(sessionId) ?? new Set()).add(key));
   }
 
+  /** A change not written yet (its bytes are still loading) waits for the
+   * next write instead of being consumed by this one. */
+  keep(sessionId: string, key: string): void {
+    this.changed.set(sessionId, (this.changed.get(sessionId) ?? new Set()).add(key));
+  }
+
   takeChanged(sessionId: string): Set<string> {
     const changed = this.changed.get(sessionId) ?? new Set<string>();
     this.changed.delete(sessionId);

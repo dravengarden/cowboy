@@ -838,8 +838,12 @@ impl Hub {
                 let mut preview_queue = s.queue.clone();
                 if front {
                     preview_queue.insert(0, new_row.clone());
-                    // The commit below settles the displaced command.
+                    // The displaced command ends now, its receipt ahead of the
+                    // preview write: a crash before the commit cannot leave it
+                    // replayable against a row persisted without its intent.
                     super::explicit_intent::strip_displaced_intents(&mut preview_queue);
+                    s.settle_head_command();
+                    self.write_receipts_locked(&sid, s);
                 } else {
                     preview_queue.push(new_row.clone());
                 }
