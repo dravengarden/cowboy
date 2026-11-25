@@ -1327,3 +1327,187 @@ test("PlanGate retains contradiction evidence for already-admitted unbound edit 
   // Earlier callB must NOT attach its diff to card-b.
   assert.equal(gate.bind(callB, turn), undefined);
 });
+
+test("PlanGate taints live WriteFile peer when an EditFile card completes with revised name WriteFile (R7-M3)", () => {
+  const gate = new PlanGate();
+  const turn = { attempt: Symbol("att") };
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "edit-1",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "a.rs", old_string: "1", new_string: "2" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "write-1",
+      name: "mcp_cowboy_WriteFile",
+      rawInput: { path: "b.rs", content: "new" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  const writeCall = { sessionId: "s1", name: "WriteFile", args: { path: "b.rs", content: "new" } };
+  gate.admitCall(writeCall, turn);
+  assert.equal(gate.bind(writeCall, turn), "write-1");
+  // edit-1 completes with revised name WriteFile matching write-1's tool/input.
+  const res = gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "edit-1",
+      name: "mcp_cowboy_WriteFile",
+      rawInput: { path: "b.rs", content: "new" },
+      status: "completed",
+    },
+    turn,
+  );
+  assert.equal(res.contradicted, true);
+  assert.ok(res.contradictedIds.includes("edit-1"));
+  assert.ok(res.contradictedIds.includes("write-1"));
+  assert.equal(gate.bind(writeCall, turn), undefined);
+  assert.equal(gate.isBindingConsistent(writeCall, turn), false);
+});
+
+test("PlanGate taints surviving peer when an evicted edit card later emits a terminal revision (R7-M3)", () => {
+  const gate = new PlanGate();
+  const turn = { attempt: Symbol("att") };
+  // First card is an EditFile that will be evicted when > 64 cards arrive.
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "evicted-edit",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "old.rs", old_string: "a", new_string: "b" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  for (let i = 0; i < 63; i += 1) {
+    gate.trackUpdate(
+      "s1",
+      {
+        toolCallId: `read-${i}`,
+        name: "mcp_cowboy_ReadFile",
+        rawInput: { path: `r${i}.rs` },
+        status: "in_progress",
+      },
+      turn,
+    );
+  }
+  // Surviving peer edit is bound BEFORE the 65th card evicts evicted-edit.
+  const peerCall = {
+    sessionId: "s1",
+    name: "EditFile",
+    args: { path: "peer.rs", old_string: "x", new_string: "y" },
+  };
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "peer-edit",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "peer.rs", old_string: "x", new_string: "y" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  // 65th card evicts evicted-edit, while peer-edit was NOT yet bound before eviction; bind a pre-eviction peer instead:
+  const gate2 = new PlanGate();
+  const turn2 = { attempt: Symbol("att2") };
+  gate2.trackUpdate(
+    "s1",
+    {
+      toolCallId: "evicted-edit",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "old.rs", old_string: "a", new_string: "b" },
+      status: "in_progress",
+    },
+    turn2,
+  );
+  gate2.trackUpdate(
+    "s1",
+    {
+      toolCallId: "peer-edit",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "peer.rs", old_string: "x", new_string: "y" },
+      status: "in_progress",
+    },
+    turn2,
+  );
+  gate2.admitCall(peerCall, turn2);
+  assert.equal(gate2.bind(peerCall, turn2), "peer-edit");
+  for (let i = 0; i < 63; i += 1) {
+    gate2.trackUpdate(
+      "s1",
+      {
+        toolCallId: `fill-${i}`,
+        name: "mcp_cowboy_ReadFile",
+        rawInput: { path: `f${i}.rs` },
+        status: "in_progress",
+      },
+      turn2,
+    );
+  }
+  // evicted-edit has now been evicted, while peer-edit is still bound.
+  const late = gate2.trackUpdate(
+    "s1",
+    {
+      toolCallId: "evicted-edit",
+      rawInput: { path: "peer.rs", old_string: "x", new_string: "y" },
+      status: "completed",
+    },
+    turn2,
+  );
+  assert.equal(late.contradicted, true);
+  assert.ok(late.contradictedIds.includes("evicted-edit"));
+  assert.ok(late.contradictedIds.includes("peer-edit"));
+  assert.equal(gate2.isBindingConsistent(peerCall, turn2), false);
+});
+
+test("PlanGate exact collision on a.rs does not taint unrelated unbound edit for b.rs (R7-L1)", () => {
+  const gate = new PlanGate();
+  const turn = { attempt: Symbol("att") };
+  const callB = {
+    sessionId: "s1",
+    name: "EditFile",
+    args: { path: "b.rs", old_string: "1", new_string: "2" },
+  };
+  // callB is admitted unbound before two identical a.rs cards collide.
+  gate.admitCall(callB, turn);
+  assert.equal(gate.bind(callB, turn), undefined);
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "a-1",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "a.rs", old_string: "x", new_string: "y" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "a-2",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "a.rs", old_string: "x", new_string: "y" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  // Unique card for b.rs arrives: callB must still bind cleanly!
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "b-1",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "b.rs", old_string: "1", new_string: "2" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  assert.equal(gate.bind(callB, turn), "b-1");
+});

@@ -107,29 +107,48 @@ fn restore_post_edit_slot(slot: tokio::sync::OwnedSemaphorePermit) {
     });
 }
 
-/// Read until a literal newline or true socket EOF, retaining at most
-/// `retain_cap` bytes in `out` while discarding any over-limit tail in fixed
-/// buffer chunks so an oversized response never masquerades as EOF (R6-L1).
-async fn read_line_bounded_and_drain(
+/// Read a single newline-delimited response up to `max_bytes` (inclusive).
+/// Returns `Ok(Some(saw_newline))` when the line or EOF finished within the
+/// limit, or `Ok(None)` immediately upon exceeding `max_bytes` so ordinary
+/// Code calls do not hold their worktree route while draining an invalid reply
+/// (R7-L2). When a post-edit permit is armed, `InflightExchangeGuard::drop`
+/// drains the over-limit tail in fixed chunks until newline or true EOF (R6-L1).
+async fn read_line_within_limit(
     reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>,
     out: &mut Vec<u8>,
-    retain_cap: usize,
-) -> std::io::Result<bool> {
+    max_bytes: usize,
+) -> std::io::Result<Option<bool>> {
     loop {
         let buf = reader.fill_buf().await?;
         if buf.is_empty() {
-            return Ok(false);
+            return Ok(Some(false));
         }
         let newline = buf.iter().position(|&b| b == b'\n');
         let take_len = newline.map_or(buf.len(), |idx| idx + 1);
-        let remaining_cap = retain_cap.saturating_sub(out.len());
-        if remaining_cap > 0 {
-            let keep = take_len.min(remaining_cap);
-            out.extend_from_slice(&buf[..keep]);
+        if out.len().saturating_add(take_len) > max_bytes {
+            return Ok(None);
         }
+        out.extend_from_slice(&buf[..take_len]);
         reader.consume(take_len);
         if newline.is_some() {
-            return Ok(true);
+            return Ok(Some(true));
+        }
+    }
+}
+
+async fn drain_until_newline_or_eof(
+    reader: &mut BufReader<tokio::net::unix::OwnedReadHalf>,
+) -> std::io::Result<()> {
+    loop {
+        let buf = reader.fill_buf().await?;
+        if buf.is_empty() {
+            return Ok(());
+        }
+        let newline = buf.iter().position(|&b| b == b'\n');
+        let take_len = newline.map_or(buf.len(), |idx| idx + 1);
+        reader.consume(take_len);
+        if newline.is_some() {
+            return Ok(());
         }
     }
 }
@@ -172,8 +191,7 @@ impl Drop for InflightExchangeGuard {
             // future. Discard bytes in fixed chunks without allocating until
             // a real newline or socket EOF before releasing the permit.
             handle.spawn(async move {
-                let mut discard = Vec::new();
-                let _ = read_line_bounded_and_drain(&mut reader, &mut discard, 0).await;
+                let _ = drain_until_newline_or_eof(&mut reader).await;
                 drop(permit);
             });
         }
@@ -908,15 +926,27 @@ async fn exchange_with_timeout(socket: &Path, payload: &Value, timeout: Duration
         write.shutdown().await?;
         let mut bytes = Vec::new();
         let read_res =
-            read_line_bounded_and_drain(guard.reader_mut(), &mut bytes, MAX_CODE_MESSAGE_BYTES + 1)
-                .await;
-        // Adapter wrote its real terminal newline or closed/errored: safe to return slot.
-        guard.disarm();
-        let saw_newline = read_res?;
-        ensure!(
-            saw_newline && bytes.len() <= MAX_CODE_MESSAGE_BYTES && bytes.last() == Some(&b'\n'),
-            "code runtime response is truncated or exceeds its size limit"
-        );
+            read_line_within_limit(guard.reader_mut(), &mut bytes, MAX_CODE_MESSAGE_BYTES).await;
+        match read_res {
+            Ok(Some(saw_newline)) => {
+                // Adapter wrote its real terminal newline or closed: safe to return slot.
+                guard.disarm();
+                ensure!(
+                    saw_newline && bytes.last() == Some(&b'\n'),
+                    "code runtime response is truncated or exceeds its size limit"
+                );
+            }
+            Ok(None) => {
+                // R7-L2: Reject immediately so the worktree route is released;
+                // if this call holds a post-edit permit, dropping `guard`
+                // armed drains the socket until newline or EOF in the background.
+                bail!("code runtime response exceeds its size limit");
+            }
+            Err(error) => {
+                guard.disarm();
+                return Err(error.into());
+            }
+        }
         let response: Value = serde_json::from_slice(&bytes)?;
         ensure!(
             response.get("ok").and_then(Value::as_bool) != Some(false)
@@ -1595,15 +1625,23 @@ mod tests {
         let call = tokio::spawn(async move {
             scope_post_edit_slot(
                 slot,
-                exchange_with_timeout(&sock, &json!({"type": "health"}), Duration::from_millis(80)),
+                exchange_with_timeout(&sock, &json!({"type": "health"}), Duration::from_secs(10)),
             )
             .await
         });
         sent_rx.await.unwrap();
-        // Wait past the 80ms caller timeout: oversized stream without newline
-        // must STILL hold the Machine permit while the peer socket stays open (R6-L1).
-        let err = call.await.unwrap().expect_err("must fail on timeout");
-        assert!(err.to_string().contains("timed out"), "{err:#}");
+        // R7-L2: Caller rejects immediately upon crossing the size limit
+        // (without waiting 10 s), while the armed guard keeps the Machine
+        // permit held until the peer sends newline or closes (R6-L1).
+        let err = tokio::time::timeout(Duration::from_secs(2), call)
+            .await
+            .expect("oversized reply must reject immediately")
+            .unwrap()
+            .expect_err("must reject oversized response");
+        assert!(
+            err.to_string().contains("exceeds its size limit"),
+            "{err:#}"
+        );
         assert!(
             host.try_acquire_post_edit_slot().is_err(),
             "oversized response without newline must not release permit early"
@@ -1626,53 +1664,37 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn post_edit_exchange_timeout_retains_slot_until_adapter_acknowledges() {
+    async fn oversized_ordinary_code_reply_fails_immediately_without_waiting_for_timeout() {
         let dir = PrivateRuntimeDirectory::create().unwrap();
-        let sock = dir.0.join("slow.sock");
+        let sock = dir.0.join("ordinary-oversized.sock");
         let listener = tokio::net::UnixListener::bind(&sock).unwrap();
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel::<()>();
-        let server = tokio::spawn(async move {
+        let (_hold_tx, hold_rx) = tokio::sync::oneshot::channel::<()>();
+        let _server = tokio::spawn(async move {
             let (stream, _) = listener.accept().await.unwrap();
             let (read, mut write) = stream.into_split();
             let mut line = String::new();
             BufReader::new(read).read_line(&mut line).await.unwrap();
-            let _ = release_rx.await;
-            write
-                .write_all(br#"{"type":"health","api_version":1}"#)
-                .await
-                .unwrap();
-            write.write_all(b"\n").await.unwrap();
-        });
-        let host = CodeRuntimeHost::default();
-        let mut others = Vec::new();
-        for _ in 0..(POST_EDIT_CONCURRENCY - 1) {
-            others.push(host.try_acquire_post_edit_slot().unwrap());
-        }
-        let slot = host.try_acquire_post_edit_slot().unwrap();
-        let err = scope_post_edit_slot(
-            slot,
-            exchange_with_timeout(&sock, &json!({"type": "health"}), Duration::from_millis(25)),
-        )
-        .await
-        .expect_err("slow adapter must time out");
-        assert!(err.to_string().contains("timed out"), "{err:#}");
-        // R5-H1: Slot MUST remain occupied while slow adapter is still working!
-        assert!(
-            host.try_acquire_post_edit_slot().is_err(),
-            "timed-out post-edit slot leaked before adapter settled"
-        );
-        let _ = release_tx.send(());
-        server.await.unwrap();
-        // Once adapter writes its terminal response line, drainer releases the slot.
-        let mut freed = false;
-        for _ in 0..40 {
-            if host.try_acquire_post_edit_slot().is_ok() {
-                freed = true;
-                break;
+            let chunk = vec![b'b'; 64 * 1024];
+            let chunks = (MAX_CODE_MESSAGE_BYTES / chunk.len()) + 2;
+            for _ in 0..chunks {
+                if write.write_all(&chunk).await.is_err() {
+                    break;
+                }
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-        assert!(freed, "slot was not released after adapter acknowledgment");
-        drop(others);
+            let _ = hold_rx.await;
+        });
+        let started = std::time::Instant::now();
+        let err = exchange_with_timeout(&sock, &json!({"type": "health"}), Duration::from_secs(10))
+            .await
+            .expect_err("oversized ordinary reply must fail");
+        assert!(
+            err.to_string().contains("exceeds its size limit"),
+            "{err:#}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "ordinary oversized reply waited {:?} instead of failing immediately",
+            started.elapsed()
+        );
     }
 }

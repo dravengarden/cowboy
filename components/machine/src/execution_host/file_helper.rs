@@ -325,31 +325,49 @@ fn lock_directory(directory: &Path) -> Result<File> {
 }
 
 /// Remove only regular files named exactly as this helper names them.
-/// Executor-owned age-based sweep of abandoned staged `payload-<32hex>.json`
-/// files under `$HOME/.cache/cowboy/file-buffers` (R5-L1, R6-M3), opening each
-/// path step without following symlinks, verifying ownership and private mode
-/// on the opened directory handle, and performing enumeration, stat, and unlink
-/// relative to that handle.
-pub(crate) fn sweep_stale_file_buffer_payloads(home: &Path, owner_uid: u32, max_age_secs: u64) {
-    use rustix::fs::{FileType, Mode, OFlags, fstat, open, openat};
+/// Open and pin the authorized `$HOME` directory descriptor once at executor
+/// startup (explicitly admitting a configured storage alias at startup while
+/// verifying directory ownership on the handle, R7-M1).
+pub(crate) fn open_pinned_home_dir(home: &Path, owner_uid: u32) -> Option<std::os::fd::OwnedFd> {
+    use rustix::fs::{FileType, Mode, OFlags, fstat, open};
     if !home.is_absolute() {
-        return;
+        return None;
     }
-    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-    let Ok(mut cur) = open(
+    let fd = open(
         home,
         OFlags::RDONLY | OFlags::DIRECTORY | OFlags::CLOEXEC,
         Mode::empty(),
-    ) else {
+    )
+    .ok()?;
+    let stat = fstat(&fd).ok()?;
+    if FileType::from_raw_mode(stat.st_mode) != FileType::Directory || stat.st_uid != owner_uid {
+        return None;
+    }
+    Some(fd)
+}
+
+/// Executor-owned age-based sweep of abandoned staged `payload-<32hex>.json`
+/// files relative to the startup-pinned `$HOME` descriptor (R5-L1, R6-M3, R7-M1),
+/// opening each step without following symlinks, verifying ownership and private
+/// mode on the opened directory handle, and performing enumeration, stat, and
+/// unlink relative to that handle.
+pub(crate) fn sweep_stale_file_buffer_payloads(
+    home_fd: &std::os::fd::OwnedFd,
+    owner_uid: u32,
+    max_age_secs: u64,
+) {
+    use rustix::fs::{FileType, Mode, OFlags, fstat, openat};
+    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
+    let Ok(cache) = openat(home_fd, ".cache", flags, Mode::empty()) else {
         return;
     };
-    for step in [".cache", "cowboy", "file-buffers"] {
-        let Ok(next) = openat(&cur, step, flags, Mode::empty()) else {
-            return;
-        };
-        cur = next;
-    }
-    let Ok(stat) = fstat(&cur) else {
+    let Ok(cowboy) = openat(&cache, "cowboy", flags, Mode::empty()) else {
+        return;
+    };
+    let Ok(buffers) = openat(&cowboy, "file-buffers", flags, Mode::empty()) else {
+        return;
+    };
+    let Ok(stat) = fstat(&buffers) else {
         return;
     };
     if FileType::from_raw_mode(stat.st_mode) != FileType::Directory
@@ -359,7 +377,7 @@ pub(crate) fn sweep_stale_file_buffer_payloads(home: &Path, owner_uid: u32, max_
         return;
     }
     sweep_dir_fd(
-        &cur,
+        &buffers,
         PAYLOAD_PREFIX,
         PAYLOAD_SUFFIX,
         max_age_secs,
@@ -1098,10 +1116,48 @@ mod tests {
                 .unwrap();
         }
         let uid = std::fs::metadata(&payloads).unwrap().uid();
-        sweep_stale_file_buffer_payloads(home.path(), uid, 3600);
+        let home_fd = open_pinned_home_dir(home.path(), uid).unwrap();
+        sweep_stale_file_buffer_payloads(&home_fd, uid, 3600);
         assert!(!stale.exists());
         assert!(young.exists());
         assert!(foreign.exists());
+
+        // R7-M1: Retargeting a HOME symlink between sweeps must never touch the
+        // replacement tree because sweeps start from the startup-pinned home_fd.
+        let alias_root = tempfile::tempdir().unwrap();
+        let orig_home = alias_root.path().join("orig");
+        let new_home = alias_root.path().join("new");
+        for root in [&orig_home, &new_home] {
+            let dir = root.join(".cache/cowboy/file-buffers");
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let home_link = alias_root.path().join("home-link");
+        std::os::unix::fs::symlink(&orig_home, &home_link).unwrap();
+        let pinned = open_pinned_home_dir(&home_link, uid).unwrap();
+        // Retarget home-link to new_home and place a stale payload in both.
+        std::fs::remove_file(&home_link).unwrap();
+        std::os::unix::fs::symlink(&new_home, &home_link).unwrap();
+        let orig_stale = orig_home.join(".cache/cowboy/file-buffers").join(format!(
+            "{PAYLOAD_PREFIX}{}{PAYLOAD_SUFFIX}",
+            "a".repeat(32)
+        ));
+        let new_stale = new_home.join(".cache/cowboy/file-buffers").join(format!(
+            "{PAYLOAD_PREFIX}{}{PAYLOAD_SUFFIX}",
+            "b".repeat(32)
+        ));
+        for file in [&orig_stale, &new_stale] {
+            std::fs::write(file, b"{}").unwrap();
+            File::options()
+                .write(true)
+                .open(file)
+                .unwrap()
+                .set_modified(old)
+                .unwrap();
+        }
+        sweep_stale_file_buffer_payloads(&pinned, uid, 3600);
+        assert!(!orig_stale.exists(), "original pinned HOME must be swept");
+        assert!(new_stale.exists(), "retargeted HOME must never be touched");
 
         // R6-M3: Refuse group/other-accessible directories and symlinked directories.
         let non_private_home = tempfile::tempdir().unwrap();
@@ -1119,7 +1175,8 @@ mod tests {
             .unwrap()
             .set_modified(old)
             .unwrap();
-        sweep_stale_file_buffer_payloads(non_private_home.path(), uid, 3600);
+        let non_private_fd = open_pinned_home_dir(non_private_home.path(), uid).unwrap();
+        sweep_stale_file_buffer_payloads(&non_private_fd, uid, 3600);
         assert!(shared_stale.exists());
 
         let symlink_home = tempfile::tempdir().unwrap();
@@ -1143,7 +1200,8 @@ mod tests {
             symlink_home.path().join(".cache/cowboy/file-buffers"),
         )
         .unwrap();
-        sweep_stale_file_buffer_payloads(symlink_home.path(), uid, 3600);
+        let symlink_fd = open_pinned_home_dir(symlink_home.path(), uid).unwrap();
+        sweep_stale_file_buffer_payloads(&symlink_fd, uid, 3600);
         assert!(victim.exists());
     }
 }

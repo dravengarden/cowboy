@@ -372,13 +372,13 @@ async fn connection(host: Arc<Host>, stream: UnixStream) -> Result<()> {
 
 fn spawn_reaper(
     host: Arc<Host>,
-    payload_home: Option<PathBuf>,
+    pinned_home: Option<Arc<std::os::fd::OwnedFd>>,
     owner_uid: u32,
 ) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        if let Some(home) = payload_home.clone() {
+        if let Some(home_fd) = pinned_home.clone() {
             let _ = tokio::task::spawn_blocking(move || {
-                file_helper::sweep_stale_file_buffer_payloads(&home, owner_uid, 3600);
+                file_helper::sweep_stale_file_buffer_payloads(&home_fd, owner_uid, 3600);
             })
             .await;
         }
@@ -390,10 +390,10 @@ fn spawn_reaper(
             interval.tick().await;
             sweep_ticks = sweep_ticks.wrapping_add(1);
             if sweep_ticks.is_multiple_of(10)
-                && let Some(home) = payload_home.clone()
+                && let Some(home_fd) = pinned_home.clone()
             {
                 let _ = tokio::task::spawn_blocking(move || {
-                    file_helper::sweep_stale_file_buffer_payloads(&home, owner_uid, 3600);
+                    file_helper::sweep_stale_file_buffer_payloads(&home_fd, owner_uid, 3600);
                 })
                 .await;
             }
@@ -569,12 +569,14 @@ pub async fn run(args: Args) -> Result<()> {
         close: tokio::sync::Notify::new(),
         attended: Mutex::new(std::time::Instant::now()),
     });
-    let payload_home = contract
+    let pinned_home = contract
         .environment
         .get("HOME")
-        .map(PathBuf::from)
-        .filter(|path| path.is_absolute());
-    let reaper = spawn_reaper(Arc::clone(&host), payload_home, contract_metadata.uid());
+        .and_then(|path| {
+            file_helper::open_pinned_home_dir(Path::new(path), contract_metadata.uid())
+        })
+        .map(Arc::new);
+    let reaper = spawn_reaper(Arc::clone(&host), pinned_home, contract_metadata.uid());
     let (messages, mut native_messages) = mpsc::channel(4);
     let reader = tokio::spawn(async move {
         loop {
