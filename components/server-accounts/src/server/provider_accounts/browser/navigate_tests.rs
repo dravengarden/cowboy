@@ -14,7 +14,11 @@ async fn fixture_state(root: &std::path::Path) -> (Arc<AccountsState>, Store) {
         .unwrap();
     store.migrate().await.unwrap();
     let config_path = root.join("service.toml");
-    std::fs::write(&config_path, "[accounts]\nmachine_browser = true\n").unwrap();
+    std::fs::write(
+        &config_path,
+        "schema = 1\n[accounts]\nmachine_browser = true\n",
+    )
+    .unwrap();
     let config = crate::config::load(crate::config::Scope::Service, &config_path).unwrap();
     let service_config = crate::config::Handle::new(config);
     let hub = Hub::new();
