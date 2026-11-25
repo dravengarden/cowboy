@@ -206,14 +206,18 @@ export function presentToolCall(toolCall, { root, known } = {}) {
  * Claude or Codex MCP call, without `agy`'s "Run mcp_cowboy_<tool>" title
  * and its `toolSummary` narration among the arguments.
  */
-export function presentExtension(toolCall, route) {
+export function presentExtension(toolCall, route, { preserveInput = false } = {}) {
   const shown = { ...toolCall, name: `mcp__${route.server}__${route.tool}`, kind: "other" };
   if (typeof toolCall.title === "string" && toolCall.title.startsWith(`Run ${PREFIX}`)) {
     shown.title = `${route.server} · ${route.tool}`;
   }
   if (isObject(toolCall.rawInput)) {
-    const { toolSummary: _summary, ...rest } = toolCall.rawInput;
-    shown.rawInput = rest;
+    if (preserveInput) {
+      shown.rawInput = { ...toolCall.rawInput };
+    } else {
+      const { toolSummary: _summary, ...rest } = toolCall.rawInput;
+      shown.rawInput = rest;
+    }
   }
   return shown;
 }

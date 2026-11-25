@@ -746,7 +746,10 @@ export class Subagents {
 
   /** End `child` for good: its row, its waiters and its native session. */
   finishChild(child, state, { stopReason, error } = {}) {
-    if (child.id !== undefined) this.proxy.planGate?.clearTurn(child.id);
+    if (child.id !== undefined) {
+      this.proxy.retirePermissions?.({ sessionId: child.id, reason: "The subagent ended." });
+      this.proxy.planGate?.clearTurn(child.id);
+    }
     if (!RUNNING.has(child.state)) return;
     clearTimeout(child.killTimer);
     child.state = state;
@@ -890,7 +893,11 @@ export class Subagents {
     child.cancelled = true;
     if (child.id === undefined) return Promise.resolve();
     const turn = this.proxy.turns.get(child.id);
-    if (turn) turn.cancelled = true;
+    if (turn) {
+      turn.cancelled = true;
+      turn.closed = true;
+    }
+    this.proxy.retirePermissions?.({ sessionId: child.id, reason: "The subagent was cancelled." });
     this.proxy.planGate?.clearTurn(child.id, turn);
     const fence = this.proxy.facade?.endTurn(child.id, { cancelled: true });
     this.proxy.agent({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: child.id } });
@@ -922,7 +929,11 @@ export class Subagents {
     const group = this.groups.get(parentId);
     if (group) group.epoch += 1;
     const turn = this.proxy.turns.get(parentId);
-    if (turn) turn.cancelled = true;
+    if (turn) {
+      turn.cancelled = true;
+      turn.closed = true;
+    }
+    this.proxy.retirePermissions?.({ sessionId: parentId, reason: "The turn was halted." });
     this.proxy.planGate?.clearTurn(parentId, turn);
     Promise.resolve(this.proxy.facade?.endTurn(parentId, { cancelled: true })).catch(() => {});
     for (const child of this.live(parentId)) this.cancelChild(child);

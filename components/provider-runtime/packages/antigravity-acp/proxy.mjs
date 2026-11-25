@@ -5,7 +5,7 @@
 // system prompt, and settles each turn with backend refusal evidence.
 import { randomUUID } from "node:crypto";
 import { Compaction, compactionStatus, isCompactionPrompt } from "./compaction.mjs";
-import { allowedTool } from "./hook.mjs";
+import { allowedTool, WEB_TOOLS } from "./hook.mjs";
 import {
   hasManagedRound,
   managedAllowedTool,
@@ -34,7 +34,13 @@ import {
   schemaRefusal,
 } from "./managed-output.mjs";
 import { expandSkillCommand, skillCommands } from "./skills.mjs";
-import { isPlanEffectiveMode, PlanGate, planToolPolicy, stripFacadePrefix } from "./plan-gate.mjs";
+import {
+  FACADE_PREFIX,
+  isPlanEffectiveMode,
+  PlanGate,
+  planToolPolicy,
+  stripFacadePrefix,
+} from "./plan-gate.mjs";
 import { Subagents } from "./subagents.mjs";
 
 /** Client requests a `runtime` unit forwards; everything else is refused. */
@@ -125,6 +131,19 @@ export const TURN_ERROR_TEXT = Object.freeze({
 });
 /** Tool call names remembered per turn (tool_call_update omits the name). */
 const MAX_TOOL_CALLS = 1024;
+/** Bounded concurrent pending worker-facing permission requests per proxy. */
+const MAX_PENDING_PERMISSIONS = 64;
+
+/** Extract an explicit mode string from an ACP session result or update. */
+function extractReportedMode(value) {
+  const current =
+    value?.modes?.currentModeId ??
+    value?.currentModeId ??
+    (Array.isArray(value?.configOptions)
+      ? value.configOptions.find((option) => option?.id === "mode")?.currentValue
+      : undefined);
+  return typeof current === "string" ? current : undefined;
+}
 /** A tool call status after which nothing more is reported for it. */
 const TERMINAL = new Set(["completed", "failed"]);
 /** A tool call of one session: another session may reuse an ID. */
@@ -275,8 +294,10 @@ export class AcpProxy {
      * exit still has to answer them, exactly once (`finalized`).
      */
     this.settling = new Map();
-    /** Permission requests forwarded to the worker, with their session. */
-    this.agentRequests = new Map();
+    /** Active worker-facing permission requests keyed by unique proxy-allocated worker ID. */
+    this.workerPermissions = new Map();
+    /** Monotonic counter for unique worker-facing permission request IDs. */
+    this.nextPermId = 0;
     this.turns = new Map();
     /** Sessions whose structured managed turn ended: native text there is held. */
     this.sealed = new Set();
@@ -284,8 +305,8 @@ export class AcpProxy {
     this.plan = undefined;
     /** The mode `agy` confirmed, per session (absent: unknown). */
     this.modes = new Map();
-    /** Mode switches still waiting for `agy`'s answer, per session. */
-    this.switches = new Map();
+    /** Mode switch tracking per owner session: { nextSeq, latestSeq, active: Set, overlapped }. */
+    this.switchState = new Map();
     /** Facade tool per call ID, for updates and requests that omit the name. */
     this.calls = new Map();
     /** The canonical workspace root on the target, once the runtime is ready. */
@@ -335,6 +356,7 @@ export class AcpProxy {
         // A managed child delegates nothing: its facade has no subagent host.
         if (ready?.facade && !this.managed) ready.facade.subagents = this.subagents;
         ready?.facade?.setAuthorizer?.((call, meta) => this.authorizeFacadeCall(call, meta));
+        ready?.facade?.setAdmitter?.((call) => this.admitFacadeCall(call));
       },
       () => {},
     );
@@ -404,6 +426,11 @@ export class AcpProxy {
     return undefined;
   }
 
+  /** Whether `ownerId` currently has any mode switch request in flight. */
+  isSwitching(ownerId) {
+    return (this.switchState.get(ownerId)?.active.size ?? 0) > 0;
+  }
+
   /**
    * Confirmed effective mode for `sessionId` (subagents inherit their parent's
    * mode). Returns `"switching"` while a switch is in flight, the confirmed
@@ -412,32 +439,250 @@ export class AcpProxy {
   effectiveMode(sessionId) {
     const ownerId = this.subagents.parentOf(sessionId) ?? sessionId;
     if (typeof ownerId !== "string") return undefined;
-    if ((this.switches.get(ownerId) ?? 0) > 0) return "switching";
+    if (this.isSwitching(ownerId)) return "switching";
     return this.modes.get(ownerId);
   }
 
-  /** Whether `sessionId` is currently governed by plan mode (fail-closed on unknown/switching). */
+  /** Whether `sessionId` is currently governed by restricted/plan enforcement. */
   isPlanMode(sessionId) {
     return isPlanEffectiveMode(this.effectiveMode(sessionId));
   }
 
-  /** Expire every plan-mode approval for `sessionId` and its active subagents. */
-  invalidatePlanGrants(sessionId) {
-    const ownerId = this.subagents.parentOf(sessionId) ?? sessionId;
-    if (typeof ownerId !== "string") return;
-    this.planGate.invalidateOwner(ownerId, this.subagents.childIdsOf(ownerId));
+  /** Allocate a fresh, collision-free worker-facing JSON-RPC permission ID. */
+  allocateWorkerPermId() {
+    this.nextPermId += 1;
+    return `cowboy-perm-${this.nextPermId}`;
   }
 
-  /** Synchronous dispatch gate invoked by `Facade.answerOnce` before any tool runs. */
+  /** Retire one live worker permission prompt, notifying the worker and resolving/cancelling it. */
+  retirePermission(
+    workerId,
+    { reason = "Permission request cancelled.", notifyWorker = true } = {},
+  ) {
+    const entry = this.workerPermissions.get(workerId);
+    if (!entry) return;
+    this.workerPermissions.delete(workerId);
+    if (notifyWorker) {
+      this.client({
+        jsonrpc: "2.0",
+        method: "$/cancel_request",
+        params: { requestId: workerId },
+      });
+    }
+    if (entry.kind === "facade") {
+      entry.resolve({ allowed: false, reason });
+    } else if (entry.kind === "agent") {
+      this.agent({
+        jsonrpc: "2.0",
+        id: entry.agyId,
+        result: { outcome: { outcome: "cancelled" } },
+      });
+    }
+  }
+
+  /**
+   * Retire every pending worker permission matching the supplied filter
+   * (`sessionId`, `ownerId`, `turn`, or all when no filter is specified).
+   */
+  retirePermissions({ sessionId, ownerId, turn, reason, notifyWorker = true } = {}) {
+    for (const [workerId, entry] of [...this.workerPermissions]) {
+      if (sessionId !== undefined && entry.sessionId !== sessionId) continue;
+      if (ownerId !== undefined && entry.ownerId !== ownerId) continue;
+      if (turn !== undefined && entry.turn !== turn) continue;
+      this.retirePermission(workerId, { reason, notifyWorker });
+    }
+  }
+
+  /**
+   * Advance the root owner's mode generation and retire every pending permission
+   * across that owner session and all of its active subagents. Never called for
+   * a child subagent's own native mode reports.
+   */
+  invalidateModeFamily(ownerId, reason = "The session's mode changed.") {
+    if (typeof ownerId !== "string" || this.subagents.owns(ownerId)) return;
+    this.planGate.bumpModeGeneration(ownerId);
+    this.retirePermissions({ ownerId, reason });
+  }
+
+  /** Record the start of a mode switch on root owner `sessionId`. */
+  beginModeSwitch(sessionId) {
+    if (typeof sessionId !== "string" || this.subagents.owns(sessionId)) return undefined;
+    let state = this.switchState.get(sessionId);
+    if (!state) {
+      state = { nextSeq: 0, latestSeq: 0, active: new Set(), overlapped: false };
+      this.switchState.set(sessionId, state);
+    }
+    const seq = ++state.nextSeq;
+    if (state.active.size > 0) state.overlapped = true;
+    state.latestSeq = seq;
+    state.active.add(seq);
+    this.modes.delete(sessionId);
+    this.invalidateModeFamily(sessionId, "The session's mode is changing.");
+    return seq;
+  }
+
+  /** Complete one tracked mode switch, failing closed on errors or overlapping replies without authoritative mode. */
+  finishModeSwitch(sessionId, seq, requestedMode, result) {
+    const state = this.switchState.get(sessionId);
+    if (!state) return;
+    state.active.delete(seq);
+    if (state.active.size > 0) return;
+    const wasOverlapped = state.overlapped;
+    const isLatest = seq === state.latestSeq;
+    state.overlapped = false;
+    // Always invalidate generation & switching-era prompts on final outcome,
+    // including errors.
+    this.invalidateModeFamily(sessionId, "The session's mode changed.");
+    if (result === undefined) {
+      this.modes.delete(sessionId);
+      return;
+    }
+    const reported = extractReportedMode(result);
+    if (!wasOverlapped) {
+      this.modes.set(sessionId, reported ?? requestedMode);
+    } else if (isLatest && reported !== undefined) {
+      this.modes.set(sessionId, reported);
+    } else {
+      // Overlapping switches with out-of-order or empty reply stay unknown (fail closed).
+      this.modes.delete(sessionId);
+    }
+  }
+
+  /** Capture a facade call's turn lifetime at admission for UI progress/result binding. */
+  admitFacadeCall(call) {
+    const sessionId = call?.sessionId;
+    const turn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
+    this.planGate.admitCall(call, turn);
+  }
+
+  /**
+   * Dispatch gate invoked by `Facade.answerOnce` before any tool handler,
+   * extension RPC, or inflight registration runs. Returns synchronously for
+   * confirmed unrestricted modes, managed calls, allowed reads/stops, and
+   * refused writes/subagents; awaits a direct single-use owner approval bound
+   * to this exact invocation and `meta.args` for RunCommand and extension calls
+   * in plan / unknown / switching / unrecognized modes.
+   */
   authorizeFacadeCall(call, meta) {
+    if (this.managed === true) return { allowed: true };
     const sessionId = call?.sessionId;
     const ownerId = this.subagents.parentOf(sessionId) ?? sessionId;
-    return this.planGate.authorizeDispatch(call, {
-      mode: this.effectiveMode(sessionId),
-      turn: typeof sessionId === "string" ? this.turns.get(sessionId) : undefined,
+    const mode = this.effectiveMode(sessionId);
+    if (!isPlanEffectiveMode(mode)) return { allowed: true };
+    const name = call?.name;
+    const policy = planToolPolicy(name);
+    if (policy === "allow") return { allowed: true };
+    if (policy === "refuse") {
+      const reason =
+        mode === "plan"
+          ? `${name} is not available in plan mode.`
+          : `${name} is unavailable while the session's mode is ${mode ?? "unknown"}.`;
+      return { allowed: false, reason };
+    }
+    const turn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
+    if (this.closing || !turn || turn.cancelled || turn.closed) {
+      return { allowed: false, reason: `No active turn to authorize ${name} in plan mode.` };
+    }
+    const child = this.subagents.childOf(sessionId);
+    if (child !== undefined && !this.subagents.isOpen(child)) {
+      return { allowed: false, reason: `Subagent is no longer active to authorize ${name}.` };
+    }
+    if (this.workerPermissions.size >= MAX_PENDING_PERMISSIONS) {
+      return {
+        allowed: false,
+        reason: `${name} refused in plan mode: too many pending permission requests.`,
+      };
+    }
+    const workerId = this.allocateWorkerPermId();
+    const modeGen = this.planGate.modeGeneration(ownerId);
+    const execArgs = meta?.args ?? (call?.args === undefined ? {} : call.args);
+    const rawToolCall = {
+      toolCallId: `cowboy-plan-${workerId}`,
+      name: `${FACADE_PREFIX}${name}`,
+      title: `Run ${FACADE_PREFIX}${name}`,
+      rawInput: execArgs,
+    };
+    const presented = this.present(rawToolCall, sessionId, { preserveExtensionInput: true });
+    const options = [
+      { optionId: "allow_once", name: "Allow once", kind: "allow_once" },
+      { optionId: "reject_once", name: "Reject", kind: "reject_once" },
+    ];
+    return new Promise((resolve) => {
+      this.workerPermissions.set(workerId, {
+        kind: "facade",
+        sessionId,
+        ownerId,
+        child,
+        turn,
+        modeGen,
+        toolName: name,
+        offeredOptionIds: new Set(["allow_once", "reject_once"]),
+        allowOptionIds: new Set(["allow_once"]),
+        resolve,
+      });
+      this.client({
+        jsonrpc: "2.0",
+        id: workerId,
+        method: "session/request_permission",
+        params: {
+          sessionId,
+          toolCall: presented,
+          options,
+        },
+      });
+    });
+  }
+
+  /** Forward one non-facade `agy` permission request under a unique worker ID. */
+  forwardAgentPermission(agyId, redactedMessage, { sessionId, ownerId, stripStanding }) {
+    const rawOptions = Array.isArray(redactedMessage.params?.options)
+      ? redactedMessage.params.options
+      : [];
+    const forwardedOptions = stripStanding
+      ? rawOptions.filter((option) => option?.kind !== "allow_always")
+      : rawOptions;
+    const offeredOptionIds = new Set(
+      forwardedOptions
+        .filter((option) => typeof option?.optionId === "string")
+        .map((option) => option.optionId),
+    );
+    if (stripStanding && forwardedOptions.length === 0) {
+      return this.rejectPermission(
+        agyId,
+        redactedMessage,
+        "rejected permission: no non-standing option",
+      );
+    }
+    if (this.workerPermissions.size >= MAX_PENDING_PERMISSIONS) {
+      return this.rejectPermission(
+        agyId,
+        redactedMessage,
+        "rejected permission: too many pending requests",
+      );
+    }
+    const workerId = this.allocateWorkerPermId();
+    const turn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
+    if (turn && (turn.cancelled || turn.closed)) {
+      return this.rejectPermission(agyId, redactedMessage, "rejected permission: turn is closing");
+    }
+    this.workerPermissions.set(workerId, {
+      kind: "agent",
+      agyId,
+      sessionId,
       ownerId,
-      managed: this.managed === true,
-      rawArgs: meta?.rawArgs,
+      child: this.subagents.childOf(sessionId),
+      turn,
+      modeGen: this.planGate.modeGeneration(ownerId),
+      offeredOptionIds,
+    });
+    return this.client({
+      ...redactedMessage,
+      id: workerId,
+      params: {
+        ...redactedMessage.params,
+        options: forwardedOptions,
+        toolCall: this.present(redactedMessage.params?.toolCall, sessionId),
+      },
     });
   }
 
@@ -459,25 +704,29 @@ export class AcpProxy {
     });
   }
 
-  /** The current mode a session result or update reports; ignored while a
-   * switch is outstanding (that switch's answer decides). */
+  /** The current mode a root session result or update reports; ignored while a
+   * switch is outstanding (that switch's answer decides) and ignored for child
+   * subagent sessions (whose effective mode is governed solely by their parent). */
   reportMode(sessionId, value) {
-    if (typeof sessionId !== "string" || (this.switches.get(sessionId) ?? 0) > 0) return;
-    const current =
-      value?.modes?.currentModeId ??
-      value?.currentModeId ??
-      (Array.isArray(value?.configOptions)
-        ? value.configOptions.find((option) => option?.id === "mode")?.currentValue
-        : undefined);
+    if (
+      typeof sessionId !== "string" ||
+      this.subagents.owns(sessionId) ||
+      this.isSwitching(sessionId)
+    ) {
+      return;
+    }
+    const current = extractReportedMode(value);
     if (typeof current === "string") {
       const previous = this.modes.get(sessionId);
       this.modes.set(sessionId, current);
-      if (previous !== current) this.invalidatePlanGrants(sessionId);
+      if (previous !== current) {
+        this.invalidateModeFamily(sessionId, "The session's mode changed.");
+      }
     }
   }
 
   /** `toolCall` as Cowboy shows it (see presentation.mjs). */
-  present(toolCall, sessionId) {
+  present(toolCall, sessionId, { preserveExtensionInput = false } = {}) {
     const id = toolCall?.toolCallId;
     const key = typeof id === "string" ? callKey(sessionId, id) : undefined;
     const tool = presentedTool(toolCall?.name);
@@ -493,7 +742,7 @@ export class AcpProxy {
       : undefined;
     const shown =
       route && tool === undefined
-        ? presentExtension(toolCall, route)
+        ? presentExtension(toolCall, route, { preserveInput: preserveExtensionInput })
         : presentToolCall(toolCall, { root: this.root, known });
     // The facade's answer, which `agy` never reports for an MCP tool.
     if (key !== undefined && TERMINAL.has(toolCall?.status) && this.results.has(key)) {
@@ -563,7 +812,9 @@ export class AcpProxy {
    * announced.
    */
   bind(call) {
-    return this.planGate.bind(call);
+    const sessionId = call?.sessionId;
+    const turn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
+    return this.planGate.bind(call, turn);
   }
 
   /**
@@ -617,6 +868,7 @@ export class AcpProxy {
   beginShutdown() {
     if (this.closing) return;
     this.closing = true;
+    this.retirePermissions({ reason: "Antigravity proxy is shutting down.", notifyWorker: false });
     this.planGate.clearAll();
     this.readyRuntime?.facade?.quiesce?.();
     this.abortAllReservations();
@@ -806,6 +1058,33 @@ export class AcpProxy {
         );
       }
     }
+    // Request-form `session/cancel` (with JSON-RPC id) must run the exact same
+    // synchronous cancellation fence as the notification form while preserving
+    // its JSON-RPC reply.
+    if (
+      message !== null &&
+      typeof message === "object" &&
+      !Array.isArray(message) &&
+      message.id !== undefined &&
+      message.method === "session/cancel"
+    ) {
+      if (this.managed === true) {
+        const refusal = this.managedSessionRefusal("session/cancel", message.params);
+        if (refusal) {
+          this.refuse(message.id, refusal, -32602);
+          return Promise.resolve();
+        }
+      }
+      if (
+        this.managed !== undefined ||
+        (typeof message.params?.sessionId === "string" &&
+          this.reservedTurns.has(message.params.sessionId))
+      ) {
+        return this.cancel(message).catch((error) =>
+          this.log(`client cancel failed: ${error.message}`),
+        );
+      }
+    }
     let preReserved;
     if (
       message !== null &&
@@ -889,35 +1168,49 @@ export class AcpProxy {
     }
     const { id, method } = message;
     if (typeof method !== "string") {
-      if (this.agentRequests.has(id)) {
-        const { sessionId, child, planToken, allowOptionIds } = this.agentRequests.get(id);
-        this.agentRequests.delete(id);
-        // An answer that arrives after its subagent stopped or answered
-        // grants nothing (the entry holds the child itself, so pruning it
-        // from the host changes nothing).
-        if (child !== undefined && !this.subagents.isOpen(child)) {
-          return this.agent({ jsonrpc: "2.0", id, result: { outcome: { outcome: "cancelled" } } });
-        }
-        if (planToken !== undefined) {
-          const outcome = message.result?.outcome;
-          const allowed =
-            outcome?.outcome === "selected" &&
-            typeof outcome.optionId === "string" &&
-            allowOptionIds.has(outcome.optionId);
-          const { forwardCancelled } = this.planGate.recordPermissionReply(
-            planToken,
-            allowed,
-            this.turns.get(sessionId),
+      if (this.workerPermissions.has(id)) {
+        const entry = this.workerPermissions.get(id);
+        this.workerPermissions.delete(id);
+        const childOpen = entry.child === undefined || this.subagents.isOpen(entry.child);
+        const modeValid = this.planGate.modeGeneration(entry.ownerId) === entry.modeGen;
+        const currentTurn =
+          typeof entry.sessionId === "string" ? this.turns.get(entry.sessionId) : undefined;
+        const turnValid =
+          entry.turn === undefined ||
+          (currentTurn === entry.turn && !entry.turn.cancelled && !entry.turn.closed);
+        const outcome = message.result?.outcome;
+        const selectedValid =
+          outcome?.outcome === "selected" &&
+          typeof outcome.optionId === "string" &&
+          entry.offeredOptionIds.has(outcome.optionId);
+        if (entry.kind === "facade") {
+          const approved =
+            !this.closing &&
+            childOpen &&
+            modeValid &&
+            turnValid &&
+            selectedValid &&
+            entry.allowOptionIds.has(outcome.optionId);
+          entry.resolve(
+            approved
+              ? { allowed: true }
+              : {
+                  allowed: false,
+                  reason: `${entry.toolName} was not approved in plan mode.`,
+                },
           );
-          if (forwardCancelled) {
-            return this.agent({
-              jsonrpc: "2.0",
-              id,
-              result: { outcome: { outcome: "cancelled" } },
-            });
-          }
+          return;
         }
-        this.agent(message);
+        // Native agent permission reply: cancel if stale, mode changed, turn
+        // ended, child stopped, or selected option was not offered.
+        if (!this.closing && childOpen && modeValid && turnValid && selectedValid) {
+          return this.agent({ ...message, id: entry.agyId });
+        }
+        return this.agent({
+          jsonrpc: "2.0",
+          id: entry.agyId,
+          result: { outcome: { outcome: "cancelled" } },
+        });
       }
       return;
     }
@@ -946,13 +1239,25 @@ export class AcpProxy {
     const forwarded = structuredClone(message);
     const requested = this.requestedMode(method, forwarded.params);
     if (requested) {
-      // Changing: unknown until `agy` answers every outstanding switch.
-      this.modes.delete(requested.sessionId);
-      this.switches.set(requested.sessionId, (this.switches.get(requested.sessionId) ?? 0) + 1);
-      this.invalidatePlanGrants(requested.sessionId);
+      requested.seq = this.beginModeSwitch(requested.sessionId);
+    }
+    // Reopening a session clears any cached mode so a load/resume omitting
+    // `modes` cannot retain an earlier unrestricted mode.
+    if (SESSION_REQUESTS.has(method) && typeof forwarded.params?.sessionId === "string") {
+      const sid = forwarded.params.sessionId;
+      this.modes.delete(sid);
+      const sw = this.switchState.get(sid);
+      if (sw && sw.active.size > 0) {
+        sw.overlapped = true;
+        sw.latestSeq = ++sw.nextSeq;
+      }
+      this.invalidateModeFamily(sid, "The session is reloading.");
     }
     // The reply is handled with this runtime, without awaiting it again.
     const record = { method, runtime, mode: requested, params: forwarded.params };
+    if (method === "session/cancel") {
+      return await this.cancel(forwarded);
+    }
     if (method === "initialize") {
       this.compaction.initialize(forwarded.params);
       this.subagents.initialize(forwarded.params);
@@ -1183,6 +1488,12 @@ export class AcpProxy {
 
   startAttemptCleanup(sessionId, turn, { cancelled = false, errored = false } = {}) {
     if (!turn) return Promise.resolve();
+    turn.closed = true;
+    this.retirePermissions({
+      sessionId,
+      turn,
+      reason: cancelled ? "The turn was cancelled." : "The turn ended.",
+    });
     this.planGate.clearTurn(sessionId, turn);
     if (turn.attemptCleanup) return turn.attemptCleanup;
     // Synchronously initiate facade cleanup when runtime is already ready so admission fences at once.
@@ -1214,6 +1525,7 @@ export class AcpProxy {
         reserved.cancelled = true;
         reserved.cancelResolve?.();
         this.releaseReservation(sessionId, reserved);
+        this.retirePermissions({ sessionId, reason: "The turn was cancelled." });
         if (!reserved.record.finalized) {
           this.endPrompt(reserved.record, {
             jsonrpc: "2.0",
@@ -1221,13 +1533,19 @@ export class AcpProxy {
             result: { stopReason: "cancelled" },
           });
         }
+        if (message.id !== undefined) {
+          this.client({ jsonrpc: "2.0", id: message.id, result: {} });
+        }
         return;
       }
       const turn = this.turns.get(sessionId);
       if (turn) {
-        // Latch synchronously before any await so `proxy.correct()` and hints fence immediately.
+        // Latch synchronously before any await so `proxy.correct()`, hints, and
+        // pending permissions fence immediately.
         turn.cancelled = true;
+        turn.closed = true;
         if (turn.wrapUp) turn.wrapUp.pending = false;
+        this.retirePermissions({ sessionId, reason: "The turn was cancelled." });
         this.planGate.clearTurn(sessionId, turn);
         this.subagents.cancelled(sessionId);
         const cleanup = this.startAttemptCleanup(sessionId, turn, { cancelled: true });
@@ -1236,11 +1554,26 @@ export class AcpProxy {
           : this.subagents.cancelChildren(sessionId);
         // Forward native `session/cancel` to `agy` IMMEDIATELY (both root and child),
         // without waiting behind facade/extension cleanup!
+        if (message.id !== undefined) {
+          this.pending.set(message.id, {
+            method: "session/cancel",
+            runtime: this.readyRuntime,
+            params: message.params,
+          });
+        }
         this.agent(message);
         this.subagents.nativeCancelled(sessionId);
         await Promise.all([cleanup, children]);
         return;
       }
+      this.retirePermissions({ sessionId, reason: "The turn was cancelled." });
+    }
+    if (message.id !== undefined) {
+      this.pending.set(message.id, {
+        method: "session/cancel",
+        runtime: this.readyRuntime,
+        params: message.params,
+      });
     }
     this.agent(message);
     // From here `agy` has the cancel: a child it does not answer ends the unit.
@@ -1505,26 +1838,27 @@ export class AcpProxy {
           error: { code: -32601, message: `${method} is not supported by this client` },
         });
       }
+      // Redact account tier metadata before inspecting or forwarding options.
+      const asked = stripTier(message);
       // Defense in depth beside the PreToolUse hook: a permission request
-      // for any tool but the facade's is rejected here, never shown; so is
-      // a managed child's request for any session but its own.
-      const name = message.params?.toolCall?.name;
+      // for any tool outside the allow-list is rejected here, never shown; so
+      // is a managed child's request for any session but its own.
+      const name = asked.params?.toolCall?.name;
       // A subagent that was stopped or answered asks for nothing more.
       const ended =
-        this.subagents.owns(message.params?.sessionId) &&
-        !this.subagents.active(message.params.sessionId);
-      if (!this.allows(name) || this.foreignSession(message.params) || ended) {
-        return this.rejectPermission(id, message, `rejected permission for ${String(name)}`);
+        this.subagents.owns(asked.params?.sessionId) &&
+        !this.subagents.active(asked.params.sessionId);
+      if (!this.allows(name) || this.foreignSession(asked.params) || ended) {
+        return this.rejectPermission(id, asked, `rejected permission for ${String(name)}`);
       }
-      // Cowboy's own tools need no prompt in confirmed non-plan modes; plan
-      // mode (and unknown / switching modes) enforces per-tool policy.
-      const sessionId = message.params?.sessionId;
+      const sessionId = asked.params?.sessionId;
       const ownerId = this.subagents.parentOf(sessionId) ?? sessionId;
       const mode = this.effectiveMode(sessionId);
       const inPlan = isPlanEffectiveMode(mode);
       const toolName = stripFacadePrefix(name);
       const policy = toolName !== undefined ? planToolPolicy(toolName) : undefined;
-      const options = Array.isArray(message.params?.options) ? message.params.options : [];
+      const isWeb = WEB_TOOLS.includes(name);
+      const options = Array.isArray(asked.params?.options) ? asked.params.options : [];
       // A managed call has nobody to ask: its read tools run, nothing else.
       if (this.managed) {
         const allow = options.find((option) => option?.kind === "allow_once");
@@ -1538,17 +1872,19 @@ export class AcpProxy {
           },
         });
       }
-      // `ask_question` always asks the owner directly without minting a facade grant.
+      // `ask_question` always asks the owner directly; in restricted/plan modes
+      // strip standing `allow_always` options while preserving answer choices.
       if (name === "ask_question") {
-        this.agentRequests.set(id, { sessionId, child: this.subagents.childOf(sessionId) });
-        const asked = stripTier(message);
-        return this.client({
-          ...asked,
-          params: { ...asked.params, toolCall: this.present(asked.params?.toolCall, sessionId) },
+        return this.forwardAgentPermission(id, asked, {
+          sessionId,
+          ownerId,
+          stripStanding: inPlan,
         });
       }
-      // In confirmed non-plan modes, Cowboy tools auto-approve once (never a
-      // standing grant). If `allow_once` is absent, fall back to asking the owner.
+      // In confirmed unrestricted modes (`default`, `accept-edits`, `auto`),
+      // Cowboy and web tools auto-approve once (never a standing grant). If
+      // `allow_once` is absent, fall back to asking the owner under a unique
+      // worker ID validated against the current mode generation.
       if (!inPlan) {
         const allow = options.find((option) => option?.kind === "allow_once");
         if (allow) {
@@ -1558,17 +1894,20 @@ export class AcpProxy {
             result: { outcome: { outcome: "selected", optionId: allow.optionId } },
           });
         }
-        this.agentRequests.set(id, { sessionId, child: this.subagents.childOf(sessionId) });
-        const asked = stripTier(message);
-        return this.client({
-          ...asked,
-          params: { ...asked.params, toolCall: this.present(asked.params?.toolCall, sessionId) },
+        return this.forwardAgentPermission(id, asked, {
+          sessionId,
+          ownerId,
+          stripStanding: false,
         });
       }
-      // In plan / unknown / switching mode:
+      // In restricted modes (`plan`, `switching`, `undefined`, unrecognized):
       //   - reads, UpdatePlan, StopCommand and StopSubagent auto-approve once;
       //   - WriteFile, EditFile and Subagent are rejected immediately;
-      //   - RunCommand and extension calls ask the owner with `allow_always` stripped.
+      //   - RunCommand and extension calls have zero side effects inside `agy`:
+      //     let `agy` reach `Facade.answerOnce` with `allow_once` (only during
+      //     a live turn, never `allow_always`), where Cowboy prompts the owner
+      //     directly with the exact execution payload bound 1-to-1 to that call;
+      //   - supported native web reads ask the owner with `allow_always` stripped.
       if (policy === "allow") {
         const allow = options.find((option) => option?.kind === "allow_once");
         if (allow) {
@@ -1578,68 +1917,46 @@ export class AcpProxy {
             result: { outcome: { outcome: "selected", optionId: allow.optionId } },
           });
         }
-        const forwardedOptions = options.filter((option) => option?.kind !== "allow_always");
-        if (forwardedOptions.length === 0) {
-          return this.rejectPermission(id, message, `rejected ${toolName}: no non-standing option`);
-        }
-        this.agentRequests.set(id, { sessionId, child: this.subagents.childOf(sessionId) });
-        const asked = stripTier(message);
-        return this.client({
-          ...asked,
-          params: {
-            ...asked.params,
-            options: forwardedOptions,
-            toolCall: this.present(asked.params?.toolCall, sessionId),
-          },
+        return this.forwardAgentPermission(id, asked, {
+          sessionId,
+          ownerId,
+          stripStanding: true,
         });
       }
-      if (policy === "refuse" || toolName === undefined) {
+      if (policy === "refuse") {
         return this.rejectPermission(
           id,
-          message,
-          `rejected ${toolName ?? String(name)} in ${mode ?? "unknown"} mode`,
+          asked,
+          `rejected ${toolName} in ${mode ?? "unknown"} mode`,
         );
       }
-      // Approval-gated tools (`RunCommand` and extension calls) require exact
-      // correlation to the active turn and canonical arguments, and single-use
-      // options only (`allow_always` is stripped so `agy` never caches a grant).
-      const prep = this.planGate.preparePermission(
-        sessionId,
-        ownerId,
-        message.params?.toolCall,
-        this.turns.get(sessionId),
-      );
-      if (!prep.ok) {
-        return this.rejectPermission(
+      if (policy === "approve") {
+        const turn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
+        if (!turn || turn.cancelled || turn.closed) {
+          return this.rejectPermission(id, asked, `rejected ${toolName}: no live turn`);
+        }
+        const allow = options.find((option) => option?.kind === "allow_once");
+        if (!allow) {
+          return this.rejectPermission(id, asked, `rejected ${toolName}: no allow_once option`);
+        }
+        return this.agent({
+          jsonrpc: "2.0",
           id,
-          message,
-          `rejected ${toolName} permission: ${prep.reason}`,
-        );
+          result: { outcome: { outcome: "selected", optionId: allow.optionId } },
+        });
       }
-      const forwardedOptions = options.filter((option) => option?.kind !== "allow_always");
-      const allowOptionIds = new Set(
-        forwardedOptions
-          .filter((option) => option?.kind === "allow_once" && typeof option.optionId === "string")
-          .map((option) => option.optionId),
+      if (isWeb) {
+        return this.forwardAgentPermission(id, asked, {
+          sessionId,
+          ownerId,
+          stripStanding: true,
+        });
+      }
+      return this.rejectPermission(
+        id,
+        asked,
+        `rejected ${String(name)} in ${mode ?? "unknown"} mode`,
       );
-      if (allowOptionIds.size === 0) {
-        return this.rejectPermission(id, message, `rejected ${toolName}: no allow_once option`);
-      }
-      this.agentRequests.set(id, {
-        sessionId,
-        child: this.subagents.childOf(sessionId),
-        planToken: prep.token,
-        allowOptionIds,
-      });
-      const asked = stripTier(message);
-      return this.client({
-        ...asked,
-        params: {
-          ...asked.params,
-          options: forwardedOptions,
-          toolCall: this.present(asked.params?.toolCall, sessionId),
-        },
-      });
     }
     const record = this.pending.get(id);
     if (!record) return;
@@ -1658,23 +1975,21 @@ export class AcpProxy {
     // worker never sees it.
     if (record.internal) return record.internal(message);
     const { runtime } = record;
-    if (record.mode) {
-      const { sessionId, mode } = record.mode;
-      const left = (this.switches.get(sessionId) ?? 1) - 1;
-      if (left > 0) this.switches.set(sessionId, left);
-      else this.switches.delete(sessionId);
-      // Only the last outstanding switch, and only an accepted one, sets
-      // the mode; a reported current mode wins over the requested one.
-      if (left === 0 && message.result !== undefined) {
-        this.modes.set(sessionId, mode);
-        this.reportMode(sessionId, message.result);
-        this.invalidatePlanGrants(sessionId);
-      }
+    if (record.mode && record.mode.seq !== undefined) {
+      this.finishModeSwitch(
+        record.mode.sessionId,
+        record.mode.seq,
+        record.mode.mode,
+        message.result,
+      );
     }
     if (message.result !== undefined) {
       if (SESSION_REQUESTS.has(record.method)) {
         const sessionId = message.result?.sessionId ?? record.session;
-        this.invalidatePlanGrants(sessionId);
+        if (typeof sessionId === "string" && !this.subagents.owns(sessionId)) {
+          this.modes.delete(sessionId);
+          this.invalidateModeFamily(sessionId, "The session reopened.");
+        }
         this.reportMode(sessionId, message.result);
         this.compaction.opened(sessionId, record.projection);
         if (!runtime.managed) {
@@ -2037,6 +2352,7 @@ export class AcpProxy {
     structured.final = undefined;
     const retry = `cowboy-correction-${randomUUID()}`;
     this.pending.set(retry, { ...record, cursor, replyId });
+    turn.closed = false;
     turn.attemptCleanup = null;
     runtime.facade.beginTurn(record.sessionId);
     this.agent({

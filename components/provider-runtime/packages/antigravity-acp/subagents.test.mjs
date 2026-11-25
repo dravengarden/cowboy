@@ -909,64 +909,40 @@ test("a parent that moves to plan mode enforces plan policy on its children", as
     }).allowed,
     false,
   );
-  // RunCommand asks the owner under the child's session, and requires exact approval at dispatch.
+  // RunCommand prompts the owner directly at facade dispatch under the child's
+  // session with `allow_always` absent; approving once resolves only that call.
   agent.length = 0;
   client.length = 0;
-  await proxy.fromAgent({
-    jsonrpc: "2.0",
-    id: "perm-2",
-    method: "session/request_permission",
-    params: {
-      sessionId: id,
-      toolCall: {
-        toolCallId: "c",
-        name: "mcp_cowboy_RunCommand",
-        rawInput: { command: "git status" },
-      },
-      options: [
-        { optionId: "yes", kind: "allow_once" },
-        { optionId: "always", kind: "allow_always" },
-      ],
-    },
-  });
-  assert.equal(agent.length, 0);
+  const auth1 = proxy.authorizeFacadeCall(
+    { sessionId: id, name: "RunCommand", args: { command: "git status" } },
+    { args: { command: "git status" } },
+  );
   assert.equal(client.at(-1).method, "session/request_permission");
   assert.equal(client.at(-1).params.sessionId, id);
   assert.deepEqual(
     client.at(-1).params.options.map((o) => o.kind),
-    ["allow_once"],
+    ["allow_once", "reject_once"],
   );
-  // Before owner approval, dispatch is refused.
-  assert.equal(
-    proxy.authorizeFacadeCall({
-      sessionId: id,
-      name: "RunCommand",
-      args: { command: "git status" },
-    }).allowed,
-    false,
-  );
-  // Owner approves once -> dispatch succeeds once, then replay is refused.
+  const permId1 = client.at(-1).id;
   await proxy.fromClient({
     jsonrpc: "2.0",
-    id: "perm-2",
-    result: { outcome: { outcome: "selected", optionId: "yes" } },
+    id: permId1,
+    result: { outcome: { outcome: "selected", optionId: "allow_once" } },
   });
-  assert.equal(
-    proxy.authorizeFacadeCall({
-      sessionId: id,
-      name: "RunCommand",
-      args: { command: "git status" },
-    }).allowed,
-    true,
+  assert.deepEqual(await auth1, { allowed: true });
+  // A second RunCommand must ask again and is refused when rejected.
+  const auth2 = proxy.authorizeFacadeCall(
+    { sessionId: id, name: "RunCommand", args: { command: "git status" } },
+    { args: { command: "git status" } },
   );
-  assert.equal(
-    proxy.authorizeFacadeCall({
-      sessionId: id,
-      name: "RunCommand",
-      args: { command: "git status" },
-    }).allowed,
-    false,
-  );
+  const permId2 = client.at(-1).id;
+  assert.notEqual(permId2, permId1);
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: permId2,
+    result: { outcome: { outcome: "selected", optionId: "reject_once" } },
+  });
+  assert.equal((await auth2).allowed, false);
 });
 
 test("a session still opening is held until the worker knows the child", async () => {
@@ -1046,19 +1022,25 @@ test("an ended child's permission requests are refused and a late approval grant
     },
   });
   assert.equal(client.at(-1).method, "session/request_permission");
+  const askWorkerId = client.at(-1).id;
   await endPrompt(made, id);
+  // Ending the child immediately cancels ask-1 to agy and sends $/cancel_request to worker.
+  assert.deepEqual(
+    agent.find((m) => m.id === "ask-1"),
+    { jsonrpc: "2.0", id: "ask-1", result: { outcome: { outcome: "cancelled" } } },
+  );
+  assert.equal(
+    client.some((m) => m.method === "$/cancel_request" && m.params?.requestId === askWorkerId),
+    true,
+  );
   agent.length = 0;
-  // The owner answers after the child ended: agy hears a cancellation.
+  // A late owner answer after the child ended is ignored and grants nothing.
   await proxy.fromClient({
     jsonrpc: "2.0",
-    id: "ask-1",
+    id: askWorkerId,
     result: { outcome: { outcome: "selected", optionId: "yes" } },
   });
-  assert.deepEqual(agent.at(-1), {
-    jsonrpc: "2.0",
-    id: "ask-1",
-    result: { outcome: { outcome: "cancelled" } },
-  });
+  assert.equal(agent.length, 0);
   // And a new request of the ended child is rejected, not approved or shown.
   agent.length = 0;
   client.length = 0;
@@ -1594,7 +1576,7 @@ test("a stopped or answered child admits no more permissions at once", async () 
 
 test("a late approval of a stopped child grants nothing, even once the child was pruned", async () => {
   const made = await parent();
-  const { proxy, agent } = made;
+  const { proxy, agent, client } = made;
   const id = await startChild(made);
   await proxy.fromAgent({
     jsonrpc: "2.0",
@@ -1606,15 +1588,20 @@ test("a late approval of a stopped child grants nothing, even once the child was
       options: [{ optionId: "yes", kind: "allow_once" }],
     },
   });
+  const askWorkerId = client.at(-1).id;
   await proxy.fromClient({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId: id } });
+  // Cancelling the child immediately retires ask-9 as cancelled.
+  assert.deepEqual(agent.find((m) => m.id === "ask-9")?.result, {
+    outcome: { outcome: "cancelled" },
+  });
   proxy.subagents.children.delete(id);
   agent.length = 0;
   await proxy.fromClient({
     jsonrpc: "2.0",
-    id: "ask-9",
+    id: askWorkerId,
     result: { outcome: { outcome: "selected", optionId: "yes" } },
   });
-  assert.deepEqual(agent.at(-1).result, { outcome: { outcome: "cancelled" } });
+  assert.equal(agent.length, 0);
 });
 
 test("a mode switch while a start is opening stops the prompt from being sent", async () => {

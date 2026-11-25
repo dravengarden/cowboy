@@ -107,6 +107,7 @@ export class Facade {
       onLost = () => {},
       onResult = () => {},
       onProgress = () => {},
+      onAdmit = () => {},
       authorize = () => ({ allowed: true }),
       managed = false,
       stopConfirmMs = LIMITS.stopConfirmMs,
@@ -122,6 +123,7 @@ export class Facade {
     this.onLost = onLost;
     this.onResult = onResult;
     this.onProgress = onProgress;
+    this.onAdmit = onAdmit;
     this.authorize = authorize;
     this.sessions = new Map();
     /** Per canonical path, how often a publish of it became uncertain. */
@@ -155,9 +157,14 @@ export class Facade {
     return new Facade(connection, { root, shell, ...options });
   }
 
-  /** Attach or replace the synchronous dispatch authorizer (e.g. `AcpProxy`). */
+  /** Attach or replace the dispatch authorizer (e.g. `AcpProxy`). */
   setAuthorizer(authorize) {
     this.authorize = typeof authorize === "function" ? authorize : () => ({ allowed: true });
+  }
+
+  /** Attach or replace the admission hook capturing call turn lifetime for UI binding. */
+  setAdmitter(onAdmit) {
+    this.onAdmit = typeof onAdmit === "function" ? onAdmit : () => {};
   }
 
   tools() {
@@ -636,24 +643,7 @@ ${WRAP_UP_NOTE}`,
 
   async answer(call) {
     if (this.closing) throw new ToolError("Antigravity proxy is shutting down");
-    const turn = call.sessionId === undefined ? undefined : this.sessions.get(call.sessionId)?.turn;
-    const trackedEffect =
-      call.name === "WriteFile" ||
-      call.name === "EditFile" ||
-      Boolean(this.extensions?.has(call.name));
-    if (!turn?.inflight || !trackedEffect) {
-      return this.answerOnce(call);
-    }
-    // A publish, its verification and the report of an unknown outcome are
-    // one admitted effect: the turn's end waits for all of it.
-    const answered = this.answerOnce(call);
-    const tracked = answered.catch(() => {});
-    turn.inflight.add(tracked);
-    try {
-      return await answered;
-    } finally {
-      turn.inflight.delete(tracked);
-    }
+    return this.answerOnce(call);
   }
 
   async answerOnce(call) {
@@ -667,32 +657,34 @@ ${WRAP_UP_NOTE}`,
       return failure(`The turn ended: an earlier ${turn.uncertain} has an unknown outcome.`);
     }
     if (turn.cancelled || turn.ended) return failure("The turn was cancelled.");
-    const rawArgs = args === undefined ? {} : args;
     if (args === null || typeof args !== "object" || Array.isArray(args)) args = {};
+    // Freeze a snapshot of the exact execution arguments before authorization so
+    // the owner approves the exact payload that executes.
+    const execArgs = structuredClone(args);
     if (this.managed && !MANAGED_FACADE_TOOLS.includes(name)) {
       return failure(`${String(name)} is not available in a read-only Cowboy managed call.`);
     }
     const handlers = {
-      ReadFile: () => this.readFile(session, args),
-      ListDirectory: () => this.listDirectory(args),
-      SearchFiles: () => this.searchFiles(turn, args),
-      WriteFile: () => this.writeFile(session, turn, args),
-      EditFile: () => this.editFile(session, turn, args),
+      ReadFile: () => this.readFile(session, execArgs),
+      ListDirectory: () => this.listDirectory(execArgs),
+      SearchFiles: () => this.searchFiles(turn, execArgs),
+      WriteFile: () => this.writeFile(session, turn, execArgs),
+      EditFile: () => this.editFile(session, turn, execArgs),
       RunCommand: () =>
-        this.runCommand(session, turn, args, (text) => {
+        this.runCommand(session, turn, execArgs, (text) => {
           try {
             this.onProgress(call, text);
           } catch {
             // Presentation only.
           }
         }),
-      StopCommand: () => this.stopCommand(session, args),
-      Subagent: () => this.subagent(sessionId, turn, args),
-      StopSubagent: () => this.stopSubagent(sessionId, args),
+      StopCommand: () => this.stopCommand(session, execArgs),
+      Subagent: () => this.subagent(sessionId, turn, execArgs),
+      StopSubagent: () => this.stopSubagent(sessionId, execArgs),
       // Presentation only (the proxy shows it as the session's plan); it
       // never reaches the target.
       UpdatePlan: async () => {
-        if (!planUpdate(args)) {
+        if (!planUpdate(execArgs)) {
           throw new ToolError(
             "plan must list 1 to 50 steps, each with a step text and a status of pending, in_progress or completed",
           );
@@ -704,37 +696,70 @@ ${WRAP_UP_NOTE}`,
     const extension = !Object.hasOwn(handlers, name) && this.extensions?.has(name);
     if (!Object.hasOwn(handlers, name) && !extension)
       return failure(`Unknown tool ${String(name)}`);
-    // Enforce confirmed mode (plan / unknown / switching fail closed) synchronously
-    // before any tool handler or extension RPC runs. Pass the exact `call` object
-    // so PlanGate can bind its WeakMap identity for onProgress/onResult.
-    const decision = this.authorize(call, { extension, rawArgs });
+    // Capture call turn lifetime synchronously at admission for UI binding.
+    try {
+      this.onAdmit(call);
+    } catch {
+      // Presentation only.
+    }
+    // Enforce confirmed mode before any tool handler, extension RPC, or
+    // inflight effect registration. In plan / unknown / switching modes,
+    // RunCommand and extensions await single-use owner approval bound directly
+    // to this exact invocation and `execArgs`.
+    const decision = await this.authorize(call, { extension, args: execArgs });
     if (decision?.allowed !== true) {
       return failure(decision?.reason ?? `${String(name)} is not available in the current mode.`);
     }
+    // Re-check turn and shutdown fences synchronously after any async approval wait.
+    if (this.closing) throw new ToolError("Antigravity proxy is shutting down");
+    if (session.turn !== turn) {
+      return failure("No Cowboy turn is active, so workspace tools are unavailable.");
+    }
+    if (turn.uncertain) {
+      return failure(`The turn ended: an earlier ${turn.uncertain} has an unknown outcome.`);
+    }
+    if (turn.cancelled || turn.ended) return failure("The turn was cancelled.");
+
+    const execute = async () => {
+      try {
+        if (extension) {
+          return await this.extensions.call(this.connection, name, execArgs);
+        }
+        // A handler answers text, or (an image ReadFile) its own content blocks.
+        const answer = await handlers[name]();
+        return typeof answer === "string" ? { content: [{ type: "text", text: answer }] } : answer;
+      } catch (error) {
+        if (error instanceof UncertainEffect) {
+          this.fenceLost(turn, error.method);
+          // The worker's trusted ledger records it before this tool answers
+          // (so before the turn can end), also when every transport call was
+          // answered (a timed-out publish): the session parks until the owner
+          // acknowledges it. A lost report still ends the turn here.
+          await this.connection.call(UNCERTAIN_REPORT, { method: error.method }).catch(() => {});
+          this.onUncertain(sessionId, error.method);
+          return failure(
+            `outcome unknown: the connection to the workspace Machine was lost after ${error.method} may have been applied. Cowboy ends this turn; do not retry.`,
+          );
+        }
+        if (error instanceof ToolError) return failure(error.message);
+        if (lost(error))
+          return failure("The workspace Machine is unreachable; nothing was changed.");
+        return failure(`The workspace Machine refused the request: ${remoteMessage(error)}`);
+      }
+    };
+    const trackedEffect = name === "WriteFile" || name === "EditFile" || Boolean(extension);
+    if (!turn.inflight || !trackedEffect) {
+      return execute();
+    }
+    // A publish, its verification, extension RPC, and report of an unknown
+    // outcome are one admitted effect: the turn's end waits for all of it.
+    const running = execute();
+    const tracked = running.catch(() => {});
+    turn.inflight.add(tracked);
     try {
-      if (extension) {
-        // Tracked via answer() through UncertainEffect reporting in catch below.
-        return await this.extensions.call(this.connection, name, args);
-      }
-      // A handler answers text, or (an image ReadFile) its own content blocks.
-      const answer = await handlers[name]();
-      return typeof answer === "string" ? { content: [{ type: "text", text: answer }] } : answer;
-    } catch (error) {
-      if (error instanceof UncertainEffect) {
-        this.fenceLost(turn, error.method);
-        // The worker's trusted ledger records it before this tool answers
-        // (so before the turn can end), also when every transport call was
-        // answered (a timed-out publish): the session parks until the owner
-        // acknowledges it. A lost report still ends the turn here.
-        await this.connection.call(UNCERTAIN_REPORT, { method: error.method }).catch(() => {});
-        this.onUncertain(sessionId, error.method);
-        return failure(
-          `outcome unknown: the connection to the workspace Machine was lost after ${error.method} may have been applied. Cowboy ends this turn; do not retry.`,
-        );
-      }
-      if (error instanceof ToolError) return failure(error.message);
-      if (lost(error)) return failure("The workspace Machine is unreachable; nothing was changed.");
-      return failure(`The workspace Machine refused the request: ${remoteMessage(error)}`);
+      return await running;
+    } finally {
+      turn.inflight.delete(tracked);
     }
   }
 

@@ -270,6 +270,7 @@ async function connectedRuntime({
     onLost: (sessionId, method) => proxy?.lost(sessionId, method),
     onResult: (call, result) => proxy?.toolResult(call, result),
     onProgress: (call, text) => proxy?.toolProgress(call, text),
+    onAdmit: (call) => proxy?.admitFacadeCall(call),
     authorize: (call, meta) =>
       proxy
         ? proxy.authorizeFacadeCall(call, meta)

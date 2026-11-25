@@ -220,6 +220,8 @@ test("agent requests other than permission are refused; permission replies are r
     id: 71,
     result: { outcome: { outcome: "selected", optionId: "deny" } },
   });
+  // RunCommand request_permission from agy receives allow_once so agy calls
+  // the facade, where authorizeFacadeCall prompts the owner directly.
   await proxy.fromAgent(
     request(72, "session/request_permission", {
       sessionId: "s",
@@ -232,15 +234,25 @@ test("agent requests other than permission are refused; permission replies are r
       options,
     }),
   );
-  assert.equal(client.at(-1).method, "session/request_permission");
-  assert.equal(client.at(-1).params.toolCall.title, "git status");
-  assert.equal(client.at(-1).params.toolCall.kind, "execute");
-  await proxy.fromClient({ jsonrpc: "2.0", id: 72, result: { outcome: { outcome: "cancelled" } } });
   assert.deepEqual(agent.at(-1), {
     jsonrpc: "2.0",
     id: 72,
+    result: { outcome: { outcome: "selected", optionId: "allow" } },
+  });
+  const pendingAuth = proxy.authorizeFacadeCall(
+    { sessionId: "s", name: "RunCommand", args: { command: "git status" } },
+    { args: { command: "git status" } },
+  );
+  assert.equal(client.at(-1).method, "session/request_permission");
+  assert.equal(client.at(-1).params.toolCall.title, "git status");
+  assert.equal(client.at(-1).params.toolCall.kind, "execute");
+  const runWorkerId = client.at(-1).id;
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: runWorkerId,
     result: { outcome: { outcome: "cancelled" } },
   });
+  assert.equal((await pendingAuth).allowed, false);
   const countBeforeUnknownReply = agent.length;
   await proxy.fromClient({ jsonrpc: "2.0", id: 999, result: {} });
   assert.equal(agent.length, countBeforeUnknownReply);
@@ -1084,14 +1096,14 @@ test("permissions auto-approve only in a mode agy confirmed", async () => {
   ];
   await proxy.runtime;
   await proxy.fromClient(request(1, "session/prompt", { sessionId: "s", prompt: [] }));
-  const askRun = (id) =>
+  const askWeb = (id) =>
     proxy.fromAgent(
       request(id, "session/request_permission", {
         sessionId: "s",
         toolCall: {
-          toolCallId: `rc-${id}`,
-          name: "mcp_cowboy_RunCommand",
-          rawInput: { command: `echo ${id}` },
+          toolCallId: `web-${id}`,
+          name: "search_web",
+          rawInput: { query: `q-${id}` },
         },
         options,
       }),
@@ -1108,16 +1120,17 @@ test("permissions auto-approve only in a mode agy confirmed", async () => {
         options,
       }),
     );
-  // Unknown mode fails closed like plan: WriteFile rejected, RunCommand asks
-  // the owner with standing `allow_always` stripped.
+  // Unknown mode fails closed like plan: WriteFile rejected, native web read
+  // asks the owner with standing `allow_always` stripped, and RunCommand prompts
+  // at facade dispatch.
   await askWrite(69);
   assert.deepEqual(agent.at(-1), {
     jsonrpc: "2.0",
     id: 69,
     result: { outcome: { outcome: "selected", optionId: "deny" } },
   });
-  await askRun(70);
-  assert.equal(client.at(-1).id, 70);
+  await askWeb(70);
+  assert.equal(client.at(-1).method, "session/request_permission");
   assert.deepEqual(
     client.at(-1).params.options.map((o) => o.kind),
     ["allow_once", "reject_once"],
@@ -1133,19 +1146,19 @@ test("permissions auto-approve only in a mode agy confirmed", async () => {
     id: 71,
     result: { outcome: { outcome: "selected", optionId: "allow" } },
   });
-  // A switch to plan reported by agy stops approvals for RunCommand and rejects WriteFile.
+  // A switch to plan reported by agy stops auto-approval and rejects WriteFile.
   await proxy.fromAgent(updateIn("current_mode_update", { currentModeId: "plan" }));
   await askWrite(711);
   assert.deepEqual(agent.at(-1).result, { outcome: { outcome: "selected", optionId: "deny" } });
-  await askRun(72);
-  assert.equal(client.at(-1).id, 72);
+  await askWeb(72);
+  assert.equal(client.at(-1).method, "session/request_permission");
   // A requested switch is unknown until agy answers it.
   await proxy.fromClient(request(4, "session/set_mode", { sessionId: "s", modeId: "default" }));
-  await askRun(73);
-  assert.equal(client.at(-1).id, 73);
+  await askWrite(73);
+  assert.deepEqual(agent.at(-1).result, { outcome: { outcome: "selected", optionId: "deny" } });
   await proxy.fromAgent({ jsonrpc: "2.0", id: 4, error: { code: 1, message: "no" } });
-  await askRun(74);
-  assert.equal(client.at(-1).id, 74);
+  await askWrite(74);
+  assert.deepEqual(agent.at(-1).result, { outcome: { outcome: "selected", optionId: "deny" } });
   // Reads and UpdatePlan never need the owner, whatever the mode.
   for (const [id, name] of [
     [75, "mcp_cowboy_UpdatePlan"],
@@ -1169,19 +1182,22 @@ test("permissions auto-approve only in a mode agy confirmed", async () => {
 });
 
 test("an older switch's answer cannot reopen approvals while a newer one is pending", async () => {
-  const { proxy, client } = harness();
+  const { proxy, agent } = harness();
   await proxy.runtime;
   await proxy.fromClient(request(1, "session/prompt", { sessionId: "s", prompt: [] }));
-  const ask = (id) =>
+  const askWrite = (id) =>
     proxy.fromAgent(
       request(id, "session/request_permission", {
         sessionId: "s",
         toolCall: {
-          toolCallId: `rc-${id}`,
-          name: "mcp_cowboy_RunCommand",
-          rawInput: { command: `echo ${id}` },
+          toolCallId: `wf-${id}`,
+          name: "mcp_cowboy_WriteFile",
+          rawInput: { path: "a.txt", content: "x" },
         },
-        options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+        options: [
+          { optionId: "allow", name: "Allow", kind: "allow_once" },
+          { optionId: "deny", name: "Deny", kind: "reject_once" },
+        ],
       }),
     );
   await proxy.fromClient(request(5, "session/set_mode", { sessionId: "s", modeId: "default" }));
@@ -1189,11 +1205,11 @@ test("an older switch's answer cannot reopen approvals while a newer one is pend
   await proxy.fromAgent({ jsonrpc: "2.0", id: 5, result: {} });
   // A mode update during the pending switch is not trusted either.
   await proxy.fromAgent(updateIn("current_mode_update", { currentModeId: "default" }));
-  await ask(80);
-  assert.equal(client.at(-1).id, 80);
+  await askWrite(80);
+  assert.deepEqual(agent.at(-1).result, { outcome: { outcome: "selected", optionId: "deny" } });
   await proxy.fromAgent({ jsonrpc: "2.0", id: 6, result: {} });
-  await ask(81);
-  assert.equal(client.at(-1).id, 81);
+  await askWrite(81);
+  assert.deepEqual(agent.at(-1).result, { outcome: { outcome: "selected", optionId: "deny" } });
 });
 
 const text = (value) => [{ type: "text", text: value }];
