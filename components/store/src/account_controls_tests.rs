@@ -565,7 +565,14 @@ fn a_prompt_agy_rejected_before_dispatch_leaves_the_account_alone() {
     ] {
         unproven.push(rejected("image_answer", with(key, value)));
     }
-    for key in ["barrier", "prompts", "dispatches", "successes", "transient", "refusals"] {
+    for key in [
+        "barrier",
+        "prompts",
+        "dispatches",
+        "successes",
+        "transient",
+        "refusals",
+    ] {
         unproven.push(rejected("image_answer", without(key)));
     }
     for signal in unproven {

@@ -554,7 +554,10 @@ fn proxy_result(error: &str) -> Option<Signal> {
 /// one prompt receipt, and zero dispatches, successes, transient retries and
 /// refusals). Anything missing or contradictory stays unclassified.
 fn prompt_rejection(code: &str, cowboy: &serde_json::Map<String, serde_json::Value>) -> bool {
-    let Some(backend) = cowboy.get("antigravity_backend").and_then(|b| b.as_object()) else {
+    let Some(backend) = cowboy
+        .get("antigravity_backend")
+        .and_then(|b| b.as_object())
+    else {
         return false;
     };
     let count = |key: &str| backend.get(key).and_then(serde_json::Value::as_u64);
