@@ -211,6 +211,7 @@ export async function fakeEndpoint(
       if (entry.closed || entry.exited || !entry.child.stdin || entry.child.stdin.destroyed) {
         return { status: "closed" };
       }
+      entry.child.stdin.once("error", () => {});
       entry.child.stdin.write(Buffer.from(params.chunk, "base64"));
       return { status: "accepted" };
     },

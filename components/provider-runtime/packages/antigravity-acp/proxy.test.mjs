@@ -131,8 +131,10 @@ test("sessions get exactly the facade server and the projection", async () => {
   await proxy.fromClient(
     request(3, "session/load", { sessionId: "s-old", cwd: "/work/repo", mcpServers: [] }),
   );
-  assert.equal(channels.get("channel-1"), "s-old");
+  assert.equal(channels.get("channel-1"), undefined);
   assert.equal(agent[1].params.mcpServers[0].args[2], "channel-1");
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 3, result: {} });
+  assert.equal(channels.get("channel-1"), "s-old");
   await proxy.fromClient(request(4, "session/resume", { sessionId: "s-old", cwd: "/occupied" }));
   assert.equal(agent.length, 2);
   assert.match(client.at(-1).error.message, /not empty/);
