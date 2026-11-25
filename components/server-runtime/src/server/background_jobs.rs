@@ -1134,6 +1134,62 @@ pub async fn catalog_retention_pass(state: &AppState) {
     }
 }
 
+async fn retire_plugin_generation(
+    state: &AppState,
+    machine_id: &str,
+    plugin_id: String,
+    plugin_kind: cowboy_plugin_sdk::PluginKind,
+    referenced: BTreeSet<String>,
+) {
+    let request = crate::generation_retention::Request {
+        referenced,
+        plugin_id,
+    };
+    if !request.is_valid() {
+        tracing::warn!(machine = %machine_id, plugin = %request.plugin_id, "skipping invalid generation retention request");
+        return;
+    }
+    let plugin_id = request.plugin_id.clone();
+    let Ok(payload) = serde_json::to_value(&request) else {
+        return;
+    };
+    match state
+        .machine_control
+        .adapter_request(machine_id, crate::generation_retention::ADAPTER, payload)
+        .await
+        .and_then(|value| {
+            serde_json::from_value::<crate::generation_retention::Outcome>(value)
+                .map_err(|error| error.to_string())
+        }) {
+        Ok(outcome) if !outcome.retired.is_empty() => tracing::info!(
+            machine = %machine_id,
+            plugin = %plugin_id,
+            retired = ?outcome.retired,
+            freed_bytes = outcome.freed_bytes,
+            "retired unreferenced Plugin generations"
+        ),
+        Ok(_) => {}
+        Err(error)
+            if plugin_kind != cowboy_plugin_sdk::PluginKind::AgentProvider
+                && error.contains(
+                    "only Agent Provider and Machine browser generations are retired",
+                ) =>
+        {
+            tracing::debug!(
+                machine = %machine_id,
+                plugin = %plugin_id,
+                "older Machine predates non-Agent Plugin generation retention"
+            );
+        }
+        Err(error) => tracing::warn!(
+            machine = %machine_id,
+            plugin = %plugin_id,
+            %error,
+            "Plugin generation retention failed"
+        ),
+    }
+}
+
 pub async fn generation_retention_pass(state: &AppState, only: Option<&str>) {
     let Ok(machines) = state.machine_snapshots.load().await else {
         return;
@@ -1210,55 +1266,29 @@ pub async fn generation_retention_pass(state: &AppState, only: Option<&str>) {
             // Machines older than protocol 26 lack the retention adapter.
             continue;
         }
-        let providers: Vec<String> = machine
+        let retainable: Vec<(String, cowboy_plugin_sdk::PluginKind)> = machine
             .plugins
             .iter()
             .filter(|plugin| {
-                plugin.plugin_kind == cowboy_plugin_sdk::PluginKind::AgentProvider
-                    && plugin.state == crate::machine_protocol::PluginInstallationState::Active
+                matches!(
+                    plugin.plugin_kind,
+                    cowboy_plugin_sdk::PluginKind::AgentProvider
+                        | cowboy_plugin_sdk::PluginKind::CodeIntelligence
+                        | cowboy_plugin_sdk::PluginKind::MemoryBackend
+                        | cowboy_plugin_sdk::PluginKind::CallProfile
+                ) && plugin.state == crate::machine_protocol::PluginInstallationState::Active
             })
-            .map(|plugin| plugin.plugin_id.clone())
+            .map(|plugin| (plugin.plugin_id.clone(), plugin.plugin_kind))
             .collect();
-        for plugin_id in providers {
-            let request = crate::generation_retention::Request {
-                referenced: referenced
-                    .get(&(machine.id.clone(), plugin_id.clone()))
-                    .cloned()
-                    .unwrap_or_default(),
-                plugin_id,
-            };
-            if !request.is_valid() {
-                tracing::warn!(machine = %machine.id, plugin = %request.plugin_id, "skipping invalid generation retention request");
-                continue;
-            }
-            let plugin_id = request.plugin_id.clone();
-            let payload = match serde_json::to_value(&request) {
-                Ok(payload) => payload,
-                Err(_) => continue,
-            };
-            match state
-                .machine_control
-                .adapter_request(&machine.id, crate::generation_retention::ADAPTER, payload)
-                .await
-                .and_then(|value| {
-                    serde_json::from_value::<crate::generation_retention::Outcome>(value)
-                        .map_err(|error| error.to_string())
-                }) {
-                Ok(outcome) if !outcome.retired.is_empty() => tracing::info!(
-                    machine = %machine.id,
-                    plugin = %plugin_id,
-                    retired = ?outcome.retired,
-                    freed_bytes = outcome.freed_bytes,
-                    "retired unreferenced Plugin generations"
-                ),
-                Ok(_) => {}
-                Err(error) => tracing::warn!(
-                    machine = %machine.id,
-                    plugin = %plugin_id,
-                    %error,
-                    "Plugin generation retention failed"
-                ),
-            }
+        for (plugin_id, plugin_kind) in retainable {
+            // Forward all known session pins for (machine, plugin_id) even if
+            // the slot was reinstalled under a non-Agent kind, so soft-deleted
+            // sessions pinning historical generations are never dropped.
+            let pinned = referenced
+                .get(&(machine.id.clone(), plugin_id.clone()))
+                .cloned()
+                .unwrap_or_default();
+            retire_plugin_generation(state, &machine.id, plugin_id, plugin_kind, pinned).await;
         }
         if let Some(auth_referenced) = &auth_referenced {
             retire_auth_generations(state, &machine, auth_referenced).await;

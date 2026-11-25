@@ -239,7 +239,7 @@ impl CodeRuntimeHost {
             Ok(false) => return Ok(refused("saturated", None)),
             Err(_) => return Ok(refused("unavailable", None)),
         }
-        let selection = select()?;
+        let (selection, _pin) = self.select_pinned(plugin_id, select).await?;
         ensure!(
             matches!(selection, CodeRuntimeSelection::Installed(_)),
             "agent warming requires an owned Code runtime"

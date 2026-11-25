@@ -210,6 +210,55 @@ async fn sqlite_purge_prunes_only_unreferenced_aged_artifacts() {
 /// session leaves pages behind, the sweeper's bounded reclaim returns them
 /// and a following pass has nothing left to return.
 #[tokio::test]
+async fn sqlite_update_session_order_preserves_updated_at_ms_for_unchanged_positions() {
+    let root = tempfile::tempdir().unwrap();
+    let url = format!("sqlite://{}", root.path().join("order.sqlite3").display());
+    let store = Store::connect(&url, root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+    for id in ["sess-a", "sess-b", "sess-c"] {
+        store.insert_session(&session(id)).await.unwrap();
+    }
+    store
+        .update_session_order(&["sess-a".into(), "sess-b".into(), "sess-c".into()])
+        .await
+        .unwrap();
+    let read_updated_at = |store: &Store| {
+        let StorageBackend::Sqlite(db) = &store.backend else {
+            panic!("expected sqlite backend");
+        };
+        let pool = db.pool.clone();
+        async move {
+            sqlx::query_as::<_, (String, i64)>("SELECT id, updated_at_ms FROM sessions")
+                .fetch_all(&pool)
+                .await
+                .unwrap()
+                .into_iter()
+                .collect::<std::collections::BTreeMap<String, i64>>()
+        }
+    };
+    let before = read_updated_at(&store).await;
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    // Re-applying identical order touches zero rows.
+    store
+        .update_session_order(&["sess-a".into(), "sess-b".into(), "sess-c".into()])
+        .await
+        .unwrap();
+    assert_eq!(read_updated_at(&store).await, before);
+    // Swapping b and c updates b and c while leaving a's updated_at_ms untouched.
+    tokio::time::sleep(Duration::from_millis(5)).await;
+    store
+        .update_session_order(&["sess-a".into(), "sess-c".into(), "sess-b".into()])
+        .await
+        .unwrap();
+    let moved = read_updated_at(&store).await;
+    assert_eq!(moved["sess-a"], before["sess-a"]);
+    assert!(moved["sess-b"] > before["sess-b"]);
+    assert!(moved["sess-c"] > before["sess-c"]);
+}
+
+#[tokio::test]
 async fn sqlite_reclaims_free_pages_after_a_purge() {
     let root = tempfile::tempdir().unwrap();
     let url = format!(

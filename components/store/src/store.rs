@@ -6136,7 +6136,9 @@ impl PostgresStorage {
         let mut tx = self.pool.begin().await.context("begin tx")?;
         for (i, id) in order.iter().enumerate() {
             let pos = i64::try_from(i).unwrap_or(i64::MAX);
-            sqlx::query("UPDATE sessions SET position = $1, updated_at = now() WHERE id = $2")
+            sqlx::query(
+                "UPDATE sessions SET position = $1, updated_at = now()                  WHERE id = $2 AND position IS DISTINCT FROM $1",
+            )
                 .bind(pos)
                 .bind(id)
                 .execute(&mut *tx)

@@ -145,3 +145,171 @@ async fn uninstalled_browser_generations_retire_once_no_instance_pins_them() {
         .unwrap();
     assert!(present(&store).is_empty());
 }
+
+#[tokio::test]
+async fn code_and_session_extension_generations_keep_active_rollback_and_retire_old() {
+    let root = tempfile::tempdir().unwrap();
+    let store = MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".to_owned()).unwrap();
+    for (plugin_id, kind) in [
+        ("zed", cowboy_plugin_sdk::PluginKind::CodeIntelligence),
+        ("matrix", cowboy_plugin_sdk::PluginKind::MemoryBackend),
+        ("review", cowboy_plugin_sdk::PluginKind::CallProfile),
+    ] {
+        let generations = store.plugin_root(plugin_id).join("generations");
+        for letter in ["a", "b", "c", "d"] {
+            let content = generations.join(name(letter)).join("content");
+            fs::create_dir_all(&content).unwrap();
+            let inventory = serde_json::json!({
+                "plugin_id": plugin_id,
+                "plugin_version": "1.0.0",
+                "plugin_kind": kind,
+                "generation_digest": digest(letter),
+                "contract_fingerprint": "sha256:fixture",
+                "state": PluginInstallationState::Active,
+            });
+            fs::write(
+                content.join("plugin-inventory.json"),
+                serde_json::to_vec(&inventory).unwrap(),
+            )
+            .unwrap();
+        }
+        let plugin = store.plugin_root(plugin_id);
+        restore_generation_link(&plugin.join("active"), Some(&name("a"))).unwrap();
+        restore_generation_link(&plugin.join("rollback"), Some(&name("b"))).unwrap();
+
+        let outcome = store
+            .retire_generations(plugin_id, &BTreeSet::new())
+            .await
+            .unwrap();
+        assert_eq!(outcome.retired, vec![digest("c"), digest("d")]);
+        assert_eq!(outcome.retained, vec![digest("a"), digest("b")]);
+
+        fs::remove_file(plugin.join("active")).unwrap();
+        let skip = BTreeSet::from([plugin_id.to_owned()]);
+        assert!(
+            store
+                .retire_uninstalled_generations(&BTreeMap::new(), &skip)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let outcomes = store
+            .retire_uninstalled_generations(&BTreeMap::new(), &BTreeSet::new())
+            .await
+            .unwrap();
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].plugin_id, plugin_id);
+        assert_eq!(outcomes[0].retired, vec![digest("a"), digest("b")]);
+        assert_eq!(fs::read_dir(&generations).unwrap().count(), 0);
+    }
+}
+
+#[tokio::test]
+async fn browser_retirement_preserves_historical_code_generations_and_finishes_tombstones() {
+    let (_root, store, pins) = browser_store();
+    let generations = store.plugin_root("machine-browser").join("generations");
+    // Place a historical CodeIntelligence generation inside the same slot and a
+    // stranded tombstone colliding with generation `c`.
+    let code_gen = name("f");
+    let code_content = generations.join(&code_gen).join("content");
+    fs::create_dir_all(&code_content).unwrap();
+    fs::write(
+        code_content.join("plugin-inventory.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "plugin_id": "machine-browser",
+            "plugin_version": "1.0.0",
+            "plugin_kind": cowboy_plugin_sdk::PluginKind::CodeIntelligence,
+            "generation_digest": digest("f"),
+            "contract_fingerprint": "sha256:fixture",
+            "state": PluginInstallationState::Active,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    let colliding = generations.join(format!("{RETIRED_GENERATION_PREFIX}{}", name("c")));
+    fs::create_dir_all(&colliding).unwrap();
+
+    *pins.0.lock() = Some(BTreeSet::new());
+    let outcome = store
+        .retire_generations("machine-browser", &BTreeSet::new())
+        .await
+        .unwrap();
+    assert!(outcome.retired.contains(&digest("c")));
+    assert!(outcome.retained.contains(&digest("f")));
+    assert!(generations.join(&code_gen).is_dir());
+    assert!(!colliding.exists());
+
+    // An uninstalled plugin with only a stranded tombstone still cleans it up.
+    let stranded_dir = store
+        .plugin_root("stranded")
+        .join("generations")
+        .join(format!("{RETIRED_GENERATION_PREFIX}{}", name("9")));
+    fs::create_dir_all(&stranded_dir).unwrap();
+    store
+        .retire_uninstalled_generations(&BTreeMap::new(), &BTreeSet::new())
+        .await
+        .unwrap();
+    assert!(!stranded_dir.exists());
+
+    // Missing `plugin_kind` in plugin-inventory.json must NOT default to
+    // AgentProvider, and an unsigned package.cowboy-provider without verified
+    // release/signature is also preserved.
+    let mixed = store.plugin_root("legacy-mixed").join("generations");
+    let omitted_kind = mixed.join(name("1")).join("content");
+    let unsigned_legacy = mixed.join(name("2")).join("content");
+    fs::create_dir_all(&omitted_kind).unwrap();
+    fs::create_dir_all(&unsigned_legacy).unwrap();
+    fs::write(
+        omitted_kind.join("plugin-inventory.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "plugin_id": "legacy-mixed",
+            "plugin_version": "1.0.0",
+            "generation_digest": digest("1"),
+            "contract_fingerprint": "sha256:fixture",
+            "state": PluginInstallationState::Active,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    fs::write(unsigned_legacy.join("package.cowboy-provider"), b"{}").unwrap();
+    let outcomes = store
+        .retire_uninstalled_generations(&BTreeMap::new(), &BTreeSet::new())
+        .await
+        .unwrap();
+    assert!(outcomes.is_empty());
+    assert!(omitted_kind.exists());
+    assert!(unsigned_legacy.exists());
+
+    // Even when a slot is currently active as an excluded kind (Telemetry),
+    // stranded validated tombstones are still swept while live gens stay untouched.
+    let telemetry_root = store.plugin_root("telem-slot");
+    let telem_active = telemetry_root
+        .join("generations")
+        .join(name("7"))
+        .join("content");
+    fs::create_dir_all(&telem_active).unwrap();
+    fs::write(
+        telem_active.join("plugin-inventory.json"),
+        serde_json::to_vec(&serde_json::json!({
+            "plugin_id": "telem-slot",
+            "plugin_version": "1.0.0",
+            "plugin_kind": cowboy_plugin_sdk::PluginKind::TelemetryBackend,
+            "generation_digest": digest("7"),
+            "contract_fingerprint": "sha256:fixture",
+            "state": PluginInstallationState::Active,
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    restore_generation_link(&telemetry_root.join("active"), Some(&name("7"))).unwrap();
+    let telem_tombstone = telemetry_root
+        .join("generations")
+        .join(format!("{RETIRED_GENERATION_PREFIX}{}-123-4", name("8")));
+    fs::create_dir_all(&telem_tombstone).unwrap();
+    store
+        .retire_uninstalled_generations(&BTreeMap::new(), &BTreeSet::new())
+        .await
+        .unwrap();
+    assert!(!telem_tombstone.exists());
+    assert!(telem_active.exists());
+}

@@ -5142,7 +5142,9 @@ impl SqliteStorage {
         let timestamp = now_ms();
         for (index, id) in order.iter().enumerate() {
             let position = i64::try_from(index).unwrap_or(i64::MAX);
-            sqlx::query("UPDATE sessions SET position = ?1, updated_at_ms = ?2 WHERE id = ?3")
+            sqlx::query(
+                "UPDATE sessions SET position = ?1, updated_at_ms = ?2                  WHERE id = ?3 AND (position IS NULL OR position != ?1)",
+            )
                 .bind(position)
                 .bind(timestamp)
                 .bind(id)

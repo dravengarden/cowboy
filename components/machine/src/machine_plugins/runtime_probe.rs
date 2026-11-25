@@ -8,12 +8,15 @@
 //! (`account_sandbox_connection`); a failed or unavailable probe refuses the
 //! generation.
 use super::*;
+use std::os::unix::process::CommandExt as _;
 
 /// Probe the staged launch command, except for an account-sandboxed Provider.
+/// Returns `true` when the platform confirmed every probe descendant exited
+/// (either no host probe ran or kernel cgroup containment finished cleanly).
 pub(super) async fn probe_provider_runtime(
     runtime: &RuntimeContract,
     command: &Path,
-) -> Result<()> {
+) -> Result<bool> {
     ensure!(
         runtime.protocol == "agent-client-protocol-1.3",
         "unsupported Provider driver protocol"
@@ -23,25 +26,38 @@ pub(super) async fn probe_provider_runtime(
             command = %command.display(),
             "launcher probe skipped for an account-sandboxed Provider; the daemon probes its runtime"
         );
-        return Ok(());
+        return Ok(true);
     }
-    let output = tokio::time::timeout(
-        PROVIDER_PROBE_TIMEOUT,
-        tokio::process::Command::new(command)
-            .arg("--version")
-            .kill_on_drop(true)
-            .output(),
-    )
-    .await
-    .context("Provider staged probe timed out")?
-    .with_context(|| format!("starting Provider entrypoint {}", command.display()))?;
+    let mut cmd = tokio::process::Command::new(command);
+    cmd.arg("--version")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    cmd.as_std_mut().process_group(0);
+    let containment = crate::cgroup::containment::Containment::prepare(&mut cmd).ok();
+    let child = cmd
+        .spawn()
+        .with_context(|| format!("starting Provider entrypoint {}", command.display()))?;
+    let process_group = child
+        .id()
+        .map(crate::plugin_process::PluginProcessGroup::new);
+    let output = tokio::time::timeout(PROVIDER_PROBE_TIMEOUT, child.wait_with_output())
+        .await
+        .context("Provider staged probe timed out")?
+        .with_context(|| format!("waiting for Provider entrypoint {}", command.display()))?;
+    drop(process_group);
+    let tree_exit_confirmed = match containment {
+        Some(group) => group.finish().await.is_ok(),
+        None => false,
+    };
     ensure!(
         output.status.success(),
         "Provider staged probe exited {}: {}",
         output.status,
         String::from_utf8_lossy(&output.stderr).trim()
     );
-    Ok(())
+    Ok(tree_exit_confirmed)
 }
 
 #[cfg(test)]
@@ -66,7 +82,7 @@ mod tests {
         let mut runtime: RuntimeContract =
             serde_json::from_value(authored["runtime"].clone()).unwrap();
         runtime.isolation = Some(cowboy_provider_sdk::RuntimeIsolationPolicy::AccountSandboxV1);
-        probe_provider_runtime(&runtime, &launcher).await.unwrap();
+        assert!(probe_provider_runtime(&runtime, &launcher).await.unwrap());
         assert!(!touched.exists());
         runtime.isolation = None;
         probe_provider_runtime(&runtime, &launcher).await.unwrap();

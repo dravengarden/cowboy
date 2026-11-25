@@ -43,9 +43,13 @@ impl ProcessTree {
 
     pub(super) fn spawn_in(
         command: &mut Command,
-        pool: Option<&Arc<retirement::Retirement>>,
+        pool: Option<(&Arc<retirement::Retirement>, &str, &str)>,
     ) -> Result<(Child, Self)> {
-        let retirement = pool.map(|pool| pool.reserve()).transpose()?;
+        let retirement = pool
+            .map(|(pool, plugin_id, digest)| {
+                pool.reserve_for(plugin_id.to_owned(), digest.to_owned())
+            })
+            .transpose()?;
         command.as_std_mut().process_group(0);
         // The membership FD is installed in pre_exec. A successful spawn
         // therefore cannot run any child code outside the original cgroup.
@@ -81,8 +85,10 @@ impl Drop for ProcessTree {
             if let Some(reservation) = self.retirement.take() {
                 reservation.retire(group);
             }
-            // Without a host pool, the containment retains its existing Drop
-            // behavior. Unsupported platforms also retain their PGID fallback.
+        } else if let Some(reservation) = self.retirement.take() {
+            // Without kernel containment, descendant exit cannot be proved.
+            // Keep a conservative generation pin for this Machine process.
+            reservation.retain_conservatively();
         }
     }
 }

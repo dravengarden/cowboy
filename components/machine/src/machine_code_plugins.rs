@@ -19,7 +19,7 @@ use serde_json::Value;
 use tokio::io::{AsyncBufReadExt as _, AsyncReadExt as _, AsyncWriteExt as _, BufReader};
 use tokio::net::UnixStream;
 use tokio::process::{Child, Command};
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, RwLock};
 
 mod agent_acquisition;
 #[cfg(all(test, target_os = "linux"))]
@@ -186,12 +186,38 @@ pub struct CodeRuntimeHost {
     /// Old owners stay on their original incarnation after a leader exits.
     /// Keep weak discovery for their still-owned descendant accounting.
     retired_engines: Mutex<Vec<Weak<RunningCodeRuntime>>>,
+    /// Coordinates generation selection with retention tombstoning without
+    /// acquiring `routes` or per-worktree locks (which may be busy on 35s RPCs).
+    selection_gate: RwLock<()>,
+    /// Generations selected by an in-flight `select() -> target()` call before
+    /// the spawned engine is registered in `engines`.
+    active_selections: Arc<parking_lot::Mutex<BTreeMap<(String, String), usize>>>,
     buffer_leases: buffer_leases::Routes,
     buffer_navigation: buffer_navigation::Operations,
     buffer_sync: buffer_sync::Operations,
 }
 
 type WorktreeRoutes = BTreeMap<(String, PathBuf), Arc<Mutex<WorktreeRoute>>>;
+
+/// RAII pin keeping a selected Code generation from being tombstoned between
+/// `select()` and `target()` registering the running engine in `engines`.
+pub(super) struct SelectionPin {
+    key: (String, String),
+    active: Arc<parking_lot::Mutex<BTreeMap<(String, String), usize>>>,
+}
+
+impl Drop for SelectionPin {
+    fn drop(&mut self) {
+        let mut active = self.active.lock();
+        if let Some(count) = active.get_mut(&self.key) {
+            if *count <= 1 {
+                active.remove(&self.key);
+            } else {
+                *count -= 1;
+            }
+        }
+    }
+}
 
 impl CodeRuntimeHost {
     pub(super) async fn reap_retired_processes(&self) -> Result<()> {
@@ -226,6 +252,58 @@ impl CodeRuntimeHost {
             .values()
             .filter(|engine| engine.strong_count() > 0)
             .count()
+    }
+
+    /// Run `select` under the shared selection gate and pin any chosen
+    /// installed generation until the returned `SelectionPin` is dropped after
+    /// `target()` registers the engine.
+    pub(super) async fn select_pinned(
+        &self,
+        plugin_id: &str,
+        select: impl FnOnce() -> Result<CodeRuntimeSelection>,
+    ) -> Result<(CodeRuntimeSelection, Option<SelectionPin>)> {
+        let _gate = self.selection_gate.read().await;
+        let selection = select()?;
+        let pin = match &selection {
+            CodeRuntimeSelection::Installed(plan) => {
+                let key = (plugin_id.to_owned(), plan.generation_digest.clone());
+                *self
+                    .active_selections
+                    .lock()
+                    .entry(key.clone())
+                    .or_insert(0) += 1;
+                Some(SelectionPin {
+                    key,
+                    active: Arc::clone(&self.active_selections),
+                })
+            }
+            CodeRuntimeSelection::Legacy(_) => None,
+        };
+        Ok((selection, pin))
+    }
+
+    /// Run `tombstone` while blocking new selections and inspecting live
+    /// selection pins, running engine reservations, retiring containment
+    /// reservations, and conservative non-containment fallback pins for
+    /// `plugin_id`.
+    ///
+    /// Never locks `routes`, per-worktree locks, `engines`, or
+    /// `retired_engines`, so neither slow worktree RPCs nor cold Code startups
+    /// can block generation retirement across Plugins.
+    pub async fn with_generation_pins<T>(
+        &self,
+        plugin_id: &str,
+        tombstone: impl FnOnce(&BTreeSet<String>) -> Result<T>,
+    ) -> Result<T> {
+        let _gate = self.selection_gate.write().await;
+        let active_selections = self.active_selections.lock();
+        let mut pinned = self.retiring_processes.pinned_generations(plugin_id);
+        for ((pid, digest), count) in active_selections.iter() {
+            if pid == plugin_id && *count > 0 {
+                pinned.insert(digest.clone());
+            }
+        }
+        tombstone(&pinned)
     }
 
     #[cfg(test)]
@@ -298,7 +376,8 @@ impl CodeRuntimeHost {
             None => None,
         };
         let Some(worktree) = request_worktree(payload)? else {
-            let (target, _) = self.target(select()?).await?;
+            let (selection, _pin) = self.select_pinned(plugin_id, select).await?;
+            let (target, _) = self.target(selection).await?;
             return exchange(target.socket(), payload).await;
         };
         let route = {
@@ -332,7 +411,7 @@ impl CodeRuntimeHost {
             && active.is_some()
             && route.generation != active;
         if route.target.is_none() || follow {
-            let selection = select()?;
+            let (selection, _pin) = self.select_pinned(plugin_id, select).await?;
             // Looking for an existing observation must not cold-start an
             // installed backend before the agent's acquisition budget runs.
             // A configured legacy socket already belongs to another process;
@@ -516,9 +595,17 @@ impl RunningCodeRuntime {
             fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
         }
         let mut command = runtime_command(plan, &plan.runtime.launch, &socket, &state_dir)?;
-        let (child, process_tree) =
-            process_tree::ProcessTree::spawn_in(&mut command, retirement.as_ref())
-                .context("starting installed code runtime")?;
+        let (child, process_tree) = process_tree::ProcessTree::spawn_in(
+            &mut command,
+            retirement.as_ref().map(|pool| {
+                (
+                    pool,
+                    plan.plugin_id.as_str(),
+                    plan.generation_digest.as_str(),
+                )
+            }),
+        )
+        .context("starting installed code runtime")?;
         let runtime = Self {
             child: parking_lot::Mutex::new(child),
             process_group: parking_lot::Mutex::new(Some(process_tree)),
@@ -527,9 +614,17 @@ impl RunningCodeRuntime {
         };
         let mut probe =
             runtime_command(plan, &plan.runtime.readiness, &runtime.socket, &state_dir)?;
-        let (mut probe, _probe_group) =
-            process_tree::ProcessTree::spawn_in(&mut probe, retirement.as_ref())
-                .context("starting code runtime readiness probe")?;
+        let (mut probe, _probe_group) = process_tree::ProcessTree::spawn_in(
+            &mut probe,
+            retirement.as_ref().map(|pool| {
+                (
+                    pool,
+                    plan.plugin_id.as_str(),
+                    plan.generation_digest.as_str(),
+                )
+            }),
+        )
+        .context("starting code runtime readiness probe")?;
         let result = tokio::time::timeout(
             Duration::from_millis(plan.runtime.readiness_timeout_ms),
             probe.wait(),
@@ -1206,5 +1301,60 @@ mod tests {
                 )
                 .unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn generation_pins_honor_selection_reservations_without_blocking_on_busy_worktrees() {
+        let root = PrivateRuntimeDirectory::create().unwrap();
+        let host = CodeRuntimeHost::default();
+        let plan = fixture_plan(&root.0, "selected-gen");
+        let (selection, pin) = host
+            .select_pinned("fixture-code", || {
+                Ok(CodeRuntimeSelection::Installed(plan.clone()))
+            })
+            .await
+            .unwrap();
+        assert!(matches!(selection, CodeRuntimeSelection::Installed(_)));
+        assert!(pin.is_some());
+
+        let busy_route = Arc::new(Mutex::new(WorktreeRoute::default()));
+        let _held_route = busy_route.lock().await;
+        host.routes.lock().await.insert(
+            ("fixture-code".into(), root.0.clone()),
+            Arc::clone(&busy_route),
+        );
+
+        let seen = tokio::time::timeout(
+            Duration::from_millis(500),
+            host.with_generation_pins("fixture-code", |pins| Ok(pins.clone())),
+        )
+        .await
+        .expect("with_generation_pins blocked on busy worktree route")
+        .unwrap();
+        assert!(seen.contains("selected-gen"), "{seen:?}");
+
+        drop(pin);
+        let after = host
+            .with_generation_pins("fixture-code", |pins| Ok(pins.clone()))
+            .await
+            .unwrap();
+        assert!(after.is_empty(), "{after:?}");
+
+        // A retiring process-tree reservation keeps its generation pinned until released.
+        let retiring_pin = host
+            .retiring_processes
+            .reserve_for("fixture-code".into(), "retiring-gen".into())
+            .unwrap();
+        let seen_retiring = host
+            .with_generation_pins("fixture-code", |pins| Ok(pins.clone()))
+            .await
+            .unwrap();
+        assert!(seen_retiring.contains("retiring-gen"), "{seen_retiring:?}");
+        drop(retiring_pin);
+        let cleared = host
+            .with_generation_pins("fixture-code", |pins| Ok(pins.clone()))
+            .await
+            .unwrap();
+        assert!(cleared.is_empty(), "{cleared:?}");
     }
 }
