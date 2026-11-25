@@ -2900,7 +2900,7 @@ async fn run_adapter_request(
             return serde_json::to_value(response).context("encoding extension response");
         }
         if adapter != "code" && adapter != crate::machine_protocol::session_code::ADAPTER {
-            let legacy = (adapter == "zed")
+            let legacy = matches!(adapter.as_str(), "zed" | "zed_post_edit")
                 .then_some(zed_adapter_socket.as_deref())
                 .flatten();
             return providers.code_request(&adapter, &payload, legacy).await;

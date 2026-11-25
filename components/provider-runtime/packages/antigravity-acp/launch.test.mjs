@@ -527,3 +527,18 @@ test("runProxy forwards both --canary-trace-file and --canary-nonce to the cowbo
   assert.ok(traceFlag >= 0 && server.args[traceFlag + 1] === traceFile);
   assert.ok(nonceFlag >= 0 && server.args[nonceFlag + 1] === "launch-fixture-nonce-42");
 });
+
+test("runProxy rejects missing --canary-nonce value when followed by another flag (R4-L2)", async (t) => {
+  const setup = layout(t);
+  const endpoint = await fakeEndpoint(setup.socket, setup.target, { virtual: setup.virtual });
+  t.after(() => endpoint.close());
+  const traceFile = join(setup.base, "canary-trace.jsonl");
+  const { call } = session(t, setup, {}, ["--canary-nonce", "--canary-trace-file", traceFile]);
+  await call("initialize", { protocolVersion: 1 });
+  const created = await call("session/new", { cwd: setup.runtimeCwd, mcpServers: [] });
+  const server = created.result.seen.params.mcpServers[0];
+  assert.equal(server.name, "cowboy");
+  const traceFlag = server.args.indexOf("--canary-trace-file");
+  assert.ok(traceFlag >= 0 && server.args[traceFlag + 1] === traceFile);
+  assert.equal(server.args.includes("--canary-nonce"), false);
+});

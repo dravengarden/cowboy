@@ -1535,20 +1535,28 @@ ${WRAP_UP_NOTE}`,
    * report, show the result. */
   async publishOnce(turn, file, base, bytes, { beforeSend } = {}) {
     const expect = sha256(bytes);
-    const request = JSON.stringify({
+    const baseRequest = {
       schema: 1,
       path: file,
       base: base === undefined ? "absent" : sha256(base),
       expect,
       splices: splice(base ?? Buffer.alloc(0), bytes),
       staleTempSeconds: 3600,
-    });
+    };
+    const inlineRequest = JSON.stringify(
+      this.resolvedPayloadDirectory
+        ? { ...baseRequest, payloadDirectory: this.resolvedPayloadDirectory }
+        : baseRequest,
+    );
     let args;
     let payload;
-    if (Buffer.byteLength(request) <= INLINE_APPLY) {
-      args = ["--request", Buffer.from(request).toString("base64")];
+    if (Buffer.byteLength(inlineRequest) <= INLINE_APPLY) {
+      args = ["--request", Buffer.from(inlineRequest).toString("base64")];
     } else {
       const directory = await this.payloadDirectory(turn, { beforeSend });
+      // R4-L1: Pass payloadDirectory so file_helper sweeps stale staged
+      // payloads even when an earlier exit-127 cleanup was fenced by beforeSend.
+      const request = JSON.stringify({ ...baseRequest, payloadDirectory: directory });
       payload = posix.join(directory, `payload-${randomUUID().replaceAll("-", "")}.json`);
       await this.mutate(
         turn,
@@ -1635,6 +1643,7 @@ ${WRAP_UP_NOTE}`,
       ) {
         throw new ToolError("The workspace Machine has no private request directory");
       }
+      this.resolvedPayloadDirectory = directory;
       return directory;
     });
     this.payloads.catch(() => {

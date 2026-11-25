@@ -2050,3 +2050,39 @@ async fn rotating_active_turn_nonce_discards_settled_reply_before_projection() {
     assert_eq!(outcome["state"], "refused");
     assert_eq!(outcome["reason"], "unavailable");
 }
+
+#[test]
+fn classify_request_line_parses_uri_path_and_rejects_absolute_form_diagnostics() {
+    assert_eq!(
+        classify_request_line(b"GET / HTTP/1.1\r\n"),
+        RequestLineRoute::Mutation
+    );
+    assert_eq!(
+        classify_request_line(b"GET /?v=1 HTTP/1.1\r\n"),
+        RequestLineRoute::Mutation
+    );
+    assert_eq!(
+        classify_request_line(b"GET /diagnostics HTTP/1.1\r\n"),
+        RequestLineRoute::Diagnostics
+    );
+    assert_eq!(
+        classify_request_line(b"GET http://127.0.0.1/diagnostics HTTP/1.1\r\n"),
+        RequestLineRoute::Diagnostics
+    );
+    assert_eq!(
+        classify_request_line(b"GET http://127.0.0.1/diagnostics?foo=bar HTTP/1.1\r\n"),
+        RequestLineRoute::Diagnostics
+    );
+    assert_eq!(
+        classify_request_line(b"GET\t/diagnostics\tHTTP/1.1\r\n"),
+        RequestLineRoute::Invalid
+    );
+    assert_eq!(
+        classify_request_line(b"POST / HTTP/1.1\r\n"),
+        RequestLineRoute::Invalid
+    );
+    assert_eq!(
+        classify_request_line(b"GET /bad target HTTP/1.1\r\n"),
+        RequestLineRoute::Invalid
+    );
+}

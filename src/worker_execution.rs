@@ -7,11 +7,15 @@ mod extension_broker;
 mod ledger;
 mod memory_bridge;
 mod post_edit;
+mod pre_auth;
 mod relay;
 pub use extension_broker::{Broker as ExtensionBroker, Plan as ExtensionPlan, ServerPlan};
 pub use ledger::{LEDGER_ENV, Ledger, MAX_PROCESSES};
 pub use memory_bridge::MemoryBridge;
 pub use post_edit::{PostEditBrokerSession, QueuedPostEdit, unix_socket_has_post_edit_headroom};
+#[cfg(test)]
+use pre_auth::classify_request_line;
+use pre_auth::{PrefixedHandshakeStream, RequestLineRoute, peek_request_line};
 
 use std::collections::{BTreeMap, HashSet};
 use std::os::fd::OwnedFd;
@@ -585,101 +589,6 @@ impl Drop for MutationSocketGuard {
     }
 }
 
-/// Limits pre-upgrade HTTP header reads to `MAX_PRE_AUTH_HEADER_BYTES` and
-/// replays the peeked request-line prefix so `/diagnostics` gets its tight
-/// 64 KiB `WebSocketConfig` at the tungstenite parser boundary.
-struct PrefixedHandshakeStream<S> {
-    inner: S,
-    prefix: Vec<u8>,
-    prefix_pos: usize,
-    pre_auth_remaining: usize,
-    init_remaining: usize,
-    upgraded: Arc<std::sync::atomic::AtomicBool>,
-    initialized: Arc<std::sync::atomic::AtomicBool>,
-}
-
-impl<S: AsyncRead + Unpin> AsyncRead for PrefixedHandshakeStream<S> {
-    fn poll_read(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &mut tokio::io::ReadBuf<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        let this = self.get_mut();
-        if this.prefix_pos < this.prefix.len() {
-            let take = (this.prefix.len() - this.prefix_pos).min(buf.remaining());
-            buf.put_slice(&this.prefix[this.prefix_pos..this.prefix_pos + take]);
-            this.prefix_pos += take;
-            return std::task::Poll::Ready(Ok(()));
-        }
-        if this.initialized.load(std::sync::atomic::Ordering::Acquire) {
-            return std::pin::Pin::new(&mut this.inner).poll_read(cx, buf);
-        }
-        let upgraded = this.upgraded.load(std::sync::atomic::Ordering::Acquire);
-        let (remaining, err_msg) = if upgraded {
-            (
-                &mut this.init_remaining,
-                "WebSocket initialization frame exceeded 4 KiB limit",
-            )
-        } else {
-            (
-                &mut this.pre_auth_remaining,
-                "pre-auth HTTP handshake exceeded 4 KiB limit",
-            )
-        };
-        if *remaining == 0 {
-            return std::task::Poll::Ready(Err(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                err_msg,
-            )));
-        }
-        let max = buf.remaining().min(*remaining);
-        let read_res = {
-            let mut sub = buf.take(max);
-            let before = sub.filled().len();
-            match std::pin::Pin::new(&mut this.inner).poll_read(cx, &mut sub) {
-                std::task::Poll::Ready(Ok(())) => {
-                    std::task::Poll::Ready(Ok(sub.filled().len() - before))
-                }
-                std::task::Poll::Ready(Err(e)) => std::task::Poll::Ready(Err(e)),
-                std::task::Poll::Pending => std::task::Poll::Pending,
-            }
-        };
-        match read_res {
-            std::task::Poll::Ready(Ok(n)) => {
-                buf.advance(n);
-                *remaining = remaining.saturating_sub(n);
-                std::task::Poll::Ready(Ok(()))
-            }
-            std::task::Poll::Ready(Err(e)) => std::task::Poll::Ready(Err(e)),
-            std::task::Poll::Pending => std::task::Poll::Pending,
-        }
-    }
-}
-
-impl<S: AsyncWrite + Unpin> AsyncWrite for PrefixedHandshakeStream<S> {
-    fn poll_write(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-        buf: &[u8],
-    ) -> std::task::Poll<std::io::Result<usize>> {
-        std::pin::Pin::new(&mut self.get_mut().inner).poll_write(cx, buf)
-    }
-
-    fn poll_flush(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.get_mut().inner).poll_flush(cx)
-    }
-
-    fn poll_shutdown(
-        self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<std::io::Result<()>> {
-        std::pin::Pin::new(&mut self.get_mut().inner).poll_shutdown(cx)
-    }
-}
-
 /// Separate single-slot admission for `/` (mutation) and `/diagnostics`
 /// (post-edit pull), with a bounded pre-auth pool that evicts a stalled
 /// pre-auth socket when the mutation slot is vacant so reconnect / `cowboy/drained`
@@ -989,31 +898,6 @@ enum SlotKind {
     Diagnostics(tokio::sync::OwnedSemaphorePermit),
 }
 
-async fn peek_request_line<S>(socket: &mut S) -> Result<(Vec<u8>, bool)>
-where
-    S: AsyncRead + Unpin,
-{
-    use tokio::io::AsyncReadExt as _;
-    let mut prefix = Vec::with_capacity(128);
-    let mut byte = [0_u8; 1];
-    while prefix.len() < 256 {
-        let n = socket.read(&mut byte).await?;
-        if n == 0 {
-            bail!("execution socket closed before HTTP request line");
-        }
-        prefix.push(byte[0]);
-        if prefix.ends_with(b"\r\n") {
-            let is_diagnostics = std::str::from_utf8(&prefix)
-                .ok()
-                .and_then(|line| line.split_whitespace().nth(1))
-                .and_then(|target| target.split('?').next())
-                == Some(DIAGNOSTICS_PATH);
-            return Ok((prefix, is_diagnostics));
-        }
-    }
-    bail!("execution HTTP request line exceeded 256 bytes");
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn classify_then_promote_mutation_reserve<S>(
     mut socket: S,
@@ -1031,11 +915,24 @@ where
     use tokio::io::AsyncWriteExt as _;
     let peeked =
         tokio::time::timeout(PRE_AUTH_CLASSIFY_TIMEOUT, peek_request_line(&mut socket)).await??;
-    if peeked.1 {
-        let _ = socket
-            .write_all(b"HTTP/1.1 503 Busy\r\nContent-Length: 4\r\nConnection: close\r\n\r\nBusy")
-            .await;
-        bail!("diagnostics rejected before mutation reserve admission");
+    match peeked.1 {
+        RequestLineRoute::Diagnostics => {
+            let _ = socket
+                .write_all(
+                    b"HTTP/1.1 503 Busy\r\nContent-Length: 4\r\nConnection: close\r\n\r\nBusy",
+                )
+                .await;
+            bail!("diagnostics rejected before mutation reserve admission");
+        }
+        RequestLineRoute::Invalid => {
+            let _ = socket
+                .write_all(
+                    b"HTTP/1.1 400 Bad Request\r\nContent-Length: 11\r\nConnection: close\r\n\r\nBad Request",
+                )
+                .await;
+            bail!("malformed request line rejected before mutation reserve admission");
+        }
+        RequestLineRoute::Mutation => {}
     }
     // Promote classified mutation candidate into the 4th reserved pre-auth ticket.
     {
@@ -1092,7 +989,7 @@ where
 #[allow(clippy::too_many_arguments)]
 async fn upgrade_and_classify<S>(
     mut socket: S,
-    pre_peeked: Option<(Vec<u8>, bool)>,
+    pre_peeked: Option<(Vec<u8>, RequestLineRoute)>,
     token: &str,
     client: Arc<Client>,
     unit_generation: u64,
@@ -1104,11 +1001,21 @@ async fn upgrade_and_classify<S>(
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
+    use tokio::io::AsyncWriteExt as _;
     let deadline = tokio::time::Instant::now() + PRE_AUTH_UPGRADE_TIMEOUT;
-    let (prefix, peeked_diagnostics) = match pre_peeked {
+    let (prefix, route) = match pre_peeked {
         Some(peeked) => peeked,
         None => tokio::time::timeout_at(deadline, peek_request_line(&mut socket)).await??,
     };
+    if route == RequestLineRoute::Invalid {
+        let _ = socket
+            .write_all(
+                b"HTTP/1.1 400 Bad Request\r\nContent-Length: 11\r\nConnection: close\r\n\r\nBad Request",
+            )
+            .await;
+        bail!("malformed execution HTTP request line");
+    }
+    let peeked_diagnostics = route == RequestLineRoute::Diagnostics;
     let remaining_header = MAX_PRE_AUTH_HEADER_BYTES.saturating_sub(prefix.len());
     let upgraded = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let initialized = Arc::new(std::sync::atomic::AtomicBool::new(false));

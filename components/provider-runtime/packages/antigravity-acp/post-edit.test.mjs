@@ -1113,3 +1113,78 @@ test("facade-relay refuses positive stdout proof when --canary-nonce is omitted 
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test("PlanGate permanently taints incoming edit call when a sole surviving compatible card is already ambiguous (R4-M5)", () => {
+  const gate = new PlanGate();
+  const turn = { attempt: Symbol("att") };
+  // Two inputless WriteFile announcements collide and become ambiguous.
+  gate.trackUpdate(
+    "s1",
+    { toolCallId: "card-a", name: "mcp_cowboy_WriteFile", status: "in_progress" },
+    turn,
+  );
+  gate.trackUpdate(
+    "s1",
+    { toolCallId: "card-b", name: "mcp_cowboy_WriteFile", status: "in_progress" },
+    turn,
+  );
+  const firstCall = { sessionId: "s1", name: "WriteFile", args: { path: "a.rs", content: "1" } };
+  gate.admitCall(firstCall, turn);
+  assert.equal(gate.bind(firstCall, turn), undefined);
+  // First card terminates, leaving ONLY the single surviving ambiguous card-b.
+  gate.trackUpdate("s1", { toolCallId: "card-a", status: "completed" }, turn);
+  const secondCall = { sessionId: "s1", name: "WriteFile", args: { path: "a.rs", content: "1" } };
+  gate.admitCall(secondCall, turn);
+  assert.equal(gate.bind(secondCall, turn), undefined);
+  // Now card-b terminates and a fresh later card-c arrives; secondCall must stay tainted.
+  gate.trackUpdate("s1", { toolCallId: "card-b", status: "completed" }, turn);
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "card-c",
+      name: "mcp_cowboy_WriteFile",
+      rawInput: { path: "a.rs", content: "1" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  assert.equal(gate.bind(secondCall, turn), undefined);
+});
+
+test("publishOnce passes payloadDirectory on staged writes so stale payloads expire even after fenced exit-127 (R4-L1)", async () => {
+  const writes = [];
+  let starts = 0;
+  const conn = {
+    async call(method, params) {
+      if (method === "process/start") {
+        starts += 1;
+        return { processId: params.processId };
+      }
+      if (method === "process/read") {
+        const text =
+          starts === 1
+            ? "/home/u/.cache/cowboy/file-buffers"
+            : JSON.stringify({ status: "applied" });
+        return {
+          chunks: [{ seq: 1, stream: "stdout", chunk: Buffer.from(text).toString("base64") }],
+          exited: true,
+          exitCode: 0,
+          closed: true,
+        };
+      }
+      if (method === "fs/writeFile") {
+        writes.push(JSON.parse(Buffer.from(params.dataBase64, "base64").toString("utf8")));
+        return {};
+      }
+      throw new Error(`unexpected ${method}`);
+    },
+  };
+  const facade = new Facade(conn, { root: "/repo", shell: "/bin/sh" });
+  facade.beginTurn("s1", { turnNonce: "n1" });
+  const turn = facade.session("s1").turn;
+  const large = Buffer.alloc(60 * 1024, "x");
+  await facade.publishOnce(turn, "/repo/big.txt", undefined, large);
+  assert.equal(writes.length, 1);
+  assert.equal(writes[0].payloadDirectory, "/home/u/.cache/cowboy/file-buffers");
+  assert.equal(writes[0].staleTempSeconds, 3600);
+});

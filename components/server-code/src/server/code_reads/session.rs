@@ -48,15 +48,31 @@ pub async fn adapter_request(
     scope: &SessionReadScope,
     request: serde_json::Value,
 ) -> anyhow::Result<crate::server::ZedAdapterResponse> {
+    adapter_request_named(hub, control, local_socket, scope, "zed", request).await
+}
+
+/// Named-adapter variant keeping the captured `SessionReadScope` connection.
+pub async fn adapter_request_named(
+    hub: &Hub,
+    control: &MachineControl,
+    local_socket: Option<&std::path::Path>,
+    scope: &SessionReadScope,
+    adapter: &str,
+    request: serde_json::Value,
+) -> anyhow::Result<crate::server::ZedAdapterResponse> {
     use crate::server::validate_zed_adapter_response;
     anyhow::ensure!(current(hub, control, scope), "code context changed");
     let response = if let Some(connection) = scope.connection() {
         let value = control
-            .adapter_request_on_connection(connection, "zed", request)
+            .adapter_request_on_connection(connection, adapter, request)
             .await
             .map_err(anyhow::Error::msg)?;
         validate_zed_adapter_response(serde_json::from_value(value)?)?
     } else {
+        anyhow::ensure!(
+            adapter == "zed",
+            "post-edit inspection requires Machine ownership"
+        );
         crate::server::zed_request_in_scope(hub, control, local_socket, scope.session(), request)
             .await?
     };

@@ -29,6 +29,7 @@ pub struct Operation<'a> {
     hub: &'a Hub,
     control: &'a MachineControl,
     scope: &'a SessionCodeScope,
+    adapter: &'static str,
     transport: Option<Transport>,
 }
 
@@ -55,17 +56,19 @@ impl<'a> Operation<'a> {
             hub,
             control,
             scope,
+            adapter: "zed",
             transport: Some(transport),
         })
     }
 
     /// Bind an operation directly to an already-verified target connection
-    /// token instead of reconnecting by Machine ID (R3-H6).
-    pub fn on_connection(
+    /// token instead of reconnecting by Machine ID (R3-H6 / R4-H1).
+    pub fn on_connection_adapter(
         hub: &'a Hub,
         control: &'a MachineControl,
         scope: &'a SessionCodeScope,
         connection: ConnectionToken,
+        adapter: &'static str,
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(hub.code_scope_is_current(scope), "code context changed");
         anyhow::ensure!(
@@ -76,6 +79,7 @@ impl<'a> Operation<'a> {
             hub,
             control,
             scope,
+            adapter,
             transport: Some(Transport::Remote(connection)),
         })
     }
@@ -94,7 +98,7 @@ impl<'a> Operation<'a> {
             Transport::Remote(connection) => {
                 let value = self
                     .control
-                    .adapter_request_on_connection(connection, "zed", request)
+                    .adapter_request_on_connection(connection, self.adapter, request)
                     .await
                     .map_err(anyhow::Error::msg)?;
                 validate_zed_adapter_response(serde_json::from_value(value)?)?
@@ -222,7 +226,8 @@ pub async fn agent_buffer_request_on_connection(
         .connection()
         .cloned()
         .context("target Machine connection is unavailable")?;
-    let mut operation = Operation::on_connection(hub, control, scope, connection)?;
+    let mut operation =
+        Operation::on_connection_adapter(hub, control, scope, connection, "zed_post_edit")?;
     let mut payload = serde_json::json!({
         "type":"acquireAgentBuffer", "ownerProtocol":2, "worktree":request.worktree,
         "path":request.path, "leaseId":request.lease_id,

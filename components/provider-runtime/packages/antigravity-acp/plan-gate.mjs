@@ -361,6 +361,19 @@ export class PlanGate {
     const unbound = liveSameTool.filter((item) => !item.boundCall && !item.ambiguous);
     let entry;
     const isDiffBearing = call.name === "WriteFile" || call.name === "EditFile";
+    if (isDiffBearing) {
+      // R4-M5: If ANY compatible live edit announcement is already tainted
+      // ambiguous (even if it is the sole remaining live card after a sibling
+      // terminated), permanently taint `call` so it cannot later rebind.
+      const compatibleLive =
+        digest !== undefined
+          ? liveSameTool.filter((item) => !item.hasInput || item.digest === digest)
+          : liveSameTool;
+      if (compatibleLive.some((item) => item.ambiguous)) {
+        this.taintedCalls.add(call);
+        return undefined;
+      }
+    }
     if (digest !== undefined) {
       const exactLive = liveSameTool.filter((item) => item.hasInput && item.digest === digest);
       const inputlessLive = liveSameTool.filter((item) => !item.hasInput);

@@ -38,3 +38,14 @@ pub fn register(token: String, target: PostEditTarget) -> Registration {
 pub fn lookup(token: &str) -> Option<PostEditTarget> {
     TARGETS.lock().get(token).cloned()
 }
+
+/// Whether the Machine owning `connection` announced post-edit support on its
+/// primary handshake (meaning it enforces Machine-owned `"zed_post_edit"`
+/// concurrency slots across WebSocket disconnects/reconnects).
+#[must_use]
+pub fn supports_connection(connection: &ConnectionToken) -> bool {
+    TARGETS
+        .lock()
+        .values()
+        .any(|target| target.connection.same(connection))
+}

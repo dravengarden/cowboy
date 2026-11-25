@@ -42,6 +42,17 @@ mod sync_fixture;
 
 const MAX_CODE_MESSAGE_BYTES: usize = 4 * 1024 * 1024;
 const MAX_WORKTREE_ROUTES: usize = 4096;
+/// Machine-owned concurrency cap for post-edit diagnostic inspections (R4-H1).
+/// Enforced on the workspace Machine across Controller WebSocket reconnects.
+const POST_EDIT_CONCURRENCY: usize = 4;
+
+struct PostEditSlots(Arc<tokio::sync::Semaphore>);
+
+impl Default for PostEditSlots {
+    fn default() -> Self {
+        Self(Arc::new(tokio::sync::Semaphore::new(POST_EDIT_CONCURRENCY)))
+    }
+}
 
 #[derive(Clone)]
 pub struct CodeLaunchPlan {
@@ -195,6 +206,7 @@ pub struct CodeRuntimeHost {
     buffer_leases: buffer_leases::Routes,
     buffer_navigation: buffer_navigation::Operations,
     buffer_sync: buffer_sync::Operations,
+    post_edit_slots: PostEditSlots,
 }
 
 type WorktreeRoutes = BTreeMap<(String, PathBuf), Arc<Mutex<WorktreeRoute>>>;
@@ -220,6 +232,15 @@ impl Drop for SelectionPin {
 }
 
 impl CodeRuntimeHost {
+    /// Acquire one non-blocking Machine-owned post-edit concurrency slot.
+    /// Held through full settlement of the underlying Code request across any
+    /// Controller WebSocket disconnect/reconnect (R4-H1).
+    pub fn try_acquire_post_edit_slot(&self) -> Result<tokio::sync::OwnedSemaphorePermit> {
+        Arc::clone(&self.post_edit_slots.0)
+            .try_acquire_owned()
+            .map_err(|_| anyhow::anyhow!("post_edit_capacity"))
+    }
+
     pub(super) async fn reap_retired_processes(&self) -> Result<()> {
         let retiring = Arc::clone(&self.retiring_processes);
         tokio::task::spawn_blocking(move || retiring.observe().map(|_| ())).await?
@@ -1356,5 +1377,20 @@ mod tests {
             .await
             .unwrap();
         assert!(cleared.is_empty(), "{cleared:?}");
+    }
+
+    #[test]
+    fn post_edit_slots_cap_concurrency_at_four_on_workspace_machine() {
+        let host = CodeRuntimeHost::default();
+        let mut held = Vec::new();
+        for _ in 0..POST_EDIT_CONCURRENCY {
+            held.push(host.try_acquire_post_edit_slot().expect("slot available"));
+        }
+        let err = host
+            .try_acquire_post_edit_slot()
+            .expect_err("5th concurrent post-edit slot must fail closed");
+        assert!(err.to_string().contains("post_edit_capacity"), "{err:#}");
+        drop(held.pop());
+        assert!(host.try_acquire_post_edit_slot().is_ok());
     }
 }

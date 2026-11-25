@@ -14,14 +14,16 @@ for (let i = 2; i < argv.length; i += 1) {
   if (
     argv[i] === "--canary-trace-file" &&
     typeof argv[i + 1] === "string" &&
-    argv[i + 1].length > 0
+    argv[i + 1].length > 0 &&
+    !argv[i + 1].startsWith("-")
   ) {
     canaryTraceFile = argv[i + 1];
     i += 1;
   } else if (
     argv[i] === "--canary-nonce" &&
     typeof argv[i + 1] === "string" &&
-    argv[i + 1].length > 0
+    argv[i + 1].length > 0 &&
+    !argv[i + 1].startsWith("-")
   ) {
     canaryNonce = argv[i + 1];
     i += 1;

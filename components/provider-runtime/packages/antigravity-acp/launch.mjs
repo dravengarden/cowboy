@@ -478,19 +478,30 @@ export async function runProxy({
     env,
     stdio: ["pipe", "pipe", "inherit"],
   });
-  const canaryIdx = Array.isArray(args) ? args.indexOf("--canary-trace-file") : -1;
-  const canaryTraceFile =
-    canaryIdx >= 0 && typeof args[canaryIdx + 1] === "string" && isAbsolute(args[canaryIdx + 1])
-      ? args[canaryIdx + 1]
-      : undefined;
-  const nonceIdx = Array.isArray(args) ? args.indexOf("--canary-nonce") : -1;
-  const canaryNonce =
-    canaryTraceFile &&
-    nonceIdx >= 0 &&
-    typeof args[nonceIdx + 1] === "string" &&
-    args[nonceIdx + 1].length > 0
-      ? args[nonceIdx + 1]
-      : undefined;
+  let canaryTraceFile;
+  let rawCanaryNonce;
+  if (Array.isArray(args)) {
+    for (let i = 0; i < args.length; i += 1) {
+      if (
+        args[i] === "--canary-trace-file" &&
+        typeof args[i + 1] === "string" &&
+        !args[i + 1].startsWith("-") &&
+        isAbsolute(args[i + 1])
+      ) {
+        canaryTraceFile = args[i + 1];
+        i += 1;
+      } else if (
+        args[i] === "--canary-nonce" &&
+        typeof args[i + 1] === "string" &&
+        args[i + 1].length > 0 &&
+        !args[i + 1].startsWith("-")
+      ) {
+        rawCanaryNonce = args[i + 1];
+        i += 1;
+      }
+    }
+  }
+  const canaryNonce = canaryTraceFile ? rawCanaryNonce : undefined;
   const runtime = prepareRuntime({
     paths,
     home: env.HOME,

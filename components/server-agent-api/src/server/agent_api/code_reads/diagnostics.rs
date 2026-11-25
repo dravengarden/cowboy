@@ -361,72 +361,66 @@ async fn read_with_acquisition(
         .filter(|trust| trust.scope() == observed.session());
     let mut files = Vec::with_capacity(paths.len());
     let conn_epoch = observed.conn_epoch();
+    const MAX_ALIAS_REOBSERVES: usize = 2;
     for path in paths {
-        // Hold the shared per-(SessionCodeScope, path) lock from observation
-        // through authorized baseline commit so delayed public reads cannot
-        // overwrite newer R4 captures (H-Ctrl-4).
-        let lock = super::baselines::file_lock(observed.session(), &path);
-        let _file_guard = lock.lock().await;
-        if trust
-            .as_ref()
-            .is_none_or(|trust| !trust.current(&state.hub))
-        {
-            files.push(json!({"path":path,"state":"restricted"}));
-            continue;
-        }
-        let (reply, acquired) = if acquire {
-            observe(
-                state,
-                observed,
-                &path,
-                trust.as_ref().expect("admitted trust"),
-            )
-            .await
-        } else {
-            (
-                observe_open_buffer(&state.code, observed, &path).await,
-                false,
-            )
-        };
-        let mut built = build_observed_file(&path, reply, acquired, conn_epoch, acquire, false);
-        let canonical = built.canonical_path.clone().unwrap_or_else(|| path.clone());
-        // R3-M3: If caller passed an in-worktree symlink alias whose canonical
-        // buffer path differs, acquire the canonical per-file lock and RE-OBSERVE
-        // under that lock before recording any baseline so a delayed alias
-        // snapshot can never overwrite a newer canonical baseline.
-        let _canonical_guard = if canonical != path {
-            drop(_file_guard);
-            let canonical_lock = super::baselines::file_lock(observed.session(), &canonical);
-            let guard = canonical_lock.lock_owned().await;
+        // Hold the shared per-(SessionCodeScope, canonical_path) lock from
+        // observation through authorized baseline commit so delayed public
+        // reads cannot overwrite newer R4 captures (H-Ctrl-4, R3-M3, R4-M2).
+        let mut lock_key = path.clone();
+        let mut file_guard = super::baselines::file_lock(observed.session(), &lock_key)
+            .lock_owned()
+            .await;
+        let mut built;
+        let mut alias_reobserves = 0usize;
+        loop {
             if trust
                 .as_ref()
                 .is_none_or(|trust| !trust.current(&state.hub))
             {
-                files.push(json!({"path":path,"state":"restricted"}));
-                continue;
+                built = ObservedFile {
+                    file: json!({"path":path,"state":"restricted"}),
+                    canonical_path: None,
+                    pending: None,
+                };
+                break;
             }
-            let (re_reply, re_acquired) = if acquire {
+            let (reply, acquired) = if acquire {
                 observe(
                     state,
                     observed,
-                    &canonical,
+                    &path,
                     trust.as_ref().expect("admitted trust"),
                 )
                 .await
             } else {
                 (
-                    observe_open_buffer(&state.code, observed, &canonical).await,
+                    observe_open_buffer(&state.code, observed, &path).await,
                     false,
                 )
             };
-            built = build_observed_file(&path, re_reply, re_acquired, conn_epoch, acquire, false);
-            if built.canonical_path.as_deref() != Some(canonical.as_str()) {
-                built.pending = None;
+            built = build_observed_file(&path, reply, acquired, conn_epoch, acquire, false);
+            let canonical = built.canonical_path.clone().unwrap_or_else(|| path.clone());
+            if canonical == lock_key {
+                break;
             }
-            Some(guard)
-        } else {
-            None
-        };
+            if alias_reobserves >= MAX_ALIAS_REOBSERVES {
+                // R4-M2: Symlink target kept moving across bounded re-queries;
+                // refuse stale target data and commit no baseline.
+                built = ObservedFile {
+                    file: json!({"path":path,"state":"unavailable"}),
+                    canonical_path: None,
+                    pending: None,
+                };
+                break;
+            }
+            alias_reobserves += 1;
+            drop(file_guard);
+            lock_key = canonical;
+            file_guard = super::baselines::file_lock(observed.session(), &lock_key)
+                .lock_owned()
+                .await;
+        }
+        let _guard = file_guard;
         if trust
             .as_ref()
             .is_none_or(|trust| !trust.current(&state.hub))
@@ -436,7 +430,7 @@ async fn read_with_acquisition(
         }
         if let Some((pending, diagnostics)) = built.pending.take() {
             built.file["comparison"] =
-                super::baselines::record(observed.session(), &canonical, pending, &diagnostics);
+                super::baselines::record(observed.session(), &lock_key, pending, &diagnostics);
         }
         files.push(built.file);
     }

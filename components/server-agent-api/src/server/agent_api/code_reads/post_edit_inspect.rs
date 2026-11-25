@@ -35,8 +35,6 @@ use crate::post_edit_inspect::{
 
 const POST_EDIT_TARGET_CONCURRENCY: usize = 4;
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
-/// Hard Zed adapter exchange timeout on the workspace Machine (`zed_session::EXCHANGE_TIMEOUT`).
-const ADAPTER_EXCHANGE_BOUND: Duration = Duration::from_secs(35);
 
 static TARGET_SLOTS: LazyLock<Mutex<HashMap<String, Arc<Semaphore>>>> =
     LazyLock::new(Mutex::default);
@@ -250,6 +248,14 @@ async fn resolve_and_authorize_initial(
     let CodeReadScope::Session(observed) = scope else {
         return Err("unavailable");
     };
+    // R4-H1: Require a target workspace Machine that registered post-edit
+    // support (enforcing Machine-owned `"zed_post_edit"` concurrency slots).
+    if !observed
+        .connection()
+        .is_some_and(machine_post_edit::supports_connection)
+    {
+        return Err("unsupported");
+    }
     let Some(trust) = state
         .hub
         .observe_language_server_trust(&request.session_id)
@@ -288,6 +294,23 @@ fn is_changed(reply: &anyhow::Result<ZedAdapterResponse>) -> bool {
             ..
         })
     )
+}
+
+fn is_not_open(reply: &anyhow::Result<ZedAdapterResponse>) -> bool {
+    matches!(reply, Err(error) if error.to_string().contains("not open"))
+}
+
+fn is_post_edit_capacity(reply: &anyhow::Result<ZedAdapterResponse>) -> bool {
+    matches!(reply, Err(error) if error.to_string().contains("post_edit_capacity"))
+}
+
+fn map_acquire_error(reason: &'static str, cold_open: bool) -> &'static str {
+    match reason {
+        "restricted" => "restricted",
+        "budget" | "capacity" => "capacity",
+        _ if cold_open => "not_open",
+        _ => "unavailable",
+    }
 }
 
 /// M9: Analysis is settled ONLY when source matches disk AND every active
@@ -456,7 +479,7 @@ async fn run_inspect_fenced(
     ctx: AuthorizedContext,
     mut caller_gone: watch::Receiver<bool>,
     deadline: Instant,
-    target_permit: tokio::sync::OwnedSemaphorePermit,
+    _target_permit: tokio::sync::OwnedSemaphorePermit,
 ) -> PostEditInspectReply {
     let lock = super::baselines::file_lock(ctx.observed.session(), &request.path);
     // M7: Race file-lock wait against caller disconnect so queued disconnected
@@ -484,7 +507,6 @@ async fn run_inspect_fenced(
         return refused_reply(&request, reason);
     }
 
-    let mut last_adapter_dispatch: Option<Instant> = None;
     let (reply, acquired) = match observe_target_file(
         &state,
         &target.connection,
@@ -494,28 +516,13 @@ async fn run_inspect_fenced(
         &ctx.trust,
         &mut caller_gone,
         deadline,
-        &mut last_adapter_dispatch,
     )
     .await
     {
         Ok(pair) => pair,
-        Err(reason) => {
-            retain_permit_on_workspace_disconnect(
-                &state,
-                &ctx.observed,
-                last_adapter_dispatch,
-                target_permit,
-            );
-            return refused_reply(&request, reason);
-        }
+        Err(reason) => return refused_reply(&request, reason),
     };
     if reply.is_err() && !session::current(&state.hub, &state.machine_control, &ctx.observed) {
-        retain_permit_on_workspace_disconnect(
-            &state,
-            &ctx.observed,
-            last_adapter_dispatch,
-            target_permit,
-        );
         return refused_reply(&request, "unavailable");
     }
 
@@ -582,29 +589,6 @@ async fn run_inspect_fenced(
     }
 }
 
-/// R3-H1: In split execution, track target adapter settlement against the
-/// workspace Machine's connection in `observed` (not the requesting runtime
-/// Machine) and hold `target_permit` until the adapter's own 35 s exchange
-/// bound if the workspace connection dropped while an adapter call was in flight.
-fn retain_permit_on_workspace_disconnect(
-    state: &AppState,
-    observed: &SessionReadScope,
-    last_adapter_dispatch: Option<Instant>,
-    target_permit: tokio::sync::OwnedSemaphorePermit,
-) {
-    if let Some(dispatched_at) = last_adapter_dispatch
-        && !session::current(&state.hub, &state.machine_control, observed)
-    {
-        let settle_until = dispatched_at + ADAPTER_EXCHANGE_BOUND;
-        if Instant::now() < settle_until {
-            tokio::spawn(async move {
-                let _permit = target_permit;
-                tokio::time::sleep_until(tokio::time::Instant::from_std(settle_until)).await;
-            });
-        }
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 async fn observe_target_file(
     state: &AppState,
@@ -615,34 +599,17 @@ async fn observe_target_file(
     trust: &LanguageServerTrust,
     caller_gone: &mut watch::Receiver<bool>,
     deadline: Instant,
-    last_adapter_dispatch: &mut Option<Instant>,
 ) -> Result<(anyhow::Result<ZedAdapterResponse>, bool), &'static str> {
-    *last_adapter_dispatch = Some(Instant::now());
-    let first = language::observe_open_buffer(&state.code, observed, &request.path).await;
-    let not_open = matches!(&first, Err(error) if error.to_string().contains("not open"));
-    if !not_open {
-        // M-Ctrl-10 & M9: An already-open buffer that is NOT Changed needs no
-        // acquisition lease; if its analysis is still Stale/Unknown, keep fenced
-        // polling until `DocumentCurrent` or deadline.
-        if !is_changed(&first) {
-            if can_advance_analysis(&first) && Instant::now() < deadline {
-                let settled = poll_until_current(
-                    state,
-                    runtime_connection,
-                    runtime_machine_id,
-                    request,
-                    observed,
-                    trust,
-                    first,
-                    caller_gone,
-                    deadline,
-                    last_adapter_dispatch,
-                )
-                .await?;
-                return Ok((settled, false));
-            }
-            return Ok((first, false));
-        }
+    let mut latest =
+        language::observe_open_buffer_post_edit(&state.code, observed, &request.path).await;
+    if is_post_edit_capacity(&latest) {
+        return Err("capacity");
+    }
+    let mut acquired = false;
+    let mut refreshed_mirror = false;
+
+    if is_not_open(&latest) {
+        // Cold acquire path: authorize and check >= 500 ms remaining AFTER async auth (R3-M14).
         authorize_step(
             state,
             runtime_connection,
@@ -655,15 +622,12 @@ async fn observe_target_file(
         )
         .await?;
         if remaining_ms_until(deadline) < MIN_POST_EDIT_COLD_START_MS {
-            return Ok((first, false));
+            return Err("timeout");
         }
-        *last_adapter_dispatch = Some(Instant::now());
-        if super::acquire::acquire_on_scope(state, observed, &request.path, trust)
+        super::acquire::acquire_on_scope(state, observed, &request.path, trust)
             .await
-            .is_err()
-        {
-            return Ok((first, false));
-        }
+            .map_err(|reason| map_acquire_error(reason, true))?;
+        acquired = true;
         authorize_step(
             state,
             runtime_connection,
@@ -675,136 +639,72 @@ async fn observe_target_file(
             deadline,
         )
         .await?;
-        if remaining_ms_until(deadline) < MIN_POST_EDIT_COLD_START_MS {
-            return Ok((first, false));
+        latest =
+            language::observe_open_buffer_post_edit(&state.code, observed, &request.path).await;
+        if is_post_edit_capacity(&latest) {
+            return Err("capacity");
         }
-        let refreshed = refresh_with_fence(
-            state,
-            runtime_connection,
-            runtime_machine_id,
-            request,
-            observed,
-            trust,
-            first,
-            caller_gone,
-            deadline,
-            last_adapter_dispatch,
-        )
-        .await?;
-        return Ok((refreshed, false));
     }
 
-    // Cold acquire path: authorize and check >= 500 ms remaining AFTER async auth (R3-M14).
-    authorize_step(
-        state,
-        runtime_connection,
-        runtime_machine_id,
-        request,
-        observed,
-        trust,
-        caller_gone,
-        deadline,
-    )
-    .await?;
-    if remaining_ms_until(deadline) < MIN_POST_EDIT_COLD_START_MS {
-        return Err("timeout");
-    }
-    *last_adapter_dispatch = Some(Instant::now());
-    if let Err(reason) =
-        super::acquire::acquire_on_scope(state, observed, &request.path, trust).await
-    {
-        return match reason {
-            "restricted" => Err("restricted"),
-            "budget" => Err("capacity"),
-            _ => Err("not_open"),
-        };
-    }
-
+    // Unified fenced advancement loop covering already-open, refreshed, and
+    // cold-acquired buffers (R4-H2, R4-M3, R4-M4).
     loop {
-        authorize_step(
-            state,
-            runtime_connection,
-            runtime_machine_id,
-            request,
-            observed,
-            trust,
-            caller_gone,
-            deadline,
-        )
-        .await?;
-        *last_adapter_dispatch = Some(Instant::now());
-        let reply = language::observe_open_buffer(&state.code, observed, &request.path).await;
-        if is_document_current(&reply) || reply.is_err() || Instant::now() >= deadline {
-            return Ok((reply, true));
+        if !acquired && !refreshed_mirror && is_changed(&latest) {
+            authorize_step(
+                state,
+                runtime_connection,
+                runtime_machine_id,
+                request,
+                observed,
+                trust,
+                caller_gone,
+                deadline,
+            )
+            .await?;
+            if remaining_ms_until(deadline) < MIN_POST_EDIT_COLD_START_MS {
+                return Ok((latest, acquired));
+            }
+            // R4-H2: Propagate pre-refresh acquisition failures instead of
+            // masking them with an earlier Changed observation.
+            super::acquire::acquire_on_scope(state, observed, &request.path, trust)
+                .await
+                .map_err(|reason| map_acquire_error(reason, false))?;
+            authorize_step(
+                state,
+                runtime_connection,
+                runtime_machine_id,
+                request,
+                observed,
+                trust,
+                caller_gone,
+                deadline,
+            )
+            .await?;
+            if remaining_ms_until(deadline) < MIN_POST_EDIT_COLD_START_MS {
+                return Ok((latest, acquired));
+            }
+            refreshed_mirror = true;
+            let query = language::Query::RefreshedLanguage {
+                refresh: language::AgentOwned::AgentOwned,
+            };
+            // R4-M4: Keep the actual refresh outcome instead of substituting an
+            // earlier stale observation on adapter error.
+            latest =
+                language::query_open_buffer_post_edit(&state.code, observed, &request.path, query)
+                    .await;
+            if is_post_edit_capacity(&latest) {
+                return Err("capacity");
+            }
+            continue;
         }
-        let sleep_for = POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now()));
-        if sleep_for.is_zero() {
-            return Ok((reply, true));
-        }
-        sleep_fenced(sleep_for, caller_gone).await?;
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn refresh_with_fence(
-    state: &AppState,
-    runtime_connection: &ConnectionToken,
-    runtime_machine_id: &str,
-    request: &PostEditInspectRequest,
-    observed: &SessionReadScope,
-    trust: &LanguageServerTrust,
-    original: anyhow::Result<ZedAdapterResponse>,
-    caller_gone: &mut watch::Receiver<bool>,
-    deadline: Instant,
-    last_adapter_dispatch: &mut Option<Instant>,
-) -> Result<anyhow::Result<ZedAdapterResponse>, &'static str> {
-    let query = language::Query::RefreshedLanguage {
-        refresh: language::AgentOwned::AgentOwned,
-    };
-    *last_adapter_dispatch = Some(Instant::now());
-    let reply = language::query_open_buffer(&state.code, observed, &request.path, query).await;
-    // R3-M5: Always feed the refreshed/original observation through the unified
-    // fenced polling loop so stale/unavailable observations continue polling
-    // even when a reload was unnecessary.
-    let seed = if reply.is_ok() { reply } else { original };
-    poll_until_current(
-        state,
-        runtime_connection,
-        runtime_machine_id,
-        request,
-        observed,
-        trust,
-        seed,
-        caller_gone,
-        deadline,
-        last_adapter_dispatch,
-    )
-    .await
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn poll_until_current(
-    state: &AppState,
-    runtime_connection: &ConnectionToken,
-    runtime_machine_id: &str,
-    request: &PostEditInspectRequest,
-    observed: &SessionReadScope,
-    trust: &LanguageServerTrust,
-    initial: anyhow::Result<ZedAdapterResponse>,
-    caller_gone: &mut watch::Receiver<bool>,
-    deadline: Instant,
-    last_adapter_dispatch: &mut Option<Instant>,
-) -> Result<anyhow::Result<ZedAdapterResponse>, &'static str> {
-    let mut latest = initial;
-    loop {
         if !can_advance_analysis(&latest) || Instant::now() >= deadline {
-            return Ok(latest);
+            return Ok((latest, acquired));
         }
         let sleep_for = POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now()));
         if sleep_for.is_zero() {
-            return Ok(latest);
+            return Ok((latest, acquired));
         }
-        // H-Ctrl-3: Sleep FIRST (fenced on caller liveness), THEN run authorize_step
+        // Sleep FIRST (fenced on caller liveness), THEN run authorize_step
         // immediately before issuing the next observe_open_buffer read.
         sleep_fenced(sleep_for, caller_gone).await?;
         authorize_step(
@@ -818,8 +718,11 @@ async fn poll_until_current(
             deadline,
         )
         .await?;
-        *last_adapter_dispatch = Some(Instant::now());
-        latest = language::observe_open_buffer(&state.code, observed, &request.path).await;
+        latest =
+            language::observe_open_buffer_post_edit(&state.code, observed, &request.path).await;
+        if is_post_edit_capacity(&latest) {
+            return Err("capacity");
+        }
     }
 }
 
@@ -860,11 +763,53 @@ mod tests {
         let found = machine_post_edit::lookup(&tok).expect("registered token must resolve");
         assert_eq!(found.machine_id, "m-runtime");
         assert!(found.connection.same(&conn));
+        assert!(machine_post_edit::supports_connection(&conn));
+        let other = crate::machine_control::ConnectionToken::for_test("m-runtime", "ep-2");
+        assert!(!machine_post_edit::supports_connection(&other));
         drop(reg);
         assert!(
             machine_post_edit::lookup(&tok).is_none(),
             "dropping primary WS registration must revoke post-edit token"
         );
+        assert!(!machine_post_edit::supports_connection(&conn));
+    }
+
+    #[test]
+    fn acquire_error_and_advancement_rules_match_r4_invariants() {
+        assert_eq!(map_acquire_error("restricted", false), "restricted");
+        assert_eq!(map_acquire_error("budget", false), "capacity");
+        assert_eq!(map_acquire_error("capacity", false), "capacity");
+        assert_eq!(map_acquire_error("unavailable", false), "unavailable");
+        assert_eq!(map_acquire_error("unavailable", true), "not_open");
+        assert!(is_post_edit_capacity(&Err(anyhow::anyhow!(
+            "post_edit_capacity"
+        ))));
+        let matching_empty = Ok(ZedAdapterResponse::BufferLanguage {
+            api_version: 1,
+            path: "a.txt".into(),
+            version: vec![],
+            diagnostics: vec![],
+            inlay_hints: vec![],
+            semantic_tokens: vec![],
+            analysis: Some(vec![]),
+            buffer_snapshot: None,
+            source_state: SourceState::Matching,
+            refresh: None,
+        });
+        assert!(!can_advance_analysis(&matching_empty));
+        let unavailable = Ok(ZedAdapterResponse::BufferLanguage {
+            api_version: 1,
+            path: "a.rs".into(),
+            version: vec![],
+            diagnostics: vec![],
+            inlay_hints: vec![],
+            semantic_tokens: vec![],
+            analysis: None,
+            buffer_snapshot: None,
+            source_state: SourceState::Unavailable,
+            refresh: None,
+        });
+        assert!(can_advance_analysis(&unavailable));
     }
 
     #[tokio::test]

@@ -140,6 +140,36 @@ pub async fn query_open_buffer(
     path: &str,
     query: Query,
 ) -> anyhow::Result<ZedAdapterResponse> {
+    query_open_buffer_adapter(state, session, path, query, "zed").await
+}
+
+/// Post-edit variant routed through the workspace Machine's bounded
+/// `"zed_post_edit"` concurrency slots (R4-H1).
+pub async fn observe_open_buffer_post_edit(
+    state: &crate::server::AppState,
+    session: &crate::machine_control::SessionReadScope,
+    path: &str,
+) -> anyhow::Result<ZedAdapterResponse> {
+    query_open_buffer_adapter(state, session, path, Query::Language, "zed_post_edit").await
+}
+
+/// Post-edit variant of `query_open_buffer` routed through `"zed_post_edit"`.
+pub async fn query_open_buffer_post_edit(
+    state: &crate::server::AppState,
+    session: &crate::machine_control::SessionReadScope,
+    path: &str,
+    query: Query,
+) -> anyhow::Result<ZedAdapterResponse> {
+    query_open_buffer_adapter(state, session, path, query, "zed_post_edit").await
+}
+
+async fn query_open_buffer_adapter(
+    state: &crate::server::AppState,
+    session: &crate::machine_control::SessionReadScope,
+    path: &str,
+    query: Query,
+    adapter: &str,
+) -> anyhow::Result<ZedAdapterResponse> {
     let observed = session.session();
     let (worktree, path) = zed_language_target(observed.machine_id(), observed.cwd(), path)
         .filter(|(worktree, _)| {
@@ -154,11 +184,12 @@ pub async fn query_open_buffer(
         path: &path,
         query,
     })?;
-    super::session::adapter_request(
+    super::session::adapter_request_named(
         &state.hub,
         &state.machine_control,
         state.zed_adapter_socket.as_deref(),
         session,
+        adapter,
         request,
     )
     .await

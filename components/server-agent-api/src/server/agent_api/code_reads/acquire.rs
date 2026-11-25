@@ -265,6 +265,16 @@ async fn acquire_inner(
             .await
         }
     };
+    if let Err(error) = &opened
+        && error.to_string().contains("post_edit_capacity")
+    {
+        // Refused on the workspace Machine before entering CodeRuntimeHost:
+        // no native open or side effect occurred.
+        if !refresh_only {
+            opening.possibly_open = false;
+        }
+        return Err("capacity");
+    }
     if refresh_only {
         if matches!(&opened, Ok(ZedAdapterResponse::AgentBufferRefreshed { lease_id, .. }) if lease_id == &lease)
         {
