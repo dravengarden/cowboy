@@ -88,6 +88,19 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
+Component release 3.151.0 records provider-runtime 1.3.34, whose
+`cowboy-antigravity-acp` 1.0.28 enforces plan mode directly at facade dispatch
+([design](antigravity-parity-round-2.md#r3-plan-mode-enforced-at-dispatch)):
+only confirmed `default`, `accept-edits`, and `auto` allow unrestricted
+dispatch; in `plan`, `switching`, unknown, or unrecognized modes, `WriteFile`,
+`EditFile`, and `Subagent` are refused at both permission and dispatch, reads
+and `UpdatePlan`/`StopCommand`/`StopSubagent` run without prompting, and
+`RunCommand` and extension tools request single-use owner approval directly
+from `Facade.answerOnce` with the full untruncated payload bound 1-to-1 to
+that invocation under incarnation-scoped worker permission IDs. Antigravity
+0.2.38 pins it; the other six Providers pinning provider-runtime advance
+one patch version.
+
 Component release 3.149.0 records provider-runtime 1.3.32, whose
 `cowboy-antigravity-acp` 1.0.27 delivers both:
 
