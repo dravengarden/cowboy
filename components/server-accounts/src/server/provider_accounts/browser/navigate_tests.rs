@@ -307,7 +307,7 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
         OWNER,
         (&grok, Authority::Launch),
         ("hawk", &client_instance),
-        Some(&identity_before),
+        IdentityFence::Expected(&identity_before),
         |instance| Command::Navigate {
             instance,
             url: "https://grok.com/?_s=usage".into(),
@@ -325,7 +325,7 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
         OWNER,
         (&grok, Authority::Launch),
         ("hawk", &client_instance),
-        Some("own"),
+        IdentityFence::Expected("own"),
         |instance| Command::Navigate {
             instance,
             url: "https://grok.com/?_s=usage".into(),
@@ -352,7 +352,7 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
                 OWNER,
                 (&grok, Authority::Launch),
                 ("hawk", &client_instance),
-                Some(&expected),
+                IdentityFence::Expected(&expected),
                 |instance| Command::Navigate {
                     instance,
                     url: "https://grok.com/?_s=usage".into(),
@@ -386,8 +386,20 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
     assert_eq!(instance, running_share);
     assert_eq!(url, "https://grok.com/?_s=usage");
     assert_eq!(attachment_id.as_deref(), Some("att-1"));
-    // The owner's share fence remains held while Navigate is in flight.
-    assert!(fence.try_lock().is_err());
+    // Share lock is released right after enqueue so revocation never blocks for
+    // 20s, while the durable navigation fence keeps share edits blocked.
+    assert!(fence.try_lock().is_ok());
+    assert!(
+        state
+            .browsers
+            .has_pending_navigation(OWNER, &running_share.account_id)
+    );
+    assert!(
+        store
+            .has_pending_browser_navigation(OWNER, &running_share.account_id)
+            .await
+            .unwrap()
+    );
 
     state.machine_control.record_remote(
         &connection,
@@ -416,7 +428,7 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
                 OWNER,
                 (&grok, Authority::Launch),
                 ("hawk", &client_instance),
-                None,
+                IdentityFence::None,
                 |instance| Command::Navigate {
                     instance,
                     url: "https://grok.com/?_s=usage".into(),
@@ -562,7 +574,7 @@ async fn timed_out_navigate_fences_share_membership_until_machine_settles() {
         OWNER,
         (&grok, Authority::Launch),
         ("hawk", &client_instance),
-        Some(&identity_fox),
+        IdentityFence::Expected(&identity_fox),
         |instance| Command::Navigate {
             instance,
             url: "https://grok.com/?_s=usage".into(),
@@ -655,7 +667,7 @@ async fn timed_out_navigate_fences_share_membership_until_machine_settles() {
         OWNER,
         (&grok, Authority::Launch),
         ("hawk", &client_instance),
-        Some(&identity_pika),
+        IdentityFence::Expected(&identity_pika),
         |instance| Command::Navigate {
             instance,
             url: "https://grok.com/?_s=usage".into(),
@@ -830,7 +842,7 @@ async fn disconnected_navigate_stays_fenced_and_reconciles_after_reconnect() {
                 OWNER,
                 (&grok, Authority::Launch),
                 ("hawk", &client_3),
-                Some(&expected),
+                IdentityFence::Expected(&expected),
                 |instance| Command::Navigate {
                     instance,
                     url: "https://grok.com/?_s=usage".into(),
@@ -1015,7 +1027,7 @@ async fn disconnected_navigate_stays_fenced_and_reconciles_after_reconnect() {
                 OWNER,
                 (&grok, Authority::Launch),
                 ("hawk", &client_4),
-                Some(&identity_pika),
+                IdentityFence::Expected(&identity_pika),
                 |instance| Command::Navigate {
                     instance,
                     url: "https://grok.com/?_s=usage".into(),
@@ -1160,7 +1172,7 @@ async fn unrelated_hibernated_and_stopping_events_do_not_clear_pending_navigatio
         OWNER,
         (&grok, Authority::Launch),
         ("hawk", &running_3),
-        Some("own"),
+        IdentityFence::Expected("own"),
         |instance| Command::Navigate {
             instance,
             url: "https://grok.com/?_s=usage".into(),
@@ -1389,7 +1401,7 @@ async fn revocation_starts_immediately_and_defers_share_leave_while_navigation_p
         OWNER,
         (&grok, Authority::Launch),
         ("hawk", &client_instance),
-        Some(&identity_before),
+        IdentityFence::Expected(&identity_before),
         |instance| Command::Navigate {
             instance,
             url: "https://grok.com/?_s=usage".into(),
@@ -1455,6 +1467,60 @@ async fn revocation_starts_immediately_and_defers_share_leave_while_navigation_p
             .any(|item| item.kind == "browser_share_leave" && item.target == grok.as_str())
     );
 
+    // Finding 3: stale shared-profile reset from another member (Pika) is
+    // refused while revocation leave is deferred.
+    store
+        .admit_shared_browser_placement(
+            OWNER,
+            (&Member::account(codex.clone()), &share_id),
+            "hawk",
+            "b-heron",
+            1,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        reset(&state, OWNER, &codex, ("hawk", 1), &identity_before).await,
+        Err("browser_navigation_pending")
+    );
+
+    // Finding 6: revoking Fox cannot hibernate (Authority::Stop) the share's browser.
+    assert_eq!(
+        instance_command(
+            &state,
+            OWNER,
+            (&grok, Authority::Stop),
+            ("hawk", &client_instance),
+            IdentityFence::None,
+            |instance| Command::Hibernate { instance },
+            Duration::from_secs(5),
+        )
+        .await,
+        Err("browser_not_running")
+    );
+    assert!(rx.try_recv().is_err());
+
+    // Finding 8: while deferred, Plan serializes `browser_share_leave_pending`
+    // so an older rolled-back Controller with `deny_unknown_fields` fails closed.
+    let pending_receipt = store
+        .provider_account_receipt(OWNER, "revoke-fox")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        pending_receipt
+            .revocation
+            .as_ref()
+            .unwrap()
+            .browser_share_leave_pending
+    );
+    assert!(
+        serde_json::to_string(&pending_receipt)
+            .unwrap()
+            .contains("browser_share_leave_pending")
+    );
+
     // Once the Machine settles the navigation, the deferred share leave commits
     // and bumps the share revision, allowing revocation completion.
     state.machine_control.record_remote(
@@ -1484,10 +1550,714 @@ async fn revocation_starts_immediately_and_defers_share_leave_while_navigation_p
             .binding(&share_id, "xai")
             .is_some_and(|b| b.member == Member::account(grok.clone()))
     );
+    let cleared_receipt = store
+        .provider_account_receipt(OWNER, "revoke-fox")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !cleared_receipt
+            .revocation
+            .as_ref()
+            .unwrap()
+            .browser_share_leave_pending
+    );
+    assert!(
+        !serde_json::to_string(&cleared_receipt)
+            .unwrap()
+            .contains("browser_share_leave_pending")
+    );
     assert!(
         store
             .complete_provider_revocation(OWNER, "revoke-fox")
             .await
             .unwrap()
+    );
+}
+
+async fn state_with_store(root: &std::path::Path, store: Store) -> Arc<AccountsState> {
+    let config_path = root.join("service.toml");
+    std::fs::write(
+        &config_path,
+        "schema = 1\n[accounts]\nmachine_browser = true\n",
+    )
+    .unwrap();
+    let config = crate::config::load(crate::config::Scope::Service, &config_path).unwrap();
+    let service_config = crate::config::Handle::new(config);
+    let hub = Hub::new();
+    let runtime_router = RuntimeRouter::new();
+    let supervisor = Arc::new(Supervisor::new(
+        hub.clone(),
+        root.to_path_buf(),
+        0,
+        Arc::clone(&runtime_router),
+    ));
+    let machine_control = Arc::new(MachineControl::default());
+    let plugin_catalog = Arc::new(crate::plugin_catalog::PluginCatalog::open(root, None).unwrap());
+    let provider_catalog = Arc::new(
+        crate::provider_catalog::ProviderCatalog::open(root, Arc::clone(&plugin_catalog)).unwrap(),
+    );
+    let provider_auth = Arc::new(
+        crate::provider_service::ProviderAuthService::open(&root.join("provider-auth")).unwrap(),
+    );
+    let usage = UsageService::with_plugin_catalog(
+        Some(store.clone()),
+        None,
+        Arc::clone(&plugin_catalog),
+        Arc::clone(&machine_control),
+    )
+    .with_config(service_config.clone());
+    let (_shutdown_tx, shutdown) = watch::channel(false);
+    Arc::new(AccountsState {
+        service_id: "svc-test".into(),
+        service_config_path: config_path,
+        service_config,
+        hub,
+        store: Some(store),
+        supervisor,
+        shutdown,
+        runtime_router,
+        machine_control,
+        browsers: coordinator::Coordinator::default(),
+        account_controls: Arc::default(),
+        plugin_catalog,
+        provider_catalog,
+        provider_auth,
+        provider_auth_sync: Arc::new(provider_auth_sync::Coordinator::default()),
+        provider_auth_executors: Arc::new(parking_lot::Mutex::new(HashMap::new())),
+        plugin_lifecycle_fences: PluginLifecycleFences::default(),
+        usage,
+        public_origins: Arc::new(Vec::new()),
+        product_auth_enabled: false,
+        device_access: Arc::new(crate::client_auth::DeviceAccessSessions::default()),
+        product_authentication: Arc::new(crate::auth_plugins::ProductAuthentication::test_default(
+            None,
+        )),
+    })
+}
+
+fn ipv4_cap() -> crate::machine_protocol::machine_browser::Capability {
+    crate::machine_protocol::machine_browser::Capability {
+        plugin_id: "machine-browser".into(),
+        plugin_version: "1.0.1".into(),
+        generation_digest: "digest".into(),
+        available: true,
+        reason: None,
+        max_instances: 2,
+        network: Some(crate::machine_protocol::machine_browser::BrowserNetwork::Ipv4OnlyV1),
+    }
+}
+
+#[tokio::test]
+async fn controller_restart_keeps_durable_navigation_fence_and_reconciles_without_url_replay() {
+    let root = tempfile::tempdir().unwrap();
+    let db_url = format!(
+        "sqlite://{}?mode=rwc",
+        root.path().join("restart.sqlite").display()
+    );
+    let store1 = Store::connect(&db_url, root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store1.migrate().await.unwrap();
+    let state1 = state_with_store(root.path(), store1.clone()).await;
+    install_observer(&state1);
+    let grok = add_account(&store1, "acc-grok", "grok", "Fox").await;
+    let codex = add_account(&store1, "acc-codex", "codex", "Pika").await;
+    let rev = store1.provider_accounts(OWNER).await.unwrap().revision;
+    let MutationResult::Applied(created) = store1
+        .mutate_browser_shares(
+            OWNER,
+            "share-create",
+            &Mutation {
+                expected_revision: rev,
+                change: Change::CreateBrowserShare {
+                    label: "Heron".into(),
+                },
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("share create");
+    };
+    let share_id = created.browser_share_id.clone().unwrap();
+    let MutationResult::Applied(joined_fox) = store1
+        .mutate_browser_shares(
+            OWNER,
+            "share-join-fox",
+            &Mutation {
+                expected_revision: created.registry.revision,
+                change: Change::SetBrowserShare {
+                    member: Member::account(grok.clone()),
+                    share_id: Some(share_id.clone()),
+                },
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("fox join");
+    };
+    let rev_fox = store1
+        .browser_shares(OWNER)
+        .await
+        .unwrap()
+        .share(&share_id)
+        .unwrap()
+        .revision;
+    let identity_fox = format!("share:{share_id}:{rev_fox}");
+    let share_account = share_key(OWNER, &share_id);
+    store1
+        .admit_shared_browser_placement(
+            OWNER,
+            (&Member::account(grok.clone()), &share_id),
+            "hawk",
+            "b-heron",
+            1,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    let (tx1, mut rx1) = mpsc::unbounded_channel();
+    let conn1 = state1.machine_control.install(
+        "hawk".into(),
+        "epoch-1".into(),
+        false,
+        crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+        tx1,
+    );
+    state1.browsers.connected(&conn1, Some(ipv4_cap()));
+    let running = InstanceRef {
+        account_id: share_account.clone(),
+        instance_id: "b-heron".into(),
+        incarnation: 3,
+    };
+    let observed = StateEvent {
+        request_id: None,
+        instance: running.clone(),
+        state: BrowserState::Attached,
+        reason: None,
+        geometry: None,
+        scale: None,
+        deadline_ms: None,
+        attachment_id: Some("att-1".into()),
+        snapshot_generation: None,
+        snapshot_at_ms: None,
+        profile_revision: Some(1),
+        unsaved_state_lost: false,
+        observed_at_ms: 100,
+    };
+    state1.browsers.observe(
+        &conn1,
+        &crate::machine_protocol::machine_browser::Event::State(observed.clone()),
+    );
+    let client_instance = InstanceRef {
+        account_id: grok.clone(),
+        instance_id: "b-heron".into(),
+        incarnation: 3,
+    };
+    assert_eq!(
+        instance_command(
+            &state1,
+            OWNER,
+            (&grok, Authority::Launch),
+            ("hawk", &client_instance),
+            IdentityFence::Expected(&identity_fox),
+            |instance| Command::Navigate {
+                instance,
+                url: "https://grok.com/?_s=usage".into(),
+                attachment_id: Some("att-1".into())
+            },
+            Duration::from_millis(20),
+        )
+        .await,
+        Err("browser_command_failed"),
+    );
+    assert!(rx1.try_recv().is_ok());
+
+    // Simulate full Controller restart with fresh empty Coordinator on the same DB.
+    drop(state1);
+    drop(store1);
+    let store2 = Store::connect(&db_url, root.path().join("artifacts"))
+        .await
+        .unwrap();
+    let state2 = state_with_store(root.path(), store2.clone()).await;
+    install_observer(&state2);
+
+    assert_eq!(
+        shares::update(
+            &state2,
+            OWNER,
+            "join-after-restart",
+            &Mutation {
+                expected_revision: joined_fox.registry.revision,
+                change: Change::SetBrowserShare {
+                    member: Member::account(codex.clone()),
+                    share_id: Some(share_id.clone())
+                },
+            }
+        )
+        .await,
+        Err("browser_navigation_pending"),
+    );
+    assert_eq!(
+        reset(&state2, OWNER, &grok, ("hawk", 1), &identity_fox).await,
+        Err("browser_navigation_pending")
+    );
+
+    // Machine connects to restarted Controller -> reconciles via Query + Hibernate (no URL replay).
+    let (tx2, mut rx2) = mpsc::unbounded_channel();
+    let conn2 = state2.machine_control.install(
+        "hawk".into(),
+        "epoch-2".into(),
+        false,
+        crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+        tx2,
+    );
+    state2.browsers.connected(&conn2, Some(ipv4_cap()));
+    let reconcile = tokio::spawn({
+        let state2 = Arc::clone(&state2);
+        async move { shares::reconcile_orphaned_navigations(&state2, Some("hawk")).await }
+    });
+    let MachineCommand::Browser {
+        request_id: q_req,
+        browser: Command::Query { account_id },
+    } = tokio::time::timeout(Duration::from_secs(2), rx2.recv())
+        .await
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("expected Command::Query");
+    };
+    assert_eq!(account_id, share_account);
+    state2.machine_control.record_remote(
+        &conn2,
+        MachineEvent::Browser {
+            browser: crate::machine_protocol::machine_browser::Event::State(StateEvent {
+                request_id: Some(q_req),
+                observed_at_ms: 200,
+                ..observed.clone()
+            }),
+        },
+    );
+    let MachineCommand::Browser {
+        request_id: h_req,
+        browser: Command::Hibernate { instance },
+    } = tokio::time::timeout(Duration::from_secs(2), rx2.recv())
+        .await
+        .unwrap()
+        .unwrap()
+    else {
+        panic!("expected Command::Hibernate");
+    };
+    assert_eq!(instance, running);
+    state2.machine_control.record_remote(
+        &conn2,
+        MachineEvent::Browser {
+            browser: crate::machine_protocol::machine_browser::Event::State(StateEvent {
+                request_id: Some(h_req),
+                state: BrowserState::Hibernated,
+                reason: Some(Reason::OwnerRequest),
+                observed_at_ms: 210,
+                ..observed
+            }),
+        },
+    );
+    reconcile.await.unwrap();
+    assert!(
+        !store2
+            .has_pending_browser_navigation(OWNER, &share_account)
+            .await
+            .unwrap()
+    );
+    assert!(
+        shares::update(
+            &state2,
+            OWNER,
+            "join-after-reconcile",
+            &Mutation {
+                expected_revision: joined_fox.registry.revision,
+                change: Change::SetBrowserShare {
+                    member: Member::account(codex),
+                    share_id: Some(share_id)
+                },
+            }
+        )
+        .await
+        .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn matching_stopping_reply_keeps_fence_until_confirmed_exit() {
+    let root = tempfile::tempdir().unwrap();
+    let (state, store) = fixture_state(root.path()).await;
+    install_observer(&state);
+    let grok = add_account(&store, "acc-grok", "grok", "Fox").await;
+    let codex = add_account(&store, "acc-codex", "codex", "Pika").await;
+    let rev = store.provider_accounts(OWNER).await.unwrap().revision;
+    let MutationResult::Applied(created) = store
+        .mutate_browser_shares(
+            OWNER,
+            "sc",
+            &Mutation {
+                expected_revision: rev,
+                change: Change::CreateBrowserShare {
+                    label: "Heron".into(),
+                },
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("sc");
+    };
+    let share_id = created.browser_share_id.clone().unwrap();
+    let MutationResult::Applied(joined_fox) = store
+        .mutate_browser_shares(
+            OWNER,
+            "jf",
+            &Mutation {
+                expected_revision: created.registry.revision,
+                change: Change::SetBrowserShare {
+                    member: Member::account(grok.clone()),
+                    share_id: Some(share_id.clone()),
+                },
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("jf");
+    };
+    let rev_fox = store
+        .browser_shares(OWNER)
+        .await
+        .unwrap()
+        .share(&share_id)
+        .unwrap()
+        .revision;
+    let identity_fox = format!("share:{share_id}:{rev_fox}");
+    let share_account = share_key(OWNER, &share_id);
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let conn = state.machine_control.install(
+        "hawk".into(),
+        "epoch-1".into(),
+        false,
+        crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+        tx,
+    );
+    state.browsers.connected(&conn, Some(ipv4_cap()));
+    let observed = StateEvent {
+        request_id: None,
+        instance: InstanceRef {
+            account_id: share_account.clone(),
+            instance_id: "b-heron".into(),
+            incarnation: 3,
+        },
+        state: BrowserState::Attached,
+        reason: None,
+        geometry: None,
+        scale: None,
+        deadline_ms: None,
+        attachment_id: Some("att-1".into()),
+        snapshot_generation: None,
+        snapshot_at_ms: None,
+        profile_revision: Some(1),
+        unsaved_state_lost: false,
+        observed_at_ms: 100,
+    };
+    state.browsers.observe(
+        &conn,
+        &crate::machine_protocol::machine_browser::Event::State(observed.clone()),
+    );
+    let client_instance = InstanceRef {
+        account_id: grok.clone(),
+        instance_id: "b-heron".into(),
+        incarnation: 3,
+    };
+    let nav = tokio::spawn({
+        let state = Arc::clone(&state);
+        let grok = grok.clone();
+        let expected = identity_fox.clone();
+        async move {
+            instance_command(
+                &state,
+                OWNER,
+                (&grok, Authority::Launch),
+                ("hawk", &client_instance),
+                IdentityFence::Expected(&expected),
+                |instance| Command::Navigate {
+                    instance,
+                    url: "https://grok.com/?_s=usage".into(),
+                    attachment_id: Some("att-1".into()),
+                },
+                Duration::from_secs(5),
+            )
+            .await
+        }
+    });
+    let MachineCommand::Browser { request_id, .. } =
+        tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap()
+    else {
+        panic!("expected Browser command");
+    };
+    // Matching request_id answering `Stopping` must NOT clear the fence!
+    state.machine_control.record_remote(
+        &conn,
+        MachineEvent::Browser {
+            browser: crate::machine_protocol::machine_browser::Event::State(StateEvent {
+                request_id: Some(request_id),
+                state: BrowserState::Stopping,
+                reason: Some(Reason::Failed),
+                observed_at_ms: 110,
+                ..observed.clone()
+            }),
+        },
+    );
+    assert!(nav.await.unwrap().is_ok());
+    assert!(state.browsers.has_pending_navigation(OWNER, &share_account));
+    assert!(
+        store
+            .has_pending_browser_navigation(OWNER, &share_account)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        shares::update(
+            &state,
+            OWNER,
+            "join-while-stopping",
+            &Mutation {
+                expected_revision: joined_fox.registry.revision,
+                change: Change::SetBrowserShare {
+                    member: Member::account(codex.clone()),
+                    share_id: Some(share_id.clone())
+                },
+            }
+        )
+        .await,
+        Err("browser_navigation_pending"),
+    );
+    // Confirmed exit clears both in-memory and durable fence.
+    state.machine_control.record_remote(
+        &conn,
+        MachineEvent::Browser {
+            browser: crate::machine_protocol::machine_browser::Event::State(StateEvent {
+                request_id: None,
+                state: BrowserState::Hibernated,
+                reason: Some(Reason::Failed),
+                observed_at_ms: 120,
+                ..observed
+            }),
+        },
+    );
+    assert!(
+        shares::update(
+            &state,
+            OWNER,
+            "join-after-exit",
+            &Mutation {
+                expected_revision: joined_fox.registry.revision,
+                change: Change::SetBrowserShare {
+                    member: Member::account(codex),
+                    share_id: Some(share_id)
+                },
+            }
+        )
+        .await
+        .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn cached_web_attachment_navigate_enforces_recorded_viewer_identity_and_fences_share() {
+    let root = tempfile::tempdir().unwrap();
+    let (state, store) = fixture_state(root.path()).await;
+    install_observer(&state);
+    let grok = add_account(&store, "acc-grok", "grok", "Fox").await;
+    let codex = add_account(&store, "acc-codex", "codex", "Pika").await;
+    let deepseek = add_account(&store, "acc-ds", "claude-deepseek", "Mole").await;
+    let rev = store.provider_accounts(OWNER).await.unwrap().revision;
+    let MutationResult::Applied(created) = store
+        .mutate_browser_shares(
+            OWNER,
+            "sc",
+            &Mutation {
+                expected_revision: rev,
+                change: Change::CreateBrowserShare {
+                    label: "Heron".into(),
+                },
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("sc");
+    };
+    let share_id = created.browser_share_id.clone().unwrap();
+    let MutationResult::Applied(joined_fox) = store
+        .mutate_browser_shares(
+            OWNER,
+            "jf",
+            &Mutation {
+                expected_revision: created.registry.revision,
+                change: Change::SetBrowserShare {
+                    member: Member::account(grok.clone()),
+                    share_id: Some(share_id.clone()),
+                },
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("jf");
+    };
+    let rev_before = store
+        .browser_shares(OWNER)
+        .await
+        .unwrap()
+        .share(&share_id)
+        .unwrap()
+        .revision;
+    let identity_before = format!("share:{share_id}:{rev_before}");
+    let share_account = share_key(OWNER, &share_id);
+
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let conn = state.machine_control.install(
+        "hawk".into(),
+        "epoch-1".into(),
+        false,
+        crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+        tx,
+    );
+    state.browsers.connected(&conn, Some(ipv4_cap()));
+    let observed = StateEvent {
+        request_id: None,
+        instance: InstanceRef {
+            account_id: share_account.clone(),
+            instance_id: "b-heron".into(),
+            incarnation: 3,
+        },
+        state: BrowserState::Attached,
+        reason: None,
+        geometry: None,
+        scale: None,
+        deadline_ms: None,
+        attachment_id: Some("att-1".into()),
+        snapshot_generation: None,
+        snapshot_at_ms: None,
+        profile_revision: Some(1),
+        unsaved_state_lost: false,
+        observed_at_ms: 100,
+    };
+    state.browsers.observe(
+        &conn,
+        &crate::machine_protocol::machine_browser::Event::State(observed),
+    );
+    let _v1 = state.browsers.register_viewer_with_identity(
+        (share_account.as_str(), OWNER, grok.as_str()),
+        "att-1",
+        3,
+        &conn,
+        identity_before,
+    );
+    let MutationResult::Applied(joined_pika) = store
+        .mutate_browser_shares(
+            OWNER,
+            "jp",
+            &Mutation {
+                expected_revision: joined_fox.registry.revision,
+                change: Change::SetBrowserShare {
+                    member: Member::account(codex),
+                    share_id: Some(share_id.clone()),
+                },
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("jp");
+    };
+    let rev_after = store
+        .browser_shares(OWNER)
+        .await
+        .unwrap()
+        .share(&share_id)
+        .unwrap()
+        .revision;
+    let identity_after = format!("share:{share_id}:{rev_after}");
+    let client_instance = InstanceRef {
+        account_id: grok.clone(),
+        instance_id: "b-heron".into(),
+        incarnation: 3,
+    };
+
+    // Cached Web bundle omits expected_browser, sends attachment_id -> refused on stale share rev.
+    assert_eq!(
+        instance_command(
+            &state,
+            OWNER,
+            (&grok, Authority::Launch),
+            ("hawk", &client_instance),
+            IdentityFence::Attachment("att-1"),
+            |instance| Command::Navigate {
+                instance,
+                url: "https://grok.com/?_s=usage".into(),
+                attachment_id: Some("att-1".into())
+            },
+            Duration::from_secs(5),
+        )
+        .await,
+        Err("browser_identity_changed"),
+    );
+    assert!(rx.try_recv().is_err());
+
+    // Current attachment dispatches AND engages the durable navigation fence.
+    let _v2 = state.browsers.register_viewer_with_identity(
+        (share_account.as_str(), OWNER, grok.as_str()),
+        "att-2",
+        3,
+        &conn,
+        identity_after,
+    );
+    assert_eq!(
+        instance_command(
+            &state,
+            OWNER,
+            (&grok, Authority::Launch),
+            ("hawk", &client_instance),
+            IdentityFence::Attachment("att-2"),
+            |instance| Command::Navigate {
+                instance,
+                url: "https://grok.com/?_s=usage".into(),
+                attachment_id: Some("att-2".into())
+            },
+            Duration::from_millis(20),
+        )
+        .await,
+        Err("browser_command_failed"),
+    );
+    assert!(rx.try_recv().is_ok());
+    assert_eq!(
+        shares::update(
+            &state,
+            OWNER,
+            "jm",
+            &Mutation {
+                expected_revision: joined_pika.registry.revision,
+                change: Change::SetBrowserShare {
+                    member: Member::account(deepseek),
+                    share_id: Some(share_id)
+                },
+            }
+        )
+        .await,
+        Err("browser_navigation_pending"),
     );
 }

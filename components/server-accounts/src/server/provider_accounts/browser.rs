@@ -205,7 +205,14 @@ async fn owned_account(
         None if legacy::retained(state, owner, account_id).await? => BrowserAccount::RetiredCard,
         None => return Err("account_unavailable"),
     };
-    let (key, share) = shares::resolve(state, owner, (account_id, &account), &registry).await?;
+    // A revoking account whose share-leave was deferred for a pending
+    // navigation keeps its membership row only to fence share edits; its own
+    // cleanup (`Authority::Stop`) never routes to the shared browser.
+    let (key, share) = if account.revoking() {
+        (account_id.clone(), None)
+    } else {
+        shares::resolve(state, owner, (account_id, &account), &registry).await?
+    };
     Ok(Resolved {
         owner: owner.to_owned(),
         id: account_id.clone(),
@@ -857,15 +864,6 @@ async fn dispatch_open(
     Ok(event)
 }
 
-/// An identity-bound request names the browser identity the member's card
-/// uses now, or is refused.
-fn expected_identity(expected: Option<&str>, resolved: &Resolved) -> Result<(), &'static str> {
-    match expected {
-        Some(expected) if expected != resolved.identity() => Err("browser_identity_changed"),
-        _ => Ok(()),
-    }
-}
-
 /// Whether an open whose member lost its access meanwhile stops what it
 /// started: only the member's own browser, and only while it runs. A share's
 /// browser serves its other members and is never stopped here.
@@ -913,7 +911,7 @@ pub async fn open_tab(
             key = resolved.key;
             continue;
         }
-        expected_identity(expected_browser, &resolved)?;
+        shares::expected_identity(expected_browser, &resolved)?;
         let gate = network::gate(state, &resolved).await?;
         let (machine_id, connection) =
             machine_for(state, owner, &resolved, (machine, gate.as_ref())).await?;
@@ -942,72 +940,76 @@ const OPEN_KEY_ATTEMPTS: usize = 3;
 /// the member's card was shown it and commanded on the browser key. A
 /// command that drives a share's browser (`Authority::Launch`) needs the
 /// share's gate on the connection it travels on; owner cleanup does not.
+pub use shares::{IdentityFence, expected_identity};
+
 pub async fn instance_command(
     state: &AppState,
     owner: &str,
     (account_id, authority): (&ProviderAccountId, Authority),
     (machine_id, instance): (&str, &InstanceRef),
-    expected_browser: Option<&str>,
+    identity_fence: IdentityFence<'_>,
     command: impl FnOnce(InstanceRef) -> Command,
     timeout: std::time::Duration,
 ) -> Result<Value, &'static str> {
-    // When bound to an observed browser identity (such as a link navigation),
-    // hold the owner's share fence across the identity check and Machine
-    // dispatch so no share membership change lands between them while the
-    // running instance and attachment stay valid.
-    let fence = expected_browser.map(|_| state.browsers.share_lock(owner));
-    let _fence = match &fence {
+    let fenced = !matches!(identity_fence, IdentityFence::None);
+    let fence = fenced.then(|| state.browsers.share_lock(owner));
+    let guard = match &fence {
         Some(lock) => Some(lock.lock().await),
         None => None,
     };
     let resolved = authorize(state, owner, account_id, authority).await?;
-    expected_identity(expected_browser, &resolved)?;
+    shares::verify_identity_fence(
+        state,
+        owner,
+        (account_id, machine_id),
+        &resolved,
+        identity_fence,
+    )?;
     let instance = resolved.inbound(instance)?;
     let observed = named_instance(state, &resolved.key, machine_id, &instance)?;
     if authority == Authority::Launch {
         network::admitted_on(state, &resolved, &observed.connection).await?;
     }
-    let tracked_instance = instance.clone();
     let command = command(instance);
-    let track_navigation =
-        expected_browser.is_some() && matches!(&command, Command::Navigate { .. });
+    let track_navigation = fenced && matches!(&command, Command::Navigate { .. });
     let request = request_id("browser");
     if let Command::Hibernate { instance } = &command {
         hibernate_sent(&observed.machine_id, instance, &request, "owner_request");
     }
     if track_navigation {
-        state.browsers.begin_navigation(
-            request.clone(),
-            owner,
-            resolved.key.clone(),
-            &observed.connection,
-            tracked_instance,
-            observed.event.observed_at_ms,
-        );
+        shares::begin_durable_navigation(state, owner, &resolved.key, &observed, &request).await?;
     }
-    let event = match state
-        .machine_control
-        .browser_command_checked(&observed.connection, request.clone(), command, timeout)
+    let (rx, _pending) =
+        match state
+            .machine_control
+            .begin_browser_command(&observed.connection, &request, command)
+        {
+            Ok(started) => started,
+            Err(error) => {
+                if track_navigation {
+                    shares::clear_durable_navigation(state, &request).await;
+                }
+                tracing::warn!(%error, "browser command failed before enqueue");
+                return Err("browser_command_failed");
+            }
+        };
+    drop(guard);
+    let event = match crate::machine_control::MachineControl::await_browser_command(rx, timeout)
         .await
     {
         Ok(event) => {
-            if track_navigation {
-                state.browsers.settle_navigation(&request);
+            if track_navigation && event.state != BrowserState::Stopping {
+                shares::clear_durable_navigation(state, &request).await;
             }
             event
         }
         Err(crate::machine_control::BrowserCommandError::Uncertain(error)) => {
-            tracing::warn!(
-                %error,
-                request_id = %request,
-                fenced = track_navigation,
-                "browser command outcome uncertain; keeping navigation fence until Machine settles"
-            );
+            tracing::warn!(%error, request_id = %request, fenced = track_navigation, "browser command outcome uncertain; keeping navigation fence");
             return Err("browser_command_failed");
         }
         Err(crate::machine_control::BrowserCommandError::Definite(error)) => {
             if track_navigation {
-                state.browsers.settle_navigation(&request);
+                shares::clear_durable_navigation(state, &request).await;
             }
             tracing::warn!(%error, "browser command failed");
             return Err("browser_command_failed");
@@ -1054,6 +1056,11 @@ pub async fn reset(
     let resolved = authorize(state, owner, account_id, Authority::Reset).await?;
     if resolved.identity() != expected_browser {
         return Err("browser_identity_changed");
+    }
+    if resolved.shared().is_some()
+        && shares::has_pending_navigation(state, owner, &resolved.key).await?
+    {
+        return Err("browser_navigation_pending");
     }
     let account_id = &resolved.key;
     let store = state.store.as_ref().ok_or("unavailable")?;
@@ -1345,13 +1352,22 @@ pub async fn http_navigate(
     if crate::machine_protocol::machine_browser::validate_url(&body.url).is_err() {
         return respond(Err("invalid_argument"));
     }
+    let attachment_fence = body.attachment_id.clone();
+    let identity_fence = match (
+        body.expected_browser.as_deref(),
+        attachment_fence.as_deref(),
+    ) {
+        (Some(expected), _) => IdentityFence::Expected(expected),
+        (None, Some(attachment_id)) => IdentityFence::Attachment(attachment_id),
+        (None, None) => IdentityFence::None,
+    };
     respond(
         instance_command(
             &state,
             &auth.principal.user_id,
             (&account, Authority::Launch),
             (&body.machine_id, &body.instance),
-            body.expected_browser.as_deref(),
+            identity_fence,
             |instance| Command::Navigate {
                 instance,
                 url: body.url,
@@ -1378,7 +1394,7 @@ pub async fn http_resize(
             &auth.principal.user_id,
             (&account, Authority::Launch),
             (&body.machine_id, &body.instance),
-            None,
+            IdentityFence::None,
             |instance| Command::Resize {
                 instance,
                 attachment_id: body.attachment_id,
@@ -1406,7 +1422,7 @@ pub async fn http_snapshot(
             &auth.principal.user_id,
             (&account, Authority::Launch),
             (&body.machine_id, &body.instance),
-            None,
+            IdentityFence::None,
             |instance| Command::Snapshot { instance },
             HIBERNATE_TIMEOUT,
         )
@@ -1429,7 +1445,7 @@ pub async fn http_hibernate(
             &auth.principal.user_id,
             (&account, Authority::Stop),
             (&body.machine_id, &body.instance),
-            None,
+            IdentityFence::None,
             |instance| Command::Hibernate { instance },
             HIBERNATE_TIMEOUT,
         )

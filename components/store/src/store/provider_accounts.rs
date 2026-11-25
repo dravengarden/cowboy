@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub mod browser_families;
+pub mod browser_pending_navigations;
 pub mod browser_placements;
 pub mod browser_shares;
 pub mod grants;
@@ -562,7 +563,23 @@ impl Store {
                 let browsers: Vec<(String, String)> = sqlx::query_as("SELECT machine_id,instance_id FROM browser_placements WHERE owner_user_id=$1 AND account_id=$2 ORDER BY machine_id")
                     .bind(owner).bind(account_id.as_str()).fetch_all(&mut *tx).await?;
                 let portable = registry.accounts.iter().any(|account| account.id == account_id && account.portable_credentials);
-                Some(revocation::Plan::capture(&account_id, logins, grants, sessions, browsers)?.with_portable(portable))
+                let deferred_share = if defer_share_leave {
+                    let count: i64 = sqlx::query_scalar(
+                        "SELECT COUNT(*) FROM provider_browser_share_members WHERE owner_user_id=$1 AND member=$2",
+                    )
+                    .bind(owner)
+                    .bind(browser_shares::Member::account(account_id.clone()).encode())
+                    .fetch_one(&mut *tx)
+                    .await?;
+                    count > 0
+                } else {
+                    false
+                };
+                Some(
+                    revocation::Plan::capture(&account_id, logins, grants, sessions, browsers)?
+                        .with_portable(portable)
+                        .with_deferred_browser_share_leave(deferred_share),
+                )
             } else { None };
             if matches!(input.change, Change::BeginRevocation { .. }) {
                 // Same transaction and owner lock as the admission fence. This

@@ -990,7 +990,37 @@ impl Store {
             .bind(&encoded)
             .execute(&mut *tx)
             .await?;
+            let ops: Vec<(String, String)> = sqlx::query_as(
+                "SELECT operation_id, result FROM provider_account_operations WHERE owner_user_id=$1",
+            )
+            .bind(owner)
+            .fetch_all(&mut *tx)
+            .await?;
+            let mut cleared_flag = false;
+            for (op_id, raw) in ops {
+                let Ok(mut receipt) = serde_json::from_str::<Receipt>(&raw) else {
+                    continue;
+                };
+                if receipt.account_id == *account_id
+                    && let Some(plan) = receipt.revocation.as_mut()
+                    && plan.browser_share_leave_pending
+                {
+                    plan.browser_share_leave_pending = false;
+                    sqlx::query(
+                        "UPDATE provider_account_operations SET result=$3                          WHERE owner_user_id=$1 AND operation_id=$2",
+                    )
+                    .bind(owner)
+                    .bind(&op_id)
+                    .bind(serde_json::to_string(&receipt)?)
+                    .execute(&mut *tx)
+                    .await?;
+                    cleared_flag = true;
+                }
+            }
             if deleted.rows_affected() == 0 {
+                if cleared_flag {
+                    tx.commit().await?;
+                }
                 return Ok(None);
             }
             registry.revision = registry

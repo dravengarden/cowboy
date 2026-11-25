@@ -138,7 +138,9 @@ impl Store {
         }
         let encoded_member =
             super::super::browser_shares::Member::account(receipt.account_id.clone()).encode();
-        if self.is_browser_share_member(owner, &encoded_member).await? {
+        if plan.browser_share_leave_pending
+            || self.is_browser_share_member(owner, &encoded_member).await?
+        {
             missing.push(Missing {
                 kind: "browser_share_leave",
                 target: receipt.account_id.as_str().to_owned(),

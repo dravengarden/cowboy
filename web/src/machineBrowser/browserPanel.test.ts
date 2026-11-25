@@ -11,7 +11,13 @@ import { BrowserFrame, type BrowserFrameProps } from "./MachineBrowserFrame";
 import { MobileBrowserToolbar } from "./MachineBrowserToolbar";
 import { sharedHibernateNote, sharedIdentityLabel } from "./shareRules";
 import { AccountBrowserEntry } from "./AccountBrowserEntry";
-import { type MachineBrowserPanelProps, MachineBrowserSheetView } from "./MachineBrowserSheet";
+import {
+  browserCommands,
+  browserMenuItems,
+  type MachineBrowserPanelProps,
+  MachineBrowserSheetView,
+} from "./MachineBrowserSheet";
+import { newEntryLatch } from "./shareRules";
 import { linkEntry, linkRequiresControllerUpgrade, linkTarget } from "./linkNavigation";
 import { restartOn } from "./useMachineBrowser";
 
@@ -388,4 +394,56 @@ test("MachineBrowserSheet with a loaded pre-share inventory does not block links
   const unpatchedShareRead = { ...preShareRead, browser_identity: "own" };
   assertEquals(linkRequiresControllerUpgrade(unpatchedShareRead, captured?.boundIdentity), true);
   assertEquals(linkEntry(unpatchedShareRead, undefined, captured?.boundIdentity), undefined);
+});
+
+test("linkUpgradeRequired hides the Restart menu item and suppresses commands.restart", () => {
+  const m = model("attached", true);
+  const chrome = {
+    navigation: true,
+    keyboard: false,
+    paste: false,
+    hibernate: true,
+    snapshot: true,
+    restart: true,
+    detach: true,
+    reset: true,
+    refresh: true,
+  };
+  let restarted = 0;
+  const cmds = browserCommands(
+    {
+      model: m,
+      dispatch: () => {},
+      open: () => {},
+      hibernate: () => {},
+      snapshot: () => {},
+      reset: () => {},
+      restart: () => {
+        restarted += 1;
+      },
+      navigate: () => {},
+      refresh: () => {},
+    },
+    { current: null },
+    false,
+    { url: "https://grok.com/?_s=usage", expectedBrowser: "own" },
+    newEntryLatch(),
+    true,
+  );
+  cmds.restart(m.viewer!.target);
+  assertEquals(restarted, 0);
+  const gatedChrome = { ...chrome, restart: false };
+  const items = browserMenuItems({
+    model: m,
+    chrome: gatedChrome,
+    commands: cmds,
+    ask: () => {},
+    onPaste: () => {},
+    onClipboard: () => {},
+    onClose: () => {},
+  });
+  assertEquals(
+    items.some((item) => item.key === "restart"),
+    false,
+  );
 });

@@ -535,6 +535,7 @@ mod tests {
                 grants: vec![],
                 browsers: vec![],
                 portable_credentials: false,
+                browser_share_leave_pending: false,
             }),
             remote_wipes: Default::default(),
             local_wipes: Default::default(),

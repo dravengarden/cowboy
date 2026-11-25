@@ -34,7 +34,35 @@ impl Store {
             if share.pending_reset.is_some() {
                 return Ok(Err("browser_share_reset_pending"));
             }
+            let pending_navs: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM browser_pending_navigations                  WHERE owner_user_id=$1 AND browser_key=$2",
+            )
+            .bind(owner)
+            .bind(share.browser_key.as_str())
+            .fetch_one(&mut *tx)
+            .await?;
+            if pending_navs > 0 {
+                return Ok(Err("browser_navigation_pending"));
+            }
             let current: Vec<&Member> = shares.members_of(share_id).into_iter().map(|row| &row.member).collect();
+            let reg_value: Option<String> = sqlx::query_scalar(
+                "SELECT value FROM provider_account_registries WHERE owner_user_id=$1",
+            )
+            .bind(owner)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some(raw) = reg_value {
+                let registry: Registry = serde_json::from_str(&raw)?;
+                if current.iter().any(|member| {
+                    let Member::Account(acc) = member;
+                    registry
+                        .accounts
+                        .iter()
+                        .any(|candidate| candidate.id == acc.account_id && candidate.revoking)
+                }) {
+                    return Ok(Err("browser_navigation_pending"));
+                }
+            }
             let released = shares.bindings.iter()
                 .filter(|row| row.share_id == share_id && !current.contains(&&row.member))
                 .map(|row| row.member.encode()).collect();

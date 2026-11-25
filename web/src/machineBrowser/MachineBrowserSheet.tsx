@@ -95,12 +95,13 @@ export interface MachineBrowserSheetProps {
 /** Commands over the controller; the screen mode is chosen from the frame
  * and the device orientation at the moment of the request. `pinned` keeps
  * every open on that Machine. */
-function browserCommands(
+export function browserCommands(
   browser: MachineBrowserController,
   areaRef: RefObject<HTMLDivElement | null>,
   touch: boolean,
   link: BrowserLink | undefined,
   entry: EntryLatch,
+  linkUpgradeRequired = false,
 ): BrowserCommands {
   const viewportNow = (): BrowserViewport => {
     const rect = areaRef.current?.getBoundingClientRect();
@@ -128,7 +129,9 @@ function browserCommands(
     hibernate: browser.hibernate,
     snapshot: browser.snapshot,
     reset: browser.reset,
-    restart: (target) => browser.restart(viewportNow(), target),
+    restart: (target) => {
+      if (!linkUpgradeRequired) browser.restart(viewportNow(), target);
+    },
     refresh: browser.refresh,
     dismiss: () => dispatch({ type: "dismiss" }),
     notice: (message) => dispatch({ type: "notice", message }),
@@ -261,7 +264,7 @@ function useCapWarning(open: boolean, browser: MachineBrowserController): void {
   }, [stopsAt, dispatch]);
 }
 
-function browserMenuItems({
+export function browserMenuItems({
   model,
   chrome,
   commands,
@@ -469,7 +472,7 @@ function MachineBrowserPanel(props: MachineBrowserPanelProps): React.JSX.Element
   const linkUpgradeRequired =
     link !== undefined &&
     linkRequiresControllerUpgrade(model.read, link.expectedBrowser ?? props.boundIdentity);
-  const commands = browserCommands(browser, areaRef, touch, link, props.entry);
+  const commands = browserCommands(browser, areaRef, touch, link, props.entry, linkUpgradeRequired);
   useAutoEntry(props, browser, commands);
   useResume(open, browser, commands, props.boundIdentity, linkUpgradeRequired);
   useCapWarning(open, browser);
@@ -483,7 +486,8 @@ function MachineBrowserPanel(props: MachineBrowserPanelProps): React.JSX.Element
   }, [open, dispatch]);
   // The Service's read names the browser a reset deletes; before it
   // arrives the inventory's view stands in.
-  const { shared, confirm, chrome } = usePanelSharing(props, model, commands, ui.chrome);
+  const { shared, confirm, chrome: sharedChrome } = usePanelSharing(props, model, commands, ui.chrome);
+  const chrome = linkUpgradeRequired ? { ...sharedChrome, restart: false } : sharedChrome;
   const uiCommands = commands;
   const status = model.loaded ? browserStateLabel(state?.state) : "Loading";
   const menu = (

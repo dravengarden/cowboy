@@ -70,6 +70,10 @@ struct Viewer {
     /// The identity whose card attached: the account itself, or a member
     /// of the share whose browser this is.
     member: String,
+    /// The browser identity (`own` or `share:<id>:<rev>`) confirmed at attach
+    /// time, enforced for cached clients that send `attachment_id` without
+    /// `expected_browser`.
+    identity: String,
     attachment_id: String,
     incarnation: u64,
     connection: ConnectionToken,
@@ -124,12 +128,15 @@ pub struct Coordinator {
     /// Per Machine: placements its current connection has not answered for.
     inventories: parking_lot::Mutex<HashMap<String, Inventory>>,
     /// Identity-bound navigations dispatched to a Machine and not yet settled
-    /// (including those whose Controller wait timed out or whose transport
-    /// dropped while the Machine's browser task may still execute). Keyed by
+    /// (including those whose Controller wait timed out, whose transport
+    /// dropped, or that were reloaded after a Controller restart). Keyed by
     /// `request_id`.
     pending_navigations: parking_lot::Mutex<HashMap<String, PendingNavigation>>,
-    /// Signalled whenever any pending navigation settles so deferred revocation
-    /// share-membership removals run promptly.
+    /// Request ids settled in memory by synchronous observation callbacks and
+    /// waiting to be deleted from `browser_pending_navigations` in the store.
+    settled_navigation_ids: parking_lot::Mutex<HashSet<String>>,
+    /// Signalled whenever any pending navigation settles so durable fence
+    /// deletions and deferred revocation share-membership removals run promptly.
     navigation_settled: Arc<tokio::sync::Notify>,
 }
 
@@ -139,7 +146,9 @@ pub struct PendingNavigation {
     pub owner: String,
     pub browser_key: ProviderAccountId,
     pub machine_id: String,
-    pub connection: ConnectionToken,
+    /// `Some` when dispatched in this Controller process; `None` when seeded
+    /// from durable storage after a Controller restart.
+    pub connection: Option<ConnectionToken>,
     pub instance: InstanceRef,
     pub observed_at_ms: i64,
 }
@@ -573,6 +582,7 @@ impl Coordinator {
         observed_at_ms: i64,
     ) {
         let machine_id = connection.machine_id().to_owned();
+        self.settled_navigation_ids.lock().remove(&request_id);
         self.pending_navigations.lock().insert(
             request_id.clone(),
             PendingNavigation {
@@ -580,17 +590,36 @@ impl Coordinator {
                 owner: owner.to_owned(),
                 browser_key,
                 machine_id,
-                connection: connection.clone(),
+                connection: Some(connection.clone()),
                 instance,
                 observed_at_ms,
             },
         );
     }
 
+    /// Seed a durable pre-restart pending navigation into memory so live
+    /// Machine observations can settle it promptly once its Machine connects.
+    pub fn seed_durable_navigation(&self, entry: PendingNavigation) {
+        if self
+            .settled_navigation_ids
+            .lock()
+            .contains(&entry.request_id)
+        {
+            return;
+        }
+        self.pending_navigations
+            .lock()
+            .entry(entry.request_id.clone())
+            .or_insert(entry);
+    }
+
     /// Clear a tracked navigation fence once the command definitely failed or
     /// finished on the Machine.
     pub fn settle_navigation(&self, request_id: &str) {
         if self.pending_navigations.lock().remove(request_id).is_some() {
+            self.settled_navigation_ids
+                .lock()
+                .insert(request_id.to_owned());
             self.navigation_settled.notify_one();
         }
     }
@@ -600,16 +629,32 @@ impl Coordinator {
     /// Returns `true` when a matching browser navigation was settled.
     pub fn settle_navigation_on(&self, connection: &ConnectionToken, request_id: &str) -> bool {
         let mut pending = self.pending_navigations.lock();
-        if pending
-            .get(request_id)
-            .is_some_and(|entry| entry.connection.same(connection))
-        {
+        if pending.get(request_id).is_some_and(|entry| {
+            entry
+                .connection
+                .as_ref()
+                .is_some_and(|conn| conn.same(connection))
+        }) {
             pending.remove(request_id);
             drop(pending);
+            self.settled_navigation_ids
+                .lock()
+                .insert(request_id.to_owned());
             self.navigation_settled.notify_one();
             return true;
         }
         false
+    }
+
+    /// Take request ids settled in memory that must be deleted from durable
+    /// storage (`browser_pending_navigations`).
+    pub fn take_settled_navigation_ids(&self) -> Vec<String> {
+        self.settled_navigation_ids.lock().drain().collect()
+    }
+
+    /// Re-queue settled request ids if their durable store deletion failed.
+    pub fn requeue_settled_navigation_ids(&self, ids: Vec<String>) {
+        self.settled_navigation_ids.lock().extend(ids);
     }
 
     /// Whether `request_id` is still tracked as an unsettled navigation.
@@ -617,8 +662,25 @@ impl Coordinator {
         self.pending_navigations.lock().contains_key(request_id)
     }
 
+    /// Whether `request_id` was dispatched in this Controller process on a
+    /// connection that is still its Machine's current connection (so the live
+    /// connection can still deliver its reply without reconnect reconciliation).
+    pub fn is_navigation_live_on_current(&self, request_id: &str) -> bool {
+        let connections = self.connections.read();
+        self.pending_navigations
+            .lock()
+            .get(request_id)
+            .is_some_and(|entry| {
+                entry.connection.as_ref().is_some_and(|conn| {
+                    connections
+                        .get(&entry.machine_id)
+                        .is_some_and(|current| current.same(conn))
+                })
+            })
+    }
+
     /// Whether `browser_key` has any unsettled identity-bound navigation in
-    /// flight (including across a Machine disconnect).
+    /// flight in memory (callers also check durable storage).
     pub fn has_pending_navigation(&self, owner: &str, browser_key: &ProviderAccountId) -> bool {
         self.pending_navigations
             .lock()
@@ -626,10 +688,9 @@ impl Coordinator {
             .any(|pending| pending.owner == owner && pending.browser_key == *browser_key)
     }
 
-    /// Unsettled navigations whose dispatching connection has been replaced by
-    /// a newer live connection on the same Machine (so the original connection
-    /// can never deliver a reply and the Controller must reconcile on the new
-    /// connection).
+    /// Unsettled in-memory navigations whose dispatching connection has been
+    /// replaced by a newer live connection on the same Machine (or that were
+    /// seeded after restart with `connection: None`).
     pub fn orphaned_navigations(&self, machine_id: Option<&str>) -> Vec<PendingNavigation> {
         let connections = self.connections.read();
         self.pending_navigations
@@ -637,9 +698,12 @@ impl Coordinator {
             .values()
             .filter(|entry| {
                 machine_id.is_none_or(|id| entry.machine_id == id)
-                    && connections
-                        .get(&entry.machine_id)
-                        .is_some_and(|current| !current.same(&entry.connection))
+                    && connections.get(&entry.machine_id).is_some_and(|current| {
+                        entry
+                            .connection
+                            .as_ref()
+                            .is_none_or(|conn| !current.same(conn))
+                    })
             })
             .cloned()
             .collect()
@@ -652,23 +716,31 @@ impl Coordinator {
         authoritative: bool,
     ) {
         let machine_id = connection.machine_id();
-        let mut settled_any = false;
+        let mut settled_ids = Vec::new();
         let mut pending = self.pending_navigations.lock();
+        // A matching `Stopping` reply (e.g. launcher navigation timeout with
+        // unconfirmed unit exit) must NOT clear the fence until exit confirms.
         if let Some(request_id) = state.request_id.as_deref()
-            && pending
-                .get(request_id)
-                .is_some_and(|entry| entry.connection.same(connection))
+            && state.state != State::Stopping
+            && pending.get(request_id).is_some_and(|entry| {
+                entry
+                    .connection
+                    .as_ref()
+                    .is_some_and(|conn| conn.same(connection))
+            })
         {
             pending.remove(request_id);
-            settled_any = true;
+            settled_ids.push(request_id.to_owned());
         }
-        let before = pending.len();
-        pending.retain(|_, entry| {
+        pending.retain(|id, entry| {
             if entry.machine_id != machine_id || entry.browser_key != state.instance.account_id {
                 return true;
             }
-            let same_connection = entry.connection.same(connection);
-            match state.state {
+            let same_connection = entry
+                .connection
+                .as_ref()
+                .is_some_and(|conn| conn.same(connection));
+            let keep = match state.state {
                 State::Hibernated => {
                     if !state.instance.instance_id.is_empty() {
                         // Confirmed terminal exit of the exact tracked instance (or a newer one).
@@ -700,10 +772,15 @@ impl Coordinator {
                         && (state.instance.instance_id != entry.instance.instance_id
                             || state.instance.incarnation > entry.instance.incarnation))
                 }
+            };
+            if !keep {
+                settled_ids.push(id.clone());
             }
+            keep
         });
-        if settled_any || pending.len() != before {
-            drop(pending);
+        drop(pending);
+        if !settled_ids.is_empty() {
+            self.settled_navigation_ids.lock().extend(settled_ids);
             self.navigation_settled.notify_one();
         }
     }
@@ -725,6 +802,28 @@ impl Coordinator {
             .is_some_and(|viewer| viewer.attachment_id == attachment_id)
     }
 
+    /// The server-recorded browser identity captured when `attachment_id`
+    /// attached for `(owner, member)` on `(machine_id, account_id)`, if that
+    /// viewer is still registered.
+    pub fn viewer_identity(
+        &self,
+        machine_id: &str,
+        account_id: &str,
+        owner: &str,
+        member: &str,
+        attachment_id: &str,
+    ) -> Option<String> {
+        self.viewers
+            .lock()
+            .get(&key(machine_id, account_id))
+            .filter(|viewer| {
+                viewer.owner == owner
+                    && viewer.member == member
+                    && viewer.attachment_id == attachment_id
+            })
+            .map(|viewer| viewer.identity.clone())
+    }
+
     /// Register the viewer of the account's instance on the connection's
     /// Machine before its attachment is requested, ending the previous one.
     /// Account disablement and revocation cancel it from this moment on.
@@ -735,12 +834,32 @@ impl Coordinator {
         incarnation: u64,
         connection: &ConnectionToken,
     ) -> watch::Receiver<bool> {
+        self.register_viewer_with_identity(
+            (account_id, owner, member),
+            attachment_id,
+            incarnation,
+            connection,
+            "own".to_owned(),
+        )
+    }
+
+    /// Like [`Self::register_viewer`], also binding the confirmed browser
+    /// identity (`own` or `share:<id>:<rev>`) observed when the viewer attached.
+    pub fn register_viewer_with_identity(
+        &self,
+        (account_id, owner, member): (&str, &str, &str),
+        attachment_id: &str,
+        incarnation: u64,
+        connection: &ConnectionToken,
+        identity: String,
+    ) -> watch::Receiver<bool> {
         let (cancel, cancelled) = watch::channel(false);
         let previous = self.viewers.lock().insert(
             key(connection.machine_id(), account_id),
             Viewer {
                 owner: owner.to_owned(),
                 member: member.to_owned(),
+                identity,
                 attachment_id: attachment_id.to_owned(),
                 incarnation,
                 connection: connection.clone(),

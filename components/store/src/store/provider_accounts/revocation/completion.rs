@@ -51,6 +51,7 @@ impl Store {
             for target in &plan.browsers {
                 if !receipt.browser_revocations.contains_key(&target.machine_id) { return Ok(false); }
             }
+            if plan.browser_share_leave_pending { return Ok(false); }
             let encoded_member =
                 super::super::browser_shares::Member::account(receipt.account_id.clone()).encode();
             let in_share: i64 = sqlx::query_scalar(
