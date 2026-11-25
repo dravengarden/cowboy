@@ -411,7 +411,9 @@ function useHandleBufferSubmit(
       // Mod+Enter always means deliver, never save/finish: persist the edited
       // queued row first, then open the Delivery Picker without blind-sending.
       void saveAndConfirmRow(sessionId, handle, resolvedRow).then((ok) => {
-        if (ok) setDeliveryAnchor(sendButtonRef.current);
+        if (ok && !closingRef.current && pendingRef.current === handle) {
+          setDeliveryAnchor(sendButtonRef.current);
+        }
       }).catch((e: Error) => notify(e.message, "error"));
       return;
     }
@@ -420,7 +422,9 @@ function useHandleBufferSubmit(
         ? Promise.resolve(true)
         : saveAndConfirmRow(sessionId, handle, resolvedRow);
       void prep.then((ok) => {
-        if (ok) setDeliveryAnchor(sendButtonRef.current);
+        if (ok && !closingRef.current && pendingRef.current === handle) {
+          setDeliveryAnchor(sendButtonRef.current);
+        }
       }).catch((e: Error) => notify(e.message, "error"));
       return;
     }
@@ -481,7 +485,7 @@ export function useDesktopBufferActions(args: DesktopBufferActionsArgs) {
     if (activeBuffer.kind === "queued") {
       closingRef.current = true;
       void saveAndConfirmRow(sessionId, handle, resolvedRow).then((ok) => {
-        if (ok) onCloseBuffer(closeTarget());
+        if (ok && pendingRef.current === handle) onCloseBuffer(closeTarget());
       }).catch((e: Error) => notify(e.message, "error")).finally(() => {
         closingRef.current = false;
       });
@@ -501,7 +505,9 @@ export function useDesktopBufferActions(args: DesktopBufferActionsArgs) {
       ? Promise.resolve(true)
       : saveAndConfirmRow(sessionId, handle, resolvedRow);
     void prep.then((ok) => {
-      if (ok) setDeliveryAnchor(sendButtonRef.current);
+      if (ok && !closingRef.current && pendingRef.current === handle) {
+        setDeliveryAnchor(sendButtonRef.current);
+      }
     }).catch((e: Error) => notify(e.message, "error"));
   }, [activeBuffer.kind, isNew, newPrompt, pendingRef, resolvedRow, sendButtonRef, sessionId]);
 
