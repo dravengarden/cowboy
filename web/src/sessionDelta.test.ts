@@ -9,7 +9,12 @@ import {
   removeSessionById,
   upsertSession,
 } from "./sessionDelta";
-import { applyEnvelope } from "./storeTimeline";
+import {
+  isSessionRemoved,
+  markSessionRemoved,
+  setRemovalFenceDataset,
+} from "./removedSessionFence";
+import { applyEnvelope, mergeEvents } from "./storeTimeline";
 
 function session(id: string, status: SessionMeta["status"] = "running"): SessionMeta {
   return {
@@ -127,4 +132,83 @@ test("authoritativeLinkMetaMap and diffAuthoritativeLinkMeta track trashed sessi
   // Removing a trashed session is detected too.
   const afterPurge = authoritativeLinkMetaMap([autoRenamedA], { a: "Committed Title" });
   expect(diffAuthoritativeLinkMeta(next, afterPurge)).toEqual(["b"]);
+});
+
+test("mergeEvents preserves a live tool completion over an overlapping older snapshot", () => {
+  const started: Envelope = {
+    session_id: "s1",
+    seq: 10,
+    kind: "update",
+    update: { sessionUpdate: "tool_call", toolCallId: "t-live", status: "in_progress" },
+  };
+  const liveCompletion: Envelope = {
+    session_id: "s1",
+    seq: 50,
+    kind: "update",
+    update: { sessionUpdate: "tool_call_update", toolCallId: "t-live", status: "completed" },
+  };
+  const liveTimeline = applyEnvelope(new Map([["s1", [started]]]), liveCompletion);
+  // Overlapping snapshot captured at seq 45 still has tool_call as in_progress.
+  const olderSnapshot = [started, message(45, "mid-turn")];
+  const mergedOlder = mergeEvents(liveTimeline, "s1", olderSnapshot).get("s1")!;
+  const toolAfterOlder = mergedOlder.find((e) => e.seq === 10);
+  expect(toolAfterOlder?.kind === "update" ? toolAfterOlder.update.status : "").toBe("completed");
+  // Newer canonical snapshot captured at seq 60 (past seq 50) replaces with canonical row.
+  const canonicalDone: Envelope = {
+    session_id: "s1",
+    seq: 10,
+    kind: "update",
+    update: { sessionUpdate: "tool_call", toolCallId: "t-live", status: "completed", title: "canonical" },
+  };
+  const mergedNewer = mergeEvents(liveTimeline, "s1", [canonicalDone, message(60, "done")]).get("s1")!;
+  const toolAfterNewer = mergedNewer.find((e) => e.seq === 10);
+  expect(toolAfterNewer?.kind === "update" ? toolAfterNewer.update.title : "").toBe("canonical");
+});
+
+test("removedSessionFence scopes entries by dataset and reconciles concurrent overwrites", async () => {
+  const entries = new Map<string, string>();
+  const fakeStorage: Storage = {
+    get length() {
+      return entries.size;
+    },
+    key: (index: number) => [...entries.keys()][index] ?? null,
+    getItem: (key: string) => entries.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      entries.set(key, value);
+    },
+    removeItem: (key: string) => {
+      entries.delete(key);
+    },
+    clear: () => {
+      entries.clear();
+    },
+  };
+  const globals = globalThis as { localStorage?: Storage };
+  const previousStorage = globals.localStorage;
+  globals.localStorage = fakeStorage;
+  try {
+    setRemovalFenceDataset("dataset-old");
+    markSessionRemoved("sess-shared-id");
+    expect(isSessionRemoved("sess-shared-id")).toBe(true);
+
+    // A replacement dataset at the same origin starts with a clean fence.
+    setRemovalFenceDataset("dataset-new");
+    expect(isSessionRemoved("sess-shared-id")).toBe(false);
+
+    // Switching back restores dataset-old's fence.
+    setRemovalFenceDataset("dataset-old");
+    expect(isSessionRemoved("sess-shared-id")).toBe(true);
+
+    // Simulate a peer tab overwriting the shared key without this tab's entry;
+    // a subsequent merge preserves both removals.
+    fakeStorage.setItem("cowboy:removed-sessions:dataset-old", JSON.stringify(["sess-peer-id"]));
+    markSessionRemoved("sess-local-second");
+    const stored = JSON.parse(fakeStorage.getItem("cowboy:removed-sessions:dataset-old") ?? "[]") as string[];
+    expect(stored).toContain("sess-shared-id");
+    expect(stored).toContain("sess-peer-id");
+    expect(stored).toContain("sess-local-second");
+  } finally {
+    setRemovalFenceDataset(undefined);
+    globals.localStorage = previousStorage;
+  }
 });

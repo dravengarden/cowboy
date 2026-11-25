@@ -239,9 +239,7 @@ async function readQueueHasPending(
   try {
     const key = `${await resolvePrefix()}session:${sessionId}:queue`;
     assertCurrent();
-    const snapshot = await owner
-      .persistence<{ pending?: unknown[] }>(key, { strictReads: true })
-      .load();
+    const snapshot = await owner.peek<{ pending?: unknown[] }>(key);
     assertCurrent();
     if (snapshot === null) return false;
     return !Array.isArray(snapshot.pending) || snapshot.pending.length > 0;
@@ -256,11 +254,15 @@ async function listScopedIds(
   assertAdmission: () => void,
   kind: string,
   suffixText: string,
-  limit: number,
+  limit?: number,
 ): Promise<string[]> {
   const start = `${await resolvePrefix()}${kind}:`;
   assertAdmission();
-  const keys = await owner.listKeys({ strict: true, limit });
+  const keys = await owner.listKeys({
+    strict: true,
+    prefix: start,
+    ...(limit === undefined ? {} : { limit }),
+  });
   assertAdmission();
   return keys
     .filter((key) => key.startsWith(start) && key.endsWith(suffixText))
@@ -356,6 +358,10 @@ export function createProductSyncDatabase(
      */
     stopAdmission: endAdmission,
     ready,
+    rememberedDatasetId: (): string | undefined => {
+      const principal = currentPrincipal();
+      return dataset?.dataset_id ?? (principal ? datasetCache?.read(principal)?.dataset_id : undefined);
+    },
     async connection(): Promise<SyncDataset> {
       const identity = await ready();
       assertAdmission();
@@ -464,26 +470,16 @@ export function createProductSyncDatabase(
       };
     },
     /** Session ids that own a cache of `state` in this dataset. */
-    async cacheSessions(state: (typeof CACHE_SESSION_STATES)[number]): Promise<string[]> {
-      const identity = dataset ?? (await ready());
-      assertCurrent();
-      const keys = await owner.listKeys({ strict: true, limit: 4096 });
-      assertCurrent();
-      const start = `${prefix(identity)}session:`;
-      const end = `:${state}`;
-      return keys
-        .filter((key) => key.startsWith(start) && key.endsWith(end))
-        .map((key) => key.slice(start.length, -end.length))
-        .filter((id) => /^[A-Za-z0-9_-]{1,128}$/.test(id));
-    },
+    cacheSessions: (state: (typeof CACHE_SESSION_STATES)[number]): Promise<string[]> =>
+      listScopedIds(owner, async () => prefix(dataset ?? (await ready())), assertCurrent, "session", `:${state}`),
     /** Delete every paint cache of this dataset. Outboxes are untouched: a
      * sign-out ends what this device shows, not what it still owes. */
     async discardCaches(): Promise<void> {
       const identity = dataset ?? (await ready());
       assertCurrent();
-      const keys = await owner.listKeys({ strict: true, limit: 4096 });
-      assertCurrent();
       const start = prefix(identity);
+      const keys = await owner.listKeys({ strict: true, prefix: start });
+      assertCurrent();
       const owned = keys.filter(
         (key) =>
           key.startsWith(start) &&
@@ -501,7 +497,7 @@ export function createProductSyncDatabase(
     async legacyRecords(): Promise<string[]> {
       await ready();
       assertAdmission();
-      const keys = await owner.listKeys({ strict: true, limit: 4096 });
+      const keys = await owner.listKeys({ strict: true, prefix: "cowboy:sync:", limit: 4096 });
       assertAdmission();
       return keys.filter((key) => key.startsWith("cowboy:sync:"));
     },

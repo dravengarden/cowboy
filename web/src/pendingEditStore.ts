@@ -31,7 +31,11 @@ import {
 } from "./pendingEditMirror";
 import { mergeStoredEdits, SlotLedger, slotMirrored, type StoredEdits } from "./pendingEditRecord";
 import type { ProductCache, ProductCacheScope } from "./productSyncDatabase";
-import { isSessionRemoved, markSessionRemoved } from "./removedSessionFence";
+import {
+  isSessionRemoved,
+  markSessionRemoved,
+  onSessionRemoved,
+} from "./removedSessionFence";
 import { newUuid } from "./uuid";
 
 export {
@@ -579,17 +583,34 @@ export function discardPendingEdits(sessionId: string): void {
 }
 
 export function prunePendingEdits(liveSessionIds: ReadonlySet<string>): void {
+  const removed = new Set<string>();
+  for (const record of records.values()) {
+    if (!liveSessionIds.has(record.sessionId)) removed.add(record.sessionId);
+  }
+  for (const { record } of readHydratedPendingEditMirrors()) {
+    if (!liveSessionIds.has(record.sessionId)) removed.add(record.sessionId);
+  }
+  for (const sessionId of removed) discardPendingEdits(sessionId);
+}
+
+onSessionRemoved((removed) => {
   for (const [key, record] of records) {
-    if (liveSessionIds.has(record.sessionId)) continue;
-    records.delete(key);
-    retiredRecords.set(key, record);
+    if (!removed.has(record.sessionId)) continue;
+    forgetLocally(key);
     dirty.delete(key);
     recovering.delete(key);
-    awaitingDatabase.delete(key);
     encodes.delete(key);
-    persist(key);
+    removePendingEditMirror(key);
   }
-}
+  for (const [key, record] of retiredRecords) {
+    if (removed.has(record.sessionId)) retiredRecords.delete(key);
+  }
+  for (const sessionId of removed) {
+    slots.takeChanged(sessionId);
+    slots.takeReleased(sessionId);
+    removeSessionPendingEditMirrors(sessionId);
+  }
+});
 
 /** Whether another tab retired this record: its mirror is gone although this
  * tab wrote or read it and holds no unflushed typing of its own. Recovering it

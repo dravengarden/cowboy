@@ -433,3 +433,42 @@ test("discarding a retained record does not resurrect it for a later reader", as
   assertEquals(await db.legacyRecords(), []);
   await db.dispose();
 });
+
+test("queueHasPending peeks without claiming record mode ownership before or after outbox borrow", async () => {
+  const factory = new FakeIndexedDb();
+  const db = createProductSyncDatabase(
+    () => "user-a",
+    () => Promise.resolve(descriptor()),
+    { factory: factory as unknown as IDBFactory },
+  );
+  // Probe BEFORE borrowing outbox: must not block later outbox recovery with record_mode_conflict.
+  assertEquals(await db.queueHasPending("session-a"), false);
+  const scope = { kind: "session", session: "session-a", state: "queue" } as const;
+  const outbox = db.outbox<number>(scope);
+  assertEquals(await outbox.load(), null);
+  outbox.acceptLoadedSnapshot!(null);
+  await outbox.save(snapshot("m1"));
+  // Probe AFTER borrowing outbox: must see pending mutation without conflict.
+  assertEquals(await db.queueHasPending("session-a"), true);
+  // Empty pending array reports settled (false) even after outbox borrow.
+  await outbox.save({ base: { version: 1, value: 1 }, pending: [] });
+  assertEquals(await db.queueHasPending("session-a"), false);
+  await db.dispose();
+});
+
+test("cacheSessions enumerates dataset keys in bounded pages beyond 4096 unrelated IndexedDB keys", async () => {
+  const factory = new FakeIndexedDb();
+  const ds = descriptor();
+  for (let i = 0; i < 4200; i += 1) {
+    factory.data.set(`cowboy:dataset:dataset-${"b".repeat(64)}:document:doc-${String(i)}:entry`, { i });
+  }
+  factory.data.set(`cowboy:dataset:${ds.dataset_id}:session:sess-keep:delivery`, { held: [] });
+  factory.data.set(`cowboy:dataset:${ds.dataset_id}:session:sess-gone:delivery`, { held: [] });
+  const db = createProductSyncDatabase(
+    () => "user-a",
+    () => Promise.resolve(ds),
+    { factory: factory as unknown as IDBFactory },
+  );
+  assertEquals((await db.cacheSessions("delivery")).sort(), ["sess-gone", "sess-keep"]);
+  await db.dispose();
+});

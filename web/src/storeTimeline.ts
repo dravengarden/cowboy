@@ -137,7 +137,18 @@ export function mergeEvents(
   events: Envelope[],
 ): Map<string, Envelope[]> {
   const existing = timelines.get(sessionId) ?? [];
-  const merged = mergeCanonicalTimeline(existing, events);
+  const incomingMax = events[events.length - 1]?.seq;
+  const preferExisting = incomingMax === undefined
+    ? undefined
+    : (oldEvent: Envelope): boolean => {
+        const seen = absorbedSeqs.get(oldEvent);
+        if (seen === undefined) return false;
+        for (const seq of seen) {
+          if (seq > incomingMax) return true;
+        }
+        return false;
+      };
+  const merged = mergeCanonicalTimeline(existing, events, preferExisting);
   if (
     merged.length === existing.length &&
     merged.every((event, index) => event === existing[index])

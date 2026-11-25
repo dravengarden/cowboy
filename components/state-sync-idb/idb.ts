@@ -43,8 +43,11 @@ export interface IdbOpts extends IdbOwnerOpts, IdbWriteOpts {}
 export interface IdbListKeysOpts {
   /** Report unavailable/failed reads instead of claiming the dataset is empty. */
   strict?: boolean;
-  /** Fail closed if more keys exist; never return a misleading partial list. */
+  /** Fail closed if more matching keys exist; never return a misleading partial list. */
   limit?: number;
+  /** Enumerate only string keys with this prefix in bounded pages, so keys in
+   *  other datasets or namespaces cannot exhaust the scan limit. */
+  prefix?: string;
 }
 
 export interface IdbSnapshot extends ScopeSnapshot {
@@ -72,6 +75,9 @@ export interface IdbPersistenceOwner {
    * are not fenced, and this does not establish principal/dataset authority.
    */
   outbox<T>(key: string): LocalPersistence<ClientSnapshot<T>>;
+  /** Read one stored record in a strict readonly transaction without claiming
+   *  value or outbox mode ownership on `key`. */
+  peek<S>(key: string): Promise<S | null>;
   /** Best-effort by default; use strict + limit for recovery/owned datasets. */
   listKeys(opts?: IdbListKeysOpts): Promise<string[]>;
   /** Delete one stored record, reporting failure rather than swallowing it: a
@@ -118,6 +124,65 @@ interface Generation {
 interface TransactionRequest<R> extends EventTarget {
   readonly result: R;
   readonly error?: DOMException | null;
+}
+
+const KEY_SCAN_PAGE_SIZE = 1024;
+
+function makeKeyRange(lower: string, upper: string, lowerOpen: boolean): unknown {
+  if (typeof IDBKeyRange !== "undefined" && typeof IDBKeyRange.bound === "function") {
+    return IDBKeyRange.bound(lower, upper, lowerOpen, false);
+  }
+  return { lower, upper, lowerOpen, upperOpen: false };
+}
+
+async function readScopedKeys(
+  run: <R>(
+    mode: IDBTransactionMode,
+    request: (store: IDBObjectStore) => TransactionRequest<R>,
+  ) => Promise<R>,
+  opts: IdbListKeysOpts,
+): Promise<string[]> {
+  const { strict = false, limit, prefix } = opts;
+  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 65_536)) {
+    throw new RangeError("IndexedDB key limit must be 1..65536");
+  }
+  try {
+    if (prefix === undefined) {
+      const keys = await run("readonly", (store) =>
+        store.getAllKeys(undefined, limit === undefined ? undefined : limit + 1),
+      );
+      if (limit !== undefined && keys.length > limit) {
+        throw new IdbPersistenceError("key_limit_exceeded");
+      }
+      return keys.filter((key): key is string => typeof key === "string");
+    }
+    const upper = `${prefix}\uffff`;
+    const collected: string[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const batch = limit === undefined
+        ? KEY_SCAN_PAGE_SIZE
+        : Math.min(KEY_SCAN_PAGE_SIZE, limit + 1 - collected.length);
+      const range = makeKeyRange(after ?? prefix, upper, after !== undefined);
+      const raw = await run("readonly", (store) =>
+        store.getAllKeys(range as IDBKeyRange, batch),
+      );
+      const page = raw.filter(
+        (key): key is string => typeof key === "string" && key.startsWith(prefix),
+      );
+      collected.push(...page);
+      if (limit !== undefined && collected.length > limit) {
+        throw new IdbPersistenceError("key_limit_exceeded");
+      }
+      if (raw.length < batch || page.length === 0) return collected;
+      const last = page[page.length - 1];
+      if (last === undefined || last === after) return collected;
+      after = last;
+    }
+  } catch (error) {
+    if (strict) throw error;
+    return [];
+  }
 }
 
 export function createIdbPersistenceOwner(opts: IdbOwnerOpts = {}): IdbPersistenceOwner {
@@ -471,24 +536,15 @@ export function createIdbPersistenceOwner(opts: IdbOwnerOpts = {}): IdbPersisten
         },
       });
     },
+    peek: <S>(key: string): Promise<S | null> =>
+      scope.run(async () =>
+        (await run<S | undefined>(
+          "readonly",
+          (store) => store.get(key) as IDBRequest<S | undefined>,
+        )) ?? null,
+      ),
     listKeys: (opts: IdbListKeysOpts = {}): Promise<string[]> =>
-      scope.run(async () => {
-        const { strict = false, limit } = opts;
-        if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 65_536))
-          throw new RangeError("IndexedDB key limit must be 1..65536");
-        try {
-          const keys = await run("readonly", (store) =>
-            store.getAllKeys(undefined, limit === undefined ? undefined : limit + 1),
-          );
-          if (limit !== undefined && keys.length > limit) {
-            throw new IdbPersistenceError("key_limit_exceeded");
-          }
-          return keys.filter((key): key is string => typeof key === "string");
-        } catch (error) {
-          if (strict) throw error;
-          return [];
-        }
-      }),
+      scope.run(() => readScopedKeys(run, opts)),
     discard: (key: string): Promise<void> =>
       scope.run(async () => {
         if (recordModes.get(key) === "outbox") {

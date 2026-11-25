@@ -128,6 +128,7 @@ import {
   prunePendingEdits,
   retryPendingEditRestore,
 } from "./pendingEditStore";
+import { setRemovalFenceDataset } from "./removedSessionFence";
 import { revealPendingArrival } from "./pendingPanelState";
 import { linkTimeline } from "./derive";
 import { acknowledgedCommand, latestClearBoundary } from "./acknowledgedCommand";
@@ -1408,6 +1409,7 @@ function applySessionUpdated(session: SessionMeta): void {
 
 function applySessionRemoved(sessionId: string): void {
   unlistedCreatedSessions.delete(sessionId);
+  clearBoundaries.delete(sessionId);
   prefetch.drop(sessionId);
   syncSessionDelta(removeSessionById(rawSessions, sessionId).sessions, true);
   // Targeted deletion only: an individual removal never prunes unrelated
@@ -1466,11 +1468,12 @@ function applySnapshot(msg: Extract<Outbound, { type: "snapshot" }>): void {
   // Clear is destructive: every row before the newest boundary in either the
   // fresh tail or the live timeline was deleted durably. Drop pre-clear rows
   // so an older snapshot can neither resurrect cleared history nor page for it.
-  const snapshotClear = lastContextClearSeq(msg.events);
-  const liveClear = reconciliation === "conflict" ? null : lastContextClearSeq(existingTimeline);
-  const clearedBefore = snapshotClear !== null && liveClear !== null
-    ? Math.max(snapshotClear, liveClear)
-    : snapshotClear ?? liveClear;
+  const clearedBefore = [
+    lastContextClearSeq(msg.events),
+    reconciliation === "conflict" ? null : lastContextClearSeq(existingTimeline),
+    clearBoundaries.get(msg.session_id) ?? null,
+  ].reduce<number | null>((max, seq) => (seq === null ? max : max === null ? seq : Math.max(max, seq)), null);
+  if (clearedBefore !== null) clearBoundaries.set(msg.session_id, clearedBefore);
   if (clearedBefore !== null && existingTimeline.some((event) => event.seq < clearedBefore)) {
     dropClearedPrefix(msg.session_id, clearedBefore);
     existingTimeline = existingTimeline.filter((event) => event.seq >= clearedBefore);
@@ -1635,6 +1638,7 @@ function handle(msg: Outbound): void {
       // order overlays so a synced rename/reorder isn't clobbered by an unrelated
       // `sessions` broadcast (status flip, new/deleted session). The overlays are
       // the client's source of truth for title + order.
+      const previousRaw = rawSessions;
       rawSessions = msg.sessions;
       if (!state.sessionsLoaded || state.sessionsSource !== "live") {
         setState({ ...withoutReplicaSyncedAt(state), sessionsLoaded: true, sessionsSource: "live" });
@@ -1654,6 +1658,13 @@ function handle(msg: Outbound): void {
         unlistedCreatedSessions,
         Date.now(),
       );
+      for (const prev of previousRaw) {
+        if (!validSessions.has(prev.id)) {
+          clearBoundaries.delete(prev.id);
+          discardDraft(prev.id);
+          discardPendingEdits(prev.id);
+        }
+      }
       pruneDrafts(validSessions);
       prunePendingEdits(validSessions);
       retainTranscriptSessions(validSessions);
@@ -1756,6 +1767,10 @@ function handle(msg: Outbound): void {
         : state.pagination;
       let optimisticMessages = state.optimisticMessages;
       if (clearsContext) {
+        clearBoundaries.set(
+          env.session_id,
+          Math.max(clearBoundaries.get(env.session_id) ?? 0, env.seq),
+        );
         resetExploreAfterContextClear(env.session_id);
         completeQuestionPages.delete(env.session_id);
         transcriptEpoch.set(
@@ -1822,6 +1837,7 @@ function handle(msg: Outbound): void {
       // Checkpoint the replica on turn boundaries and lifecycle changes at
       // once; streaming chunks coalesce into the debounced write.
       if (cached) scheduleReplicaTail(env.session_id, env.kind !== "update" || clearsContext);
+      else if (clearsContext) dropReplicaSession(env.session_id);
       break;
     }
     case "config_options": {
@@ -1939,19 +1955,12 @@ async function hydrateSession(
       const bootstrap = (await response.json()) as SessionBootstrapResponse;
       if (controller.signal.aborted) { if (strict) throw new Error("Conversation sync was interrupted; nothing was cleared."); return; }
       if ((transcriptEpoch.get(sessionId) ?? 0) !== epochAtRequestStart) {
-        if (strict) throw new Error("Conversation sync was interrupted; nothing was cleared.");
         // A live Clear (or eviction) advanced the transcript epoch while this
         // bootstrap was in flight; reject stale pre-clear messages and subagents.
-        if (
-          state.connected &&
-          (openedSessionId === sessionId ||
-            peekedSessions.has(sessionId) ||
-            needsDraftSource(sessionId))
-        ) {
+        if (state.connected && (openedSessionId === sessionId || peekedSessions.has(sessionId) || needsDraftSource(sessionId))) {
           void hydrateSession(sessionId, true);
-        } else {
-          retryableFailure = true;
-        }
+        } else retryableFailure = true;
+        if (strict) throw new Error("Conversation sync was interrupted; nothing was cleared.");
         return;
       }
       const applyHydratedConfigOptions = shouldApplyHydratedConfigOptions(
@@ -2212,6 +2221,7 @@ function openSocket(): void {
   // check and adds a round trip to every foreground recovery. No command is
   // sent until that protocol is selected and bootstrap_complete arrives.
   void Promise.resolve().then(() => syncDatabase.ready()).then(async (dataset) => {
+    setRemovalFenceDataset(dataset.dataset_id);
     // This module loads before a reloaded page has bound its account, so the
     // first read of the drafts' attachment bytes failed. The dataset is known
     // now: read them before anything can mistake the wait for a loss.
@@ -2562,6 +2572,7 @@ const syncBase = newCmid(); // namespaces mutation ids across states + this tab
 // Last known server-derived state, painted before the socket answers. Every
 // value is a cache the next broadcast replaces; nothing here is ever sent.
 // Composer drafts keep their attachment bytes beside the replica caches.
+setRemovalFenceDataset(syncDatabase.rememberedDatasetId());
 attachDraftDatabase(syncDatabase);
 attachPendingEditDatabase(syncDatabase);
 
@@ -2632,18 +2643,23 @@ async function restoreReplicaTail(sessionId: string): Promise<void> {
     tail === null || productSessionAbandoned || state.hydrated.has(sessionId) ||
     !transcriptIsCached(sessionId) || (transcriptEpoch.get(sessionId) ?? 0) !== epoch
   ) return;
+  const clearedBefore = clearBoundaries.get(sessionId);
+  const tailEvents = clearedBefore === undefined
+    ? tail.events
+    : dropEventsBefore(tail.events, clearedBefore);
+  if (clearedBefore !== undefined && tailEvents.length === 0) return;
   const existing = state.timelines.get(sessionId) ?? [];
   // Live events may already have arrived for this session. A cached tail that
   // disagrees with them belongs to another epoch and is simply skipped.
-  if (existing.length > 0 && replicaTailConflicts(tail.events, existing)) return;
-  const timelines = mergeEvents(state.timelines, sessionId, [...tail.events]);
+  if (existing.length > 0 && replicaTailConflicts(tailEvents, existing)) return;
+  const timelines = mergeEvents(state.timelines, sessionId, [...tailEvents]);
   const hydrated = new Set(state.hydrated).add(sessionId);
   const pagination = state.pagination.has(sessionId)
     ? state.pagination
     : new Map(state.pagination).set(sessionId, {
       reachedStart: tail.reachedStart,
       loadingOlder: false,
-      beforeSeq: tail.events[0]?.seq ?? null,
+      beforeSeq: tailEvents[0]?.seq ?? null,
     });
   const configOptions = tail.configOptions !== undefined && !state.configOptions.has(sessionId)
     ? new Map(state.configOptions).set(sessionId, [...tail.configOptions])
@@ -2652,11 +2668,12 @@ async function restoreReplicaTail(sessionId: string): Promise<void> {
     source: "replica",
     syncedAt: tail.receivedAt,
   });
-  replicaTails.set(sessionId, [...tail.events]);
+  replicaTails.set(sessionId, [...tailEvents]);
   setState({ ...state, timelines, hydrated, pagination, configOptions, transcriptSources });
 }
 
 const replicaTails = new Map<string, readonly Envelope[]>();
+const clearBoundaries = new Map<string, number>();
 
 function discardReplicaTimeline(sessionId: string): void {
   forgetSessionAuthority(sessionId);
@@ -2725,11 +2742,23 @@ async function retainReplicaWithOutboxGuard(valid: ReadonlySet<string>): Promise
   });
 }
 
+function isRemovedSession(sessionId: string): boolean {
+  return state.sessionsLoaded && !rawSessions.some((s) => s.id === sessionId) && !unlistedCreatedSessions.has(sessionId);
+}
+
+async function retireRemovedDelivery(sessionId: string): Promise<void> {
+  if (productSessionAbandoned || !isRemovedSession(sessionId)) return;
+  if (!(await syncDatabase.queueHasPending(sessionId)) && isRemovedSession(sessionId)) {
+    await replica.session(sessionId).discardDelivery();
+  }
+}
+
 function dropReplicaSession(sessionId: string): void {
   retainedReplicaKey = undefined;
-  // Evict only the transcript tail; held-delivery decisions stay tied to their
-  // durable outbox mutations and retire only once those mutations settle.
+  // Evict the transcript tail immediately; retire the delivery record as soon
+  // as no durable outbox mutations remain for a removed session.
   void replica.session(sessionId).discardTail();
+  void retireRemovedDelivery(sessionId);
   if (cachedTailSessions.has(sessionId)) {
     const next = new Set(cachedTailSessions);
     next.delete(sessionId);
@@ -2843,6 +2872,10 @@ function persistHeld(sessionId: string): void {
   if (client === undefined || productSessionAbandoned) return;
   const held = client.pending().map((mutation) => mutation.id)
     .filter((id) => qStatus.get(id) === "failed");
+  if (held.length === 0 && client.pending().length === 0 && isRemovedSession(sessionId)) {
+    void retireRemovedDelivery(sessionId);
+    return;
+  }
   void replica.session(sessionId).saveDelivery({ held });
 }
 
@@ -4156,6 +4189,7 @@ function commitQueue(sessionId: string): void {
   // Arms/retires the stall deadlines alongside the statuses just projected, so
   // no phase this function can paint is left without an owner.
   reconcileStallWatchdogs(sessionId);
+  if (pend.size === 0 && isRemovedSession(sessionId)) void retireRemovedDelivery(sessionId);
 }
 
 /** The one way an unconfirmed row reaches its terminal, escapable phase: red
