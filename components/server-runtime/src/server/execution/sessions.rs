@@ -372,6 +372,7 @@ async fn apply_create_defaults(
     use crate::session_folders::defaults::DefaultKey;
     super::super::session_context::validate_sources(state, principal, &request.context_sources)?;
     let defaults = folder_defaults::resolve(state, principal, request.folder_id.as_deref())?;
+    let provider_overridden = !request.provider.is_empty();
     if request.provider.is_empty() {
         request.provider =
             value(&defaults, DefaultKey::Provider).unwrap_or_else(|| "claude-code".into());
@@ -415,7 +416,8 @@ async fn apply_create_defaults(
         .await?;
     }
     if request.preset.is_none() {
-        request.preset = value(&defaults, DefaultKey::Preset);
+        request.preset =
+            folder_defaults::inherited_preset(&request.provider, &defaults, provider_overridden);
     }
     Ok(provider_account_id)
 }

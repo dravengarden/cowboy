@@ -15,7 +15,7 @@ import { folderDeletePlan, liveDrafts, TRASH_ROOT_KEY, TRASH_URGENT_MS, type Tra
 import { reorderWorkspaceItems } from "./store";
 import { DRAFT_DRAG_TYPE } from "./documents/model";
 import { sessionDirectoryChoices } from "./sessionDirectoryChoices";
-import { newSessionPreset } from "./newSessionPreset";
+import { resolveCreateSessionPreset } from "./newSessionPreset";
 import { SessionPresetPicker } from "./SessionPresetPicker";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { AiInstallationPicker, installationCapacity } from "./AiInstallationPicker";
@@ -2923,9 +2923,9 @@ export function CreateDialog({
         active_work_items: [],
     } : undefined;
     const selectedProviderEntry = placement.installation?.entry;
-    const selectedPreset = newSessionPreset(provider, selectedProviderEntry?.manifest.configuration.presets ?? [], directoryDefaults.values.preset, presetOverride);
+    const presetState = resolveCreateSessionPreset(provider, selectedProviderEntry?.manifest.configuration.presets ?? [], directoryDefaults.values, placement.installationChosen, presetOverride);
     const selectedInstalledProvider = placement.installation?.installed;
-    const presetAvailable = !selectedPreset || Boolean(selectedProviderEntry?.manifest.configuration.presets.some((preset) => `${provider}/${preset.id}` === selectedPreset));
+    const { inherited: inheritedPreset, override: effectivePresetOverride, selected: selectedPreset, available: presetAvailable } = presetState;
     const providerAvailable = (candidate: string): boolean => Boolean(candidate && placement.ready && candidate === provider);
     const selectedWorkItem = selectedWorkspace?.active_work_items.find((item) => item.id === workItemId);
     // Editable session title. Empty on Create → renameSession no-ops → the
@@ -2990,7 +2990,7 @@ export function CreateDialog({
     function formDirty(): boolean {
         return folderName.trim() !== "" || Object.keys(folderDefaults).length > 0 ||
             title !== openedDefaults.current.title || draftTitle !== openedDefaults.current.draftTitle ||
-            directory !== (initialFolder ?? "") || presetOverride !== undefined ||
+            directory !== (initialFolder ?? "") || effectivePresetOverride !== undefined ||
             workItemId !== "" || contextSources.length > 0 ||
             placement.chosen || subscription.chosen;
     }
@@ -3205,7 +3205,7 @@ export function CreateDialog({
             runtime_machine: placement.installation.runtime_machine_id,
             provider: placement.installation.provider,
             // Only a picked preset is pinned; the agent default stays live.
-            preset: presetOverride || undefined,
+            preset: effectivePresetOverride || undefined,
         })
         : undefined;
     const form = (
@@ -3363,7 +3363,7 @@ export function CreateDialog({
                                     hierarchyPreferenceKey="cowboy.sessionDirectoryHierarchy"
                                     entries={directoryChoices}
                                     value={directory}
-                                    onChange={setDirectory}
+                                    onChange={(next): void => { setDirectory(next); setPresetOverride(undefined); }}
                                 />
                                 {directory && (
                                     <Stack direction="row" alignItems="center" flexWrap="wrap" data-create-defaults-summary sx={{ gap: 1, mt: "4px !important" }}>
@@ -3412,7 +3412,10 @@ export function CreateDialog({
                                 <AiInstallationPicker
                                     installations={placement.installations}
                                     value={placement.installation?.value ?? ""}
-                                    onChange={placement.selectInstallation}
+                                    onChange={(value): void => {
+                                        placement.selectInstallation(value);
+                                        if (placement.installations.find((i) => i.value === value)?.provider !== provider) setPresetOverride(undefined);
+                                    }}
                                     helperText={placement.loading ? "Checking available AI installations…" : placement.installation
                                         ? `${placement.separate ? "Remote" : "Local"} · AI on ${placement.installation.machine.display_name} · Files and commands on ${machines.find((m) => m.id === machineId)?.display_name ?? machineId}`
                                         : fullInstallation
@@ -3421,7 +3424,7 @@ export function CreateDialog({
                                         : "No ready AI installation can use this project. Check Machines in Settings."}
                                 />
                                 <SessionSubscription state={subscription} disabled={creating} desktop={desktop} helperText={subscription.hinted ? `Same as “${sessionHints?.session.title ?? "latest session"}”` : undefined} />
-                                <SessionPresetPicker provider={provider} presets={selectedProviderEntry?.manifest.configuration.presets ?? []} value={selectedPreset} onChange={setPresetOverride} helperText={presetOverride === undefined && directoryDefaults.sources.preset ? `Inherited from ${sessionFolderById(sessionDirectories, directoryDefaults.sources.preset)?.name ?? "directory"}` : "Applied before the first prompt"} />
+                                <SessionPresetPicker provider={provider} presets={selectedProviderEntry?.manifest.configuration.presets ?? []} value={selectedPreset} onChange={setPresetOverride} helperText={effectivePresetOverride === undefined && inheritedPreset && directoryDefaults.sources.preset ? `Inherited from ${sessionFolderById(sessionDirectories, directoryDefaults.sources.preset)?.name ?? "directory"}` : "Applied before the first prompt"} />
                                 <SessionContextPicker value={contextSources} onChange={setContextSources} disabled={creating} />
                                 <Typography variant="caption" color="text.secondary">
                                     Git projects open in a session worktree. Other directories are shared in place.

@@ -5,7 +5,11 @@ import { BrowserProductTheme } from "./browserProductTheme";
 import { SurfaceContext } from "./surface/SurfaceProfile";
 import { classifySurface } from "./surface/profile";
 import { SessionPresetPicker } from "./SessionPresetPicker";
-import { newSessionPreset, type SessionPreset } from "./newSessionPreset";
+import {
+  newSessionPreset,
+  resolveCreateSessionPreset,
+  type SessionPreset,
+} from "./newSessionPreset";
 import {
   SessionSubscription,
   useSessionSubscription,
@@ -32,9 +36,7 @@ export async function runNewSessionDefaultsBrowserChecks(): Promise<void> {
       values: {},
     },
   ];
-  const check = (ok: unknown, message: string): void => {
-    if (!ok) throw new Error(message);
-  };
+  const check = (ok: unknown, message: string): void => { if (!ok) throw new Error(message); };
   const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 50));
   globalThis.fetch = (() =>
     Promise.resolve(Response.json({
@@ -235,7 +237,141 @@ export async function runNewSessionDefaultsBrowserChecks(): Promise<void> {
         container.remove();
       }
     }
+    checkCrossProviderPresetSwitch(presets, check);
   } finally {
     globalThis.fetch = originalFetch;
+  }
+}
+
+function checkCrossProviderPresetSwitch(
+  presets: readonly SessionPreset[],
+  check: (ok: unknown, message: string) => void,
+): void {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const agyPresets: SessionPreset[] = [
+    {
+      id: "gemini-neon-high",
+      name: "Gemini 4 Neon · High",
+      detail: "Strongest",
+      is_default: true,
+      values: {},
+    },
+  ];
+  const claudePresets: SessionPreset[] = [
+    {
+      id: "sonnet-xhigh",
+      name: "Sonnet · XHigh",
+      detail: "",
+      is_default: false,
+      values: {},
+    },
+    ...presets,
+  ];
+  const folderDefaults = {
+    provider: "claude-code",
+    preset: "claude-code/sonnet-xhigh",
+  };
+  let submitted = "";
+  function SwitchAgent() {
+    const [provider, setProvider] = useState("claude-code");
+    const [chosen, setChosen] = useState(false);
+    const [override, setOverride] = useState<string>();
+    const activePresets = provider === "antigravity" ? agyPresets : claudePresets;
+    const state = resolveCreateSessionPreset(
+      provider,
+      activePresets,
+      folderDefaults,
+      chosen,
+      override,
+    );
+    return (
+      <>
+        <button
+          data-switch-agy
+          onClick={() => {
+            setProvider("antigravity");
+            setChosen(true);
+            setOverride(undefined);
+          }}
+        >
+          Switch to Antigravity
+        </button>
+        <button
+          data-switch-claude
+          onClick={() => {
+            setProvider("claude-code");
+            setChosen(true);
+            setOverride(undefined);
+          }}
+        >
+          Switch to Claude
+        </button>
+        <SessionPresetPicker
+          provider={provider}
+          presets={activePresets}
+          value={state.selected}
+          onChange={setOverride}
+          helperText={state.override === undefined && state.inherited
+            ? "Inherited from Suger"
+            : "Applied before the first prompt"}
+        />
+        <button data-submit onClick={() => (submitted = state.selected)}>
+          Submit
+        </button>
+      </>
+    );
+  }
+  try {
+    flushSync(() =>
+      root.render(
+        <BrowserProductTheme>
+          <SwitchAgent />
+        </BrowserProductTheme>,
+      )
+    );
+    const field = () =>
+      container.querySelector<HTMLElement>('.MuiSelect-select[role="combobox"]')!;
+    check(
+      field().textContent?.includes("Sonnet · XHigh"),
+      "directory preset selected initially for Claude",
+    );
+    check(
+      container.textContent?.includes("Inherited from Suger"),
+      "inherited helper shown for matching provider",
+    );
+    flushSync(() =>
+      container.querySelector<HTMLButtonElement>("[data-switch-agy]")!.click()
+    );
+    check(
+      field().textContent?.includes("Gemini 4 Neon · High · Recommended"),
+      "switching to Antigravity selects Antigravity recommended preset",
+    );
+    check(
+      !container.textContent?.includes("Unavailable or incompatible"),
+      "switching to Antigravity does not show incompatible warning",
+    );
+    check(
+      !container.textContent?.includes("Inherited from Suger"),
+      "switched agent does not claim preset was inherited from Suger",
+    );
+    flushSync(() =>
+      container.querySelector<HTMLButtonElement>("[data-submit]")!.click()
+    );
+    check(
+      submitted === "antigravity/gemini-neon-high",
+      "submits Antigravity recommended preset",
+    );
+    flushSync(() =>
+      container.querySelector<HTMLButtonElement>("[data-switch-claude]")!.click()
+    );
+    check(
+      field().textContent?.includes("Sonnet · XHigh"),
+      "switching back to Claude restores Suger inherited preset",
+    );
+  } finally {
+    flushSync(() => root.unmount());
+    container.remove();
   }
 }

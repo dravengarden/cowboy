@@ -98,6 +98,37 @@ pub fn value(defaults: &ResolvedDefaults, key: DefaultKey) -> Option<String> {
     defaults.values.get(&key).cloned().flatten()
 }
 
+/// Directory preset applicable to `provider` when the caller omitted `preset`.
+/// A preset belonging to `provider` is always inherited (including retired IDs,
+/// so `preset_values` reports the incompatibility). A foreign preset is skipped
+/// when the caller overrode the Provider or the directory paired that preset
+/// with its own default Provider, so creating a session with another agent
+/// uses that agent's defaults instead of failing with a cross-agent preset error.
+pub fn inherited_preset(
+    provider: &str,
+    defaults: &ResolvedDefaults,
+    provider_overridden: bool,
+) -> Option<String> {
+    let preset = value(defaults, DefaultKey::Preset)?;
+    let owner = preset
+        .split_once('/')
+        .map(|(owner, _)| owner)
+        .filter(|owner| !owner.is_empty());
+    if owner == Some(provider) {
+        return Some(preset);
+    }
+    let default_provider = value(defaults, DefaultKey::Provider);
+    if provider_overridden
+        || owner.is_some_and(|owner| {
+            default_provider.as_deref() == Some(owner)
+                || (default_provider.is_none() && owner == "claude-code")
+        })
+    {
+        return None;
+    }
+    Some(preset)
+}
+
 /// Service-side counterpart of New Session's automatic local/connected project
 /// choice. Explicit identities are filters, never hints that may be discarded.
 pub async fn default_workspace(
@@ -266,8 +297,62 @@ pub async fn apply_created(
 
 #[cfg(test)]
 mod tests {
-    use super::{select_workspace, workspace};
+    use super::{inherited_preset, select_workspace, workspace};
     use crate::machine_protocol::MachineWorkspace;
+    use crate::session_folders::defaults::{DefaultKey, ResolvedDefaults};
+
+    #[test]
+    fn inherited_preset_skips_foreign_preset_when_provider_changes_and_keeps_same_provider_or_broken_defaults()
+     {
+        let make = |provider: Option<&str>, preset: Option<&str>| {
+            let mut defaults = ResolvedDefaults::default();
+            if let Some(provider) = provider {
+                defaults
+                    .values
+                    .insert(DefaultKey::Provider, Some(provider.to_owned()));
+            }
+            if let Some(preset) = preset {
+                defaults
+                    .values
+                    .insert(DefaultKey::Preset, Some(preset.to_owned()));
+            }
+            defaults
+        };
+
+        let suger = make(Some("claude-code"), Some("claude-code/sonnet-xhigh"));
+        assert_eq!(
+            inherited_preset("claude-code", &suger, false).as_deref(),
+            Some("claude-code/sonnet-xhigh")
+        );
+        assert_eq!(
+            inherited_preset("claude-code", &suger, true).as_deref(),
+            Some("claude-code/sonnet-xhigh")
+        );
+        assert_eq!(inherited_preset("antigravity", &suger, true), None);
+        assert_eq!(inherited_preset("antigravity", &suger, false), None);
+
+        let implicit_claude = make(None, Some("claude-code/sonnet-xhigh"));
+        assert_eq!(
+            inherited_preset("antigravity", &implicit_claude, true),
+            None
+        );
+        assert_eq!(
+            inherited_preset("antigravity", &implicit_claude, false),
+            None
+        );
+
+        let retired = make(Some("antigravity"), Some("antigravity/retired"));
+        assert_eq!(
+            inherited_preset("antigravity", &retired, false).as_deref(),
+            Some("antigravity/retired")
+        );
+
+        let broken = make(Some("claude-code"), Some("codex/missing"));
+        assert_eq!(
+            inherited_preset("claude-code", &broken, false).as_deref(),
+            Some("codex/missing")
+        );
+    }
 
     #[test]
     fn directory_routes_use_product_authentication_and_operator_mutation_grants() {
