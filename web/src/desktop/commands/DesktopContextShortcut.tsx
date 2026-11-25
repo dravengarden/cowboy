@@ -137,7 +137,7 @@ export function DesktopContextShortcut({
             overflow: "visible",
             opacity: inline ? 0.72 : itemScoped ? 0 : 0.28,
             transform: restingTransform,
-            transition: "opacity 120ms ease, transform 120ms ease",
+            // Switch badge visibility/position without compositor-layer churn.
             pointerEvents: "none",
           }}
         >

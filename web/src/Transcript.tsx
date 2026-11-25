@@ -69,7 +69,7 @@ import {
   transcriptScrollHasReaderIntent,
   wheelLeavesLatest,
 } from "./transcriptFollowIntent";
-import { transcriptRowContainment, transcriptScrollerChildSx } from "./transcriptMotion";
+import { transcriptFrameIsolationSx, transcriptRowContainment, transcriptScrollerChildSx } from "./transcriptMotion";
 import {
   liveTranscriptMountedRows,
   liveTranscriptWindow,
@@ -2619,9 +2619,9 @@ export function Transcript({
         flex: 1,
         position: "relative",
         overflow: "hidden",
+        ...transcriptFrameIsolationSx(desktopNavigation),
         ...readerTopEdge(theme, topInset), // Shared paint-only top fade.
-        // Column keeps the status bar in flow; loading stays absolute.
-        display: "flex",
+        display: "flex", // Column keeps the status bar in flow; loading stays absolute.
         flexDirection: "column",
         minHeight: 0,
       })}

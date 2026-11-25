@@ -138,9 +138,11 @@ export function ShortcutKeycap({
           lineHeight: 1,
           whiteSpace: "nowrap",
           opacity: inactive ? 0.32 : 1,
-          filter: inactive ? "grayscale(1) saturate(0)" : "none",
+          // Keep keycap state changes off the GPU compositor: opacity/filter
+          // transitions on repeated keycaps promote temporary layers that tear
+          // down macOS WebKit's column-reverse transcript backing store.
           transition:
-            "color 120ms ease, background-color 120ms ease, border-color 120ms ease, opacity 120ms ease, filter 120ms ease",
+            "color 120ms ease, background-color 120ms ease, border-color 120ms ease",
         },
         ...(Array.isArray(sx) ? sx : [sx]),
       ]}
