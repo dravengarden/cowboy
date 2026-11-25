@@ -593,8 +593,9 @@ export class Subagents {
         "session/prompt",
         { sessionId: nativeId, prompt: [{ type: "text", text: prompt }] },
         null,
-        // Synchronously: agy answered, so the child closes its turn, retires
-        // pending permissions and UI bindings, and disarms the stop watchdog.
+        // Synchronously: agy answered, so the child closes its turn, fences its
+        // facade immediately, retires pending permissions and UI bindings, and
+        // disarms the stop watchdog.
         () => {
           child.replied = true;
           clearTimeout(child.killTimer);
@@ -609,6 +610,9 @@ export class Subagents {
             proxy.planGate?.clearTurn(nativeId, childTurn);
             proxy.clearResults?.(nativeId, childTurn);
           }
+          child.facadeCleanup ??= Promise.resolve(
+            (proxy.facade ?? runtime.facade)?.endTurn(nativeId),
+          ).catch(() => {});
         },
       )
         .then((message) => this.settle(child, message))
@@ -713,9 +717,9 @@ export class Subagents {
     if (!RUNNING.has(child.state)) return;
     const turn = proxy.turns.get(child.id);
     proxy.planGate?.clearTurn(child.id, turn);
-    // Fenced first, as for any ending turn: no tool call of the child admits
-    // anything more and its commands stop.
-    await proxy.facade.endTurn(child.id).catch(() => {});
+    // Fenced first, as for any ending turn: join the synchronous endTurn
+    // started when agy answered (or start it now if not yet running).
+    await (child.facadeCleanup ?? proxy.facade.endTurn(child.id).catch(() => {}));
     const runtime = await proxy.runtime;
     let settled = await runtime.evidence
       .settle(child.cursor, child.id, message.result?.stopReason)
@@ -793,7 +797,7 @@ export class Subagents {
     proxy.modes.delete(child.id);
     proxy.waiting?.delete(child.id);
     this.opening.delete(child.id);
-    proxy.runtime.then(
+    Promise.resolve(proxy.runtime).then(
       (runtime) => {
         runtime.unbindChannel?.(child.channel);
         runtime.facade.forgetSession?.(child.id);

@@ -179,7 +179,11 @@ test("agent requests other than permission are refused; permission replies are r
   await proxy.fromClient(
     request(8, "session/set_config_option", { sessionId: "s", configId: "mode", value: "default" }),
   );
-  await proxy.fromAgent({ jsonrpc: "2.0", id: 8, result: {} });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 8,
+    result: { configOptions: [{ id: "mode", currentValue: "default" }] },
+  });
   await proxy.fromAgent(
     request(75, "session/request_permission", {
       sessionId: "s",
@@ -244,7 +248,7 @@ test("agent requests other than permission are refused; permission replies are r
     { args: { command: "git status" } },
   );
   assert.equal(client.at(-1).method, "session/request_permission");
-  assert.equal(client.at(-1).params.toolCall.title, "RunCommand: git status");
+  assert.equal(client.at(-1).params.toolCall.title, 'RunCommand {"command":"git status"}');
   assert.equal(client.at(-1).params.toolCall.kind, "execute");
   const runWorkerId = client.at(-1).id;
   await proxy.fromClient({

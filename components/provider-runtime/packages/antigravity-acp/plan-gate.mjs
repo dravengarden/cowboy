@@ -190,67 +190,88 @@ export class PlanGate {
 
   /**
    * Clear waiting announcements belonging to `turn` (or all announcements for
-   * `sessionId` when `turn` is `undefined`).
+   * `sessionId` when `turn` is `undefined`), returning unresolved `toolCallId`s
+   * so subsequent correction attempts of the same turn can taint them.
    */
   clearTurn(sessionId, turn) {
-    if (typeof sessionId !== "string") return;
+    if (typeof sessionId !== "string") return [];
     const list = this.waiting.get(sessionId);
-    if (!list) return;
+    if (!list) return [];
     if (turn === undefined) {
       this.waiting.delete(sessionId);
-      return;
+      return list.map((entry) => entry.id);
     }
-    const left = list.filter((entry) => entry.turn !== turn);
+    const removed = [];
+    const left = [];
+    for (const entry of list) {
+      if (entry.turn === turn) removed.push(entry.id);
+      else left.push(entry);
+    }
     if (left.length) this.waiting.set(sessionId, left);
     else this.waiting.delete(sessionId);
+    return removed;
   }
 
   /**
    * Record one `tool_call` or `tool_call_update` emitted by `agy` for UI
-   * progress/result attachment. Terminal updates remove the entry; later
-   * updates that contradict an existing entry or its bound call's digest mark
-   * it ambiguous so `bind()` suppresses mismatched output.
+   * progress/result attachment. Validates `name` and `rawInput` against an
+   * existing entry (and its bound call's digest) BEFORE removing terminal
+   * entries, returning `{ contradicted }` so the proxy can drop buffered
+   * results for contradicted calls.
    */
   trackUpdate(sessionId, update, turn) {
     const id = update?.toolCallId;
-    if (typeof sessionId !== "string" || typeof id !== "string" || id === "") return;
-    const list = this.waiting.get(sessionId) ?? [];
-    if (TERMINAL.has(update.status)) {
-      const left = list.filter((entry) => entry.id !== id);
-      if (left.length) this.waiting.set(sessionId, left);
-      else this.waiting.delete(sessionId);
-      return;
+    if (typeof sessionId !== "string" || typeof id !== "string" || id === "") {
+      return { contradicted: false };
     }
-    if (turn !== undefined && !isTurnLive(turn)) return;
+    const list = this.waiting.get(sessionId) ?? [];
     const attempt = attemptOf(turn);
     const existing = list.find((entry) => entry.id === id);
+    let contradicted = false;
     if (existing) {
-      if (existing.turn !== turn || existing.attempt !== attempt) existing.ambiguous = true;
+      if (existing.turn !== turn || existing.attempt !== attempt) {
+        existing.ambiguous = true;
+        contradicted = true;
+      }
       if (typeof update.name === "string" && update.name !== existing.name) {
         existing.ambiguous = true;
+        contradicted = true;
       }
       if (update.rawInput !== undefined) {
         const stripSummary = isBuiltinFacadeTool(existing.toolName);
         const digest = argsDigest(update.rawInput, { stripSummary });
-        if (digest === undefined) existing.ambiguous = true;
-        else if (!existing.hasInput) {
+        if (digest === undefined) {
+          existing.ambiguous = true;
+          contradicted = true;
+        } else if (!existing.hasInput) {
           existing.hasInput = true;
           existing.digest = digest;
           if (existing.boundDigest !== undefined && existing.boundDigest !== digest) {
             existing.ambiguous = true;
+            contradicted = true;
           }
         } else if (existing.digest !== digest) {
           existing.ambiguous = true;
+          contradicted = true;
         }
       }
-      return;
+      if (existing.ambiguous) contradicted = true;
     }
+    if (TERMINAL.has(update.status)) {
+      const left = list.filter((entry) => entry.id !== id);
+      if (left.length) this.waiting.set(sessionId, left);
+      else this.waiting.delete(sessionId);
+      return { contradicted };
+    }
+    if (existing) return { contradicted };
+    if (turn !== undefined && !isTurnLive(turn)) return { contradicted: false };
     const name = update.name;
     const toolName = stripFacadePrefix(name);
-    if (toolName === undefined) return;
+    if (toolName === undefined) return { contradicted: false };
     const stripSummary = isBuiltinFacadeTool(toolName);
     const hasRaw = update.rawInput !== undefined;
     const digest = hasRaw ? argsDigest(update.rawInput, { stripSummary }) : undefined;
+    const tainted = Boolean(turn?.taintedToolCallIds?.has(id));
     if (list.length >= MAX_WAITING) list.shift();
     list.push({
       id,
@@ -260,11 +281,12 @@ export class PlanGate {
       attempt,
       hasInput: hasRaw && digest !== undefined,
       digest,
-      ambiguous: hasRaw && digest === undefined,
+      ambiguous: tainted || (hasRaw && digest === undefined),
       boundCall: undefined,
       boundDigest: undefined,
     });
     this.waiting.set(sessionId, list);
+    return { contradicted: false };
   }
 
   /**
@@ -342,5 +364,24 @@ export class PlanGate {
       return binding.id;
     }
     return this.matchUnbound(call, currentTurn, currentAttempt);
+  }
+
+  /** Whether `call`'s previously bound UI announcement is still consistent and live. */
+  isBindingConsistent(call, currentTurn) {
+    if (!call || typeof call !== "object") return false;
+    const binding = this.bound.get(call);
+    if (!binding) return false;
+    const currentAttempt = attemptOf(currentTurn);
+    if (binding.turn !== currentTurn || binding.attempt !== currentAttempt) return false;
+    if (binding.turn !== undefined && !isTurnLive(binding.turn)) return false;
+    if (binding.entry.ambiguous) return false;
+    if (
+      binding.digest !== undefined &&
+      binding.entry.hasInput &&
+      binding.entry.digest !== binding.digest
+    ) {
+      return false;
+    }
+    return true;
   }
 }

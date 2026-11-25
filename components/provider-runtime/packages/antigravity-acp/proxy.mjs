@@ -133,46 +133,27 @@ export const TURN_ERROR_TEXT = Object.freeze({
 const MAX_TOOL_CALLS = 1024;
 /** Bounded concurrent pending worker-facing permission requests per proxy. */
 const MAX_PENDING_PERMISSIONS = 64;
-/** Maximum full approval title length displayed on Cowboy Web controls (no truncation). */
-const MAX_APPROVAL_TITLE_CHARS = 8192;
+/** Maximum full approval title size (UTF-8 bytes) displayed on Cowboy Web controls (no truncation). */
+const MAX_APPROVAL_TITLE_BYTES = 8192;
 
 /**
- * Build an untruncated owner-facing approval title showing the exact frozen
- * execution payload (full multi-line RunCommand or complete extension JSON
- * including `toolSummary`). Returns `undefined` if the payload cannot be
- * displayed in full within `MAX_APPROVAL_TITLE_CHARS`.
+ * Build an unambiguous, untruncated owner-facing approval title showing the
+ * exact frozen JSON execution payload for both `RunCommand` and extension
+ * calls (all fields JSON-escaped so literal command text cannot spoof other
+ * arguments). Returns `undefined` if the payload cannot be serialized or
+ * exceeds `MAX_APPROVAL_TITLE_BYTES` UTF-8 bytes.
  */
 function buildApprovalTitle(name, execArgs, route) {
-  let title;
-  if (
-    name === "RunCommand" &&
-    typeof execArgs?.command === "string" &&
-    Object.keys(execArgs).every((key) =>
-      ["command", "wait_seconds", "timeout_seconds", "toolSummary"].includes(key),
-    )
-  ) {
-    const extras = [];
-    if (execArgs.wait_seconds !== undefined) extras.push(`wait=${execArgs.wait_seconds}s`);
-    if (execArgs.timeout_seconds !== undefined) {
-      extras.push(`timeout=${execArgs.timeout_seconds}s`);
-    }
-    if (typeof execArgs.toolSummary === "string" && execArgs.toolSummary.trim()) {
-      extras.push(`summary=${JSON.stringify(execArgs.toolSummary.trim())}`);
-    }
-    const suffix = extras.length ? ` [${extras.join(", ")}]` : "";
-    title = `RunCommand: ${execArgs.command}${suffix}`;
-  } else {
-    const label = route ? `${route.server} · ${route.tool}` : name;
-    let encoded;
-    try {
-      encoded = JSON.stringify(execArgs ?? {});
-    } catch {
-      return undefined;
-    }
-    if (encoded === undefined) return undefined;
-    title = `${label} ${encoded}`;
+  const label = route ? `${route.server} · ${route.tool}` : name;
+  let encoded;
+  try {
+    encoded = JSON.stringify(execArgs ?? {});
+  } catch {
+    return undefined;
   }
-  return title.length <= MAX_APPROVAL_TITLE_CHARS ? title : undefined;
+  if (encoded === undefined) return undefined;
+  const title = `${label} ${encoded}`;
+  return Buffer.byteLength(title, "utf8") <= MAX_APPROVAL_TITLE_BYTES ? title : undefined;
 }
 
 /** Extract an explicit mode string from an ACP session result or update. */
@@ -339,8 +320,8 @@ export class AcpProxy {
     this.workerPermissions = new Map();
     /** Reverse lookup from normalized native `agy` permission request ID -> worker ID. */
     this.agentPermToWorker = new Map();
-    /** Random incarnation token so permission IDs never collide across proxy restarts. */
-    this.permIncarnation = randomUUID().slice(0, 8);
+    /** Random 128-bit incarnation token so permission IDs never collide across proxy restarts. */
+    this.permIncarnation = randomUUID();
     /** Monotonic counter for unique worker-facing permission request IDs. */
     this.nextPermId = 0;
     this.turns = new Map();
@@ -476,16 +457,24 @@ export class AcpProxy {
     return (this.switchState.get(ownerId)?.active.size ?? 0) > 0;
   }
 
+  /** Whether `ownerId` has any active mode switch or session reopen in flight. */
+  hasActiveModeOps(ownerId) {
+    const state = this.switchState.get(ownerId);
+    return (state?.active.size ?? 0) > 0 || (state?.activeReopens.size ?? 0) > 0;
+  }
+
   /**
    * Confirmed effective mode for `sessionId` (subagents inherit their parent's
-   * mode). Returns `"switching"` while a switch is in flight, the confirmed
-   * mode string when known, or `undefined` when unknown.
+   * mode). Returns `"switching"` while a mode switch or reopen is in flight,
+   * the confirmed mode string when known, or `undefined` when unknown.
    */
   effectiveMode(sessionId) {
     const ownerId = this.subagents.parentOf(sessionId) ?? sessionId;
     if (typeof ownerId !== "string") return undefined;
     if (this.isSwitching(ownerId)) return "switching";
-    return this.modes.get(ownerId);
+    const mode = this.modes.get(ownerId);
+    if (this.hasActiveModeOps(ownerId) && !isPlanEffectiveMode(mode)) return "switching";
+    return mode;
   }
 
   /** Whether `sessionId` is currently governed by restricted/plan enforcement. */
@@ -565,7 +554,13 @@ export class AcpProxy {
   ensureSwitchState(sessionId) {
     let state = this.switchState.get(sessionId);
     if (!state) {
-      state = { nextSeq: 0, latestSeq: 0, active: new Set(), overlapped: false };
+      state = {
+        nextSeq: 0,
+        latestSeq: 0,
+        active: new Set(),
+        activeReopens: new Set(),
+        overlapped: false,
+      };
       this.switchState.set(sessionId, state);
     }
     return state;
@@ -576,11 +571,23 @@ export class AcpProxy {
     if (typeof sessionId !== "string" || this.subagents.owns(sessionId)) return undefined;
     const state = this.ensureSwitchState(sessionId);
     const seq = ++state.nextSeq;
-    if (state.active.size > 0) state.overlapped = true;
+    if (state.active.size > 0 || state.activeReopens.size > 0) state.overlapped = true;
     state.latestSeq = seq;
+    state.activeReopens.add(seq);
     this.modes.delete(sessionId);
     this.invalidateModeFamily(sessionId, "The session is reloading.");
     return seq;
+  }
+
+  /** Complete one tracked session reopen (`load`/`resume`), on either result or error. */
+  finishModeReopen(sessionId, seq) {
+    if (typeof sessionId !== "string" || seq === undefined) return;
+    const state = this.switchState.get(sessionId);
+    if (!state) return;
+    state.activeReopens.delete(seq);
+    if (state.active.size === 0 && state.activeReopens.size === 0) {
+      state.overlapped = false;
+    }
   }
 
   /** Record the start of a mode switch on root owner `sessionId`. */
@@ -588,7 +595,7 @@ export class AcpProxy {
     if (typeof sessionId !== "string" || this.subagents.owns(sessionId)) return undefined;
     const state = this.ensureSwitchState(sessionId);
     const seq = ++state.nextSeq;
-    if (state.active.size > 0) state.overlapped = true;
+    if (state.active.size > 0 || state.activeReopens.size > 0) state.overlapped = true;
     state.latestSeq = seq;
     state.active.add(seq);
     this.modes.delete(sessionId);
@@ -596,8 +603,12 @@ export class AcpProxy {
     return seq;
   }
 
-  /** Complete one tracked mode switch, failing closed on errors or overlapping replies without authoritative mode. */
-  finishModeSwitch(sessionId, seq, requestedMode, result) {
+  /**
+   * Complete one tracked mode switch, failing closed on errors, overlapping
+   * replies without an authoritative mode, or empty `session/set_config_option`
+   * replies requesting an unrestricted mode.
+   */
+  finishModeSwitch(sessionId, seq, requestedMode, result, { allowEmptyUnrestricted = false } = {}) {
     const state = this.switchState.get(sessionId);
     if (!state) return;
     state.active.delete(seq);
@@ -611,7 +622,7 @@ export class AcpProxy {
     }
     const wasOverlapped = state.overlapped;
     const isLatest = seq === state.latestSeq;
-    state.overlapped = false;
+    if (state.activeReopens.size === 0) state.overlapped = false;
     // Always invalidate generation & switching-era prompts on final outcome,
     // including errors.
     this.invalidateModeFamily(sessionId, "The session's mode changed.");
@@ -620,12 +631,24 @@ export class AcpProxy {
       return;
     }
     const reported = extractReportedMode(result);
-    if (!wasOverlapped && isLatest) {
-      this.modes.set(sessionId, reported ?? requestedMode);
-    } else if (isLatest && reported !== undefined) {
+    if (reported !== undefined && isLatest) {
       this.modes.set(sessionId, reported);
+    } else if (
+      isLatest &&
+      typeof requestedMode === "string" &&
+      isPlanEffectiveMode(requestedMode)
+    ) {
+      this.modes.set(sessionId, requestedMode);
+    } else if (
+      !wasOverlapped &&
+      isLatest &&
+      typeof requestedMode === "string" &&
+      allowEmptyUnrestricted
+    ) {
+      this.modes.set(sessionId, requestedMode);
     } else {
-      // Overlapping switches or newer reopens with out-of-order or empty reply stay unknown.
+      // Overlapping switches, newer reopens, or empty set_config_option replies
+      // requesting an unrestricted mode stay unknown (fail-closed).
       this.modes.delete(sessionId);
     }
   }
@@ -782,18 +805,6 @@ export class AcpProxy {
       return this.rejectPermission(agyId, redactedMessage, "rejected permission: no live turn");
     }
     const agyKey = JSON.stringify(agyId);
-    if (this.agentPermToWorker.has(agyKey)) {
-      // Live duplicate native permission ID: retire the existing worker prompt
-      // and refuse the colliding request fail-closed.
-      this.retirePermission(this.agentPermToWorker.get(agyKey), {
-        reason: "Duplicate native permission request ID.",
-      });
-      return this.rejectPermission(
-        agyId,
-        redactedMessage,
-        "rejected permission: duplicate live native request ID",
-      );
-    }
     const rawOptions = Array.isArray(redactedMessage.params?.options)
       ? redactedMessage.params.options
       : [];
@@ -869,7 +880,7 @@ export class AcpProxy {
     if (
       typeof sessionId !== "string" ||
       this.subagents.owns(sessionId) ||
-      this.isSwitching(sessionId)
+      this.hasActiveModeOps(sessionId)
     ) {
       return;
     }
@@ -907,8 +918,12 @@ export class AcpProxy {
       const entry = this.results.get(key);
       this.results.delete(key);
       const currentTurn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
+      const isTainted = Boolean(currentTurn?.taintedToolCallIds?.has(id));
       const matchesAttempt = entry.turn === currentTurn && entry.attempt === currentTurn?.attempt;
-      if (matchesAttempt && entry.content.length) {
+      const bindingOk = entry.call
+        ? this.planGate.isBindingConsistent(entry.call, currentTurn)
+        : true;
+      if (!isTainted && matchesAttempt && bindingOk && entry.content.length) {
         return { ...shown, content: entry.content };
       }
     }
@@ -964,7 +979,14 @@ export class AcpProxy {
    */
   track(sessionId, update) {
     const turn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
-    this.planGate.trackUpdate(sessionId, update, turn);
+    const outcome = this.planGate.trackUpdate(sessionId, update, turn);
+    if (
+      outcome?.contradicted &&
+      typeof sessionId === "string" &&
+      typeof update?.toolCallId === "string"
+    ) {
+      this.results.delete(callKey(sessionId, update.toolCallId));
+    }
   }
 
   /**
@@ -999,11 +1021,13 @@ export class AcpProxy {
     const id = this.bind(call);
     if (id === undefined) return;
     const turn = typeof call.sessionId === "string" ? this.turns.get(call.sessionId) : undefined;
+    if (turn?.taintedToolCallIds?.has(id)) return;
     if (this.results.size >= MAX_TOOL_CALLS) this.results.delete(this.results.keys().next().value);
     this.results.set(callKey(call.sessionId, id), {
       sessionId: call.sessionId,
       turn,
       attempt: turn?.attempt,
+      call,
       content: resultContent(call.name, call.args, result, this.root),
     });
   }
@@ -1022,6 +1046,8 @@ export class AcpProxy {
   toolProgress(call, text) {
     const id = this.bind(call);
     if (id === undefined || typeof text !== "string") return;
+    const turn = typeof call.sessionId === "string" ? this.turns.get(call.sessionId) : undefined;
+    if (turn?.taintedToolCallIds?.has(id)) return;
     // Through the same seal as native tool updates.
     const shown = this.holdReply({
       jsonrpc: "2.0",
@@ -1467,6 +1493,9 @@ export class AcpProxy {
         forwarded.params = params;
       } catch (error) {
         if (method === "session/new") this.managedOpening = false;
+        if (modeOpSeq !== undefined) {
+          this.finishModeReopen(forwarded.params?.sessionId, modeOpSeq);
+        }
         return refuseClient(id, `cowboy_antigravity_unavailable: ${error.message}`, -32603);
       }
     } else if (method === "session/prompt") {
@@ -1672,7 +1701,11 @@ export class AcpProxy {
       turn,
       reason: cancelled ? "The turn was cancelled." : "The turn ended.",
     });
-    this.planGate.clearTurn(sessionId, turn);
+    const unresolved = this.planGate.clearTurn(sessionId, turn);
+    if (unresolved.length) {
+      turn.taintedToolCallIds ??= new Set();
+      for (const id of unresolved) turn.taintedToolCallIds.add(id);
+    }
     this.clearResults(sessionId, turn);
     if (turn.attemptCleanup) return turn.attemptCleanup;
     // Synchronously initiate facade cleanup when runtime is already ready so admission fences at once.
@@ -2035,6 +2068,18 @@ export class AcpProxy {
       }
       // Redact account tier metadata before inspecting or forwarding options.
       const asked = stripTier(message);
+      const agyKey = JSON.stringify(id);
+      if (this.agentPermToWorker.has(agyKey)) {
+        // Live duplicate native permission ID: retire the existing worker
+        // prompt and send a single cancellation reply for `id`.
+        this.retirePermission(this.agentPermToWorker.get(agyKey), {
+          reason: "Duplicate native permission request ID.",
+          notifyWorker: true,
+          replyAgent: true,
+        });
+        this.log("rejected permission: duplicate live native request ID");
+        return;
+      }
       if (this.closing) {
         return this.rejectPermission(id, asked, "rejected permission: proxy closing");
       }
@@ -2179,20 +2224,48 @@ export class AcpProxy {
         record.mode.seq,
         record.mode.mode,
         message.result,
+        { allowEmptyUnrestricted: record.method === "session/set_mode" },
       );
+    }
+    if (SESSION_REQUESTS.has(record.method) && record.modeOpSeq !== undefined) {
+      const reopenSessionId =
+        record.session ?? record.params?.sessionId ?? message.result?.sessionId;
+      const sw =
+        typeof reopenSessionId === "string" ? this.switchState.get(reopenSessionId) : undefined;
+      const isCurrentReopen =
+        sw?.latestSeq === record.modeOpSeq &&
+        !this.isSwitching(reopenSessionId) &&
+        sw.activeReopens.size === 1 &&
+        sw.activeReopens.has(record.modeOpSeq);
+      this.finishModeReopen(reopenSessionId, record.modeOpSeq);
+      if (message.result !== undefined) {
+        const sessionId = message.result?.sessionId ?? record.session;
+        if (
+          typeof sessionId === "string" &&
+          sessionId === reopenSessionId &&
+          !this.subagents.owns(sessionId) &&
+          isCurrentReopen
+        ) {
+          this.modes.delete(sessionId);
+          this.invalidateModeFamily(sessionId, "The session reopened.");
+          this.reportMode(sessionId, message.result);
+        }
+      }
     }
     if (message.result !== undefined) {
       if (SESSION_REQUESTS.has(record.method)) {
         const sessionId = message.result?.sessionId ?? record.session;
-        const sw = typeof sessionId === "string" ? this.switchState.get(sessionId) : undefined;
-        const isCurrentReopen =
-          record.modeOpSeq !== undefined
-            ? sw?.latestSeq === record.modeOpSeq && !this.isSwitching(sessionId)
-            : sw === undefined;
-        if (typeof sessionId === "string" && !this.subagents.owns(sessionId) && isCurrentReopen) {
-          this.modes.delete(sessionId);
-          this.invalidateModeFamily(sessionId, "The session reopened.");
-          this.reportMode(sessionId, message.result);
+        if (record.modeOpSeq === undefined) {
+          const sw = typeof sessionId === "string" ? this.switchState.get(sessionId) : undefined;
+          if (
+            typeof sessionId === "string" &&
+            !this.subagents.owns(sessionId) &&
+            sw === undefined
+          ) {
+            this.modes.delete(sessionId);
+            this.invalidateModeFamily(sessionId, "The session reopened.");
+            this.reportMode(sessionId, message.result);
+          }
         }
         this.compaction.opened(sessionId, record.projection);
         if (!runtime.managed) {

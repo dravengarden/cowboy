@@ -1784,15 +1784,22 @@ export function renderSubagent(id, outcome) {
 export function serveMcp(stream, facade, sessionOf) {
   const relayId = facade.registerRelay(sessionOf);
   const activeCalls = new Map();
+  let streamEnded = false;
   const abortAllCalls = () => {
-    for (const controller of activeCalls.values()) controller.abort();
+    for (const entry of activeCalls.values()) entry.controller.abort();
     activeCalls.clear();
   };
+  stream.once("end", () => {
+    streamEnded = true;
+    abortAllCalls();
+  });
   stream.once("close", () => {
+    streamEnded = true;
     abortAllCalls();
     facade.unregisterRelay(relayId);
   });
   stream.on("error", () => {
+    streamEnded = true;
     abortAllCalls();
   });
   let buffered = "";
@@ -1830,10 +1837,10 @@ export function serveMcp(stream, facade, sessionOf) {
         params?.requestId !== undefined
       ) {
         const key = JSON.stringify(params.requestId);
-        const controller = activeCalls.get(key);
-        if (controller) {
+        const active = activeCalls.get(key);
+        if (active) {
           activeCalls.delete(key);
-          controller.abort();
+          active.controller.abort();
         }
       }
       return;
@@ -1852,6 +1859,9 @@ export function serveMcp(stream, facade, sessionOf) {
     if (method === "ping") return await send({ id, result: {} });
     if (method === "tools/list") return await send({ id, result: { tools: facade.tools() } });
     if (method === "tools/call") {
+      if (streamEnded || stream.destroyed || stream.writableEnded) {
+        return;
+      }
       if (facade.closing) {
         return await send({
           id,
@@ -1861,28 +1871,39 @@ export function serveMcp(stream, facade, sessionOf) {
           },
         });
       }
+      const callKey = JSON.stringify(id);
+      if (activeCalls.has(callKey)) {
+        const existing = activeCalls.get(callKey);
+        activeCalls.delete(callKey);
+        existing.suppressed = true;
+        existing.controller.abort();
+        return await send({
+          id,
+          error: { code: -32600, message: "Duplicate active MCP request ID" },
+        });
+      }
       const sid = sessionOf();
       const trackedTurn = facade.beginCall(sid);
-      const callKey = JSON.stringify(id);
-      const controller = new AbortController();
-      if (activeCalls.has(callKey)) {
-        activeCalls.get(callKey).abort();
-      }
-      activeCalls.set(callKey, controller);
+      const entry = { controller: new AbortController(), suppressed: false };
+      activeCalls.set(callKey, entry);
       let delivered = false;
       try {
         let result;
         try {
           result = await facade.call(sid, params?.name, params?.arguments, relayId, {
-            signal: controller.signal,
+            signal: entry.controller.signal,
           });
         } catch {
-          delivered = await send({ id, error: { code: -32603, message: "Internal error" } });
+          if (!entry.suppressed) {
+            delivered = await send({ id, error: { code: -32603, message: "Internal error" } });
+          }
           return;
         }
-        delivered = await send({ id, result });
+        if (!entry.suppressed) {
+          delivered = await send({ id, result });
+        }
       } finally {
-        if (activeCalls.get(callKey) === controller) activeCalls.delete(callKey);
+        if (activeCalls.get(callKey) === entry) activeCalls.delete(callKey);
         if (!delivered) {
           facade.markRelayAmbiguous(sid, relayId);
         }
