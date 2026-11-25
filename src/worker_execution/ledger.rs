@@ -367,6 +367,15 @@ impl Ledger {
             .collect()
     }
 
+    /// `processes` without the worker's own servers.
+    fn without_servers(&self, processes: Vec<(String, u64)>) -> Vec<(String, u64)> {
+        let state = self.state.lock();
+        processes
+            .into_iter()
+            .filter(|(process, _)| !state.servers.contains(process))
+            .collect()
+    }
+
     /// Whether `turn` is still the active turn (an admitted call queued
     /// behind another may not reach the target once it ended).
     pub(super) fn turn_open(&self, turn: &str) -> bool {
@@ -750,14 +759,22 @@ impl Ledger {
         true
     }
 
-    /// Durably park the session if ANY unclosed process tree, in-flight start,
-    /// admitted mutation, or open extension call remains when a SIGTERM cutoff
+    /// Durably park the session if ANY unclosed turn process tree, in-flight
+    /// start, admitted mutation, or open extension call remains when a SIGTERM cutoff
     /// forces exit before `settle_all` completes.
     pub fn mark_unresolved_effects_uncertain(&self) -> bool {
         let mut state = self.state.lock();
-        let has_processes = !state.processes.is_empty()
+        // The worker's own servers are not session effects (the keeper
+        // reaps them); only turn processes and their starts park.
+        let has_processes = state
+            .processes
+            .keys()
+            .any(|process| !state.servers.contains(process))
             || !state.record.active_processes.is_empty()
-            || !state.starting.is_empty();
+            || state
+                .starting
+                .iter()
+                .any(|process| !state.servers.contains(process));
         let has_effects =
             !state.admitted.is_empty() || !state.result_relays.is_empty() || state.calls > 0;
         if !has_processes && !has_effects {
@@ -1277,7 +1294,11 @@ impl Client {
             ledger
                 .wait_until(|ledger| ledger.mutations_drained(None))
                 .await;
+            // The worker's own servers were ended above without parking: an
+            // unconfirmed end of one is the keeper's to reap, never a session
+            // effect, so it is not ended (and parked) a second time here.
             let processes = ledger.fence(None);
+            let processes = ledger.without_servers(processes);
             self.terminate_all(processes, true).await;
             ledger.wait_until(|ledger| ledger.drained(None)).await;
         }

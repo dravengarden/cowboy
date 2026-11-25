@@ -1887,3 +1887,49 @@ async fn finish_turn_waits_for_in_flight_result_carrying_process_read_after_proc
     assert!(ledger.uncertain_sequence() > 0);
     let _ = read_task.await.unwrap();
 }
+
+/// A target whose processes never confirm their end.
+fn unconfirmed_ends() -> Handler {
+    Arc::new(|invocation| match invocation.method.as_str() {
+        "process/start" => {
+            let id = invocation.params["processId"].as_str().unwrap_or("");
+            completed(json!({"result": {"processId": id}}))
+        }
+        "process/read" => {
+            completed(json!({"result": {"chunks": [], "exited": false, "closed": false}}))
+        }
+        _ => completed(json!({"result": {}})),
+    })
+}
+
+#[tokio::test]
+async fn an_unconfirmed_server_end_in_teardown_does_not_park_the_session() {
+    // 2026-11-25 (OVH): every worker SIGTERM whose MCP server end was not
+    // confirmed within the bound parked its session with `process/terminate`:
+    // the server was ended again, parking, with the turn processes.
+    let target = Target::new(unconfirmed_ends());
+    let l = ledger(&target.client, None);
+    l.record_server("cowboy-worker-mcp-1").unwrap();
+    l.server_started("cowboy-worker-mcp-1", true);
+    target.client.settle_all().await;
+    assert!(l.uncertain_effect().is_none());
+    // The SIGTERM cutoff ignores it too.
+    assert!(!l.mark_unresolved_effects_uncertain());
+    assert!(l.uncertain_effect().is_none());
+}
+
+#[tokio::test]
+async fn an_unconfirmed_turn_process_beside_a_server_still_parks_teardown() {
+    let target = Target::new(unconfirmed_ends());
+    let l = ledger(&target.client, None);
+    l.record_server("cowboy-worker-mcp-1").unwrap();
+    l.server_started("cowboy-worker-mcp-1", true);
+    l.begin_turn("turn-1");
+    let started = target
+        .client
+        .relay("process/start".into(), start("stuck-turn-process"))
+        .await;
+    assert!(started.get("result").is_some());
+    target.client.settle_all().await;
+    assert_eq!(l.uncertain_effect().as_deref(), Some("process/terminate"));
+}

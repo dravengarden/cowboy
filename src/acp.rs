@@ -1036,6 +1036,18 @@ fn finish_prompt_state(
     }
 }
 
+/// Whether a prompt error is a governed Provider proxy's structured terminal
+/// result: JSON-RPC data carrying a `cowboy` object (the Antigravity proxy's
+/// refusal, violation and unproven-outcome endings). Its classification must
+/// reach the Controller even when a Stop raced it.
+fn governed_terminal_error(error: &Error) -> bool {
+    error
+        .data
+        .as_ref()
+        .and_then(|data| data.get("cowboy"))
+        .is_some_and(serde_json::Value::is_object)
+}
+
 fn projected_auth_error(
     provider_id: &str,
     service_auth_projected: bool,
@@ -4683,7 +4695,16 @@ async fn run_session(
                         state.set_status(Status::Running, None);
                         return Ok(());
                     }
-                    if cancelled_during_retry && !recycled_by_watchdog {
+                    // A Stop that raced a governed Provider's terminal error
+                    // (the proxy's structured result: a refusal, a violation or
+                    // an unproven outcome, with `data.cowboy`) must not erase
+                    // it: the Controller derives the account's state from that
+                    // error, and `Cancelled` raises nothing.
+                    let governed_error = response
+                        .as_ref()
+                        .err()
+                        .is_some_and(governed_terminal_error);
+                    if cancelled_during_retry && !recycled_by_watchdog && !governed_error {
                         sink.prompt_completed(&sid, cmid.as_deref(), "Cancelled");
                         prompt.pending_empty_stream_update.lock().take();
                         if let Some(tx) = completion {
