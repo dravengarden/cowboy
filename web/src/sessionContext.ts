@@ -84,6 +84,7 @@ export function stagedNextAgent(context: SessionContext): boolean {
 const DISPLAY_CACHE_LIMIT = 64;
 const reads = new Map<string, Promise<SessionContext>>();
 const cachedContexts = new Map<string, { revision: number; data: SessionContext }>();
+const contextDependencies = new Map<string, Set<string>>();
 const announcedRevisions = new Map<string, number>();
 const loadedAnnouncedRevisions = new Map<string, number>();
 const configured = new Set<string>();
@@ -132,26 +133,42 @@ function invalidateRead(id: string) {
   loadedAnnouncedRevisions.delete(id);
 }
 
+function recordContextDependencies(id: string, context: SessionContext): void {
+  const deps = new Set<string>();
+  for (const link of context.links ?? []) deps.add(link.id);
+  for (const source of context.source_sessions ?? []) deps.add(source.id);
+  for (const sourceId of context.sources ?? []) deps.add(sourceId);
+  if (deps.size === 0) contextDependencies.delete(id);
+  else contextDependencies.set(id, deps);
+}
+
 /** Drop cached context state for a deleted session so attachments and metadata
  *  do not linger in memory across a mobile session. */
 export function evictSessionContext(id: string): void {
   invalidateRead(id);
+  contextDependencies.delete(id);
   announcedRevisions.delete(id);
   configured.delete(id);
   readRevisions.delete(id);
   sends.delete(id);
 }
 
-/** Invalidate cached context views whose linked or source sessions reference
- *  `targetSessionId` (e.g. when a linked session's availability or closing
- *  state changes without bumping the referencing session's context revision). */
-export function invalidateReferencingContexts(targetSessionId: string): void {
+/** Invalidate cached or mounted context views whose linked or source sessions
+ *  intersect `changedSessionIds` (e.g. when a linked session's availability,
+ *  closing state, or title changes via full list, delta, or title sync patch). */
+export function invalidateReferencingContexts(changedSessionIds: string | Iterable<string>): void {
+  const changed = typeof changedSessionIds === "string"
+    ? new Set([changedSessionIds])
+    : new Set(changedSessionIds);
+  if (changed.size === 0) return;
   const affected: string[] = [];
-  for (const [id, entry] of cachedContexts) {
-    const referencesTarget =
-      entry.data.links?.some((link) => link.id === targetSessionId) === true ||
-      entry.data.source_sessions?.some((source) => source.id === targetSessionId) === true;
-    if (referencesTarget) affected.push(id);
+  for (const [id, deps] of contextDependencies) {
+    for (const dep of deps) {
+      if (changed.has(dep)) {
+        affected.push(id);
+        break;
+      }
+    }
   }
   for (const id of affected) announceContext(id);
 }
@@ -265,6 +282,7 @@ export function loadSessionContext(id: string): Promise<SessionContext> {
         return loadSessionContext(id);
       }
       if (context.revision > 0) configured.add(id);
+      recordContextDependencies(id, context);
       if (announced !== undefined && announcedRevisions.get(id) === announced) {
         loadedAnnouncedRevisions.set(id, announced);
         storeDisplayCache(id, revision, context);
@@ -437,6 +455,7 @@ globalThis.addEventListener?.("cowboy:product-sign-out", () => {
   sends.clear();
   reads.clear();
   cachedContexts.clear();
+  contextDependencies.clear();
   announcedRevisions.clear();
   loadedAnnouncedRevisions.clear();
   readRevisions.clear();

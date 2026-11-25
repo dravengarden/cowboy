@@ -59,6 +59,7 @@ let database: DraftDatabase | undefined;
 // known to own a database record.
 const awaitingDatabase = new Map<string, string>();
 const databaseDrafts = new Set<string>();
+const removedSessions = new Set<string>();
 // The database's own list of records has been read. Until then a record this
 // page never wrote may still exist, so a discard is remembered, not skipped.
 let databaseListed = false;
@@ -141,6 +142,23 @@ function writeDatabase(
 
 function discardDatabaseDraft(sessionId: string, force = false): void {
   awaitingDatabase.delete(sessionId);
+  const cache = draftCache(sessionId);
+  if (force) {
+    databaseDrafts.delete(sessionId);
+    if (cache === undefined) {
+      pendingDiscards.add(sessionId);
+      return;
+    }
+    pendingDiscards.delete(sessionId);
+    const tombstone: StoredDraft = { text: "", attachments: [], savedAt: Date.now(), removed: true };
+    // Enqueue directly on the per-session write chain without waiting for
+    // enumeration; atomic tombstone prevents a peer tab's queued write from
+    // recreating attachments after removal.
+    void writeDatabase(sessionId, () =>
+      cache.update ? cache.update(() => tombstone) : cache.discard()
+    ).catch(() => undefined);
+    return;
+  }
   if (!databaseListed) {
     // The record may exist without this page knowing. Discard it once the
     // database answers, or the draft it holds comes back on the next load.
@@ -148,14 +166,13 @@ function discardDatabaseDraft(sessionId: string, force = false): void {
     databaseDrafts.delete(sessionId);
     return;
   }
-  const existed = databaseDrafts.delete(sessionId);
-  if (!existed && !force) return;
-  const cache = draftCache(sessionId);
+  if (!databaseDrafts.delete(sessionId)) return;
   if (cache === undefined) return;
   void writeDatabase(sessionId, () => cache.discard()).catch(() => undefined);
 }
 
 function persist(sessionId: string, draft: Draft | null): void {
+  if (removedSessions.has(sessionId)) return;
   const ls = globalThis.localStorage;
   if (!ls) return;
   const key = KEY_PREFIX + sessionId;
@@ -200,10 +217,16 @@ function persist(sessionId: string, draft: Draft | null): void {
       const stored: StoredDraft = { text: draft.text, attachments, savedAt: Date.now() };
       databaseDrafts.add(sessionId);
       pendingDiscards.delete(sessionId);
-      void writeDatabase(sessionId, () => cache.save(stored)).catch((): void => {
+      void writeDatabase(sessionId, () =>
+        cache.update
+          ? cache.update((existing) => (existing?.removed === true ? existing : stored))
+          : cache.save(stored)
+      ).catch((): void => {
         databaseDrafts.delete(sessionId);
         // Only if nothing newer replaced this draft while the write failed.
-        if (drafts.get(sessionId) === draft) persistLegacy(ls, key, draft);
+        if (!removedSessions.has(sessionId) && drafts.get(sessionId) === draft) {
+          persistLegacy(ls, key, draft);
+        }
       });
       return;
     }
@@ -363,6 +386,11 @@ async function restoreOnce(): Promise<void> {
     const promised = awaitingDatabase.has(sessionId);
     const hydratedText = awaitingDatabase.get(sessionId);
     awaitingDatabase.delete(sessionId);
+    if (record?.removed === true || removedSessions.has(sessionId)) {
+      drafts.delete(sessionId);
+      dirty.delete(sessionId);
+      continue;
+    }
     if (live === undefined && cleared.has(sessionId)) {
       // Sent or cleared here after the record was written.
       discardDatabaseDraft(sessionId);
@@ -466,6 +494,7 @@ export function subscribeDraftRestore(
 // so it never sits on the typing path. An empty draft (e.g. just sent) is cleared
 // from disk immediately — a clear is cheap, and a pending write for it is cancelled.
 export function setDraft(sessionId: string, draft: Draft): void {
+  if (removedSessions.has(sessionId)) return;
   if (!draft.text && draft.attachments.length === 0) {
     drafts.delete(sessionId);
     dirty.delete(sessionId);
@@ -497,12 +526,14 @@ function sameStoredAttachments(previous: Draft | undefined, next: Draft): boolea
 /** Drop the local composer draft for one explicitly removed session without
  *  pruning drafts belonging to other sessions in shared localStorage. */
 export function discardDraft(sessionId: string): void {
+  removedSessions.add(sessionId);
   drafts.delete(sessionId);
   dirty.delete(sessionId);
   awaitingDatabase.delete(sessionId);
   cleared.add(sessionId);
   // Another tab may have saved an attachment draft after this tab enumerated
-  // IndexedDB; enqueue an unconditional discard through the per-session chain.
+  // IndexedDB or before enumeration completed; write a dataset-scoped removal
+  // tombstone directly on the per-session write chain.
   discardDatabaseDraft(sessionId, true);
   try {
     globalThis.localStorage?.removeItem(KEY_PREFIX + sessionId);

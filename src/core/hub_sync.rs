@@ -15,41 +15,105 @@ impl Hub {
         Ok(title.to_owned())
     }
 
-    /// Apply a rename to the typed truth (NO `Sessions` re-broadcast — the sync
-    /// channel carries the title now). Persists so fresh-connect + restart show
-    /// it. Mirror of [`Self::rename_session`] minus the broadcast.
-    pub(super) fn apply_rename(&self, session_id: &str, title: String) {
-        {
+    /// Apply a rename under the canonical `sync` -> `sessions` lock order,
+    /// bumping `"title"`'s version and publishing the `SyncPatch` before
+    /// releasing `sessions` so connect bootstraps and session deltas observe
+    /// titles at one linearizable boundary.
+    pub(super) fn apply_rename_sync(
+        &self,
+        state: &str,
+        id: String,
+        name: &str,
+        args: &serde_json::Value,
+        session_id: String,
+        title: String,
+    ) -> Result<(), String> {
+        let version = {
+            let mut reg = self.inner.sync.lock();
             let mut sessions = self.inner.sessions.lock();
-            if let Some(s) = sessions.get_mut(session_id) {
+            if let Some(s) = sessions.get_mut(&session_id) {
                 s.meta.title.clone_from(&title);
             }
-        }
-        if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::UpdateTitle {
-                session_id: session_id.to_owned(),
-                title,
+            let entry = reg.entry(state.to_owned()).or_default();
+            entry.seen.insert(id.clone());
+            entry.version += 1;
+            let version = entry.version;
+            let value = serde_json::Value::Object(
+                sessions
+                    .values()
+                    .map(|s| {
+                        (
+                            s.meta.id.clone(),
+                            serde_json::Value::String(s.meta.title.clone()),
+                        )
+                    })
+                    .collect(),
+            );
+            self.fanout(Outbound::SyncPatch {
+                state: state.to_owned(),
+                version,
+                value,
+                confirmed: vec![id.clone()],
+                resync: false,
             });
+            version
+        };
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::UpdateTitle { session_id, title });
         }
+        tracing::info!(target: "cowboy::oplog", op = "mutation", %state, name, args = %args);
+        tracing::info!(target: "cowboy::oplog", op = "change", %state, version, confirmed = ?vec![id]);
+        Ok(())
     }
 
-    /// Apply a session reorder to the order list (NO broadcast — the sync channel
-    /// carries it). Mirror of [`Self::reorder_sessions`] minus the broadcast.
-    /// Submitted ids only permute names they include; every existing id survives.
-    pub(super) fn apply_reorder(&self, order: &[String]) {
-        {
+    /// Apply a reorder under the canonical `sync` -> `sessions` -> `order`
+    /// lock order, serializing with session creation and connect bootstraps.
+    pub(super) fn apply_reorder_sync(
+        &self,
+        state: &str,
+        id: String,
+        name: &str,
+        args: &serde_json::Value,
+        order: &[String],
+    ) -> Result<(), String> {
+        let (version, persisted_order) = {
+            let mut reg = self.inner.sync.lock();
+            let _sessions = self.inner.sessions.lock();
             let mut list = self.inner.order.lock();
             *list = merge_session_order(&list, order);
-        }
+            let entry = reg.entry(state.to_owned()).or_default();
+            entry.seen.insert(id.clone());
+            entry.version += 1;
+            let version = entry.version;
+            let persisted_order = list.clone();
+            let value = serde_json::Value::Array(
+                persisted_order
+                    .iter()
+                    .map(|sid| serde_json::Value::String(sid.clone()))
+                    .collect(),
+            );
+            self.fanout(Outbound::SyncPatch {
+                state: state.to_owned(),
+                version,
+                value,
+                confirmed: vec![id.clone()],
+                resync: false,
+            });
+            (version, persisted_order)
+        };
         if let Some(tx) = self.inner.store_tx.as_ref() {
-            let order = self.inner.order.lock().clone();
-            let _ = tx.send(StoreWrite::UpdateSessionOrder { order });
+            let _ = tx.send(StoreWrite::UpdateSessionOrder {
+                order: persisted_order,
+            });
         }
+        tracing::info!(target: "cowboy::oplog", op = "mutation", %state, name, args = %args);
+        tracing::info!(target: "cowboy::oplog", op = "change", %state, version, confirmed = ?vec![id]);
+        Ok(())
     }
 
     /// Apply a sidebar-folders mutation to the typed tree and persist what it
     /// changed: the owner's whole folder set and any explicit placements.
-    /// Mirror of [`Self::apply_reorder`]; the sync channel carries the value.
+    /// Mirror of [`Self::apply_reorder_sync`]; the sync channel carries the value.
     pub(super) fn apply_folders(
         &self,
         actor: &crate::session_folders::FolderActor,
@@ -573,8 +637,12 @@ impl Hub {
                     });
                 }
             }
-            Op::Rename { session_id, title } => self.apply_rename(&session_id, title),
-            Op::Reorder { order } => self.apply_reorder(&order),
+            Op::Rename { session_id, title } => {
+                return self.apply_rename_sync(state, id, name, args, session_id, title);
+            }
+            Op::Reorder { order } => {
+                return self.apply_reorder_sync(state, id, name, args, &order);
+            }
             Op::Folders { mutation, args } => self.apply_folders(actor, &mutation, &args)?,
             Op::MobileReview {
                 session_id,

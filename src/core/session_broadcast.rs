@@ -108,6 +108,112 @@ impl Hub {
         (list, seq)
     }
 
+    /// Atomically capture the client-projected session list, fan-out sequence
+    /// watermark, and global `SyncPatch` resync frames under one consistent
+    /// lock boundary (`sync` -> `sessions` -> `provider_update_offers` -> `order`).
+    /// This guarantees `"title"` / `"order"` sync versions and values match the
+    /// exact session list and `sessions_seq` returned to both delta-aware and
+    /// legacy WebSocket clients.
+    #[must_use]
+    pub fn global_bootstrap_snapshot_for_client(
+        &self,
+        keep: impl Fn(Option<&str>) -> bool,
+    ) -> (Vec<SessionMeta>, u64, Vec<Outbound>) {
+        let now = now_ms();
+        let (list, seq, title_patch, order_patch, other_states) = {
+            let reg = self.inner.sync.lock();
+            let sessions = self.inner.sessions.lock();
+            let offers = self.inner.provider_update_offers.lock();
+            let order = self.inner.order.lock();
+
+            let list = build_session_list(&sessions, &order, &offers, now, keep, true);
+            let seq = self.inner.session_fanout_seq.load(Ordering::Acquire);
+
+            let title_value = serde_json::Value::Object(
+                sessions
+                    .values()
+                    .map(|s| {
+                        (
+                            s.meta.id.clone(),
+                            serde_json::Value::String(s.meta.title.clone()),
+                        )
+                    })
+                    .collect(),
+            );
+            let (title_version, title_confirmed) = reg.get("title").map_or_else(
+                || (0, Vec::new()),
+                |entry| (entry.version, entry.seen.iter().cloned().collect()),
+            );
+            let title_patch = Outbound::SyncPatch {
+                state: "title".to_owned(),
+                version: title_version,
+                value: title_value,
+                confirmed: title_confirmed,
+                resync: true,
+            };
+
+            let order_value = serde_json::Value::Array(
+                order
+                    .iter()
+                    .map(|id| serde_json::Value::String(id.clone()))
+                    .collect(),
+            );
+            let (order_version, order_confirmed) = reg.get("order").map_or_else(
+                || (0, Vec::new()),
+                |entry| (entry.version, entry.seen.iter().cloned().collect()),
+            );
+            let order_patch = Outbound::SyncPatch {
+                state: "order".to_owned(),
+                version: order_version,
+                value: order_value,
+                confirmed: order_confirmed,
+                resync: true,
+            };
+
+            let mut other_states: Vec<(String, u64, Vec<String>)> = reg
+                .iter()
+                .filter(|(s, _)| {
+                    *s != "title"
+                        && *s != "order"
+                        && !s.starts_with("queue:")
+                        && !s.starts_with("mobile-review:")
+                })
+                .map(|(s, e)| (s.clone(), e.version, e.seen.iter().cloned().collect()))
+                .collect();
+            for state in ["folders", "workspace-order"] {
+                if !other_states.iter().any(|(s, _, _)| s == state) {
+                    let version = reg.get(state).map_or(0, |e| e.version);
+                    other_states.push((state.to_owned(), version, Vec::new()));
+                }
+            }
+            for session_id in sessions.keys() {
+                let state = format!("mobile-review:{session_id}");
+                if !other_states
+                    .iter()
+                    .any(|(existing, _, _)| existing == &state)
+                {
+                    let version = reg.get(&state).map_or(0, |entry| entry.version);
+                    other_states.push((state, version, Vec::new()));
+                }
+            }
+            (list, seq, title_patch, order_patch, other_states)
+        };
+
+        let mut resyncs = Vec::with_capacity(other_states.len() + 2);
+        resyncs.push(title_patch);
+        resyncs.push(order_patch);
+        for (state, version, confirmed) in other_states {
+            resyncs.push(Outbound::SyncPatch {
+                value: self.sync_value(&state),
+                state,
+                version,
+                confirmed,
+                resync: true,
+            });
+        }
+        (list, seq, resyncs)
+    }
+
     /// Replace every session's Provider update offer. Emits per-session deltas
     /// when only a small batch changed, or a full session list otherwise.
     pub fn publish_provider_update_offers(&self, offers: HashMap<String, ProviderUpdateOffer>) {

@@ -32,8 +32,12 @@ import {
   SNAPSHOT_GAP_FILL_PAGES,
 } from "./historyFetch";
 import {
+  type BootstrapJournal,
   boundSocketUrl,
-  liveEventsToReplayAfterSnapshot,
+  createBootstrapJournal,
+  diffLinkRelevantSessionIds,
+  mergeSnapshotTimeline,
+  recordBootstrapEvent,
   removeSessionById,
   shouldDiscardStaleReplica,
   upsertSession,
@@ -168,7 +172,7 @@ import {
 } from "./machineState";
 import { type ConfigOption, type ClientCapacity, type ContentBlock, type Delivery, type DraftSchedule, type Envelope, type Inbound, type MachineSummary, type Outbound, type SessionBootstrapResponse, type SessionMeta, type WireQueued } from "./protocol";
 import { observePromptSuggestion } from "./promptSuggestions";
-import { dropEventsBefore, lastContextClearSeq, snapshotJoinGap } from "./canonicalTimeline";
+import { dropEventsBefore } from "./canonicalTimeline";
 import { retainedEventCountForRows, retainTimelineState } from "./timelineRetention";
 import { transcriptPresentationIntervalMs } from "./transcriptRenderPacing";
 import { readUsage, startUsageRefresh } from "./usageApi";
@@ -460,7 +464,8 @@ function evictTranscriptSessions(sessionIds: readonly string[]): void {
     sessionHydrationRetryTimers.delete(sessionId);
     completeQuestionPages.delete(sessionId);
     replicaTails.delete(sessionId);
-    pendingReplicaLiveEvents.delete(sessionId);
+    bootstrapJournals.delete(sessionId);
+    acceptedSnapshotWatermarks.delete(sessionId);
     transcriptEpoch.set(sessionId, (transcriptEpoch.get(sessionId) ?? 0) + 1);
   }
 
@@ -568,9 +573,10 @@ function abandonProductSocket(reason: AbandonReason): Promise<void> {
   productSessionPausedForAuth = false;
   if (reason === "dataset_changed") datasetFenced = true;
   replicaTails.clear();
-  pendingReplicaLiveEvents.clear();
+  bootstrapJournals.clear();
+  acceptedSnapshotWatermarks.clear();
+  hydratedQueues.clear();
   retainedReplicaKey = undefined;
-  cachedQueuesHydrated = false;
   clearReconnectTimer();
   stopLiveness();
   const current = socket;
@@ -1393,13 +1399,6 @@ function applySessionUpdated(session: SessionMeta): void {
   const { sessions, previous } = upsertSession(rawSessions, session);
   unlistedCreatedSessions.delete(session.id);
   syncSessionDelta(sessions, false);
-  if (
-    previous === undefined ||
-    Boolean(previous.closing) !== Boolean(session.closing) ||
-    previous.title !== session.title
-  ) {
-    invalidateReferencingContexts(session.id);
-  }
   if (previous === undefined || previous.status !== session.status) schedulePrefetch();
   if (
     openedSessionId === session.id && !state.hydrated.has(openedSessionId) &&
@@ -1423,7 +1422,6 @@ function applySessionRemoved(sessionId: string): void {
   dropTranscriptSession(sessionId);
   dropReplicaSession(sessionId);
   evictSessionContext(sessionId);
-  invalidateReferencingContexts(sessionId);
   schedulePrefetch();
 }
 
@@ -1439,54 +1437,48 @@ function applySnapshot(msg: Extract<Outbound, { type: "snapshot" }>): void {
     touchTranscriptSession(msg.session_id);
   }
   const cachedReplicaTail = replicaTails.get(msg.session_id);
-  const bufferedLive = pendingReplicaLiveEvents.get(msg.session_id) ?? [];
-  pendingReplicaLiveEvents.delete(msg.session_id);
-  let existingTimeline = state.timelines.get(msg.session_id) ?? [];
-  if (
-    shouldDiscardStaleReplica(
-      state.transcriptSources.get(msg.session_id)?.source,
-      cachedReplicaTail ?? existingTimeline,
-      msg.events,
-    )
-  ) {
-    discardReplicaTimeline(msg.session_id);
-    existingTimeline = [];
-  }
-  replicaTails.delete(msg.session_id);
-  // Clear is destructive: every row before the newest boundary in the fresh
-  // tail was deleted durably while this device was away. Drop that prefix
-  // here instead of paging history for a hole that can never be filled.
-  const clearedBefore = lastContextClearSeq(msg.events);
-  if (
-    clearedBefore !== null &&
-    existingTimeline.some((event) => event.seq < clearedBefore)
-  ) {
-    dropClearedPrefix(msg.session_id, clearedBefore);
-    existingTimeline = state.timelines.get(msg.session_id) ?? [];
-  }
-  let joinGap = snapshotJoinGap(existingTimeline, msg.events);
-  let timelines = mergeEvents(state.timelines, msg.session_id, msg.events);
-  // Replay buffered raw WebSocket updates strictly at or after the snapshot's
-  // raw sequence watermark so chunks/tool updates absorbed into an earlier row
-  // are preserved without duplicating anything already folded into `msg.events`.
-  const replayLive = liveEventsToReplayAfterSnapshot(
-    bufferedLive,
+  const journal = bootstrapJournals.get(msg.session_id);
+  bootstrapJournals.delete(msg.session_id);
+  const currentTimeline = state.timelines.get(msg.session_id) ?? [];
+  const source = state.transcriptSources.get(msg.session_id)?.source;
+  const conflictingEpoch = source === "replica" &&
+    replicaTailConflicts(cachedReplicaTail ?? currentTimeline, msg.events);
+  const discardReplica = shouldDiscardStaleReplica(
+    source,
+    cachedReplicaTail ?? currentTimeline,
     msg.events,
-    msg.next_seq,
-    clearedBefore,
   );
-  let replayedClear = false;
-  for (const env of replayLive) {
-    timelines = applyEnvelope(timelines, env);
-    if (env.kind === "update" && env.update.sessionUpdate === "context_cleared") {
-      replayedClear = true;
-    }
+  if (discardReplica) discardReplicaTimeline(msg.session_id);
+  replicaTails.delete(msg.session_id);
+
+  const hasWatermark = typeof msg.next_seq === "number";
+  if (hasWatermark) {
+    const previous = acceptedSnapshotWatermarks.get(msg.session_id) ?? 0;
+    acceptedSnapshotWatermarks.set(msg.session_id, Math.max(previous, msg.next_seq!));
   }
-  if (replayedClear) joinGap = null;
+  const {
+    timelines,
+    incomingEvents,
+    newestClear,
+    clearedPrefix,
+    clearedAtBoundary,
+    joinGap,
+  } = mergeSnapshotTimeline({
+    sessionId: msg.session_id,
+    timelines: state.timelines,
+    currentTimeline,
+    incoming: msg.events,
+    snapshotNextSeq: msg.next_seq,
+    discardReplica,
+    conflictingEpoch,
+    journal,
+  });
+  if (clearedPrefix && newestClear !== null) dropClearedPrefix(msg.session_id, newestClear);
+  const finalTimeline = timelines.get(msg.session_id) ?? [];
   const hydrated = state.hydrated.has(msg.session_id)
     ? state.hydrated
     : new Set(state.hydrated).add(msg.session_id);
-  const pagination = replayedClear
+  const pagination = clearedAtBoundary
     ? new Map(state.pagination).set(msg.session_id, {
         reachedStart: true,
         loadingOlder: false,
@@ -1497,13 +1489,13 @@ function applySnapshot(msg: Extract<Outbound, { type: "snapshot" }>): void {
     : new Map(state.pagination).set(msg.session_id, {
         reachedStart: msg.reached_start,
         loadingOlder: false,
-        beforeSeq: msg.events[0]?.seq ?? null,
+        beforeSeq: incomingEvents[0]?.seq ?? null,
       });
   const confirmedCmids = new Set(
-    msg.events.flatMap((event) => {
+    incomingEvents.flatMap((event) => {
       if (event.cmid === undefined) return [];
       const local = state.optimisticMessages.get(msg.session_id)?.find((row) => row.cmid === event.cmid);
-      return local !== undefined && !promptEchoReadyToReplaceOptimistic(local, timelines.get(msg.session_id) ?? [])
+      return local !== undefined && !promptEchoReadyToReplaceOptimistic(local, finalTimeline)
         ? [] : [event.cmid];
     }),
   );
@@ -1512,7 +1504,7 @@ function applySnapshot(msg: Extract<Outbound, { type: "snapshot" }>): void {
     : reconcileReadyOptimistic(
       state.optimisticMessages,
       msg.session_id,
-      timelines.get(msg.session_id) ?? [],
+      finalTimeline,
     );
   setState({
     ...state,
@@ -1556,10 +1548,13 @@ function applySnapshot(msg: Extract<Outbound, { type: "snapshot" }>): void {
       }
     }
   }
-  retireEchoedRecoveryDrafts(msg.session_id, msg.events);
+  retireEchoedRecoveryDrafts(msg.session_id, incomingEvents);
   const retry = sessionHydrationRetryTimers.get(msg.session_id);
   if (retry !== undefined) clearTimeout(retry);
   sessionHydrationRetryTimers.delete(msg.session_id);
+  if (journal?.overflowed && state.connected && openedSessionId === msg.session_id) {
+    void hydrateSession(msg.session_id, true);
+  }
 }
 
 function applyCommandResult(
@@ -1773,16 +1768,13 @@ function handle(msg: Outbound): void {
         }
       }
       const cached = transcriptIsCached(env.session_id);
-      if (cached && state.transcriptSources.get(env.session_id)?.source === "replica") {
-        // Buffer raw live WS events while a replica tail is painted so the
-        // first live snapshot can replay updates newer than its `next_seq`
-        // watermark through `applyEnvelope` without losing absorbed chunks.
-        const buffered = clearsContext
-          ? [env]
-          : [...(pendingReplicaLiveEvents.get(env.session_id) ?? []), env];
-        pendingReplicaLiveEvents.set(env.session_id, buffered);
+      const watermark = acceptedSnapshotWatermarks.get(env.session_id);
+      const coveredBySnapshot = watermark !== undefined && env.seq < watermark;
+      const journal = bootstrapJournals.get(env.session_id);
+      if (cached && journal !== undefined && !coveredBySnapshot) {
+        recordBootstrapEvent(journal, env);
       }
-      const timelines = cached
+      const timelines = cached && !coveredBySnapshot
         ? applyEnvelope(state.timelines, env)
         : state.timelines;
       if (
@@ -1924,6 +1916,7 @@ async function hydrateSession(
   if (scheduledRetry !== undefined) clearTimeout(scheduledRetry);
   sessionHydrationRetryTimers.delete(sessionId);
   const controller = new AbortController();
+  bootstrapJournals.set(sessionId, createBootstrapJournal(state.timelines.get(sessionId) ?? []));
   setTranscriptSyncState(sessionId, "syncing");
   let timedOut = false;
   const timeout = setTimeout(() => {
@@ -1985,6 +1978,9 @@ async function hydrateSession(
       clearTimeout(timeout);
       if (sessionHydrations.get(sessionId)?.controller === controller) {
         sessionHydrations.delete(sessionId);
+        if (openedSessionId !== sessionId || !state.connected) {
+          bootstrapJournals.delete(sessionId);
+        }
         const needsFocusedTranscript = (): boolean =>
           transcriptIsCached(sessionId) && openedSessionId === sessionId &&
           transcriptNeedsHydration(state.hydrated.has(sessionId), state.transcriptSources.get(sessionId)?.source);
@@ -2567,7 +2563,7 @@ const replica = createReplica(syncDatabase, {
 });
 let machinesSource: "none" | "replica" | "live" = "none";
 let retainedReplicaKey: string | undefined = undefined;
-let cachedQueuesHydrated = false;
+const hydratedQueues = new Set<string>();
 let datasetFenced = false;
 
 function withoutReplicaSyncedAt(current: State): Omit<State, "replicaSyncedAt"> {
@@ -2650,17 +2646,21 @@ async function restoreReplicaTail(sessionId: string): Promise<void> {
     syncedAt: tail.receivedAt,
   });
   replicaTails.set(sessionId, [...tail.events]);
-  pendingReplicaLiveEvents.delete(sessionId);
+  if (openedSessionId === sessionId) {
+    bootstrapJournals.set(sessionId, createBootstrapJournal(tail.events));
+  }
   setState({ ...state, timelines, hydrated, pagination, configOptions, transcriptSources });
 }
 
 const replicaTails = new Map<string, readonly Envelope[]>();
-const pendingReplicaLiveEvents = new Map<string, Envelope[]>();
+const bootstrapJournals = new Map<string, BootstrapJournal>();
+const acceptedSnapshotWatermarks = new Map<string, number>();
 
 function discardReplicaTimeline(sessionId: string): void {
   forgetSessionAuthority(sessionId);
   replicaTails.delete(sessionId);
-  pendingReplicaLiveEvents.delete(sessionId);
+  bootstrapJournals.delete(sessionId);
+  acceptedSnapshotWatermarks.delete(sessionId);
   transcriptEpoch.set(sessionId, (transcriptEpoch.get(sessionId) ?? 0) + 1);
   completeQuestionPages.delete(sessionId);
   const timelines = new Map(state.timelines);
@@ -2716,27 +2716,26 @@ function scheduleReplicaTail(sessionId: string, immediate: boolean): void {
   ) noteCachedTail(sessionId);
 }
 
-async function canDiscardDelivery(sessionId: string): Promise<boolean> {
-  // Never drop a persisted held-delivery decision while this session may still
-  // own an unresolved outbox entry; otherwise a reload can auto-resend a held
-  // prompt to a deleted destination and trigger unintended parking recovery.
-  if (!cachedQueuesHydrated) return false;
-  const client = qClients.get(sessionId);
-  if (client !== undefined) return client.pending().length === 0;
+async function retainReplicaWithOutboxGuard(valid: ReadonlySet<string>): Promise<void> {
+  // Check durable IndexedDB outboxes (not tab-local `qClients`), preserving
+  // every held-delivery decision if storage cannot be read or an outbox exists.
+  let outboxes: ReadonlySet<string> | null = null;
   try {
-    const outboxes = await syncDatabase.queueSessions();
-    return !outboxes.includes(sessionId);
+    outboxes = new Set(await syncDatabase.queueSessions());
   } catch {
-    return false;
+    outboxes = null;
   }
+  if (productSessionAbandoned) return;
+  await replica.retainSessions(valid, {
+    keepDelivery: (sessionId) => outboxes === null || outboxes.has(sessionId),
+  });
 }
 
 function dropReplicaSession(sessionId: string): void {
   retainedReplicaKey = undefined;
+  // Evict only the transcript tail; held-delivery decisions stay tied to their
+  // durable outbox mutations and retire only once those mutations settle.
   void replica.session(sessionId).discardTail();
-  void canDiscardDelivery(sessionId).then((safe) => {
-    if (safe && !productSessionAbandoned) void replica.session(sessionId).discardDelivery();
-  });
   if (cachedTailSessions.has(sessionId)) {
     const next = new Set(cachedTailSessions);
     next.delete(sessionId);
@@ -2748,9 +2747,7 @@ function retainReplicaSessions(valid: ReadonlySet<string>): void {
   const key = [...valid].sort().join("\n");
   if (key === retainedReplicaKey) return;
   retainedReplicaKey = key;
-  void replica.retainSessions(valid, {
-    keepDelivery: async (sessionId) => !(await canDiscardDelivery(sessionId)),
-  });
+  void retainReplicaWithOutboxGuard(valid);
   if ([...cachedTailSessions].some((id) => !valid.has(id))) {
     setCachedTailSessions(new Set([...cachedTailSessions].filter((id) => valid.has(id))));
   }
@@ -2853,7 +2850,9 @@ function persistHeld(sessionId: string): void {
   const held = client.pending().map((mutation) => mutation.id)
     .filter((id) => qStatus.get(id) === "failed");
   if (held.length === 0) {
-    void replica.session(sessionId).discardDelivery();
+    if (hydratedQueues.has(sessionId) && client.pending().length === 0) {
+      void replica.session(sessionId).discardDelivery();
+    }
   } else {
     void replica.session(sessionId).saveDelivery({ held });
   }
@@ -3335,6 +3334,7 @@ function liveFolders(raw: SessionFoldersValue): SessionFoldersValue {
 }
 
 function commitSessions(): void {
+  const previousSessions = state.sessions;
   const titles = titleSync.view();
   const folders = foldersSync.view();
   const { live, trashed } = splitTrashedSessions(deriveSessions(rawSessions, titles, syncedKeyList(orderSync.view())));
@@ -3352,6 +3352,10 @@ function commitSessions(): void {
     sessionFoldersReady: foldersSync.ready(),
     workspaceOrder: syncedKeyList(workspaceOrderSync.view()),
   });
+  if (state.sessionsSource === "live" || previousSessions.length > 0) {
+    const changed = diffLinkRelevantSessionIds(previousSessions, sessions);
+    if (changed.length > 0) invalidateReferencingContexts(changed);
+  }
 }
 
 // --- Sessions Trash (docs/sessions-folders.md#trash) ------------------------
@@ -3977,7 +3981,10 @@ function restoreQueue(sessionId: string): Promise<void> {
     // a held row that offers an explicit retry instead of staying held.
     reportSyncStorageFailure("sync_held_restore_failed", `queue:${sessionId}`, "restore-held", error);
     return [] as readonly string[];
-  }).then((held) => store.hydrate().then(() => held)).then((held) => {
+  }).then((held) => store.hydrate().then(() => {
+    if (!productSessionAbandoned) hydratedQueues.add(sessionId);
+    return held;
+  })).then((held) => {
     if (productSessionAbandoned) return;
     forgetSettledHeld(sessionId, held);
     commitQueue(sessionId);
@@ -4070,7 +4077,6 @@ async function hydrateCachedQueues(): Promise<void> {
   const outcomes = await Promise.allSettled(
     sessions.map((session) => restoreQueue(session)),
   );
-  if (!productSessionAbandoned) cachedQueuesHydrated = true;
   outcomes.forEach((outcome, index) => {
     if (outcome.status !== "rejected") return;
     reportSyncStorageFailure(
@@ -4919,7 +4925,11 @@ function optimisticMessage(
 // every navigation.
 export function openSession(id: string, { reassert = true } = {}): void {
   if (!reassert && openedSessionId === id) return;
+  const previousOpenedId = openedSessionId;
   openedSessionId = id;
+  if (previousOpenedId !== undefined && previousOpenedId !== id && !sessionHydrations.has(previousOpenedId)) {
+    bootstrapJournals.delete(previousOpenedId);
+  }
   // Keep an in-flight prefetch for this session and yield other work to it.
   prefetch.cancel(id);
   touchTranscriptSession(id);

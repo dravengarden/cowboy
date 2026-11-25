@@ -1036,8 +1036,8 @@ pub struct WebSocketCapacityIdentity {
 }
 
 pub fn global_bootstrap_with_seq(hub: &Hub, principal: &ProductPrincipal) -> (Vec<Outbound>, u64) {
-    let (sessions, sessions_seq) =
-        hub.session_list_for_client_with_seq(|owner| principal.can_see(owner));
+    let (sessions, sessions_seq, resyncs) =
+        hub.global_bootstrap_snapshot_for_client(|owner| principal.can_see(owner));
     let visible = sessions.iter().map(|meta| meta.id.clone()).collect();
     let mut messages = vec![
         Outbound::Sessions { sessions },
@@ -1048,7 +1048,7 @@ pub fn global_bootstrap_with_seq(hub: &Hub, principal: &ProductPrincipal) -> (Ve
         },
     ];
     messages.extend(
-        hub.sync_resync()
+        resyncs
             .into_iter()
             .filter_map(|message| project_outbound(hub, principal, &visible, message)),
     );

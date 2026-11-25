@@ -2,7 +2,9 @@ import { expect, test } from "bun:test";
 import type { Envelope, SessionMeta } from "./protocol";
 import {
   boundSocketUrl,
+  diffLinkRelevantSessionIds,
   liveEventsToReplayAfterSnapshot,
+  newestClearSeq,
   removeSessionById,
   shouldDiscardStaleReplica,
   upsertSession,
@@ -94,7 +96,7 @@ test("liveEventsToReplayAfterSnapshot replays newer absorbed chunks without over
   // Snapshot captured right after seq 100 (`next_seq = 101`): seq 101 must
   // replay onto row 100 so the absorbed text is preserved.
   const snapBefore101 = [message(100, "hello")];
-  const toReplay = liveEventsToReplayAfterSnapshot(buffered, snapBefore101, 101, null);
+  const toReplay = liveEventsToReplayAfterSnapshot(buffered, 101, null);
   expect(toReplay.map((e) => e.seq)).toEqual([101]);
   let timelines = mergeEvents(new Map(), "s1", snapBefore101);
   for (const env of toReplay) timelines = applyEnvelope(timelines, env);
@@ -103,14 +105,31 @@ test("liveEventsToReplayAfterSnapshot replays newer absorbed chunks without over
 
   // Snapshot captured after seq 101 (`next_seq = 102`): seq 101 is already
   // folded into row 100 and must NOT be replayed again.
-  const snapAfter101 = [message(100, "hello world")];
-  expect(liveEventsToReplayAfterSnapshot(buffered, snapAfter101, 102, null)).toEqual([]);
-
-  // Older Controller without next_seq falls back to strictly past incoming max.
-  expect(liveEventsToReplayAfterSnapshot(buffered, snapBefore101, undefined, null).map((e) => e.seq))
-    .toEqual([101]);
+  expect(liveEventsToReplayAfterSnapshot(buffered, 102, null)).toEqual([]);
 
   // Cleared boundary drops earlier buffered events.
-  expect(liveEventsToReplayAfterSnapshot([message(99, "old"), message(105, "new")], [], 90, 102).map((e) => e.seq))
+  expect(liveEventsToReplayAfterSnapshot([message(99, "old"), message(105, "new")], 90, 102).map((e) => e.seq))
     .toEqual([105]);
+
+  const clear150: Envelope = {
+    session_id: "s1",
+    seq: 150,
+    kind: "update",
+    update: { sessionUpdate: "context_cleared" },
+  };
+  expect(newestClearSeq([message(100, "old")], [clear150])).toBe(150);
+});
+
+test("diffLinkRelevantSessionIds reports added, removed, renamed, and closing transitions", () => {
+  const a = session("a");
+  const b = session("b");
+  const renamedA = { ...a, title: "Renamed" };
+  const closingB = { ...b, closing: true };
+  expect(diffLinkRelevantSessionIds([a, b], [a, b])).toEqual([]);
+  expect(diffLinkRelevantSessionIds([a, b], [renamedA, closingB, session("c")]).sort()).toEqual([
+    "a",
+    "b",
+    "c",
+  ]);
+  expect(diffLinkRelevantSessionIds([a, b], [a])).toEqual(["b"]);
 });

@@ -81,6 +81,7 @@ const awaitingDatabase = new Map<string, string>();
 // Edits whose bytes the session's database record holds (or was asked to).
 // Only a change to one of them needs the record rewritten.
 const databaseOwners = new Set<string>();
+const removedSessions = new Set<string>();
 const slots = new SlotLedger();
 // Edits this tab ended whose removal is not persisted yet.
 const retiredRecords = new Map<string, PendingEditRecord>();
@@ -123,6 +124,7 @@ function writeDatabase(sessionId: string, write: () => Promise<void>): Promise<v
 /** Merge this tab's changed slots into the session's record in one transaction
  * (promised bytes stay as stored). False: keep the bytes in localStorage. */
 function saveSessionEdits(sessionId: string): boolean {
+  if (removedSessions.has(sessionId)) return true;
   const cache = editsCache(sessionId);
   if (cache === undefined) return false;
   const changed = slots.takeChanged(sessionId);
@@ -313,6 +315,12 @@ async function restoreOnce(): Promise<void> {
       // An unreadable record is not an absent one. Its edits stay promised.
       continue;
     }
+    if (found?.removed === true || removedSessions.has(sessionId)) {
+      for (const [key, record] of records) {
+        if (record.sessionId === sessionId) forgetLocally(key);
+      }
+      continue;
+    }
     const restored: [string, RestoredPendingEdit][] = [];
     const awaiting = awaitingDatabase.size;
     for (const [key, record] of records) {
@@ -396,6 +404,7 @@ export function setPendingEdit(input: {
   baseText: string;
   baseAttachments: readonly Attachment[];
 }): void {
+  if (removedSessions.has(input.sessionId)) return;
   const key = recordKey(input.sessionId, input.kind, input.id);
   const existing = records.get(key);
   // A paste placeholder has no durable bytes yet and its blob preview URL dies
@@ -535,6 +544,7 @@ export function finishOrphanedPendingEdit(record: PendingEditRecord, recovered: 
 /** Drop pending edit buffers for one explicitly removed session without
  *  scanning or removing buffers belonging to other sessions. */
 export function discardPendingEdits(sessionId: string): void {
+  removedSessions.add(sessionId);
   for (const [key, record] of records) {
     if (record.sessionId !== sessionId) continue;
     records.delete(key);
@@ -555,7 +565,10 @@ export function discardPendingEdits(sessionId: string): void {
   removeSessionPendingEditMirrors(sessionId);
   const cache = editsCache(sessionId);
   if (cache !== undefined) {
-    void writeDatabase(sessionId, () => cache.discard()).catch(() => undefined);
+    const tombstone: StoredEdits = { edits: {}, savedAt: Date.now(), removed: true };
+    void writeDatabase(sessionId, () =>
+      cache.update ? cache.update(() => tombstone) : cache.discard()
+    ).catch(() => undefined);
   }
 }
 
@@ -620,6 +633,9 @@ export function beginPendingEditEncoding(
   id: string,
   placeholders: readonly Attachment[],
 ): PendingEditEncode {
+  if (removedSessions.has(sessionId)) {
+    return Object.assign(() => undefined, { alive: () => false });
+  }
   const key = recordKey(sessionId, kind, id);
   const entry = encodes.get(key) ?? { batches: 0, placeholders: new Set<string>() };
   entry.batches += 1;
@@ -627,7 +643,7 @@ export function beginPendingEditEncoding(
   encodes.set(key, entry);
   let settled = false;
   const settle = (completed: readonly Attachment[]): void => {
-    if (settled) return;
+    if (settled || removedSessions.has(sessionId)) return;
     settled = true;
     // The edit was saved, discarded or recovered meanwhile: these bytes
     // belong to none of the row's later edits.

@@ -238,28 +238,42 @@ test("invalidateReferencingContexts refreshes cached views referencing a changed
   const listener = (event: Event) => {
     announced.push((event as CustomEvent<string | null>).detail);
   };
-  globalThis.fetch = (() =>
-    Promise.resolve(Response.json({
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    const isReader = url.includes("reader-sess");
+    return Promise.resolve(Response.json({
       revision: 1,
       applied_revision: 1,
-      sources: ["linked-src"],
-      source_sessions: [{ id: "linked-src", available: false }],
-      links: [{ id: "linked-src", available: false, title: "Old", before: 42 }],
+      sources: isReader ? ["linked-src"] : [],
+      source_sessions: isReader ? [{ id: "linked-src", available: false }] : [],
+      links: isReader ? [{ id: "linked-src", available: false, title: "Old", before: 42 }] : [],
       next_agent: null,
       delivery: null,
       max_sources: 32,
-    }))) as typeof fetch;
+    }));
+  }) as typeof fetch;
   globalThis.dispatchEvent(
     new CustomEvent(PREFERENCES_CHANGED, {
       detail: { "session_context:reader-sess": 1 },
     }),
   );
   await loadSessionContext("reader-sess");
+  // Evict reader-sess from the 64-entry display LRU; mounted dependencies must survive.
+  for (let i = 0; i < 66; i += 1) {
+    const filler = `filler-ctx-${String(i)}`;
+    globalThis.dispatchEvent(
+      new CustomEvent(PREFERENCES_CHANGED, {
+        detail: { [`session_context:${filler}`]: 1 },
+      }),
+    );
+    await loadSessionContext(filler);
+  }
   globalThis.addEventListener(CONTEXT_CHANGED, listener);
   try {
     invalidateReferencingContexts("unrelated-session");
-    invalidateReferencingContexts("linked-src");
+    invalidateReferencingContexts(["linked-src"]);
     evictSessionContext("reader-sess");
+    for (let i = 0; i < 66; i += 1) evictSessionContext(`filler-ctx-${String(i)}`);
   } finally {
     globalThis.removeEventListener(CONTEXT_CHANGED, listener);
   }
