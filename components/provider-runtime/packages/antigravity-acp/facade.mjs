@@ -80,19 +80,38 @@ const APPLY_STDIN = [
   'len="$1"',
   "case \"$len\" in ''|*[!0-9]*) exit 2 ;; esac",
   `[ "$len" -ge 1 ] && [ "$len" -le ${MAX_STDIN_APPLY_BYTES} ] || exit 2`,
+  "my_uid=$(id -u) || exit 2",
+  "case \"$my_uid\" in ''|*[!0-9]*) exit 2 ;; esac",
   'h="${HOME:-}"',
   'while [ "$h" != "/" ] && [ "${h%/}" != "$h" ]; do h="${h%/}"; done',
   'case "$h" in /*) [ "$h" != "/" ] || exit 2 ;; *) exit 2 ;; esac',
   "check_ancestors() {",
   '  cur="$1"',
-  '  while [ "$cur" != "/" ]; do',
+  '  child_uid=""',
+  "  while :; do",
   '    [ -d "$cur" ] || exit 2',
-  '    p=$(LC_ALL=C ls -ld -- "$cur" 2>/dev/null) || exit 2',
-  '    case "$p" in',
-  "      d????-??-?*) ;;",
-  "      d????????t*|d????????T*) ;;",
+  '    [ ! -L "$cur" ] || exit 2',
+  '    line=$(LC_ALL=C ls -ldn -- "$cur" 2>/dev/null) || exit 2',
+  "    IFS=' ' read -r perms _ uid _ <<EOF",
+  "$line",
+  "EOF",
+  '    case "$uid" in',
+  '      0|"$my_uid") ;;',
   "      *) exit 2 ;;",
   "    esac",
+  '    case "$perms" in',
+  "      d????-??-?*) ;;",
+  "      d????????t*|d????????T*)",
+  '        [ -n "$child_uid" ] || exit 2',
+  '        case "$child_uid" in',
+  '          0|"$my_uid") ;;',
+  "          *) exit 2 ;;",
+  "        esac",
+  "        ;;",
+  "      *) exit 2 ;;",
+  "    esac",
+  '    [ "$cur" = "/" ] && break',
+  '    child_uid="$uid"',
   '    cur=$(dirname -- "$cur")',
   "  done",
   "}",
@@ -100,14 +119,22 @@ const APPLY_STDIN = [
   '  [ -d "$1" ] || exit 2',
   '  [ ! -L "$1" ] || exit 2',
   '  [ -O "$1" ] || exit 2',
-  '  p=$(LC_ALL=C ls -ld -- "$1" 2>/dev/null) || exit 2',
-  '  case "$p" in d????-??-?*) ;; *) exit 2 ;; esac',
+  '  line=$(LC_ALL=C ls -ldn -- "$1" 2>/dev/null) || exit 2',
+  "  IFS=' ' read -r perms _ uid _ <<EOF",
+  "$line",
+  "EOF",
+  '  [ "$uid" = "$my_uid" ] || exit 2',
+  '  case "$perms" in d????-??-?*) ;; *) exit 2 ;; esac',
   "}",
   "check_private_dir() {",
   '  check_owner_dir "$1"',
-  '  chmod 700 -- "$1" || exit 2',
-  '  p=$(LC_ALL=C ls -ld -- "$1" 2>/dev/null) || exit 2',
-  '  case "$p" in drwx------*) ;; *) exit 2 ;; esac',
+  '  chmod 00700 -- "$1" || exit 2',
+  '  line=$(LC_ALL=C ls -ldn -- "$1" 2>/dev/null) || exit 2',
+  "  IFS=' ' read -r perms _ uid _ <<EOF",
+  "$line",
+  "EOF",
+  '  [ "$uid" = "$my_uid" ] || exit 2',
+  '  case "$perms" in drwx------*) ;; *) exit 2 ;; esac',
   "}",
   'raw=$(LC_ALL=C head -c "$((len + 1))"; printf x)',
   "nl='\n'",
@@ -135,17 +162,20 @@ const APPLY_STDIN = [
   '  check_owner_dir "$cb"',
   '  cb_real="$cb"',
   "fi",
-  'd="$cb_real/file-buffers"',
+  'fb="$cb_real/file-buffers"',
+  'if [ ! -e "$fb" ] && [ ! -L "$fb" ]; then mkdir -- "$fb" 2>/dev/null || true; fi',
+  'check_private_dir "$fb"',
+  'd="$fb/antigravity"',
   'if [ ! -e "$d" ] && [ ! -L "$d" ]; then mkdir -- "$d" 2>/dev/null || true; fi',
   'check_private_dir "$d"',
-  "find \"$d\" -maxdepth 1 -type f -name 'payload-*' -mmin +60 -exec rm -f -- {} + 2>/dev/null || true",
+  "find \"$d\" -maxdepth 1 -type f -name 'agy-apply-[0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z]' -mmin +60 -exec rm -f -- {} + 2>/dev/null || true",
   'tmp=""',
   'cleanup() { [ -n "$tmp" ] && rm -f -- "$tmp" || true; }',
   "trap cleanup EXIT",
   "trap 'cleanup; trap - HUP; kill -HUP $$' HUP",
   "trap 'cleanup; trap - INT; kill -INT $$' INT",
   "trap 'cleanup; trap - TERM; kill -TERM $$' TERM",
-  'tmp=$(mktemp "$d/payload-XXXXXXXX") || exit 2',
+  'tmp=$(mktemp "$d/agy-apply-XXXXXXXX") || exit 2',
   '[ -f "$tmp" ] || exit 2',
   '[ ! -L "$tmp" ] || exit 2',
   '[ -O "$tmp" ] || exit 2',
@@ -207,6 +237,7 @@ export class Facade {
       authorize = () => ({ allowed: true }),
       managed = false,
       stopConfirmMs = LIMITS.stopConfirmMs,
+      publishTimeoutMs = LIMITS.publishTimeoutMs,
       diagnostics = undefined,
       canaryTrace = false,
     },
@@ -214,6 +245,7 @@ export class Facade {
     this.connection = connection;
     this.managed = managed;
     this.stopConfirmMs = stopConfirmMs;
+    this.publishTimeoutMs = publishTimeoutMs;
     this.diagnostics = diagnostics;
     this.canaryTrace = Boolean(canaryTrace);
     this.canaryNonce =
@@ -1651,7 +1683,7 @@ ${WRAP_UP_NOTE}`,
       stdinPayload = requestBytes;
     }
     const result = await this.runBounded(turn, argv, {
-      timeoutMs: LIMITS.publishTimeoutMs,
+      timeoutMs: this.publishTimeoutMs,
       maxBytes: 64 * 1024,
       lostIsUncertain: true,
       pipeStdin: stdinPayload !== undefined,
@@ -1672,6 +1704,13 @@ ${WRAP_UP_NOTE}`,
     if (outcome?.status === "conflict") {
       this.recordFileObservation(file, undefined);
       throw new ToolError("The file changed on the target since it was read; read it again.");
+    }
+    if (result.stdinTimedOutBeforeDispatch) {
+      // Stdin was never dispatched and the helper was confirmed stopped:
+      // nothing was written, so fail cleanly without parking the session.
+      throw new ToolError(
+        "Timed out before delivering the edit request to the workspace helper; nothing was written.",
+      );
     }
     if (result.timedOut) {
       // The helper may still publish: its outcome is unknown.
@@ -1954,6 +1993,7 @@ ${WRAP_UP_NOTE}`,
     const deadline = Date.now() + timeoutMs;
     let truncated = false;
     let timedOut = false;
+    let stdinTimedOutBeforeDispatch = false;
     let failure;
     try {
       let stdinDelivered = stdinPayload === undefined;
@@ -1964,14 +2004,15 @@ ${WRAP_UP_NOTE}`,
         for (;;) {
           const remaining = deadline - Date.now();
           if (remaining <= 0) {
-            timedOut = true;
+            stdinTimedOutBeforeDispatch = true;
             break;
           }
           let dispatched = false;
           let preSendExpired = false;
+          let writeClosed = false;
           const writeBeforeSend = () => {
             if (typeof beforeSend === "function") beforeSend();
-            if (Date.now() >= deadline) {
+            if (writeClosed || Date.now() >= deadline) {
               preSendExpired = true;
               throw new ToolError("Timed out before delivering apply request to workspace helper.");
             }
@@ -1995,17 +2036,19 @@ ${WRAP_UP_NOTE}`,
             });
             const raced = await Promise.race([writeCall, expired]);
             if (raced === deadlineSentinel) {
+              writeClosed = true;
               if (dispatched) {
                 turn.uncertain ??= "process/write";
                 throw new UncertainEffect("process/write");
               }
-              timedOut = true;
+              stdinTimedOutBeforeDispatch = true;
               break;
             }
             reply = raced;
           } catch (error) {
             if (preSendExpired && !dispatched) {
-              timedOut = true;
+              writeClosed = true;
+              stdinTimedOutBeforeDispatch = true;
               break;
             }
             if (dispatched && !notSent(error) && error?.message === "Target request timed out") {
@@ -2034,7 +2077,7 @@ ${WRAP_UP_NOTE}`,
           if (reply?.status === "starting") {
             const pause = Math.min(100, deadline - Date.now());
             if (pause <= 0) {
-              timedOut = true;
+              stdinTimedOutBeforeDispatch = true;
               break;
             }
             await new Promise((resolve) => setTimeout(resolve, pause));
@@ -2044,7 +2087,7 @@ ${WRAP_UP_NOTE}`,
         }
       }
       const pollDeadline = stdinDelivered ? deadline : Math.min(deadline, Date.now() + 5000);
-      while (!process.closed && !timedOut) {
+      while (!process.closed && !timedOut && !stdinTimedOutBeforeDispatch) {
         const remaining = pollDeadline - Date.now();
         if (remaining <= 0) {
           if (stdinDelivered) {
@@ -2073,7 +2116,12 @@ ${WRAP_UP_NOTE}`,
     }
     // Only the ordinary poll's E1 settles an outcome; during cleanup below it
     // merely confirms the close and never replaces a timeout or failure.
-    const ended = failure === undefined && !timedOut && !truncated && process.forgotten === true;
+    const ended =
+      failure === undefined &&
+      !timedOut &&
+      !stdinTimedOutBeforeDispatch &&
+      !truncated &&
+      process.forgotten === true;
     // Whatever ended the loop, the process is not left running unconfirmed: a
     // helper that may still publish is an effect of unknown outcome.
     if (!process.closed) {
@@ -2089,6 +2137,7 @@ ${WRAP_UP_NOTE}`,
       stderr: Buffer.concat(out.stderr).toString(),
       truncated,
       timedOut,
+      stdinTimedOutBeforeDispatch,
       // The process ended unseen (E1): its output may be incomplete.
       forgotten: ended,
     };

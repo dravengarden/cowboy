@@ -152,6 +152,8 @@ export class Subagents {
      * yet: their frames wait here until the child is announced.
      */
     this.opening = new Map();
+    /** Buffered pre-open/quarantined frame -> arrival-time `{ turn, attempt }` (R12-L3). */
+    this.heldTurns = new WeakMap();
     /** `session/new` requests of this host that `agy` has not answered. */
     this.pendingOpens = 0;
     /** Frames of sessions nobody knows while a start is opening one (bounded). */
@@ -369,7 +371,11 @@ export class Subagents {
     );
     this.quarantine = [];
     frames
-      .reduce((done, frame) => done.then(() => this.proxy.fromAgent(frame)), Promise.resolve())
+      .reduce((done, frame) => {
+        const arrival = this.heldTurns.get(frame);
+        this.heldTurns.delete(frame);
+        return done.then(() => this.proxy.fromAgent(frame, arrival ? { arrival } : undefined));
+      }, Promise.resolve())
       .catch(() => {});
   }
 
@@ -384,10 +390,18 @@ export class Subagents {
 
   /** Keep one frame of a session still opening, bounded. */
   hold(message) {
-    const frames = this.opening.get(message.params?.sessionId);
+    const sid = message.params?.sessionId;
+    const arrivalTurn = typeof sid === "string" ? this.proxy.turns.get(sid) : undefined;
+    const recordArrival = () =>
+      this.heldTurns.set(message, { turn: arrivalTurn, attempt: arrivalTurn?.attempt });
+    const frames = this.opening.get(sid);
     if (frames) {
-      if (frames.length < MAX_HELD) frames.push(message);
+      if (frames.length < MAX_HELD) {
+        recordArrival();
+        frames.push(message);
+      }
     } else if (this.quarantine.length < MAX_HELD) {
+      recordArrival();
       this.quarantine.push(message);
     }
   }
@@ -398,7 +412,11 @@ export class Subagents {
     this.opening.delete(sessionId);
     const before = frames.beforeReply ?? 0;
     const drain = (done, list) =>
-      list.reduce((chain, frame) => chain.then(() => this.proxy.fromAgent(frame)), done);
+      list.reduce((chain, frame) => {
+        const arrival = this.heldTurns.get(frame);
+        this.heldTurns.delete(frame);
+        return chain.then(() => this.proxy.fromAgent(frame, arrival ? { arrival } : undefined));
+      }, done);
     // In the order agy spoke: what it sent before its answer, then what that
     // answer confirmed (`publish`), then what it sent after.
     drain(

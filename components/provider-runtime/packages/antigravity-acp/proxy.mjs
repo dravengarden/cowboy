@@ -941,7 +941,7 @@ export class AcpProxy {
    * left out (its plan is sent instead), and only runnable slash commands.
    * `undefined` when nothing is forwarded.
    */
-  presentUpdate(message, answer = false) {
+  presentUpdate(message, answer = false, arrival = undefined) {
     const update = message.params?.update;
     if (update?.sessionUpdate === "available_commands_update") {
       // A managed turn's instruction is never a native command or skill,
@@ -961,7 +961,7 @@ export class AcpProxy {
       if (notice) return { ...message, params: { ...message.params, update: notice } };
     }
     if (!["tool_call", "tool_call_update"].includes(update?.sessionUpdate)) return message;
-    this.track(message.params.sessionId, update);
+    this.track(message.params.sessionId, update, arrival);
     const id = update.toolCallId;
     const sessionId = message.params.sessionId;
     const key = typeof id === "string" ? callKey(sessionId, id) : undefined;
@@ -982,8 +982,17 @@ export class AcpProxy {
    * (`tool_call`, with its arguments) before it calls the MCP server, and
    * the MCP request carries no ACP call ID.
    */
-  track(sessionId, update) {
-    const turn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
+  track(sessionId, update, arrival = undefined) {
+    let turn;
+    if (arrival !== undefined) {
+      const current = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
+      turn =
+        arrival.turn && current === arrival.turn && current.attempt === arrival.attempt
+          ? current
+          : undefined;
+    } else {
+      turn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
+    }
     const outcome = this.planGate.trackUpdate(sessionId, update, turn);
     if (typeof sessionId === "string" && Array.isArray(outcome?.contradictedIds)) {
       for (const badId of outcome.contradictedIds) {
@@ -1992,7 +2001,7 @@ export class AcpProxy {
     }
   }
 
-  async fromAgent(message) {
+  async fromAgent(message, replayOptions = undefined) {
     if (message === null || typeof message !== "object" || Array.isArray(message)) return;
     const { id, method } = message;
     // A subagent's session the worker has not been told about yet: nothing of
@@ -2066,7 +2075,11 @@ export class AcpProxy {
           // Evidence and the worker see the same sanitized, presented
           // update: a tool's result counts, `agy`'s status lines do not
           // (text the answer took is never shown as one).
-          const presented = this.presentUpdate(this.annotateUsage(stripTier(message)), answer);
+          const presented = this.presentUpdate(
+            this.annotateUsage(stripTier(message)),
+            answer,
+            replayOptions?.arrival,
+          );
           const shown = presented && this.holdReply(presented);
           if (shown === undefined) return;
           this.remember(shown.params);

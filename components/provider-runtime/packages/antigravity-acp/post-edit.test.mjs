@@ -1027,7 +1027,7 @@ test("Exit-127 large edit leaves zero scratch payload even when beforeSend refus
         false,
         `${scenario}: must not invoke fs/writeFile or post-fence fs/remove`,
       );
-      const fbDir = join(home, ".cache", "cowboy", "file-buffers");
+      const fbDir = join(home, ".cache", "cowboy", "file-buffers", "antigravity");
       const leftovers = await readdir(fbDir).catch(() => []);
       assert.deepEqual(leftovers, [], `${scenario}: must leave zero payload files in file-buffers`);
     } finally {
@@ -1721,7 +1721,7 @@ test("Large stdin-fed edit publishes cleanly end-to-end with zero scratch residu
       endpoint.calls.some((c) => c.method === "fs/writeFile" || c.method === "fs/remove"),
       false,
     );
-    const fbDir = join(home, ".cache", "cowboy", "file-buffers");
+    const fbDir = join(home, ".cache", "cowboy", "file-buffers", "antigravity");
     assert.deepEqual(await readdir(fbDir).catch(() => []), []);
   } finally {
     conn.close();
@@ -2028,7 +2028,8 @@ test("Stdin delivery bounds both pre-send and post-dispatch waits by publish dea
       pipeStdin: true,
       stdinPayload: Buffer.from("{}", "utf8"),
     });
-    assert.equal(res.timedOut, true);
+    assert.equal(res.timedOut, false);
+    assert.equal(res.stdinTimedOutBeforeDispatch, true);
     assert.equal(sentWrite, false, "pre-send deadline check must block late dispatch");
     assert.equal(
       turn.uncertain,
@@ -2042,21 +2043,26 @@ test("Stdin delivery bounds both pre-send and post-dispatch waits by publish dea
   }
 });
 
-test("Large stdin-fed wrapper sweeps stale abandoned payload files while keeping fresh ones (R11-L1)", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "cowboy-r11-sweep-"));
+test("Large stdin-fed wrapper sweeps only stale Antigravity scratch files and preserves Claude payloads (R11-L1/R12-L1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r12-swp-"));
   const repo = join(dir, "repo");
   const home = join(dir, "home");
   const fb = join(home, ".cache", "cowboy", "file-buffers");
+  const agyDir = join(fb, "antigravity");
   await mkdir(repo);
-  await mkdir(fb, { recursive: true });
-  const stale = join(fb, "payload-deadbeef");
-  const fresh = join(fb, "payload-fresh123");
-  const unrelated = join(fb, "notes.txt");
+  await mkdir(agyDir, { recursive: true });
+  const claudeAged = join(fb, "payload-0123456789abcdef0123456789abcdef.json");
+  const stale = join(agyDir, "agy-apply-deadbeef");
+  const fresh = join(agyDir, "agy-apply-fresh123");
+  const unrelated = join(agyDir, "agy-apply-keep.txt");
+  await writeFile(claudeAged, "claude-owned-payload");
   await writeFile(stale, "old-orphan");
   await writeFile(fresh, "active-edit");
   await writeFile(unrelated, "keep-me");
   const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+  await utimes(claudeAged, twoHoursAgo, twoHoursAgo);
   await utimes(stale, twoHoursAgo, twoHoursAgo);
+  await utimes(unrelated, twoHoursAgo, twoHoursAgo);
   const socket = join(dir, "exec.sock");
   const endpoint = await fakeEndpoint(socket, repo, { home });
   const conn = await Connection.open(
@@ -2078,8 +2084,16 @@ test("Large stdin-fed wrapper sweeps stale abandoned payload files while keeping
       undefined,
       Buffer.from("s".repeat(64 * 1024), "utf8"),
     );
-    const remaining = (await readdir(fb)).sort();
-    assert.deepEqual(remaining, ["notes.txt", "payload-fresh123"]);
+    assert.deepEqual(
+      (await readdir(fb)).sort(),
+      ["antigravity", "payload-0123456789abcdef0123456789abcdef.json"],
+      "Claude aged payload in shared file-buffers must survive untouched",
+    );
+    assert.deepEqual(
+      (await readdir(agyDir)).sort(),
+      ["agy-apply-fresh123", "agy-apply-keep.txt"],
+      "only stale Antigravity agy-apply-???????? files may be swept",
+    );
   } finally {
     conn.close();
     endpoint.close();
@@ -2173,6 +2187,7 @@ test("Large stdin-fed edit allows owner-controlled symlinked .cache/cowboy stora
   await mkdir(repo);
   await mkdir(join(home, ".cache"), { recursive: true });
   await mkdir(storageTarget, { mode: 0o755 });
+  await chmod(storageTarget, 0o2755); // setgid parent (R12-L2)
   await chmod(home, 0o700);
   await chmod(join(home, ".cache"), 0o755);
   await symlink(storageTarget, join(home, ".cache", "cowboy"));
@@ -2195,11 +2210,234 @@ test("Large stdin-fed edit allows owner-controlled symlinked .cache/cowboy stora
     await facade.publishOnce(turn, join(repo, "ok.txt"), undefined, Buffer.from(content, "utf8"));
     assert.equal(await readFile(join(repo, "ok.txt"), "utf8"), content);
     const fb = join(storageTarget, "file-buffers");
-    assert.equal((await stat(fb)).mode & 0o777, 0o700);
-    assert.deepEqual(await readdir(fb), []);
+    const agyDir = join(fb, "antigravity");
+    assert.equal(
+      (await stat(fb)).mode & 0o7777,
+      0o0700,
+      "setgid bit must be cleared on file-buffers",
+    );
+    assert.equal(
+      (await stat(agyDir)).mode & 0o7777,
+      0o0700,
+      "setgid bit must be cleared on antigravity dir",
+    );
+    assert.deepEqual(await readdir(agyDir), []);
   } finally {
     conn.close();
     endpoint.close();
     await rm(dir, { recursive: true, force: true });
   }
+});
+
+test("Large stdin-fed edit rejects 0755 ancestor owned by another UID (R12-H1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r12-uid-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  const fakeBin = join(dir, "bin");
+  const otherParent = join(dir, "other-user-parent");
+  const ownedTarget = join(otherParent, "cowboy");
+  await mkdir(repo);
+  await mkdir(join(home, ".cache"), { recursive: true });
+  await mkdir(fakeBin);
+  await mkdir(ownedTarget, { recursive: true });
+  await chmod(otherParent, 0o755);
+  await chmod(ownedTarget, 0o755);
+  await symlink(ownedTarget, join(home, ".cache", "cowboy"));
+  // Wrap `ls` so `otherParent` reports numeric UID 65534 (another user) with mode 0755.
+  const realLs = "/bin/sh";
+  const lsWrapper = join(fakeBin, "ls");
+  await writeFile(
+    lsWrapper,
+    `#!/bin/sh
+if [ "$1" = "-ldn" ] && [ "$2" = "--" ] && [ "$3" = "${otherParent}" ]; then
+  printf 'drwxr-xr-x 3 65534 65534 60 Nov 25 19:00 %s\n' "$3"
+  exit 0
+fi
+exec /usr/bin/env -u PATH sh -c 'PATH="${process.env.PATH}"; exec ls "$@"' sh "$@"
+`,
+  );
+  await chmod(lsWrapper, 0o755);
+  const origPath = process.env.PATH;
+  process.env.PATH = `${fakeBin}:${origPath}`;
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const turn = facade.session("s1").turn;
+    const large = Buffer.from("u".repeat(64 * 1024), "utf8");
+    await assert.rejects(
+      () => facade.publishOnce(turn, join(repo, "blocked.txt"), undefined, large),
+      /failed/i,
+    );
+    assert.deepEqual(
+      await readdir(ownedTarget),
+      [],
+      "ancestor owned by another UID must prevent creating file-buffers or scratch files",
+    );
+    assert.deepEqual(await readdir(repo), []);
+  } finally {
+    process.env.PATH = origPath;
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("WriteFile pre-dispatch stdin timeout returns ToolError without parking session and permanently closes delayed send (R12-M1)", async () => {
+  const calls = [];
+  let delayedSendOutcome = "not-run";
+  let delayedWriteDone;
+  const delayedWriteReady = new Promise((r) => {
+    delayedWriteDone = r;
+  });
+  const uncertainCalls = [];
+  const conn = {
+    async call(method, params, opts) {
+      calls.push({ method, params });
+      if (method === "fs/canonicalize") return { path: params.path };
+      if (method === "fs/getMetadata") {
+        const err = new Error("missing");
+        err.remote = { code: -32004, message: "No such file" };
+        throw err;
+      }
+      if (method === "fs/readDirectory") return { entries: [] };
+      if (method === "process/start") {
+        opts?.beforeSend?.();
+        return { processId: params.processId };
+      }
+      if (method === "process/write") {
+        // Simulate reconnect stall that finishes AFTER the publish deadline expires.
+        await new Promise((r) => setTimeout(r, 150));
+        try {
+          opts?.beforeSend?.();
+          delayedSendOutcome = "sent";
+          return { status: "accepted" };
+        } catch (err) {
+          delayedSendOutcome = `refused:${err.message}`;
+          throw err;
+        } finally {
+          delayedWriteDone();
+        }
+      }
+      if (method === "process/terminate") return { running: true };
+      if (method === "process/read")
+        return { chunks: [], exited: true, exitCode: 143, closed: true };
+      if (method === "cowboy/uncertainEffect") {
+        uncertainCalls.push(params);
+        return {};
+      }
+      throw new Error(`unexpected ${method}`);
+    },
+  };
+  const lostEvents = [];
+  const facade = new Facade(conn, {
+    root: "/repo",
+    shell: "/bin/sh",
+    publishTimeoutMs: 70,
+    onUncertain: (sid, method) => lostEvents.push([sid, method]),
+    onLost: (sid, method) => lostEvents.push([sid, method]),
+  });
+  facade.beginTurn("s1", { turnNonce: "n1" });
+  const session = facade.session("s1");
+  const turn = session.turn;
+  const content = "w".repeat(64 * 1024);
+  await assert.rejects(
+    () => facade.writeFile(session, turn, { path: "big.txt", content }),
+    (err) =>
+      !(err instanceof UncertainEffect) &&
+      /Timed out before delivering the edit request/i.test(err.message),
+  );
+  // Wait for the delayed reconnect's send attempt and prove the closed guard refused it.
+  await delayedWriteReady;
+  assert.match(
+    delayedSendOutcome,
+    /^refused:/,
+    "delayed pre-send guard must stay permanently closed",
+  );
+  assert.equal(turn.uncertain, undefined, "pre-dispatch timeout must not fence turn as uncertain");
+  assert.deepEqual(lostEvents, [], "must not emit onUncertain/onLost");
+  assert.deepEqual(uncertainCalls, [], "must not report cowboy/uncertainEffect to ledger");
+  assert.equal(
+    calls.some((c) => c.method === "process/terminate"),
+    true,
+    "helper must be confirmed terminated",
+  );
+});
+
+test("Buffered pre-prompt subagent cards replayed after turn install do not trigger eviction (R12-L3)", async () => {
+  const sent = [];
+  const proxy = new AcpProxy({
+    agent: () => {},
+    client: (frame) => sent.push(frame),
+  });
+  proxy.root = "/repo";
+  const childId = "child-sub-1";
+  // Child session is opening (no live turn yet): flood > MAX_WAITING nonterminal cards.
+  proxy.subagents.adopt(childId);
+  for (let i = 0; i < MAX_WAITING + 10; i += 1) {
+    await proxy.fromAgent({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: childId,
+        update: {
+          sessionUpdate: "tool_call",
+          toolCallId: `pre-${i}`,
+          name: "mcp_cowboy_EditFile",
+          rawInput: { path: `pre${i}.rs`, old_string: "a", new_string: "b" },
+          status: "in_progress",
+        },
+      },
+    });
+  }
+  // Now install the child's real live turn and release the buffered pre-prompt frames.
+  const childTurn = {
+    attempt: Symbol("child-att"),
+    tools: new Map(),
+    events: new Set(),
+    violations: [],
+    calls: new Map(),
+  };
+  proxy.turns.set(childId, childTurn);
+  proxy.subagents.release(childId);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(
+    proxy.planGate.waiting.get(childId),
+    undefined,
+    "replayed pre-prompt cards must not enter waiting for the new child turn",
+  );
+  assert.equal(childTurn.announcementEvicted, undefined);
+
+  // Child's genuine live EditFile call announces and binds cleanly!
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: childId,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "real-child-edit",
+        name: "mcp_cowboy_EditFile",
+        rawInput: { path: "real.rs", old_string: "old", new_string: "new" },
+        status: "in_progress",
+      },
+    },
+  });
+  const call = {
+    sessionId: childId,
+    name: "EditFile",
+    args: { path: "real.rs", old_string: "old", new_string: "new" },
+  };
+  proxy.planGate.admitCall(call, childTurn);
+  assert.equal(proxy.bind(call), "real-child-edit");
 });
