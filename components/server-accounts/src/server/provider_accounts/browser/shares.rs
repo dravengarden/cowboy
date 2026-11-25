@@ -375,14 +375,12 @@ pub async fn update(
             }
         }
         Change::DeleteBrowserShare { share_id }
-            if fresh_join(store, owner, operation, input.expected_revision).await? =>
+            if fresh_join(store, owner, operation, input.expected_revision).await?
+                && state
+                    .browsers
+                    .has_pending_navigation(owner, &browser_shares::share_key(owner, share_id)) =>
         {
-            if state
-                .browsers
-                .has_pending_navigation(owner, &browser_shares::share_key(owner, share_id))
-            {
-                return Err("browser_navigation_pending");
-            }
+            return Err("browser_navigation_pending");
         }
         _ => {}
     }
