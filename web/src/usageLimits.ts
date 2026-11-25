@@ -84,18 +84,27 @@ export function accountProviderLabel(provider: string): string {
 }
 
 /** External page where an account's plan usage and any banked limit resets are
- * read and redeemed (for example Claude's usage settings, or Grok's web usage
- * page whose reset RPC sits behind a Cloudflare browser challenge). The usage
- * host schema has no field for this yet; a Provider-owned `usage.manage_url`
- * would replace this table. */
+ * read (for example Claude's usage settings). The usage host schema has no
+ * field for this yet; a Provider-owned `usage.manage_url` would replace this
+ * table. */
 const ACCOUNT_MANAGE_URLS: Record<string, string> = {
   anthropic: "https://claude.ai/settings/usage",
+};
+
+/** The account page of a registered Provider identity (`claude-code`). */
+const PROVIDER_MANAGE_ACCOUNTS: Record<string, string> = {
+  "claude-code": "anthropic",
+};
+
+/** Vendor usage/reset pages opened exclusively inside the selected account's
+ * isolated Machine browser (never as an un-isolated device-browser anchor),
+ * for providers whose resets cannot run natively (for example Grok behind a
+ * Cloudflare browser challenge). */
+const ACCOUNT_BROWSER_MANAGE_URLS: Record<string, string> = {
   xai: "https://grok.com/?_s=usage",
 };
 
-/** The account page of a registered Provider identity (`claude-code`, `grok`). */
-const PROVIDER_MANAGE_ACCOUNTS: Record<string, string> = {
-  "claude-code": "anthropic",
+const PROVIDER_BROWSER_MANAGE_ACCOUNTS: Record<string, string> = {
   grok: "xai",
 };
 
@@ -107,6 +116,16 @@ export function providerManageUrl(providerId: string): string | undefined {
 /** Account page for a provider id, or undefined when none is published. */
 export function accountManageUrl(provider: string): string | undefined {
   return ACCOUNT_MANAGE_URLS[provider];
+}
+
+export function providerBrowserManageUrl(providerId: string): string | undefined {
+  const account = PROVIDER_BROWSER_MANAGE_ACCOUNTS[providerId];
+  return account === undefined ? undefined : ACCOUNT_BROWSER_MANAGE_URLS[account];
+}
+
+/** Machine-browser-only usage/reset page for a usage provider id. */
+export function accountBrowserManageUrl(provider: string): string | undefined {
+  return ACCOUNT_BROWSER_MANAGE_URLS[provider];
 }
 
 /** Keep first-party account cards in product order and unknown cards stable. */

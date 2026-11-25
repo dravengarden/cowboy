@@ -24,6 +24,12 @@ export const GROK_CLI_VERSION = "1.0.92";
 // A token this close to expiry would be renewed by the CLI; without the CLI
 // the collector reports authentication required instead.
 const EXPIRY_MARGIN_MS = 60_000;
+const MAX_RESPONSE_BYTES = 1024 * 1024;
+// The host kills a usage collector after 12 s; keep billing + optional settings
+// enrichment inside one shared 10 s deadline so a slow settings call never
+// discards a valid billing result.
+const POLL_BUDGET_MS = 10_000;
+const MIN_METADATA_BUDGET_MS = 250;
 const CHILD_ENV_KEYS = [
   "HOME",
   "PATH",
@@ -212,34 +218,71 @@ function authHeaders(credential, contentType) {
   };
 }
 
-async function boundedBytes(response, operation) {
+async function boundedBytes(response, operation, maxBytes = MAX_RESPONSE_BYTES) {
   if (!response.ok) {
+    try {
+      await response.body?.cancel();
+    } catch {
+      // Ignore cancellation errors on rejected responses.
+    }
     throw new Error(`${operation} returned HTTP ${response.status}`);
   }
   const declared = Number(response.headers.get("content-length") ?? "0");
-  if (declared > 1024 * 1024) {
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    try {
+      await response.body?.cancel();
+    } catch {
+      // Ignore cancellation errors on oversized responses.
+    }
     throw new Error(`${operation} response is too large`);
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.length > 1024 * 1024) {
-    throw new Error(`${operation} response is too large`);
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length > maxBytes) {
+      throw new Error(`${operation} response is too large`);
+    }
+    return bytes;
   }
-  return bytes;
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value || value.byteLength === 0) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error(`${operation} response is too large`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
 }
 
-const PLAN_LABELS = {
-  SUBSCRIPTION_TIER_SUPER_GROK_LITE: "SuperGrok Lite",
-  SUBSCRIPTION_TIER_GROK_PRO: "SuperGrok",
-  SUBSCRIPTION_TIER_SUPER_GROK_PLUS: "SuperGrok Plus",
-  SUBSCRIPTION_TIER_SUPER_GROK_PRO: "SuperGrok Heavy",
-  SuperGrokLite: "SuperGrok Lite",
-  GrokPro: "SuperGrok",
-  SuperGrokPlus: "SuperGrok Plus",
-  SuperGrokPro: "SuperGrok Heavy",
-  XPremiumPlus: "X Premium+",
-  XPremium: "X Premium",
-  XBasic: "X Basic",
-};
+const PLAN_LABELS = new Map([
+  ["SUBSCRIPTION_TIER_SUPER_GROK_LITE", "SuperGrok Lite"],
+  ["SUBSCRIPTION_TIER_GROK_PRO", "SuperGrok"],
+  ["SUBSCRIPTION_TIER_SUPER_GROK_PLUS", "SuperGrok Plus"],
+  ["SUBSCRIPTION_TIER_SUPER_GROK_PRO", "SuperGrok Heavy"],
+  ["SuperGrokLite", "SuperGrok Lite"],
+  ["GrokPro", "SuperGrok"],
+  ["SuperGrokPlus", "SuperGrok Plus"],
+  ["SuperGrokPro", "SuperGrok Heavy"],
+  ["XPremiumPlus", "X Premium+"],
+  ["XPremium", "X Premium"],
+  ["XBasic", "X Basic"],
+]);
 
 export function activePlan(document) {
   const labels = {
@@ -264,7 +307,7 @@ export function settingsPlan(document) {
     if (typeof raw !== "string") continue;
     const trimmed = raw.trim();
     if (!trimmed || trimmed.length > 64 || /[\x00-\x1f\x7f]/.test(trimmed)) continue;
-    return PLAN_LABELS[trimmed] ?? trimmed;
+    return PLAN_LABELS.get(trimmed) ?? trimmed;
   }
   return undefined;
 }
@@ -402,8 +445,8 @@ async function grpcWeb(credential, path, message = new Uint8Array(), fetchImpl =
  * `grok.com` web billing endpoints sit behind Cloudflare's browser challenge,
  * so usage polls read plan labels from the CLI proxy instead and never hit
  * `grok.com`. Failures are discarded without retry. */
-async function accountMetadata(credential, fetchImpl = fetch) {
-  if (!credential) return {};
+async function accountMetadata(credential, fetchImpl = fetch, timeoutMs = POLL_BUDGET_MS) {
+  if (!credential || timeoutMs < MIN_METADATA_BUDGET_MS) return {};
   try {
     const response = await fetchImpl(`${CHAT_PROXY_BASE}/settings`, {
       redirect: "manual",
@@ -413,7 +456,7 @@ async function accountMetadata(credential, fetchImpl = fetch) {
         "x-grok-client-mode": "interactive",
         accept: "application/json",
       },
-      signal: AbortSignal.timeout(10_000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const bytes = await boundedBytes(response, "xAI settings");
     const plan = settingsPlan(JSON.parse(decoder.decode(bytes)));
@@ -466,9 +509,20 @@ function usage(billing, metadata, observedAtMs) {
   };
 }
 
-async function collect(rpc, { credential = loadCredential, fetch: fetchImpl = fetch } = {}) {
+async function collect(
+  rpc,
+  {
+    credential = loadCredential,
+    fetch: fetchImpl = fetch,
+    now = Date.now,
+    budgetMs = POLL_BUDGET_MS,
+  } = {},
+) {
+  const deadline = now() + budgetMs;
   const billing = await rpc.request("_x.ai/billing", {});
-  return usage(billing, await accountMetadata(await credential(), fetchImpl), Date.now());
+  const current = await credential();
+  const metadata = await accountMetadata(current, fetchImpl, deadline - now());
+  return usage(billing, metadata, now());
 }
 
 // The pinned CLI decodes its billing response into typed structs and answers
@@ -553,7 +607,7 @@ export function billingProjection(document) {
   return { config: optional(document.config, billingConfig) ?? null };
 }
 
-async function billingWithoutCli(credential, fetchImpl) {
+async function billingWithoutCli(credential, fetchImpl, timeoutMs = POLL_BUDGET_MS) {
   const response = await fetchImpl(`${CHAT_PROXY_BASE}/billing?format=credits`, {
     redirect: "manual",
     headers: {
@@ -561,7 +615,7 @@ async function billingWithoutCli(credential, fetchImpl) {
       "x-grok-client-version": GROK_CLI_VERSION,
       "x-grok-client-mode": "interactive",
     },
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
   });
   if (response.status === 401 || response.status === 403) {
     throw new AuthenticationRequired(
@@ -587,7 +641,9 @@ export async function collectWithoutRefresh({
   credential = loadCredential,
   fetch: fetchImpl = fetch,
   now = Date.now,
+  budgetMs = POLL_BUDGET_MS,
 } = {}) {
+  const deadline = now() + budgetMs;
   const current = await credential();
   if (!current) {
     throw new AuthenticationRequired("Grok usage authentication required: no Grok sign-in.");
@@ -597,8 +653,9 @@ export async function collectWithoutRefresh({
       "Grok usage authentication required: the access token expired.",
     );
   }
-  const billing = await billingWithoutCli(current, fetchImpl);
-  return usage(billing, await accountMetadata(current, fetchImpl), now());
+  const billing = await billingWithoutCli(current, fetchImpl, deadline - now());
+  const metadata = await accountMetadata(current, fetchImpl, deadline - now());
+  return usage(billing, metadata, now());
 }
 
 async function reset(rpc, request) {

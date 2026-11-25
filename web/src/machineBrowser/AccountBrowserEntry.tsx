@@ -13,7 +13,7 @@ import { openAppSettings } from "../appSettings";
 import type { SubscriptionSnapshot } from "../subscriptionAccounts";
 import { accountBrowserEntry } from "./entryRules";
 import { MachineBrowserSheet } from "./MachineBrowserSheet";
-import { sharedBrowser, sharedCardLabel } from "./shareRules";
+import { browserIdentityKey, identityRequiredFor, sharedBrowser, sharedCardLabel } from "./shareRules";
 
 export function AccountBrowserEntry({
   snapshot,
@@ -30,11 +30,15 @@ export function AccountBrowserEntry({
    * directly in this account's Machine browser. */
   pageLink?: { url: string; label: string } | undefined;
 }): React.JSX.Element | null {
-  const [openTarget, setOpenTarget] = useState<{ url?: string } | null>(null);
+  const [openTarget, setOpenTarget] = useState<{
+    url?: string;
+    expectedBrowser?: string | undefined;
+  } | null>(null);
   const entry = accountBrowserEntry(snapshot, id, label);
   if (entry.kind === "none" || !snapshot) return null;
   const { account } = entry;
   const shared = sharedBrowser(snapshot, account.id);
+  const expectedBrowser = identityRequiredFor(snapshot) ? browserIdentityKey(shared) : undefined;
   return (
     <Stack spacing={0.25} data-account-browser-entry={account.id}>
       <Stack direction="row" spacing={0.5} flexWrap="wrap" alignItems="center">
@@ -63,7 +67,7 @@ export function AccountBrowserEntry({
                 : `${pageLink.label} in browser`
             }
             data-account-browser-page-link={pageLink.url}
-            onClick={() => setOpenTarget({ url: pageLink.url })}
+            onClick={() => setOpenTarget({ url: pageLink.url, expectedBrowser })}
             sx={{ alignSelf: "flex-start", minHeight: 36, textTransform: "none" }}
           >
             {pageLink.label}
@@ -104,7 +108,11 @@ export function AccountBrowserEntry({
             label: account.label,
             browserEnabled: account.browser_enabled,
           }}
-          link={openTarget.url ? { url: openTarget.url } : undefined}
+          link={
+            openTarget.url
+              ? { url: openTarget.url, expectedBrowser: openTarget.expectedBrowser }
+              : undefined
+          }
         />
       )}
     </Stack>

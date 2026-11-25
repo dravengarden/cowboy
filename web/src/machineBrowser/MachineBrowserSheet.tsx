@@ -44,7 +44,7 @@ import {
   resetTarget,
   resumeStep,
 } from "./browserModel";
-import { linkEntry, linkTarget } from "./linkNavigation";
+import { type BrowserLink, activeBrowserLink, linkEntry, linkTarget } from "./linkNavigation";
 import {
   type SharedBrowser,
   browserIdentityKey,
@@ -77,9 +77,9 @@ export interface MachineBrowserSheetProps {
    * `machine` is named (for example a Provider sign-in's verification URL),
    * opens are pinned to that Machine; without `machine` (for example a
    * vendor usage/reset page), the account's ordinary placement or Machine
-   * choice is used. Nothing flows back: the panel never reads or fills
-   * anything for the caller. */
-  link?: { url: string; machine?: string | undefined } | undefined;
+   * choice is used, bound to `expectedBrowser` when supplied. Nothing flows
+   * back: the panel never reads or fills anything for the caller. */
+  link?: BrowserLink | undefined;
   onEnableBrowser?: (() => void) | undefined;
   /** The enablement write is pending elsewhere. */
   enabling?: boolean | undefined;
@@ -92,7 +92,8 @@ function browserCommands(
   browser: MachineBrowserController,
   areaRef: RefObject<HTMLDivElement | null>,
   touch: boolean,
-  pinned: string | undefined,
+  link: BrowserLink | undefined,
+  entry: EntryLatch,
 ): BrowserCommands {
   const viewportNow = (): BrowserViewport => {
     const rect = areaRef.current?.getBoundingClientRect();
@@ -104,8 +105,18 @@ function browserCommands(
   };
   const { dispatch } = browser;
   return {
-    open: (machine, expected) => browser.open(viewportNow(), pinned ?? machine, expected),
-    attach: (takeover, target) => dispatch({ type: "attach", takeover, target }),
+    open: (machine, expected) => {
+      entry.autoOpened = true;
+      browser.open(
+        viewportNow(),
+        link?.machine ?? machine,
+        expected ?? link?.expectedBrowser,
+      );
+    },
+    attach: (takeover, target) => {
+      entry.autoOpened = true;
+      dispatch({ type: "attach", takeover, target });
+    },
     detach: () => dispatch({ type: "detach" }),
     hibernate: browser.hibernate,
     snapshot: browser.snapshot,
@@ -134,18 +145,23 @@ function useAutoEntry(
     (autoOpen || link !== undefined) &&
     open &&
     model.loaded &&
+    model.read !== undefined &&
     !model.busy &&
-    !model.read?.admission;
+    !model.read.admission;
   useEffect(() => {
-    if (!readyToAutoOpen || !takeLatch(latch, "autoOpened")) return;
-    const entry = link ? linkEntry(model.read, link.machine) : autoEntry(state?.state);
+    if (!readyToAutoOpen) return;
+    const entry = link
+      ? linkEntry(model.read, link.machine, link.expectedBrowser)
+      : autoEntry(state?.state);
+    if (entry === undefined || !takeLatch(latch, "autoOpened")) return;
     if (entry === "attach") commandsRef.current.attach(false);
-    else if (entry === "open") commandsRef.current.open();
+    else commandsRef.current.open();
   }, [readyToAutoOpen, latch, link, model.read, state]);
-  const shownLink = link && !model.busy ? linkTarget(model, link.machine) : undefined;
+  const shownLink =
+    link && !model.busy ? linkTarget(model, link.machine, link.expectedBrowser) : undefined;
   useEffect(() => {
     if (!link || !shownLink || !takeLatch(latch, "linked")) return;
-    browser.navigate(link.url, shownLink);
+    browser.navigate(link.url, shownLink.target, shownLink.attachmentId);
   }, [browser, latch, link, shownLink]);
 }
 
@@ -334,7 +350,7 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
   // identity: the first one binds, an equal one (from either source) keeps
   // the panel, another one re-binds it.
   const [binding, setBinding] = useState<IdentityBinding>(() => ({
-    identity: snapshot ? browserIdentityKey(shared) : undefined,
+    identity: props.link?.expectedBrowser ?? (snapshot ? browserIdentityKey(shared) : undefined),
     epoch: 0,
   }));
   const observe = useCallback(
@@ -344,12 +360,15 @@ export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.
   const inventoryIdentity = snapshot ? browserIdentityKey(shared) : undefined;
   useEffect(() => observe(inventoryIdentity), [inventoryIdentity, observe]);
   // The link-opening action is consumed once per sheet, above the keyed
-  // panel: a re-bound panel never opens or navigates the link again.
+  // panel: a re-bound panel never opens or navigates the link again, and an
+  // identity-bound link is cancelled when the browser identity changes.
   const [entry] = useState(newEntryLatch);
+  const activeLink = activeBrowserLink(props.link, binding);
   return (
     <MachineBrowserPanel
       key={binding.epoch}
       {...props}
+      link={activeLink}
       entry={entry}
       shared={shared}
       snapshot={snapshot}
@@ -419,7 +438,7 @@ function MachineBrowserPanel(
   const machineLabel = machineId
     ? machines.find((machine) => machine.id === machineId)?.display_name || machineId
     : "no Machine yet";
-  const commands = browserCommands(browser, areaRef, touch, link?.machine);
+  const commands = browserCommands(browser, areaRef, touch, link, props.entry);
   useAutoEntry(props, browser, commands);
   useResume(open, browser, commands);
   useCapWarning(open, browser);

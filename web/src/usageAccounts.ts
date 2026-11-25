@@ -3,7 +3,7 @@ import type { SubscriptionSnapshot } from "./subscriptionAccounts";
 import { sessionQuota } from "./sessionQuota";
 import type { NativeAccountUsage } from "./nativeAccountUsage";
 import { accountControl, accountPlanLabel, namedOnlyProvider } from "./accountControls";
-import { accountManageUrl, providerManageUrl, accountProviderLabel, nearestAvailableResetCredit, type ProviderUsage, record, type UsageSnapshot, usageAccountId, usageCardOrder, usagePluginId, usageResetProvider } from "./usageLimits";
+import { accountBrowserManageUrl, accountManageUrl, accountProviderLabel, nearestAvailableResetCredit, providerBrowserManageUrl, providerManageUrl, type ProviderUsage, record, type UsageSnapshot, usageAccountId, usageCardOrder, usagePluginId, usageResetProvider } from "./usageLimits";
 import type { UsageResetTarget } from "./usageApi";
 
 export interface UsageAccountCard {
@@ -176,18 +176,26 @@ export function usageResetUnavailableMessage(card: UsageAccountCard): string | u
 
 /** The Provider's plan and reset page, on the cards that own reset actions. */
 export function usageCardManageUrl(card: UsageAccountCard): string | undefined {
-  // The Provider identity decides (named Claude and Grok cards included, even
-  // with no observation or snapshot), never whether reset credits are reported now.
+  // The Provider identity decides (named Claude cards included, even with no
+  // observation or snapshot), never whether reset credits are reported now.
   return accountManageUrl(card.usage.provider) ??
     (card.providerId === undefined ? undefined : providerManageUrl(card.providerId));
 }
 
 /** Direct Machine-browser destination for a card whose resets are performed on
- * the vendor's web page rather than natively by Cowboy (for example xAI/Grok). */
+ * the vendor's web page rather than natively by Cowboy (for example xAI/Grok).
+ * Web-only providers are offered immediately (even while usage is loading);
+ * providers with native resets wait until usage resolves `resets_supported: false`. */
 export function usageCardBrowserManageLink(
   card: UsageAccountCard,
 ): { url: string; label: string } | undefined {
   if (card.native?.resets_supported === true) return undefined;
+  const browserUrl = accountBrowserManageUrl(card.usage.provider) ??
+    (card.providerId === undefined ? undefined : providerBrowserManageUrl(card.providerId));
+  if (browserUrl !== undefined) {
+    return { url: browserUrl, label: "Usage & resets" };
+  }
+  if (card.native?.resets_supported !== false) return undefined;
   const url = usageCardManageUrl(card);
   return url === undefined ? undefined : { url, label: "Usage & resets" };
 }

@@ -4,8 +4,10 @@ import { assertEquals } from "../../tools/test-assert.ts";
 import { quotaView } from "../../plugins/claude-code/collector/usage.js";
 import {
   acceptedScheduleTime,
+  accountBrowserManageUrl,
   accountManageUrl,
   accountProviderLabel,
+  providerBrowserManageUrl,
   providerManageUrl,
   accountProviderUsage,
   applyUsageHostPlugins,
@@ -235,14 +237,19 @@ test("account manage links are published only for known accounts", () => {
     accountManageUrl("anthropic"),
     "https://claude.ai/settings/usage",
   );
+  // Grok usage/reset pages stay in the isolated Machine browser, never as an
+  // un-isolated device-browser anchor.
+  assertEquals(accountManageUrl("xai"), undefined);
+  assertEquals(providerManageUrl("grok"), undefined);
   assertEquals(
-    accountManageUrl("xai"),
+    accountBrowserManageUrl("xai"),
     "https://grok.com/?_s=usage",
   );
   assertEquals(
-    providerManageUrl("grok"),
+    providerBrowserManageUrl("grok"),
     "https://grok.com/?_s=usage",
   );
+  assertEquals(accountBrowserManageUrl("anthropic"), undefined);
   assertEquals(accountManageUrl("openai"), undefined);
   assertEquals(accountManageUrl("future-labs"), undefined);
 });

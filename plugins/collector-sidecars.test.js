@@ -17,6 +17,7 @@ import {
   AuthenticationRequired,
   activePlan,
   billingProjection,
+  collectWithoutRefresh as collectGrokWithoutRefresh,
   credentialFromJson,
   encodeStringField,
   GROK_CLI_VERSION,
@@ -708,4 +709,78 @@ test("Codex and Grok order equal-time grants by code units, not locale", () => {
   ];
   equal(nearestCodexCredit({ rateLimitResetCredits: { credits } }), "B", "codex");
   equal(nearestGrokCredit(credits.map(({ id, expiresAt }) => ({ id, expiresAt }))).id, "B", "grok");
+});
+
+test("Grok settingsPlan ignores Object.prototype keys and always returns a string", () => {
+  equal(settingsPlan({ subscription_tier_display: "__proto__" }), "__proto__", "__proto__");
+  equal(settingsPlan({ subscription_tier_display: "constructor" }), "constructor", "constructor");
+  equal(settingsPlan({ subscription_tier: "toString" }), "toString", "toString");
+});
+
+test("Grok settings enrichment shares the collector deadline and skips or aborts without losing billing", async () => {
+  const billingBody = JSON.stringify({ config: { creditUsagePercent: 12.5 } });
+  // Case 1: billing leaves less than the minimum metadata budget -> settings is skipped.
+  let clock = 1_000_000;
+  const seenUrls = [];
+  const skipped = await collectGrokWithoutRefresh({
+    credential: async () => ({ key: "k", userId: "u", expiresAt: 1_500_000 }),
+    now: () => clock,
+    budgetMs: 1_000,
+    fetch: async (url) => {
+      seenUrls.push(String(url));
+      clock += 800; // only 200ms left (< 250ms minimum)
+      return new Response(billingBody, { status: 200 });
+    },
+  });
+  equal(seenUrls, ["https://cli-chat-proxy.grok.com/v1/billing?format=credits"], "skipped");
+  equal(skipped.rate_limits.config.creditUsagePercent, 12.5, "billing preserved when skipped");
+  equal(skipped.account, undefined, "no plan when skipped");
+
+  // Case 2: settings stalls past the remaining budget -> aborted cleanly, billing preserved.
+  let settingsAborted = false;
+  const aborted = await collectGrokWithoutRefresh({
+    credential: async () => ({ key: "k", userId: "u", expiresAt: Date.now() + 600_000 }),
+    budgetMs: 300,
+    fetch: async (url, init) => {
+      if (String(url).includes("/billing")) {
+        return new Response(billingBody, { status: 200 });
+      }
+      return await new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          settingsAborted = true;
+          reject(init.signal.reason ?? new Error("aborted"));
+        });
+      });
+    },
+  });
+  equal(settingsAborted, true, "settings signal aborted within remaining budget");
+  equal(aborted.rate_limits.config.creditUsagePercent, 12.5, "billing preserved after abort");
+});
+
+test("Grok boundedBytes cancels an oversized chunked settings stream without losing billing", async () => {
+  const billingBody = JSON.stringify({ config: { creditUsagePercent: 42 } });
+  let pulled = 0;
+  let cancelled = false;
+  const oversized = new ReadableStream({
+    pull(controller) {
+      pulled += 1;
+      controller.enqueue(new Uint8Array(256 * 1024));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const result = await collectGrokWithoutRefresh({
+    credential: async () => ({ key: "k", userId: "u", expiresAt: Date.now() + 600_000 }),
+    fetch: async (url) => {
+      if (String(url).includes("/billing")) {
+        return new Response(billingBody, { status: 200 });
+      }
+      return new Response(oversized, { status: 200 });
+    },
+  });
+  equal(cancelled, true, "oversized chunked stream cancelled");
+  equal(pulled <= 6, true, `stopped reading early (pulled ${pulled} chunks)`);
+  equal(result.rate_limits.config.creditUsagePercent, 42, "billing preserved");
+  equal(result.account, undefined, "oversized settings discarded");
 });

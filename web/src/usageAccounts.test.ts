@@ -353,17 +353,34 @@ test("retired-default providers keep product order, host labels, and renewal sta
   assertEquals(grok.subtitle, "xAI · Default");
   assertEquals(grok.statusLabel, "SIGN IN AGAIN");
   assertEquals(grok.emptyMessage, authExpired.message);
-  assertEquals(usageCardManageUrl(grok), "https://grok.com/?_s=usage");
+  // Grok stays in the account's isolated Machine browser (never a device-browser anchor)
+  // and is available immediately even while usage is pending.
+  assertEquals(usageCardManageUrl(grok), undefined);
   assertEquals(usageCardBrowserManageLink(grok), {
     url: "https://grok.com/?_s=usage",
     label: "Usage & resets",
   });
-  // Cards whose resets are spent natively by Cowboy do not add a browser reset shortcut.
+  assertEquals(usageCardBrowserManageLink({ ...grok, native: undefined }), {
+    url: "https://grok.com/?_s=usage",
+    label: "Usage & resets",
+  });
+  // Native-reset providers do not flash the browser shortcut while loading or
+  // when native resets are supported; only explicit `resets_supported: false` falls back.
+  const claudePending = cards.find((c) => c.id === "lark")!;
+  assertEquals(usageCardBrowserManageLink(claudePending), undefined);
   const claudeSupported = {
-    ...cards.find((c) => c.id === "lark")!,
+    ...claudePending,
     native: { account_id: "lark", provider_id: "claude-code", refreshing: false, resets_supported: true },
   };
   assertEquals(usageCardBrowserManageLink(claudeSupported), undefined);
+  const claudeUnsupported = {
+    ...claudePending,
+    native: { account_id: "lark", provider_id: "claude-code", refreshing: false, resets_supported: false },
+  };
+  assertEquals(usageCardBrowserManageLink(claudeUnsupported), {
+    url: "https://claude.ai/settings/usage",
+    label: "Usage & resets",
+  });
   assertEquals(usageCardBrowserManageLink(cards.find((c) => c.id === "pika")!), undefined);
   // Explicit user order overrides the product default.
   assertEquals(
