@@ -252,6 +252,21 @@ pub async fn update_value(
     // commits its receipt but has no browser effect.
     let (result, noop) = if input.change.is_browser_share() {
         browser::shares::update(state, owner, operation, input).await?
+    } else if let crate::store::provider_accounts::Change::BeginRevocation { id } = &input.change {
+        let defer_leave = browser::shares::member_has_pending_navigation(state, owner, id).await?;
+        (
+            if defer_leave {
+                store
+                    .mutate_provider_accounts_deferring_share_leave(owner, operation, input)
+                    .await
+            } else {
+                store
+                    .mutate_provider_accounts(owner, operation, input)
+                    .await
+            }
+            .map_err(|_| "outcome_unknown")?,
+            false,
+        )
     } else {
         (
             store

@@ -20,19 +20,20 @@ pub type BrowserObserver = Arc<dyn Fn(&ConnectionToken, &machine_browser::Event)
 pub type BrowserResultObserver = Arc<dyn Fn(&ConnectionToken, &str) -> bool + Send + Sync>;
 
 /// Why [`MachineControl::browser_command_checked`] did not receive a browser
-/// state event: either the Controller wait timed out while the Machine may
-/// still execute the dispatched command, or dispatch/execution definitely failed.
+/// state event: either the command was enqueued and its outcome is uncertain
+/// (Controller wait timed out or the connection closed after dispatch while the
+/// Machine may still execute it), or dispatch/execution definitely failed
+/// (never enqueued, or explicitly rejected by the Machine).
 #[derive(Debug)]
 pub enum BrowserCommandError {
-    TimedOut,
-    Failed(String),
+    Uncertain(String),
+    Definite(String),
 }
 
 impl BrowserCommandError {
     pub fn into_message(self) -> String {
         match self {
-            Self::TimedOut => "Machine browser command timed out".into(),
-            Self::Failed(detail) => detail,
+            Self::Uncertain(detail) | Self::Definite(detail) => detail,
         }
     }
 }
@@ -40,8 +41,7 @@ impl BrowserCommandError {
 impl std::fmt::Display for BrowserCommandError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::TimedOut => f.write_str("Machine browser command timed out"),
-            Self::Failed(detail) => f.write_str(detail),
+            Self::Uncertain(detail) | Self::Definite(detail) => f.write_str(detail),
         }
     }
 }
@@ -64,8 +64,9 @@ impl MachineControl {
     }
 
     /// One Machine browser command on the exact authenticated connection,
-    /// distinguishing a wait timeout (command still in flight on the Machine)
-    /// from a definite send/refusal/disconnect failure.
+    /// distinguishing an uncertain post-enqueue outcome (timeout or transport
+    /// close while the Machine may still execute) from a definite pre-send or
+    /// Machine-refusal failure.
     pub async fn browser_command_checked(
         &self,
         connection: &ConnectionToken,
@@ -84,17 +85,19 @@ impl MachineControl {
                 ReplyKind::Browser,
                 Some(RequestBinding::Connection(connection)),
             )
-            .map_err(BrowserCommandError::Failed)?;
+            .map_err(BrowserCommandError::Definite)?;
         match tokio::time::timeout(timeout, rx).await {
             Ok(Ok(Reply::Browser(Ok(state)))) => Ok(*state),
-            Ok(Ok(Reply::Browser(Err(detail)))) => Err(BrowserCommandError::Failed(detail)),
-            Ok(Ok(_)) => Err(BrowserCommandError::Failed(
+            Ok(Ok(Reply::Browser(Err(detail)))) => Err(BrowserCommandError::Definite(detail)),
+            Ok(Ok(_)) => Err(BrowserCommandError::Definite(
                 "Machine browser reply kind mismatch".into(),
             )),
-            Ok(Err(_)) => Err(BrowserCommandError::Failed(
+            Ok(Err(_)) => Err(BrowserCommandError::Uncertain(
                 "Machine browser response channel closed".into(),
             )),
-            Err(_) => Err(BrowserCommandError::TimedOut),
+            Err(_) => Err(BrowserCommandError::Uncertain(
+                "Machine browser command timed out".into(),
+            )),
         }
     }
 

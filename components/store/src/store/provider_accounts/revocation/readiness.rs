@@ -99,14 +99,8 @@ impl Store {
             );
             missing.extend(grant_missing(&receipt, &grant));
         }
-        for target in &plan.browsers {
-            if !receipt.browser_revocations.contains_key(&target.machine_id) {
-                missing.push(Missing {
-                    kind: "browser_revocation",
-                    target: target.machine_id.clone(),
-                });
-            }
-        }
+        self.append_browser_missing(owner, &receipt, plan, &mut missing)
+            .await?;
         missing.extend(
             super::account_removals::missing(&receipt)
                 .into_iter()
@@ -125,6 +119,32 @@ impl Store {
             missing,
             completion_admission: "internal_only",
         })
+    }
+
+    async fn append_browser_missing(
+        &self,
+        owner: &str,
+        receipt: &Receipt,
+        plan: &super::Plan,
+        missing: &mut Vec<Missing>,
+    ) -> Result<()> {
+        for target in &plan.browsers {
+            if !receipt.browser_revocations.contains_key(&target.machine_id) {
+                missing.push(Missing {
+                    kind: "browser_revocation",
+                    target: target.machine_id.clone(),
+                });
+            }
+        }
+        let encoded_member =
+            super::super::browser_shares::Member::account(receipt.account_id.clone()).encode();
+        if self.is_browser_share_member(owner, &encoded_member).await? {
+            missing.push(Missing {
+                kind: "browser_share_leave",
+                target: receipt.account_id.as_str().to_owned(),
+            });
+        }
+        Ok(())
     }
 }
 

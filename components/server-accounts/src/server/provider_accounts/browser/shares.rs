@@ -334,6 +334,150 @@ pub fn run_effects(state: &Arc<AppState>, owner: &str, change: &Change, effects:
 /// `expected_revision` (the writer's `revision_conflict`) are resolved by
 /// the writer first, so they never wait on, or read as, a Machine check; a
 /// no-op is answered without these checks too.
+/// Whether `account_id` is currently a member of a shared browser whose
+/// profile has an unsettled identity-bound navigation in flight.
+pub async fn member_has_pending_navigation(
+    state: &AppState,
+    owner: &str,
+    account_id: &ProviderAccountId,
+) -> Result<bool, &'static str> {
+    let store = state.store.as_ref().ok_or("unavailable")?;
+    let shares = store
+        .browser_shares(owner)
+        .await
+        .map_err(|_| "unavailable")?;
+    let member = Member::account(account_id.clone());
+    let Some(row) = shares.membership(&member) else {
+        return Ok(false);
+    };
+    let Some(share) = shares.share(&row.share_id) else {
+        return Ok(false);
+    };
+    Ok(state
+        .browsers
+        .has_pending_navigation(owner, &share.browser_key))
+}
+
+/// Commit any deferred share-membership removals for revoking accounts of
+/// `owner` whose share no longer has a pending navigation. Caller MUST hold
+/// `state.browsers.share_lock(owner)`.
+pub async fn flush_revoked_share_leaves_locked(state: &AppState, owner: &str) {
+    let Some(store) = state.store.as_ref() else {
+        return;
+    };
+    let Ok(deferred) = store.deferred_revoked_share_members(Some(owner)).await else {
+        tracing::info!("deferred revoked share members not read; retrying");
+        return;
+    };
+    for (_, account_id, browser_key) in deferred {
+        if state.browsers.has_pending_navigation(owner, &browser_key) {
+            continue;
+        }
+        match store.finish_revoked_share_leave(owner, &account_id).await {
+            Ok(Some(revision)) => {
+                state
+                    .hub
+                    .announce_preferences(owner, "provider_accounts", revision);
+            }
+            Ok(None) => {}
+            Err(error) => {
+                tracing::warn!(%error, account = %account_id.as_str(), "deferred revoked share leave failed; retrying");
+            }
+        }
+    }
+}
+
+/// Settle identity-bound navigations whose dispatching connection dropped once
+/// their Machine reconnects on a new connection: query first (which settles
+/// immediately if the instance exited or was replaced), and if that exact
+/// instance is still running on the Machine, hibernate it so confirmed unit
+/// exit proves the old navigation can never land.
+pub async fn reconcile_orphaned_navigations(state: &Arc<AppState>, machine_id: Option<&str>) {
+    for pending in state.browsers.orphaned_navigations(machine_id) {
+        let Some(event) =
+            super::query_machine(state, &pending.machine_id, &pending.browser_key).await
+        else {
+            continue;
+        };
+        if !state.browsers.is_navigation_pending(&pending.request_id) {
+            continue;
+        }
+        if matches!(
+            event.state,
+            BrowserState::Starting | BrowserState::Detached | BrowserState::Attached
+        ) && event.instance == pending.instance
+            && let Ok(connection) = super::connection_for(state, &pending.machine_id)
+            && !connection.same(&pending.connection)
+        {
+            let request = super::request_id("browser-hibernate");
+            super::hibernate_sent(
+                &pending.machine_id,
+                &pending.instance,
+                &request,
+                "navigation_reconcile",
+            );
+            match state
+                .machine_control
+                .browser_command(
+                    &connection,
+                    request,
+                    Command::Hibernate {
+                        instance: pending.instance.clone(),
+                    },
+                    super::HIBERNATE_TIMEOUT,
+                )
+                .await
+            {
+                Ok(hib_event) => {
+                    if hib_event.state == BrowserState::Hibernated
+                        && state.browsers.is_navigation_pending(&pending.request_id)
+                    {
+                        // E.g. the instance exited between Query and Hibernate so
+                        // the Machine answered `Hibernated/Superseded` with
+                        // `incarnation: 0`; re-query authoritatively right away.
+                        let _ =
+                            super::query_machine(state, &pending.machine_id, &pending.browser_key)
+                                .await;
+                    }
+                }
+                Err(error) => {
+                    tracing::info!(
+                        %error,
+                        machine = %pending.machine_id,
+                        "browser hibernate to settle orphaned navigation did not complete"
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Reconcile deferred share-membership removals for revoking accounts once
+/// their share's pending navigation has settled.
+pub async fn reconcile_revoked_share_leaves(state: &AppState, owner: Option<&str>) {
+    let Some(store) = state.store.as_ref() else {
+        return;
+    };
+    let Ok(deferred) = store.deferred_revoked_share_members(owner).await else {
+        tracing::info!("deferred revoked share members not read; retrying");
+        return;
+    };
+    let owners: std::collections::BTreeSet<String> = deferred
+        .into_iter()
+        .filter(|(row_owner, _, browser_key)| {
+            !state
+                .browsers
+                .has_pending_navigation(row_owner, browser_key)
+        })
+        .map(|(row_owner, _, _)| row_owner)
+        .collect();
+    for row_owner in owners {
+        let fence = state.browsers.share_lock(&row_owner);
+        let _fence = fence.lock().await;
+        flush_revoked_share_leaves_locked(state, &row_owner).await;
+    }
+}
+
 pub async fn update(
     state: &Arc<AppState>,
     owner: &str,
@@ -341,6 +485,14 @@ pub async fn update(
     input: &Mutation,
 ) -> Result<(MutationResult, bool), &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
+    if store
+        .provider_account_receipt(owner, operation)
+        .await
+        .map_err(|_| "unavailable")?
+        .is_none()
+    {
+        flush_revoked_share_leaves_locked(state, owner).await;
+    }
     let mut noop = false;
     match &input.change {
         Change::SetBrowserShare { member, share_id }
@@ -550,11 +702,20 @@ impl DeletionRetries {
 /// a human step.
 pub fn start_deletion_reconciler(state: &Arc<AppState>) {
     let weak = Arc::downgrade(state);
+    let nav_settled = state.browsers.navigation_settled_notify();
     tokio::spawn(async move {
         let mut retries = DeletionRetries::default();
         loop {
-            tokio::time::sleep(DELETION_TICK).await;
+            let settled_wakeup = tokio::select! {
+                () = tokio::time::sleep(DELETION_TICK) => false,
+                () = nav_settled.notified() => true,
+            };
             let Some(state) = weak.upgrade() else { return };
+            reconcile_revoked_share_leaves(&state, None).await;
+            if settled_wakeup {
+                continue;
+            }
+            reconcile_orphaned_navigations(&state, None).await;
             let Some(store) = state.store.as_ref() else {
                 return;
             };

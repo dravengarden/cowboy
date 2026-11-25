@@ -218,7 +218,7 @@ export function BrowserFrame(props: BrowserFrameProps): React.JSX.Element {
         bgcolor: "background.default",
       }}
     >
-      {model.viewer && browserRunning(state?.state) ? (
+      {model.viewer && browserRunning(state?.state) && !props.linkUpgradeRequired ? (
         <Suspense
           fallback={
             <Typography role="status" variant="body2" sx={{ p: 2, textAlign: "center" }}>

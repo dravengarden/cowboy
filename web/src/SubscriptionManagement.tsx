@@ -87,12 +87,12 @@ export function subscriptionWriteRejected(status: number, code: string | undefin
     "account_not_found", "account_revoking", "invalid_argument", "invalid_browser_share", "browser_share_capacity", "browser_share_not_found",
     "browser_share_family_conflict", "browser_share_family_unknown", "browser_share_family_bound", "browser_share_family_drift",
     "browser_share_changed", "browser_share_machine_unsupported", "browser_share_machine_unknown",
-    "browser_share_reset_pending", "named_account_required"].includes(code ?? "");
+    "browser_share_reset_pending", "browser_navigation_pending", "named_account_required"].includes(code ?? "");
 }
 
 /** The owner-facing explanation of a definitive refusal. */
 export function subscriptionRejectionText(code: string): string {
-  return code.startsWith("browser_share_")
+  return code.startsWith("browser_share_") || code === "browser_navigation_pending"
     ? browserErrorText(code)
     : `Change rejected (${code}). Review the list before trying again.`;
 }

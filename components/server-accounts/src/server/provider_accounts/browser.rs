@@ -720,6 +720,8 @@ pub async fn refresh_placements(state: Arc<AppState>, connection: ConnectionToke
         }
         let _ = query_machine(&state, &machine_id, &account_id).await;
     }
+    // Reconcile any identity-bound navigations orphaned by a prior connection drop.
+    shares::reconcile_orphaned_navigations(&state, Some(&machine_id)).await;
     // A share deleted while this Machine was away is revoked now.
     for owner in owners {
         shares::resume_deletions(&state, &owner).await;
@@ -965,19 +967,22 @@ pub async fn instance_command(
     if authority == Authority::Launch {
         network::admitted_on(state, &resolved, &observed.connection).await?;
     }
-    let tracked_instance = expected_browser.is_some().then(|| instance.clone());
+    let tracked_instance = instance.clone();
     let command = command(instance);
+    let track_navigation =
+        expected_browser.is_some() && matches!(&command, Command::Navigate { .. });
     let request = request_id("browser");
     if let Command::Hibernate { instance } = &command {
         hibernate_sent(&observed.machine_id, instance, &request, "owner_request");
     }
-    if let Some(tracked) = tracked_instance {
+    if track_navigation {
         state.browsers.begin_navigation(
             request.clone(),
             owner,
             resolved.key.clone(),
             &observed.connection,
-            tracked,
+            tracked_instance,
+            observed.event.observed_at_ms,
         );
     }
     let event = match state
@@ -986,21 +991,22 @@ pub async fn instance_command(
         .await
     {
         Ok(event) => {
-            if expected_browser.is_some() {
+            if track_navigation {
                 state.browsers.settle_navigation(&request);
             }
             event
         }
-        Err(crate::machine_control::BrowserCommandError::TimedOut) => {
+        Err(crate::machine_control::BrowserCommandError::Uncertain(error)) => {
             tracing::warn!(
+                %error,
                 request_id = %request,
-                fenced = expected_browser.is_some(),
-                "browser command timed out; keeping navigation fence until Machine settles"
+                fenced = track_navigation,
+                "browser command outcome uncertain; keeping navigation fence until Machine settles"
             );
             return Err("browser_command_failed");
         }
-        Err(crate::machine_control::BrowserCommandError::Failed(error)) => {
-            if expected_browser.is_some() {
+        Err(crate::machine_control::BrowserCommandError::Definite(error)) => {
+            if track_navigation {
                 state.browsers.settle_navigation(&request);
             }
             tracing::warn!(%error, "browser command failed");
@@ -1044,6 +1050,7 @@ pub async fn reset(
     // and the Machine's answer: the reset deletes the profile observed.
     let fence = state.browsers.share_lock(owner);
     let _fence = fence.lock().await;
+    shares::flush_revoked_share_leaves_locked(state, owner).await;
     let resolved = authorize(state, owner, account_id, Authority::Reset).await?;
     if resolved.identity() != expected_browser {
         return Err("browser_identity_changed");

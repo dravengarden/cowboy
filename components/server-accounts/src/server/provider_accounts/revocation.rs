@@ -111,6 +111,7 @@ pub async fn reconcile(
     } else {
         serde_json::json!({"state":"waiting_for_session_stop"})
     };
+    super::browser::shares::reconcile_revoked_share_leaves(state, Some(owner)).await;
     if store
         .complete_provider_revocation(owner, operation)
         .await

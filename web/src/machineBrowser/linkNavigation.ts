@@ -50,13 +50,15 @@ export function activeBrowserLink(
   return link;
 }
 
-/** Whether a reconnect step must be suppressed because the latest read names
- * a different browser identity than this panel's bound identity (before React
- * rebinds the panel). */
+/** Whether a reconnect step must be suppressed: either an active link
+ * requires a Controller upgrade, or the latest read names a different browser
+ * identity than this panel's bound identity (before React rebinds the panel). */
 export function resumeBlockedByIdentity(
   boundIdentity: string | undefined,
   observedIdentity: string | undefined,
+  linkUpgradeRequired = false,
 ): boolean {
+  if (linkUpgradeRequired) return true;
   return (
     boundIdentity !== undefined &&
     observedIdentity !== undefined &&

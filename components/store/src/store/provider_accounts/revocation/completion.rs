@@ -51,6 +51,16 @@ impl Store {
             for target in &plan.browsers {
                 if !receipt.browser_revocations.contains_key(&target.machine_id) { return Ok(false); }
             }
+            let encoded_member =
+                super::super::browser_shares::Member::account(receipt.account_id.clone()).encode();
+            let in_share: i64 = sqlx::query_scalar(
+                "SELECT COUNT(*) FROM provider_browser_share_members WHERE owner_user_id=$1 AND member=$2",
+            )
+            .bind(owner)
+            .bind(&encoded_member)
+            .fetch_one(&mut *tx)
+            .await?;
+            if in_share > 0 { return Ok(false); }
             // A named-only account's sandbox (home and system user) is removed on every Machine.
             if !super::account_removals::missing(&receipt).is_empty() { return Ok(false); }
             if !super::super::portable::missing(&receipt).is_empty() { return Ok(false); }

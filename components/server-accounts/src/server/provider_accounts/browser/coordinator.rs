@@ -124,17 +124,24 @@ pub struct Coordinator {
     /// Per Machine: placements its current connection has not answered for.
     inventories: parking_lot::Mutex<HashMap<String, Inventory>>,
     /// Identity-bound navigations dispatched to a Machine and not yet settled
-    /// (including those whose Controller HTTP wait timed out while the Machine
-    /// was still busy with a snapshot). Keyed by `request_id`.
+    /// (including those whose Controller wait timed out or whose transport
+    /// dropped while the Machine's browser task may still execute). Keyed by
+    /// `request_id`.
     pending_navigations: parking_lot::Mutex<HashMap<String, PendingNavigation>>,
+    /// Signalled whenever any pending navigation settles so deferred revocation
+    /// share-membership removals run promptly.
+    navigation_settled: Arc<tokio::sync::Notify>,
 }
 
-#[derive(Clone)]
-struct PendingNavigation {
-    owner: String,
-    browser_key: ProviderAccountId,
-    connection: ConnectionToken,
-    instance: InstanceRef,
+#[derive(Clone, Debug)]
+pub struct PendingNavigation {
+    pub request_id: String,
+    pub owner: String,
+    pub browser_key: ProviderAccountId,
+    pub machine_id: String,
+    pub connection: ConnectionToken,
+    pub instance: InstanceRef,
+    pub observed_at_ms: i64,
 }
 
 /// What the cache keeps of a state event. A reason on a running instance's
@@ -182,9 +189,6 @@ impl Coordinator {
         self.cancel_viewers_where(|(machine, _), viewer| {
             *machine == machine_id && !viewer.connection.same(connection)
         });
-        self.pending_navigations.lock().retain(|_, pending| {
-            pending.connection.machine_id() != machine_id || pending.connection.same(connection)
-        });
     }
 
     /// A Machine connection ended: drop what it reported and end its viewers.
@@ -215,9 +219,6 @@ impl Coordinator {
             .write()
             .retain(|_, observed| !observed.connection.same(connection));
         self.cancel_viewers_where(|_, viewer| viewer.connection.same(connection));
-        self.pending_navigations
-            .lock()
-            .retain(|_, pending| !pending.connection.same(connection));
     }
 
     fn is_current(&self, connection: &ConnectionToken) -> bool {
@@ -316,7 +317,7 @@ impl Coordinator {
                     }
                 }
                 self.end_mismatched_viewer(&key, state);
-                self.settle_navigations_from_state(connection, state);
+                self.settle_navigations_from_state(connection, state, false);
             }
             Event::Capability(capability) => {
                 self.observe_capability(connection, Some(capability.clone()));
@@ -324,9 +325,6 @@ impl Coordinator {
             Event::CapabilityLost => {
                 self.observe_capability(connection, None);
                 self.cancel_viewers_where(|(machine, _), _| machine == machine_id);
-                self.pending_navigations
-                    .lock()
-                    .retain(|_, pending| !pending.connection.same(connection));
             }
         }
     }
@@ -388,6 +386,7 @@ impl Coordinator {
         } else {
             self.end_mismatched_viewer(&key, event);
         }
+        self.settle_navigations_from_state(connection, event, true);
     }
 
     /// The durable placements on the connection's Machine are known: each
@@ -556,9 +555,14 @@ impl Coordinator {
         lock_for(&self.share_locks, owner)
     }
 
+    /// Handle notified whenever a tracked navigation fence clears.
+    pub fn navigation_settled_notify(&self) -> Arc<tokio::sync::Notify> {
+        Arc::clone(&self.navigation_settled)
+    }
+
     /// Record an identity-bound navigation dispatched on `connection` so share
-    /// membership changes remain fenced even if the Controller wait times out
-    /// before the Machine confirms completion or cancellation.
+    /// membership changes remain fenced across Controller wait timeouts and
+    /// transport drops until the Machine settles it or confirms instance exit.
     pub fn begin_navigation(
         &self,
         request_id: String,
@@ -566,14 +570,19 @@ impl Coordinator {
         browser_key: ProviderAccountId,
         connection: &ConnectionToken,
         instance: InstanceRef,
+        observed_at_ms: i64,
     ) {
+        let machine_id = connection.machine_id().to_owned();
         self.pending_navigations.lock().insert(
-            request_id,
+            request_id.clone(),
             PendingNavigation {
+                request_id,
                 owner: owner.to_owned(),
                 browser_key,
+                machine_id,
                 connection: connection.clone(),
                 instance,
+                observed_at_ms,
             },
         );
     }
@@ -581,7 +590,9 @@ impl Coordinator {
     /// Clear a tracked navigation fence once the command definitely failed or
     /// finished on the Machine.
     pub fn settle_navigation(&self, request_id: &str) {
-        self.pending_navigations.lock().remove(request_id);
+        if self.pending_navigations.lock().remove(request_id).is_some() {
+            self.navigation_settled.notify_one();
+        }
     }
 
     /// Clear a tracked navigation fence when the exact Machine connection
@@ -594,13 +605,20 @@ impl Coordinator {
             .is_some_and(|entry| entry.connection.same(connection))
         {
             pending.remove(request_id);
+            drop(pending);
+            self.navigation_settled.notify_one();
             return true;
         }
         false
     }
 
+    /// Whether `request_id` is still tracked as an unsettled navigation.
+    pub fn is_navigation_pending(&self, request_id: &str) -> bool {
+        self.pending_navigations.lock().contains_key(request_id)
+    }
+
     /// Whether `browser_key` has any unsettled identity-bound navigation in
-    /// flight on a connected Machine.
+    /// flight (including across a Machine disconnect).
     pub fn has_pending_navigation(&self, owner: &str, browser_key: &ProviderAccountId) -> bool {
         self.pending_navigations
             .lock()
@@ -608,7 +626,33 @@ impl Coordinator {
             .any(|pending| pending.owner == owner && pending.browser_key == *browser_key)
     }
 
-    fn settle_navigations_from_state(&self, connection: &ConnectionToken, state: &StateEvent) {
+    /// Unsettled navigations whose dispatching connection has been replaced by
+    /// a newer live connection on the same Machine (so the original connection
+    /// can never deliver a reply and the Controller must reconcile on the new
+    /// connection).
+    pub fn orphaned_navigations(&self, machine_id: Option<&str>) -> Vec<PendingNavigation> {
+        let connections = self.connections.read();
+        self.pending_navigations
+            .lock()
+            .values()
+            .filter(|entry| {
+                machine_id.is_none_or(|id| entry.machine_id == id)
+                    && connections
+                        .get(&entry.machine_id)
+                        .is_some_and(|current| !current.same(&entry.connection))
+            })
+            .cloned()
+            .collect()
+    }
+
+    fn settle_navigations_from_state(
+        &self,
+        connection: &ConnectionToken,
+        state: &StateEvent,
+        authoritative: bool,
+    ) {
+        let machine_id = connection.machine_id();
+        let mut settled_any = false;
         let mut pending = self.pending_navigations.lock();
         if let Some(request_id) = state.request_id.as_deref()
             && pending
@@ -616,24 +660,52 @@ impl Coordinator {
                 .is_some_and(|entry| entry.connection.same(connection))
         {
             pending.remove(request_id);
+            settled_any = true;
         }
-        let stopped = !matches!(state.state, State::Detached | State::Attached);
+        let before = pending.len();
         pending.retain(|_, entry| {
-            if !entry.connection.same(connection) || entry.browser_key != state.instance.account_id
-            {
+            if entry.machine_id != machine_id || entry.browser_key != state.instance.account_id {
                 return true;
             }
-            if stopped {
-                return false;
+            let same_connection = entry.connection.same(connection);
+            match state.state {
+                State::Hibernated => {
+                    if !state.instance.instance_id.is_empty() {
+                        // Confirmed terminal exit of the exact tracked instance (or a newer one).
+                        !(state.instance.instance_id == entry.instance.instance_id
+                            && state.instance.incarnation >= entry.instance.incarnation)
+                    } else if authoritative
+                        && (!same_connection || state.observed_at_ms >= entry.observed_at_ms)
+                    {
+                        // Authoritative Machine answer (`Query`, confirmed `Reset`/`Revoke`)
+                        // proving no running or unconfirmed unit exists for this key.
+                        false
+                    } else {
+                        // Non-authoritative empty `Hibernated` (such as a refused reset for a
+                        // stale profile revision) never proves the running browser exited.
+                        true
+                    }
+                }
+                State::Stopping => {
+                    // `Stopping` for the tracked incarnation does not confirm unit exit.
+                    // Only a strictly newer incarnation proves the earlier one already exited.
+                    !(!state.instance.instance_id.is_empty()
+                        && state.instance.instance_id == entry.instance.instance_id
+                        && state.instance.incarnation > entry.instance.incarnation)
+                }
+                State::Starting | State::Detached | State::Attached => {
+                    // A different running instance or strictly newer incarnation proves the
+                    // tracked instance exited and was replaced.
+                    !(!state.instance.instance_id.is_empty()
+                        && (state.instance.instance_id != entry.instance.instance_id
+                            || state.instance.incarnation > entry.instance.incarnation))
+                }
             }
-            if !state.instance.instance_id.is_empty()
-                && (state.instance.instance_id != entry.instance.instance_id
-                    || state.instance.incarnation > entry.instance.incarnation)
-            {
-                return false;
-            }
-            true
         });
+        if settled_any || pending.len() != before {
+            drop(pending);
+            self.navigation_settled.notify_one();
+        }
     }
 
     /// Whether the Controller holds a viewer for the account's instance on

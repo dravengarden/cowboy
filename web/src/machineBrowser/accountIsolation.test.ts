@@ -400,6 +400,9 @@ test("a link opens and navigates only this account's browser on the login's Mach
   assertEquals(resumeBlockedByIdentity("own", undefined), false);
   assertEquals(resumeBlockedByIdentity(undefined, "share:s1:1"), false);
   assertEquals(resumeBlockedByIdentity("own", "share:s1:1"), true);
+  // Controller rollback to a share-capable build without fenced navigate blocks resume too.
+  assertEquals(resumeBlockedByIdentity("own", "own", true), true);
+  assertEquals(resumeBlockedByIdentity(undefined, undefined, true), true);
 
   // The calls: a tab open pinned to hawk, then a navigation fenced by this
   // viewer's confirmed attachment_id. No route names a login, and nothing reads a code back.
