@@ -1,6 +1,7 @@
 use super::*;
 use crate::machine_protocol::{MachineCommand, MachineEvent};
-use crate::store::provider_accounts::browser_shares::{Change, Member, Mutation, MutationResult};
+use crate::store::provider_accounts::browser_shares::{Member, share_key};
+use crate::store::provider_accounts::{Change, Mutation, MutationResult};
 use std::pin::pin;
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -14,9 +15,7 @@ async fn fixture_state(root: &std::path::Path) -> (Arc<AccountsState>, Store) {
     store.migrate().await.unwrap();
     let config_path = root.join("service.toml");
     std::fs::write(&config_path, "[accounts]\nmachine_browser = true\n").unwrap();
-    let config = crate::config::load(crate::config::Scope::Service, Some(&config_path))
-        .config
-        .expect("valid test service config");
+    let config = crate::config::load(crate::config::Scope::Service, &config_path).unwrap();
     let service_config = crate::config::Handle::new(config);
     let hub = Hub::new();
     let runtime_router = RuntimeRouter::new();
@@ -57,7 +56,7 @@ async fn fixture_state(root: &std::path::Path) -> (Arc<AccountsState>, Store) {
         plugin_catalog,
         provider_catalog,
         provider_auth,
-        provider_auth_sync: Arc::new(crate::server::provider_auth_sync::Coordinator::default()),
+        provider_auth_sync: Arc::new(provider_auth_sync::Coordinator::default()),
         provider_auth_executors: Arc::new(parking_lot::Mutex::new(HashMap::new())),
         plugin_lifecycle_fences: PluginLifecycleFences::default(),
         usage,
@@ -77,9 +76,9 @@ async fn add_account(store: &Store, op: &str, provider: &str, label: &str) -> Pr
         .mutate_provider_accounts(
             OWNER,
             op,
-            &crate::store::provider_accounts::Mutation {
+            &Mutation {
                 expected_revision: rev,
-                change: crate::store::provider_accounts::Change::Create {
+                change: Change::Create {
                     provider_id: provider.into(),
                     label: label.into(),
                 },
@@ -87,7 +86,7 @@ async fn add_account(store: &Store, op: &str, provider: &str, label: &str) -> Pr
         )
         .await
         .unwrap();
-    let crate::store::provider_accounts::MutationResult::Applied(receipt) = res else {
+    let MutationResult::Applied(receipt) = res else {
         panic!("expected account create receipt, got {res:?}");
     };
     let account = receipt
@@ -102,20 +101,17 @@ async fn add_account(store: &Store, op: &str, provider: &str, label: &str) -> Pr
         .mutate_provider_accounts(
             OWNER,
             &format!("{op}-browser"),
-            &crate::store::provider_accounts::Mutation {
+            &Mutation {
                 expected_revision: receipt.registry.revision,
-                change: crate::store::provider_accounts::Change::SetBrowserEnabled {
-                    account_id: account.clone(),
+                change: Change::SetBrowserEnabled {
+                    id: account.clone(),
                     enabled: true,
                 },
             },
         )
         .await
         .unwrap();
-    assert!(matches!(
-        enable,
-        crate::store::provider_accounts::MutationResult::Applied(_)
-    ));
+    assert!(matches!(enable, MutationResult::Applied(_)));
     account
 }
 
@@ -191,16 +187,16 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
     else {
         panic!("expected share creation");
     };
-    let share_id = created.shares.shares[0].share_id.clone();
+    let share_id = created.browser_share_id.clone().expect("created share id");
     let MutationResult::Applied(joined_fox) = store
         .mutate_browser_shares(
             OWNER,
             "share-join-fox",
             &Mutation {
                 expected_revision: created.registry.revision,
-                change: Change::AddBrowserShareMember {
-                    share_id: share_id.clone(),
+                change: Change::SetBrowserShare {
                     member: Member::account(grok.clone()),
+                    share_id: Some(share_id.clone()),
                 },
             },
         )
@@ -209,20 +205,26 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
     else {
         panic!("expected Fox to join share");
     };
-    let rev_before = joined_fox.shares.share(&share_id).unwrap().revision;
+    let rev_before = store
+        .browser_shares(OWNER)
+        .await
+        .unwrap()
+        .share(&share_id)
+        .unwrap()
+        .revision;
     let identity_before = format!("share:{share_id}:{rev_before}");
 
     // Another device adds Pika to the same share while Fox's browser stays
     // running and attached with the same instance and attachment_id.
-    let MutationResult::Applied(joined_pika) = store
+    let MutationResult::Applied(_) = store
         .mutate_browser_shares(
             OWNER,
             "share-join-pika",
             &Mutation {
                 expected_revision: joined_fox.registry.revision,
-                change: Change::AddBrowserShareMember {
-                    share_id: share_id.clone(),
+                change: Change::SetBrowserShare {
                     member: Member::account(codex.clone()),
+                    share_id: Some(share_id.clone()),
                 },
             },
         )
@@ -231,7 +233,13 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
     else {
         panic!("expected Pika to join share");
     };
-    let rev_after = joined_pika.shares.share(&share_id).unwrap().revision;
+    let rev_after = store
+        .browser_shares(OWNER)
+        .await
+        .unwrap()
+        .share(&share_id)
+        .unwrap()
+        .revision;
     assert_ne!(rev_before, rev_after);
     let identity_after = format!("share:{share_id}:{rev_after}");
 
@@ -249,14 +257,16 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
         Some(crate::machine_protocol::machine_browser::Capability {
             plugin_id: "machine-browser".into(),
             plugin_version: "1.0.1".into(),
+            generation_digest: "digest".into(),
             available: true,
             reason: None,
-            enforces_ipv4_only: true,
+            max_instances: 2,
+            network: None,
         }),
     );
-    let share_key = crate::store::provider_accounts::browser_shares::share_key(&share_id);
+    let share_account = share_key(OWNER, &share_id);
     let running_share = InstanceRef {
-        account_id: share_key.clone(),
+        account_id: share_account,
         instance_id: "b-heron".into(),
         incarnation: 3,
     };
@@ -367,7 +377,7 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
     state.machine_control.record_remote(
         &connection,
         MachineEvent::Browser {
-            event: crate::machine_protocol::machine_browser::Event::State(StateEvent {
+            browser: crate::machine_protocol::machine_browser::Event::State(StateEvent {
                 request_id: Some(request_id),
                 ..observed_event.clone()
             }),
@@ -404,7 +414,7 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
     state.machine_control.record_remote(
         &connection,
         MachineEvent::Browser {
-            event: crate::machine_protocol::machine_browser::Event::State(StateEvent {
+            browser: crate::machine_protocol::machine_browser::Event::State(StateEvent {
                 request_id: Some(request_id),
                 ..observed_event
             }),
