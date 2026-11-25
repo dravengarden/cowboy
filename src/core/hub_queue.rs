@@ -307,6 +307,8 @@ impl Hub {
         if self.inner.dispatch_tx.lock().is_none() {
             return;
         }
+        // Read before the queue lock: the wait is a setting of its own.
+        let target_gate = !manual && !retry && self.awaits_execution_target(session_id);
         let req = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -330,10 +332,7 @@ impl Hub {
             // refuse it and requeue it under a new id, which a terminal holding
             // an edit of that row reads as a sent message and parks its buffer
             // as a draft beside the original.
-            if !manual
-                && !retry
-                && s.meta.resource_wait.as_deref() == Some(crate::core::TARGET_WAIT_REASON)
-            {
+            if target_gate {
                 return;
             }
             // A retried explicit send carries no caller of its own: it must
@@ -393,7 +392,7 @@ impl Hub {
                 .clone()
                 .unwrap_or_else(|| crate::prompt_origin::DeliveryOrigin::cowboy("legacy_queue"));
             let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(head.cmid);
-            s.end_explicit_intent();
+            s.dispatch_explicit_intent(&head.id, &dispatch_cmid);
             s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);
@@ -449,6 +448,12 @@ impl Hub {
     }
 
     pub fn retry_resource_wait(&self, session_id: &str) {
+        self.drain_head(session_id, true, false, None);
+    }
+
+    /// Maintenance's retry of a waiting session whose execution Machine it
+    /// found connected: the only automatic drain a target wait lets through.
+    pub fn retry_connected_wait(&self, session_id: &str) {
         self.drain_head_inner(session_id, true, false, None, None, true);
     }
 
@@ -457,72 +462,6 @@ impl Hub {
     /// Only the row that intent was recorded for is sent this way.
     pub fn retry_explicit_wait(&self, session_id: &str) {
         self.drain_head(session_id, true, true, None);
-    }
-
-    /// Whether the head row is held by a terminal editing it, which a retried
-    /// explicit send waits for.
-    pub fn head_held_for_editing(&self, session_id: &str) -> bool {
-        self.inner.sessions.lock().get(session_id).is_some_and(|s| {
-            s.queue
-                .first()
-                .is_some_and(|head| s.editing.as_deref() == Some(head.id.as_str()))
-        })
-    }
-
-    /// Record (or end) explicit send intent for the current head row.
-    pub fn set_explicit_wait(&self, session_id: &str, explicit: bool) {
-        {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            if explicit {
-                s.explicit_wait = true;
-                s.explicit.row = s.queue.first().map(|head| head.id.clone());
-            } else {
-                s.end_explicit_intent();
-            }
-        }
-        self.persist_explicit_wait(session_id);
-    }
-
-    /// Write the session's explicit intent into its persisted wait, which
-    /// carries it across a Controller restart.
-    pub fn persist_explicit_wait(&self, session_id: &str) {
-        // Read and write as one step: two concurrent holds must not leave the
-        // older row's intent persisted over the newer one.
-        static PERSIST: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
-        let _serial = PERSIST.lock();
-        let Some((explicit, row, cmid)) = self.inner.sessions.lock().get(session_id).map(|s| {
-            (
-                s.explicit_wait,
-                s.explicit.row.clone(),
-                s.explicit.cmid.clone(),
-            )
-        }) else {
-            return;
-        };
-        let key = format!(
-            "{}{session_id}",
-            settings_keys::SESSION_RESOURCE_WAIT_PREFIX
-        );
-        if let Some(serde_json::Value::Object(mut wait)) = self.setting(&key) {
-            let before = wait.clone();
-            wait.insert("explicit".to_owned(), serde_json::Value::Bool(explicit));
-            for (field, value) in [("row", row), ("cmid", cmid)] {
-                match value {
-                    Some(value) => {
-                        wait.insert(field.to_owned(), serde_json::Value::String(value));
-                    }
-                    None => {
-                        wait.remove(field);
-                    }
-                }
-            }
-            if wait != before {
-                self.set_setting(key, serde_json::Value::Object(wait));
-            }
-        }
     }
 
     pub fn explicit_wait(&self, session_id: &str) -> bool {
@@ -1048,20 +987,6 @@ impl Hub {
         self.promote_with(session_id, id, caller, Some(cmid))
     }
 
-    /// Whether `cmid` is a held Send now this Hub already recorded: `Some(true)`
-    /// while its intent still waits, `Some(false)` once that intent ended. A
-    /// client replays a command whose reply it lost; the replay must not take
-    /// the live send path, which would dispatch the row past the wait (and an
-    /// edit of it) or send a row the user has since reordered.
-    pub fn held_send_replay(&self, session_id: &str, cmid: &str) -> Option<bool> {
-        let sessions = self.inner.sessions.lock();
-        let s = sessions.get(session_id)?;
-        if s.explicit_wait && s.explicit.cmid.as_deref() == Some(cmid) {
-            return Some(true);
-        }
-        s.explicit.settled(cmid).then_some(false)
-    }
-
     /// Move a queued prompt to the front under `caller`'s send intent.
     pub fn promote_queued(
         &self,
@@ -1429,7 +1354,10 @@ impl Hub {
                 return;
             };
             sort_by_id_order(&mut s.queue, order, |m| &m.id);
+            // A held row moved off the head no longer carries its Send now.
+            s.end_displaced_explicit_intent();
         }
+        self.persist_explicit_wait(session_id);
         self.emit_pending(session_id);
         self.try_drain(session_id);
     }

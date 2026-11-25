@@ -98,14 +98,12 @@ pub fn wait(hub: &Hub, session: &str, reason: &str) {
     {
         value["explicit"] = serde_json::Value::Bool(explicit);
     }
-    for field in ["row", "cmid"] {
-        if let Some(bound) = current.as_ref().and_then(|v| v.get(field)).cloned() {
-            value[field] = bound;
-        }
-    }
     if hub.setting(&key).as_ref() != Some(&value) {
         hub.set_setting(key, value);
     }
+    // The intent's binding comes from the Hub, under its own serialization:
+    // copying it from the read above could restore a superseded one.
+    hub.persist_explicit_wait(session);
 }
 
 fn waiting(hub: &Hub, session: &str) -> Option<(i64, String)> {
@@ -172,7 +170,7 @@ pub(crate) fn execution_target_connected(
 fn retry_blocked(state: &Arc<AppState>, meta: &crate::core::SessionMeta, explicit: bool) -> bool {
     !execution_target_connected(state, meta)
         || account_parked(state, meta)
-        || (explicit && state.hub.head_held_for_editing(&meta.id))
+        || state.hub.retry_held_for_editing(&meta.id, explicit)
 }
 
 /// A named-only account parks the session's queue: show why and skip it.
@@ -379,7 +377,7 @@ pub fn start(state: &Arc<AppState>) {
                     if explicit {
                         state.hub.retry_explicit_wait(&meta.id);
                     } else {
-                        state.hub.retry_resource_wait(&meta.id);
+                        state.hub.retry_connected_wait(&meta.id);
                     }
                 }
             }

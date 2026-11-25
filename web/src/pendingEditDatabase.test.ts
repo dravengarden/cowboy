@@ -374,13 +374,15 @@ test("an image pasted while the edit's bytes load keeps its token and settles", 
   second.retryPendingEditRestore();
   await settle();
   assertEquals(second.getPendingEdit("paste", "draft", "row-1")?.text, pasted);
-  assertEquals(settledSessions, []);
+  // Recovery is told, but the claim waits for the encode.
+  assertEquals(settledSessions, ["paste"]);
+  assertEquals(second.claimOrphanedPendingEdits("paste", new Set(), new Set()), []);
 
   settleImage([image("p1")]);
   const recovered = second.getPendingEdit("paste", "draft", "row-1");
   assertEquals(recovered?.text, pasted);
   assertEquals(recovered?.attachments.map((attachment) => attachment.id), ["a1", "p1"]);
-  assertEquals(settledSessions, ["paste"]);
+  assertEquals(settledSessions, ["paste", "paste"]);
   stop();
 });
 
@@ -409,4 +411,32 @@ test("orphan recovery is rechecked once an edit's bytes arrive", async () => {
   assertEquals(settledSessions, ["arrive"]);
   assertEquals(second.claimOrphanedPendingEdits("arrive", new Set(), new Set()).length, 1);
   stop();
+});
+
+test("an edit another tab retired while its bytes loaded is not written back", async () => {
+  const storage = fakeStorage(900);
+  const database = fakeDatabase();
+  const first = await loadPage(storage);
+  first.attachPendingEditDatabase(database as never);
+  await settle();
+  first.setPendingEdit(edit("retired"));
+  first.flushPendingEdits();
+  await settle();
+
+  database.ready = false;
+  const second = await loadPage(storage);
+  second.attachPendingEditDatabase(database as never);
+  await settle();
+  // The other tab saved or discarded the edit; its storage event is late.
+  for (const key of [...storage.records.keys()]) {
+    if (key.startsWith(PREFIX)) storage.records.delete(key);
+  }
+  database.ready = true;
+  second.retryPendingEditRestore();
+  await settle();
+  second.flushPendingEdits();
+  assertEquals(second.getPendingEdit("retired", "draft", "row-1"), null);
+  // Earlier tests' pages may still flush their own mirrors into this storage.
+  assertEquals([...storage.records.keys()].filter((key) => key.includes('"retired"')), []);
+  assertEquals(second.claimOrphanedPendingEdits("retired", new Set(), new Set()), []);
 });

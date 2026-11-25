@@ -86,6 +86,15 @@ pub(super) fn declare(
     sessions.insert(session.session_id.clone(), session.clone());
 }
 
+/// Whether a Machine-owned relaunch can start from this declaration. An MCP
+/// launch without the session-extension switches is refused, so a cutover
+/// keeps the running worker until the Controller declares them (it does on
+/// every reconnect); stopping it first crashed the session (2026-11-25,
+/// sess-1794380205511 after an OVH Machine restart).
+pub(super) fn relaunchable(session: &StartSession) -> bool {
+    session.mcp_plan.is_none() || session.extensions.is_some()
+}
+
 pub(super) fn same_placement(old: &StartSession, session: &StartSession) -> bool {
     old.cwd == session.cwd && old.mcp_plan == session.mcp_plan
 }
@@ -220,6 +229,28 @@ mod tests {
             Some(&running),
             Some(&running)
         ));
+    }
+
+    #[test]
+    fn a_cutover_never_stops_a_worker_it_cannot_relaunch() {
+        let mut session: super::StartSession = serde_json::from_value(serde_json::json!({
+            "session_id":"s","provider":"claude-code","cwd":"/w","generation":"g"
+        }))
+        .unwrap();
+        assert!(super::relaunchable(&session));
+        session.mcp_plan = Some(Box::new(
+            serde_json::from_value(serde_json::json!({"schema":1,"command":"/bin/cowboy",
+                "bindings":[{"name":"suger","descriptor":"/d.json"}]}))
+            .unwrap(),
+        ));
+        // A worker's own report never carries the switches.
+        assert!(!super::relaunchable(&session));
+        session.extensions = Some(crate::runtime_wire::SessionExtensions {
+            schema: crate::runtime_wire::SESSION_EXTENSIONS_SCHEMA,
+            memory_tools: false,
+            memory_recall: false,
+        });
+        assert!(super::relaunchable(&session));
     }
 
     #[tokio::test]

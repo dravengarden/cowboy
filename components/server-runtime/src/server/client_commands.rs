@@ -820,8 +820,10 @@ pub fn request_send_queued(
         state.hub.request_send_queued(session_id, id, caller);
         return false;
     };
+    // The wait first: once the promoted row is visible, an automatic drain
+    // must already find the session waiting.
+    session_maintenance::wait(&state.hub, session_id, &reason);
     if state.hub.hold_queued(session_id, id, caller, cmid) {
-        session_maintenance::wait(&state.hub, session_id, &reason);
         state.hub.persist_explicit_wait(session_id);
         // Command results reach every socket: the wait reason stays in the
         // session's own state, which only its viewers receive.

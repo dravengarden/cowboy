@@ -113,8 +113,8 @@ function editSlot(record: PendingEditRecord): string {
   return record.kind + ":" + record.id;
 }
 
-function sessionHolds(keys: Iterable<string>, sessionId: string): boolean {
-  for (const key of keys) {
+function sessionAwaits(sessionId: string): boolean {
+  for (const key of awaitingDatabase.keys()) {
     if (records.get(key)?.sessionId === sessionId) return true;
   }
   return false;
@@ -141,7 +141,7 @@ function writeDatabase(
  * localStorage instead. */
 function saveSessionEdits(sessionId: string): boolean {
   // Bytes still promised are not in memory: this record is all there is.
-  if (sessionHolds(awaitingDatabase.keys(), sessionId)) return true;
+  if (sessionAwaits(sessionId)) return true;
   const cache = editsCache(sessionId);
   if (cache === undefined) return false;
   const edits: Record<string, Attachment[]> = {};
@@ -431,19 +431,22 @@ async function restoreOnce(): Promise<void> {
       continue;
     }
     const restored: [string, RestoredPendingEdit][] = [];
-    let arrived = false;
+    const awaiting = awaitingDatabase.size;
     for (const [key, record] of records) {
       if (record.sessionId !== sessionId || !awaitingDatabase.has(key)) continue;
+      // Another tab retired it while the bytes loaded: never write it back.
+      if (retiredByAnotherTab(key)) {
+        forgetLocally(key);
+        continue;
+      }
       const hydratedText = awaitingDatabase.get(key);
       awaitingDatabase.delete(key);
-      arrived = true;
       const bytes = found?.edits?.[editSlot(record)];
-      // A paste since the editor reopened may still be encoding: keep its token.
       const merged = mergeRestoredDraft(
         { text: record.text, attachments: record.attachments, attachmentsInDatabase: true },
         bytes === undefined ? null : { text: record.text, attachments: bytes, savedAt: 0 },
         hydratedText,
-        encodes.get(key)?.placeholders,
+        encodes.get(key)?.placeholders, // a paste still encoding keeps its token
       );
       if (merged !== null) {
         records.set(key, { ...record, text: merged.text, attachments: merged.attachments });
@@ -456,10 +459,8 @@ async function restoreOnce(): Promise<void> {
     for (const [key, edit] of restored) {
       for (const listener of restoreListeners.get(key) ?? []) listener(edit);
     }
-    // Orphan recovery skipped these edits while loading; recheck once settled.
-    const settled = !sessionHolds(awaitingDatabase.keys(), sessionId) &&
-      !sessionHolds(encodes.keys(), sessionId);
-    if (arrived && settled) for (const listener of encodeListeners) listener(sessionId);
+    // Deferred orphan recovery may run now; its claim skips encoding edits.
+    if (awaitingDatabase.size < awaiting) for (const listener of encodeListeners) listener(sessionId);
   }
 }
 
@@ -787,9 +788,8 @@ function settleEncodedAttachments(
   for (const listener of restoreListeners.get(key) ?? []) listener({ text, attachments });
 }
 
-/** Called with a session whose edits finished every attachment encode and
- * database restore, so orphan recovery deferred for them can run against the
- * current queue. */
+/** Called with a session whose edits finished every attachment encode or a
+ * database restore, so deferred orphan recovery can run against the queue. */
 export function onPendingEditEncodesSettled(
   listener: (sessionId: string) => void,
 ): () => void {

@@ -127,7 +127,7 @@ impl Hub {
     /// interleaved removal or reorder can never wake the worker for another
     /// prompt.
     pub fn wake_queued_call_notice(&self, session_id: &str, completion_id: &str) -> bool {
-        if self.inner.dispatch_tx.lock().is_none() {
+        if self.inner.dispatch_tx.lock().is_none() || self.awaits_execution_target(session_id) {
             return false;
         }
         let req = {
@@ -153,7 +153,6 @@ impl Hub {
                 return false;
             }
             let head = s.queue.remove(0);
-            s.end_explicit_intent();
             s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);
@@ -161,6 +160,7 @@ impl Hub {
             let dispatch_origin =
                 crate::prompt_origin::compute_dispatch_origin(head.origin.as_ref(), Some(&trigger));
             let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(head.cmid);
+            s.dispatch_explicit_intent(&head.id, &dispatch_cmid);
             Self::note_dispatched(s, Some(&dispatch_cmid));
             DispatchReq {
                 ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),

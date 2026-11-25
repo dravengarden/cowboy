@@ -2522,9 +2522,10 @@ fn update_declaration(shared: &Shared, worker: &WorkerSnapshot) {
         return;
     };
     session.adopt_only = true;
-    // A worker never reports its session-extension switches. An ordinary
-    // launch never records a declaration here, so without a reset's one the
-    // session's current switches stand in (what any relaunch declares). Every
+    // A worker never reports its session-extension switches. The session's
+    // current ones stand in, as any relaunch declares them (a cached reset
+    // declaration may predate a policy change); an ordinary launch records
+    // no declaration here at all. Every
     // Machine (re)connect re-sends this cache, and the Machine relaunches from
     // it on a generation cutover, which refuses an MCP launch without them
     // (2026-11-25, sess-1794380205511 crashed after an OVH Machine restart).
@@ -2536,7 +2537,7 @@ fn update_declaration(shared: &Shared, worker: &WorkerSnapshot) {
     let declared = declarations
         .get(&session.session_id)
         .and_then(|old| old.extensions);
-    session.extensions = session.extensions.or(declared).or(current);
+    session.extensions = session.extensions.or(current).or(declared);
     declarations.insert(session.session_id.clone(), session);
 }
 
@@ -4787,6 +4788,34 @@ mod tests {
         let declared = runtime.shared.declarations.lock()["s"].clone();
         assert!(declared.adopt_only);
         assert_eq!(declared.extensions, session.extensions);
+        // A stale cached value (a reset's, before a policy change) never wins
+        // over the session's current switches.
+        runtime
+            .shared
+            .declarations
+            .lock()
+            .get_mut("s")
+            .unwrap()
+            .extensions = Some(crate::runtime_wire::SessionExtensions {
+            schema: crate::runtime_wire::SESSION_EXTENSIONS_SCHEMA,
+            memory_tools: true,
+            memory_recall: true,
+        });
+        let mut worker = snapshot("s");
+        worker.launch.as_mut().expect("reported launch").extensions = None;
+        handle_frame(
+            &runtime.shared,
+            Frame::Snapshot {
+                worker: Box::new(worker),
+            },
+            &mut tokio::io::sink(),
+        )
+        .await
+        .expect("snapshot");
+        assert_eq!(
+            runtime.shared.declarations.lock()["s"].extensions,
+            session.extensions
+        );
     }
 
     #[tokio::test]

@@ -3212,6 +3212,14 @@ impl Broker {
             snapshot.generation.clone()
         };
         if self
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|declared| !mcp_launch::relaunchable(declared))
+        {
+            return;
+        }
+        if self
             .replacing
             .lock()
             .insert(session_id.to_owned(), old_generation)

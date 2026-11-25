@@ -634,9 +634,13 @@ fn finish_deferred_dispatch(
             }
         }
         SyncSendOutcome::HandoffRefusal(wait) => {
+            let session = session_id.clone();
             retain_failed_dispatch(
                 hub, session_id, text, content, cmid, origin, initiator, &wait,
             );
+            if explicit {
+                retain_explicit_intent(hub, &session, &wait);
+            }
         }
         SyncSendOutcome::SendError(error) => {
             tracing::warn!(session = %session_id, error = %error, "queued dispatch failed");
