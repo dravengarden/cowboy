@@ -1148,7 +1148,9 @@ ${WRAP_UP_NOTE}`,
     const execute = async () => {
       try {
         if (extension) {
-          return await this.extensions.call(this.connection, name, execArgs);
+          return await this.extensions.call(this.connection, name, execArgs, {
+            beforeSend: () => this.assertAuthorizedBeforeEffect(session, turn, decision, signal),
+          });
         }
         // A handler answers text, or (an image ReadFile) its own content blocks.
         const answer = await handlers[name](decision);
@@ -1213,7 +1215,15 @@ ${WRAP_UP_NOTE}`,
     turn.uncertain ??= method;
     if (turn.sessionId === undefined) return;
     const session = this.sessions.get(turn.sessionId);
-    if (session?.parentTurn) session.parentTurn.uncertain ??= method;
+    const rootTurn = session?.parentTurn ?? turn;
+    rootTurn.uncertain ??= method;
+    // Synchronously fence every active child linked to the affected root turn
+    // so children cannot start new mutations during root cleanup (R17-M2).
+    for (const other of this.sessions.values()) {
+      if (other.parentTurn === rootTurn && other.turn) {
+        other.turn.uncertain ??= method;
+      }
+    }
     try {
       this.onLost(turn.sessionId, method);
     } catch {
@@ -1227,16 +1237,22 @@ ${WRAP_UP_NOTE}`,
    * concurrent tool call of the same turn admits nothing after it.
    */
   async mutate(turn, method, params, { beforeSend, timeoutMs } = {}) {
-    if (turn.cancelled || turn.ended || turn.uncertain) {
-      throw new ToolError("The turn was cancelled.");
-    }
-    const callOpts =
-      beforeSend || timeoutMs !== undefined
-        ? {
-            ...(beforeSend ? { beforeSend } : {}),
-            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-          }
-        : undefined;
+    const checkTurn = () => {
+      if (turn.cancelled || turn.ended || turn.uncertain) {
+        throw new ToolError("The turn was cancelled.");
+      }
+    };
+    checkTurn();
+    // Always recheck captured turn state synchronously at transport dispatch
+    // (after any reconnect) so a concurrent command/mutation cannot slip past
+    // a publish fence (R17-M3).
+    const callOpts = {
+      beforeSend: () => {
+        checkTurn();
+        if (typeof beforeSend === "function") beforeSend();
+      },
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    };
     const call = this.connection.call(method, params, callOpts);
     turn.inflight?.add(call);
     try {
@@ -1726,8 +1742,10 @@ ${WRAP_UP_NOTE}`,
     } catch {
       outcome = undefined;
     }
-    if (result.truncated) {
-      // Output beyond the helper's bound: its report cannot be trusted.
+    if (result.truncated || result.fenced || result.timedOut) {
+      // Once the publish exceeded its output bound, timed out, or fenced the
+      // turn before cleanup, never accept a buffered receipt as success: report
+      // uncertainty through the normal path (R17-M4).
       throw new UncertainEffect("file publish");
     }
     if (outcome?.status === "applied") return false;
@@ -1741,10 +1759,6 @@ ${WRAP_UP_NOTE}`,
       throw new ToolError(
         "Timed out before delivering the edit request to the workspace helper; nothing was written.",
       );
-    }
-    if (result.timedOut) {
-      // The helper may still publish: its outcome is unknown.
-      throw new UncertainEffect("file publish");
     }
     if (result.forgotten) {
       // The helper ended unseen (E1) and its report is lost; it can never
@@ -1876,7 +1890,7 @@ ${WRAP_UP_NOTE}`,
           );
         });
         const raced = await Promise.race([call, expired]);
-        if (raced === deadlineSentinel) {
+        if (raced === deadlineSentinel || Date.now() >= deadline) {
           closedBeforeDispatch = true;
           if (dispatched && lostIsUncertain) throw new UncertainEffect("process/read");
           return [];
@@ -2012,21 +2026,24 @@ ${WRAP_UP_NOTE}`,
     // outstanding) and never sends a second signal to a process handling the
     // first. Only a stop refused before it was sent (no connection, or no
     // request slot) is sent again later; a reply lost after sending keeps it.
+    process.stopDeadline = Math.max(process.stopDeadline ?? 0, deadline);
     for (;;) {
       if (process.closed) return true;
       const leftBefore = deadline - Date.now();
       if (leftBefore <= 0) return process.closed;
-      let ownStopClosed = false;
       if (!process.stopping) {
         let stopDispatched = false;
+        // Share one transport call without imposing a short caller's timeoutMs
+        // on longer-budget callers that join it (e.g. 60s root cleanup joining
+        // a 5s StopCommand, R17-M5). Each caller waits with its own stopExpired
+        // timer while `process.stopDeadline` bounds pre-dispatch admission.
         const stopCall = this.connection
           .call(
             "process/terminate",
             { processId: process.processId },
             {
-              timeoutMs: Math.max(1, Math.ceil(leftBefore)),
               beforeSend: () => {
-                if (ownStopClosed || process.closed || Date.now() >= deadline) {
+                if (process.closed || Date.now() >= (process.stopDeadline ?? 0)) {
                   throw new Error(
                     "Execution unavailable; terminate deadline expired before dispatch",
                   );
@@ -2040,8 +2057,7 @@ ${WRAP_UP_NOTE}`,
             // observes (the stop may have been delivered) or, if it was never
             // sent/admitted, sends it.
             process.stopping =
-              (!stopDispatched && (ownStopClosed || retryablePreAdmission(error))) ||
-              workerNotAdmitted(error)
+              (!stopDispatched && retryablePreAdmission(error)) || workerNotAdmitted(error)
                 ? undefined
                 : Promise.resolve();
             throw error;
@@ -2050,16 +2066,10 @@ ${WRAP_UP_NOTE}`,
         process.stopping = stopCall;
       }
       const remainingStop = deadline - Date.now();
-      if (remainingStop <= 0) {
-        ownStopClosed = true;
-        return process.closed;
-      }
+      if (remainingStop <= 0) return process.closed;
       let stopTimer;
       const stopExpired = new Promise((resolve) => {
-        stopTimer = setTimeout(() => {
-          ownStopClosed = true;
-          resolve(false);
-        }, remainingStop);
+        stopTimer = setTimeout(() => resolve(false), remainingStop);
       });
       try {
         if ((await Promise.race([process.stopping.then(() => true), stopExpired])) === false) {
@@ -2321,6 +2331,7 @@ ${WRAP_UP_NOTE}`,
     // wait up to stopConfirmMs), so concurrent turn calls cannot mutate files
     // during cleanup — even after a capacity refusal followed by an empty final
     // poll (R16-M2).
+    let fenced = false;
     if (
       fenceOnTimeout &&
       turn &&
@@ -2329,6 +2340,7 @@ ${WRAP_UP_NOTE}`,
       (stdinDelivered || !stdinPayload) &&
       (timedOut || truncated)
     ) {
+      fenced = true;
       this.fenceLost(turn, "file publish");
     }
     // Whatever ended the loop, the process is not left running unconfirmed: a
@@ -2348,6 +2360,7 @@ ${WRAP_UP_NOTE}`,
       stderr: Buffer.concat(out.stderr).toString(),
       truncated,
       timedOut,
+      fenced,
       stdinTimedOutBeforeDispatch,
       // The process ended unseen (E1): its output may be incomplete.
       forgotten: ended,

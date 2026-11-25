@@ -3622,8 +3622,12 @@ test("Evicted mode switch reply cannot settle a re-admitted session's newer plan
     proxy.rememberSession(sid);
     proxy.turns.set(sid, { attempt: Symbol("t"), tools: new Map() });
   }
-  assert.equal(proxy.knownSessions.has("s-0"), false);
-  // Re-admit s-0 with a NEW switch to plan (seq 1, incarnation B).
+  assert.equal(
+    proxy.knownSessions.has("s-0"),
+    true,
+    "busy session with active switch must not be evicted (R17-H1)",
+  );
+  // Send a newer switch to plan (seq 2) while switch 101 is still active.
   await proxy.fromClient({
     jsonrpc: "2.0",
     id: 102,
@@ -3631,9 +3635,21 @@ test("Evicted mode switch reply cannot settle a re-admitted session's newer plan
     params: { sessionId: "s-0", modeId: "plan" },
   });
   assert.equal(proxy.isSwitching("s-0"), true);
-  // Delayed reply to the evicted default switch (101) arrives: MUST NOT settle switch 102 or restore default!
-  await proxy.fromAgent({ jsonrpc: "2.0", id: 101, result: {} });
-  assert.equal(proxy.isSwitching("s-0"), true, "evicted reply must not clear newer switch");
+  // Even if plan switch 102 finishes first, delayed default notification from 101 is still suppressed while 101 is active!
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 102, result: {} });
+  assert.equal(
+    proxy.isSwitching("s-0"),
+    true,
+    "plan switch cannot drop suppression while older op 101 is active",
+  );
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-0",
+      update: { sessionUpdate: "current_mode_update", currentModeId: "default" },
+    },
+  });
   assert.equal(proxy.effectiveMode("s-0"), "switching");
   // Write permission MUST still be denied while plan switch 102 is pending.
   await proxy.fromAgent({
@@ -3654,9 +3670,9 @@ test("Evicted mode switch reply cannot settle a re-admitted session's newer plan
     id: "perm-r16-m1",
     result: { outcome: { outcome: "selected", optionId: "deny" } },
   });
-  // Real plan switch 102 completes cleanly.
-  await proxy.fromAgent({ jsonrpc: "2.0", id: 102, result: {} });
-  assert.equal(proxy.effectiveMode("s-0"), "plan");
+  // Delayed default reply 101 finishes: because it is not latest (overlapped), mode stays unknown (fail-closed), never default!
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 101, result: {} });
+  assert.equal(proxy.effectiveMode("s-0"), undefined);
 });
 
 test("Refused reopen discards staged config updates and never leaves failed session admitted (R16-M5)", async () => {
@@ -3715,7 +3731,7 @@ test("Refused reopen discards staged config updates and never leaves failed sess
   });
   assert.equal(clientFrames.length, 0, "failed reopen ID must remain unadmitted");
 
-  // Case 2: session/load succeeds -> staged update releases AFTER the load reply without clobbering authoritative mode.
+  // Case 2: session/load succeeds -> mid-load config for unadmitted ID was dropped (never overwrites worker load result, R17-M7/M8).
   await proxy.fromClient({
     jsonrpc: "2.0",
     id: 202,
@@ -3729,7 +3745,7 @@ test("Refused reopen discards staged config updates and never leaves failed sess
       sessionId: "s-ok-load",
       update: {
         sessionUpdate: "config_option_update",
-        configOptions: [{ id: "mode", currentValue: "default" }],
+        configOptions: [{ id: "mode", currentValue: "plan" }],
       },
     },
   });
@@ -3737,17 +3753,35 @@ test("Refused reopen discards staged config updates and never leaves failed sess
   await proxy.fromAgent({
     jsonrpc: "2.0",
     id: 202,
-    result: { modes: { currentModeId: "plan" } },
+    result: { modes: { currentModeId: "default" } },
   });
   assert.equal(proxy.knownSessions.has("s-ok-load"), true);
+  assert.equal(proxy.effectiveMode("s-ok-load"), "default");
   assert.equal(
-    proxy.effectiveMode("s-ok-load"),
-    "plan",
-    "staged update must not overwrite load result mode",
+    clientFrames.length,
+    1,
+    "only authoritative load reply is forwarded (no replayed stale config)",
   );
-  assert.equal(clientFrames.length, 2, "load reply then released staged update");
   assert.equal(clientFrames[0].id, 202);
-  assert.equal(clientFrames[1].params?.update?.sessionUpdate, "config_option_update");
+
+  // Case 3: reopen reply naming a DIFFERENT sessionId must NOT admit or bind that wrong ID (R17-M6).
+  const boundChannels = [];
+  runtime.bindChannel = (ch, sid) => boundChannels.push([ch, sid]);
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 203,
+    method: "session/load",
+    params: { sessionId: "s-wanted", cwd: "/repo", mcpServers: [] },
+  });
+  boundChannels.length = 0;
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 203,
+    result: { sessionId: "s-wrong-other", modes: { currentModeId: "default" } },
+  });
+  assert.equal(proxy.knownSessions.has("s-wrong-other"), false);
+  assert.equal(proxy.effectiveMode("s-wrong-other"), undefined);
+  assert.deepEqual(boundChannels, [], "mismatched reopen reply must not rebind facade channel");
 });
 
 test("Capacity refusal followed by empty final poll fences unproven edit BEFORE cleanup runs (R16-M2)", async () => {
@@ -3819,13 +3853,13 @@ test("Stalled post-stdin result read honors absolute publish deadline instead of
   const endpoint = await fakeEndpoint(socket, repo, {
     home,
     notifications: false,
-    // Stall the first ordinary process/read far beyond the 200ms publish deadline.
-    lose: (method) => {
+    // Hold the first ordinary process/read on an OPEN socket far beyond the 200ms publish deadline (R17-L1).
+    delay: (method) => {
       if (method === "process/read" && stallRead) {
         stallRead = false;
-        return true;
+        return 5000;
       }
-      return false;
+      return 0;
     },
   });
   const conn = await Connection.open(
@@ -3983,6 +4017,166 @@ test("Cleanup terminate retry never dispatches a new stop after its confirmation
     // Clean up helper process.
     conn.call = origCall;
     await facade.terminate(proc, 5000);
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Root fenceLost synchronously fences linked child turns and blocks concurrent mutations awaiting reconnect (R17-M2, R17-M3)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r17-fam-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home, notifications: false });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+    facade.beginTurn("root-1", { turnNonce: "r1" });
+    const rootTurn = facade.session("root-1").turn;
+    facade.link("child-1", "root-1");
+    facade.beginTurn("child-1");
+    const childTurn = facade.session("child-1").turn;
+    // Simulate a concurrent RunCommand waiting on reconnect before dispatch.
+    let releaseConnect;
+    const origEnsure = conn.ensureConnected.bind(conn);
+    conn.ensureConnected = () =>
+      new Promise((resolve) => {
+        releaseConnect = () => resolve(origEnsure());
+      });
+    const pendingStart = facade.mutate(rootTurn, "process/start", {
+      processId: "cowboy-agy-late-cmd",
+      argv: ["/bin/sh", "-c", "echo should-not-run"],
+      cwd: `file://${repo}`,
+    });
+    await new Promise((r) => setTimeout(r, 15));
+    // Root publish fence fires BEFORE reconnect finishes!
+    facade.fenceLost(rootTurn, "file publish");
+    assert.equal(rootTurn.uncertain, "file publish");
+    assert.equal(
+      childTurn.uncertain,
+      "file publish",
+      "child turn must be fenced synchronously (R17-M2)",
+    );
+    releaseConnect();
+    await assert.rejects(() => pendingStart, /turn was cancelled/i);
+    assert.equal(
+      endpoint.calls.some((c) => c.params?.processId === "cowboy-agy-late-cmd"),
+      false,
+      "mutation waiting on reconnect must not dispatch after publish fence (R17-M3)",
+    );
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Timed-out publish never returns success even if buffered stdout holds applied receipt (R17-M4)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r17-rcpt-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home, notifications: false });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const origCall = conn.call.bind(conn);
+  let ordinaryReads = 0;
+  conn.call = async (method, params, opts) => {
+    if (method === "process/read" && !opts?.cleanup) {
+      ordinaryReads += 1;
+      if (ordinaryReads === 1) {
+        // Emit complete applied JSON on stdout while process stays open, consuming budget on next poll.
+        return {
+          chunks: [
+            {
+              seq: 1,
+              stream: "stdout",
+              chunk: Buffer.from('{"status":"applied"}\n').toString("base64"),
+            },
+          ],
+          exited: false,
+          closed: false,
+        };
+      }
+      await new Promise((r) => setTimeout(r, 150));
+      return { chunks: [], exited: false, closed: false };
+    }
+    return await origCall(method, params, opts);
+  };
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh", publishTimeoutMs: 100 });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const session = facade.session("s1");
+    const turn = session.turn;
+    await assert.rejects(
+      () => facade.writeFile(session, turn, { path: "rcpt.txt", content: "x".repeat(64 * 1024) }),
+      (err) => err instanceof UncertainEffect && err.method === "file publish",
+    );
+    assert.equal(turn.uncertain, "file publish");
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Longer cleanup joining short StopCommand is not cut off by StopCommand's shorter timeout (R17-M5)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r17-join-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, {
+    home,
+    notifications: false,
+    // Terminate reply takes 180ms: exceeds short 60ms StopCommand, succeeds inside 2000ms root cleanup.
+    delay: (method) => (method === "process/terminate" ? 180 : 0),
+  });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const turn = facade.session("s1").turn;
+    const proc = await facade.start(turn, ["/bin/sh", "-c", "sleep 30"]);
+    const shortStop = facade.terminate(proc, 60);
+    await new Promise((r) => setTimeout(r, 15));
+    const longCleanup = facade.terminate(proc, 2000);
+    assert.equal(await shortStop, false, "short StopCommand returns false at its own 60ms budget");
+    assert.equal(
+      await longCleanup,
+      true,
+      "longer cleanup joining the shared stop confirms exit cleanly",
+    );
   } finally {
     conn.close();
     endpoint.close();

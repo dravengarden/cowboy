@@ -337,8 +337,6 @@ export class AcpProxy {
     this.calls = new Map();
     /** Root sessions admitted by the client (LRU-bounded); guards mode/permission state (R14-M2). */
     this.knownSessions = new Set();
-    /** In-flight load/resume reopens for previously unadmitted sessions: sessionId -> { count, staged } (R16-M5). */
-    this.openingReopens = new Map();
     /** Per-turn nonterminal tool announcements seen only via stale replay, outside live state (R14-M3, R15-M6). */
     this.staleReplayTools = new WeakMap();
     /** The canonical workspace root on the target, once the runtime is ready. */
@@ -594,6 +592,7 @@ export class AcpProxy {
     state.activeReopens.delete(op.seq);
     if (state.active.size === 0 && state.activeReopens.size === 0) {
       state.overlapped = false;
+      if (!this.knownSessions.has(sessionId)) this.switchState.delete(sessionId);
     }
   }
 
@@ -966,7 +965,7 @@ export class AcpProxy {
     this.clearStaleReplayTools(sessionId);
   }
 
-  /** Record a client-admitted root session ID (bounded LRU) for mode/permission guards (R14-M2, R15-M3). */
+  /** Record a client-admitted root session ID (bounded LRU) for mode/permission guards (R14-M2, R15-M3, R17-H1). */
   rememberSession(sessionId) {
     if (typeof sessionId !== "string" || this.subagents.owns(sessionId)) return;
     this.knownSessions.delete(sessionId);
@@ -982,9 +981,12 @@ export class AcpProxy {
           break;
         }
       }
-      evicted ??= this.knownSessions.values().next().value;
-      this.knownSessions.delete(evicted);
-      this.evictSessionAuthority(evicted);
+      // Never evict a session with an active turn or in-flight mode operation
+      // so delayed notifications/replies from that operation stay fenced (R17-H1).
+      if (evicted !== undefined) {
+        this.knownSessions.delete(evicted);
+        this.evictSessionAuthority(evicted);
+      }
     }
     this.knownSessions.add(sessionId);
   }
@@ -1646,12 +1648,6 @@ export class AcpProxy {
         record.session = params.sessionId;
         if (typeof params.sessionId === "string") {
           runtime.bindChannel(record.channel, params.sessionId);
-          if (!this.subagents.owns(params.sessionId) && !this.knownSessions.has(params.sessionId)) {
-            const entry = this.openingReopens.get(params.sessionId) ?? { count: 0, staged: [] };
-            entry.count += 1;
-            this.openingReopens.set(params.sessionId, entry);
-            record.stagedReopenSession = params.sessionId;
-          }
         }
         delete params.additionalDirectories;
         params.mcpServers = [runtime.mcpServer(record.channel)];
@@ -1659,13 +1655,6 @@ export class AcpProxy {
         forwarded.params = params;
       } catch (error) {
         if (method === "session/new") this.managedOpening = false;
-        if (record.stagedReopenSession !== undefined) {
-          const entry = this.openingReopens.get(record.stagedReopenSession);
-          if (entry) {
-            entry.count -= 1;
-            if (entry.count <= 0) this.openingReopens.delete(record.stagedReopenSession);
-          }
-        }
         if (modeOp !== undefined) {
           this.finishModeReopen(forwarded.params?.sessionId, modeOp);
         }
@@ -2209,11 +2198,6 @@ export class AcpProxy {
               update?.sessionUpdate === "current_mode_update") &&
             !this.isAdmittedConfigSession(message.params?.sessionId)
           ) {
-            const opening = this.openingReopens.get(message.params?.sessionId);
-            if (opening) {
-              if (opening.staged.length < MAX_TOOL_CALLS) opening.staged.push(message);
-              return;
-            }
             return this.log(`dropped ${update.sessionUpdate} for unclaimed session`);
           }
           const staleReplay = this.isStaleReplay(message.params?.sessionId, replayOptions?.arrival);
@@ -2463,31 +2447,16 @@ export class AcpProxy {
         { allowEmptyUnrestricted: record.method === "session/set_mode" },
       );
     }
-    let stagedToRelease;
-    if (SESSION_REQUESTS.has(record.method)) {
-      if (message.result !== undefined) {
-        const openedSessionId = message.result?.sessionId ?? record.session;
-        this.rememberSession(openedSessionId);
-        this.clearStaleReplayTools(openedSessionId);
-        if (record.stagedReopenSession !== undefined) {
-          const entry = this.openingReopens.get(record.stagedReopenSession);
-          if (entry) {
-            if (openedSessionId === record.stagedReopenSession) {
-              stagedToRelease = entry.staged;
-              this.openingReopens.delete(record.stagedReopenSession);
-            } else {
-              entry.count -= 1;
-              if (entry.count <= 0) this.openingReopens.delete(record.stagedReopenSession);
-            }
-          }
-        }
-      } else if (record.stagedReopenSession !== undefined) {
-        const entry = this.openingReopens.get(record.stagedReopenSession);
-        if (entry) {
-          entry.count -= 1;
-          if (entry.count <= 0) this.openingReopens.delete(record.stagedReopenSession);
-        }
-      }
+    const repliedSessionId = message.result?.sessionId;
+    const mismatchedReopen =
+      SESSION_REQUESTS.has(record.method) &&
+      typeof record.session === "string" &&
+      typeof repliedSessionId === "string" &&
+      repliedSessionId !== record.session;
+    if (SESSION_REQUESTS.has(record.method) && message.result !== undefined && !mismatchedReopen) {
+      const openedSessionId = repliedSessionId ?? record.session;
+      this.rememberSession(openedSessionId);
+      this.clearStaleReplayTools(openedSessionId);
     }
     if (SESSION_REQUESTS.has(record.method) && record.modeOp !== undefined) {
       const reopenSessionId =
@@ -2501,8 +2470,8 @@ export class AcpProxy {
         sw.activeReopens.size === 1 &&
         sw.activeReopens.has(record.modeOp.seq);
       this.finishModeReopen(reopenSessionId, record.modeOp);
-      if (message.result !== undefined) {
-        const sessionId = message.result?.sessionId ?? record.session;
+      if (message.result !== undefined && !mismatchedReopen) {
+        const sessionId = repliedSessionId ?? record.session;
         if (
           typeof sessionId === "string" &&
           sessionId === reopenSessionId &&
@@ -2516,8 +2485,8 @@ export class AcpProxy {
       }
     }
     if (message.result !== undefined) {
-      if (SESSION_REQUESTS.has(record.method)) {
-        const sessionId = message.result?.sessionId ?? record.session;
+      if (SESSION_REQUESTS.has(record.method) && !mismatchedReopen) {
+        const sessionId = repliedSessionId ?? record.session;
         if (record.modeOp === undefined) {
           const sw = typeof sessionId === "string" ? this.switchState.get(sessionId) : undefined;
           if (
@@ -2541,8 +2510,8 @@ export class AcpProxy {
         this.subagents.configured(record.method, record.params);
       }
     }
-    if (record.channel && typeof message.result?.sessionId === "string") {
-      runtime.bindChannel(record.channel, message.result.sessionId);
+    if (record.channel && typeof repliedSessionId === "string" && !mismatchedReopen) {
+      runtime.bindChannel(record.channel, repliedSessionId);
     }
     // A managed child's session is the one `agy` just created for it.
     if (runtime.managed && record.method === "session/new") {
@@ -2574,18 +2543,7 @@ export class AcpProxy {
       else delete result._meta;
       return this.client({ ...message, result });
     }
-    if (record.method !== "session/prompt") {
-      const forwarded = this.client(message);
-      if (stagedToRelease && stagedToRelease.length > 0) {
-        for (const frame of stagedToRelease) {
-          const presented = this.presentUpdate(this.annotateUsage(stripTier(frame)), false, {
-            staleReplay: true,
-          });
-          if (presented !== undefined) this.client(presented);
-        }
-      }
-      return forwarded;
-    }
+    if (record.method !== "session/prompt") return this.client(message);
     // A prompt reply is never forwarded at once. The turn's facade calls
     // are fenced now, but the turn stays observed until its evidence has
     // settled: a built-in tool reported in the same chunk as this result,
