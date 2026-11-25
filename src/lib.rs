@@ -112,7 +112,7 @@ pub mod legacy_provider_release;
 pub mod local_operator;
 pub mod logs;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub use cowboy_wire::machine_auth;
+pub mod machine_auth;
 #[cfg(feature = "full")]
 pub mod machine_control;
 #[cfg(feature = "full")]

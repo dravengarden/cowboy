@@ -490,29 +490,40 @@ pub async fn wait_cgroup_empty(dir: &Path, timeout: Duration) -> Result<bool> {
 
 /// Every loaded `cowboy-browser-*` unit of the user manager.
 ///
+/// Non-Linux hosts have no systemd user manager or Linux browser units, so an
+/// empty inventory avoids looping on a nonexistent `systemctl` binary at start.
+///
 /// # Errors
-/// Returns when `systemctl` cannot list units.
+/// Returns when `systemctl` cannot list units on Linux.
 pub async fn list_units() -> Result<Vec<String>> {
-    let pattern = format!("{UNIT_PREFIX}*.service");
-    let output = systemctl(&[
-        "--user",
-        "list-units",
-        "--all",
-        "--plain",
-        "--no-legend",
-        "--no-pager",
-        &pattern,
-    ])
-    .await
-    .context("listing browser units")?;
-    ensure!(
-        output.status.success(),
-        "systemctl list-units exited {}",
-        output.status
-    );
-    Ok(parse_unit_list(&String::from_utf8_lossy(&output.stdout)))
+    #[cfg(not(target_os = "linux"))]
+    {
+        Ok(Vec::new())
+    }
+    #[cfg(target_os = "linux")]
+    {
+        let pattern = format!("{UNIT_PREFIX}*.service");
+        let output = systemctl(&[
+            "--user",
+            "list-units",
+            "--all",
+            "--plain",
+            "--no-legend",
+            "--no-pager",
+            &pattern,
+        ])
+        .await
+        .context("listing browser units")?;
+        ensure!(
+            output.status.success(),
+            "systemctl list-units exited {}",
+            output.status
+        );
+        Ok(parse_unit_list(&String::from_utf8_lossy(&output.stdout)))
+    }
 }
 
+#[cfg(any(target_os = "linux", test))]
 fn parse_unit_list(text: &str) -> Vec<String> {
     text.lines()
         .filter_map(|line| line.split_whitespace().next())

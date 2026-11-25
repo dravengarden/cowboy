@@ -12,6 +12,7 @@ import type { SessionMeta } from "./protocol";
 import { COARSE_POINTER_ROOT_CLASS } from "./platform";
 import { Suspense, use } from "react";
 import { MobileReviewBoundary } from "./mobile/review/MobileReviewPage";
+import { MobileProductShell } from "./mobile/shell/MobileProductShell";
 import { MOBILE_OPEN_PRODUCT_EVENT, mobileProductFromEvent, openMobileProduct } from "./mobile/appPagerMotion";
 import { DesktopWorkspace } from "./desktop/DesktopWorkspace";
 import { DesktopWorkspaceProvider } from "./desktop/DesktopWorkspaceController";
@@ -528,21 +529,27 @@ async function checkReviewLoading(): Promise<string> {
   const navigation: string[] = [];
   const onNavigate = (event: Event) => navigation.push((event as CustomEvent).detail.product);
   globalThis.addEventListener(MOBILE_OPEN_PRODUCT_EVENT, onNavigate);
+  const previousProduct = globalThis.localStorage?.getItem("cowboy:mobile-product") ?? null;
+  globalThis.localStorage?.setItem("cowboy:mobile-product", "review");
   function SlowReview() {
     use(pending.promise);
     return <div data-review-ready>Ready</div>;
   }
   try {
     flushSync(() => root.render(
-      <BrowserProductTheme>
-        <CssBaseline />
-        <Suspense fallback={<div data-whole-app-loading />}>
-          <input aria-label="Agent draft" defaultValue="Keep this draft" />
-          <div style={{ height: 680 }}>
-            <MobileReviewBoundary><SlowReview /></MobileReviewBoundary>
-          </div>
-        </Suspense>
-      </BrowserProductTheme>,
+      <SurfaceProvider>
+        <BrowserProductTheme>
+          <CssBaseline />
+          <Suspense fallback={<div data-whole-app-loading />}>
+            <MobileProductShell
+              themeMode="light"
+              onSetThemeMode={() => {}}
+              renderAgentPage={() => <input aria-label="Agent draft" defaultValue="Keep this draft" />}
+              renderReviewPage={() => <MobileReviewBoundary><SlowReview /></MobileReviewBoundary>}
+            />
+          </Suspense>
+        </BrowserProductTheme>
+      </SurfaceProvider>,
     ));
     await wait();
     const input = container.querySelector("input")!;
@@ -550,11 +557,35 @@ async function checkReviewLoading(): Promise<string> {
     check(loading && loading.getBoundingClientRect().height > 600, "Review loading must paint a full-height surface");
     check(!container.querySelector("[data-whole-app-loading]"), "Review loading hid Agent and the pager");
     check(loading.querySelector('[role="status"]')?.textContent?.includes("Opening review"), "Slow Review has no visible loading status");
+    const pagerShell = container.querySelector<HTMLElement>("[data-mobile-product]")!;
+    const reviewSpinner = loading.querySelector<HTMLElement>('[aria-label="Opening review"]')!;
+    const reviewSpinnerSvg = reviewSpinner.querySelector("svg")!;
+    const reviewSpinnerCircle = reviewSpinner.querySelector(".MuiCircularProgress-circle")!;
+    const reducedMotion = globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches === true;
+    check(
+      getComputedStyle(reviewSpinnerSvg).animationName === "none" &&
+        getComputedStyle(reviewSpinnerSvg).transform === "none" &&
+        getComputedStyle(reviewSpinnerCircle).animationName === (reducedMotion ? "none" : "cowboy-loading-dash"),
+      "Cold Review loading spinner must stay paint-only inside the mobile pager",
+    );
     const back = loading.querySelector("button")!;
     const rect = back.getBoundingClientRect();
     check(rect.height >= 44 && rect.top > loading.getBoundingClientRect().top + 500, "Loading Review lost its bottom navigation");
     back.click();
     check(navigation[0] === "agent", "A slow Review cannot return to Agent");
+    check(
+      pagerShell.getAttribute("data-mobile-product-settling") === "true" &&
+        getComputedStyle(reviewSpinner).animationPlayState === "paused" &&
+        (reducedMotion
+          ? getComputedStyle(reviewSpinnerCircle).animationName === "none"
+          : getComputedStyle(reviewSpinnerCircle).animationPlayState === "paused"),
+      "Tapping Agent during cold Review loading must pause the fallback ring while the pager transitions",
+    );
+    await until(
+      () => pagerShell.getAttribute("data-mobile-product") === "agent" &&
+        pagerShell.getAttribute("data-mobile-product-settling") === null,
+      "Programmatic pager transition from cold Review did not settle on Agent",
+    );
     input.value = "Draft typed while Review loads";
     pending.resolve();
     await until(() => !!container.querySelector("[data-review-ready]"), "Review did not replace its loading surface");
@@ -564,6 +595,8 @@ async function checkReviewLoading(): Promise<string> {
   } finally {
     pending.resolve();
     globalThis.removeEventListener(MOBILE_OPEN_PRODUCT_EVENT, onNavigate);
+    if (previousProduct === null) globalThis.localStorage?.removeItem("cowboy:mobile-product");
+    else globalThis.localStorage?.setItem("cowboy:mobile-product", previousProduct);
     root.unmount();
     container.remove();
   }
