@@ -2055,14 +2055,17 @@ test("Large stdin-fed wrapper sweeps only stale Antigravity scratch files and pr
   const stale = join(agyDir, "agy-apply-deadbeef");
   const fresh = join(agyDir, "agy-apply-fresh123");
   const unrelated = join(agyDir, "agy-apply-keep.txt");
+  const nonAscii = join(agyDir, "agy-apply-café1234");
   await writeFile(claudeAged, "claude-owned-payload");
   await writeFile(stale, "old-orphan");
   await writeFile(fresh, "active-edit");
   await writeFile(unrelated, "keep-me");
+  await writeFile(nonAscii, "non-ascii-keep");
   const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
   await utimes(claudeAged, twoHoursAgo, twoHoursAgo);
   await utimes(stale, twoHoursAgo, twoHoursAgo);
   await utimes(unrelated, twoHoursAgo, twoHoursAgo);
+  await utimes(nonAscii, twoHoursAgo, twoHoursAgo);
   const socket = join(dir, "exec.sock");
   const endpoint = await fakeEndpoint(socket, repo, { home });
   const conn = await Connection.open(
@@ -2091,8 +2094,8 @@ test("Large stdin-fed wrapper sweeps only stale Antigravity scratch files and pr
     );
     assert.deepEqual(
       (await readdir(agyDir)).sort(),
-      ["agy-apply-fresh123", "agy-apply-keep.txt"],
-      "only stale Antigravity agy-apply-???????? files may be swept",
+      ["agy-apply-café1234", "agy-apply-fresh123", "agy-apply-keep.txt"],
+      "only stale ASCII agy-apply-[0-9A-Za-z]{8} files may be swept",
     );
   } finally {
     conn.close();
@@ -2440,4 +2443,198 @@ test("Buffered pre-prompt subagent cards replayed after turn install do not trig
   };
   proxy.planGate.admitCall(call, childTurn);
   assert.equal(proxy.bind(call), "real-child-edit");
+});
+
+test("Large stdin-fed edit preserves trailing newlines when validating storage ancestors (R13-H1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r13-nl-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  const safeSibling = join(dir, "nl-parent");
+  const unsafeNewlineParent = join(dir, "nl-parent\n");
+  const targetUnderNewline = join(unsafeNewlineParent, "cowboy");
+  await mkdir(repo);
+  await mkdir(join(home, ".cache"), { recursive: true });
+  await mkdir(safeSibling, { mode: 0o700 });
+  await mkdir(unsafeNewlineParent, { mode: 0o755 });
+  await chmod(unsafeNewlineParent, 0o777); // unsafe world-writable ancestor ending in '\n'
+  await mkdir(targetUnderNewline, { mode: 0o755 });
+  await symlink(targetUnderNewline, join(home, ".cache", "cowboy"));
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const turn = facade.session("s1").turn;
+    const large = Buffer.from("n".repeat(64 * 1024), "utf8");
+    // Must check `nl-parent\n` (unsafe 0777), NOT `nl-parent` (safe 0700)!
+    await assert.rejects(
+      () => facade.publishOnce(turn, join(repo, "blocked.txt"), undefined, large),
+      /failed/i,
+    );
+    assert.deepEqual(await readdir(targetUnderNewline), []);
+    assert.deepEqual(await readdir(repo), []);
+
+    // Once `nl-parent\n` is safe 0755 owned by us, preserving trailing newline succeeds cleanly!
+    await chmod(unsafeNewlineParent, 0o755);
+    await facade.publishOnce(turn, join(repo, "ok.txt"), undefined, large);
+    assert.equal((await readFile(join(repo, "ok.txt"))).length, large.length);
+    assert.deepEqual(await readdir(join(targetUnderNewline, "file-buffers", "antigravity")), []);
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("WriteFile classifies dropped reconnect initialize reply before process/write as pre-dispatch failure without parking session (R13-M1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r13-reinit-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  let initCount = 0;
+  const endpoint = await fakeEndpoint(socket, repo, {
+    home,
+    lose: (method) => {
+      if (method === "initialize") {
+        initCount += 1;
+        // Drop the FIRST reconnect's initialize reply (2nd initialize overall),
+        // then let the cleanup reconnect (3rd initialize) succeed cleanly!
+        return initCount === 2;
+      }
+      return false;
+    },
+  });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const origCall = conn.call.bind(conn);
+  let disconnectedAfterStart = false;
+  conn.call = async (method, params, opts) => {
+    const res = await origCall(method, params, opts);
+    if (method === "process/start" && params.pipeStdin && !disconnectedAfterStart) {
+      disconnectedAfterStart = true;
+      // Drop connection right after process/start completes, forcing process/write to reconnect.
+      conn.disconnect();
+    }
+    return res;
+  };
+  const lostEvents = [];
+  try {
+    const facade = new Facade(conn, {
+      root: repo,
+      shell: "/bin/sh",
+      onUncertain: (sid, method) => lostEvents.push([sid, method]),
+      onLost: (sid, method) => lostEvents.push([sid, method]),
+    });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const session = facade.session("s1");
+    const turn = session.turn;
+    const large = "r".repeat(64 * 1024);
+    await assert.rejects(
+      () => facade.writeFile(session, turn, { path: "big.txt", content: large }),
+      (err) =>
+        !(err instanceof UncertainEffect) &&
+        /Execution unavailable before delivering the edit request/i.test(err.message),
+    );
+    assert.equal(initCount, 3, "initial connect + failed reconnect + successful cleanup reconnect");
+    assert.equal(turn.uncertain, undefined, "dropped reconnect initialize must not park session");
+    assert.deepEqual(lostEvents, [], "must not emit onUncertain/onLost");
+    assert.equal(
+      endpoint.calls.some((c) => c.method === "process/write"),
+      false,
+      "process/write must never have reached the endpoint",
+    );
+    assert.equal(
+      endpoint.calls.some((c) => c.method === "process/terminate"),
+      true,
+      "subsequent reconnect must confirm helper termination",
+    );
+    assert.deepEqual(await readdir(repo), []);
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Pre-prompt buffered completed tool_call_update without name does not trigger policy violation or cancel live parent (R13-M2)", async () => {
+  const agentFrames = [];
+  const clientFrames = [];
+  const proxy = new AcpProxy({
+    agent: (frame) => agentFrames.push(frame),
+    client: (frame) => clientFrames.push(frame),
+  });
+  proxy.root = "/repo";
+  const parentId = "parent-1";
+  const childId = "child-sub-policy";
+  const parentTurn = {
+    attempt: Symbol("parent-att"),
+    tools: new Map(),
+    events: new Set(),
+    violations: [],
+    calls: new Map(),
+    cancelled: false,
+  };
+  proxy.turns.set(parentId, parentTurn);
+  proxy.subagents.adopt(childId);
+  // Buffer a nameless completed tool_call_update BEFORE the child's turn starts.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: childId,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "stale-completed-1",
+        status: "completed",
+      },
+    },
+  });
+  // Install the child's live turn and release buffered pre-prompt frames.
+  const childTurn = {
+    attempt: Symbol("child-att"),
+    tools: new Map(),
+    events: new Set(),
+    violations: [],
+    calls: new Map(),
+    cancelled: false,
+  };
+  proxy.turns.set(childId, childTurn);
+  proxy.subagents.release(childId);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(childTurn.violation, undefined, "stale replay must not record policy violation");
+  assert.equal(childTurn.cancelled, false, "stale replay must not cancel child turn");
+  assert.equal(parentTurn.cancelled, false, "stale replay must not cancel parent turn");
+  assert.equal(
+    agentFrames.some((f) => f.method === "session/cancel"),
+    false,
+    "stale replay must not cancel agy session",
+  );
+  assert.equal(
+    clientFrames.some(
+      (f) =>
+        f.method === "session/update" &&
+        f.params?.sessionId === childId &&
+        f.params?.update?.toolCallId === "stale-completed-1",
+    ),
+    true,
+    "stale replay still routes cleanly through read-only presentation",
+  );
 });

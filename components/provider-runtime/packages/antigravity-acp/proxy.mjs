@@ -895,11 +895,11 @@ export class AcpProxy {
   }
 
   /** `toolCall` as Cowboy shows it (see presentation.mjs). */
-  present(toolCall, sessionId, { preserveExtensionInput = false } = {}) {
+  present(toolCall, sessionId, { preserveExtensionInput = false, readOnly = false } = {}) {
     const id = toolCall?.toolCallId;
     const key = typeof id === "string" ? callKey(sessionId, id) : undefined;
     const tool = presentedTool(toolCall?.name);
-    if (tool !== undefined && key !== undefined) {
+    if (!readOnly && tool !== undefined && key !== undefined) {
       if (this.calls.size >= MAX_TOOL_CALLS) this.calls.delete(this.calls.keys().next().value);
       this.calls.set(key, tool);
     }
@@ -915,7 +915,7 @@ export class AcpProxy {
         : presentToolCall(toolCall, { root: this.root, known, includeDiff: false });
     // The facade's answer, which `agy` never reports for an MCP tool.
     // M-Proxy-7: Attach diffs ONLY to a uniquely bound `completed` update with a successful facade result.
-    if (key !== undefined && TERMINAL.has(toolCall?.status) && this.results.has(key)) {
+    if (!readOnly && key !== undefined && TERMINAL.has(toolCall?.status) && this.results.has(key)) {
       const entry = this.results.get(key);
       this.results.delete(key);
       const currentTurn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
@@ -941,7 +941,14 @@ export class AcpProxy {
    * left out (its plan is sent instead), and only runnable slash commands.
    * `undefined` when nothing is forwarded.
    */
-  presentUpdate(message, answer = false, arrival = undefined) {
+  /** Whether a replayed buffered notification belongs to an older or absent turn/attempt (R13-M2). */
+  isStaleReplay(sessionId, arrival) {
+    if (arrival === undefined) return false;
+    const current = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
+    return !(arrival.turn && current === arrival.turn && current.attempt === arrival.attempt);
+  }
+
+  presentUpdate(message, answer = false, { staleReplay = false } = {}) {
     const update = message.params?.update;
     if (update?.sessionUpdate === "available_commands_update") {
       // A managed turn's instruction is never a native command or skill,
@@ -949,7 +956,7 @@ export class AcpProxy {
       if (this.managed !== false) return undefined;
       const kept = availableCommands(update);
       const offered = Array.isArray(kept.availableCommands) ? kept.availableCommands : [];
-      this.agyCommands = offered.map((command) => command?.name);
+      if (!staleReplay) this.agyCommands = offered.map((command) => command?.name);
       const skills = skillCommands(this.skills, offered);
       const shown = skills.length ? { ...kept, availableCommands: [...offered, ...skills] } : kept;
       return shown === update
@@ -961,17 +968,21 @@ export class AcpProxy {
       if (notice) return { ...message, params: { ...message.params, update: notice } };
     }
     if (!["tool_call", "tool_call_update"].includes(update?.sessionUpdate)) return message;
-    this.track(message.params.sessionId, update, arrival);
     const id = update.toolCallId;
     const sessionId = message.params.sessionId;
     const key = typeof id === "string" ? callKey(sessionId, id) : undefined;
     const known = key !== undefined ? this.calls.get(key) : undefined;
+    if (!staleReplay) {
+      this.track(sessionId, update);
+    }
     if ((presentedTool(update.name) ?? known) === "UpdatePlan") {
-      if (key !== undefined && known === undefined) this.calls.set(key, "UpdatePlan");
-      if (key !== undefined && TERMINAL.has(update.status)) this.results.delete(key);
+      if (!staleReplay) {
+        if (key !== undefined && known === undefined) this.calls.set(key, "UpdatePlan");
+        if (key !== undefined && TERMINAL.has(update.status)) this.results.delete(key);
+      }
       return undefined;
     }
-    const shown = this.present(update, sessionId);
+    const shown = this.present(update, sessionId, { readOnly: staleReplay });
     if (shown === update) return message;
     return { ...message, params: { ...message.params, update: shown } };
   }
@@ -982,17 +993,8 @@ export class AcpProxy {
    * (`tool_call`, with its arguments) before it calls the MCP server, and
    * the MCP request carries no ACP call ID.
    */
-  track(sessionId, update, arrival = undefined) {
-    let turn;
-    if (arrival !== undefined) {
-      const current = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
-      turn =
-        arrival.turn && current === arrival.turn && current.attempt === arrival.attempt
-          ? current
-          : undefined;
-    } else {
-      turn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
-    }
+  track(sessionId, update) {
+    const turn = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
     const outcome = this.planGate.trackUpdate(sessionId, update, turn);
     if (typeof sessionId === "string" && Array.isArray(outcome?.contradictedIds)) {
       for (const badId of outcome.contradictedIds) {
@@ -2068,6 +2070,14 @@ export class AcpProxy {
           ) {
             return;
           }
+          const staleReplay = this.isStaleReplay(message.params?.sessionId, replayOptions?.arrival);
+          if (staleReplay) {
+            const presented = this.presentUpdate(this.annotateUsage(stripTier(message)), false, {
+              staleReplay: true,
+            });
+            if (presented === undefined) return;
+            return this.client(presented);
+          }
           this.observe(message.params);
           this.subagents.collect(message.params);
           // Before presentation, which hides some tool calls (UpdatePlan).
@@ -2075,11 +2085,7 @@ export class AcpProxy {
           // Evidence and the worker see the same sanitized, presented
           // update: a tool's result counts, `agy`'s status lines do not
           // (text the answer took is never shown as one).
-          const presented = this.presentUpdate(
-            this.annotateUsage(stripTier(message)),
-            answer,
-            replayOptions?.arrival,
-          );
+          const presented = this.presentUpdate(this.annotateUsage(stripTier(message)), answer);
           const shown = presented && this.holdReply(presented);
           if (shown === undefined) return;
           this.remember(shown.params);

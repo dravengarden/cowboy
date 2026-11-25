@@ -112,7 +112,8 @@ const APPLY_STDIN = [
   "    esac",
   '    [ "$cur" = "/" ] && break',
   '    child_uid="$uid"',
-  '    cur=$(dirname -- "$cur")',
+  "    parent=${cur%/*}",
+  "    cur=${parent:-/}",
   "  done",
   "}",
   "check_owner_dir() {",
@@ -146,7 +147,10 @@ const APPLY_STDIN = [
   "orig_umask=$(umask)",
   "umask 077",
   'check_owner_dir "$h"',
-  'h_real=$(cd -P -- "$h" && pwd -P) || exit 2',
+  'h_real=$(cd -P -- "$h" && pwd -P && printf x) || exit 2',
+  "h_real=${h_real%?}",
+  "h_real=${h_real%?}",
+  '[ -n "$h_real" ] || exit 2',
   'check_ancestors "$h_real"',
   'c="$h_real/.cache"',
   'if [ ! -e "$c" ] && [ ! -L "$c" ]; then mkdir -- "$c" 2>/dev/null || true; fi',
@@ -155,7 +159,10 @@ const APPLY_STDIN = [
   'if [ ! -e "$cb" ] && [ ! -L "$cb" ]; then mkdir -- "$cb" 2>/dev/null || true; fi',
   'if [ -L "$cb" ]; then',
   '  [ -d "$cb" ] || exit 2',
-  '  cb_real=$(cd -P -- "$cb" && pwd -P) || exit 2',
+  '  cb_real=$(cd -P -- "$cb" && pwd -P && printf x) || exit 2',
+  "  cb_real=${cb_real%?}",
+  "  cb_real=${cb_real%?}",
+  '  [ -n "$cb_real" ] || exit 2',
   '  check_owner_dir "$cb_real"',
   '  check_ancestors "$cb_real"',
   "else",
@@ -168,7 +175,7 @@ const APPLY_STDIN = [
   'd="$fb/antigravity"',
   'if [ ! -e "$d" ] && [ ! -L "$d" ]; then mkdir -- "$d" 2>/dev/null || true; fi',
   'check_private_dir "$d"',
-  "find \"$d\" -maxdepth 1 -type f -name 'agy-apply-[0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z]' -mmin +60 -exec rm -f -- {} + 2>/dev/null || true",
+  "LC_ALL=C find \"$d\" -maxdepth 1 -type f -name 'agy-apply-[0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z][0-9A-Za-z]' -mmin +60 -exec rm -f -- {} + 2>/dev/null || true",
   'tmp=""',
   'cleanup() { [ -n "$tmp" ] && rm -f -- "$tmp" || true; }',
   "trap cleanup EXIT",
@@ -2050,6 +2057,12 @@ ${WRAP_UP_NOTE}`,
               writeClosed = true;
               stdinTimedOutBeforeDispatch = true;
               break;
+            }
+            if (!dispatched && notSent(error)) {
+              writeClosed = true;
+              throw new ToolError(
+                "Execution unavailable before delivering the edit request to the workspace helper; nothing was written.",
+              );
             }
             if (dispatched && !notSent(error) && error?.message === "Target request timed out") {
               turn.uncertain ??= "process/write";

@@ -143,6 +143,11 @@ export class Connection {
       }
     } catch (error) {
       connection.disconnect();
+      // A caller awaiting ensureConnected() has not dispatched its request yet;
+      // classify a dropped reconnect initialize reply as pre-dispatch unavailable.
+      if (/result unknown/.test(error?.message ?? "")) {
+        throw new Error("Execution unavailable; reconnect initialization failed before dispatch");
+      }
       throw error;
     }
   }
