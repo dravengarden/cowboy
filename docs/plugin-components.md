@@ -107,8 +107,10 @@ Component release 3.149.0 records provider-runtime 1.3.32, whose
   with the reason shown to the owner and leaves the account unchanged
   ([evidence contract](../components/provider-runtime/packages/antigravity-acp/README.md#backend-evidence)).
 
-Antigravity 0.2.35 pins it and adds the matching error rule. The other six
-Providers pinning provider-runtime advance one patch version.
+Antigravity 0.2.36 is published as the independent Plugin release carrying the
+combined `cowboy-antigravity-acp` 1.0.27 runtime (since `0.2.35` was already
+published from pre-merge `be2df6a3a`) and adds the matching error rule. The
+other six Providers pinning provider-runtime advance one patch version.
 
 Component release 3.148.0 records provider-runtime 1.3.31, whose
 `cowboy-antigravity-acp` 1.0.26 carries the uncertain-effect L1c proxy half
