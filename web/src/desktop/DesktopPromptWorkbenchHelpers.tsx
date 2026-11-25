@@ -9,7 +9,7 @@ import {
   useState,
 } from "react";
 import { Box, Button, DialogContentText, Paper } from "@mui/material";
-import { Check, Send } from "@mui/icons-material";
+import { Check, SaveOutlined, Send } from "@mui/icons-material";
 import type { ComposerEditorHandle } from "../ComposerEditor";
 import { DeliveryPicker } from "../DeliveryPicker";
 import { Kbd, useConfirmEnter } from "../Kbd";
@@ -681,6 +681,7 @@ export function DesktopWorkbenchCanvas({
         onCurrentTurn={isNew ? newPrompt.onCurrentTurn : actions.handleForce}
         pending={actions.toolbarPresentation.pending}
         progress={actions.toolbarPresentation.progress}
+        primaryAction={actions.toolbarPresentation.primaryAction}
         sendLabel={actions.toolbarPresentation.sendLabel}
         sendIcon={actions.toolbarPresentation.sendIconKind === "check"
           ? <Check sx={{ fontSize: "1rem" }} />
@@ -688,6 +689,7 @@ export function DesktopWorkbenchCanvas({
           ? <Send sx={{ fontSize: "1rem" }} />
           : undefined}
         sendDescription={actions.toolbarPresentation.sendDescription}
+        saveIcon={actions.toolbarPresentation.saveIconKind === "save" ? <SaveOutlined /> : undefined}
         saveLabel={actions.toolbarPresentation.saveLabel}
         saveTitle={actions.toolbarPresentation.saveTitle}
         scheduleLabel={actions.toolbarPresentation.scheduleLabel}

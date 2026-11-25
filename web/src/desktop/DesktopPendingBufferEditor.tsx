@@ -83,8 +83,14 @@ function usePendingBufferFocus({
   const [flashHint, setFlashHint] = useState<string | null>(null);
   const flashTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
+  const sendableRef = useRef(stateSnapshot.sendable);
+  sendableRef.current = stateSnapshot.sendable;
   const flashDirtyHint = useCallback((): void => {
-    setFlashHint("Unsaved edits · Mod+Enter finish · Mod+S save · ZQ discard");
+    setFlashHint(
+      sendableRef.current
+        ? "Unsaved edits · Mod+S save · ZQ discard"
+        : "Message is empty · ZQ discard",
+    );
     if (flashTimerRef.current !== undefined) clearTimeout(flashTimerRef.current);
     flashTimerRef.current = setTimeout(() => setFlashHint(null), 2800);
   }, []);

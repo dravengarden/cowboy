@@ -319,17 +319,16 @@ function regionHints(
       if (promptStatus.kind === "queued") {
         return [
           { keys: "Esc", label: promptStatus.dirty && vim ? "Normal" : "Close" },
-          { keys: "Mod+Enter", label: "Finish" },
           { keys: "Mod+S", label: "Save" },
-          { keys: "Alt+Enter", label: "Deliver…" },
+          { keys: "Mod+Enter", label: "Deliver…" },
           ...(vim ? [{ keys: "[q/]q", label: "Queue" }, { keys: "ZQ", label: "Discard" }] : []),
         ];
       }
       if (promptStatus.kind === "scheduled") {
         return [
           { keys: "Esc", label: promptStatus.dirty && vim ? "Normal" : "Close" },
-          { keys: "Mod+Enter", label: "Deliver…" },
           { keys: "Mod+S", label: "Save" },
+          { keys: "Mod+Enter", label: "Deliver…" },
           ...(vim ? [{ keys: "ZQ", label: "Discard" }] : []),
         ];
       }

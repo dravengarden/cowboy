@@ -550,6 +550,40 @@ export async function runDesktopComposerBrowserConformance(observe?: () => Promi
         "State has truthful Send/Queue label",
       );
     }
+    flushSync(() => setOptions({ primaryAction: "save", sendLabel: "Save" }));
+    check(
+      !container.querySelector('[data-composer-action="draft"]'),
+      "Queue edit replaces duplicate Draft button with Deliver…",
+    );
+    check(
+      button("send").textContent?.includes("Save") &&
+        button("send").querySelector("kbd")?.textContent?.includes("S"),
+      "Queue edit primary CTA is Save with Mod+S keycap",
+    );
+    check(
+      button("deliver").querySelector("kbd") !== null,
+      "Queue edit exposes Deliver… with Mod+Enter keycap",
+    );
+    click("send");
+    check(calls.at(-1) === "draft", "Queue Save primary button runs onSaveDraft");
+    click("deliver");
+    check(calls.at(-1) === "send", "Queue Deliver… button runs onSubmit");
+    key("s", "KeyS", isMac ? { metaKey: true } : { ctrlKey: true });
+    check(calls.at(-1) === "draft", "Queue Mod+S runs save");
+    key("Enter", "Enter", isMac ? { metaKey: true } : { ctrlKey: true });
+    check(calls.at(-1) === "send", "Queue Mod+Enter runs deliver");
+    container.style.width = "320px";
+    await tick();
+    const qRow = container.querySelector<HTMLElement>("[data-composer-delivery]")!;
+    check(
+      qRow.scrollWidth <= qRow.clientWidth + 1 &&
+        Math.abs(
+          button("deliver").getBoundingClientRect().top -
+            button("send").getBoundingClientRect().top,
+        ) < 8,
+      "Queue edit delivery row stays single-line at 320px",
+    );
+    container.style.width = "720px";
     results.push(
       "Empty, unavailable, preparing/queued, paused and pending states keep stable controls and disabled bindings",
     );

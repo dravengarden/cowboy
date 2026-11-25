@@ -173,15 +173,15 @@ const DISCOVERY: ShortcutRow[] = [
 const DIRECT_ACTIONS: ShortcutRow[] = [
   {
     keys: ["Mod+Enter"],
-    title: "Primary action: Send prompt, Finish queue edit, or Use Draft in Session…",
+    title: "Send or deliver prompt, or Use Draft in Session…",
     description:
-      "In New Prompt or Session Draft: send or open delivery picker. In a Queue edit: save and release hold without sending. In an independent Draft: choose a Session to open it in its Prompt canvas",
+      "In New Prompt or Session Draft: send or open delivery picker. In a Queue edit: save and open delivery picker (Steer / Queue first) without blind-sending. In an independent Draft: choose a Session to open it in its Prompt canvas",
   },
   {
     keys: [DESKTOP_SHORTCUTS.saveDraft],
-    title: "Save in place without sending",
+    title: "Save without sending",
     description:
-      "In New Prompt: save as a Session draft. In a Queue edit, Session Draft, or independent Draft: save and stay in the editor",
+      "In New Prompt: save as a Session draft. In a Queue edit: save changes, close editor, and release hold. In a Session Draft or independent Draft: save in place",
   },
   { keys: ["Alt+Enter"], title: "Choose delivery mode (Steer / Queue first / Send & pause)" },
   {

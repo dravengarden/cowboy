@@ -58,7 +58,7 @@ function buildComposerCommands(
   return [
     {
       id: "composer.submit",
-      title: "Send or finish prompt",
+      title: "Send or deliver prompt",
       group: "Prompt actions",
       shortcut: "Mod+Enter",
       consumeWhenDisabled: true,
@@ -108,7 +108,7 @@ function buildComposerCommands(
     },
     {
       id: "composer.saveDraft",
-      title: "Save prompt or draft",
+      title: "Save draft or queue edit",
       group: "Prompt actions",
       shortcut: DESKTOP_SHORTCUTS.saveDraft,
       consumeWhenDisabled: true,

@@ -1035,10 +1035,12 @@ item when present; `␣D` opens Drafts even at count 0 (`N` creates a new Sessio
 draft). `j/k` moves selection, `i` opens the selected item in the Prompt canvas
 in Insert at end, `l`/`Enter` opens it in Vim Normal, and `Esc`/`h` returns to
 the Prompt canvas. Editing a Queue item holds server auto-drain (and editing a
-Scheduled draft protects its fire timer); `Mod+Enter` finishes a Queue edit in
-place, `Mod+S` saves in place without sending, and plain `Esc` returns cleanly
-for clean/autosaved buffers or flashes an inline save/discard hint for dirty
-Queue/Scheduled edits (no modal; `ZQ` discards explicitly). Mobile retains its
+Scheduled draft protects its fire timer); `Mod+S` saves without sending (and
+finishes a Queue edit in place, releasing the hold), `Mod+Enter` delivers (opening
+the delivery picker on a Queue edit without blind-sending, or sending/opening
+delivery on a Session draft), and plain `Esc` returns cleanly (saving ordinary
+Drafts; prompting on dirty Queue/Scheduled edits with no modal; `ZQ` discards
+explicitly). Mobile retains its
 established inline/fullscreen card flow.
 
 ## Visual hierarchy

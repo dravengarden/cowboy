@@ -38,7 +38,7 @@ export const desktopComposerToolbarSx: SxProps<Theme> = {
   // menu's, then Draft's and Schedule's. Keys stay in tooltips and keep working; Send keeps its.
   "& [data-composer-delivery] :is([data-composer-action='stop'], [data-composer-action='conversation']) kbd":
     { display: "none" },
-  "& [data-composer-delivery] :is([data-composer-action='draft'], [data-composer-action='schedule']) kbd":
+  "& [data-composer-delivery] :is([data-composer-action='draft'], [data-composer-action='deliver'], [data-composer-action='schedule']) kbd":
     { display: "none" },
   // Conversation shortcuts read as secondary inline text, not another row
   // of outlined controls. Keep the information visible at every inline width.
@@ -64,7 +64,7 @@ export const desktopComposerToolbarSx: SxProps<Theme> = {
     },
   },
   "@container composer-tools (min-width: 26rem)": {
-    "& [data-composer-delivery] :is([data-composer-action='draft'], [data-composer-action='schedule']) kbd":
+    "& [data-composer-delivery] :is([data-composer-action='draft'], [data-composer-action='deliver'], [data-composer-action='schedule']) kbd":
       { display: "inline-flex" },
   },
   "@container composer-tools (min-width: 28rem)": {

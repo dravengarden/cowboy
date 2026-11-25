@@ -74,16 +74,21 @@ async function saveAndConfirmRow(
   return true;
 }
 
-function buildToolbarPresentation(
-  args: DesktopBufferActionsArgs,
+export function buildToolbarPresentation(
+  args: Pick<
+    DesktopBufferActionsArgs,
+    "activeBuffer" | "resolvedRow" | "bufferMeta" | "queue" | "newPrompt"
+  >,
   busy: boolean,
 ) {
   const { activeBuffer, resolvedRow, bufferMeta, queue, newPrompt } = args;
   if (activeBuffer.kind === "new") {
     return {
+      primaryAction: "submit" as const,
       sendLabel: newPrompt.sendLabel,
       sendIconKind: undefined as "check" | "send" | undefined,
       sendDescription: newPrompt.sendDescription,
+      saveIconKind: "draft" as const,
       saveLabel: "Draft",
       saveTitle: "Save as draft",
       scheduleLabel: "Schedule",
@@ -99,11 +104,13 @@ function buildToolbarPresentation(
   }
   if (activeBuffer.kind === "queued") {
     return {
-      sendLabel: "Finish" as const,
+      primaryAction: "save" as const,
+      sendLabel: "Save" as const,
       sendIconKind: "check" as const,
       sendDescription: "Save changes, preserve queue position, and release hold",
+      saveIconKind: "save" as const,
       saveLabel: "Save",
-      saveTitle: "Save changes and keep queue hold",
+      saveTitle: "Save changes, preserve queue position, and release hold",
       scheduleLabel: "Schedule",
       scheduleTitle: "Move to scheduled drafts",
       canSave: bufferMeta.sendable,
@@ -116,6 +123,7 @@ function buildToolbarPresentation(
     };
   }
   return {
+    primaryAction: "submit" as const,
     sendLabel: (bufferMeta.scheduled
       ? "Deliver…"
       : busy || queue.length > 0
@@ -127,6 +135,7 @@ function buildToolbarPresentation(
       : busy || queue.length > 0
       ? "Save draft and choose delivery mode"
       : "Save and send draft",
+    saveIconKind: "save" as const,
     saveLabel: "Save",
     saveTitle: bufferMeta.scheduled ? "Save scheduled text" : "Save draft now",
     scheduleLabel: bufferMeta.scheduled ? "Reschedule" : "Schedule",
@@ -316,7 +325,7 @@ function useBufferCloseActions(
 
   const handleSaveAndClose = useCallback((): void => {
     const handle = pendingRef.current;
-    if (!handle) return;
+    if (!handle || closingRef.current) return;
     closingRef.current = true;
     void saveAndConfirmRow(sessionId, handle, resolvedRow).then((ok) => {
       if (ok) onCloseBuffer(closeTarget());
@@ -397,14 +406,13 @@ function useHandleBufferSubmit(
       return;
     }
     const handle = pendingRef.current;
-    if (!handle || !handle.isSendable()) return;
+    if (!handle || !handle.isSendable() || closingRef.current) return;
     if (activeBuffer.kind === "queued") {
-      closingRef.current = true;
+      // Mod+Enter always means deliver, never save/finish: persist the edited
+      // queued row first, then open the Delivery Picker without blind-sending.
       void saveAndConfirmRow(sessionId, handle, resolvedRow).then((ok) => {
-        if (ok) onCloseBuffer(closeTarget());
-      }).catch((e: Error) => notify(e.message, "error")).finally(() => {
-        closingRef.current = false;
-      });
+        if (ok) setDeliveryAnchor(sendButtonRef.current);
+      }).catch((e: Error) => notify(e.message, "error"));
       return;
     }
     if (bufferMeta.scheduled || busy || queue.length > 0) {
@@ -468,8 +476,19 @@ export function useDesktopBufferActions(args: DesktopBufferActionsArgs) {
       newPrompt.onSaveDraft();
       return;
     }
-    void pendingRef.current?.save().catch((e: Error) => notify(e.message, "error"));
-  }, [isNew, newPrompt, pendingRef]);
+    const handle = pendingRef.current;
+    if (!handle || !handle.isSendable() || closingRef.current) return;
+    if (activeBuffer.kind === "queued") {
+      closingRef.current = true;
+      void saveAndConfirmRow(sessionId, handle, resolvedRow).then((ok) => {
+        if (ok) onCloseBuffer(closeTarget());
+      }).catch((e: Error) => notify(e.message, "error")).finally(() => {
+        closingRef.current = false;
+      });
+      return;
+    }
+    void handle.save().catch((e: Error) => notify(e.message, "error"));
+  }, [activeBuffer.kind, closeTarget, closingRef, isNew, newPrompt, onCloseBuffer, pendingRef, resolvedRow, sessionId]);
 
   const handleForce = useCallback((): void => {
     if (isNew) {
@@ -477,7 +496,7 @@ export function useDesktopBufferActions(args: DesktopBufferActionsArgs) {
       return;
     }
     const handle = pendingRef.current;
-    if (!handle || !handle.isSendable()) return;
+    if (!handle || !handle.isSendable() || closingRef.current) return;
     const prep = activeBuffer.kind === "new-draft"
       ? Promise.resolve(true)
       : saveAndConfirmRow(sessionId, handle, resolvedRow);

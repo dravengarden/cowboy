@@ -71,7 +71,8 @@ export interface DesktopComposerToolbarProps {
   onCurrentTurn?: () => void;
   pending: boolean;
   progress: boolean;
-  sendLabel: "Send" | "Queue" | "Send…" | "Enqueue" | "Finish" | "Deliver…";
+  primaryAction?: "submit" | "save";
+  sendLabel: "Send" | "Queue" | "Send…" | "Enqueue" | "Save" | "Deliver…";
   sendIcon?: ReactNode;
   sendDescription: string;
   saveLabel?: string;
@@ -164,6 +165,8 @@ export function DesktopComposerToolbarView(
     />
   );
   const saveReady = (props.canSave ?? ready) && !props.pending;
+  const primaryIsSave = props.primaryAction === "save";
+  const primaryReady = primaryIsSave ? saveReady : ready;
   const scheduleReady = (props.canSchedule ?? true) && ready;
   return (
     <Box
@@ -236,16 +239,27 @@ export function DesktopComposerToolbarView(
             gap: 0.25,
           }}
         >
-          {action({
-            id: "draft",
-            icon: props.saveIcon ?? <EditNoteOutlined />,
-            label: props.saveLabel ?? "Draft",
-            title: props.saveTitle ?? "Save as draft",
-            shortcut: DESKTOP_SHORTCUTS.saveDraft,
-            disabled: !saveReady,
-            reason: deliveryReason,
-            onClick: props.onSaveDraft,
-          })}
+          {primaryIsSave
+            ? action({
+              id: "deliver",
+              icon: <Send />,
+              label: "Deliver…",
+              title: "Choose delivery mode (Steer, Queue first)",
+              shortcut: "Mod+Enter",
+              disabled: !ready,
+              reason: deliveryReason,
+              onClick: props.onSubmit,
+            })
+            : action({
+              id: "draft",
+              icon: props.saveIcon ?? <EditNoteOutlined />,
+              label: props.saveLabel ?? "Draft",
+              title: props.saveTitle ?? "Save as draft",
+              shortcut: DESKTOP_SHORTCUTS.saveDraft,
+              disabled: !saveReady,
+              reason: deliveryReason,
+              onClick: props.onSaveDraft,
+            })}
           {action({
             id: "schedule",
             icon: <Schedule />,
@@ -321,7 +335,7 @@ export function DesktopComposerToolbarView(
           held: !session.stop.busy,
           onClick: session.stop.open,
         })}
-        <Tooltip title={ready ? props.sendDescription : deliveryReason}>
+        <Tooltip title={primaryReady ? props.sendDescription : deliveryReason}>
           <span>
             <Button
               ref={props.sendButtonRef}
@@ -329,16 +343,21 @@ export function DesktopComposerToolbarView(
               size="small"
               disableElevation
               data-composer-action="send"
-              aria-label={props.sendLabel === "Queue"
+              aria-label={primaryIsSave
+                ? "save queued changes"
+                : props.sendLabel === "Queue"
                 ? "queue message"
                 : "send"}
-              aria-haspopup={props.sendLabel === "Send…" ? "menu" : undefined}
-              disabled={!ready}
+              aria-haspopup={!primaryIsSave &&
+                  (props.sendLabel === "Send…" || props.sendLabel === "Deliver…")
+                ? "menu"
+                : undefined}
+              disabled={!primaryReady}
               aria-busy={props.pending || undefined}
               onPointerDown={(event) => {
                 if (event.button === 0) event.preventDefault();
               }}
-              onClick={props.onSubmit}
+              onClick={primaryIsSave ? props.onSaveDraft : props.onSubmit}
               sx={{
                 minHeight: "2rem",
                 minWidth: "6.5rem",
@@ -360,10 +379,10 @@ export function DesktopComposerToolbarView(
                 : (props.sendIcon ?? <Send sx={{ fontSize: "1rem" }} />)}
               {props.sendLabel}
               <DesktopShortcut
-                shortcut="Mod+Enter"
+                shortcut={primaryIsSave ? DESKTOP_SHORTCUTS.saveDraft : "Mod+Enter"}
                 quiet
                 compact
-                availability={shortcutAvailability(scoped && ready)}
+                availability={shortcutAvailability(scoped && primaryReady)}
               />
             </Button>
           </span>

@@ -231,7 +231,7 @@ export async function checkDraftKeyboard(): Promise<string> {
       if (kind === "queued" || kind === "draft") {
         check(
           calls.at(-1) === "submit" && calls.length === before + 1,
-          `${kind}: Mod+Enter runs the unified primary action`,
+          `${kind}: Mod+Enter runs the unified send/deliver action`,
         );
       } else if (kind === "document") {
         check(
