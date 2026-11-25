@@ -41,11 +41,10 @@ import {
   RESUME_FAILED,
   RESUME_OTHER_DEVICE,
   autoEntry,
-  linkEntry,
-  linkTarget,
   resetTarget,
   resumeStep,
 } from "./browserModel";
+import { linkEntry, linkTarget } from "./linkNavigation";
 import {
   type SharedBrowser,
   browserIdentityKey,
@@ -74,12 +73,13 @@ export interface MachineBrowserSheetProps {
   dataset: string;
   /** Open or attach as soon as the state is known. */
   autoOpen?: boolean | undefined;
-  /** A link to show once in the account's ordinary tab browser on
-   * `machine` (for example a Provider sign-in's verification URL): opens
-   * are pinned to that Machine and the browser navigates there once it
-   * runs. Nothing flows back: the panel never reads or fills anything for
-   * the caller. */
-  link?: { url: string; machine: string } | undefined;
+  /** A link to show once in the account's ordinary tab browser: when
+   * `machine` is named (for example a Provider sign-in's verification URL),
+   * opens are pinned to that Machine; without `machine` (for example a
+   * vendor usage/reset page), the account's ordinary placement or Machine
+   * choice is used. Nothing flows back: the panel never reads or fills
+   * anything for the caller. */
+  link?: { url: string; machine?: string | undefined } | undefined;
   onEnableBrowser?: (() => void) | undefined;
   /** The enablement write is pending elsewhere. */
   enabling?: boolean | undefined;
@@ -452,6 +452,7 @@ function MachineBrowserPanel(
     />
   );
   const chord = (value: Parameters<ViewerControls["chord"]>[0]): void => ui.controls?.chord(value);
+  const pinned = link?.machine !== undefined;
   const frameProps: BrowserFrameProps = {
     areaRef,
     browser,
@@ -459,8 +460,8 @@ function MachineBrowserPanel(
     machineLabel,
     touch,
     link: link !== undefined,
-    pinned: link !== undefined,
-    retry: retryOffered(model, link !== undefined),
+    pinned,
+    retry: retryOffered(model, pinned),
     commands: uiCommands,
     enabling,
     onEnableBrowser: props.onEnableBrowser,

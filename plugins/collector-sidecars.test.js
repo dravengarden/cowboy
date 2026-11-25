@@ -23,6 +23,7 @@ import {
   handle as handleGrok,
   nearestCredit as nearestGrokCredit,
   readLines as grokLines,
+  settingsPlan,
 } from "./grok/collector/index.js";
 import codexDeclaration from "./codex/collector/portable-account.json" with { type: "json" };
 import grokDeclaration from "./grok/collector/portable-account.json" with { type: "json" };
@@ -299,15 +300,20 @@ test("Codex collector never refreshes on other failures or a second expiry", asy
 
 const grokCredential = { key: "fixture-token", userId: "user-fixture" };
 
-/** Billing answers `body`; plan and resets fail as they do without an account. */
-function fakeGrokFetch(billing) {
+/** Billing answers `billing`; `/v1/settings` answers `settings` (default 404). */
+function fakeGrokFetch(billing, settings = 404) {
   const calls = [];
   const fetch = async (url, init) => {
     calls.push({ url, headers: init?.headers });
-    if (url.startsWith("https://cli-chat-proxy.grok.com/")) {
+    if (url.startsWith("https://cli-chat-proxy.grok.com/v1/billing")) {
       return typeof billing === "number"
         ? new Response("{}", { status: billing })
         : Response.json(billing);
+    }
+    if (url === "https://cli-chat-proxy.grok.com/v1/settings") {
+      return typeof settings === "number"
+        ? new Response("{}", { status: settings })
+        : Response.json(settings);
     }
     return new Response("", { status: 404 });
   };
@@ -334,13 +340,19 @@ test("Grok direct billing reproduces the pinned CLI's _x.ai/billing projection",
 test("Grok direct billing sends the CLI's request and pins its version", async () => {
   const pinned = grokProvider.runtime.dependencies.find((entry) => entry.id === "xai-grok");
   equal(pinned.version, GROK_CLI_VERSION, "header version follows the runtime pin");
-  const { calls, fetch } = fakeGrokFetch(billingCapture.cases[0].body);
-  await handleGrok(
+  const { calls, fetch } = fakeGrokFetch(billingCapture.cases[0].body, {
+    subscription_tier_display: "SuperGrok Heavy",
+  });
+  const result = await handleGrok(
     { operation: "collect", token_refresh: false },
     { credential: async () => grokCredential, fetch, startRpc: () => assert.fail("spawned") },
   );
   const captured = billingCapture.request;
-  equal(calls[0].url, `${captured.base_url}/billing?format=credits`, "billing URL");
+  equal(
+    calls.map((call) => call.url),
+    [`${captured.base_url}/billing?format=credits`, `${captured.base_url}/settings`],
+    "billing and settings URLs",
+  );
   for (const name of [
     "x-xai-token-auth",
     "x-userid",
@@ -348,8 +360,41 @@ test("Grok direct billing sends the CLI's request and pins its version", async (
     "x-grok-client-mode",
   ]) {
     equal(calls[0].headers[name], captured.headers[name], name);
+    equal(calls[1].headers[name], captured.headers[name], `settings ${name}`);
   }
   equal(calls[0].headers.authorization, "Bearer fixture-token", "bearer");
+  equal(calls[1].headers.authorization, "Bearer fixture-token", "settings bearer");
+  equal(result.account, { account: { planType: "SuperGrok Heavy" } }, "plan from settings");
+  // Usage polls never touch Cloudflare-challenged grok.com endpoints.
+  equal(
+    calls.some((call) => call.url.startsWith("https://grok.com/")),
+    false,
+    "no grok.com poll",
+  );
+  // Settings plan helper normalizes enum fallbacks and rejects malformed strings.
+  equal(settingsPlan({ subscription_tier_display: "  Free  " }), "Free", "trimmed display");
+  equal(settingsPlan({ subscription_tier: "SuperGrokPro" }), "SuperGrok Heavy", "camel enum");
+  equal(
+    settingsPlan({ subscription_tier: "SUBSCRIPTION_TIER_GROK_PRO" }),
+    "SuperGrok",
+    "proto enum",
+  );
+  equal(
+    settingsPlan({ subscription_tier_display: "bad\nvalue", subscription_tier: "GrokPro" }),
+    "SuperGrok",
+    "control chars skipped",
+  );
+  equal(settingsPlan({ subscription_tier_display: "x".repeat(65) }), undefined, "oversize dropped");
+  // A failing settings lookup never fails a valid billing read.
+  const withoutSettings = await handleGrok(
+    { operation: "collect", token_refresh: false },
+    {
+      credential: async () => grokCredential,
+      fetch: fakeGrokFetch(billingCapture.cases[0].body, 503).fetch,
+      startRpc: () => assert.fail("spawned"),
+    },
+  );
+  equal(withoutSettings.account, undefined, "fail-soft settings");
 });
 
 test("Grok refresh-free usage never starts the CLI and matches the CLI path", async () => {
@@ -485,9 +530,17 @@ test("Grok declares refresh-free usage and reaches only its read endpoints", () 
     },
     "declaration",
   );
+  equal(
+    grokHost.usage.collector_argv.find((value) => value.startsWith("--allow-net=")),
+    "--allow-net=cli-chat-proxy.grok.com:443",
+    "collector network grant",
+  );
+  equal(
+    grokHost.usage.reset_argv.find((value) => value.startsWith("--allow-net=")),
+    "--allow-net=grok.com:443,cli-chat-proxy.grok.com:443",
+    "reset network grant",
+  );
   for (const argv of [grokHost.usage.collector_argv, grokHost.usage.reset_argv]) {
-    const net = argv.find((value) => value.startsWith("--allow-net="));
-    equal(net, "--allow-net=grok.com:443,cli-chat-proxy.grok.com:443", "network grant");
     equal(
       argv.some((value) => value.startsWith("--allow-write")),
       false,

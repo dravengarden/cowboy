@@ -84,17 +84,20 @@ export function accountProviderLabel(provider: string): string {
 }
 
 /** External page where an account's plan usage and any banked limit resets are
- * read and redeemed. Cowboy never claims a reset itself: the Provider CLIs
- * expose no scriptable claim verb, and the vendor endpoints behind their
- * interactive commands are private and flag-gated, so the card links out
- * instead of speaking them. The usage host schema has no field for this yet;
- * a Provider-owned `usage.manage_url` would replace this table. */
+ * read and redeemed (for example Claude's usage settings, or Grok's web usage
+ * page whose reset RPC sits behind a Cloudflare browser challenge). The usage
+ * host schema has no field for this yet; a Provider-owned `usage.manage_url`
+ * would replace this table. */
 const ACCOUNT_MANAGE_URLS: Record<string, string> = {
   anthropic: "https://claude.ai/settings/usage",
+  xai: "https://grok.com/?_s=usage",
 };
 
-/** The account page of a registered Provider identity (`claude-code`). */
-const PROVIDER_MANAGE_ACCOUNTS: Record<string, string> = { "claude-code": "anthropic" };
+/** The account page of a registered Provider identity (`claude-code`, `grok`). */
+const PROVIDER_MANAGE_ACCOUNTS: Record<string, string> = {
+  "claude-code": "anthropic",
+  grok: "xai",
+};
 
 export function providerManageUrl(providerId: string): string | undefined {
   const account = PROVIDER_MANAGE_ACCOUNTS[providerId];

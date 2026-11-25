@@ -6,6 +6,7 @@ import {
   acceptedScheduleTime,
   accountManageUrl,
   accountProviderLabel,
+  providerManageUrl,
   accountProviderUsage,
   applyUsageHostPlugins,
   exhaustedAccountUsageLimits,
@@ -233,6 +234,14 @@ test("account manage links are published only for known accounts", () => {
   assertEquals(
     accountManageUrl("anthropic"),
     "https://claude.ai/settings/usage",
+  );
+  assertEquals(
+    accountManageUrl("xai"),
+    "https://grok.com/?_s=usage",
+  );
+  assertEquals(
+    providerManageUrl("grok"),
+    "https://grok.com/?_s=usage",
   );
   assertEquals(accountManageUrl("openai"), undefined);
   assertEquals(accountManageUrl("future-labs"), undefined);

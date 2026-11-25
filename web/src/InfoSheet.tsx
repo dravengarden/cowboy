@@ -61,7 +61,7 @@ import { ClientStorageInfoSection, ServiceStorageInfoSection } from "./InfoRunti
 import { SessionMaintenancePanel } from "./SessionMaintenancePanel";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { AccountBrowserEntry } from "./machineBrowser/AccountBrowserEntry";
-import { displayPlan, orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageResetUnavailableMessage } from "./usageAccounts";
+import { displayPlan, orderUsageAccounts, registeredUsageAccounts, type UsageAccountCard, usageCardBrowserManageLink, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageResetUnavailableMessage } from "./usageAccounts";
 import { PendingResetSchedule, UsageResetActions, UsageResetFields, useUsageResetFlow } from "./UsageResetFlow";
 import { useProviderCatalog } from "./providerCatalog";
 import { useNativeAccountUsage } from "./nativeAccountUsage";
@@ -639,7 +639,7 @@ export function UsageInfoSection({ order, layoutAction, accounts }: {
           onUsageChanged={() => load(false)}
           onRefresh={account.native?.available ? () => native.refresh(account.id) : undefined}
           refreshing={account.native?.refreshing ?? false}
-          action={<AccountBrowserEntry snapshot={accounts.data} account={account.id} label={account.title} />}
+          action={<AccountBrowserEntry snapshot={accounts.data} account={account.id} label={account.title} pageLink={usageCardBrowserManageLink(account)} />}
         >
           {account.native?.machine_id && <InfoRow k="Usage query Machine" v={execution?.machines.find((machine) => machine.id === account.native!.machine_id)?.name ?? account.native.machine_id} />}
           {account.native?.message && account.native.usage && <Typography variant="caption" color="warning.main">{account.native.message}</Typography>}

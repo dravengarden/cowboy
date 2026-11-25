@@ -176,8 +176,18 @@ export function usageResetUnavailableMessage(card: UsageAccountCard): string | u
 
 /** The Provider's plan and reset page, on the cards that own reset actions. */
 export function usageCardManageUrl(card: UsageAccountCard): string | undefined {
-  // The Provider identity decides (named Claude cards included, even with no
-  // observation or snapshot), never whether reset credits are reported now.
+  // The Provider identity decides (named Claude and Grok cards included, even
+  // with no observation or snapshot), never whether reset credits are reported now.
   return accountManageUrl(card.usage.provider) ??
     (card.providerId === undefined ? undefined : providerManageUrl(card.providerId));
+}
+
+/** Direct Machine-browser destination for a card whose resets are performed on
+ * the vendor's web page rather than natively by Cowboy (for example xAI/Grok). */
+export function usageCardBrowserManageLink(
+  card: UsageAccountCard,
+): { url: string; label: string } | undefined {
+  if (card.native?.resets_supported === true) return undefined;
+  const url = usageCardManageUrl(card);
+  return url === undefined ? undefined : { url, label: "Usage & resets" };
 }

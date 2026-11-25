@@ -227,6 +227,20 @@ async function boundedBytes(response, operation) {
   return bytes;
 }
 
+const PLAN_LABELS = {
+  SUBSCRIPTION_TIER_SUPER_GROK_LITE: "SuperGrok Lite",
+  SUBSCRIPTION_TIER_GROK_PRO: "SuperGrok",
+  SUBSCRIPTION_TIER_SUPER_GROK_PLUS: "SuperGrok Plus",
+  SUBSCRIPTION_TIER_SUPER_GROK_PRO: "SuperGrok Heavy",
+  SuperGrokLite: "SuperGrok Lite",
+  GrokPro: "SuperGrok",
+  SuperGrokPlus: "SuperGrok Plus",
+  SuperGrokPro: "SuperGrok Heavy",
+  XPremiumPlus: "X Premium+",
+  XPremium: "X Premium",
+  XBasic: "X Basic",
+};
+
 export function activePlan(document) {
   const labels = {
     SUBSCRIPTION_TIER_SUPER_GROK_LITE: [1, "SuperGrok Lite"],
@@ -240,6 +254,19 @@ export function activePlan(document) {
         .map((value) => labels[value.tier])
         .sort((left, right) => right[0] - left[0])[0]?.[1]
     : undefined;
+}
+
+/** Plan label from `cli-chat-proxy.grok.com/v1/settings` (`subscription_tier_display`
+ * with fallback to `subscription_tier`). */
+export function settingsPlan(document) {
+  if (!isObject(document)) return undefined;
+  for (const raw of [document.subscription_tier_display, document.subscription_tier]) {
+    if (typeof raw !== "string") continue;
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed.length > 64 || /[\x00-\x1f\x7f]/.test(trimmed)) continue;
+    return PLAN_LABELS[trimmed] ?? trimmed;
+  }
+  return undefined;
 }
 
 function encodeVarint(value) {
@@ -371,27 +398,29 @@ async function grpcWeb(credential, path, message = new Uint8Array(), fetchImpl =
   return decodeGrpcWeb(await boundedBytes(response, `xAI RPC ${path}`));
 }
 
+/** Optional plan-tier enrichment from the CLI chat proxy (`/v1/settings`).
+ * `grok.com` web billing endpoints sit behind Cloudflare's browser challenge,
+ * so usage polls read plan labels from the CLI proxy instead and never hit
+ * `grok.com`. Failures are discarded without retry. */
 async function accountMetadata(credential, fetchImpl = fetch) {
   if (!credential) return {};
-  const [planResult, resetsResult] = await Promise.allSettled([
-    fetchImpl(`${WEB_BASE}/rest/subscriptions`, {
-      headers: authHeaders(credential),
+  try {
+    const response = await fetchImpl(`${CHAT_PROXY_BASE}/settings`, {
       redirect: "manual",
+      headers: {
+        ...authHeaders(credential),
+        "x-grok-client-version": GROK_CLI_VERSION,
+        "x-grok-client-mode": "interactive",
+        accept: "application/json",
+      },
       signal: AbortSignal.timeout(10_000),
-    })
-      .then((response) => boundedBytes(response, "xAI subscriptions"))
-      .then((bytes) => activePlan(JSON.parse(decoder.decode(bytes)))),
-    grpcWeb(
-      credential,
-      "/prod_mc_billing.ConsumerUiSvc/GetRemainingResets",
-      undefined,
-      fetchImpl,
-    ).then(resetTokens),
-  ]);
-  return {
-    ...(planResult.status === "fulfilled" && planResult.value ? { plan: planResult.value } : {}),
-    ...(resetsResult.status === "fulfilled" ? { resets: resetsResult.value } : {}),
-  };
+    });
+    const bytes = await boundedBytes(response, "xAI settings");
+    const plan = settingsPlan(JSON.parse(decoder.decode(bytes)));
+    return plan ? { plan } : {};
+  } catch {
+    return {};
+  }
 }
 
 function attachMetadata(billing, metadata) {
@@ -552,8 +581,8 @@ async function billingWithoutCli(credential, fetchImpl) {
 /** A named portable account's poll (`token_refresh: false`). The Grok CLI
  * renews an expiring sign-in on start and after any 401, so this path never
  * starts it: it reads the current token, refuses one that has (nearly)
- * expired, and reads billing, plan and resets directly with it. A rejected
- * token is authentication required; nothing is retried or refreshed. */
+ * expired, and reads billing and plan directly from the CLI proxy with it. A
+ * rejected token is authentication required; nothing is retried or refreshed. */
 export async function collectWithoutRefresh({
   credential = loadCredential,
   fetch: fetchImpl = fetch,

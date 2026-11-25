@@ -19,33 +19,57 @@ export function AccountBrowserEntry({
   snapshot,
   account: id,
   label,
+  pageLink,
 }: {
   snapshot: SubscriptionSnapshot | undefined;
   /** The usage card id: a named account id or a legacy card's usage provider. */
   account: string;
   /** The card title, shown by the panel of a legacy card. */
   label?: string | undefined;
+  /** Optional vendor page (for example a web-only usage/reset page) opened
+   * directly in this account's Machine browser. */
+  pageLink?: { url: string; label: string } | undefined;
 }): React.JSX.Element | null {
-  const [open, setOpen] = useState(false);
+  const [openTarget, setOpenTarget] = useState<{ url?: string } | null>(null);
   const entry = accountBrowserEntry(snapshot, id, label);
   if (entry.kind === "none" || !snapshot) return null;
   const { account } = entry;
   const shared = sharedBrowser(snapshot, account.id);
   return (
     <Stack spacing={0.25} data-account-browser-entry={account.id}>
-      <Button
-        size="small"
-        color={shared ? "secondary" : "primary"}
-        startIcon={
-          shared ? <GroupsRounded fontSize="small" /> : <OpenInBrowserRounded fontSize="small" />
-        }
-        aria-label={shared ? `Shared browser: ${shared.label}` : "Browser"}
-        disabled={entry.kind !== "ready"}
-        onClick={() => setOpen(true)}
-        sx={{ alignSelf: "flex-start", minHeight: 36 }}
-      >
-        {shared ? "Shared browser" : "Browser"}
-      </Button>
+      <Stack direction="row" spacing={0.5} flexWrap="wrap" alignItems="center">
+        <Button
+          size="small"
+          color={shared ? "secondary" : "primary"}
+          startIcon={
+            shared ? <GroupsRounded fontSize="small" /> : <OpenInBrowserRounded fontSize="small" />
+          }
+          aria-label={shared ? `Shared browser: ${shared.label}` : "Browser"}
+          disabled={entry.kind !== "ready"}
+          onClick={() => setOpenTarget({})}
+          sx={{ alignSelf: "flex-start", minHeight: 36 }}
+        >
+          {shared ? "Shared browser" : "Browser"}
+        </Button>
+        {entry.kind === "ready" && pageLink && (
+          <Button
+            size="small"
+            variant="outlined"
+            color={shared ? "secondary" : "primary"}
+            startIcon={<OpenInBrowserRounded fontSize="small" />}
+            aria-label={
+              shared
+                ? `${pageLink.label} in shared browser: ${shared.label}`
+                : `${pageLink.label} in browser`
+            }
+            data-account-browser-page-link={pageLink.url}
+            onClick={() => setOpenTarget({ url: pageLink.url })}
+            sx={{ alignSelf: "flex-start", minHeight: 36, textTransform: "none" }}
+          >
+            {pageLink.label}
+          </Button>
+        )}
+      </Stack>
       {shared && (
         <Typography variant="caption" color="secondary.main" data-browser-shared={shared.label}>
           {sharedCardLabel(shared)}
@@ -68,11 +92,11 @@ export function AccountBrowserEntry({
           )}
         </Typography>
       )}
-      {open && (
+      {openTarget !== null && (
         <MachineBrowserSheet
-          key={account.id}
+          key={`${account.id}:${openTarget.url ?? ""}`}
           open
-          onClose={() => setOpen(false)}
+          onClose={() => setOpenTarget(null)}
           owner={snapshot.dataset.user_id}
           dataset={snapshot.dataset.dataset_id}
           account={{
@@ -80,6 +104,7 @@ export function AccountBrowserEntry({
             label: account.label,
             browserEnabled: account.browser_enabled,
           }}
+          link={openTarget.url ? { url: openTarget.url } : undefined}
         />
       )}
     </Stack>

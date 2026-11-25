@@ -184,6 +184,27 @@ test("a shared card's browser entry has its own icon, accent and name", () => {
   const own = entry(false);
   assertEquals(own.includes('aria-label="Browser"'), true);
   assertEquals(own.includes("Shared"), false);
+  const pageLink = { url: "https://grok.com/?_s=usage", label: "Usage &amp; resets" };
+  const withPage = render(
+    React.createElement(AccountBrowserEntry, {
+      snapshot: snapshot(true),
+      account: PIKA,
+      pageLink: { url: "https://grok.com/?_s=usage", label: "Usage & resets" },
+    }),
+  );
+  assertEquals(withPage.includes('data-account-browser-page-link="https://grok.com/?_s=usage"'), true);
+  assertEquals(withPage.includes('aria-label="Usage &amp; resets in shared browser: Google"'), true);
+  assertEquals(withPage.includes(pageLink.label), true);
+  const disabledSnap = snapshot(false);
+  disabledSnap.registry.accounts[0]!.browser_enabled = false;
+  const disabledWithPage = render(
+    React.createElement(AccountBrowserEntry, {
+      snapshot: disabledSnap,
+      account: PIKA,
+      pageLink: { url: "https://grok.com/?_s=usage", label: "Usage & resets" },
+    }),
+  );
+  assertEquals(disabledWithPage.includes("data-account-browser-page-link"), false);
 });
 
 test("a restart's reopen is bound to the confirmed identity on the Service", async () => {

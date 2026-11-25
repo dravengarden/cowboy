@@ -12,8 +12,7 @@ import {
 import {
   type AccountBrowserModel,
   INITIAL_BROWSER_MODEL,
-  linkEntry,
-  linkTarget,
+
   modelFor,
   pinnedMachine,
   readTicket,
@@ -22,6 +21,7 @@ import {
   resetTarget,
   shownTarget,
 } from "./browserModel";
+import { linkEntry, linkTarget } from "./linkNavigation";
 import { type ViewerControls, addressCommand, chromeState, controlsFor } from "./browserChrome";
 import type { KeyboardSink } from "./touchKeyboard";
 import { bindTouchKeyboard } from "./touchKeyboardBridge";
@@ -291,6 +291,35 @@ test("a link opens and navigates only this account's browser on the login's Mach
     now: 2,
   });
   assertEquals(linkTarget(starting, "hawk"), undefined);
+
+  // Unpinned links (e.g. grok.com/?_s=usage) respect Machine choice and never
+  // hijack another device's attached browser before takeover.
+  const choosing: BrowserRead = {
+    machine_id: null,
+    state: null,
+    placements: [],
+    admission: null,
+    choose_machine: true,
+    capable_machines: [{ machine_id: "ovh" }],
+  };
+  assertEquals(linkEntry(choosing), undefined);
+  assertEquals(linkEntry({ ...onOvh, state: { ...onOvh.state!, state: "hibernated" } }), "open");
+  assertEquals(linkEntry(onOvh), "attach");
+  const otherAttachedRead: BrowserRead = {
+    ...onOvh,
+    state: { ...onOvh.state!, state: "attached" },
+  };
+  assertEquals(linkEntry(otherAttachedRead), undefined);
+  const otherAttached = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "read",
+    read: otherAttachedRead,
+    now: 1,
+  });
+  assertEquals(linkTarget(otherAttached), undefined);
+  const takenOver = reduceBrowser(otherAttached, { type: "attach", takeover: true });
+  assertEquals(linkTarget(takenOver), shownTarget(takenOver));
+  assertEquals(linkTarget(shownOnOvh), shownTarget(shownOnOvh));
+  assertEquals(linkTarget(starting), undefined);
 
   // The calls: a tab open pinned to hawk, then a navigation of exactly that
   // instance. No route names a login, and nothing reads a code back.

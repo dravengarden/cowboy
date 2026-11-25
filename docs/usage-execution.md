@@ -63,7 +63,10 @@ any 401, so its collector never starts the CLI for such a request: it reads
 the current token, reports authentication required when it has (nearly)
 expired or xAI rejects it, and otherwise reads billing
 (`cli-chat-proxy.grok.com/v1/billing?format=credits`, projected exactly as the
-pinned CLI's `_x.ai/billing`), plan and resets directly. No
+pinned CLI's `_x.ai/billing`) and plan tier (`cli-chat-proxy.grok.com/v1/settings`)
+directly. `grok.com` web reset RPCs sit behind Cloudflare's browser challenge,
+so usage polls do not request them and Grok usage cards instead offer opening
+`https://grok.com/?_s=usage` in the account's Machine browser. No
 Machine speaking protocol 50 was released before this, so no other capability
 negotiation is needed. An entered DeepSeek key is never refreshed.
 
@@ -324,11 +327,11 @@ a timeout within the collector's deadline):
 | Anthropic | `claude auth status`, `get_usage` control request | up to 3: `/api/oauth/usage`, `/api/oauth/profile`, prepaid credits |
 | OpenAI | Codex app-server `account/read` (a token refresh only after the backend reports it expired), `account/rateLimits/read`, `account/usage/read` | none |
 | DeepSeek | none | one local gateway `/provider-info` request per lane (2); the gateway owns its upstream balance request |
-| xAI | Grok `_x.ai/billing` | up to 2: `/rest/subscriptions`, `GetRemainingResets` |
+| xAI | Grok `_x.ai/billing` (or direct `/v1/billing?format=credits`) | up to 1: `/v1/settings` |
 
 With the defaults, a Provider therefore receives at most two collector
-invocations per two minutes, so at most 6 direct Anthropic and 4 direct xAI
-requests in that window, plus the native CLI's own requests. Direct enrichment
+invocations per two minutes, so at most 6 direct Anthropic and 2 direct xAI
+enrichment requests in that window, plus the native CLI's own requests. Direct enrichment
 failures (including HTTP 429) are discarded without retry; they do not trigger
 Provider backoff, and the next attempt still waits for the account interval.
 `Retry-After` is not read by the current collectors, so the configured pacing

@@ -3,7 +3,7 @@ import { assertEquals } from "../../tools/test-assert.ts";
 import type { SessionMeta } from "./protocol";
 import { applyUsageHostPlugins, type UsageSnapshot, usageLimits } from "./usageLimits";
 import type { SubscriptionSnapshot } from "./subscriptionAccounts";
-import { displayPlan, orderUsageAccounts, registeredUsageAccounts, sessionAccountQuota, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageResetUnavailableMessage } from "./usageAccounts";
+import { displayPlan, orderUsageAccounts, registeredUsageAccounts, sessionAccountQuota, usageCardBrowserManageLink, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageResetUnavailableMessage } from "./usageAccounts";
 import { loadProviderCatalog, resetProviderCatalog } from "./providerCatalogRegistry";
 import { providerUiManifestFixture } from "./providerUiContract.fixture";
 
@@ -353,6 +353,18 @@ test("retired-default providers keep product order, host labels, and renewal sta
   assertEquals(grok.subtitle, "xAI · Default");
   assertEquals(grok.statusLabel, "SIGN IN AGAIN");
   assertEquals(grok.emptyMessage, authExpired.message);
+  assertEquals(usageCardManageUrl(grok), "https://grok.com/?_s=usage");
+  assertEquals(usageCardBrowserManageLink(grok), {
+    url: "https://grok.com/?_s=usage",
+    label: "Usage & resets",
+  });
+  // Cards whose resets are spent natively by Cowboy do not add a browser reset shortcut.
+  const claudeSupported = {
+    ...cards.find((c) => c.id === "lark")!,
+    native: { account_id: "lark", provider_id: "claude-code", refreshing: false, resets_supported: true },
+  };
+  assertEquals(usageCardBrowserManageLink(claudeSupported), undefined);
+  assertEquals(usageCardBrowserManageLink(cards.find((c) => c.id === "pika")!), undefined);
   // Explicit user order overrides the product default.
   assertEquals(
     orderUsageAccounts(cards, ["husky", "lark", "pika"]).map((c) => c.id),
