@@ -70,6 +70,7 @@ import {
 } from "./localFirstDelivery.ts";
 import {
   type DraftActivation,
+  type QueuedSendArgs,
   draftActivationSourceId,
   deliveryConfirmations,
   emptyQueueValue,
@@ -3518,9 +3519,9 @@ const qMut = {
   frontQueue: (v: QValue, a: { row: QueuedMessage }): QValue => queueMutators.frontQueue(v, a),
   activateDraft: (v: QValue, a: DraftActivation<QueuedMessage>): QValue =>
     queueMutators.activateDraft(v, a),
-  sendQueued: (v: QValue, a: { id: string; row: QueuedMessage }): QValue =>
+  sendQueued: (v: QValue, a: QueuedSendArgs<QueuedMessage>): QValue =>
     queueMutators.sendQueued(v, a),
-  forceQueued: (v: QValue, a: { id: string; row: QueuedMessage }): QValue =>
+  forceQueued: (v: QValue, a: QueuedSendArgs<QueuedMessage>): QValue =>
     queueMutators.forceQueued(v, a),
   returnQueuedToDraft: (v: QValue, a: { id: string; row: QueuedMessage }): QValue =>
     queueMutators.returnQueuedToDraft(v, a),
@@ -3772,7 +3773,7 @@ function retireEchoedRecoveryDrafts(sessionId: string, events: readonly Envelope
 }
 
 function commandForQueueMutation(sessionId: string, m: { name: string; id: string; args: unknown }): Inbound | null {
-  const args = m.args as { id?: string; row?: QueuedMessage };
+  const args = m.args as { id?: string; row?: QueuedMessage; issuedAtMs?: number };
   if (m.name === "addDraft" && args.row !== undefined) {
     return {
       type: "add_draft",
@@ -3854,7 +3855,7 @@ function commandForQueueMutation(sessionId: string, m: { name: string; id: strin
     };
   }
   if (isQueuedSend(m.name) && args.id !== undefined) {
-    return { type: m.name === "sendQueued" ? "request_send_queued" : "force_push_queued", session_id: sessionId, id: args.id, cmid: m.id };
+    return { type: m.name === "sendQueued" ? "request_send_queued" : "force_push_queued", session_id: sessionId, id: args.id, cmid: m.id, ...(typeof args.issuedAtMs === "number" ? { issued_ms: args.issuedAtMs } : {}) };
   }
   if (m.name === "returnQueuedToDraft" && args.id !== undefined) {
     return { type: "queued_to_draft", session_id: sessionId, id: args.id };
@@ -5252,7 +5253,7 @@ export async function requestSendQueued(sessionId: string, id: string): Promise<
   try {
     await mutateQueueDurably(sessionId,
       "sendQueued",
-      { id, row: presented },
+      { id, row: presented, issuedAtMs: Date.now() } satisfies QueuedSendArgs<QueuedMessage>,
       opId,
     );
   } catch (error) {

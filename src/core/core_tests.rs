@@ -852,7 +852,7 @@ async fn a_retried_explicit_send_waits_for_the_edit_of_its_row() {
         .iter()
         .map(|row| row.id.clone())
         .collect();
-    hub.set_explicit_wait("edit-retry", true);
+    assert!(hub.hold_queued("edit-retry", &ids[0], &person, None, "r"));
     hub.set_queue_editing("edit-retry", Some(ids[0].clone()));
     hub.retry_explicit_wait("edit-retry");
     assert!(rx.try_recv().is_err(), "the edited head stays queued");
@@ -884,13 +884,20 @@ async fn explicit_intent_does_not_pass_to_a_reordered_head() {
         .iter()
         .map(|row| row.id.clone())
         .collect();
-    hub.set_explicit_wait("bound", true);
+    assert!(hub.hold_queued("bound", &ids[0], &person, None, "r"));
     hub.reorder_queue("bound", &[ids[1].clone(), ids[0].clone()]);
     hub.retry_explicit_wait("bound");
     assert!(rx.try_recv().is_err(), "the reordered head stays paused");
     assert!(!hub.explicit_wait("bound"), "the intent ended with its row");
+    assert!(
+        hub.inner.sessions.lock()["bound"]
+            .queue
+            .iter()
+            .all(|row| row.explicit.is_none()),
+        "no row keeps it"
+    );
     // Bound to the head it was recorded for, the retry still sends it.
-    hub.set_explicit_wait("bound", true);
+    assert!(hub.hold_queued("bound", &ids[1], &person, None, "r"));
     hub.retry_explicit_wait("bound");
     assert_eq!(rx.try_recv().expect("the bound head is sent").text, "other");
 }
@@ -913,7 +920,7 @@ async fn a_held_send_binds_its_intent_to_the_requested_row() {
         .iter()
         .map(|row| row.id.clone())
         .collect();
-    assert!(hub.hold_queued("hold", &ids[1], &person, None));
+    assert!(hub.hold_queued("hold", &ids[1], &person, None, "r"));
     assert!(hub.explicit_wait("hold"));
     assert!(rx.try_recv().is_err(), "a held send dispatches nothing");
     // Another terminal moves the first row back ahead before the retry.
@@ -984,17 +991,40 @@ async fn a_replayed_held_send_is_recognized_while_waiting_and_after_it_ends() {
     );
     let id = hub.inner.sessions.lock()["replay"].queue[0].id.clone();
     let key = format!("{}replay", settings_keys::SESSION_RESOURCE_WAIT_PREFIX);
-    hub.edit_resource_wait("replay", |_| {
-        Some(serde_json::json!({"reason": "r", "since_ms": 1}))
-    });
-    assert!(hub.hold_queued("replay", &id, &person, Some("send-1")));
-    hub.persist_explicit_wait("replay");
-    assert_eq!(hub.setting(&key).unwrap()["cmid"], "send-1");
+    assert!(hub.hold_queued("replay", &id, &person, Some("send-1"), "r"));
+    assert_eq!(hub.setting(&key).unwrap()["reason"], "r");
+    // The command rides on the row, in the same queue write as its position.
+    assert_eq!(
+        hub.inner.sessions.lock()["replay"].queue[0].explicit,
+        Some(crate::core::ExplicitSend {
+            command: Some("send-1".into())
+        })
+    );
     assert_eq!(hub.held_send_replay("replay", "send-1"), Some(true));
     assert_eq!(hub.held_send_replay("replay", "other"), None);
     hub.retry_explicit_wait("replay");
     rx.try_recv().expect("maintenance sends the held row");
     assert_eq!(hub.held_send_replay("replay", "send-1"), Some(false));
+}
+
+fn queue_ids(hub: &Hub, session: &str) -> Vec<String> {
+    hub.inner.sessions.lock()[session]
+        .queue
+        .iter()
+        .map(|row| row.id.clone())
+        .collect()
+}
+
+fn held_receipts(hub: &Hub, session: &str) -> Vec<String> {
+    hub.setting(&format!(
+        "{}{session}",
+        settings_keys::SESSION_HELD_SENDS_PREFIX
+    ))
+    .and_then(|value| value.as_array().cloned())
+    .unwrap_or_default()
+    .iter()
+    .filter_map(|entry| entry["cmid"].as_str().map(str::to_owned))
+    .collect()
 }
 
 // A held send refused transiently after its retry popped it is requeued with
@@ -1011,66 +1041,204 @@ async fn a_held_send_keeps_its_command_through_a_requeue_and_ends_on_reorder() {
     for (text, cmid) in [("a", "c-a"), ("b", "c-b")] {
         hub.submit("keep", text.into(), vec![], Some(cmid.into()), &person);
     }
-    let ids: Vec<String> = hub.inner.sessions.lock()["keep"]
-        .queue
-        .iter()
-        .map(|row| row.id.clone())
-        .collect();
-    hub.edit_resource_wait("keep", |_| {
-        Some(serde_json::json!({"reason": "r", "since_ms": 1}))
-    });
-    assert!(hub.hold_queued("keep", &ids[0], &person, Some("send-a")));
+    let ids = queue_ids(&hub, "keep");
+    assert!(hub.hold_queued("keep", &ids[0], &person, Some("send-a"), "r"));
     // An ordinary drain (a released edit, an unpause) leaves the held row.
     hub.set_paused("keep", false);
     assert!(rx.try_recv().is_err(), "a held row waits for its retry");
     hub.retry_explicit_wait("keep");
     let req = rx.try_recv().expect("the held row is retried");
-    let prompt = req.cmid.clone();
-    // The account refused it after the pop: it returns with its intent, but
-    // never to another row.
-    hub.retain_explicit_intent("keep", Some("another-prompt"));
-    assert!(!hub.explicit_wait("keep"));
-    hub.requeue_prompt(
+    assert!(req.explicit);
+    assert_eq!(hub.held_send_replay("keep", "send-a"), Some(false));
+    // The account refused it after the pop: it returns with its intent and
+    // command in one queue write.
+    hub.requeue_dispatch(
         "keep",
         req.text,
         req.content,
         req.cmid,
         req.origin,
         req.initiator,
+        true,
     );
-    hub.retain_explicit_intent("keep", prompt.as_deref());
     assert_eq!(hub.held_send_replay("keep", "send-a"), Some(true));
-    assert!(hub.explicit_intent_pending("keep"));
+    assert!(hub.explicit_wait("keep"));
+    assert!(held_receipts(&hub, "keep").is_empty());
     hub.set_paused("keep", true);
     // Moving it off the head ends that intent for good.
-    let mut order: Vec<String> = hub.inner.sessions.lock()["keep"]
-        .queue
-        .iter()
-        .map(|row| row.id.clone())
-        .collect();
+    let mut order = queue_ids(&hub, "keep");
     order.reverse();
     hub.reorder_queue("keep", &order);
     assert!(!hub.explicit_wait("keep"));
-    assert_eq!(hub.held_send_replay("keep", "send-a"), Some(false));
-    assert_eq!(
-        hub.setting(&format!("{}keep", settings_keys::SESSION_HELD_SENDS_PREFIX)),
-        Some(serde_json::json!(["send-a"]))
+    assert!(
+        hub.inner.sessions.lock()["keep"]
+            .queue
+            .iter()
+            .all(|row| row.explicit.is_none())
     );
+    assert_eq!(hub.held_send_replay("keep", "send-a"), Some(false));
+    assert_eq!(held_receipts(&hub, "keep"), vec!["send-a"]);
     // A live send of another row displaces a held one.
-    let rows: Vec<String> = hub.inner.sessions.lock()["keep"]
-        .queue
-        .iter()
-        .map(|row| row.id.clone())
-        .collect();
-    assert!(hub.hold_queued("keep", &rows[0], &person, Some("send-c")));
+    let rows = queue_ids(&hub, "keep");
+    assert!(hub.hold_queued("keep", &rows[0], &person, Some("send-c"), "r"));
     assert!(hub.promote_queued("keep", &rows[1], &person));
     assert!(!hub.explicit_wait("keep"));
+    assert_eq!(hub.held_send_replay("keep", "send-c"), Some(false));
     // Removing a held row ends its intent too.
-    let head = hub.inner.sessions.lock()["keep"].queue[0].id.clone();
-    assert!(hub.hold_queued("keep", &head, &person, Some("send-b")));
+    let head = queue_ids(&hub, "keep")[0].clone();
+    assert!(hub.hold_queued("keep", &head, &person, Some("send-b"), "r"));
     assert!(hub.remove_queued("keep", &head));
     assert!(!hub.explicit_wait("keep"));
     assert_eq!(hub.held_send_replay("keep", "send-b"), Some(false));
+    // The receipts survive a Controller restart.
+    let restored = hub_with_session("other");
+    restored.load_settings(
+        hub.settings_snapshot()
+            .into_iter()
+            .filter(|(key, _)| key.starts_with(settings_keys::SESSION_HELD_SENDS_PREFIX))
+            .collect(),
+    );
+    let mut queue = Vec::new();
+    let intent =
+        super::hub_queue::ExplicitIntent::restored(&restored, "keep", &mut queue, &mut false);
+    let mut session = restored.inner.sessions.lock();
+    let s = session.get_mut("other").unwrap();
+    s.explicit = intent;
+    drop(session);
+    assert_eq!(restored.held_send_replay("other", "send-b"), Some(false));
+}
+
+// An older explicit dispatch refused after a newer Send now was held must not
+// take the head back: the newer held row stays first with its command, and
+// the refused prompt returns right behind it without an intent.
+#[tokio::test]
+async fn an_older_refusal_never_supersedes_a_newer_held_send() {
+    let hub = hub_with_session("newer");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    hub.set_dispatch_tx(tx);
+    hub.set_status("newer", Status::Running, None);
+    hub.set_paused("newer", true);
+    let person = crate::prompt_origin::RequestCaller::Person;
+    for (text, cmid) in [("a", "c-a"), ("b", "c-b")] {
+        hub.submit("newer", text.into(), vec![], Some(cmid.into()), &person);
+    }
+    let ids = queue_ids(&hub, "newer");
+    assert!(hub.hold_queued("newer", &ids[0], &person, Some("send-a"), "r"));
+    hub.retry_explicit_wait("newer");
+    let a = rx.try_recv().expect("A is retried");
+    // While A awaits admission, another terminal holds B.
+    assert!(hub.hold_queued("newer", &ids[1], &person, Some("send-b"), "r"));
+    hub.requeue_dispatch(
+        "newer",
+        a.text,
+        a.content,
+        a.cmid,
+        a.origin,
+        a.initiator,
+        true,
+    );
+    let sessions = hub.inner.sessions.lock();
+    let s = &sessions["newer"];
+    assert_eq!(s.queue[0].id, ids[1]);
+    assert_eq!(
+        s.queue[0].explicit,
+        Some(crate::core::ExplicitSend {
+            command: Some("send-b".into())
+        })
+    );
+    assert_eq!(s.queue[1].text, "a");
+    assert_eq!(s.queue[1].explicit, None);
+    drop(sessions);
+    assert_eq!(hub.held_send_replay("newer", "send-b"), Some(true));
+    assert_eq!(hub.held_send_replay("newer", "send-a"), Some(false));
+}
+
+// A local refusal of a popped held row (here the dispatcher's channel is
+// gone) gives its intent and command back, and a completed dispatch of another
+// prompt cannot clear the wait a held row needs.
+#[tokio::test]
+async fn a_local_requeue_restores_the_held_intent_and_completion_keeps_its_wait() {
+    let hub = hub_with_session("local");
+    let (tx, rx) = tokio::sync::mpsc::channel(1);
+    hub.set_dispatch_tx(tx);
+    drop(rx);
+    hub.set_status("local", Status::Running, None);
+    hub.set_paused("local", true);
+    let person = crate::prompt_origin::RequestCaller::Person;
+    hub.submit("local", "a".into(), vec![], Some("c-a".into()), &person);
+    let id = queue_ids(&hub, "local")[0].clone();
+    assert!(hub.hold_queued("local", &id, &person, Some("send-a"), "r"));
+    hub.retry_explicit_wait("local");
+    assert_eq!(queue_texts(&hub, "local"), vec!["a"]);
+    assert_eq!(hub.held_send_replay("local", "send-a"), Some(true));
+    let wait = format!("{}local", settings_keys::SESSION_RESOURCE_WAIT_PREFIX);
+    assert!(!hub.clear_resource_wait_unless_held("local"));
+    assert!(hub.setting(&wait).is_some());
+    // Once nothing is held, completion clears it.
+    hub.end_explicit_intent("local");
+    assert_eq!(hub.held_send_replay("local", "send-a"), Some(false));
+    assert!(hub.clear_resource_wait_unless_held("local"));
+    assert!(hub.setting(&wait).is_none());
+}
+
+// Held-send receipts are kept for the replay window and no longer: an older
+// one is dropped on restore, a legacy bare id is kept a full window.
+#[test]
+fn held_send_receipts_expire_after_the_replay_window() {
+    let hub = hub_with_session("aged");
+    let now = chrono::Utc::now().timestamp_millis();
+    hub.load_settings(vec![(
+        format!("{}aged", settings_keys::SESSION_HELD_SENDS_PREFIX),
+        serde_json::json!([
+            {"cmid": "old", "at_ms": now - crate::core::HELD_SEND_REPLAY_HORIZON_MS - 1},
+            {"cmid": "recent", "at_ms": now - 1_000},
+            "legacy",
+        ]),
+    )]);
+    let intent =
+        super::hub_queue::ExplicitIntent::restored(&hub, "aged", &mut Vec::new(), &mut false);
+    hub.inner.sessions.lock().get_mut("aged").unwrap().explicit = intent;
+    assert_eq!(hub.held_send_replay("aged", "old"), None);
+    assert_eq!(hub.held_send_replay("aged", "recent"), Some(false));
+    assert_eq!(hub.held_send_replay("aged", "legacy"), Some(false));
+}
+
+// A held row whose wait was lost (written as two records before) gets its
+// intent back from a legacy wait binding on restore.
+#[test]
+fn a_legacy_wait_binding_moves_onto_its_head_row() {
+    let hub = hub_with_session("legacy");
+    hub.load_settings(vec![(
+        format!("{}legacy", settings_keys::SESSION_RESOURCE_WAIT_PREFIX),
+        serde_json::json!({"reason": "r", "since_ms": 1, "explicit": true, "row": "q7", "cmid": "send-7"}),
+    )]);
+    let row = |id: &str| crate::core::QueuedMessage {
+        id: id.into(),
+        text: "t".into(),
+        content: vec![],
+        cmid: None,
+        schedule: None,
+        origin: None,
+        initiator: None,
+        explicit: None,
+    };
+    let mut queue = vec![row("q8"), row("q7")];
+    let mut migrated = false;
+    super::hub_queue::ExplicitIntent::restored(&hub, "legacy", &mut queue, &mut migrated);
+    assert!(
+        queue.iter().all(|row| row.explicit.is_none()),
+        "not the head"
+    );
+    assert!(!migrated);
+    let mut queue = vec![row("q7"), row("q8")];
+    super::hub_queue::ExplicitIntent::restored(&hub, "legacy", &mut queue, &mut migrated);
+    assert!(migrated);
+    assert_eq!(
+        queue[0].explicit,
+        Some(crate::core::ExplicitSend {
+            command: Some("send-7".into())
+        })
+    );
 }
 
 // Maintenance reads the intent before it retries. If another terminal sent the
@@ -1388,7 +1556,14 @@ async fn dispatch_marks_explicit_sends_and_consumes_a_waiting_intent() {
     // Maintenance's ordinary retry respects Pause and is not explicit.
     hub.retry_resource_wait("explicit");
     assert!(rx.try_recv().is_err());
-    hub.set_explicit_wait("explicit", true);
+    let id = hub.inner.sessions.lock()["explicit"].queue[0].id.clone();
+    assert!(hub.hold_queued(
+        "explicit",
+        &id,
+        &crate::prompt_origin::RequestCaller::Person,
+        None,
+        "r"
+    ));
     hub.drain_now("explicit", &crate::prompt_origin::RequestCaller::Person);
     let request = rx.try_recv().unwrap();
     assert!(request.explicit);

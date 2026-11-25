@@ -32,6 +32,7 @@ impl Hub {
                 schedule: None,
                 origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
                 initiator: None,
+                explicit: None,
             };
             drafts.push(draft.clone());
             added_drafts.push(draft);
@@ -544,6 +545,7 @@ impl Hub {
                     schedule: None,
                     origin: None,
                     initiator: None,
+                    explicit: None,
                 });
                 let queue = s.queue.clone();
                 let drafts = s.drafts.clone();
@@ -626,6 +628,7 @@ impl Hub {
                 schedule: None,
                 origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
                 initiator: None,
+                explicit: None,
             });
             let mut claims = self.inner.notice_claims.lock();
             let key = (session_id.to_owned(), notice_cid.clone());

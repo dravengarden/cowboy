@@ -90,6 +90,7 @@ impl Hub {
                     schedule: None,
                     origin: content_origin,
                     initiator: Some(initiator),
+                    explicit: None,
                 };
                 if front {
                     s.queue.insert(0, message);
@@ -153,15 +154,15 @@ impl Hub {
             {
                 return false;
             }
-            let head = s.queue.remove(0);
+            let mut head = s.queue.remove(0);
             s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);
             let trigger = crate::prompt_origin::DeliveryOrigin::cowboy("managed_call");
             let dispatch_origin =
                 crate::prompt_origin::compute_dispatch_origin(head.origin.as_ref(), Some(&trigger));
-            let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(head.cmid);
-            s.dispatch_explicit_intent(&head.id, &dispatch_cmid);
+            let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(head.cmid.take());
+            s.take_dispatch_intent(&mut head, &dispatch_cmid);
             Self::note_dispatched(s, Some(&dispatch_cmid));
             DispatchReq {
                 ownership: DispatchOwnership::new(self, session_id, s.in_flight_epoch),

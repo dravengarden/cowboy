@@ -440,3 +440,88 @@ test("an edit another tab retired while its bytes loaded is not written back", a
   assertEquals([...storage.records.keys()].filter((key) => key.includes('"retired"')), []);
   assertEquals(second.claimOrphanedPendingEdits("retired", new Set(), new Set()), []);
 });
+
+const slots = (database: ReturnType<typeof fakeDatabase>, session: string): string[] =>
+  Object.keys(
+    (database.records.get(session) as { edits?: Record<string, unknown> } | undefined)?.edits ?? {},
+  ).sort();
+
+test("tabs that each know only their own edit never erase the other's bytes", async () => {
+  const storage = fakeStorage();
+  const database = fakeDatabase();
+  const first = await loadPage(storage);
+  first.attachPendingEditDatabase(database as never);
+  const second = await loadPage(storage);
+  second.attachPendingEditDatabase(database as never);
+  await settle();
+  // Each tab starts its edit after the other loaded, so neither sees it.
+  second.setPendingEdit({
+    ...edit("tabs", "queued ![b](cowboy-att:b1)", [image("b1")]),
+    kind: "queued",
+    id: "row-2",
+  });
+  second.flushPendingEdits();
+  await settle();
+  first.setPendingEdit(edit("tabs"));
+  first.flushPendingEdits();
+  await settle();
+  assertEquals(slots(database, "tabs"), ["draft:row-1", "queued:row-2"]);
+  // Ending its own edit takes out only that slot.
+  first.clearPendingEdit("tabs", "draft", "row-1");
+  await settle();
+  assertEquals(slots(database, "tabs"), ["queued:row-2"]);
+  const third = await loadPage(storage);
+  third.attachPendingEditDatabase(database as never);
+  await settle();
+  assertEquals(
+    third.getPendingEdit("tabs", "queued", "row-2")?.attachments.map((a) => a.id),
+    ["b1"],
+  );
+});
+
+test("a stale copy of another tab's edit never overwrites its newer bytes", async () => {
+  const storage = fakeStorage();
+  const database = fakeDatabase();
+  const first = await loadPage(storage);
+  first.attachPendingEditDatabase(database as never);
+  await settle();
+  first.setPendingEdit(edit("stale"));
+  first.flushPendingEdits();
+  await settle();
+  const second = await loadPage(storage);
+  second.attachPendingEditDatabase(database as never);
+  await settle();
+  // The first tab replaces the image; the second still holds the old one.
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  first.setPendingEdit(edit("stale", "new ![n](cowboy-att:n1)", [image("n1")]));
+  first.flushPendingEdits();
+  await settle();
+  // A write of the second tab for another edit of the session.
+  second.setPendingEdit({
+    ...edit("stale", "other ![o](cowboy-att:o1)", [image("o1")]),
+    id: "row-9",
+  });
+  second.flushPendingEdits();
+  await settle();
+  const stored = database.records.get("stale") as {
+    edits: Record<string, { id: string }[]>;
+  };
+  assertEquals(stored.edits["draft:row-1"]?.map((a) => a.id), ["n1"]);
+  assertEquals(stored.edits["draft:row-9"]?.map((a) => a.id), ["o1"]);
+});
+
+test("bytes no tab mirrors any more are swept on the next write", async () => {
+  const storage = fakeStorage();
+  const database = fakeDatabase();
+  database.records.set("sweep", {
+    edits: { "draft:gone": [image("g1")] },
+    savedAt: 1,
+  });
+  const first = await loadPage(storage);
+  first.attachPendingEditDatabase(database as never);
+  await settle();
+  first.setPendingEdit(edit("sweep"));
+  first.flushPendingEdits();
+  await settle();
+  assertEquals(slots(database, "sweep"), ["draft:row-1"]);
+});

@@ -392,6 +392,21 @@ pub struct QueuedMessage {
     /// `None` on parked drafts and legacy rows persisted before C-auth.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initiator: Option<crate::delivery_origin::DeliveryOrigin>,
+    /// An explicit send a transient wait keeps at the queue head: maintenance
+    /// delivers it as that send (through Pause, reviving a crashed session)
+    /// once the wait clears. Persisted with the row, so the queue order and
+    /// the intent always commit together. Only the head row carries one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub explicit: Option<ExplicitSend>,
+}
+
+/// The explicit send intent a queue row carries (see [`QueuedMessage::explicit`]).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExplicitSend {
+    /// Client command id of the held Send now that recorded it. A client that
+    /// lost the "waiting" reply replays that command; it must find the wait.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command: Option<String>,
 }
 
 /// A draft's future auto-send instruction. Server-controlled (fires even with

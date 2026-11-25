@@ -361,24 +361,6 @@ pub const GENERATION_RETENTION_DELAY: std::time::Duration = std::time::Duration:
 /// declared `disk.low_watermark` between scheduled passes.
 pub const URGENT_RETENTION_POLL: std::time::Duration = std::time::Duration::from_secs(60);
 
-/// Reboot convergence: an explicit send returned only because a Machine or
-/// resource was not ready yet must be delivered once it is, even when the
-/// queue is paused or the session crashed while its host rebooted.
-/// `prompt` is the cmid the refused prompt was requeued under: the intent
-/// returns only to that row.
-pub fn retain_explicit_intent(hub: &Hub, session_id: &str, error: &str, prompt: Option<&str>) {
-    if error.starts_with(session_maintenance::WAIT_PREFIX) {
-        hub.retain_explicit_intent(session_id, prompt);
-    } else if is_transient_machine_disconnect(error) {
-        session_maintenance::wait(
-            hub,
-            session_id,
-            session_maintenance::MACHINE_CONNECTION_WAIT,
-        );
-        hub.retain_explicit_intent(session_id, prompt);
-    }
-}
-
 #[cfg(test)]
 mod dispatcher_failure_tests;
 

@@ -182,6 +182,7 @@ impl Hub {
                     schedule: None,
                     origin,
                     initiator: None,
+                    explicit: None,
                 });
             }
         }
@@ -272,6 +273,7 @@ impl Hub {
                         schedule,
                         origin: Some(author),
                         initiator: None,
+                        explicit: None,
                     });
                     did
                 }
@@ -436,6 +438,7 @@ impl Hub {
                     schedule: None,
                     origin: m.origin,
                     initiator: Some(trigger),
+                    explicit: None,
                 };
                 if front {
                     s.queue.insert(0, msg);
@@ -808,6 +811,7 @@ impl Hub {
                 schedule: None,
                 origin: original.origin.clone(),
                 initiator: Some(trigger),
+                explicit: None,
             };
             if !self.has_store_writer() {
                 s.drafts.remove(pos);
@@ -1156,6 +1160,7 @@ impl Hub {
                 schedule: None,
                 origin: m.origin,
                 initiator: Some(trigger),
+                explicit: None,
             };
             if front {
                 s.queue.insert(0, row);

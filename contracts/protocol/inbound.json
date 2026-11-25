@@ -215,7 +215,9 @@
     "value": {
       "type": "request_send_queued",
       "session_id": "s",
-      "id": "q"
+      "id": "q",
+      "cmid": "c",
+      "issued_ms": 1
     }
   },
   {

@@ -75,15 +75,11 @@ pub async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
                 ownership: _ownership,
                 ..
             } = req;
-            let (session, prompt) = (session_id.clone(), cmid.clone());
-            retain_failed_dispatch(
-                &state.hub, session_id, text, content, cmid, origin, initiator, &reason,
-            );
             // A paused send refused by a limit the gate just refreshed keeps
             // its intent, like any later transient refusal.
-            if explicit {
-                retain_explicit_intent(&state.hub, &session, &reason, prompt.as_deref());
-            }
+            retain_failed_dispatch(
+                &state.hub, session_id, text, content, cmid, origin, initiator, &reason, explicit,
+            );
         }
     }
 }
@@ -164,12 +160,9 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
     } = req;
     let retain =
         |sid: String, text, content, cmid: Option<String>, origin, initiator, error: &str| {
-            let session = sid.clone();
-            let prompt = cmid.clone();
-            retain_failed_dispatch(hub, sid, text, content, cmid, origin, initiator, error);
-            if explicit {
-                retain_explicit_intent(hub, &session, error, prompt.as_deref());
-            }
+            retain_failed_dispatch(
+                hub, sid, text, content, cmid, origin, initiator, error, explicit,
+            );
         };
     // A user send retries a preparation that failed permanently; the
     // preflight below then holds the prompt until the target is ready.
@@ -201,8 +194,10 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
             return;
         }
         PreflightOutcome::WorkspaceWait(wait) => {
+            // Preparation drains the queue itself; an explicit intent would
+            // re-drain it on every maintenance tick meanwhile.
             retain_failed_dispatch(
-                hub, session_id, text, content, cmid, origin, initiator, &wait,
+                hub, session_id, text, content, cmid, origin, initiator, &wait, false,
             );
             return;
         }
@@ -432,10 +427,9 @@ async fn finish_dispatch_outcome(
             // Successful sends synchronously enter the runtime pending set.
             // Failed sends retain dispatch ownership until requeue completes.
             drop(ownership);
-            // A Send now held meanwhile for another row keeps its wait.
-            if !hub.explicit_intent_pending(&session_id) {
-                session_maintenance::clear_wait(hub, &session_id);
-            }
+            // A Send now held meanwhile for another row keeps its wait;
+            // checked under the section that installs a hold.
+            hub.clear_resource_wait_unless_held(&session_id);
             if let Some(t) = title {
                 hub.auto_title(&session_id, t);
             }
@@ -628,47 +622,60 @@ fn finish_deferred_dispatch(
     explicit: bool,
 ) {
     match outcome {
+        // Both return the prompt for a condition that clears by itself; an
+        // explicit one keeps its intent on its row.
         SyncSendOutcome::RequeueByFence => {
-            hub.requeue_prompt(&session_id, text, content, cmid, origin, initiator);
+            hub.requeue_dispatch(
+                &session_id,
+                text,
+                content,
+                cmid,
+                origin,
+                initiator,
+                explicit,
+            );
         }
         SyncSendOutcome::WakeForAgent(Ok(())) => {
-            hub.requeue_prompt(&session_id, text, content, cmid, origin, initiator);
+            hub.requeue_dispatch(
+                &session_id,
+                text,
+                content,
+                cmid,
+                origin,
+                initiator,
+                explicit,
+            );
             // The launch may already have reported Running.
             hub.context_state_changed(&session_id);
         }
         SyncSendOutcome::WakeForAgent(Err(error)) => {
-            let (session, prompt) = (session_id.clone(), cmid.clone());
             retain_failed_dispatch(
-                hub, session_id, text, content, cmid, origin, initiator, &error,
+                hub, session_id, text, content, cmid, origin, initiator, &error, explicit,
             );
-            if explicit {
-                retain_explicit_intent(hub, &session, &error, prompt.as_deref());
-            }
         }
         SyncSendOutcome::HandoffRefusal(wait) => {
-            let (session, prompt) = (session_id.clone(), cmid.clone());
             retain_failed_dispatch(
-                hub, session_id, text, content, cmid, origin, initiator, &wait,
+                hub, session_id, text, content, cmid, origin, initiator, &wait, explicit,
             );
-            if explicit {
-                retain_explicit_intent(hub, &session, &wait, prompt.as_deref());
-            }
         }
         SyncSendOutcome::SendError(error) => {
             tracing::warn!(session = %session_id, error = %error, "queued dispatch failed");
-            let (session, prompt) = (session_id.clone(), cmid.clone());
             retain_failed_dispatch(
-                hub, session_id, text, content, cmid, origin, initiator, &error,
+                hub, session_id, text, content, cmid, origin, initiator, &error, explicit,
             );
-            if explicit {
-                retain_explicit_intent(hub, &session, &error, prompt.as_deref());
-            }
         }
         SyncSendOutcome::Ready | SyncSendOutcome::Sent { .. } => {}
     }
 }
 
 /// Restore a prompt that left the durable queue but never reached its runtime.
+///
+/// Reboot convergence: an `explicit` send returned only because a Machine or
+/// resource was not ready yet must be delivered once it is, even when the
+/// queue is paused or the session crashed while its host rebooted. Its wait
+/// is written first, then the row with its intent (and a held Send now's
+/// command) in one queue write, so a crash between them never leaves a
+/// paused row without the retry that would send it.
 #[allow(clippy::too_many_arguments)]
 pub fn retain_failed_dispatch(
     hub: &Hub,
@@ -679,10 +686,19 @@ pub fn retain_failed_dispatch(
     origin: Option<crate::prompt_origin::DeliveryOrigin>,
     initiator: Option<crate::prompt_origin::DeliveryOrigin>,
     error: &str,
+    explicit: bool,
 ) {
-    hub.requeue_prompt(&session_id, text, content, cmid, origin, initiator);
     if let Some(reason) = error.strip_prefix(session_maintenance::WAIT_PREFIX) {
         session_maintenance::wait(hub, &session_id, reason);
+        hub.requeue_dispatch(
+            &session_id,
+            text,
+            content,
+            cmid,
+            origin,
+            initiator,
+            explicit,
+        );
         return;
     }
     // A Controller restart authenticates the Machine WebSocket before the
@@ -694,11 +710,29 @@ pub fn retain_failed_dispatch(
             error = %error,
             "queued dispatch deferred until Machine runtime is ready"
         );
+        if explicit {
+            session_maintenance::wait(
+                hub,
+                &session_id,
+                session_maintenance::MACHINE_CONNECTION_WAIT,
+            );
+        }
+        hub.requeue_dispatch(
+            &session_id,
+            text,
+            content,
+            cmid,
+            origin,
+            initiator,
+            explicit,
+        );
         return;
     }
+    hub.requeue_prompt(&session_id, text, content, cmid, origin, initiator);
     // A refusal that is not a wait ends an earlier retry: the prompt stays
     // queued for explicit intervention instead of failing every two seconds.
-    session_maintenance::clear_wait(hub, &session_id);
+    // A Send now held meanwhile for another row keeps the wait it needs.
+    hub.clear_resource_wait_unless_held(&session_id);
     // Restore-timeout holds already explain the queue and the next step.
     // Prefixing "send failed:" makes a protective refusal look like a
     // transport crash.

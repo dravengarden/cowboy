@@ -571,8 +571,8 @@ export type Inbound =
     cmid?: string;
   }
   | { type: "clear_queue"; session_id: string }
-  | { type: "request_send_queued"; session_id: string; id: string; cmid?: string }
-  | { type: "force_push_queued"; session_id: string; id: string; cmid?: string }
+  | { type: "request_send_queued"; session_id: string; id: string; cmid?: string; issued_ms?: number }
+  | { type: "force_push_queued"; session_id: string; id: string; cmid?: string; issued_ms?: number }
   | { type: "queued_to_draft"; session_id: string; id: string }
   | { type: "set_queue_editing"; session_id: string; id: string | null; token?: string }
   | {

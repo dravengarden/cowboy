@@ -35,8 +35,9 @@ pub const PROVIDER_UPDATE_FAILURE_PREFIX: &str = "provider_update_failure:";
 pub const MACHINE_MAINTENANCE_PREFIX: &str = "machine_maintenance:";
 /// A never-dispatched prompt waiting for resources, resumable after restart.
 pub const SESSION_RESOURCE_WAIT_PREFIX: &str = "session_resource_wait:";
-/// Held Send now command ids whose wait ended (a bounded array), so a client
-/// replaying one after a reconnect sends nothing; the session id follows.
+/// Held Send now command ids whose intent ended, each with when
+/// (`[{"cmid", "at_ms"}]`, kept for the replay window), so a client replaying
+/// one after a reconnect sends nothing; the session id follows.
 pub const SESSION_HELD_SENDS_PREFIX: &str = "session_held_sends:";
 /// Explicit queue pause must survive a Controller restart.
 pub const SESSION_QUEUE_PAUSED_PREFIX: &str = "session_queue_paused:";

@@ -55,7 +55,10 @@ mod hub_peer_notice;
 pub use hub_peer_notice::PromptProgress;
 mod hub_provider_pins;
 mod hub_queue;
-pub use hub_queue::{SteerSource, SteerSourceKind, TARGET_WAIT_REASON};
+pub use hub_queue::{
+    HELD_SEND_REPLAY_HORIZON_MS, SteerSource, SteerSourceKind, TARGET_RETRY_FIELD,
+    TARGET_WAIT_REASON, next_wait, wait_awaits_target,
+};
 mod hub_superagent;
 mod hub_sync;
 mod mobile_review;
@@ -209,10 +212,11 @@ pub use crate::agent_model::{Event, Status};
 // existing callers.
 use crate::agent_model::{LEGACY_AUTO_CONTINUE_PREFIX, SCHED_PREFIX};
 pub use crate::model::{
-    Delivery, DraftSchedule, Envelope, HISTORY_MAX_BYTES, HOT_TAIL, HOT_TAIL_MAX_BYTES,
-    NON_ACTIVITY_SESSION_UPDATES_SQL, ProviderUpdate, ProviderUpdateAvailable, ProviderUpdateOffer,
-    QuestionPageSummary, QueuedMessage, SessionMeta, SessionOrigin, bound_history_page,
-    counts_as_activity, estimated_envelope_bytes, merge_session_order, question_summary_title,
+    Delivery, DraftSchedule, Envelope, ExplicitSend, HISTORY_MAX_BYTES, HOT_TAIL,
+    HOT_TAIL_MAX_BYTES, NON_ACTIVITY_SESSION_UPDATES_SQL, ProviderUpdate, ProviderUpdateAvailable,
+    ProviderUpdateOffer, QuestionPageSummary, QueuedMessage, SessionMeta, SessionOrigin,
+    bound_history_page, counts_as_activity, estimated_envelope_bytes, merge_session_order,
+    question_summary_title,
 };
 #[cfg(test)]
 pub(crate) use crate::model::{HOT_TAIL_TRIM_BATCH, NON_ACTIVITY_SESSION_UPDATES};
@@ -555,16 +559,6 @@ impl Hub {
         ))
         .and_then(|value| value.as_str().map(str::to_owned))
     }
-
-    /// Whether a restored session waits for resources by explicit request.
-    fn restored_explicit_wait(&self, id: &str) -> bool {
-        self.setting(&format!(
-            "{}{id}",
-            settings_keys::SESSION_RESOURCE_WAIT_PREFIX
-        ))
-        .and_then(|value| value.get("explicit").and_then(serde_json::Value::as_bool))
-        .unwrap_or(false)
-    }
 }
 
 /// When a restored session was last active, from its newest durable event.
@@ -676,11 +670,8 @@ struct Session {
     /// A durable interrupt/send admission owns automatic queue dispatch until
     /// its outcome is known. Unknown effects survive restart without replay.
     delivery_hold: Option<String>,
-    /// The queue head is an explicit send returned for a transient resource
-    /// wait. Maintenance redelivers it as that explicit send; any dispatch of
-    /// the head consumes the intent.
-    explicit_wait: bool,
-    /// The row and held command that explicit intent belongs to.
+    /// Held-send receipts and wait flags beside the rows' explicit intents
+    /// (see [`QueuedMessage::explicit`]).
     explicit: hub_queue::ExplicitIntent,
     /// A channel/preflight-owned prompt has not reached its runtime yet.
     dispatch_pending: Option<u64>,
@@ -967,6 +958,10 @@ pub enum Inbound {
         id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cmid: Option<String>,
+        /// When the client issued it (epoch ms). A replay older than the
+        /// held-send receipt window is refused without effect.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        issued_ms: Option<i64>,
     },
     /// "Force push": interrupt the running turn and make this prompt run next.
     ForcePushQueued {
@@ -974,6 +969,10 @@ pub enum Inbound {
         id: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cmid: Option<String>,
+        /// When the client issued it (epoch ms). A replay older than the
+        /// held-send receipt window is refused without effect.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        issued_ms: Option<i64>,
     },
     /// Move a queued prompt back to drafts.
     QueuedToDraft { session_id: String, id: String },
@@ -2208,6 +2207,8 @@ impl Hub {
                     }
                 }
                 let id = meta.id.clone();
+                let explicit =
+                    hub_queue::ExplicitIntent::restored(self, &id, &mut queue, &mut healed);
                 if reconcile_config_preferences(config_options.as_ref(), &mut config_preferences) {
                     config_preferences_dirty.push((id.clone(), config_preferences.clone()));
                 }
@@ -2309,8 +2310,7 @@ impl Hub {
                             }),
                         in_flight_epoch: 0,
                         delivery_hold: self.restored_delivery_hold(&id),
-                        explicit_wait: self.restored_explicit_wait(&id),
-                        explicit: hub_queue::ExplicitIntent::restored(self, &id),
+                        explicit,
                         dispatch_pending: None,
                         dispatched_cmids: VecDeque::new(),
                         dispatched_origins: HashMap::new(),
@@ -3115,7 +3115,6 @@ impl Hub {
                     in_flight: false,
                     in_flight_epoch: 0,
                     delivery_hold: None,
-                    explicit_wait: false,
                     explicit: hub_queue::ExplicitIntent::default(),
                     dispatch_pending: None,
                     dispatched_cmids: VecDeque::new(),

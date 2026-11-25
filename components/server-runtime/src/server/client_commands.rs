@@ -776,6 +776,8 @@ pub fn force_cancel_grace(state: &AppState, session_id: &str) -> std::time::Dura
 
 const HELD_SEND_REPLY: &str =
     "This session cannot send yet. The message stays first in the queue and sends once it can.";
+const SEND_NOW_EXPIRED_REPLY: &str =
+    "This Send now was made too long ago to resend. The message stays in the queue; send it again.";
 
 /// A queued row's Send now. While the session's account parks dispatch (a
 /// rate limit, a block, an unacknowledged effect) or its execution Machine is
@@ -787,13 +789,17 @@ const HELD_SEND_REPLY: &str =
 /// an addressed refusal for `cmid`, so it retires its optimistic send instead
 /// of replaying it after a reconnect. A device that lost that reply replays
 /// the command: it gets the reply again and sends nothing, whether the wait
-/// still holds the row or already ended. Whether the send was held.
+/// still holds the row or already ended. A command issued before the window
+/// those receipts are kept for (`issued_ms`) is refused without effect, so an
+/// evicted receipt never turns a replay into a new send. Whether the send was
+/// held or refused (nothing was sent).
 pub fn request_send_queued(
     state: &Arc<AppState>,
     caller: &crate::prompt_origin::RequestCaller,
     session_id: &str,
     id: &str,
     cmid: Option<&str>,
+    issued_ms: Option<i64>,
 ) -> bool {
     if let Some(cmid) = cmid
         && let Some(waiting) = state.hub.held_send_replay(session_id, cmid)
@@ -810,6 +816,17 @@ pub fn request_send_queued(
         );
         return true;
     }
+    if send_now_expired(issued_ms, chrono::Utc::now().timestamp_millis()) {
+        if let Some(cmid) = cmid {
+            state.hub.command_result(
+                session_id,
+                cmid,
+                CommandOutcome::Rejected,
+                SEND_NOW_EXPIRED_REPLY,
+            );
+        }
+        return true;
+    }
     let held = state.hub.session_info(session_id).and_then(|info| {
         provider_accounts::controls::parked_reason(&state.accounts, &info.meta).or_else(|| {
             (!session_maintenance::execution_target_connected(state, &info.meta))
@@ -820,33 +837,30 @@ pub fn request_send_queued(
         state.hub.request_send_queued(session_id, id, caller);
         return false;
     };
-    // The wait first: once the promoted row is visible, an automatic drain
-    // must already find the session waiting. A request for a row another
-    // terminal removed puts the session's previous wait back unchanged.
-    let previous = state.hub.setting(&format!(
-        "{}{session_id}",
-        crate::core::settings_keys::SESSION_RESOURCE_WAIT_PREFIX
-    ));
-    session_maintenance::wait(&state.hub, session_id, &reason);
-    if !state.hub.hold_queued(session_id, id, caller, cmid) {
-        let reason = previous
-            .as_ref()
-            .and_then(|wait| wait.get("reason"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned);
-        state.hub.set_resource_wait(session_id, reason);
-        state.hub.edit_resource_wait(session_id, |_| previous);
-    } else {
-        state.hub.persist_explicit_wait(session_id);
+    // The wait, the row's position and its intent are installed in one
+    // serialized section: an automatic drain that sees the held row already
+    // finds the session waiting, a completion cannot clear the wait in
+    // between, and a request for a row another terminal removed leaves the
+    // session's previous wait exactly as it was.
+    if state.hub.hold_queued(session_id, id, caller, cmid, &reason)
+        && let Some(cmid) = cmid
+    {
         // Command results reach every socket: the wait reason stays in the
         // session's own state, which only its viewers receive.
-        if let Some(cmid) = cmid {
-            state
-                .hub
-                .command_result(session_id, cmid, CommandOutcome::Rejected, HELD_SEND_REPLY);
-        }
+        state
+            .hub
+            .command_result(session_id, cmid, CommandOutcome::Rejected, HELD_SEND_REPLY);
     }
     true
+}
+
+/// Whether a Send now issued at `issued_ms` is older than the window the
+/// Controller keeps held-send receipts for. A command without a time (from a
+/// client before it was sent) is never refused for its age.
+fn send_now_expired(issued_ms: Option<i64>, now_ms: i64) -> bool {
+    issued_ms.is_some_and(|issued| {
+        now_ms.saturating_sub(issued) > crate::core::HELD_SEND_REPLAY_HORIZON_MS
+    })
 }
 
 /// A queued row's force push: promote it and interrupt the running turn so
@@ -859,6 +873,7 @@ pub fn force_push_queued(
     session_id: &str,
     id: &str,
     cmid: Option<&str>,
+    issued_ms: Option<i64>,
 ) -> Result<(), String> {
     if let Some(refusal) =
         provider_accounts::retirement::session_refusal(&state.accounts, session_id)
@@ -866,7 +881,7 @@ pub fn force_push_queued(
         return Err(refusal.to_owned());
     }
     // Promote to front either way.
-    if request_send_queued(state, caller, session_id, id, cmid) {
+    if request_send_queued(state, caller, session_id, id, cmid, issued_ms) {
         return Ok(());
     }
     if matches!(
@@ -1367,4 +1382,27 @@ pub fn retry_turn_command(
     state.supervisor.prepare_session(session_id).map(|_| {
         state.hub.retry_turn(session_id, caller, resolved_original);
     })
+}
+
+#[cfg(test)]
+mod send_now_expiry_tests {
+    use super::send_now_expired;
+    use crate::core::HELD_SEND_REPLAY_HORIZON_MS;
+
+    #[test]
+    fn only_a_send_now_older_than_the_receipt_window_expires() {
+        let now = 10 * HELD_SEND_REPLAY_HORIZON_MS;
+        assert!(!send_now_expired(None, now));
+        assert!(!send_now_expired(Some(now), now));
+        // A client clock somewhat ahead is not refused.
+        assert!(!send_now_expired(Some(now + 60_000), now));
+        assert!(!send_now_expired(
+            Some(now - HELD_SEND_REPLAY_HORIZON_MS),
+            now
+        ));
+        assert!(send_now_expired(
+            Some(now - HELD_SEND_REPLAY_HORIZON_MS - 1),
+            now
+        ));
+    }
 }

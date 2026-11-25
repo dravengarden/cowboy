@@ -29,6 +29,7 @@ fn a_permanent_refusal_ends_an_earlier_retried_wait() {
         None,
         None,
         &not_ready,
+        false,
     );
     assert!(hub.setting(&key).is_some());
     retain_failed_dispatch(
@@ -40,6 +41,7 @@ fn a_permanent_refusal_ends_an_earlier_retried_wait() {
         None,
         None,
         "Execution target unavailable or identity changed; retained prompt was not delivered",
+        false,
     );
     assert!(hub.setting(&key).is_none());
     assert_eq!(hub.session_info("s").unwrap().queue_count, 1);
@@ -53,6 +55,7 @@ fn a_permanent_refusal_ends_an_earlier_retried_wait() {
         None,
         None,
         "Machine is not connected",
+        false,
     );
     assert!(hub.setting(&key).is_none());
 }
@@ -82,8 +85,8 @@ fn an_explicit_send_keeps_its_intent_across_a_transient_machine_wait() {
         None,
         None,
         "Machine is not connected",
+        true,
     );
-    retain_explicit_intent(&hub, "s", "Machine is not connected", Some("c1"));
     assert!(hub.setting(&key).is_some());
     assert!(hub.explicit_wait("s"));
     assert_eq!(hub.session_info("s").unwrap().queue_count, 1);
@@ -93,7 +96,7 @@ fn an_explicit_send_keeps_its_intent_across_a_transient_machine_wait() {
         session_maintenance::WAIT_PREFIX,
         session_maintenance::MACHINE_CONNECTION_WAIT
     );
-    hub.set_explicit_wait("s", false);
+    hub.end_explicit_intent("s");
     retain_failed_dispatch(
         &hub,
         "s".into(),
@@ -103,8 +106,8 @@ fn an_explicit_send_keeps_its_intent_across_a_transient_machine_wait() {
         None,
         None,
         &busy,
+        true,
     );
-    retain_explicit_intent(&hub, "s", &busy, Some("c1"));
     assert!(hub.explicit_wait("s"));
     // ...and a permanent refusal ends both the wait and the intent.
     let refused =
@@ -118,8 +121,8 @@ fn an_explicit_send_keeps_its_intent_across_a_transient_machine_wait() {
         None,
         None,
         refused,
+        true,
     );
-    retain_explicit_intent(&hub, "s", refused, Some("c1"));
     assert!(hub.setting(&key).is_none());
     assert!(!hub.explicit_wait("s"));
 }
@@ -167,6 +170,7 @@ async fn shutdown_returns_a_preflight_owned_prompt_before_writer_drain() {
             None,
             None,
             &error,
+            false,
         );
     });
     observed.notified().await;
@@ -204,6 +208,7 @@ fn failed_remote_dispatch_retains_the_original_prompt() {
         None,
         None,
         "machine is not connected",
+        false,
     );
 
     assert_eq!(hub.session_info("remote-session").unwrap().queue_count, 1);
@@ -235,6 +240,7 @@ fn restore_timeout_hold_does_not_look_like_a_send_failure() {
         None,
         None,
         crate::provider_behavior::NATIVE_RESTORE_TIMEOUT_HOLD,
+        false,
     );
 
     assert_eq!(hub.session_info("restore-session").unwrap().queue_count, 1);

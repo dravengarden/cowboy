@@ -1096,6 +1096,7 @@ async fn round3_fifo_withdrawal_clear_queue_claim_guard_and_legacy_draft_activat
         schedule: None,
         origin: None,
         initiator: None,
+        explicit: None,
     };
     store
         .update_pending(PARENT, &[], &[legacy_draft])

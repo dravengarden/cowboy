@@ -74,7 +74,7 @@ export const inboundFixtures = {
     cmid: "c",
   },
   clear_queue: { type: "clear_queue", session_id: "s" },
-  request_send_queued: { type: "request_send_queued", session_id: "s", id: "q" },
+  request_send_queued: { type: "request_send_queued", session_id: "s", id: "q", cmid: "c", issued_ms: 1 },
   force_push_queued: { type: "force_push_queued", session_id: "s", id: "q" },
   queued_to_draft: { type: "queued_to_draft", session_id: "s", id: "q" },
   set_queue_editing: { type: "set_queue_editing", session_id: "s", id: "q" },

@@ -62,7 +62,7 @@ pub fn resume(state: &Arc<AppState>, session_id: &str) -> Option<String> {
     }
     let source_path = meta.workspace_source_path.as_deref()?;
     // Preparation completion drains the queue itself.
-    state.hub.set_explicit_wait(session_id, false);
+    state.hub.end_explicit_intent(session_id);
     if schedule(
         state,
         session_id,
