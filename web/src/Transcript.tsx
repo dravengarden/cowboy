@@ -69,7 +69,7 @@ import {
   transcriptScrollHasReaderIntent,
   wheelLeavesLatest,
 } from "./transcriptFollowIntent";
-import { transcriptRowContainment } from "./transcriptMotion";
+import { transcriptRowContainment, transcriptScrollerChildSx } from "./transcriptMotion";
 import {
   liveTranscriptMountedRows,
   liveTranscriptWindow,
@@ -2731,7 +2731,7 @@ export function Transcript({
           // card until another layout pass. Transcript rows must always own
           // their intrinsic content height so overflow increases scrollHeight
           // instead of compressing siblings.
-          "& > *": { flex: "0 0 auto" },
+          "& > *": transcriptScrollerChildSx(desktopNavigation),
           // The loading outline is the sole intentional flexible child. A zero
           // basis + minHeight:0 means it can consume exactly the unused area but
           // contributes no intrinsic height once real transcript rows fill it.
@@ -2955,8 +2955,8 @@ export function Transcript({
                       // hide the entire user bubble when it scrolls into view.
                       contain: transcriptRowContainment(
                         item.key === streamingRowKey || isRunningTool(item),
-                        item.kind === "message" &&
-                          item.chunks.some((chunk) => chunk.type === "image"),
+                        item.kind === "message" && item.chunks.some((chunk) => chunk.type === "image"),
+                        desktopNavigation,
                       ),
                       color: locatedToolKey === item.key
                         ? "primary.main"

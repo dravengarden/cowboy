@@ -1,0 +1,74 @@
+{
+ "schema": 1,
+ "source_revision": "8a9ce20bc20e5f50d294c54cf766dd9d28318db9",
+ "worker_generation": "worker-7f07de621174d5a2afb5",
+ "production_activation": true,
+ "change": "worker teardown never parks a session on the worker's own MCP servers; a Stop keeps a named-only Provider's account signal",
+ "session_flags": [
+  "browser_device",
+  "native_projects",
+  "session_maintenance",
+  "execution_recovery",
+  "execution_boot_recovery",
+  "execution_attempt_recovery",
+  "runtime_reboot",
+  "subscription_lifecycle"
+ ],
+ "known_failures": [
+  {
+   "flag": "execution_clear_recovery",
+   "result": "Clear replacement ready timed out: the Machine broker ignores frames from the replacement worker as fenced",
+   "baseline": "reproduces with the active pin f2aa86175 worker; not run in the f2aa86175 acceptance either"
+  }
+ ],
+ "tests": [
+  {
+   "name": "worker-codex",
+   "receipt_sha256": "c69f91c589b325158f160b28c03301ce52e91736672ee7df5ffdc1b91c54c7ba",
+   "schema": "cowboy.execution-worker-conformance/v1",
+   "accepted": true,
+   "checks": 34
+  },
+  {
+   "name": "worker-claude",
+   "receipt_sha256": "0a890a584c31f5f10d7afa24941872dd05dcc8db0ca51830e8af5a1586c6b68a",
+   "schema": "cowboy.claude-execution-worker-conformance/v1",
+   "accepted": true,
+   "checks": 96
+  },
+  {
+   "name": "session",
+   "receipt_sha256": "5c2899a3cf33ca297ff88aeb4fbad8c6076de2dc262f488e93a1d1919b4c202d",
+   "schema": "cowboy.execution-session-conformance/v1",
+   "accepted": true,
+   "checks": 44
+  },
+  {
+   "name": "logs",
+   "receipt_sha256": "6cc64d9989fff2c0a0f79867c71836b02cf6d4e1fef8c5cc3faffc9e85c8bd28",
+   "schema": "cowboy.logs-conformance/v1",
+   "accepted": true,
+   "checks": 11
+  },
+  {
+   "name": "agent-codex",
+   "receipt_sha256": "bd7002dfcf3d43e1466e4ef69d3856907a764624f01f68598755ae10e6962f42",
+   "plugin": "codex 3.6.38",
+   "previous": "3.6.37",
+   "probes": [
+    "codex 0.171.0 passed",
+    "codex-acp 2.9.0 passed"
+   ]
+  },
+  {
+   "name": "agent-claude-code",
+   "receipt_sha256": "fbadf32ce289bee50b9358ef54643c265bf7443d0153ae919a68faf3ed834761",
+   "plugin": "claude-code 3.20.80",
+   "previous": "3.20.79",
+   "probes": [
+    "claude 2.1.330 passed",
+    "claude-agent-acp 0.109.1 passed"
+   ]
+  }
+ ]
+}

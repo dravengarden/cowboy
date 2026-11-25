@@ -95,7 +95,7 @@ import { useSubscriptionAccounts } from "../subscriptionAccounts";
 import { type AboutValues, DEFAULT_ABOUT_VALUES, topBarUsageGroups, topBarUsageItems, useAboutPreferences } from "../aboutPreferences";
 import { useNativeAccountUsage } from "../nativeAccountUsage";
 import { sameComposerSheetSession } from "../composerSessionSlice";
-import { registeredUsageAccounts, sameSessionQuotaInputs, type UsageAccountCard, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageResetUnavailableMessage } from "../usageAccounts";
+import { registeredUsageAccounts, sameSessionQuotaInputs, type UsageAccountCard, usageCardBrowserManageLink, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageResetUnavailableMessage } from "../usageAccounts";
 import { AccountBrowserEntry } from "../machineBrowser/AccountBrowserEntry";
 import { desktopDialogSlotProps, DesktopModal, InstantModalTransition, isImeBlockedEscape } from "./DesktopModal";
 import { RunConfigurationDialog } from "./RunConfigurationDialog";
@@ -1384,7 +1384,7 @@ export const DesktopTopBarControls = memo(function DesktopTopBarControls({
                     refreshing={account.native?.refreshing ?? false}
                     onRefresh={account.native?.available ? () => native.refresh(account.id) : undefined}
                     onUsageChanged={() => loadUsage(false)}
-                    action={<AccountBrowserEntry snapshot={accounts.data} account={account.id} label={account.title} />}
+                    action={<AccountBrowserEntry snapshot={accounts.data} account={account.id} label={account.title} pageLink={usageCardBrowserManageLink(account)} />}
                   />
                 </Stack>
               ))}

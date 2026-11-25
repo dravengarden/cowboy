@@ -17,12 +17,14 @@ import {
   AuthenticationRequired,
   activePlan,
   billingProjection,
+  collectWithoutRefresh as collectGrokWithoutRefresh,
   credentialFromJson,
   encodeStringField,
   GROK_CLI_VERSION,
   handle as handleGrok,
   nearestCredit as nearestGrokCredit,
   readLines as grokLines,
+  settingsPlan,
 } from "./grok/collector/index.js";
 import codexDeclaration from "./codex/collector/portable-account.json" with { type: "json" };
 import grokDeclaration from "./grok/collector/portable-account.json" with { type: "json" };
@@ -299,15 +301,20 @@ test("Codex collector never refreshes on other failures or a second expiry", asy
 
 const grokCredential = { key: "fixture-token", userId: "user-fixture" };
 
-/** Billing answers `body`; plan and resets fail as they do without an account. */
-function fakeGrokFetch(billing) {
+/** Billing answers `billing`; `/v1/settings` answers `settings` (default 404). */
+function fakeGrokFetch(billing, settings = 404) {
   const calls = [];
   const fetch = async (url, init) => {
     calls.push({ url, headers: init?.headers });
-    if (url.startsWith("https://cli-chat-proxy.grok.com/")) {
+    if (url.startsWith("https://cli-chat-proxy.grok.com/v1/billing")) {
       return typeof billing === "number"
         ? new Response("{}", { status: billing })
         : Response.json(billing);
+    }
+    if (url === "https://cli-chat-proxy.grok.com/v1/settings") {
+      return typeof settings === "number"
+        ? new Response("{}", { status: settings })
+        : Response.json(settings);
     }
     return new Response("", { status: 404 });
   };
@@ -334,13 +341,19 @@ test("Grok direct billing reproduces the pinned CLI's _x.ai/billing projection",
 test("Grok direct billing sends the CLI's request and pins its version", async () => {
   const pinned = grokProvider.runtime.dependencies.find((entry) => entry.id === "xai-grok");
   equal(pinned.version, GROK_CLI_VERSION, "header version follows the runtime pin");
-  const { calls, fetch } = fakeGrokFetch(billingCapture.cases[0].body);
-  await handleGrok(
+  const { calls, fetch } = fakeGrokFetch(billingCapture.cases[0].body, {
+    subscription_tier_display: "SuperGrok Heavy",
+  });
+  const result = await handleGrok(
     { operation: "collect", token_refresh: false },
     { credential: async () => grokCredential, fetch, startRpc: () => assert.fail("spawned") },
   );
   const captured = billingCapture.request;
-  equal(calls[0].url, `${captured.base_url}/billing?format=credits`, "billing URL");
+  equal(
+    calls.map((call) => call.url),
+    [`${captured.base_url}/billing?format=credits`, `${captured.base_url}/settings`],
+    "billing and settings URLs",
+  );
   for (const name of [
     "x-xai-token-auth",
     "x-userid",
@@ -348,8 +361,41 @@ test("Grok direct billing sends the CLI's request and pins its version", async (
     "x-grok-client-mode",
   ]) {
     equal(calls[0].headers[name], captured.headers[name], name);
+    equal(calls[1].headers[name], captured.headers[name], `settings ${name}`);
   }
   equal(calls[0].headers.authorization, "Bearer fixture-token", "bearer");
+  equal(calls[1].headers.authorization, "Bearer fixture-token", "settings bearer");
+  equal(result.account, { account: { planType: "SuperGrok Heavy" } }, "plan from settings");
+  // Usage polls never touch Cloudflare-challenged grok.com endpoints.
+  equal(
+    calls.some((call) => call.url.startsWith("https://grok.com/")),
+    false,
+    "no grok.com poll",
+  );
+  // Settings plan helper normalizes enum fallbacks and rejects malformed strings.
+  equal(settingsPlan({ subscription_tier_display: "  Free  " }), "Free", "trimmed display");
+  equal(settingsPlan({ subscription_tier: "SuperGrokPro" }), "SuperGrok Heavy", "camel enum");
+  equal(
+    settingsPlan({ subscription_tier: "SUBSCRIPTION_TIER_GROK_PRO" }),
+    "SuperGrok",
+    "proto enum",
+  );
+  equal(
+    settingsPlan({ subscription_tier_display: "bad\nvalue", subscription_tier: "GrokPro" }),
+    "SuperGrok",
+    "control chars skipped",
+  );
+  equal(settingsPlan({ subscription_tier_display: "x".repeat(65) }), undefined, "oversize dropped");
+  // A failing settings lookup never fails a valid billing read.
+  const withoutSettings = await handleGrok(
+    { operation: "collect", token_refresh: false },
+    {
+      credential: async () => grokCredential,
+      fetch: fakeGrokFetch(billingCapture.cases[0].body, 503).fetch,
+      startRpc: () => assert.fail("spawned"),
+    },
+  );
+  equal(withoutSettings.account, undefined, "fail-soft settings");
 });
 
 test("Grok refresh-free usage never starts the CLI and matches the CLI path", async () => {
@@ -485,9 +531,17 @@ test("Grok declares refresh-free usage and reaches only its read endpoints", () 
     },
     "declaration",
   );
+  equal(
+    grokHost.usage.collector_argv.find((value) => value.startsWith("--allow-net=")),
+    "--allow-net=cli-chat-proxy.grok.com:443",
+    "collector network grant",
+  );
+  equal(
+    grokHost.usage.reset_argv.find((value) => value.startsWith("--allow-net=")),
+    "--allow-net=grok.com:443,cli-chat-proxy.grok.com:443",
+    "reset network grant",
+  );
   for (const argv of [grokHost.usage.collector_argv, grokHost.usage.reset_argv]) {
-    const net = argv.find((value) => value.startsWith("--allow-net="));
-    equal(net, "--allow-net=grok.com:443,cli-chat-proxy.grok.com:443", "network grant");
     equal(
       argv.some((value) => value.startsWith("--allow-write")),
       false,
@@ -655,4 +709,106 @@ test("Codex and Grok order equal-time grants by code units, not locale", () => {
   ];
   equal(nearestCodexCredit({ rateLimitResetCredits: { credits } }), "B", "codex");
   equal(nearestGrokCredit(credits.map(({ id, expiresAt }) => ({ id, expiresAt }))).id, "B", "grok");
+});
+
+test("Grok settingsPlan ignores Object.prototype keys and always returns a string", () => {
+  equal(settingsPlan({ subscription_tier_display: "__proto__" }), "__proto__", "__proto__");
+  equal(settingsPlan({ subscription_tier_display: "constructor" }), "constructor", "constructor");
+  equal(settingsPlan({ subscription_tier: "toString" }), "toString", "toString");
+});
+
+test("Grok settings enrichment shares the collector deadline and skips or aborts without losing billing", async () => {
+  const billingBody = JSON.stringify({ config: { creditUsagePercent: 12.5 } });
+  // Case 1: billing leaves less than the minimum metadata budget -> settings is skipped.
+  let clock = 1_000_000;
+  const seenUrls = [];
+  const skipped = await collectGrokWithoutRefresh({
+    credential: async () => ({ key: "k", userId: "u", expiresAt: 1_500_000 }),
+    now: () => clock,
+    budgetMs: 1_000,
+    fetch: async (url) => {
+      seenUrls.push(String(url));
+      clock += 800; // only 200ms left (< 250ms minimum)
+      return new Response(billingBody, { status: 200 });
+    },
+  });
+  equal(seenUrls, ["https://cli-chat-proxy.grok.com/v1/billing?format=credits"], "skipped");
+  equal(skipped.rate_limits.config.creditUsagePercent, 12.5, "billing preserved when skipped");
+  equal(skipped.account, undefined, "no plan when skipped");
+
+  // Case 2: settings stalls past the remaining budget -> aborted cleanly, billing preserved.
+  let settingsAborted = false;
+  const aborted = await collectGrokWithoutRefresh({
+    credential: async () => ({ key: "k", userId: "u", expiresAt: Date.now() + 600_000 }),
+    budgetMs: 300,
+    fetch: async (url, init) => {
+      if (String(url).includes("/billing")) {
+        return new Response(billingBody, { status: 200 });
+      }
+      return await new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => {
+          settingsAborted = true;
+          reject(init.signal.reason ?? new Error("aborted"));
+        });
+      });
+    },
+  });
+  equal(settingsAborted, true, "settings signal aborted within remaining budget");
+  equal(aborted.rate_limits.config.creditUsagePercent, 12.5, "billing preserved after abort");
+});
+
+test("Grok boundedBytes cancels an oversized chunked settings stream without losing billing", async () => {
+  const billingBody = JSON.stringify({ config: { creditUsagePercent: 42 } });
+  let pulled = 0;
+  let cancelled = false;
+  const oversized = new ReadableStream({
+    pull(controller) {
+      pulled += 1;
+      controller.enqueue(new Uint8Array(256 * 1024));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  });
+  const result = await collectGrokWithoutRefresh({
+    credential: async () => ({ key: "k", userId: "u", expiresAt: Date.now() + 600_000 }),
+    fetch: async (url) => {
+      if (String(url).includes("/billing")) {
+        return new Response(billingBody, { status: 200 });
+      }
+      return new Response(oversized, { status: 200 });
+    },
+  });
+  equal(cancelled, true, "oversized chunked stream cancelled");
+  equal(pulled <= 6, true, `stopped reading early (pulled ${pulled} chunks)`);
+  equal(result.rate_limits.config.creditUsagePercent, 42, "billing preserved");
+  equal(result.account, undefined, "oversized settings discarded");
+});
+
+test("Grok refresh-permitted poll counts CLI startup against the shared deadline before settings", async () => {
+  let clock = 5_000;
+  let settingsCalled = false;
+  const result = await handleGrok(
+    { operation: "collect" },
+    {
+      clock: () => clock,
+      budgetMs: 1_000,
+      credential: async () => ({ key: "k", userId: "u" }),
+      startRpc: async () => {
+        clock += 800; // CLI startup leaves only 200ms (< 250ms minimum)
+        return {
+          request: async () => ({ config: { creditUsagePercent: 33 } }),
+          close() {},
+        };
+      },
+      fetch: async () => {
+        settingsCalled = true;
+        return new Response(JSON.stringify({ subscription_tier_display: "SuperGrok" }), {
+          status: 200,
+        });
+      },
+    },
+  );
+  equal(settingsCalled, false, "settings skipped when CLI startup consumed budget");
+  equal(result.rate_limits.config.creditUsagePercent, 33, "billing preserved");
 });

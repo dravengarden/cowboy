@@ -12,8 +12,7 @@ import {
 import {
   type AccountBrowserModel,
   INITIAL_BROWSER_MODEL,
-  linkEntry,
-  linkTarget,
+
   modelFor,
   pinnedMachine,
   readTicket,
@@ -22,6 +21,8 @@ import {
   resetTarget,
   shownTarget,
 } from "./browserModel";
+import { activeBrowserLink, linkEntry, linkTarget, resumeBlockedByIdentity } from "./linkNavigation";
+import { reconcileBinding } from "./shareRules";
 import { type ViewerControls, addressCommand, chromeState, controlsFor } from "./browserChrome";
 import type { KeyboardSink } from "./touchKeyboard";
 import { bindTouchKeyboard } from "./touchKeyboardBridge";
@@ -275,15 +276,24 @@ test("a link opens and navigates only this account's browser on the login's Mach
   assertEquals(linkEntry({ ...onOvh, machine_id: "hawk" }, "hawk"), "attach");
   const shownOnOvh = reduceBrowser(INITIAL_BROWSER_MODEL, { type: "read", read: onOvh, now: 1 });
   assertEquals(linkTarget(shownOnOvh, "hawk"), undefined);
-  // Only the pinned open's answer, running on hawk, receives the link.
+  // Only the pinned open's answer, running on hawk AND stream-confirmed with
+  // this device's attachment_id, receives the link.
   const opened = reduceBrowser(shownOnOvh, {
     type: "result",
     action: "open",
     result: openA,
     now: 2,
   });
-  assertEquals(linkTarget(opened, "hawk"), shownTarget(opened));
-  assertEquals(linkTarget(opened, "hawk")?.instance.account_id, A);
+  assertEquals(linkTarget(opened, "hawk"), undefined);
+  const confirmedHawk = reduceBrowser(opened, {
+    type: "stream_state",
+    state: { ...openA.state, state: "attached", attachment_id: "att-hawk-1" },
+  });
+  assertEquals(linkTarget(confirmedHawk, "hawk"), {
+    target: shownTarget(confirmedHawk)!,
+    attachmentId: "att-hawk-1",
+  });
+  assertEquals(linkTarget(confirmedHawk, "hawk")?.target.instance.account_id, A);
   const starting = reduceBrowser(INITIAL_BROWSER_MODEL, {
     type: "result",
     action: "open",
@@ -292,16 +302,91 @@ test("a link opens and navigates only this account's browser on the login's Mach
   });
   assertEquals(linkTarget(starting, "hawk"), undefined);
 
-  // The calls: a tab open pinned to hawk, then a navigation of exactly that
-  // instance. No route names a login, and nothing reads a code back.
+  // Unpinned links (e.g. grok.com/?_s=usage) require a successful read, respect
+  // Machine choice, wait for this device's confirmed attachment, and stay bound
+  // to the browser identity captured at click time.
+  assertEquals(linkEntry(undefined), undefined);
+  const choosing: BrowserRead = {
+    machine_id: null,
+    state: null,
+    placements: [],
+    admission: null,
+    choose_machine: true,
+    capable_machines: [{ machine_id: "ovh" }],
+  };
+  assertEquals(linkEntry(choosing), undefined);
+  assertEquals(linkEntry({ ...onOvh, state: { ...onOvh.state!, state: "starting" } }), undefined);
+  assertEquals(linkEntry({ ...onOvh, state: { ...onOvh.state!, state: "hibernated" } }), "open");
+  assertEquals(linkEntry(onOvh), "attach");
+  assertEquals(linkEntry({ ...onOvh, browser_identity: "share:s1:1" }, undefined, "own"), undefined);
+  assertEquals(linkEntry({ ...onOvh, browser_identity: "own" }, undefined, "own"), "attach");
+  const otherAttachedRead: BrowserRead = {
+    ...onOvh,
+    state: { ...onOvh.state!, state: "attached" },
+  };
+  assertEquals(linkEntry(otherAttachedRead), undefined);
+  const otherAttached = reduceBrowser(INITIAL_BROWSER_MODEL, {
+    type: "read",
+    read: otherAttachedRead,
+    now: 1,
+  });
+  assertEquals(linkTarget(otherAttached), undefined);
+  // Detached or unconfirmed takeover must NOT navigate before stream_state confirms attachment_id.
+  assertEquals(linkTarget(shownOnOvh), undefined);
+  const takenOverPending = reduceBrowser(otherAttached, { type: "attach", takeover: true });
+  assertEquals(linkTarget(takenOverPending), undefined);
+  const takenOverConfirmed = reduceBrowser(takenOverPending, {
+    type: "stream_state",
+    state: { ...onOvh.state!, state: "attached", attachment_id: "att-ovh-2" },
+  });
+  assertEquals(linkTarget(takenOverConfirmed), {
+    target: shownTarget(takenOverConfirmed)!,
+    attachmentId: "att-ovh-2",
+  });
+  assertEquals(
+    linkTarget({ ...takenOverConfirmed, observedIdentity: "share:s1:1" }, undefined, "own"),
+    undefined,
+  );
+  assertEquals(
+    linkTarget({ ...takenOverConfirmed, observedIdentity: "own" }, undefined, "own"),
+    { target: shownTarget(takenOverConfirmed)!, attachmentId: "att-ovh-2" },
+  );
+  assertEquals(linkTarget(starting), undefined);
+
+  // Rebinding a sheet cancels every pending link (bound or pinned sign-in)
+  // and suppresses reconnect steps before the rebind remounts the panel.
+  const boundLink = { url: "https://grok.com/?_s=usage", expectedBrowser: "own" };
+  const pinnedSignInLink = { url: "https://claude.ai/oauth/x", machine: "hawk" };
+  const initialBinding = { identity: "own", epoch: 0 };
+  assertEquals(activeBrowserLink(boundLink, initialBinding), boundLink);
+  assertEquals(activeBrowserLink(pinnedSignInLink, initialBinding), pinnedSignInLink);
+  const rebound = reconcileBinding(initialBinding, "share:s1:1");
+  assertEquals(rebound.epoch, 1);
+  assertEquals(activeBrowserLink(boundLink, rebound), undefined);
+  assertEquals(activeBrowserLink(pinnedSignInLink, rebound), undefined);
+  assertEquals(resumeBlockedByIdentity("own", "own"), false);
+  assertEquals(resumeBlockedByIdentity("own", undefined), false);
+  assertEquals(resumeBlockedByIdentity(undefined, "share:s1:1"), false);
+  assertEquals(resumeBlockedByIdentity("own", "share:s1:1"), true);
+
+  // The calls: a tab open pinned to hawk, then a navigation fenced by this
+  // viewer's confirmed attachment_id. No route names a login, and nothing reads a code back.
   const calls: { path: string; body: unknown }[] = [];
   const api = createMachineBrowserApi((path, init) => {
     calls.push({ path, body: JSON.parse(String(init.body)) });
     return Promise.resolve(new Response(JSON.stringify(openA), { status: 200 }));
   });
   const signal = new AbortController().signal;
+  const confirmed = linkTarget(confirmedHawk, "hawk")!;
   await api.open(A, "d", { width: 800, height: 600, scale: 1 }, signal, "hawk");
-  await api.navigate(A, "d", linkTarget(opened, "hawk")!, "https://claude.ai/oauth/x", signal);
+  await api.navigate(
+    A,
+    "d",
+    confirmed.target,
+    "https://claude.ai/oauth/x",
+    signal,
+    confirmed.attachmentId,
+  );
   assertEquals(
     calls.map((call) => call.path),
     [`/api/provider-accounts/${A}/browser/open`, `/api/provider-accounts/${A}/browser/navigate`],
@@ -318,6 +403,7 @@ test("a link opens and navigates only this account's browser on the login's Mach
     machine_id: "hawk",
     instance: openA.state.instance,
     url: "https://claude.ai/oauth/x",
+    attachment_id: "att-hawk-1",
   });
   assertEquals("openSignIn" in api, false);
 });

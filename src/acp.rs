@@ -4683,7 +4683,7 @@ async fn run_session(
                         state.set_status(Status::Running, None);
                         return Ok(());
                     }
-                    if cancelled_during_retry && !recycled_by_watchdog {
+                    if cancelled_during_retry && !recycled_by_watchdog && !response.as_ref().is_err_and(|e| crate::provider::governed_terminal_error(&provider, e)) {
                         sink.prompt_completed(&sid, cmid.as_deref(), "Cancelled");
                         prompt.pending_empty_stream_update.lock().take();
                         if let Some(tx) = completion {

@@ -1,7 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "../../tools/test-assert.ts";
-import { transcriptRowContainment } from "./transcriptMotion.ts";
+import {
+  transcriptRowContainment,
+  transcriptScrollerChildSx,
+} from "./transcriptMotion.ts";
 import { readTranscriptSource } from "./appSource.test.ts";
 
 const transcriptSource = await readTranscriptSource();
@@ -116,8 +119,16 @@ test("the growing row stays in the scroller paint flow", () => {
   assertEquals(transcriptRowContainment(true), "none");
   assertEquals(transcriptRowContainment(false), "layout paint");
   assertEquals(transcriptRowContainment(false, true), "layout");
+  assertEquals(transcriptRowContainment(true, false, false), "none");
+  assertEquals(transcriptRowContainment(false, false, false), "layout paint");
+  assertEquals(transcriptRowContainment(false, true, false), "layout");
+  // Desktop rows stay at constant layout containment so macOS WebKit never
+  // toggles a row's stacking-context boundary on turn/tool settlement.
+  assertEquals(transcriptRowContainment(true, false, true), "layout");
+  assertEquals(transcriptRowContainment(false, false, true), "layout");
+  assertEquals(transcriptRowContainment(false, true, true), "layout");
   assert(
-    /contain:\s*transcriptRowContainment\(\s*item\.key === streamingRowKey \|\| isRunningTool\(item\),\s*item\.kind === "message" &&\s*item\.chunks\.some\(\(chunk\) => chunk\.type === "image"\)/
+    /contain:\s*transcriptRowContainment\(\s*item\.key === streamingRowKey \|\| isRunningTool\(item\),\s*item\.kind === "message" &&\s*item\.chunks\.some\(\(chunk\) => chunk\.type === "image"\),\s*desktopNavigation,\s*\)/
       .test(
         transcriptSource,
       ),
@@ -149,5 +160,20 @@ test("restored visible scrollback resumes for each advanced cursor", () => {
       /viewportRestoreActiveRef\.current = false;\s*(?:setMaskingViewportRestore\(false\);\s*)?requestVisibleScrollbackBoundaryRef\.current\(\);/g,
     )?.length,
     2,
+  );
+});
+
+test("desktop transcript scroller contains every direct child at layout level without changing mobile", () => {
+  assertEquals(transcriptScrollerChildSx(true), {
+    flex: "0 0 auto",
+    contain: "layout",
+  });
+  assertEquals(transcriptScrollerChildSx(false), {
+    flex: "0 0 auto",
+  });
+  assert(
+    transcriptSource.includes(
+      '"& > *": transcriptScrollerChildSx(desktopNavigation),',
+    ),
   );
 });

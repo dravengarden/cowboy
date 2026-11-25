@@ -35,12 +35,14 @@ export function LinkBrowserEntry({
 }): React.JSX.Element | null {
   /** `undefined` while the browser read is pending. */
   const [offered, setOffered] = useState<boolean>();
+  const [expectedBrowser, setExpectedBrowser] = useState<string>();
   const [reason, setReason] = useState("");
   const [open, setOpen] = useState(false);
   const [attempt, setAttempt] = useState(0);
   useEffect(() => {
     const abort = new AbortController();
     setOffered(undefined);
+    setExpectedBrowser(undefined);
     setReason("");
     api
       .read(
@@ -53,12 +55,14 @@ export function LinkBrowserEntry({
           if (!abort.signal.aborted && productSyncPrincipal() === owner) {
             const ok = linkBrowserOffered(read, machine);
             setOffered(ok);
+            setExpectedBrowser(ok ? read.browser_identity : undefined);
             if (!ok) setReason(read.admission ? browserErrorText(read.admission) : `This account’s Machine browser cannot run on ${machine} now.`);
           }
         },
         () => {
           if (!abort.signal.aborted) {
             setOffered(false);
+            setExpectedBrowser(undefined);
             setReason("Could not read this account’s Machine browser.");
           }
         },
@@ -94,7 +98,7 @@ export function LinkBrowserEntry({
           owner={owner}
           dataset={dataset}
           account={{ id: account, label, browserEnabled: true }}
-          link={{ url, machine }}
+          link={{ url, machine, expectedBrowser }}
         />
       )}
     </>

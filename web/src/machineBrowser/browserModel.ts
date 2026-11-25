@@ -348,17 +348,6 @@ export function autoEntry(state: BrowserState | null | undefined): "open" | "att
   return undefined;
 }
 
-/** How a panel asked to show a link on `machine` enters the browser: the
- * browser the panel shows on that Machine as `autoEntry` would, anything
- * else (nothing yet, another Machine's browser) through an open pinned to
- * that Machine. */
-export function linkEntry(
-  read: BrowserRead | undefined,
-  machine: string,
-): "open" | "attach" | undefined {
-  return read?.machine_id === machine ? autoEntry(read.state?.state) : "open";
-}
-
 export type ResumeStep =
   /** The browser still runs undisplayed: attach (never a takeover). */
   | "attach"
@@ -413,16 +402,6 @@ export function resumeStep(model: BrowserModel, now: number): ResumeStep | undef
       : "other_device";
   }
   return "wait";
-}
-
-/** The running browser on `machine` a link may be shown in: the one the
- * panel shows, only while it runs on exactly that Machine. */
-export function linkTarget(model: BrowserModel, machine: string): BrowserTarget | undefined {
-  const target = shownTarget(model);
-  if (!target || target.machine_id !== machine || model.read?.machine_id !== machine) {
-    return undefined;
-  }
-  return browserRunning(model.read.state?.state) ? target : undefined;
 }
 
 /** What a finished snapshot or reset means for the owner: the success text,

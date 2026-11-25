@@ -43,6 +43,8 @@ const READINESS_TURN: &str = "cowboy-readiness";
 /// and the folder's bindings): the worker starts them itself, they outlive
 /// turns and end at teardown. The unit can neither start nor reach them.
 const SERVER_TURN: &str = "cowboy-session-servers";
+/// A tracked process and its exact start generation.
+type Tracked = (String, u64);
 /// Process ids of worker-run servers (and their probes), in every worker of
 /// the session: the unit may never name one, also one a previous worker
 /// left running.
@@ -365,6 +367,14 @@ impl Ledger {
             .filter(|(_, entry)| entry.turn == SERVER_TURN)
             .map(|(process, entry)| (process.clone(), entry.generation))
             .collect()
+    }
+
+    /// `processes` split into the worker's own servers and the rest.
+    fn split_servers(&self, processes: Vec<Tracked>) -> (Vec<Tracked>, Vec<Tracked>) {
+        let state = self.state.lock();
+        processes
+            .into_iter()
+            .partition(|(process, _)| state.servers.contains(process))
     }
 
     /// Whether `turn` is still the active turn (an admitted call queued
@@ -750,14 +760,22 @@ impl Ledger {
         true
     }
 
-    /// Durably park the session if ANY unclosed process tree, in-flight start,
-    /// admitted mutation, or open extension call remains when a SIGTERM cutoff
+    /// Durably park the session if ANY unclosed turn process tree, in-flight
+    /// start, admitted mutation, or open extension call remains when a SIGTERM cutoff
     /// forces exit before `settle_all` completes.
     pub fn mark_unresolved_effects_uncertain(&self) -> bool {
         let mut state = self.state.lock();
-        let has_processes = !state.processes.is_empty()
+        // The worker's own servers are not session effects (the keeper
+        // reaps them); only turn processes and their starts park.
+        let has_processes = state
+            .processes
+            .keys()
+            .any(|process| !state.servers.contains(process))
             || !state.record.active_processes.is_empty()
-            || !state.starting.is_empty();
+            || state
+                .starting
+                .iter()
+                .any(|process| !state.servers.contains(process));
         let has_effects =
             !state.admitted.is_empty() || !state.result_relays.is_empty() || state.calls > 0;
         if !has_processes && !has_effects {
@@ -1277,8 +1295,15 @@ impl Client {
             ledger
                 .wait_until(|ledger| ledger.mutations_drained(None))
                 .await;
-            let processes = ledger.fence(None);
-            self.terminate_all(processes, true).await;
+            // A server whose end was not confirmed above is ended once more,
+            // still without parking: the worker's own servers are never a
+            // session effect. Only turn processes park.
+            let (servers, processes) = ledger.split_servers(ledger.fence(None));
+            futures::future::join(
+                self.terminate_all(servers, false),
+                self.terminate_all(processes, true),
+            )
+            .await;
             ledger.wait_until(|ledger| ledger.drained(None)).await;
         }
     }

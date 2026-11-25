@@ -1009,6 +1009,43 @@ pub fn uses_yolo_session_mode(id: &str) -> bool {
     behavior(id).permission == cowboy_provider_sdk::PermissionBehavior::AcpSessionModeYoloV1
 }
 
+/// Whether a prompt error is a governed (named-only, the Controller's account
+/// controls) Provider proxy's account signal: the
+/// Antigravity proxy's backend refusal (`antigravity_backend_refusal:<class>`
+/// with the same class in `data.cowboy.antigravity_backend`, `unknown_refusal`
+/// included) or policy violation (`antigravity_policy_violation:<tool>` with
+/// the same tool in `data.cowboy.policy_violation`). A Stop that raced one
+/// must not erase it: the Controller derives the account's state from it, and
+/// `Cancelled` raises nothing. Anything else, a proven local rejection
+/// included, stays the Stop.
+#[must_use]
+pub fn governed_terminal_error(provider: &str, error: &agent_client_protocol::Error) -> bool {
+    if !crate::provider_account::named_only(provider) {
+        return false;
+    }
+    let Some(cowboy) = error
+        .data
+        .as_ref()
+        .and_then(|data| data.get("cowboy"))
+        .and_then(serde_json::Value::as_object)
+    else {
+        return false;
+    };
+    let named = |key: &str| cowboy.get(key).and_then(serde_json::Value::as_str);
+    if let Some(class) = error.message.strip_prefix("antigravity_backend_refusal:") {
+        return !class.is_empty()
+            && cowboy
+                .get("antigravity_backend")
+                .and_then(|backend| backend.get("class"))
+                .and_then(serde_json::Value::as_str)
+                == Some(class);
+    }
+    if let Some(tool) = error.message.strip_prefix("antigravity_policy_violation:") {
+        return !tool.is_empty() && named("policy_violation") == Some(tool);
+    }
+    false
+}
+
 #[must_use]
 pub fn keeps_worker_alive_for_behavior(
     behavior: &cowboy_provider_sdk::ProviderBehaviorContract,

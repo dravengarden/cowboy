@@ -631,6 +631,7 @@ async fn resolve_new_session_defaults(
         Ok(value) => value,
         Err(error) => return Err((StatusCode::BAD_REQUEST, error).into_response()),
     };
+    let provider_overridden = !req.provider.is_empty();
     if req.provider.is_empty() {
         req.provider = folder_defaults::value(&defaults, DefaultKey::Provider)
             .unwrap_or_else(|| "claude-code".into());
@@ -682,7 +683,8 @@ async fn resolve_new_session_defaults(
         }
     }
     if req.preset.is_none() {
-        req.preset = folder_defaults::value(&defaults, DefaultKey::Preset);
+        req.preset =
+            folder_defaults::inherited_preset(&req.provider, &defaults, provider_overridden);
     }
     let runtime = req
         .runtime_machine_id

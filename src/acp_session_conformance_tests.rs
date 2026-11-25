@@ -2219,3 +2219,154 @@ fn an_answered_url_elicitation_forgets_its_completion_id() {
     forget_url_elicitation(&state, "9");
     assert!(state.url_elicitations.lock().is_empty());
 }
+
+/// One prompt Stopped while the agent answers it with `error`; the turn's
+/// recorded stop reason.
+async fn stopped_prompt_ending(provider: &'static str, error: Value) -> String {
+    let (state, sink) = activity_fixture(provider);
+    let (client_io, peer_io) = tokio::io::duplex(64 * 1024);
+    let (client_read, client_write) = tokio::io::split(client_io);
+    let (command_tx, mut command_rx) = mpsc::unbounded_channel();
+    let (startup, mut phase) = watch::channel(StartupPhase::Initialize);
+    let main_state = state.clone();
+    let client = Client.builder().connect_with(
+        ByteStreams::new(client_write.compat_write(), client_read.compat()),
+        async move |cx: ConnectionTo<Agent>| {
+            run_session(
+                &main_state,
+                cx,
+                None.into(),
+                PathBuf::from(CWD),
+                &mut command_rx,
+                provider,
+                &startup,
+            )
+            .await
+        },
+    );
+    let peer = async {
+        let (reader, mut writer) = tokio::io::split(peer_io);
+        let mut lines = BufReader::new(reader).lines();
+        let initialize: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        send_json(
+            &mut writer,
+            json!({"jsonrpc":"2.0","id":initialize["id"],"result":{"protocolVersion":1,"agentCapabilities":{}}}),
+        )
+        .await;
+        let new: Value = serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        send_json(
+            &mut writer,
+            json!({"jsonrpc":"2.0","id":new["id"],"result":{"sessionId":NATIVE}}),
+        )
+        .await;
+        phase
+            .wait_for(|phase| *phase == StartupPhase::Ready)
+            .await
+            .unwrap();
+        command_tx
+            .send(AgentCommand::Prompt(
+                vec![ContentBlock::Text(
+                    agent_client_protocol::schema::v1::TextContent::new("hi"),
+                )],
+                Some("first".into()),
+                None,
+            ))
+            .unwrap();
+        let prompt: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(prompt["method"], "session/prompt");
+        // The owner's Stop reaches the agent while it is settling the turn.
+        command_tx.send(AgentCommand::Cancel).unwrap();
+        let cancellation: Value =
+            serde_json::from_str(&lines.next_line().await.unwrap().unwrap()).unwrap();
+        assert_eq!(cancellation["method"], "session/cancel");
+        send_json(
+            &mut writer,
+            json!({"jsonrpc":"2.0","id":prompt["id"],"error":error}),
+        )
+        .await;
+        while sink.prompt_completions.lock().is_empty() {
+            tokio::task::yield_now().await;
+        }
+        drop(command_tx);
+        phase.wait_for(|_| false).await.unwrap_err();
+    };
+    tokio::time::timeout(Duration::from_secs(5), async {
+        let (result, ()) = tokio::join!(client, peer);
+        assert!(result.is_ok(), "{result:?}");
+    })
+    .await
+    .expect("bounded stop fixture");
+    let events = sink.hub.snapshot(SESSION).unwrap().0;
+    events
+        .iter()
+        .rev()
+        .find_map(|entry| match &entry.event {
+            Event::TurnEnd { stop_reason, .. } => Some(stop_reason.clone()),
+            _ => None,
+        })
+        .expect("the turn ended")
+}
+
+#[tokio::test]
+async fn a_stop_racing_a_governed_refusal_keeps_the_refusal() {
+    // A Stop while the Antigravity proxy settled a refusal ended the turn as
+    // `Cancelled`, so the Controller never parked the refused account.
+    let refusal = json!({
+        "code": -32603,
+        "message": "antigravity_backend_refusal:verification_required",
+        "data": {
+            "message": "Google asks to verify this Antigravity account.",
+            "cowboy": {"antigravity_backend": {"class": "verification_required"}},
+        },
+    });
+    let ending = stopped_prompt_ending("antigravity", refusal.clone()).await;
+    assert!(
+        ending.starts_with("error: antigravity_backend_refusal:verification_required"),
+        "{ending}"
+    );
+    // The Controller governs only named-only Providers: the same reply from
+    // any other adapter is still the Stop.
+    assert_eq!(
+        stopped_prompt_ending("claude-code", refusal).await,
+        "Cancelled"
+    );
+    let ending = stopped_prompt_ending(
+        "antigravity",
+        json!({
+            "code": -32603,
+            "message": "antigravity_policy_violation:search_web",
+            "data": {"cowboy": {"policy_violation": "search_web"}},
+        }),
+    )
+    .await;
+    assert!(
+        ending.starts_with("error: antigravity_policy_violation:search_web"),
+        "{ending}"
+    );
+    // Any other error after a Stop is still the Stop: a plain one, a proven
+    // local rejection, other `cowboy` metadata, or a mismatched payload.
+    for error in [
+        json!({"code": -32603, "message": "boom"}),
+        json!({
+            "code": -32603,
+            "message": "antigravity_prompt_rejected:image_answer",
+            "data": {"cowboy": {
+                "prompt_rejected": "image_answer",
+                "antigravity_backend": {"class": "not_dispatched"},
+            }},
+        }),
+        json!({"code": -32603, "message": "adapter failed", "data": {"cowboy": {"trace": 1}}}),
+        json!({
+            "code": -32603,
+            "message": "antigravity_backend_refusal:rate_limited",
+            "data": {"cowboy": {"antigravity_backend": {"class": "ok"}}},
+        }),
+    ] {
+        assert_eq!(
+            stopped_prompt_ending("antigravity", error).await,
+            "Cancelled"
+        );
+    }
+}

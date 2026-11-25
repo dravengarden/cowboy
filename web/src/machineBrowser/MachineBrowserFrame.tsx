@@ -115,8 +115,9 @@ function BrowserEmptyPage({
       />
       {link && (
         <Typography variant="caption" color="text.secondary" sx={{ maxWidth: 420 }}>
-          The link opens in this account’s browser once it runs. Anything the page shows you (such
-          as a code) stays yours to copy back.
+          {pinned
+            ? "The link opens in this account’s browser once it runs. Anything the page shows you (such as a code) stays yours to copy back."
+            : "The page opens in this account’s browser once it runs."}
         </Typography>
       )}
     </Stack>

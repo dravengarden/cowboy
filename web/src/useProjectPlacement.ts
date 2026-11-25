@@ -151,8 +151,7 @@ export function useProjectPlacement(
         m.id === placement.runtime_machine_id
       );
       if (!machine?.connected || machine.capacity.draining) return [];
-      // Creating a session prepares its workspace; a worker is admitted on
-      // first use. A full worker pool must not disable creating a conversation.
+      // Creating a session prepares its workspace; a full worker pool must not block it.
       const full = false;
       const inventory = projectAgentPluginInventory(machine.plugins);
       const row = joinProviderInstallations(catalog?.providers ?? [], inventory)
@@ -213,6 +212,7 @@ export function useProjectPlacement(
     },
     /** The user picked a project or installation instead of the default. */
     chosen: Boolean(projectKey || installationKey),
+    installationChosen: Boolean(installationKey),
     configuredDefaultProject: preferredProject,
     setDefaultProject: (value: string): void =>
       newSessionProjectPreference.set(value),

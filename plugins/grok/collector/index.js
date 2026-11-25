@@ -24,6 +24,13 @@ export const GROK_CLI_VERSION = "1.0.92";
 // A token this close to expiry would be renewed by the CLI; without the CLI
 // the collector reports authentication required instead.
 const EXPIRY_MARGIN_MS = 60_000;
+const MAX_RESPONSE_BYTES = 1024 * 1024;
+// The host kills a usage collector after 12 s; keep billing + optional settings
+// enrichment inside one shared 10 s deadline so a slow settings call never
+// discards a valid billing result.
+const POLL_BUDGET_MS = 10_000;
+const MIN_METADATA_BUDGET_MS = 250;
+const monotonicNow = () => performance.now();
 const CHILD_ENV_KEYS = [
   "HOME",
   "PATH",
@@ -212,20 +219,71 @@ function authHeaders(credential, contentType) {
   };
 }
 
-async function boundedBytes(response, operation) {
+async function boundedBytes(response, operation, maxBytes = MAX_RESPONSE_BYTES) {
   if (!response.ok) {
+    try {
+      await response.body?.cancel();
+    } catch {
+      // Ignore cancellation errors on rejected responses.
+    }
     throw new Error(`${operation} returned HTTP ${response.status}`);
   }
   const declared = Number(response.headers.get("content-length") ?? "0");
-  if (declared > 1024 * 1024) {
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    try {
+      await response.body?.cancel();
+    } catch {
+      // Ignore cancellation errors on oversized responses.
+    }
     throw new Error(`${operation} response is too large`);
   }
-  const bytes = new Uint8Array(await response.arrayBuffer());
-  if (bytes.length > 1024 * 1024) {
-    throw new Error(`${operation} response is too large`);
+  const reader = response.body?.getReader();
+  if (!reader) {
+    const bytes = new Uint8Array(await response.arrayBuffer());
+    if (bytes.length > maxBytes) {
+      throw new Error(`${operation} response is too large`);
+    }
+    return bytes;
   }
-  return bytes;
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value || value.byteLength === 0) continue;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel();
+        throw new Error(`${operation} response is too large`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  const merged = new Uint8Array(total);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return merged;
 }
+
+const PLAN_LABELS = new Map([
+  ["SUBSCRIPTION_TIER_SUPER_GROK_LITE", "SuperGrok Lite"],
+  ["SUBSCRIPTION_TIER_GROK_PRO", "SuperGrok"],
+  ["SUBSCRIPTION_TIER_SUPER_GROK_PLUS", "SuperGrok Plus"],
+  ["SUBSCRIPTION_TIER_SUPER_GROK_PRO", "SuperGrok Heavy"],
+  ["SuperGrokLite", "SuperGrok Lite"],
+  ["GrokPro", "SuperGrok"],
+  ["SuperGrokPlus", "SuperGrok Plus"],
+  ["SuperGrokPro", "SuperGrok Heavy"],
+  ["XPremiumPlus", "X Premium+"],
+  ["XPremium", "X Premium"],
+  ["XBasic", "X Basic"],
+]);
 
 export function activePlan(document) {
   const labels = {
@@ -240,6 +298,19 @@ export function activePlan(document) {
         .map((value) => labels[value.tier])
         .sort((left, right) => right[0] - left[0])[0]?.[1]
     : undefined;
+}
+
+/** Plan label from `cli-chat-proxy.grok.com/v1/settings` (`subscription_tier_display`
+ * with fallback to `subscription_tier`). */
+export function settingsPlan(document) {
+  if (!isObject(document)) return undefined;
+  for (const raw of [document.subscription_tier_display, document.subscription_tier]) {
+    if (typeof raw !== "string") continue;
+    const trimmed = raw.trim();
+    if (!trimmed || trimmed.length > 64 || /[\x00-\x1f\x7f]/.test(trimmed)) continue;
+    return PLAN_LABELS.get(trimmed) ?? trimmed;
+  }
+  return undefined;
 }
 
 function encodeVarint(value) {
@@ -371,27 +442,29 @@ async function grpcWeb(credential, path, message = new Uint8Array(), fetchImpl =
   return decodeGrpcWeb(await boundedBytes(response, `xAI RPC ${path}`));
 }
 
-async function accountMetadata(credential, fetchImpl = fetch) {
-  if (!credential) return {};
-  const [planResult, resetsResult] = await Promise.allSettled([
-    fetchImpl(`${WEB_BASE}/rest/subscriptions`, {
-      headers: authHeaders(credential),
+/** Optional plan-tier enrichment from the CLI chat proxy (`/v1/settings`).
+ * `grok.com` web billing endpoints sit behind Cloudflare's browser challenge,
+ * so usage polls read plan labels from the CLI proxy instead and never hit
+ * `grok.com`. Failures are discarded without retry. */
+async function accountMetadata(credential, fetchImpl = fetch, timeoutMs = POLL_BUDGET_MS) {
+  if (!credential || timeoutMs < MIN_METADATA_BUDGET_MS) return {};
+  try {
+    const response = await fetchImpl(`${CHAT_PROXY_BASE}/settings`, {
       redirect: "manual",
-      signal: AbortSignal.timeout(10_000),
-    })
-      .then((response) => boundedBytes(response, "xAI subscriptions"))
-      .then((bytes) => activePlan(JSON.parse(decoder.decode(bytes)))),
-    grpcWeb(
-      credential,
-      "/prod_mc_billing.ConsumerUiSvc/GetRemainingResets",
-      undefined,
-      fetchImpl,
-    ).then(resetTokens),
-  ]);
-  return {
-    ...(planResult.status === "fulfilled" && planResult.value ? { plan: planResult.value } : {}),
-    ...(resetsResult.status === "fulfilled" ? { resets: resetsResult.value } : {}),
-  };
+      headers: {
+        ...authHeaders(credential),
+        "x-grok-client-version": GROK_CLI_VERSION,
+        "x-grok-client-mode": "interactive",
+        accept: "application/json",
+      },
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const bytes = await boundedBytes(response, "xAI settings");
+    const plan = settingsPlan(JSON.parse(decoder.decode(bytes)));
+    return plan ? { plan } : {};
+  } catch {
+    return {};
+  }
 }
 
 function attachMetadata(billing, metadata) {
@@ -437,9 +510,23 @@ function usage(billing, metadata, observedAtMs) {
   };
 }
 
-async function collect(rpc, { credential = loadCredential, fetch: fetchImpl = fetch } = {}) {
+async function collect(
+  rpc,
+  {
+    credential = loadCredential,
+    fetch: fetchImpl = fetch,
+    now = Date.now,
+    clock,
+    budgetMs = POLL_BUDGET_MS,
+    deadline,
+  } = {},
+) {
+  const timer = clock ?? (now === Date.now ? monotonicNow : now);
+  const limit = deadline ?? timer() + budgetMs;
   const billing = await rpc.request("_x.ai/billing", {});
-  return usage(billing, await accountMetadata(await credential(), fetchImpl), Date.now());
+  const current = await credential();
+  const metadata = await accountMetadata(current, fetchImpl, limit - timer());
+  return usage(billing, metadata, now());
 }
 
 // The pinned CLI decodes its billing response into typed structs and answers
@@ -524,7 +611,7 @@ export function billingProjection(document) {
   return { config: optional(document.config, billingConfig) ?? null };
 }
 
-async function billingWithoutCli(credential, fetchImpl) {
+async function billingWithoutCli(credential, fetchImpl, timeoutMs = POLL_BUDGET_MS) {
   const response = await fetchImpl(`${CHAT_PROXY_BASE}/billing?format=credits`, {
     redirect: "manual",
     headers: {
@@ -532,7 +619,7 @@ async function billingWithoutCli(credential, fetchImpl) {
       "x-grok-client-version": GROK_CLI_VERSION,
       "x-grok-client-mode": "interactive",
     },
-    signal: AbortSignal.timeout(10_000),
+    signal: AbortSignal.timeout(Math.max(1, timeoutMs)),
   });
   if (response.status === 401 || response.status === 403) {
     throw new AuthenticationRequired(
@@ -552,13 +639,18 @@ async function billingWithoutCli(credential, fetchImpl) {
 /** A named portable account's poll (`token_refresh: false`). The Grok CLI
  * renews an expiring sign-in on start and after any 401, so this path never
  * starts it: it reads the current token, refuses one that has (nearly)
- * expired, and reads billing, plan and resets directly with it. A rejected
- * token is authentication required; nothing is retried or refreshed. */
+ * expired, and reads billing and plan directly from the CLI proxy with it. A
+ * rejected token is authentication required; nothing is retried or refreshed. */
 export async function collectWithoutRefresh({
   credential = loadCredential,
   fetch: fetchImpl = fetch,
   now = Date.now,
+  clock,
+  budgetMs = POLL_BUDGET_MS,
+  deadline,
 } = {}) {
+  const timer = clock ?? (now === Date.now ? monotonicNow : now);
+  const limit = deadline ?? timer() + budgetMs;
   const current = await credential();
   if (!current) {
     throw new AuthenticationRequired("Grok usage authentication required: no Grok sign-in.");
@@ -568,8 +660,9 @@ export async function collectWithoutRefresh({
       "Grok usage authentication required: the access token expired.",
     );
   }
-  const billing = await billingWithoutCli(current, fetchImpl);
-  return usage(billing, await accountMetadata(current, fetchImpl), now());
+  const billing = await billingWithoutCli(current, fetchImpl, limit - timer());
+  const metadata = await accountMetadata(current, fetchImpl, limit - timer());
+  return usage(billing, metadata, now());
 }
 
 async function reset(rpc, request) {
@@ -630,6 +723,12 @@ async function renew(rpc) {
 
 /** Answer one request. Only a request that may refresh starts the CLI. */
 export async function handle(request, { startRpc = () => AcpRpc.start(), ...direct } = {}) {
+  const timer = direct.clock ?? (direct.now && direct.now !== Date.now ? direct.now : monotonicNow);
+  const pollOptions = {
+    ...direct,
+    clock: timer,
+    deadline: direct.deadline ?? timer() + (direct.budgetMs ?? POLL_BUDGET_MS),
+  };
   if (request.operation === "renew") {
     if (request.token_refresh !== "renew") {
       throw new Error("a renewal must be requested explicitly");
@@ -644,13 +743,13 @@ export async function handle(request, { startRpc = () => AcpRpc.start(), ...dire
   if (request.token_refresh === false) {
     return request.operation === "consume_reset"
       ? await reset(undefined, request)
-      : await collectWithoutRefresh(direct);
+      : await collectWithoutRefresh(pollOptions);
   }
   const rpc = await startRpc();
   try {
     return request.operation === "consume_reset"
       ? await reset(rpc, request)
-      : await collect(rpc, direct);
+      : await collect(rpc, pollOptions);
   } finally {
     rpc.close();
   }
