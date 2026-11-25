@@ -913,7 +913,7 @@ async fn a_held_send_binds_its_intent_to_the_requested_row() {
         .iter()
         .map(|row| row.id.clone())
         .collect();
-    assert!(hub.hold_queued("hold", &ids[1], &person));
+    assert!(hub.hold_queued("hold", &ids[1], &person, None));
     assert!(hub.explicit_wait("hold"));
     assert!(rx.try_recv().is_err(), "a held send dispatches nothing");
     // Another terminal moves the first row back ahead before the retry.
@@ -924,6 +924,73 @@ async fn a_held_send_binds_its_intent_to_the_requested_row() {
         "the other row is not sent through Pause"
     );
     assert!(!hub.explicit_wait("hold"));
+}
+
+// While the session waits for its execution Machine, releasing an edit (or
+// any other automatic drain) must not take the head out: the dispatcher would
+// refuse it and requeue it under a new id, which the terminal that left its
+// edit reads as sent. Only maintenance's retry, which first checks that
+// Machine, delivers it.
+#[tokio::test]
+async fn an_automatic_drain_leaves_the_head_queued_while_its_target_is_awaited() {
+    let hub = hub_with_session("target");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    hub.set_dispatch_tx(tx);
+    hub.set_status("target", Status::Running, None);
+    hub.set_paused("target", true);
+    let person = crate::prompt_origin::RequestCaller::Person;
+    hub.submit(
+        "target",
+        "held".into(),
+        vec![],
+        Some("c-held".into()),
+        &person,
+    );
+    let id = hub.inner.sessions.lock()["target"].queue[0].id.clone();
+    hub.set_resource_wait("target", Some(crate::core::TARGET_WAIT_REASON.to_owned()));
+    hub.set_queue_editing("target", Some(id.clone()));
+    hub.set_paused("target", false);
+    hub.set_queue_editing("target", None);
+    assert!(rx.try_recv().is_err(), "the head waits for its Machine");
+    assert_eq!(hub.inner.sessions.lock()["target"].queue[0].id, id);
+    hub.retry_resource_wait("target");
+    let req = rx.try_recv().expect("maintenance delivers the head");
+    assert_eq!(req.cmid.as_deref(), Some("c-held"));
+}
+
+// A client that lost the "waiting" reply to its held Send now replays that
+// command after a reconnect. The Hub recognizes it, persisted with the wait,
+// while the intent waits and after it ended, so the replay never takes the
+// live send path.
+#[tokio::test]
+async fn a_replayed_held_send_is_recognized_while_waiting_and_after_it_ends() {
+    let hub = hub_with_session("replay");
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    hub.set_dispatch_tx(tx);
+    hub.set_status("replay", Status::Running, None);
+    hub.set_paused("replay", true);
+    let person = crate::prompt_origin::RequestCaller::Person;
+    hub.submit(
+        "replay",
+        "head".into(),
+        vec![],
+        Some("c-head".into()),
+        &person,
+    );
+    let id = hub.inner.sessions.lock()["replay"].queue[0].id.clone();
+    let key = format!("{}replay", settings_keys::SESSION_RESOURCE_WAIT_PREFIX);
+    hub.set_setting(
+        key.clone(),
+        serde_json::json!({"reason": "r", "since_ms": 1}),
+    );
+    assert!(hub.hold_queued("replay", &id, &person, Some("send-1")));
+    hub.persist_explicit_wait("replay");
+    assert_eq!(hub.setting(&key).unwrap()["cmid"], "send-1");
+    assert_eq!(hub.held_send_replay("replay", "send-1"), Some(true));
+    assert_eq!(hub.held_send_replay("replay", "other"), None);
+    hub.retry_explicit_wait("replay");
+    rx.try_recv().expect("maintenance sends the held row");
+    assert_eq!(hub.held_send_replay("replay", "send-1"), Some(false));
 }
 
 // Maintenance reads the intent before it retries. If another terminal sent the

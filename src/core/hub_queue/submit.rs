@@ -153,8 +153,7 @@ impl Hub {
                 return false;
             }
             let head = s.queue.remove(0);
-            s.explicit_wait = false;
-            s.explicit_row = None;
+            s.end_explicit_intent();
             s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);

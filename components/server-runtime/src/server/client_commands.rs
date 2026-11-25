@@ -774,6 +774,9 @@ pub fn force_cancel_grace(state: &AppState, session_id: &str) -> std::time::Dura
     }
 }
 
+const HELD_SEND_REPLY: &str =
+    "This session cannot send yet. The message stays first in the queue and sends once it can.";
+
 /// A queued row's Send now. While the session's account parks dispatch (a
 /// rate limit, a block, an unacknowledged effect) or its execution Machine is
 /// not connected, the row only moves to the front and waits there, retried as
@@ -782,7 +785,9 @@ pub fn force_cancel_grace(state: &AppState, session_id: &str) -> std::time::Dura
 /// a new id, which a client editing the row reads as a sent message and saves
 /// the edit as a draft beside the returned original. The sending device gets
 /// an addressed refusal for `cmid`, so it retires its optimistic send instead
-/// of replaying it after a reconnect. Whether the send was held.
+/// of replaying it after a reconnect. A device that lost that reply replays
+/// the command: it gets the reply again and sends nothing, whether the wait
+/// still holds the row or already ended. Whether the send was held.
 pub fn request_send_queued(
     state: &Arc<AppState>,
     caller: &crate::prompt_origin::RequestCaller,
@@ -790,6 +795,21 @@ pub fn request_send_queued(
     id: &str,
     cmid: Option<&str>,
 ) -> bool {
+    if let Some(cmid) = cmid
+        && let Some(waiting) = state.hub.held_send_replay(session_id, cmid)
+    {
+        state.hub.command_result(
+            session_id,
+            cmid,
+            CommandOutcome::Rejected,
+            if waiting {
+                HELD_SEND_REPLY
+            } else {
+                "This Send now was already handled."
+            },
+        );
+        return true;
+    }
     let held = state.hub.session_info(session_id).and_then(|info| {
         provider_accounts::controls::parked_reason(&state.accounts, &info.meta).or_else(|| {
             (!session_maintenance::execution_target_connected(state, &info.meta))
@@ -800,18 +820,15 @@ pub fn request_send_queued(
         state.hub.request_send_queued(session_id, id, caller);
         return false;
     };
-    if state.hub.hold_queued(session_id, id, caller) {
+    if state.hub.hold_queued(session_id, id, caller, cmid) {
         session_maintenance::wait(&state.hub, session_id, &reason);
         state.hub.persist_explicit_wait(session_id);
         // Command results reach every socket: the wait reason stays in the
         // session's own state, which only its viewers receive.
         if let Some(cmid) = cmid {
-            state.hub.command_result(
-                session_id,
-                cmid,
-                CommandOutcome::Rejected,
-                "This session cannot send yet. The message stays first in the queue and sends once it can.",
-            );
+            state
+                .hub
+                .command_result(session_id, cmid, CommandOutcome::Rejected, HELD_SEND_REPLY);
         }
     }
     true

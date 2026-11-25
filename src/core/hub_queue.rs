@@ -7,8 +7,12 @@ pub use drafts::{
     InFlightDispatchCmidGuard, PendingRecoveryActivationCommit, RecoveryActivationCommitStep,
     RecoveryActivationReservation, RecoveryReserveErr,
 };
+mod explicit_intent;
 mod retry;
 mod submit;
+
+pub(super) use explicit_intent::ExplicitIntent;
+pub use explicit_intent::TARGET_WAIT_REASON;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -288,7 +292,7 @@ impl Hub {
         manual: bool,
         trigger: Option<&crate::prompt_origin::RequestCaller>,
     ) {
-        self.drain_head_inner(session_id, allow_revive, manual, trigger, None);
+        self.drain_head_inner(session_id, allow_revive, manual, trigger, None, false);
     }
 
     fn drain_head_inner(
@@ -298,6 +302,7 @@ impl Hub {
         manual: bool,
         trigger: Option<&crate::prompt_origin::RequestCaller>,
         expected_head_id: Option<&str>,
+        retry: bool,
     ) {
         if self.inner.dispatch_tx.lock().is_none() {
             return;
@@ -316,6 +321,19 @@ impl Hub {
                 self.context_allows_dispatch(session_id, cmid)
             });
             if decision != DrainDecision::Dispatch {
+                return;
+            }
+            // While the session waits for its execution Machine, only the
+            // maintenance retry delivers the head, once that Machine is
+            // connected. Any other automatic drain (a turn ending, an edit
+            // released) would take the row out only for the dispatcher to
+            // refuse it and requeue it under a new id, which a terminal holding
+            // an edit of that row reads as a sent message and parks its buffer
+            // as a draft beside the original.
+            if !manual
+                && !retry
+                && s.meta.resource_wait.as_deref() == Some(crate::core::TARGET_WAIT_REASON)
+            {
                 return;
             }
             // A retried explicit send carries no caller of its own: it must
@@ -343,12 +361,12 @@ impl Hub {
             // the lock that takes the row out.
             if manual
                 && trigger.is_none()
-                && s.explicit_row
+                && s.explicit
+                    .row
                     .as_ref()
                     .is_some_and(|row| s.queue.first().is_none_or(|head| &head.id != row))
             {
-                s.explicit_wait = false;
-                s.explicit_row = None;
+                s.end_explicit_intent();
                 drop(sessions);
                 self.persist_explicit_wait(session_id);
                 return;
@@ -375,8 +393,7 @@ impl Hub {
                 .clone()
                 .unwrap_or_else(|| crate::prompt_origin::DeliveryOrigin::cowboy("legacy_queue"));
             let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(head.cmid);
-            s.explicit_wait = false;
-            s.explicit_row = None;
+            s.end_explicit_intent();
             s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);
@@ -419,6 +436,7 @@ impl Hub {
             false,
             trigger,
             Some(target_row_id),
+            false,
         );
     }
 
@@ -431,7 +449,7 @@ impl Hub {
     }
 
     pub fn retry_resource_wait(&self, session_id: &str) {
-        self.drain_head(session_id, true, false, None);
+        self.drain_head_inner(session_id, true, false, None, None, true);
     }
 
     /// Retry a previously explicit send parked on a resource wait, preserving
@@ -458,12 +476,12 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            s.explicit_wait = explicit;
-            s.explicit_row = s
-                .queue
-                .first()
-                .filter(|_| explicit)
-                .map(|head| head.id.clone());
+            if explicit {
+                s.explicit_wait = true;
+                s.explicit.row = s.queue.first().map(|head| head.id.clone());
+            } else {
+                s.end_explicit_intent();
+            }
         }
         self.persist_explicit_wait(session_id);
     }
@@ -475,13 +493,13 @@ impl Hub {
         // older row's intent persisted over the newer one.
         static PERSIST: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
         let _serial = PERSIST.lock();
-        let Some((explicit, row)) = self
-            .inner
-            .sessions
-            .lock()
-            .get(session_id)
-            .map(|s| (s.explicit_wait, s.explicit_row.clone()))
-        else {
+        let Some((explicit, row, cmid)) = self.inner.sessions.lock().get(session_id).map(|s| {
+            (
+                s.explicit_wait,
+                s.explicit.row.clone(),
+                s.explicit.cmid.clone(),
+            )
+        }) else {
             return;
         };
         let key = format!(
@@ -491,12 +509,14 @@ impl Hub {
         if let Some(serde_json::Value::Object(mut wait)) = self.setting(&key) {
             let before = wait.clone();
             wait.insert("explicit".to_owned(), serde_json::Value::Bool(explicit));
-            match row {
-                Some(row) => {
-                    wait.insert("row".to_owned(), serde_json::Value::String(row));
-                }
-                None => {
-                    wait.remove("row");
+            for (field, value) in [("row", row), ("cmid", cmid)] {
+                match value {
+                    Some(value) => {
+                        wait.insert(field.to_owned(), serde_json::Value::String(value));
+                    }
+                    None => {
+                        wait.remove(field);
+                    }
                 }
             }
             if wait != before {
@@ -1023,8 +1043,23 @@ impl Hub {
         session_id: &str,
         id: &str,
         caller: &crate::prompt_origin::RequestCaller,
+        cmid: Option<&str>,
     ) -> bool {
-        self.promote_with(session_id, id, caller, true)
+        self.promote_with(session_id, id, caller, Some(cmid))
+    }
+
+    /// Whether `cmid` is a held Send now this Hub already recorded: `Some(true)`
+    /// while its intent still waits, `Some(false)` once that intent ended. A
+    /// client replays a command whose reply it lost; the replay must not take
+    /// the live send path, which would dispatch the row past the wait (and an
+    /// edit of it) or send a row the user has since reordered.
+    pub fn held_send_replay(&self, session_id: &str, cmid: &str) -> Option<bool> {
+        let sessions = self.inner.sessions.lock();
+        let s = sessions.get(session_id)?;
+        if s.explicit_wait && s.explicit.cmid.as_deref() == Some(cmid) {
+            return Some(true);
+        }
+        s.explicit.settled(cmid).then_some(false)
     }
 
     /// Move a queued prompt to the front under `caller`'s send intent.
@@ -1034,7 +1069,7 @@ impl Hub {
         id: &str,
         caller: &crate::prompt_origin::RequestCaller,
     ) -> bool {
-        self.promote_with(session_id, id, caller, false)
+        self.promote_with(session_id, id, caller, None)
     }
 
     fn promote_with(
@@ -1042,7 +1077,7 @@ impl Hub {
         session_id: &str,
         id: &str,
         caller: &crate::prompt_origin::RequestCaller,
-        hold: bool,
+        hold: Option<Option<&str>>,
     ) -> bool {
         if self.is_managed_child(session_id) {
             return false;
@@ -1062,9 +1097,11 @@ impl Hub {
             let mut m = s.queue.remove(pos);
             m.initiator = Some(trigger);
             s.queue.insert(0, m);
-            if hold {
+            if let Some(cmid) = hold {
+                s.end_explicit_intent();
                 s.explicit_wait = true;
-                s.explicit_row = Some(id.to_owned());
+                s.explicit.row = Some(id.to_owned());
+                s.explicit.cmid = cmid.map(str::to_owned);
             }
         }
         self.emit_pending(session_id);

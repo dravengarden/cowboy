@@ -12,7 +12,7 @@ pub mod crashed_workers;
 pub use cowboy_server_auth::server::WAIT_PREFIX;
 pub const MACHINE_CONNECTION_WAIT: &str = "waiting for Machine connection";
 /// The wait of an admitted prompt whose execution Machine is offline or booting.
-pub const TARGET_WAIT_REASON: &str = "the execution Machine is not ready";
+pub const TARGET_WAIT_REASON: &str = crate::core::TARGET_WAIT_REASON;
 const WAKE_HEADROOM: u64 = 1 << 30;
 
 #[derive(Default)]
@@ -98,8 +98,10 @@ pub fn wait(hub: &Hub, session: &str, reason: &str) {
     {
         value["explicit"] = serde_json::Value::Bool(explicit);
     }
-    if let Some(row) = current.as_ref().and_then(|v| v.get("row")).cloned() {
-        value["row"] = row;
+    for field in ["row", "cmid"] {
+        if let Some(bound) = current.as_ref().and_then(|v| v.get(field)).cloned() {
+            value[field] = bound;
+        }
     }
     if hub.setting(&key).as_ref() != Some(&value) {
         hub.set_setting(key, value);

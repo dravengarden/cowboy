@@ -44,6 +44,8 @@ export function mergeRestoredDraft(
   live: DraftMirror | undefined,
   record: StoredDraft | null,
   hydratedText?: string,
+  /** Tokens of attachments still encoding: no bytes yet, not orphans. */
+  encoding: ReadonlySet<string> = new Set(),
 ): RestoredDraft | null {
   if (live === undefined) {
     if (record === null) return null;
@@ -60,7 +62,7 @@ export function mergeRestoredDraft(
     attachments.push(attachment);
     known.add(attachment.id);
   }
-  const text = dropOrphanImageTokens(live.text, known);
+  const text = dropOrphanImageTokens(live.text, new Set([...known, ...encoding]));
   if (text === live.text && attachments.length === live.attachments.length) {
     return null;
   }

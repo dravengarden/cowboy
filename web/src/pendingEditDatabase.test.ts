@@ -337,3 +337,76 @@ test("an unchanged rerender does not overwrite another tab's newer mirror", asyn
     ["newer"],
   );
 });
+
+test("an image pasted while the edit's bytes load keeps its token and settles", async () => {
+  const storage = fakeStorage(900);
+  const database = fakeDatabase();
+  const first = await loadPage(storage);
+  first.attachPendingEditDatabase(database as never);
+  await settle();
+  first.setPendingEdit(edit("paste"));
+  first.flushPendingEdits();
+  await settle();
+
+  database.ready = false;
+  const second = await loadPage(storage);
+  second.attachPendingEditDatabase(database as never);
+  await settle();
+  // Only this test's session: an earlier test's page may still flush its
+  // debounced mirror into the shared localStorage this page hydrates from.
+  const settledSessions: string[] = [];
+  const stop = second.onPendingEditEncodesSettled((session) => {
+    if (session === "paste") settledSessions.push(session);
+  });
+  // The editor reopens on the edit and the user pastes before a1 is back.
+  const placeholder = {
+    ...image("p1"),
+    block: { type: "image" as const, data: "", mimeType: "image/png" },
+    pending: true,
+  };
+  const settleImage = second.beginPendingEditEncoding("paste", "draft", "row-1", [placeholder]);
+  const pasted = TEXT + " ![new](cowboy-att:p1)";
+  second.setPendingEdit(edit("paste", pasted, [placeholder]));
+  second.flushPendingEdits();
+
+  // The database answers first: the paste's token is not an orphan.
+  database.ready = true;
+  second.retryPendingEditRestore();
+  await settle();
+  assertEquals(second.getPendingEdit("paste", "draft", "row-1")?.text, pasted);
+  assertEquals(settledSessions, []);
+
+  settleImage([image("p1")]);
+  const recovered = second.getPendingEdit("paste", "draft", "row-1");
+  assertEquals(recovered?.text, pasted);
+  assertEquals(recovered?.attachments.map((attachment) => attachment.id), ["a1", "p1"]);
+  assertEquals(settledSessions, ["paste"]);
+  stop();
+});
+
+test("orphan recovery is rechecked once an edit's bytes arrive", async () => {
+  const storage = fakeStorage(900);
+  const database = fakeDatabase();
+  const first = await loadPage(storage);
+  first.attachPendingEditDatabase(database as never);
+  await settle();
+  first.setPendingEdit(edit("arrive"));
+  first.flushPendingEdits();
+  await settle();
+
+  database.ready = false;
+  const second = await loadPage(storage);
+  second.attachPendingEditDatabase(database as never);
+  await settle();
+  const settledSessions: string[] = [];
+  const stop = second.onPendingEditEncodesSettled((session) => {
+    if (session === "arrive") settledSessions.push(session);
+  });
+  assertEquals(second.claimOrphanedPendingEdits("arrive", new Set(), new Set()), []);
+  database.ready = true;
+  second.retryPendingEditRestore();
+  await settle();
+  assertEquals(settledSessions, ["arrive"]);
+  assertEquals(second.claimOrphanedPendingEdits("arrive", new Set(), new Set()).length, 1);
+  stop();
+});

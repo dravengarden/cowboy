@@ -2522,12 +2522,21 @@ fn update_declaration(shared: &Shared, worker: &WorkerSnapshot) {
         return;
     };
     session.adopt_only = true;
+    // A worker never reports its session-extension switches. An ordinary
+    // launch never records a declaration here, so without a reset's one the
+    // session's current switches stand in (what any relaunch declares). Every
+    // Machine (re)connect re-sends this cache, and the Machine relaunches from
+    // it on a generation cutover, which refuses an MCP launch without them
+    // (2026-11-25, sess-1794380205511 crashed after an OVH Machine restart).
+    let current = shared
+        .hub
+        .session_info(&session.session_id)
+        .map(|info| crate::controller_hooks::launch_extensions(&shared.hub, &info.meta));
     let mut declarations = shared.declarations.lock();
-    // A worker never reports its session-extension switches; keep the declared ones.
     let declared = declarations
         .get(&session.session_id)
         .and_then(|old| old.extensions);
-    session.extensions = session.extensions.or(declared);
+    session.extensions = session.extensions.or(declared).or(current);
     declarations.insert(session.session_id.clone(), session);
 }
 
@@ -4737,6 +4746,47 @@ mod tests {
             ),
             "{commands:?}"
         );
+    }
+
+    // An ordinary launch records no declaration and its worker never reports
+    // the session-extension switches. The cached declaration every Machine
+    // reconnect re-sends must still carry them: after a Machine restart a
+    // generation cutover relaunches from it, and an MCP launch without them is
+    // refused (2026-11-25, sess-1794380205511).
+    #[tokio::test]
+    async fn a_reported_launch_declares_the_session_extension_switches() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "codex".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::model::SessionOrigin::Web,
+            false,
+        );
+        let runtime = RemoteRuntime::for_test(hub, Vec::new());
+        let mut session = snapshot("s").launch.expect("launch metadata");
+        session.extensions = Some(crate::runtime_wire::SessionExtensions {
+            schema: crate::runtime_wire::SESSION_EXTENSIONS_SCHEMA,
+            memory_tools: false,
+            memory_recall: false,
+        });
+        runtime.ensure(session.clone());
+        assert!(!runtime.shared.declarations.lock().contains_key("s"));
+        let mut worker = snapshot("s");
+        worker.launch.as_mut().expect("reported launch").extensions = None;
+        handle_frame(
+            &runtime.shared,
+            Frame::Snapshot {
+                worker: Box::new(worker),
+            },
+            &mut tokio::io::sink(),
+        )
+        .await
+        .expect("snapshot");
+        let declared = runtime.shared.declarations.lock()["s"].clone();
+        assert!(declared.adopt_only);
+        assert_eq!(declared.extensions, session.extensions);
     }
 
     #[tokio::test]
