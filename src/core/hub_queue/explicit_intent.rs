@@ -125,7 +125,10 @@ impl ExplicitIntent {
             .into_iter()
             .filter_map(|entry| match entry {
                 // Before receipts carried a time: keep them a full horizon.
-                serde_json::Value::String(cmid) => Some((cmid, now)),
+                serde_json::Value::String(cmid) if cmid.len() <= MAX_HELD_COMMAND_BYTES => {
+                    Some((cmid, now))
+                }
+                serde_json::Value::String(_) => None,
                 entry => Some((
                     entry.get("cmid")?.as_str()?.to_owned(),
                     entry.get("at_ms")?.as_i64()?,
@@ -267,6 +270,18 @@ impl Session {
             .and_then(|held| held.command.clone())
         {
             self.explicit.settle(command);
+        }
+    }
+
+    /// Undo [`Self::settle_head_command`]: the displacing commit failed.
+    pub(in crate::core) fn unsettle_head_command(&mut self) {
+        if let Some(command) = self
+            .queue
+            .first()
+            .and_then(|head| head.explicit.as_ref())
+            .and_then(|held| held.command.clone())
+        {
+            self.explicit.unsettle(&command);
         }
     }
 
@@ -447,8 +462,12 @@ impl Hub {
         self.inner
             .sessions
             .lock()
-            .get(session_id)
-            .is_none_or(|s| s.explicit.settled.len() < MAX_RECEIPTS)
+            .get_mut(session_id)
+            .is_none_or(|s| {
+                // Expired receipts never hold a place: a full ledger frees itself.
+                s.explicit.prune(chrono::Utc::now().timestamp_millis());
+                s.explicit.settled.len() < MAX_RECEIPTS
+            })
     }
 
     /// Whether an edit holds back what a retry of this wait would send: the

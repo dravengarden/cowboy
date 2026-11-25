@@ -160,13 +160,11 @@ function saveSessionEdits(sessionId: string): boolean {
   void writeDatabase(sessionId, () =>
     cache.update((stored) => mergeStoredEdits(stored, { owned, released, mirrored })),
   ).catch((): void => {
-    // Refused or unreadable: localStorage for every edit this write carried
-    // and nothing newer replaced; released slots go with the next write.
+    // Retried later; a copy too big for localStorage keeps the mirror's promise.
     owners.forEach((key, index) => {
-      databaseOwners.delete(key);
-      if (records.get(key) !== snapshot[index]) return;
-      slots.keep(sessionId, key); // the next write (a restore, a flush) retries
-      persistLegacy(key);
+      if (records.get(key) !== snapshot[index]) return void databaseOwners.delete(key);
+      slots.keep(sessionId, key);
+      if (persistLegacy(key, false)) databaseOwners.delete(key);
     });
     slots.restoreReleased(sessionId, released);
   });
@@ -301,16 +299,19 @@ function persist(key: string): void {
   persistLegacy(key);
 }
 
-function persistLegacy(key: string): void {
+/** Mirror the record (`strip`: only its text if too big); whether all fit. */
+function persistLegacy(key: string, strip = true): boolean {
   const local = storage();
-  if (local === null) return;
+  if (local === null) return false;
   const record = records.get(key);
-  if (record === undefined || mirrorNewerThan(key, record.updatedAt)) return;
+  if (record === undefined || mirrorNewerThan(key, record.updatedAt)) return false;
   const storageKey = KEY_PREFIX + key;
   try {
     local.setItem(storageKey, JSON.stringify(record));
     mirrored.add(key);
+    return true;
   } catch {
+    if (!strip) return false;
     // Large embedded images can exceed the browser quota. Keep the irreplaceable
     // text and strip now-orphaned inline-image tokens; files can be reattached.
     try {
@@ -326,6 +327,7 @@ function persistLegacy(key: string): void {
     } catch {
       // The mounted editor and in-memory mirror remain the last-resort source.
     }
+    return false;
   }
 }
 

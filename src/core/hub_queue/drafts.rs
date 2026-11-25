@@ -858,6 +858,11 @@ impl Hub {
                     s.pending_retired_dispatches.clone(),
                     false,
                 ) else {
+                    if front {
+                        // The head stays first: its command did not end.
+                        s.unsettle_head_command();
+                        self.write_receipts_locked(&sid, s);
+                    }
                     return Err("Failed to persist recovery draft activation; draft retained");
                 };
                 claims
@@ -950,6 +955,12 @@ impl Hub {
         let mut claims = self.inner.notice_claims.lock();
         if let Some(s) = sessions.get_mut(&sid) {
             commit.reservation.release_in_session(s);
+            if commit.front {
+                // The held head stays first: its command did not end. Written
+                // ahead of the snapshot that restores the queue.
+                s.unsettle_head_command();
+                self.write_receipts_locked(&sid, s);
+            }
             self.finish_in_flight_pending_commit(&sid, &s.queue, &s.drafts, &mut claims);
         } else {
             claims.in_flight_pending_commits.remove(&sid);

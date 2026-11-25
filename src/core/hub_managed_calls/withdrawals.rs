@@ -219,6 +219,8 @@ impl Hub {
                         "another pending queue commit is in progress; retry shortly",
                     );
                 }
+                // Never persist a displaced intent; the commit settles it.
+                crate::core::hub_queue::strip_displaced_intents(&mut queue);
                 let Some(rx) = self.send_acked_update_pending_with_retired(
                     session_id,
                     queue.clone(),
@@ -298,6 +300,7 @@ impl Hub {
         if settled_notices.is_empty() {
             return None;
         }
+        crate::core::hub_queue::strip_displaced_intents(&mut queue);
         let mut claims = self.inner.notice_claims.lock();
         if claims.in_flight_pending_commits.contains_key(session_id) {
             return Some(Err(

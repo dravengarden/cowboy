@@ -12,6 +12,7 @@ mod retry;
 mod submit;
 
 pub(super) use explicit_intent::ExplicitIntent;
+pub(in crate::core) use explicit_intent::strip_displaced_intents;
 
 /// The wait of a prompt the full dispatch channel returned.
 const DISPATCH_FULL_WAIT: &str = "the dispatch queue is full";
