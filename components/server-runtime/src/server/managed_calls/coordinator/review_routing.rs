@@ -141,3 +141,136 @@ pub(super) async fn route_review(
     target.options = None;
     Ok(())
 }
+
+/// Soft response budget for `calls.capabilities()` so it stays safely below
+/// the 16 KiB `cowboy_read` limit even as providers and presets grow.
+const CAPABILITIES_SOFT_BUDGET_BYTES: usize = 15_000;
+
+/// Compact one projected quota entry for `calls.capabilities()` only.
+/// Admission reads `account_quota()` directly and never passes through this
+/// projection, so quota-pace routing keeps full fidelity.
+fn compact_quota_account(account: &mut Value) {
+    let Some(limits) = account.get_mut("limits").and_then(Value::as_object_mut) else {
+        return;
+    };
+    if let Some(by_id) = limits.get("rateLimitsByLimitId").and_then(Value::as_object)
+        && !by_id.is_empty()
+        && let Some(top) = limits.get("rateLimits")
+        && by_id.values().any(|entry| {
+            entry.get("primary") == top.get("primary")
+                && entry.get("secondary") == top.get("secondary")
+        })
+    {
+        limits.remove("rateLimits");
+    }
+    if let Some(credits) = limits
+        .get_mut("rateLimitResetCredits")
+        .and_then(Value::as_object_mut)
+        && let Some(items) = credits.get_mut("credits").and_then(Value::as_array_mut)
+    {
+        for item in items {
+            if let Some(obj) = item.as_object_mut() {
+                obj.remove("description");
+            }
+        }
+    }
+}
+
+/// Keep the `calls.capabilities()` JSON response safely under the 16 KiB
+/// CodeAct limit without altering provider/preset/routing fields consumed by
+/// callers or workspace routing scripts.
+pub(super) fn compact_capabilities_payload(mut payload: Value) -> Value {
+    if let Some(accounts) = payload
+        .pointer_mut("/quota/accounts")
+        .and_then(Value::as_array_mut)
+    {
+        for account in accounts {
+            compact_quota_account(account);
+        }
+    }
+    let bytes = serde_json::to_vec(&payload).map_or(usize::MAX, |b| b.len());
+    if bytes > CAPABILITIES_SOFT_BUDGET_BYTES
+        && let Some(accounts) = payload
+            .pointer_mut("/quota/accounts")
+            .and_then(Value::as_array_mut)
+    {
+        for account in accounts {
+            if let Some(obj) = account.as_object_mut() {
+                obj.insert("limits".into(), Value::Null);
+                obj.insert("needs_read".into(), json!(true));
+            }
+        }
+    }
+    payload
+}
+
+#[cfg(test)]
+mod compact_tests {
+    use super::*;
+
+    #[test]
+    fn compact_quota_dedupes_rate_limits_and_strips_credit_prose() {
+        let mut payload = json!({
+            "providers": [{"id": "codex", "review_routing": {"high": {"preset": "astra-max"}}}],
+            "quota": {
+                "accounts": [{
+                    "account": "acct-1",
+                    "provider_id": "codex",
+                    "status": "available",
+                    "stale": false,
+                    "needs_read": false,
+                    "limits": {
+                        "rateLimits": {"primary": {"usedPercent": 10}, "secondary": {"usedPercent": 20}},
+                        "rateLimitsByLimitId": {
+                            "codex": {"primary": {"usedPercent": 10}, "secondary": {"usedPercent": 20}}
+                        },
+                        "rateLimitResetCredits": {
+                            "credits": [{"remaining": 2, "description": "Long verbose marketing copy"}]
+                        }
+                    }
+                }]
+            }
+        });
+        payload = compact_capabilities_payload(payload);
+        let limits = &payload["quota"]["accounts"][0]["limits"];
+        assert!(limits.get("rateLimits").is_none());
+        assert_eq!(
+            limits["rateLimitsByLimitId"]["codex"]["primary"]["usedPercent"],
+            10
+        );
+        assert!(
+            limits["rateLimitResetCredits"]["credits"][0]
+                .get("description")
+                .is_none()
+        );
+        assert_eq!(
+            limits["rateLimitResetCredits"]["credits"][0]["remaining"],
+            2
+        );
+        assert_eq!(
+            payload["providers"][0]["review_routing"]["high"]["preset"],
+            "astra-max"
+        );
+    }
+
+    #[test]
+    fn oversized_capabilities_falls_back_to_needs_read_on_quota_accounts() {
+        let mut payload = json!({
+            "providers": [{"id": "codex", "padding": "x".repeat(14_900)}],
+            "quota": {
+                "accounts": [{
+                    "account": "acct-1",
+                    "provider_id": "codex",
+                    "status": "available",
+                    "stale": false,
+                    "needs_read": false,
+                    "limits": {"rateLimitsByLimitId": {"codex": {"primary": {"usedPercent": 15}}}}
+                }]
+            }
+        });
+        payload = compact_capabilities_payload(payload);
+        assert_eq!(payload["quota"]["accounts"][0]["limits"], Value::Null);
+        assert_eq!(payload["quota"]["accounts"][0]["needs_read"], true);
+        assert_eq!(payload["providers"][0]["id"], "codex");
+    }
+}

@@ -149,18 +149,16 @@ today's family/effort order. For a fresh review:
   routine review of the redesign. Failed or cancelled rounds do not count.
   `cowboy.review.routed` records the child's completed `rounds` on every
   continuation decision.
-- Quota stays advisory evidence for the caller. There is no quota-based
-  automatic fallback.
-- Astra Max is explicit-only (since 2026-11-21, OpenAI weekly quota pressure).
-  The Codex high tier chooses Sol Max like routine; a high-risk review still
-  admits `astra-max` by name. Before this, 17 Astra Max reviews in three days
-  averaged about 5.3M tokens each, against about 2.9M for Sol Max, and most
-  were the caller's own choice under a broad reading of high.
-- Callers name Astra Max or Fable only when the user asked for it or the
-  review root's `AGENTS.md` Review risk section lists the change's area for
-  the strongest reviewer (since 2026-11-22); the reason cites the request or
-  that entry. A repository without such a list keeps them user-requested
-  only.
+- On `risk: "high"` for Codex (since 2026-11-24), automatic priority switches
+  between `astra-max` when fresh quota headroom is ample relative to reset time
+  and `sol-max` when conserving (`quota_mode` in `providers[].review_routing`).
+  Routine reviews never use quota to escalate: they stay on Sol Max and refuse
+  `astra-max` (`preset_outside_tier`).
+- Agents may also self-assess and explicitly name `astra-max` with
+  `risk: "high"` and a concrete `reason` when an important change warrants the
+  strongest reviewer (for example areas listed in the review root's `AGENTS.md`
+  Review risk section). `fable-max` remains explicit-only with `risk: "high"`
+  and a concrete `reason` due to its higher cost.
 
 The chosen preset is already recorded on the call; generation binding, claim,
 recovery and reuse (`review-generation-binding.md`) are unchanged.

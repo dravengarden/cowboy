@@ -282,7 +282,7 @@ pub const ACTION_SDK: &str = r#"// cowboy_execute({action,arguments,operation});
 // Images: discover calls.capabilities({capability:"image.generate"}); send only task + input paths.
 // calls.result returns verified artifact paths on the execution machine, never image bytes.
 // review.start: {focus?:string,design?:boolean,provider?:"auto"|"codex"|"claude-code"|"antigravity",files?:string[],root?:string,preset?:string,title?:string,reason?:string,task?:string,base?:string,fresh?:boolean,notify?:boolean,risk?:"routine"|"high"}
-// risk:"high" (needs reason) routes by review_routing (Astra Max/Fable explicit-only); omit preset.
+// risk:"high" (needs reason) routes by review_routing (Codex auto-switches Astra/Sol by quota; Fable explicit-only); omit preset or self-assess astra-max.
 // notify:true queues one Cowboy notice into this session when the call ends (idle: new turn;
 // busy: next turn). End your turn instead of polling calls.wait; then read calls.result.
 // task (stable id: letters, digits, -_. up to 128, e.g. "f01-awaiting-merge"; prose goes in focus)
@@ -522,7 +522,7 @@ export interface Cowboy {
     capabilities(q:{capability:"image.generate"|"image.edit";if_revision?:string}):Promise<{revision:string;unchanged?:boolean;providers?:{id:string;available:boolean;reason:string|null}[];[key:string]:unknown}>;
     inspect(call_id: string):Promise<CallView>;
     wait(call_id: string, timeout_ms?: number):Promise<CallView>;
-    result(call_id: string, q?: TextWindow):Promise<CallView>; // error notice_dispatching: retry after notice arrives
+    result(call_id: string, q?: TextWindow):Promise<CallView>; // chars<=12000 (fit 16KiB); notice_dispatching: retry
     observe(request_id: string):Promise<CallView>;
   };
 }

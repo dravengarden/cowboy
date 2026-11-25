@@ -158,7 +158,24 @@ pub fn resolve_machine_workspace<'a>(
     workspaces
         .iter()
         .find(|workspace| workspace.id == requested_id)
-        .ok_or_else(|| format!("unknown trusted workspace {requested_id:?}"))
+        .ok_or_else(|| {
+            let ids: Vec<&str> = workspaces.iter().take(8).map(|w| w.id.as_str()).collect();
+            if ids.is_empty() {
+                format!(
+                    "unknown trusted workspace {requested_id:?}; no trusted workspaces are registered on this machine (see projects.workspaces)"
+                )
+            } else {
+                let more = if workspaces.len() > ids.len() {
+                    ", …"
+                } else {
+                    ""
+                };
+                format!(
+                    "unknown trusted workspace {requested_id:?}; pass a workspace id (not a path) such as {}{more} (see projects.workspaces)",
+                    ids.join(", ")
+                )
+            }
+        })
 }
 
 pub fn default_file_limit() -> usize {

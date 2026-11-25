@@ -766,7 +766,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
     {
         return error(code, "not_submitted");
     }
-    json!({
+    review_routing::compact_capabilities_payload(json!({
         "schema": 1,
         "state": "ok",
         "enabled": policy.enabled,
@@ -800,7 +800,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             // tree of a repository registered on this Machine.
             "cwd": placement.cwd,
         },
-    })
+    }))
 }
 
 /// The first candidate whose child can run now, in preference order; else

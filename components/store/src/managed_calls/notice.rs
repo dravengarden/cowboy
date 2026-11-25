@@ -66,7 +66,7 @@ pub fn call_notice(record: &Record) -> String {
         .unwrap_or_default();
     format!(
         "[Cowboy] Managed call {}{title} finished: {}{error}. Read it with cowboy_read: \
-         cowboy.calls.result(\"{}\",{{offset:0,chars:4000}}). A running, failed or partial \
+         cowboy.calls.result(\"{}\",{{offset:0,chars:12000}}). A running, failed or partial \
          review is never evidence of a clean review.{hint}",
         record.call_id,
         record.state.code(),

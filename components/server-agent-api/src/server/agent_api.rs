@@ -38,6 +38,8 @@ mod control;
 mod event_reads;
 mod json_reads;
 mod observations;
+mod result_window;
+use result_window::result_window;
 mod review_defaults;
 mod session_reads;
 mod usage_reads;
@@ -962,37 +964,6 @@ fn text_window(value: &mut Value, field: &str, args: &Value) -> Result<(), Strin
     Ok(())
 }
 
-/// A schema result's `structured` is `JSON.parse` of the complete text, so a
-/// page that holds only part of that text must not repeat the whole parse:
-/// it alone can exceed the response budget on every page. Scalars such as
-/// `verdict` stay; the omitted keys are listed for a caller that pages the
-/// text and parses it inside its program.
-fn result_window(result: &mut Value, args: &Value) -> Result<(), String> {
-    text_window(result, "text", args)?;
-    partial_structured(result);
-    Ok(())
-}
-
-fn partial_structured(result: &mut Value) {
-    let complete = result["range"]["offset"] == 0 && result["range"]["next"].is_null();
-    if complete || result.get("range").is_none() {
-        return;
-    }
-    let Some(structured) = result.get_mut("structured").and_then(Value::as_object_mut) else {
-        return;
-    };
-    let omitted: Vec<String> = structured
-        .iter()
-        .filter(|(_, value)| value.is_object() || value.is_array())
-        .map(|(key, _)| key.clone())
-        .collect();
-    if omitted.is_empty() {
-        return;
-    }
-    structured.retain(|_, value| !value.is_object() && !value.is_array());
-    result["structured_omitted"] = json!(omitted);
-}
-
 fn content_text(content: &[Value]) -> String {
     content
         .iter()
@@ -1016,10 +987,11 @@ const EVENT_KINDS: &[&str] = &[
 ];
 
 /// Accepts the Provider-transcript names agents guess (`assistant`,
-/// `user_message`) for Cowboy's kinds; six sessions failed on them.
+/// `user_message`, `tool_call`, `tool_use`) for Cowboy's kinds.
 fn normalize_event_kind(kind: &str) -> &str {
     match kind.strip_suffix("_message").unwrap_or(kind) {
         "assistant" => "agent",
+        "tool_call" | "tool_use" => "tool",
         kind => kind,
     }
 }
@@ -1405,7 +1377,7 @@ fn call_error(op: &str, echo: &str, error: String) -> Value {
         "text_window_required" => {
             // List reads (messages, queue, drafts) window each row with chars
             // only; a single text read also pages with offset.
-            "; pass {chars:1000} (max 4000); a single text read also takes {offset} and continues from range.next".to_owned()
+            "; pass {chars:1000} (max 4000; calls.result up to 12000, auto-fitted to 16 KiB); a single text read also takes {offset} and continues from range.next".to_owned()
         }
         _ => String::new(),
     };
@@ -1457,7 +1429,7 @@ fn finish(done: bool, mut frame: Value) -> Value {
         if size > MAX_RESULT_BYTES {
             json!({"schema":1,"state":"error","error":{"code":"result_too_large","bytes":size,
                 "limit":MAX_RESULT_BYTES,"largest":largest_fields(&result),
-                "message":"return a projection: map to the needed fields or pass a smaller limit; long text such as a call result fits one 4000-char window per cowboy_read, so continue from range.next in the next call"}})
+                "message":"return a projection: map to the needed fields or pass a smaller limit; calls.result accepts up to chars:12000 (auto-fitted to 16 KiB) and other text reads up to chars:4000, continuing from range.next"}})
         } else {
             json!({"schema":1,"state":"ok","value":result})
         }

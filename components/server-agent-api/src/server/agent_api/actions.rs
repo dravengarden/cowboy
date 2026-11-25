@@ -203,14 +203,16 @@ fn call_action(action: &str, args: Value, operation: &str) -> Result<Action, Cal
     let input: CallInput = serde_json::from_value(args)
         .map_err(|_| refuse("unknown or mistyped argument; see cowboy_read({help:\"actions\"})"))?;
     let review = action == "review.start";
+    if review && input.child_session_id.is_some() {
+        return Err(refuse(
+            "review.start always starts a fresh review; to continue a review child (up to 3 rounds, keeping its preset when the declared risk tier admits it; Antigravity is fresh-only), use calls.start({purpose:\"review\"|\"design_review\",child_session_id,instruction,risk}) without preset, or omit child_session_id on review.start with the same task, base and root to reuse captured input",
+        ));
+    }
     if review
-        && (input.instruction.is_some()
-            || input.purpose.is_some()
-            || input.capability.is_some()
-            || input.child_session_id.is_some())
+        && (input.instruction.is_some() || input.purpose.is_some() || input.capability.is_some())
     {
         return Err(refuse(
-            "review.start takes focus, not instruction, purpose, capability or child_session_id",
+            "review.start takes focus, not instruction, purpose or capability",
         ));
     }
     if !review
@@ -1327,5 +1329,19 @@ mod tests {
         assert_eq!(request.labels[crate::managed_calls::review::REUSE], "true");
         assert!(!request.output.is_text());
         assert!(request.prompt().contains(&"a".repeat(40)));
+    }
+
+    #[test]
+    fn review_start_rejects_child_session_id_with_continuation_and_reuse_guidance() {
+        let err =
+            call_action("review.start", json!({"child_session_id": "sess-1"}), "op").unwrap_err();
+        assert_eq!(err.code, "invalid_argument");
+        assert!(err.message.contains("calls.start"), "{}", err.message);
+        assert!(err.message.contains("design_review"), "{}", err.message);
+        assert!(
+            err.message.contains("task, base and root"),
+            "{}",
+            err.message
+        );
     }
 }

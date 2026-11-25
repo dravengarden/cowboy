@@ -22,6 +22,55 @@ const LIMIT: usize = 256 * 1024;
 type Gateway =
     Arc<dyn Fn(RelayAction) -> Pin<Box<dyn Future<Output = Result<Value>> + Send>> + Send + Sync>;
 
+#[derive(Debug)]
+struct GatewayError {
+    code: Option<String>,
+    message: String,
+}
+
+impl GatewayError {
+    fn rejected(code: Option<String>, message: impl Into<String>) -> anyhow::Error {
+        anyhow::Error::new(Self {
+            code,
+            message: message.into(),
+        })
+    }
+}
+
+impl std::fmt::Display for GatewayError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.code.as_deref() {
+            Some(code) => write!(f, "{} ({code})", self.message),
+            None => f.write_str(&self.message),
+        }
+    }
+}
+
+impl std::error::Error for GatewayError {}
+
+fn is_definitive_authority_end(err: &anyhow::Error) -> bool {
+    matches!(
+        err.downcast_ref::<GatewayError>()
+            .and_then(|err| err.code.as_deref()),
+        Some(
+            "epoch_changed"
+                | "binding_not_admitted"
+                | "binding_not_configured"
+                | "binding_changed"
+                | "mcp_not_admitted"
+                | "managed_session_denied"
+                | "wrong_runtime_machine"
+                | "placement_changed"
+        )
+    )
+}
+
+enum CallFailure {
+    AuthorityEnded,
+    PreDispatch,
+    PostDispatchUncertain,
+}
+
 fn descriptor(path: &Path) -> Result<NativeDescriptor> {
     ensure!(path.is_absolute(), "MCP descriptor path must be absolute");
     let file = std::fs::OpenOptions::new()
@@ -66,10 +115,13 @@ pub(super) async fn serve(path: &Path) -> Result<()> {
                 30_000,
             )
             .await;
-            ensure!(
-                response["schema"] == 1 && response["state"] == "ok",
-                "MCP binding unavailable"
-            );
+            if response["schema"] != 1 || response["state"] != "ok" {
+                let code = response
+                    .pointer("/error/code")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                return Err(GatewayError::rejected(code, "MCP binding unavailable"));
+            }
             response
                 .get("result")
                 .cloned()
@@ -143,6 +195,7 @@ struct Session {
     gateway: Gateway,
     remote: Option<String>,
     protocol: Option<String>,
+    authority_ended: bool,
 }
 
 impl Session {
@@ -158,43 +211,86 @@ impl Session {
             .context("MCP response missing")
     }
 
-    async fn call(&mut self, message: Value) -> Result<Value> {
+    fn record_failure(&mut self, err: &anyhow::Error, dispatched: bool) -> CallFailure {
+        if is_definitive_authority_end(err) {
+            self.authority_ended = true;
+            CallFailure::AuthorityEnded
+        } else if dispatched {
+            CallFailure::PostDispatchUncertain
+        } else {
+            CallFailure::PreDispatch
+        }
+    }
+
+    async fn call(&mut self, message: Value) -> std::result::Result<Value, CallFailure> {
+        if self.authority_ended {
+            return Err(CallFailure::AuthorityEnded);
+        }
         if self.remote.is_none() {
-            let opened = (self.gateway)(RelayAction::Open).await?;
-            let handle = opened["handle"]
-                .as_str()
-                .context("MCP handle missing")?
-                .to_owned();
-            RelayRequest {
+            let opened = match (self.gateway)(RelayAction::Open).await {
+                Ok(opened) => opened,
+                Err(err) => return Err(self.record_failure(&err, false)),
+            };
+            let Some(handle) = opened["handle"].as_str().map(str::to_owned) else {
+                return Err(CallFailure::PreDispatch);
+            };
+            if (RelayRequest {
                 binding: self.descriptor.binding.name.clone(),
                 epoch: self.descriptor.epoch.clone(),
                 action: RelayAction::Close {
                     handle: handle.clone(),
                 },
+            })
+            .validate()
+            .is_err()
+            {
+                return Err(CallFailure::PreDispatch);
             }
-            .validate()?;
             self.remote = Some(handle.clone());
-            let initialized = self.request(&handle, json!({"jsonrpc":"2.0","id":"binding-initialize","method":"initialize","params":{"protocolVersion":self.protocol,"capabilities":{},"clientInfo":{"name":"cowboy-binding","version":"1"}}})).await?;
-            ensure!(
-                initialized.get("error").is_none()
-                    && initialized["result"]["protocolVersion"]
-                        .as_str()
-                        .is_some_and(|version| super::PROTOCOL_VERSIONS.contains(&version)),
-                "MCP initialization failed"
-            );
-            self.request(
-                &handle,
-                json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
-            )
-            .await?;
+            let initialized = match self
+                .request(
+                    &handle,
+                    json!({"jsonrpc":"2.0","id":"binding-initialize","method":"initialize","params":{"protocolVersion":self.protocol,"capabilities":{},"clientInfo":{"name":"cowboy-binding","version":"1"}}}),
+                )
+                .await
+            {
+                Ok(initialized) => initialized,
+                Err(err) => {
+                    self.close().await;
+                    return Err(self.record_failure(&err, false));
+                }
+            };
+            if initialized.get("error").is_some()
+                || !initialized["result"]["protocolVersion"]
+                    .as_str()
+                    .is_some_and(|version| super::PROTOCOL_VERSIONS.contains(&version))
+            {
+                self.close().await;
+                return Err(CallFailure::PreDispatch);
+            }
+            if let Err(err) = self
+                .request(
+                    &handle,
+                    json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+                )
+                .await
+            {
+                self.close().await;
+                return Err(self.record_failure(&err, false));
+            }
         }
-        let reply = self
-            .request(self.remote.as_deref().unwrap(), message.clone())
-            .await?;
-        ensure!(
-            reply["jsonrpc"] == "2.0" && reply["id"] == message["id"],
-            "MCP response identity changed"
-        );
+        let handle = self.remote.clone().expect("remote handle opened");
+        let reply = match self.request(&handle, message.clone()).await {
+            Ok(reply) => reply,
+            Err(err) => {
+                self.close().await;
+                return Err(self.record_failure(&err, true));
+            }
+        };
+        if reply["jsonrpc"] != "2.0" || reply["id"] != message["id"] {
+            self.close().await;
+            return Err(CallFailure::PostDispatchUncertain);
+        }
         Ok(reply)
     }
 
@@ -245,6 +341,7 @@ async fn serve_io(
         gateway,
         remote: None,
         protocol: None,
+        authority_ended: false,
     };
     let result = tokio::select! {
         biased;
@@ -338,14 +435,17 @@ async fn run(
                 };
                 match outcome {
                     Ok(reply) => reply,
-                    Err(_) => {
-                        super::write_reply(
-                            output,
-                            &super::rpc_error(id, -32000, "MCP binding unavailable"),
-                        )
-                        .await?;
-                        return Ok(());
+                    Err(CallFailure::AuthorityEnded) => {
+                        super::rpc_error(id, -32000, "MCP binding authority ended")
                     }
+                    Err(CallFailure::PreDispatch) => {
+                        super::rpc_error(id, -32000, "MCP binding unavailable")
+                    }
+                    Err(CallFailure::PostDispatchUncertain) => super::rpc_error(
+                        id,
+                        -32000,
+                        "MCP binding outcome unknown after dispatch; inspect state before retrying non-idempotent actions",
+                    ),
                 }
             }
             _ => super::rpc_error(id, -32601, "method or tool not admitted"),

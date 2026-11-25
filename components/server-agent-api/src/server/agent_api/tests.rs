@@ -303,8 +303,10 @@ fn transcript_chunks_coalesce_and_tool_updates_fold_into_their_call() {
             .err()
             .is_some_and(|error| error.contains("\"thought\" is not one"))
     );
-    let aliases = EventQuery::parse(&json!({"kinds":["assistant","user_message"]})).unwrap();
-    assert_eq!(aliases.kinds, ["agent", "user"]);
+    let aliases =
+        EventQuery::parse(&json!({"kinds":["assistant","user_message","tool_call","tool_use"]}))
+            .unwrap();
+    assert_eq!(aliases.kinds, ["agent", "user", "tool", "tool"]);
     assert!(EventQuery::parse(&json!({"limit":101})).is_err());
     assert!(EventQuery::parse(&json!({"limit":0})).is_err());
 }
