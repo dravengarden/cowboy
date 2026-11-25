@@ -264,7 +264,7 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
             available: true,
             reason: None,
             max_instances: 2,
-            network: None,
+            network: Some(crate::machine_protocol::machine_browser::BrowserNetwork::Ipv4OnlyV1),
         }),
     );
     let share_account = share_key(OWNER, &share_id);
