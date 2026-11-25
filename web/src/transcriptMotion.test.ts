@@ -1,7 +1,10 @@
 import { readFile } from "node:fs/promises";
 import { test } from "bun:test";
 import { assert, assertEquals } from "../../tools/test-assert.ts";
-import { transcriptRowContainment } from "./transcriptMotion.ts";
+import {
+  transcriptRowContainment,
+  transcriptScrollerChildSx,
+} from "./transcriptMotion.ts";
 import { readTranscriptSource } from "./appSource.test.ts";
 
 const transcriptSource = await readTranscriptSource();
@@ -157,5 +160,20 @@ test("restored visible scrollback resumes for each advanced cursor", () => {
       /viewportRestoreActiveRef\.current = false;\s*(?:setMaskingViewportRestore\(false\);\s*)?requestVisibleScrollbackBoundaryRef\.current\(\);/g,
     )?.length,
     2,
+  );
+});
+
+test("desktop transcript scroller contains every direct child at layout level without changing mobile", () => {
+  assertEquals(transcriptScrollerChildSx(true), {
+    flex: "0 0 auto",
+    contain: "layout",
+  });
+  assertEquals(transcriptScrollerChildSx(false), {
+    flex: "0 0 auto",
+  });
+  assert(
+    transcriptSource.includes(
+      '"& > *": transcriptScrollerChildSx(desktopNavigation),',
+    ),
   );
 });

@@ -41,3 +41,30 @@ export function transcriptRowContainment(
   if (streaming) return "none";
   return lazyMedia ? "layout" : "layout paint";
 }
+
+export type TranscriptScrollerChildSx = {
+  readonly flex: "0 0 auto";
+  readonly contain?: "layout";
+};
+
+/**
+ * Every direct child of the Desktop transcript scroller — not only `[data-key]`
+ * message/tool rows, but also sibling chrome such as the trailing activity row
+ * (`ThinkingIndicator`), `ScrollbackLoadingSkeleton`, optimistic user bubbles,
+ * compaction rows, and skeletons — must stay at constant `contain: "layout"`.
+ *
+ * On macOS 26.6.2 WebKit (21624.5.1.11.3), mounting, unmounting, or animating a
+ * composited layer (for example `CircularProgress`, `Skeleton`, or `maskImage`)
+ * inside a non-contained direct child of the `column-reverse` scroller still
+ * forces WebKit to tear down `"scrolled contents"` and leak its tiled
+ * `WKCompositingLayer` and `<CAIOSurface>` tree into a QuartzCore retain cycle.
+ * Mobile stays untouched (`flex: "0 0 auto"` only) so iOS WebKit's per-row
+ * paint containment and drawer overrides keep their existing behavior.
+ */
+export function transcriptScrollerChildSx(
+  desktop: boolean,
+): TranscriptScrollerChildSx {
+  return desktop
+    ? { flex: "0 0 auto", contain: "layout" }
+    : { flex: "0 0 auto" };
+}
