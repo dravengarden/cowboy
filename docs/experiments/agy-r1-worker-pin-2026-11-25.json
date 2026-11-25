@@ -1,0 +1,58 @@
+{
+ "schema": 1,
+ "source_revision": "f2aa8617567ae9945dc7161ff0d979fb1a4cc9c1",
+ "pre_merge_acceptance_revision": "e95f8c6b0a040745ef73501c56c1a2b3a83dc752",
+ "pin_advance_revision": "20c742f111dcd4617924dd2ba7065b493ea3a992",
+ "worker_generation": "worker-d1e33d3734a25370de61",
+ "production_activation": true,
+ "tests": [
+  {
+   "name": "worker-codex",
+   "receipt_sha256": "22abaeec30805803fe9aa46708b4dd77918c02f9d77252e27a33bc395f9fc25c",
+   "schema": "cowboy.execution-worker-conformance/v1",
+   "accepted": true,
+   "checks": 36
+  },
+  {
+   "name": "worker-claude",
+   "receipt_sha256": "4ad10e68894880b2429f5f1e09132496d6419026cae88330ce56b660ffda0096",
+   "schema": "cowboy.claude-execution-worker-conformance/v1",
+   "accepted": true,
+   "checks": 97
+  },
+  {
+   "name": "session",
+   "receipt_sha256": "422e22899ab74e1246b9a94aca514d366f9bfdfbc480fc455b62f7f4124b60e7",
+   "schema": "cowboy.execution-session-conformance/v1",
+   "accepted": true,
+   "checks": 44
+  },
+  {
+   "name": "logs",
+   "receipt_sha256": "fb5cd7419172be2324339ac887a2ec0c14c91b5f58e4cf96598b5964edaf2cf7",
+   "schema": "cowboy.logs-conformance/v1",
+   "accepted": true,
+   "checks": 11
+  },
+  {
+   "name": "agent-codex",
+   "receipt_sha256": "d72ee6a9ca843bf84258c35b76783e4fb63396690452c4b92d121cb97b51ac8f",
+   "plugin": "codex 3.6.37",
+   "previous": "3.6.36",
+   "probes": [
+    "codex 0.171.0 passed",
+    "codex-acp 2.9.0 passed"
+   ]
+  },
+  {
+   "name": "agent-claude-code",
+   "receipt_sha256": "fe7b5f655678bfffb793bb1017df221062198dbe5564d60e4472b04af1976ded",
+   "plugin": "claude-code 3.20.79",
+   "previous": "3.20.78",
+   "probes": [
+    "claude 2.1.330 passed",
+    "claude-agent-acp 0.109.1 passed"
+   ]
+  }
+ ]
+}
