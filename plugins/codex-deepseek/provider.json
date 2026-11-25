@@ -1,11 +1,11 @@
 {
   "authoring_schema": 2,
   "id": "codex-deepseek",
-  "version": "3.1.95",
+  "version": "3.1.96",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {
-    "name": "Codex · DeepSeek",
+    "name": "Codex \u00b7 DeepSeek",
     "vendor": "DeepSeek",
     "summary": "Codex in an isolated DeepSeek runtime with V4.1 Flash and V4 Pro",
     "accent": "#4D6BFE",
@@ -49,7 +49,7 @@
         "Working"
       ],
       "interval_ms": 4200,
-      "suffix": "…",
+      "suffix": "\u2026",
       "effect": "shimmer"
     },
     "accessible_label": "Codex DeepSeek is working"
@@ -57,8 +57,8 @@
   "configuration_presets": [
     {
       "id": "deepseek-flash-max",
-      "name": "Flash · Max",
-      "detail": "DeepSeek-V4.1-Flash · Max reasoning",
+      "name": "Flash \u00b7 Max",
+      "detail": "DeepSeek-V4.1-Flash \u00b7 Max reasoning",
       "is_default": true,
       "values": {
         "model": "deepseek-flash",
@@ -245,6 +245,13 @@
         "source": "git+ssh://git@github.com/dravengarden/columbus.git#0a5e25d5d4aadae833991afdea54e816ecbce5a1:projects/codex-deepseek",
         "integrity": "sha256:d993d4e362d572f14c732dec1a8b9c57d43bb38584ff6191f57f571cf98d2acf",
         "private": true
+      },
+      {
+        "id": "nodejs",
+        "version": "24.21.0",
+        "source": "https://nodejs.org/dist/v24.21.0/",
+        "integrity": "sha256:d9b4b85b5f62c81463503e58ec20e314509293caa5938fecefd7d0b5a4274c2b",
+        "private": true
       }
     ],
     "platforms": [
@@ -254,6 +261,12 @@
         "payload_digest": "",
         "launch_command": "codex-acp",
         "private_components": [
+          {
+            "kind": "acp_runtime",
+            "slot": "node",
+            "dependency": "nodejs",
+            "command": "node"
+          },
           {
             "kind": "provider_cli",
             "slot": "codex",
@@ -280,6 +293,12 @@
         "payload_digest": "",
         "launch_command": "codex-acp",
         "private_components": [
+          {
+            "kind": "acp_runtime",
+            "slot": "node",
+            "dependency": "nodejs",
+            "command": "node"
+          },
           {
             "kind": "provider_cli",
             "slot": "codex",

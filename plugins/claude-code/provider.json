@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-code",
-  "version": "3.20.80",
+  "version": "3.20.81",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {
@@ -19,12 +19,12 @@
     "indicator": {
       "kind": "glyph_cycle",
       "frames": [
-        "·",
-        "✢",
+        "\u00b7",
+        "\u2722",
         "*",
-        "✶",
-        "✻",
-        "✽"
+        "\u2736",
+        "\u273b",
+        "\u273d"
       ],
       "interval_ms": 200
     },
@@ -45,7 +45,7 @@
         "Working"
       ],
       "interval_ms": 3500,
-      "suffix": "…",
+      "suffix": "\u2026",
       "effect": "shimmer"
     },
     "accessible_label": "Claude Code is working"
@@ -53,8 +53,8 @@
   "configuration_presets": [
     {
       "id": "sonnet-xhigh",
-      "name": "Sonnet · XHigh",
-      "detail": "Sonnet 5.5 · Extra high effort",
+      "name": "Sonnet \u00b7 XHigh",
+      "detail": "Sonnet 5.5 \u00b7 Extra high effort",
       "is_default": false,
       "values": {
         "model": "sonnet",
@@ -63,8 +63,8 @@
     },
     {
       "id": "sonnet-medium",
-      "name": "Sonnet · Medium",
-      "detail": "Sonnet 5.5 · Medium effort",
+      "name": "Sonnet \u00b7 Medium",
+      "detail": "Sonnet 5.5 \u00b7 Medium effort",
       "is_default": false,
       "values": {
         "model": "sonnet",
@@ -73,8 +73,8 @@
     },
     {
       "id": "opus-high",
-      "name": "Opus · High",
-      "detail": "Opus 5.5 (1M context) · High effort",
+      "name": "Opus \u00b7 High",
+      "detail": "Opus 5.5 (1M context) \u00b7 High effort",
       "is_default": false,
       "values": {
         "model": "opus",
@@ -83,8 +83,8 @@
     },
     {
       "id": "opus-default",
-      "name": "Opus · Recommended",
-      "detail": "Opus 5.5 (1M context) · Model default effort",
+      "name": "Opus \u00b7 Recommended",
+      "detail": "Opus 5.5 (1M context) \u00b7 Model default effort",
       "is_default": true,
       "values": {
         "model": "opus",
@@ -93,8 +93,8 @@
     },
     {
       "id": "fable-high",
-      "name": "Fable · High",
-      "detail": "Fable 5.2 (1M context) · High effort",
+      "name": "Fable \u00b7 High",
+      "detail": "Fable 5.2 (1M context) \u00b7 High effort",
       "is_default": false,
       "values": {
         "model": "claude-fable-5-2[1m]",
@@ -103,8 +103,8 @@
     },
     {
       "id": "fable-max",
-      "name": "Fable · Max",
-      "detail": "Fable 5.2 (1M context) · Max effort",
+      "name": "Fable \u00b7 Max",
+      "detail": "Fable 5.2 (1M context) \u00b7 Max effort",
       "is_default": false,
       "values": {
         "model": "claude-fable-5-2[1m]",
@@ -310,6 +310,13 @@
         "source": "https://registry.npmjs.org/@anthropic-ai/claude-code/-/claude-code-2.1.330.tgz",
         "integrity": "sha512-KQMl6kixLMGHRCDUhkUPebuBhw13MpxlH3+17QzHQx40FNVd1z3uFKUSqQXB5zF9vLQGcpoC/8wWe5R35lsWvQ==",
         "private": true
+      },
+      {
+        "id": "nodejs",
+        "version": "24.21.0",
+        "source": "https://nodejs.org/dist/v24.21.0/",
+        "integrity": "sha256:d9b4b85b5f62c81463503e58ec20e314509293caa5938fecefd7d0b5a4274c2b",
+        "private": true
       }
     ],
     "platforms": [
@@ -319,6 +326,12 @@
         "payload_digest": "",
         "launch_command": "claude-agent-acp",
         "private_components": [
+          {
+            "kind": "acp_runtime",
+            "slot": "node",
+            "dependency": "nodejs",
+            "command": "node"
+          },
           {
             "kind": "provider_cli",
             "slot": "claude",
@@ -339,6 +352,12 @@
         "payload_digest": "",
         "launch_command": "claude-agent-acp",
         "private_components": [
+          {
+            "kind": "acp_runtime",
+            "slot": "node",
+            "dependency": "nodejs",
+            "command": "node"
+          },
           {
             "kind": "provider_cli",
             "slot": "claude",

@@ -1999,10 +1999,19 @@ def main():
         before = len(api.requests)
         # Negative candidates are disposable copies; never modify supplied
         # packaged input bytes or production Plugin state.
-        broken = args.runtime.parent / "broken-claude-package"
+        broken_root = args.runtime.parent / "broken-claude-package"
+        broken = broken_root / "provider_adapter-claude" / "content"
         (broken / "app").mkdir(parents=True)
         shutil.copytree(launcher.parent.parent / "bin", broken / "bin")
-        (broken / "runtime").symlink_to(launcher.parent.parent / "runtime", target_is_directory=True)
+        embedded_runtime = launcher.parent.parent / "runtime"
+        sibling_node = launcher.parent.parent.parent.parent / "acp_runtime-node" / "bin"
+        if embedded_runtime.exists():
+            (broken / "runtime").symlink_to(embedded_runtime, target_is_directory=True)
+        else:
+            require(sibling_node.is_file(), f"missing split Node runtime at {sibling_node}")
+            (broken_root / "acp_runtime-node").mkdir(parents=True, mode=0o700)
+            shutil.copyfile(sibling_node, broken_root / "acp_runtime-node" / "bin")
+            (broken_root / "acp_runtime-node" / "bin").chmod(0o500)
         (broken / "app/node_modules").symlink_to(launcher.parent / "node_modules", target_is_directory=True)
         # Every packaged module except the Mod itself, so a new module in the
         # package cannot make this negative case fail for an unrelated reason.

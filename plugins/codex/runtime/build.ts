@@ -123,9 +123,10 @@ try {
       throw new Error("Missing exact Codex adapter target");
     }
     const targetName = `${target.os}-${target.architecture}`;
-    const targetRoot = `${stage}/${targetName}`;
+    const runtimeStage = `${stage}/${targetName}`;
+    const targetRoot = `${runtimeStage}/provider_adapter-codex/content`;
     const targetArchive = `${output}/${targetName}/codex-acp.tar.gz`;
-    await mkdir(targetRoot);
+    await mkdir(targetRoot, { recursive: true });
     await run("tar", ["-xzf", targetArchive, "-C", targetRoot]);
     await copyFile(
       `${sourceRoot}/dist/index.js`,
@@ -211,7 +212,51 @@ try {
     component.artifact_digest = `sha256:${digest}`;
     component.artifact_url = `${baseUrl}/${digest}/codex-acp.tar.gz`;
     if (targetName === "linux-x86_64") {
-      await run(`${targetRoot}/bin/codex-acp`, ["--version"]);
+      const nodeBin = `${output}/${targetName}/node`;
+      const nodeComponent = target.components.find(
+        (value: { kind: string; slot: string }) =>
+          value.kind === "acp_runtime" && value.slot === "node",
+      );
+      if (!nodeComponent) throw new Error("Codex split Node component missing");
+      const probeSpec = `${stage}/probe-spec.json`;
+      await writeFile(
+        probeSpec,
+        JSON.stringify({
+          temporary: stage,
+          items: [
+            {
+              requirement: {
+                kind: "acp_runtime",
+                slot: "node",
+                dependency: nodeComponent.dependency,
+                command: nodeComponent.command,
+              },
+              path: nodeBin,
+              digest: nodeComponent.artifact_digest.replace(/^sha256:/, ""),
+              format: "raw",
+              probe: nodeComponent.probe.args,
+            },
+            {
+              requirement: {
+                kind: "provider_adapter",
+                slot: component.slot,
+                dependency: component.dependency,
+                command: component.command,
+              },
+              path: targetArchive,
+              digest,
+              format: "tar_gz",
+              entrypoint: component.entrypoint,
+              probe: component.probe.args,
+            },
+          ],
+        }),
+      );
+      await run(
+        process.execPath,
+        ["components/provider-runtime/build-helpers.ts", "--probe", probeSpec],
+        repository,
+      );
     }
   }
   // Publish the binding only after every patched target was built successfully.

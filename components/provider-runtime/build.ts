@@ -4,10 +4,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
-  readdir,
-  readFile,
   realpath,
-  rename,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -57,6 +54,12 @@ interface NpmArchiveRecipe {
   targets: Partial<Record<TargetKey, DownloadTarget>>;
 }
 
+interface NodeRuntimeRecipe {
+  kind: "node_runtime";
+  version: string;
+  probe: string[];
+}
+
 interface NodeNpmRecipe extends OwnedNodeRecipe {
   kind: "node_npm";
   version: string;
@@ -65,6 +68,8 @@ interface NodeNpmRecipe extends OwnedNodeRecipe {
   launcher?: string;
   /** Keep platform-filtered optional native bindings the package requires. */
   include_optional?: boolean;
+  /** Set false when the Provider declares a separate `acp_runtime` `node` component. */
+  bundle_node?: boolean;
   probe: string[];
 }
 
@@ -110,6 +115,7 @@ interface OwnedArchiveRecipe {
 
 type ComponentRecipe =
   | NpmArchiveRecipe
+  | NodeRuntimeRecipe
   | NodeNpmRecipe
   | GitGoRecipe
   | VendorArchiveRecipe
@@ -178,7 +184,16 @@ try {
   for (const platform of source.runtime.platforms) {
     const target = `${platform.os}-${platform.architecture}` as TargetKey;
     const components: ReleasedComponent[] = [];
+    const probeItems: Array<{
+      requirement: PrivateComponent;
+      path: string;
+      digest: string;
+      format: "raw" | "tar_gz";
+      entrypoint?: string;
+      probe: string[];
+    }> = [];
     for (const requirement of platform.private_components) {
+      validateComponentRef(requirement);
       const dependency = source.runtime.dependencies.find((candidate) =>
         candidate.id === requirement.dependency
       );
@@ -221,13 +236,18 @@ try {
       if (built.entrypoint) released.entrypoint = built.entrypoint;
       components.push(released);
       if (target === "linux-x86_64") {
-        await probeArtifact(
-          built.path,
-          built.format,
-          built.entrypoint,
-          recipe.probe,
-        );
+        probeItems.push({
+          requirement,
+          path: built.path,
+          digest,
+          format: built.format,
+          entrypoint: built.entrypoint,
+          probe: recipe.probe,
+        });
       }
+    }
+    if (target === "linux-x86_64" && probeItems.length > 0) {
+      await probePlatformArtifacts(temporary, probeItems);
     }
     matrix.push({
       os: platform.os,
@@ -315,7 +335,7 @@ async function buildComponent(
       if (!/^[a-f0-9]{128}$/.test(sha512)) {
         throw new Error(`invalid vendor SHA-512 for ${locked.url}`);
       }
-      const archive = await downloadVerified(locked.url, "sha512", sha512);
+      const archive = await downloadVerified(cacheRoot, locked.url, "sha512", sha512);
       return {
         path: archive,
         format: "tar_gz",
@@ -326,7 +346,7 @@ async function buildComponent(
     }
     case "npm_archive": {
       const locked = requiredTarget(recipe.targets, target, dependency.id);
-      const archive = await downloadSRI(
+      const archive = await downloadSRI(cacheRoot, 
         locked.url,
         required(locked.integrity, "npm integrity"),
       );
@@ -336,7 +356,7 @@ async function buildComponent(
     }
     case "npm_brotli": {
       const locked = requiredTarget(recipe.targets, target, dependency.id);
-      const archive = await downloadSRI(
+      const archive = await downloadSRI(cacheRoot, 
         locked.url,
         required(locked.integrity, "npm integrity"),
       );
@@ -360,22 +380,51 @@ async function buildComponent(
       await deterministicTarGz(stage, output);
       return { path: output, format: "tar_gz", entrypoint: `bin/${command}` };
     }
-    case "node_npm": {
+    case "node_runtime": {
+      if (
+        recipe.version !== runtimeLock.node.version ||
+        dependency.source !== `https://nodejs.org/dist/v${runtimeLock.node.version}/` ||
+        dependency.integrity !== nodeRuntimeIntegrity(runtimeLock.node)
+      ) {
+        throw new Error(`Node.js runtime source mismatch for ${dependency.id}`);
+      }
       const node = requiredTarget(runtimeLock.node.targets, target, "Node.js");
-      const nodeArchive = await downloadSha256(
+      const nodeArchive = await downloadSha256(cacheRoot, 
         node.url,
         required(node.sha256, "Node SHA-256"),
       );
       const stage = await mkdtemp(join(temporary, `${command}-`));
-      await mkdir(`${stage}/runtime`, { recursive: true });
       await run("tar", [
         "-xzf",
         nodeArchive,
         "-C",
-        `${stage}/runtime`,
+        stage,
         "--strip-components=2",
         node.entrypoint,
       ]);
+      const output = `${await realpath(destination)}/${command}`;
+      await copyFile(`${stage}/node`, output);
+      await chmod(output, 0o755);
+      return { path: output, format: "raw" };
+    }
+    case "node_npm": {
+      const stage = await mkdtemp(join(temporary, `${command}-`));
+      if (recipe.bundle_node !== false) {
+        const node = requiredTarget(runtimeLock.node.targets, target, "Node.js");
+        const nodeArchive = await downloadSha256(cacheRoot, 
+          node.url,
+          required(node.sha256, "Node SHA-256"),
+        );
+        await mkdir(`${stage}/runtime`, { recursive: true });
+        await run("tar", [
+          "-xzf",
+          nodeArchive,
+          "-C",
+          `${stage}/runtime`,
+          "--strip-components=2",
+          node.entrypoint,
+        ]);
+      }
       await mkdir(`${stage}/app`, { recursive: true });
       await copyFile(
         join(runtimeRoot, recipe.package_dir, "package.json"),
@@ -404,6 +453,16 @@ async function buildComponent(
           if (!((error as { code?: string }).code === "ENOENT")) throw error;
         });
       await mkdir(`${stage}/bin`, { recursive: true });
+      const nodeResolver = recipe.bundle_node === false
+        ? 'if [ -x "$cowboy_root/runtime/node" ]; then\n' +
+          '  cowboy_node="$cowboy_root/runtime/node"\n' +
+          'elif [ -x "$cowboy_root/../../acp_runtime-node/bin" ]; then\n' +
+          '  cowboy_node="$cowboy_root/../../acp_runtime-node/bin"\n' +
+          'else\n' +
+          '  echo "Cowboy Node.js runtime missing" >&2\n' +
+          '  exit 127\n' +
+          'fi\n'
+        : 'cowboy_node="$cowboy_root/runtime/node"\n';
       if (recipe.launcher) {
         if (!/^packages\/[a-z0-9-]+\/launch\.mjs$/.test(recipe.launcher)) {
           throw new Error("unsafe private launcher source");
@@ -411,13 +470,15 @@ async function buildComponent(
         await copyOwnedNode(runtimeRoot, recipe, dependency, `${stage}/app`);
         await writeFile(
           `${stage}/bin/cowboy-configured-cli`,
-          '#!/bin/sh\nset -eu\ncowboy_dir=${0%/*}\ncowboy_root=$(CDPATH= cd -- "$cowboy_dir/.." && pwd)\nexec "$cowboy_root/runtime/node" "$cowboy_root/app/cowboy-launch.mjs" --cowboy-private-cli "$@"\n',
+          '#!/bin/sh\nset -eu\ncase "$0" in */*) cowboy_dir=${0%/*} ;; *) cowboy_dir=. ;; esac\ncowboy_root=$(CDPATH= cd -- "$cowboy_dir/.." && pwd)\n' +
+            nodeResolver +
+            'exec "$cowboy_node" "$cowboy_root/app/cowboy-launch.mjs" --cowboy-private-cli "$@"\n',
           { mode: 0o755 },
         );
       }
       await writeFile(
         `${stage}/bin/${command}`,
-        `#!/bin/sh\nset -eu\ncase "$0" in */*) cowboy_dir=\${0%/*} ;; *) cowboy_dir=. ;; esac\ncowboy_root=$(CDPATH= cd -- "$cowboy_dir/.." && pwd)\nexec "$cowboy_root/runtime/node" "$cowboy_root/app/${
+        `#!/bin/sh\nset -eu\ncase "$0" in */*) cowboy_dir=\${0%/*} ;; *) cowboy_dir=. ;; esac\ncowboy_root=$(CDPATH= cd -- "$cowboy_dir/.." && pwd)\n${nodeResolver}exec "$cowboy_node" "$cowboy_root/app/${
           recipe.launcher ? "cowboy-launch.mjs" : recipe.script
         }" "$@"\n`,
         { mode: 0o755 },
@@ -568,204 +629,26 @@ async function writeProvenance(
   );
 }
 
-async function probeArtifact(
-  artifact: string,
-  format: "raw" | "tar_gz",
-  entrypoint: string | undefined,
-  args: string[],
-): Promise<void> {
-  const probeRoot = await mkdtemp(join(temporary, "probe-"));
-  const executablePath = format === "raw"
-    ? artifact
-    : `${probeRoot}/${required(entrypoint, "archive entrypoint")}`;
-  if (format === "tar_gz") {
-    await run("tar", ["-xzf", artifact, "-C", probeRoot]);
-    await chmod(executablePath, 0o755);
-  }
-  const executable = await realpath(executablePath);
-  const home = `${probeRoot}/home`;
-  await mkdir(home, { recursive: true });
-  const child = Bun.spawn({
-    cmd: [executable, ...args],
-    cwd: probeRoot,
-    env: {
-      ...process.env,
-      HOME: home,
-      XDG_CONFIG_HOME: `${home}/.config`,
-      GROK_HOME: `${home}/.grok`,
-    },
-    stdin: "ignore",
-    stdout: "inherit",
-    stderr: "inherit",
-  });
-  const timeout = setTimeout(() => child.kill("SIGKILL"), 30_000);
-  const code = await child.exited;
-  clearTimeout(timeout);
-  if (code !== 0) throw new Error(`runtime probe failed for ${artifact}`);
-}
 
-async function deterministicTarGz(
-  stage: string,
-  output: string,
-): Promise<void> {
-  const names = [];
-  for (const entry of await readdir(stage, { withFileTypes: true })) {
-    names.push(entry.name);
-  }
-  names.sort();
-  const tarPath = `${output}.tar`;
-  await run("tar", [
-    "--sort=name",
-    "--mtime=@0",
-    "--owner=0",
-    "--group=0",
-    "--numeric-owner",
-    "--format=gnu",
-    "-cf",
-    tarPath,
-    "-C",
-    stage,
-    ...names,
-  ]);
-  await run("gzip", ["-n", "-9", "-f", tarPath]);
-  await rename(`${tarPath}.gz`, output);
-}
-
-async function rejectLinks(root: string): Promise<void> {
-  for (const entry of await readdir(root, { withFileTypes: true })) {
-    const path = `${root}/${entry.name}`;
-    const metadata = await lstat(path);
-    if (metadata.isSymbolicLink()) {
-      throw new Error(`runtime archive contains symlink ${path}`);
-    }
-    if (metadata.isDirectory()) await rejectLinks(path);
-  }
-}
-
-async function downloadSRI(url: string, integrity: string): Promise<string> {
-  const match = /^sha512-([A-Za-z0-9+/]+={0,2})$/.exec(integrity);
-  if (!match) throw new Error(`unsupported npm integrity for ${url}`);
-  const expected = base64Hex(match[1]);
-  return await downloadVerified(url, "sha512", expected);
-}
-
-async function downloadSha256(url: string, expected: string): Promise<string> {
-  if (!/^[a-f0-9]{64}$/.test(expected)) {
-    throw new Error(`invalid SHA-256 for ${url}`);
-  }
-  return await downloadVerified(url, "sha256", expected);
-}
-
-async function downloadVerified(
-  url: string,
-  algorithm: "sha256" | "sha512",
-  expected: string,
-): Promise<string> {
-  const path = `${cacheRoot}/${algorithm}-${expected}`;
-  if (!(await exists(path))) {
-    const partial = `${path}.${process.pid}.partial`;
-    await run("curl", [
-      "--fail",
-      "--location",
-      "--retry",
-      "3",
-      "--output",
-      partial,
-      url,
-    ]);
-    const actual = await digestFile(partial, algorithm);
-    if (actual !== expected) {
-      await rm(partial).catch(() => undefined);
-      throw new Error(`download digest mismatch for ${url}`);
-    }
-    await rename(partial, path).catch(async (error) => {
-      if (!((error as { code?: string }).code === "EEXIST")) throw error;
-      await rm(partial);
-    });
-  }
-  const actual = await digestFile(path, algorithm);
-  if (actual !== expected) {
-    throw new Error(`cached download digest mismatch for ${url}`);
-  }
-  return path;
-}
-
-async function sha256(path: string): Promise<string> {
-  return await digestFile(path, "sha256");
-}
-
-async function digestFile(
-  path: string,
-  algorithm: "sha256" | "sha512",
-): Promise<string> {
-  const child = Bun.spawn({
-    cmd: [`${algorithm}sum`, path],
-    stdin: "ignore",
-    stdout: "pipe",
-    stderr: "ignore",
-  });
-  const output = await new Response(child.stdout).text();
-  if (await child.exited !== 0) {
-    throw new Error(`${algorithm}sum failed for ${path}`);
-  }
-  return output.trim().split(/\s+/)[0].toLowerCase();
-}
-
-function base64Hex(value: string): string {
-  const bytes = Uint8Array.from(
-    atob(value),
-    (character) => character.charCodeAt(0),
-  );
-  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join(
-    "",
-  );
-}
-
-async function run(
-  command: string,
-  args: string[],
-  options: { cwd?: string } = {},
-): Promise<void> {
-  const code = await Bun.spawn({
-    cmd: [command, ...args],
-    ...(options.cwd === undefined ? {} : { cwd: options.cwd }),
-    stdin: "ignore",
-    stdout: "inherit",
-    stderr: "inherit",
-  }).exited;
-  if (code !== 0) throw new Error(`${command} exited ${code}`);
-}
-
-async function readJson<T>(path: string): Promise<T> {
-  return JSON.parse(await readFile(path, "utf8")) as T;
-}
-
-async function exists(path: string): Promise<boolean> {
-  try {
-    await lstat(path);
-    return true;
-  } catch (error) {
-    if ((error as { code?: string }).code === "ENOENT") return false;
-    throw error;
-  }
-}
-
-function required<T>(value: T | undefined, label: string): T {
-  if (value === undefined) throw new Error(`missing ${label}`);
-  return value;
-}
-
-function requiredTarget<T>(
-  targets: Partial<Record<TargetKey, T>>,
-  target: TargetKey,
-  label: string,
-): T {
-  return required(targets[target], `${label} runtime lock for ${target}`);
-}
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   copyOwnedNode,
+  nodeRuntimeIntegrity,
   ownedArchiveIntegrity,
   type OwnedNodeRecipe,
 } from "./owned-sources.ts";
+import {
+  deterministicTarGz,
+  downloadSha256,
+  downloadSRI,
+  downloadVerified,
+  probePlatformArtifacts,
+  readJson,
+  rejectLinks,
+  required,
+  requiredTarget,
+  run,
+  sha256,
+  validateComponentRef,
+} from "./build-helpers.ts";

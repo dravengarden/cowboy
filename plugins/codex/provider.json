@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "codex",
-  "version": "3.6.38",
+  "version": "3.6.39",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {
@@ -33,7 +33,7 @@
         "Working"
       ],
       "interval_ms": 4200,
-      "suffix": "…",
+      "suffix": "\u2026",
       "effect": "shimmer"
     },
     "accessible_label": "Codex is working"
@@ -41,8 +41,8 @@
   "configuration_presets": [
     {
       "id": "sol-6-2-medium",
-      "name": "Sol 6.2 · Medium",
-      "detail": "GPT-6.2-Sol · Medium reasoning",
+      "name": "Sol 6.2 \u00b7 Medium",
+      "detail": "GPT-6.2-Sol \u00b7 Medium reasoning",
       "is_default": true,
       "values": {
         "model": "gpt-6.2-sol",
@@ -51,8 +51,8 @@
     },
     {
       "id": "astra-medium",
-      "name": "Astra · Medium",
-      "detail": "GPT-6.2-Astra · Medium reasoning",
+      "name": "Astra \u00b7 Medium",
+      "detail": "GPT-6.2-Astra \u00b7 Medium reasoning",
       "is_default": false,
       "values": {
         "model": "gpt-6.2-astra",
@@ -61,8 +61,8 @@
     },
     {
       "id": "astra-max",
-      "name": "Astra · Max",
-      "detail": "GPT-6.2-Astra · Max reasoning",
+      "name": "Astra \u00b7 Max",
+      "detail": "GPT-6.2-Astra \u00b7 Max reasoning",
       "is_default": false,
       "values": {
         "model": "gpt-6.2-astra",
@@ -71,8 +71,8 @@
     },
     {
       "id": "luna-6-max",
-      "name": "Luna 6 · Max",
-      "detail": "GPT-6-Luna · Max reasoning",
+      "name": "Luna 6 \u00b7 Max",
+      "detail": "GPT-6-Luna \u00b7 Max reasoning",
       "is_default": false,
       "values": {
         "model": "gpt-6-luna",
@@ -81,8 +81,8 @@
     },
     {
       "id": "sol-6-2-max",
-      "name": "Sol 6.2 · Max",
-      "detail": "GPT-6.2-Sol · Max reasoning",
+      "name": "Sol 6.2 \u00b7 Max",
+      "detail": "GPT-6.2-Sol \u00b7 Max reasoning",
       "is_default": false,
       "values": {
         "model": "gpt-6.2-sol",
@@ -253,6 +253,13 @@
         "source": "https://registry.npmjs.org/@openai/codex/-/codex-0.171.0.tgz",
         "integrity": "sha512-1IOFzL2Xg86tLdw6kDo3GoKbkQENgQi7TI6rlEvN132R7ngSw7SNOIQoTcnKzSZZ8kf9N9GynCweSoaFbqk2Eg==",
         "private": true
+      },
+      {
+        "id": "nodejs",
+        "version": "24.21.0",
+        "source": "https://nodejs.org/dist/v24.21.0/",
+        "integrity": "sha256:d9b4b85b5f62c81463503e58ec20e314509293caa5938fecefd7d0b5a4274c2b",
+        "private": true
       }
     ],
     "platforms": [
@@ -262,6 +269,12 @@
         "payload_digest": "",
         "launch_command": "codex-acp",
         "private_components": [
+          {
+            "kind": "acp_runtime",
+            "slot": "node",
+            "dependency": "nodejs",
+            "command": "node"
+          },
           {
             "kind": "provider_cli",
             "slot": "codex",
@@ -282,6 +295,12 @@
         "payload_digest": "",
         "launch_command": "codex-acp",
         "private_components": [
+          {
+            "kind": "acp_runtime",
+            "slot": "node",
+            "dependency": "nodejs",
+            "command": "node"
+          },
           {
             "kind": "provider_cli",
             "slot": "codex",

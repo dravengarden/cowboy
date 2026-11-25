@@ -172,3 +172,15 @@ export async function ownedArchiveIntegrity(
   }
   return `sha256:${createHash("sha256").update(lines).digest("hex")}`;
 }
+
+/** SHA-256 over the sorted pinned Node.js targets from `lock.json`. */
+export function nodeRuntimeIntegrity(node: {
+  version: string;
+  targets: Partial<Record<string, { url: string; sha256?: string; entrypoint: string }>>;
+}): string {
+  const lines = Object.entries(node.targets)
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([target, locked]) => `${target} ${locked?.url} ${locked?.sha256} ${locked?.entrypoint}\n`)
+    .join("");
+  return `sha256:${createHash("sha256").update(lines).digest("hex")}`;
+}

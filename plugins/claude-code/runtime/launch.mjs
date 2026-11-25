@@ -8,9 +8,21 @@ import { constants as fsConstants, mkdtempSync, rmSync } from "node:fs";
 import { createConnection, createServer } from "node:net";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { access, copyFile, lstat, mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  access,
+  chmod,
+  copyFile,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
-import { dirname, isAbsolute, join, posix } from "node:path";
+import { basename, dirname, isAbsolute, join, posix } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { bindingKey, DESCRIPTIONS, NATIVE_TOOLS, WorkspaceTools } from "./tools.mjs";
 import { startModBridge } from "./mod-bridge.mjs";
@@ -238,6 +250,142 @@ function accepts(path) {
     connection.once("error", (error) => settle(!["ECONNREFUSED", "ENOENT"].includes(error.code)));
     connection.setTimeout(2000, () => settle(true));
   });
+}
+
+const STAGE_OWNER_DIR = /^cowboy-claude-stage-[A-Za-z0-9]{6}$/;
+const STAGE_SOCKET_ROOT = "/tmp";
+const MAX_UNIX_SOCKET_BYTES = 100;
+
+// Probe a verified stage owner socket: ONLY `ECONNREFUSED` (the socket inode
+// still exists on disk with no listener) proves the owner died without cleanup.
+// `ENOENT` or any other error is treated as `"unknown"` so live stages are
+// never deleted.
+function stageOwnerState(socketPath) {
+  return new Promise((resolveState) => {
+    const connection = createConnection(socketPath);
+    const settle = (state) => {
+      connection.destroy();
+      resolveState(state);
+    };
+    connection.once("connect", () => settle("live"));
+    connection.once("error", (error) =>
+      settle(error?.code === "ECONNREFUSED" ? "dead" : "unknown"),
+    );
+    connection.setTimeout(2000, () => settle("live"));
+  });
+}
+
+// Keep a short private Unix socket under one fixed bounded root (`/tmp`,
+// matching `mod-bridge.mjs` so neither a deep runtime path nor a changing
+// `TMPDIR` can exceed `SUN_LEN` or strand owner lookups), and publish ONLY the
+// generated directory name atomically into `owner.json`.
+export async function acquireStageOwner(stage, socketRoot = STAGE_SOCKET_ROOT) {
+  if (
+    !isAbsolute(socketRoot) ||
+    Buffer.byteLength(join(socketRoot, "cowboy-claude-stage-XXXXXX", "s")) > MAX_UNIX_SOCKET_BYTES
+  ) {
+    throw new Error("Invalid stage owner socket root");
+  }
+  const stageName = basename(stage);
+  const ownerDir = await mkdtemp(join(socketRoot, "cowboy-claude-stage-"));
+  const dirName = basename(ownerDir);
+  const socketPath = join(ownerDir, "s");
+  const server = createServer((socket) => {
+    socket.on("error", () => {});
+    socket.end();
+  });
+  server.on("error", () => {});
+  const ownerTemp = join(stage, `.owner.${process.pid}.${randomUUID().slice(0, 8)}.tmp`);
+  try {
+    await writeFile(join(ownerDir, "stage.json"), JSON.stringify({ stage: stageName }), {
+      mode: 0o600,
+      flag: "wx",
+    });
+    await new Promise((resolveListen, rejectListen) => {
+      server.once("error", rejectListen);
+      server.listen(socketPath, () => {
+        server.off("error", rejectListen);
+        resolveListen();
+      });
+    });
+    await chmod(socketPath, 0o600);
+    server.unref();
+    await writeFile(ownerTemp, JSON.stringify({ dir: dirName, stage: stageName }), {
+      mode: 0o600,
+      flag: "wx",
+    });
+    await rename(ownerTemp, join(stage, "owner.json"));
+  } catch (error) {
+    await rm(ownerTemp, { force: true }).catch(() => {});
+    await new Promise((done) => server.close(() => done()));
+    await rm(ownerDir, { recursive: true, force: true }).catch(() => {});
+    throw error;
+  }
+  return {
+    dirName,
+    socketPath,
+    ownerDir,
+    async close() {
+      await new Promise((done) => server.close(() => done()));
+      await rm(ownerDir, { recursive: true, force: true }).catch(() => {});
+    },
+  };
+}
+
+// Remove abandoned sibling `native-*` stages under one `.cowboy-claude-*` root
+// ONLY when their `owner.json` names a verified Unix socket under `socketRoot`
+// that returns `ECONNREFUSED`. Unmarked (pre-upgrade), corrupt, missing-socket,
+// or live stages are always retained so no live launcher can lose its files.
+export async function sweepStaleNativeStages(
+  root,
+  { exclude, socketRoot = STAGE_SOCKET_ROOT } = {},
+) {
+  const uid = process.getuid?.();
+  let names;
+  try {
+    names = await readdir(root);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const name of names) {
+    if (name === exclude || !/^native-[A-Za-z0-9_-]{6}$/.test(name)) continue;
+    const directory = join(root, name);
+    try {
+      const info = await lstat(directory);
+      if (!info.isDirectory() || info.uid !== uid || info.mode & 0o077) continue;
+      const ownerPath = join(directory, "owner.json");
+      const ownerStat = await lstat(ownerPath);
+      if (!ownerStat.isFile() || ownerStat.uid !== uid || ownerStat.size > 512) continue;
+      const parsed = JSON.parse(await readFile(ownerPath, "utf8"));
+      const dirName =
+        typeof parsed?.dir === "string" &&
+        STAGE_OWNER_DIR.test(parsed.dir) &&
+        parsed?.stage === name
+          ? parsed.dir
+          : undefined;
+      if (!dirName) continue;
+      const ownerDir = join(socketRoot, dirName);
+      const dirStat = await lstat(ownerDir);
+      if (!dirStat.isDirectory() || dirStat.uid !== uid || dirStat.mode & 0o077) continue;
+      const stageMetaPath = join(ownerDir, "stage.json");
+      const stageMetaStat = await lstat(stageMetaPath);
+      if (!stageMetaStat.isFile() || stageMetaStat.uid !== uid || stageMetaStat.size > 512) continue;
+      const stageMeta = JSON.parse(await readFile(stageMetaPath, "utf8"));
+      if (stageMeta?.stage !== name) continue;
+      const socketPath = join(ownerDir, "s");
+      const sockStat = await lstat(socketPath);
+      if (!sockStat.isSocket() || sockStat.uid !== uid) continue;
+      if ((await stageOwnerState(socketPath)) !== "dead") continue;
+      await rm(directory, { recursive: true, force: true });
+      removed++;
+      // Remove the owner socket directory ONLY after its stage is gone.
+      await rm(ownerDir, { recursive: true, force: true }).catch(() => {});
+    } catch {
+      // Missing/unmarked/corrupt owner.json, missing socket, or concurrent change: retain.
+    }
+  }
+  return removed;
 }
 
 export const FORBIDDEN_TOOLS = [
@@ -1107,8 +1255,9 @@ async function native(args) {
     throw new Error("Invalid private execution directory");
   }
   const stage = await mkdtemp(join(root, "native-"));
-  let child, connection, modBridge, memory, tools, extensions, memoryConfigured;
+  let stageOwner, child, connection, modBridge, memory, tools, extensions, memoryConfigured;
   try {
+    stageOwner = await acquireStageOwner(stage);
     // The endpoint serves one connection; a restarted session can arrive
     // while the previous process's connection is still being torn down.
     // Retry soon at first, within the same ~10 s budget as before.
@@ -1125,6 +1274,8 @@ async function native(args) {
         await new Promise((resolve) => setTimeout(resolve, delay));
       }
     }
+    // Sweep abandoned sibling `native-*` stages whose owner socket proves death.
+    sweepStaleNativeStages(root, { exclude: basename(stage) }).catch(() => {});
     tools = new WorkspaceTools(connection, descriptor.binding, join(root, "state.json"));
     tools.useFileBuffers(descriptor.file_buffers);
     await tools.load();
@@ -1362,6 +1513,7 @@ async function native(args) {
     await memory?.close();
     await modBridge?.close();
     await rm(stage, { recursive: true, force: true });
+    await stageOwner?.close();
   }
 }
 
