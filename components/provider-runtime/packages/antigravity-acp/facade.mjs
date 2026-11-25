@@ -1787,7 +1787,7 @@ ${WRAP_UP_NOTE}`,
     return read;
   }
 
-  async readOnce(process, waitMs, { lostIsUncertain = true, deadline } = {}) {
+  async readOnce(process, waitMs, { lostIsUncertain = true, deadline, cleanup = false } = {}) {
     // Checked when this read's turn in the chain comes: a reader ahead of
     // it may have confirmed the close or used the caller's remaining time.
     if (process.closed) return [];
@@ -1798,12 +1798,16 @@ ${WRAP_UP_NOTE}`,
     }
     let result;
     try {
-      result = await this.connection.call("process/read", {
-        processId: process.processId,
-        afterSeq: process.afterSeq,
-        maxBytes: 65536,
-        waitMs,
-      });
+      result = await this.connection.call(
+        "process/read",
+        {
+          processId: process.processId,
+          afterSeq: process.afterSeq,
+          maxBytes: 65536,
+          waitMs,
+        },
+        cleanup ? { cleanup: true } : undefined,
+      );
     } catch (error) {
       if (forgotten(error, process.processId)) {
         // E1: the executor forgot it, so it ended; its exit status and any
@@ -1964,7 +1968,11 @@ ${WRAP_UP_NOTE}`,
         await Promise.race([
           // Not sent at all once the deadline passed while it waited in
           // the reader chain.
-          this.read(process, Math.min(500, remaining), { lostIsUncertain: false, deadline }),
+          this.read(process, Math.min(500, remaining), {
+            lostIsUncertain: false,
+            deadline,
+            cleanup: true,
+          }),
           expired,
         ]);
       } catch (error) {

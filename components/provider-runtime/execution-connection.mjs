@@ -166,7 +166,7 @@ export class Connection {
    * request is rejected then, and its late reply is ignored. Use it only for
    * reads whose outcome does not matter.
    */
-  request(method, params, { timeoutMs, beforeSend } = {}) {
+  request(method, params, { timeoutMs, beforeSend, cleanup = false } = {}) {
     // While draining only a report of an unknown outcome and the drain's own
     // acknowledgement are sent (answered by the worker, never forwarded).
     const draining = this.draining && !DRAIN_REQUESTS.has(method);
@@ -177,7 +177,9 @@ export class Connection {
     // Check capacity BEFORE running `beforeSend` so a capacity refusal never
     // marks a request dispatched; reserve slot 16 for `process/terminate`
     // cleanup and keep drain/uncertainty notifications uncapped (R14-M4).
-    const limit = CLEANUP_REQUESTS.has(method) ? 16 : 15;
+    const isCleanup =
+      CLEANUP_REQUESTS.has(method) || (cleanup === true && method === "process/read");
+    const limit = isCleanup ? 16 : 15;
     if (!DRAIN_REQUESTS.has(method) && this.pending.size + this.abandoned.size >= limit) {
       return Promise.reject(new Error("Too many execution requests"));
     }

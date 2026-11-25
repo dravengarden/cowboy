@@ -2638,3 +2638,453 @@ test("Pre-prompt buffered completed tool_call_update without name does not trigg
     "stale replay still routes cleanly through read-only presentation",
   );
 });
+
+test("Pre-prompt buffered session/request_permission is cancelled on replay instead of auto-approved (R14-M1)", async () => {
+  const agentFrames = [];
+  const clientFrames = [];
+  const runtime = {
+    managed: false,
+    facade: { beginTurn() {}, async endTurn() {} },
+    sessionCwd: (cwd) => cwd,
+    checkMirror() {},
+    projection: async () => "PROJ",
+    newChannel: () => "ch-0",
+    bindChannel() {},
+    mcpServer: () => ({ name: "cowboy", command: "/node", args: [], env: [] }),
+    evidence: { mark: async () => 1, settle: async () => ({ class: "ok", successes: 1 }) },
+  };
+  const proxy = new AcpProxy({
+    agent: (frame) => agentFrames.push(frame),
+    client: (frame) => clientFrames.push(frame),
+    runtime: Promise.resolve(runtime),
+  });
+  await proxy.runtime;
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "session/load",
+    params: { sessionId: "parent-r14", cwd: "/repo", mcpServers: [] },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 1,
+    result: { modes: { currentModeId: "default" } },
+  });
+  const childId = "child-r14-perm";
+  proxy.subagents.adopt(childId);
+  const options = [
+    { optionId: "allow", name: "Allow", kind: "allow_once" },
+    { optionId: "deny", name: "Deny", kind: "reject_once" },
+  ];
+  // Buffer permission request BEFORE child has any live turn.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "perm-stale-1",
+    method: "session/request_permission",
+    params: {
+      sessionId: childId,
+      toolCall: { toolCallId: "w1", name: "mcp_cowboy_WriteFile" },
+      options,
+    },
+  });
+  assert.equal(
+    agentFrames.some((f) => f.id === "perm-stale-1"),
+    false,
+    "buffered permission must wait while child is opening",
+  );
+  // Child becomes active under parent's unrestricted mode and replays buffered frames.
+  proxy.subagents.children.set(childId, {
+    id: childId,
+    parent: "parent-r14",
+    state: "running",
+    cancelled: false,
+    replied: false,
+  });
+  proxy.turns.set(childId, {
+    attempt: Symbol("child-att"),
+    tools: new Map(),
+    events: new Set(),
+    violations: [],
+    calls: new Map(),
+    cancelled: false,
+    closed: false,
+  });
+  proxy.subagents.release(childId);
+  await new Promise((r) => setTimeout(r, 30));
+  const staleReply = agentFrames.find((f) => f.id === "perm-stale-1");
+  assert.deepEqual(staleReply, {
+    jsonrpc: "2.0",
+    id: "perm-stale-1",
+    result: { outcome: { outcome: "cancelled" } },
+  });
+  // A fresh live permission request for the active child under parent's unrestricted mode still approves.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "perm-live-1",
+    method: "session/request_permission",
+    params: {
+      sessionId: childId,
+      toolCall: { toolCallId: "w2", name: "mcp_cowboy_WriteFile" },
+      options,
+    },
+  });
+  assert.deepEqual(
+    agentFrames.find((f) => f.id === "perm-live-1"),
+    {
+      jsonrpc: "2.0",
+      id: "perm-live-1",
+      result: { outcome: { outcome: "selected", optionId: "allow" } },
+    },
+  );
+});
+
+test("Quarantined unclaimed current_mode_update does not mutate mode/PlanGate and unknown or turnless web permissions are rejected (R14-M2)", async () => {
+  const agentFrames = [];
+  const clientFrames = [];
+  const runtime = {
+    managed: false,
+    facade: { beginTurn() {}, async endTurn() {} },
+    sessionCwd: (cwd) => cwd,
+    checkMirror() {},
+    projection: async () => "PROJ",
+    newChannel: () => "ch-0",
+    bindChannel() {},
+    mcpServer: () => ({ name: "cowboy", command: "/node", args: [], env: [] }),
+    evidence: { mark: async () => 1, settle: async () => ({ class: "ok", successes: 1 }) },
+  };
+  const proxy = new AcpProxy({
+    agent: (frame) => agentFrames.push(frame),
+    client: (frame) => clientFrames.push(frame),
+    runtime: Promise.resolve(runtime),
+  });
+  await proxy.runtime;
+  const options = [
+    { optionId: "allow", name: "Allow", kind: "allow_once" },
+    { optionId: "deny", name: "Deny", kind: "reject_once" },
+  ];
+  // Simulate a pending child open quarantining an unclaimed session's current_mode_update.
+  proxy.subagents.pendingOpens = 1;
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "orphan-r14",
+      update: { sessionUpdate: "current_mode_update", currentModeId: "default" },
+    },
+  });
+  assert.equal(proxy.subagents.quarantine.length, 1);
+  // Child open fails -> releaseQuarantine replays the unclaimed frame.
+  proxy.subagents.pendingOpens = 0;
+  proxy.subagents.releaseQuarantine();
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(proxy.effectiveMode("orphan-r14"), undefined);
+  assert.equal(proxy.planGate.modeGeneration("orphan-r14"), 0);
+  // Even a direct non-quarantined current_mode_update for an unknown session is ignored.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "orphan-r14",
+      update: { sessionUpdate: "current_mode_update", currentModeId: "default" },
+    },
+  });
+  assert.equal(proxy.effectiveMode("orphan-r14"), undefined);
+  assert.equal(proxy.planGate.modeGeneration("orphan-r14"), 0);
+  // Native web permission AND read permission for unclaimed session are rejected, never auto-approved.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "orphan-web",
+    method: "session/request_permission",
+    params: {
+      sessionId: "orphan-r14",
+      toolCall: { toolCallId: "w1", name: "search_web", rawInput: { query: "x" } },
+      options,
+    },
+  });
+  assert.deepEqual(agentFrames.at(-1), {
+    jsonrpc: "2.0",
+    id: "orphan-web",
+    result: { outcome: { outcome: "selected", optionId: "deny" } },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "orphan-read",
+    method: "session/request_permission",
+    params: {
+      sessionId: "orphan-r14",
+      toolCall: { toolCallId: "r1", name: "mcp_cowboy_ReadFile" },
+      options,
+    },
+  });
+  assert.deepEqual(agentFrames.at(-1), {
+    jsonrpc: "2.0",
+    id: "orphan-read",
+    result: { outcome: { outcome: "selected", optionId: "deny" } },
+  });
+  // Known session in unrestricted mode WITHOUT a live turn still rejects native web auto-approval.
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "session/load",
+    params: { sessionId: "known-idle", cwd: "/repo", mcpServers: [] },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 2,
+    result: { modes: { currentModeId: "default" } },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "idle-web",
+    method: "session/request_permission",
+    params: {
+      sessionId: "known-idle",
+      toolCall: { toolCallId: "w2", name: "search_web", rawInput: { query: "y" } },
+      options,
+    },
+  });
+  assert.deepEqual(agentFrames.at(-1), {
+    jsonrpc: "2.0",
+    id: "idle-web",
+    result: { outcome: { outcome: "selected", optionId: "deny" } },
+  });
+});
+
+test("Stale replayed allowed tool preserves provenance for late nameless completion and clears on fresh announcement (R14-M3)", async () => {
+  const agentFrames = [];
+  const clientFrames = [];
+  const runtime = {
+    managed: false,
+    facade: { beginTurn() {}, async endTurn() {} },
+    sessionCwd: (cwd) => cwd,
+    checkMirror() {},
+    projection: async () => "PROJ",
+    newChannel: () => "ch-0",
+    bindChannel() {},
+    mcpServer: () => ({ name: "cowboy", command: "/node", args: [], env: [] }),
+    evidence: { mark: async () => 1, settle: async () => ({ class: "ok", successes: 1 }) },
+  };
+  const proxy = new AcpProxy({
+    agent: (frame) => agentFrames.push(frame),
+    client: (frame) => clientFrames.push(frame),
+    runtime: Promise.resolve(runtime),
+  });
+  await proxy.runtime;
+  proxy.root = "/repo";
+  const childId = "child-r14-prov";
+  proxy.subagents.adopt(childId);
+  // Buffer two nonterminal allowed tool announcements before child prompt starts.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: childId,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "t-allow",
+        name: "mcp_cowboy_ReadFile",
+        status: "in_progress",
+      },
+    },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: childId,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "t-reclaim",
+        name: "mcp_cowboy_ReadFile",
+        status: "in_progress",
+      },
+    },
+  });
+  const childTurn = {
+    attempt: Symbol("child-prov-att"),
+    tools: new Map(),
+    events: new Set(),
+    violations: [],
+    calls: new Map(),
+    cancelled: false,
+  };
+  proxy.turns.set(childId, childTurn);
+  proxy.subagents.release(childId);
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(childTurn.tools.size, 0, "stale replay must stay outside live turn.tools");
+  // Late live nameless completion of the buffered allowed tool does NOT trigger a violation.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: childId,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "t-allow",
+        status: "completed",
+      },
+    },
+  });
+  assert.equal(childTurn.violation, undefined, "late completion of buffered allowed tool is clean");
+  assert.equal(
+    agentFrames.some((f) => f.method === "session/cancel"),
+    false,
+  );
+  // A fresh live nameless announcement for t-reclaim clears replay ownership so its completion violates.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: childId,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "t-reclaim",
+        status: "in_progress",
+      },
+    },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: childId,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "t-reclaim",
+        status: "completed",
+      },
+    },
+  });
+  assert.equal(
+    childTurn.violation,
+    "unknown",
+    "fresh nameless tool_call must clear replay provenance",
+  );
+  // A buffered disallowed built-in tool whose nameless completion arrives live still records violation.
+  const childId2 = "child-r14-deny";
+  proxy.subagents.adopt(childId2);
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: childId2,
+      update: {
+        sessionUpdate: "tool_call",
+        toolCallId: "t-deny",
+        name: "read_file",
+        status: "in_progress",
+      },
+    },
+  });
+  const childTurn2 = {
+    attempt: Symbol("child-deny-att"),
+    tools: new Map(),
+    events: new Set(),
+    violations: [],
+    calls: new Map(),
+    cancelled: false,
+  };
+  proxy.turns.set(childId2, childTurn2);
+  proxy.subagents.release(childId2);
+  await new Promise((r) => setTimeout(r, 30));
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: childId2,
+      update: {
+        sessionUpdate: "tool_call_update",
+        toolCallId: "t-deny",
+        status: "completed",
+      },
+    },
+  });
+  assert.equal(
+    childTurn2.violation,
+    "read_file",
+    "buffered built-in tool completion must still violate",
+  );
+});
+
+test("Full 15 ordinary slots reject process/write pre-dispatch and reserved slot 16 cleans up helper without parking (R14-M4)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r14-slots-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  let filledSlots = false;
+  const endpoint = await fakeEndpoint(socket, repo, {
+    home,
+    notifications: false,
+    delay: (method) => (filledSlots && method === "fs/getMetadata" ? 3000 : 0),
+  });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const origCall = conn.call.bind(conn);
+  const fillers = [];
+  conn.call = async (method, params, opts) => {
+    const res = await origCall(method, params, opts);
+    if (method === "process/start" && params.pipeStdin && !filledSlots) {
+      filledSlots = true;
+      // Occupy all 15 ordinary request slots with slow fs/getMetadata calls
+      // BEFORE process/write runs; keep notifications disabled so confirming
+      // process/read must also use reserved cleanup slot 16!
+      for (let i = 0; i < 15; i += 1) {
+        const p = origCall("fs/getMetadata", { path: `file://${repo}` });
+        p.catch(() => {});
+        fillers.push(p);
+      }
+      // Yield one microtask so all 15 enter conn.pending before process/write.
+      await new Promise((r) => setTimeout(r, 15));
+    }
+    return res;
+  };
+  const lostEvents = [];
+  try {
+    const facade = new Facade(conn, {
+      root: repo,
+      shell: "/bin/sh",
+      onUncertain: (sid, method) => lostEvents.push([sid, method]),
+      onLost: (sid, method) => lostEvents.push([sid, method]),
+    });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const session = facade.session("s1");
+    const turn = session.turn;
+    const large = "z".repeat(64 * 1024);
+    await assert.rejects(
+      () => facade.writeFile(session, turn, { path: "big.txt", content: large }),
+      (err) =>
+        !(err instanceof UncertainEffect) &&
+        /Execution unavailable before delivering the edit request/i.test(err.message),
+    );
+    assert.equal(
+      turn.uncertain,
+      undefined,
+      "capacity refusal before dispatch must not park session",
+    );
+    assert.deepEqual(lostEvents, [], "must not emit onUncertain/onLost");
+    assert.equal(
+      endpoint.calls.some((c) => c.method === "process/write"),
+      false,
+      "process/write must never leave the proxy when 15 ordinary slots are full",
+    );
+    assert.equal(
+      endpoint.calls.some((c) => c.method === "process/terminate"),
+      true,
+      "reserved 16th cleanup slot must execute process/terminate immediately",
+    );
+    assert.deepEqual(await readdir(repo), []);
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

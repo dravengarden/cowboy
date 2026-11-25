@@ -335,6 +335,10 @@ export class AcpProxy {
     this.switchState = new Map();
     /** Facade tool per call ID, for updates and requests that omit the name. */
     this.calls = new Map();
+    /** Root sessions admitted by the client (LRU-bounded); guards mode/permission state (R14-M2). */
+    this.knownSessions = new Set();
+    /** Nonterminal tool announcements seen only via stale replay, outside live state (R14-M3). */
+    this.staleReplayTools = new Map();
     /** The canonical workspace root on the target, once the runtime is ready. */
     this.root = undefined;
     /** `/compact` turns and the context restated after them. */
@@ -880,6 +884,7 @@ export class AcpProxy {
     if (
       typeof sessionId !== "string" ||
       this.subagents.owns(sessionId) ||
+      !this.knownSessions.has(sessionId) ||
       this.hasActiveModeOps(sessionId)
     ) {
       return;
@@ -941,11 +946,71 @@ export class AcpProxy {
    * left out (its plan is sent instead), and only runnable slash commands.
    * `undefined` when nothing is forwarded.
    */
-  /** Whether a replayed buffered notification belongs to an older or absent turn/attempt (R13-M2). */
+  /** Whether a replayed buffered notification/request belongs to an older or absent turn/attempt (R13-M2, R14-M1). */
   isStaleReplay(sessionId, arrival) {
     if (arrival === undefined) return false;
     const current = typeof sessionId === "string" ? this.turns.get(sessionId) : undefined;
     return !(arrival.turn && current === arrival.turn && current.attempt === arrival.attempt);
+  }
+
+  /** Record a client-admitted root session ID (bounded LRU) for mode/permission guards (R14-M2). */
+  rememberSession(sessionId) {
+    if (typeof sessionId !== "string" || this.subagents.owns(sessionId)) return;
+    this.knownSessions.delete(sessionId);
+    if (this.knownSessions.size >= MAX_TOOL_CALLS) {
+      this.knownSessions.delete(this.knownSessions.values().next().value);
+    }
+    this.knownSessions.add(sessionId);
+  }
+
+  /** Whether `sessionId` is a known live session eligible for automatic permission approval (R14-M2). */
+  isKnownLiveSession(sessionId, { requireTurn = false } = {}) {
+    if (typeof sessionId !== "string") return false;
+    if (this.subagents.owns(sessionId)) {
+      if (!this.subagents.active(sessionId)) return false;
+      const turn = this.turns.get(sessionId);
+      return Boolean(turn && !turn.cancelled && !turn.closed);
+    }
+    if (!this.knownSessions.has(sessionId)) return false;
+    const turn = this.turns.get(sessionId);
+    if (turn && (turn.cancelled || turn.closed)) return false;
+    if (requireTurn) return Boolean(turn);
+    return true;
+  }
+
+  /** Record nonterminal tool announcements observed only via stale replay outside live state (R14-M3). */
+  trackStaleReplayTool(sessionId, update) {
+    if (
+      typeof sessionId !== "string" ||
+      !["tool_call", "tool_call_update"].includes(update?.sessionUpdate)
+    ) {
+      return;
+    }
+    const id = update.toolCallId;
+    if (typeof id !== "string") return;
+    const key = callKey(sessionId, id);
+    if (TERMINAL.has(update.status)) {
+      this.staleReplayTools.delete(key);
+      return;
+    }
+    if (typeof update.name === "string") {
+      this.staleReplayTools.delete(key);
+      if (this.staleReplayTools.size >= MAX_TOOL_CALLS) {
+        this.staleReplayTools.delete(this.staleReplayTools.keys().next().value);
+      }
+      this.staleReplayTools.set(key, update.name);
+    } else if (update.sessionUpdate === "tool_call") {
+      this.staleReplayTools.delete(key);
+    }
+  }
+
+  /** Drop stale-replay tool provenance entries belonging to `sessionId` (R14-M3). */
+  clearStaleReplayTools(sessionId) {
+    if (typeof sessionId !== "string" || this.staleReplayTools.size === 0) return;
+    const prefix = `${sessionId}\u0000`;
+    for (const key of this.staleReplayTools.keys()) {
+      if (key.startsWith(prefix)) this.staleReplayTools.delete(key);
+    }
   }
 
   presentUpdate(message, answer = false, { staleReplay = false } = {}) {
@@ -1470,6 +1535,13 @@ export class AcpProxy {
       if (method === "session/new") this.managedOpening = true;
     }
     const forwarded = structuredClone(message);
+    if (
+      method === "session/set_mode" ||
+      method === "session/set_model" ||
+      method === "session/set_config_option"
+    ) {
+      this.rememberSession(forwarded.params?.sessionId);
+    }
     const requested = this.requestedMode(method, forwarded.params);
     if (requested) {
       requested.seq = this.beginModeSwitch(requested.sessionId);
@@ -1657,6 +1729,7 @@ export class AcpProxy {
           stagedPrompt = [{ type: "text", text: restated }, ...stagedPrompt];
         }
         forwarded.params.prompt = stagedPrompt;
+        this.rememberSession(sessionId);
         this.turns.set(sessionId, {
           id,
           attempt: Symbol("attempt"),
@@ -1834,10 +1907,30 @@ export class AcpProxy {
     const turn = this.turns.get(sessionId);
     if (!turn || !["tool_call", "tool_call_update"].includes(update?.sessionUpdate)) return;
     const id = update.toolCallId;
+    const key =
+      typeof sessionId === "string" && typeof id === "string" ? callKey(sessionId, id) : undefined;
+    // A fresh live announcement or named update claims ownership of the call ID
+    // and clears any stale-replay provenance (R14-M3).
+    if (
+      key !== undefined &&
+      (update.sessionUpdate === "tool_call" || typeof update.name === "string")
+    ) {
+      this.staleReplayTools.delete(key);
+    }
     if (typeof update.name === "string" && typeof id === "string") {
       if (turn.tools.size < MAX_TOOL_CALLS || turn.tools.has(id)) turn.tools.set(id, update.name);
     }
-    const name = typeof update.name === "string" ? update.name : turn.tools.get(id);
+    const replayName =
+      key !== undefined &&
+      update.sessionUpdate === "tool_call_update" &&
+      typeof update.name !== "string" &&
+      !turn.tools.has(id)
+        ? this.staleReplayTools.get(key)
+        : undefined;
+    if (replayName !== undefined && TERMINAL.has(update.status)) {
+      this.staleReplayTools.delete(key);
+    }
+    const name = typeof update.name === "string" ? update.name : (turn.tools.get(id) ?? replayName);
     if (!EXECUTED.has(update.status)) return;
     // `agy` announces every call as an `in_progress` `tool_call` before its
     // `PreToolUse` hook decides; a denied call then fails without running
@@ -2040,10 +2133,13 @@ export class AcpProxy {
           ) {
             return this.log("dropped a config_option_update of a child with replayed settings");
           }
-          if (update?.sessionUpdate === "current_mode_update") {
-            this.reportMode(message.params.sessionId, update);
-          } else if (update?.sessionUpdate === "config_option_update") {
-            this.reportMode(message.params.sessionId, update);
+          const staleReplay = this.isStaleReplay(message.params?.sessionId, replayOptions?.arrival);
+          if (!staleReplay) {
+            if (update?.sessionUpdate === "current_mode_update") {
+              this.reportMode(message.params.sessionId, update);
+            } else if (update?.sessionUpdate === "config_option_update") {
+              this.reportMode(message.params.sessionId, update);
+            }
           }
           // Only the proxy marks an update as after a structured answer.
           if (message.params?.update?._meta?.[AFTER_ANSWER] !== undefined) {
@@ -2070,8 +2166,8 @@ export class AcpProxy {
           ) {
             return;
           }
-          const staleReplay = this.isStaleReplay(message.params?.sessionId, replayOptions?.arrival);
           if (staleReplay) {
+            this.trackStaleReplayTool(message.params?.sessionId, update);
             const presented = this.presentUpdate(this.annotateUsage(stripTier(message)), false, {
               staleReplay: true,
             });
@@ -2117,6 +2213,14 @@ export class AcpProxy {
       }
       if (this.closing) {
         return this.rejectPermission(id, asked, "rejected permission: proxy closing");
+      }
+      if (this.isStaleReplay(asked.params?.sessionId, replayOptions?.arrival)) {
+        this.log("cancelled stale buffered permission request");
+        return this.agent({
+          jsonrpc: "2.0",
+          id,
+          result: { outcome: { outcome: "cancelled" } },
+        });
       }
       // Defense in depth beside the PreToolUse hook: a permission request
       // for any tool outside the allow-list is rejected here, never shown; so
@@ -2164,6 +2268,13 @@ export class AcpProxy {
       // `allow_once` is absent, fall back to asking the owner under a unique
       // worker ID validated against the current mode generation.
       if (!inPlan) {
+        if (!this.isKnownLiveSession(sessionId, { requireTurn: isWeb })) {
+          return this.rejectPermission(
+            id,
+            asked,
+            `rejected ${String(name)}: no known live session`,
+          );
+        }
         const allow = options.find((option) => option?.kind === "allow_once");
         if (allow) {
           return this.agent({
@@ -2187,6 +2298,13 @@ export class AcpProxy {
       //     directly with the exact execution payload bound 1-to-1 to that call;
       //   - supported native web reads ask the owner with `allow_always` stripped.
       if (policy === "allow") {
+        if (!this.isKnownLiveSession(sessionId)) {
+          return this.rejectPermission(
+            id,
+            asked,
+            `rejected ${String(name)}: no known live session`,
+          );
+        }
         const allow = options.find((option) => option?.kind === "allow_once");
         if (allow) {
           return this.agent({
@@ -2261,6 +2379,11 @@ export class AcpProxy {
         message.result,
         { allowEmptyUnrestricted: record.method === "session/set_mode" },
       );
+    }
+    if (SESSION_REQUESTS.has(record.method) && message.result !== undefined) {
+      const openedSessionId = message.result?.sessionId ?? record.session;
+      this.rememberSession(openedSessionId);
+      this.clearStaleReplayTools(openedSessionId);
     }
     if (SESSION_REQUESTS.has(record.method) && record.modeOpSeq !== undefined) {
       const reopenSessionId =
@@ -2407,6 +2530,7 @@ export class AcpProxy {
     if (this.turns.get(record.sessionId) === turn) {
       this.planGate.clearTurn(record.sessionId, turn);
       this.turns.delete(record.sessionId);
+      this.clearStaleReplayTools(record.sessionId);
     }
     await this.settleMemory(turn);
     const violation = turn?.violation;
