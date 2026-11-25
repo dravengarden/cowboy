@@ -613,13 +613,17 @@ impl Coordinator {
             .or_insert(entry);
     }
 
-    /// Clear a tracked navigation fence once the command definitely failed or
-    /// finished on the Machine.
+    /// Clear a tracked navigation fence once the command definitely failed,
+    /// was cancelled before dispatch, or finished on the Machine. Keeps a
+    /// settled tombstone in memory until the durable row deletion commits so
+    /// the orphan reconciler never re-seeds and hibernates a live browser.
     pub fn settle_navigation(&self, request_id: &str) {
-        if self.pending_navigations.lock().remove(request_id).is_some() {
-            self.settled_navigation_ids
-                .lock()
-                .insert(request_id.to_owned());
+        let removed = self.pending_navigations.lock().remove(request_id).is_some();
+        let tombstoned = self
+            .settled_navigation_ids
+            .lock()
+            .insert(request_id.to_owned());
+        if removed || tombstoned {
             self.navigation_settled.notify_one();
         }
     }
@@ -646,15 +650,24 @@ impl Coordinator {
         false
     }
 
-    /// Take request ids settled in memory that must be deleted from durable
-    /// storage (`browser_pending_navigations`).
-    pub fn take_settled_navigation_ids(&self) -> Vec<String> {
-        self.settled_navigation_ids.lock().drain().collect()
+    /// Snapshot settled navigation request ids awaiting durable deletion
+    /// without removing their tombstones yet.
+    pub fn settled_navigation_ids(&self) -> Vec<String> {
+        self.settled_navigation_ids.lock().iter().cloned().collect()
     }
 
-    /// Re-queue settled request ids if their durable store deletion failed.
-    pub fn requeue_settled_navigation_ids(&self, ids: Vec<String>) {
-        self.settled_navigation_ids.lock().extend(ids);
+    /// Remove settled tombstones only after their durable rows have been
+    /// deleted from `browser_pending_navigations`.
+    pub fn confirm_settled_navigations_deleted(&self, ids: &[String]) {
+        let mut settled = self.settled_navigation_ids.lock();
+        for id in ids {
+            settled.remove(id);
+        }
+    }
+
+    /// Whether `request_id` has a settled tombstone awaiting durable deletion.
+    pub fn is_navigation_settled(&self, request_id: &str) -> bool {
+        self.settled_navigation_ids.lock().contains(request_id)
     }
 
     /// Whether `request_id` is still tracked as an unsettled navigation.

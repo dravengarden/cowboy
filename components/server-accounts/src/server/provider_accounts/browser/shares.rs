@@ -330,6 +330,10 @@ pub fn run_effects(state: &Arc<AppState>, owner: &str, change: &Change, effects:
 #[derive(Clone, Copy, Debug)]
 pub enum IdentityFence<'a> {
     None,
+    /// Navigate without explicit `expected_browser` or `attachment_id` (such as
+    /// manual address bar or MCP `accounts.browser_navigate`): still acquires
+    /// `share_lock(owner)` and records a durable pending-navigation fence.
+    UnboundNavigate,
     Expected(&'a str),
     Attachment(&'a str),
 }
@@ -355,7 +359,7 @@ pub fn verify_identity_fence(
     identity_fence: IdentityFence<'_>,
 ) -> Result<(), &'static str> {
     match identity_fence {
-        IdentityFence::None => Ok(()),
+        IdentityFence::None | IdentityFence::UnboundNavigate => Ok(()),
         IdentityFence::Expected(expected) => expected_identity(Some(expected), resolved),
         IdentityFence::Attachment(attachment_id) => {
             let recorded = state
@@ -373,9 +377,27 @@ pub fn verify_identity_fence(
     }
 }
 
-/// Persist a pending identity-bound navigation fence before dispatch and
-/// track it in memory so both live observations and Controller restarts keep
-/// share membership changes fenced.
+/// Drop guard ensuring a cancelled or failed durable insert immediately
+/// tombstones the request id in memory so `reconcile_orphaned_navigations`
+/// deletes any committed row without hibernating the live browser.
+struct PendingInsertGuard<'a> {
+    browsers: &'a super::coordinator::Coordinator,
+    request_id: &'a str,
+    armed: bool,
+}
+
+impl Drop for PendingInsertGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.browsers.settle_navigation(self.request_id);
+        }
+    }
+}
+
+/// Track a pending navigation fence in memory first (so the orphan reconciler
+/// never mistakes an in-progress insert for a pre-restart orphan), then persist
+/// it durably before dispatch so both live observations and Controller restarts
+/// keep share membership changes fenced.
 pub async fn begin_durable_navigation(
     state: &AppState,
     owner: &str,
@@ -395,10 +417,6 @@ pub async fn begin_durable_navigation(
             observed_at_ms: observed.event.observed_at_ms,
             started_at_ms: super::now_ms(),
         };
-    store
-        .record_browser_pending_navigation(&record)
-        .await
-        .map_err(|_| "unavailable")?;
     state.browsers.begin_navigation(
         request_id.to_owned(),
         owner,
@@ -407,46 +425,49 @@ pub async fn begin_durable_navigation(
         observed.event.instance.clone(),
         observed.event.observed_at_ms,
     );
+    let mut guard = PendingInsertGuard {
+        browsers: &state.browsers,
+        request_id,
+        armed: true,
+    };
+    store
+        .record_browser_pending_navigation(&record)
+        .await
+        .map_err(|_| "unavailable")?;
+    guard.armed = false;
     Ok(())
 }
 
-/// Clear a tracked navigation fence from both memory and durable storage.
+/// Clear a tracked navigation fence from both memory and durable storage,
+/// keeping the in-memory settled tombstone until the SQL DELETE commits.
 pub async fn clear_durable_navigation(state: &AppState, request_id: &str) {
     state.browsers.settle_navigation(request_id);
-    if let Some(store) = state.store.as_ref() {
-        let mut ids = state.browsers.take_settled_navigation_ids();
-        if !ids.iter().any(|id| id == request_id) {
-            ids.push(request_id.to_owned());
-        }
-        if store
-            .delete_browser_pending_navigations(&ids)
-            .await
-            .is_err()
-        {
-            state.browsers.requeue_settled_navigation_ids(ids);
-        }
-    }
+    drain_settled_navigations(state).await;
 }
 
 /// Flush any request ids settled by synchronous Machine observation callbacks
-/// out of durable storage (`browser_pending_navigations`).
+/// or cancelled inserts out of durable storage (`browser_pending_navigations`).
+/// Tombstones stay in memory until the SQL DELETE succeeds so concurrent
+/// reconcilers never re-seed and hibernate a live browser.
 pub async fn drain_settled_navigations(state: &AppState) {
     let Some(store) = state.store.as_ref() else {
         return;
     };
-    let ids = state.browsers.take_settled_navigation_ids();
+    let ids = state.browsers.settled_navigation_ids();
     if ids.is_empty() {
         return;
     }
-    if let Err(error) = store.delete_browser_pending_navigations(&ids).await {
-        tracing::info!(%error, "settled browser navigation rows not deleted; retrying");
-        state.browsers.requeue_settled_navigation_ids(ids);
+    match store.delete_browser_pending_navigations(&ids).await {
+        Ok(()) => state.browsers.confirm_settled_navigations_deleted(&ids),
+        Err(error) => {
+            tracing::info!(%error, "settled browser navigation rows not deleted; retrying");
+        }
     }
 }
 
-/// Whether `(owner, browser_key)` has an unsettled identity-bound navigation
-/// in either memory or durable storage (including immediately after a
-/// Controller restart).
+/// Whether `(owner, browser_key)` has an unsettled navigation in either memory
+/// or unexpired durable storage (including immediately after a Controller
+/// restart).
 pub async fn has_pending_navigation(
     state: &AppState,
     owner: &str,
@@ -458,70 +479,19 @@ pub async fn has_pending_navigation(
     }
     let store = state.store.as_ref().ok_or("unavailable")?;
     store
-        .has_pending_browser_navigation(owner, browser_key)
+        .has_pending_browser_navigation(owner, browser_key, super::now_ms())
         .await
         .map_err(|_| "unavailable")
 }
 
-/// Whether `account_id` is currently a member of a shared browser whose
-/// profile has an unsettled identity-bound navigation in flight.
-pub async fn member_has_pending_navigation(
-    state: &AppState,
-    owner: &str,
-    account_id: &ProviderAccountId,
-) -> Result<bool, &'static str> {
-    let store = state.store.as_ref().ok_or("unavailable")?;
-    let shares = store
-        .browser_shares(owner)
-        .await
-        .map_err(|_| "unavailable")?;
-    let member = Member::account(account_id.clone());
-    let Some(row) = shares.membership(&member) else {
-        return Ok(false);
-    };
-    let Some(share) = shares.share(&row.share_id) else {
-        return Ok(false);
-    };
-    has_pending_navigation(state, owner, &share.browser_key).await
-}
-
-/// Commit any deferred share-membership removals for revoking accounts of
-/// `owner` whose share no longer has a pending navigation. Caller MUST hold
-/// `state.browsers.share_lock(owner)`.
-pub async fn flush_revoked_share_leaves_locked(state: &AppState, owner: &str) {
-    let Some(store) = state.store.as_ref() else {
-        return;
-    };
-    let Ok(deferred) = store.deferred_revoked_share_members(Some(owner)).await else {
-        tracing::info!("deferred revoked share members not read; retrying");
-        return;
-    };
-    for (_, account_id, browser_key) in deferred {
-        if has_pending_navigation(state, owner, &browser_key)
-            .await
-            .unwrap_or(true)
-        {
-            continue;
-        }
-        match store.finish_revoked_share_leave(owner, &account_id).await {
-            Ok(Some(revision)) => {
-                state
-                    .hub
-                    .announce_preferences(owner, "provider_accounts", revision);
-            }
-            Ok(None) => {}
-            Err(error) => {
-                tracing::warn!(%error, account = %account_id.as_str(), "deferred revoked share leave failed; retrying");
-            }
-        }
-    }
-}
-
-/// Settle durable or in-memory identity-bound navigations whose dispatching
-/// connection dropped or that survived a Controller restart once their Machine
-/// connects: query first (settling immediately if the instance exited or was
-/// replaced), and if that exact instance is still running on the Machine,
-/// hibernate it so confirmed unit exit proves the old navigation can never land.
+/// Settle durable or in-memory navigations whose dispatching connection dropped
+/// or that survived a Controller restart:
+/// - Expired rows (older than `PENDING_NAVIGATION_TTL_MS` while not live on the
+///   dispatching connection) or rows for a revoked Machine are pruned cleanly.
+/// - Live connected Machines are queried first (settling immediately if the
+///   instance exited or was replaced), and only after confirming the durable
+///   row still exists and is neither live nor settled is `Command::Hibernate`
+///   sent for that exact incarnation.
 pub async fn reconcile_orphaned_navigations(state: &Arc<AppState>, machine_id: Option<&str>) {
     drain_settled_navigations(state).await;
     let Some(store) = state.store.as_ref() else {
@@ -531,11 +501,24 @@ pub async fn reconcile_orphaned_navigations(state: &Arc<AppState>, machine_id: O
         tracing::info!("pending browser navigations not read; retrying");
         return;
     };
+    let now = super::now_ms();
+    let ttl =
+        crate::store::provider_accounts::browser_pending_navigations::PENDING_NAVIGATION_TTL_MS;
     for row in rows {
         if state
             .browsers
             .is_navigation_live_on_current(&row.request_id)
+            || state.browsers.is_navigation_settled(&row.request_id)
         {
+            continue;
+        }
+        if now.saturating_sub(row.started_at_ms) >= ttl
+            || store
+                .is_machine_revoked(&row.machine_id)
+                .await
+                .unwrap_or(false)
+        {
+            clear_durable_navigation(state, &row.request_id).await;
             continue;
         }
         let instance = crate::machine_protocol::machine_browser::InstanceRef {
@@ -562,10 +545,20 @@ pub async fn reconcile_orphaned_navigations(state: &Arc<AppState>, machine_id: O
             continue;
         };
         drain_settled_navigations(state).await;
-        if !state.browsers.is_navigation_pending(&row.request_id) {
-            let _ = store
-                .delete_browser_pending_navigation(&row.request_id)
-                .await;
+        if state
+            .browsers
+            .is_navigation_live_on_current(&row.request_id)
+            || state.browsers.is_navigation_settled(&row.request_id)
+            || !state.browsers.is_navigation_pending(&row.request_id)
+        {
+            continue;
+        }
+        if !store
+            .has_pending_browser_navigation_request(&row.request_id)
+            .await
+            .unwrap_or(false)
+        {
+            clear_durable_navigation(state, &row.request_id).await;
             continue;
         }
         if matches!(
@@ -608,33 +601,6 @@ pub async fn reconcile_orphaned_navigations(state: &Arc<AppState>, machine_id: O
     drain_settled_navigations(state).await;
 }
 
-/// Reconcile deferred share-membership removals for revoking accounts once
-/// their share's pending navigation has settled.
-pub async fn reconcile_revoked_share_leaves(state: &AppState, owner: Option<&str>) {
-    drain_settled_navigations(state).await;
-    let Some(store) = state.store.as_ref() else {
-        return;
-    };
-    let Ok(deferred) = store.deferred_revoked_share_members(owner).await else {
-        tracing::info!("deferred revoked share members not read; retrying");
-        return;
-    };
-    let mut owners = std::collections::BTreeSet::new();
-    for (row_owner, _, browser_key) in deferred {
-        if !has_pending_navigation(state, &row_owner, &browser_key)
-            .await
-            .unwrap_or(true)
-        {
-            owners.insert(row_owner);
-        }
-    }
-    for row_owner in owners {
-        let fence = state.browsers.share_lock(&row_owner);
-        let _fence = fence.lock().await;
-        flush_revoked_share_leaves_locked(state, &row_owner).await;
-    }
-}
-
 /// Apply a share change through the registry writer, under the owner's
 /// share fence (held by the caller), and report whether it was a no-op (the
 /// member already in exactly that share), whose browser effects are none.
@@ -652,14 +618,6 @@ pub async fn update(
     input: &Mutation,
 ) -> Result<(MutationResult, bool), &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
-    if store
-        .provider_account_receipt(owner, operation)
-        .await
-        .map_err(|_| "unavailable")?
-        .is_none()
-    {
-        flush_revoked_share_leaves_locked(state, owner).await;
-    }
     let mut noop = false;
     match &input.change {
         Change::SetBrowserShare { member, share_id }
@@ -882,7 +840,7 @@ pub fn start_deletion_reconciler(state: &Arc<AppState>) {
                 return;
             };
             if woken {
-                reconcile_revoked_share_leaves(&state, None).await;
+                drain_settled_navigations(&state).await;
             }
         }
     });
@@ -896,7 +854,6 @@ pub fn start_deletion_reconciler(state: &Arc<AppState>) {
             tick.tick().await;
             let Some(state) = weak.upgrade() else { return };
             reconcile_orphaned_navigations(&state, None).await;
-            reconcile_revoked_share_leaves(&state, None).await;
             let Some(store) = state.store.as_ref() else {
                 return;
             };

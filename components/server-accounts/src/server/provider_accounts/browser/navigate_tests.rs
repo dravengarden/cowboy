@@ -396,7 +396,7 @@ async fn identity_bound_navigate_refuses_stale_share_revision_and_holds_share_fe
     );
     assert!(
         store
-            .has_pending_browser_navigation(OWNER, &running_share.account_id)
+            .has_pending_browser_navigation(OWNER, &running_share.account_id, now_ms())
             .await
             .unwrap()
     );
@@ -1271,7 +1271,7 @@ async fn unrelated_hibernated_and_stopping_events_do_not_clear_pending_navigatio
 }
 
 #[tokio::test]
-async fn revocation_starts_immediately_and_defers_share_leave_while_navigation_pending() {
+async fn revocation_starts_immediately_keeps_rollback_safe_plan_and_keeps_navigation_fence() {
     let root = tempfile::tempdir().unwrap();
     let (state, store) = fixture_state(root.path()).await;
     install_observer(&state);
@@ -1420,7 +1420,9 @@ async fn revocation_starts_immediately_and_defers_share_leave_while_navigation_p
     };
 
     // Start revocation of Fox while navigation is unsettled: access is revoked
-    // immediately, while share membership & revision wait for settlement.
+    // immediately, Fox leaves the share while keeping its family binding, Plan
+    // stays 100% rollback-compatible (no unknown fields), and the pending
+    // navigation keeps fencing share mutations and resets until settled.
     let revoked = super::update_value(
         &state,
         OWNER,
@@ -1440,35 +1442,47 @@ async fn revocation_starts_immediately_and_defers_share_leave_while_navigation_p
             .err(),
         Some("account_unavailable")
     );
-    let shares_while_pending = store.browser_shares(OWNER).await.unwrap();
-    assert_eq!(
-        shares_while_pending.share(&share_id).unwrap().revision,
-        rev_before
+    let shares_after_revoke = store.browser_shares(OWNER).await.unwrap();
+    let rev_after = shares_after_revoke.share(&share_id).unwrap().revision;
+    assert_eq!(rev_after, rev_before + 1);
+    assert!(
+        shares_after_revoke
+            .membership(&Member::account(grok.clone()))
+            .is_none()
     );
     assert!(
-        shares_while_pending
-            .membership(&Member::account(grok.clone()))
+        shares_after_revoke
+            .membership(&Member::account(codex.clone()))
             .is_some()
     );
     assert!(
-        !store
+        shares_after_revoke
+            .binding(&share_id, "xai")
+            .is_some_and(|b| b.member == Member::account(grok.clone()))
+    );
+    let identity_after = format!("share:{share_id}:{rev_after}");
+
+    // Revocation Plan has no unknown fields (older Controllers deserialize cleanly
+    // on rollback) and completes independently of unrelated share Machines.
+    let receipt = store
+        .provider_account_receipt(OWNER, "revoke-fox")
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(
+        !serde_json::to_string(&receipt)
+            .unwrap()
+            .contains("browser_share_leave_pending")
+    );
+    assert!(
+        store
             .complete_provider_revocation(OWNER, "revoke-fox")
             .await
             .unwrap()
     );
-    let readiness = store
-        .provider_revocation_readiness(OWNER, "revoke-fox")
-        .await
-        .unwrap();
-    assert!(
-        readiness
-            .missing
-            .iter()
-            .any(|item| item.kind == "browser_share_leave" && item.target == grok.as_str())
-    );
 
-    // Finding 3: stale shared-profile reset from another member (Pika) is
-    // refused while revocation leave is deferred.
+    // Even after Fox revoked, the pending navigation still fences shared-profile
+    // resets and share edits until settled.
     store
         .admit_shared_browser_placement(
             OWNER,
@@ -1481,11 +1495,27 @@ async fn revocation_starts_immediately_and_defers_share_leave_while_navigation_p
         .unwrap()
         .unwrap();
     assert_eq!(
-        reset(&state, OWNER, &codex, ("hawk", 1), &identity_before).await,
+        reset(&state, OWNER, &codex, ("hawk", 1), &identity_after).await,
+        Err("browser_navigation_pending")
+    );
+    let rev_now = store.provider_accounts(OWNER).await.unwrap().revision;
+    assert_eq!(
+        shares::update(
+            &state,
+            OWNER,
+            "delete-share-while-nav",
+            &Mutation {
+                expected_revision: rev_now,
+                change: Change::DeleteBrowserShare {
+                    share_id: share_id.clone(),
+                },
+            },
+        )
+        .await,
         Err("browser_navigation_pending")
     );
 
-    // Finding 6: revoking Fox cannot hibernate (Authority::Stop) the share's browser.
+    // Revoking Fox cannot hibernate (Authority::Stop) the share's browser.
     assert_eq!(
         instance_command(
             &state,
@@ -1501,28 +1531,7 @@ async fn revocation_starts_immediately_and_defers_share_leave_while_navigation_p
     );
     assert!(rx.try_recv().is_err());
 
-    // Finding 8: while deferred, Plan serializes `browser_share_leave_pending`
-    // so an older rolled-back Controller with `deny_unknown_fields` fails closed.
-    let pending_receipt = store
-        .provider_account_receipt(OWNER, "revoke-fox")
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(
-        pending_receipt
-            .revocation
-            .as_ref()
-            .unwrap()
-            .browser_share_leave_pending
-    );
-    assert!(
-        serde_json::to_string(&pending_receipt)
-            .unwrap()
-            .contains("browser_share_leave_pending")
-    );
-
-    // Once the Machine settles the navigation, the deferred share leave commits
-    // and bumps the share revision, allowing revocation completion.
+    // Once the Machine settles the navigation, the fence clears.
     state.machine_control.record_remote(
         &conn,
         MachineEvent::Browser {
@@ -1533,43 +1542,8 @@ async fn revocation_starts_immediately_and_defers_share_leave_while_navigation_p
             }),
         },
     );
-    shares::reconcile_revoked_share_leaves(&state, Some(OWNER)).await;
-    let shares_after = store.browser_shares(OWNER).await.unwrap();
-    assert_eq!(
-        shares_after.share(&share_id).unwrap().revision,
-        rev_before + 1
-    );
     assert!(
-        shares_after
-            .membership(&Member::account(grok.clone()))
-            .is_none()
-    );
-    assert!(shares_after.membership(&Member::account(codex)).is_some());
-    assert!(
-        shares_after
-            .binding(&share_id, "xai")
-            .is_some_and(|b| b.member == Member::account(grok.clone()))
-    );
-    let cleared_receipt = store
-        .provider_account_receipt(OWNER, "revoke-fox")
-        .await
-        .unwrap()
-        .unwrap();
-    assert!(
-        !cleared_receipt
-            .revocation
-            .as_ref()
-            .unwrap()
-            .browser_share_leave_pending
-    );
-    assert!(
-        !serde_json::to_string(&cleared_receipt)
-            .unwrap()
-            .contains("browser_share_leave_pending")
-    );
-    assert!(
-        store
-            .complete_provider_revocation(OWNER, "revoke-fox")
+        !shares::has_pending_navigation(&state, OWNER, &share_account)
             .await
             .unwrap()
     );
@@ -1867,7 +1841,7 @@ async fn controller_restart_keeps_durable_navigation_fence_and_reconciles_withou
     reconcile.await.unwrap();
     assert!(
         !store2
-            .has_pending_browser_navigation(OWNER, &share_account)
+            .has_pending_browser_navigation(OWNER, &share_account, now_ms())
             .await
             .unwrap()
     );
@@ -2024,7 +1998,7 @@ async fn matching_stopping_reply_keeps_fence_until_confirmed_exit() {
     assert!(state.browsers.has_pending_navigation(OWNER, &share_account));
     assert!(
         store
-            .has_pending_browser_navigation(OWNER, &share_account)
+            .has_pending_browser_navigation(OWNER, &share_account, now_ms())
             .await
             .unwrap()
     );
@@ -2259,5 +2233,415 @@ async fn cached_web_attachment_navigate_enforces_recorded_viewer_identity_and_fe
         )
         .await,
         Err("browser_navigation_pending"),
+    );
+}
+
+#[tokio::test]
+async fn settled_tombstone_prevents_orphan_reconciler_from_hibernating_live_browser() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, store) = fixture_state(dir.path()).await;
+    install_observer(&state);
+    let grok = add_account(&store, "acc-grok", "grok", "Fox").await;
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let conn = state.machine_control.install(
+        "hawk".into(),
+        "epoch-1".into(),
+        false,
+        crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+        tx,
+    );
+    state.browsers.connected(&conn, Some(ipv4_cap()));
+    let running = InstanceRef {
+        account_id: grok.clone(),
+        instance_id: "b-live".into(),
+        incarnation: 5,
+    };
+    let observed = StateEvent {
+        request_id: None,
+        instance: running.clone(),
+        state: BrowserState::Attached,
+        reason: None,
+        geometry: None,
+        scale: None,
+        deadline_ms: None,
+        attachment_id: Some("att-1".into()),
+        snapshot_generation: None,
+        snapshot_at_ms: None,
+        profile_revision: Some(1),
+        unsaved_state_lost: false,
+        observed_at_ms: 100,
+    };
+    state.browsers.observe(
+        &conn,
+        &crate::machine_protocol::machine_browser::Event::State(observed),
+    );
+    let observed_handle = state.browsers.state_on("hawk", grok.as_str()).unwrap();
+    // Simulate a navigation recorded in SQL and settled in memory before the
+    // SQL DELETE has committed (tombstone stays active in settled_navigation_ids).
+    shares::begin_durable_navigation(&state, OWNER, &grok, &observed_handle, "nav-tombstone")
+        .await
+        .unwrap();
+    state.browsers.settle_navigation("nav-tombstone");
+    assert!(state.browsers.is_navigation_settled("nav-tombstone"));
+    // Even if seed_durable_navigation is called while the SQL row still exists,
+    // the tombstone rejects re-seeding.
+    state
+        .browsers
+        .seed_durable_navigation(coordinator::PendingNavigation {
+            request_id: "nav-tombstone".into(),
+            owner: OWNER.into(),
+            browser_key: grok.clone(),
+            machine_id: "hawk".into(),
+            connection: None,
+            instance: running,
+            observed_at_ms: 100,
+        });
+    assert!(!state.browsers.is_navigation_pending("nav-tombstone"));
+    // Reconciler drains the settled row without ever sending Query or Hibernate.
+    shares::reconcile_orphaned_navigations(&state, Some("hawk")).await;
+    assert!(rx.try_recv().is_err());
+    assert!(!state.browsers.is_navigation_settled("nav-tombstone"));
+    assert!(
+        !store
+            .has_pending_browser_navigation_request("nav-tombstone")
+            .await
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn pending_navigation_expires_on_ttl_and_clears_when_machine_revoked_or_placement_removed() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, store) = fixture_state(dir.path()).await;
+    install_observer(&state);
+    let grok = add_account(&store, "acc-grok", "grok", "Fox").await;
+    let codex = add_account(&store, "acc-codex", "codex", "Pika").await;
+    let rev = store.provider_accounts(OWNER).await.unwrap().revision;
+    let MutationResult::Applied(created) = store
+        .mutate_browser_shares(
+            OWNER,
+            "sc",
+            &Mutation {
+                expected_revision: rev,
+                change: Change::CreateBrowserShare {
+                    label: "Heron".into(),
+                },
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("sc");
+    };
+    let share_id = created.browser_share_id.clone().unwrap();
+    let share_account = share_key(OWNER, &share_id);
+    let MutationResult::Applied(joined) = store
+        .mutate_browser_shares(
+            OWNER,
+            "jf",
+            &Mutation {
+                expected_revision: created.registry.revision,
+                change: Change::SetBrowserShare {
+                    member: Member::account(grok.clone()),
+                    share_id: Some(share_id.clone()),
+                },
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("jf");
+    };
+
+    // 1. Expired row (> PENDING_NAVIGATION_TTL_MS old) on an offline Machine
+    // does not permanently wedge share edits or resets, and reconciler prunes it.
+    let expired_started = now_ms()
+        - crate::store::provider_accounts::browser_pending_navigations::PENDING_NAVIGATION_TTL_MS
+        - 10_000;
+    store
+        .record_browser_pending_navigation(
+            &crate::store::provider_accounts::browser_pending_navigations::PendingNavigationRecord {
+                request_id: "nav-expired".into(),
+                owner_user_id: OWNER.into(),
+                browser_key: share_account.clone(),
+                machine_id: "offline-gone".into(),
+                instance_id: "b-heron".into(),
+                incarnation: 1,
+                observed_at_ms: 100,
+                started_at_ms: expired_started,
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        !shares::has_pending_navigation(&state, OWNER, &share_account)
+            .await
+            .unwrap()
+    );
+    shares::reconcile_orphaned_navigations(&state, None).await;
+    assert!(
+        !store
+            .has_pending_browser_navigation_request("nav-expired")
+            .await
+            .unwrap()
+    );
+
+    // 2. Removing the browser placement atomically clears its pending navigation.
+    store
+        .admit_shared_browser_placement(
+            OWNER,
+            (&Member::account(grok.clone()), &share_id),
+            "hawk",
+            "b-heron",
+            now_ms(),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    store
+        .record_browser_pending_navigation(
+            &crate::store::provider_accounts::browser_pending_navigations::PendingNavigationRecord {
+                request_id: "nav-placement".into(),
+                owner_user_id: OWNER.into(),
+                browser_key: share_account.clone(),
+                machine_id: "hawk".into(),
+                instance_id: "b-heron".into(),
+                incarnation: 2,
+                observed_at_ms: 100,
+                started_at_ms: now_ms(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        shares::has_pending_navigation(&state, OWNER, &share_account)
+            .await
+            .unwrap()
+    );
+    store
+        .remove_browser_placement(OWNER, &share_account, "hawk")
+        .await
+        .unwrap();
+    assert!(
+        !shares::has_pending_navigation(&state, OWNER, &share_account)
+            .await
+            .unwrap()
+    );
+
+    // 3. Revoking a Machine enrollment immediately unblocks share edits and
+    // reconciler prunes the row without needing the Machine to reconnect.
+    let token = store
+        .create_machine_enrollment("gone-machine", "Gone", 60)
+        .await
+        .unwrap();
+    store
+        .consume_machine_enrollment(
+            &token,
+            "ssh-ed25519 CQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+            "CQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=",
+        )
+        .await
+        .unwrap();
+    store
+        .record_browser_pending_navigation(
+            &crate::store::provider_accounts::browser_pending_navigations::PendingNavigationRecord {
+                request_id: "nav-revoked-machine".into(),
+                owner_user_id: OWNER.into(),
+                browser_key: share_account.clone(),
+                machine_id: "gone-machine".into(),
+                instance_id: "b-heron".into(),
+                incarnation: 3,
+                observed_at_ms: 100,
+                started_at_ms: now_ms(),
+            },
+        )
+        .await
+        .unwrap();
+    assert!(
+        shares::has_pending_navigation(&state, OWNER, &share_account)
+            .await
+            .unwrap()
+    );
+    store.revoke_machine("gone-machine").await.unwrap();
+    assert!(
+        !shares::has_pending_navigation(&state, OWNER, &share_account)
+            .await
+            .unwrap()
+    );
+    shares::reconcile_orphaned_navigations(&state, None).await;
+    assert!(
+        !store
+            .has_pending_browser_navigation_request("nav-revoked-machine")
+            .await
+            .unwrap()
+    );
+    assert!(
+        shares::update(
+            &state,
+            OWNER,
+            "jp",
+            &Mutation {
+                expected_revision: joined.registry.revision,
+                change: Change::SetBrowserShare {
+                    member: Member::account(codex),
+                    share_id: Some(share_id),
+                },
+            },
+        )
+        .await
+        .is_ok()
+    );
+}
+
+#[tokio::test]
+async fn unbound_navigate_still_takes_share_lock_and_fences_share_mutations() {
+    let dir = tempfile::tempdir().unwrap();
+    let (state, store) = fixture_state(dir.path()).await;
+    install_observer(&state);
+    let grok = add_account(&store, "acc-grok", "grok", "Fox").await;
+    let codex = add_account(&store, "acc-codex", "codex", "Pika").await;
+    let rev = store.provider_accounts(OWNER).await.unwrap().revision;
+    let MutationResult::Applied(created) = store
+        .mutate_browser_shares(
+            OWNER,
+            "sc",
+            &Mutation {
+                expected_revision: rev,
+                change: Change::CreateBrowserShare {
+                    label: "Heron".into(),
+                },
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("sc");
+    };
+    let share_id = created.browser_share_id.clone().unwrap();
+    let share_account = share_key(OWNER, &share_id);
+    let MutationResult::Applied(joined) = store
+        .mutate_browser_shares(
+            OWNER,
+            "jf",
+            &Mutation {
+                expected_revision: created.registry.revision,
+                change: Change::SetBrowserShare {
+                    member: Member::account(grok.clone()),
+                    share_id: Some(share_id.clone()),
+                },
+            },
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("jf");
+    };
+    let (tx, mut rx) = mpsc::unbounded_channel();
+    let conn = state.machine_control.install(
+        "hawk".into(),
+        "epoch-1".into(),
+        false,
+        crate::machine_protocol::MACHINE_PROTOCOL_VERSION,
+        tx,
+    );
+    state.browsers.connected(&conn, Some(ipv4_cap()));
+    let observed = StateEvent {
+        request_id: None,
+        instance: InstanceRef {
+            account_id: share_account.clone(),
+            instance_id: "b-heron".into(),
+            incarnation: 3,
+        },
+        state: BrowserState::Attached,
+        reason: None,
+        geometry: None,
+        scale: None,
+        deadline_ms: None,
+        attachment_id: Some("att-1".into()),
+        snapshot_generation: None,
+        snapshot_at_ms: None,
+        profile_revision: Some(1),
+        unsaved_state_lost: false,
+        observed_at_ms: 100,
+    };
+    state.browsers.observe(
+        &conn,
+        &crate::machine_protocol::machine_browser::Event::State(observed.clone()),
+    );
+    let client_instance = InstanceRef {
+        account_id: grok.clone(),
+        instance_id: "b-heron".into(),
+        incarnation: 3,
+    };
+
+    // Unbound navigate (no expected_browser, no attachment_id — e.g. MCP or
+    // address bar) still tracks a durable fence on the shared browser.
+    assert_eq!(
+        instance_command(
+            &state,
+            OWNER,
+            (&grok, Authority::Launch),
+            ("hawk", &client_instance),
+            IdentityFence::UnboundNavigate,
+            |instance| Command::Navigate {
+                instance,
+                url: "https://grok.com/?_s=usage".into(),
+                attachment_id: None,
+            },
+            Duration::from_millis(20),
+        )
+        .await,
+        Err("browser_command_failed"),
+    );
+    let MachineCommand::Browser {
+        request_id: nav_req,
+        ..
+    } = rx.try_recv().expect("navigate sent")
+    else {
+        panic!("expected Browser command");
+    };
+    assert_eq!(
+        shares::update(
+            &state,
+            OWNER,
+            "jp",
+            &Mutation {
+                expected_revision: joined.registry.revision,
+                change: Change::SetBrowserShare {
+                    member: Member::account(codex.clone()),
+                    share_id: Some(share_id.clone()),
+                },
+            },
+        )
+        .await,
+        Err("browser_navigation_pending"),
+    );
+
+    // Settling the unbound navigate lifts the fence.
+    state.machine_control.record_remote(
+        &conn,
+        MachineEvent::Browser {
+            browser: crate::machine_protocol::machine_browser::Event::State(StateEvent {
+                request_id: Some(nav_req),
+                observed_at_ms: 150,
+                ..observed
+            }),
+        },
+    );
+    assert!(
+        shares::update(
+            &state,
+            OWNER,
+            "jp",
+            &Mutation {
+                expected_revision: joined.registry.revision,
+                change: Change::SetBrowserShare {
+                    member: Member::account(codex),
+                    share_id: Some(share_id),
+                },
+            },
+        )
+        .await
+        .is_ok()
     );
 }

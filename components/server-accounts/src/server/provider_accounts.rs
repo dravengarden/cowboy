@@ -250,25 +250,8 @@ pub async fn update_value(
         .is_some();
     // A no-op share change (the member already in exactly that share)
     // commits its receipt but has no browser effect.
-    let mut deferred_share_leave = false;
     let (result, noop) = if input.change.is_browser_share() {
         browser::shares::update(state, owner, operation, input).await?
-    } else if let crate::store::provider_accounts::Change::BeginRevocation { id } = &input.change {
-        deferred_share_leave =
-            browser::shares::member_has_pending_navigation(state, owner, id).await?;
-        (
-            if deferred_share_leave {
-                store
-                    .mutate_provider_accounts_deferring_share_leave(owner, operation, input)
-                    .await
-            } else {
-                store
-                    .mutate_provider_accounts(owner, operation, input)
-                    .await
-            }
-            .map_err(|_| "outcome_unknown")?,
-            false,
-        )
     } else {
         (
             store
@@ -294,9 +277,6 @@ pub async fn update_value(
                 &input.change,
                 browser::shares::fresh_effects(owner, &input.change, replay || noop),
             );
-            if deferred_share_leave {
-                state.browsers.navigation_settled_notify().notify_one();
-            }
             Ok(receipt_value(&receipt))
         }
         MutationResult::Conflict(current) => {
@@ -535,7 +515,6 @@ mod tests {
                 grants: vec![],
                 browsers: vec![],
                 portable_credentials: false,
-                browser_share_leave_pending: false,
             }),
             remote_wipes: Default::default(),
             local_wipes: Default::default(),

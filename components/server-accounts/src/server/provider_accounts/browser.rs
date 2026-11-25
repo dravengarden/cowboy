@@ -1052,7 +1052,6 @@ pub async fn reset(
     // and the Machine's answer: the reset deletes the profile observed.
     let fence = state.browsers.share_lock(owner);
     let _fence = fence.lock().await;
-    shares::flush_revoked_share_leaves_locked(state, owner).await;
     let resolved = authorize(state, owner, account_id, Authority::Reset).await?;
     if resolved.identity() != expected_browser {
         return Err("browser_identity_changed");
@@ -1359,7 +1358,7 @@ pub async fn http_navigate(
     ) {
         (Some(expected), _) => IdentityFence::Expected(expected),
         (None, Some(attachment_id)) => IdentityFence::Attachment(attachment_id),
-        (None, None) => IdentityFence::None,
+        (None, None) => IdentityFence::UnboundNavigate,
     };
     respond(
         instance_command(

@@ -61,25 +61,12 @@ pub struct Plan {
     /// must be wiped (targets are fixed when the vault is wiped).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub portable_credentials: bool,
-    /// Set while this revoking account's removal from its shared browser was
-    /// deferred for an unsettled navigation. Omitted when false so ordinary
-    /// revocations stay readable by older Controllers; while true, `Plan`'s
-    /// `#[serde(deny_unknown_fields)]` stops an older rolled-back Controller
-    /// from deserializing and prematurely completing revocation.
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub browser_share_leave_pending: bool,
 }
 
 impl Plan {
     #[must_use]
     pub(super) fn with_portable(mut self, portable_credentials: bool) -> Self {
         self.portable_credentials = portable_credentials;
-        self
-    }
-
-    #[must_use]
-    pub(super) fn with_deferred_browser_share_leave(mut self, pending: bool) -> Self {
-        self.browser_share_leave_pending = pending;
         self
     }
 
@@ -92,7 +79,6 @@ impl Plan {
     ) -> Result<Self> {
         let mut plan = Self {
             portable_credentials: false,
-            browser_share_leave_pending: false,
             logins: Vec::new(),
             grants: Vec::new(),
             sessions: sessions

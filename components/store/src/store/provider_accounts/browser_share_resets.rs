@@ -20,7 +20,9 @@ impl Store {
         (machine_id, expected_profile_revision): (&str, u64),
         (operation_id, now_ms): (&str, i64),
     ) -> Result<std::result::Result<(), &'static str>> {
-        macro_rules! begin { ($db:expr) => {{
+        let nav_cutoff = now_ms
+            .saturating_sub(super::super::browser_pending_navigations::PENDING_NAVIGATION_TTL_MS);
+        macro_rules! begin { ($db:expr, $revoked:literal) => {{
             let mut tx = $db.pool.begin().await?;
             sqlx::query("UPDATE provider_account_registries SET revision=revision WHERE owner_user_id=$1")
                 .bind(owner).execute(&mut *tx).await?;
@@ -34,35 +36,22 @@ impl Store {
             if share.pending_reset.is_some() {
                 return Ok(Err("browser_share_reset_pending"));
             }
-            let pending_navs: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM browser_pending_navigations                  WHERE owner_user_id=$1 AND browser_key=$2",
-            )
+            let pending_navs: i64 = sqlx::query_scalar(concat!(
+                "SELECT COUNT(*) FROM browser_pending_navigations p ",
+                "WHERE p.owner_user_id=$1 AND p.browser_key=$2 AND p.started_at_ms > $3 ",
+                "AND NOT EXISTS (SELECT 1 FROM machines m WHERE m.id = p.machine_id AND m.",
+                $revoked,
+                " IS NOT NULL)"
+            ))
             .bind(owner)
             .bind(share.browser_key.as_str())
+            .bind(nav_cutoff)
             .fetch_one(&mut *tx)
             .await?;
             if pending_navs > 0 {
                 return Ok(Err("browser_navigation_pending"));
             }
             let current: Vec<&Member> = shares.members_of(share_id).into_iter().map(|row| &row.member).collect();
-            let reg_value: Option<String> = sqlx::query_scalar(
-                "SELECT value FROM provider_account_registries WHERE owner_user_id=$1",
-            )
-            .bind(owner)
-            .fetch_optional(&mut *tx)
-            .await?;
-            if let Some(raw) = reg_value {
-                let registry: Registry = serde_json::from_str(&raw)?;
-                if current.iter().any(|member| {
-                    let Member::Account(acc) = member;
-                    registry
-                        .accounts
-                        .iter()
-                        .any(|candidate| candidate.id == acc.account_id && candidate.revoking)
-                }) {
-                    return Ok(Err("browser_navigation_pending"));
-                }
-            }
             let released = shares.bindings.iter()
                 .filter(|row| row.share_id == share_id && !current.contains(&&row.member))
                 .map(|row| row.member.encode()).collect();
@@ -73,8 +62,8 @@ impl Store {
             tx.commit().await?;
         }} }
         match &self.backend {
-            StorageBackend::Postgres(db) => begin!(db),
-            StorageBackend::Sqlite(db) => begin!(db),
+            StorageBackend::Postgres(db) => begin!(db, "revoked_at"),
+            StorageBackend::Sqlite(db) => begin!(db, "revoked_at_ms"),
         }
         Ok(Ok(()))
     }

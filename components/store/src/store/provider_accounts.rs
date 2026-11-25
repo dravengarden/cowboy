@@ -498,31 +498,6 @@ impl Store {
         operation: &str,
         input: &Mutation,
     ) -> Result<MutationResult> {
-        self.mutate_provider_accounts_inner(owner, operation, input, false)
-            .await
-    }
-
-    /// Like [`Self::mutate_provider_accounts`], but for `BeginRevocation` starts
-    /// access revocation immediately while deferring removal from any shared
-    /// browser (and the share's membership revision bump) until an in-flight
-    /// identity-bound navigation settles.
-    pub async fn mutate_provider_accounts_deferring_share_leave(
-        &self,
-        owner: &str,
-        operation: &str,
-        input: &Mutation,
-    ) -> Result<MutationResult> {
-        self.mutate_provider_accounts_inner(owner, operation, input, true)
-            .await
-    }
-
-    async fn mutate_provider_accounts_inner(
-        &self,
-        owner: &str,
-        operation: &str,
-        input: &Mutation,
-        defer_share_leave: bool,
-    ) -> Result<MutationResult> {
         if input.expected_revision < 0 || !crate::managed_calls::valid_id(operation) {
             return Ok(MutationResult::Invalid("invalid_argument"));
         }
@@ -563,22 +538,9 @@ impl Store {
                 let browsers: Vec<(String, String)> = sqlx::query_as("SELECT machine_id,instance_id FROM browser_placements WHERE owner_user_id=$1 AND account_id=$2 ORDER BY machine_id")
                     .bind(owner).bind(account_id.as_str()).fetch_all(&mut *tx).await?;
                 let portable = registry.accounts.iter().any(|account| account.id == account_id && account.portable_credentials);
-                let deferred_share = if defer_share_leave {
-                    let count: i64 = sqlx::query_scalar(
-                        "SELECT COUNT(*) FROM provider_browser_share_members WHERE owner_user_id=$1 AND member=$2",
-                    )
-                    .bind(owner)
-                    .bind(browser_shares::Member::account(account_id.clone()).encode())
-                    .fetch_one(&mut *tx)
-                    .await?;
-                    count > 0
-                } else {
-                    false
-                };
                 Some(
                     revocation::Plan::capture(&account_id, logins, grants, sessions, browsers)?
-                        .with_portable(portable)
-                        .with_deferred_browser_share_leave(deferred_share),
+                        .with_portable(portable),
                 )
             } else { None };
             if matches!(input.change, Change::BeginRevocation { .. }) {
@@ -591,15 +553,13 @@ impl Store {
                 // still require vault/replica revocation, never cancellation.
                 sqlx::query($cancel_grants).bind(owner).bind(account_id.as_str())
                     .execute(&mut *tx).await?;
-                if !defer_share_leave {
-                    // The account leaves any shared browser; the share's profile
-                    // stays with its other members. The membership revision
-                    // moves, so a reset captured before is refused.
-                    sqlx::query("UPDATE provider_browser_shares SET revision=revision+1 WHERE owner_user_id=$1 AND share_id IN (SELECT share_id FROM provider_browser_share_members WHERE owner_user_id=$1 AND member=$2)")
-                        .bind(owner).bind(browser_shares::Member::account(account_id.clone()).encode()).execute(&mut *tx).await?;
-                    sqlx::query("DELETE FROM provider_browser_share_members WHERE owner_user_id=$1 AND member=$2")
-                        .bind(owner).bind(browser_shares::Member::account(account_id.clone()).encode()).execute(&mut *tx).await?;
-                }
+                // The account leaves any shared browser; the share's profile
+                // stays with its other members. The membership revision
+                // moves, so a reset captured before is refused.
+                sqlx::query("UPDATE provider_browser_shares SET revision=revision+1 WHERE owner_user_id=$1 AND share_id IN (SELECT share_id FROM provider_browser_share_members WHERE owner_user_id=$1 AND member=$2)")
+                    .bind(owner).bind(browser_shares::Member::account(account_id.clone()).encode()).execute(&mut *tx).await?;
+                sqlx::query("DELETE FROM provider_browser_share_members WHERE owner_user_id=$1 AND member=$2")
+                    .bind(owner).bind(browser_shares::Member::account(account_id.clone()).encode()).execute(&mut *tx).await?;
             }
             sqlx::query("UPDATE provider_account_registries SET revision=$1,value=$2 WHERE owner_user_id=$3")
                 .bind(registry.revision).bind(serde_json::to_string(&registry)?).bind(owner).execute(&mut *tx).await?;

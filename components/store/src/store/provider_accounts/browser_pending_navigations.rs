@@ -1,9 +1,13 @@
-//! Durable fence for identity-bound Machine browser navigations whose
-//! terminal outcome is not yet confirmed (across HTTP wait timeouts, Machine
-//! disconnects, and Controller restarts).
+//! Durable fence for Machine browser navigations whose terminal outcome is not
+//! yet confirmed (across HTTP wait timeouts, Machine disconnects, and
+//! Controller restarts).
 use super::super::{StorageBackend, Store};
 use crate::provider_account::ProviderAccountId;
 use anyhow::Result;
+
+/// Upper bound on how long an orphaned navigation row can fence a share when
+/// its Machine never reconnects (10x the Machine's 30 s navigate timeout).
+pub const PENDING_NAVIGATION_TTL_MS: i64 = 5 * 60 * 1000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingNavigationRecord {
@@ -35,9 +39,8 @@ fn decode_row(row: RawRow) -> Option<PendingNavigationRecord> {
 }
 
 impl Store {
-    /// Persist a pending identity-bound navigation before dispatching it to
-    /// the Machine so the share fence survives disconnects and Controller
-    /// restarts.
+    /// Persist a pending navigation before dispatching it to the Machine so the
+    /// share fence survives disconnects and Controller restarts.
     pub async fn record_browser_pending_navigation(
         &self,
         record: &PendingNavigationRecord,
@@ -105,24 +108,71 @@ impl Store {
         Ok(())
     }
 
+    pub async fn has_pending_browser_navigation_request(&self, request_id: &str) -> Result<bool> {
+        macro_rules! check {
+            ($db:expr) => {{
+                let count: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM browser_pending_navigations WHERE request_id=$1",
+                )
+                .bind(request_id)
+                .fetch_one(&$db.pool)
+                .await?;
+                count > 0
+            }};
+        }
+        Ok(match &self.backend {
+            StorageBackend::Postgres(db) => check!(db),
+            StorageBackend::Sqlite(db) => check!(db),
+        })
+    }
+
+    pub async fn is_machine_revoked(&self, machine_id: &str) -> Result<bool> {
+        macro_rules! check {
+            ($db:expr, $revoked:literal) => {{
+                let count: i64 = sqlx::query_scalar(concat!(
+                    "SELECT COUNT(*) FROM machines WHERE id=$1 AND ",
+                    $revoked,
+                    " IS NOT NULL"
+                ))
+                .bind(machine_id)
+                .fetch_one(&$db.pool)
+                .await?;
+                count > 0
+            }};
+        }
+        Ok(match &self.backend {
+            StorageBackend::Postgres(db) => check!(db, "revoked_at"),
+            StorageBackend::Sqlite(db) => check!(db, "revoked_at_ms"),
+        })
+    }
+
     pub async fn has_pending_browser_navigation(
         &self,
         owner: &str,
         browser_key: &ProviderAccountId,
+        now_ms: i64,
     ) -> Result<bool> {
-        macro_rules! check { ($db:expr) => {{
-            let count: i64 = sqlx::query_scalar(
-                "SELECT COUNT(*) FROM browser_pending_navigations                  WHERE owner_user_id=$1 AND browser_key=$2",
-            )
-            .bind(owner)
-            .bind(browser_key.as_str())
-            .fetch_one(&$db.pool)
-            .await?;
-            count > 0
-        }}; }
+        let cutoff = now_ms.saturating_sub(PENDING_NAVIGATION_TTL_MS);
+        macro_rules! check {
+            ($db:expr, $revoked:literal) => {{
+                let count: i64 = sqlx::query_scalar(concat!(
+                    "SELECT COUNT(*) FROM browser_pending_navigations p ",
+                    "WHERE p.owner_user_id=$1 AND p.browser_key=$2 AND p.started_at_ms > $3 ",
+                    "AND NOT EXISTS (SELECT 1 FROM machines m WHERE m.id = p.machine_id AND m.",
+                    $revoked,
+                    " IS NOT NULL)"
+                ))
+                .bind(owner)
+                .bind(browser_key.as_str())
+                .bind(cutoff)
+                .fetch_one(&$db.pool)
+                .await?;
+                count > 0
+            }};
+        }
         Ok(match &self.backend {
-            StorageBackend::Postgres(db) => check!(db),
-            StorageBackend::Sqlite(db) => check!(db),
+            StorageBackend::Postgres(db) => check!(db, "revoked_at"),
+            StorageBackend::Sqlite(db) => check!(db, "revoked_at_ms"),
         })
     }
 
