@@ -379,82 +379,66 @@ test("session_updated and session_removed incrementally update live store sessio
   }
 });
 
-test("snapshot watermark replays live absorbed chunks without overwriting or duplicating", async () => {
+test("stale replica trims only cached prefix without dropping live events or resurrecting clears", async () => {
   const socket = FakeSocket.all.at(-1)!;
-  const sessionId = "delta-replica-replay";
-  // Seed a stale replica tail in IndexedDB before opening the session.
+  const sessionId = "delta-replica-trim";
   await database.cache({ kind: "session", session: sessionId, state: "tail" }).save({
     receivedAt: Date.now() - 60_000,
-    lastSeq: 2,
+    lastSeq: 1,
     reachedStart: false,
     events: [
       {
         session_id: sessionId,
         seq: 1,
         kind: "update",
-        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "stale" } },
+        update: {
+          sessionUpdate: "agent_message_chunk",
+          messageId: "stale-msg",
+          content: { type: "text", text: "stale" },
+        },
       },
     ],
   });
   store.openSession(sessionId);
   await settle(25);
-  // While the stale replica is painted, live WS delivers seq 100 and absorbs seq 101 into it.
+  // Newer live WS event arrives after the stale replica was painted.
   socket.receive({
     type: "event",
     envelope: {
       session_id: sessionId,
-      seq: 100,
+      seq: 102,
       kind: "update",
-      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello" } },
-    },
-  });
-  socket.receive({
-    type: "event",
-    envelope: {
-      session_id: sessionId,
-      seq: 101,
-      kind: "update",
-      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: " world" } },
+      update: {
+        sessionUpdate: "agent_message_chunk",
+        messageId: "live-msg",
+        content: { type: "text", text: "after" },
+      },
     },
   });
   await settle(25);
-  // Snapshot captured right after seq 100 (next_seq = 101) arrives: stale replica
-  // is discarded, snapshot row 100 ("hello") lands, and buffered seq 101 replays.
+  // Snapshot for [100..101] drops stale prefix seq=1 without paging history,
+  // while keeping newer live event seq=102 intact.
   socket.receive({
     type: "snapshot",
     session_id: sessionId,
     reached_start: false,
-    next_seq: 101,
     events: [
       {
         session_id: sessionId,
         seq: 100,
         kind: "update",
-        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello" } },
+        update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "hi" } },
+      },
+      {
+        session_id: sessionId,
+        seq: 101,
+        kind: "update",
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "reply" } },
       },
     ],
   });
   await settle(25);
-  const timeline = store.canonicalTimeline(sessionId) ?? [];
-  expect(timeline.map((e) => e.seq)).toEqual([100]);
-  const text = timeline[0]?.kind === "update" ? timeline[0].update.content?.text : "";
-  expect(text).toBe("hello world");
-
-  // Delayed covered WS chunk (seq 100 < accepted watermark 101) is dropped.
-  socket.receive({
-    type: "event",
-    envelope: {
-      session_id: sessionId,
-      seq: 100,
-      kind: "update",
-      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: " DUPE" } },
-    },
-  });
-  await settle(25);
-  const afterDelayed = store.canonicalTimeline(sessionId) ?? [];
-  expect(afterDelayed[0]?.kind === "update" ? afterDelayed[0].update.content?.text : "").toBe(
-    "hello world",
-  );
+  expect((store.canonicalTimeline(sessionId) ?? []).map((e) => e.seq)).toEqual([100, 101, 102]);
 
   // A live context_cleared arriving while an older pre-clear snapshot is in
   // flight must never resurrect cleared rows.
@@ -471,7 +455,6 @@ test("snapshot watermark replays live absorbed chunks without overwriting or dup
     type: "snapshot",
     session_id: sessionId,
     reached_start: true,
-    next_seq: 140,
     events: [
       {
         session_id: sessionId,
@@ -483,57 +466,6 @@ test("snapshot watermark replays live absorbed chunks without overwriting or dup
   });
   await settle(25);
   expect((store.canonicalTimeline(sessionId) ?? []).map((e) => e.seq)).toEqual([150]);
-
-  // A standalone live chunk already folded into the incoming snapshot must not
-  // survive as a duplicate row after merging onto the pre-journal base.
-  const overlapId = "delta-replica-overlap-dedupe";
-  await database.cache({ kind: "session", session: overlapId, state: "tail" }).save({
-    receivedAt: Date.now() - 5_000,
-    lastSeq: 99,
-    reachedStart: true,
-    events: [
-      {
-        session_id: overlapId,
-        seq: 99,
-        kind: "update",
-        update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "ask" } },
-      },
-    ],
-  });
-  store.openSession(overlapId);
-  await settle(25);
-  socket.receive({
-    type: "event",
-    envelope: {
-      session_id: overlapId,
-      seq: 101,
-      kind: "update",
-      update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: " world" } },
-    },
-  });
-  await settle(25);
-  socket.receive({
-    type: "snapshot",
-    session_id: overlapId,
-    reached_start: true,
-    next_seq: 102,
-    events: [
-      {
-        session_id: overlapId,
-        seq: 99,
-        kind: "update",
-        update: { sessionUpdate: "user_message_chunk", content: { type: "text", text: "ask" } },
-      },
-      {
-        session_id: overlapId,
-        seq: 100,
-        kind: "update",
-        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "hello world" } },
-      },
-    ],
-  });
-  await settle(25);
-  expect((store.canonicalTimeline(overlapId) ?? []).map((e) => e.seq)).toEqual([99, 100]);
 });
 
 // Last: an auth-required close pauses the product socket until the sign-in

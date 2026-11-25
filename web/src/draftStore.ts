@@ -150,13 +150,9 @@ function discardDatabaseDraft(sessionId: string, force = false): void {
       return;
     }
     pendingDiscards.delete(sessionId);
-    const tombstone: StoredDraft = { text: "", attachments: [], savedAt: Date.now(), removed: true };
-    // Enqueue directly on the per-session write chain without waiting for
-    // enumeration; atomic tombstone prevents a peer tab's queued write from
-    // recreating attachments after removal.
-    void writeDatabase(sessionId, () =>
-      cache.update ? cache.update(() => tombstone) : cache.discard()
-    ).catch(() => undefined);
+    // Enqueue discard directly on the per-session write chain without waiting
+    // for enumeration and without creating permanent tombstone keys.
+    void writeDatabase(sessionId, () => cache.discard()).catch(() => undefined);
     return;
   }
   if (!databaseListed) {
@@ -217,11 +213,7 @@ function persist(sessionId: string, draft: Draft | null): void {
       const stored: StoredDraft = { text: draft.text, attachments, savedAt: Date.now() };
       databaseDrafts.add(sessionId);
       pendingDiscards.delete(sessionId);
-      void writeDatabase(sessionId, () =>
-        cache.update
-          ? cache.update((existing) => (existing?.removed === true ? existing : stored))
-          : cache.save(stored)
-      ).catch((): void => {
+      void writeDatabase(sessionId, () => cache.save(stored)).catch((): void => {
         databaseDrafts.delete(sessionId);
         // Only if nothing newer replaced this draft while the write failed.
         if (!removedSessions.has(sessionId) && drafts.get(sessionId) === draft) {
@@ -386,7 +378,7 @@ async function restoreOnce(): Promise<void> {
     const promised = awaitingDatabase.has(sessionId);
     const hydratedText = awaitingDatabase.get(sessionId);
     awaitingDatabase.delete(sessionId);
-    if (record?.removed === true || removedSessions.has(sessionId)) {
+    if (removedSessions.has(sessionId)) {
       drafts.delete(sessionId);
       dirty.delete(sessionId);
       continue;
@@ -532,8 +524,8 @@ export function discardDraft(sessionId: string): void {
   awaitingDatabase.delete(sessionId);
   cleared.add(sessionId);
   // Another tab may have saved an attachment draft after this tab enumerated
-  // IndexedDB or before enumeration completed; write a dataset-scoped removal
-  // tombstone directly on the per-session write chain.
+  // IndexedDB or before enumeration completed; enqueue discard directly on the
+  // per-session write chain without creating permanent tombstone keys.
   discardDatabaseDraft(sessionId, true);
   try {
     globalThis.localStorage?.removeItem(KEY_PREFIX + sessionId);

@@ -279,3 +279,45 @@ test("invalidateReferencingContexts refreshes cached views referencing a changed
   }
   expect(announced).toEqual(["reader-sess"]);
 });
+
+test("first context read revalidates if a returned linked session changed while in flight", async () => {
+  const first = Promise.withResolvers<Response>();
+  let reads = 0;
+  globalThis.fetch = (() => {
+    reads += 1;
+    return reads === 1
+      ? first.promise
+      : Promise.resolve(Response.json({
+          revision: 1,
+          applied_revision: 1,
+          sources: ["linked-inflight"],
+          source_sessions: [{ id: "linked-inflight", available: true, title: "Fresh" }],
+          links: [{ id: "linked-inflight", available: true, title: "Fresh", before: 10 }],
+          next_agent: null,
+          delivery: null,
+          max_sources: 32,
+        }));
+  }) as typeof fetch;
+  globalThis.dispatchEvent(
+    new CustomEvent(PREFERENCES_CHANGED, {
+      detail: { "session_context:first-read-race": 1 },
+    }),
+  );
+  const pending = loadSessionContext("first-read-race");
+  // Linked session changes BEFORE first-read-race's first GET returns.
+  invalidateReferencingContexts(["linked-inflight"]);
+  first.resolve(Response.json({
+    revision: 1,
+    applied_revision: 1,
+    sources: ["linked-inflight"],
+    source_sessions: [{ id: "linked-inflight", available: false }],
+    links: [{ id: "linked-inflight", available: false, title: "Stale", before: 10 }],
+    next_agent: null,
+    delivery: null,
+    max_sources: 32,
+  }));
+  const resolved = await pending;
+  expect(reads).toBe(2);
+  expect(resolved.links?.[0]?.title).toBe("Fresh");
+  evictSessionContext("first-read-race");
+});

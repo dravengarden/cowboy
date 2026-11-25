@@ -437,7 +437,6 @@ export type Outbound =
     session_id: string;
     events: Envelope[];
     reached_start: boolean;
-    next_seq?: number;
   }
   | { type: "event"; envelope: Envelope }
   | { type: "config_options"; session_id: string; options: ConfigOption[] }

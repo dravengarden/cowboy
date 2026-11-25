@@ -29,7 +29,7 @@ export const outboundFixtures = {
   "session_removed": {"type":"session_removed","session_id":"sess-1"},
   "machines": {"type":"machines","revision":7,"machines":[],"resync":false},
   "bootstrap_complete": {"type":"bootstrap_complete"},
-  "snapshot": {"type":"snapshot","session_id":"sess-1","events":[{"session_id":"sess-1","seq":1,"kind":"lifecycle","status":"running","detail":null}],"reached_start":true,"next_seq":2},
+  "snapshot": {"type":"snapshot","session_id":"sess-1","events":[{"session_id":"sess-1","seq":1,"kind":"lifecycle","status":"running","detail":null}],"reached_start":true},
   "event_with_cmid": {"type":"event","envelope":{"session_id":"sess-1","seq":2,"kind":"update","update":{"sessionUpdate":"user_message_chunk","content":{"type":"text","text":"hi"}},"cmid":"cmid-1"}},
   "event_without_cmid": {"type":"event","envelope":{"session_id":"sess-1","seq":3,"kind":"turn_end","stop_reason":"end_turn"}},
   "ping": {"type":"ping"},

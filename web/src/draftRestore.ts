@@ -18,9 +18,6 @@ export interface StoredDraft {
   readonly text: string;
   readonly attachments: readonly Attachment[];
   readonly savedAt: number;
-  /** Dataset-scoped removal tombstone checked inside IndexedDB transactions so
-   *  a late peer-tab write cannot recreate attachments for a removed session. */
-  readonly removed?: true;
 }
 
 export interface RestoredDraft {

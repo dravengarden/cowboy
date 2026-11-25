@@ -111,6 +111,66 @@ impl Hub {
         Ok(())
     }
 
+    /// Republish `"title"` or `"order"` under the canonical `sync` ->
+    /// `sessions` -> `order` lock hierarchy for retried duplicate deliveries so
+    /// a duplicate ack can never publish an older value at a newer version.
+    pub(super) fn republish_linearized_sync(&self, state: &str, id: String) {
+        let version = match state {
+            "title" => {
+                let mut reg = self.inner.sync.lock();
+                let sessions = self.inner.sessions.lock();
+                let entry = reg.entry(state.to_owned()).or_default();
+                entry.version += 1;
+                let version = entry.version;
+                let value = serde_json::Value::Object(
+                    sessions
+                        .values()
+                        .map(|s| {
+                            (
+                                s.meta.id.clone(),
+                                serde_json::Value::String(s.meta.title.clone()),
+                            )
+                        })
+                        .collect(),
+                );
+                self.fanout(Outbound::SyncPatch {
+                    state: state.to_owned(),
+                    version,
+                    value,
+                    confirmed: vec![id.clone()],
+                    resync: false,
+                });
+                version
+            }
+            "order" => {
+                let mut reg = self.inner.sync.lock();
+                let _sessions = self.inner.sessions.lock();
+                let list = self.inner.order.lock();
+                let entry = reg.entry(state.to_owned()).or_default();
+                entry.version += 1;
+                let version = entry.version;
+                let value = serde_json::Value::Array(
+                    list.iter()
+                        .map(|sid| serde_json::Value::String(sid.clone()))
+                        .collect(),
+                );
+                self.fanout(Outbound::SyncPatch {
+                    state: state.to_owned(),
+                    version,
+                    value,
+                    confirmed: vec![id.clone()],
+                    resync: false,
+                });
+                version
+            }
+            _ => {
+                self.sync_broadcast(state, vec![id]);
+                return;
+            }
+        };
+        tracing::info!(target: "cowboy::oplog", op = "change", %state, version, confirmed = ?vec![id]);
+    }
+
     /// Apply a sidebar-folders mutation to the typed tree and persist what it
     /// changed: the owner's whole folder set and any explicit placements.
     /// Mirror of [`Self::apply_reorder_sync`]; the sync channel carries the value.
@@ -613,9 +673,8 @@ impl Hub {
             _ => return Err(format!("unknown sync mutation {state}/{name}")),
         };
         if self.sync_already_seen(state, &id) {
-            // Duplicate delivery/retry: already applied. Confirm it again so a
-            // client that missed the original patch retires its outbox entry.
-            self.sync_broadcast(state, vec![id]);
+            // Duplicate retry: re-confirm under the same atomic lock boundary.
+            self.republish_linearized_sync(state, id);
             return Ok(());
         }
         match op {

@@ -85,10 +85,12 @@ const DISPLAY_CACHE_LIMIT = 64;
 const reads = new Map<string, Promise<SessionContext>>();
 const cachedContexts = new Map<string, { revision: number; data: SessionContext }>();
 const contextDependencies = new Map<string, Set<string>>();
+const linkMetadataChangeEpochs = new Map<string, number>();
 const announcedRevisions = new Map<string, number>();
 const loadedAnnouncedRevisions = new Map<string, number>();
 const configured = new Set<string>();
 const readRevisions = new Map<string, number>();
+let linkMetadataEpoch = 0;
 let principalEpoch = 0;
 
 function trimContextForDisplayCache(context: SessionContext): SessionContext {
@@ -161,6 +163,8 @@ export function invalidateReferencingContexts(changedSessionIds: string | Iterab
     ? new Set([changedSessionIds])
     : new Set(changedSessionIds);
   if (changed.size === 0) return;
+  linkMetadataEpoch += 1;
+  for (const depId of changed) linkMetadataChangeEpochs.set(depId, linkMetadataEpoch);
   const affected: string[] = [];
   for (const [id, deps] of contextDependencies) {
     for (const dep of deps) {
@@ -270,6 +274,7 @@ export function loadSessionContext(id: string): Promise<SessionContext> {
   if (existing) return existing;
   const revision = readRevisions.get(id) ?? 0;
   const announced = announcedRevisions.get(id);
+  const metaEpochAtStart = linkMetadataEpoch;
   const epoch = principalEpoch;
   const read: Promise<SessionContext> = json<SessionContext>(
     `/api/sessions/${encodeURIComponent(id)}/context`,
@@ -283,6 +288,16 @@ export function loadSessionContext(id: string): Promise<SessionContext> {
       }
       if (context.revision > 0) configured.add(id);
       recordContextDependencies(id, context);
+      // If a returned linked/source session changed while this first read was
+      // in flight, revalidate rather than caching stale linked metadata.
+      const deps = contextDependencies.get(id);
+      if (
+        deps !== undefined &&
+        [...deps].some((dep) => (linkMetadataChangeEpochs.get(dep) ?? 0) > metaEpochAtStart)
+      ) {
+        if (reads.get(id) === read) reads.delete(id);
+        return loadSessionContext(id);
+      }
       if (announced !== undefined && announcedRevisions.get(id) === announced) {
         loadedAnnouncedRevisions.set(id, announced);
         storeDisplayCache(id, revision, context);
@@ -456,6 +471,7 @@ globalThis.addEventListener?.("cowboy:product-sign-out", () => {
   reads.clear();
   cachedContexts.clear();
   contextDependencies.clear();
+  linkMetadataChangeEpochs.clear();
   announcedRevisions.clear();
   loadedAnnouncedRevisions.clear();
   readRevisions.clear();

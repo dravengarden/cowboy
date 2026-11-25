@@ -13,9 +13,6 @@ export interface StoredEdits {
   /** When each slot's edit last changed (`updatedAt`); absent before stamps. */
   readonly stamps?: Readonly<Record<string, number>>;
   readonly savedAt: number;
-  /** Dataset-scoped removal tombstone checked inside IndexedDB transactions so
-   *  a disconnected peer tab cannot recreate attachments for a removed session. */
-  readonly removed?: true;
 }
 
 /** One tab's view of a session's slots for one merge. */
@@ -30,7 +27,6 @@ export interface OwnedSlots {
 
 /** The record after this tab's change, or `null` when no slot is left. */
 export function mergeStoredEdits(stored: StoredEdits | null, view: OwnedSlots): StoredEdits | null {
-  if (stored?.removed === true) return stored;
   const edits: Record<string, readonly Attachment[]> = { ...stored?.edits };
   const stamps: Record<string, number> = { ...stored?.stamps };
   for (const slot of Object.keys(edits)) {

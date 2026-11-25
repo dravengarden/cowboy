@@ -258,7 +258,7 @@ test("a reload leaves a text draft exactly as typed", async () => {
   assertEquals(second.getDraft("code").text, text);
 });
 
-test("discardDraft fences removed sessions immediately before listing and blocks late peer writes", async () => {
+test("discardDraft deletes IndexedDB attachment drafts immediately before listing without leaving keys", async () => {
   const storage = fakeStorage();
   const database = fakeDatabase();
   const tabB = await loadPage(storage);
@@ -278,14 +278,13 @@ test("discardDraft fences removed sessions immediately before listing and blocks
   });
   tabA.discardDraft("cross-tab-removed");
   await settle();
-  assertEquals(database.records.get("cross-tab-removed")?.removed, true);
+  assertEquals(database.records.has("cross-tab-removed"), false);
   assertEquals(storage.records.has(KEY + "cross-tab-removed"), false);
 
-  // A peer tab's late attachment write cannot overwrite the removal tombstone.
-  tabB.setDraft("cross-tab-removed", { text: `${TEXT} late`, attachments: [image("a2")] });
+  // Late in-tab setDraft for a removed session is rejected without creating keys.
+  tabA.setDraft("cross-tab-removed", { text: `${TEXT} late`, attachments: [image("a2")] });
   await settle();
-  assertEquals(database.records.get("cross-tab-removed")?.removed, true);
-  assertEquals(database.records.get("cross-tab-removed")?.attachments.length, 0);
+  assertEquals(database.records.has("cross-tab-removed"), false);
 
   // A reloaded page sees no restored draft.
   const reloaded = await loadPage(storage);

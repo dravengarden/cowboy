@@ -1961,7 +1961,6 @@ impl Bridge {
                 session_id,
                 events,
                 reached_start,
-                ..
             } => self.apply_snapshot(session_id, events, reached_start),
             Outbound::Event { envelope } => self.handle_live_envelope(&envelope, cx)?,
             Outbound::ConfigOptions {
@@ -2398,7 +2397,6 @@ fn apply_bootstrap_outbound(state: &Arc<Mutex<BridgeState>>, outbound: Outbound)
             session_id,
             mut events,
             reached_start,
-            ..
         } => {
             events.sort_unstable_by_key(|event| event.seq);
             state
@@ -3073,7 +3071,6 @@ mod tests {
                             session_id: id.clone(),
                             events: vec![envelope(5, text_update("e")), envelope(6, text_update("f"))],
                             reached_start: false,
-                            next_seq: None,
                         },
                         Outbound::ConfigOptions { session_id: id, options: serde_json::json!([]) },
                         {"type": "a_frame_from_a_newer_daemon"},
@@ -3157,7 +3154,6 @@ mod tests {
                 session_id: "sess-1".to_owned(),
                 events: vec![envelope(8, text_update("b")), envelope(7, text_update("a"))],
                 reached_start: false,
-                next_seq: None,
             })
             .unwrap(),
             serde_json::to_value(Outbound::ConfigOptions {

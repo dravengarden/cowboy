@@ -315,7 +315,7 @@ async function restoreOnce(): Promise<void> {
       // An unreadable record is not an absent one. Its edits stay promised.
       continue;
     }
-    if (found?.removed === true || removedSessions.has(sessionId)) {
+    if (removedSessions.has(sessionId)) {
       for (const [key, record] of records) {
         if (record.sessionId === sessionId) forgetLocally(key);
       }
@@ -565,10 +565,9 @@ export function discardPendingEdits(sessionId: string): void {
   removeSessionPendingEditMirrors(sessionId);
   const cache = editsCache(sessionId);
   if (cache !== undefined) {
-    const tombstone: StoredEdits = { edits: {}, savedAt: Date.now(), removed: true };
-    void writeDatabase(sessionId, () =>
-      cache.update ? cache.update(() => tombstone) : cache.discard()
-    ).catch(() => undefined);
+    // Delete the session's edits key directly without writing a permanent
+    // tombstone record that would consume the dataset's key-scan budget.
+    void writeDatabase(sessionId, () => cache.discard()).catch(() => undefined);
   }
 }
 
