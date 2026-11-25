@@ -177,7 +177,7 @@ export class PlanGate {
      */
     this.turnAmbiguities = new WeakMap();
     this.unboundAmbiguities = new Map();
-    /** Turn object -> Map<`${sessionId}\0${id}`, { aliasNames: Set<string>, attempt }> all evicted cards (R7-M3, R8-M4). */
+    /** Turn object -> Map<`${sessionId}\0${id}`, { diffNames: Set<string>, attempt }> all evicted cards (R7-M3, R8-M4, R9-L1). */
     this.turnEvicted = new WeakMap();
     this.unboundEvicted = new Map();
   }
@@ -316,9 +316,9 @@ export class PlanGate {
         contradicted = true;
       }
       if (incomingName !== undefined && incomingName !== existing.name) {
-        // R8-M3: Retain every revised identity on the card so later matching
-        // peers and nameless completions remain tainted until retirement.
-        existing.aliasNames.add(incomingName);
+        // R8-M3 / R9-L1: Retain only diff-bearing revised identities (at most
+        // WriteFile and EditFile) so repeated malformed renames stay O(1).
+        if (isDiffName(incomingName)) existing.diffNames.add(incomingName);
         existing.ambiguous = true;
         existing.inputContradicted = true;
         contradicted = true;
@@ -360,7 +360,7 @@ export class PlanGate {
       for (const item of list) {
         if (
           item.id !== excludeId &&
-          item.aliasNames.has(peerName) &&
+          item.diffNames.has(peerName) &&
           item.turn === targetTurn &&
           item.attempt === targetAttempt
         ) {
@@ -377,12 +377,10 @@ export class PlanGate {
     };
     const detectDiffCollisions = (target) => {
       const affected = [];
-      if (!target) return affected;
-      const diffNames = [...target.aliasNames].filter(isDiffName);
-      if (diffNames.length === 0) return affected;
+      if (!target || target.diffNames.size === 0) return affected;
       const toolWideTarget =
         Boolean(target.inputContradicted) || (target.ambiguous && !target.hasInput);
-      for (const diffName of diffNames) {
+      for (const diffName of target.diffNames) {
         if (toolWideTarget) {
           this.recordDiffAmbiguity(sessionId, target.turn, target.attempt, diffName);
         } else if (target.ambiguous && target.hasInput && target.digest !== undefined) {
@@ -391,7 +389,7 @@ export class PlanGate {
         const peers = list.filter(
           (item) =>
             item.id !== target.id &&
-            item.aliasNames.has(diffName) &&
+            item.diffNames.has(diffName) &&
             item.turn === target.turn &&
             item.attempt === target.attempt,
         );
@@ -435,11 +433,12 @@ export class PlanGate {
     // revisions on ANY evicted card (including evicted non-edit cards renamed to an edit).
     const existingAffected = existing ? detectDiffCollisions(existing) : [];
     if (evictedRecord) {
-      if (incomingName !== undefined) evictedRecord.aliasNames.add(incomingName);
-      const evictedDiffNames = [...evictedRecord.aliasNames].filter(isDiffName);
-      if (evictedDiffNames.length > 0) {
+      if (incomingName !== undefined && isDiffName(incomingName)) {
+        evictedRecord.diffNames.add(incomingName);
+      }
+      if (evictedRecord.diffNames.size > 0) {
         contradicted = true;
-        for (const diffName of evictedDiffNames) {
+        for (const diffName of evictedRecord.diffNames) {
           existingAffected.push(...taintToolPeers(diffName, turn, evictedRecord.attempt, id));
         }
       }
@@ -489,11 +488,11 @@ export class PlanGate {
             if (oldest !== undefined) map.delete(oldest);
           }
           map.set(`${sessionId}\0${evicted.id}`, {
-            aliasNames: new Set(evicted.aliasNames),
+            diffNames: new Set(evicted.diffNames),
             attempt: evicted.attempt,
           });
         }
-        for (const diffName of [...evicted.aliasNames].filter(isDiffName)) {
+        for (const diffName of evicted.diffNames) {
           this.recordDiffAmbiguity(sessionId, evicted.turn, evicted.attempt, diffName);
         }
         if (turn && typeof turn === "object") turn.announcementEvicted = true;
@@ -502,7 +501,7 @@ export class PlanGate {
     const added = {
       id,
       name,
-      aliasNames: new Set([name]),
+      diffNames: new Set(isDiffName(name) ? [name] : []),
       toolName,
       turn,
       attempt,
@@ -540,12 +539,15 @@ export class PlanGate {
     const name = `${FACADE_PREFIX}${call.name}`;
     const stripSummary = isBuiltinFacadeTool(call.name);
     const digest = argsDigest(call.args === undefined ? {} : call.args, { stripSummary });
+    const isDiffBearing = call.name === "WriteFile" || call.name === "EditFile";
     const liveSameTool = list.filter(
-      (item) => item.aliasNames.has(name) && item.turn === turn && item.attempt === attempt,
+      (item) =>
+        (isDiffBearing ? item.diffNames.has(name) : item.name === name) &&
+        item.turn === turn &&
+        item.attempt === attempt,
     );
     const unbound = liveSameTool.filter((item) => !item.boundCall && !item.ambiguous);
     let entry;
-    const isDiffBearing = call.name === "WriteFile" || call.name === "EditFile";
     if (isDiffBearing) {
       // R6-M2: If a diff-bearing card for this tool/turn/attempt contradicted
       // itself or collided AFTER this unbound call was admitted (even if that

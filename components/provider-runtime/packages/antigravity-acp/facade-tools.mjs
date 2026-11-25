@@ -87,7 +87,7 @@ export const APPLY = 'exec "$COWBOY_EXECUTION_FILE_HELPER" apply "$@"';
 /** Requests up to this size travel inline in the helper's arguments. */
 export const INLINE_APPLY = 48 * 1024;
 /** The private directory request files larger than that are written to. */
-export const PAYLOAD_DIRECTORY = `umask 077 && if [ -n "\${COWBOY_EXECUTION_PAYLOAD_DIR:-}" ]; then d="$COWBOY_EXECUTION_PAYLOAD_DIR" && test -d "$d" && test ! -L "$d" && test -O "$d" && printf %s "$d"; else c="$HOME/.cache" && { test -e "$c" || mkdir -m 700 -- "$c"; } && test -d "$c" && test ! -L "$c" && test -O "$c" && b="$c/cowboy" && { test -e "$b" || mkdir -m 700 -- "$b"; } && test -d "$b" && test ! -L "$b" && test -O "$b" && d="$b/file-buffers" && { test -e "$d" || mkdir -m 700 -- "$d"; } && test -d "$d" && test ! -L "$d" && test -O "$d" && chmod 700 -- "$d" && printf %s "$d"; fi`;
+export const PAYLOAD_DIRECTORY = `umask 077 && d="$HOME/.cache/cowboy/file-buffers" && mkdir -p -- "$d" && test -d "$d" && test ! -L "$d" && test -O "$d" && chmod 700 -- "$d" && printf %s "$d"`;
 
 /** The single splice that turns `base` into `written` (shared prefix and suffix kept). */
 export function splice(base, written) {

@@ -1151,47 +1151,6 @@ test("PlanGate permanently taints incoming edit call when a sole surviving compa
   assert.equal(gate.bind(secondCall, turn), undefined);
 });
 
-test("publishOnce stages into keeper payload dir without injecting cached payloadDirectory into apply (R8-M2)", async () => {
-  const writes = [];
-  const writePaths = [];
-  let starts = 0;
-  const conn = {
-    async call(method, params) {
-      if (method === "process/start") {
-        starts += 1;
-        return { processId: params.processId };
-      }
-      if (method === "process/read") {
-        const text =
-          starts === 1
-            ? "/run/cowboy/keeper-1/file-buffers"
-            : JSON.stringify({ status: "applied" });
-        return {
-          chunks: [{ seq: 1, stream: "stdout", chunk: Buffer.from(text).toString("base64") }],
-          exited: true,
-          exitCode: 0,
-          closed: true,
-        };
-      }
-      if (method === "fs/writeFile") {
-        writePaths.push(params.path);
-        writes.push(JSON.parse(Buffer.from(params.dataBase64, "base64").toString("utf8")));
-        return {};
-      }
-      throw new Error(`unexpected ${method}`);
-    },
-  };
-  const facade = new Facade(conn, { root: "/repo", shell: "/bin/sh" });
-  facade.beginTurn("s1", { turnNonce: "n1" });
-  const turn = facade.session("s1").turn;
-  const large = Buffer.alloc(60 * 1024, "x");
-  await facade.publishOnce(turn, "/repo/big.txt", undefined, large);
-  assert.equal(writes.length, 1);
-  assert.ok(writePaths[0].startsWith("file:///run/cowboy/keeper-1/file-buffers/payload-"));
-  assert.equal(writes[0].payloadDirectory, undefined);
-  assert.equal(writes[0].staleTempSeconds, 3600);
-});
-
 test("PlanGate taints incoming edit call matching revised rawInput of a contradicted card (R5-M4)", () => {
   const gate = new PlanGate();
   const turn = { attempt: Symbol("att") };
@@ -1653,4 +1612,42 @@ test("PlanGate admitting unrelated edit B while two exact colliding A cards are 
     turn,
   );
   assert.equal(gate.bind(callB, turn), "b-1");
+});
+
+test("PlanGate bounds retained rename identities per card to at most the two diff tools (R9-L1)", () => {
+  const gate = new PlanGate();
+  const turn = { attempt: Symbol("att") };
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "malformed-1",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "a.rs", old_string: "1", new_string: "2" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  for (let i = 0; i < 100; i += 1) {
+    gate.trackUpdate(
+      "s1",
+      {
+        toolCallId: "malformed-1",
+        name: `mcp_cowboy_RandomTool_${i}`,
+        status: "in_progress",
+      },
+      turn,
+    );
+  }
+  gate.trackUpdate(
+    "s1",
+    {
+      toolCallId: "malformed-1",
+      name: "mcp_cowboy_WriteFile",
+      status: "in_progress",
+    },
+    turn,
+  );
+  const entry = gate.waiting.get("s1")[0];
+  assert.equal(entry.diffNames.size, 2);
+  assert.equal(entry.name, "mcp_cowboy_EditFile");
 });

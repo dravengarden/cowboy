@@ -240,7 +240,6 @@ struct ApplyRequest {
 const ABSENT: &str = "absent";
 const TEMP_PREFIX: &str = ".cowboy-buffer-";
 const TEMP_SUFFIX: &str = ".tmp";
-pub(crate) const KEEPER_PAYLOAD_DIR_ENV: &str = "COWBOY_EXECUTION_PAYLOAD_DIR";
 const PAYLOAD_PREFIX: &str = "payload-";
 const PAYLOAD_SUFFIX: &str = ".json";
 /// A temporary file younger than this may belong to a running apply.
@@ -326,153 +325,20 @@ fn lock_directory(directory: &Path) -> Result<File> {
 }
 
 /// Remove only regular files named exactly as this helper names them.
-/// Open, validate, and pin the keeper-private `file-buffers` directory inside
-/// the startup-verified `0700` execution `state_dir` without following symlinks
-/// on `state_dir` or `file-buffers`, returning both its path and pinned handle
-/// (R8-M1, R8-M2).
-pub(crate) fn prepare_keeper_payload_dir(
-    state_dir: &Path,
-    owner_uid: u32,
-) -> Result<(PathBuf, std::os::fd::OwnedFd)> {
-    use rustix::fs::{FileType, Mode, OFlags, fstat, mkdirat, open, openat};
-    ensure!(
-        state_dir.is_absolute(),
-        "execution state path must be absolute"
-    );
-    let flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-    let state_fd = open(state_dir, flags, Mode::empty())?;
-    let state_stat = fstat(&state_fd)?;
-    ensure!(
-        FileType::from_raw_mode(state_stat.st_mode) == FileType::Directory
-            && state_stat.st_uid == owner_uid
-            && (state_stat.st_mode & 0o077) == 0,
-        "execution state directory must be a private 0700 directory"
-    );
-    match mkdirat(&state_fd, "file-buffers", Mode::from_raw_mode(0o700)) {
-        Ok(()) | Err(rustix::io::Errno::EXIST) => {}
-        Err(error) => return Err(error.into()),
-    }
-    let payload_fd = openat(&state_fd, "file-buffers", flags, Mode::empty())?;
-    let payload_stat = fstat(&payload_fd)?;
-    ensure!(
-        FileType::from_raw_mode(payload_stat.st_mode) == FileType::Directory
-            && payload_stat.st_uid == owner_uid
-            && (payload_stat.st_mode & 0o077) == 0,
-        "keeper file-buffers directory must be a private 0700 directory"
-    );
-    Ok((state_dir.join("file-buffers"), payload_fd))
-}
-
-/// Executor-owned age-based sweep of abandoned staged `payload-<32hex>.json`
-/// files strictly on the startup-pinned keeper directory handle (R8-M1, R8-M2).
-pub(crate) fn sweep_pinned_payload_dir(
-    payload_fd: &std::os::fd::OwnedFd,
-    owner_uid: u32,
-    max_age_secs: u64,
-) {
-    sweep_dir_fd(
-        payload_fd,
-        PAYLOAD_PREFIX,
-        PAYLOAD_SUFFIX,
-        max_age_secs,
-        Some(owner_uid),
-    );
-}
-
-fn read_and_unlink_in_keeper_dir(keeper_dir: &Path, payload: &Path) -> Result<Vec<u8>> {
-    use rustix::fs::{AtFlags, FileType, Mode, OFlags, fstat, open, openat, unlinkat};
-    let owner_uid = rustix::process::getuid().as_raw();
-    let dir_flags = OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC;
-    let dir_fd = open(keeper_dir, dir_flags, Mode::empty())?;
-    let dir_stat = fstat(&dir_fd)?;
-    ensure!(
-        FileType::from_raw_mode(dir_stat.st_mode) == FileType::Directory
-            && dir_stat.st_uid == owner_uid
-            && (dir_stat.st_mode & 0o077) == 0,
-        "keeper payload directory must be a private 0700 directory"
-    );
-    let file_name = payload
-        .file_name()
-        .and_then(std::ffi::OsStr::to_str)
-        .filter(|name| {
-            name.strip_prefix(PAYLOAD_PREFIX)
-                .and_then(|rest| rest.strip_suffix(PAYLOAD_SUFFIX))
-                .is_some_and(|mid| mid.len() == 32 && mid.bytes().all(|b| b.is_ascii_hexdigit()))
-        })
-        .ok_or_else(|| anyhow::anyhow!("invalid staged payload filename"))?;
-    let file_fd = openat(
-        &dir_fd,
-        file_name,
-        OFlags::RDONLY | OFlags::NONBLOCK | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    );
-    let result = match file_fd {
-        Ok(fd) => {
-            let file_stat = fstat(&fd)?;
-            if FileType::from_raw_mode(file_stat.st_mode) != FileType::RegularFile
-                || file_stat.st_uid != owner_uid
-            {
-                Err(anyhow::anyhow!(
-                    "staged payload must be an owned regular file"
-                ))
-            } else {
-                let file = File::from(fd);
-                let mut data = Vec::new();
-                file.take((PAYLOAD_LIMIT + 1) as u64)
-                    .read_to_end(&mut data)?;
-                if data.len() > PAYLOAD_LIMIT {
-                    Err(anyhow::anyhow!("staged payload exceeds limit"))
-                } else {
-                    Ok(data)
-                }
-            }
-        }
-        Err(error) => Err(error.into()),
-    };
-    let _ = unlinkat(&dir_fd, file_name, AtFlags::empty());
-    result
-}
-
 fn sweep(directory: &Path, prefix: &str, suffix: &str, older_than: u64) {
-    use rustix::fs::{Mode, OFlags, open};
-    let Ok(dir_fd) = open(
-        directory,
-        OFlags::RDONLY | OFlags::DIRECTORY | OFlags::NOFOLLOW | OFlags::CLOEXEC,
-        Mode::empty(),
-    ) else {
+    let Ok(entries) = std::fs::read_dir(directory) else {
         return;
     };
-    sweep_dir_fd(&dir_fd, prefix, suffix, older_than, None);
-}
-
-fn sweep_dir_fd(
-    dir_fd: &std::os::fd::OwnedFd,
-    prefix: &str,
-    suffix: &str,
-    older_than: u64,
-    required_uid: Option<u32>,
-) {
-    use rustix::fs::{AtFlags, Dir, FileType, statat, unlinkat};
-    let Some(cutoff) = std::time::SystemTime::now()
-        .checked_sub(std::time::Duration::from_secs(
-            older_than.max(MIN_STALE_TEMP_SECONDS),
-        ))
-        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-    else {
+    let Some(cutoff) = std::time::SystemTime::now().checked_sub(std::time::Duration::from_secs(
+        older_than.max(MIN_STALE_TEMP_SECONDS),
+    )) else {
         return;
     };
-    let Ok(mut dir) = Dir::read_from(dir_fd) else {
-        return;
-    };
-    let cutoff_secs = cutoff.as_secs();
-    let cutoff_nanos = cutoff.subsec_nanos();
-    while let Some(Ok(entry)) = dir.next() {
-        let raw_name = entry.file_name();
-        let Ok(name) = raw_name.to_str() else {
-            continue;
-        };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
         let Some(middle) = name
-            .strip_prefix(prefix)
+            .to_str()
+            .and_then(|name| name.strip_prefix(prefix))
             .and_then(|rest| rest.strip_suffix(suffix))
         else {
             continue;
@@ -480,23 +346,11 @@ fn sweep_dir_fd(
         if middle.len() != 32 || !middle.bytes().all(|b| b.is_ascii_hexdigit()) {
             continue;
         }
-        let Ok(stat) = statat(dir_fd, raw_name, AtFlags::SYMLINK_NOFOLLOW) else {
-            continue;
-        };
-        if FileType::from_raw_mode(stat.st_mode) != FileType::RegularFile {
-            continue;
-        }
-        if let Some(uid) = required_uid
-            && stat.st_uid != uid
+        if let Ok(metadata) = std::fs::symlink_metadata(entry.path())
+            && metadata.is_file()
+            && metadata.modified().is_ok_and(|modified| modified < cutoff)
         {
-            continue;
-        }
-        let Ok(mtime_secs) = u64::try_from(stat.st_mtime) else {
-            continue;
-        };
-        let mtime_nanos = u32::try_from(stat.st_mtime_nsec).unwrap_or(0);
-        if (mtime_secs, mtime_nanos) < (cutoff_secs, cutoff_nanos) {
-            let _ = unlinkat(dir_fd, raw_name, AtFlags::empty());
+            let _ = std::fs::remove_file(entry.path());
         }
     }
 }
@@ -731,20 +585,10 @@ fn apply_request(inline: Option<String>, payload: Option<PathBuf>) -> Result<App
     let raw = match (inline, payload) {
         (Some(inline), None) => base64::engine::general_purpose::STANDARD.decode(inline)?,
         (None, Some(payload)) => {
-            // When launched by a keeper exporting its validated private payload
-            // directory and the request file sits inside it, consume and unlink
-            // strictly relative to that validated directory descriptor (R8-M2).
-            if let Some(keeper_dir) = std::env::var_os(KEEPER_PAYLOAD_DIR_ENV)
-                .map(PathBuf::from)
-                .filter(|dir| dir.is_absolute() && payload.parent() == Some(dir.as_path()))
-            {
-                read_and_unlink_in_keeper_dir(&keeper_dir, &payload)?
-            } else {
-                // Legacy/external caller fallback: private one-shot file consumed here.
-                let data = read(&payload, PAYLOAD_LIMIT);
-                let _ = std::fs::remove_file(&payload);
-                data?
-            }
+            // A private one-shot file the caller wrote; consumed here.
+            let data = read(&payload, PAYLOAD_LIMIT);
+            let _ = std::fs::remove_file(&payload);
+            data?
         }
         _ => anyhow::bail!("exactly one of an inline request or a request file"),
     };
@@ -1143,70 +987,5 @@ mod tests {
         let unknown =
             base64::engine::general_purpose::STANDARD.encode(br#"{"schema":1,"extra":1}"#);
         assert!(apply_request(Some(unknown), None).is_err());
-    }
-
-    #[test]
-    fn keeper_payload_dir_pins_private_handle_for_consumption_and_reaping() {
-        use std::os::unix::fs::PermissionsExt as _;
-        let root = tempfile::tempdir().unwrap();
-        let state_dir = root.path().join("state");
-        std::fs::create_dir(&state_dir).unwrap();
-        std::fs::set_permissions(&state_dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let uid = std::fs::metadata(&state_dir).unwrap().uid();
-
-        let (payload_dir, pinned_fd) = prepare_keeper_payload_dir(&state_dir, uid).unwrap();
-        assert_eq!(payload_dir, state_dir.join("file-buffers"));
-
-        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(7200);
-        let stale = payload_dir.join(format!(
-            "{PAYLOAD_PREFIX}{}{PAYLOAD_SUFFIX}",
-            "d".repeat(32)
-        ));
-        let young = payload_dir.join(format!(
-            "{PAYLOAD_PREFIX}{}{PAYLOAD_SUFFIX}",
-            "e".repeat(32)
-        ));
-        let foreign = payload_dir.join("keep.json");
-        for file in [&stale, &young, &foreign] {
-            std::fs::write(file, b"{}").unwrap();
-        }
-        for file in [&stale, &foreign] {
-            File::options()
-                .write(true)
-                .open(file)
-                .unwrap()
-                .set_modified(old)
-                .unwrap();
-        }
-        sweep_pinned_payload_dir(&pinned_fd, uid, 3600);
-        assert!(!stale.exists());
-        assert!(young.exists());
-        assert!(foreign.exists());
-
-        // Handle-relative consumption reads and unlinks strictly inside the validated keeper dir.
-        let sample = br#"{"schema":1,"path":"/x","base":"absent","expect":"0000000000000000000000000000000000000000000000000000000000000000","splices":[],"staleTempSeconds":60}"#;
-        let staged = payload_dir.join(format!(
-            "{PAYLOAD_PREFIX}{}{PAYLOAD_SUFFIX}",
-            "a".repeat(32)
-        ));
-        std::fs::write(&staged, sample).unwrap();
-        let consumed = read_and_unlink_in_keeper_dir(&payload_dir, &staged).unwrap();
-        assert_eq!(consumed, sample);
-        assert!(!staged.exists());
-
-        // R8-M1: Refuse non-private (0770) or symlinked state/file-buffers directories.
-        let shared_state = root.path().join("shared-state");
-        std::fs::create_dir(&shared_state).unwrap();
-        std::fs::set_permissions(&shared_state, std::fs::Permissions::from_mode(0o770)).unwrap();
-        assert!(prepare_keeper_payload_dir(&shared_state, uid).is_err());
-
-        let symlink_state = root.path().join("symlink-state");
-        std::fs::create_dir(&symlink_state).unwrap();
-        std::fs::set_permissions(&symlink_state, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let outside = root.path().join("outside");
-        std::fs::create_dir(&outside).unwrap();
-        std::fs::set_permissions(&outside, std::fs::Permissions::from_mode(0o700)).unwrap();
-        std::os::unix::fs::symlink(&outside, symlink_state.join("file-buffers")).unwrap();
-        assert!(prepare_keeper_payload_dir(&symlink_state, uid).is_err());
     }
 }

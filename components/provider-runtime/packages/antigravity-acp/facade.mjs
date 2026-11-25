@@ -1535,8 +1535,6 @@ ${WRAP_UP_NOTE}`,
    * report, show the result. */
   async publishOnce(turn, file, base, bytes, { beforeSend } = {}) {
     const expect = sha256(bytes);
-    // R8-M2: Leave abandoned-payload cleanup strictly to the keeper's pinned
-    // directory descriptor reaper; never pass a cached pathname to apply.
     const request = JSON.stringify({
       schema: 1,
       path: file,
@@ -1619,25 +1617,30 @@ ${WRAP_UP_NOTE}`,
     );
   }
 
-  /** The target's private directory for large helper requests (re-validated per staged write, R8-M2). */
+  /** The target's private directory for large helper requests. */
   async payloadDirectory(turn, { beforeSend } = {}) {
     if (typeof beforeSend === "function") beforeSend();
-    const result = await this.runBounded(turn, ["/bin/sh", "-c", PAYLOAD_DIRECTORY], {
+    this.payloads ??= this.runBounded(turn, ["/bin/sh", "-c", PAYLOAD_DIRECTORY], {
       timeoutMs: LIMITS.publishTimeoutMs,
       maxBytes: 4096,
       beforeSend,
+    }).then((result) => {
+      const directory = result.stdout.trim();
+      if (
+        result.exitCode !== 0 ||
+        result.forgotten ||
+        result.timedOut ||
+        result.truncated ||
+        !posix.isAbsolute(directory)
+      ) {
+        throw new ToolError("The workspace Machine has no private request directory");
+      }
+      return directory;
     });
-    const directory = result.stdout.trim();
-    if (
-      result.exitCode !== 0 ||
-      result.forgotten ||
-      result.timedOut ||
-      result.truncated ||
-      !posix.isAbsolute(directory)
-    ) {
-      throw new ToolError("The workspace Machine has no private request directory");
-    }
-    return directory;
+    this.payloads.catch(() => {
+      this.payloads = undefined;
+    });
+    return this.payloads;
   }
 
   /**
