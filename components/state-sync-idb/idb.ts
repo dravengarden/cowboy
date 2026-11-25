@@ -220,21 +220,30 @@ async function discardRecordIf<S>(
   guardKey: string,
   shouldDiscard: (guard: S | null) => boolean,
 ): Promise<boolean> {
-  if (recordModes.get(targetKey) === "outbox") {
+  const previousMode = recordModes.get(targetKey);
+  if (previousMode === "outbox") {
     throw new IdbPersistenceError("record_mode_conflict");
   }
+  // Reserve targetKey synchronously against concurrent outbox() acquisition
+  // until the conditional delete transaction completes or aborts.
+  recordModes.set(targetKey, "value");
   let discarded = false;
-  await run<unknown>(
-    "readwrite",
-    (store) => store.get(guardKey),
-    (stored, store) => {
-      if (!shouldDiscard((stored ?? null) as S | null)) return undefined;
-      discarded = true;
-      return store.delete(targetKey);
-    },
-  );
-  if (discarded) recordModes.delete(targetKey);
-  return discarded;
+  try {
+    await run<unknown>(
+      "readwrite",
+      (store) => store.get(guardKey),
+      (stored, store) => {
+        if (!shouldDiscard((stored ?? null) as S | null)) return undefined;
+        discarded = true;
+        return store.delete(targetKey);
+      },
+    );
+    return discarded;
+  } finally {
+    if (discarded || previousMode === undefined) {
+      if (recordModes.get(targetKey) === "value") recordModes.delete(targetKey);
+    }
+  }
 }
 
 export function createIdbPersistenceOwner(opts: IdbOwnerOpts = {}): IdbPersistenceOwner {

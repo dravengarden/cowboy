@@ -1833,7 +1833,12 @@ function handle(msg: Outbound): void {
       // Checkpoint the replica on turn boundaries and lifecycle changes at
       // once; streaming chunks coalesce into the debounced write.
       if (clearsContext && (!cached || state.transcriptSources.get(env.session_id)?.source !== "live")) {
-        dropReplicaSession(env.session_id);
+        if (cached || cachedTailSessions.has(env.session_id)) {
+          replica.session(env.session_id).scheduleTail(
+            () => ({ receivedAt: Date.now(), lastSeq: env.seq, reachedStart: true, events: [env] }),
+            { immediate: true },
+          );
+        } else dropReplicaSession(env.session_id);
       } else if (cached) scheduleReplicaTail(env.session_id, env.kind !== "update" || clearsContext);
       break;
     }
@@ -2731,11 +2736,12 @@ function scheduleReplicaTail(sessionId: string, immediate: boolean): void {
 }
 
 async function retainReplicaWithOutboxGuard(valid: ReadonlySet<string>): Promise<void> {
-  // Check durable IndexedDB outbox pending arrays (not tab-local `qClients` and
-  // not settled empty `:queue` keys): preserve a hold while any pending
-  // mutation exists or storage is unreadable, and retire settled delivery keys.
+  // Check live membership and delete settled delivery records atomically in
+  // ONE readwrite transaction gated on the durable :queue record.
   await replica.retainSessions(valid, {
-    keepDelivery: (sessionId) => syncDatabase.queueHasPending(sessionId),
+    retireDelivery: async (sessionId) => {
+      if (isRemovedSession(sessionId)) await syncDatabase.retireDeliveryIfSettled(sessionId);
+    },
   });
 }
 

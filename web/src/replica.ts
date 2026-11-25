@@ -3,6 +3,7 @@
 // (docs/offline-first-sync.md §Architecture 1). Every value here is a paint
 // cache. The Hub's next broadcast replaces it; nothing in it is an obligation
 // and nothing in it is ever sent.
+import { lastContextClearSeq } from "./canonicalTimeline.ts";
 import type {
   ConfigOption,
   Envelope,
@@ -144,6 +145,7 @@ function createWriter<T>(
   timing: { readonly debounceMs: number; readonly maxWaitMs: number },
   active: () => boolean,
   onError: (error: unknown) => void,
+  mergeStored?: (stored: T | null, next: T) => T,
 ): ReplicaWriter<T> {
   let producer: (() => T | null) | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -168,7 +170,15 @@ function createWriter<T>(
     }
     if (value === null) return tail;
     const next = value;
-    tail = tail.then(() => active() ? cache.save(next) : undefined).catch(onError);
+    tail = tail
+      .then(() => {
+        if (!active()) return undefined;
+        if (mergeStored !== undefined && typeof cache.update === "function") {
+          return cache.update((stored) => mergeStored(stored, next));
+        }
+        return cache.save(next);
+      })
+      .catch(onError);
     return tail;
   };
   return {
@@ -201,6 +211,7 @@ export interface SessionReplica {
   saveDelivery(delivery: ReplicaDelivery): Promise<void>;
   discardTail(): Promise<void>;
   discardDelivery(): Promise<void>;
+  retireDelivery(retire: () => Promise<unknown>): Promise<void>;
   discard(): Promise<void>;
 }
 
@@ -215,13 +226,23 @@ export interface Replica {
   /** Drop caches for sessions the Hub no longer lists. Throttled by callers. */
   retainSessions(
     valid: ReadonlySet<string>,
-    opts?: { readonly keepDelivery?: (sessionId: string) => boolean | Promise<boolean> },
+    opts?: {
+      readonly keepDelivery?: (sessionId: string) => boolean | Promise<boolean>;
+      readonly retireDelivery?: (sessionId: string) => Promise<unknown>;
+    },
   ): Promise<void>;
   flush(): Promise<void>;
   /** Stop scheduling writes. Pending producers are dropped. */
   seal(): void;
   /** Explicit sign-out: forget everything this device painted. */
   discardAll(): Promise<void>;
+}
+
+function mergeTailAcrossClear(stored: ReplicaTail | null, next: ReplicaTail): ReplicaTail {
+  const existing = stored === null ? null : decodeReplicaTail(stored);
+  const storedClear = existing === null ? null : lastContextClearSeq(existing.events);
+  if (storedClear !== null && next.lastSeq < storedClear) return existing!;
+  return next;
 }
 
 function createSessionReplica(
@@ -239,6 +260,7 @@ function createSessionReplica(
     timing,
     active,
     onError,
+    mergeTailAcrossClear,
   );
   let deliveryWrite: Promise<void> = Promise.resolve();
   const decode = async <T>(
@@ -285,6 +307,19 @@ function createSessionReplica(
         .then(async () => {
           try {
             await deliveryCache.discard();
+          } catch (error) {
+            onError(error);
+          }
+        });
+      deliveryWrite = next;
+      await next;
+    },
+    retireDelivery: async (retire) => {
+      const next = deliveryWrite
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            await retire();
           } catch (error) {
             onError(error);
           }
@@ -405,14 +440,16 @@ export function createReplica(
       const stale = [...new Set([...tails, ...deliveries])].filter((id) => !valid.has(id));
       await Promise.all(
         stale.map(async (id) => {
+          if (retainOpts.retireDelivery) {
+            await session(id).discardTail();
+            await session(id).retireDelivery(() => retainOpts.retireDelivery!(id));
+            return;
+          }
           const keepDelivery = retainOpts.keepDelivery
             ? await retainOpts.keepDelivery(id)
             : false;
-          if (keepDelivery) {
-            await session(id).discardTail();
-          } else {
-            await session(id).discard();
-          }
+          if (keepDelivery) await session(id).discardTail();
+          else await session(id).discard();
         }),
       );
     },

@@ -6,12 +6,15 @@ const REMOVED_SESSIONS_KEY = "cowboy:removed-sessions";
 const REMOVED_SESSIONS_PREFIX = "cowboy:removed-sessions:";
 const MAX_REMOVED_SESSIONS = 256;
 
+type FenceOp = "add" | "clear";
+
 let activeDatasetId: string | undefined;
 const fallbackRemovedByKey = new Map<string, string[]>();
-// Only unpublished additions waiting to commit under the cross-tab Web Lock;
-// cleared once merged so evicted entries at capacity are never republished.
-const pendingByStorage = new WeakMap<Storage, Map<string, string[]>>();
-const mergeQueuedKeys = new Set<string>();
+// Unpublished intent queued for the next Web-Lock commit. Checked synchronously
+// by this tab's isSessionRemoved() and cleared on its first committed write so
+// evicted or peer-cleared IDs are never republished.
+const pendingOpsByStorage = new WeakMap<Storage, Map<string, Map<string, FenceOp>>>();
+const lockQueuedKeys = new Set<string>();
 const removalListeners = new Set<(removed: ReadonlySet<string>) => void>();
 
 let cachedStorage: Storage | null | undefined = undefined;
@@ -27,24 +30,36 @@ function localStore(): Storage | null {
   }
 }
 
+function webLocks(): {
+  request?: (name: string, cb: () => Promise<void> | void) => Promise<unknown>;
+} | undefined {
+  return (
+    globalThis as {
+      navigator?: {
+        locks?: { request?: (name: string, cb: () => Promise<void> | void) => Promise<unknown> };
+      };
+    }
+  ).navigator?.locks;
+}
+
 function currentKey(): string {
   return activeDatasetId !== undefined && activeDatasetId.length > 0
     ? `${REMOVED_SESSIONS_PREFIX}${activeDatasetId}`
     : REMOVED_SESSIONS_KEY;
 }
 
-function pendingList(ls: Storage, key: string): string[] {
-  let map = pendingByStorage.get(ls);
-  if (map === undefined) {
-    map = new Map();
-    pendingByStorage.set(ls, map);
+function pendingOps(ls: Storage, key: string): Map<string, FenceOp> {
+  let byKey = pendingOpsByStorage.get(ls);
+  if (byKey === undefined) {
+    byKey = new Map();
+    pendingOpsByStorage.set(ls, byKey);
   }
-  let list = map.get(key);
-  if (list === undefined) {
-    list = [];
-    map.set(key, list);
+  let ops = byKey.get(key);
+  if (ops === undefined) {
+    ops = new Map();
+    byKey.set(key, ops);
   }
-  return list;
+  return ops;
 }
 
 function fallbackList(key: string): string[] {
@@ -56,15 +71,19 @@ function fallbackList(key: string): string[] {
   return list;
 }
 
-function appendBounded(existing: Iterable<string>, additions: Iterable<string>): string[] {
+function applyOpsBounded(
+  existing: Iterable<string>,
+  ops: ReadonlyMap<string, FenceOp>,
+): string[] {
   const ordered: string[] = [];
   const seen = new Set<string>();
   for (const id of existing) {
-    if (seen.has(id)) continue;
+    if (seen.has(id) || ops.get(id) === "clear") continue;
     seen.add(id);
     ordered.push(id);
   }
-  for (const id of additions) {
+  for (const [id, op] of ops) {
+    if (op !== "add") continue;
     if (seen.has(id)) {
       const index = ordered.indexOf(id);
       if (index >= 0) ordered.splice(index, 1);
@@ -103,9 +122,17 @@ function readSharedRemoved(key: string): Set<string> | null {
   }
 }
 
-function writeFence(ls: Storage, key: string, additions: readonly string[]): boolean {
+function commitPendingOps(ls: Storage, key: string): void {
+  const ops = pendingOpsByStorage.get(ls)?.get(key);
+  if (ops === undefined || ops.size === 0) return;
   const existing = readSharedRemoved(key) ?? new Set<string>();
-  const bounded = appendBounded(existing, additions);
+  const bounded = applyOpsBounded(existing, ops);
+  const unchanged =
+    bounded.length === existing.size && bounded.every((id) => existing.has(id));
+  if (unchanged) {
+    ops.clear();
+    return;
+  }
   try {
     const raw = JSON.stringify(bounded);
     ls.setItem(key, raw);
@@ -113,36 +140,28 @@ function writeFence(ls: Storage, key: string, additions: readonly string[]): boo
     cachedKey = key;
     cachedRaw = raw;
     cachedIds = new Set(bounded);
-    return true;
+    ops.clear();
   } catch {
-    return false;
+    // Keep pending ops in memory as fallback when localStorage quota is full.
   }
 }
 
-function scheduleLockedCommit(key: string): void {
-  const locks = (
-    globalThis as {
-      navigator?: { locks?: { request?: (name: string, cb: () => Promise<void> | void) => Promise<unknown> } };
-    }
-  ).navigator?.locks;
+function flushOps(ls: Storage, key: string): void {
+  const locks = webLocks();
   if (typeof locks?.request !== "function") {
-    const ls = localStore();
-    if (ls !== null) pendingList(ls, key).length = 0;
+    commitPendingOps(ls, key);
     return;
   }
-  if (mergeQueuedKeys.has(key)) return;
-  mergeQueuedKeys.add(key);
+  if (lockQueuedKeys.has(key)) return;
+  lockQueuedKeys.add(key);
   void locks
     .request(key, () => {
-      mergeQueuedKeys.delete(key);
-      const ls = localStore();
-      if (ls === null) return;
-      const pending = pendingList(ls, key);
-      if (pending.length === 0) return;
-      if (writeFence(ls, key, pending)) pending.length = 0;
+      lockQueuedKeys.delete(key);
+      const currentLs = localStore();
+      if (currentLs !== null) commitPendingOps(currentLs, key);
     })
     .catch(() => {
-      mergeQueuedKeys.delete(key);
+      lockQueuedKeys.delete(key);
     });
 }
 
@@ -185,15 +204,14 @@ export function markSessionRemoved(sessionId: string): void {
   const ls = localStore();
   if (ls === null) {
     const own = fallbackList(key);
-    const nextOwn = appendBounded(own, [sessionId]);
-    own.splice(0, own.length, ...nextOwn);
+    const next = applyOpsBounded(own, new Map([[sessionId, "add"]]));
+    own.splice(0, own.length, ...next);
     return;
   }
-  const pending = pendingList(ls, key);
-  const nextPending = appendBounded(pending, [sessionId]);
-  pending.splice(0, pending.length, ...nextPending);
-  writeFence(ls, key, pending);
-  scheduleLockedCommit(key);
+  const ops = pendingOps(ls, key);
+  ops.delete(sessionId);
+  ops.set(sessionId, "add");
+  flushOps(ls, key);
 }
 
 /** Clear any stale removal fence entry for a session confirmed live by the Hub. */
@@ -208,24 +226,13 @@ export function clearSessionRemoved(sessionId: string): void {
     }
     return;
   }
-  const pending = pendingByStorage.get(ls)?.get(key);
-  if (pending !== undefined) {
-    const index = pending.indexOf(sessionId);
-    if (index >= 0) pending.splice(index, 1);
-  }
+  const existingOp = pendingOpsByStorage.get(ls)?.get(key)?.get(sessionId);
   const shared = readSharedRemoved(key);
-  if (shared === null || !shared.has(sessionId)) return;
-  const filtered = [...shared].filter((id) => id !== sessionId);
-  try {
-    const raw = JSON.stringify(filtered);
-    ls.setItem(key, raw);
-    cachedStorage = ls;
-    cachedKey = key;
-    cachedRaw = raw;
-    cachedIds = new Set(filtered);
-  } catch {
-    /* tolerant */
-  }
+  if (existingOp !== "add" && (shared === null || !shared.has(sessionId))) return;
+  const ops = pendingOps(ls, key);
+  ops.delete(sessionId);
+  ops.set(sessionId, "clear");
+  flushOps(ls, key);
 }
 
 /** Whether any tab in the active dataset recorded permanent removal for `sessionId`. */
@@ -233,9 +240,11 @@ export function isSessionRemoved(sessionId: string): boolean {
   const key = currentKey();
   const ls = localStore();
   if (ls === null) return fallbackList(key).includes(sessionId);
+  const op = pendingOpsByStorage.get(ls)?.get(key)?.get(sessionId);
+  if (op === "add") return true;
+  if (op === "clear") return false;
   const shared = readSharedRemoved(key);
-  if (shared !== null && shared.has(sessionId)) return true;
-  return pendingList(ls, key).includes(sessionId);
+  return shared !== null && shared.has(sessionId);
 }
 
 if (typeof globalThis.addEventListener === "function") {

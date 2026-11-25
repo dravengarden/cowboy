@@ -138,6 +138,17 @@ function liveEventAheadOfSnapshot(
   newEvent: Envelope,
   incomingMax: number,
 ): boolean {
+  if (oldEvent.kind !== "update" || newEvent.kind !== "update") return false;
+  if (
+    oldEvent.update.sessionUpdate === "tool_call" &&
+    newEvent.update.sessionUpdate === "tool_call" &&
+    oldEvent.update.toolCallId !== undefined &&
+    oldEvent.update.toolCallId === newEvent.update.toolCallId
+  ) {
+    // Tool lifecycle is strictly monotone (pending -> in_progress -> terminal);
+    // never let a delayed snapshot or older page downgrade a completed/running tool.
+    return toolStatusRank(oldEvent.update.status) > toolStatusRank(newEvent.update.status);
+  }
   const seen = absorbedSeqs.get(oldEvent);
   if (seen === undefined) return false;
   let hasBeyond = false;
@@ -147,15 +158,7 @@ function liveEventAheadOfSnapshot(
       break;
     }
   }
-  if (!hasBeyond || oldEvent.kind !== "update" || newEvent.kind !== "update") return false;
-  if (
-    oldEvent.update.sessionUpdate === "tool_call" &&
-    newEvent.update.sessionUpdate === "tool_call" &&
-    oldEvent.update.toolCallId !== undefined &&
-    oldEvent.update.toolCallId === newEvent.update.toolCallId
-  ) {
-    return toolStatusRank(oldEvent.update.status) > toolStatusRank(newEvent.update.status);
-  }
+  if (!hasBeyond) return false;
   if (
     oldEvent.update.sessionUpdate === newEvent.update.sessionUpdate &&
     (oldEvent.update.sessionUpdate === "agent_message_chunk" ||
