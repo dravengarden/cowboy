@@ -821,9 +821,15 @@ pub fn request_send_queued(
         return false;
     };
     // The wait first: once the promoted row is visible, an automatic drain
-    // must already find the session waiting.
+    // must already find the session waiting. A request for a row another
+    // terminal removed leaves no wait behind for the rest of the queue.
+    let waited = session_maintenance::waiting(&state.hub, session_id).is_some();
     session_maintenance::wait(&state.hub, session_id, &reason);
-    if state.hub.hold_queued(session_id, id, caller, cmid) {
+    if !state.hub.hold_queued(session_id, id, caller, cmid) {
+        if !waited {
+            session_maintenance::clear_wait(&state.hub, session_id);
+        }
+    } else {
         state.hub.persist_explicit_wait(session_id);
         // Command results reach every socket: the wait reason stays in the
         // session's own state, which only its viewers receive.

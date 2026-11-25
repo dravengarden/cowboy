@@ -83,7 +83,7 @@ fn an_explicit_send_keeps_its_intent_across_a_transient_machine_wait() {
         None,
         "Machine is not connected",
     );
-    retain_explicit_intent(&hub, "s", "Machine is not connected");
+    retain_explicit_intent(&hub, "s", "Machine is not connected", Some("c1"));
     assert!(hub.setting(&key).is_some());
     assert!(hub.explicit_wait("s"));
     assert_eq!(hub.session_info("s").unwrap().queue_count, 1);
@@ -104,7 +104,7 @@ fn an_explicit_send_keeps_its_intent_across_a_transient_machine_wait() {
         None,
         &busy,
     );
-    retain_explicit_intent(&hub, "s", &busy);
+    retain_explicit_intent(&hub, "s", &busy, Some("c1"));
     assert!(hub.explicit_wait("s"));
     // ...and a permanent refusal ends both the wait and the intent.
     let refused =
@@ -119,7 +119,7 @@ fn an_explicit_send_keeps_its_intent_across_a_transient_machine_wait() {
         None,
         refused,
     );
-    retain_explicit_intent(&hub, "s", refused);
+    retain_explicit_intent(&hub, "s", refused, Some("c1"));
     assert!(hub.setting(&key).is_none());
     assert!(!hub.explicit_wait("s"));
 }

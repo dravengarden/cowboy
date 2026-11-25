@@ -2043,6 +2043,8 @@ impl Broker {
                 self.send_controller(Frame::Snapshot {
                     worker: Box::new(worker),
                 });
+                // A cutover held back for an incomplete declaration may go now.
+                self.maybe_cutover(&session.session_id);
                 return;
             }
             Some(Ok(worker)) => {

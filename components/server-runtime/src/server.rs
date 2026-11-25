@@ -364,16 +364,18 @@ pub const URGENT_RETENTION_POLL: std::time::Duration = std::time::Duration::from
 /// Reboot convergence: an explicit send returned only because a Machine or
 /// resource was not ready yet must be delivered once it is, even when the
 /// queue is paused or the session crashed while its host rebooted.
-pub fn retain_explicit_intent(hub: &Hub, session_id: &str, error: &str) {
+/// `prompt` is the cmid the refused prompt was requeued under: the intent
+/// returns only to that row.
+pub fn retain_explicit_intent(hub: &Hub, session_id: &str, error: &str, prompt: Option<&str>) {
     if error.starts_with(session_maintenance::WAIT_PREFIX) {
-        hub.set_explicit_wait(session_id, true);
+        hub.retain_explicit_intent(session_id, prompt);
     } else if is_transient_machine_disconnect(error) {
         session_maintenance::wait(
             hub,
             session_id,
             session_maintenance::MACHINE_CONNECTION_WAIT,
         );
-        hub.set_explicit_wait(session_id, true);
+        hub.retain_explicit_intent(session_id, prompt);
     }
 }
 

@@ -71,12 +71,19 @@ pub async fn dispatch_one(state: Arc<AppState>, req: DispatchReq) {
                 cmid,
                 origin,
                 initiator,
+                explicit,
                 ownership: _ownership,
                 ..
             } = req;
+            let (session, prompt) = (session_id.clone(), cmid.clone());
             retain_failed_dispatch(
                 &state.hub, session_id, text, content, cmid, origin, initiator, &reason,
             );
+            // A paused send refused by a limit the gate just refreshed keeps
+            // its intent, like any later transient refusal.
+            if explicit {
+                retain_explicit_intent(&state.hub, &session, &reason, prompt.as_deref());
+            }
         }
     }
 }
@@ -155,13 +162,15 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
         dispatch_origin,
         trigger,
     } = req;
-    let retain = |sid: String, text, content, cmid, origin, initiator, error: &str| {
-        let session = sid.clone();
-        retain_failed_dispatch(hub, sid, text, content, cmid, origin, initiator, error);
-        if explicit {
-            retain_explicit_intent(hub, &session, error);
-        }
-    };
+    let retain =
+        |sid: String, text, content, cmid: Option<String>, origin, initiator, error: &str| {
+            let session = sid.clone();
+            let prompt = cmid.clone();
+            retain_failed_dispatch(hub, sid, text, content, cmid, origin, initiator, error);
+            if explicit {
+                retain_explicit_intent(hub, &session, error, prompt.as_deref());
+            }
+        };
     // A user send retries a preparation that failed permanently; the
     // preflight below then holds the prompt until the target is ready.
     if explicit {
@@ -423,7 +432,10 @@ async fn finish_dispatch_outcome(
             // Successful sends synchronously enter the runtime pending set.
             // Failed sends retain dispatch ownership until requeue completes.
             drop(ownership);
-            session_maintenance::clear_wait(hub, &session_id);
+            // A Send now held meanwhile for another row keeps its wait.
+            if !hub.explicit_intent_pending(&session_id) {
+                session_maintenance::clear_wait(hub, &session_id);
+            }
             if let Some(t) = title {
                 hub.auto_title(&session_id, t);
             }
@@ -625,31 +637,31 @@ fn finish_deferred_dispatch(
             hub.context_state_changed(&session_id);
         }
         SyncSendOutcome::WakeForAgent(Err(error)) => {
-            let session = session_id.clone();
+            let (session, prompt) = (session_id.clone(), cmid.clone());
             retain_failed_dispatch(
                 hub, session_id, text, content, cmid, origin, initiator, &error,
             );
             if explicit {
-                retain_explicit_intent(hub, &session, &error);
+                retain_explicit_intent(hub, &session, &error, prompt.as_deref());
             }
         }
         SyncSendOutcome::HandoffRefusal(wait) => {
-            let session = session_id.clone();
+            let (session, prompt) = (session_id.clone(), cmid.clone());
             retain_failed_dispatch(
                 hub, session_id, text, content, cmid, origin, initiator, &wait,
             );
             if explicit {
-                retain_explicit_intent(hub, &session, &wait);
+                retain_explicit_intent(hub, &session, &wait, prompt.as_deref());
             }
         }
         SyncSendOutcome::SendError(error) => {
             tracing::warn!(session = %session_id, error = %error, "queued dispatch failed");
-            let session = session_id.clone();
+            let (session, prompt) = (session_id.clone(), cmid.clone());
             retain_failed_dispatch(
                 hub, session_id, text, content, cmid, origin, initiator, &error,
             );
             if explicit {
-                retain_explicit_intent(hub, &session, &error);
+                retain_explicit_intent(hub, &session, &error, prompt.as_deref());
             }
         }
         SyncSendOutcome::Ready | SyncSendOutcome::Sent { .. } => {}

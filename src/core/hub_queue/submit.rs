@@ -127,7 +127,7 @@ impl Hub {
     /// interleaved removal or reorder can never wake the worker for another
     /// prompt.
     pub fn wake_queued_call_notice(&self, session_id: &str, completion_id: &str) -> bool {
-        if self.inner.dispatch_tx.lock().is_none() || self.awaits_execution_target(session_id) {
+        if self.inner.dispatch_tx.lock().is_none() {
             return false;
         }
         let req = {
@@ -143,6 +143,7 @@ impl Hub {
                 || s.dispatch_pending.is_some()
                 || s.delivery_hold.is_some()
                 || s.editing.is_some()
+                || s.head_awaits_retry()
                 || s.queue.first().and_then(|m| m.cmid.as_deref()) != Some(completion_id)
                 || s.queue
                     .first()

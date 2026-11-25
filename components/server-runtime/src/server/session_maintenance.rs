@@ -85,28 +85,17 @@ pub fn queue_initial_prompt(
 
 pub fn wait(hub: &Hub, session: &str, reason: &str) {
     hub.set_resource_wait(session, Some(reason.to_owned()));
-    let key = format!("{SESSION_RESOURCE_WAIT_PREFIX}{session}");
-    let current = hub.setting(&key);
-    let since = current
-        .as_ref()
-        .and_then(|v| v.get("since_ms").and_then(serde_json::Value::as_i64))
-        .unwrap_or_else(now_ms);
-    let mut value = serde_json::json!({"reason": reason, "since_ms": since});
-    if let Some(explicit) = current
-        .as_ref()
-        .and_then(|v| v.get("explicit").and_then(serde_json::Value::as_bool))
-    {
-        value["explicit"] = serde_json::Value::Bool(explicit);
-    }
-    if hub.setting(&key).as_ref() != Some(&value) {
-        hub.set_setting(key, value);
-    }
-    // The intent's binding comes from the Hub, under its own serialization:
-    // copying it from the read above could restore a superseded one.
-    hub.persist_explicit_wait(session);
+    // The Hub serializes every wait write and adds the intent binding itself.
+    hub.edit_resource_wait(session, |current| {
+        let since = current
+            .as_ref()
+            .and_then(|v| v.get("since_ms").and_then(serde_json::Value::as_i64))
+            .unwrap_or_else(now_ms);
+        Some(serde_json::json!({"reason": reason, "since_ms": since}))
+    });
 }
 
-fn waiting(hub: &Hub, session: &str) -> Option<(i64, String)> {
+pub(crate) fn waiting(hub: &Hub, session: &str) -> Option<(i64, String)> {
     let value = hub.setting(&format!("{SESSION_RESOURCE_WAIT_PREFIX}{session}"))?;
     Some((
         value.get("since_ms")?.as_i64()?,
@@ -185,10 +174,7 @@ fn account_parked(state: &Arc<AppState>, meta: &crate::core::SessionMeta) -> boo
 pub fn clear_wait(hub: &Hub, session: &str) {
     hub.set_resource_wait(session, None);
     hub.set_explicit_wait(session, false);
-    let key = format!("{SESSION_RESOURCE_WAIT_PREFIX}{session}");
-    if hub.setting(&key).is_some() {
-        hub.set_setting(key, serde_json::Value::Null);
-    }
+    hub.edit_resource_wait(session, |_| None);
 }
 
 pub fn has_waiters(state: &AppState, machine: &str) -> bool {

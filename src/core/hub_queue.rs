@@ -307,8 +307,6 @@ impl Hub {
         if self.inner.dispatch_tx.lock().is_none() {
             return;
         }
-        // Read before the queue lock: the wait is a setting of its own.
-        let target_gate = !manual && !retry && self.awaits_execution_target(session_id);
         let req = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
@@ -325,14 +323,9 @@ impl Hub {
             if decision != DrainDecision::Dispatch {
                 return;
             }
-            // While the session waits for its execution Machine, only the
-            // maintenance retry delivers the head, once that Machine is
-            // connected. Any other automatic drain (a turn ending, an edit
-            // released) would take the row out only for the dispatcher to
-            // refuse it and requeue it under a new id, which a terminal holding
-            // an edit of that row reads as a sent message and parks its buffer
-            // as a draft beside the original.
-            if target_gate {
+            // Only maintenance's eligibility-checked retry delivers a head
+            // that waits for its Machine or is a held Send now.
+            if !manual && !retry && s.head_awaits_retry() {
                 return;
             }
             // A retried explicit send carries no caller of its own: it must
@@ -836,12 +829,14 @@ impl Hub {
                 s.editing = None;
                 s.editing_token = None;
             }
+            s.end_displaced_explicit_intent();
             (
                 before != s.queue.len(),
                 settled,
                 res_before != s.steer_reservations.len(),
             )
         };
+        self.persist_explicit_wait(session_id);
         if dropped_reservation {
             self.persist_steer_reservations(session_id);
         }
@@ -1067,11 +1062,13 @@ impl Hub {
                     s.editing_token = None;
                 }
                 s.drafts.push(m);
+                s.end_displaced_explicit_intent();
                 settled
             } else {
                 return;
             }
         };
+        self.persist_explicit_wait(session_id);
         self.emit_pending_with_notice_ops(session_id, settled, Vec::new());
         self.try_drain(session_id);
     }

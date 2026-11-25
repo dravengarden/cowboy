@@ -2514,31 +2514,50 @@ async fn merge_worker_snapshots_with_protocol(
     }
 }
 
-fn update_declaration(shared: &Shared, worker: &WorkerSnapshot) {
+/// Cache the worker's launch as its adopt-only declaration. Returns that
+/// declaration when the Machine needs it sent again (see below).
+fn update_declaration(shared: &Shared, worker: &WorkerSnapshot) -> Option<StartSession> {
     if !snapshot::admits_worker(shared, worker) {
-        return;
+        return None;
     }
-    let Some(mut session) = worker.launch.clone() else {
-        return;
-    };
+    let mut session = worker.launch.clone()?;
     session.adopt_only = true;
-    // A worker never reports its session-extension switches. The session's
-    // current ones stand in, as any relaunch declares them (a cached reset
-    // declaration may predate a policy change); an ordinary launch records
-    // no declaration here at all. Every
-    // Machine (re)connect re-sends this cache, and the Machine relaunches from
-    // it on a generation cutover, which refuses an MCP launch without them
-    // (2026-11-25, sess-1794380205511 crashed after an OVH Machine restart).
+    // A worker never reports its session-extension switches, and the Machine
+    // may fill a report from its own stale declaration. The session's current
+    // ones win, as any relaunch declares them; an ordinary launch records no
+    // declaration here at all. Every Machine (re)connect re-sends this cache,
+    // and the Machine relaunches from it on a generation cutover, which
+    // refuses an MCP launch without them (2026-11-25, sess-1794380205511
+    // crashed after an OVH Machine restart).
     let current = shared
         .hub
         .session_info(&session.session_id)
         .map(|info| crate::controller_hooks::launch_extensions(&shared.hub, &info.meta));
+    // A draining MCP worker that reported after this connection's declarations
+    // waits for them: the Machine keeps it until it can relaunch it.
+    let repair = worker.drain_requested
+        && worker.current_turn_id.is_none()
+        && session.mcp_plan.is_some()
+        && session.extensions.is_none()
+        && current.is_some();
     let mut declarations = shared.declarations.lock();
     let declared = declarations
         .get(&session.session_id)
         .and_then(|old| old.extensions);
-    session.extensions = session.extensions.or(current).or(declared);
-    declarations.insert(session.session_id.clone(), session);
+    session.extensions = current.or(session.extensions).or(declared);
+    declarations.insert(session.session_id.clone(), session.clone());
+    repair.then_some(session)
+}
+
+/// Send a repaired declaration after the snapshot acknowledged earlier ones.
+fn resend_declaration(shared: &Shared, session: StartSession) {
+    let key = format!("ensure:{}", session.session_id);
+    if !shared.resetting.lock().contains(&session.session_id)
+        && !shared.pending.lock().contains_key(&key)
+    {
+        insert_pending(shared, key, CoreCommand::EnsureSession { session });
+        let _ = shared.notify.send(());
+    }
 }
 
 fn worker_status(state: WorkerState) -> Status {
@@ -4816,6 +4835,34 @@ mod tests {
             runtime.shared.declarations.lock()["s"].extensions,
             session.extensions
         );
+        // An idle MCP worker draining for a cutover gets the repaired
+        // declaration sent again: the Machine holds it until it can relaunch.
+        runtime.shared.pending.lock().clear();
+        let mut worker = snapshot("s");
+        worker.state = WorkerState::Running;
+        worker.current_turn_id = None;
+        worker.drain_requested = true;
+        let launch = worker.launch.as_mut().expect("reported launch");
+        launch.extensions = None;
+        launch.mcp_plan = Some(Box::new(
+            serde_json::from_value(serde_json::json!({"schema":1,"command":"/bin/cowboy",
+                "bindings":[{"name":"suger","descriptor":"/d.json"}]}))
+            .unwrap(),
+        ));
+        handle_frame(
+            &runtime.shared,
+            Frame::Snapshot {
+                worker: Box::new(worker),
+            },
+            &mut tokio::io::sink(),
+        )
+        .await
+        .expect("draining snapshot");
+        assert!(matches!(
+            runtime.shared.pending.lock().get("ensure:s"),
+            Some(CoreCommand::EnsureSession { session })
+                if session.adopt_only && session.extensions == declared.extensions
+        ));
     }
 
     #[tokio::test]

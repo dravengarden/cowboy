@@ -947,11 +947,9 @@ async fn an_automatic_drain_leaves_the_head_queued_while_its_target_is_awaited()
         &person,
     );
     let id = hub.inner.sessions.lock()["target"].queue[0].id.clone();
-    let key = format!("{}target", settings_keys::SESSION_RESOURCE_WAIT_PREFIX);
-    hub.set_setting(
-        key,
-        serde_json::json!({"reason": crate::core::TARGET_WAIT_REASON, "since_ms": 1}),
-    );
+    hub.edit_resource_wait("target", |_| {
+        Some(serde_json::json!({"reason": crate::core::TARGET_WAIT_REASON, "since_ms": 1}))
+    });
     hub.set_queue_editing("target", Some(id.clone()));
     hub.set_paused("target", false);
     hub.set_queue_editing("target", None);
@@ -986,10 +984,9 @@ async fn a_replayed_held_send_is_recognized_while_waiting_and_after_it_ends() {
     );
     let id = hub.inner.sessions.lock()["replay"].queue[0].id.clone();
     let key = format!("{}replay", settings_keys::SESSION_RESOURCE_WAIT_PREFIX);
-    hub.set_setting(
-        key.clone(),
-        serde_json::json!({"reason": "r", "since_ms": 1}),
-    );
+    hub.edit_resource_wait("replay", |_| {
+        Some(serde_json::json!({"reason": "r", "since_ms": 1}))
+    });
     assert!(hub.hold_queued("replay", &id, &person, Some("send-1")));
     hub.persist_explicit_wait("replay");
     assert_eq!(hub.setting(&key).unwrap()["cmid"], "send-1");
@@ -1019,12 +1016,20 @@ async fn a_held_send_keeps_its_command_through_a_requeue_and_ends_on_reorder() {
         .iter()
         .map(|row| row.id.clone())
         .collect();
-    let key = format!("{}keep", settings_keys::SESSION_RESOURCE_WAIT_PREFIX);
-    hub.set_setting(key, serde_json::json!({"reason": "r", "since_ms": 1}));
+    hub.edit_resource_wait("keep", |_| {
+        Some(serde_json::json!({"reason": "r", "since_ms": 1}))
+    });
     assert!(hub.hold_queued("keep", &ids[0], &person, Some("send-a")));
+    // An ordinary drain (a released edit, an unpause) leaves the held row.
+    hub.set_paused("keep", false);
+    assert!(rx.try_recv().is_err(), "a held row waits for its retry");
     hub.retry_explicit_wait("keep");
     let req = rx.try_recv().expect("the held row is retried");
-    // The account refused it after the pop: it returns with its intent.
+    let prompt = req.cmid.clone();
+    // The account refused it after the pop: it returns with its intent, but
+    // never to another row.
+    hub.retain_explicit_intent("keep", Some("another-prompt"));
+    assert!(!hub.explicit_wait("keep"));
     hub.requeue_prompt(
         "keep",
         req.text,
@@ -1033,8 +1038,10 @@ async fn a_held_send_keeps_its_command_through_a_requeue_and_ends_on_reorder() {
         req.origin,
         req.initiator,
     );
-    hub.set_explicit_wait("keep", true);
+    hub.retain_explicit_intent("keep", prompt.as_deref());
     assert_eq!(hub.held_send_replay("keep", "send-a"), Some(true));
+    assert!(hub.explicit_intent_pending("keep"));
+    hub.set_paused("keep", true);
     // Moving it off the head ends that intent for good.
     let mut order: Vec<String> = hub.inner.sessions.lock()["keep"]
         .queue
@@ -1049,6 +1056,12 @@ async fn a_held_send_keeps_its_command_through_a_requeue_and_ends_on_reorder() {
         hub.setting(&format!("{}keep", settings_keys::SESSION_HELD_SENDS_PREFIX)),
         Some(serde_json::json!(["send-a"]))
     );
+    // Removing a held row ends its intent too.
+    let head = hub.inner.sessions.lock()["keep"].queue[0].id.clone();
+    assert!(hub.hold_queued("keep", &head, &person, Some("send-b")));
+    assert!(hub.remove_queued("keep", &head));
+    assert!(!hub.explicit_wait("keep"));
+    assert_eq!(hub.held_send_replay("keep", "send-b"), Some(false));
 }
 
 // Maintenance reads the intent before it retries. If another terminal sent the

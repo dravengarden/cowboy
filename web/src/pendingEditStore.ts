@@ -114,10 +114,7 @@ function editSlot(record: PendingEditRecord): string {
 }
 
 function sessionAwaits(sessionId: string): boolean {
-  for (const key of awaitingDatabase.keys()) {
-    if (records.get(key)?.sessionId === sessionId) return true;
-  }
-  return false;
+  return [...awaitingDatabase.keys()].some((key) => records.get(key)?.sessionId === sessionId);
 }
 
 function writeDatabase(
@@ -432,11 +429,14 @@ async function restoreOnce(): Promise<void> {
     }
     const restored: [string, RestoredPendingEdit][] = [];
     const awaiting = awaitingDatabase.size;
+    let retired = 0;
     for (const [key, record] of records) {
       if (record.sessionId !== sessionId || !awaitingDatabase.has(key)) continue;
-      // Another tab retired it while the bytes loaded: never write it back.
+      // Another tab retired it while the bytes loaded: never write it back,
+      // nor rewrite that tab's record of the session from this tab's view.
       if (retiredByAnotherTab(key)) {
         forgetLocally(key);
+        retired += 1;
         continue;
       }
       const hydratedText = awaitingDatabase.get(key);
@@ -455,7 +455,7 @@ async function restoreOnce(): Promise<void> {
       schedulePersist(key);
     }
     // Also removes a record none of whose edits exist any more.
-    saveSessionEdits(sessionId);
+    if (retired === 0 || awaiting - awaitingDatabase.size > retired) saveSessionEdits(sessionId);
     for (const [key, edit] of restored) {
       for (const listener of restoreListeners.get(key) ?? []) listener(edit);
     }

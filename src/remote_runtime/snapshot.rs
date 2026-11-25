@@ -1,8 +1,8 @@
 use super::{
     Ordering, RuntimeEvent, Shared, Status, WorkerSnapshot, WorkerState,
     acknowledge_pending_ensure_from_snapshot, fail_config_startup, idle_snapshot_guard,
-    notice_recovery, reconcile_idle_guard, recoverable_live_worker_error, sync_config_for_worker,
-    update_declaration, worker_status,
+    notice_recovery, reconcile_idle_guard, recoverable_live_worker_error, resend_declaration,
+    sync_config_for_worker, update_declaration, worker_status,
 };
 
 /// The session accepts runtime projection and `worker` belongs to its current
@@ -276,11 +276,14 @@ pub(super) fn project_snapshot_with_protocol(
         return false;
     }
     let applied = apply_snapshot(shared, &worker);
-    update_declaration(shared, &worker);
+    let repaired = update_declaration(shared, &worker);
     shared.install_worker_with_raw_wrap_up(worker.clone(), raw_wrap);
     if applied {
         acknowledge_pending_ensure_from_snapshot(shared, &worker);
         notice_recovery::spawn_record_snapshot_worker_epoch_if_notice(shared, &worker);
+    }
+    if let Some(session) = repaired {
+        resend_declaration(shared, session);
     }
     applied
 }
