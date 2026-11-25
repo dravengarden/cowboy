@@ -774,6 +774,12 @@ export class AcpProxy {
 
   async cancel(message) {
     const sessionId = message.params?.sessionId;
+    // A prompt whose reply is still settling has left `turns`; its Stop is
+    // latched on the record so the settled reply cannot claim a local
+    // rejection.
+    for (const record of this.settling.values()) {
+      if (record.sessionId === sessionId) record.cancelled = true;
+    }
     if (typeof sessionId === "string" && this.turns.has(sessionId)) {
       // Marked before anything is awaited: no correction starts after a stop.
       this.turns.get(sessionId).cancelled = true;
@@ -1219,7 +1225,12 @@ export class AcpProxy {
         : undefined;
     // Emitted only while the proxy still runs this turn: a stop or a forced
     // exit that began meanwhile keeps the unproven outcome.
-    if (rejection && this.killed === undefined && turn.cancelled !== true) {
+    if (
+      rejection &&
+      this.killed === undefined &&
+      turn.cancelled !== true &&
+      record.cancelled !== true
+    ) {
       return this.endPrompt(record, {
         jsonrpc: "2.0",
         id: replyId,
@@ -1518,12 +1529,27 @@ export function promptHasImage(params) {
  * is that text or a generic JSON-RPC label. ACP's `-32000`
  * (`auth_required`) is never one.
  */
+const ERROR_KEYS = new Set(["code", "message", "data"]);
+const DATA_KEYS = new Set(["message", "error", "details"]);
+const plainObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
 function statedRejection(error) {
-  if (error === null || typeof error !== "object" || error.code === -32000) return undefined;
+  // Only the JSON-RPC envelope, with an integer code that is not ACP's
+  // auth_required, and data absent, a string, or an object holding only the
+  // text fields: anything else may carry a status this matcher cannot read.
+  if (
+    !plainObject(error) ||
+    Object.keys(error).some((key) => !ERROR_KEYS.has(key)) ||
+    !Number.isInteger(error.code) ||
+    error.code === -32000
+  ) {
+    return undefined;
+  }
   const fields = [error.message];
   const data = error.data;
   if (typeof data === "string") fields.push(data);
-  else if (data !== null && typeof data === "object") {
+  else if (plainObject(data)) {
+    if (Object.keys(data).some((key) => !DATA_KEYS.has(key))) return undefined;
     fields.push(data.message, data.error, data.details);
   } else if (data !== undefined) return undefined;
   const present = fields.filter((field) => field !== undefined);

@@ -324,6 +324,12 @@ test("a prompt agy refused before dispatching it is not a refusal", async () => 
     { code: -32603, message: "Unknown failure" },
     { code: -32603, message: text, data: { details: "PERMISSION_DENIED" } },
     { code: -32603, message: text, data: 403 },
+    { code: -32603, message: text, data: { status: "UNAUTHENTICATED" } },
+    { code: -32603, message: text, data: { message: text, status: "UNAUTHENTICATED" } },
+    { code: -32603, message: text, data: [text] },
+    { code: -32603, message: text, status: "UNAUTHENTICATED" },
+    { code: "-32603", message: text },
+    { message: text },
   ]) {
     assert.equal(localRejection(stated, clean, image), undefined);
   }
@@ -361,6 +367,28 @@ test("a prompt agy refused before dispatching it is not a refusal", async () => 
   await unproven((p) => {
     p.turns.get("s").subagents = true;
   });
+  // A Stop that arrives while the reply is still settling (the turn has
+  // already left `turns`) also keeps the outcome unproven.
+  let release;
+  const gate = new Promise((done) => {
+    release = done;
+  });
+  const settling = harness({ backend: clean });
+  // Memory settles after the turn has left `turns`, before the reply.
+  settling.proxy.settleMemory = async () => {
+    await gate;
+  };
+  await settling.proxy.fromClient(request(9, "session/prompt", { sessionId: "s", ...image }));
+  const replied = settling.proxy.fromAgent({ jsonrpc: "2.0", id: 9, error });
+  while (settling.proxy.turns.has("s")) await new Promise((done) => setImmediate(done));
+  await settling.proxy.fromClient({
+    jsonrpc: "2.0",
+    method: "session/cancel",
+    params: { sessionId: "s" },
+  });
+  release();
+  await replied;
+  assert.equal(settling.client.at(-1).error.message, `${REFUSAL_PREFIX}unknown_refusal`);
 });
 
 test("cancel and an unknown facade outcome end the turn", async () => {
