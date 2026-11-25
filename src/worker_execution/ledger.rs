@@ -367,13 +367,15 @@ impl Ledger {
             .collect()
     }
 
-    /// `processes` without the worker's own servers.
-    fn without_servers(&self, processes: Vec<(String, u64)>) -> Vec<(String, u64)> {
+    /// `processes` split into the worker's own servers and the rest.
+    fn split_servers(
+        &self,
+        processes: Vec<(String, u64)>,
+    ) -> (Vec<(String, u64)>, Vec<(String, u64)>) {
         let state = self.state.lock();
         processes
             .into_iter()
-            .filter(|(process, _)| !state.servers.contains(process))
-            .collect()
+            .partition(|(process, _)| state.servers.contains(process))
     }
 
     /// Whether `turn` is still the active turn (an admitted call queued
@@ -1294,12 +1296,15 @@ impl Client {
             ledger
                 .wait_until(|ledger| ledger.mutations_drained(None))
                 .await;
-            // The worker's own servers were ended above without parking: an
-            // unconfirmed end of one is the keeper's to reap, never a session
-            // effect, so it is not ended (and parked) a second time here.
-            let processes = ledger.fence(None);
-            let processes = ledger.without_servers(processes);
-            self.terminate_all(processes, true).await;
+            // A server whose end was not confirmed above is ended once more,
+            // still without parking: the worker's own servers are never a
+            // session effect. Only turn processes park.
+            let (servers, processes) = ledger.split_servers(ledger.fence(None));
+            futures::future::join(
+                self.terminate_all(servers, false),
+                self.terminate_all(processes, true),
+            )
+            .await;
             ledger.wait_until(|ledger| ledger.drained(None)).await;
         }
     }

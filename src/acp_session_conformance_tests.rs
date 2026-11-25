@@ -2326,7 +2326,35 @@ async fn a_stop_racing_a_governed_refusal_keeps_the_refusal() {
         ending.starts_with("error: antigravity_backend_refusal:verification_required"),
         "{ending}"
     );
-    // Any other error after a Stop is still the Stop.
-    let ending = stopped_prompt_ending(json!({"code": -32603, "message": "boom"})).await;
-    assert_eq!(ending, "Cancelled");
+    let ending = stopped_prompt_ending(json!({
+        "code": -32603,
+        "message": "antigravity_policy_violation:search_web",
+        "data": {"cowboy": {"policy_violation": "search_web"}},
+    }))
+    .await;
+    assert!(
+        ending.starts_with("error: antigravity_policy_violation:search_web"),
+        "{ending}"
+    );
+    // Any other error after a Stop is still the Stop: a plain one, a proven
+    // local rejection, other `cowboy` metadata, or a mismatched payload.
+    for error in [
+        json!({"code": -32603, "message": "boom"}),
+        json!({
+            "code": -32603,
+            "message": "antigravity_prompt_rejected:image_answer",
+            "data": {"cowboy": {
+                "prompt_rejected": "image_answer",
+                "antigravity_backend": {"class": "not_dispatched"},
+            }},
+        }),
+        json!({"code": -32603, "message": "adapter failed", "data": {"cowboy": {"trace": 1}}}),
+        json!({
+            "code": -32603,
+            "message": "antigravity_backend_refusal:rate_limited",
+            "data": {"cowboy": {"antigravity_backend": {"class": "ok"}}},
+        }),
+    ] {
+        assert_eq!(stopped_prompt_ending(error).await, "Cancelled");
+    }
 }

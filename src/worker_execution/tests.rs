@@ -1913,6 +1913,13 @@ async fn an_unconfirmed_server_end_in_teardown_does_not_park_the_session() {
     l.server_started("cowboy-worker-mcp-1", true);
     target.client.settle_all().await;
     assert!(l.uncertain_effect().is_none());
+    // Its end is still requested a second time, without parking.
+    let terminations = target
+        .log()
+        .iter()
+        .filter(|entry| entry.starts_with("process/terminate "))
+        .count();
+    assert_eq!(terminations, 2);
     // The SIGTERM cutoff ignores it too.
     assert!(!l.mark_unresolved_effects_uncertain());
     assert!(l.uncertain_effect().is_none());
