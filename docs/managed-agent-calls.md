@@ -895,7 +895,8 @@ Example request (proposed schema 1):
 
 An `instruction` is a task written as text. One that begins with a native
 slash command (`/speckit.review-pr ...`, `/compact`) is refused at admission
-with `invalid_instruction` and a fixed hint, before any child starts: Claude's
+with `invalid_instruction` and a fixed hint, before replay, approval or any
+child starts: Claude's
 managed runtime ends its process on a native command, which crashed a
 persistent reviewer and surfaced only as `provider_error`
 (sess-1795490077099). Name the workflow in text instead, for example

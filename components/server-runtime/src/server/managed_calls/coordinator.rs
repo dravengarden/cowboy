@@ -527,6 +527,15 @@ pub async fn dispatch_calls_from(
     }
     match action {
         Action::Capabilities {} => capabilities(state, meta, ledger).await,
+        // A task, never a native slash command: Claude's managed runtime ends
+        // its process on one (the child crashes and the call fails as
+        // provider_error), and no Provider may run a native command for a
+        // managed call. Refused before anything starts, with a fixed hint.
+        Action::Start { request, .. } if native_command_instruction(&request.instruction) => {
+            let mut refused = error("invalid_instruction", "not_submitted");
+            refused["error"]["hint"] = json!(NATIVE_COMMAND_HINT);
+            refused
+        }
         Action::Start {
             provider,
             request,
@@ -889,15 +898,6 @@ async fn start(
         }
         Ok(None) => {}
         Err(_) => return error("capacity", "not_submitted"),
-    }
-    // A task, never a native slash command: Claude's managed runtime ends its
-    // process on one (the child crashes and the call fails as provider_error),
-    // and no Provider may run a native command for a managed call. Refused
-    // before anything starts, with a fixed hint that echoes no input.
-    if native_command_instruction(&request.instruction) {
-        let mut refused = error("invalid_instruction", "not_submitted");
-        refused["error"]["hint"] = json!(NATIVE_COMMAND_HINT);
-        return refused;
     }
     // What the caller submitted: the replay of a repeated request id matches
     // against it, not against the agent a continuation resolves below.
