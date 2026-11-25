@@ -720,13 +720,7 @@ export class Facade {
       ? `canary-${randomUUID().replaceAll("-", "")}`
       : undefined;
     const makeCanaryMeta = (expectedNoteDigest = null) =>
-      canaryInspectId
-        ? {
-            inspectId: canaryInspectId,
-            expectedNoteDigest,
-            ...(this.canaryNonce ? { expectedDiagnosticNonce: this.canaryNonce } : {}),
-          }
-        : undefined;
+      canaryInspectId ? { inspectId: canaryInspectId, expectedNoteDigest } : undefined;
 
     const reply = await this.diagnostics.postEdit({
       path: relPath,
@@ -1280,7 +1274,11 @@ ${WRAP_UP_NOTE}`,
     let size = metadata.size;
     let bytes;
     if (size <= LIMITS.wholeFile) {
-      const data = (await this.current(file, metadata)) ?? Buffer.alloc(0);
+      const data = await this.current(file, metadata);
+      if (data === undefined) {
+        this.recordMissingPath(session, path, file);
+        throw new ToolError(`No such file: ${path}`);
+      }
       const digest = sha256(data);
       session.observed.set(file, digest);
       this.recordFileObservation(file, digest);
@@ -1598,7 +1596,12 @@ ${WRAP_UP_NOTE}`,
     if (result.exitCode === 127) {
       // No helper ran (the executor exports none): nothing was written.
       if (payload) {
-        await this.mutate(turn, "fs/remove", { path: url(payload), force: true }).catch(() => {});
+        await this.mutate(
+          turn,
+          "fs/remove",
+          { path: url(payload), force: true },
+          { beforeSend },
+        ).catch(() => {});
       }
       throw new ToolError(
         "The workspace Machine's execution helper is unavailable; nothing was written.",

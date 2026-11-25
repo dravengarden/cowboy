@@ -389,14 +389,41 @@ async fn read_with_acquisition(
             )
         };
         let mut built = build_observed_file(&path, reply, acquired, conn_epoch, acquire, false);
-        let canonical = built.canonical_path.as_deref().unwrap_or(&path);
-        // M11: If caller passed an in-worktree symlink alias whose canonical buffer
-        // path differs, switch the per-file lock to the resolved buffer identity
-        // before authorizing and committing the baseline (strict lock drop first).
+        let canonical = built.canonical_path.clone().unwrap_or_else(|| path.clone());
+        // R3-M3: If caller passed an in-worktree symlink alias whose canonical
+        // buffer path differs, acquire the canonical per-file lock and RE-OBSERVE
+        // under that lock before recording any baseline so a delayed alias
+        // snapshot can never overwrite a newer canonical baseline.
         let _canonical_guard = if canonical != path {
             drop(_file_guard);
-            let canonical_lock = super::baselines::file_lock(observed.session(), canonical);
-            Some(canonical_lock.lock_owned().await)
+            let canonical_lock = super::baselines::file_lock(observed.session(), &canonical);
+            let guard = canonical_lock.lock_owned().await;
+            if trust
+                .as_ref()
+                .is_none_or(|trust| !trust.current(&state.hub))
+            {
+                files.push(json!({"path":path,"state":"restricted"}));
+                continue;
+            }
+            let (re_reply, re_acquired) = if acquire {
+                observe(
+                    state,
+                    observed,
+                    &canonical,
+                    trust.as_ref().expect("admitted trust"),
+                )
+                .await
+            } else {
+                (
+                    observe_open_buffer(&state.code, observed, &canonical).await,
+                    false,
+                )
+            };
+            built = build_observed_file(&path, re_reply, re_acquired, conn_epoch, acquire, false);
+            if built.canonical_path.as_deref() != Some(canonical.as_str()) {
+                built.pending = None;
+            }
+            Some(guard)
         } else {
             None
         };
@@ -409,7 +436,7 @@ async fn read_with_acquisition(
         }
         if let Some((pending, diagnostics)) = built.pending.take() {
             built.file["comparison"] =
-                super::baselines::record(observed.session(), canonical, pending, &diagnostics);
+                super::baselines::record(observed.session(), &canonical, pending, &diagnostics);
         }
         files.push(built.file);
     }

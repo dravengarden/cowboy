@@ -289,7 +289,6 @@ async function connectedRuntime({
     managed,
     diagnostics,
     canaryTrace: Boolean(canaryTraceFile),
-    canaryNonce: canaryTraceFile ? canaryNonce : undefined,
   });
   const listed = facade.tools().map((tool) => tool.name);
   if (JSON.stringify(listed) !== JSON.stringify(managed ? MANAGED_FACADE_TOOLS : EXPECTED_TOOLS)) {

@@ -526,6 +526,9 @@ fn bearer_token() -> String {
 
 const MAX_PRE_AUTH_SOCKETS: usize = 4;
 const MAX_NON_MUTATION_PRE_AUTH_SOCKETS: usize = 3;
+const MAX_PRE_AUTH_CLASSIFY_SOCKETS: usize = 2;
+const PRE_AUTH_CLASSIFY_TIMEOUT: Duration = Duration::from_millis(100);
+const PRE_AUTH_CLASSIFY_EVICT_AFTER: Duration = Duration::from_millis(50);
 const PRE_AUTH_UPGRADE_TIMEOUT: Duration = Duration::from_millis(500);
 const PRE_AUTH_STALL_EVICT_AFTER: Duration = Duration::from_millis(200);
 const MAX_PRE_AUTH_HEADER_BYTES: usize = 4 * 1024;
@@ -543,10 +546,16 @@ struct PreAuthSlot {
     mutation_only: bool,
 }
 
+struct ClassifySlot {
+    started_at: Instant,
+    abort: Option<tokio::task::AbortHandle>,
+}
+
 #[derive(Default)]
 struct AdmissionState {
     next_id: u64,
     pre_auth: std::collections::HashMap<u64, PreAuthSlot>,
+    classifying: std::collections::HashMap<u64, ClassifySlot>,
 }
 
 struct PreAuthCleanup {
@@ -556,7 +565,9 @@ struct PreAuthCleanup {
 
 impl Drop for PreAuthCleanup {
     fn drop(&mut self) {
-        self.state.lock().pre_auth.remove(&self.id);
+        let mut guard = self.state.lock();
+        guard.pre_auth.remove(&self.id);
+        guard.classifying.remove(&self.id);
     }
 }
 
@@ -700,29 +711,32 @@ impl Admission {
     {
         let mut guard = self.state.lock();
         let mutation_vacant = self.mutation_slot.available_permits() > 0;
-        let cap = if mutation_vacant {
-            MAX_PRE_AUTH_SOCKETS
-        } else {
-            MAX_NON_MUTATION_PRE_AUTH_SOCKETS
-        };
-        if guard.pre_auth.len() >= cap {
-            if mutation_vacant
-                && let Some((&evict_id, _)) = guard
-                    .pre_auth
-                    .iter()
-                    .filter(|(_, slot)| slot.started_at.elapsed() >= PRE_AUTH_STALL_EVICT_AFTER)
-                    .min_by_key(|(_, slot)| slot.started_at)
-            {
-                if let Some(evicted) = guard.pre_auth.remove(&evict_id)
-                    && let Some(abort) = evicted.abort
-                {
-                    abort.abort();
-                }
-            } else {
+        // R3-M4: When all 3 general pre-auth slots are occupied and mutation is
+        // vacant, classify the HTTP request line in a short bounded stage BEFORE
+        // assigning the 4th mutation-only ticket so a stalled /diagnostics
+        // handshake can never occupy the mutation reserve.
+        let classify_first = guard.pre_auth.len() >= MAX_NON_MUTATION_PRE_AUTH_SOCKETS;
+        if classify_first {
+            if !mutation_vacant {
                 return;
             }
+            if guard.classifying.len() >= MAX_PRE_AUTH_CLASSIFY_SOCKETS {
+                if let Some((&evict_id, _)) = guard
+                    .classifying
+                    .iter()
+                    .filter(|(_, slot)| slot.started_at.elapsed() >= PRE_AUTH_CLASSIFY_EVICT_AFTER)
+                    .min_by_key(|(_, slot)| slot.started_at)
+                {
+                    if let Some(evicted) = guard.classifying.remove(&evict_id)
+                        && let Some(abort) = evicted.abort
+                    {
+                        abort.abort();
+                    }
+                } else {
+                    return;
+                }
+            }
         }
-        let mutation_only = guard.pre_auth.len() >= MAX_NON_MUTATION_PRE_AUTH_SOCKETS;
         guard.next_id = guard.next_id.saturating_add(1);
         let id = guard.next_id;
         let state = Arc::clone(&self.state);
@@ -737,39 +751,73 @@ impl Admission {
         let abort = self.tasks.spawn(async move {
             let _cleanup = cleanup;
             let session = client.session.clone();
-            match upgrade_and_classify(
-                socket,
-                &token,
-                Arc::clone(&client),
-                unit_generation,
-                id,
-                Arc::clone(&state),
-                mutation_slot,
-                diagnostics_slot,
-            )
-            .await
-            {
-                Ok(UpgradedConnection::Mutation { websocket, initialized, _guard }) => {
+            let upgraded = if classify_first {
+                classify_then_promote_mutation_reserve(
+                    socket,
+                    &token,
+                    Arc::clone(&client),
+                    unit_generation,
+                    id,
+                    Arc::clone(&state),
+                    mutation_slot,
+                    diagnostics_slot,
+                )
+                .await
+            } else {
+                upgrade_and_classify(
+                    socket,
+                    None,
+                    &token,
+                    Arc::clone(&client),
+                    unit_generation,
+                    id,
+                    Arc::clone(&state),
+                    mutation_slot,
+                    diagnostics_slot,
+                )
+                .await
+            };
+            match upgraded {
+                Ok(UpgradedConnection::Mutation {
+                    websocket,
+                    initialized,
+                    _guard,
+                }) => {
                     if serve_mutation(websocket, initialized, client).await.is_err() {
                         tracing::warn!(event_name = "cowboy.execution.disconnected", %session, reason = "endpoint_failed", "execution endpoint disconnected");
                     }
                     drop(_guard);
                 }
-                Ok(UpgradedConnection::Diagnostics { websocket, initialized, _permit }) => {
-                    let _ = serve_diagnostics(websocket, initialized, client, unit_generation).await;
+                Ok(UpgradedConnection::Diagnostics {
+                    websocket,
+                    initialized,
+                    _permit,
+                }) => {
+                    let _ =
+                        serve_diagnostics(websocket, initialized, client, unit_generation).await;
                     drop(_permit);
                 }
                 Err(_) => {}
             }
         });
-        guard.pre_auth.insert(
-            id,
-            PreAuthSlot {
-                started_at: Instant::now(),
-                abort: Some(abort),
-                mutation_only,
-            },
-        );
+        if classify_first {
+            guard.classifying.insert(
+                id,
+                ClassifySlot {
+                    started_at: Instant::now(),
+                    abort: Some(abort),
+                },
+            );
+        } else {
+            guard.pre_auth.insert(
+                id,
+                PreAuthSlot {
+                    started_at: Instant::now(),
+                    abort: Some(abort),
+                    mutation_only: false,
+                },
+            );
+        }
     }
 
     async fn reap(&mut self) {
@@ -966,6 +1014,77 @@ where
     bail!("execution HTTP request line exceeded 256 bytes");
 }
 
+#[allow(clippy::too_many_arguments)]
+async fn classify_then_promote_mutation_reserve<S>(
+    mut socket: S,
+    token: &str,
+    client: Arc<Client>,
+    unit_generation: u64,
+    id: u64,
+    admission_state: Arc<Mutex<AdmissionState>>,
+    mutation_slot: Arc<Semaphore>,
+    diagnostics_slot: Arc<Semaphore>,
+) -> Result<UpgradedConnection<S>>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+{
+    use tokio::io::AsyncWriteExt as _;
+    let peeked =
+        tokio::time::timeout(PRE_AUTH_CLASSIFY_TIMEOUT, peek_request_line(&mut socket)).await??;
+    if peeked.1 {
+        let _ = socket
+            .write_all(b"HTTP/1.1 503 Busy\r\nContent-Length: 4\r\nConnection: close\r\n\r\nBusy")
+            .await;
+        bail!("diagnostics rejected before mutation reserve admission");
+    }
+    // Promote classified mutation candidate into the 4th reserved pre-auth ticket.
+    {
+        let mut guard = admission_state.lock();
+        let Some(slot) = guard.classifying.remove(&id) else {
+            bail!("classify slot evicted");
+        };
+        if mutation_slot.available_permits() == 0 {
+            bail!("mutation slot no longer vacant");
+        }
+        if guard.pre_auth.len() >= MAX_PRE_AUTH_SOCKETS {
+            if let Some((&evict_id, _)) = guard
+                .pre_auth
+                .iter()
+                .filter(|(_, s)| s.started_at.elapsed() >= PRE_AUTH_STALL_EVICT_AFTER)
+                .min_by_key(|(_, s)| s.started_at)
+            {
+                if let Some(evicted) = guard.pre_auth.remove(&evict_id)
+                    && let Some(abort) = evicted.abort
+                {
+                    abort.abort();
+                }
+            } else {
+                bail!("pre-auth pool full");
+            }
+        }
+        guard.pre_auth.insert(
+            id,
+            PreAuthSlot {
+                started_at: Instant::now(),
+                abort: slot.abort,
+                mutation_only: true,
+            },
+        );
+    }
+    upgrade_and_classify(
+        socket,
+        Some(peeked),
+        token,
+        client,
+        unit_generation,
+        id,
+        admission_state,
+        mutation_slot,
+        diagnostics_slot,
+    )
+    .await
+}
+
 #[expect(
     clippy::result_large_err,
     reason = "Tungstenite fixes the callback HTTP error response type"
@@ -973,6 +1092,7 @@ where
 #[allow(clippy::too_many_arguments)]
 async fn upgrade_and_classify<S>(
     mut socket: S,
+    pre_peeked: Option<(Vec<u8>, bool)>,
     token: &str,
     client: Arc<Client>,
     unit_generation: u64,
@@ -985,8 +1105,10 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
 {
     let deadline = tokio::time::Instant::now() + PRE_AUTH_UPGRADE_TIMEOUT;
-    let (prefix, peeked_diagnostics) =
-        tokio::time::timeout_at(deadline, peek_request_line(&mut socket)).await??;
+    let (prefix, peeked_diagnostics) = match pre_peeked {
+        Some(peeked) => peeked,
+        None => tokio::time::timeout_at(deadline, peek_request_line(&mut socket)).await??,
+    };
     let remaining_header = MAX_PRE_AUTH_HEADER_BYTES.saturating_sub(prefix.len());
     let upgraded = Arc::new(std::sync::atomic::AtomicBool::new(false));
     let initialized = Arc::new(std::sync::atomic::AtomicBool::new(false));

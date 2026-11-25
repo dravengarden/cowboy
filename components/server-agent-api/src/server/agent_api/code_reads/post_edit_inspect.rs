@@ -35,6 +35,8 @@ use crate::post_edit_inspect::{
 
 const POST_EDIT_TARGET_CONCURRENCY: usize = 4;
 const POLL_INTERVAL: Duration = Duration::from_millis(250);
+/// Hard Zed adapter exchange timeout on the workspace Machine (`zed_session::EXCHANGE_TIMEOUT`).
+const ADAPTER_EXCHANGE_BOUND: Duration = Duration::from_secs(35);
 
 static TARGET_SLOTS: LazyLock<Mutex<HashMap<String, Arc<Semaphore>>>> =
     LazyLock::new(Mutex::default);
@@ -304,20 +306,29 @@ fn is_document_current(reply: &anyhow::Result<ZedAdapterResponse>) -> bool {
     )
 }
 
-/// Whether an already-open matching buffer has servers in `Stale`/`Unknown`
-/// state that can still advance to `DocumentCurrent` during fenced polling.
+/// R3-M5: Whether an observation can still advance to `DocumentCurrent` via
+/// fenced polling. Covers `Stale`/`Unknown` analysis, `SourceState::Unavailable`
+/// (busy source readers), and absent server lists; stops on `DocumentCurrent`,
+/// explicit empty servers on a matching buffer, or transport/adapter errors.
 fn can_advance_analysis(reply: &anyhow::Result<ZedAdapterResponse>) -> bool {
-    matches!(
-        reply,
+    match reply {
         Ok(ZedAdapterResponse::BufferLanguage {
-            source_state: SourceState::Matching,
-            analysis: Some(servers),
+            source_state,
+            analysis,
             ..
-        }) if !servers.is_empty()
-            && servers
-                .iter()
-                .any(|s| matches!(s.state, AnalysisState::Stale | AnalysisState::Unknown))
-    )
+        }) => {
+            if is_document_current(reply) {
+                return false;
+            }
+            if *source_state == SourceState::Matching
+                && analysis.as_ref().is_some_and(Vec::is_empty)
+            {
+                return false;
+            }
+            true
+        }
+        _ => false,
+    }
 }
 
 async fn race_caller_gone<F, T>(
@@ -473,6 +484,7 @@ async fn run_inspect_fenced(
         return refused_reply(&request, reason);
     }
 
+    let mut last_adapter_dispatch: Option<Instant> = None;
     let (reply, acquired) = match observe_target_file(
         &state,
         &target.connection,
@@ -482,31 +494,28 @@ async fn run_inspect_fenced(
         &ctx.trust,
         &mut caller_gone,
         deadline,
+        &mut last_adapter_dispatch,
     )
     .await
     {
         Ok(pair) => pair,
         Err(reason) => {
-            // M8: If target connection dropped mid-adapter I/O, keep the target
-            // permit charged until the bounded inspection deadline so reconnects
-            // cannot stack >4 overlapping adapter jobs on the target.
-            if !state.machine_control.is_current(&target.connection) && Instant::now() < deadline {
-                tokio::spawn(async move {
-                    let _permit = target_permit;
-                    tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
-                });
-            }
+            retain_permit_on_workspace_disconnect(
+                &state,
+                &ctx.observed,
+                last_adapter_dispatch,
+                target_permit,
+            );
             return refused_reply(&request, reason);
         }
     };
-    if reply.is_err()
-        && !state.machine_control.is_current(&target.connection)
-        && Instant::now() < deadline
-    {
-        tokio::spawn(async move {
-            let _permit = target_permit;
-            tokio::time::sleep_until(tokio::time::Instant::from_std(deadline)).await;
-        });
+    if reply.is_err() && !session::current(&state.hub, &state.machine_control, &ctx.observed) {
+        retain_permit_on_workspace_disconnect(
+            &state,
+            &ctx.observed,
+            last_adapter_dispatch,
+            target_permit,
+        );
         return refused_reply(&request, "unavailable");
     }
 
@@ -573,6 +582,29 @@ async fn run_inspect_fenced(
     }
 }
 
+/// R3-H1: In split execution, track target adapter settlement against the
+/// workspace Machine's connection in `observed` (not the requesting runtime
+/// Machine) and hold `target_permit` until the adapter's own 35 s exchange
+/// bound if the workspace connection dropped while an adapter call was in flight.
+fn retain_permit_on_workspace_disconnect(
+    state: &AppState,
+    observed: &SessionReadScope,
+    last_adapter_dispatch: Option<Instant>,
+    target_permit: tokio::sync::OwnedSemaphorePermit,
+) {
+    if let Some(dispatched_at) = last_adapter_dispatch
+        && !session::current(&state.hub, &state.machine_control, observed)
+    {
+        let settle_until = dispatched_at + ADAPTER_EXCHANGE_BOUND;
+        if Instant::now() < settle_until {
+            tokio::spawn(async move {
+                let _permit = target_permit;
+                tokio::time::sleep_until(tokio::time::Instant::from_std(settle_until)).await;
+            });
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 async fn observe_target_file(
     state: &AppState,
@@ -583,7 +615,9 @@ async fn observe_target_file(
     trust: &LanguageServerTrust,
     caller_gone: &mut watch::Receiver<bool>,
     deadline: Instant,
+    last_adapter_dispatch: &mut Option<Instant>,
 ) -> Result<(anyhow::Result<ZedAdapterResponse>, bool), &'static str> {
+    *last_adapter_dispatch = Some(Instant::now());
     let first = language::observe_open_buffer(&state.code, observed, &request.path).await;
     let not_open = matches!(&first, Err(error) if error.to_string().contains("not open"));
     if !not_open {
@@ -602,6 +636,7 @@ async fn observe_target_file(
                     first,
                     caller_gone,
                     deadline,
+                    last_adapter_dispatch,
                 )
                 .await?;
                 return Ok((settled, false));
@@ -622,6 +657,7 @@ async fn observe_target_file(
         if remaining_ms_until(deadline) < MIN_POST_EDIT_COLD_START_MS {
             return Ok((first, false));
         }
+        *last_adapter_dispatch = Some(Instant::now());
         if super::acquire::acquire_on_scope(state, observed, &request.path, trust)
             .await
             .is_err()
@@ -652,6 +688,7 @@ async fn observe_target_file(
             first,
             caller_gone,
             deadline,
+            last_adapter_dispatch,
         )
         .await?;
         return Ok((refreshed, false));
@@ -672,6 +709,7 @@ async fn observe_target_file(
     if remaining_ms_until(deadline) < MIN_POST_EDIT_COLD_START_MS {
         return Err("timeout");
     }
+    *last_adapter_dispatch = Some(Instant::now());
     if let Err(reason) =
         super::acquire::acquire_on_scope(state, observed, &request.path, trust).await
     {
@@ -694,6 +732,7 @@ async fn observe_target_file(
             deadline,
         )
         .await?;
+        *last_adapter_dispatch = Some(Instant::now());
         let reply = language::observe_open_buffer(&state.code, observed, &request.path).await;
         if is_document_current(&reply) || reply.is_err() || Instant::now() >= deadline {
             return Ok((reply, true));
@@ -717,21 +756,17 @@ async fn refresh_with_fence(
     original: anyhow::Result<ZedAdapterResponse>,
     caller_gone: &mut watch::Receiver<bool>,
     deadline: Instant,
+    last_adapter_dispatch: &mut Option<Instant>,
 ) -> Result<anyhow::Result<ZedAdapterResponse>, &'static str> {
     let query = language::Query::RefreshedLanguage {
         refresh: language::AgentOwned::AgentOwned,
     };
+    *last_adapter_dispatch = Some(Instant::now());
     let reply = language::query_open_buffer(&state.code, observed, &request.path, query).await;
-    let reloaded = matches!(
-        &reply,
-        Ok(ZedAdapterResponse::BufferLanguage {
-            refresh: Some(outcome),
-            ..
-        }) if outcome == "reloaded"
-    );
-    if !reloaded {
-        return Ok(if reply.is_ok() { reply } else { original });
-    }
+    // R3-M5: Always feed the refreshed/original observation through the unified
+    // fenced polling loop so stale/unavailable observations continue polling
+    // even when a reload was unnecessary.
+    let seed = if reply.is_ok() { reply } else { original };
     poll_until_current(
         state,
         runtime_connection,
@@ -739,9 +774,10 @@ async fn refresh_with_fence(
         request,
         observed,
         trust,
-        reply,
+        seed,
         caller_gone,
         deadline,
+        last_adapter_dispatch,
     )
     .await
 }
@@ -757,10 +793,11 @@ async fn poll_until_current(
     initial: anyhow::Result<ZedAdapterResponse>,
     caller_gone: &mut watch::Receiver<bool>,
     deadline: Instant,
+    last_adapter_dispatch: &mut Option<Instant>,
 ) -> Result<anyhow::Result<ZedAdapterResponse>, &'static str> {
     let mut latest = initial;
     loop {
-        if is_document_current(&latest) || latest.is_err() || Instant::now() >= deadline {
+        if !can_advance_analysis(&latest) || Instant::now() >= deadline {
             return Ok(latest);
         }
         let sleep_for = POLL_INTERVAL.min(deadline.saturating_duration_since(Instant::now()));
@@ -781,6 +818,7 @@ async fn poll_until_current(
             deadline,
         )
         .await?;
+        *last_adapter_dispatch = Some(Instant::now());
         latest = language::observe_open_buffer(&state.code, observed, &request.path).await;
     }
 }

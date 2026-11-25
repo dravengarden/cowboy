@@ -383,14 +383,29 @@ export class PlanGate {
         if (!turn?.announcementEvicted) entry = exactUnbound[0];
       } else if (!turn?.announcementEvicted) {
         if (isDiffBearing && liveSameTool.length > 1) {
-          for (const item of inputlessLive) item.ambiguous = true;
+          // R3-M6: Permanently taint the incoming call and colliding entries on inputless ambiguity.
+          this.taintedCalls.add(call);
+          for (const item of inputlessLive) {
+            item.ambiguous = true;
+            if (item.boundCall) {
+              this.taintedCalls.add(item.boundCall);
+              this.bound.delete(item.boundCall);
+              item.boundCall = undefined;
+            }
+          }
         } else {
           const inputless = unbound.filter((item) => !item.hasInput);
           if (inputless.length === 1) entry = inputless[0];
         }
       }
     } else if (!turn?.announcementEvicted && unbound.length === 1) {
-      if (!isDiffBearing || liveSameTool.length === 1) entry = unbound[0];
+      if (!isDiffBearing || liveSameTool.length === 1) {
+        entry = unbound[0];
+      } else {
+        this.taintedCalls.add(call);
+      }
+    } else if (isDiffBearing && liveSameTool.length > 1) {
+      this.taintedCalls.add(call);
     }
     if (!entry) return undefined;
     entry.boundCall = call;

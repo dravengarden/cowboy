@@ -506,3 +506,24 @@ test("a descriptor that does not validate starts no agy", async (t) => {
     assert.equal(existsSync(join(setup.base, "agy-started")), false, name);
   }
 });
+
+test("runProxy forwards both --canary-trace-file and --canary-nonce to the cowboy relay (R3-L1)", async (t) => {
+  const setup = layout(t);
+  const endpoint = await fakeEndpoint(setup.socket, setup.target, { virtual: setup.virtual });
+  t.after(() => endpoint.close());
+  const traceFile = join(setup.base, "canary-trace.jsonl");
+  const { call } = session(t, setup, {}, [
+    "--canary-trace-file",
+    traceFile,
+    "--canary-nonce",
+    "launch-fixture-nonce-42",
+  ]);
+  await call("initialize", { protocolVersion: 1 });
+  const created = await call("session/new", { cwd: setup.runtimeCwd, mcpServers: [] });
+  const server = created.result.seen.params.mcpServers[0];
+  assert.equal(server.name, "cowboy");
+  const traceFlag = server.args.indexOf("--canary-trace-file");
+  const nonceFlag = server.args.indexOf("--canary-nonce");
+  assert.ok(traceFlag >= 0 && server.args[traceFlag + 1] === traceFile);
+  assert.ok(nonceFlag >= 0 && server.args[nonceFlag + 1] === "launch-fixture-nonce-42");
+});

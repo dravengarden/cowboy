@@ -704,7 +704,15 @@ test("facade-relay proves diagnostic note reached native stdout and rejects fals
   try {
     const child = spawn(
       process.execPath,
-      [join(here, "facade-relay.mjs"), sockPath, channel, "--canary-trace-file", traceFile],
+      [
+        join(here, "facade-relay.mjs"),
+        sockPath,
+        channel,
+        "--canary-trace-file",
+        traceFile,
+        "--canary-nonce",
+        "canary-diag-nonce-99",
+      ],
       { stdio: ["pipe", "pipe", "pipe"] },
     );
     let stdout = "";
@@ -781,7 +789,7 @@ test("ReadFile discovering a deleted file invalidates pending diagnostic notes (
     async call(method, params, opts) {
       opts?.beforeSend?.();
       if (!exists && (method === "fs/canonicalize" || method === "fs/getMetadata")) {
-        throw Object.assign(new Error("No such file or directory"), { code: -32002 });
+        throw Object.assign(new Error("No such file or directory"), { remote: { code: -32004 } });
       }
       if (method === "fs/canonicalize") return { path: params.path };
       if (method === "fs/getMetadata") return { isFile: true, size: 3 };
@@ -938,6 +946,168 @@ test("facade-relay verifies independent --canary-nonce on native stdout for posi
     assert.equal(traces[0].stdoutNoteMatched, true);
     assert.equal(traces[1].nonceInStdout, false);
     assert.equal(traces[1].stdoutNoteMatched, false);
+  } finally {
+    server.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Exit-127 staged edit skips fs/remove when beforeSend refuses (R3-M1)", async () => {
+  const calls = [];
+  let allow = true;
+  const conn = {
+    async call(method, params, opts) {
+      opts?.beforeSend?.();
+      calls.push({ method, params });
+      if (method === "process/start" && params.argv?.[2]?.includes("mkdir -p")) {
+        return { processId: params.processId };
+      }
+      if (method === "process/start" && params.argv?.includes("--request-file")) {
+        allow = false; // Plan-mode switch or cancel occurs while helper runs.
+        return { processId: params.processId };
+      }
+      if (method === "process/read") {
+        const isMkdir = calls.filter((c) => c.method === "process/start").length === 1;
+        return {
+          chunks: isMkdir
+            ? [
+                {
+                  seq: 1,
+                  stream: "stdout",
+                  chunk: Buffer.from("/home/u/.cache/cowboy/file-buffers").toString("base64"),
+                },
+              ]
+            : [],
+          exited: true,
+          exitCode: isMkdir ? 0 : 127,
+          closed: true,
+        };
+      }
+      if (method === "fs/writeFile") return {};
+      throw new Error(`unexpected ${method}`);
+    },
+  };
+  const facade = new Facade(conn, { root: "/repo", shell: "/bin/sh" });
+  facade.beginTurn("s1", { turnNonce: "n1" });
+  const session = facade.session("s1");
+  const turn = session.turn;
+  const large = Buffer.from("x".repeat(60 * 1024), "utf8");
+  const beforeSend = () =>
+    facade.assertAuthorizedBeforeEffect(session, turn, { confirm: () => allow }, undefined);
+  await assert.rejects(
+    () => facade.publishOnce(turn, "/repo/big.txt", undefined, large, { beforeSend }),
+    /helper is unavailable/,
+  );
+  assert.equal(
+    calls.some((c) => c.method === "fs/remove"),
+    false,
+    "exit-127 cleanup must respect beforeSend fence",
+  );
+});
+
+test("ReadFile throws No such file and preserves absence when file disappears after getMetadata (R3-M2)", async () => {
+  const conn = {
+    async call(method, params) {
+      if (method === "fs/canonicalize") return { path: params.path };
+      if (method === "fs/getMetadata") return { isFile: true, size: 10 };
+      if (method === "fs/readFile") {
+        throw Object.assign(new Error("No such file or directory"), { remote: { code: -32004 } });
+      }
+      throw new Error(`unexpected ${method}`);
+    },
+  };
+  const facade = new Facade(conn, { root: "/repo", shell: "/bin/sh" });
+  facade.beginTurn("s1", { turnNonce: "n1" });
+  const session = facade.session("s1");
+  session.observed.set("/repo/gone.rs", "old-digest");
+  facade.recordFileObservation("/repo/gone.rs", "old-digest", { forceAdvance: true });
+  await assert.rejects(() => facade.readFile(session, { path: "gone.rs" }), /No such file/);
+  assert.equal(session.observed.has("/repo/gone.rs"), false);
+  assert.equal(facade.fileObservation.get("/repo/gone.rs")?.rawDigest, null);
+});
+
+test("PlanGate permanently taints edit call on inputless collision across card termination (R3-M6)", () => {
+  const gate = new PlanGate();
+  const turn = { attempt: Symbol("att") };
+  const c1 = {
+    sessionId: "s",
+    name: "EditFile",
+    args: { path: "z.rs", old_string: "a", new_string: "b" },
+  };
+  // Two inputless EditFile announcements collide when c1 is admitted.
+  gate.trackUpdate(
+    "s",
+    { toolCallId: "i1", name: "mcp_cowboy_EditFile", status: "in_progress" },
+    turn,
+  );
+  gate.trackUpdate(
+    "s",
+    { toolCallId: "i2", name: "mcp_cowboy_EditFile", status: "in_progress" },
+    turn,
+  );
+  gate.admitCall(c1, turn);
+  assert.equal(gate.bind(c1, turn), undefined);
+  // Both colliding cards terminate, then a third matching edit card arrives.
+  gate.trackUpdate("s", { toolCallId: "i1", status: "completed" }, turn);
+  gate.trackUpdate("s", { toolCallId: "i2", status: "completed" }, turn);
+  gate.trackUpdate(
+    "s",
+    {
+      toolCallId: "i3",
+      name: "mcp_cowboy_EditFile",
+      rawInput: { path: "z.rs", old_string: "a", new_string: "b" },
+      status: "in_progress",
+    },
+    turn,
+  );
+  assert.equal(gate.bind(c1, turn), undefined);
+});
+
+test("facade-relay refuses positive stdout proof when --canary-nonce is omitted (R3-L1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "cowboy-relay-nononce-"));
+  const sockPath = join(dir, "f.sock");
+  const traceFile = join(dir, "trace.jsonl");
+  const channel = "11111111-2222-3333-4444-555555555555";
+  const note = "<system-reminder>\nAdvisory: fixture-123\n</system-reminder>";
+  const digest = createHash("sha256").update(note, "utf8").digest("hex");
+
+  const server = createServer((socket) => {
+    let buf = "";
+    socket.on("data", (chunk) => {
+      buf += chunk.toString();
+      if (buf.includes("\n")) {
+        const msg = {
+          jsonrpc: "2.0",
+          id: 1,
+          result: { content: [{ type: "text", text: `Edited a.rs\n\n${note}` }] },
+          // Even if facade metadata attempts to supply expectedDiagnosticNonce, CLI flag is authoritative.
+          _cowboyCanary: {
+            inspectId: "no-cli-nonce",
+            noteAttached: true,
+            expectedNoteDigest: digest,
+            expectedDiagnosticNonce: "fixture-123",
+          },
+        };
+        socket.write(`${JSON.stringify(msg)}\n`);
+        socket.end();
+      }
+    });
+  });
+  await new Promise((resolve) => server.listen(sockPath, resolve));
+  try {
+    const child = spawn(
+      process.execPath,
+      [join(here, "facade-relay.mjs"), sockPath, channel, "--canary-trace-file", traceFile],
+      { stdio: ["pipe", "pipe", "pipe"] },
+    );
+    await new Promise((resolve) => child.once("close", resolve));
+    const traces = (await readFile(traceFile, "utf8"))
+      .trim()
+      .split("\n")
+      .map((l) => JSON.parse(l));
+    assert.equal(traces.length, 1);
+    assert.equal(traces[0].nonceInStdout, false);
+    assert.equal(traces[0].stdoutNoteMatched, false);
   } finally {
     server.close();
     await rm(dir, { recursive: true, force: true });

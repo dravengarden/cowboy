@@ -52,25 +52,21 @@ function verifyStdoutNote(parsed, outLine, canaryMeta) {
     : null;
   const expected =
     typeof canaryMeta?.expectedNoteDigest === "string" ? canaryMeta.expectedNoteDigest : null;
-  const expectedDiagnosticNonce =
-    typeof canaryMeta?.expectedDiagnosticNonce === "string" &&
-    canaryMeta.expectedDiagnosticNonce.length > 0
-      ? canaryMeta.expectedDiagnosticNonce
-      : (canaryNonce ?? null);
-  const nonceInStdout = expectedDiagnosticNonce
-    ? Boolean(
-        matchedNote &&
-          matchedNote.includes(expectedDiagnosticNonce) &&
-          outLine.includes(expectedDiagnosticNonce),
-      )
-    : null;
+  // R3-L1: The independent CLI `--canary-nonce` is authoritative and required
+  // for a positive proof; metadata from the facade can never supply or bypass it.
+  const nonceInStdout = Boolean(
+    canaryNonce &&
+      matchedNote &&
+      matchedNote.includes(canaryNonce) &&
+      outLine.includes(canaryNonce),
+  );
   const stdoutNoteMatched = Boolean(
     matchedNote &&
       stdoutNoteSha256 &&
       expected &&
       stdoutNoteSha256 === expected &&
       outLine.includes("<system-reminder>") &&
-      (nonceInStdout === null || nonceInStdout),
+      nonceInStdout,
   );
   return { stdoutNoteMatched, stdoutNoteSha256, nonceInStdout };
 }
