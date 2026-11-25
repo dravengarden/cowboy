@@ -1009,7 +1009,8 @@ pub fn uses_yolo_session_mode(id: &str) -> bool {
     behavior(id).permission == cowboy_provider_sdk::PermissionBehavior::AcpSessionModeYoloV1
 }
 
-/// Whether a prompt error is a governed Provider proxy's account signal: the
+/// Whether a prompt error is a governed (named-only, the Controller's account
+/// controls) Provider proxy's account signal: the
 /// Antigravity proxy's backend refusal (`antigravity_backend_refusal:<class>`
 /// with the same class in `data.cowboy.antigravity_backend`, `unknown_refusal`
 /// included) or policy violation (`antigravity_policy_violation:<tool>` with
@@ -1018,7 +1019,10 @@ pub fn uses_yolo_session_mode(id: &str) -> bool {
 /// `Cancelled` raises nothing. Anything else, a proven local rejection
 /// included, stays the Stop.
 #[must_use]
-pub fn governed_terminal_error(error: &agent_client_protocol::Error) -> bool {
+pub fn governed_terminal_error(provider: &str, error: &agent_client_protocol::Error) -> bool {
+    if !crate::provider_account::named_only(provider) {
+        return false;
+    }
     let Some(cowboy) = error
         .data
         .as_ref()

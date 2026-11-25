@@ -2222,8 +2222,8 @@ fn an_answered_url_elicitation_forgets_its_completion_id() {
 
 /// One prompt Stopped while the agent answers it with `error`; the turn's
 /// recorded stop reason.
-async fn stopped_prompt_ending(error: Value) -> String {
-    let (state, sink) = activity_fixture("claude-code");
+async fn stopped_prompt_ending(provider: &'static str, error: Value) -> String {
+    let (state, sink) = activity_fixture(provider);
     let (client_io, peer_io) = tokio::io::duplex(64 * 1024);
     let (client_read, client_write) = tokio::io::split(client_io);
     let (command_tx, mut command_rx) = mpsc::unbounded_channel();
@@ -2238,7 +2238,7 @@ async fn stopped_prompt_ending(error: Value) -> String {
                 None.into(),
                 PathBuf::from(CWD),
                 &mut command_rx,
-                "claude-code",
+                provider,
                 &startup,
             )
             .await
@@ -2313,24 +2313,33 @@ async fn stopped_prompt_ending(error: Value) -> String {
 async fn a_stop_racing_a_governed_refusal_keeps_the_refusal() {
     // A Stop while the Antigravity proxy settled a refusal ended the turn as
     // `Cancelled`, so the Controller never parked the refused account.
-    let ending = stopped_prompt_ending(json!({
+    let refusal = json!({
         "code": -32603,
         "message": "antigravity_backend_refusal:verification_required",
         "data": {
             "message": "Google asks to verify this Antigravity account.",
             "cowboy": {"antigravity_backend": {"class": "verification_required"}},
         },
-    }))
-    .await;
+    });
+    let ending = stopped_prompt_ending("antigravity", refusal.clone()).await;
     assert!(
         ending.starts_with("error: antigravity_backend_refusal:verification_required"),
         "{ending}"
     );
-    let ending = stopped_prompt_ending(json!({
-        "code": -32603,
-        "message": "antigravity_policy_violation:search_web",
-        "data": {"cowboy": {"policy_violation": "search_web"}},
-    }))
+    // The Controller governs only named-only Providers: the same reply from
+    // any other adapter is still the Stop.
+    assert_eq!(
+        stopped_prompt_ending("claude-code", refusal).await,
+        "Cancelled"
+    );
+    let ending = stopped_prompt_ending(
+        "antigravity",
+        json!({
+            "code": -32603,
+            "message": "antigravity_policy_violation:search_web",
+            "data": {"cowboy": {"policy_violation": "search_web"}},
+        }),
+    )
     .await;
     assert!(
         ending.starts_with("error: antigravity_policy_violation:search_web"),
@@ -2355,6 +2364,9 @@ async fn a_stop_racing_a_governed_refusal_keeps_the_refusal() {
             "data": {"cowboy": {"antigravity_backend": {"class": "ok"}}},
         }),
     ] {
-        assert_eq!(stopped_prompt_ending(error).await, "Cancelled");
+        assert_eq!(
+            stopped_prompt_ending("antigravity", error).await,
+            "Cancelled"
+        );
     }
 }
