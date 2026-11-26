@@ -29,6 +29,12 @@ impl Hub {
             let session = sessions
                 .get_mut(session_id)
                 .ok_or("session no longer exists")?;
+            if session.lineage_pins > 0 {
+                return Err(
+                    "A fork or handoff is capturing this session's history; retry Clear in a moment"
+                        .into(),
+                );
+            }
             session.clear_pending = true;
             // Decided with the latch: owner prompts wait from here on.
             let turn_lost = Self::owner_turn_lost_of(session_id, session);

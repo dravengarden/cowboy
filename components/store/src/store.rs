@@ -58,7 +58,8 @@ pub mod provider_accounts;
 pub mod session_lineage;
 mod session_metadata;
 pub use session_lineage::{
-    ArchivedLineageSegment, DuplicateReceipt, LineageEdge, LineageHistoryPage, TurnCompletion,
+    ArchivedLineageSegment, ChildDisplayLineage, DuplicateReceipt, LineageEdge,
+    LineageHistoryOutcome, LineageHistoryPage, ReserveOutcome, TurnCompletion,
 };
 pub mod session_widgets;
 pub mod subagent_events;
@@ -6007,17 +6008,22 @@ impl PostgresStorage {
         }
         let created_at_ms = chrono::Utc::now().timestamp_millis();
         for anchor in anchors {
-            sqlx::query(
+            let sql = if anchor.rebase {
                 "INSERT INTO transcript_anchors(session_id, anchor_key, seq, created_at_ms) \
-                 VALUES ($1, $2, $3, $4) ON CONFLICT(session_id, anchor_key) DO NOTHING",
-            )
-            .bind(&anchor.session_id)
-            .bind(&anchor.key)
-            .bind(i64::try_from(anchor.seq).context("anchor seq i64 overflow")?)
-            .bind(created_at_ms)
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("INSERT anchor {}/{}", anchor.session_id, anchor.key))?;
+                 VALUES ($1, $2, $3, $4) ON CONFLICT(session_id, anchor_key) DO UPDATE SET \
+                 seq = GREATEST(transcript_anchors.seq, EXCLUDED.seq), created_at_ms = EXCLUDED.created_at_ms"
+            } else {
+                "INSERT INTO transcript_anchors(session_id, anchor_key, seq, created_at_ms) \
+                 VALUES ($1, $2, $3, $4) ON CONFLICT(session_id, anchor_key) DO NOTHING"
+            };
+            sqlx::query(sql)
+                .bind(&anchor.session_id)
+                .bind(&anchor.key)
+                .bind(i64::try_from(anchor.seq).context("anchor seq i64 overflow")?)
+                .bind(created_at_ms)
+                .execute(&mut *tx)
+                .await
+                .with_context(|| format!("INSERT anchor {}/{}", anchor.session_id, anchor.key))?;
         }
         for occurrence in occurrences {
             sqlx::query(task_notifications::INSERT_INTENT)
@@ -6276,11 +6282,14 @@ impl PostgresStorage {
     /// # Errors
     /// If the UPDATE fails.
     pub async fn delete_session(&self, session_id: &str) -> Result<()> {
+        let mut tx = self.pool.begin().await?;
+        session_lineage::seal_lineage_on_delete_pg(&mut tx, session_id).await?;
         sqlx::query("UPDATE sessions SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL")
             .bind(session_id)
-            .execute(&self.pool)
+            .execute(&mut *tx)
             .await
             .with_context(|| format!("soft-delete session {session_id}"))?;
+        tx.commit().await?;
         Ok(())
     }
 

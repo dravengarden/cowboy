@@ -337,17 +337,26 @@ fn lineage_root(hub: &crate::core::Hub, session: &SessionMeta) -> Option<String>
     let mut current = session.id.clone();
     let mut visited = std::collections::HashSet::with_capacity(8);
     visited.insert(current.clone());
-    // Walk durable auth_parent edges (independent of Clear display detachment
-    // and archived/purged intermediates). Cycles or depth > 256 return None so
-    // callers fail closed (`same_lineage` treats unknown roots as related).
+    // Walk durable auth_parent edges with explicit root tracking: an unknown
+    // purged pre-migration intermediate returns None so `same_lineage` fails
+    // closed instead of mistaking a missing edge for a known root.
     for _ in 0..256 {
-        let Some(parent) = hub.auth_parent(&current) else {
-            return Some(current);
-        };
-        if !visited.insert(parent.clone()) {
-            return None;
+        match hub.auth_parent_status(&current) {
+            crate::core::AuthParentStatus::KnownRoot => return Some(current),
+            crate::core::AuthParentStatus::Unknown => return None,
+            crate::core::AuthParentStatus::Parent {
+                parent_id,
+                parent_is_root,
+            } => {
+                if !visited.insert(parent_id.clone()) {
+                    return None;
+                }
+                if parent_is_root {
+                    return Some(parent_id);
+                }
+                current = parent_id;
+            }
         }
-        current = parent;
     }
     None
 }

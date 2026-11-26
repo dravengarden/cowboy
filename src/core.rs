@@ -35,6 +35,7 @@ mod session_continuation;
 mod session_fork;
 mod session_lineage;
 pub use session_fork::{FORK_ORIGIN_UPDATE, ForkPoint, ForkRecord, ForkState};
+pub use session_lineage::{AuthParentEntry, AuthParentStatus, LineageCaptureGuard};
 mod hub_config;
 mod hub_dispatch_origin;
 mod hub_wrap_up;
@@ -610,6 +611,8 @@ struct Session {
     runtime_epochs: runtime_epoch_fence::EpochFence,
     /// A user Clear is committing: queued prompts wait and Steer is refused.
     clear_pending: bool,
+    /// Active fork/handoff captures pinning this session against concurrent Clear.
+    lineage_pins: usize,
     /// Hot event tail when persistence is enabled; the full log in memory-only
     /// development mode.
     log: Vec<Envelope>,
@@ -1303,6 +1306,7 @@ pub enum StoreWrite {
     FreezeLineagePrefix {
         session_id: String,
         before_seq: u64,
+        ack_id: Option<u64>,
     },
     RecordTurnCompletion(crate::store::TurnCompletion),
     /// Persist a session's queue + drafts (whole lists, as JSONB) so staged
@@ -1514,7 +1518,7 @@ struct HubInner {
     mcp_launch: Mutex<Option<std::sync::Arc<mcp_launch::Resolver>>>,
     sessions: Mutex<HashMap<String, Session>>,
     context_edits: Mutex<HashSet<String>>,
-    auth_parents: Mutex<HashMap<String, String>>,
+    auth_parents: Mutex<HashMap<String, AuthParentEntry>>,
     /// Internal auth/admin state restored from the durable settings table.
     settings: Mutex<HashMap<String, serde_json::Value>>,
     product_permissions: Mutex<product_permissions::Observations>,
@@ -2311,6 +2315,7 @@ impl Hub {
                         machine_lineage: None,
                         runtime_epochs: Default::default(),
                         clear_pending: false,
+                        lineage_pins: 0,
                         log,
                         log_bytes,
                         event_count,
@@ -2383,13 +2388,18 @@ impl Hub {
         for id in pending_dirty {
             self.emit_pending(&id);
         }
-        for (session_id, preferences) in config_preferences_dirty {
-            if let Some(tx) = self.inner.store_tx.as_ref() {
-                let _ = tx.send(StoreWrite::UpdateConfigPreferences {
-                    session_id,
-                    preferences,
-                });
-            }
+        self.persist_restored_config_preferences(config_preferences_dirty);
+    }
+
+    fn persist_restored_config_preferences(&self, dirty: Vec<(String, serde_json::Value)>) {
+        let Some(tx) = self.inner.store_tx.as_ref() else {
+            return;
+        };
+        for (session_id, preferences) in dirty {
+            let _ = tx.send(StoreWrite::UpdateConfigPreferences {
+                session_id,
+                preferences,
+            });
         }
     }
 
@@ -3054,6 +3064,7 @@ impl Hub {
                     machine_lineage: None,
                     runtime_epochs: Default::default(),
                     clear_pending: false,
+                    lineage_pins: 0,
                     log: Vec::new(),
                     log_bytes: 0,
                     event_count: 0,

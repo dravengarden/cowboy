@@ -7,15 +7,18 @@ use futures::TryStreamExt as _;
 use sqlx::{Row as _, Sqlite, Transaction};
 
 use super::{
-    ArchivedLineageSegment, LineageEdge, LineageHistoryPage, decode_lineage_events,
-    empty_sealed_page, next_segment_id, to_i64_seq,
+    ArchivedLineageSegment, ChildDisplayLineage, LineageEdge, LineageHistoryOutcome,
+    LineageHistoryPage, MAX_MATERIALIZED_HOPS, decode_lineage_events, empty_sealed_page,
+    next_segment_id, to_i64_seq,
 };
 use crate::store::sqlite::SqliteStorage;
 
 #[derive(sqlx::FromRow)]
 struct SqliteEdgeRow {
     child_session_id: String,
+    hop_order: i32,
     parent_session_id: String,
+    parent_is_root: bool,
     owner_user_id: String,
     kind: String,
     before_seq: i64,
@@ -31,7 +34,9 @@ impl From<SqliteEdgeRow> for LineageEdge {
     fn from(row: SqliteEdgeRow) -> Self {
         Self {
             child_session_id: row.child_session_id,
+            hop_order: u32::try_from(row.hop_order).unwrap_or(1),
             parent_session_id: row.parent_session_id,
+            parent_is_root: row.parent_is_root,
             owner_user_id: row.owner_user_id,
             kind: row.kind,
             before_seq: u64::try_from(row.before_seq).unwrap_or(0),
@@ -73,8 +78,9 @@ impl From<SqliteSegmentRow> for ArchivedLineageSegment {
 }
 
 const EDGE_SELECT: &str = "\
-SELECT child_session_id, parent_session_id, owner_user_id, kind, before_seq, \
-       source_title, source_provider, segment_id, display_detached, edge_version, created_at_ms \
+SELECT child_session_id, hop_order, parent_session_id, parent_is_root, owner_user_id, \
+       kind, before_seq, source_title, source_provider, segment_id, display_detached, \
+       edge_version, created_at_ms \
 FROM session_lineage_edges";
 
 fn decode_json_rows(raw: Vec<(i64, String)>) -> Vec<(i64, serde_json::Value)> {
@@ -93,14 +99,17 @@ fn decode_json_rows(raw: Vec<(i64, String)>) -> Vec<(i64, serde_json::Value)> {
 
 impl SqliteStorage {
     pub(super) async fn upsert_lineage_edge(&self, edge: &LineageEdge) -> Result<()> {
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        let hop_order = i32::try_from(edge.hop_order.max(1)).unwrap_or(1);
         sqlx::query(
             "INSERT INTO session_lineage_edges ( \
-               child_session_id, parent_session_id, owner_user_id, kind, before_seq, \
-               source_title, source_provider, segment_id, display_detached, edge_version, \
-               created_at_ms \
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11) \
-             ON CONFLICT (child_session_id) DO UPDATE SET \
+               child_session_id, hop_order, parent_session_id, parent_is_root, owner_user_id, \
+               kind, before_seq, source_title, source_provider, segment_id, display_detached, \
+               edge_version, created_at_ms \
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
+             ON CONFLICT (child_session_id, hop_order) DO UPDATE SET \
                parent_session_id = excluded.parent_session_id, \
+               parent_is_root = excluded.parent_is_root, \
                owner_user_id = excluded.owner_user_id, \
                kind = excluded.kind, \
                before_seq = excluded.before_seq, \
@@ -111,7 +120,9 @@ impl SqliteStorage {
                edge_version = session_lineage_edges.edge_version + 1",
         )
         .bind(&edge.child_session_id)
+        .bind(hop_order)
         .bind(&edge.parent_session_id)
+        .bind(edge.parent_is_root)
         .bind(&edge.owner_user_id)
         .bind(&edge.kind)
         .bind(to_i64_seq(edge.before_seq)?)
@@ -121,9 +132,62 @@ impl SqliteStorage {
         .bind(edge.display_detached)
         .bind(to_i64_seq(edge.edge_version.max(1))?)
         .bind(edge.created_at_ms)
-        .execute(&self.pool)
+        .execute(&mut *tx)
         .await
         .with_context(|| format!("UPSERT SQLite lineage edge for {}", edge.child_session_id))?;
+
+        if hop_order == 1 {
+            sqlx::query(
+                "DELETE FROM session_lineage_edges WHERE child_session_id = ?1 AND hop_order > 1",
+            )
+            .bind(&edge.child_session_id)
+            .execute(&mut *tx)
+            .await
+            .context("clear prior SQLite materialized lineage hops")?;
+
+            if !edge.display_detached {
+                let parent_hops: Vec<SqliteEdgeRow> = sqlx::query_as(&format!(
+                    "{EDGE_SELECT} WHERE child_session_id = ?1 AND NOT display_detached \
+                     ORDER BY hop_order ASC LIMIT ?2"
+                ))
+                .bind(&edge.parent_session_id)
+                .bind(i64::from(MAX_MATERIALIZED_HOPS.saturating_sub(1)))
+                .fetch_all(&mut *tx)
+                .await
+                .context("read SQLite parent display hops for materialization")?;
+                let mut seen = HashSet::from([
+                    edge.child_session_id.clone(),
+                    edge.parent_session_id.clone(),
+                ]);
+                for (next_hop, inherited) in (2_i32..).zip(parent_hops) {
+                    if !seen.insert(inherited.parent_session_id.clone()) {
+                        break;
+                    }
+                    sqlx::query(
+                        "INSERT INTO session_lineage_edges ( \
+                           child_session_id, hop_order, parent_session_id, parent_is_root, \
+                           owner_user_id, kind, before_seq, source_title, source_provider, \
+                           segment_id, display_detached, edge_version, created_at_ms \
+                         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 0, 1, ?11)",
+                    )
+                    .bind(&edge.child_session_id)
+                    .bind(next_hop)
+                    .bind(&inherited.parent_session_id)
+                    .bind(inherited.parent_is_root)
+                    .bind(&edge.owner_user_id)
+                    .bind(&inherited.kind)
+                    .bind(inherited.before_seq)
+                    .bind(&inherited.source_title)
+                    .bind(&inherited.source_provider)
+                    .bind(inherited.segment_id.as_deref())
+                    .bind(inherited.created_at_ms)
+                    .execute(&mut *tx)
+                    .await
+                    .context("materialize SQLite inherited lineage hop")?;
+                }
+            }
+        }
+        tx.commit().await?;
         Ok(())
     }
 
@@ -138,7 +202,7 @@ impl SqliteStorage {
 
     pub(super) async fn lineage_edge(&self, child_session_id: &str) -> Result<Option<LineageEdge>> {
         let row = sqlx::query_as::<_, SqliteEdgeRow>(&format!(
-            "{EDGE_SELECT} WHERE child_session_id = ?1"
+            "{EDGE_SELECT} WHERE child_session_id = ?1 AND hop_order = 1"
         ))
         .bind(child_session_id)
         .fetch_optional(&self.pool)
@@ -147,11 +211,36 @@ impl SqliteStorage {
         Ok(row.map(LineageEdge::from))
     }
 
+    pub(super) async fn child_display_lineage(
+        &self,
+        child_session_id: &str,
+    ) -> Result<ChildDisplayLineage> {
+        let rows = sqlx::query_as::<_, SqliteEdgeRow>(&format!(
+            "{EDGE_SELECT} WHERE child_session_id = ?1 ORDER BY hop_order ASC"
+        ))
+        .bind(child_session_id)
+        .fetch_all(&self.pool)
+        .await
+        .with_context(|| format!("SELECT SQLite child display lineage for {child_session_id}"))?;
+        let has_durable_edge = !rows.is_empty();
+        let hops = rows
+            .into_iter()
+            .map(LineageEdge::from)
+            .filter(|edge| !edge.display_detached)
+            .collect();
+        Ok(ChildDisplayLineage {
+            has_durable_edge,
+            hops,
+        })
+    }
+
     pub(super) async fn load_all_lineage_edges(&self) -> Result<Vec<LineageEdge>> {
-        let rows = sqlx::query_as::<_, SqliteEdgeRow>(EDGE_SELECT)
-            .fetch_all(&self.pool)
-            .await
-            .context("SELECT all SQLite lineage edges")?;
+        let rows = sqlx::query_as::<_, SqliteEdgeRow>(&format!(
+            "{EDGE_SELECT} ORDER BY child_session_id, hop_order ASC"
+        ))
+        .fetch_all(&self.pool)
+        .await
+        .context("SELECT all SQLite lineage edges")?;
         Ok(rows.into_iter().map(LineageEdge::from).collect())
     }
 
@@ -160,7 +249,7 @@ impl SqliteStorage {
         parent_session_id: &str,
     ) -> Result<Vec<LineageEdge>> {
         let rows = sqlx::query_as::<_, SqliteEdgeRow>(&format!(
-            "{EDGE_SELECT} WHERE parent_session_id = ?1 ORDER BY created_at_ms DESC"
+            "{EDGE_SELECT} WHERE parent_session_id = ?1 AND hop_order = 1 ORDER BY created_at_ms DESC"
         ))
         .bind(parent_session_id)
         .fetch_all(&self.pool)
@@ -185,80 +274,93 @@ impl SqliteStorage {
         Ok(row.map(ArchivedLineageSegment::from))
     }
 
+    pub(super) async fn session_has_live_events_before(
+        &self,
+        session_id: &str,
+        before_seq: u64,
+    ) -> Result<bool> {
+        if before_seq == 0 {
+            return Ok(false);
+        }
+        let exists: i64 = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM events WHERE session_id = ?1 AND seq < ?2)",
+        )
+        .bind(session_id)
+        .bind(to_i64_seq(before_seq)?)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("check SQLite live events for {session_id}"))?;
+        Ok(exists != 0)
+    }
+
     pub(super) async fn lineage_history_page(
         &self,
         edge: &LineageEdge,
         before_seq: u64,
         page_size: usize,
     ) -> Result<LineageHistoryPage> {
-        let effective_before = before_seq.min(edge.before_seq);
-        if effective_before == 0 {
-            return Ok(empty_sealed_page(edge.segment_id.clone()));
-        }
-        let before_i64 = to_i64_seq(effective_before)?;
-        let limit = i64::try_from(page_size).context("lineage page size overflow")?;
-        if let Some(segment_id) = edge.segment_id.as_deref() {
-            return self
-                .archived_history_page(segment_id, &edge.parent_session_id, before_i64, limit)
-                .await;
-        }
-        let raw: Vec<(i64, String)> = sqlx::query_as(
-            "SELECT seq, payload FROM events \
-             WHERE session_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
-        )
-        .bind(&edge.parent_session_id)
-        .bind(before_i64)
-        .bind(limit)
-        .fetch_all(&self.pool)
-        .await
-        .with_context(|| {
-            format!(
-                "SELECT SQLite live lineage page for {}",
-                edge.parent_session_id
-            )
-        })?;
-        let events = decode_lineage_events(&edge.parent_session_id, decode_json_rows(raw));
-        let oldest = events.first().map(|event| event.seq);
-        let reached_start = match oldest {
-            Some(seq) => {
-                let exists: i64 = sqlx::query_scalar(
-                    "SELECT EXISTS(SELECT 1 FROM events WHERE session_id = ?1 AND seq < ?2)",
-                )
-                .bind(&edge.parent_session_id)
-                .bind(to_i64_seq(seq)?)
-                .fetch_one(&self.pool)
-                .await
-                .context("SELECT SQLite live lineage start")?;
-                exists == 0
-            }
-            None => true,
-        };
-        let session_next_seq: Option<i64> =
-            sqlx::query_scalar("SELECT next_seq FROM sessions WHERE id = ?1")
-                .bind(&edge.parent_session_id)
-                .fetch_optional(&self.pool)
-                .await
-                .context("SELECT SQLite parent next_seq for lineage seal")?;
-        let is_sealed = session_next_seq
-            .and_then(|value| u64::try_from(value).ok())
-            .is_some_and(|next_seq| next_seq >= edge.before_seq);
-        let next_before_seq = (!reached_start).then_some(oldest.unwrap_or(effective_before));
-        Ok(LineageHistoryPage {
-            events,
-            next_before_seq,
-            reached_start,
-            is_sealed,
-            segment_id: None,
-        })
+        let mut tx = self.pool.begin().await?;
+        let page = read_history_page_in_tx(&mut tx, edge, before_seq, page_size).await?;
+        tx.commit().await?;
+        Ok(page)
     }
 
-    async fn archived_history_page(
+    pub(super) async fn lineage_history_page_checked(
         &self,
-        segment_id: &str,
-        source_session_id: &str,
-        before_i64: i64,
-        limit: i64,
-    ) -> Result<LineageHistoryPage> {
+        child_session_id: &str,
+        hop_parent_id: &str,
+        owner_user_id: Option<&str>,
+        expected_edge_version: Option<u64>,
+        before_seq: u64,
+        page_size: usize,
+    ) -> Result<LineageHistoryOutcome> {
+        let mut tx = self.pool.begin().await?;
+        let row = sqlx::query_as::<_, SqliteEdgeRow>(&format!(
+            "{EDGE_SELECT} WHERE child_session_id = ?1 AND parent_session_id = ?2 \
+             AND NOT display_detached ORDER BY hop_order ASC LIMIT 1"
+        ))
+        .bind(child_session_id)
+        .bind(hop_parent_id)
+        .fetch_optional(&mut *tx)
+        .await
+        .context("SELECT SQLite snapshot lineage edge")?;
+        let Some(edge) = row.map(LineageEdge::from) else {
+            return Ok(LineageHistoryOutcome::NotFound);
+        };
+        if let Some(owner) = owner_user_id
+            && edge.owner_user_id != owner
+        {
+            return Ok(LineageHistoryOutcome::NotFound);
+        }
+        if let Some(expected) = expected_edge_version
+            && expected != edge.edge_version
+        {
+            return Ok(LineageHistoryOutcome::VersionConflict {
+                current_version: edge.edge_version,
+            });
+        }
+        let page = read_history_page_in_tx(&mut tx, &edge, before_seq, page_size).await?;
+        tx.commit().await?;
+        Ok(LineageHistoryOutcome::Page(page))
+    }
+}
+
+async fn read_history_page_in_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    edge: &LineageEdge,
+    before_seq: u64,
+    page_size: usize,
+) -> Result<LineageHistoryPage> {
+    let effective_before = before_seq.min(edge.before_seq);
+    if effective_before == 0 {
+        return Ok(empty_sealed_page(
+            edge.segment_id.clone(),
+            edge.edge_version,
+        ));
+    }
+    let before_i64 = to_i64_seq(effective_before)?;
+    let limit = i64::try_from(page_size).context("lineage page size overflow")?;
+    if let Some(segment_id) = edge.segment_id.as_deref() {
         let raw: Vec<(i64, String)> = sqlx::query_as(
             "SELECT seq, payload FROM archived_lineage_events \
              WHERE segment_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
@@ -266,10 +368,10 @@ impl SqliteStorage {
         .bind(segment_id)
         .bind(before_i64)
         .bind(limit)
-        .fetch_all(&self.pool)
+        .fetch_all(&mut **tx)
         .await
         .with_context(|| format!("SELECT SQLite archived lineage page for {segment_id}"))?;
-        let events = decode_lineage_events(source_session_id, decode_json_rows(raw));
+        let events = decode_lineage_events(&edge.parent_session_id, decode_json_rows(raw));
         let oldest = events.first().map(|event| event.seq);
         let reached_start = match oldest {
             Some(seq) => {
@@ -279,7 +381,7 @@ impl SqliteStorage {
                 )
                 .bind(segment_id)
                 .bind(to_i64_seq(seq)?)
-                .fetch_one(&self.pool)
+                .fetch_one(&mut **tx)
                 .await
                 .context("SELECT SQLite archived lineage start")?;
                 exists == 0
@@ -287,14 +389,64 @@ impl SqliteStorage {
             None => true,
         };
         let next_before_seq = (!reached_start).then_some(oldest.unwrap_or(0));
-        Ok(LineageHistoryPage {
+        return Ok(LineageHistoryPage {
             events,
             next_before_seq,
             reached_start,
             is_sealed: true,
             segment_id: Some(segment_id.to_owned()),
-        })
+            edge_version: edge.edge_version,
+        });
     }
+    let raw: Vec<(i64, String)> = sqlx::query_as(
+        "SELECT seq, payload FROM events \
+         WHERE session_id = ?1 AND seq < ?2 ORDER BY seq DESC LIMIT ?3",
+    )
+    .bind(&edge.parent_session_id)
+    .bind(before_i64)
+    .bind(limit)
+    .fetch_all(&mut **tx)
+    .await
+    .with_context(|| {
+        format!(
+            "SELECT SQLite live lineage page for {}",
+            edge.parent_session_id
+        )
+    })?;
+    let events = decode_lineage_events(&edge.parent_session_id, decode_json_rows(raw));
+    let oldest = events.first().map(|event| event.seq);
+    let reached_start = match oldest {
+        Some(seq) => {
+            let exists: i64 = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM events WHERE session_id = ?1 AND seq < ?2)",
+            )
+            .bind(&edge.parent_session_id)
+            .bind(to_i64_seq(seq)?)
+            .fetch_one(&mut **tx)
+            .await
+            .context("SELECT SQLite live lineage start")?;
+            exists == 0
+        }
+        None => true,
+    };
+    let session_next_seq: Option<i64> =
+        sqlx::query_scalar("SELECT next_seq FROM sessions WHERE id = ?1")
+            .bind(&edge.parent_session_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .context("SELECT SQLite parent next_seq for lineage seal")?;
+    let is_sealed = session_next_seq
+        .and_then(|value| u64::try_from(value).ok())
+        .is_some_and(|next_seq| next_seq >= edge.before_seq);
+    let next_before_seq = (!reached_start).then_some(oldest.unwrap_or(effective_before));
+    Ok(LineageHistoryPage {
+        events,
+        next_before_seq,
+        reached_start,
+        is_sealed,
+        segment_id: None,
+        edge_version: edge.edge_version,
+    })
 }
 
 /// See `seal_lineage_on_clear_pg`.
@@ -303,10 +455,17 @@ pub(in crate::store) async fn seal_lineage_on_clear_sqlite(
     session_id: &str,
     now_ms: i64,
 ) -> Result<()> {
+    sqlx::query("DELETE FROM session_lineage_edges WHERE child_session_id = ?1 AND hop_order > 1")
+        .bind(session_id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("drop SQLite deeper display hops on clear for {session_id}"))?;
+
     sqlx::query(
         "UPDATE session_lineage_edges \
-         SET display_detached = TRUE, segment_id = NULL, edge_version = edge_version + 1 \
-         WHERE child_session_id = ?1 AND (NOT display_detached OR segment_id IS NOT NULL)",
+         SET display_detached = 1, segment_id = NULL, edge_version = edge_version + 1 \
+         WHERE child_session_id = ?1 AND hop_order = 1 \
+           AND (NOT display_detached OR segment_id IS NOT NULL)",
     )
     .bind(session_id)
     .execute(&mut **tx)
@@ -327,10 +486,40 @@ pub(in crate::store) async fn seal_lineage_on_clear_sqlite(
     .fetch_one(&mut **tx)
     .await
     .with_context(|| format!("check SQLite child lineage prefixes for {session_id}"))?;
-    let Some(max_before) = max_before else {
-        return Ok(());
-    };
-    seal_session_prefix_sqlite(tx, session_id, max_before, "clear", now_ms).await
+    if let Some(max_before) = max_before {
+        seal_session_prefix_sqlite(tx, session_id, max_before, "clear", now_ms).await?;
+    }
+    gc_unreferenced_segments_sqlite(tx).await
+}
+
+/// See `seal_lineage_on_delete_pg`.
+pub(in crate::store) async fn seal_lineage_on_delete_sqlite(
+    tx: &mut Transaction<'_, Sqlite>,
+    session_id: &str,
+    now_ms: i64,
+) -> Result<()> {
+    sqlx::query(
+        "UPDATE session_duplicate_receipts SET state = 'deleted', updated_at_ms = ?2 \
+         WHERE destination_session_id = ?1 AND state <> 'deleted'",
+    )
+    .bind(session_id)
+    .bind(now_ms)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| format!("mark SQLite deleted duplicate receipt for {session_id}"))?;
+
+    let max_before: Option<i64> = sqlx::query_scalar(
+        "SELECT MAX(before_seq) FROM session_lineage_edges \
+         WHERE parent_session_id = ?1 AND segment_id IS NULL AND NOT display_detached",
+    )
+    .bind(session_id)
+    .fetch_one(&mut **tx)
+    .await
+    .with_context(|| format!("check SQLite child lineage prefixes on delete for {session_id}"))?;
+    if let Some(max_before) = max_before {
+        seal_session_prefix_sqlite(tx, session_id, max_before, "delete", now_ms).await?;
+    }
+    Ok(())
 }
 
 async fn seal_session_prefix_sqlite(
@@ -384,24 +573,40 @@ async fn seal_session_prefix_sqlite(
     sqlx::query(
         "UPDATE session_lineage_edges \
          SET segment_id = ?1, edge_version = edge_version + 1 \
-         WHERE parent_session_id = ?2 AND segment_id IS NULL AND NOT display_detached",
+         WHERE parent_session_id = ?2 AND segment_id IS NULL AND NOT display_detached \
+           AND before_seq <= ?3",
     )
     .bind(&segment_id)
     .bind(session_id)
+    .bind(max_before)
     .execute(&mut **tx)
     .await
-    .with_context(|| format!("bind SQLite archived segment {segment_id} onto edges"))?;
+    .with_context(|| format!("attach SQLite archived segment {segment_id}"))?;
     Ok(())
 }
 
-/// See `purge_deleted_pg`.
+async fn gc_unreferenced_segments_sqlite(tx: &mut Transaction<'_, Sqlite>) -> Result<()> {
+    sqlx::query(
+        "DELETE FROM archived_lineage_segments \
+         WHERE segment_id NOT IN ( \
+           SELECT segment_id FROM session_lineage_edges WHERE segment_id IS NOT NULL \
+         )",
+    )
+    .execute(&mut **tx)
+    .await
+    .context("GC unreferenced SQLite archived lineage segments")?;
+    Ok(())
+}
+
+/// See `purge_deleted_pg`. Uses `BEGIN IMMEDIATE` so WAL write upgrades never
+/// fail with `SQLITE_BUSY_SNAPSHOT` under ordinary concurrent writes.
 pub(in crate::store) async fn purge_deleted_sqlite(
     storage: &SqliteStorage,
     retention_days: i64,
 ) -> Result<u64> {
-    let retention_ms = retention_days.saturating_mul(86_400_000);
     let now_ms = Utc::now().timestamp_millis();
-    let mut tx = storage.pool.begin().await?;
+    let retention_ms = retention_days.saturating_mul(86_400_000);
+    let mut tx = storage.pool.begin_with("BEGIN IMMEDIATE").await?;
     let purging: Vec<String> = sqlx::query_scalar(
         "SELECT id FROM sessions WHERE deleted_at_ms IS NOT NULL \
          AND COALESCE(purge_after_at_ms, deleted_at_ms + ?1) <= ?2 \
@@ -423,27 +628,21 @@ pub(in crate::store) async fn purge_deleted_sqlite(
         Vec::new()
     } else {
         sqlx::query_as(
-            "WITH RECURSIVE \
-               purging(id) AS (SELECT value FROM json_each(?1)), \
-               display_reachable(id) AS ( \
-                 SELECT id FROM sessions WHERE id NOT IN (SELECT id FROM purging) \
-                 UNION \
-                 SELECT e.parent_session_id FROM session_lineage_edges AS e \
-                 JOIN display_reachable AS r ON e.child_session_id = r.id \
-                 WHERE NOT e.display_detached \
-               ) \
+            "WITH purging(id) AS (SELECT value FROM json_each(?1)) \
              SELECT e.parent_session_id, MAX(e.before_seq) \
              FROM session_lineage_edges AS e \
              WHERE e.parent_session_id IN (SELECT id FROM purging) \
                AND e.segment_id IS NULL \
                AND NOT e.display_detached \
-               AND e.child_session_id IN (SELECT id FROM display_reachable) \
+               AND e.child_session_id IN ( \
+                 SELECT id FROM sessions WHERE id NOT IN (SELECT id FROM purging) \
+               ) \
              GROUP BY e.parent_session_id",
         )
         .bind(&purging_json)
         .fetch_all(&mut *tx)
         .await
-        .context("compute reachable SQLite lineage ancestors before purge")?
+        .context("compute SQLite display-reachable lineage ancestors before purge")?
     };
 
     for (session_id, max_before) in to_archive {
@@ -453,13 +652,62 @@ pub(in crate::store) async fn purge_deleted_sqlite(
     let purged_count = if purging.is_empty() {
         0
     } else {
-        sqlx::query("DELETE FROM sessions WHERE id IN (SELECT value FROM json_each(?1))")
-            .bind(&purging_json)
-            .execute(&mut *tx)
-            .await
-            .context("purge soft-deleted SQLite sessions")?
-            .rows_affected()
+        let done = sqlx::query(
+            "DELETE FROM sessions WHERE id IN (SELECT value FROM json_each(?1)) \
+             AND deleted_at_ms IS NOT NULL \
+             AND COALESCE(purge_after_at_ms, deleted_at_ms + ?2) <= ?3 \
+             AND NOT EXISTS (SELECT 1 FROM managed_agent_calls AS call \
+                 WHERE (call.parent_session_id = sessions.id OR call.child_session_id = sessions.id) \
+                 AND call.state NOT IN ('completed', 'failed', 'cancelled')) \
+             AND NOT EXISTS (SELECT 1 FROM plugin_uninstall_operations AS operation \
+                 WHERE operation.machine_id = sessions.machine_id AND operation.plugin_id = sessions.provider \
+                 AND operation.phase NOT IN ('completed', 'compensated', 'aborted'))",
+        )
+        .bind(&purging_json)
+        .bind(retention_ms)
+        .bind(now_ms)
+        .execute(&mut *tx)
+        .await
+        .context("purge soft-deleted SQLite sessions")?;
+        sqlx::query(
+            "UPDATE session_duplicate_receipts SET state = 'deleted', updated_at_ms = ?2 \
+             WHERE destination_session_id IN (SELECT value FROM json_each(?1)) \
+               AND destination_session_id NOT IN (SELECT id FROM sessions) \
+               AND state <> 'deleted'",
+        )
+        .bind(&purging_json)
+        .bind(now_ms)
+        .execute(&mut *tx)
+        .await
+        .context("mark SQLite purged duplicate receipts deleted")?;
+        done.rows_affected()
     };
+
+    gc_lineage_edges_sqlite(&mut tx).await?;
+    tx.commit().await?;
+    prune_sqlite_artifacts(storage).await?;
+    Ok(purged_count)
+}
+
+async fn gc_lineage_edges_sqlite(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Result<()> {
+    sqlx::query(
+        "UPDATE session_lineage_edges \
+         SET segment_id = NULL, edge_version = edge_version + 1 \
+         WHERE segment_id IS NOT NULL \
+           AND (display_detached OR child_session_id NOT IN (SELECT id FROM sessions))",
+    )
+    .execute(&mut **tx)
+    .await
+    .context("detach SQLite segments from non-display-reachable edges")?;
+
+    sqlx::query(
+        "DELETE FROM session_lineage_edges \
+         WHERE hop_order > 1 \
+           AND (display_detached OR child_session_id NOT IN (SELECT id FROM sessions))",
+    )
+    .execute(&mut **tx)
+    .await
+    .context("GC unreachable SQLite deeper lineage display edges")?;
 
     sqlx::query(
         "WITH RECURSIVE auth_reachable(id) AS ( \
@@ -467,27 +715,17 @@ pub(in crate::store) async fn purge_deleted_sqlite(
            UNION \
            SELECT e.parent_session_id FROM session_lineage_edges AS e \
            JOIN auth_reachable AS r ON e.child_session_id = r.id \
+           WHERE e.hop_order = 1 \
          ) \
          DELETE FROM session_lineage_edges \
-         WHERE child_session_id NOT IN (SELECT id FROM auth_reachable)",
+         WHERE hop_order = 1 AND child_session_id NOT IN (SELECT id FROM auth_reachable)",
     )
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await
-    .context("GC unreachable SQLite lineage edges")?;
+    .context("GC unreachable SQLite auth lineage edges")?;
 
-    sqlx::query(
-        "DELETE FROM archived_lineage_segments \
-         WHERE segment_id NOT IN ( \
-           SELECT segment_id FROM session_lineage_edges WHERE segment_id IS NOT NULL \
-         )",
-    )
-    .execute(&mut *tx)
-    .await
-    .context("GC unreferenced SQLite archived lineage segments")?;
-
-    tx.commit().await?;
-    prune_sqlite_artifacts(storage).await?;
-    Ok(purged_count)
+    gc_unreferenced_segments_sqlite(tx).await?;
+    Ok(())
 }
 
 async fn prune_sqlite_artifacts(storage: &SqliteStorage) -> Result<()> {

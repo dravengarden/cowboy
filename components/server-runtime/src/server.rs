@@ -295,10 +295,22 @@ pub async fn flush_event_batch(
     if let Some(error) = last_error {
         tracing::error!(%error, rows = rows.len(), "store writer exhausted event-batch retries");
     }
-    // These anchors were never committed; do not treat them as durable.
+    // Restore uncommitted batch state so subsequent operations (especially Clear)
+    // never treat a failed flush as empty or archive an incomplete prefix.
+    for row in rows {
+        events.insert((row.session_id.clone(), row.seq), row);
+    }
+    for (sid, seq) in watermarks {
+        highwaters
+            .entry(sid)
+            .and_modify(|cur| *cur = (*cur).max(seq))
+            .or_insert(seq);
+    }
     for anchor in &new_anchors {
         reducer.forget_anchor(&anchor.session_id, &anchor.key);
     }
+    anchors.extend(new_anchors);
+    occurrences.extend(new_occurrences);
     false
 }
 

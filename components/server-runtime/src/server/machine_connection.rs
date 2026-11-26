@@ -310,16 +310,7 @@ impl MachineSnapshots {
                     capacity,
                     active_sessions,
                     resources: self.machine_control.host_resources(&machine_id),
-                    capabilities: crate::machine_protocol::MachineCapabilities {
-                        hibernation: self.machine_control.machine_supports(
-                            &machine_id,
-                            crate::machine_protocol::SESSION_HIBERNATION_PROTOCOL_VERSION,
-                        ),
-                        native_fork: self.machine_control.machine_supports(
-                            &machine_id,
-                            crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
-                        ),
-                    },
+                    capabilities: self.machine_capabilities(&machine_id),
                     pending_updates,
                     convergence: Vec::new(),
                     plugin_lifecycle: if desired_plugins.value.manages(&machine_id) {
@@ -339,6 +330,26 @@ impl MachineSnapshots {
                 summary
             })
             .collect())
+    }
+
+    fn machine_capabilities(
+        &self,
+        machine_id: &str,
+    ) -> crate::machine_protocol::MachineCapabilities {
+        crate::machine_protocol::MachineCapabilities {
+            hibernation: self.machine_control.machine_supports(
+                machine_id,
+                crate::machine_protocol::SESSION_HIBERNATION_PROTOCOL_VERSION,
+            ),
+            native_fork: self.machine_control.machine_supports(
+                machine_id,
+                crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
+            ),
+            fork_workspace_mode: self.machine_control.machine_supports(
+                machine_id,
+                crate::machine_protocol::FORK_WORKSPACE_MODE_PROTOCOL_VERSION,
+            ),
+        }
     }
 
     pub async fn connect_message(&self) -> anyhow::Result<Outbound> {

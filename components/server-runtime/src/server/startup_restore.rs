@@ -46,18 +46,10 @@ pub async fn restore_hub_from_store(store: &Store, hub: &Hub) -> anyhow::Result<
         .collect();
     managed_calls::prune_settled_restored_notices(store, &mut restored).await;
     let restored_count = restored.len();
-    // Adopt durable anchors before any reducer sees a new event, so a
-    // restarted Controller never starts a second subagent/Call row.
-    let lineage_edges = match store.load_all_lineage_edges().await {
-        Ok(edges) => {
-            hub.warm_lineage_edges(&edges);
-            edges
-        }
-        Err(error) => {
-            tracing::warn!(%error, "warming lineage edges failed");
-            Vec::new()
-        }
-    };
+    // Load required lineage edges with retry before admitting requests or event
+    // writes (fail-closed on persistent failure).
+    let lineage_edges = load_required_lineage_edges(store).await?;
+    hub.warm_lineage_edges(&lineage_edges);
     match store
         .recent_transcript_anchors(crate::transcript_anchors::HUB_WARM_ANCHORS)
         .await
@@ -89,6 +81,25 @@ pub async fn restore_hub_from_store(store: &Store, hub: &Hub) -> anyhow::Result<
     hub.set_artifacts(store.artifacts());
     tracing::info!(restored = restored_count, "persistence wired",);
     Ok(())
+}
+
+async fn load_required_lineage_edges(
+    store: &Store,
+) -> anyhow::Result<Vec<crate::store::LineageEdge>> {
+    let mut last_error = None;
+    for attempt in 0..3 {
+        match store.load_all_lineage_edges().await {
+            Ok(edges) => return Ok(edges),
+            Err(err) => {
+                tracing::warn!(%err, attempt = attempt + 1, "retrying required lineage edge load");
+                last_error = Some(err);
+                tokio::time::sleep(std::time::Duration::from_millis(100 * (1 << attempt))).await;
+            }
+        }
+    }
+    Err(last_error
+        .unwrap_or_else(|| anyhow::anyhow!("required lineage edges unavailable"))
+        .context("loading required lineage edges during startup recovery"))
 }
 
 /// What startup persistence produced: the Hub (warmed from the database when
@@ -174,13 +185,15 @@ pub async fn open_persistence(
         let writer_persistence_health = Arc::clone(&health);
         let writer_shutdown = store_shutdown_rx.clone();
         let writer_acks = hub.store_ack_sink();
+        let writer_floors = hub.snapshot_freeze_floors();
         let writer_task = tokio::spawn(async move {
-            run_store_writer_with_acks(
+            run_store_writer_with_floors(
                 writer_store,
                 rx,
                 writer_persistence_health,
                 writer_shutdown,
                 Some(writer_acks),
+                writer_floors,
             )
             .await;
             writer_health.set_store_writer(false);

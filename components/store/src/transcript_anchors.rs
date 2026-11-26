@@ -71,6 +71,9 @@ pub struct AnchorWrite {
     pub session_id: String,
     pub key: String,
     pub seq: u64,
+    /// Move an existing anchor forward when the previously anchored row fell
+    /// below a lineage freeze floor.
+    pub rebase: bool,
 }
 
 /// Bounded LRU of `(session, anchor key) -> seq`. Never cleared wholesale.

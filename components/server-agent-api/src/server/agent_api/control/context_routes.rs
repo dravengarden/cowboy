@@ -17,6 +17,26 @@ pub(super) fn context_route(
             "/api/sessions/{session_id}/context",
             get(web::session_context::get),
         ),
+        "sessions.lineage" => (
+            "GET",
+            "/api/sessions/{session_id}/lineage",
+            get(web::session_context::lineage_get),
+        ),
+        "sessions.lineage_history" => (
+            "GET",
+            "/api/sessions/{session_id}/lineage/{hop_id}/history",
+            get(web::session_context::lineage_history),
+        ),
+        "sessions.lineage_question_pages" => (
+            "GET",
+            "/api/sessions/{session_id}/lineage/{hop_id}/question-pages",
+            get(web::session_context::lineage_question_pages),
+        ),
+        "sessions.lineage_question_page" => (
+            "GET",
+            "/api/sessions/{session_id}/lineage/{hop_id}/question-pages/{page_id}",
+            get(web::session_context::lineage_question_page),
+        ),
         "sessions.context_set" => (
             "PUT",
             "/api/sessions/{session_id}/context",

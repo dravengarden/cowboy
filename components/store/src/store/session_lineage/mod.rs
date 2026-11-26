@@ -1,11 +1,11 @@
 //! Durable session lineage edges and decoupled archived history segments.
 //!
-//! Each forked or replaced session records one durable `LineageEdge` pointing
-//! to its immediate parent and the exclusive sequence cursor (`before_seq`)
-//! captured at branch time. Clearing or purging a parent archives only the
-//! referenced prefix (`seq < MAX(before_seq)`) into `archived_lineage_segments`
-//! and `archived_lineage_events`, releasing the parent's `sessions` row and
-//! retired provider auth generations cleanly.
+//! Each forked or replaced session records its immediate parent (`hop_order = 1`)
+//! plus a materialized snapshot of its parent's active display hops
+//! (`hop_order = 2..=MAX_DISPLAY_HOPS`). Clearing an intermediate branch detaches
+//! only that branch's own display view while preserving existing descendants'
+//! materialized hops. Auth ancestry walks `hop_order = 1` edges with explicit
+//! `parent_is_root` tracking so purged pre-migration intermediates fail closed.
 
 mod explore;
 mod pg;
@@ -25,15 +25,24 @@ use crate::model::{Envelope, bound_history_page};
 
 static SEGMENT_COUNTER: AtomicU64 = AtomicU64::new(1);
 
-pub(super) use pg::{purge_deleted_pg, seal_lineage_on_clear_pg};
-pub(super) use sqlite::{purge_deleted_sqlite, seal_lineage_on_clear_sqlite};
-pub use turns_and_receipts::{DuplicateReceipt, TurnCompletion};
+/// Maximum display hops materialized onto a child session.
+pub const MAX_MATERIALIZED_HOPS: u32 = 16;
 
-/// Durable provenance edge from a child session to its immediate parent.
+pub(super) use pg::{purge_deleted_pg, seal_lineage_on_clear_pg, seal_lineage_on_delete_pg};
+pub(super) use sqlite::{
+    purge_deleted_sqlite, seal_lineage_on_clear_sqlite, seal_lineage_on_delete_sqlite,
+};
+pub use turns_and_receipts::{DuplicateReceipt, ReserveOutcome, TurnCompletion};
+
+/// Durable provenance edge from a child session to an ancestor (`hop_order = 1`
+/// is the immediate parent and authorization link; `hop_order >= 2` are
+/// materialized display hops copied at branch creation).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct LineageEdge {
     pub child_session_id: String,
+    pub hop_order: u32,
     pub parent_session_id: String,
+    pub parent_is_root: bool,
     pub owner_user_id: String,
     pub kind: String,
     pub before_seq: u64,
@@ -45,7 +54,17 @@ pub struct LineageEdge {
     pub created_at_ms: i64,
 }
 
-/// Decoupled archived prefix copied from a parent session on Clear or Purge.
+/// Durable display lineage for one child session, distinguishing a legacy
+/// session (no rows at all) from an explicitly detached session (Clear or
+/// excluded Replace).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ChildDisplayLineage {
+    pub has_durable_edge: bool,
+    pub hops: Vec<LineageEdge>,
+}
+
+/// Decoupled archived prefix copied from a parent session on Clear, logical
+/// delete, or Trash purge.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ArchivedLineageSegment {
     pub segment_id: String,
@@ -68,6 +87,15 @@ pub struct LineageHistoryPage {
     /// safe for immutable HTTP/Service Worker caching.
     pub is_sealed: bool,
     pub segment_id: Option<String>,
+    pub edge_version: u64,
+}
+
+/// Atomic snapshot outcome for `GET /api/sessions/{id}/lineage/{hop}/history`.
+#[derive(Debug, Clone)]
+pub enum LineageHistoryOutcome {
+    Page(LineageHistoryPage),
+    NotFound,
+    VersionConflict { current_version: u64 },
 }
 
 pub(super) fn next_segment_id(source_session_id: &str, now_ms: i64, reason: &str) -> String {
@@ -100,13 +128,17 @@ pub(super) fn decode_lineage_events(
     bound_history_page(events)
 }
 
-pub(super) fn empty_sealed_page(segment_id: Option<String>) -> LineageHistoryPage {
+pub(super) fn empty_sealed_page(
+    segment_id: Option<String>,
+    edge_version: u64,
+) -> LineageHistoryPage {
     LineageHistoryPage {
         events: Vec::new(),
         next_before_seq: None,
         reached_start: true,
         is_sealed: true,
         segment_id,
+        edge_version,
     }
 }
 
@@ -124,29 +156,45 @@ macro_rules! dispatch {
 }
 
 impl Store {
-    /// Insert or update the lineage edge for `edge.child_session_id`.
+    /// Insert or update the immediate (`hop_order = 1`) lineage edge for
+    /// `edge.child_session_id` and snapshot the parent's active display hops
+    /// onto the child inside one transaction.
     pub async fn upsert_lineage_edge(&self, edge: &LineageEdge) -> Result<()> {
         dispatch!(self, upsert_lineage_edge(edge))
     }
 
-    /// Delete the lineage edge for `child_session_id` (used when Cancel Switch
-    /// rolls back a newly created destination).
+    /// Delete every lineage edge row owned by `child_session_id` (Cancel Switch).
     pub async fn delete_lineage_edge(&self, child_session_id: &str) -> Result<bool> {
         dispatch!(self, delete_lineage_edge(child_session_id))
     }
 
-    /// Fetch the immediate lineage edge for `child_session_id`, if any.
+    /// Fetch the immediate (`hop_order = 1`) lineage edge for `child_session_id`.
     pub async fn lineage_edge(&self, child_session_id: &str) -> Result<Option<LineageEdge>> {
         dispatch!(self, lineage_edge(child_session_id))
     }
 
-    /// Load every persisted lineage edge (used at startup to warm auth ancestry
-    /// and `EventReducer` freeze floors).
+    /// Fetch the materialized active display hops for `child_session_id` and
+    /// whether any durable edge row exists at all (distinguishing detached from
+    /// legacy pre-migration sessions).
+    pub async fn child_display_lineage(
+        &self,
+        child_session_id: &str,
+    ) -> Result<ChildDisplayLineage> {
+        dispatch!(self, child_display_lineage(child_session_id))
+    }
+
+    /// Load every persisted lineage edge (startup auth ancestry & freeze floors).
     pub async fn load_all_lineage_edges(&self) -> Result<Vec<LineageEdge>> {
         dispatch!(self, load_all_lineage_edges())
     }
 
-    /// List direct children of `parent_session_id`, newest first.
+    /// Load the maximum completed-turn `before_seq` per session so restarted
+    /// reducers preserve freeze floors for historical completed turns.
+    pub async fn load_max_turn_completion_floors(&self) -> Result<Vec<(String, u64)>> {
+        dispatch!(self, load_max_turn_completion_floors())
+    }
+
+    /// List direct (`hop_order = 1`) children of `parent_session_id`, newest first.
     pub async fn lineage_children(&self, parent_session_id: &str) -> Result<Vec<LineageEdge>> {
         dispatch!(self, lineage_children(parent_session_id))
     }
@@ -159,7 +207,17 @@ impl Store {
         dispatch!(self, lineage_segment(segment_id))
     }
 
-    /// Read one page of ancestor events strictly bounded by `edge.before_seq`.
+    /// Whether durable live `events` rows exist for `session_id` `< before_seq`.
+    pub async fn session_has_live_events_before(
+        &self,
+        session_id: &str,
+        before_seq: u64,
+    ) -> Result<bool> {
+        dispatch!(self, session_has_live_events_before(session_id, before_seq))
+    }
+
+    /// Read one page of ancestor events strictly bounded by `edge.before_seq`
+    /// in a single consistent database snapshot.
     pub async fn lineage_history_page(
         &self,
         edge: &LineageEdge,
@@ -167,5 +225,30 @@ impl Store {
         page_size: usize,
     ) -> Result<LineageHistoryPage> {
         dispatch!(self, lineage_history_page(edge, before_seq, page_size))
+    }
+
+    /// Read one page of ancestor history for `(child_session_id, hop_parent_id)`
+    /// inside a single database snapshot, validating ownership, display
+    /// attachment, and `expected_edge_version` atomically with events and seal.
+    pub async fn lineage_history_page_checked(
+        &self,
+        child_session_id: &str,
+        hop_parent_id: &str,
+        owner_user_id: Option<&str>,
+        expected_edge_version: Option<u64>,
+        before_seq: u64,
+        page_size: usize,
+    ) -> Result<LineageHistoryOutcome> {
+        dispatch!(
+            self,
+            lineage_history_page_checked(
+                child_session_id,
+                hop_parent_id,
+                owner_user_id,
+                expected_edge_version,
+                before_seq,
+                page_size,
+            )
+        )
     }
 }

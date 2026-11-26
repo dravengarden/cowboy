@@ -1,6 +1,6 @@
 //! Links are references, never native transcripts, credentials, or authority.
 #[path = "session_context_digest.rs"]
-mod handoff_digest;
+pub mod handoff_digest;
 
 use serde::{Deserialize, Serialize};
 
@@ -89,10 +89,43 @@ pub fn carrier(hub: &crate::core::Hub, id: &str, injection: &Injection) -> Optio
 /// The compare-and-set that names `cmid` as the carrier, or `None` when this
 /// prompt needs no record: legacy binding, no links, a non-authored prompt or
 /// an injection that already has its carrier.
+pub fn carrier_claim_sources(
+    hub: &crate::core::Hub,
+    id: &str,
+    cmid: Option<&str>,
+) -> Option<Vec<Source>> {
+    let cmid = cmid.filter(|cmid| crate::core::Hub::is_authored_cmid(cmid))?;
+    let context = read(hub, id).ok()?;
+    let injection = context
+        .injection
+        .filter(|injection| injection.follows_first_prompt && !injection.sources.is_empty())?;
+    if context
+        .delivery
+        .as_ref()
+        .is_some_and(|delivery| matches!(delivery.state.as_str(), "preparing" | "unknown"))
+        && injection.cmid != cmid
+    {
+        return None;
+    }
+    if carrier(hub, id, &injection).is_some() {
+        return None;
+    }
+    Some(injection.sources)
+}
+
 pub fn carrier_claim(
     hub: &crate::core::Hub,
     id: &str,
     cmid: Option<&str>,
+) -> Option<(String, Option<serde_json::Value>, serde_json::Value)> {
+    carrier_claim_with_preamble(hub, id, cmid, None)
+}
+
+pub fn carrier_claim_with_preamble(
+    hub: &crate::core::Hub,
+    id: &str,
+    cmid: Option<&str>,
+    precomputed_preamble: Option<String>,
 ) -> Option<(String, Option<serde_json::Value>, serde_json::Value)> {
     let cmid = cmid.filter(|cmid| crate::core::Hub::is_authored_cmid(cmid))?;
     let context = read(hub, id).ok()?;
@@ -113,8 +146,10 @@ pub fn carrier_claim(
     }
     let key = carrier_key(id);
     let expected = hub.setting(&key);
-    let generated_preamble = (!injection.sources.is_empty())
-        .then(|| handoff_digest::build_preamble(hub, &injection.sources));
+    let generated_preamble = precomputed_preamble.or_else(|| {
+        (!injection.sources.is_empty())
+            .then(|| handoff_digest::build_preamble(hub, &injection.sources))
+    });
     let value = serde_json::to_value(Carrier {
         injection: injection.cmid,
         cmid: cmid.to_owned(),
@@ -329,12 +364,14 @@ pub fn promotion(hub: &crate::core::Hub, id: &str, cmid: Option<&str>) -> Option
     let owner = hub.session_info(id)?.meta.owner_user_id;
     let waiting = std::mem::take(&mut context.waiting);
     // A session deleted while waiting must not refuse the prompt.
+    let auth_parent = hub.auth_parent(id);
     let links: Vec<_> = waiting
         .into_iter()
         .filter(|link| {
-            hub.session_info(&link.session_id).is_some_and(|info| {
-                !info.meta.system && !info.meta.closing && info.meta.owner_user_id == owner
-            })
+            auth_parent.as_deref() == Some(link.session_id.as_str())
+                || hub.session_info(&link.session_id).is_some_and(|info| {
+                    !info.meta.system && !info.meta.closing && info.meta.owner_user_id == owner
+                })
         })
         .collect();
     context.links = context.known_links();
@@ -577,7 +614,11 @@ pub fn preamble(
         .ok_or("Session unavailable")?
         .meta
         .owner_user_id;
+    let auth_parent = hub.auth_parent(id);
     for source in &injection.sources {
+        if auth_parent.as_deref() == Some(source.session_id.as_str()) {
+            continue;
+        }
         if hub.session_info(&source.session_id).is_none_or(|info| {
             info.meta.system || info.meta.closing || info.meta.owner_user_id != owner
         }) {

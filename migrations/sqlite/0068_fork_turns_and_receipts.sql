@@ -1,4 +1,4 @@
--- Durable completed-turn cursor index and Linked Fork idempotency receipts.
+-- Durable completed-turn cursor index and Linked Fork reservation receipts.
 -- Mirrors PostgreSQL migration 0094_fork_turns_and_receipts.sql.
 CREATE TABLE session_turn_completions (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
@@ -18,9 +18,14 @@ CREATE TABLE session_duplicate_receipts (
     operation_id TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
     destination_session_id TEXT NOT NULL,
+    state TEXT NOT NULL DEFAULT 'reserved',
     created_at_ms BIGINT NOT NULL,
+    updated_at_ms BIGINT NOT NULL DEFAULT 0,
     PRIMARY KEY (owner_user_id, source_session_id, operation_id)
 ) WITHOUT ROWID;
 
 CREATE INDEX idx_session_duplicate_receipts_source
     ON session_duplicate_receipts (source_session_id);
+
+CREATE INDEX idx_session_duplicate_receipts_dest
+    ON session_duplicate_receipts (destination_session_id);

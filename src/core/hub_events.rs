@@ -239,7 +239,13 @@ impl Hub {
         // same worker incarnation never becomes a newer observation.
         let subagent_child = live_subagent_child(&event).map(str::to_owned);
         let mut subagent_anchor = None;
-        let (envelope, durable_agent_session_id, attention_changed, native_wait_started) = {
+        let (
+            envelope,
+            durable_agent_session_id,
+            attention_changed,
+            native_wait_started,
+            turn_completion,
+        ) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
@@ -317,29 +323,7 @@ impl Hub {
                 if subagent_child.is_some() {
                     subagent_anchor = Some(canonical.seq);
                 }
-                match s
-                    .log
-                    .binary_search_by_key(&canonical.seq, |entry| entry.seq)
-                {
-                    Ok(index) => {
-                        s.log_bytes = s
-                            .log_bytes
-                            .saturating_sub(estimated_envelope_bytes(&s.log[index]))
-                            .saturating_add(estimated_envelope_bytes(&canonical));
-                        s.log[index] = canonical;
-                    }
-                    Err(_) if canonical.seq == seq => {
-                        s.log_bytes = s
-                            .log_bytes
-                            .saturating_add(estimated_envelope_bytes(&canonical));
-                        s.log.push(canonical);
-                        s.event_count = s.event_count.saturating_add(1);
-                    }
-                    // The canonical row was already trimmed from the hot tail.
-                    // Its durable UPSERT still lands below, but re-inserting an
-                    // old seq here would break the tail's sorted cursor contract.
-                    Err(_) => {}
-                }
+                Self::apply_canonical_hot_log(s, seq, canonical);
             }
             if self.inner.store_tx.is_some()
                 && trim_hot_log(
@@ -354,6 +338,11 @@ impl Hub {
             let durable_agent_session_id = is_user_message_chunk(&envelope)
                 .then(|| s.meta.agent_session_id.clone())
                 .flatten();
+            let turn_completion = if matches!(envelope.event, Event::TurnEnd { .. }) {
+                Self::extract_turn_completion_in_session(session_id, s, envelope.seq)
+            } else {
+                None
+            };
             if let (Some(child), Some(anchor), Event::Update { update }) =
                 (subagent_child, subagent_anchor, &envelope.event)
             {
@@ -364,6 +353,7 @@ impl Hub {
                 durable_agent_session_id,
                 attention_changed,
                 native_wait_started,
+                turn_completion,
             )
         };
         self.finish_pushed_event(
@@ -372,7 +362,31 @@ impl Hub {
             durable_agent_session_id,
             attention_changed,
             native_wait_started,
+            turn_completion,
         );
+    }
+
+    fn apply_canonical_hot_log(s: &mut Session, seq: u64, canonical: Envelope) {
+        match s
+            .log
+            .binary_search_by_key(&canonical.seq, |entry| entry.seq)
+        {
+            Ok(index) => {
+                s.log_bytes = s
+                    .log_bytes
+                    .saturating_sub(estimated_envelope_bytes(&s.log[index]))
+                    .saturating_add(estimated_envelope_bytes(&canonical));
+                s.log[index] = canonical;
+            }
+            Err(_) if canonical.seq == seq => {
+                s.log_bytes = s
+                    .log_bytes
+                    .saturating_add(estimated_envelope_bytes(&canonical));
+                s.log.push(canonical);
+                s.event_count = s.event_count.saturating_add(1);
+            }
+            Err(_) => {}
+        }
     }
 
     fn finish_pushed_event(
@@ -382,6 +396,7 @@ impl Hub {
         durable_agent_session_id: Option<String>,
         attention_changed: bool,
         native_wait_started: bool,
+        turn_completion: Option<crate::store::TurnCompletion>,
     ) {
         self.observe_compaction(session_id, &envelope.event);
         if is_user_message_chunk(&envelope)
@@ -394,8 +409,8 @@ impl Hub {
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::AppendEvent(envelope.clone()));
-            if matches!(envelope.event, Event::TurnEnd { .. }) {
-                self.record_turn_completion_from_hot_log(session_id, envelope.seq);
+            if let Some(completion) = turn_completion {
+                let _ = tx.send(StoreWrite::RecordTurnCompletion(completion));
             }
             if let Some(agent_session_id) = durable_agent_session_id {
                 let _ = tx.send(StoreWrite::SetAgentSessionId {

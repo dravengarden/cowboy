@@ -108,6 +108,15 @@ impl EventReducer {
         self.freeze_floors.get(session_id).copied().unwrap_or(0)
     }
 
+    #[must_use]
+    pub fn snapshot_freeze_floors(&self) -> Vec<(String, u64)> {
+        self.freeze_floors
+            .iter()
+            .filter(|&(_, &floor)| floor > 0)
+            .map(|(sid, &floor)| (sid.clone(), floor))
+            .collect()
+    }
+
     /// Whether this reducer already knows the anchor, without counting a hit.
     #[must_use]
     pub fn knows_anchor(&self, session_id: &str, key: &str) -> bool {
@@ -245,47 +254,8 @@ impl EventReducer {
             if !tool_id.is_empty() {
                 let key = (sid, tool_id);
                 if kind == Some("tool_call_update") {
-                    let mut terminal = false;
-                    let mut canonical = None;
-                    let floor = self.freeze_floor(&key.0);
-                    if let Some(tool_env) = self.tools.get_mut(&key) {
-                        if tool_env.seq < floor {
-                            // Keep the pre-fork tool row immutable; rebase the
-                            // accumulated tool snapshot onto the new post-freeze seq.
-                            tool_env.seq = env.seq;
-                        }
-                        let mut merged = false;
-                        if let (
-                            Event::Update {
-                                update: base_update,
-                            },
-                            Event::Update { update: delta },
-                        ) = (&mut tool_env.event, &env.event)
-                            && let (Some(base_object), Some(delta)) =
-                                (base_update.as_object_mut(), delta.as_object())
-                        {
-                            for (name, value) in delta {
-                                if name != "sessionUpdate" && name != "rawOutput" {
-                                    base_object.insert(name.clone(), value.clone());
-                                }
-                            }
-                            base_object.insert(
-                                "sessionUpdate".to_owned(),
-                                serde_json::Value::String("tool_call".to_owned()),
-                            );
-                            merged = true;
-                        }
-                        if merged {
-                            compact_canonical_tool_output(tool_env);
-                            terminal = envelope_tool_is_terminal(tool_env);
-                            canonical = Some(tool_env.clone());
-                        }
-                    }
-                    if terminal {
-                        self.tools.remove(&key);
-                    }
-                    if canonical.is_some() {
-                        return canonical;
+                    if let Some(canonical) = self.reduce_tool_update(&key, &env) {
+                        return Some(canonical);
                     }
                 } else {
                     let mut canonical = env;
@@ -307,6 +277,49 @@ impl EventReducer {
     /// removed at the terminal update above; release an unusually large hash
     /// table at the next lifecycle boundary as well instead of pinning its peak
     /// bucket allocation for the rest of the daemon lifetime.
+    fn reduce_tool_update(&mut self, key: &(String, String), env: &Envelope) -> Option<Envelope> {
+        let mut terminal = false;
+        let mut canonical = None;
+        let floor = self.freeze_floor(&key.0);
+        if let Some(tool_env) = self.tools.get_mut(key) {
+            if tool_env.seq < floor {
+                // Keep the pre-fork tool row immutable; rebase the
+                // accumulated tool snapshot onto the new post-freeze seq.
+                tool_env.seq = env.seq;
+            }
+            let mut merged = false;
+            if let (
+                Event::Update {
+                    update: base_update,
+                },
+                Event::Update { update: delta },
+            ) = (&mut tool_env.event, &env.event)
+                && let (Some(base_object), Some(delta)) =
+                    (base_update.as_object_mut(), delta.as_object())
+            {
+                for (name, value) in delta {
+                    if name != "sessionUpdate" && name != "rawOutput" {
+                        base_object.insert(name.clone(), value.clone());
+                    }
+                }
+                base_object.insert(
+                    "sessionUpdate".to_owned(),
+                    serde_json::Value::String("tool_call".to_owned()),
+                );
+                merged = true;
+            }
+            if merged {
+                compact_canonical_tool_output(tool_env);
+                terminal = envelope_tool_is_terminal(tool_env);
+                canonical = Some(tool_env.clone());
+            }
+        }
+        if terminal {
+            self.tools.remove(key);
+        }
+        canonical
+    }
+
     fn shrink_tools_if_sparse(&mut self) {
         const LARGE_TOOL_TABLE: usize = 256;
         if self.tools.capacity() > LARGE_TOOL_TABLE

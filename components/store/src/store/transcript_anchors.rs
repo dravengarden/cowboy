@@ -210,7 +210,7 @@ macro_rules! implementation {
                 Ok(rows
                     .into_iter()
                     .filter_map(|(session_id, key, seq)| {
-                        Some(AnchorWrite { session_id, key, seq: u64::try_from(seq).ok()? })
+                        Some(AnchorWrite { session_id, key, seq: u64::try_from(seq).ok()?, rebase: false })
                     })
                     .collect())
             }

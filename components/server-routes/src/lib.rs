@@ -206,7 +206,7 @@ pub fn machine_routes(state: &AppState) -> Router<Arc<AppState>> {
 /// Linked context, its handoff to a new agent, and forks.
 fn with_session_context_routes(
     router: Router<Arc<AppState>>,
-    state: &Arc<AppState>,
+    _state: &Arc<AppState>,
 ) -> Router<Arc<AppState>> {
     router
         .route(
@@ -248,10 +248,7 @@ fn with_session_context_routes(
         )
         .route(
             "/api/sessions/{id}/duplicate",
-            post(session_context::duplicate).layer(middleware::from_fn_with_state(
-                Arc::clone(&state.session_create_replays),
-                session_create_replay::replay,
-            )),
+            post(session_context::duplicate),
         )
 }
 

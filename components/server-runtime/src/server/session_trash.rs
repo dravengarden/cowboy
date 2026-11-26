@@ -21,35 +21,11 @@ static PENDING_FOLDER_PURGES: std::sync::LazyLock<parking_lot::Mutex<HashSet<Str
 /// execution environment confirms the stop.
 const RETENTION_DELAY: std::time::Duration = std::time::Duration::from_secs(2 * 60);
 
-/// True while a continuation destination can still invoke Cancel Switch on
-/// `source_id` (starting up or holding its sole queued bootstrap message).
+/// True while any continuation destination (live or in Trash) can still invoke
+/// Cancel Switch to return its sole bootstrap prompt to `source_id`.
 fn handoff_cancel_pinned(state: &AppState, source_id: &str) -> bool {
     state.hub.session_list().into_iter().any(|meta| {
-        if meta.trashed_at_ms.is_some()
-            || meta.closing
-            || meta.continued_from.as_deref() != Some(source_id)
-        {
-            return false;
-        }
-        if meta.status == crate::agent_model::Status::Starting {
-            return true;
-        }
-        let Ok(ctx) = crate::session_context::read(&state.hub, &meta.id) else {
-            return false;
-        };
-        let accepted = ctx
-            .delivery
-            .as_ref()
-            .is_some_and(|delivery| delivery.state == "accepted" && delivery.session_id == meta.id);
-        let Some(cmid) = ctx.injection.as_ref().map(|inj| inj.cmid.as_str()) else {
-            return false;
-        };
-        accepted
-            && state
-                .hub
-                .session_info(&meta.id)
-                .is_some_and(|info| info.queue_count == 1)
-            && state.hub.has_queued_cmid(&meta.id, cmid)
+        super::session_context::is_cancellable_handoff_destination(state, source_id, &meta)
     })
 }
 
@@ -235,6 +211,15 @@ fn delete_claimed(
         .claim_trash_deletion(session_id, expected_trashed_at_ms)
     {
         return Ok(());
+    }
+    // Re-check after claiming deletion so a concurrent handoff starting or
+    // moving its destination to Trash cannot be orphaned by purge.
+    if handoff_cancel_pinned(state, session_id) {
+        state.hub.set_closing(session_id, false);
+        return Err(
+            "Wait until the new agent starts or cancel the switch before permanently deleting the original session"
+                .into(),
+        );
     }
     let result = delete_now(state, session_id);
     if result.is_err() {

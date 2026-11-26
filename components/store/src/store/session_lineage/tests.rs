@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use super::*;
 use crate::agent_model::Event;
 use crate::model::Envelope;
+use crate::persistence::EventReducer;
 use crate::store::fixtures::session;
 
 async fn test_store() -> (Store, tempfile::TempDir) {
@@ -31,7 +32,9 @@ fn msg(session_id: &str, seq: u64, text: &str) -> Envelope {
 fn make_edge(child: &str, parent: &str, kind: &str, before_seq: u64) -> LineageEdge {
     LineageEdge {
         child_session_id: child.to_owned(),
+        hop_order: 1,
         parent_session_id: parent.to_owned(),
+        parent_is_root: false,
         owner_user_id: String::new(),
         kind: kind.to_owned(),
         before_seq,
@@ -45,6 +48,7 @@ fn make_edge(child: &str, parent: &str, kind: &str, before_seq: u64) -> LineageE
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn transitive_purge_archives_ancestors_without_pinning_auth_generation_and_gcs_on_leaf_purge()
 {
     let (store, _dir) = test_store().await;
@@ -58,7 +62,6 @@ async fn transitive_purge_archives_ancestors_without_pinning_auth_generation_and
     store.insert_session(&b).await.unwrap();
     store.insert_session(&c).await.unwrap();
 
-    // A has seq 0, 1, 2 (B forks before 2). B has seq 0, 1 (C forks before 1).
     store
         .upsert_event_batch(
             &[
@@ -73,121 +76,165 @@ async fn transitive_purge_archives_ancestors_without_pinning_auth_generation_and
         .await
         .unwrap();
 
-    store
-        .upsert_lineage_edge(&make_edge("sess-b", "sess-a", "native_fork", 2))
-        .await
-        .unwrap();
+    let mut e_ba = make_edge("sess-b", "sess-a", "native_fork", 2);
+    e_ba.parent_is_root = true;
+    store.upsert_lineage_edge(&e_ba).await.unwrap();
     store
         .upsert_lineage_edge(&make_edge("sess-c", "sess-b", "replace", 1))
         .await
         .unwrap();
 
-    // Soft-delete A and B so both expire on purge_deleted(-1), while C stays alive.
+    // Soft-delete A and B immediately seals segments (no 3-day gap!).
     store.delete_session("sess-a").await.unwrap();
     store.delete_session("sess-b").await.unwrap();
-    assert_eq!(store.purge_deleted(-1).await.unwrap(), 2);
+    let pre_purge_display = store.child_display_lineage("sess-c").await.unwrap();
+    assert_eq!(pre_purge_display.hops.len(), 2);
+    assert!(pre_purge_display.hops[0].segment_id.is_some());
+    assert!(pre_purge_display.hops[1].segment_id.is_some());
 
-    // Neither A nor B pins provider_auth_generation anymore.
+    assert_eq!(store.purge_deleted(-1).await.unwrap(), 2);
     assert!(
         store.session_auth_generations().await.unwrap().is_empty(),
         "archived lineage must not pin retired auth generations"
     );
 
-    // Both edges survived and now reference immutable archived segments.
-    let edge_cb = store
-        .lineage_edge("sess-c")
-        .await
-        .unwrap()
-        .expect("edge C->B");
-    let edge_ba = store
-        .lineage_edge("sess-b")
-        .await
-        .unwrap()
-        .expect("edge B->A");
-    assert!(edge_cb.segment_id.is_some());
-    assert!(edge_ba.segment_id.is_some());
+    // C has both hops (B < 1, A < 2) sealed and readable through checked snapshot API.
+    let display = store.child_display_lineage("sess-c").await.unwrap();
+    assert_eq!(display.hops.len(), 2);
+    let hop_b = &display.hops[0];
+    let hop_a = &display.hops[1];
+    assert_eq!(hop_b.parent_session_id, "sess-b");
+    assert_eq!(hop_a.parent_session_id, "sess-a");
+    let seg_b = hop_b.segment_id.clone().expect("seg B");
+    let seg_a = hop_a.segment_id.clone().expect("seg A");
 
-    // C can read B's prefix (< 1) and A's prefix (< 2), strictly excluding post-fork rows.
-    let page_b = store.lineage_history_page(&edge_cb, 100, 50).await.unwrap();
+    let LineageHistoryOutcome::Page(page_b) = store
+        .lineage_history_page_checked("sess-c", "sess-b", None, Some(hop_b.edge_version), 100, 50)
+        .await
+        .unwrap()
+    else {
+        panic!("expected page B");
+    };
     assert!(page_b.is_sealed);
     assert_eq!(page_b.events.len(), 1);
     assert_eq!(page_b.events[0].seq, 0);
 
-    let page_a = store.lineage_history_page(&edge_ba, 100, 50).await.unwrap();
+    // Stale edge_version returns VersionConflict atomically.
+    assert!(matches!(
+        store
+            .lineage_history_page_checked(
+                "sess-c",
+                "sess-b",
+                None,
+                Some(hop_b.edge_version + 9),
+                100,
+                50
+            )
+            .await
+            .unwrap(),
+        LineageHistoryOutcome::VersionConflict { .. }
+    ));
+
+    let LineageHistoryOutcome::Page(page_a) = store
+        .lineage_history_page_checked("sess-c", "sess-a", None, Some(hop_a.edge_version), 100, 50)
+        .await
+        .unwrap()
+    else {
+        panic!("expected page A");
+    };
     assert!(page_a.is_sealed);
     assert_eq!(page_a.events.len(), 2);
-    assert_eq!(page_a.events[0].seq, 0);
-    assert_eq!(page_a.events[1].seq, 1);
 
-    // Once C is purged too, GC drops both edges and both archived segments.
+    // Clearing C drops display references AND immediately GCs unreachable segments
+    // even while B->A auth edge remains retained for Tools ancestry (H10).
+    store
+        .clear_conversation("sess-c", 0, None, None)
+        .await
+        .unwrap();
+    let _ = store.purge_deleted(-1).await.unwrap();
+    let after_clear = store.child_display_lineage("sess-c").await.unwrap();
+    assert!(after_clear.has_durable_edge);
+    assert!(after_clear.hops.is_empty());
+    let auth_ba = store
+        .lineage_edge("sess-b")
+        .await
+        .unwrap()
+        .expect("auth edge B->A retained");
+    assert!(auth_ba.parent_is_root);
+    assert_eq!(
+        auth_ba.segment_id, None,
+        "auth-only edge must not hold segment"
+    );
+    assert!(
+        store.lineage_segment(&seg_b).await.unwrap().is_none(),
+        "seg B GC'd"
+    );
+    assert!(
+        store.lineage_segment(&seg_a).await.unwrap().is_none(),
+        "seg A GC'd"
+    );
+
+    // Once C is purged too, auth-only edges are GC'd.
     store.delete_session("sess-c").await.unwrap();
     assert_eq!(store.purge_deleted(-1).await.unwrap(), 1);
     assert!(store.lineage_edge("sess-c").await.unwrap().is_none());
     assert!(store.lineage_edge("sess-b").await.unwrap().is_none());
-    assert!(
-        store
-            .lineage_segment(edge_cb.segment_id.as_deref().unwrap())
-            .await
-            .unwrap()
-            .is_none()
-    );
-    assert!(
-        store
-            .lineage_segment(edge_ba.segment_id.as_deref().unwrap())
-            .await
-            .unwrap()
-            .is_none()
-    );
 }
 
 #[tokio::test]
-async fn clear_seals_parent_prefix_and_detaches_child_display_without_dropping_auth_edge() {
+async fn clearing_intermediate_branch_b_preserves_inherited_a_and_b_history_for_c() {
     let (store, _dir) = test_store().await;
-    store.insert_session(&session("parent")).await.unwrap();
-    store.insert_session(&session("child")).await.unwrap();
+    store.insert_session(&session("a")).await.unwrap();
+    store.insert_session(&session("b")).await.unwrap();
+    store.insert_session(&session("c")).await.unwrap();
     store
         .upsert_event_batch(
-            &[msg("parent", 0, "p0"), msg("parent", 1, "p1")],
-            &HashMap::from([("parent".to_owned(), 2)]),
+            &[msg("a", 0, "a0"), msg("b", 0, "b0")],
+            &HashMap::from([("a".to_owned(), 1), ("b".to_owned(), 1)]),
         )
         .await
         .unwrap();
     store
-        .upsert_lineage_edge(&make_edge("child", "parent", "linked_fork", 2))
+        .upsert_lineage_edge(&make_edge("b", "a", "native_fork", 1))
+        .await
+        .unwrap();
+    store
+        .upsert_lineage_edge(&make_edge("c", "b", "linked_fork", 1))
         .await
         .unwrap();
 
-    // Clearing parent seals `< 2` before deleting parent's events.
-    store
-        .clear_conversation("parent", 0, None, None)
-        .await
-        .unwrap();
-    let edge = store.lineage_edge("child").await.unwrap().unwrap();
-    assert!(edge.segment_id.is_some());
-    assert!(!edge.display_detached);
-    let page = store.lineage_history_page(&edge, 2, 50).await.unwrap();
-    assert!(page.is_sealed);
-    assert_eq!(page.events.len(), 2);
+    // Clear intermediate B: B detaches from A, B's prefix archives for C,
+    // AND C retains its materialized hop to A!
+    store.clear_conversation("b", 0, None, None).await.unwrap();
 
-    // Clearing child detaches its visible lineage while keeping parent_session_id for auth.
-    store
-        .clear_conversation("child", 0, None, None)
+    let b_display = store.child_display_lineage("b").await.unwrap();
+    assert!(b_display.has_durable_edge);
+    assert!(b_display.hops.is_empty(), "B's own view is detached");
+
+    let c_display = store.child_display_lineage("c").await.unwrap();
+    assert_eq!(c_display.hops.len(), 2, "C keeps both B and A hops");
+    assert_eq!(c_display.hops[0].parent_session_id, "b");
+    assert!(c_display.hops[0].segment_id.is_some());
+    assert_eq!(c_display.hops[1].parent_session_id, "a");
+
+    // Even if A is now cleared too, C's materialized hop to A gets archived!
+    store.clear_conversation("a", 0, None, None).await.unwrap();
+    let c_after_a_clear = store.child_display_lineage("c").await.unwrap();
+    assert_eq!(c_after_a_clear.hops.len(), 2);
+    assert!(c_after_a_clear.hops[1].segment_id.is_some());
+    let page_a = store
+        .lineage_history_page(&c_after_a_clear.hops[1], 10, 50)
         .await
         .unwrap();
-    let detached = store.lineage_edge("child").await.unwrap().unwrap();
-    assert!(detached.display_detached);
-    assert_eq!(detached.parent_session_id, "parent");
-    assert!(detached.segment_id.is_none());
-    assert!(detached.edge_version > edge.edge_version);
+    assert_eq!(page_a.events.len(), 1);
+    assert_eq!(page_a.events[0].seq, 0);
 }
 
 #[tokio::test]
-async fn live_seal_state_respects_write_behind_and_zero_cutoff() {
+async fn live_lineage_page_reports_unsealed_until_parent_next_seq_reaches_cutoff() {
     let (store, _dir) = test_store().await;
     store.insert_session(&session("src")).await.unwrap();
     store.insert_session(&session("dst")).await.unwrap();
-
-    // Unflushed prefix: store next_seq is 1 while edge.before_seq is 3.
     store
         .upsert_event_batch(
             &[msg("src", 0, "s0")],
@@ -195,15 +242,13 @@ async fn live_seal_state_respects_write_behind_and_zero_cutoff() {
         )
         .await
         .unwrap();
-    let edge = make_edge("dst", "src", "replace", 3);
+    let edge = make_edge("dst", "src", "native_fork", 3);
     store.upsert_lineage_edge(&edge).await.unwrap();
-    let unsealed = store.lineage_history_page(&edge, 3, 50).await.unwrap();
-    assert!(
-        !unsealed.is_sealed,
-        "unflushed write-behind must not mark sealed"
-    );
 
-    // Once flushed past before_seq, page becomes sealed.
+    let unsealed = store.lineage_history_page(&edge, 3, 50).await.unwrap();
+    assert!(!unsealed.is_sealed);
+    assert_eq!(unsealed.events.len(), 1);
+
     store
         .upsert_event_batch(
             &[msg("src", 1, "s1"), msg("src", 2, "s2")],
@@ -215,7 +260,6 @@ async fn live_seal_state_respects_write_behind_and_zero_cutoff() {
     assert!(sealed.is_sealed);
     assert_eq!(sealed.events.len(), 3);
 
-    // Zero cutoff admits 0 events and is sealed.
     let zero_edge = make_edge("dst-zero", "src", "replace", 0);
     let empty = store
         .lineage_history_page(&zero_edge, 10, 50)
@@ -227,9 +271,56 @@ async fn live_seal_state_respects_write_behind_and_zero_cutoff() {
 }
 
 #[tokio::test]
-async fn turn_completions_and_duplicate_receipts_persist_and_clear_cleanly() {
+#[allow(clippy::too_many_lines)]
+async fn turn_completions_cold_scan_and_duplicate_receipt_lifecycle() {
     let (store, _dir) = test_store().await;
     store.insert_session(&session("src")).await.unwrap();
+    store.insert_session(&session("dst-1")).await.unwrap();
+
+    // Cold-history SQL scan finds pre-migration turn boundary without turn_completions row.
+    store
+        .upsert_event_batch(
+            &[
+                Envelope {
+                    session_id: "src".to_owned(),
+                    seq: 0,
+                    event: Event::Update {
+                        update: serde_json::json!({
+                            "sessionUpdate": "agent_message_chunk",
+                            "messageId": "legacy-m1",
+                            "content": {"type": "text", "text": "ans1"},
+                        }),
+                    },
+                    cmid: None,
+                },
+                Envelope {
+                    session_id: "src".to_owned(),
+                    seq: 1,
+                    event: Event::TurnEnd {
+                        stop_reason: "end_turn".to_owned(),
+                        usage: None,
+                    },
+                    cmid: None,
+                },
+            ],
+            &HashMap::from([("src".to_owned(), 2)]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .find_message_turn_before_seq("src", "legacy-m1")
+            .await
+            .unwrap(),
+        Some(2)
+    );
+    assert_eq!(
+        store
+            .find_message_turn_before_seq("src", "missing")
+            .await
+            .unwrap(),
+        None
+    );
 
     store
         .record_turn_completion(&TurnCompletion {
@@ -241,62 +332,154 @@ async fn turn_completions_and_duplicate_receipts_persist_and_clear_cleanly() {
         })
         .await
         .unwrap();
-    store
-        .record_turn_completion(&TurnCompletion {
-            session_id: "src".to_owned(),
-            context_generation: 0,
-            message_id: "m2".to_owned(),
-            before_seq: 9,
-            completed_at_ms: 200,
-        })
-        .await
-        .unwrap();
     assert_eq!(
         store.latest_turn_completion("src", 0).await.unwrap(),
-        Some(("m2".to_owned(), 9))
+        Some(("m1".to_owned(), 4))
     );
     assert_eq!(
-        store
-            .turn_completion_before_seq("src", 0, "m1")
-            .await
-            .unwrap(),
-        Some(4)
+        store.load_max_turn_completion_floors().await.unwrap(),
+        vec![("src".to_owned(), 4)]
     );
 
-    // Clear wipes turn completions so stale message IDs cannot be forked after Clear.
-    store
-        .clear_conversation("src", 0, None, None)
-        .await
-        .unwrap();
-    assert_eq!(store.latest_turn_completion("src", 0).await.unwrap(), None);
-
-    // Duplicate receipt is idempotent and rejects conflicting second insert.
+    // Durable duplicate receipt reservation -> ready -> deleted on destination delete.
     let receipt = DuplicateReceipt {
         owner_user_id: "u1".to_owned(),
         source_session_id: "src".to_owned(),
         operation_id: "op-1".to_owned(),
         fingerprint: "fp-a".to_owned(),
         destination_session_id: "dst-1".to_owned(),
+        state: "reserved".to_owned(),
         created_at_ms: 300,
+        updated_at_ms: 300,
     };
-    assert!(store.put_duplicate_receipt(&receipt).await.unwrap());
-    assert!(!store.put_duplicate_receipt(&receipt).await.unwrap());
     assert_eq!(
-        store.duplicate_receipt("u1", "src", "op-1").await.unwrap(),
-        Some(receipt)
+        store.reserve_duplicate_receipt(&receipt).await.unwrap(),
+        ReserveOutcome::Reserved
     );
+    assert!(matches!(
+        store.reserve_duplicate_receipt(&receipt).await.unwrap(),
+        ReserveOutcome::Existing(ref r) if r.state == "reserved"
+    ));
     store
-        .delete_duplicate_receipt("u1", "src", "op-1")
+        .complete_duplicate_receipt("u1", "src", "op-1", 400)
         .await
         .unwrap();
     assert_eq!(
-        store.duplicate_receipt("u1", "src", "op-1").await.unwrap(),
-        None
+        store
+            .duplicate_receipt("u1", "src", "op-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        "ready"
+    );
+    // Deleting the destination automatically transitions its receipt to `deleted`.
+    store.delete_session("dst-1").await.unwrap();
+    assert_eq!(
+        store
+            .duplicate_receipt("u1", "src", "op-1")
+            .await
+            .unwrap()
+            .unwrap()
+            .state,
+        "deleted"
     );
 }
 
 #[tokio::test]
-async fn lineage_question_pages_clamp_strictly_and_survive_parent_purge() {
+async fn lineage_freeze_floor_rebases_subagent_anchor_in_reducer_and_durable_table() {
+    let (store, _dir) = test_store().await;
+    store.insert_session(&session("s")).await.unwrap();
+    let mut reducer = EventReducer::default();
+    let sub_running = Envelope {
+        session_id: "s".to_owned(),
+        seq: 1,
+        event: Event::Update {
+            update: serde_json::json!({
+                "sessionUpdate": "cowboy_subagent",
+                "sessionId": "sub-1",
+                "state": "running",
+            }),
+        },
+        cmid: None,
+    };
+    let r1 = reducer.reduce(sub_running).unwrap();
+    assert_eq!(r1.seq, 1);
+    let end = Envelope {
+        session_id: "s".to_owned(),
+        seq: 2,
+        event: Event::TurnEnd {
+            stop_reason: "end_turn".to_owned(),
+            usage: None,
+        },
+        cmid: None,
+    };
+    let _ = reducer.reduce(end).unwrap();
+    // Unforked session preserves single-row subagent semantics; once a fork
+    // cutoff pins the prefix at seq 3, subsequent updates rebase past the floor.
+    reducer.set_freeze_floor("s", 3);
+    assert_eq!(reducer.freeze_floor("s"), 3);
+
+    // Post-TurnEnd subagent completion allocates fresh seq 5 rather than overwriting seq 1.
+    let sub_done = Envelope {
+        session_id: "s".to_owned(),
+        seq: 5,
+        event: Event::Update {
+            update: serde_json::json!({
+                "sessionUpdate": "cowboy_subagent",
+                "sessionId": "sub-1",
+                "state": "idle",
+            }),
+        },
+        cmid: None,
+    };
+    let r2 = reducer.reduce(sub_done).unwrap();
+    assert_eq!(r2.seq, 5, "frozen turn-1 subagent row preserved intact");
+
+    // Durable anchor rebase moves anchor from 1 -> 5 in storage.
+    let key = crate::transcript_anchors::anchor_key(match &r1.event {
+        Event::Update { update } => update,
+        _ => unreachable!(),
+    })
+    .unwrap();
+    store
+        .upsert_event_batch_with_anchors(
+            &[r1],
+            &HashMap::from([("s".to_owned(), 2)]),
+            &[crate::transcript_anchors::AnchorWrite {
+                session_id: "s".to_owned(),
+                key: key.clone(),
+                seq: 1,
+                rebase: false,
+            }],
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(store.transcript_anchor("s", &key).await.unwrap(), Some(1));
+    store
+        .upsert_event_batch_with_anchors(
+            &[r2],
+            &HashMap::from([("s".to_owned(), 6)]),
+            &[crate::transcript_anchors::AnchorWrite {
+                session_id: "s".to_owned(),
+                key: key.clone(),
+                seq: 5,
+                rebase: true,
+            }],
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store.transcript_anchor("s", &key).await.unwrap(),
+        Some(5),
+        "rebased anchor points at post-floor row"
+    );
+}
+
+#[tokio::test]
+async fn lineage_question_pages_paginate_in_sql_and_survive_parent_purge() {
     let (store, _dir) = test_store().await;
     store.insert_session(&session("parent-q")).await.unwrap();
     store.insert_session(&session("child-q")).await.unwrap();
@@ -316,32 +499,44 @@ async fn lineage_question_pages_clamp_strictly_and_survive_parent_purge() {
             &[
                 user_msg(0, "First question"),
                 msg("parent-q", 1, "First answer"),
-                user_msg(2, "Second question after fork"),
+                user_msg(2, "Second question"),
                 msg("parent-q", 3, "Second answer"),
+                user_msg(4, "Third question after fork"),
+                msg("parent-q", 5, "Third answer"),
             ],
-            &HashMap::from([("parent-q".to_owned(), 4)]),
+            &HashMap::from([("parent-q".to_owned(), 6)]),
         )
         .await
         .unwrap();
-    let edge = make_edge("child-q", "parent-q", "linked_fork", 2);
+    let edge = make_edge("child-q", "parent-q", "linked_fork", 4);
     store.upsert_lineage_edge(&edge).await.unwrap();
 
-    // Purge parent -> archives `< 2`.
     store.delete_session("parent-q").await.unwrap();
     assert_eq!(store.purge_deleted(-1).await.unwrap(), 1);
     let archived_edge = store.lineage_edge("child-q").await.unwrap().unwrap();
     assert!(archived_edge.segment_id.is_some());
 
-    let (pages, next_before, total) = store
-        .lineage_question_pages(&archived_edge, None, 20)
+    // Paginate with limit=1 to verify exact ordinals, total=2, and cursor paging.
+    let (page1, next1, total1) = store
+        .lineage_question_pages(&archived_edge, None, 1)
         .await
         .unwrap();
-    assert_eq!(total, 1);
-    assert_eq!(pages.len(), 1);
-    assert_eq!(pages[0].id, 0);
-    assert_eq!(next_before, None);
+    assert_eq!(total1, 2);
+    assert_eq!(page1.len(), 1);
+    assert_eq!(page1[0].id, 2);
+    assert_eq!(page1[0].ordinal, 2);
+    assert_eq!(next1, Some(2));
 
-    // Reading page 0 succeeds and includes seq 0..2; reading post-cutoff page 2 returns None.
+    let (page2, next2, total2) = store
+        .lineage_question_pages(&archived_edge, next1, 1)
+        .await
+        .unwrap();
+    assert_eq!(total2, 2);
+    assert_eq!(page2.len(), 1);
+    assert_eq!(page2[0].id, 0);
+    assert_eq!(page2[0].ordinal, 1);
+    assert_eq!(next2, None);
+
     let detail = store
         .lineage_question_page_at(&archived_edge, 0)
         .await
@@ -350,7 +545,7 @@ async fn lineage_question_pages_clamp_strictly_and_survive_parent_purge() {
     assert_eq!(detail.len(), 2);
     assert!(
         store
-            .lineage_question_page_at(&archived_edge, 2)
+            .lineage_question_page_at(&archived_edge, 4)
             .await
             .unwrap()
             .is_none(),

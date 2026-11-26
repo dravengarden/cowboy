@@ -24,8 +24,10 @@ CREATE TABLE archived_lineage_events (
 ) WITHOUT ROWID;
 
 CREATE TABLE session_lineage_edges (
-    child_session_id TEXT PRIMARY KEY,
+    child_session_id TEXT NOT NULL,
+    hop_order INTEGER NOT NULL DEFAULT 1,
     parent_session_id TEXT NOT NULL,
+    parent_is_root BOOLEAN NOT NULL DEFAULT FALSE,
     owner_user_id TEXT NOT NULL DEFAULT '',
     kind TEXT NOT NULL,
     before_seq BIGINT NOT NULL,
@@ -35,7 +37,8 @@ CREATE TABLE session_lineage_edges (
         REFERENCES archived_lineage_segments(segment_id) ON DELETE SET NULL,
     display_detached BOOLEAN NOT NULL DEFAULT FALSE,
     edge_version BIGINT NOT NULL DEFAULT 1,
-    created_at_ms BIGINT NOT NULL
+    created_at_ms BIGINT NOT NULL,
+    PRIMARY KEY (child_session_id, hop_order)
 );
 
 CREATE INDEX idx_session_lineage_edges_parent

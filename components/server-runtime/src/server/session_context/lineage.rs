@@ -1,13 +1,10 @@
 //! Durable lineage recording, child-scoped ancestor chain inspection, and
 //! bounded immutable ancestor history paging.
 
-use std::collections::HashSet;
-
 use super::*;
-use crate::store::LineageEdge;
+use crate::core::{AuthParentStatus, LineageCaptureGuard};
+use crate::store::{LineageEdge, LineageHistoryOutcome};
 
-/// Maximum ancestor hops returned for inline transcript display.
-const MAX_DISPLAY_HOPS: usize = 16;
 /// Maximum sibling/child branches listed for the branch switcher.
 const MAX_BRANCHES: usize = 50;
 
@@ -45,6 +42,9 @@ pub struct LineageBranchResponse {
 #[derive(Debug, Serialize)]
 struct LineageResponse {
     session_id: String,
+    /// `true` when the session has a durable edge that was explicitly detached
+    /// (Clear or excluded Replace), suppressing legacy provenance fallback.
+    display_detached: bool,
     hops: Vec<LineageHopResponse>,
     branches: Vec<LineageBranchResponse>,
 }
@@ -71,8 +71,38 @@ struct LineageHistoryResponse {
     is_sealed: bool,
 }
 
-/// Record a durable lineage edge, update Hub's auth-parent index, and freeze
-/// the parent's `< before_seq` prefix when displayed.
+/// Pin `source_id` against concurrent Clear, freeze `< before_seq` on both
+/// reducers in FIFO event order, and wait for the store writer to flush any
+/// buffered pre-cutoff events before returning the RAII pin guard.
+pub(super) async fn pin_and_freeze_source(
+    state: &AppState,
+    source_id: &str,
+    requested_before: Option<u64>,
+) -> Result<(u64, LineageCaptureGuard), String> {
+    let (before_seq, ack_rx, guard) = state
+        .hub
+        .pin_and_freeze_source(source_id, requested_before)?;
+    if let Some(rx) = ack_rx {
+        match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+            Ok(Ok(Ok(true))) => {}
+            Ok(Ok(Err(reason))) => return Err(reason),
+            Ok(Ok(Ok(false))) => {
+                return Err("Lineage freeze was not acknowledged by durable storage".into());
+            }
+            Ok(Err(_)) => {
+                return Err("Durable store writer stopped before freezing lineage prefix".into());
+            }
+            Err(_) => {
+                return Err("Timed out waiting for durable lineage prefix freeze".into());
+            }
+        }
+    }
+    Ok((before_seq, guard))
+}
+
+/// Record a durable lineage edge (`hop_order = 1`, materializing ancestor
+/// display hops in storage) and update Hub's auth-parent index. Returns `Err`
+/// on durable failure so callers never admit an edge-less destination.
 pub(super) async fn record_edge(
     state: &AppState,
     child_session_id: &str,
@@ -82,9 +112,15 @@ pub(super) async fn record_edge(
     display_detached: bool,
 ) -> Result<(), String> {
     let effective_before = if display_detached { 0 } else { before_seq };
+    let parent_is_root = matches!(
+        state.hub.auth_parent_status(&source.id),
+        AuthParentStatus::KnownRoot
+    );
     let edge = LineageEdge {
         child_session_id: child_session_id.to_owned(),
+        hop_order: 1,
         parent_session_id: source.id.clone(),
+        parent_is_root,
         owner_user_id: source.owner_user_id.clone().unwrap_or_default(),
         kind: kind.to_owned(),
         before_seq: effective_before,
@@ -101,29 +137,26 @@ pub(super) async fn record_edge(
             .await
             .map_err(|error| format!("Lineage storage unavailable ({error})"))?;
     }
-    state.hub.record_auth_parent(child_session_id, &source.id);
-    if !display_detached && effective_before > 0 {
-        state
-            .hub
-            .freeze_lineage_prefix(&source.id, effective_before);
-    }
+    state
+        .hub
+        .record_auth_parent(child_session_id, &source.id, parent_is_root);
     Ok(())
 }
 
-/// Record the durable lineage edge for a Replace handoff (`target_id != id`).
+/// Record the mandatory durable lineage edge for a Replace handoff.
 pub(super) async fn record_replace_edge(
     state: &AppState,
     target_id: &str,
     source: &crate::core::SessionMeta,
     target_context: &crate::session_context::Context,
-) {
+) -> Result<(), String> {
     let self_source = target_context
         .injection
         .as_ref()
         .and_then(|inj| inj.sources.iter().find(|src| src.session_id == source.id));
     let before_seq = self_source.map_or(0, |src| src.before);
     let display_detached = self_source.is_none();
-    if let Err(error) = record_edge(
+    record_edge(
         state,
         target_id,
         source,
@@ -132,19 +165,19 @@ pub(super) async fn record_replace_edge(
         display_detached,
     )
     .await
-    {
-        tracing::warn!(session = %target_id, source = %source.id, %error, "replace lineage edge not recorded");
-    }
 }
 
-/// Remove a rolled-back lineage edge (Cancel Switch).
-pub(super) async fn delete_edge(state: &AppState, child_session_id: &str) {
-    state.hub.remove_auth_parent(child_session_id);
-    if let Some(store) = state.store.as_ref()
-        && let Err(error) = store.delete_lineage_edge(child_session_id).await
-    {
-        tracing::warn!(session = %child_session_id, %error, "failed to delete cancelled lineage edge");
+/// Remove a rolled-back lineage edge (Cancel Switch). Persists storage removal
+/// before dropping the in-memory auth-parent entry.
+pub(super) async fn delete_edge(state: &AppState, child_session_id: &str) -> Result<(), String> {
+    if let Some(store) = state.store.as_ref() {
+        store
+            .delete_lineage_edge(child_session_id)
+            .await
+            .map_err(|error| format!("Lineage storage unavailable ({error})"))?;
     }
+    state.hub.remove_auth_parent(child_session_id);
+    Ok(())
 }
 
 fn edge_owner_matches(state: &AppState, principal: &ProductPrincipal, edge: &LineageEdge) -> bool {
@@ -168,39 +201,24 @@ fn owner_can_see_session(
     Ok(info)
 }
 
-async fn walk_display_edges(
+async fn load_child_display_edges(
     state: &AppState,
     principal: &ProductPrincipal,
     root_id: &str,
-) -> Result<Vec<LineageEdge>, StatusCode> {
+) -> Result<(bool, Vec<LineageEdge>), StatusCode> {
     let Some(store) = state.store.as_ref() else {
-        return Ok(Vec::new());
+        return Ok((false, Vec::new()));
     };
-    let mut edges = Vec::new();
-    let mut visited = HashSet::with_capacity(8);
-    visited.insert(root_id.to_owned());
-    let mut cursor = root_id.to_owned();
-    for _ in 0..MAX_DISPLAY_HOPS {
-        let edge = store
-            .lineage_edge(&cursor)
-            .await
-            .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
-        let Some(edge) = edge else {
-            break;
-        };
-        if edge.display_detached {
-            break;
-        }
-        if !edge_owner_matches(state, principal, &edge) {
+    let lineage = store
+        .child_display_lineage(root_id)
+        .await
+        .map_err(|_| StatusCode::SERVICE_UNAVAILABLE)?;
+    for edge in &lineage.hops {
+        if !edge_owner_matches(state, principal, edge) {
             return Err(StatusCode::FORBIDDEN);
         }
-        if !visited.insert(edge.parent_session_id.clone()) {
-            break;
-        }
-        cursor = edge.parent_session_id.clone();
-        edges.push(edge);
     }
-    Ok(edges)
+    Ok((lineage.has_durable_edge, lineage.hops))
 }
 
 fn legacy_hop(
@@ -306,15 +324,25 @@ pub async fn get(
         Ok(info) => info,
         Err(status) => return status.into_response(),
     };
-    let edges = match walk_display_edges(&state, &auth.principal, &id).await {
-        Ok(edges) => edges,
-        Err(status) => return status.into_response(),
-    };
+    let (has_durable_edge, edges) =
+        match load_child_display_edges(&state, &auth.principal, &id).await {
+            Ok(result) => result,
+            Err(status) => return status.into_response(),
+        };
+    let display_detached = has_durable_edge && edges.is_empty();
     let immediate_parent = edges
         .first()
         .map(|edge| edge.parent_session_id.clone())
-        .or_else(|| info.meta.forked_from.clone())
-        .or_else(|| info.meta.continued_from.clone());
+        .or_else(|| {
+            (!display_detached)
+                .then(|| {
+                    info.meta
+                        .forked_from
+                        .clone()
+                        .or(info.meta.continued_from.clone())
+                })
+                .flatten()
+        });
 
     let mut hops = Vec::with_capacity(edges.len());
     for (idx, edge) in edges.into_iter().enumerate() {
@@ -339,6 +367,15 @@ pub async fn get(
             "archived"
         } else if parent_state != "purged" {
             "live"
+        } else if let Some(store) = state.store.as_ref()
+            && store
+                .session_has_live_events_before(&edge.parent_session_id, edge.before_seq)
+                .await
+                .unwrap_or(false)
+        {
+            // Logically deleted in Trash during the 3-day purge grace window:
+            // events are still durably readable through the child-scoped route.
+            "live"
         } else {
             "unavailable"
         };
@@ -358,7 +395,11 @@ pub async fn get(
         });
     }
 
-    if hops.is_empty()
+    // Only emit legacy fallback when NO durable edge exists at all; an
+    // explicitly detached session (`display_detached == true`) must never fall
+    // back to an unbounded parent link.
+    if !has_durable_edge
+        && hops.is_empty()
         && let Some(legacy) = legacy_hop(&state, &auth.principal, &info)
     {
         hops.push(legacy);
@@ -371,6 +412,7 @@ pub async fn get(
         [(header::CACHE_CONTROL.as_str(), "private, no-store")],
         Json(LineageResponse {
             session_id: id,
+            display_detached,
             hops,
             branches,
         }),
@@ -379,7 +421,8 @@ pub async fn get(
 }
 
 /// `GET /api/sessions/{id}/lineage/{hop_id}/history` — child-scoped immutable
-/// ancestor history page, server-clamped to `edge.before_seq`.
+/// ancestor history page, read with its edge version and seal watermark in one
+/// consistent database snapshot.
 pub async fn history(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthenticatedProductRequest>,
@@ -389,36 +432,24 @@ pub async fn history(
     if let Err(status) = owner_can_see_session(&state, &auth.principal, &id) {
         return status.into_response();
     }
-    let edges = match walk_display_edges(&state, &auth.principal, &id).await {
-        Ok(edges) => edges,
-        Err(status) => return status.into_response(),
-    };
-    let Some(edge) = edges
-        .into_iter()
-        .find(|edge| edge.parent_session_id == hop_id)
-    else {
-        return (StatusCode::NOT_FOUND, "ancestor not in session lineage").into_response();
-    };
-    if let Some(expected) = query.edge_version
-        && expected != edge.edge_version
-    {
-        return (
-            StatusCode::CONFLICT,
-            Json(serde_json::json!({
-                "error": "lineage_edge_changed",
-                "edge_version": edge.edge_version,
-            })),
-        )
-            .into_response();
-    }
     let Some(store) = state.store.as_ref() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "lineage store unavailable").into_response();
     };
-    let page = match store
-        .lineage_history_page(&edge, query.before_seq, crate::core::HISTORY_PAGE)
+    let owner_filter = state
+        .product_auth_enabled
+        .then_some(auth.principal.user_id.as_str());
+    let outcome = match store
+        .lineage_history_page_checked(
+            &id,
+            &hop_id,
+            owner_filter,
+            query.edge_version,
+            query.before_seq,
+            crate::core::HISTORY_PAGE,
+        )
         .await
     {
-        Ok(page) => page,
+        Ok(outcome) => outcome,
         Err(error) => {
             tracing::warn!(session = %id, hop = %hop_id, %error, "lineage history query failed");
             return (
@@ -428,12 +459,28 @@ pub async fn history(
                 .into_response();
         }
     };
+    let page = match outcome {
+        LineageHistoryOutcome::NotFound => {
+            return (StatusCode::NOT_FOUND, "ancestor not in session lineage").into_response();
+        }
+        LineageHistoryOutcome::VersionConflict { current_version } => {
+            return (
+                StatusCode::CONFLICT,
+                Json(serde_json::json!({
+                    "error": "lineage_edge_changed",
+                    "edge_version": current_version,
+                })),
+            )
+                .into_response();
+        }
+        LineageHistoryOutcome::Page(page) => page,
+    };
     let body = Json(LineageHistoryResponse {
         session_id: hop_id,
         events: page.events,
         next_before_seq: page.next_before_seq,
         reached_start: page.reached_start,
-        edge_version: edge.edge_version,
+        edge_version: page.edge_version,
         is_sealed: page.is_sealed,
     });
     if page.is_sealed {
@@ -465,8 +512,8 @@ pub async fn question_pages(
     if let Err(status) = owner_can_see_session(&state, &auth.principal, &id) {
         return status.into_response();
     }
-    let edges = match walk_display_edges(&state, &auth.principal, &id).await {
-        Ok(edges) => edges,
+    let (_, edges) = match load_child_display_edges(&state, &auth.principal, &id).await {
+        Ok(result) => result,
         Err(status) => return status.into_response(),
     };
     let Some(edge) = edges
@@ -515,8 +562,8 @@ pub async fn question_page(
     if let Err(status) = owner_can_see_session(&state, &auth.principal, &id) {
         return status.into_response();
     }
-    let edges = match walk_display_edges(&state, &auth.principal, &id).await {
-        Ok(edges) => edges,
+    let (_, edges) = match load_child_display_edges(&state, &auth.principal, &id).await {
+        Ok(result) => result,
         Err(status) => return status.into_response(),
     };
     let Some(edge) = edges

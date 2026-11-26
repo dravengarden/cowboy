@@ -21,6 +21,40 @@ struct Cancelled {
 
 const CANCELLED: &str = "cancelled";
 
+/// Shared eligibility predicate for whether `meta` (live OR in Trash!) can
+/// still invoke Cancel Switch to return its sole bootstrap prompt to `source_id`.
+pub(crate) fn is_cancellable_handoff_destination(
+    state: &AppState,
+    source_id: &str,
+    meta: &crate::core::SessionMeta,
+) -> bool {
+    if meta.closing || meta.continued_from.as_deref() != Some(source_id) {
+        return false;
+    }
+    let Ok(ctx) = crate::session_context::read(&state.hub, &meta.id) else {
+        return false;
+    };
+    let accepted = ctx
+        .delivery
+        .as_ref()
+        .is_some_and(|delivery| delivery.state == "accepted" && delivery.session_id == meta.id);
+    if !accepted {
+        return meta.status == crate::agent_model::Status::Starting
+            && ctx
+                .delivery
+                .as_ref()
+                .is_some_and(|d| d.state == "preparing");
+    }
+    let Some(cmid) = ctx.injection.as_ref().map(|inj| inj.cmid.as_str()) else {
+        return false;
+    };
+    state
+        .hub
+        .session_info(&meta.id)
+        .is_some_and(|info| info.queue_count == 1)
+        && state.hub.has_queued_cmid(&meta.id, cmid)
+}
+
 fn replayed(state: &AppState, returned: &crate::session_context::Returned) -> Cancelled {
     Cancelled {
         session: state
@@ -34,6 +68,30 @@ fn replayed(state: &AppState, returned: &crate::session_context::Returned) -> Ca
     }
 }
 
+fn replay_cancelled(
+    state: &AppState,
+    target: &crate::session_context::Context,
+    operation: &str,
+) -> Option<Cancelled> {
+    target
+        .delivery
+        .as_ref()
+        .filter(|delivery| delivery.operation == operation && delivery.state == CANCELLED)
+        .and_then(|delivery| delivery.returned.as_ref())
+        .map(|returned| replayed(state, returned))
+}
+
+fn restore_source_if_trashed(
+    state: &Arc<AppState>,
+    principal: &ProductPrincipal,
+    source: &str,
+) -> Result<(), String> {
+    if state.hub.session_is_trashed(source) {
+        super::super::session_trash::restore(state, principal, &[], &[source.to_owned()])?;
+    }
+    Ok(())
+}
+
 async fn take_back(
     state: Arc<AppState>,
     auth: AuthenticatedProductRequest,
@@ -44,17 +102,11 @@ async fn take_back(
     let destination = owned(&state, &auth.principal, &id)?.meta;
     // A lost reply is replayed from the destination's receipt, which keeps
     // the message once it left the queue.
-    let replay = |target: &crate::session_context::Context| {
-        target
-            .delivery
-            .as_ref()
-            .filter(|delivery| {
-                delivery.operation == request.operation && delivery.state == CANCELLED
-            })
-            .and_then(|delivery| delivery.returned.as_ref())
-            .map(|returned| replayed(&state, returned))
-    };
-    if let Some(cancelled) = replay(&crate::session_context::read(&state.hub, &id)?) {
+    if let Some(cancelled) = replay_cancelled(
+        &state,
+        &crate::session_context::read(&state.hub, &id)?,
+        &request.operation,
+    ) {
         return Ok(cancelled);
     }
     let source = destination
@@ -67,7 +119,7 @@ async fn take_back(
     let _guard = lock.lock().await;
     owned(&state, &auth.principal, &source)?;
     let mut target = crate::session_context::read(&state.hub, &id)?;
-    if let Some(cancelled) = replay(&target) {
+    if let Some(cancelled) = replay_cancelled(&state, &target, &request.operation) {
         return Ok(cancelled);
     }
     let cmid = target
@@ -98,16 +150,7 @@ async fn take_back(
     {
         return Err(refused.into());
     }
-    // Restore first: if the message leaves for the agent meanwhile, the
-    // original is merely back beside its continuation, as when Trash refuses.
-    if state.hub.session_is_trashed(&source) {
-        super::super::session_trash::restore(
-            &state,
-            &auth.principal,
-            &[],
-            std::slice::from_ref(&source),
-        )?;
-    }
+    restore_source_if_trashed(&state, &auth.principal, &source)?;
     let taken = state.hub.take_sole_queued(&id, &cmid).ok_or(refused)?;
     let (text, content, origin, initiator) =
         (taken.text, taken.content, taken.origin, taken.initiator);
@@ -123,6 +166,15 @@ async fn take_back(
     }
     target.injection = None;
     if let Err(error) = advance_applied(&mut target) {
+        state
+            .hub
+            .requeue_prompt(&id, text, content, Some(cmid), origin, initiator);
+        return Err(error);
+    }
+    // Remove the durable lineage edge BEFORE finalizing the cancelled receipt
+    // so a transient storage failure safely requeues the message and never
+    // leaves a cancelled destination linked in lineage or auth ancestry.
+    if let Err(error) = super::lineage::delete_edge(&state, &id).await {
         state
             .hub
             .requeue_prompt(&id, text, content, Some(cmid), origin, initiator);
@@ -145,7 +197,6 @@ async fn take_back(
         serde_json::Value::Null,
     );
     state.hub.set_continued_from(&id, None);
-    super::lineage::delete_edge(&state, &id).await;
     let note = super::super::session_trash::trash(
         &state,
         &auth.principal,

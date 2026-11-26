@@ -5029,19 +5029,24 @@ impl SqliteStorage {
             .with_context(|| format!("UPDATE SQLite next_seq for {session_id}"))?;
         }
         for anchor in anchors {
-            sqlx::query(
+            let sql = if anchor.rebase {
                 "INSERT INTO transcript_anchors(session_id, anchor_key, seq, created_at_ms) \
-                 VALUES (?1, ?2, ?3, ?4) ON CONFLICT(session_id, anchor_key) DO NOTHING",
-            )
-            .bind(&anchor.session_id)
-            .bind(&anchor.key)
-            .bind(i64::try_from(anchor.seq).context("anchor seq i64 overflow")?)
-            .bind(timestamp)
-            .execute(&mut *transaction)
-            .await
-            .with_context(|| {
-                format!("INSERT SQLite anchor {}/{}", anchor.session_id, anchor.key)
-            })?;
+                 VALUES (?1, ?2, ?3, ?4) ON CONFLICT(session_id, anchor_key) DO UPDATE SET \
+                 seq = max(transcript_anchors.seq, excluded.seq), created_at_ms = excluded.created_at_ms"
+            } else {
+                "INSERT INTO transcript_anchors(session_id, anchor_key, seq, created_at_ms) \
+                 VALUES (?1, ?2, ?3, ?4) ON CONFLICT(session_id, anchor_key) DO NOTHING"
+            };
+            sqlx::query(sql)
+                .bind(&anchor.session_id)
+                .bind(&anchor.key)
+                .bind(i64::try_from(anchor.seq).context("anchor seq i64 overflow")?)
+                .bind(timestamp)
+                .execute(&mut *transaction)
+                .await
+                .with_context(|| {
+                    format!("INSERT SQLite anchor {}/{}", anchor.session_id, anchor.key)
+                })?;
         }
         for occurrence in occurrences {
             sqlx::query(super::task_notifications::INSERT_INTENT)
@@ -5298,14 +5303,18 @@ impl SqliteStorage {
     }
 
     pub(super) async fn delete_session(&self, session_id: &str) -> Result<()> {
+        let now = now_ms();
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
+        super::session_lineage::seal_lineage_on_delete_sqlite(&mut tx, session_id, now).await?;
         sqlx::query(
             "UPDATE sessions SET deleted_at_ms = ?2 WHERE id = ?1 AND deleted_at_ms IS NULL",
         )
         .bind(session_id)
-        .bind(now_ms())
-        .execute(&self.pool)
+        .bind(now)
+        .execute(&mut *tx)
         .await
         .with_context(|| format!("soft-delete SQLite session {session_id}"))?;
+        tx.commit().await?;
         Ok(())
     }
 

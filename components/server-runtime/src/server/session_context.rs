@@ -10,6 +10,7 @@ mod inheritance;
 pub mod lineage;
 pub mod rollover;
 pub use cancel::cancel;
+pub(crate) use cancel::is_cancellable_handoff_destination;
 pub use fork::{duplicate, duplicate_options, fork};
 pub use lineage::{
     get as lineage_get, history as lineage_history, question_page as lineage_question_page,
@@ -71,20 +72,48 @@ pub fn validate_sources(
     Ok(())
 }
 
-fn capture(
+async fn capture_and_freeze(
     state: &AppState,
     principal: &ProductPrincipal,
     ids: &[String],
-) -> Result<Vec<Source>, String> {
-    validate_sources(state, principal, ids)?;
-    ids.iter()
-        .map(|id| {
-            Ok(Source {
-                session_id: id.clone(),
-                before: state.hub.next_event_seq(id).ok_or("Session unavailable")?,
-            })
-        })
-        .collect()
+    parked_cutoffs: &std::collections::HashMap<String, u64>,
+    child_session_id: Option<&str>,
+) -> Result<(Vec<Source>, Vec<crate::core::LineageCaptureGuard>), String> {
+    crate::session_context::validate_sources(ids)?;
+    let auth_parent = child_session_id.and_then(|cid| state.hub.auth_parent(cid));
+    let mut out = Vec::with_capacity(ids.len());
+    let mut guards = Vec::with_capacity(ids.len());
+    for source_id in ids {
+        if let Some(&parked) = parked_cutoffs.get(source_id) {
+            if state.hub.session_info(source_id).is_some() {
+                owned(state, principal, source_id)?;
+                let (before, guard) =
+                    lineage::pin_and_freeze_source(state, source_id, Some(parked)).await?;
+                guards.push(guard);
+                out.push(Source {
+                    session_id: source_id.clone(),
+                    before,
+                });
+            } else if auth_parent.as_deref() == Some(source_id.as_str()) {
+                // Archived lineage parent purged while waiting: keep exact parked cutoff.
+                out.push(Source {
+                    session_id: source_id.clone(),
+                    before: parked,
+                });
+            } else {
+                return Err("Session no longer exists".into());
+            }
+        } else {
+            owned(state, principal, source_id)?;
+            let (before, guard) = lineage::pin_and_freeze_source(state, source_id, None).await?;
+            guards.push(guard);
+            out.push(Source {
+                session_id: source_id.clone(),
+                before,
+            });
+        }
+    }
+    Ok((out, guards))
 }
 
 fn delivered_links(state: &AppState, sources: &[Source]) -> Vec<Link> {
@@ -141,7 +170,14 @@ pub async fn initialize_with_prompt(
     if sources.is_empty() {
         return Ok(());
     }
-    let snapshots = capture(state, principal, &sources)?;
+    let (snapshots, _pin_guards) = capture_and_freeze(
+        state,
+        principal,
+        &sources,
+        &std::collections::HashMap::new(),
+        Some(id),
+    )
+    .await?;
     let initial_is_command = initial_prompt.is_some_and(crate::session_context::is_command);
     if initial_cmid.is_some() && initial_is_command {
         // Do not bind linked context to a bootstrap slash command such as
@@ -218,7 +254,16 @@ async fn claim_carrier_in(
         hub.load_settings(vec![(key, value)]);
         crate::session_context::announce(hub, id, &promoted);
     }
-    let Some((key, expected, value)) = crate::session_context::carrier_claim(hub, id, cmid) else {
+    let precomputed = match crate::session_context::carrier_claim_sources(hub, id, cmid) {
+        Some(sources) => Some(
+            crate::session_context::handoff_digest::build_preamble_async(hub, store, id, &sources)
+                .await,
+        ),
+        None => None,
+    };
+    let Some((key, expected, value)) =
+        crate::session_context::carrier_claim_with_preamble(hub, id, cmid, precomputed)
+    else {
         return Ok(());
     };
     let store = store.ok_or(unavailable)?;
@@ -470,7 +515,15 @@ pub async fn set(
         // Staging a new agent leaves the waiting links in place: going back
         // must not move their point.
         let waiting = if links_only {
-            let links = delivered_links(&state, &capture(&state, &auth.principal, &edit.sources)?);
+            let (captured, _pin_guards) = capture_and_freeze(
+                &state,
+                &auth.principal,
+                &edit.sources,
+                &std::collections::HashMap::new(),
+                Some(&id),
+            )
+            .await?;
+            let links = delivered_links(&state, &captured);
             links
                 .into_iter()
                 .map(|link| {
@@ -756,7 +809,11 @@ async fn deliver(
     {
         return Err("Context changed or was already applied; refresh before sending".into());
     }
+    let mut parked_cutoffs = std::collections::HashMap::new();
     if links_waiting {
+        for link in &context.waiting {
+            parked_cutoffs.insert(link.session_id.clone(), link.before);
+        }
         context.sources = crate::session_context::pending_links(&context);
         context.waiting.clear();
     }
@@ -770,7 +827,14 @@ async fn deliver(
     {
         return Err("Wait for this agent to finish, or stop it and resolve its queue before starting the new context".into());
     }
-    let sources = capture(&state, &auth.principal, &context.sources)?;
+    let (sources, _pin_guards) = capture_and_freeze(
+        &state,
+        &auth.principal,
+        &context.sources,
+        &parked_cutoffs,
+        Some(&id),
+    )
+    .await?;
     let target_id = if context.next_agent.is_some() {
         state.supervisor.reserve_session_id()
     } else {
@@ -822,8 +886,12 @@ async fn deliver(
         preparation_failed(&state, &id, &mut context, &mut delivery, error).await?;
         return Ok(delivery);
     }
-    if target_id != id {
-        lineage::record_replace_edge(&state, &target_id, &info.meta, &target_context).await;
+    if target_id != id
+        && let Err(error) =
+            lineage::record_replace_edge(&state, &target_id, &info.meta, &target_context).await
+    {
+        preparation_failed(&state, &id, &mut context, &mut delivery, error).await?;
+        return Ok(delivery);
     }
     // No retry ever reaches this dispatch twice: the durable intent above is
     // observation-only, even if the process dies before recording acceptance.
@@ -834,11 +902,35 @@ async fn deliver(
         cmid,
         &auth.caller,
     );
+    finalize_delivery_contexts(
+        &state,
+        &auth.principal,
+        &id,
+        &target_id,
+        context,
+        target_context,
+        links,
+        delivery,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn finalize_delivery_contexts(
+    state: &Arc<AppState>,
+    principal: &ProductPrincipal,
+    id: &str,
+    target_id: &str,
+    mut context: Context,
+    mut target_context: Context,
+    links: Vec<Link>,
+    mut delivery: Delivery,
+) -> Result<Delivery, String> {
     delivery.state = "accepted".into();
     target_context.remember_links(links);
     if target_id != id {
         target_context.delivery = Some(delivery.clone());
-        save(&state, &target_id, &target_context).await?;
+        save(state, target_id, &target_context).await?;
     }
     if target_id == id {
         context = target_context;
@@ -852,9 +944,9 @@ async fn deliver(
         context.waiting.clear();
     }
     context.delivery = Some(delivery.clone());
-    save(&state, &id, &context).await?;
+    save(state, id, &context).await?;
     if target_id != id {
-        retire_source(&state, &auth.principal, &id, &mut context, &mut delivery).await;
+        retire_source(state, principal, id, &mut context, &mut delivery).await;
     }
     Ok(delivery)
 }

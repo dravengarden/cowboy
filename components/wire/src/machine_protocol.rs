@@ -362,6 +362,9 @@ pub struct MachineCapabilities {
     /// Starts sessions with a native `session/fork` and forked worktrees.
     #[serde(default)]
     pub native_fork: bool,
+    /// Supports v54 committed-HEAD vs uncommitted-copy workspace fork modes.
+    #[serde(default)]
+    pub fork_workspace_mode: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

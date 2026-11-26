@@ -1,9 +1,10 @@
 -- Durable session lineage edges and decoupled archived history segments.
 --
--- Archived segments hold immutable event prefixes copied on Clear or Trash
--- purge so child sessions can render inherited history even after an ancestor
--- clears its transcript or ages out of Trash, without keeping expired parent
--- session rows (or retired provider auth generations) alive.
+-- Archived segments hold immutable event prefixes copied on Clear, logical
+-- deletion, or Trash purge so child sessions can render inherited history even
+-- after an ancestor clears its transcript or ages out of Trash, without
+-- keeping expired parent session rows (or retired provider auth generations)
+-- alive.
 CREATE TABLE archived_lineage_segments (
     segment_id TEXT PRIMARY KEY,
     source_session_id TEXT NOT NULL,
@@ -28,11 +29,14 @@ CREATE TABLE archived_lineage_events (
 );
 
 -- Deliberately has no ON DELETE CASCADE from sessions(id): if intermediate B
--- in A -> B -> C is purged while C survives, B's edge to A stays reachable
--- until C is purged and lineage GC removes unreachable edges and segments.
+-- in A -> B -> C is purged while C survives, B's hop_order=1 auth edge to A
+-- stays reachable until C is purged, and C's own materialized hop_order=2 edge
+-- to A survives even if B is cleared.
 CREATE TABLE session_lineage_edges (
-    child_session_id TEXT PRIMARY KEY,
+    child_session_id TEXT NOT NULL,
+    hop_order INTEGER NOT NULL DEFAULT 1,
     parent_session_id TEXT NOT NULL,
+    parent_is_root BOOLEAN NOT NULL DEFAULT FALSE,
     owner_user_id TEXT NOT NULL DEFAULT '',
     kind TEXT NOT NULL,
     before_seq BIGINT NOT NULL,
@@ -42,7 +46,8 @@ CREATE TABLE session_lineage_edges (
         REFERENCES archived_lineage_segments(segment_id) ON DELETE SET NULL,
     display_detached BOOLEAN NOT NULL DEFAULT FALSE,
     edge_version BIGINT NOT NULL DEFAULT 1,
-    created_at_ms BIGINT NOT NULL
+    created_at_ms BIGINT NOT NULL,
+    PRIMARY KEY (child_session_id, hop_order)
 );
 
 CREATE INDEX idx_session_lineage_edges_parent

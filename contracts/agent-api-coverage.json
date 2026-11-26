@@ -185,10 +185,10 @@
     "notifications::renew_presence": "exception:browser \u2014 Web Push enrollment and device presence belong to one browser installation; an agent has no push endpoint or focus to report.",
     "notifications::release_presence": "exception:browser \u2014 Web Push enrollment and device presence belong to one browser installation; an agent has no push endpoint or focus to report.",
     "notifications::acknowledge": "exception:human \u2014 acknowledging a task records that a person saw it; an agent marking it would hide a failure from them.",
-    "session_context::lineage_get": "sessions.context",
-    "session_context::lineage_history": "sessions.history",
-    "session_context::lineage_question_pages": "sessions.history",
-    "session_context::lineage_question_page": "sessions.history"
+    "session_context::lineage_get": "sessions.lineage",
+    "session_context::lineage_history": "sessions.lineage_history",
+    "session_context::lineage_question_pages": "sessions.lineage_question_pages",
+    "session_context::lineage_question_page": "sessions.lineage_question_page"
   },
   "websocket": {
     "ActivateAllDrafts": "drafts.activate_all",
