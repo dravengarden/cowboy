@@ -1818,7 +1818,12 @@ updated; restart MCP discovery when adopting its new help and receipt domain.
 Retain accepted worker generations during a resident Machine update.
 
 Future Cowboy settings should expose AI-readable schema and an explicit MCP
-action by default, with a documented reason for any exception. Keep storage
+action by default, with a documented reason for any exception. Documented
+exceptions: Device `execution.user_mcp` and `execution.user_mcp_allowlist`
+([`antigravity-user-mcp-r2-design.md`](antigravity-user-mcp-r2-design.md)) are
+host-level execution security switches; they remain discoverable in the Device
+configuration schema and intentionally expose no AI-callable Cowboy MCP write
+action (host-owner `device.toml` edits only). Keep storage
 ownership: UI-edited user state belongs in DB; Service/Device configuration
 remains in the unified configuration framework and retains its validation,
 permission and activation contract. Extend domain operations behind the four

@@ -1,577 +1,778 @@
-# Antigravity User MCP Servers (R2) — Design (Revision 2)
+# Antigravity User MCP Servers (R2) — Design Document (Revision 3)
 
-Status: **Revision 2 (owner-approved Option 1 boundary, pending Round 2 design review)**
+Status: **Design Revision 3** (Owner-approved Option 1 pragmatic same-UID parity;
+addresses all 14 Round 1 findings from `call-471f3a5bc14a499bcbc732e8` and all 15
+Round 2 findings from `call-ae42c7df5b133bae153ba7cf`).
 
-This document specifies **R2** from
-[`docs/antigravity-parity-round-2.md`](antigravity-parity-round-2.md):
-exposing owner-configured **stdio** MCP servers from the target home's
-`~/.claude.json` to ordinary (non-managed) Antigravity sessions running on OVH
-against a Linux execution target (Hawk/Falcon).
-
-Revision 2 resolves all 7 High, 6 Medium, and 1 Low findings from Round 1 design
-review `call-471f3a5bc14a499bcbc732e8` (Claude Fable Max) and incorporates the
-owner's explicit **2026-11-26 Option 1 scope decision** aligning R2 with the
-documented host-isolation reality in [`docs/host-isolation-design.md`](host-isolation-design.md).
-
----
-
-## 1. Scope, Trust Boundary, and Owner-Accepted Residual Risk
-
-### 1.1 Honest host-isolation reality (resolves Round 1 High 1 & High 2)
-
-As documented in [`docs/host-isolation-design.md`](host-isolation-design.md)
-(lines 41–78 and 675–687):
-
-- On Hawk today, the Controller (`cowboy.service`, `User=draven`), Machine
-  broker, workers, keepers (`cowboy-execution-host`), `RunCommand`, and owner
-  CLI device credentials (`~/.config/cowboy/client-auth`) all share UID 1000
-  (`draven`).
-- Consequently, any same-UID `--bind / /` blacklist sandbox or same-UID
-  Controller admission store **cannot** provide a true cross-UID security
-  boundary against another compromised `draven` process. Real user-MCP
-  sandboxing (static `cowboy-sbx-<n>` users, `ProtectHome=tmpfs`, positive FS
-  view, network allowlist, and credential separation) belongs to
-  `docs/host-isolation-design.md` **Part I** (I-1 / I-8 / Future user-MCP
-  sandbox).
-- Meanwhile, Cowboy's Claude Code remote runtime
-  (`plugins/claude-code/runtime/mcp.mjs`) already runs the target user's
-  `~/.claude.json` stdio MCP servers directly under `draven` on Hawk/Falcon,
-  and the owner's actual `~/.claude.json` servers on Hawk require target host
-  capabilities incompatible with a loopback-blocked/tmpfs-`$HOME` sandbox
-  (`chrome-devtools*` connect to loopback `127.0.0.1:9222..9225`; `ios-sim`
-  runs `ssh macbook-air ...` using `~/.ssh`).
-
-**Owner Decision (2026-11-26, Option 1)**: Ship R2 now with parity to Claude
-Code's existing same-UID `~/.claude.json` trust model on Hawk/Falcon — explicitly
-recording the same-UID residual risk until Part I lands rather than claiming an
-unenforceable separate-UID sandbox — while enforcing every real guardrail that
-holds cleanly under the current architecture:
-
-1. **Zero secrets or config cross off the target Machine**: `~/.claude.json`,
-   server `env` values, `args`, and host executable paths NEVER leave the target
-   keeper (`cowboy-execution-host`), NEVER enter `StartSession`, OVH worker
-   argv, `contract.json`, Controller storage, or the account sandbox unit.
-2. **No repository `.mcp.json` execution** (deferred to D1): ONLY
-   `$HOME/.claude.json` (`mcpServers` user scope + `projects[projectKey].mcpServers`
-   local scope minus `disabledMcpServers`) is read.
-3. **Pre-turn worktree / repository confinement**: user MCP servers run with
-   `cwd` set to a keeper-owned empty mode-`0500` neutral directory
-   (`<keeper_state_dir>/user-mcp-cwd`), NEVER the mutable session worktree.
-   Commands with relative `/` paths (`./`, `../`), executables resolving inside
-   the worktree/workspace/source root, and relative `./`/`../` or worktree-path
-   arguments are refused.
-4. **No `COWBOY_CALL_CONTEXT` or `COWBOY_*` env inheritance (defence-in-depth)**:
-   user MCP servers start through a dedicated keeper method
-   (`cowboy/startUserMcp`) that **never** calls `wire::with_call_context(...)`
-   and explicitly excludes `COWBOY_CALL_CONTEXT`,
-   `COWBOY_EXECUTION_FILE_HELPER`, and all `COWBOY_*` keys from the spawned
-   process's environment. (This prevents accidental credential inheritance; it
-   does not claim kernel-level isolation against a malicious same-UID binary.)
-5. **Live Device-level kill-switch and server-name allowlist**: target Machine
-   Device configuration (`execution.user_mcp`, default `true`, `Reload::Live`;
-   `execution.user_mcp_allowlist`, default `[]`, `Reload::Live`) lets the owner
-   disable user MCP or pin exact server names without restarting keepers or
-   breaking worker adoption.
-6. **Managed read-only calls excluded**: when `binding.managed.is_some()` (or
-   keeper `read_only == true`), user MCP servers are never advertised, listed,
-   or started.
-7. **Single closed `agy` tool namespace**: user MCP tools surface only through
-   the worker extension broker inside `mcp_cowboy_*` with mandatory `<server>_`
-   prefixing; required folder bindings and Cowboy MCP retain full priority and
-   existing budgets.
-
-### 1.2 Explicitly excluded (non-goals)
-
-- Repository `.mcp.json` servers (D1).
-- HTTP / SSE / streamable-HTTP user MCP servers (stdio only; non-stdio entries
-  produce bounded availability notes).
-- Non-Linux / Windows execution targets (`execution-connection.mjs` already
-  refuses non-Linux executors; non-Unix targets return empty/refused cleanly).
-- Cross-UID kernel sandboxing (`bwrap` / static `cowboy-sbx-*` UIDs — deferred
-  to `docs/host-isolation-design.md` Part I).
+Related documents:
+- [`antigravity-parity-round-2.md`](antigravity-parity-round-2.md) — Round 2 parity requirements (R2 and D1 aligned to the 2026-11-26 Option 1 decision)
+- [`antigravity-real-accounts-design.md`](antigravity-real-accounts-design.md) — Account-sandboxed Antigravity runtime and session extension broker
+- [`antigravity-post-edit-r4-design.md`](antigravity-post-edit-r4-design.md) — R4 post-edit diagnostics and §7.1 three-tier populated-ledger fallback verification
+- [`host-isolation-design.md`](host-isolation-design.md) — Target-host same-UID threat model and Part I control-UID boundary
+- [`uncertain-effect-recovery.md`](uncertain-effect-recovery.md) — Uncertain effect durability, L1c drain, and recovery UX
+- [`machine-worker-pin-advance-runbook.md`](machine-worker-pin-advance-runbook.md) — `retained-worker-interface-compatible` and worker pin advance
+- [`agent-api.md`](agent-api.md) — Cowboy MCP schema discovery and write-action policy exceptions
 
 ---
 
-## 2. Target-Side Keeper User-MCP Protocol (Resolves High 3, High 4, High 7, Medium 5, Medium 6)
+## 1. Decision Record, Trust Model & Guardrails
 
-### 2.1 Zero breaking wire/contract changes
+### 1.1 Owner-Approved Trust Model (Option 1 — 2026-11-26)
 
-R2 adds **zero fields** to `LaunchContract` (`contract.json`), `StartSession`,
-`SessionExtensions`, `execution_protocol::Command`, or
-`machine_protocol::execution::Action` (all of which use `deny_unknown_fields`
-or `mcp_launch.rs` equality checks). Instead:
+On target hosts such as Hawk and Falcon today, the Controller (`User=draven`),
+Machine, execution keeper (`cowboy-execution-host`), ordinary session
+`RunCommand` processes, Claude Code's native stdio MCP servers, and
+`~/.config/cowboy/client-auth` all execute under the same OS UID (`1000`,
+[`host-isolation-design.md`](host-isolation-design.md)). Within a single UID, a
+same-UID `bwrap` or filesystem blacklist cannot establish a genuine security
+boundary against arbitrary user-level code (`client-auth`, `systemd-run --user`,
+Docker socket, writable `$HOME`).
 
-- `components/wire/src/execution_protocol.rs` adds three string constants only:
-  - `USER_MCP_INITIALIZATION_KEY = "cowboyUserMcp"`
-  - `USER_MCP_LIST_METHOD = "cowboy/listUserMcp"`
-  - `USER_MCP_START_METHOD = "cowboy/startUserMcp"`
-- Both methods ride inside the existing `Command::Invoke { invocation, wait_ms }`
-  envelope (`Invocation::validate` already permits `[A-Za-z0-9/_]` up to 128
-  bytes).
+On 2026-11-26 the owner explicitly approved **Option 1**:
 
-### 2.2 Explicit keeper capability negotiation (High 3)
+1. **Honest same-UID parity with Claude Code**: Antigravity R2 adopts the exact
+   same target-user trust anchor as Claude Code's existing `~/.claude.json`
+   stdio MCP servers on Hawk/Falcon. R2 makes **no false claim** of cross-UID
+   sandbox confinement or `bwrap` isolation.
+2. **Explicit residual risk**: Until [`host-isolation-design.md`](host-isolation-design.md)
+   Part I establishes a separate control UID / peer-credential boundary, any
+   process running as UID `1000` (including `RunCommand` or a user MCP server)
+   shares OS privilege with `~/.claude.json` and same-UID Cowboy control files.
+   This residual risk is documented here and in
+   [`antigravity-parity-round-2.md`](antigravity-parity-round-2.md) (with frozen,
+   credential-isolated launch plans scoped to D1 / Part I).
+3. **All real, enforceable guardrails stay intact**: Everything that genuinely
+   improves safety, privacy, durability, and blast-radius control without
+   needing Part I is strictly enforced below.
 
-At keeper startup (`components/machine/src/execution_host.rs`), when
-`contract.managed.is_none()`:
+### 1.2 Enforceable Guardrails in R2
 
-1. The keeper creates `<keeper_state_dir>/user-mcp-cwd` with mode `0500` (if
-   absent, failing startup only if `state_dir` is broken; verifying mode/owner
-   and non-symlink).
-2. The keeper generates a random 256-bit ephemeral per-keeper HMAC/keyed-hash
-   secret (`user_mcp_key: [u8; 32]`) in memory (never persisted, never logged).
-3. The keeper adds `"cowboyUserMcp": { "schema": 1 }` to `initialization`
-   (matching `cowboyAgentCli` and `cowboyManaged`).
-
-**Retained legacy keeper safety**:
-- A retained legacy keeper from before this release does **not** advertise
-  `"cowboyUserMcp"` in `initialization`.
-- Before attempting user MCP discovery, the worker inspects `initialization`
-  from `Command::Describe`. If `"cowboyUserMcp"` `{ "schema": 1 }` is absent,
-  the worker skips user MCP discovery completely and emits a bounded
-  availability note (`"User MCP servers require a refreshed target execution
-  environment."`).
-- Even if `cowboy/startUserMcp` were ever sent to a legacy keeper, the legacy
-  keeper forwards the unknown method verbatim to the native executor, which
-  rejects it with `-32601 Method not found` — it **never** falls back to
-  `process/start` and **never** injects `COWBOY_CALL_CONTEXT`.
-
-### 2.3 Target-local `~/.claude.json` resolution (`cowboy/listUserMcp`)
-
-Handled locally inside `Host::request` (NEVER forwarded to the native executor):
-
-1. Refuses immediately when `self.read_only` (`contract.managed.is_some()`),
-   when `self.ledger.lock().lost`, or when `!self.current_workspace()`.
-2. Reads `$HOME/.claude.json` from `self.environment.get("HOME")` (bounded to
-   `MAX_CLAUDE_CONFIG_BYTES = 2 MiB`; symlink/non-regular check; missing file
-   returns empty `servers: []`).
-3. **Precedence & `projectKey` resolution** (matches `plugins/claude-code/runtime/mcp.mjs:118-138`
-   without reading `.mcp.json`, and resolves Medium 2's worktree `project_key`
-   mismatch):
-   - User scope: top-level `mcpServers`.
-   - Local project scope: `projects[key]` where `key` checks
-     `contract.binding.workspace.source_path` first (e.g., `/home/draven/columbus`,
-     NOT the ephemeral worktree `/srv/storage/fast0/agent/sessions/sess-...`),
-     falling back to `canonicalize(source_path)` if symlinked and distinct.
-   - Local scope overrides user scope by server name; names in
-     `local.disabledMcpServers` are skipped.
-   - Never reads `.mcp.json` or `disabledMcpjsonServers`.
-4. **Validation, confinement & sanitization** per candidate server (capped at
-   `MAX_USER_MCP_SERVERS = 16`):
-   - `name` matches `^[A-Za-z0-9_-]{1,64}$` and is not `"cowboy"`.
-   - Transport must be stdio (`type` absent or `"stdio"`, `command` non-empty
-     string, `url` absent). Non-stdio entries go to `omitted`.
-   - Expands `${VAR}` and `${VAR:-default}` in `command`, `args`, and `env`
-     against `sanitized_env` (`contract.environment` with ALL `COWBOY_*` keys
-     stripped).
-   - Rejects (omits) if `env` contains any `COWBOY_*` key or loader/injection
-     key (`LD_PRELOAD`, `LD_LIBRARY_PATH`, `LD_AUDIT`, `NODE_OPTIONS`,
-     `NODE_PATH`, `PYTHONPATH`, `PYTHONSTARTUP`, `PERL5OPT`, `RUBYOPT`,
-     `BASH_ENV`, `ENV`, `ZDOTDIR`, `IFS`), or if any key/value contains `\0` or
-     exceeds bounded length (`MAX_ARGS = 64`, `MAX_ARG_BYTES = 4096`,
-     `MAX_ENV_ENTRIES = 64`, `MAX_ENV_VALUE_BYTES = 4096`).
-   - **Executable & argument confinement**:
-     - Rejects relative `command` containing `/` (`./...`, `../...`).
-     - Resolves bare `command` via sanitized `PATH` (skipping empty entries,
-       `.`, and any directory inside forbidden workspace roots).
-     - Canonicalizes the resolved executable; requires regular file with execute
-       bit and `realpath` strictly outside all forbidden roots:
-       `{ cwd, canonicalize(cwd), source_path, canonicalize(source_path) }`.
-     - Rejects any argument starting with `./` or `../`, or any absolute path
-       argument whose existing or ancestor-canonicalized path lies inside
-       `cwd` / `canonicalize(cwd)`.
-5. **Opaque keyed fingerprint (no secrets leave target — resolves High 7)**:
-   - Computes `fingerprint = hex(SHA-256(user_mcp_key || canonical_json({ name, executable, args, env })))`.
-   - Returns ONLY:
-     ```json
-     {
-       "result": {
-         "schema": 1,
-         "servers": [{ "name": "chrome-devtools", "scope": "local", "fingerprint": "<64-hex>" }],
-         "omitted": [{ "name": "remote-sse", "scope": "user", "reason": "non-stdio transport is not supported" }]
-       }
-     }
-     ```
-   - ZERO `env` values, ZERO `args`, and ZERO host executable paths leave the
-     target Machine.
-
-### 2.4 Target-local sanitized launch (`cowboy/startUserMcp`)
-
-Handled inside `Host::request` and admitted through `execution_host::ledger::Ledger`:
-
-1. Validates `!self.read_only`, `wait_ms <= MAX_WAIT_MS`, `current_workspace()`,
-   `params.processId` matches `^cowboy-user-mcp-[0-9a-f]{32}$`,
-   `params.serverName` matches `^[A-Za-z0-9_-]{1,64}$`, and
-   `params.fingerprint` is 64 lowercase hex.
-2. Re-resolves `serverName` from `$HOME/.claude.json` using the exact Section
-   2.3 resolver and verifies `computed_fingerprint == params.fingerprint` (if
-   `~/.claude.json` drifted between list and start, returns a clean refusal
-   without starting a swapped entry).
-3. Builds the native `process/start` parameters locally:
-   - `processId`: validated `cowboy-user-mcp-<hex>`
-   - `argv`: `[resolved_executable, ...expanded_args]`
-   - `cwd`: `file://<keeper_state_dir>/user-mcp-cwd` (mode `0500` empty dir)
-   - `env`: `{}`
-   - `tty`: `false`, `pipeStdin`: `true`, `arg0`: `null`
-   - `envPolicy`:
-     - `inherit: "all"`, `ignoreDefaultExcludes: true`
-     - `exclude`: explicit list of `COWBOY_CALL_CONTEXT`,
-       `COWBOY_EXECUTION_FILE_HELPER`, plus EVERY `COWBOY_*` key present in
-       `contract.environment` or the keeper process environment
-     - `set`: the server's validated `env` entries
-     - `includeOnly`: `[]`
-4. Admits `invocation` into `execution_host::ledger::Ledger` (preserving
-   idempotent `operation_id` deduplication AND recording `processId` in
-   `ledger.processes` so `reap_unattended()` automatically cleans up orphaned
-   user MCP processes if a worker vanishes for 30 min!).
-5. On `Admission::New`, sends `{"id": id, "method": "process/start", "params": native_params}`
-   directly to the native executor **WITHOUT calling `wire::with_call_context`**!
-
-### 2.5 Target Machine Device config gate (`src/config/schema.rs` + `machine_cli/execution.rs`)
-
-Add two live-reloadable Device settings (enforced by the target Machine
-receiving `Action::Call` in `execution::Manager::call`, matching
-`docs/configuration.md`):
-
-- `execution.user_mcp` (`Kind::Bool`, default `true`, `Reload::Live`): master
-  switch for target user MCP servers (`~/.claude.json`). When `false`,
-  `execution::Manager::call` immediately answers `cowboy/listUserMcp` with
-  `{ schema: 1, disabled: true, servers: [], omitted: [] }` and refuses
-  `cowboy/startUserMcp` before reaching the keeper.
-- `execution.user_mcp_allowlist` (`Kind::Identifiers { max_items: 32 }`,
-  default `[]`, `Reload::Live`): when empty, all validated stdio servers from
-  `~/.claude.json` are eligible; when non-empty, `execution::Manager::call`
-  filters `cowboy/listUserMcp` responses to listed names (moving others to
-  `omitted`) and refuses `cowboy/startUserMcp` for unlisted names.
-- Rollback note in `Field.doc` (matching `diagnostics.heartbeat_gap_sampler`):
-  if explicitly written into `device.toml`, remove the `[execution]` keys before
-  rolling back to an older Machine release. When omitted (default), older
-  Machines are unaffected.
-
-### 2.6 Account-unit reachability fence (Resolves Medium 6)
-
-In `src/worker_execution/ledger.rs` and `src/worker_execution.rs`:
-
-1. Define `pub(super) const USER_SERVER_PREFIX: &str = "cowboy-user-mcp-";`
-   alongside `SERVER_PREFIX = "cowboy-worker-mcp-"`.
-2. `is_worker_server_process(id)` checks BOTH prefixes (`SERVER_PREFIX` and
-   `USER_SERVER_PREFIX`) in:
-   - `worker_event()` (execution events for user MCP servers NEVER reach the
-     account unit);
-   - `Ledger::admit()` (unit requests naming either prefix are refused with
-     `"that process belongs to the worker; request refused"`).
-3. `Ledger::admit()` (and `serve_mutation` before forwarding) locally **refuses**
-   any unit-originated request whose `method` starts with `"cowboy/"` other than
-   the explicitly handled local endpoints (`cowboy/extensions`,
-   `cowboy/extensionCall`, `cowboy/extensionCallAck`, `cowboy/uncertainEffect`,
-   `cowboy/drained`) — so the account unit can NEVER directly invoke
-   `cowboy/listUserMcp` or `cowboy/startUserMcp`.
+1. **Zero secrets or config values cross off the target Machine**:
+   `~/.claude.json`, server `env` values, `args`, and executable paths are
+   parsed and held exclusively inside the target `cowboy-execution-host` keeper.
+   Only `{ name, scope, fingerprint }` leaves the target to the OVH worker. No
+   change is made to `LaunchContract`, `StartSession`, `contract.json`, or the
+   OVH account-sandbox unit.
+2. **Anti-accidental-repo-execution guardrail (neutral cwd + lexical repo-path checks)**:
+   - Repository `.mcp.json` files are **never** read (deferred to D1).
+   - User MCP servers start in a neutral, read-only, mode-`0500` directory
+     located **outside** both `<keeper_state_dir>` and Machine state:
+     `/tmp/cowboy-user-mcp-<uid>/<incarnation>` (created and verified for
+     current UID, non-symlink `O_NOFOLLOW`, `0700` parent / `0500` leaf,
+     mirroring `control_root()` in `components/machine/src/machine_cli/execution.rs:1122`,
+     and removed on keeper shutdown).
+   - Lexical repo-path checks (explicitly documented as an accidental-execution
+     guardrail, not an OS confinement boundary) reject:
+     - relative commands containing `/` (e.g. `./server.js`, `../bin/mcp`);
+     - executables whose logical OR canonicalized path lies inside either
+       `binding.workspace.source_path` (including its git toplevel) OR
+       `binding.workspace.cwd` (worktree);
+     - arguments starting with `./` or `../`, or referencing either
+       `source_path` or `cwd` (logical or canonicalized).
+3. **Clean child environment (empirically verified `envPolicy.inherit = "none"`)**:
+   - Keeper's dedicated `cowboy/startUserMcp` handler **never** calls
+     `wire::with_call_context`.
+   - Native `process/start` is sent with `envPolicy: { inherit: "none",
+     ignoreDefaultExcludes: true, exclude: [], set: <clean map>, includeOnly: [] }`
+     (empirically verified on pinned `codex 0.159.3`: yields *exclusively* the
+     keys in `set`, guaranteeing zero leakage of `COWBOY_CALL_CONTEXT`,
+     `COWBOY_EXECUTION_FILE_HELPER`, or keeper-private
+     `CODEX_HOME=<keeper_state_dir>/executor-home`).
+   - `set` is constructed from `contract.environment` minus all `COWBOY_*` keys
+     and minus any `CODEX_HOME` pointing inside `<keeper_state_dir>`, overlaid
+     with the server's expanded `env` (rejecting any `COWBOY_*` key).
+4. **Live-reloadable target Machine kill-switch & allowlist (fail closed)**:
+   - Device config `[execution]`: `user_mcp` (`bool`, default `true`,
+     `Reload::Live`) and `user_mcp_allowlist` (`Kind::McpServerNames { max_items: 32 }`,
+     default `[]`, `Reload::Live`).
+   - Target `execution::Manager` injects a canonical `managerGate` on every
+     `cowboy/listUserMcp` and `cowboy/startUserMcp`; the keeper **fails closed**
+     if `managerGate` is absent (protecting against old-Machine rollback with a
+     retained new keeper).
+   - A 5-second live-reload watcher in `execution::Manager` (mirroring
+     `src/config/file_buffers.rs`) detects `user_mcp: true -> false` or
+     `user_mcp_allowlist` narrowing and immediately invokes `cowboy/stopUserMcp`
+     across active keepers so already-running servers stop promptly.
+5. **Durable pending-call recovery & bounded correlated proxy acks**:
+   - Pending user-MCP calls are recorded in Schema-1 `record.active_processes`
+     as `cowboy-pending-call:<call_id>` (zero ledger schema bump), gated on an
+     explicit rollback worker floor (first generation containing `d3b59b8ca` /
+     `f2aa86175`, verified via R4 §7.1 three-tier populated-ledger proof).
+   - Correlated proxy ack (`cowboy/extensionCallAck`, `15 s` deadline started at
+     registration, `MAX_ACK = 8` dedicated lane on proxy & worker, top-level
+     `cowboyAck` frame field) guarantees no silent effect loss and no unbounded
+     turn hang even if the socket closes mid-call.
+6. **Keeper-authoritative orphan & process-tree lifecycle**:
+   - User-MCP processes use process IDs under the **existing protected prefix**:
+     `cowboy-worker-mcp-user-<32hex>`. Every previously released worker
+     generation already blocks account-unit events and requests for
+     `cowboy-worker-mcp-*` without modification.
+   - Keeper owns `cowboy/stopUserMcp` (tracking active user servers,
+     `stop_epoch`, and bounded per-`processId` tombstones), eliminating sibling
+     ledger files and unconfirmed-start deadlocks.
+7. **Zero wire-interface churn (`retained-worker-interface-compatible`)**:
+   - `components/wire/src/` is **not modified**. The 4 string constants are
+     defined in keeper and worker modules and kept identical by a workspace unit
+     test (the existing `READINESS_SCRIPT` pattern), allowing Hawk and Falcon to
+     deploy target support as resident host releases without replacing live
+     Hawk/Falcon workers.
 
 ---
 
-## 3. Zero-Schema-Migration Durable Tracking & Orphan Cleanup (Resolves High 5 & Medium 3)
+## 2. Protocol & Configuration Design
 
-### 3.1 Pending call durability in Schema-1 `ledger.json` (no schema bump!)
+### 2.1 Shared String Constants (Zero `components/wire/src` Changes)
 
-Note: the worker's execution ledger lives on the **runtime Machine** at
-`<state>/execution-ledgers/<session_id>.json` (`src/account_sandbox.rs:114-134`),
-NOT inside `<keeper_state_dir>` (resolves Low finding).
+To avoid tripping `retained-worker-interface-compatible` (`flake.nix:1016-1028`)
+and forcing unnecessary worker generation swaps on Hawk/Falcon, the four string
+constants live in `components/machine/src/execution_host/user_mcp.rs` and
+`src/worker_execution/extension_broker.rs`, verified byte-identical by a unit
+test:
 
-Rather than bumping `ledger.json` from Schema 1 to Schema 2 (which caused
-per-session fallback breakage in Round 1 High 5), R2 stores in-flight durable
-user-MCP call sentinels directly inside the existing Schema-1
-`record.active_processes: BTreeSet<String>` using reserved prefix
-`cowboy-pending-call:<call_id>`:
-
-- **Pre-dispatch**: before writing `tools/call` to a user MCP server's stdin,
-  the worker allocates a 128-bit hex `call_id`, inserts
-  `"cowboy-pending-call:<call_id>"` into `record.active_processes`, and
-  atomically persists `ledger.json` (still `schema: 1`!). If the write fails,
-  the call is refused before dispatch (`Failure::NotSent`).
-- **On worker crash or rollback to ANY older Schema-1 worker generation**
-  (automatic, manual, or per-session fallback):
-  - An **older worker** (`worker-11af6d9b0b7925e98a9d` or earlier) opens
-    `schema: 1` cleanly, sees `!record.active_processes.is_empty()`, atomically
-    clears `active_processes`, sets `uncertain_effect` and advances
-    `uncertain_sequence` (`ledger.rs:271-281`) — zero `"unsupported execution
-    ledger schema"` crash!
-  - A **new R2 worker** reopening `ledger.json` distinguishes
-    `cowboy-pending-call:*` entries from process IDs: if only pending-call
-    sentinels exist it records `uncertain_effect = Some("tools/call")`; if
-    process IDs also exist it records `"process/terminate"`; in both cases it
-    clears `active_processes` and atomically advances `uncertain_sequence`.
-- **On `mark_unresolved_effects_uncertain` (SIGTERM cutoff)**: if any
-  `cowboy-pending-call:*` sentinel or unacked call remains, records
-  `uncertain_effect` (`"process/terminate"` if turn processes remain, else
-  `"tools/call"`) atomically.
-- **No Phase-A / Phase-B reader-floor deadlock**: Schema stays `1`, so every
-  existing rollback tier is immediately compatible with zero two-phase schema
-  migration!
-
-### 3.2 Retained-keeper orphan user-server cleanup via sibling file (Resolves Medium 3)
-
-Because worker-owned MCP servers are never a session effect
-(`ledger.rs:1301`: *"the worker's own servers are never a session effect"*),
-running user-MCP server IDs are **not** stored in `active_processes` (which
-would falsely park sessions on normal worker restarts). Instead, they are
-tracked in a bounded sibling file next to the ledger:
-`<ledger_path>.user-servers.json` (mode `0600`, max `64 KiB`, max `32` records):
-
-```json
-{
-  "schema": 1,
-  "servers": [
-    {
-      "process_id": "cowboy-user-mcp-<32-hex>",
-      "server_name": "chrome-devtools",
-      "scope": { "binding_id": "...", "revision": 1, "incarnation": "..." },
-      "start_confirmed": true
-    }
-  ]
-}
+```rust
+pub const USER_MCP_INITIALIZATION_KEY: &str = "cowboyUserMcp";
+pub const USER_MCP_LIST_METHOD: &str = "cowboy/listUserMcp";
+pub const USER_MCP_START_METHOD: &str = "cowboy/startUserMcp";
+pub const USER_MCP_STOP_METHOD: &str = "cowboy/stopUserMcp";
+pub const USER_MCP_PROCESS_PREFIX: &str = "cowboy-worker-mcp-user-";
 ```
 
-Lifecycle invariants (incorporating the three L2 start-tracking rules from
-`docs/uncertain-effect-recovery.md:468-484`):
+No struct with `#[serde(deny_unknown_fields)]` (`LaunchContract`,
+`SessionExtensions`, `execution_protocol::Command`, `machine_protocol::execution::Action`)
+is modified.
 
-1. **Persist before start**: before issuing `cowboy/startUserMcp`, atomically
-   persist the entry with `start_confirmed: false` (enforcing the 32-entry /
-   64 KiB cap).
-2. **Classified start with surviving completion owner**:
-   - `cowboy/startUserMcp` runs via `invoke_classified` inside a spawned
-     completion task that **survives** discovery timeout cancellation (so
-     cancelling discovery never leaves a process stuck in `ledger.starting`!).
-   - On `Ok(processId)` → update sibling entry to `start_confirmed: true` and
-     call `ledger.server_started(process, true)`.
-   - On `Err(maybe_sent = false)` (definitive refusal) → remove sibling entry
-     and call `ledger.server_started(process, false)`.
-   - On `Err(maybe_sent = true)` or discovery timeout → clear `starting` while
-     keeping the process tracked for termination (`start_confirmed` stays
-     `false`), trigger bounded cleanup termination of that process, disable that
-     server name for this worker epoch with a bounded availability note, and do
-     **NOT** park the session (optional user MCP failure never wedges a session
-     before turn 1).
-3. **Reopen orphan sweep before new user-server starts**:
-   - On `Broker::start()`, read `<ledger_path>.user-servers.json`.
-   - Entries whose `scope != Scope::from_binding(&client.binding)` belong to a
-     retired/closed incarnation and are pruned immediately.
-   - Entries matching the connected keeper's `scope` are terminated via
-     `process/terminate` + `process/read` within `USER_SERVER_STOP_CONFIRM_MS = 10s`:
-     - If `start_confirmed == true`: `closed` OR `E1 forgotten` confirms exit.
-     - If `start_confirmed == false`: `E1 forgotten` is **NOT** accepted as
-       closure proof (a queued `start` resend could still land!); only confirmed
-       `terminate` + `closed` removes the record.
-     - If termination is unconfirmed within 10 s, that `server_name` stays
-       disabled for this worker epoch (no duplicate copy launched; session is
-       not parked) and the record is bounded-pruned once the scope changes or a
-       later sweep confirms exit.
-4. **Clean worker teardown**: terminates all live user servers (`park_on_unconfirmed = false`),
-   and removes confirmed-closed entries from `<ledger_path>.user-servers.json`.
+### 2.2 Keeper Capability Advertisement
+
+In `components/machine/src/execution_host.rs` (right after `MANAGED_INITIALIZATION_KEY`
+annotation):
+- When `contract.managed.is_none()` (ordinary non-managed sessions only):
+  the keeper creates its neutral cwd `/tmp/cowboy-user-mcp-<uid>/<incarnation>`
+  and ephemeral 256-bit HMAC/SHA-256 fingerprint key, and inserts into
+  `initialization`:
+  ```json
+  "cowboyUserMcp": { "schema": 1 }
+  ```
+- Managed read-only children (`contract.managed.is_some()`): omit
+  `cowboyUserMcp` and refuse all three `cowboy/*UserMcp` methods.
+- Retained legacy keepers omit `cowboyUserMcp`; the R2 worker skips Phase 2 and
+  the startup orphan sweep cleanly. (If a legacy keeper ever received
+  `cowboy/*UserMcp`, `codex 0.159.3` returns JSON-RPC `-32601`.)
+
+### 2.3 Device Configuration & Cowboy MCP Policy Exception
+
+In `src/config.rs` and `src/config/schema.rs`:
+
+1. Add `Kind::McpServerNames { max_items: usize }` (matching the MCP server name
+   grammar `^[A-Za-z0-9._-]{1,64}$`, supporting names such as `ios_sim`,
+   `GitHub`, `chrome-devtools-draven`, unlike `Kind::Identifiers` which only
+   accepts lowercase hyphenated slugs).
+2. Add two live-reloadable Device fields under `[execution]`:
+   - `DEVICE_EXECUTION_USER_MCP`: `execution.user_mcp`, `Kind::Bool`,
+     default `true`, `Reload::Live`.
+   - `DEVICE_EXECUTION_USER_MCP_ALLOWLIST`: `execution.user_mcp_allowlist`,
+     `Kind::McpServerNames { max_items: 32 }`, default `[]` (empty = allow all
+     valid stdio servers from `~/.claude.json`), `Reload::Live`.
+3. **Cowboy MCP policy exception (`docs/agent-api.md:1820-1826`)**: Both fields
+   are host security switches controlling what target processes Antigravity may
+   launch. They are **discoverable in the Device config schema** (`cowboy config
+   schema` / JSON Schema), and **intentionally expose NO AI-callable Cowboy MCP
+   write action** — only the host owner editing `device.toml` may change them.
+   This exception is also recorded in [`agent-api.md`](agent-api.md).
+4. **Rollback note for `[execution]`**: Older Machines reject unknown TOML
+   sections (`docs/configuration.md:64`). Rolling back a target Machine to a
+   pre-R2 release requires removing the **entire `[execution]` section** (not
+   merely its keys) from `device.toml` if present. Even with `[execution]`
+   removed, a retained R2 keeper still **fails closed** under an old Machine
+   because the old Manager omits `managerGate` (§2.5).
+
+### 2.4 Target-Local `~/.claude.json` Parser & Claude Code Parity
+
+Implemented in `components/machine/src/execution_host/user_mcp.rs`:
+
+1. **Source**: `$HOME/.claude.json` resolved from `contract.environment["HOME"]`
+   (refusing symlinks to non-regular files or files > **4 MiB**, matching
+   `plugins/claude-code/runtime/tools.mjs:2848`). Missing file yields empty
+   list without error. Repository `.mcp.json` is **never** read.
+2. **Project key resolution (Claude Code parity)**:
+   - Determine `project_root` from `binding.workspace.source_path`: walk upward
+     (bounded, no child process spawn) to locate a `.git` file/directory to find
+     the repository root if `source_path` is a subdirectory, falling back to
+     `source_path` (`plugins/claude-code/runtime/mcp.mjs:62-64`).
+   - Match `projects` entries in `~/.claude.json` by comparing canonicalized
+     paths of each key against both `canonicalize(project_root)` and
+     `canonicalize(source_path)` (preferring exact/canonical `project_root`
+     match, then `source_path`), so symlinked workspace aliases match reliably.
+3. **Precedence & filtering**:
+   - Merge top-level `mcpServers` (scope `"user"`) overridden by matching
+     `projects[<key>].mcpServers` (scope `"local"`).
+   - Remove any server listed in `projects[<key>].disabledMcpServers`.
+   - Accept **stdio only** (`type` absent or `"stdio"`, non-empty `command`,
+     optional string array `args`, optional string-to-string `env`). Non-stdio
+     entries (`http`, `sse`, `ws`) are skipped with bounded reason code
+     `"unsupported_transport"`.
+   - Validate server name against `^[A-Za-z0-9._-]{1,64}$`; reject `"cowboy"`
+     and any name starting with `"cowboy"` (case-insensitive) at the keeper as
+     well as in worker Phase 2.
+   - Apply `managerGate.allowlist` (when non-empty) **BEFORE** enforcing the
+     maximum list size (`MAX_USER_MCP_SERVERS = 16`, sorted deterministically by
+     server name). This guarantees allowlisted servers are never dropped by
+     truncation when `~/.claude.json` defines >16 entries.
+4. **Variable expansion**:
+   - Expand `${VAR}` and `${VAR:-default}` across `command`, `args`, and `env`
+     values (identical to `plugins/claude-code/runtime/mcp.mjs:39-57`) using
+     `contract.environment` (minus `COWBOY_*` and keeper-private `CODEX_HOME`)
+     plus `CLAUDE_PROJECT_DIR = binding.workspace.source_path`. Unset variables
+     without default stay literal.
+5. **Executable, argument & environment validation**:
+   - `command` must not contain NUL, must not be a relative path containing `/`
+     (e.g. `./foo`, `../foo`, `sub/foo`).
+   - If `command` is a bare name (no `/`), resolve it against `PATH` from
+     `contract.environment` to obtain `logical_executable` (an absolute path
+     preserving symlinks!).
+   - Canonicalize `logical_executable` (`realpath`) **solely for the lexical
+     workspace check**; execute **`logical_executable`** so symlink-dispatched
+     tools (`venv/bin/python`, `bunx`, `uvx`, Nix wrappers) preserve `argv[0]`
+     and sibling directory behavior identically to Claude Code.
+   - Reject if EITHER `logical_executable` OR `realpath(logical_executable)` is
+     inside ANY of: `source_path`, `canonicalize(source_path)`, `project_root`,
+     `canonicalize(project_root)`, `cwd`, `canonicalize(cwd)`.
+   - Reject if ANY `arg` starts with `./` or `../`, or matches/contains a path
+     prefix inside any of the above workspace/worktree directories (both logical
+     and canonicalized forms).
+   - Under Option 1, standard runtime variables (`LD_LIBRARY_PATH`,
+     `NODE_OPTIONS`, `PYTHONPATH`, etc.) are **allowed** so legitimate NixOS
+     configurations work; **only `COWBOY_*` keys (case-insensitive)** are
+     rejected in server `env` (defense-in-depth).
+   - Child `envPolicy` sent to executor:
+     ```json
+     {
+       "inherit": "none",
+       "ignoreDefaultExcludes": true,
+       "exclude": [],
+       "set": { "<clean contract.environment + server.env>" },
+       "includeOnly": []
+     }
+     ```
+     (`CLAUDE_PROJECT_DIR` is both expanded to and set to
+     `binding.workspace.source_path` — never the worktree `cwd` — matching
+     `plugins/claude-code/runtime/tools.mjs:2987` without pointing servers into
+     an unvetted branch worktree.)
+6. **Keyed ephemeral fingerprint**:
+   - Computed as `SHA-256(keeper_ephemeral_32B_key || canonical_json(name, scope, logical_executable, args, sorted_env))`
+     (64 lowercase hex chars). Never leaks config content; detects drift
+     between `listUserMcp` and `startUserMcp`.
+
+### 2.5 Target Manager Enforcement, Fail-Closed Gate & Keeper Methods
+
+#### Manager (`components/machine/src/machine_cli/execution.rs`)
+
+`execution::Manager` holds `device_config: crate::config::Handle` and spawns a
+5-second background watcher (like `src/config/file_buffers.rs`):
+
+1. **On every `Manager::call` with `Command::Invoke { invocation, .. }`**:
+   - For `cowboy/listUserMcp` and `cowboy/startUserMcp`:
+     - Strip any caller-supplied `managerGate` field from `invocation.params`.
+     - Read live `enabled = device_config.current().get(&DEVICE_EXECUTION_USER_MCP)`
+       and `allowlist = device_config.current().get(&DEVICE_EXECUTION_USER_MCP_ALLOWLIST)`.
+     - If `!enabled`:
+       - Issue a best-effort local `cowboy/stopUserMcp {}` to this session's
+         keeper so any already-running user servers are stopped.
+       - Return **`Outcome::Completed`** (NOT `Response::Refused`!) with:
+         ```json
+         {"error": {"code": -32000, "message": "user MCP servers disabled by device configuration", "data": {"code": "user_mcp_disabled"}}}
+         ```
+     - If `enabled`:
+       - Inject `"managerGate": { "enabled": true, "allowlist": allowlist }`
+         into `invocation.params` and forward to the keeper.
+   - For `cowboy/stopUserMcp`:
+     - Forward directly to keeper regardless of `enabled` (always safe; only
+       terminates user servers; strips any caller-supplied `keepAllowlist` so
+       only the Manager's live watcher can supply allowlist-scoped stops).
+2. **On 5-second live-reload watcher**:
+   - Track `(last_enabled, last_allowlist)`.
+   - When `enabled` flips `true -> false`: sweep all active non-stopped,
+     non-managed session directories under `self.root` and send best-effort
+     `cowboy/stopUserMcp {}` (5 s per-keeper bound).
+   - When `enabled` remains `true` and `allowlist` narrows (becomes non-empty
+     where it was empty, or drops any previously allowed name): sweep active
+     keepers with `cowboy/stopUserMcp { "keepAllowlist": allowlist }`.
+
+#### Keeper (`components/machine/src/execution_host.rs` & `execution_host/ledger.rs`)
+
+1. **`cowboy/listUserMcp`**:
+   - Handled locally in `Host::request` (never hits `exec-server`, never
+     consumes a ledger operation slot).
+   - Refuses managed/read-only keepers (`Outcome::Completed` error
+     `"user_mcp_unsupported"`).
+   - Requires `params.managerGate` with `enabled == true` (otherwise returns
+     `Outcome::Completed` error `"user_mcp_manager_gate_required"` or
+     `"user_mcp_disabled"` — **fails closed under old Machine rollback**!).
+   - Parses `~/.claude.json`, applies `managerGate.allowlist` **before**
+     truncating to 16 servers, and returns:
+     ```json
+     {"result": {"servers": [{"name": "...", "scope": "user"|"local", "fingerprint": "<64hex>"}], "omitted": [{"name": "...", "reason": "<closed_code>"}]}}
+     ```
+     (Zero paths, args, or env values in response.)
+
+2. **`cowboy/startUserMcp`**:
+   - Params: `{ "name": string, "processId": string, "fingerprint": string, "managerGate": { "enabled": true, "allowlist": [...] } }`.
+   - **Exact execution order (idempotency-first!)**:
+     1. Validate `managerGate` is present and `enabled == true` (otherwise
+        return `Outcome::Completed` error `"user_mcp_manager_gate_required"` /
+        `"user_mcp_disabled"` — fails closed even under old Machine).
+     2. Strip `managerGate` from `invocation.params` into a local variable so
+        the ledger digest is computed strictly over `{ name, processId, fingerprint }`
+        (immune to allowlist edits across retries).
+     3. **Check `ledger.observe(&invocation.operation_id)` FIRST** (matching
+        native `execution_host.rs:294-298`). If the operation already exists
+        (`Completed` or `Pending`), return/await that exact outcome immediately
+        **without** re-reading `~/.claude.json` or re-checking fingerprint!
+     4. Validate `processId` matches `^cowboy-worker-mcp-user-[0-9a-f]{32}$`.
+     5. Snapshot `let epoch = self.user_mcp.lock().stop_epoch` and check that
+        `processId` is NOT in `stopped_process_ids` tombstone (else return
+        `Outcome::Completed` error `"user_mcp_stopped"`).
+     6. Re-read `~/.claude.json`, apply `managerGate.allowlist`, resolve
+        `name`, verify `fingerprint` matches (else return `Outcome::Completed`
+        error `"user_mcp_config_drift"` / `"user_mcp_not_allowed"` /
+        `"user_mcp_invalid"` — NEVER `Refused`!).
+     7. Re-acquire `self.user_mcp` mutex, verify `stop_epoch == epoch` and
+        `!stopped_process_ids.contains(&processId)` and active count `< 32`.
+        Reserve `self.writer` permit, call `ledger.admit(&clean_invocation)` —
+        extending `execution_host/ledger.rs:132-137` so **both**
+        `method == "process/start"` AND `method == "cowboy/startUserMcp"` record
+        `processId` in `self.processes` (so `reap_unattended()` also covers user
+        servers!).
+     8. Record `(processId -> server_name)` in `self.user_mcp.active_processes`
+        and send native `process/start` (`cwd = file:///tmp/cowboy-user-mcp-<uid>/<incarnation>`,
+        `argv = [logical_executable, ...args]`, `envPolicy = { inherit: "none", set: ... }`,
+        `tty: false`, `pipeStdin: true`, `arg0: null`) on `self.writer`
+        **WITHOUT** calling `wire::with_call_context`.
+     9. On `process/exited` / `process/closed` events for a tracked user-MCP
+        `processId`, remove it from `self.user_mcp.active_processes`.
+
+3. **`cowboy/stopUserMcp`**:
+   - Params: `{ "processId"?: string, "keepAllowlist"?: string[] }`.
+   - Does **not** require `managerGate` (safe-only destructive cleanup, so R2
+     workers can still sweep orphans in a retained new keeper during Machine
+     rollback).
+   - Behavior:
+     - **Targeted (`processId` present)**: validate `^cowboy-worker-mcp-user-[0-9a-f]{32}$`;
+       insert `processId` into bounded `stopped_process_ids` (FIFO cap 512) so
+       any late-arriving `cowboy/startUserMcp` for that ID is rejected; if
+       present in `active_processes`, remove and send `process/terminate` on
+       `self.writer` (FIFO-ordered after any already-queued `process/start`!),
+       awaiting confirmation up to `5 s`. Executor `unknown process id` is
+       authoritative confirmation that the process is gone.
+     - **Allowlist-scoped (`keepAllowlist` present)**: select every active
+       `(processId, server_name)` where `!keepAllowlist.contains(&server_name)`,
+       insert their IDs into `stopped_process_ids`, and terminate each (total
+       bound `5 s`).
+     - **Stop-all (both omitted)**: bump `stop_epoch += 1`, drain all entries
+       from `active_processes`, insert their IDs into `stopped_process_ids`, and
+       terminate every one via `self.writer` (total bound `5 s`).
+   - Returns `Outcome::Completed` with `{"result": {"stopped": u32, "failed": u32}}`
+     (zero paths/secrets).
+
+### 2.6 Account-Unit Isolation & `cowboy/*` Dispatch Boundary
+
+1. **Process prefix**: Because user-MCP process IDs are
+   `cowboy-worker-mcp-user-<32hex>`, they inherit the existing
+   `SERVER_PREFIX = "cowboy-worker-mcp-"` protection in `worker_event()` and
+   `Ledger::admit()` (`src/worker_execution/ledger.rs:51-58, 507-511`) across
+   **both** R2 workers AND all previously released worker generations.
+2. **No second `cowboy/*` allowlist**: In `Client::relay_guarded`
+   (`src/worker_execution/ledger.rs:1058-1120`), all existing local endpoints
+   continue to be dispatched explicitly (`cowboy/drained`, `cowboy/memory`,
+   `cowboy/extensions`, `cowboy/extensionCall`, `cowboy/extensionCallAck`,
+   `cowboy/uncertainEffect`). Immediately **after** those local branches — and
+   **before** `ledger.admit()` or target forwarding — reject ANY remaining
+   method where `method.starts_with("cowboy/")` with
+   `refused("reserved cowboy method")`!
+   - This guarantees `cowboy/memory` keeps working without maintaining a
+     duplicate allowlist, while preventing the account unit from ever invoking
+     `cowboy/listUserMcp`, `cowboy/startUserMcp`, `cowboy/stopUserMcp`, or any
+     future keeper-internal `cowboy/*` method.
+3. **Worker `effectful()` classification**: Add `USER_MCP_START_METHOD`
+   (`"cowboy/startUserMcp"`) to `effectful()` in `src/worker_execution/ledger.rs:113-127`.
+   Thus any transport-level `Response::Refused` is classified `Err(true)`
+   (ambiguous → worker calls `cowboy/stopUserMcp { processId }` to fence/clean
+   up), whereas keeper policy/validation/drift rejections arrive as
+   `Outcome::Completed` with `{ "error": ... }` (definitive non-start → zero
+   orphan possible!).
 
 ---
 
-## 4. Bounded Correlated Proxy Ack (`cowboy/extensionCallAck`) (Resolves High 6 & Medium 1)
+## 3. Ledger Durability, Rollback Floor & Orphan Lifecycle
 
-### 4.1 Scope & legacy-proxy compatibility
+### 3.1 Schema-1 Sentinel Durability (No Schema Bump)
 
-- Correlated acks apply **strictly** to `Route::UserServer` calls. Cowboy MCP,
-  required folder bindings (`suger`), and Matrix memory keep their existing
-  protocol unchanged so retained older Antigravity Plugin generations (`0.2.39`)
-  keep working with zero disruption.
-- In `cowboy/extensions`, the proxy sends `{ "ackProtocol": 1 }`.
-  - If `ackProtocol >= 1` is absent, `cowboy/extensions` omits all
-    `Route::UserServer` tools (adding a bounded upgrade note) and
-    `cowboy/extensionCall` refuses any `Route::UserServer` call before dispatch
-    (`Failure::NotSent`).
+Instead of bumping `SCHEMA` from `1` to `2`, pending user-MCP tool calls reuse
+Schema-1's existing `Record.active_processes: BTreeSet<String>` field with a
+reserved sentinel format:
 
-### 4.2 Top-level frame field & spoofing resistance
+```text
+cowboy-pending-call:<32hex-call-id>
+```
 
-- On `Route::UserServer` `tools/call`:
-  - **`Failure::NotSent`**: remove `cowboy-pending-call:<call_id>` from
-    `ledger.json` immediately, release `SettlementGuard`, return plain refusal
-    (no ack required).
-  - **`Failure::MaybeSent`**: atomically remove `cowboy-pending-call:<call_id>`
-    AND record `uncertain_effect = Some("tools/call")` + `next_sequence(...)` in
-    one atomic `ledger.json` write, release `SettlementGuard`, return
-    `{ error: { code: -32000, message: "...", data: { outcome: "unknown" } } }`.
-  - **`Ok(result)` OR `Failure::Refused(reason)`** (server actually processed the
-    call and returned a result or MCP error): keep `cowboy-pending-call:<call_id>`
-    durably in `ledger.json`, register an in-memory `PendingAck` holding the
-    call's `SettlementGuard`, and attach **`"cowboyAck": { "callId": "<32-hex>" }`**
-    as a **top-level member of the JSON-RPC execution reply frame** (sibling to
-    `id` and `result`/`error`, NEVER inside `result`!).
-- On the proxy (`components/provider-runtime/execution-connection.mjs`):
-  - `Connection.request` reads top-level `frame.cowboyAck` cleanly and exposes
-    it to `Extensions.call` on both resolved results (`requestWithMeta`) and
-    rejected remote errors (`error.cowboyAck`).
-  - A malicious MCP server returning `{"cowboyAck": ...}` or `{"_cowboyAck": ...}`
-    inside its tool output can NEVER spoof or trigger an ack because the proxy
-    only inspects the top-level execution frame member produced by the worker.
+1. **Before writing `tools/call` to a user server**: `Ledger::record_pending_call(call_id)`
+   inserts `cowboy-pending-call:<call_id>` into `record.active_processes` and
+   persists atomically. If persist fails, nothing is sent (`Failure::NotSent`).
+2. **On `Ledger::open()` (crash / restart recovery)**:
+   - Partition persisted `record.active_processes` entries:
+     - Any entry starting with `cowboy-pending-call:` → record
+       `uncertain_effect = "tools/call"` (incrementing `uncertain_sequence` via
+       `next_sequence()`).
+     - Any non-sentinel entry → existing behavior (`uncertain_effect = "process/terminate"`).
+   - Persist cleared `active_processes` + incremented `uncertain_sequence`
+     atomically. (Same partitioning in `mark_unresolved_effects_uncertain()`.)
+3. **On `MaybeSent` (timeout / lost reply from user server)**:
+   `Ledger::convert_pending_call_to_uncertain(call_id)` removes the sentinel AND
+   sets `uncertain_effect = "tools/call"` + increments `uncertain_sequence` in
+   **one atomic persist**.
+4. **On valid proxy `cowboy/extensionCallAck`**:
+   `Ledger::clear_pending_call(call_id)` removes the sentinel and persists
+   atomically. If persist fails, fail closed (convert to uncertain in memory and
+   return `{ acknowledged: false }`).
 
-### 4.3 Dedicated ack capacity `>= MAX_CALLS` (8) and worker wiring
+### 3.2 Mandatory Rollback Worker Floor (R4 §7.1 Verification)
 
-- **Worker `MutationInflightIds` (`src/worker_execution.rs`)**: adds a third
-  independent admission set `ack: HashSet<String>` with `MAX_ACK = 8` (matching
-  `MAX_CALLS = 8`), completely separate from `MAX_CONTROL = 4` (`uncertainEffect`,
-  `drained`) and `MAX_FORWARDED = 16`.
-- **Proxy `Connection` (`components/provider-runtime/execution-connection.mjs`)**:
-  adds `cowboy/extensionCallAck` to `DRAIN_REQUESTS` with its own `kind = "ack"`
-  slot class (`MAX_ACK = 8`), separate from `control` (4) and `forwarded` (16).
-- **`src/account_sandbox.rs`**: adds `"cowboy/extensionCallAck"` to
-  `cleanup(method)` so draining units can ALWAYS acknowledge delivered replies
-  during graceful worker cutover/shutdown.
-- **`src/worker_execution.rs` (`serve_mutation`) & `ledger.rs`**: handles
-  `"cowboy/extensionCallAck"` locally BEFORE `ledger.admit()` (never forwarded
-  to the keeper).
-- **Zero duplicate L1c accounting**: in `src/worker_execution/relay.rs`,
-  `Relays::delivered` skips recording `unread_effects` for replies that carry
-  top-level `cowboyAck` because those calls are already tracked durably via
-  `cowboy-pending-call:<call_id>` and converted to uncertain on socket close or
-  ack deadline expiry.
+`active_processes` and its reopen recovery were introduced in commit `d3b59b8ca`
+(2026-11-24); the first pinned worker generation containing it is **`f2aa86175`**
+(2026-11-25). Workers older than `d3b59b8ca` (e.g. `76c69b882`, `2d8e0d85c`,
+`198a7a479`) lack `active_processes` and `deny_unknown_fields` on `Record`, so
+reopening a populated ledger on them would silently strip the sentinel on next
+persist.
 
-### 4.4 Bounded ack deadline (`EXTENSION_ACK_TIMEOUT = 15s`)
+**Binding rollout invariant**:
+- **Minimum rollback floor**: worker generation `>= f2aa86175` (contains
+  `d3b59b8ca`).
+- Before enabling R2 user-MCP writes in production on OVH, run the
+  [`antigravity-post-edit-r4-design.md`](antigravity-post-edit-r4-design.md) §7.1
+  **three-tier populated-ledger proof** (automatic `previous.conf`, manual
+  rollback targets, and every per-session `fallback_pins` / live retained worker
+  binary) using a ledger populated with `cowboy-pending-call:<call_id>`,
+  verifying BOTH first reopen (consumes sentinel, records `uncertain_effect`,
+  increments `uncertain_sequence`) AND second reopen (retains incremented
+  `uncertain_sequence` and fence). Any selectable fallback binary below floor
+  MUST be retired first.
+- (Live audit on 2026-11-26 confirmed all live OVH worker binaries including
+  the sole retained older generation already contain `active_processes` and
+  `cowboy-worker-mcp-`; formal §7.1 execution on every fallback binary remains a
+  required gate before rollout.)
 
-Once the worker writes a reply frame carrying `cowboyAck: { callId }` to the
-execution WebSocket, a bounded `15 s` timer runs for `callId`. Exactly ONE of
-four terminal transitions settles the entry and drops its `SettlementGuard`:
+### 3.3 Orphan Cleanup Without Sibling Files
 
-1. **Valid `cowboy/extensionCallAck({ callId })`**: atomically removes
-   `cowboy-pending-call:<call_id>` from `ledger.json`, drops `SettlementGuard`,
-   and replies `{"result": {"acknowledged": true}}`.
-2. **Proxy reports `cowboy/uncertainEffect` with matching `callId`**: atomically
-   removes `cowboy-pending-call:<call_id>`, records `uncertain_effect = Some("tools/call")`,
-   and drops `SettlementGuard`.
-3. **Socket close OR `15 s` ack timeout**: atomically removes
-   `cowboy-pending-call:<call_id>`, records `uncertain_effect = Some("tools/call")`
-   + `next_sequence(...)`, and drops `SettlementGuard`. Thus `finish_turn` /
-   `mutations_drained` / `TurnEnded` can **never** hang indefinitely!
-4. **Late/unknown `callId` on `cowboy/extensionCallAck`** (e.g., arrived after
-   timeout or reconnect): worker answers cleanly `{"result": {"acknowledged": false, "reason": "unknown_call_id"}}`
-   without breaking the socket; proxy treats `acknowledged !== true` or any ack
-   transport/timeout error as `UncertainEffect("tools/call")` and fences the turn.
+Sibling `.user-servers.json` and `start_confirmed` are **eliminated**.
+Because the keeper is authoritative via `cowboy/stopUserMcp`:
+
+1. **Unconditional startup sweep**: When `Broker::start` launches on a keeper
+   whose `initialization` advertises `cowboyUserMcp: { schema: 1 }`, it spawns a
+   one-time background sweep task calling `cowboy/stopUserMcp {}` (bounded
+   `5 s`). This runs **unconditionally** — even when `execution.user_mcp` was
+   flipped to `false` or when a retained `0.2.39` proxy never triggers Phase 2!
+2. **Phase 2 barrier**: Phase 2 awaits completion of this startup sweep before
+   calling `cowboy/listUserMcp` / `cowboy/startUserMcp`.
+3. **Ambiguous / straggler cleanup**: Whenever `cowboy/startUserMcp` returns
+   `Err(true)` (ambiguous transport failure) OR a server fails/times out during
+   Phase 2 `initialize`/`tools/list`, the worker invokes
+   `cowboy/stopUserMcp { "processId": id }` (which both tombstones an unseen ID
+   and terminates a started one).
+4. **Worker shutdown**: `Broker::shutdown` invokes `cowboy/stopUserMcp {}`
+   alongside Phase-1 server termination.
 
 ---
 
-## 5. Discovery Budgets & Namespace Isolation (Resolves Medium 4)
+## 4. Correlated Proxy Acknowledgement & Concurrency Lanes
 
-In `src/worker_execution/extension_broker.rs`:
+### 4.1 Wire Protocol (`ackProtocol: 1`)
 
-1. **Phase 1 (Required folder bindings + Cowboy MCP + Matrix memory) keeps its
-   full existing `40 s` budget (`DISCOVERY_TIMEOUT = 40s`) and existing
-   per-server `MAX_TOOLS = 128` limit unchanged**:
-   - Required bindings (`plan.required == true`) are never shortened to 20 s and
-     never displaced by optional user MCP servers.
-   - All Phase-1 tool names (plus `FACADE_TOOLS` and reserved Cowboy MCP /
-     memory tool names) are claimed in `taken` BEFORE Phase 2 runs.
-2. **Phase 2 (Optional user MCP servers) runs after Phase 1 succeeds with its
-   own independent bounded budget**:
-   - Only runs when `binding.managed.is_none()`, keeper `initialization`
-     advertises `"cowboyUserMcp": { "schema": 1 }`, and `listUserMcp` returns
-     servers.
-   - Runs orphan cleanup first (Section 3.2), then launches admitted user
-     servers in parallel with bounded concurrency (`MAX_USER_MCP_CONCURRENCY = 4`,
-     per-server init timeout `USER_MCP_SERVER_INIT_TIMEOUT = 10s`, overall Phase
-     2 cap `USER_MCP_DISCOVERY_TIMEOUT = 15s`) — preventing 2 slow servers from
-     starving the remaining servers.
-   - Dedicated user-MCP tool caps: `MAX_USER_MCP_TOOLS_PER_SERVER = 64`,
-     `MAX_USER_MCP_TOOLS_TOTAL = 128` (independent of Phase 1).
-   - **Mandatory `<server>_` prefix**: user MCP server tools are ALWAYS exposed
-     as `<server>_<original>` (never bare `<original>`), capped at 64 chars
-     matching `^[A-Za-z0-9_-]{1,64}$`, so a user server can never claim a bare
-     Cowboy MCP, memory, or facade tool name even when Cowboy MCP or memory
-     failed to start.
-   - Any user server failure/timeout adds a bounded availability note (no
-     secrets/paths) and never fails session startup.
+1. **`cowboy/extensions`**: Proxy `0.2.40` sends `{"ackProtocol": 1}` (timeout
+   `70_000 ms`, safely above Phase 1 `40 s` + Phase 2 `15 s` + margin). Legacy
+   `0.2.39` sends `{}` (`ackProtocol` omitted / `0`) → worker skips Phase 2 and
+   returns Phase 1 tools only.
+2. **`cowboy/extensionCall`**: Proxy `0.2.40` sends
+   `{"name": ..., "arguments": ..., "ackProtocol": 1}`. Worker checks
+   `ackProtocol >= 1` **strictly for `Route::UserServer`**; legacy proxies calling
+   a user tool receive a clean refusal (zero `tools/call` sent). Phase-1 Cowboy
+   MCP, folder bindings, and Memory tools remain unchanged (`ackProtocol` not
+   required).
+3. **Top-level `cowboyAck` frame field (spoof-proof)**:
+   - For `Route::UserServer` replies (`Ok(result)` AND `Failure::Refused` — i.e.
+     any completed server exchange that is not `NotSent` and not already-marked
+     `MaybeSent`), `Done` carries `ack_call_id: Option<String>` outside `reply`.
+   - `Done::frame()` inserts top-level `"cowboyAck": { "callId": "<32hex>" }`
+     adjacent to `"id"` and `"result"`/`"error"` (NEVER inside `"result"`, so a
+     malicious user server cannot spoof or suppress ack metadata).
+   - Proxy `execution-connection.mjs` extracts `frame.cowboyAck?.callId` ONLY
+     from the top-level JSON-RPC response frame (for both `result` and `error`
+     frames).
+4. **`cowboy/extensionCallAck`**:
+   - Proxy sends `{"callId": "<32hex>"}` with explicit **`timeoutMs: 12_000`**
+     before returning the tool result or refused error to `agy`.
+   - If the ack request fails, times out, or returns `acknowledged !== true`,
+     proxy throws `UncertainEffect("tools/call")` (never returning the tool
+     result as clean!).
+
+### 4.2 Dedicated Concurrency Lanes (`MAX_ACK = 8`)
+
+Because `MAX_CALLS = 8` extension calls can complete simultaneously while
+`MAX_CONTROL = 4`:
+
+- **Worker (`src/worker_execution.rs` & `src/account_sandbox.rs`)**:
+  - Add `EXTENSION_CALL_ACK: &str = "cowboy/extensionCallAck"` to
+    `account_sandbox::cleanup(method)` so acks are admitted while draining.
+  - Add a dedicated `ack: HashSet<String>` lane with **`MAX_ACK = 8`** inside
+    `MutationInflightIds` (separate from `forward: 16` and `control: 4`).
+  - Handle `cowboy/extensionCallAck` directly inside `serve_mutation` **before**
+    `ledger.admit()`, with zero target round-trip.
+- **Proxy (`components/provider-runtime/execution-connection.mjs`)**:
+  - Add `"cowboy/extensionCallAck"` to `DRAIN_REQUESTS` with dedicated slot
+    class `kind = "ack"` (`MAX_ACK = 8`), separate from ordinary (15), cleanup
+    (1), and control (4) slots.
+
+### 4.3 Bounded `PendingAck` State Machine & Deadlock-Free Lock Ordering
+
+Every `Route::UserServer` call that completes with `Ok` or `Failure::Refused`
+registers a `PendingAck` entry holding `{ call_id, connection_id, ledger, guard: SettlementGuard, timer_abort: AbortHandle }`:
+
+1. **Timer starts AT REGISTRATION (not after frame write!)**:
+   - `Broker::register_pending_ack(call_id, connection_id, ledger, guard)`
+     checks under `pending_acks` mutex whether `connection_id` is already closed
+     (closed connection IDs are tracked in a small bounded set per Broker).
+   - **If `connection_id` is already closed**: do NOT insert! Release
+     `pending_acks` lock, call `ledger.convert_pending_call_to_uncertain(&call_id)`,
+     then drop `guard` outside every lock, and return `None` (`ack_call_id = None`).
+   - **Otherwise**: insert entry AND immediately spawn the
+     `EXTENSION_ACK_TIMEOUT = 15 s` deadline task right here.
+2. **Exclusive ownership across ALL four relay paths (zero hang, zero duplicate L1c)**:
+   - Whenever `done.ack_call_id` is `Some(call_id)`:
+     - **`Relays::delivered(&done)`**: **skips** `unread_effects` (PendingAck
+       owns settlement until ack / timeout / close / uncertainReport).
+     - **`Relays::undelivered(&done)`**: **skips** `client.undelivered(...)` and
+       calls `broker.fail_pending_ack(&call_id)` (converts sentinel →
+       `uncertain_effect = "tools/call"`, aborts timer, drops `SettlementGuard`).
+     - **`Relays::drop` drain task**: **skips** `client.undelivered(...)` and
+       calls `broker.fail_pending_ack(&call_id)`.
+     - **`mpsc::SendError(done)` & WebSocket `send_bounded` error**: **skips**
+       `client.undelivered(...)` and calls `broker.fail_pending_ack(&call_id)`.
+3. **Socket close (`serve_mutation` exit)**:
+   - Calls `broker.connection_closed(connection_id)` which records
+     `connection_id` closed, removes all `PendingAck` entries matching
+     `connection_id`, releases `pending_acks` lock, converts all their sentinels
+     to `uncertain_effect = "tools/call"` in one batch persist, and drops all
+     their `SettlementGuard`s outside every lock.
+4. **`cowboy/uncertainEffect({ method, callId? })`**:
+   - If `callId` matches a `PendingAck`, settles it via
+     `broker.fail_pending_ack(&call_id)` (single atomic conversion + guard drop,
+     no duplicate `uncertain_sequence` increment).
+5. **Strict lock-ordering invariant (zero self-deadlock)**:
+   - `SettlementGuard::drop` acquires `ledger.state`.
+   - Therefore EVERY settlement path follows the exact 3-step sequence:
+     1. Lock `broker.pending_acks` → remove `PendingAck` → **unlock `broker.pending_acks`**.
+     2. Call `ledger.clear_pending_call` or `ledger.convert_pending_call_to_uncertain`
+        (acquires & releases `ledger.state` internally).
+     3. **`drop(entry.guard)`** AFTER both locks are released!
+   - While step 2 executes, `entry.guard` is still alive (`admitted[turn] >= 1`),
+     so `finish_turn` cannot observe `mutations_drained` until after the durable
+     ledger update has already persisted.
 
 ---
 
-## 6. Mixed-Version Compatibility Matrix & Single Clean Rollout (Resolves Medium 6)
+## 5. Two-Phase Discovery, Bounds & Sanitization
 
-Because R2 introduces **zero** breaking changes to `ledger.json` schema (`schema == 1`),
-`LaunchContract`, `StartSession`, `SessionExtensions`, `execution_protocol::Command`,
-or `machine_protocol::execution::Action`:
+### 5.1 Independent Phase 1 & Demand-Triggered Phase 2
 
-| Runtime Worker | Target Keeper | Antigravity Proxy | Behaviour |
-|---|---|---|---|
-| Old (`worker-11af6d9b`) | New | Old (`0.2.39`) | Old worker ignores `cowboyUserMcp`; 100% unchanged |
-| New | Old (retained) | New (`0.2.40`) | Old keeper omits `cowboyUserMcp` → worker skips user MCP with note; `cowboy/startUserMcp` never sent (and would return `-32601`) |
-| New | New | Old (`0.2.39`) | Old proxy omits `ackProtocol: 1` → worker omits user MCP with upgrade note; Cowboy MCP / `suger` / memory unaffected |
-| Old (`worker-11af6d9b`) | Old or New | New (`0.2.40`) | Old worker returns no `cowboyAck` → proxy sends no ack; 100% compatible |
-| New → Rollback to Old | New | Any | Schema-1 `ledger.json` opens cleanly; any `cowboy-pending-call:*` in `active_processes` atomically parks session; `.user-servers.json` ignored and keeper reaps |
-| New | New | New (`0.2.40`) | Full R2 active: target-local `~/.claude.json` stdio user MCP with neutral cwd, `COWBOY_*` stripped, `<server>_` tools, durable acks |
+1. **Phase 1 (unchanged, published immediately)**:
+   - Runs Cowboy MCP, folder bindings (required & optional), and Memory tools
+     under the existing `DISCOVERY_TIMEOUT = 40 s` and `MAX_TOOLS = 128`.
+   - `Broker::discovered()` waits **only** for Phase 1 (`45 s` ceiling).
+     Required binding failures still refuse session startup; Phase 1 latency and
+     retained `0.2.39` sessions are completely untouched.
+2. **Startup orphan sweep (unconditional, non-blocking for Phase 1)**:
+   - If keeper advertises `cowboyUserMcp: { schema: 1 }`, `Broker::start` spawns
+     one background `cowboy/stopUserMcp {}` call (`5 s` timeout) tracked by a
+     `watch::Receiver<bool>` (`sweep_done`).
+3. **Phase 2 (demand-triggered on first `cowboy/extensions` with `ackProtocol >= 1`)**:
+   - If `ackProtocol < 1`, keeper lacks `cowboyUserMcp`, or session is managed:
+     `Broker::list()` returns Phase 1 immediately (zero user servers started!).
+   - On the first `cowboy/extensions` with `ackProtocol >= 1`, a single-flight
+     `tokio::sync::OnceCell<UserDiscovery>` runs Phase 2 under a dedicated
+     **`USER_MCP_DISCOVERY_TIMEOUT = 15 s`** total wall budget (starting when
+     triggered):
+     1. Wait for `sweep_done` within the remaining 15 s budget (if sweep did not
+        complete, record note `orphan_sweep_timeout` and return Phase 1 only).
+     2. Call `cowboy/listUserMcp {}`. If disabled or error, record bounded
+        reason-code note (or empty if disabled) and return Phase 1 only.
+     3. Filter out any server whose name:
+        - starts with `"cowboy"` (case-insensitive);
+        - collides (case-insensitive) with ANY Phase-1 server name;
+        - collides (case-insensitive) with `plan.memory_server` (e.g. `"matrix"`).
+        Record omitted note with reason code `"reserved_name_collision"`.
+     4. Start remaining servers (up to 16) with bounded concurrency
+        **`MAX_USER_MCP_CONCURRENCY = 4`**, per-server init + `tools/list`
+        timeout **`10 s`**, all bounded by the outer **`15 s`** Phase 2
+        deadline.
+     5. **Partial-success guarantee**: When the 15 s deadline expires, Phase 2
+        **always succeeds** and publishes whatever user servers completed in
+        time alongside Phase 1! Any still-initializing straggler is cancelled
+        and cleaned up via background `cowboy/stopUserMcp { "processId": id }`
+        and recorded as a concise note (`reason = "init_timeout"`). An optional
+        or hanging user server (e.g. `ios-sim` when Mac is offline) can **never**
+        fail `cowboy/extensions` or block session startup beyond 15 s.
 
-### Rollout order
+### 5.2 Tool Namespacing, Result Size, Instructions & Logging Bounds
 
-1. **PR / Push `R` + Worker Pin Advance `P` + Acceptance Receipt `P2`** (one
-   clean pin advance; passes all 6 independent worker acceptance suites +
-   existing `just session-deletion-production-conformance` per
-   `docs/machine-worker-pin-advance-runbook.md`).
-2. **Deploy Target Machine Hosts (Hawk writer host + Falcon host)**: activates
-   `cowboy-execution-host` with `cowboyUserMcp` + `execution.user_mcp` Device
-   config (new sessions get new keepers; existing retained keepers remain
-   compatible).
-3. **Deploy OVH Machine + Workers** (`activate-workers` / `accept-workers`,
-   sync `machines/ovh/cowboy/10-plugin-admission.conf` in Columbus).
-4. **Publish & install `antigravity 0.2.40`** (and companion `3.156.0` plugins)
-   to `/var/lib/cowboy/plugins/catalog` and activate on OVH.
-5. **Live OVH ↔ Hawk Canary Acceptance**:
-   - Verify a fresh OVH `antigravity 0.2.40` session against a Hawk Columbus
-     worktree discovers and invokes a real `~/.claude.json` stdio MCP server
-     (e.g., `chrome-devtools` or a disposable canary stdio server), confirming:
-     - `COWBOY_CALL_CONTEXT` and `COWBOY_*` absent from child env;
-     - `cwd` is neutral mode-`0500` `user-mcp-cwd` (not worktree);
-     - tool exposed with `<server>_` prefix;
-     - correlated `cowboy/extensionCallAck` clears `cowboy-pending-call:*` with
-       zero `UncertainEffect`;
-     - `execution.user_mcp = false` kill-switch cleanly suppresses user MCP.
+- **Mandatory `<server>_` prefix**: Every user-MCP tool is exposed as
+  `<server>_<tool>` (sanitized to `^[A-Za-z0-9_-]{1,64}$`, never colliding with
+  facade tools or Phase-1 tools).
+- **Tool count caps**: Max **64 tools per user server**, max **128 total user
+  MCP tools** (separate budget from Phase 1's `MAX_TOOLS = 128`).
+- **Instructions cap**: User server `initialize.instructions` is capped at
+  **1,024 chars per server** and **4,096 chars total** across all user servers
+  (UTF-8 safe truncation), preventing prompt bloat.
+- **Result size cap**: Worker enforces **`MAX_USER_MCP_RESULT_BYTES = 4 MiB`**
+  (4,194,304 bytes — comfortably below proxy's 14 MiB `maxPayload`) on user
+  server `tools/call` responses. Oversized results return a structured MCP tool
+  error (`isError: true`, bounded text `"user MCP tool result exceeded 4 MiB limit"`)
+  and complete the normal `cowboyAck` handshake so other in-flight requests on
+  the socket are never disrupted.
+- **Call duration limit**: User server `tools/call` shares `CALL_TIMEOUT = 170 s`
+  (below proxy's 185 s socket timer). Calls exceeding 170 s (e.g. long external
+  Xcode builds) trigger `MaybeSent` / `UncertainEffect("tools/call")`; async
+  MCP progress / streaming calls are out of scope for R2.
+- **Bounded OVH logs & prompt notes**: For user servers, OVH worker `tracing`
+  logs and system-prompt notes emit **only** `{ server_name, reason_code }` from
+  a closed enum (`disabled`, `init_timeout`, `process_exited`, `protocol_error`,
+  `start_failed`, `reserved_name_collision`, `result_too_large`, `call_timeout`,
+  `config_drift`, `not_allowed`, `invalid_config`, `unsupported_transport`,
+  `orphan_sweep_timeout`) — NEVER raw server stderr/error text, paths, args, or
+  env values.
 
 ---
 
-## 7. Required Test Matrix
+## 6. Mixed-Version & Rollback Compatibility Matrix
 
-1. **Keeper (`components/machine/src/execution_host/user_mcp.rs` + `execution_host.rs`)**:
-   - `~/.claude.json` user + `projects[source_path]` + symlinked `source_path`
-     precedence + `disabledMcpServers`; `.mcp.json` ignored.
-   - Rejects `./`/`../` commands, executables resolving inside worktree/source
-     root, worktree path args, non-stdio entries, `COWBOY_*` and loader env
-     injection keys (`LD_PRELOAD`, `NODE_OPTIONS`, etc.).
-   - `cowboy/listUserMcp` response contains zero `env` values, zero `args`,
-     zero executable paths; fingerprint rejects drift between list and start.
-   - `cowboy/startUserMcp` launches with neutral mode-`0500` `user-mcp-cwd`,
-     NEVER calls `with_call_context`, excludes `COWBOY_CALL_CONTEXT` &
-     `COWBOY_*`, and records `processId` in keeper ledger for `reap_unattended`.
-   - Managed (`read_only`) keeper refuses `cowboy/listUserMcp` &
-     `cowboy/startUserMcp` and omits `cowboyUserMcp` from `initialization`.
-   - Target Machine `execution::Manager` live `execution.user_mcp` kill-switch
-     and `execution.user_mcp_allowlist` filtering.
-2. **Worker (`src/worker_execution/{ledger,extension_broker,relay,tests}.rs`, `src/account_sandbox.rs`)**:
-   - Schema-1 `cowboy-pending-call:*` in `active_processes`: crash/reopen by
-     new worker records `uncertain_effect = "tools/call"` + monotonic sequence;
-     simulated legacy Schema-1 reader opens cleanly and parks session.
-   - Correlated `cowboy/extensionCallAck`: happy path (`Ok` and `Failure::Refused`),
-     `15 s` timeout converts to uncertain and releases `SettlementGuard`
-     (unblocking `finish_turn` / `TurnEnded`), socket close before ack parks,
-     ack accepted during `RelayQuiet` drain (`cleanup`), 8 concurrent acks pass
-     under `MAX_ACK = 8` without starving `MAX_CONTROL = 4`, late/unknown
-     `callId` returns `{ acknowledged: false }`, zero duplicate L1c accounting.
-   - Legacy proxy (no `ackProtocol: 1`) omits user MCP while preserving Cowboy
-     MCP / required bindings / memory.
-   - Retained legacy keeper (no `cowboyUserMcp`) skips user MCP with note.
-   - Account unit refused for `cowboy/listUserMcp`, `cowboy/startUserMcp`, and
-     both `cowboy-worker-mcp-` / `cowboy-user-mcp-` prefixes; `worker_event()`
-     filters both prefixes.
-   - Sibling `.user-servers.json` orphan sweep: confirmed start accepts
-     `closed`/`forgotten`, unconfirmed start rejects `forgotten`, different
-     keeper scope pruned, unconfirmed stop disables server name without parking,
-     capped at 32 entries.
-   - Discovery isolation: Phase 1 keeps 40 s + `MAX_TOOLS = 128`; slow user
-     servers never starve Phase 1 or other user servers; `<server>_` prefix
-     cannot shadow Cowboy MCP / memory / facade names.
-3. **Antigravity Proxy (`components/provider-runtime/packages/antigravity-acp/`)**:
-   - Sends `ackProtocol: 1` on `cowboy/extensions` and `cowboy/extensionCall`.
-   - Reads top-level `frame.cowboyAck` (ignoring any spoofed `result._cowboyAck`
-     or `result.cowboyAck`), sends `cowboy/extensionCallAck` on both success and
-     refused errors before returning tool output.
-   - Ack failure / `{ acknowledged: false }` throws `UncertainEffect("tools/call")`.
-   - `cowboy/extensionCallAck` runs during `Connection.idle()` drain and uses
-     its own 8-slot `ack` lane independent of `control` (4) and `forwarded` (16).
-   - Old worker (no `cowboyAck` in reply) works identically to `0.2.39`.
+| Target Machine | Target Keeper | OVH Worker | Antigravity Proxy | Behavior |
+|---|---|---|---|---|
+| **Old** (pre-R2) | **Old** (pre-R2) | **New** (R2) | **New** (`0.2.40`) | Keeper omits `cowboyUserMcp`; worker skips sweep & Phase 2; Phase 1 works identically. |
+| **Old** (rolled back; `[execution]` removed) | **New** (retained R2) | **New** (R2) | **New** (`0.2.40`) | Old Manager omits `managerGate` → retained R2 keeper **fails closed** on `listUserMcp`/`startUserMcp` (`user_mcp_manager_gate_required`); `stopUserMcp` still works for orphan cleanup! |
+| **New** (R2) | **Old** (retained pre-R2) | **New** (R2) | **New** (`0.2.40`) | Keeper omits `cowboyUserMcp`; worker skips sweep & Phase 2; zero errors. |
+| **New** (R2) | **New** (R2) | **Old** (`>= f2aa86175` floor) | **Old** or **New** | Old worker ignores `cowboyUserMcp`; any leftover `cowboy-worker-mcp-user-*` processes remain unit-isolated by `cowboy-worker-mcp-` prefix; any `cowboy-pending-call:*` in ledger converts to `uncertain_effect` on reopen (`>= f2aa86175` floor proven via R4 §7.1); leftover processes persist until keeper shutdown or next R2 worker sweep (not reaped by `reap_unattended` while old worker polls). |
+| **New** (R2) | **New** (R2) | **New** (R2) | **Old** (retained `0.2.39`) | `0.2.39` omits `ackProtocol`; worker skips Phase 2 completely (zero startup latency added, zero unused user servers spawned); startup orphan sweep still cleans prior orphans. |
+| **New** (R2) | **New** (R2) | **New** (R2) | **New** (`0.2.40`) | Full R2: `managerGate` enforced live, Phase 1 + demand-triggered Phase 2, `<server>_` tools, Schema-1 sentinel + correlated `cowboyAck` (`15 s` / `MAX_ACK = 8`), `4 MiB` result cap, keeper-authoritative `stopUserMcp`. |
+
+---
+
+## 7. Verification & Test Matrix
+
+### 7.1 Unit & Integration Tests (Deterministic Gate)
+
+1. **Cross-module constant parity test**: Asserts keeper and worker string
+   constants (`USER_MCP_INITIALIZATION_KEY`, `USER_MCP_LIST_METHOD`,
+   `USER_MCP_START_METHOD`, `USER_MCP_STOP_METHOD`, `USER_MCP_PROCESS_PREFIX`)
+   match byte-for-byte (`retained-worker-interface-compatible` stays green).
+2. **Device config & `Kind::McpServerNames` tests**:
+   - Accepts uppercase/underscore/dot/hyphen names (`ios_sim`, `GitHub`,
+     `chrome-devtools-draven`); rejects invalid chars and `>32` items.
+   - Example config (`cowboy config init --print`) and JSON Schema snapshots
+     stay synchronized.
+3. **Keeper parser & validation tests (`execution_host/user_mcp.rs`)**:
+   - Merges user + local `projects` (via git toplevel & symlinked alias
+     canonicalization), honors `disabledMcpServers`, ignores `.mcp.json`,
+     enforces 4 MiB file cap, skips non-stdio entries with closed reason code.
+   - Expands `${VAR}`, `${VAR:-default}`, `${CLAUDE_PROJECT_DIR}` while
+     stripping `COWBOY_*` and keeper-private `CODEX_HOME`.
+   - Symlink-preserving `argv[0]`: executes logical PATH path while checking
+     realpath against both `source_path` and `cwd`.
+   - Rejects relative `/` commands, executables inside `source_path` OR `cwd`,
+     `./`/`../` args, args referencing `source_path` OR `cwd`, and `COWBOY_*`
+     env keys; allows `LD_LIBRARY_PATH`/`NODE_OPTIONS`/`PYTHONPATH`.
+   - Allowlist applied **before** 16-server truncation.
+   - `envPolicy.inherit = "none"` yields clean env (no `COWBOY_CALL_CONTEXT`,
+     no `COWBOY_EXECUTION_FILE_HELPER`, no keeper `CODEX_HOME`); neutral cwd
+     `/tmp/cowboy-user-mcp-<uid>/<incarnation>` is mode `0500` outside keeper
+     state.
+4. **Keeper lifecycle, idempotency & fail-closed tests (`execution_host.rs`)**:
+   - Missing `managerGate` fails closed (`Outcome::Completed` error).
+   - `cowboy/startUserMcp` checks `ledger.observe(operation_id)` BEFORE reading
+     `~/.claude.json` or fingerprint (retry after config edit/drift replays
+     cached outcome cleanly).
+   - Validation/drift/tombstone failures return `Outcome::Completed` error
+     (never `Refused`).
+   - `execution_host/ledger.rs` registers `cowboy/startUserMcp` processes in
+     `self.processes` for `reap_unattended()`.
+   - `cowboy/stopUserMcp` targeted (tombstones unseen ID + terminates running
+     ID), allowlist-scoped, and stop-all (bumps `stop_epoch` + terminates all).
+   - Managed read-only keeper omits `cowboyUserMcp` and refuses all three
+     methods.
+5. **Target Manager live-reload tests (`machine_cli/execution.rs`)**:
+   - Strips spoofed caller `managerGate`; injects live `enabled` & `allowlist`.
+   - When `user_mcp == false`, returns `Outcome::Completed` `"user_mcp_disabled"`
+     and stops running user servers.
+   - Live reload `true -> false` and allowlist narrowing invoke
+     `cowboy/stopUserMcp` on active keepers.
+6. **Worker isolation, Phase 2 & PendingAck tests (`src/worker_execution/`)**:
+   - Unit sending `cowboy/memory` **succeeds**; unit sending `cowboy/listUserMcp`,
+     `cowboy/startUserMcp`, `cowboy/stopUserMcp`, or `cowboy/anythingUnknown` is
+     refused locally.
+   - `cowboy-worker-mcp-user-*` process events are hidden from the unit and unit
+     `process/read`/`write`/`terminate` against them are refused.
+   - `effectful("cowboy/startUserMcp") == true`; transport `Refused` triggers
+     `cowboy/stopUserMcp { processId }`.
+   - Phase 1 publishes independently (`45 s`); retained `0.2.39` (`ackProtocol`
+     absent) skips Phase 2; `0.2.40` triggers Phase 2 once; hanging user server
+     times out at `15 s` returning ready servers + Phase 1 without failing
+     `cowboy/extensions`.
+   - Name collisions with `cowboy*`, Phase-1 servers, or `memory_server` are
+     dropped (`reserved_name_collision`); instructions capped at 1,024/4,096;
+     `>4 MiB` tool result returns bounded `isError: true` and still completes
+     normal `cowboyAck` without closing socket.
+   - **High-1 regression**: Mutation socket closes **while user-MCP `tools/call`
+     is in flight** → turn terminates boundedly (no hang, no self-deadlock) and
+     records **exactly one** `uncertain_effect = "tools/call"` (no duplicate
+     from `undelivered`).
+   - **High-1 timeout & ack**: Ack received within 15 s clears sentinel cleanly
+     (no uncertain); ack omitted times out at 15 s and converts sentinel once;
+     `cowboy/uncertainEffect({ method, callId })` settles immediately without
+     double sequence bump; 8 concurrent user-MCP calls complete simultaneously
+     via `MAX_ACK = 8` without starving control lane.
+   - **High-2 floor & counterexample**: Schema-1 ledger with
+     `cowboy-pending-call:<id>` reopens on R2 worker as `uncertain_effect = "tools/call"`
+     and survives second reopen; counterexample test with a pre-`d3b59b8ca`
+     reader struct (no `active_processes`) proves silent sentinel drop and
+     documents the `f2aa86175` rollback floor.
+7. **Proxy JS tests (`components/provider-runtime/`)**:
+   - `execution-connection.mjs`: `cowboy/extensionCallAck` uses dedicated `ack`
+     lane (`MAX_ACK = 8`), permitted during drain, extracts ONLY top-level
+     `frame.cowboyAck` (ignores spoofed `result.cowboyAck`), enforces
+     `timeoutMs: 12000`.
+   - `antigravity-acp/extensions.mjs`: sends `ackProtocol: 1` on
+     `cowboy/extensions` (`70 s` timeout) & `cowboy/extensionCall`; acks both
+     result and refused error; throws `UncertainEffect("tools/call")` if ack
+     fails or returns `acknowledged !== true`.
+
+### 7.2 Production Rollout & Live Canary Acceptance
+
+1. **Order of deployment**:
+   - **Step 1 (Target hosts first — resident host releases)**: Deploy R2
+     Machine host release to Hawk and Falcon (`retained-worker-interface-compatible`
+     holds → zero live Hawk/Falcon worker replacement!).
+   - **Step 2 (Pre-rollout floor proof on OVH)**: Run R4 §7.1 three-tier
+     populated-ledger reopen + second-reopen proof with
+     `cowboy-pending-call:*` against EVERY selectable fallback binary on OVH;
+     confirm all are `>= f2aa86175`.
+   - **Step 3 (Worker pin advance + all 6 independent worker acceptance suites
+     + `session-deletion-production-conformance`)**: Advance
+     `inputs.cowboy-workers`, publish `3.156.0` / `antigravity 0.2.40` plugins,
+     upgrade OVH Machine + Workers (`--workers`), converge fleet plugins, and
+     activate `antigravity 0.2.40` on OVH.
+2. **Live OVH `antigravity 0.2.40` ↔ Hawk canary**:
+   - Positive control: real stdio server from `~/.claude.json` discovered with
+     `<server>_` prefix; live tool call returns expected output via correlated
+     ack with `parked: null, uncertain_effects: null`; child process environment
+     verified clean (no `COWBOY_*`, no keeper `CODEX_HOME`) and cwd verified at
+     `/tmp/cowboy-user-mcp-<uid>/<incarnation>`.
+   - Kill-switch control: flip `execution.user_mcp = false` live on Hawk →
+     running user server terminates promptly and new session lists zero user
+     MCP tools; restore `execution.user_mcp = true` afterward and clean up all
+     canary artifacts.

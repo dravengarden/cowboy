@@ -279,41 +279,55 @@ per-project `mcpServers`, minus `disabledMcpServers`), stdio only, as Claude's
 remote runtime reads them (`plugins/claude-code/runtime/tools.mjs:2670-2700`).
 Repository `.mcp.json` stays excluded (D1).
 
-High findings to resolve:
+Detailed design: [`antigravity-user-mcp-r2-design.md`](antigravity-user-mcp-r2-design.md).
 
-- **Opening a worktree can execute repository code.** The broker starts servers
-  before a turn with the workspace as cwd, so an owner entry such as
-  `node ./server.js` runs a branch-controlled file on open, and an earlier
-  session's `RunCommand` can rewrite the same user's `.claude.json`. Requirement:
-  a frozen, owner-admitted launch plan; pre-turn executables and startup inputs
-  kept outside mutable worktree state.
-- **Omitting `COWBOY_CALL_CONTEXT` leaves the gateway credential accessible.** The
-  keeper starts ordinary processes under the target user, whose private gateway
-  files hold the socket and capability. Requirement: a target-side filesystem and
-  socket boundary for user servers and their resolver, tested by a server that
-  cannot read the context file or connect to the gateway. A credential-isolated,
-  frozen launch plan covers both findings.
-- **The pending record can disappear before the result reaches the proxy.** A
-  record cleared on the server reply loses the effect if the worker dies before
-  delivering it. Requirement: keep the record through a correlated proxy
-  acknowledgement, or atomically convert it to an uncertain effect on recovery;
-  gate older proxies that cannot acknowledge.
-- **Schema-2 writes can precede a safe rollback floor.** The ledger `SCHEMA` bump
-  makes older workers refuse the ledger, and OVH's timer and the broker fallback
-  can select one. Requirement: ship a reader for both schemas first, preserve
-  existing uncertainty sequences, and fence schema-2 writes until automatic,
-  manual and per-session fallback all use compatible readers. The Hawk
-  production-conformance step then needs the full artifact set (two distinct
-  writer revisions and ELFs, a reader-only fallback on the same worker
-  generation, a default-reader artifact and a fresh receipt path).
+**Owner decision (2026-11-26, Option 1 — pragmatic same-UID parity):** On target
+hosts such as Hawk and Falcon, the Controller, Machine, execution keeper,
+ordinary `RunCommand` processes, Claude Code's native stdio MCP servers, and
+same-UID Cowboy files all share OS UID `1000`
+([`host-isolation-design.md`](host-isolation-design.md)). Within one UID, a
+same-UID `bwrap` or filesystem blacklist cannot form a real privilege boundary.
+R2 therefore explicitly adopts Claude Code's existing same-UID trust anchor for
+owner-authored `~/.claude.json` servers and records the same-UID residual risk
+until [`host-isolation-design.md`](host-isolation-design.md) Part I lands a
+separate control UID / peer-credential boundary. A frozen, credential-isolated
+launch plan is no longer claimed by R2 and remains a prerequisite for D1 / Part
+I.
 
-Medium findings that belong to the same redesign:
+Requirements enforced by R2:
 
-- A user-server process on a retained keeper can outlive a worker replacement.
-  Persist server identity and keeper scope before launch; fence it on an
-  uncertain dispatch or reopen and confirm termination before discovery or reuse.
-- Required bindings must keep their budget: reserve it for them, refuse startup
-  if they do not fit, and bound optional launch concurrency.
+- **Target-local resolution & zero secret egress.** `~/.claude.json`, server
+  `env`, `args`, and executable paths stay strictly inside the target keeper;
+  only `{ name, scope, fingerprint }` leaves the target.
+- **Neutral cwd, lexical repo-path guardrail & clean child env.** User servers
+  start in a read-only mode-`0500` directory outside keeper/Machine state
+  (`/tmp/cowboy-user-mcp-<uid>/<incarnation>`), reject relative `/` commands,
+  executables/args inside `source_path` or worktree `cwd`, and `COWBOY_*` env
+  keys, and launch with `envPolicy.inherit = "none"` (explicit clean `set`, no
+  `COWBOY_CALL_CONTEXT`, no keeper-private `CODEX_HOME`). Target Device config
+  provides live-reloadable `execution.user_mcp` and `execution.user_mcp_allowlist`
+  enforced fail-closed via Manager-injected `managerGate`.
+- **Correlated proxy acknowledgement & bounded settlement.** Pending user-MCP
+  calls are recorded in Schema-1 `active_processes` (`cowboy-pending-call:<id>`)
+  and cleared only on a correlated `cowboy/extensionCallAck` (`15 s` deadline
+  from registration, dedicated `MAX_ACK = 8` lane, top-level `cowboyAck` frame
+  field, gated on `ackProtocol >= 1`) or atomically converted to
+  `uncertain_effect = "tools/call"` on timeout, disconnect, or reopen.
+- **Safe rollback floor without Schema-2 bump.** Using Schema-1
+  `active_processes` avoids a ledger schema bump, gated on retiring any OVH
+  fallback worker older than `d3b59b8ca` (`f2aa86175`) and proving three-tier
+  populated-ledger reopen + second-reopen recovery per
+  [`antigravity-post-edit-r4-design.md`](antigravity-post-edit-r4-design.md) §7.1.
+- **Keeper-authoritative orphan cleanup & cross-generation isolation.** User
+  servers run under `cowboy-worker-mcp-user-<32hex>` (inheriting existing
+  `cowboy-worker-mcp-` account-unit isolation across all worker generations) and
+  are terminated/tombstoned via keeper-owned `cowboy/stopUserMcp` on broker
+  startup, straggler/ambiguous starts, and live kill-switch/allowlist changes.
+- **Independent Phase 1 budget & demand-triggered Phase 2.** Phase 1 keeps its
+  full `40 s` / `128`-tool budget and publishes independently; Phase 2 runs only
+  on `ackProtocol >= 1` within a separate `15 s` / concurrency-4 budget with
+  partial-success fallback, `<server>_` prefixing, `4 MiB` result cap, and
+  bounded instructions/logs.
 
 ### R3. Plan mode enforced at dispatch
 
@@ -437,7 +451,10 @@ Opening a worktree must not run repository code. Requirements:
 
 - owner approval scoped to target, workspace and the exact resolved
   configuration, frozen across list and run;
-- the frozen, credential-isolated launch plan that R2 requires.
+- a frozen, credential-isolated launch plan backed by the target-side control
+  UID / peer-credential boundary in
+  [`host-isolation-design.md`](host-isolation-design.md) Part I (not provided by
+  R2's Option 1 same-UID model).
 
 ### D2. Repository hooks
 
