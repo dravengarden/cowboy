@@ -1503,6 +1503,7 @@ mod tests {
             schedule: None,
             origin: None,
             initiator: None,
+            explicit: None,
         };
         let hub_restore = Hub::new();
         hub_restore.restore_reconciling_runtime(vec![crate::core::RestoredSession {

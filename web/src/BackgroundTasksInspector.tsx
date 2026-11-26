@@ -8,7 +8,6 @@ import { READER_TOP_FROST_FADE, readerTopFrost } from "./readerTopEdge";
 // admission jumps to the approval surface. There is no universal detail view.
 
 import {
-  type KeyboardEvent as ReactKeyboardEvent,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -47,7 +46,8 @@ import { setActiveSessionId } from "./controlPlane";
 import { desktopDialogSlotProps, InstantModalTransition, isImeBlockedEscape } from "./desktop/DesktopModal";
 import { DesktopShortcutBar } from "./desktop/DesktopShortcutBar";
 import { DesktopTasksHeader } from "./DesktopTasksHeader";
-import { handleBackgroundTasksKeyDown } from "./backgroundTasksKeyboard";
+import { type BackgroundTasksKeyContext, useBackgroundTasksKeyboard } from "./backgroundTasksKeyboard";
+import { isTopmostDialog } from "./desktop/commands/modalGuard";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import { CallConversation, CallDetailView } from "./ManagedCallsDock";
 import { callConversationId } from "./managedCalls";
@@ -391,13 +391,21 @@ export function BackgroundTasksInspector({
   const { child, conversation } = useTaskConversation(sessionId, open ? selected : null, desktop, level, setLevel, depth);
   const consumedDeepLink = useRef<string | null>(null);
   const inspectorRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open || !desktop) return undefined;
-    const frame = requestAnimationFrame(() =>
-      inspectorRef.current?.focus({ preventScroll: true })
-    );
-    return () => cancelAnimationFrame(frame);
-  }, [open, desktop]);
+  const keyContextRef = useRef<BackgroundTasksKeyContext>({
+    ownNode: null,
+    selected: null,
+    step: () => undefined,
+    openConversation: () => undefined,
+    locate: () => undefined,
+    answerApproval: () => undefined,
+    close: () => undefined,
+  });
+  useBackgroundTasksKeyboard({
+    enabled: open && desktop,
+    selectedKey,
+    inspectorRef,
+    contextRef: keyContextRef,
+  });
 
   // `␣G` and deep links open this session's inspector.
   useEffect(() => {
@@ -514,16 +522,15 @@ export function BackgroundTasksInspector({
     close();
     onLocate?.(key);
   };
-  const keys = (event: ReactKeyboardEvent<HTMLElement>): void =>
-    handleBackgroundTasksKeyDown(event, {
-      ownNode: inspectorRef.current,
-      selected,
-      step,
-      openConversation: () => { if (selected) openConversation(selected); },
-      locate,
-      answerApproval,
-      close,
-    });
+  keyContextRef.current = {
+    ownNode: inspectorRef.current,
+    selected,
+    step,
+    openConversation: () => { if (selected) openConversation(selected); },
+    locate,
+    answerApproval,
+    close,
+  };
   // Only a structured MCP identity links a Call to its tool card (I8).
   const originTool = selected?.source === "call" && selected.call
     ? originToolKey(background.items, selected.call.request_id)
@@ -566,21 +573,22 @@ export function BackgroundTasksInspector({
     return createPortal(
       <Dialog
         open
-        onClose={(e, r) => { if (!isImeBlockedEscape(e, r)) close(); }}
+        onClose={(e, r) => {
+          if (r === "escapeKeyDown" && (!isTopmostDialog(inspectorRef.current) || isImeBlockedEscape(e, r))) return;
+          close();
+        }}
         maxWidth={false}
         fullWidth
         disableScrollLock
         aria-labelledby="background-tasks-title"
         slots={{ transition: InstantModalTransition }}
         slotProps={desktopDialogSlotProps({
-          root: { onKeyDown: keys },
-          onClose: close,
           paperSx: {
-            width: "calc(100vw - 32px)",
-            maxWidth: 1600,
-            height: "calc(100dvh - 32px)",
-            maxHeight: 1100,
-            m: 2,
+            width: "calc(100vw - 24px)",
+            maxWidth: "none",
+            height: "calc(100dvh - 24px)",
+            maxHeight: "none",
+            m: 1.5,
             overflow: "hidden",
           },
         })}
@@ -597,7 +605,7 @@ export function BackgroundTasksInspector({
             onLocate={selected && selected.anchorSeq !== null ? (): void => locate(selected.key) : undefined}
             onClose={close}
           />
-          <Box sx={{ minHeight: 0, display: "grid", gridTemplateColumns: "clamp(280px, 24vw, 380px) minmax(0, 1fr)" }}>
+          <Box sx={{ minHeight: 0, display: "grid", gridTemplateColumns: "clamp(240px, 18vw, 320px) minmax(0, 1fr)" }}>
             <Box
               sx={{
                 minHeight: 0,
@@ -618,12 +626,11 @@ export function BackgroundTasksInspector({
                 minHeight: 0,
                 display: "flex",
                 flexDirection: conversation ? "row" : "column",
-                gap: 2,
                 overflow: "hidden",
               }}
             >
               {selected?.source === "call" && selected.call && (
-                <CallConversation call={selected.call} desktop detailsOpen onDetails={(): void => undefined} />
+                <CallConversation call={selected.call} desktop />
               )}
               {conversation && selected?.subagent && (
                 <SubagentConversation sessionId={sessionId} subagent={selected.subagent} state={child} desktop />
@@ -631,12 +638,12 @@ export function BackgroundTasksInspector({
               <Box
                 sx={{
                   ...(conversation
-                    ? { width: "clamp(320px, 26vw, 460px)", flexShrink: 0, borderLeft: 1, borderColor: "divider" }
+                    ? { width: "clamp(280px, 22vw, 380px)", flexShrink: 0, borderLeft: 1, borderColor: "divider" }
                     : { flex: 1 }),
                   minHeight: 0,
                   overflowY: "auto",
-                  px: { md: 3, xl: 4 },
-                  py: 2.5,
+                  px: { md: 2.25, xl: 2.5 },
+                  py: 2,
                   ...desktopScrollbarSx,
                 }}
               >

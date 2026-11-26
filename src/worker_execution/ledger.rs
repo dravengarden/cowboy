@@ -1049,6 +1049,13 @@ impl Client {
         method: String,
         params: Value,
     ) -> (Value, Option<SettlementGuard>) {
+        if method == crate::account_sandbox::DRAINED {
+            // The unit read every reply it awaited before its stop (L1c).
+            // Always handled locally, even without a ledger, so it never falls
+            // through to target `invoke` (R21-M1).
+            self.relays.acknowledge();
+            return (json!({"result": {}}), None);
+        }
         let Some(ledger) = self.ledger().cloned() else {
             if method == UNCERTAIN_REPORT {
                 return (refused("no execution ledger"), None);
@@ -1083,11 +1090,6 @@ impl Client {
                 Some(broker) => broker.call_guarded(self, &params).await,
                 None => (refused("this session has no extensions"), None),
             };
-        }
-        if method == crate::account_sandbox::DRAINED {
-            // The unit read every reply it awaited before its stop (L1c).
-            self.relays.acknowledge();
-            return (json!({"result": {}}), None);
         }
         if method == UNCERTAIN_REPORT {
             let reported = params

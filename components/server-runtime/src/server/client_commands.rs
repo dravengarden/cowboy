@@ -776,6 +776,10 @@ pub fn force_cancel_grace(state: &AppState, session_id: &str) -> std::time::Dura
 
 const HELD_SEND_REPLY: &str =
     "This session cannot send yet. The message stays first in the queue and sends once it can.";
+const SEND_NOW_EXPIRED_REPLY: &str = "This Send now was made too long ago (or the device clock is off) to resend. The message stays in the queue; send it again.";
+const SEND_NOW_HANDLED_REPLY: &str = "This Send now was already handled.";
+const SEND_NOW_REFUSED_REPLY: &str =
+    "This session cannot take another Send now right now. The message stays in the queue.";
 
 /// A queued row's Send now. While the session's account parks dispatch (a
 /// rate limit, a block, an unacknowledged effect) or its execution Machine is
@@ -784,30 +788,48 @@ const HELD_SEND_REPLY: &str =
 /// Dispatching it would take the row out of the queue just to requeue it under
 /// a new id, which a client editing the row reads as a sent message and saves
 /// the edit as a draft beside the returned original. The sending device gets
-/// an addressed refusal for `cmid`, so it retires its optimistic send instead
-/// of replaying it after a reconnect. A device that lost that reply replays
-/// the command: it gets the reply again and sends nothing, whether the wait
-/// still holds the row or already ended. Whether the send was held.
+/// an addressed refusal for `cmid` once the hold is durable, so it retires its
+/// optimistic send only when a restart can no longer lose it. A device that
+/// lost that reply replays the command: it gets the reply again and sends
+/// nothing, whether the wait still holds the row or already ended. A command
+/// issued outside the window those receipts are kept for (`issued_ms`) is
+/// refused without effect, so no replay can outlive its receipt. Whether
+/// nothing more is to be done: the send was held, refused, or its row is gone.
 pub fn request_send_queued(
     state: &Arc<AppState>,
     caller: &crate::prompt_origin::RequestCaller,
     session_id: &str,
     id: &str,
     cmid: Option<&str>,
+    issued_ms: Option<i64>,
 ) -> bool {
+    let reply = |message: &'static str| {
+        if let Some(cmid) = cmid {
+            state
+                .hub
+                .command_result(session_id, cmid, CommandOutcome::Rejected, message);
+        }
+    };
     if let Some(cmid) = cmid
         && let Some(waiting) = state.hub.held_send_replay(session_id, cmid)
     {
-        state.hub.command_result(
-            session_id,
-            cmid,
-            CommandOutcome::Rejected,
-            if waiting {
-                HELD_SEND_REPLY
-            } else {
-                "This Send now was already handled."
-            },
-        );
+        reply(if waiting {
+            HELD_SEND_REPLY
+        } else {
+            SEND_NOW_HANDLED_REPLY
+        });
+        return true;
+    }
+    if send_now_outside_window(issued_ms, chrono::Utc::now().timestamp_millis()) {
+        reply(SEND_NOW_EXPIRED_REPLY);
+        return true;
+    }
+    // Every command may end as a receipt: an oversized id or a full ledger
+    // would make the ledger a write the store refuses.
+    if cmid.is_some_and(|cmid| {
+        cmid.len() > crate::core::MAX_HELD_COMMAND_BYTES || !state.hub.held_sends_admit(session_id)
+    }) {
+        reply(SEND_NOW_REFUSED_REPLY);
         return true;
     }
     let held = state.hub.session_info(session_id).and_then(|info| {
@@ -817,36 +839,50 @@ pub fn request_send_queued(
         })
     });
     let Some(reason) = held else {
-        state.hub.request_send_queued(session_id, id, caller);
-        return false;
+        return !state
+            .hub
+            .request_send_queued_as(session_id, id, caller, cmid);
     };
-    // The wait first: once the promoted row is visible, an automatic drain
-    // must already find the session waiting. A request for a row another
-    // terminal removed puts the session's previous wait back unchanged.
-    let previous = state.hub.setting(&format!(
-        "{}{session_id}",
-        crate::core::settings_keys::SESSION_RESOURCE_WAIT_PREFIX
-    ));
-    session_maintenance::wait(&state.hub, session_id, &reason);
-    if !state.hub.hold_queued(session_id, id, caller, cmid) {
-        let reason = previous
-            .as_ref()
-            .and_then(|wait| wait.get("reason"))
-            .and_then(serde_json::Value::as_str)
-            .map(str::to_owned);
-        state.hub.set_resource_wait(session_id, reason);
-        state.hub.edit_resource_wait(session_id, |_| previous);
-    } else {
-        state.hub.persist_explicit_wait(session_id);
-        // Command results reach every socket: the wait reason stays in the
-        // session's own state, which only its viewers receive.
-        if let Some(cmid) = cmid {
-            state
-                .hub
-                .command_result(session_id, cmid, CommandOutcome::Rejected, HELD_SEND_REPLY);
+    // The wait, the row's position and its intent are installed in one
+    // serialized section: an automatic drain that sees the held row already
+    // finds the session waiting, a completion cannot clear the wait in
+    // between, a duplicate of this command is recognized there, and a request
+    // for a row another terminal removed leaves the previous wait as it was.
+    match state.hub.hold_queued(session_id, id, caller, cmid, &reason) {
+        crate::core::HoldOutcome::Held => {
+            // Command results reach every socket: the wait reason stays in
+            // the session's own state, which only its viewers receive.
+            if let Some(cmid) = cmid {
+                let barrier = state.hub.store_barrier();
+                let (hub, session, cmid) =
+                    (state.hub.clone(), session_id.to_owned(), cmid.to_owned());
+                tokio::spawn(async move {
+                    if let Some(durable) = barrier {
+                        let _ = durable.await;
+                    }
+                    hub.command_result(&session, &cmid, CommandOutcome::Rejected, HELD_SEND_REPLY);
+                });
+            }
         }
+        crate::core::HoldOutcome::Replayed { waiting } => reply(if waiting {
+            HELD_SEND_REPLY
+        } else {
+            SEND_NOW_HANDLED_REPLY
+        }),
+        crate::core::HoldOutcome::Missing => {}
     }
     true
+}
+
+/// Whether a Send now issued at `issued_ms` falls outside the window the
+/// Controller keeps held-send receipts for: older than the replay horizon, or
+/// stamped further ahead than a client clock may run. A command without a
+/// time (from a client before it was sent) is never refused for it.
+fn send_now_outside_window(issued_ms: Option<i64>, now_ms: i64) -> bool {
+    issued_ms.is_some_and(|issued| {
+        now_ms.saturating_sub(issued) > crate::core::HELD_SEND_REPLAY_HORIZON_MS
+            || issued.saturating_sub(now_ms) > crate::core::HELD_SEND_CLOCK_SKEW_MS
+    })
 }
 
 /// A queued row's force push: promote it and interrupt the running turn so
@@ -859,6 +895,7 @@ pub fn force_push_queued(
     session_id: &str,
     id: &str,
     cmid: Option<&str>,
+    issued_ms: Option<i64>,
 ) -> Result<(), String> {
     if let Some(refusal) =
         provider_accounts::retirement::session_refusal(&state.accounts, session_id)
@@ -866,7 +903,7 @@ pub fn force_push_queued(
         return Err(refusal.to_owned());
     }
     // Promote to front either way.
-    if request_send_queued(state, caller, session_id, id, cmid) {
+    if request_send_queued(state, caller, session_id, id, cmid, issued_ms) {
         return Ok(());
     }
     if matches!(
@@ -1367,4 +1404,34 @@ pub fn retry_turn_command(
     state.supervisor.prepare_session(session_id).map(|_| {
         state.hub.retry_turn(session_id, caller, resolved_original);
     })
+}
+
+#[cfg(test)]
+mod send_now_expiry_tests {
+    use super::send_now_outside_window;
+    use crate::core::{HELD_SEND_CLOCK_SKEW_MS, HELD_SEND_REPLAY_HORIZON_MS};
+
+    #[test]
+    fn only_a_send_now_outside_the_receipt_window_is_refused() {
+        let now = 10 * HELD_SEND_REPLAY_HORIZON_MS;
+        assert!(!send_now_outside_window(None, now));
+        assert!(!send_now_outside_window(Some(now), now));
+        // A client clock somewhat ahead is not refused.
+        assert!(!send_now_outside_window(
+            Some(now + HELD_SEND_CLOCK_SKEW_MS),
+            now
+        ));
+        assert!(send_now_outside_window(
+            Some(now + HELD_SEND_CLOCK_SKEW_MS + 1),
+            now
+        ));
+        assert!(!send_now_outside_window(
+            Some(now - HELD_SEND_REPLAY_HORIZON_MS),
+            now
+        ));
+        assert!(send_now_outside_window(
+            Some(now - HELD_SEND_REPLAY_HORIZON_MS - 1),
+            now
+        ));
+    }
 }

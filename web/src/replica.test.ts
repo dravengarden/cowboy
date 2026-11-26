@@ -30,6 +30,16 @@ function memoryDatabase(): ReplicaDatabase & { readonly data: Map<string, unknow
           data.delete(key);
           return Promise.resolve();
         },
+        update: (merge: (stored: T | null) => T | null) => {
+          const current = (data.has(key) ? structuredClone(data.get(key)) : null) as T | null;
+          const next = merge(current);
+          if (next === null) data.delete(key);
+          else {
+            db.saves += 1;
+            data.set(key, structuredClone(next));
+          }
+          return Promise.resolve();
+        },
       };
     },
     cacheSessions: (state: "tail" | "delivery") =>
@@ -130,4 +140,70 @@ test("replica seal drops pending producers without writing", async () => {
   await replica.flush();
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert(db.data.size === 0);
+});
+
+test("discardTail and retainSessions keep held deliveries while evicting removed tails", async () => {
+  const db = memoryDatabase();
+  const replica = createReplica(db, { debounceMs: 1, maxWaitMs: 5 });
+  await replica.session("held-removed").saveDelivery({ held: ["m-held"] });
+  replica.session("held-removed").scheduleTail(
+    () => ({ receivedAt: 1, lastSeq: 1, reachedStart: true, events: [event(1)] }),
+    { immediate: true },
+  );
+  await replica.session("clean-removed").saveDelivery({ held: ["m-old"] });
+  await replica.flush();
+
+  await replica.session("held-removed").discardTail();
+  assertEquals(await replica.session("held-removed").loadTail(), null);
+  assertEquals((await replica.session("held-removed").loadDelivery())?.held, ["m-held"]);
+
+  // Full-list pruning also keeps deliveries protected by unresolved outbox entries.
+  await replica.retainSessions(new Set(), {
+    keepDelivery: (id) => id === "held-removed",
+  });
+  assertEquals((await replica.session("held-removed").loadDelivery())?.held, ["m-held"]);
+  assertEquals(await replica.session("clean-removed").loadDelivery(), null);
+
+  await replica.session("held-removed").discardDelivery();
+  assertEquals(await replica.session("held-removed").loadDelivery(), null);
+});
+
+test("clear boundary stored in replica tail rejects delayed pre-Clear writes from another tab", async () => {
+  const db = memoryDatabase();
+  const tabA = createReplica(db, { debounceMs: 1, maxWaitMs: 5 });
+  const tabB = createReplica(db, { debounceMs: 1, maxWaitMs: 5 });
+  const clearEnv: Envelope = {
+    session_id: "a",
+    seq: 50,
+    kind: "update",
+    update: { sessionUpdate: "context_cleared" },
+  };
+  tabA.session("a").scheduleTail(
+    () => ({ receivedAt: 2, lastSeq: 50, reachedStart: true, events: [clearEnv] }),
+    { immediate: true },
+  );
+  await tabA.flush();
+
+  // Delayed tab B attempts to flush a stale pre-Clear tail (lastSeq 40 < 50).
+  tabB.session("a").scheduleTail(
+    () => ({ receivedAt: 1, lastSeq: 40, reachedStart: false, events: [event(40)] }),
+    { immediate: true },
+  );
+  await tabB.flush();
+
+  const stored = await tabA.session("a").loadTail();
+  assertEquals(stored?.lastSeq, 50);
+  assertEquals(stored?.events.map((e) => e.seq), [50]);
+
+  // Atomic retireDelivery hook runs on stale sessions in retainSessions.
+  await tabA.session("a").saveDelivery({ held: ["m1"] });
+  const retired: string[] = [];
+  await tabA.retainSessions(new Set(), {
+    retireDelivery: async (id) => {
+      retired.push(id);
+      db.data.delete(`session:${id}:delivery`);
+    },
+  });
+  assertEquals(retired, ["a"]);
+  assertEquals(await tabA.session("a").loadDelivery(), null);
 });

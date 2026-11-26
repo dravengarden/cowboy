@@ -3,6 +3,7 @@
 // (docs/offline-first-sync.md §Architecture 1). Every value here is a paint
 // cache. The Hub's next broadcast replaces it; nothing in it is an obligation
 // and nothing in it is ever sent.
+import { lastContextClearSeq } from "./canonicalTimeline.ts";
 import type {
   ConfigOption,
   Envelope,
@@ -136,7 +137,7 @@ interface ReplicaWriter<T> {
    * a burst of changes costs one serialization. */
   schedule(produce: () => T | null, opts?: { readonly immediate?: boolean }): void;
   flush(): Promise<void>;
-  cancel(): void;
+  cancel(): Promise<void>;
 }
 
 function createWriter<T>(
@@ -144,6 +145,7 @@ function createWriter<T>(
   timing: { readonly debounceMs: number; readonly maxWaitMs: number },
   active: () => boolean,
   onError: (error: unknown) => void,
+  mergeStored?: (stored: T | null, next: T) => T,
 ): ReplicaWriter<T> {
   let producer: (() => T | null) | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -168,7 +170,15 @@ function createWriter<T>(
     }
     if (value === null) return tail;
     const next = value;
-    tail = tail.then(() => active() ? cache.save(next) : undefined).catch(onError);
+    tail = tail
+      .then(() => {
+        if (!active()) return undefined;
+        if (mergeStored !== undefined && typeof cache.update === "function") {
+          return cache.update((stored) => mergeStored(stored, next));
+        }
+        return cache.save(next);
+      })
+      .catch(onError);
     return tail;
   };
   return {
@@ -186,9 +196,10 @@ function createWriter<T>(
       timer = setTimeout(() => void land(), Math.min(timing.debounceMs, remaining));
     },
     flush: (): Promise<void> => producer === undefined ? tail : land(),
-    cancel: (): void => {
+    cancel: (): Promise<void> => {
       clear();
       producer = undefined;
+      return tail.catch(() => undefined);
     },
   };
 }
@@ -198,6 +209,9 @@ export interface SessionReplica {
   scheduleTail(produce: () => ReplicaTail | null, opts?: { readonly immediate?: boolean }): void;
   loadDelivery(): Promise<ReplicaDelivery | null>;
   saveDelivery(delivery: ReplicaDelivery): Promise<void>;
+  discardTail(): Promise<void>;
+  discardDelivery(): Promise<void>;
+  retireDelivery(retire: () => Promise<unknown>): Promise<void>;
   discard(): Promise<void>;
 }
 
@@ -210,12 +224,121 @@ export interface Replica {
   /** Sessions with a cached transcript tail; empty when the store is unreadable. */
   listTailSessions(): Promise<string[]>;
   /** Drop caches for sessions the Hub no longer lists. Throttled by callers. */
-  retainSessions(valid: ReadonlySet<string>): Promise<void>;
+  retainSessions(
+    valid: ReadonlySet<string>,
+    opts?: {
+      readonly keepDelivery?: (sessionId: string) => boolean | Promise<boolean>;
+      readonly retireDelivery?: (sessionId: string) => Promise<unknown>;
+    },
+  ): Promise<void>;
   flush(): Promise<void>;
   /** Stop scheduling writes. Pending producers are dropped. */
   seal(): void;
   /** Explicit sign-out: forget everything this device painted. */
   discardAll(): Promise<void>;
+}
+
+function mergeTailAcrossClear(stored: ReplicaTail | null, next: ReplicaTail): ReplicaTail {
+  const existing = stored === null ? null : decodeReplicaTail(stored);
+  const storedClear = existing === null ? null : lastContextClearSeq(existing.events);
+  if (storedClear !== null && next.lastSeq < storedClear) return existing!;
+  return next;
+}
+
+function createSessionReplica(
+  db: ReplicaDatabase,
+  sessionId: string,
+  timing: { readonly debounceMs: number; readonly maxWaitMs: number },
+  active: () => boolean,
+  onError: (error: unknown) => void,
+  onDiscard: () => void,
+): { replica: SessionReplica; writer: ReplicaWriter<ReplicaTail> } {
+  const tailCache = db.cache<unknown>({ kind: "session", session: sessionId, state: "tail" });
+  const deliveryCache = db.cache<unknown>({ kind: "session", session: sessionId, state: "delivery" });
+  const writer = createWriter<ReplicaTail>(
+    tailCache as ProductCache<ReplicaTail>,
+    timing,
+    active,
+    onError,
+    mergeTailAcrossClear,
+  );
+  let deliveryWrite: Promise<void> = Promise.resolve();
+  const decode = async <T>(
+    cache: ProductCache<unknown>,
+    decoder: (value: unknown) => T | null,
+  ): Promise<T | null> => {
+    try {
+      const value = await cache.load();
+      return value === null ? null : decoder(value);
+    } catch {
+      return null;
+    }
+  };
+  const replica: SessionReplica = {
+    loadTail: () => decode(tailCache, decodeReplicaTail),
+    scheduleTail: (produce, scheduleOpts) => writer.schedule(produce, scheduleOpts),
+    loadDelivery: () => decode(deliveryCache, decodeReplicaDelivery),
+    saveDelivery: (delivery) => {
+      if (!active()) return Promise.resolve();
+      const next = deliveryWrite
+        .catch(() => undefined)
+        .then(async () => {
+          if (!active()) return;
+          try {
+            await (deliveryCache as ProductCache<ReplicaDelivery>).save(delivery);
+          } catch (error) {
+            onError(error);
+          }
+        });
+      deliveryWrite = next;
+      return next;
+    },
+    discardTail: async () => {
+      await writer.cancel();
+      try {
+        await tailCache.discard();
+      } catch (error) {
+        onError(error);
+      }
+    },
+    discardDelivery: async () => {
+      const next = deliveryWrite
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            await deliveryCache.discard();
+          } catch (error) {
+            onError(error);
+          }
+        });
+      deliveryWrite = next;
+      await next;
+    },
+    retireDelivery: async (retire) => {
+      const next = deliveryWrite
+        .catch(() => undefined)
+        .then(async () => {
+          try {
+            await retire();
+          } catch (error) {
+            onError(error);
+          }
+        });
+      deliveryWrite = next;
+      await next;
+    },
+    discard: async () => {
+      onDiscard();
+      // Order deletion strictly after any in-flight tail or delivery write
+      // so an active save cannot land after the session was removed.
+      await Promise.allSettled([writer.cancel(), deliveryWrite]);
+      const outcomes = await Promise.allSettled([tailCache.discard(), deliveryCache.discard()]);
+      for (const outcome of outcomes) {
+        if (outcome.status === "rejected") onError(outcome.reason);
+      }
+    },
+  };
+  return { replica, writer };
 }
 
 export function createReplica(
@@ -269,37 +392,16 @@ export function createReplica(
     if (!SESSION_ID.test(sessionId)) throw new Error("invalid session id");
     const existing = sessions.get(sessionId);
     if (existing !== undefined) return existing.replica;
-    const tailCache = db.cache<unknown>({ kind: "session", session: sessionId, state: "tail" });
-    const deliveryCache = db.cache<unknown>({ kind: "session", session: sessionId, state: "delivery" });
-    const writer = createWriter<ReplicaTail>(
-      tailCache as ProductCache<ReplicaTail>,
+    const entry = createSessionReplica(
+      db,
+      sessionId,
       timing,
       active,
       onError,
+      () => sessions.delete(sessionId),
     );
-    const replica: SessionReplica = {
-      loadTail: () => decodeWith(tailCache, decodeReplicaTail),
-      scheduleTail: (produce, scheduleOpts) => writer.schedule(produce, scheduleOpts),
-      loadDelivery: () => decodeWith(deliveryCache, decodeReplicaDelivery),
-      saveDelivery: async (delivery) => {
-        if (sealed) return;
-        try {
-          await (deliveryCache as ProductCache<ReplicaDelivery>).save(delivery);
-        } catch (error) {
-          onError(error);
-        }
-      },
-      discard: async () => {
-        writer.cancel();
-        sessions.delete(sessionId);
-        const outcomes = await Promise.allSettled([tailCache.discard(), deliveryCache.discard()]);
-        for (const outcome of outcomes) {
-          if (outcome.status === "rejected") onError(outcome.reason);
-        }
-      },
-    };
-    sessions.set(sessionId, { replica, writer });
-    return replica;
+    sessions.set(sessionId, entry);
+    return entry.replica;
   };
   return {
     loadSessions: () => decodeWith(sessionsCache, decodeReplicaSessions),
@@ -321,22 +423,34 @@ export function createReplica(
         return [];
       }
     },
-    retainSessions: async (valid): Promise<void> => {
+    retainSessions: async (valid, retainOpts = {}): Promise<void> => {
       if (sealed) return;
-      let stored: string[];
+      let tails: string[];
+      let deliveries: string[];
       try {
-        const [tails, deliveries] = await Promise.all([
+        [tails, deliveries] = await Promise.all([
           db.cacheSessions("tail"),
           db.cacheSessions("delivery"),
         ]);
-        stored = [...new Set([...tails, ...deliveries])];
       } catch (error) {
         onError(error);
         return;
       }
       if (sealed) return;
+      const stale = [...new Set([...tails, ...deliveries])].filter((id) => !valid.has(id));
       await Promise.all(
-        stored.filter((id) => !valid.has(id)).map((id) => session(id).discard()),
+        stale.map(async (id) => {
+          if (retainOpts.retireDelivery) {
+            await session(id).discardTail();
+            await session(id).retireDelivery(() => retainOpts.retireDelivery!(id));
+            return;
+          }
+          const keepDelivery = retainOpts.keepDelivery
+            ? await retainOpts.keepDelivery(id)
+            : false;
+          if (keepDelivery) await session(id).discardTail();
+          else await session(id).discard();
+        }),
       );
     },
     flush: async (): Promise<void> => {

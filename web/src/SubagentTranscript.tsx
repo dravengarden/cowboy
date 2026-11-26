@@ -215,7 +215,7 @@ export function SubagentConversation({
       }}
     >
       {(transcript.moreBefore || transcript.gaps > 0) && (
-        <Box sx={{ display: "flex", alignItems: "center", gap: 1, px: desktop ? 0 : 2, py: 0.5 }}>
+        <Box sx={{ display: "flex", alignItems: "center", gap: 1, px: 2, py: 0.75 }}>
           {transcript.moreBefore && (
             <Button
               size="small"

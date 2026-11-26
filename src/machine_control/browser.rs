@@ -5,7 +5,10 @@ use std::sync::Arc;
 
 use parking_lot::RwLockWriteGuard;
 
-use super::{ConnectionToken, LiveState, MachineControl, Reply, ReplyKind, RequestBinding};
+use super::{
+    ConnectionToken, LiveState, MachineControl, PendingRequestGuard, Reply, ReplyKind,
+    RequestBinding,
+};
 use crate::machine_protocol::{MachineCommand, machine_browser};
 
 /// Consumer of Machine browser observations, with the exact connection that
@@ -13,11 +16,119 @@ use crate::machine_protocol::{MachineCommand, machine_browser};
 /// connection's lifetime. Invoked outside every correlation lock; the events
 /// name accounts and never enter the shared diagnostics history.
 pub type BrowserObserver = Arc<dyn Fn(&ConnectionToken, &machine_browser::Event) + Send + Sync>;
+/// Consumer notified when a Machine answers a browser request with a
+/// `CommandResult` (including late refusals after the caller's HTTP timeout).
+/// Returns `true` if `request_id` belonged to a tracked browser command so
+/// its payload never enters shared diagnostics history.
+pub type BrowserResultObserver = Arc<dyn Fn(&ConnectionToken, &str) -> bool + Send + Sync>;
+
+/// Why [`MachineControl::browser_command_checked`] did not receive a browser
+/// state event: either the command was enqueued and its outcome is uncertain
+/// (Controller wait timed out or the connection closed after dispatch while the
+/// Machine may still execute it), or dispatch/execution definitely failed
+/// (never enqueued, or explicitly rejected by the Machine).
+#[derive(Debug)]
+pub enum BrowserCommandError {
+    Uncertain(String),
+    Definite(String),
+}
+
+impl BrowserCommandError {
+    pub fn into_message(self) -> String {
+        match self {
+            Self::Uncertain(detail) | Self::Definite(detail) => detail,
+        }
+    }
+}
+
+impl std::fmt::Display for BrowserCommandError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Uncertain(detail) | Self::Definite(detail) => f.write_str(detail),
+        }
+    }
+}
 
 impl MachineControl {
     /// Install the consumer of Machine browser observations.
     pub fn set_browser_observer(&self, observer: BrowserObserver) {
         *self.browser_observer.write() = Some(observer);
+    }
+
+    /// Install the consumer of Machine `CommandResult` replies that settle
+    /// tracked browser request fences.
+    pub fn set_browser_result_observer(&self, observer: BrowserResultObserver) {
+        *self.browser_result_observer.write() = Some(observer);
+    }
+
+    pub(super) fn notify_browser_result(&self, token: &ConnectionToken, request_id: &str) -> bool {
+        let observer = self.browser_result_observer.read().clone();
+        observer.is_some_and(|observer| observer(token, request_id))
+    }
+
+    /// Synchronously enqueue one Machine browser command on the exact
+    /// authenticated connection so callers may release higher-level locks
+    /// before awaiting the Machine reply via [`Self::await_browser_command`].
+    pub fn begin_browser_command<'a>(
+        &'a self,
+        connection: &ConnectionToken,
+        request_id: &str,
+        command: machine_browser::Command,
+    ) -> Result<
+        (
+            tokio::sync::oneshot::Receiver<Reply>,
+            PendingRequestGuard<'a>,
+        ),
+        BrowserCommandError,
+    > {
+        self.begin_request(
+            &connection.0.machine_id,
+            request_id,
+            MachineCommand::Browser {
+                request_id: request_id.to_string(),
+                browser: command,
+            },
+            ReplyKind::Browser,
+            Some(RequestBinding::Connection(connection)),
+        )
+        .map_err(BrowserCommandError::Definite)
+    }
+
+    /// Await the reply of a command enqueued with [`Self::begin_browser_command`],
+    /// distinguishing an uncertain post-enqueue outcome (timeout or closed
+    /// channel) from a definite Machine rejection.
+    pub async fn await_browser_command(
+        rx: tokio::sync::oneshot::Receiver<Reply>,
+        timeout: std::time::Duration,
+    ) -> Result<machine_browser::StateEvent, BrowserCommandError> {
+        match tokio::time::timeout(timeout, rx).await {
+            Ok(Ok(Reply::Browser(Ok(state)))) => Ok(*state),
+            Ok(Ok(Reply::Browser(Err(detail)))) => Err(BrowserCommandError::Definite(detail)),
+            Ok(Ok(_)) => Err(BrowserCommandError::Definite(
+                "Machine browser reply kind mismatch".into(),
+            )),
+            Ok(Err(_)) => Err(BrowserCommandError::Uncertain(
+                "Machine browser response channel closed".into(),
+            )),
+            Err(_) => Err(BrowserCommandError::Uncertain(
+                "Machine browser command timed out".into(),
+            )),
+        }
+    }
+
+    /// One Machine browser command on the exact authenticated connection,
+    /// distinguishing an uncertain post-enqueue outcome (timeout or transport
+    /// close while the Machine may still execute) from a definite pre-send or
+    /// Machine-refusal failure.
+    pub async fn browser_command_checked(
+        &self,
+        connection: &ConnectionToken,
+        request_id: String,
+        command: machine_browser::Command,
+        timeout: std::time::Duration,
+    ) -> Result<machine_browser::StateEvent, BrowserCommandError> {
+        let (rx, _pending) = self.begin_browser_command(connection, &request_id, command)?;
+        Self::await_browser_command(rx, timeout).await
     }
 
     /// One Machine browser command on the exact authenticated connection,
@@ -29,23 +140,9 @@ impl MachineControl {
         command: machine_browser::Command,
         timeout: std::time::Duration,
     ) -> Result<machine_browser::StateEvent, String> {
-        let (rx, _pending) = self.begin_request(
-            &connection.0.machine_id,
-            &request_id,
-            MachineCommand::Browser {
-                request_id: request_id.clone(),
-                browser: command,
-            },
-            ReplyKind::Browser,
-            Some(RequestBinding::Connection(connection)),
-        )?;
-        match tokio::time::timeout(timeout, rx).await {
-            Ok(Ok(Reply::Browser(Ok(state)))) => Ok(*state),
-            Ok(Ok(Reply::Browser(Err(detail)))) => Err(detail),
-            Ok(Ok(_)) => Err("Machine browser reply kind mismatch".into()),
-            Ok(Err(_)) => Err("Machine browser response channel closed".into()),
-            Err(_) => Err("Machine browser command timed out".into()),
-        }
+        self.browser_command_checked(connection, request_id, command, timeout)
+            .await
+            .map_err(BrowserCommandError::into_message)
     }
 
     /// Fire-and-forget attachment lease renewal; the Machine answers only a

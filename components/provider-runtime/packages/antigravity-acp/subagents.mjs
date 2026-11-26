@@ -429,13 +429,28 @@ export class Subagents {
    * Start a subagent for `parentId`, which must be in a turn. Returns its
    * session id once it runs; nothing is left behind when it cannot.
    */
-  async start(parentId, { prompt, description }) {
+  async start(
+    parentId,
+    { prompt, description },
+    { parentFacadeTurn = undefined, decision = undefined, signal = undefined } = {},
+  ) {
     const { proxy } = this;
     if (!this.supported) throw new ToolError("This Cowboy client does not support subagents.");
     if (this.owns(parentId)) throw new ToolError("A subagent cannot start subagents.");
     const setup = this.setups.get(parentId);
     const parentTurn = proxy.turns.get(parentId);
-    if (!setup || !parentTurn || parentTurn.cancelled) {
+    const facadeTurn = parentFacadeTurn ?? proxy.facade?.sessions?.get(parentId)?.turn;
+    if (
+      !setup ||
+      !parentTurn ||
+      parentTurn.cancelled ||
+      parentTurn.closed ||
+      parentTurn.uncertain !== undefined ||
+      facadeTurn?.cancelled ||
+      facadeTurn?.ended ||
+      facadeTurn?.uncertain !== undefined ||
+      signal?.aborted
+    ) {
       throw new ToolError("Subagents can only be started inside a running turn.");
     }
     const mode = proxy.effectiveMode(parentId);
@@ -493,9 +508,18 @@ export class Subagents {
         child.cancelled ||
         group.epoch !== epoch ||
         proxy.turns.get(parentId) !== parentTurn ||
-        parentTurn.cancelled
+        parentTurn.cancelled ||
+        parentTurn.closed ||
+        parentTurn.uncertain !== undefined ||
+        facadeTurn?.cancelled ||
+        facadeTurn?.ended ||
+        facadeTurn?.uncertain !== undefined ||
+        signal?.aborted
       ) {
         throw new ToolError(TURN_ENDED);
+      }
+      if (typeof decision?.confirm === "function" && !decision.confirm()) {
+        throw new ToolError(MODE_CHANGED);
       }
       const now = proxy.effectiveMode(parentId);
       if (!isUnrestrictedMode(now)) {
@@ -1061,10 +1085,25 @@ export class Subagents {
    */
   lost(sessionId, method) {
     const child = this.children.get(sessionId);
-    if (!child) return;
-    if (this.proxy.turns.get(child.parent) !== child.parentTurn) return;
-    child.parentTurn.uncertain ??= method;
-    this.halt(child.parent);
+    if (child) {
+      if (this.proxy.turns.get(child.parent) !== child.parentTurn) return;
+      child.parentTurn.uncertain ??= method;
+      this.halt(child.parent);
+      return;
+    }
+    const parentTurn = this.proxy.turns.get(sessionId);
+    if (!parentTurn) return;
+    parentTurn.uncertain ??= method;
+    const group = this.groups.get(sessionId);
+    if (group) group.epoch += 1;
+    this.proxy.retirePermissions?.({
+      sessionId,
+      reason: "The turn was fenced after an uncertain effect.",
+    });
+    for (const liveChild of this.live(sessionId)) {
+      if (liveChild.state === "starting") liveChild.cancelled = true;
+      else this.cancelChild(liveChild);
+    }
   }
 
   /** A child's effect on the target became unknown: the parent's turn ends too. */

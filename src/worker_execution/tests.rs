@@ -2136,3 +2136,140 @@ async fn malformed_http_version_cannot_occupy_mutation_reserve_slot() {
         .expect("mutation client must not be starved by malformed HTTP version");
     drop(stalled);
 }
+
+#[tokio::test]
+async fn uncertain_effect_control_request_succeeds_under_16_slot_saturation() {
+    let inner = processes();
+    let fixture = UnixFixture::with(Arc::new(move |invocation| {
+        if invocation.method == "fs/getMetadata" {
+            Reply::Hold
+        } else {
+            inner(invocation)
+        }
+    }));
+    let ledger_dir = tempfile::tempdir().unwrap();
+    let ledger_path = ledger_dir.path().join("ledger.json");
+    let ledger = ledger(&fixture.target.client, Some(ledger_path.clone()));
+    let seq_before = ledger.uncertain_sequence();
+    ledger.begin_turn("turn-1");
+    let mut socket = fixture.initialized().await;
+    // Saturate all 16 forwarded request slots.
+    for id in 1..=16 {
+        socket
+            .send(Message::Text(
+                json!({"id": id, "method": "fs/getMetadata", "params": {"path": "file:///target/a"}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+    }
+    eventually(|| fixture.target.held.lock().len() == 16).await;
+
+    // A 17th forwarded request must be refused at capacity.
+    socket
+        .send(Message::Text(
+            json!({"id": 17, "method": "fs/getMetadata", "params": {"path": "file:///target/a"}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let refused_raw = tokio::time::timeout(Duration::from_secs(5), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let refused: Value = serde_json::from_str(refused_raw.to_text().unwrap()).unwrap();
+    assert_eq!(refused["id"], json!(17));
+    assert_eq!(refused["error"]["code"], json!(-32000));
+
+    // A worker-local uncertainty report must still be admitted through the independent
+    // control lane and durably fence the ledger while all 16 forwarded slots stay full (R20-M3).
+    socket
+        .send(Message::Text(
+            json!({"id": 18, "method": "cowboy/uncertainEffect", "params": {"method": "file publish"}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let ack_raw = tokio::time::timeout(Duration::from_secs(5), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let ack: Value = serde_json::from_str(ack_raw.to_text().unwrap()).unwrap();
+    assert_eq!(ack["id"], json!(18));
+    assert!(
+        ack.get("error").is_none(),
+        "control request failed under saturation: {ack}"
+    );
+    assert_eq!(ledger.uncertain_effect().as_deref(), Some("file publish"));
+    // Reopen from disk while all 16 forwarded requests remain held to prove
+    // durable persistence across worker restarts (R21-L1).
+    assert_eq!(fixture.target.held.lock().len(), 16);
+    let reopened = Ledger::open("session", Some(ledger_path)).unwrap();
+    assert_eq!(reopened.uncertain_effect().as_deref(), Some("file publish"));
+    assert!(
+        reopened.uncertain_sequence() > seq_before,
+        "durable uncertainty sequence must advance"
+    );
+
+    fixture.target.release(json!({"result": {}}));
+}
+
+#[tokio::test]
+async fn drain_acknowledgement_without_ledger_is_local_under_16_slot_saturation() {
+    let inner = processes();
+    let fixture = UnixFixture::with(Arc::new(move |invocation| {
+        if invocation.method == "fs/getMetadata" {
+            Reply::Hold
+        } else {
+            inner(invocation)
+        }
+    }));
+    // Deliberately attach NO ledger on this connection (R21-M1).
+    let mut socket = fixture.initialized().await;
+    for id in 1..=16 {
+        socket
+            .send(Message::Text(
+                json!({"id": id, "method": "fs/getMetadata", "params": {"path": "file:///target/a"}})
+                    .to_string()
+                    .into(),
+            ))
+            .await
+            .unwrap();
+    }
+    eventually(|| fixture.target.held.lock().len() == 16).await;
+
+    // Sending cowboy/drained while saturated and ledgerless must be answered locally
+    // without forwarding a 17th request to the target.
+    socket
+        .send(Message::Text(
+            json!({"id": 17, "method": "cowboy/drained", "params": {}})
+                .to_string()
+                .into(),
+        ))
+        .await
+        .unwrap();
+    let ack_raw = tokio::time::timeout(Duration::from_secs(5), socket.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let ack: Value = serde_json::from_str(ack_raw.to_text().unwrap()).unwrap();
+    assert_eq!(ack["id"], json!(17));
+    assert_eq!(ack["result"], json!({}));
+    assert_eq!(fixture.target.held.lock().len(), 16);
+    assert!(
+        !fixture
+            .target
+            .log()
+            .iter()
+            .any(|entry| entry.contains("cowboy/drained")),
+        "cowboy/drained must never be forwarded to target"
+    );
+
+    fixture.target.release(json!({"result": {}}));
+}

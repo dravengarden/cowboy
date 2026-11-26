@@ -14,12 +14,12 @@ export function DesktopTasksHeader({
   return (
     <Box
       sx={{
-        px: 2.5,
-        py: 1.25,
+        px: 2,
+        py: 1,
         display: "grid",
-        gridTemplateColumns: "clamp(280px, 24vw, 380px) minmax(0, 1fr)",
+        gridTemplateColumns: "clamp(240px, 18vw, 320px) minmax(0, 1fr)",
         alignItems: "center",
-        gap: 2.5,
+        gap: 2,
         borderBottom: 1,
         borderColor: "divider",
       }}

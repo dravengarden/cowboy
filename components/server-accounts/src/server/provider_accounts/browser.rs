@@ -20,6 +20,8 @@ use serde_json::{Value, json};
 pub mod coordinator;
 pub mod legacy;
 pub mod machine_stream;
+#[cfg(test)]
+mod navigate_tests;
 mod network;
 pub mod revocation;
 pub mod shares;
@@ -58,6 +60,14 @@ pub fn install_observer(state: &Arc<AppState>) {
             if let Some(state) = weak.upgrade() {
                 state.browsers.observe(connection, event);
             }
+        }));
+    let weak_results = Arc::downgrade(state);
+    state
+        .machine_control
+        .set_browser_result_observer(Arc::new(move |connection, request_id| {
+            weak_results
+                .upgrade()
+                .is_some_and(|state| state.browsers.settle_navigation_on(connection, request_id))
         }));
     shares::start_deletion_reconciler(state);
 }
@@ -195,7 +205,14 @@ async fn owned_account(
         None if legacy::retained(state, owner, account_id).await? => BrowserAccount::RetiredCard,
         None => return Err("account_unavailable"),
     };
-    let (key, share) = shares::resolve(state, owner, (account_id, &account), &registry).await?;
+    // Defense-in-depth: a revoking account leaves shared browsers on
+    // `BeginRevocation`, and its cleanup (`Authority::Stop`) always targets
+    // its own browser key rather than any shared browser.
+    let (key, share) = if account.revoking() {
+        (account_id.clone(), None)
+    } else {
+        shares::resolve(state, owner, (account_id, &account), &registry).await?
+    };
     Ok(Resolved {
         owner: owner.to_owned(),
         id: account_id.clone(),
@@ -637,7 +654,8 @@ pub async fn state_value(
     }
     let mut value = json!({"machine_id": Value::Null, "state": Value::Null, "placements": placements, "admission": gate,
         "choose_machine": choose, "capable_machines": capable,
-        "share": resolved.shared().map(|share| share.value(owner)), "browser_identity": resolved.identity()});
+        "share": resolved.shared().map(|share| share.value(owner)), "browser_identity": resolved.identity(),
+        "navigate_identity_fenced": true});
     if let Some(observed) = &observed {
         value["machine_id"] = json!(observed.machine_id);
         value["state"] = json!(resolved.present(&observed.event));
@@ -709,6 +727,8 @@ pub async fn refresh_placements(state: Arc<AppState>, connection: ConnectionToke
         }
         let _ = query_machine(&state, &machine_id, &account_id).await;
     }
+    // Reconcile any identity-bound navigations orphaned by a prior connection drop.
+    shares::reconcile_orphaned_navigations(&state, Some(&machine_id)).await;
     // A share deleted while this Machine was away is revoked now.
     for owner in owners {
         shares::resume_deletions(&state, &owner).await;
@@ -844,15 +864,6 @@ async fn dispatch_open(
     Ok(event)
 }
 
-/// An identity-bound request names the browser identity the member's card
-/// uses now, or is refused.
-fn expected_identity(expected: Option<&str>, resolved: &Resolved) -> Result<(), &'static str> {
-    match expected {
-        Some(expected) if expected != resolved.identity() => Err("browser_identity_changed"),
-        _ => Ok(()),
-    }
-}
-
 /// Whether an open whose member lost its access meanwhile stops what it
 /// started: only the member's own browser, and only while it runs. A share's
 /// browser serves its other members and is never stopped here.
@@ -900,7 +911,7 @@ pub async fn open_tab(
             key = resolved.key;
             continue;
         }
-        expected_identity(expected_browser, &resolved)?;
+        shares::expected_identity(expected_browser, &resolved)?;
         let gate = network::gate(state, &resolved).await?;
         let (machine_id, connection) =
             machine_for(state, owner, &resolved, (machine, gate.as_ref())).await?;
@@ -929,33 +940,81 @@ const OPEN_KEY_ATTEMPTS: usize = 3;
 /// the member's card was shown it and commanded on the browser key. A
 /// command that drives a share's browser (`Authority::Launch`) needs the
 /// share's gate on the connection it travels on; owner cleanup does not.
+pub use shares::{IdentityFence, expected_identity};
+
 pub async fn instance_command(
     state: &AppState,
     owner: &str,
     (account_id, authority): (&ProviderAccountId, Authority),
     (machine_id, instance): (&str, &InstanceRef),
+    identity_fence: IdentityFence<'_>,
     command: impl FnOnce(InstanceRef) -> Command,
     timeout: std::time::Duration,
 ) -> Result<Value, &'static str> {
+    let fenced = !matches!(identity_fence, IdentityFence::None);
+    let fence = fenced.then(|| state.browsers.share_lock(owner));
+    let guard = match &fence {
+        Some(lock) => Some(lock.lock().await),
+        None => None,
+    };
     let resolved = authorize(state, owner, account_id, authority).await?;
+    shares::verify_identity_fence(
+        state,
+        owner,
+        (account_id, machine_id),
+        &resolved,
+        identity_fence,
+    )?;
     let instance = resolved.inbound(instance)?;
     let observed = named_instance(state, &resolved.key, machine_id, &instance)?;
     if authority == Authority::Launch {
         network::admitted_on(state, &resolved, &observed.connection).await?;
     }
     let command = command(instance);
+    let track_navigation = fenced && matches!(&command, Command::Navigate { .. });
     let request = request_id("browser");
     if let Command::Hibernate { instance } = &command {
         hibernate_sent(&observed.machine_id, instance, &request, "owner_request");
     }
-    let event = state
-        .machine_control
-        .browser_command(&observed.connection, request, command, timeout)
+    if track_navigation {
+        shares::begin_durable_navigation(state, owner, &resolved.key, &observed, &request).await?;
+    }
+    let (rx, _pending) =
+        match state
+            .machine_control
+            .begin_browser_command(&observed.connection, &request, command)
+        {
+            Ok(started) => started,
+            Err(error) => {
+                if track_navigation {
+                    shares::clear_durable_navigation(state, &request).await;
+                }
+                tracing::warn!(%error, "browser command failed before enqueue");
+                return Err("browser_command_failed");
+            }
+        };
+    drop(guard);
+    let event = match crate::machine_control::MachineControl::await_browser_command(rx, timeout)
         .await
-        .map_err(|error| {
+    {
+        Ok(event) => {
+            if track_navigation && event.state != BrowserState::Stopping {
+                shares::clear_durable_navigation(state, &request).await;
+            }
+            event
+        }
+        Err(crate::machine_control::BrowserCommandError::Uncertain(error)) => {
+            tracing::warn!(%error, request_id = %request, fenced = track_navigation, "browser command outcome uncertain; keeping navigation fence");
+            return Err("browser_command_failed");
+        }
+        Err(crate::machine_control::BrowserCommandError::Definite(error)) => {
+            if track_navigation {
+                shares::clear_durable_navigation(state, &request).await;
+            }
             tracing::warn!(%error, "browser command failed");
-            "browser_command_failed"
-        })?;
+            return Err("browser_command_failed");
+        }
+    };
     Ok(resolved.state_json(&observed.machine_id, &event))
 }
 
@@ -996,6 +1055,11 @@ pub async fn reset(
     let resolved = authorize(state, owner, account_id, Authority::Reset).await?;
     if resolved.identity() != expected_browser {
         return Err("browser_identity_changed");
+    }
+    if resolved.shared().is_some()
+        && shares::has_pending_navigation(state, owner, &resolved.key).await?
+    {
+        return Err("browser_navigation_pending");
     }
     let account_id = &resolved.key;
     let store = state.store.as_ref().ok_or("unavailable")?;
@@ -1201,6 +1265,9 @@ pub struct NavigateBody {
     /// When present, the Machine navigates only while this attachment is
     /// the instance's current one (a quick link bound to its viewer).
     attachment_id: Option<String>,
+    /// When present, navigate only while the card still uses this browser
+    /// identity (`browser_identity`), checked under the owner's share fence.
+    expected_browser: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -1284,12 +1351,22 @@ pub async fn http_navigate(
     if crate::machine_protocol::machine_browser::validate_url(&body.url).is_err() {
         return respond(Err("invalid_argument"));
     }
+    let attachment_fence = body.attachment_id.clone();
+    let identity_fence = match (
+        body.expected_browser.as_deref(),
+        attachment_fence.as_deref(),
+    ) {
+        (Some(expected), _) => IdentityFence::Expected(expected),
+        (None, Some(attachment_id)) => IdentityFence::Attachment(attachment_id),
+        (None, None) => IdentityFence::UnboundNavigate,
+    };
     respond(
         instance_command(
             &state,
             &auth.principal.user_id,
             (&account, Authority::Launch),
             (&body.machine_id, &body.instance),
+            identity_fence,
             |instance| Command::Navigate {
                 instance,
                 url: body.url,
@@ -1316,6 +1393,7 @@ pub async fn http_resize(
             &auth.principal.user_id,
             (&account, Authority::Launch),
             (&body.machine_id, &body.instance),
+            IdentityFence::None,
             |instance| Command::Resize {
                 instance,
                 attachment_id: body.attachment_id,
@@ -1343,6 +1421,7 @@ pub async fn http_snapshot(
             &auth.principal.user_id,
             (&account, Authority::Launch),
             (&body.machine_id, &body.instance),
+            IdentityFence::None,
             |instance| Command::Snapshot { instance },
             HIBERNATE_TIMEOUT,
         )
@@ -1365,6 +1444,7 @@ pub async fn http_hibernate(
             &auth.principal.user_id,
             (&account, Authority::Stop),
             (&body.machine_id, &body.instance),
+            IdentityFence::None,
             |instance| Command::Hibernate { instance },
             HIBERNATE_TIMEOUT,
         )

@@ -81,25 +81,131 @@ export function stagedNextAgent(context: SessionContext): boolean {
     context.delivery?.state !== "unknown";
 }
 
+const DISPLAY_CACHE_LIMIT = 64;
 const reads = new Map<string, Promise<SessionContext>>();
+const cachedContexts = new Map<string, { revision: number; data: SessionContext }>();
+const contextDependencies = new Map<string, Set<string>>();
+const linkMetadataChangeEpochs = new Map<string, number>();
+const announcedRevisions = new Map<string, number>();
+const loadedAnnouncedRevisions = new Map<string, number>();
 const configured = new Set<string>();
 const readRevisions = new Map<string, number>();
+let linkMetadataEpoch = 0;
 let principalEpoch = 0;
+
+function trimContextForDisplayCache(context: SessionContext): SessionContext {
+  if (!context.delivery || !("returned" in context.delivery)) return context;
+  const {
+    operation,
+    session_id,
+    state,
+    error,
+    session,
+    source_trashed,
+    source_kept,
+  } = context.delivery;
+  return {
+    ...context,
+    delivery: {
+      operation,
+      session_id,
+      state,
+      ...(error !== undefined ? { error } : {}),
+      ...(session !== undefined ? { session } : {}),
+      ...(source_trashed !== undefined ? { source_trashed } : {}),
+      ...(source_kept !== undefined ? { source_kept } : {}),
+    },
+  };
+}
+
+function storeDisplayCache(id: string, revision: number, context: SessionContext): void {
+  cachedContexts.delete(id);
+  cachedContexts.set(id, { revision, data: trimContextForDisplayCache(context) });
+  while (cachedContexts.size > DISPLAY_CACHE_LIMIT) {
+    const oldest = cachedContexts.keys().next().value;
+    if (oldest === undefined) break;
+    cachedContexts.delete(oldest);
+  }
+}
+
 function invalidateRead(id: string) {
   readRevisions.set(id, (readRevisions.get(id) ?? 0) + 1);
   reads.delete(id);
+  cachedContexts.delete(id);
+  loadedAnnouncedRevisions.delete(id);
 }
+
+function recordContextDependencies(id: string, context: SessionContext): void {
+  const deps = new Set<string>();
+  for (const link of context.links ?? []) deps.add(link.id);
+  for (const source of context.source_sessions ?? []) deps.add(source.id);
+  for (const sourceId of context.sources ?? []) deps.add(sourceId);
+  if (deps.size === 0) contextDependencies.delete(id);
+  else contextDependencies.set(id, deps);
+}
+
+/** Drop cached context state for a deleted session so attachments and metadata
+ *  do not linger in memory across a mobile session. */
+export function evictSessionContext(id: string): void {
+  invalidateRead(id);
+  contextDependencies.delete(id);
+  announcedRevisions.delete(id);
+  configured.delete(id);
+  readRevisions.delete(id);
+  sends.delete(id);
+}
+
+/** Invalidate cached or mounted context views whose linked or source sessions
+ *  intersect `changedSessionIds` (e.g. when a linked session's availability,
+ *  closing state, or title changes via full list, delta, or title sync patch). */
+export function invalidateReferencingContexts(changedSessionIds: string | Iterable<string>): void {
+  const changed = typeof changedSessionIds === "string"
+    ? new Set([changedSessionIds])
+    : new Set(changedSessionIds);
+  if (changed.size === 0) return;
+  linkMetadataEpoch += 1;
+  for (const depId of changed) linkMetadataChangeEpochs.set(depId, linkMetadataEpoch);
+  const affected: string[] = [];
+  for (const [id, deps] of contextDependencies) {
+    for (const dep of deps) {
+      if (changed.has(dep)) {
+        affected.push(id);
+        break;
+      }
+    }
+  }
+  for (const id of affected) announceContext(id);
+}
+
 globalThis.addEventListener?.(PREFERENCES_CHANGED, (event) => {
   const scopes =
     (event as CustomEvent<Record<string, number> | undefined>).detail;
-  for (const key of Object.keys(scopes ?? {})) {
-    if (key.startsWith("session_context:")) {
-      const id = key.slice("session_context:".length);
-      configured.add(id);
+  if (!scopes) {
+    announcedRevisions.clear();
+    loadedAnnouncedRevisions.clear();
+    for (const id of new Set([...reads.keys(), ...cachedContexts.keys(), ...configured])) {
       invalidateRead(id);
     }
+    globalThis.dispatchEvent?.(new CustomEvent(CONTEXT_CHANGED, { detail: null }));
+    return;
   }
-  if (!scopes) { for (const id of reads.keys()) invalidateRead(id); }
+  for (const [key, revision] of Object.entries(scopes)) {
+    if (!key.startsWith("session_context:")) continue;
+    const id = key.slice("session_context:".length);
+    configured.add(id);
+    const previous = announcedRevisions.get(id);
+    announcedRevisions.set(id, revision);
+    // Skip only when this exact revision already completed a successful load
+    // or is currently in flight; a prior failed read must retry on reconnect.
+    if (
+      previous === revision &&
+      (loadedAnnouncedRevisions.get(id) === revision || reads.has(id))
+    ) {
+      continue;
+    }
+    invalidateRead(id);
+    globalThis.dispatchEvent?.(new CustomEvent(CONTEXT_CHANGED, { detail: id }));
+  }
 });
 export const CONTEXT_CHANGED = "cowboy:session-context-changed";
 
@@ -167,6 +273,8 @@ export function loadSessionContext(id: string): Promise<SessionContext> {
   const existing = reads.get(id);
   if (existing) return existing;
   const revision = readRevisions.get(id) ?? 0;
+  const announced = announcedRevisions.get(id);
+  const metaEpochAtStart = linkMetadataEpoch;
   const epoch = principalEpoch;
   const read: Promise<SessionContext> = json<SessionContext>(
     `/api/sessions/${encodeURIComponent(id)}/context`,
@@ -179,6 +287,21 @@ export function loadSessionContext(id: string): Promise<SessionContext> {
         return loadSessionContext(id);
       }
       if (context.revision > 0) configured.add(id);
+      recordContextDependencies(id, context);
+      // If a returned linked/source session changed while this first read was
+      // in flight, revalidate rather than caching stale linked metadata.
+      const deps = contextDependencies.get(id);
+      if (
+        deps !== undefined &&
+        [...deps].some((dep) => (linkMetadataChangeEpochs.get(dep) ?? 0) > metaEpochAtStart)
+      ) {
+        if (reads.get(id) === read) reads.delete(id);
+        return loadSessionContext(id);
+      }
+      if (announced !== undefined && announcedRevisions.get(id) === announced) {
+        loadedAnnouncedRevisions.set(id, announced);
+        storeDisplayCache(id, revision, context);
+      }
       return context;
     })
     .finally(() => {
@@ -186,6 +309,21 @@ export function loadSessionContext(id: string): Promise<SessionContext> {
     });
   reads.set(id, read);
   return read;
+}
+
+function readDisplaySessionContext(id: string): Promise<SessionContext> {
+  // Only reuse the display cache when the Controller announces revisions for
+  // this session; ownerless sessions (product auth disabled) revalidate on mount.
+  if (announcedRevisions.has(id)) {
+    const cached = cachedContexts.get(id);
+    const revision = readRevisions.get(id) ?? 0;
+    if (cached !== undefined && cached.revision === revision) {
+      cachedContexts.delete(id);
+      cachedContexts.set(id, cached);
+      return Promise.resolve(cached.data);
+    }
+  }
+  return loadSessionContext(id);
 }
 
 /** Whether the Service has announced context for this session. Ordinary
@@ -247,12 +385,13 @@ export async function continueHere(id: string): Promise<void> {
   });
 }
 
-export function useSessionContext(id: string, active = true) {
+export function useSessionContext(id: string, active = true, refreshOnFocus = true) {
   const [loaded, setLoaded] = useState<{ id: string; data: SessionContext }>();
   const data = loaded?.id === id ? loaded.data : undefined;
   const [error, setError] = useState("");
   const reload = useCallback(async () => {
     try {
+      invalidateRead(id);
       const next = await loadSessionContext(id);
       setLoaded({ id, data: next });
       setError("");
@@ -266,8 +405,8 @@ export function useSessionContext(id: string, active = true) {
     if (!active) return;
     let alive = true;
     setLoaded(undefined);
-    const refresh = () => {
-      void loadSessionContext(id).then((next) => {
+    const apply = (promise: Promise<SessionContext>) => {
+      void promise.then((next) => {
         if (alive) {
           setLoaded({ id, data: next });
           setError("");
@@ -281,25 +420,30 @@ export function useSessionContext(id: string, active = true) {
           }
         });
     };
-    const preference = (event: Event) => {
-      const scopes =
-        (event as CustomEvent<Record<string, number> | undefined>).detail;
-      if (!scopes || Object.hasOwn(scopes, `session_context:${id}`)) refresh();
+    const refresh = () => apply(readDisplaySessionContext(id));
+    const refreshFresh = () => {
+      invalidateRead(id);
+      apply(loadSessionContext(id));
     };
     const local = (event: Event) => {
-      if ((event as CustomEvent<string>).detail === id) refresh();
+      const target = (event as CustomEvent<string | null>).detail;
+      if (target === null || target === id) refresh();
+    };
+    const onFocus = () => {
+      // Sessions with server-pushed preference announcements recover via
+      // PREFERENCES_CHANGED on reconnect; ownerless sessions (product auth off)
+      // have no owner stream and still revalidate when the tab regains focus.
+      if (refreshOnFocus || !announcedRevisions.has(id)) refreshFresh();
     };
     refresh();
-    window.addEventListener(PREFERENCES_CHANGED, preference);
     window.addEventListener(CONTEXT_CHANGED, local);
-    window.addEventListener("focus", refresh);
+    window.addEventListener("focus", onFocus);
     return () => {
       alive = false;
-      window.removeEventListener(PREFERENCES_CHANGED, preference);
       window.removeEventListener(CONTEXT_CHANGED, local);
-      window.removeEventListener("focus", refresh);
+      window.removeEventListener("focus", onFocus);
     };
-  }, [id, active]);
+  }, [id, active, refreshOnFocus]);
   return { data, error, reload };
 }
 
@@ -325,6 +469,11 @@ globalThis.addEventListener?.("cowboy:product-sign-out", () => {
   principalEpoch++;
   sends.clear();
   reads.clear();
+  cachedContexts.clear();
+  contextDependencies.clear();
+  linkMetadataChangeEpochs.clear();
+  announcedRevisions.clear();
+  loadedAnnouncedRevisions.clear();
   readRevisions.clear();
   configured.clear();
   observedHandoffs.clear();

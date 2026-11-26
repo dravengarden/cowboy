@@ -6,6 +6,25 @@ function requireValue(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
 
+async function verifyAppleProject(read: (path: string) => Promise<string>): Promise<void> {
+  const project = await read("apple/project.yml");
+  requireValue(
+    !/DEVELOPMENT_TEAM:/.test(project),
+    "default project must not require a personal signing team",
+  );
+  requireValue(project.includes("path: Sources"), "Xcode must include both owned bridges");
+  const exportOptions = await read("apple/ExportOptions.plist");
+  requireValue(
+    exportOptions.includes("<string>app-store-connect</string>") &&
+      exportOptions.includes("<string>automatic</string>"),
+    "ExportOptions.plist must target standard App Store Connect automatic signing",
+  );
+  requireValue(
+    !/<key>teamID<\/key>/.test(exportOptions),
+    "ExportOptions.plist template must not hardcode a signing teamID",
+  );
+}
+
 // Read-only: never repair, unlink or copy a borrowed native project.
 export async function verifyNativeShell(repository: string): Promise<void> {
   const root = await realpath(repository);
@@ -158,6 +177,7 @@ export async function verifyNativeShell(repository: string): Promise<void> {
     "tauri/src/main.rs",
     "tauri/Info.ios.plist",
     "apple/project.yml",
+    "apple/ExportOptions.plist",
     "apple/LaunchScreen.storyboard",
     "apple/Sources/cowboy-app/main.mm",
     "apple/Sources/cowboy-app/bindings/bindings.h",
@@ -217,12 +237,7 @@ export async function verifyNativeShell(repository: string): Promise<void> {
       androidActivity.includes("authenticationBrowser.onResume()"),
     "Android activity must install the authentication browser",
   );
-  const project = await read("apple/project.yml");
-  requireValue(
-    !/DEVELOPMENT_TEAM:/.test(project),
-    "default project must not require a personal signing team",
-  );
-  requireValue(project.includes("path: Sources"), "Xcode must include both owned bridges");
+  await verifyAppleProject(read);
   const capabilities = JSON.parse(await read("tauri/capabilities/remote-haptics.json"));
   requireValue(
     JSON.stringify(capabilities.remote.urls) ===

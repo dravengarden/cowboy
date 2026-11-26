@@ -210,6 +210,7 @@ async fn assert_prompt_dispatches_hydration_and_queue_contract(
         schedule: None,
         origin: Some(DeliveryOrigin::Owner),
         initiator: Some(DeliveryOrigin::peer("agent-1")),
+        explicit: None,
     };
     store
         .update_pending(active, &[legacy_row, typed_row], &[])
@@ -315,6 +316,7 @@ async fn assert_prompt_dispatches_hydration_and_queue_contract(
         schedule: None,
         origin: None,
         initiator: None,
+        explicit: None,
     };
     store
         .update_pending_with_notice_ops(

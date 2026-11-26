@@ -137,6 +137,20 @@ for (const [name, path, before, after, message] of [
     "personal signing team",
   ],
   [
+    "legacy debugging ExportOptions",
+    "apple/ExportOptions.plist",
+    "<string>app-store-connect</string>",
+    "<string>debugging</string>",
+    "standard App Store Connect automatic signing",
+  ],
+  [
+    "hardcoded ExportOptions teamID",
+    "apple/ExportOptions.plist",
+    "</dict>",
+    "    <key>teamID</key><string>ABC1234567</string>\n</dict>",
+    "must not hardcode a signing teamID",
+  ],
+  [
     "unpinned Android NDK",
     "toolchain.json",
     '"ndk": "30.0.16248370"',
@@ -248,8 +262,9 @@ test("native build is locked, fresh and build-only", async () => {
     "--no-sign",
     "receipt.json",
     "--receipt-path",
-    "ipa_sha256",
-    "ditto -c -k --keepParent",
+    "--version",
+    "--build-number",
+    "Cowboy.xcarchive",
     'open("x")',
   ]) {
     assert(builder.includes(contract), "missing native build contract: " + contract);
@@ -261,8 +276,24 @@ test("native build is locked, fresh and build-only", async () => {
     "|| echo",
     "cowboy-shell",
     ".codex/",
+    "SideStore",
   ]) {
     assert(!builder.includes(unsafe), "native build imports unsafe legacy behavior: " + unsafe);
+  }
+  const publisher = await readFile(resolve(root, "tools/publish-ios-appstore.sh"), "utf8");
+  for (const contract of [
+    "-exportArchive",
+    "-allowProvisioningUpdates",
+    "-authenticationKeyPath",
+    "-authenticationKeyID",
+    "-authenticationKeyIssuerID",
+    "app-store-connect",
+    "testFlightInternalTestingOnly",
+    "executable_sha256",
+    "appstore-receipt.json",
+    'open("x")',
+  ]) {
+    assert(publisher.includes(contract), "missing App Store publisher contract: " + contract);
   }
   const swift = await readFile(
     resolve(root, "apps/native-shell/apple/Sources/cowboy-app/CowboyDevBridge.swift"),

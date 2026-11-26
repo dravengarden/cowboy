@@ -3006,7 +3006,7 @@ test("Stale replayed allowed tool preserves provenance for late nameless complet
   );
 });
 
-test("Full 15 ordinary slots reject process/write pre-dispatch and reserved slot 16 cleans up helper without parking (R14-M4)", async () => {
+test("Full 14 ordinary slots reject process/write pre-dispatch and reserved cleanup slots clean up helper without parking (R14-M4)", async () => {
   const dir = await mkdtemp(join(tmpdir(), "r14-slots-"));
   const repo = join(dir, "repo");
   const home = join(dir, "home");
@@ -3034,10 +3034,10 @@ test("Full 15 ordinary slots reject process/write pre-dispatch and reserved slot
     const res = await origCall(method, params, opts);
     if (method === "process/start" && params.pipeStdin && !filledSlots) {
       filledSlots = true;
-      // Occupy all 15 ordinary request slots with slow fs/getMetadata calls
-      // BEFORE process/write runs; keep notifications disabled so confirming
-      // process/read must also use reserved cleanup slot 16!
-      for (let i = 0; i < 15; i += 1) {
+      // Occupy all 14 ordinary request slots with slow fs/getMetadata calls
+      // BEFORE process/write runs; keep notifications disabled so terminate
+      // uses slot 15 and confirming process/read uses slot 16!
+      for (let i = 0; i < 14; i += 1) {
         const p = origCall("fs/getMetadata", { path: `file://${repo}` });
         p.catch(() => {});
         fillers.push(p);
@@ -3587,4 +3587,1310 @@ test("Replay tool provenance is isolated per child turn so sibling churn cannot 
     agentFrames.some((f) => f.method === "session/cancel"),
     false,
   );
+});
+
+test("Evicted mode switch reply cannot settle a re-admitted session's newer plan switch (R16-M1)", async () => {
+  const agentFrames = [];
+  const clientFrames = [];
+  const runtime = {
+    managed: false,
+    facade: { beginTurn() {}, async endTurn() {} },
+    sessionCwd: (cwd) => cwd,
+    checkMirror() {},
+    projection: async () => "PROJ",
+    newChannel: () => "ch-0",
+    bindChannel() {},
+    mcpServer: () => ({ name: "cowboy", command: "/node", args: [], env: [] }),
+    evidence: { mark: async () => 1, settle: async () => ({ class: "ok", successes: 1 }) },
+  };
+  const proxy = new AcpProxy({
+    agent: (frame) => agentFrames.push(frame),
+    client: (frame) => clientFrames.push(frame),
+    runtime: Promise.resolve(runtime),
+  });
+  await proxy.runtime;
+  // Start a switch to default on s-0 (seq 1, incarnation A), leave it in flight.
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 101,
+    method: "session/set_mode",
+    params: { sessionId: "s-0", modeId: "default" },
+  });
+  // Make all 1024 sessions busy so fallback evicts s-0 while switch 101 is still in flight.
+  for (let i = 1; i <= 1024; i += 1) {
+    const sid = `s-busy-${i}`;
+    proxy.rememberSession(sid);
+    proxy.turns.set(sid, { attempt: Symbol("t"), tools: new Map() });
+  }
+  assert.equal(
+    proxy.knownSessions.has("s-0"),
+    true,
+    "busy session with active switch must not be evicted (R17-H1)",
+  );
+  // Send a newer switch to plan (seq 2) while switch 101 is still active.
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 102,
+    method: "session/set_mode",
+    params: { sessionId: "s-0", modeId: "plan" },
+  });
+  assert.equal(proxy.isSwitching("s-0"), true);
+  // Even if plan switch 102 finishes first, delayed default notification from 101 is still suppressed while 101 is active!
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 102, result: {} });
+  assert.equal(
+    proxy.isSwitching("s-0"),
+    true,
+    "plan switch cannot drop suppression while older op 101 is active",
+  );
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-0",
+      update: { sessionUpdate: "current_mode_update", currentModeId: "default" },
+    },
+  });
+  assert.equal(proxy.effectiveMode("s-0"), "switching");
+  // Write permission MUST still be denied while plan switch 102 is pending.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "perm-r16-m1",
+    method: "session/request_permission",
+    params: {
+      sessionId: "s-0",
+      toolCall: { toolCallId: "w1", name: "mcp_cowboy_WriteFile" },
+      options: [
+        { optionId: "allow", name: "Allow", kind: "allow_once" },
+        { optionId: "deny", name: "Deny", kind: "reject_once" },
+      ],
+    },
+  });
+  assert.deepEqual(agentFrames.at(-1), {
+    jsonrpc: "2.0",
+    id: "perm-r16-m1",
+    result: { outcome: { outcome: "selected", optionId: "deny" } },
+  });
+  // Delayed default reply 101 finishes: because it is not latest (overlapped), mode stays unknown (fail-closed), never default!
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 101, result: {} });
+  assert.equal(proxy.effectiveMode("s-0"), undefined);
+});
+
+test("Refused reopen discards staged config updates and never leaves failed session admitted (R16-M5)", async () => {
+  const agentFrames = [];
+  const clientFrames = [];
+  const runtime = {
+    managed: false,
+    facade: { beginTurn() {}, async endTurn() {} },
+    sessionCwd: (cwd) => cwd,
+    checkMirror() {},
+    projection: async () => "PROJ",
+    newChannel: () => "ch-0",
+    bindChannel() {},
+    mcpServer: () => ({ name: "cowboy", command: "/node", args: [], env: [] }),
+    evidence: { mark: async () => 1, settle: async () => ({ class: "ok", successes: 1 }) },
+  };
+  const proxy = new AcpProxy({
+    agent: (frame) => agentFrames.push(frame),
+    client: (frame) => clientFrames.push(frame),
+    runtime: Promise.resolve(runtime),
+  });
+  await proxy.runtime;
+  // Case 1: session/load is refused by agy -> staged update discarded & session stays unadmitted.
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 201,
+    method: "session/load",
+    params: { sessionId: "s-fail-load", cwd: "/repo", mcpServers: [] },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-fail-load",
+      update: {
+        sessionUpdate: "config_option_update",
+        configOptions: [{ id: "mode", currentValue: "plan" }],
+      },
+    },
+  });
+  assert.equal(clientFrames.length, 0, "mid-load update for unadmitted ID must be staged");
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 201, error: { code: -32004, message: "not found" } });
+  assert.equal(proxy.knownSessions.has("s-fail-load"), false);
+  clientFrames.length = 0;
+  // A subsequent direct config_option_update for the failed ID must still be dropped.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-fail-load",
+      update: {
+        sessionUpdate: "config_option_update",
+        configOptions: [{ id: "mode", currentValue: "plan" }],
+      },
+    },
+  });
+  assert.equal(clientFrames.length, 0, "failed reopen ID must remain unadmitted");
+
+  // Case 2: session/load succeeds -> mid-load config for unadmitted ID was dropped (never overwrites worker load result, R17-M7/M8).
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 202,
+    method: "session/load",
+    params: { sessionId: "s-ok-load", cwd: "/repo", mcpServers: [] },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-ok-load",
+      update: {
+        sessionUpdate: "config_option_update",
+        configOptions: [{ id: "mode", currentValue: "plan" }],
+      },
+    },
+  });
+  assert.equal(clientFrames.length, 0);
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 202,
+    result: { modes: { currentModeId: "default" } },
+  });
+  assert.equal(proxy.knownSessions.has("s-ok-load"), true);
+  assert.equal(proxy.effectiveMode("s-ok-load"), "default");
+  assert.equal(
+    clientFrames.length,
+    1,
+    "only authoritative load reply is forwarded (no replayed stale config)",
+  );
+  assert.equal(clientFrames[0].id, 202);
+
+  // Case 3: reopen reply naming a DIFFERENT or malformed sessionId returns a JSON-RPC error,
+  // revokes the relay channel, and never binds before validation (R17-M6, R18-M2).
+  const boundChannels = [];
+  const unboundChannels = [];
+  runtime.bindChannel = (ch, sid) => boundChannels.push([ch, sid]);
+  runtime.unbindChannel = (ch) => unboundChannels.push(ch);
+  clientFrames.length = 0;
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 203,
+    method: "session/load",
+    params: { sessionId: "s-wanted", cwd: "/repo", mcpServers: [] },
+  });
+  assert.deepEqual(boundChannels, [], "reopen channel must not bind before reply validation");
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 203,
+    result: { sessionId: "s-wrong-other", modes: { currentModeId: "default" } },
+  });
+  assert.equal(proxy.knownSessions.has("s-wrong-other"), false);
+  assert.equal(proxy.knownSessions.has("s-wanted"), false);
+  assert.equal(proxy.effectiveMode("s-wrong-other"), undefined);
+  assert.deepEqual(boundChannels, [], "mismatched reopen reply must not bind facade channel");
+  assert.equal(unboundChannels.length, 1, "mismatched reopen must revoke its relay channel");
+  assert.equal(clientFrames.length, 1);
+  assert.equal(clientFrames[0].id, 203);
+  assert.equal(
+    clientFrames[0].error?.code,
+    -32603,
+    "worker must receive JSON-RPC error on mismatch",
+  );
+
+  // Case 4: malformed explicit sessionId (empty string) also fails closed with error + revocation.
+  clientFrames.length = 0;
+  unboundChannels.length = 0;
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 204,
+    method: "session/resume",
+    params: { sessionId: "s-wanted", cwd: "/repo", mcpServers: [] },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 204,
+    result: { sessionId: "", modes: { currentModeId: "default" } },
+  });
+  assert.equal(unboundChannels.length, 1, "malformed reopen must revoke its relay channel");
+  assert.equal(clientFrames[0].error?.code, -32603);
+  assert.deepEqual(boundChannels, []);
+});
+
+test("Capacity refusal followed by empty final poll fences unproven edit BEFORE cleanup runs (R16-M2)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r16-empty-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home, notifications: false });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const origCall = conn.call.bind(conn);
+  let ordinaryReads = 0;
+  let fencedBeforeTerminate = false;
+  let observedTurn;
+  conn.call = async (method, params, opts) => {
+    if (method === "process/read" && !opts?.cleanup) {
+      ordinaryReads += 1;
+      if (ordinaryReads === 1) {
+        throw new Error("Too many execution requests");
+      }
+      // Return empty still-open result consuming the rest of the 150ms publish budget.
+      await new Promise((r) => setTimeout(r, 170));
+      return { chunks: [], exited: false, closed: false };
+    }
+    if (method === "process/terminate") {
+      fencedBeforeTerminate = observedTurn?.uncertain !== undefined;
+    }
+    return await origCall(method, params, opts);
+  };
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh", publishTimeoutMs: 150 });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const session = facade.session("s1");
+    observedTurn = session.turn;
+    const large = "e".repeat(64 * 1024);
+    await assert.rejects(
+      () => facade.writeFile(session, observedTurn, { path: "empty-poll.txt", content: large }),
+      (err) => err instanceof UncertainEffect,
+    );
+    assert.equal(
+      fencedBeforeTerminate,
+      true,
+      "unproven edit must be fenced BEFORE terminate awaits cleanup",
+    );
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Stalled post-stdin result read honors absolute publish deadline instead of 185s timeout (R16-M3)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r16-stall-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  let stallRead = false;
+  const endpoint = await fakeEndpoint(socket, repo, {
+    home,
+    notifications: false,
+    // Hold the first ordinary process/read on an OPEN socket far beyond the 200ms publish deadline (R17-L1).
+    delay: (method) => {
+      if (method === "process/read" && stallRead) {
+        stallRead = false;
+        return 5000;
+      }
+      return 0;
+    },
+  });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 60000 },
+  );
+  const origCall = conn.call.bind(conn);
+  let fencedBeforeTerminate = false;
+  let observedTurn;
+  conn.call = async (method, params, opts) => {
+    const res = await origCall(method, params, opts);
+    if (method === "process/write" && res?.status === "accepted") {
+      stallRead = true;
+    }
+    return res;
+  };
+  const origTerm = conn.call;
+  conn.call = async (method, params, opts) => {
+    if (method === "process/terminate") {
+      fencedBeforeTerminate = observedTurn?.uncertain !== undefined;
+    }
+    return await origTerm(method, params, opts);
+  };
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh", publishTimeoutMs: 200 });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const session = facade.session("s1");
+    observedTurn = session.turn;
+    const started = Date.now();
+    await assert.rejects(
+      () =>
+        facade.writeFile(session, observedTurn, {
+          path: "stall.txt",
+          content: "s".repeat(64 * 1024),
+        }),
+      (err) => err instanceof UncertainEffect && err.method === "process/read",
+    );
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 4000, `stalled read must expire at publish deadline, took ${elapsed}ms`);
+    assert.equal(fencedBeforeTerminate, true, "stalled read expiry must fence BEFORE cleanup");
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Transient pre-dispatch reconnect refusal on post-stdin read retries cleanly without parking (R16-M4)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r16-reconn-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home, notifications: false });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const origCall = conn.call.bind(conn);
+  let reconnectFailures = 0;
+  conn.call = async (method, params, opts) => {
+    if (method === "process/read" && !opts?.cleanup && reconnectFailures < 2) {
+      reconnectFailures += 1;
+      // Simulate a definite pre-dispatch reconnect failure (beforeSend was NOT called).
+      throw new Error("Execution unavailable; reconnect initialization failed before dispatch");
+    }
+    return await origCall(method, params, opts);
+  };
+  const lostEvents = [];
+  try {
+    const facade = new Facade(conn, {
+      root: repo,
+      shell: "/bin/sh",
+      onUncertain: (sid, method) => lostEvents.push([sid, method]),
+      onLost: (sid, method) => lostEvents.push([sid, method]),
+    });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const session = facade.session("s1");
+    const turn = session.turn;
+    const large = "r".repeat(64 * 1024);
+    await facade.writeFile(session, turn, { path: "reconn-ok.txt", content: large });
+    assert.equal(reconnectFailures, 2, "must retry pre-dispatch reconnect failure");
+    assert.equal(
+      turn.uncertain,
+      undefined,
+      "transient pre-dispatch reconnect failure must not park",
+    );
+    assert.deepEqual(lostEvents, []);
+    assert.equal(await readFile(join(repo, "reconn-ok.txt"), "utf8"), large);
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Cleanup terminate retry never dispatches a new stop after its confirmation deadline expires (R16-L1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r16-term-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home, notifications: false });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const origCall = conn.call.bind(conn);
+  let termCalls = 0;
+  let dispatchedAfterDeadline = false;
+  let testDeadline = 0;
+  conn.call = async (method, params, opts) => {
+    if (method === "process/terminate") {
+      termCalls += 1;
+      if (Date.now() > testDeadline + 5) dispatchedAfterDeadline = true;
+      if (termCalls === 1) {
+        // Consume almost the entire 40ms budget (leave ~10ms < 25ms) before refusing.
+        await new Promise((r) => setTimeout(r, 30));
+        throw new Error("Too many execution requests");
+      }
+    }
+    return await origCall(method, params, opts);
+  };
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const turn = facade.session("s1").turn;
+    const proc = await facade.start(turn, ["/bin/sh", "-c", "sleep 30"]);
+    testDeadline = Date.now() + 40;
+    const closed = await facade.terminate(proc, 40, { retryNotSent: true });
+    assert.equal(closed, false);
+    assert.equal(
+      termCalls,
+      1,
+      "must not start a second terminate after sleeping past the deadline",
+    );
+    assert.equal(dispatchedAfterDeadline, false);
+    // Clean up helper process.
+    conn.call = origCall;
+    await facade.terminate(proc, 5000);
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Root fenceLost synchronously fences linked child turns and blocks concurrent mutations awaiting reconnect (R17-M2, R17-M3)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r17-fam-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home, notifications: false });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+    facade.beginTurn("root-1", { turnNonce: "r1" });
+    const rootTurn = facade.session("root-1").turn;
+    facade.link("child-1", "root-1");
+    facade.beginTurn("child-1");
+    const childTurn = facade.session("child-1").turn;
+    // Simulate a concurrent RunCommand waiting on reconnect before dispatch.
+    let releaseConnect;
+    const origEnsure = conn.ensureConnected.bind(conn);
+    conn.ensureConnected = () =>
+      new Promise((resolve) => {
+        releaseConnect = () => resolve(origEnsure());
+      });
+    const pendingStart = facade.mutate(rootTurn, "process/start", {
+      processId: "cowboy-agy-late-cmd",
+      argv: ["/bin/sh", "-c", "echo should-not-run"],
+      cwd: `file://${repo}`,
+    });
+    await new Promise((r) => setTimeout(r, 15));
+    // Root publish fence fires BEFORE reconnect finishes!
+    facade.fenceLost(rootTurn, "file publish");
+    assert.equal(rootTurn.uncertain, "file publish");
+    assert.equal(
+      childTurn.uncertain,
+      "file publish",
+      "child turn must be fenced synchronously (R17-M2)",
+    );
+    releaseConnect();
+    await assert.rejects(() => pendingStart, /turn was cancelled/i);
+    assert.equal(
+      endpoint.calls.some((c) => c.params?.processId === "cowboy-agy-late-cmd"),
+      false,
+      "mutation waiting on reconnect must not dispatch after publish fence (R17-M3)",
+    );
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Timed-out publish never returns success even if buffered stdout holds applied receipt (R17-M4)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r17-rcpt-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home, notifications: false });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const origCall = conn.call.bind(conn);
+  let ordinaryReads = 0;
+  conn.call = async (method, params, opts) => {
+    if (method === "process/read" && !opts?.cleanup) {
+      ordinaryReads += 1;
+      if (ordinaryReads === 1) {
+        // Emit complete applied JSON on stdout while process stays open, consuming budget on next poll.
+        return {
+          chunks: [
+            {
+              seq: 1,
+              stream: "stdout",
+              chunk: Buffer.from('{"status":"applied"}\n').toString("base64"),
+            },
+          ],
+          exited: false,
+          closed: false,
+        };
+      }
+      await new Promise((r) => setTimeout(r, 150));
+      return { chunks: [], exited: false, closed: false };
+    }
+    return await origCall(method, params, opts);
+  };
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh", publishTimeoutMs: 100 });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const session = facade.session("s1");
+    const turn = session.turn;
+    await assert.rejects(
+      () => facade.writeFile(session, turn, { path: "rcpt.txt", content: "x".repeat(64 * 1024) }),
+      (err) => err instanceof UncertainEffect && err.method === "file publish",
+    );
+    assert.equal(turn.uncertain, "file publish");
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Longer cleanup joining short StopCommand is not cut off by StopCommand's shorter timeout (R17-M5)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r17-join-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, {
+    home,
+    notifications: false,
+    // Terminate reply takes 180ms: exceeds short 60ms StopCommand, succeeds inside 2000ms root cleanup.
+    delay: (method) => (method === "process/terminate" ? 180 : 0),
+  });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const turn = facade.session("s1").turn;
+    const proc = await facade.start(turn, ["/bin/sh", "-c", "sleep 30"]);
+    const shortStop = facade.terminate(proc, 60);
+    await new Promise((r) => setTimeout(r, 15));
+    const longCleanup = facade.terminate(proc, 2000);
+    assert.equal(await shortStop, false, "short StopCommand returns false at its own 60ms budget");
+    assert.equal(
+      await longCleanup,
+      true,
+      "longer cleanup joining the shared stop confirms exit cleanly",
+    );
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("RunCommand authorized in default mode refuses process/start if mode switches to plan before dispatch (R18-H1)", async () => {
+  const clientFrames = [];
+  const agentFrames = [];
+  let releaseReconnect;
+  const reconnectGate = new Promise((r) => {
+    releaseReconnect = r;
+  });
+  let startedCount = 0;
+  const connection = {
+    descriptor: { binding: { workspace: { cwd: "/repo" } } },
+    call: async (method, params, opts) => {
+      if (method === "process/start") {
+        await reconnectGate;
+        opts?.beforeSend?.();
+        startedCount += 1;
+        return { processId: params.processId };
+      }
+      return {};
+    },
+  };
+  let proxy;
+  const facade = new Facade(connection, {
+    root: "/repo",
+    shell: "/bin/sh",
+    authorize: (call, meta) => proxy.authorizeFacadeCall(call, meta),
+  });
+  const runtime = {
+    facade,
+    managed: false,
+    sessionCwd: (c) => c,
+    checkMirror: () => {},
+    projection: async () => "proj",
+    newChannel: () => "ch-1",
+    bindChannel: () => {},
+    unbindChannel: () => {},
+    mcpServer: () => ({ name: "cowboy", command: "/node", args: [], env: [] }),
+    evidence: { mark: async () => ({}), settle: async () => ({ class: "ok" }) },
+  };
+  proxy = new AcpProxy({
+    agent: (m) => agentFrames.push(m),
+    client: (m) => clientFrames.push(m),
+    runtime: Promise.resolve(runtime),
+    log: () => {},
+  });
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "session/new",
+    params: { cwd: "/repo" },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 1,
+    result: { sessionId: "s-cmd", modes: { currentModeId: "default" } },
+  });
+  facade.beginTurn("s-cmd", { turnNonce: "n1" });
+  const pendingCmd = facade.call("s-cmd", "RunCommand", { command: "echo hi" });
+  await new Promise((r) => setTimeout(r, 15));
+  // Owner switches to plan mode while RunCommand waits on reconnect.
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "session/set_mode",
+    params: { sessionId: "s-cmd", modeId: "plan" },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 2,
+    result: { modes: { currentModeId: "plan" } },
+  });
+  releaseReconnect();
+  const res = await pendingCmd;
+  assert.equal(res.isError, true);
+  assert.match(res.content[0].text, /mode or turn changed/i);
+  assert.equal(startedCount, 0, "process/start must not dispatch after switching to plan mode");
+  assert.equal(facade.session("s-cmd").turn.uncertain, undefined);
+});
+
+test("Subagent still opening while root publish fences never starts a child turn or mutates (R18-M1)", async () => {
+  const clientFrames = [];
+  const agentFrames = [];
+  let releaseMark;
+  const markGate = new Promise((r) => {
+    releaseMark = r;
+  });
+  let writesSent = 0;
+  const connection = {
+    descriptor: { binding: { workspace: { cwd: "/repo" } } },
+    call: async (method) => {
+      if (method === "process/start") writesSent += 1;
+      return {};
+    },
+  };
+  let proxy;
+  const facade = new Facade(connection, {
+    root: "/repo",
+    shell: "/bin/sh",
+    onLost: (sid, method) => proxy.lost(sid, method),
+    onUncertain: (sid, method) => proxy.uncertain(sid, method),
+    authorize: (call, meta) => proxy.authorizeFacadeCall(call, meta),
+  });
+  let markCalls = 0;
+  const runtime = {
+    facade,
+    managed: false,
+    sessionCwd: (c) => c,
+    checkMirror: () => {},
+    projection: async () => "proj",
+    newChannel: () => `ch-${Math.random()}`,
+    bindChannel: () => {},
+    unbindChannel: () => {},
+    mcpServer: () => ({ name: "cowboy", command: "/node", args: [], env: [] }),
+    evidence: {
+      mark: async () => {
+        markCalls += 1;
+        if (markCalls === 2) await markGate;
+        return { pos: markCalls };
+      },
+      settle: async () => ({ class: "ok" }),
+    },
+  };
+  proxy = new AcpProxy({
+    agent: (m) => {
+      agentFrames.push(m);
+      if (m.method === "session/new" && m.id !== 1) {
+        queueMicrotask(() =>
+          proxy.fromAgent({ jsonrpc: "2.0", id: m.id, result: { sessionId: "child-opening" } }),
+        );
+      } else if (m.method === "session/close") {
+        queueMicrotask(() => proxy.fromAgent({ jsonrpc: "2.0", id: m.id, result: {} }));
+      }
+    },
+    client: (m) => clientFrames.push(m),
+    runtime: Promise.resolve(runtime),
+    log: () => {},
+  });
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 0,
+    method: "initialize",
+    params: { clientCapabilities: { subagents: {} } },
+  });
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 0, result: {} });
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 1,
+    method: "session/new",
+    params: { cwd: "/repo" },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 1,
+    result: { sessionId: "s-root", modes: { currentModeId: "default" } },
+  });
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: 2,
+    method: "session/prompt",
+    params: { sessionId: "s-root", prompt: [{ type: "text", text: "go" }] },
+  });
+  const rootFacadeTurn = facade.session("s-root").turn;
+  const opening = facade.call("s-root", "Subagent", { prompt: "mutate", description: "child" });
+  for (let i = 0; i < 200 && markCalls < 2; i++) await new Promise((r) => setTimeout(r, 5));
+  assert.equal(markCalls, 2, "subagent should reach evidence.mark() before root fence");
+  // Root publish fences while the subagent is still awaiting evidence.mark().
+  facade.fenceLost(rootFacadeTurn, "file publish");
+  releaseMark();
+  const res = await opening;
+  assert.equal(res.isError, true);
+  assert.equal(
+    agentFrames.some(
+      (m) => m.method === "session/prompt" && m.params?.sessionId === "child-opening",
+    ),
+    false,
+    "fenced opening subagent must never dispatch session/prompt",
+  );
+  // Defense in depth: even a direct beginTurn on a linked child inherits the root fence.
+  facade.link("child-direct", "s-root");
+  facade.beginTurn("child-direct");
+  const childMut = await facade.call("child-direct", "RunCommand", { command: "echo nope" });
+  assert.equal(childMut.isError, true);
+  assert.equal(writesSent, 0);
+});
+
+test("Root cleanup retries capacity-refused terminate and confirms closure when terminate reply stalls (R18-M3)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r18-m3-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home, notifications: false });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const origCall = conn.call.bind(conn);
+  let termCalls = 0;
+  let releaseStalledTerminate;
+  const stalledTerminate = new Promise((r) => {
+    releaseStalledTerminate = r;
+  });
+  conn.call = async (method, params, opts) => {
+    if (method === "process/terminate") {
+      termCalls += 1;
+      if (termCalls === 1) {
+        const err = new Error("Target operation failed");
+        err.remote = {
+          code: -32000,
+          message: "Execution request capacity reached; this request was not admitted",
+        };
+        throw err;
+      }
+      // Second attempt dispatches (killing the process) while its reply stalls on an open connection.
+      opts?.beforeSend?.();
+      await origCall(method, params);
+      return await stalledTerminate;
+    }
+    return await origCall(method, params, opts);
+  };
+  try {
+    const uncertainReports = [];
+    const facade = new Facade(conn, {
+      root: repo,
+      shell: "/bin/sh",
+      stopConfirmMs: 1500,
+      onUncertain: (sid, m) => uncertainReports.push([sid, m]),
+    });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const res = await facade.call("s1", "RunCommand", {
+      command: "sleep 30",
+      wait_seconds: 0,
+    });
+    assert.equal(res.isError, undefined);
+    await facade.endTurn("s1", { cancelled: true });
+    assert.equal(
+      termCalls,
+      2,
+      "retries capacity refusal once, never sends a second stop after dispatch",
+    );
+    assert.equal(
+      facade.session("s1").commands.size,
+      0,
+      "closure confirmed via process/read despite stalled terminate reply",
+    );
+    assert.deepEqual(uncertainReports, [], "confirmed closure must not park the session");
+    releaseStalledTerminate({ running: false });
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Late E1 unknown-process rejection arriving at or after publish deadline stays uncertain (R18-L1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r18-l1-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const targetFile = join(repo, "a.txt");
+  await writeFile(targetFile, "old\n");
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home, notifications: false });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const origCall = conn.call.bind(conn);
+  let readCount = 0;
+  conn.call = async (method, params, opts) => {
+    if (method === "process/read" && !opts?.cleanup) {
+      readCount += 1;
+      if (readCount === 1) {
+        opts?.beforeSend?.();
+        // Wait until past publishTimeoutMs, write the expected file, then reject with E1.
+        await new Promise((r) => setTimeout(r, 110));
+        await writeFile(targetFile, "new\n");
+        const err = new Error("Target operation failed");
+        err.remote = { code: -32600, message: `unknown process id ${params.processId}` };
+        throw err;
+      }
+    }
+    return await origCall(method, params, opts);
+  };
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh", publishTimeoutMs: 60 });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    await facade.call("s1", "ReadFile", { path: "a.txt" });
+    const turn = facade.session("s1").turn;
+    await assert.rejects(
+      () => facade.publishOnce(turn, targetFile, Buffer.from("old\n"), Buffer.from("new\n")),
+      (err) => err instanceof UncertainEffect,
+      "expired E1 rejection must never settle publish as verified success",
+    );
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("Queued terminate never dispatches after all callers time out even if wall clock steps backward (R18-L2)", async () => {
+  let releaseReconnect;
+  const reconnectGate = new Promise((r) => {
+    releaseReconnect = r;
+  });
+  let beforeSendError;
+  let dispatched = false;
+  const connection = {
+    descriptor: { binding: { workspace: { cwd: "/repo" } } },
+    call: async (method, params, opts) => {
+      if (method === "process/terminate") {
+        await reconnectGate;
+        try {
+          opts?.beforeSend?.();
+          dispatched = true;
+          return { running: false };
+        } catch (err) {
+          beforeSendError = err;
+          throw err;
+        }
+      }
+      return {};
+    },
+  };
+  const origDateNow = Date.now;
+  let offset = 0;
+  Date.now = () => origDateNow() + offset;
+  try {
+    const facade = new Facade(connection, { root: "/repo", shell: "/bin/sh" });
+    const proc = { processId: "cowboy-agy-clock", afterSeq: null, exitCode: null, closed: false };
+    const stopPromise = facade.terminate(proc, 40);
+    // Step wall clock backward by 60 seconds while terminate waits on reconnect.
+    offset = -60_000;
+    const closed = await stopPromise;
+    assert.equal(
+      closed,
+      false,
+      "caller expires on monotonic timer despite backward wall-clock step",
+    );
+    releaseReconnect();
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(dispatched, false, "queued stop must not dispatch once all callers timed out");
+    assert.match(beforeSendError?.message ?? "", /deadline expired before dispatch/i);
+  } finally {
+    Date.now = origDateNow;
+  }
+});
+
+test("RunCommand with wait_seconds=1 always sends integer waitMs to process/read (R19-H1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r19-h1-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home, notifications: false });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const origCall = conn.call.bind(conn);
+  const observedWaits = [];
+  conn.call = async (method, params, opts) => {
+    if (method === "process/read") observedWaits.push(params.waitMs);
+    return await origCall(method, params, opts);
+  };
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const res = await facade.call("s1", "RunCommand", {
+      command: "sleep 30",
+      wait_seconds: 1,
+    });
+    assert.equal(res.isError, undefined, res.content?.[0]?.text);
+    assert.match(res.content[0].text, /Still running \(command_id:/);
+    assert.ok(observedWaits.length >= 1, "expected at least one process/read");
+    for (const w of observedWaits) {
+      assert.equal(Number.isInteger(w) && w >= 0, true, `waitMs must be integer, got ${w}`);
+    }
+    await facade.endTurn("s1", { cancelled: true });
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("With 14 ordinary requests pending and process/terminate held in Connection.pending, confirming process/read still runs on slot 16 (R19-M1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r19-m1-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  let fillNow = false;
+  let releaseTerm;
+  const termHold = new Promise((r) => {
+    releaseTerm = r;
+  });
+  const endpoint = await fakeEndpoint(socket, repo, {
+    home,
+    notifications: false,
+    delay: (method) => {
+      if (fillNow && method === "fs/getMetadata") return 4000;
+      if (method === "process/terminate") return 4000;
+      return 0;
+    },
+  });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const fillers = [];
+  const uncertainReports = [];
+  try {
+    const facade = new Facade(conn, {
+      root: repo,
+      shell: "/bin/sh",
+      stopConfirmMs: 2500,
+      onUncertain: (sid, m) => uncertainReports.push([sid, m]),
+    });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const started = await facade.call("s1", "RunCommand", {
+      command: "sleep 0.15",
+      wait_seconds: 0,
+    });
+    assert.equal(started.isError, undefined);
+    // Fill all 14 ordinary request slots with real Connection.pending entries.
+    fillNow = true;
+    for (let i = 0; i < 14; i += 1) {
+      const p = conn.call("fs/getMetadata", { path: `file://${repo}` });
+      p.catch(() => {});
+      fillers.push(p);
+    }
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(conn.pending.size, 14, "all 14 ordinary slots should be occupied");
+    // endTurn dispatches process/terminate into slot 15 (held in Connection.pending for 4s)
+    // while confirming process/read uses slot 16 to observe process exit cleanly!
+    await facade.endTurn("s1", { cancelled: true });
+    assert.equal(facade.session("s1").commands.size, 0, "closure confirmed via slot 16");
+    assert.deepEqual(uncertainReports, [], "confirmed closure must not park");
+    // The stalled process/terminate reply plus the 14 fillers remain tracked in Connection.pending for drain.
+    assert.equal(
+      conn.pending.size,
+      15,
+      "stalled process/terminate must remain in Connection.pending",
+    );
+    releaseTerm();
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("session/load and session/resume refuse empty or missing sessionId before forwarding (R19-M2)", async () => {
+  const clientFrames = [];
+  const agentFrames = [];
+  const boundChannels = [];
+  const runtime = {
+    facade: new Facade(
+      { descriptor: { binding: { workspace: { cwd: "/repo" } } }, call: async () => ({}) },
+      { root: "/repo", shell: "/bin/sh" },
+    ),
+    managed: false,
+    sessionCwd: (c) => c,
+    checkMirror: () => {},
+    projection: async () => "proj",
+    newChannel: () => "ch-never",
+    bindChannel: (ch, sid) => boundChannels.push([ch, sid]),
+    unbindChannel: () => {},
+    mcpServer: () => ({ name: "cowboy", command: "/node", args: [], env: [] }),
+    evidence: { mark: async () => ({}), settle: async () => ({ class: "ok" }) },
+  };
+  const proxy = new AcpProxy({
+    agent: (m) => agentFrames.push(m),
+    client: (m) => clientFrames.push(m),
+    runtime: Promise.resolve(runtime),
+    log: () => {},
+  });
+  for (const [id, method, sessionId] of [
+    [1, "session/load", ""],
+    [2, "session/resume", ""],
+    [3, "session/load", undefined],
+    [4, "session/resume", undefined],
+  ]) {
+    await proxy.fromClient({
+      jsonrpc: "2.0",
+      id,
+      method,
+      params: sessionId === undefined ? { cwd: "/repo" } : { sessionId, cwd: "/repo" },
+    });
+  }
+  assert.equal(agentFrames.length, 0, "empty or missing reopen sessionId must never reach agy");
+  assert.equal(clientFrames.length, 4);
+  for (const frame of clientFrames) {
+    assert.equal(frame.error?.code, -32603);
+    assert.match(frame.error?.message ?? "", /sessionId is required/);
+  }
+  assert.deepEqual(boundChannels, []);
+});
+
+test("Controlled-clock rejected stdin process/write after deadline preserves uncertainty for executor errors and fails cleanly for definitive worker refusals (R19-L1, R20-M2)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r20-m2-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const targetFile = join(repo, "big.txt");
+  const socket = join(dir, "exec.sock");
+  const endpoint = await fakeEndpoint(socket, repo, { home, notifications: false });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const origCall = conn.call.bind(conn);
+  let clock = 1000;
+  let nextWriteError;
+  conn.call = async (method, params, opts) => {
+    if (method === "process/write") {
+      opts?.beforeSend?.();
+      // Advance controlled clock past the 5000ms publishTimeoutMs BEFORE rejecting
+      // synchronously so the rejection reaches catch() after deadline and well
+      // before the 5000ms timer fires.
+      clock += 6000;
+      throw nextWriteError;
+    }
+    return await origCall(method, params, opts);
+  };
+  try {
+    const facade = new Facade(conn, {
+      root: repo,
+      shell: "/bin/sh",
+      publishTimeoutMs: 5000,
+      now: () => clock,
+    });
+    const large = Buffer.from("x".repeat(64 * 1024));
+
+    // Subcase A & B: definitive worker-side non-admission refusals observed past
+    // deadline must NOT park the turn or throw UncertainEffect.
+    for (const msg of [
+      "The session is ending; this request was not admitted",
+      "no Cowboy turn is running; the process mutation was refused",
+    ]) {
+      facade.beginTurn("s-refused", { turnNonce: "n-refused" });
+      const turn = facade.session("s-refused").turn;
+      nextWriteError = Object.assign(new Error("Target operation failed"), {
+        remote: { code: -32000, message: msg },
+      });
+      await assert.rejects(
+        () => facade.publishOnce(turn, targetFile, undefined, large),
+        (err) => !(err instanceof UncertainEffect) && /nothing was written/i.test(err.message),
+        `definitive worker refusal (${msg}) must fail cleanly without parking`,
+      );
+      assert.equal(
+        turn.uncertain,
+        undefined,
+        `definitive refusal (${msg}) must not set turn.uncertain`,
+      );
+    }
+
+    // Subcase C: non--32000 executor rejection observed past deadline BEFORE timer
+    // fires must preserve UncertainEffect("process/write") and fence the turn.
+    facade.beginTurn("s-exec", { turnNonce: "n-exec" });
+    const turnExec = facade.session("s-exec").turn;
+    nextWriteError = Object.assign(new Error("Target operation failed"), {
+      remote: { code: -32600, message: "process closed" },
+    });
+    await assert.rejects(
+      () => facade.publishOnce(turnExec, targetFile, undefined, large),
+      (err) => err instanceof UncertainEffect && err.method === "process/write",
+      "post-deadline executor rejection after dispatched stdin write must stay uncertain",
+    );
+    assert.equal(turnExec.uncertain, "process/write");
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("With 14 ordinary requests pending and a held confirming process/read, process/terminate still uses the remaining reserved cleanup slot (R20-M1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r20-m1-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  let fillNow = false;
+  const endpoint = await fakeEndpoint(socket, repo, {
+    home,
+    notifications: false,
+    delay: (method) => {
+      if (fillNow && method === "fs/getMetadata") return 4000;
+      if (fillNow && method === "process/read") return 3000;
+      return 0;
+    },
+  });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const fillers = [];
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
+    facade.beginTurn("s1", { turnNonce: "n1" });
+    const turn = facade.session("s1").turn;
+    const p1 = await facade.start(turn, ["/bin/sh", "-c", "sleep 30"]);
+    const p2 = await facade.start(turn, ["/bin/sh", "-c", "sleep 30"]);
+    fillNow = true;
+    for (let i = 0; i < 14; i += 1) {
+      const p = conn.call("fs/getMetadata", { path: `file://${repo}` });
+      p.catch(() => {});
+      fillers.push(p);
+    }
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(conn.pending.size, 14);
+    // Hold a confirming process/read on p1 FIRST (takes confirm_read slot 15).
+    const heldConfirmRead = conn.call(
+      "process/read",
+      { processId: p1.processId, afterSeq: null, maxBytes: 65536, waitMs: 500 },
+      { cleanup: true },
+    );
+    heldConfirmRead.catch(() => {});
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(conn.pending.size, 15, "14 ordinary + 1 held confirming read should be pending");
+    // A second confirming read must be refused to keep the stop reservation intact.
+    await assert.rejects(
+      () =>
+        conn.call(
+          "process/read",
+          { processId: p2.processId, afterSeq: null, maxBytes: 65536, waitMs: 500 },
+          { cleanup: true },
+        ),
+      /Too many execution requests/,
+    );
+    // Now process/terminate for p2 MUST succeed on the dedicated stop reservation (slot 16)!
+    const stopResult = await conn.call("process/terminate", { processId: p2.processId });
+    assert.equal(typeof stopResult.running, "boolean");
+    // Clean up p1 too.
+    await conn.call("process/terminate", { processId: p1.processId });
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
 });

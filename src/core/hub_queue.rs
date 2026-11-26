@@ -12,7 +12,14 @@ mod retry;
 mod submit;
 
 pub(super) use explicit_intent::ExplicitIntent;
-pub use explicit_intent::TARGET_WAIT_REASON;
+pub(in crate::core) use explicit_intent::strip_displaced_intents;
+
+/// The wait of a prompt the full dispatch channel returned.
+const DISPATCH_FULL_WAIT: &str = "the dispatch queue is full";
+pub use explicit_intent::{
+    HELD_SEND_CLOCK_SKEW_MS, HELD_SEND_REPLAY_HORIZON_MS, HoldOutcome, MAX_HELD_COMMAND_BYTES,
+    TARGET_RETRY_FIELD, TARGET_WAIT_REASON, next_wait, wait_awaits_target,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -89,21 +96,33 @@ impl Hub {
         if let Some(tx) = self.inner.dispatch_tx.lock().as_ref()
             && let Err(error) = tx.try_send(req)
         {
-            let req = error.into_inner();
-            tracing::error!(session = %req.session_id, "dispatch queue rejected a prompt");
-            self.requeue_prompt(
-                &req.session_id,
-                req.text,
-                req.content,
-                req.cmid,
-                req.origin,
-                req.initiator,
-            );
-            self.broadcast_error(
-                Some(req.session_id),
-                "dispatch queue is full; prompt remains queued".to_owned(),
-            );
+            self.retain_rejected_dispatch(error.into_inner());
         }
+    }
+
+    /// A prompt the full dispatch channel refused goes back to the queue
+    /// under a wait, so maintenance retries it once the channel drains: an
+    /// idle session has no other event that would (a fired wakeup is gone
+    /// from the scheduler). An explicit one keeps its intent.
+    pub(super) fn retain_rejected_dispatch(&self, req: DispatchReq) {
+        tracing::error!(session = %req.session_id, "dispatch queue rejected a prompt");
+        self.set_resource_wait(&req.session_id, Some(DISPATCH_FULL_WAIT.to_owned()));
+        self.edit_resource_wait(&req.session_id, |current| {
+            Some(next_wait(current.as_ref(), DISPATCH_FULL_WAIT))
+        });
+        self.requeue_dispatch(
+            &req.session_id,
+            req.text,
+            req.content,
+            req.cmid,
+            req.origin,
+            req.initiator,
+            req.explicit,
+        );
+        self.broadcast_error(
+            Some(req.session_id),
+            "dispatch queue is full; prompt remains queued".to_owned(),
+        );
     }
 
     /// Whether a queued prompt can be dispatched now. `allow_revive` is the
@@ -145,7 +164,7 @@ impl Hub {
             ),
             serde_json::json!(operation),
         )]);
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
         if operation.is_none() {
             self.try_drain(session_id);
         }
@@ -292,9 +311,10 @@ impl Hub {
         manual: bool,
         trigger: Option<&crate::prompt_origin::RequestCaller>,
     ) {
-        self.drain_head_inner(session_id, allow_revive, manual, trigger, None, false);
+        self.drain_head_inner(session_id, allow_revive, manual, trigger, None, false, None);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn drain_head_inner(
         &self,
         session_id: &str,
@@ -303,6 +323,7 @@ impl Hub {
         trigger: Option<&crate::prompt_origin::RequestCaller>,
         expected_head_id: Option<&str>,
         retry: bool,
+        command: Option<&str>,
     ) {
         if self.inner.dispatch_tx.lock().is_none() {
             return;
@@ -334,9 +355,10 @@ impl Hub {
             // as a sent message and parks its buffer as a duplicate draft. The
             // retry resumes once the edit is saved or abandoned.
             // A caller-less manual drain is a retried explicit send: it needs
-            // live intent. Another terminal may have sent the held row since
-            // maintenance read the flag; the next row then gets no bypass.
-            if manual && trigger.is_none() && !s.explicit_wait {
+            // a head that carries the intent. Another terminal may have sent,
+            // removed or reordered the held row since maintenance read the
+            // flag; the next row then gets no bypass.
+            if manual && trigger.is_none() && !s.explicit_head() {
                 return;
             }
             if manual
@@ -345,22 +367,6 @@ impl Hub {
                     .first()
                     .is_some_and(|head| s.editing.as_deref() == Some(head.id.as_str()))
             {
-                return;
-            }
-            // Its intent belongs to the row it was recorded for: once the
-            // user removed or reordered that row, the new head is not sent
-            // through Pause on its behalf, and the intent ends. Checked under
-            // the lock that takes the row out.
-            if manual
-                && trigger.is_none()
-                && s.explicit
-                    .row
-                    .as_ref()
-                    .is_some_and(|row| s.queue.first().is_none_or(|head| &head.id != row))
-            {
-                s.end_explicit_intent();
-                drop(sessions);
-                self.persist_explicit_wait(session_id);
                 return;
             }
             if s.queue.first().is_some_and(|head| {
@@ -373,7 +379,7 @@ impl Hub {
             }) {
                 return;
             }
-            let head = s.queue.remove(0);
+            let mut head = s.queue.remove(0);
             let effective_trigger = trigger
                 .map(crate::prompt_origin::DeliveryOrigin::from_caller)
                 .or_else(|| head.initiator.clone());
@@ -384,8 +390,8 @@ impl Hub {
             let record_trigger = effective_trigger
                 .clone()
                 .unwrap_or_else(|| crate::prompt_origin::DeliveryOrigin::cowboy("legacy_queue"));
-            let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(head.cmid);
-            s.dispatch_explicit_intent(&head.id, &dispatch_cmid);
+            let dispatch_cmid = hub_dispatch_origin::ensure_dispatch_cmid(head.cmid.take());
+            let carried = s.take_dispatch_intent(&mut head, &dispatch_cmid, command);
             s.in_flight_epoch = s.in_flight_epoch.wrapping_add(1);
             s.in_flight = true;
             s.dispatch_pending = Some(s.in_flight_epoch);
@@ -396,7 +402,8 @@ impl Hub {
                 text: head.text,
                 content: head.content,
                 cmid: Some(dispatch_cmid),
-                explicit: manual,
+                // A held row's intent travels with it, whichever retry took it.
+                explicit: manual || carried,
                 origin: head.origin,
                 initiator: effective_trigger,
                 dispatch_origin,
@@ -429,6 +436,7 @@ impl Hub {
             trigger,
             Some(target_row_id),
             false,
+            None,
         );
     }
 
@@ -447,7 +455,7 @@ impl Hub {
     /// Maintenance's retry of a waiting session whose execution Machine it
     /// found connected: the only automatic drain a target wait lets through.
     pub fn retry_connected_wait(&self, session_id: &str) {
-        self.drain_head_inner(session_id, true, false, None, None, true);
+        self.drain_head_inner(session_id, true, false, None, None, true, None);
     }
 
     /// Retry a previously explicit send parked on a resource wait, preserving
@@ -457,12 +465,13 @@ impl Hub {
         self.drain_head(session_id, true, true, None);
     }
 
+    /// Whether the session's head is a held explicit send.
     pub fn explicit_wait(&self, session_id: &str) -> bool {
         self.inner
             .sessions
             .lock()
             .get(session_id)
-            .is_some_and(|s| s.explicit_wait)
+            .is_some_and(Session::explicit_head)
     }
 
     /// Clear the in-flight guard (used by the dispatcher when a send fails) and
@@ -552,6 +561,10 @@ impl Hub {
     /// un-consumed prompt here so it lands back in the durable queue — visible
     /// again, and re-drained the moment the session next reaches `Running`.
     /// Idempotent on `cmid` (a racing re-revive must not double-queue it).
+    ///
+    /// A head that is a held explicit send (another row's Send now, held
+    /// while this prompt was out) stays first, as that send was promised; the
+    /// prompt returns right behind it.
     pub fn requeue_prompt(
         &self,
         session_id: &str,
@@ -560,6 +573,23 @@ impl Hub {
         cmid: Option<String>,
         origin: Option<crate::prompt_origin::DeliveryOrigin>,
         initiator: Option<crate::prompt_origin::DeliveryOrigin>,
+    ) {
+        self.requeue_dispatch(session_id, text, content, cmid, origin, initiator, false);
+    }
+
+    /// [`Self::requeue_prompt`] for a dispatch a transient condition returned:
+    /// an `explicit` one keeps its intent (and a held Send now's command) on
+    /// its row, in the same queue write, as long as it is back at the head.
+    #[allow(clippy::too_many_arguments)]
+    pub fn requeue_dispatch(
+        &self,
+        session_id: &str,
+        text: String,
+        content: Vec<serde_json::Value>,
+        cmid: Option<String>,
+        origin: Option<crate::prompt_origin::DeliveryOrigin>,
+        initiator: Option<crate::prompt_origin::DeliveryOrigin>,
+        explicit: bool,
     ) {
         if let Some(id) = cmid
             .as_deref()
@@ -615,14 +645,19 @@ impl Hub {
                 s.dispatched_cmids.retain(|seen| seen.cmid != c);
                 hub_dispatch_origin::remove_pending_echo(s, c);
             }
-            if let Some(c) = cmid.as_deref()
-                && s.queue.iter().any(|m| m.cmid.as_deref() == Some(c))
+            if let Some(index) = cmid
+                .as_deref()
+                .and_then(|c| s.queue.iter().position(|m| m.cmid.as_deref() == Some(c)))
             {
-                false
+                let held = s.explicit_head();
+                s.restore_dispatch_intent(index, cmid.as_deref(), explicit);
+                held != s.explicit_head()
             } else {
+                let index = usize::from(s.explicit_head());
                 let id = self.next_qid();
+                let restored = cmid.clone();
                 s.queue.insert(
-                    0,
+                    index,
                     QueuedMessage {
                         id,
                         text,
@@ -631,8 +666,10 @@ impl Hub {
                         schedule: None,
                         origin,
                         initiator,
+                        explicit: None,
                     },
                 );
+                s.restore_dispatch_intent(index, restored.as_deref(), explicit);
                 true
             }
         };
@@ -797,8 +834,10 @@ impl Hub {
                         schedule: None,
                         origin: content_origin,
                         initiator: Some(initiator),
+                        explicit: None,
                     },
                 );
+                self.settle_explicit_locked(session_id, s);
                 interrupt = interrupt_on_busy && context_allows;
             }
         }
@@ -829,14 +868,12 @@ impl Hub {
                 s.editing = None;
                 s.editing_token = None;
             }
-            s.end_displaced_explicit_intent();
             (
                 before != s.queue.len(),
                 settled,
                 res_before != s.steer_reservations.len(),
             )
         };
-        self.persist_explicit_wait(session_id);
         if dropped_reservation {
             self.persist_steer_reservations(session_id);
         }
@@ -944,10 +981,8 @@ impl Hub {
                 s.editing = None;
                 s.editing_token = None;
             }
-            s.end_displaced_explicit_intent();
             settled
         };
-        self.persist_explicit_wait(session_id);
         self.emit_pending_with_notice_ops(session_id, settled, Vec::new());
     }
 
@@ -961,45 +996,44 @@ impl Hub {
         id: &str,
         caller: &crate::prompt_origin::RequestCaller,
     ) {
-        if self.is_managed_child(session_id) {
-            return;
-        }
-        if self.promote_queued(session_id, id, caller) {
-            self.drain_head(session_id, true, true, Some(caller));
-        }
+        self.request_send_queued_as(session_id, id, caller, None);
     }
 
-    /// Move a queued prompt to the front under `caller`'s send intent without
-    /// dispatching it, and record that explicit intent for exactly this row in
-    /// the same critical section: a session that cannot dispatch now keeps the
-    /// row in place instead of taking it out only to requeue it under a new
-    /// id. The caller persists the intent with its wait. Whether the row exists.
-    pub fn hold_queued(
+    /// [`Self::request_send_queued`] for the client command `command`. Only
+    /// the requested row is sent: another terminal may remove or reorder it
+    /// between the promotion and the dispatch, and the replacement head is not
+    /// sent under this caller's authority. If the dispatch comes back for a
+    /// transient wait, the row is held under `command`, so a replay finds it.
+    /// Whether the row was still queued.
+    pub fn request_send_queued_as(
         &self,
         session_id: &str,
         id: &str,
         caller: &crate::prompt_origin::RequestCaller,
-        cmid: Option<&str>,
+        command: Option<&str>,
     ) -> bool {
-        self.promote_with(session_id, id, caller, Some(cmid))
+        if self.is_managed_child(session_id) || !self.promote_queued(session_id, id, caller) {
+            return false;
+        }
+        self.drain_head_inner(
+            session_id,
+            true,
+            true,
+            Some(caller),
+            Some(id),
+            false,
+            command,
+        );
+        true
     }
 
-    /// Move a queued prompt to the front under `caller`'s send intent.
+    /// Move a queued prompt to the front under `caller`'s send intent. A
+    /// held explicit send of another row it displaces ends with that write.
     pub fn promote_queued(
         &self,
         session_id: &str,
         id: &str,
         caller: &crate::prompt_origin::RequestCaller,
-    ) -> bool {
-        self.promote_with(session_id, id, caller, None)
-    }
-
-    fn promote_with(
-        &self,
-        session_id: &str,
-        id: &str,
-        caller: &crate::prompt_origin::RequestCaller,
-        hold: Option<Option<&str>>,
     ) -> bool {
         if self.is_managed_child(session_id) {
             return false;
@@ -1019,17 +1053,8 @@ impl Hub {
             let mut m = s.queue.remove(pos);
             m.initiator = Some(trigger);
             s.queue.insert(0, m);
-            if let Some(cmid) = hold {
-                s.end_explicit_intent();
-                s.explicit_wait = true;
-                s.explicit.row = Some(id.to_owned());
-                s.explicit.cmid = cmid.map(str::to_owned);
-            } else {
-                // A live send of another row displaces a held one.
-                s.end_displaced_explicit_intent();
-            }
+            self.settle_explicit_locked(session_id, s);
         }
-        self.persist_explicit_wait(session_id);
         self.emit_pending(session_id);
         true
     }
@@ -1068,13 +1093,11 @@ impl Hub {
                     s.editing_token = None;
                 }
                 s.drafts.push(m);
-                s.end_displaced_explicit_intent();
                 settled
             } else {
                 return;
             }
         };
-        self.persist_explicit_wait(session_id);
         self.emit_pending_with_notice_ops(session_id, settled, Vec::new());
         self.try_drain(session_id);
     }
@@ -1246,7 +1269,7 @@ impl Hub {
                 self.emit_pending(session_id);
                 if had_schedule {
                     self.cancel_draft_timer(session_id, &row_id);
-                    self.broadcast_sessions();
+                    self.broadcast_session(session_id);
                 }
             }
         }
@@ -1357,10 +1380,9 @@ impl Hub {
                 return;
             };
             sort_by_id_order(&mut s.queue, order, |m| &m.id);
-            // A held row moved off the head no longer carries its Send now.
-            s.end_displaced_explicit_intent();
+            self.settle_explicit_locked(session_id, s);
         }
-        self.persist_explicit_wait(session_id);
+        // A held row moved off the head no longer carries its Send now.
         self.emit_pending(session_id);
         self.try_drain(session_id);
     }

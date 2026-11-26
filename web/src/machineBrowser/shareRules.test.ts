@@ -35,6 +35,7 @@ import {
   familyName,
   identityBinding,
   identityRequiredFor,
+  inventoryBrowserIdentity,
   newEntryLatch,
   reconcileBinding,
   takeLatch,
@@ -731,4 +732,26 @@ test("an Antigravity account shares as family google with its Machine refusals e
   const unsupported = subscriptionRejectionText("browser_share_machine_unsupported");
   assertEquals(unsupported.includes("IPv4-only"), true);
   assertEquals(unsupported.includes("installed and allowed"), true);
+});
+
+test("browser_navigation_pending is a definitive 422 refusal with its own message", () => {
+  assertEquals(subscriptionWriteRejected(422, "browser_navigation_pending"), true);
+  assertEquals(subscriptionWriteRejected(503, "browser_navigation_pending"), false);
+  assertEquals(
+    subscriptionRejectionText("browser_navigation_pending"),
+    browserErrorText("browser_navigation_pending"),
+  );
+});
+
+test("a pre-share inventory never synthesizes an own browser identity", () => {
+  const legacy = snapshot([]);
+  delete legacy.browser_shares;
+  assertEquals(inventoryBrowserIdentity(undefined, undefined), undefined);
+  assertEquals(inventoryBrowserIdentity(legacy, undefined), undefined);
+  assertEquals(inventoryBrowserIdentity(snapshot([]), undefined), "own");
+  const withShare = snapshot([{ member: { account_id: PIKA }, family: "openai", account_id: PIKA }]);
+  assertEquals(
+    inventoryBrowserIdentity(withShare, sharedBrowser(withShare, PIKA)),
+    `share:${SHARE}:2`,
+  );
 });

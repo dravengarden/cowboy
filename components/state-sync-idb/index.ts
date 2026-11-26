@@ -14,4 +14,5 @@ export type {
   IdbSnapshot,
   IdbWriteOpts,
   OwnedIdbPersistence,
+  ValuePersistence,
 } from "./idb.ts";

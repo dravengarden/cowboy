@@ -242,6 +242,10 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0091_prompt_dispatches_undelivered_retired.sql",
         "674000faf46525ee375168b4945421a699d02ce6ab8308c81abeba3e99b67968",
     ),
+    (
+        "0092_browser_pending_navigations.sql",
+        "759d4d29d8f7d02c5878c6fe345085b1f29f043c01f79c53f3dc095f9ea9a5fb",
+    ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -475,6 +479,10 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0065_prompt_dispatches_undelivered_retired.sql",
         "27e1ec4c6f7f9033f22ebaa67fda77176783e4675ae1f636d2b664f8295ab64b",
+    ),
+    (
+        "0066_browser_pending_navigations.sql",
+        "759d4d29d8f7d02c5878c6fe345085b1f29f043c01f79c53f3dc095f9ea9a5fb",
     ),
 ];
 

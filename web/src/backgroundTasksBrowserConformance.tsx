@@ -283,6 +283,14 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
     open.focus();
     open.click();
     const dialog = await waitFor(inspector, "the inspector opens from the row");
+    const paper = dialog.closest<HTMLElement>(".MuiDialog-paper")!;
+    const paperStyle = getComputedStyle(paper);
+    const paperRect = paper.getBoundingClientRect();
+    check(
+      paperStyle.maxWidth === "none" && paperStyle.maxHeight === "none" &&
+        paperRect.width >= innerWidth - 32 && paperRect.height >= innerHeight - 32,
+      "desktop background-tasks inspector claims the available viewport without artificial caps",
+    );
     check(inspectorState().key === subagentKey("a"), "opens at the row's key");
     check(
       document.querySelector(`[data-task-option="${subagentKey("a")}"]`)?.getAttribute("aria-selected") === "true",
@@ -295,6 +303,21 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
     press(document.activeElement ?? dialog, "k");
     await settle();
     check(inspectorState().key === subagentKey("a"), "k selects the previous task under DesktopCommandProvider");
+    // Focus dropping to document.body (e.g. an unmounted task button) must not kill shortcuts.
+    (document.activeElement as HTMLElement | null)?.blur?.();
+    press(document.body, "j", { code: "KeyJ" });
+    await settle();
+    check(inspectorState().key === order[order.indexOf(subagentKey("a")) + 1], "j still works when focus drops to document.body");
+    // Idle CJK IME reporting Process/229 or full-width brackets must still drive shortcuts.
+    press(document.body, "Process", { code: "KeyK", keyCode: 229 });
+    await settle();
+    check(inspectorState().key === subagentKey("a"), "idle CJK Process/229 k still steps backward");
+    press(document.body, "】", { code: "BracketRight", keyCode: 229 });
+    await settle();
+    check(inspectorState().key === order[order.indexOf(subagentKey("a")) + 1], "idle CJK 】 steps forward");
+    press(document.body, "【", { code: "BracketLeft", keyCode: 229 });
+    await settle();
+    check(inspectorState().key === subagentKey("a"), "idle CJK 【 steps backward");
     press(document.activeElement ?? dialog, "ArrowDown");
     await settle();
     check(inspectorState().key === order[order.indexOf(subagentKey("a")) + 1], "ArrowDown selects the next task");
@@ -312,11 +335,12 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
     check(!document.querySelector("[data-subagent-stop-confirm]"), "nothing triggers during IME composition");
     press(dialog, "x");
     await waitFor(() => document.querySelector("[data-subagent-stop-confirm]"), "x opens the Stop confirmation");
-    [...document.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent?.startsWith("Keep running"))!
-      .click();
-    await waitFor(() => !document.querySelector("[data-subagent-stop-confirm]"), "Keep running closes it");
-    check(sent.length === 0, "keeping it running sent nothing");
-    press(dialog, "Escape");
+    // Escape inside the Stop confirmation closes only the confirmation, never the inspector beneath.
+    press(document.activeElement ?? document.body, "Escape", { code: "Escape" });
+    await waitFor(() => !document.querySelector("[data-subagent-stop-confirm]"), "Esc closes only the Stop confirmation");
+    check(inspector() !== null, "Esc inside Stop confirmation keeps the inspector open");
+    check(sent.length === 0, "dismissing Stop confirmation sent nothing");
+    press(document.body, "Process", { code: "Escape", keyCode: 229 });
     await waitFor(() => inspector() === null, "Esc closes the inspector");
     await waitFor(() => document.activeElement === open, "T15 focus returns to the originating row");
     passed.push("T15 desktop keyboard selection, stop confirmation, IME suppression and focus return");
@@ -676,6 +700,25 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
     render(<BackgroundTasksInspector sessionId="s" desktop background={backgroundOf([], [call({ request_id: "cli-7" })])} onOpenTool={() => undefined} />);
     await waitFor(inspector, "the inspector opens");
     check(!document.querySelector("[data-task-open-origin]"), "a shell-started call has no structured link");
+    const callConv = document.querySelector<HTMLElement>("[data-call-conversation='call-1']")!;
+    const callConvHeader = callConv.querySelector<HTMLElement>("[data-call-conversation-header]")!;
+    const callHeaderStyle = getComputedStyle(callConvHeader);
+    const detailsPane = document.querySelector<HTMLElement>("[data-task-detail='call:call-1']")!.parentElement!;
+    check(
+      parseFloat(callHeaderStyle.paddingTop) >= 6 &&
+        Math.abs(parseFloat(callHeaderStyle.paddingTop) - parseFloat(callHeaderStyle.paddingBottom)) <= 1 &&
+        parseFloat(callHeaderStyle.paddingLeft) >= 12 &&
+        Math.abs(parseFloat(callHeaderStyle.paddingLeft) - parseFloat(callHeaderStyle.paddingRight)) <= 1,
+      "desktop call conversation header keeps balanced inset padding",
+    );
+    check(
+      !callConvHeader.querySelector("button"),
+      "desktop inspector omits the dead Details toggle when details stay visible beside the transcript",
+    );
+    check(
+      Math.abs(detailsPane.getBoundingClientRect().left - callConv.getBoundingClientRect().right) <= 1,
+      "desktop call conversation meets the adjacent details pane divider without a dead gap",
+    );
     closeBackgroundTasks();
     passed.push("T11 only structured MCP identity links a call to its tool card");
 

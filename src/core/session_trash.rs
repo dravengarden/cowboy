@@ -319,7 +319,7 @@ impl Hub {
             }
         };
         if claimed {
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
         claimed
     }
@@ -397,8 +397,12 @@ impl Hub {
             }
         }
         self.sync_broadcast("folders", Vec::new());
-        if !sessions.is_empty() {
+        if sessions.len() > super::session_broadcast::SESSION_DELTA_BATCH_LIMIT {
             self.broadcast_sessions();
+        } else {
+            for id in sessions {
+                self.broadcast_session(id);
+            }
         }
     }
 }

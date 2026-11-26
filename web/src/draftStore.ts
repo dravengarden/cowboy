@@ -23,6 +23,11 @@
 // (no product dataset yet) the old text-only quota fallback still applies.
 
 import {
+  isSessionRemoved,
+  markSessionRemoved,
+  onSessionRemoved,
+} from "./removedSessionFence";
+import {
   type Attachment,
   dropOrphanImageTokens,
 } from "./attachments";
@@ -100,6 +105,7 @@ function hydrate(): void {
           ? [...parsed.attachments]
           : [];
         const sessionId = k.slice(KEY_PREFIX.length);
+        if (isSessionRemoved(sessionId)) continue;
         if (parsed.attachmentsInDatabase === true && attachments.length === 0) {
           // The bytes live in IndexedDB; keep the tokens so the restore can
           // put the images back exactly where they were.
@@ -139,8 +145,21 @@ function writeDatabase(
   return chained;
 }
 
-function discardDatabaseDraft(sessionId: string): void {
+function discardDatabaseDraft(sessionId: string, force = false): void {
   awaitingDatabase.delete(sessionId);
+  const cache = draftCache(sessionId);
+  if (force) {
+    databaseDrafts.delete(sessionId);
+    if (cache === undefined) {
+      pendingDiscards.add(sessionId);
+      return;
+    }
+    pendingDiscards.delete(sessionId);
+    // Enqueue discard directly on the per-session write chain without waiting
+    // for enumeration and without creating permanent tombstone keys.
+    void writeDatabase(sessionId, () => cache.discard()).catch(() => undefined);
+    return;
+  }
   if (!databaseListed) {
     // The record may exist without this page knowing. Discard it once the
     // database answers, or the draft it holds comes back on the next load.
@@ -149,12 +168,12 @@ function discardDatabaseDraft(sessionId: string): void {
     return;
   }
   if (!databaseDrafts.delete(sessionId)) return;
-  const cache = draftCache(sessionId);
   if (cache === undefined) return;
   void writeDatabase(sessionId, () => cache.discard()).catch(() => undefined);
 }
 
 function persist(sessionId: string, draft: Draft | null): void {
+  if (isSessionRemoved(sessionId)) return;
   const ls = globalThis.localStorage;
   if (!ls) return;
   const key = KEY_PREFIX + sessionId;
@@ -199,10 +218,14 @@ function persist(sessionId: string, draft: Draft | null): void {
       const stored: StoredDraft = { text: draft.text, attachments, savedAt: Date.now() };
       databaseDrafts.add(sessionId);
       pendingDiscards.delete(sessionId);
-      void writeDatabase(sessionId, () => cache.save(stored)).catch((): void => {
+      void writeDatabase(sessionId, () =>
+        cache.update(() => (isSessionRemoved(sessionId) ? null : stored)),
+      ).catch((): void => {
         databaseDrafts.delete(sessionId);
         // Only if nothing newer replaced this draft while the write failed.
-        if (drafts.get(sessionId) === draft) persistLegacy(ls, key, draft);
+        if (!isSessionRemoved(sessionId) && drafts.get(sessionId) === draft) {
+          persistLegacy(ls, key, draft);
+        }
       });
       return;
     }
@@ -362,6 +385,11 @@ async function restoreOnce(): Promise<void> {
     const promised = awaitingDatabase.has(sessionId);
     const hydratedText = awaitingDatabase.get(sessionId);
     awaitingDatabase.delete(sessionId);
+    if (isSessionRemoved(sessionId)) {
+      drafts.delete(sessionId);
+      dirty.delete(sessionId);
+      continue;
+    }
     if (live === undefined && cleared.has(sessionId)) {
       // Sent or cleared here after the record was written.
       discardDatabaseDraft(sessionId);
@@ -465,6 +493,7 @@ export function subscribeDraftRestore(
 // so it never sits on the typing path. An empty draft (e.g. just sent) is cleared
 // from disk immediately — a clear is cheap, and a pending write for it is cancelled.
 export function setDraft(sessionId: string, draft: Draft): void {
+  if (isSessionRemoved(sessionId)) return;
   if (!draft.text && draft.attachments.length === 0) {
     drafts.delete(sessionId);
     dirty.delete(sessionId);
@@ -491,6 +520,25 @@ function sameStoredAttachments(previous: Draft | undefined, next: Draft): boolea
   const after = storableAttachments(next.attachments);
   return before.length === after.length &&
     before.every((attachment, index) => attachment === after[index]);
+}
+
+/** Drop the local composer draft for one explicitly removed session without
+ *  pruning drafts belonging to other sessions in shared localStorage. */
+export function discardDraft(sessionId: string): void {
+  markSessionRemoved(sessionId);
+  drafts.delete(sessionId);
+  dirty.delete(sessionId);
+  awaitingDatabase.delete(sessionId);
+  cleared.add(sessionId);
+  // Another tab may have saved an attachment draft after this tab enumerated
+  // IndexedDB or before enumeration completed; enqueue discard directly on the
+  // per-session write chain without creating permanent tombstone keys.
+  discardDatabaseDraft(sessionId, true);
+  try {
+    globalThis.localStorage?.removeItem(KEY_PREFIX + sessionId);
+  } catch {
+    /* tolerant — leave stale entry rather than throw */
+  }
 }
 
 // Drop drafts whose session no longer exists (deleted here or on another
@@ -529,3 +577,16 @@ export function pruneDrafts(liveSessionIds: Set<string>): void {
     /* tolerant — leave stale entries rather than throw */
   }
 }
+
+onSessionRemoved((removed) => {
+  for (const id of removed) {
+    drafts.delete(id);
+    dirty.delete(id);
+    awaitingDatabase.delete(id);
+    try {
+      globalThis.localStorage?.removeItem(KEY_PREFIX + id);
+    } catch {
+      /* tolerant */
+    }
+  }
+});

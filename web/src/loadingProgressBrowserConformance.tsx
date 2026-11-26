@@ -2,15 +2,18 @@ import { createRoot } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { Box, CircularProgress, CssBaseline, Stack, Typography } from "@mui/material";
 import { BrowserProductTheme } from "./browserProductTheme";
+import { SurfaceContext } from "./surface/SurfaceProfile";
+import { classifySurface } from "./surface/profile";
+import { Sheet } from "./Sheet";
 import { StatusDot } from "./SessionStatusDot";
 import { SessionMachineBadge } from "./SessionMachineBadge";
 import { SessionUpdateBadge } from "./SessionUpdateBadge";
-import { mobileCompositorFlattenSx } from "./mobilePresentationMotion";
+import { mobileCompositorFlattenSx, mobilePresentationMovingRootSx } from "./mobilePresentationMotion";
 import { splashHtml } from "../../components/app-shell/splash";
 
 /** Real theme, synthetic activity, no product account. Keep mounted for CDP
  * screenshots and reduced-motion / forced-colors emulation. */
-export function runLoadingProgressBrowserConformance(keepFixture = false): string[] {
+export async function runLoadingProgressBrowserConformance(keepFixture = false): Promise<string[]> {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -63,6 +66,20 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
             <CircularProgress size={16} aria-label="Paused loading" />
           </Box>
         </Box>
+        <Box
+          data-mobile-product="agent"
+          data-mobile-product-moving="true"
+          sx={mobilePresentationMovingRootSx("data-mobile-product-moving")}
+        >
+          <Box data-mobile-review-loading>
+            <CircularProgress size={20} thickness={3.6} aria-label="Cold review loading" />
+          </Box>
+        </Box>
+        <Box data-mobile-product="agent">
+          <CircularProgress size={16} thickness={3.6} aria-label="Mobile thin ring" />
+          <CircularProgress size={16} thickness={5} aria-label="Mobile thick ring" />
+        </Box>
+
       </Stack>
     </BrowserProductTheme>,
   ));
@@ -87,17 +104,76 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
     const paused = container.querySelector('[aria-label="Paused during swipe"]')!;
     const pausedStartup = container.querySelector('[aria-label="Paused startup"]')!;
     const pausedRing = container.querySelector('[aria-label="Paused loading"]')!;
+    const coldReview = container.querySelector('[aria-label="Cold review loading"]')!;
     check(getComputedStyle(paused).animationPlayState === "paused" &&
+      getComputedStyle(paused.querySelector("svg")!).animationName === "none" &&
+      getComputedStyle(paused.querySelector("svg")!).transform === "none" &&
+      getComputedStyle(paused.querySelector("svg")!).animationPlayState === "paused" &&
+      getComputedStyle(paused.querySelector(".MuiCircularProgress-circle")!).animationName === "cowboy-loading-dash" &&
       getComputedStyle(paused.querySelector(".MuiCircularProgress-circle")!).animationPlayState === "paused" &&
       getComputedStyle(pausedStartup, "::before").animationPlayState === "paused" &&
       getComputedStyle(pausedStartup, "::after").animationPlayState === "paused" &&
       getComputedStyle(pausedStartup.querySelector("svg")!).animationPlayState === "paused" &&
       getComputedStyle(pausedRing).animationPlayState === "paused" &&
-      getComputedStyle(pausedRing.querySelector(".MuiCircularProgress-circle")!).animationPlayState === "paused", "Mobile swipe pauses loading motion");
+      getComputedStyle(pausedRing.querySelector("svg")!).animationName === "none" &&
+      getComputedStyle(pausedRing.querySelector("svg")!).transform === "none" &&
+      getComputedStyle(pausedRing.querySelector("svg")!).animationPlayState === "paused" &&
+      getComputedStyle(pausedRing.querySelector(".MuiCircularProgress-circle")!).animationName === "cowboy-loading-dash" &&
+      getComputedStyle(pausedRing.querySelector(".MuiCircularProgress-circle")!).animationPlayState === "paused" &&
+      getComputedStyle(coldReview).animationPlayState === "paused" &&
+      getComputedStyle(coldReview.querySelector("svg")!).animationName === "none" &&
+      getComputedStyle(coldReview.querySelector("svg")!).transform === "none" &&
+      getComputedStyle(coldReview.querySelector(".MuiCircularProgress-circle")!).animationName === "cowboy-loading-dash" &&
+      getComputedStyle(coldReview.querySelector(".MuiCircularProgress-circle")!).animationPlayState === "paused" &&
+      await (async () => {
+        const host = document.createElement("div");
+        document.body.append(host);
+        const sheetRoot = createRoot(host);
+        try {
+          flushSync(() => sheetRoot.render(
+            <SurfaceContext.Provider value={classifySurface({ finePointer: false, hover: false, tabletWidth: false, touchCapable: true, desktopHost: false })}>
+              <BrowserProductTheme>
+                <Sheet open onClose={() => {}} title="Loading" forceSheet cover portal>
+                  <CircularProgress size={26} aria-label="Portaled sheet loading" />
+                </Sheet>
+              </BrowserProductTheme>
+            </SurfaceContext.Provider>,
+          ));
+          let ring: HTMLElement | null = null;
+          for (let attempt = 0; attempt < 40 && ring === null; attempt += 1) {
+            ring = document.body.querySelector<HTMLElement>('[aria-label="Portaled sheet loading"]');
+            if (ring === null) await new Promise<void>((resolve) => setTimeout(resolve, 16));
+          }
+          return ring !== null &&
+            !container.contains(ring) &&
+            !host.contains(ring) &&
+            getComputedStyle(ring.querySelector("svg")!).animationName === "none" &&
+            getComputedStyle(ring.querySelector("svg")!).transform === "none" &&
+            getComputedStyle(ring.querySelector(".MuiCircularProgress-circle")!).animationName === "cowboy-loading-dash";
+        } finally {
+          flushSync(() => sheetRoot.unmount());
+          host.remove();
+        }
+      })(), "Mobile swipe surfaces keep rings paint-only and pause loading motion");
+    check(["Mobile thin ring", "Mobile thick ring"].every((label) => {
+      const ring = container.querySelector<HTMLElement>(`[aria-label="${label}"]`)!;
+      const arc = ring.querySelector<SVGCircleElement>(".MuiCircularProgress-circle")!;
+      const circumference = 2 * Math.PI * arc.r.baseVal.value;
+      const motion = arc.getAnimations()[0]!;
+      motion.pause();
+      try {
+        motion.currentTime = 300;
+        const offset = Number.parseFloat(getComputedStyle(arc).strokeDashoffset || "0");
+        return Math.abs(offset + circumference / 2) < 0.25;
+      } finally {
+        motion.play();
+      }
+    }), "Mobile rings with different thicknesses animate to their own circumference without keyframe collision");
     check(busy.getAttribute("role") === "progressbar" && !busy.hasAttribute("aria-valuenow"), "Busy status retains indeterminate accessibility semantics");
     const starting = container.querySelector('[aria-label="Starting…"]')!;
     check(getComputedStyle(busy).animationName === "none" &&
-      getComputedStyle(busy.querySelector(".MuiCircularProgress-circle")!).animationName === "cowboy-loading-rotate" &&
+      getComputedStyle(busy.querySelector("svg")!).animationName === "cowboy-loading-rotate" &&
+      getComputedStyle(busy.querySelector(".MuiCircularProgress-circle")!).animationName === "none" &&
       getComputedStyle(busy.querySelector("svg")!).display !== "none" &&
       getComputedStyle(busy.querySelector(".MuiCircularProgress-circle")!).display !== "none" &&
       getComputedStyle(numeric.querySelector(".MuiCircularProgress-circle")!).display !== "none" &&
@@ -114,29 +190,39 @@ export function runLoadingProgressBrowserConformance(keepFixture = false): strin
       const svg = node.querySelector("svg")!;
       const arc = node.querySelector<SVGCircleElement>(".MuiCircularProgress-circle")!;
       const track = node.querySelector(".MuiCircularProgress-track")!;
-      const motion = arc.getAnimations()[0]!;
-      const anchor = track.getBoundingClientRect();
+      const motion = svg.getAnimations()[0]!;
+      const anchor = node.getBoundingClientRect();
       const circumference = 2 * Math.PI * arc.r.baseVal.value;
       motion.pause();
       try {
         return getComputedStyle(svg).overflow === "visible" && [0, 100, 200, 300, 450, 599].every((time) => {
           motion.currentTime = time;
+          const svgStyle = getComputedStyle(svg);
           const style = getComputedStyle(arc);
           const fixed = track.getBoundingClientRect();
           const moving = arc.getBoundingClientRect();
           const pattern = style.strokeDasharray.split(/[, ]+/).map(Number.parseFloat);
-          return style.transform === "none" &&
+          const expectedRad = (time / 600) * Math.PI * 2;
+          const matrixMatch = svgStyle.transform.match(/^matrix\(([^)]+)\)$/);
+          const rotationOk = time === 0
+            ? svgStyle.transform === "none" || (matrixMatch !== null && Math.abs(Number.parseFloat(matrixMatch[1]!.split(",")[0]!) - 1) < 0.02)
+            : matrixMatch !== null &&
+              Math.abs(Number.parseFloat(matrixMatch[1]!.split(",")[0]!) - Math.cos(expectedRad)) < 0.02 &&
+              Math.abs(Number.parseFloat(matrixMatch[1]!.split(",")[1]!) - Math.sin(expectedRad)) < 0.02;
+          return rotationOk &&
+            style.transform === "none" &&
+            Math.abs(Number.parseFloat(style.strokeDashoffset || "0")) < 0.01 &&
             Math.abs(pattern[0]! - circumference / 3) < 0.01 &&
             Math.abs(pattern.reduce((sum, length) => sum + length, 0) - circumference) < 0.01 &&
-            Math.abs(Number.parseFloat(style.strokeDashoffset) + time / 600 * circumference) < 0.01 &&
-            Math.abs(fixed.x - anchor.x) < 0.01 && Math.abs(fixed.y - anchor.y) < 0.01 &&
+            Math.abs(fixed.x + fixed.width / 2 - anchor.x - anchor.width / 2) < 0.1 &&
+            Math.abs(fixed.y + fixed.height / 2 - anchor.y - anchor.height / 2) < 0.1 &&
             Math.abs(moving.x + moving.width / 2 - anchor.x - anchor.width / 2) < 0.1 &&
             Math.abs(moving.y + moving.height / 2 - anchor.y - anchor.height / 2) < 0.1;
         });
       } finally {
         motion.play();
       }
-    }), "Status and sending rings move paint through a full loop without transformed SVG clipping or track movement");
+    }), "Status and sending rings rotate the full SVG on the compositor without strokeDashoffset layout churn or center drift");
     const splash = splashHtml({ title: "Cowboy" });
     const shell = document.createElement("div");
     shell.innerHTML = splash.head + splash.body;

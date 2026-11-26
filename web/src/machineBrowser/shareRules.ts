@@ -183,6 +183,18 @@ export function identityRequiredFor(snapshot: SubscriptionSnapshot | undefined):
   return !(snapshot !== undefined && snapshot.browser_shares === undefined);
 }
 
+/** The browser identity a loaded account inventory establishes for a card:
+ * only when the inventory advertises shared profiles (`browser_shares`
+ * present). A pre-share Controller omits `browser_shares`, so the sheet must
+ * not synthesize `"own"` locally and mistake it for a share-capable
+ * Controller that lacks fenced navigation. */
+export function inventoryBrowserIdentity(
+  snapshot: SubscriptionSnapshot | undefined,
+  shared: SharedBrowser | undefined,
+): string | undefined {
+  return snapshot?.browser_shares !== undefined ? browserIdentityKey(shared) : undefined;
+}
+
 /** The one-shot entry actions of a sheet (auto-open, the link's
  * navigation), held above its keyed panel so a re-bind never repeats them. */
 export interface EntryLatch {

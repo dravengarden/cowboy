@@ -136,13 +136,16 @@ function spatialDrawerOwnsGesture(shell: HTMLElement): boolean {
   return false;
 }
 
-export function MobileProductShell({
-  themeMode,
-  onSetThemeMode,
-}: {
+type MobileProductShellProps = {
   themeMode: ThemeMode;
   onSetThemeMode: (mode: ThemeMode) => void;
-}): React.JSX.Element {
+  renderAgentPage?: (onDrawerOpenChange: (open: boolean) => void) => React.ReactNode;
+  renderReviewPage?: (active: boolean, onDrawerOpenChange: (open: boolean) => void) => React.ReactNode;
+};
+
+export function MobileProductShell(
+  { themeMode, onSetThemeMode, renderAgentPage, renderReviewPage }: MobileProductShellProps,
+): React.JSX.Element {
   const draft = useDraftRoute();
   const [product, setProduct] = useState<MobileProduct>(() => draft.active ? "agent" : restoredProduct());
   const productRef = useRef(product);
@@ -259,20 +262,24 @@ export function MobileProductShell({
       const duration = mobileDrawerSettleDurationMs(remaining, releaseVelocity);
       const transition =
         `transform ${String(duration)}ms ${MOBILE_DRAWER_SETTLE_EASING}`;
+      if (targetOffset !== releaseOffset) {
+        shell.setAttribute("data-mobile-product-settling", "true");
+      }
       agentPage.style.transition = transition;
       reviewPage.style.transition = transition;
       render(targetOffset, width);
       const changed = next !== productRef.current;
       productRef.current = next;
-      globalThis.localStorage?.setItem(PRODUCT_STORAGE_KEY, next);
-      if (next === "review") dismissMobileSoftwareKeyboardForSwipe();
-      if (changed) navigationHaptic();
       settleTimer = globalThis.setTimeout(() => {
         agentPage.style.removeProperty("transition");
         reviewPage.style.removeProperty("transition");
+        shell.removeAttribute("data-mobile-product-settling");
         setProduct(next);
         if (directManipulationActive) releaseDirectManipulation();
       }, duration + 20);
+      try { globalThis.localStorage?.setItem(PRODUCT_STORAGE_KEY, next); } catch { /* quota/privacy */ }
+      if (next === "review") dismissMobileSoftwareKeyboardForSwipe();
+      if (changed) navigationHaptic();
     };
     // A pager offset that is neither Agent nor Review, with no gesture in
     // flight, is a wedge: a claimed swipe lost its stream before touchend, so
@@ -510,6 +517,7 @@ export function MobileProductShell({
       shell.removeEventListener("touchcancel", onTouchCancel, true);
       globalThis.removeEventListener("resize", onResize);
       globalThis.clearTimeout(settleTimer);
+      shell.removeAttribute("data-mobile-product-settling");
       if (bookkeepingFrame !== 0) globalThis.cancelAnimationFrame(bookkeepingFrame);
       if (releaseFrame !== 0) globalThis.cancelAnimationFrame(releaseFrame);
       if (releaseIdle !== undefined) {
@@ -601,11 +609,9 @@ export function MobileProductShell({
               : "translate3d(-100%, 0, 0)",
           }}
         >
-          <AgentApp
-            themeMode={themeMode}
-            onSetThemeMode={onSetThemeMode}
-            onDrawerOpenChange={onAgentDrawerOpenChange}
-          />
+          {renderAgentPage ? renderAgentPage(onAgentDrawerOpenChange) : (
+            <AgentApp themeMode={themeMode} onSetThemeMode={onSetThemeMode} onDrawerOpenChange={onAgentDrawerOpenChange} />
+          )}
         </Box>
         <Box
           ref={reviewPageRef}
@@ -630,10 +636,9 @@ export function MobileProductShell({
               : "translate3d(100%, 0, 0)",
           }}
         >
-          <MobileReviewPage
-            active={product === "review"}
-            onDrawerOpenChange={onReviewDrawerOpenChange}
-          />
+          {renderReviewPage ? renderReviewPage(product === "review", onReviewDrawerOpenChange) : (
+            <MobileReviewPage active={product === "review"} onDrawerOpenChange={onReviewDrawerOpenChange} />
+          )}
         </Box>
       </Box>
     </Box>

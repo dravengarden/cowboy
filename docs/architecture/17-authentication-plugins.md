@@ -347,8 +347,8 @@ native dispatch is an unknown outcome, not a missing capability; it never
 automatically starts another ceremony. The unchanged native v1 driver's explicit
 `not_configured`/`unsupported_os` refusal retains its existing fallback.
 
-A SideStore-signed iOS shell that cannot obtain the Associated Domains
-entitlement runs the WebAuthn prompt in an `ASWebAuthenticationSession`, not its
+An iOS shell without an active Associated Domains entitlement runs the WebAuthn
+prompt in an `ASWebAuthenticationSession`, not its
 embedded `WKWebView`. This preserves the normal origin-bound Safari ceremony.
 Assertion begins automatically from the user's Cowboy tap; registration still
 requires the explicit trusted-page gesture. The handoff does not transfer the

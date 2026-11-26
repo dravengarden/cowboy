@@ -1,12 +1,12 @@
 import type { NativeAppPlatform } from "./native-app-version.ts";
 
-export type NativeReleaseChannelKind = "sidestore" | "app_store";
+export type NativeReleaseChannelKind = "testflight" | "app_store";
 
 export interface NativeReleaseChannel {
   readonly kind: NativeReleaseChannelKind;
   readonly url: string;
   readonly label?: string;
-  /** Shells this channel installs on. SideStore and the App Store channel
+  /** Shells this channel installs on. TestFlight and App Store channels
    *  serve the iOS/iPadOS app unless a manifest says otherwise. */
   readonly platforms?: readonly NativeAppPlatform[];
 }

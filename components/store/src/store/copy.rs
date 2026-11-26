@@ -29,6 +29,7 @@ const TABLES: &[&str] = &[
     "provider_browser_shares",
     "provider_browser_share_members",
     "provider_browser_share_bindings",
+    "browser_pending_navigations",
     "provider_session_transitions",
     "provider_session_transition_stops",
     "provider_session_transition_commits",

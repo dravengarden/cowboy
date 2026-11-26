@@ -44,7 +44,7 @@ mod telemetry_recovery;
 mod telemetry_resolution;
 mod workspace;
 
-pub use browser::BrowserObserver;
+pub use browser::{BrowserCommandError, BrowserObserver, BrowserResultObserver};
 pub use reply::{Reply, ReplyKind};
 pub use session_reads::SessionReadScope;
 pub use telemetry_resolution::TelemetryInstallationLease;
@@ -68,54 +68,8 @@ const PLUGIN_HOST_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(
 const MAX_PENDING: usize = 4096;
 const MAX_PENDING_PER_MACHINE: usize = 256;
 
-/// Created only by installing an authenticated channel. Not deserializable;
-/// even accidentally reusing an epoch string creates a distinct incarnation.
-#[derive(Clone, Debug)]
-pub struct ConnectionToken(Arc<ConnectionIdentity>);
-
-static NEXT_CONNECTION_EPOCH: AtomicU64 = AtomicU64::new(1);
-
-#[derive(Debug)]
-struct ConnectionIdentity {
-    machine_id: String,
-    epoch: String,
-    conn_epoch: u64,
-}
-
-impl ConnectionToken {
-    pub fn machine_id(&self) -> &str {
-        &self.0.machine_id
-    }
-
-    /// The authenticated handshake's epoch, also recorded as the Machine's
-    /// current `connection_epoch` before this token is installed.
-    pub fn epoch(&self) -> &str {
-        &self.0.epoch
-    }
-
-    /// Controller-local monotonic connection epoch (`>= 1`; `0` is reserved for
-    /// local reads) used to invalidate diagnostic baselines across Machine
-    /// reconnects (R2-M10).
-    #[must_use]
-    pub fn conn_epoch(&self) -> u64 {
-        self.0.conn_epoch
-    }
-
-    pub fn same(&self, other: &Self) -> bool {
-        self.0.epoch == other.0.epoch && Arc::ptr_eq(&self.0, &other.0)
-    }
-
-    /// A connection identity of its own, for Controller tests.
-    #[cfg(any(test, feature = "test-support"))]
-    #[must_use]
-    pub fn for_test(machine_id: &str, epoch: &str) -> Self {
-        Self(Arc::new(ConnectionIdentity {
-            machine_id: machine_id.to_owned(),
-            epoch: epoch.to_owned(),
-            conn_epoch: NEXT_CONNECTION_EPOCH.fetch_add(1, Ordering::Relaxed),
-        }))
-    }
-}
+mod connection_token;
+pub use connection_token::ConnectionToken;
 
 /// Core-originated login projection, never a remote RPC response or inventory.
 pub struct ServiceLoginNotice {
@@ -465,6 +419,7 @@ pub struct MachineControl {
     /// offline Machine still shows when it was last observed.
     host_resources: RwLock<HashMap<String, crate::machine_protocol::ObservedHostResources>>,
     browser_observer: RwLock<Option<BrowserObserver>>,
+    browser_result_observer: RwLock<Option<BrowserResultObserver>>,
     /// Test-only replacement for the binding and recovery commit ACK waits.
     telemetry_commit_timeout: Option<std::time::Duration>,
 }
@@ -493,6 +448,7 @@ impl MachineControl {
             next_request: AtomicU64::new(0),
             host_resources: RwLock::default(),
             browser_observer: RwLock::new(None),
+            browser_result_observer: RwLock::new(None),
             telemetry_commit_timeout: None,
         }
     }
@@ -552,11 +508,7 @@ impl MachineControl {
         tx: mpsc::UnboundedSender<MachineCommand>,
     ) -> ConnectionToken {
         let mut live = self.live.write();
-        let token = ConnectionToken(Arc::new(ConnectionIdentity {
-            machine_id: machine_id.clone(),
-            epoch,
-            conn_epoch: NEXT_CONNECTION_EPOCH.fetch_add(1, Ordering::Relaxed),
-        }));
+        let token = ConnectionToken::new(machine_id.clone(), epoch);
         live.disconnect(&machine_id);
         live.connections.insert(
             machine_id,
@@ -716,7 +668,20 @@ impl MachineControl {
                 detail,
             } => {
                 if live.refuse_browser(token, &request_id, detail.as_deref()) {
+                    drop(live);
+                    let _ = self.notify_browser_result(token, &request_id);
                     return;
+                }
+                // Even after a browser command's HTTP wait timed out and its
+                // waiter dropped, a delayed Machine refusal still settles any
+                // coordinator fence tracking that request ID (without dropping
+                // unrelated async login CommandResults).
+                if !live.pending.contains_key(&request_id) {
+                    drop(live);
+                    if self.notify_browser_result(token, &request_id) {
+                        return;
+                    }
+                    live = self.live.write();
                 }
                 // A generic ACK addressed to a different connection or typed
                 // RPC is not an asynchronous login status. Drop its payload

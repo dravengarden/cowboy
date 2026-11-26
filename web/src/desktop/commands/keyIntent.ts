@@ -86,23 +86,43 @@ export function desktopKeyIntent(
 // CM6: composition owns input from start until shortly after end, because
 // macOS Pinyin may dispatch the committing keydown after compositionend.
 let nativeComposing = false;
+let nativeComposingTarget: EventTarget | null = null;
 let nativeCompositionEndedAt = 0;
 let trackerInstalled = false;
 
 export function installNativeCompositionTracker(): void {
   if (trackerInstalled || typeof document === "undefined") return;
   trackerInstalled = true;
-  document.addEventListener("compositionstart", () => {
+  document.addEventListener("compositionstart", (event) => {
     nativeComposing = true;
+    nativeComposingTarget = event.target;
     nativeCompositionEndedAt = 0;
   }, true);
   document.addEventListener("compositionend", () => {
     nativeComposing = false;
+    nativeComposingTarget = null;
     nativeCompositionEndedAt = Date.now();
   }, true);
 }
 
 export function desktopCompositionActive(now = Date.now()): boolean {
+  if (nativeComposing) {
+    const active = typeof document !== "undefined" ? document.activeElement : null;
+    const targetDisconnected =
+      typeof Node !== "undefined" &&
+      nativeComposingTarget instanceof Node &&
+      !nativeComposingTarget.isConnected;
+    const movedIntoNonEditableModal =
+      typeof Element !== "undefined" &&
+      active instanceof Element &&
+      active !== nativeComposingTarget &&
+      !isTextEditingTarget(active) &&
+      active.closest("[role='dialog'][aria-modal='true']") !== null;
+    if (targetDisconnected || movedIntoNonEditableModal) {
+      nativeComposing = false;
+      nativeComposingTarget = null;
+    }
+  }
   return isImeComposing() ||
     imeOwnsEditable(
       nativeComposing,

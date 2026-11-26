@@ -200,8 +200,12 @@ impl Store {
         machine_id: &str,
     ) -> Result<()> {
         macro_rules! delete { ($db:expr) => {{
+            let mut tx = $db.pool.begin().await?;
             sqlx::query("DELETE FROM browser_placements WHERE owner_user_id=$1 AND account_id=$2 AND machine_id=$3")
-                .bind(owner).bind(account.as_str()).bind(machine_id).execute(&$db.pool).await?;
+                .bind(owner).bind(account.as_str()).bind(machine_id).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM browser_pending_navigations WHERE owner_user_id=$1 AND browser_key=$2 AND machine_id=$3")
+                .bind(owner).bind(account.as_str()).bind(machine_id).execute(&mut *tx).await?;
+            tx.commit().await?;
         }} }
         match &self.backend {
             StorageBackend::Postgres(db) => delete!(db),

@@ -59,9 +59,9 @@ export class Extensions {
    * One extension tool call. A reply the worker or the target lost is an
    * unknown outcome (`UncertainEffect`), never a retryable failure.
    */
-  async call(connection, name, args) {
+  async call(connection, name, args, options) {
     try {
-      return await connection.call("cowboy/extensionCall", { name, arguments: args });
+      return await connection.call("cowboy/extensionCall", { name, arguments: args }, options);
     } catch (error) {
       if (unknownOutcome(error)) throw new UncertainEffect("tools/call");
       return {

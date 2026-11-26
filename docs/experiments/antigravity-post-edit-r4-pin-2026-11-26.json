@@ -1,0 +1,71 @@
+{
+ "schema": 1,
+ "source_revision": "5d0ea826da645984a2753074050872623e68e146",
+ "pre_merge_acceptance_revision": "28ea482168cb1bd12ff68f664fff8ee498dce1e5",
+ "pin_advance_revision": "7c9aceae0e14e731b62e500c28a4f369d233c07a",
+ "worker_generation": "worker-11af6d9b0b7925e98a9d",
+ "production_activation": true,
+ "change": "Antigravity R4 post-edit diagnostics: unsequenced worker/Machine/Controller diagnostic pull, /diagnostics WebSocket lane, and R18-R21 execution-connection/teardown hardening",
+ "session_flags": [
+  "browser_device",
+  "native_projects",
+  "session_maintenance",
+  "execution_recovery",
+  "execution_boot_recovery",
+  "execution_attempt_recovery",
+  "runtime_reboot",
+  "subscription_lifecycle"
+ ],
+ "tests": [
+  {
+   "name": "worker-codex",
+   "receipt_sha256": "b6cdd8385c2af59c210baaac68991030811c678870dd5ae3d4d34eb8fa859acc",
+   "schema": "cowboy.execution-worker-conformance/v1",
+   "accepted": true,
+   "checks": 34
+  },
+  {
+   "name": "worker-claude",
+   "receipt_sha256": "b3dc340ea548d9f24be2454fa4ee735dfb69ee3b7415d26c730bfe73c1b6ea61",
+   "schema": "cowboy.claude-execution-worker-conformance/v1",
+   "accepted": true,
+   "checks": 96
+  },
+  {
+   "name": "session",
+   "receipt_sha256": "ddd0352f93fd9a43921efda57e6b7fa87d714ea28d3c9dedbd3c346349255025",
+   "schema": "cowboy.execution-session-conformance/v1",
+   "accepted": true,
+   "checks": 44
+  },
+  {
+   "name": "logs",
+   "receipt_sha256": "b74037715c73a267d25658da5a063788614a82b35334e08640b35a90bf74d01c",
+   "schema": "cowboy.logs-conformance/v1",
+   "accepted": true,
+   "checks": 11
+  },
+  {
+   "name": "agent-codex",
+   "receipt_sha256": "fdd63916ba368f6c1bf1ac04b6d8e8530d59542b72247fd45ba70b997a51ffbb",
+   "plugin": "codex 3.6.41",
+   "previous": "3.6.40",
+   "probes": [
+    "node 24.21.0 passed",
+    "codex 0.171.0 passed",
+    "codex-acp 2.9.0 passed"
+   ]
+  },
+  {
+   "name": "agent-claude-code",
+   "receipt_sha256": "788a5a2271439f5c9eb29d7600165065775ff54bbe80c476fb6095bcee282364",
+   "plugin": "claude-code 3.20.83",
+   "previous": "3.20.82",
+   "probes": [
+    "node 24.21.0 passed",
+    "claude 2.1.330 passed",
+    "claude-agent-acp 0.109.1 passed"
+   ]
+  }
+ ]
+}

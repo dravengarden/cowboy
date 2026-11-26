@@ -4758,12 +4758,16 @@ Command is still running (ID: ${id}). Read ${TASK_OUTPUT_PREFIX}${id} for its fu
       await this.connection.call("process/terminate", { processId: id }).catch(() => {});
       // This observation does not advance the task's output cursor. Do not
       // wait behind its foreground output collection to deliver cancellation.
-      const result = await this.connection.call("process/read", {
-        processId: id,
-        afterSeq: this.state.jobs[id]?.afterSeq ?? null,
-        maxBytes: 1,
-        waitMs: 1,
-      });
+      const result = await this.connection.call(
+        "process/read",
+        {
+          processId: id,
+          afterSeq: this.state.jobs[id]?.afterSeq ?? null,
+          maxBytes: 1,
+          waitMs: 1,
+        },
+        { cleanup: true },
+      );
       if (this.state.jobs[id]?.unknownSince !== undefined) {
         await this.save(() => {
           const previous = this.state.jobs[id];

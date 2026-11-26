@@ -27,6 +27,15 @@ export interface DraftActivation<R extends QueueItem = QueueItem> {
   front?: boolean;
 }
 
+/** A queued row's Send now. `issuedAtMs` (absent on sends persisted before it
+ *  existed) lets the Controller refuse a replay older than the window it
+ *  remembers held sends for, instead of mistaking it for a new send. */
+export interface QueuedSendArgs<R extends QueueItem = QueueItem> {
+  id: string;
+  row: R;
+  issuedAtMs?: number;
+}
+
 export function draftActivationSourceId(
   activation: DraftActivation,
   drafts: readonly QueueItem[],
@@ -205,7 +214,7 @@ export const queueMutators = {
   }),
   sendQueued: <R extends QueueItem>(
     value: QueueValue<R>,
-    args: { id: string; row: R },
+    args: QueuedSendArgs<R>,
   ): QueueValue<R> => ({
     ...value,
     queue: removeById(value.queue, args.id),
@@ -213,7 +222,7 @@ export const queueMutators = {
   }),
   forceQueued: <R extends QueueItem>(
     value: QueueValue<R>,
-    args: { id: string; row: R },
+    args: QueuedSendArgs<R>,
   ): QueueValue<R> => ({
     ...value,
     queue: removeById(value.queue, args.id),

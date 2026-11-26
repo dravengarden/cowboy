@@ -559,6 +559,7 @@ export class AcpProxy {
     let state = this.switchState.get(sessionId);
     if (!state) {
       state = {
+        incarnation: Symbol("mode-state"),
         nextSeq: 0,
         latestSeq: 0,
         active: new Set(),
@@ -580,17 +581,18 @@ export class AcpProxy {
     state.activeReopens.add(seq);
     this.modes.delete(sessionId);
     this.invalidateModeFamily(sessionId, "The session is reloading.");
-    return seq;
+    return { seq, incarnation: state.incarnation };
   }
 
   /** Complete one tracked session reopen (`load`/`resume`), on either result or error. */
-  finishModeReopen(sessionId, seq) {
-    if (typeof sessionId !== "string" || seq === undefined) return;
+  finishModeReopen(sessionId, op) {
+    if (typeof sessionId !== "string" || op === undefined) return;
     const state = this.switchState.get(sessionId);
-    if (!state) return;
-    state.activeReopens.delete(seq);
+    if (!state || state.incarnation !== op.incarnation) return;
+    state.activeReopens.delete(op.seq);
     if (state.active.size === 0 && state.activeReopens.size === 0) {
       state.overlapped = false;
+      if (!this.knownSessions.has(sessionId)) this.switchState.delete(sessionId);
     }
   }
 
@@ -604,7 +606,7 @@ export class AcpProxy {
     state.active.add(seq);
     this.modes.delete(sessionId);
     this.invalidateModeFamily(sessionId, "The session's mode is changing.");
-    return seq;
+    return { seq, incarnation: state.incarnation };
   }
 
   /**
@@ -612,9 +614,10 @@ export class AcpProxy {
    * replies without an authoritative mode, or empty `session/set_config_option`
    * replies requesting an unrestricted mode.
    */
-  finishModeSwitch(sessionId, seq, requestedMode, result, { allowEmptyUnrestricted = false } = {}) {
+  finishModeSwitch(sessionId, op, requestedMode, result, { allowEmptyUnrestricted = false } = {}) {
     const state = this.switchState.get(sessionId);
-    if (!state) return;
+    if (!state || !op || state.incarnation !== op.incarnation) return;
+    const seq = op.seq;
     state.active.delete(seq);
     if (state.active.size > 0) {
       // Intermediate switch errors still invalidate switching-era prompts while
@@ -962,7 +965,7 @@ export class AcpProxy {
     this.clearStaleReplayTools(sessionId);
   }
 
-  /** Record a client-admitted root session ID (bounded LRU) for mode/permission guards (R14-M2, R15-M3). */
+  /** Record a client-admitted root session ID (bounded LRU) for mode/permission guards (R14-M2, R15-M3, R17-H1). */
   rememberSession(sessionId) {
     if (typeof sessionId !== "string" || this.subagents.owns(sessionId)) return;
     this.knownSessions.delete(sessionId);
@@ -978,9 +981,12 @@ export class AcpProxy {
           break;
         }
       }
-      evicted ??= this.knownSessions.values().next().value;
-      this.knownSessions.delete(evicted);
-      this.evictSessionAuthority(evicted);
+      // Never evict a session with an active turn or in-flight mode operation
+      // so delayed notifications/replies from that operation stay fenced (R17-H1).
+      if (evicted !== undefined) {
+        this.knownSessions.delete(evicted);
+        this.evictSessionAuthority(evicted);
+      }
     }
     this.knownSessions.add(sessionId);
   }
@@ -1604,16 +1610,16 @@ export class AcpProxy {
     }
     const requested = this.requestedMode(method, forwarded.params);
     if (requested) {
-      requested.seq = this.beginModeSwitch(requested.sessionId);
+      requested.op = this.beginModeSwitch(requested.sessionId);
     }
     // Reopening a session clears any cached mode so a load/resume omitting
     // `modes` cannot retain an earlier unrestricted mode.
-    let modeOpSeq;
+    let modeOp;
     if (SESSION_REQUESTS.has(method) && typeof forwarded.params?.sessionId === "string") {
-      modeOpSeq = this.beginModeReopen(forwarded.params.sessionId);
+      modeOp = this.beginModeReopen(forwarded.params.sessionId);
     }
     // The reply is handled with this runtime, without awaiting it again.
-    const record = { method, runtime, mode: requested, modeOpSeq, params: forwarded.params };
+    const record = { method, runtime, mode: requested, modeOp, params: forwarded.params };
     if (method === "session/cancel") {
       return await this.cancel(forwarded);
     }
@@ -1632,6 +1638,12 @@ export class AcpProxy {
       const params = forwarded.params ?? {};
       try {
         if (typeof params.cwd !== "string") throw new Error("session cwd is required");
+        if (
+          method !== "session/new" &&
+          (typeof params.sessionId !== "string" || params.sessionId.length === 0)
+        ) {
+          throw new Error("session sessionId is required");
+        }
         params.cwd = runtime.sessionCwd(params.cwd);
         record.cwd = params.cwd;
         runtime.checkMirror(params.cwd);
@@ -1640,18 +1652,15 @@ export class AcpProxy {
         this.skills = runtime.skills ?? [];
         record.channel = runtime.newChannel();
         record.session = params.sessionId;
-        if (typeof params.sessionId === "string") {
-          runtime.bindChannel(record.channel, params.sessionId);
-          this.rememberSession(params.sessionId);
-        }
         delete params.additionalDirectories;
         params.mcpServers = [runtime.mcpServer(record.channel)];
         params._meta = { antigravity: { systemPrompt: { append: projection } } };
         forwarded.params = params;
       } catch (error) {
+        if (record.channel) runtime.unbindChannel?.(record.channel);
         if (method === "session/new") this.managedOpening = false;
-        if (modeOpSeq !== undefined) {
-          this.finishModeReopen(forwarded.params?.sessionId, modeOpSeq);
+        if (modeOp !== undefined) {
+          this.finishModeReopen(forwarded.params?.sessionId, modeOp);
         }
         return refuseClient(id, `cowboy_antigravity_unavailable: ${error.message}`, -32603);
       }
@@ -2419,94 +2428,137 @@ export class AcpProxy {
     const record = this.pending.get(id);
     if (!record) return;
     this.pending.delete(id);
-    if (
-      SESSION_REQUESTS.has(record.method) &&
-      message.result?._meta?.antigravity?.tier !== undefined
-    ) {
-      // Informational, fail closed: a tier this proxy cannot read clears
-      // the plan; a result that reports none keeps the last one.
-      this.plan = accountPlan(message.result._meta);
-    }
+    const rawTierMeta =
+      SESSION_REQUESTS.has(record.method) && message.result?._meta?.antigravity?.tier !== undefined
+        ? message.result._meta
+        : undefined;
     // No result or error leaves the proxy with the raw tier.
     message = stripTier(message);
     // The proxy's own request (a subagent's session): its host answers, the
     // worker never sees it.
-    if (record.internal) return record.internal(message);
+    if (record.internal) {
+      if (rawTierMeta !== undefined) this.plan = accountPlan(rawTierMeta);
+      return record.internal(message);
+    }
     const { runtime } = record;
-    if (record.mode && record.mode.seq !== undefined) {
+    if (record.mode && record.mode.op !== undefined) {
       this.finishModeSwitch(
         record.mode.sessionId,
-        record.mode.seq,
+        record.mode.op,
         record.mode.mode,
         message.result,
         { allowEmptyUnrestricted: record.method === "session/set_mode" },
       );
     }
-    if (SESSION_REQUESTS.has(record.method) && message.result !== undefined) {
-      const openedSessionId = message.result?.sessionId ?? record.session;
+    if (SESSION_REQUESTS.has(record.method)) {
+      const resultObj =
+        message.result !== null &&
+        typeof message.result === "object" &&
+        !Array.isArray(message.result)
+          ? message.result
+          : undefined;
+      const hasExplicitSessionId =
+        resultObj !== undefined &&
+        Object.hasOwn(resultObj, "sessionId") &&
+        resultObj.sessionId !== undefined;
+      const repliedSessionId = hasExplicitSessionId ? resultObj.sessionId : undefined;
+      const malformedExplicitId =
+        hasExplicitSessionId &&
+        (typeof repliedSessionId !== "string" || repliedSessionId.length === 0);
+      const requestedSessionId =
+        typeof record.session === "string" && record.session.length > 0
+          ? record.session
+          : undefined;
+      const invalidSessionOpen =
+        message.result !== undefined &&
+        (resultObj === undefined ||
+          malformedExplicitId ||
+          (record.method === "session/new"
+            ? !hasExplicitSessionId
+            : requestedSessionId === undefined ||
+              (hasExplicitSessionId && repliedSessionId !== requestedSessionId)));
+
+      let reopenSessionId;
+      let isCurrentReopen = false;
+      if (record.modeOp !== undefined) {
+        reopenSessionId = record.session ?? record.params?.sessionId;
+        const sw =
+          typeof reopenSessionId === "string" ? this.switchState.get(reopenSessionId) : undefined;
+        isCurrentReopen =
+          sw?.incarnation === record.modeOp.incarnation &&
+          sw?.latestSeq === record.modeOp.seq &&
+          !this.isSwitching(reopenSessionId) &&
+          sw.activeReopens.size === 1 &&
+          sw.activeReopens.has(record.modeOp.seq);
+        this.finishModeReopen(reopenSessionId, record.modeOp);
+      }
+
+      if (runtime.managed && record.method === "session/new") {
+        this.managedOpening = false;
+      }
+
+      if (message.result === undefined || invalidSessionOpen) {
+        if (record.channel) runtime.unbindChannel?.(record.channel);
+        if (invalidSessionOpen) {
+          return this.client({
+            jsonrpc: "2.0",
+            id,
+            error: {
+              code: -32603,
+              message: `Antigravity returned an unexpected sessionId for ${record.method}`,
+            },
+          });
+        }
+        return this.client(message);
+      }
+
+      if (rawTierMeta !== undefined) {
+        this.plan = accountPlan(rawTierMeta);
+      }
+      const openedSessionId = hasExplicitSessionId ? repliedSessionId : requestedSessionId;
       this.rememberSession(openedSessionId);
       this.clearStaleReplayTools(openedSessionId);
-    }
-    if (SESSION_REQUESTS.has(record.method) && record.modeOpSeq !== undefined) {
-      const reopenSessionId =
-        record.session ?? record.params?.sessionId ?? message.result?.sessionId;
-      const sw =
-        typeof reopenSessionId === "string" ? this.switchState.get(reopenSessionId) : undefined;
-      const isCurrentReopen =
-        sw?.latestSeq === record.modeOpSeq &&
-        !this.isSwitching(reopenSessionId) &&
-        sw.activeReopens.size === 1 &&
-        sw.activeReopens.has(record.modeOpSeq);
-      this.finishModeReopen(reopenSessionId, record.modeOpSeq);
-      if (message.result !== undefined) {
-        const sessionId = message.result?.sessionId ?? record.session;
+      if (record.modeOp !== undefined) {
         if (
-          typeof sessionId === "string" &&
-          sessionId === reopenSessionId &&
-          !this.subagents.owns(sessionId) &&
+          typeof openedSessionId === "string" &&
+          openedSessionId === reopenSessionId &&
+          !this.subagents.owns(openedSessionId) &&
           isCurrentReopen
         ) {
-          this.modes.delete(sessionId);
-          this.invalidateModeFamily(sessionId, "The session reopened.");
-          this.reportMode(sessionId, message.result);
+          this.modes.delete(openedSessionId);
+          this.invalidateModeFamily(openedSessionId, "The session reopened.");
+          this.reportMode(openedSessionId, message.result);
+        }
+      } else {
+        const sw =
+          typeof openedSessionId === "string" ? this.switchState.get(openedSessionId) : undefined;
+        if (
+          typeof openedSessionId === "string" &&
+          !this.subagents.owns(openedSessionId) &&
+          sw === undefined
+        ) {
+          this.modes.delete(openedSessionId);
+          this.invalidateModeFamily(openedSessionId, "The session reopened.");
+          this.reportMode(openedSessionId, message.result);
         }
       }
-    }
-    if (message.result !== undefined) {
-      if (SESSION_REQUESTS.has(record.method)) {
-        const sessionId = message.result?.sessionId ?? record.session;
-        if (record.modeOpSeq === undefined) {
-          const sw = typeof sessionId === "string" ? this.switchState.get(sessionId) : undefined;
-          if (
-            typeof sessionId === "string" &&
-            !this.subagents.owns(sessionId) &&
-            sw === undefined
-          ) {
-            this.modes.delete(sessionId);
-            this.invalidateModeFamily(sessionId, "The session reopened.");
-            this.reportMode(sessionId, message.result);
-          }
-        }
-        this.compaction.opened(sessionId, record.projection);
-        if (!runtime.managed) {
-          this.subagents.opened(sessionId, { cwd: record.cwd, projection: record.projection });
-        }
-      } else if (
-        record.method === "session/set_model" ||
-        record.method === "session/set_config_option"
-      ) {
-        this.subagents.configured(record.method, record.params);
+      this.compaction.opened(openedSessionId, record.projection);
+      if (!runtime.managed) {
+        this.subagents.opened(openedSessionId, { cwd: record.cwd, projection: record.projection });
       }
-    }
-    if (record.channel && typeof message.result?.sessionId === "string") {
-      runtime.bindChannel(record.channel, message.result.sessionId);
-    }
-    // A managed child's session is the one `agy` just created for it.
-    if (runtime.managed && record.method === "session/new") {
-      this.managedOpening = false;
-      if (typeof message.result?.sessionId === "string") {
-        this.managedSession = message.result.sessionId;
+      if (record.channel && typeof openedSessionId === "string") {
+        runtime.bindChannel(record.channel, openedSessionId);
       }
+      if (runtime.managed && record.method === "session/new") {
+        this.managedSession = openedSessionId;
+      }
+      return this.client(message);
+    }
+    if (
+      message.result !== undefined &&
+      (record.method === "session/set_model" || record.method === "session/set_config_option")
+    ) {
+      this.subagents.configured(record.method, record.params);
     }
     // Nothing is awaited before a non-prompt reply is forwarded, so it
     // reaches the worker before any notification read after it (the worker

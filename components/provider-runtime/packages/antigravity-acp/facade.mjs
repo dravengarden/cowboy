@@ -18,6 +18,10 @@
 // lost one.
 import { createHash, randomUUID } from "node:crypto";
 import { posix } from "node:path";
+import { performance } from "node:perf_hooks";
+
+/** Monotonic millisecond clock immune to wall-clock steps (R18-L2). */
+const nowMs = () => performance.now();
 import { fileURLToPath } from "node:url";
 import {
   APPLY,
@@ -67,19 +71,43 @@ export const READINESS_PREFIX = "cowboy-agy-readiness-";
 
 /** Maximum byte length of one JSON apply request fed to `APPLY_STDIN`. */
 const MAX_STDIN_APPLY_BYTES = 5 * 1024 * 1024;
+/** Private Symbol channel for trusted WriteFile/EditFile post-edit receipts (unforgeable by JSON MCP results). */
+const POST_EDIT_META = Symbol("postEditMeta");
 /**
- * Exact worker-side `-32000` messages that definitively prove a request was
- * refused before transport admission (never matches `unavailable()` unknown outcomes).
+ * Exact worker-side `-32000` messages that prove a request was refused before
+ * transport admission and MAY be retried on cleanup (never matches `unavailable()` unknown outcomes).
  */
 const WORKER_PRE_ADMISSION_MESSAGES = new Set([
   "Execution request capacity reached; this request was not admitted",
   "Execution unavailable; the request was not sent",
+]);
+/**
+ * Exact worker-side `-32000` refusals proving non-admission that must NOT be
+ * retried because the session or turn is already fenced (R20-M2).
+ */
+const WORKER_DEFINITIVE_REFUSAL_MESSAGES = new Set([
+  "The session is ending; this request was not admitted",
+  "the execution ledger cannot be written; the change was refused",
+  "that process belongs to the worker; request refused",
+  "no Cowboy turn is running; the process mutation was refused",
+  "no Cowboy turn is running; the filesystem change was refused",
+  "the turn was cancelled or ended; process start refused",
+  "no Cowboy turn is running; process start refused",
 ]);
 
 function workerNotAdmitted(error) {
   return (
     error?.remote?.code === -32000 &&
     WORKER_PRE_ADMISSION_MESSAGES.has(error.remote.message) &&
+    !unknownOutcome(error)
+  );
+}
+
+function workerDefinitivelyRefused(error) {
+  return (
+    error?.remote?.code === -32000 &&
+    (WORKER_PRE_ADMISSION_MESSAGES.has(error.remote.message) ||
+      WORKER_DEFINITIVE_REFUSAL_MESSAGES.has(error.remote.message)) &&
     !unknownOutcome(error)
   );
 }
@@ -267,9 +295,11 @@ export class Facade {
       publishTimeoutMs = LIMITS.publishTimeoutMs,
       diagnostics = undefined,
       canaryTrace = false,
+      now = nowMs,
     },
   ) {
     this.connection = connection;
+    this.now = now;
     this.managed = managed;
     this.stopConfirmMs = stopConfirmMs;
     this.publishTimeoutMs = publishTimeoutMs;
@@ -457,12 +487,25 @@ export class Facade {
     }
   }
 
+  turnUncertain(turn) {
+    return turn?.uncertain ?? turn?.parentTurn?.uncertain;
+  }
+
+  isTurnClosed(turn) {
+    return Boolean(
+      !turn || turn.cancelled || turn.ended || turn.parentTurn?.cancelled || turn.parentTurn?.ended,
+    );
+  }
+
   beginTurn(sessionId, { wrapUp = null, turnNonce = undefined } = {}) {
-    this.session(sessionId).turn = {
+    const session = this.session(sessionId);
+    const parentTurn = session.parentTurn;
+    const turn = {
       sessionId,
-      cancelled: false,
+      parentTurn,
+      cancelled: Boolean(parentTurn?.cancelled || parentTurn?.ended),
       ended: false,
-      uncertain: undefined,
+      uncertain: parentTurn?.uncertain,
       wrapUp,
       turnNonce,
       inflight: new Set(),
@@ -471,6 +514,8 @@ export class Facade {
       // subagent returns at once instead of holding the end of the turn.
       abort: new AbortController(),
     };
+    if (turn.cancelled || turn.uncertain !== undefined) turn.abort.abort();
+    session.turn = turn;
   }
 
   /**
@@ -502,13 +547,13 @@ export class Facade {
     // Combined budget aligns with Controller EXECUTION_FORCE_CANCEL_GRACE (75s =
     // 10s start registration + 60s Stop confirmation + 5s report flush margin).
     const deadlineEntry = isRoot
-      ? { deadline: Date.now() + startWaitMs + confirmMs + reportMarginMs }
+      ? { deadline: this.now() + startWaitMs + confirmMs + reportMarginMs }
       : undefined;
     if (deadlineEntry) this.rootCleanupDeadlines.add(deadlineEntry);
     const cleanup = (async () => {
       try {
         // Bounded start/publish registration phase (joins detached quiesce work too).
-        const startDeadline = Date.now() + startWaitMs;
+        const startDeadline = this.now() + startWaitMs;
         let inflightTimedOut = false;
         const awaited = new Set();
         while (true) {
@@ -516,7 +561,7 @@ export class Facade {
             (work) => !awaited.has(work),
           );
           if (pending.length === 0) break;
-          const remaining = startDeadline - Date.now();
+          const remaining = startDeadline - this.now();
           if (remaining <= 0) {
             inflightTimedOut = true;
             break;
@@ -550,7 +595,7 @@ export class Facade {
         const commands = [...session.commands.values()];
         if (deadlineEntry) {
           if (commands.length > 0) {
-            deadlineEntry.deadline = Date.now() + confirmMs + reportMarginMs;
+            deadlineEntry.deadline = this.now() + confirmMs + reportMarginMs;
           } else {
             this.rootCleanupDeadlines.delete(deadlineEntry);
           }
@@ -563,7 +608,9 @@ export class Facade {
             command.cleaning = (command.cleaning ?? 0) + 1;
             let closed;
             try {
-              closed = await this.terminate(command, confirmMs).catch(() => false);
+              closed = await this.terminate(command, confirmMs, { retryNotSent: true }).catch(
+                () => false,
+              );
             } finally {
               command.cleaning -= 1;
             }
@@ -638,7 +685,7 @@ export class Facade {
     if (maxDeadline === 0) return 0;
     return Math.max(
       0,
-      Math.min(this.startWaitMs + this.stopConfirmMs + 10_000, maxDeadline - Date.now()),
+      Math.min(this.startWaitMs + this.stopConfirmMs + 10_000, maxDeadline - this.now()),
     );
   }
 
@@ -695,7 +742,7 @@ export class Facade {
    * bound ended the wait.
    */
   async settled(ms) {
-    const floorDeadline = Date.now() + Math.max(0, ms);
+    const floorDeadline = this.now() + Math.max(0, ms);
     const awaited = new Set();
     while (true) {
       const work = [
@@ -708,8 +755,8 @@ export class Facade {
       if (work.length === 0) return true;
       const allDone = Promise.allSettled(work).then(() => "done");
       while (true) {
-        const targetDeadline = Math.max(floorDeadline, Date.now() + this.remainingRootStopMs());
-        const remaining = targetDeadline - Date.now();
+        const targetDeadline = Math.max(floorDeadline, this.now() + this.remainingRootStopMs());
+        const remaining = targetDeadline - this.now();
         if (remaining <= 0) return false;
         let timer;
         const expired = new Promise((resolve) => {
@@ -747,7 +794,6 @@ export class Facade {
       rel === "." ||
       rel === ".." ||
       rel.startsWith("/") ||
-      rel.startsWith("../") ||
       rel.includes("\0") ||
       rel.includes("//") ||
       rel.split("/").some((part) => part === "" || part === "." || part === "..")
@@ -799,9 +845,8 @@ export class Facade {
       signal?.aborted ||
       turn.abort?.signal?.aborted ||
       session.turn !== turn ||
-      turn.cancelled ||
-      turn.ended ||
-      turn.uncertain !== undefined ||
+      this.isTurnClosed(turn) ||
+      this.turnUncertain(turn) !== undefined ||
       (typeof decision?.confirm === "function" && !decision.confirm())
     ) {
       throw new PreDispatchRefusal(
@@ -925,9 +970,9 @@ export class Facade {
     } finally {
       if (callTurn && callTurn.openCalls > 0) callTurn.openCalls -= 1;
     }
-    const postEditMeta = rawResult?._postEditMeta;
+    const postEditMeta = rawResult?.[POST_EDIT_META];
     const cleanResult =
-      rawResult && Object.hasOwn(rawResult, "_postEditMeta")
+      rawResult && Object.hasOwn(rawResult, POST_EDIT_META)
         ? { content: rawResult.content, ...(rawResult.isError ? { isError: true } : {}) }
         : rawResult;
     // Presentation only: it never changes the answer `agy` receives.
@@ -966,9 +1011,9 @@ export class Facade {
     } finally {
       if (callTurn && callTurn.openCalls > 0) callTurn.openCalls -= 1;
     }
-    const postEditMeta = rawResult?._postEditMeta;
+    const postEditMeta = rawResult?.[POST_EDIT_META];
     const cleanResult =
-      rawResult && Object.hasOwn(rawResult, "_postEditMeta")
+      rawResult && Object.hasOwn(rawResult, POST_EDIT_META)
         ? { content: rawResult.content, ...(rawResult.isError ? { isError: true } : {}) }
         : rawResult;
     try {
@@ -1070,10 +1115,11 @@ ${WRAP_UP_NOTE}`,
     const session = sessionId === undefined ? undefined : this.session(sessionId);
     const turn = session?.turn;
     if (!turn) return failure("No Cowboy turn is active, so workspace tools are unavailable.");
-    if (turn.uncertain) {
-      return failure(`The turn ended: an earlier ${turn.uncertain} has an unknown outcome.`);
+    const priorUncertain = this.turnUncertain(turn);
+    if (priorUncertain) {
+      return failure(`The turn ended: an earlier ${priorUncertain} has an unknown outcome.`);
     }
-    if (turn.cancelled || turn.ended) return failure("The turn was cancelled.");
+    if (this.isTurnClosed(turn)) return failure("The turn was cancelled.");
     if (signal?.aborted) return failure("The tool request was cancelled.");
     if (args === null || typeof args !== "object" || Array.isArray(args)) args = {};
     // Freeze a snapshot of the exact execution arguments before authorization so
@@ -1088,16 +1134,22 @@ ${WRAP_UP_NOTE}`,
       SearchFiles: () => this.searchFiles(turn, execArgs),
       WriteFile: (decision) => this.writeFile(session, turn, execArgs, { decision, signal }),
       EditFile: (decision) => this.editFile(session, turn, execArgs, { decision, signal }),
-      RunCommand: () =>
-        this.runCommand(session, turn, execArgs, (text) => {
-          try {
-            this.onProgress(call, text);
-          } catch {
-            // Presentation only.
-          }
-        }),
+      RunCommand: (decision) =>
+        this.runCommand(
+          session,
+          turn,
+          execArgs,
+          (text) => {
+            try {
+              this.onProgress(call, text);
+            } catch {
+              // Presentation only.
+            }
+          },
+          { decision, signal },
+        ),
       StopCommand: () => this.stopCommand(session, execArgs),
-      Subagent: () => this.subagent(sessionId, turn, execArgs),
+      Subagent: (decision) => this.subagent(sessionId, turn, execArgs, { decision, signal }),
       StopSubagent: () => this.stopSubagent(sessionId, execArgs),
       // Presentation only (the proxy shows it as the session's plan); it
       // never reaches the target.
@@ -1135,10 +1187,11 @@ ${WRAP_UP_NOTE}`,
     if (session.turn !== turn) {
       return failure("No Cowboy turn is active, so workspace tools are unavailable.");
     }
-    if (turn.uncertain) {
-      return failure(`The turn ended: an earlier ${turn.uncertain} has an unknown outcome.`);
+    const postAuthUncertain = this.turnUncertain(turn);
+    if (postAuthUncertain) {
+      return failure(`The turn ended: an earlier ${postAuthUncertain} has an unknown outcome.`);
     }
-    if (turn.cancelled || turn.ended) return failure("The turn was cancelled.");
+    if (this.isTurnClosed(turn)) return failure("The turn was cancelled.");
     if (typeof decision.confirm === "function" && !decision.confirm()) {
       return failure(`${name} was cancelled because the session's mode or turn changed.`);
     }
@@ -1146,7 +1199,9 @@ ${WRAP_UP_NOTE}`,
     const execute = async () => {
       try {
         if (extension) {
-          return await this.extensions.call(this.connection, name, execArgs);
+          return await this.extensions.call(this.connection, name, execArgs, {
+            beforeSend: () => this.assertAuthorizedBeforeEffect(session, turn, decision, signal),
+          });
         }
         // A handler answers text, or (an image ReadFile) its own content blocks.
         const answer = await handlers[name](decision);
@@ -1209,9 +1264,17 @@ ${WRAP_UP_NOTE}`,
    */
   fenceLost(turn, method) {
     turn.uncertain ??= method;
+    const session = turn.sessionId === undefined ? undefined : this.sessions.get(turn.sessionId);
+    const rootTurn = turn.parentTurn ?? session?.parentTurn ?? turn;
+    rootTurn.uncertain ??= method;
+    // Synchronously fence every active child linked to the affected root turn
+    // so children cannot start new mutations during root cleanup (R17-M2, R18-M1).
+    for (const other of this.sessions.values()) {
+      if ((other.parentTurn === rootTurn || other.turn?.parentTurn === rootTurn) && other.turn) {
+        other.turn.uncertain ??= method;
+      }
+    }
     if (turn.sessionId === undefined) return;
-    const session = this.sessions.get(turn.sessionId);
-    if (session?.parentTurn) session.parentTurn.uncertain ??= method;
     try {
       this.onLost(turn.sessionId, method);
     } catch {
@@ -1225,16 +1288,22 @@ ${WRAP_UP_NOTE}`,
    * concurrent tool call of the same turn admits nothing after it.
    */
   async mutate(turn, method, params, { beforeSend, timeoutMs } = {}) {
-    if (turn.cancelled || turn.ended || turn.uncertain) {
-      throw new ToolError("The turn was cancelled.");
-    }
-    const callOpts =
-      beforeSend || timeoutMs !== undefined
-        ? {
-            ...(beforeSend ? { beforeSend } : {}),
-            ...(timeoutMs !== undefined ? { timeoutMs } : {}),
-          }
-        : undefined;
+    const checkTurn = () => {
+      if (this.isTurnClosed(turn) || this.turnUncertain(turn) !== undefined) {
+        throw new ToolError("The turn was cancelled.");
+      }
+    };
+    checkTurn();
+    // Always recheck captured turn state synchronously at transport dispatch
+    // (after any reconnect) so a concurrent command/mutation cannot slip past
+    // a publish fence (R17-M3).
+    const callOpts = {
+      beforeSend: () => {
+        checkTurn();
+        if (typeof beforeSend === "function") beforeSend();
+      },
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    };
     const call = this.connection.call(method, params, callOpts);
     turn.inflight?.add(call);
     try {
@@ -1572,7 +1641,7 @@ ${WRAP_UP_NOTE}`,
       const text = published.verified
         ? `${current ? "Replaced" : "Created"} ${file}: ${VERIFIED}`
         : `${current ? "Replaced" : "Created"} ${file} (${bytes.length} bytes)`;
-      return { content: [{ type: "text", text }], _postEditMeta: published.postEdit };
+      return { content: [{ type: "text", text }], [POST_EDIT_META]: published.postEdit };
     });
   }
 
@@ -1626,7 +1695,7 @@ ${WRAP_UP_NOTE}`,
       const summary = published.verified
         ? `Edited ${file}: ${VERIFIED}`
         : `Edited ${file} (${replaced} replacement${replaced === 1 ? "" : "s"})`;
-      return { content: [{ type: "text", text: summary }], _postEditMeta: published.postEdit };
+      return { content: [{ type: "text", text: summary }], [POST_EDIT_META]: published.postEdit };
     });
   }
 
@@ -1713,6 +1782,7 @@ ${WRAP_UP_NOTE}`,
       timeoutMs: this.publishTimeoutMs,
       maxBytes: 64 * 1024,
       lostIsUncertain: true,
+      fenceOnTimeout: true,
       pipeStdin: stdinPayload !== undefined,
       stdinPayload,
       beforeSend,
@@ -1723,8 +1793,10 @@ ${WRAP_UP_NOTE}`,
     } catch {
       outcome = undefined;
     }
-    if (result.truncated) {
-      // Output beyond the helper's bound: its report cannot be trusted.
+    if (result.truncated || result.fenced || result.timedOut) {
+      // Once the publish exceeded its output bound, timed out, or fenced the
+      // turn before cleanup, never accept a buffered receipt as success: report
+      // uncertainty through the normal path (R17-M4).
       throw new UncertainEffect("file publish");
     }
     if (outcome?.status === "applied") return false;
@@ -1738,10 +1810,6 @@ ${WRAP_UP_NOTE}`,
       throw new ToolError(
         "Timed out before delivering the edit request to the workspace helper; nothing was written.",
       );
-    }
-    if (result.timedOut) {
-      // The helper may still publish: its outcome is unknown.
-      throw new UncertainEffect("file publish");
     }
     if (result.forgotten) {
       // The helper ended unseen (E1) and its report is lost; it can never
@@ -1807,28 +1875,89 @@ ${WRAP_UP_NOTE}`,
     return read;
   }
 
-  async readOnce(process, waitMs, { lostIsUncertain = true, deadline, cleanup = false } = {}) {
+  async readOnce(
+    process,
+    waitMs,
+    {
+      lostIsUncertain = true,
+      deadline,
+      cleanup = false,
+      retryPreDispatch = false,
+      enforceDeadline = false,
+    } = {},
+  ) {
     // Checked when this read's turn in the chain comes: a reader ahead of
     // it may have confirmed the close or used the caller's remaining time.
     if (process.closed) return [];
+    let remaining;
     if (deadline !== undefined) {
-      const remaining = deadline - Date.now();
+      remaining = deadline - this.now();
       if (remaining <= 0) return [];
-      waitMs = Math.min(waitMs, remaining);
+      // Leave headroom before the absolute deadline on publish/cleanup reads
+      // so normal quiet waits finish before the transport timeout fires (R16-M3).
+      waitMs =
+        enforceDeadline || cleanup
+          ? Math.min(waitMs, remaining <= 50 ? 0 : Math.max(0, remaining - 50))
+          : Math.min(waitMs, remaining);
     }
+    const readWaitMs = Math.max(0, Math.floor(Number.isFinite(waitMs) ? waitMs : 0));
+    const hardDeadline = deadline !== undefined && (enforceDeadline || cleanup);
+    let dispatched = false;
+    let closedBeforeDispatch = false;
+    let timer;
+    const deadlineSentinel = Symbol("read-deadline");
     let result;
     try {
-      result = await this.connection.call(
+      const callOpts = hardDeadline
+        ? {
+            ...(cleanup ? { cleanup: true } : {}),
+            timeoutMs: Math.max(1, Math.ceil(remaining)),
+            beforeSend: () => {
+              if (closedBeforeDispatch || process.closed || this.now() >= deadline) {
+                throw new Error("Execution unavailable; read deadline expired before dispatch");
+              }
+              dispatched = true;
+            },
+          }
+        : undefined;
+      const call = this.connection.call(
         "process/read",
         {
           processId: process.processId,
           afterSeq: process.afterSeq,
           maxBytes: 65536,
-          waitMs,
+          waitMs: readWaitMs,
         },
-        cleanup ? { cleanup: true } : undefined,
+        callOpts,
       );
+      if (hardDeadline) {
+        call.catch(() => {});
+        const expired = new Promise((resolve) => {
+          timer = setTimeout(
+            () => {
+              closedBeforeDispatch = true;
+              resolve(deadlineSentinel);
+            },
+            Math.max(1, Math.ceil(remaining)),
+          );
+        });
+        const raced = await Promise.race([call, expired]);
+        if (raced === deadlineSentinel || this.now() >= deadline) {
+          closedBeforeDispatch = true;
+          if (dispatched && lostIsUncertain) throw new UncertainEffect("process/read");
+          return [];
+        }
+        result = raced;
+      } else {
+        result = await call;
+      }
     } catch (error) {
+      // Apply the hard deadline to rejected replies BEFORE interpreting E1 (R18-L1).
+      if (hardDeadline && this.now() >= deadline) {
+        closedBeforeDispatch = true;
+        if (dispatched && lostIsUncertain) throw new UncertainEffect("process/read");
+        return [];
+      }
       if (forgotten(error, process.processId)) {
         // E1: the executor forgot it, so it ended; its exit status and any
         // unread output are lost. Nothing more is sent for it.
@@ -1837,14 +1966,26 @@ ${WRAP_UP_NOTE}`,
         process.wake?.();
         return [];
       }
+      if (!dispatched && closedBeforeDispatch) {
+        return [];
+      }
+      if (retryPreDispatch && !dispatched && retryablePreAdmission(error)) {
+        throw error;
+      }
       // A started process whose state cannot be read, because the reply was
-      // lost or the connection could not be opened again, has an unknown
-      // outcome: a quiet reader waits with no read in flight, so a close
-      // reaches it as a reconnect failure rather than a lost reply.
-      if (lostIsUncertain && (unknownOutcome(error) || unreachable(error))) {
+      // lost, stalled past the publish deadline, or the connection could not
+      // be opened again, has an unknown outcome.
+      if (
+        lostIsUncertain &&
+        (unknownOutcome(error) ||
+          unreachable(error) ||
+          (dispatched && error?.message === "Target request timed out"))
+      ) {
         throw new UncertainEffect("process/read");
       }
       throw error;
+    } finally {
+      clearTimeout(timer);
     }
     const chunks = [];
     for (const chunk of result.chunks ?? []) {
@@ -1875,7 +2016,7 @@ ${WRAP_UP_NOTE}`,
    */
   async poll(process, remaining, options) {
     const listeners = this.connection.listeners;
-    const deadline = Date.now() + remaining;
+    const deadline = this.now() + remaining;
     options = { ...options, deadline };
     const chunks =
       (process.quiet ?? 0) >= LIMITS.quietReads && listeners && remaining > 2000
@@ -1917,7 +2058,7 @@ ${WRAP_UP_NOTE}`,
     try {
       const chunks = await this.read(process, 0, options);
       if (chunks.length || process.closed) return chunks;
-      if (!(await notified) || process.closed || Date.now() >= deadline) return [];
+      if (!(await notified) || process.closed || this.now() >= deadline) return [];
       return await this.read(process, 0, options);
     } finally {
       clearTimeout(timer);
@@ -1930,84 +2071,187 @@ ${WRAP_UP_NOTE}`,
    * within `confirmMs`. */
   async terminate(process, confirmMs = 5000, { retryNotSent = false } = {}) {
     if (process.closed) return true;
-    // One stop per process: after a stop that may have been delivered (its
-    // reply lost included), later attempts only observe, so a process
-    // handling the first signal never receives a second.
-    // One monotonic budget covers the stop's own reply, waiting behind
-    // another reader, reconnects and the confirming reads: when it ends the
-    // close is unconfirmed (`false`), and a request still in flight finishes
-    // on its own.
-    const deadline = Date.now() + confirmMs;
-    // One stop per process, shared by every caller: a later caller joins the
-    // stop in flight (so nothing that settles this process leaves its reply
-    // outstanding) and never sends a second signal to a process handling the
-    // first. Only a stop refused before it was sent (no connection, or no
-    // request slot) is sent again later; a reply lost after sending keeps it.
-    for (;;) {
-      if (!process.stopping) {
-        process.stopping = this.connection
-          .call("process/terminate", { processId: process.processId })
-          .catch((error) => {
-            // Callers joined on this stop see its failure; a later caller only
-            // observes (the stop may have been delivered) or, if it was never
-            // sent, sends it.
-            process.stopping = retryablePreAdmission(error) ? undefined : Promise.resolve();
-            throw error;
+    // One monotonic budget covers pre-dispatch wait, bounded stop reply grace,
+    // reconnects and confirming reads (R18-M3, R18-L2). Each active caller
+    // keeps its open confirmation window in `process.stopWaiters` so a queued
+    // stop never dispatches after every caller has timed out.
+    const deadline = this.now() + confirmMs;
+    const waiter = { deadline };
+    process.stopWaiters ??= new Set();
+    process.stopWaiters.add(waiter);
+    let waitedStopGrace = false;
+    let joinedAttempt = undefined;
+    let joinedBeforeSettled = false;
+    try {
+      while (!process.closed) {
+        if (
+          joinedAttempt &&
+          joinedAttempt.settled &&
+          joinedAttempt.error !== undefined &&
+          joinedBeforeSettled
+        ) {
+          const failed = joinedAttempt;
+          joinedAttempt = undefined;
+          if (retryNotSent && failed.retryable) {
+            const left = deadline - this.now();
+            if (left <= 25 || process.closed) break;
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            if (process.closed || this.now() >= deadline) break;
+            continue;
+          }
+          throw failed.error;
+        }
+        const remaining = deadline - this.now();
+        if (remaining <= 0) break;
+        if (!process.stopAttempt) {
+          let resolveDispatched;
+          const onDispatched = new Promise((resolve) => {
+            resolveDispatched = resolve;
           });
-        process.stopping.catch(() => {});
-      }
-      let stopTimer;
-      const stopExpired = new Promise((resolve) => {
-        stopTimer = setTimeout(() => resolve(false), Math.max(0, deadline - Date.now()));
-      });
-      try {
-        if ((await Promise.race([process.stopping.then(() => true), stopExpired])) === false) {
-          return process.closed;
+          const attempt = {
+            dispatched: false,
+            settled: false,
+            error: undefined,
+            retryable: false,
+            onDispatched,
+            promise: undefined,
+          };
+          // Share one transport call without imposing a short caller's timeoutMs
+          // on longer-budget callers that join it (R17-M5) and keep its reply
+          // tracked in connection.pending for shutdown drain (R18-M3).
+          const stopCall = this.connection
+            .call(
+              "process/terminate",
+              { processId: process.processId },
+              {
+                beforeSend: () => {
+                  const now = this.now();
+                  let hasOpenWaiter = false;
+                  for (const active of process.stopWaiters) {
+                    if (now < active.deadline) {
+                      hasOpenWaiter = true;
+                      break;
+                    }
+                  }
+                  if (process.closed || !hasOpenWaiter) {
+                    throw new Error(
+                      "Execution unavailable; terminate deadline expired before dispatch",
+                    );
+                  }
+                  attempt.dispatched = true;
+                  resolveDispatched();
+                },
+              },
+            )
+            .then(
+              () => {
+                attempt.settled = true;
+                resolveDispatched();
+              },
+              (error) => {
+                attempt.settled = true;
+                attempt.error = error;
+                attempt.retryable =
+                  (!attempt.dispatched && retryablePreAdmission(error)) || workerNotAdmitted(error);
+                // Only a stop proved not admitted may be sent again; a stop that
+                // may have been delivered stays latched so later callers only
+                // observe via confirming reads.
+                if (attempt.retryable && process.stopAttempt === attempt) {
+                  process.stopAttempt = undefined;
+                }
+                resolveDispatched();
+              },
+            );
+          attempt.promise = stopCall;
+          process.stopAttempt = attempt;
         }
-        break;
-      } catch (error) {
-        if (retryNotSent && retryablePreAdmission(error)) {
-          const left = deadline - Date.now();
-          if (left <= 0) return process.closed;
-          await new Promise((resolve) => setTimeout(resolve, Math.min(25, left)));
-          continue;
+        const current = process.stopAttempt;
+        if (current !== joinedAttempt) {
+          joinedAttempt = current;
+          joinedBeforeSettled = !current.settled;
+          waitedStopGrace = false;
         }
-        throw error;
-      } finally {
-        clearTimeout(stopTimer);
-      }
-    }
-    while (!process.closed) {
-      const remaining = deadline - Date.now();
-      if (remaining <= 0) break;
-      let timer;
-      const expired = new Promise((resolve) => {
-        timer = setTimeout(resolve, remaining);
-      });
-      try {
-        await Promise.race([
-          // Not sent at all once the deadline passed while it waited in
-          // the reader chain.
-          this.read(process, Math.min(500, remaining), {
-            lostIsUncertain: false,
-            deadline,
-            cleanup: true,
-          }),
-          expired,
-        ]);
-      } catch (error) {
-        if (retryNotSent && retryablePreAdmission(error)) {
-          const left = deadline - Date.now();
+        // Phase 1: wait for pre-dispatch admission (or pre-dispatch refusal).
+        if (!current.settled && !current.dispatched) {
+          const waitMs = deadline - this.now();
+          if (waitMs <= 0) break;
+          let timer;
+          const expired = new Promise((resolve) => {
+            timer = setTimeout(resolve, Math.max(1, Math.ceil(waitMs)));
+          });
+          try {
+            await Promise.race([current.onDispatched, expired]);
+          } finally {
+            clearTimeout(timer);
+          }
+          if (process.closed || this.now() >= deadline) break;
+        }
+        // Phase 2: once dispatched, give the stop reply a bounded grace window
+        // so a stalled terminate reply on an open connection never starves
+        // confirming process/read checks (R18-M3).
+        if (!current.settled && current.dispatched && !waitedStopGrace) {
+          waitedStopGrace = true;
+          const left = deadline - this.now();
           if (left <= 0) break;
-          await new Promise((resolve) => setTimeout(resolve, Math.min(25, left)));
-          continue;
+          const graceMs = Math.min(500, Math.max(25, Math.floor(confirmMs / 4)), left);
+          let timer;
+          const graceExpired = new Promise((resolve) => {
+            timer = setTimeout(resolve, Math.max(1, Math.ceil(graceMs)));
+          });
+          try {
+            await Promise.race([current.promise, graceExpired]);
+          } finally {
+            clearTimeout(timer);
+          }
+          if (process.closed || this.now() >= deadline) break;
         }
-        throw error;
-      } finally {
-        clearTimeout(timer);
+        if (current.settled && current.error !== undefined && joinedBeforeSettled) {
+          if (retryNotSent && current.retryable) {
+            const left = deadline - this.now();
+            // Do not sleep and retry when the 25ms backoff itself exceeds the deadline.
+            if (left <= 25 || process.closed) break;
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            if (process.closed || this.now() >= deadline) break;
+            continue;
+          }
+          throw current.error;
+        }
+        if (!current.settled && !current.dispatched) continue;
+        // Phase 3: confirm closure via process/read without sending another signal.
+        const readLeft = deadline - this.now();
+        if (readLeft <= 0 || process.closed) break;
+        let readTimer;
+        const readExpired = new Promise((resolve) => {
+          readTimer = setTimeout(resolve, Math.max(1, Math.ceil(readLeft)));
+        });
+        try {
+          await Promise.race([
+            // Not sent at all once the deadline passed while it waited in
+            // the reader chain.
+            this.read(process, Math.min(500, readLeft), {
+              lostIsUncertain: false,
+              deadline,
+              cleanup: true,
+            }),
+            readExpired,
+          ]);
+        } catch (error) {
+          if (retryNotSent && retryablePreAdmission(error)) {
+            const left = deadline - this.now();
+            if (left <= 25 || process.closed) break;
+            await new Promise((resolve) => setTimeout(resolve, 25));
+            if (process.closed || this.now() >= deadline) break;
+            continue;
+          }
+          throw error;
+        } finally {
+          clearTimeout(readTimer);
+        }
       }
+      return process.closed;
+    } finally {
+      process.stopWaiters.delete(waiter);
     }
-    return process.closed;
   }
 
   /** Run a process to its end within bounds; stdout and stderr apart. */
@@ -2032,6 +2276,7 @@ ${WRAP_UP_NOTE}`,
       maxBytes,
       maxLines,
       lostIsUncertain = true,
+      fenceOnTimeout = false,
       readiness = false,
       pipeStdin = false,
       stdinPayload = undefined,
@@ -2044,19 +2289,19 @@ ${WRAP_UP_NOTE}`,
       beforeSend,
     });
     const out = { stdout: [], stderr: [], size: 0, lines: 0 };
-    const deadline = Date.now() + timeoutMs;
+    const deadline = this.now() + timeoutMs;
     let truncated = false;
     let timedOut = false;
     let stdinTimedOutBeforeDispatch = false;
+    let stdinDelivered = stdinPayload === undefined;
     let failure;
     try {
-      let stdinDelivered = stdinPayload === undefined;
       if (stdinPayload !== undefined) {
         const chunk = Buffer.concat([stdinPayload, Buffer.from("\n")]).toString("base64");
         const writeId = randomUUID();
         const deadlineSentinel = Symbol("stdin-write-deadline");
         for (;;) {
-          const remaining = deadline - Date.now();
+          const remaining = deadline - this.now();
           if (remaining <= 0) {
             stdinTimedOutBeforeDispatch = true;
             break;
@@ -2066,7 +2311,7 @@ ${WRAP_UP_NOTE}`,
           let writeClosed = false;
           const writeBeforeSend = () => {
             if (typeof beforeSend === "function") beforeSend();
-            if (writeClosed || Date.now() >= deadline) {
+            if (writeClosed || this.now() >= deadline) {
               preSendExpired = true;
               throw new ToolError("Timed out before delivering apply request to workspace helper.");
             }
@@ -2089,7 +2334,7 @@ ${WRAP_UP_NOTE}`,
               );
             });
             const raced = await Promise.race([writeCall, expired]);
-            if (raced === deadlineSentinel) {
+            if (raced === deadlineSentinel || this.now() >= deadline) {
               writeClosed = true;
               if (dispatched) {
                 turn.uncertain ??= "process/write";
@@ -2105,11 +2350,23 @@ ${WRAP_UP_NOTE}`,
               stdinTimedOutBeforeDispatch = true;
               break;
             }
-            if (workerNotAdmitted(error) || (!dispatched && notSent(error))) {
+            if (workerDefinitivelyRefused(error) || (!dispatched && notSent(error))) {
               writeClosed = true;
               throw new ToolError(
                 "Execution unavailable before delivering the edit request to the workspace helper; nothing was written.",
               );
+            }
+            // Enforce the monotonic deadline before interpreting any other rejected
+            // executor reply; a dispatched write preserves uncertainty unless the
+            // reply proved non-admission above (R19-L1, R20-M2).
+            if (this.now() >= deadline) {
+              writeClosed = true;
+              if (dispatched) {
+                turn.uncertain ??= "process/write";
+                throw new UncertainEffect("process/write");
+              }
+              stdinTimedOutBeforeDispatch = true;
+              break;
             }
             if (dispatched && !notSent(error) && error?.message === "Target request timed out") {
               turn.uncertain ??= "process/write";
@@ -2135,7 +2392,7 @@ ${WRAP_UP_NOTE}`,
             break;
           }
           if (reply?.status === "starting") {
-            const pause = Math.min(100, deadline - Date.now());
+            const pause = Math.min(100, deadline - this.now());
             if (pause <= 0) {
               stdinTimedOutBeforeDispatch = true;
               break;
@@ -2146,10 +2403,10 @@ ${WRAP_UP_NOTE}`,
           break;
         }
       }
-      const pollDeadline = stdinDelivered ? deadline : Math.min(deadline, Date.now() + 5000);
+      const pollDeadline = stdinDelivered ? deadline : Math.min(deadline, this.now() + 5000);
       let readRefusedByCapacity = false;
       while (!process.closed && !timedOut && !stdinTimedOutBeforeDispatch) {
-        const remaining = pollDeadline - Date.now();
+        const remaining = pollDeadline - this.now();
         if (remaining <= 0) {
           if (readRefusedByCapacity && lostIsUncertain && (stdinDelivered || !stdinPayload)) {
             throw new UncertainEffect("process/read");
@@ -2164,12 +2421,14 @@ ${WRAP_UP_NOTE}`,
         try {
           chunks = await this.poll(process, remaining, {
             lostIsUncertain,
+            retryPreDispatch: true,
+            enforceDeadline: fenceOnTimeout,
           });
           readRefusedByCapacity = false;
         } catch (error) {
           if (retryablePreAdmission(error)) {
             readRefusedByCapacity = true;
-            const left = pollDeadline - Date.now();
+            const left = pollDeadline - this.now();
             if (left > 0) {
               await new Promise((resolve) => setTimeout(resolve, Math.min(25, left)));
               continue;
@@ -2211,6 +2470,22 @@ ${WRAP_UP_NOTE}`,
       !stdinTimedOutBeforeDispatch &&
       !truncated &&
       process.forgotten === true;
+    // Fence an unproven publish before awaiting stop confirmation (which can
+    // wait up to stopConfirmMs), so concurrent turn calls cannot mutate files
+    // during cleanup — even after a capacity refusal followed by an empty final
+    // poll (R16-M2).
+    let fenced = false;
+    if (
+      fenceOnTimeout &&
+      turn &&
+      !process.closed &&
+      !stdinTimedOutBeforeDispatch &&
+      (stdinDelivered || !stdinPayload) &&
+      (timedOut || truncated)
+    ) {
+      fenced = true;
+      this.fenceLost(turn, "file publish");
+    }
     // Whatever ended the loop, the process is not left running unconfirmed: a
     // helper that may still publish is an effect of unknown outcome.
     if (!process.closed) {
@@ -2228,13 +2503,14 @@ ${WRAP_UP_NOTE}`,
       stderr: Buffer.concat(out.stderr).toString(),
       truncated,
       timedOut,
+      fenced,
       stdinTimedOutBeforeDispatch,
       // The process ended unseen (E1): its output may be incomplete.
       forgotten: ended,
     };
   }
 
-  async runCommand(session, turn, args, progress = () => {}) {
+  async runCommand(session, turn, args, progress = () => {}, { decision, signal } = {}) {
     const { command, command_id: id, timeout_seconds: timeout, wait_seconds: wait } = args;
     // Validated before anything starts: a bad argument starts no process.
     if (
@@ -2258,9 +2534,11 @@ ${WRAP_UP_NOTE}`,
       }
       // From its start to its registration the command is part of the turn:
       // the turn's end waits for it, so its cleanup always sees the handle.
+      const beforeSend = () => this.assertAuthorizedBeforeEffect(session, turn, decision, signal);
       const registering = (async () => {
-        const started = await this.start(turn, this.commandArgv(command));
-        started.deadline = Date.now() + seconds * 1000;
+        beforeSend();
+        const started = await this.start(turn, this.commandArgv(command), { beforeSend });
+        started.deadline = this.now() + seconds * 1000;
         // Every reader's chunks land here (see `read`).
         started.output = new Retained(LIMITS.commandOutput);
         session.commands.set(started.processId, started);
@@ -2280,18 +2558,18 @@ ${WRAP_UP_NOTE}`,
     if (running.busy) throw new ToolError("Another call is reading this command");
     running.busy = true;
     try {
-      const until = Math.min(running.deadline, Date.now() + (wait ?? Infinity) * 1000);
+      const until = Math.min(running.deadline, this.now() + (wait ?? Infinity) * 1000);
       // Output so far is shown while the command runs: a bounded tail, at
       // most every `progressMs` and only when it changed. No extra request
       // reaches the target; the reads are the ones the command needs anyway.
-      let shown = Date.now();
+      let shown = this.now();
       let changed = false;
-      while (!running.closed && Date.now() < until) {
-        for (const { bytes } of await this.poll(running, until - Date.now())) {
+      while (!running.closed && this.now() < until) {
+        for (const { bytes } of await this.poll(running, until - this.now())) {
           changed ||= bytes.length > 0;
         }
-        if (changed && !running.closed && Date.now() - shown >= LIMITS.progressMs) {
-          shown = Date.now();
+        if (changed && !running.closed && this.now() - shown >= LIMITS.progressMs) {
+          shown = this.now();
           changed = false;
           progress(running.output.peek(LIMITS.progressBytes));
         }
@@ -2303,7 +2581,7 @@ ${WRAP_UP_NOTE}`,
           status +=
             " (the command's process ended while the connection to the workspace Machine was interrupted; its remaining output is unavailable)";
         }
-      } else if (Date.now() >= running.deadline) {
+      } else if (this.now() >= running.deadline) {
         let stopped;
         try {
           stopped = await this.terminate(running);
@@ -2317,7 +2595,7 @@ ${WRAP_UP_NOTE}`,
       } else {
         // Each continuation costs the agent a whole turn; say how long one
         // may wait so a long gate is read in few, long waits.
-        const left = Math.max(1, Math.ceil((running.deadline - Date.now()) / 1000));
+        const left = Math.max(1, Math.ceil((running.deadline - this.now()) / 1000));
         status =
           `Still running (command_id: ${running.processId}). ` +
           `Continue it with wait_seconds ${Math.min(left, LIMITS.commandMaxSeconds)} to wait for the rest of its ${left} s.`;
@@ -2426,7 +2704,7 @@ ${WRAP_UP_NOTE}`,
    * need it), so a wait never exceeds `LIMITS.subagentWaitSeconds`; a longer
    * task returns its id to wait for again.
    */
-  async subagent(sessionId, turn, args) {
+  async subagent(sessionId, turn, args, { decision, signal } = {}) {
     const { prompt, description, subagent_id: id, wait_seconds: wait } = args;
     const host = this.subagents;
     if (host === undefined) throw new ToolError("Subagents are not available in this session.");
@@ -2452,7 +2730,11 @@ ${WRAP_UP_NOTE}`,
       if (description !== undefined && typeof description !== "string") {
         throw new ToolError("description must be text");
       }
-      childId = await host.start(sessionId, { prompt, description });
+      childId = await host.start(
+        sessionId,
+        { prompt, description },
+        { parentFacadeTurn: turn, decision, signal },
+      );
     }
     const outcome = await host.wait(
       sessionId,

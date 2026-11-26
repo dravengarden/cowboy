@@ -1,5 +1,11 @@
 //! The explicit send intent a held queue row carries through a resource wait,
 //! and the wait on an execution Machine that only maintenance may end.
+//!
+//! The intent lives on the row itself ([`QueuedMessage::explicit`]), so the
+//! queue order, the intent and the held command id are one durable write: a
+//! reorder, removal or requeue can never leave an intent bound to the wrong
+//! row, and a Controller crash between two writes cannot split them. Only the
+//! head row carries one; every queue write ends any other row's intent.
 use super::*;
 
 /// The resource wait of an admitted prompt whose execution Machine is offline
@@ -7,38 +13,100 @@ use super::*;
 /// checks that Machine, delivers the session's queue head.
 pub const TARGET_WAIT_REASON: &str = "the execution Machine is not ready";
 
-/// How many ended held-send command ids a session remembers for late replays.
-const SETTLED_HELD_SENDS: usize = 64;
+/// The persisted wait field that keeps an admitted prompt's right to the
+/// maintenance retry once its execution Machine is back but another resource
+/// (a worker slot, memory) now blocks it: the displayed reason changes, the
+/// retry eligibility does not.
+pub const TARGET_RETRY_FIELD: &str = "retry_target";
 
-/// What an explicit send intent (`Session::explicit_wait`) belongs to.
+/// How long a client may replay a held Send now whose reply it lost. A replay
+/// issued earlier is refused without effect; the Controller remembers every
+/// ended held command at least this long (plus [`HELD_SEND_CLOCK_SKEW_MS`]),
+/// so no replay inside it is mistaken for a new send.
+pub const HELD_SEND_REPLAY_HORIZON_MS: i64 = 24 * 60 * 60 * 1000;
+
+/// How far ahead of the Controller a client clock may run. A command stamped
+/// further ahead is refused, so no replay can outlive the receipts.
+pub const HELD_SEND_CLOCK_SKEW_MS: i64 = 60 * 60 * 1000;
+
+/// The longest Send now command id a receipt records (client ids are ~40).
+pub const MAX_HELD_COMMAND_BYTES: usize = 128;
+
+/// Unexpired receipts one session may hold. Never evicted: past this a new
+/// Send now command is refused, so the ledger stays one bounded store write.
+const MAX_RECEIPTS: usize = 4096;
+
+/// How long an ended held command is remembered: every replay the window
+/// admits finds its receipt. Never evicted by count.
+const RECEIPT_RETENTION_MS: i64 = HELD_SEND_REPLAY_HORIZON_MS + HELD_SEND_CLOCK_SKEW_MS;
+
+/// What a held Send now did.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HoldOutcome {
+    /// The row is first and held, waiting for its retry.
+    Held,
+    /// The row is gone (sent, removed, moved to drafts).
+    Missing,
+    /// The command was already recorded: still waiting, or already ended.
+    Replayed { waiting: bool },
+}
+
+/// The session's explicit-send bookkeeping beside its rows' intents.
 #[derive(Default)]
 pub(in crate::core) struct ExplicitIntent {
-    /// The queued row it was recorded for. Another row at the head (the user
-    /// removed or reordered it) does not inherit it. `None` for an intent
-    /// recorded before rows were bound.
-    pub(in crate::core) row: Option<String>,
-    /// The client command id of the held Send now that recorded it. A client
-    /// that lost the "waiting" reply replays that command after a reconnect;
-    /// it must find the wait, not send the row itself.
-    pub(in crate::core) cmid: Option<String>,
     /// Command ids of held Send nows whose intent ended (sent, superseded,
-    /// removed). A late replay of one sends nothing. Bounded, persisted.
-    settled: VecDeque<String>,
+    /// removed), with when. A replay of one sends nothing. Persisted.
+    settled: VecDeque<(String, i64)>,
+    /// `settled` changed since it was last written.
+    settled_dirty: bool,
+    /// A dispatch ended a command: its receipt follows the queue write that
+    /// takes the row out, so a crash between them leaves it replayable.
+    receipts_after_queue: bool,
+    /// The held command the head carried at the last queue write. Once no
+    /// row carries it (the row was removed, cleared or edited away), it ended.
+    held: Option<String>,
     /// The prompt cmid a held send was dispatched under, and its command id:
-    /// a transient refusal that requeues that prompt keeps the command's
-    /// intent instead of reporting it handled.
+    /// a transient refusal that requeues that prompt gives the command back.
     dispatched: Option<(String, String)>,
     /// The persisted wait is for the execution Machine (see
-    /// [`TARGET_WAIT_REASON`]). Kept with the queue so a drain checks it under
-    /// the same lock that takes the head; written with the wait itself.
+    /// [`TARGET_WAIT_REASON`]), or keeps that retry right. Kept with the queue
+    /// so a drain checks it under the same lock that takes the head; written
+    /// with the wait itself.
     pub(in crate::core) awaits_target: bool,
-    /// A resource wait is persisted, so maintenance will retry the session.
-    waiting: bool,
+}
+
+/// The persisted wait that `reason` blocks next, after `current`: it keeps
+/// when the wait began and the execution-Machine retry right.
+pub fn next_wait(current: Option<&serde_json::Value>, reason: &str) -> serde_json::Value {
+    let since = current
+        .and_then(|v| v.get("since_ms").and_then(serde_json::Value::as_i64))
+        .unwrap_or_else(|| chrono::Utc::now().timestamp_millis());
+    let mut wait = serde_json::json!({"reason": reason, "since_ms": since});
+    if reason == TARGET_WAIT_REASON || current.is_some_and(wait_awaits_target) {
+        wait[TARGET_RETRY_FIELD] = serde_json::Value::Bool(true);
+    }
+    wait
+}
+
+/// Whether a persisted wait keeps the execution-Machine retry right.
+pub fn wait_awaits_target(wait: &serde_json::Value) -> bool {
+    wait.get("reason").and_then(serde_json::Value::as_str) == Some(TARGET_WAIT_REASON)
+        || wait
+            .get(TARGET_RETRY_FIELD)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false)
 }
 
 impl ExplicitIntent {
-    /// The row and command a restored session's persisted wait names.
-    pub(in crate::core) fn restored(hub: &Hub, session_id: &str) -> Self {
+    /// A restored session's bookkeeping. A wait persisted before intents moved
+    /// onto rows names its row: that head takes the intent back (`migrated`,
+    /// so the queue is written with it).
+    pub(in crate::core) fn restored(
+        hub: &Hub,
+        session_id: &str,
+        queue: &mut [QueuedMessage],
+        migrated: &mut bool,
+    ) -> Self {
         let wait = hub.setting(&format!(
             "{}{session_id}",
             settings_keys::SESSION_RESOURCE_WAIT_PREFIX
@@ -49,26 +117,117 @@ impl ExplicitIntent {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned)
         };
+        let now = chrono::Utc::now().timestamp_millis();
         let settled = hub
             .setting(&held_sends_key(session_id))
-            .and_then(|value| serde_json::from_value(value).ok())
-            .unwrap_or_default();
-        Self {
-            row: field("row"),
-            cmid: field("cmid"),
+            .and_then(|value| value.as_array().cloned())
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|entry| match entry {
+                // Before receipts carried a time: keep them a full horizon.
+                serde_json::Value::String(cmid) if cmid.len() <= MAX_HELD_COMMAND_BYTES => {
+                    Some((cmid, now))
+                }
+                serde_json::Value::String(_) => None,
+                entry => Some((
+                    entry.get("cmid")?.as_str()?.to_owned(),
+                    entry.get("at_ms")?.as_i64()?,
+                )),
+            })
+            .collect();
+        let mut intent = Self {
             settled,
+            settled_dirty: false,
+            receipts_after_queue: false,
+            held: None,
             dispatched: None,
-            awaits_target: field("reason").as_deref() == Some(TARGET_WAIT_REASON),
-            waiting: wait.is_some(),
+            awaits_target: wait.as_ref().is_some_and(wait_awaits_target),
+        };
+        intent.prune(now);
+        // Receipts are written ahead of the queue snapshot that ended them: a
+        // head whose command already settled lost that later queue write.
+        if let Some(head) = queue.first_mut()
+            && head
+                .explicit
+                .as_ref()
+                .and_then(|held| held.command.as_deref())
+                .is_some_and(|command| intent.is_settled(command))
+        {
+            head.explicit = None;
+            *migrated = true;
         }
+        // A wait persisted before intents moved onto rows names its row: that
+        // head takes the intent back once (maintenance rewrites the wait
+        // without the binding); a command that already ended stays ended.
+        let legacy = wait
+            .as_ref()
+            .and_then(|value| value.get("explicit"))
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        if legacy && field("cmid").is_none_or(|command| !intent.is_settled(&command)) {
+            let named = |head: &QueuedMessage| field("row").is_none_or(|row| row == head.id);
+            match queue.first_mut() {
+                // An earlier restore already moved it onto this head.
+                Some(head)
+                    if named(head)
+                        && head
+                            .explicit
+                            .as_ref()
+                            .is_some_and(|held| held.command == field("cmid")) => {}
+                Some(head) if head.explicit.is_none() && named(head) => {
+                    head.explicit = Some(ExplicitSend {
+                        command: field("cmid"),
+                    });
+                    *migrated = true;
+                }
+                _ => {
+                    if let Some(command) = field("cmid") {
+                        intent.settle(command);
+                    }
+                }
+            }
+        }
+        // Only the head carries an intent; a displaced one persisted by a
+        // direct commit ends here, with its receipt.
+        for row in queue.iter_mut().skip(1) {
+            if row.explicit.is_some() {
+                Session::end_row_intent(&mut intent, row);
+                *migrated = true;
+            }
+        }
+        intent.held = queue
+            .first()
+            .and_then(|head| head.explicit.as_ref())
+            .and_then(|held| held.command.clone());
+        intent
+    }
+
+    fn prune(&mut self, now: i64) {
+        let before = self.settled.len();
+        self.settled
+            .retain(|(_, at)| now.saturating_sub(*at) <= RECEIPT_RETENTION_MS);
+        self.settled_dirty |= before != self.settled.len();
     }
 
     fn settle(&mut self, cmid: String) {
-        self.settled.retain(|settled| settled != &cmid);
-        if self.settled.len() >= SETTLED_HELD_SENDS {
-            self.settled.pop_front();
-        }
-        self.settled.push_back(cmid);
+        let now = chrono::Utc::now().timestamp_millis();
+        self.settled.retain(|(settled, _)| settled != &cmid);
+        self.settled.push_back((cmid, now));
+        self.settled_dirty = true;
+        self.prune(now);
+    }
+
+    fn unsettle(&mut self, cmid: &str) {
+        let before = self.settled.len();
+        self.settled.retain(|(settled, _)| settled != cmid);
+        self.settled_dirty |= before != self.settled.len();
+    }
+
+    fn is_settled(&self, cmid: &str) -> bool {
+        let now = chrono::Utc::now().timestamp_millis();
+        self.settled
+            .iter()
+            .any(|(settled, at)| settled == cmid && now.saturating_sub(*at) <= RECEIPT_RETENTION_MS)
     }
 }
 
@@ -76,59 +235,209 @@ fn held_sends_key(session_id: &str) -> String {
     format!("{}{session_id}", settings_keys::SESSION_HELD_SENDS_PREFIX)
 }
 
+/// One serialized section for every resource-wait write and every held-row
+/// change that must agree with it: a wait read before another writer's change
+/// is never written back over it, and installing a hold cannot interleave with
+/// a completion clearing the wait.
+fn wait_serial() -> parking_lot::MutexGuard<'static, ()> {
+    static SERIAL: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
+    SERIAL.lock()
+}
+
 impl Session {
-    /// End the explicit send intent. Its held command id is remembered, so a
-    /// client replaying that command after a reconnect sends nothing.
-    pub(in crate::core) fn end_explicit_intent(&mut self) {
-        self.explicit_wait = false;
-        self.explicit.row = None;
-        if let Some(cmid) = self.explicit.cmid.take() {
-            self.explicit.settle(cmid);
+    /// Whether the head row carries an explicit send intent.
+    pub(in crate::core) fn explicit_head(&self) -> bool {
+        self.queue
+            .first()
+            .is_some_and(|head| head.explicit.is_some())
+    }
+
+    /// End `row`'s intent; its held command id is remembered, so a client
+    /// replaying that command after a reconnect sends nothing.
+    fn end_row_intent(explicit: &mut ExplicitIntent, row: &mut QueuedMessage) {
+        if let Some(command) = row.explicit.take().and_then(|intent| intent.command) {
+            explicit.settle(command);
         }
     }
 
-    /// The head `row_id` leaves the queue as prompt `dispatch_cmid`; any
-    /// dispatch consumes the intent.
-    pub(in crate::core) fn dispatch_explicit_intent(&mut self, row_id: &str, dispatch_cmid: &str) {
-        let held = (self.explicit_wait && self.explicit.row.as_deref() == Some(row_id))
-            .then(|| self.explicit.cmid.clone())
-            .flatten();
-        self.end_explicit_intent();
-        self.explicit.dispatched = held.map(|held| (dispatch_cmid.to_owned(), held));
-    }
-
-    /// A reorder, removal or move to drafts that took the held row off the
-    /// head ends its intent (a later row may even reuse its id).
-    pub(in crate::core) fn end_displaced_explicit_intent(&mut self) {
-        if self.explicit_wait
-            && self
-                .explicit
-                .row
-                .as_ref()
-                .is_some_and(|row| self.queue.first().is_none_or(|head| &head.id != row))
+    /// Record the head's held command as ended while its row keeps the intent
+    /// in memory: a previewed commit that displaces it is in flight.
+    pub(in crate::core) fn settle_head_command(&mut self) {
+        if let Some(command) = self
+            .queue
+            .first()
+            .and_then(|head| head.explicit.as_ref())
+            .and_then(|held| held.command.clone())
         {
-            self.end_explicit_intent();
+            self.explicit.settle(command);
         }
+    }
+
+    /// Undo [`Self::settle_head_command`]: the displacing commit failed.
+    pub(in crate::core) fn unsettle_head_command(&mut self) {
+        if let Some(command) = self
+            .queue
+            .first()
+            .and_then(|head| head.explicit.as_ref())
+            .and_then(|held| held.command.clone())
+        {
+            self.explicit.unsettle(&command);
+        }
+    }
+
+    /// End the head row's explicit send intent.
+    pub(in crate::core) fn end_explicit_intent(&mut self) {
+        if let Some(head) = self.queue.first_mut() {
+            Self::end_row_intent(&mut self.explicit, head);
+        }
+    }
+
+    /// Only the head may carry an intent, and no draft: a reorder, removal,
+    /// front insert or move to drafts that took a held row off the head ended
+    /// its intent (another row's Send now superseded it). Run before every
+    /// queue write, so the intent commits with the order that ended it.
+    pub(in crate::core) fn normalize_explicit_intents(&mut self) {
+        let Self {
+            queue,
+            drafts,
+            explicit,
+            ..
+        } = self;
+        for row in queue.iter_mut().skip(1).chain(drafts.iter_mut()) {
+            Self::end_row_intent(explicit, row);
+        }
+        let held = queue
+            .first()
+            .and_then(|head| head.explicit.as_ref())
+            .and_then(|intent| intent.command.clone());
+        if let Some(ended) = std::mem::replace(&mut explicit.held, held.clone())
+            && Some(&ended) != held.as_ref()
+        {
+            explicit.settle(ended);
+        }
+    }
+
+    /// The head row leaves the queue as prompt `dispatch_cmid`. Its intent
+    /// travels with the dispatch (whether it was explicit), and its held
+    /// command (or the live Send now `live` that sends it) ends now: a replay
+    /// while it is in flight sends nothing. A transient refusal gives the
+    /// command back (see [`Hub::requeue_prompt`]).
+    pub(in crate::core) fn take_dispatch_intent(
+        &mut self,
+        head: &mut QueuedMessage,
+        dispatch_cmid: &str,
+        live: Option<&str>,
+    ) -> bool {
+        self.explicit.dispatched = None;
+        let intent = head.explicit.take();
+        let carried = intent.is_some();
+        if let Some(command) = intent
+            .and_then(|intent| intent.command)
+            .or_else(|| live.map(str::to_owned))
+        {
+            self.explicit.settle(command.clone());
+            self.explicit.receipts_after_queue = true;
+            self.explicit.dispatched = Some((dispatch_cmid.to_owned(), command));
+        }
+        carried
+    }
+
+    /// A prompt that left as `cmid` is back at `index`. Only an explicit one
+    /// returned to the head keeps its intent, with its held command.
+    pub(in crate::core) fn restore_dispatch_intent(
+        &mut self,
+        index: usize,
+        cmid: Option<&str>,
+        explicit: bool,
+    ) {
+        let command = self
+            .explicit
+            .dispatched
+            .take_if(|(dispatched, _)| cmid == Some(dispatched.as_str()))
+            .map(|(_, command)| command);
+        let Some(row) = self.queue.get_mut(index) else {
+            return;
+        };
+        // An ordinary return never touches a hold installed meanwhile.
+        if !explicit || index != 0 {
+            return;
+        }
+        if row.explicit.is_some() {
+            return;
+        }
+        if let Some(command) = &command {
+            self.explicit.unsettle(command);
+        }
+        row.explicit = Some(ExplicitSend { command });
     }
 
     /// Whether only a retry that checked the session's eligibility may take
     /// the head: the session waits for its execution Machine, or the head is
-    /// a held Send now (an account park or offline target holds it). Any other
-    /// automatic drain would take it out only for the dispatcher to refuse it
-    /// and requeue it under a new id, which a terminal holding an edit of that
-    /// row reads as a sent message and parks as a draft beside the original.
+    /// a held explicit send (an account park or offline target holds it; a
+    /// held row whose wait record is missing gets one back from maintenance).
+    /// Any other automatic drain would take it out only for the dispatcher to
+    /// refuse it and requeue it under a new id, which a terminal holding an
+    /// edit of that row reads as a sent message and parks as a draft beside
+    /// the original.
     pub(in crate::core) fn head_awaits_retry(&self) -> bool {
-        self.explicit.awaits_target
-            || (self.explicit.waiting
-                && self.explicit_wait
-                && self
-                    .queue
-                    .first()
-                    .is_some_and(|head| self.explicit.row.as_deref() == Some(head.id.as_str())))
+        self.explicit.awaits_target || self.explicit_head()
+    }
+
+    /// The remembered held commands to write, once they changed.
+    pub(in crate::core) fn take_settled_receipts(&mut self) -> Option<serde_json::Value> {
+        if !std::mem::take(&mut self.explicit.settled_dirty) {
+            return None;
+        }
+        Some(serde_json::Value::Array(
+            self.explicit
+                .settled
+                .iter()
+                .map(|(cmid, at)| serde_json::json!({"cmid": cmid, "at_ms": at}))
+                .collect(),
+        ))
+    }
+}
+
+/// Strip intents from every row but the head of a queue about to be written
+/// directly (a previewed commit), so no displaced row is persisted with one.
+/// The session's own queue settles their commands when it commits.
+pub(in crate::core) fn strip_displaced_intents(queue: &mut [QueuedMessage]) {
+    for row in queue.iter_mut().skip(1) {
+        row.explicit = None;
     }
 }
 
 impl Hub {
+    /// End every displaced intent under the lock that changed the queue, and
+    /// write the held commands it ended. Called by each queue mutation that
+    /// can move the head and before every queue snapshot: the receipts enter
+    /// the store FIFO ahead of the queue write that ended them, so a restore
+    /// never finds an intent whose command already settled.
+    pub(in crate::core) fn settle_explicit_locked(&self, session_id: &str, s: &mut Session) {
+        s.normalize_explicit_intents();
+        if !s.explicit.receipts_after_queue {
+            self.write_receipts_locked(session_id, s);
+        }
+    }
+
+    /// Write the session's remembered held commands if they changed. A
+    /// dispatch's receipts are written here, after its queue snapshot.
+    pub(in crate::core) fn write_receipts_locked(&self, session_id: &str, s: &mut Session) {
+        s.explicit.receipts_after_queue = false;
+        let Some(value) = s.take_settled_receipts() else {
+            return;
+        };
+        let key = held_sends_key(session_id);
+        if let Some(tx) = self.inner.store_tx.as_ref() {
+            let _ = tx.send(StoreWrite::PutSetting {
+                key: key.clone(),
+                value: value.clone(),
+            });
+        }
+        // Sessions before settings is the admitted lock order.
+        self.with_settings_mut(|settings| settings.insert(key, value));
+    }
+
     /// Whether `cmid` is a held Send now this Hub already recorded: `Some(true)`
     /// while its intent still waits, `Some(false)` once that intent ended. A
     /// client replays a command whose reply it lost; the replay must not take
@@ -137,15 +446,28 @@ impl Hub {
     pub fn held_send_replay(&self, session_id: &str, cmid: &str) -> Option<bool> {
         let sessions = self.inner.sessions.lock();
         let s = sessions.get(session_id)?;
-        if s.explicit_wait && s.explicit.cmid.as_deref() == Some(cmid) {
+        if s.queue.first().is_some_and(|head| {
+            head.explicit
+                .as_ref()
+                .is_some_and(|intent| intent.command.as_deref() == Some(cmid))
+        }) {
             return Some(true);
         }
-        let in_flight = s
-            .explicit
-            .dispatched
-            .as_ref()
-            .is_some_and(|(_, held)| held == cmid);
-        (in_flight || s.explicit.settled.iter().any(|settled| settled == cmid)).then_some(false)
+        s.explicit.is_settled(cmid).then_some(false)
+    }
+
+    /// Whether the session may admit another Send now command: its receipt
+    /// ledger has room within [`MAX_RECEIPTS`].
+    pub fn held_sends_admit(&self, session_id: &str) -> bool {
+        self.inner
+            .sessions
+            .lock()
+            .get_mut(session_id)
+            .is_none_or(|s| {
+                // Expired receipts never hold a place: a full ledger frees itself.
+                s.explicit.prune(chrono::Utc::now().timestamp_millis());
+                s.explicit.settled.len() < MAX_RECEIPTS
+            })
     }
 
     /// Whether an edit holds back what a retry of this wait would send: the
@@ -163,143 +485,180 @@ impl Hub {
         })
     }
 
-    /// Record (or end) explicit send intent for the current head row.
-    pub fn set_explicit_wait(&self, session_id: &str, explicit: bool) {
-        {
+    /// End the head row's explicit intent (a wait that ended, a workspace
+    /// preparation that will drain it itself).
+    pub fn end_explicit_intent(&self, session_id: &str) {
+        let ended = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            s.explicit.dispatched = None;
+            let held = s.explicit_head();
             s.end_explicit_intent();
-            if explicit {
-                s.explicit_wait = true;
-                s.explicit.row = s.queue.first().map(|head| head.id.clone());
-            }
+            held
+        };
+        if ended {
+            self.emit_pending(session_id);
         }
-        self.persist_explicit_wait(session_id);
     }
 
-    /// An explicit send `prompt` came back from a transient refusal. Its intent
-    /// returns only if that prompt is the head now: another terminal may have
-    /// removed or reordered it meanwhile, and the intent never moves to another
-    /// row. A held send's command id comes back with it.
-    pub fn retain_explicit_intent(&self, session_id: &str, prompt: Option<&str>) {
-        {
-            let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            let head = s
-                .queue
-                .first()
-                .filter(|head| prompt.is_some() && head.cmid.as_deref() == prompt)
-                .map(|head| head.id.clone());
-            let Some(head) = head else {
-                return;
-            };
-            let held = s
-                .explicit
-                .dispatched
-                .take_if(|(dispatched, _)| prompt == Some(dispatched.as_str()))
-                .map(|(_, held)| held);
-            s.end_explicit_intent();
-            s.explicit_wait = true;
-            s.explicit.row = Some(head);
-            if let Some(held) = held {
-                s.explicit.settled.retain(|settled| settled != &held);
-                s.explicit.cmid = Some(held);
-            }
-        }
-        self.persist_explicit_wait(session_id);
-    }
-
-    /// Whether a recorded explicit intent still waits for its queued row. A
-    /// completed dispatch of another prompt must not end that wait.
-    pub fn explicit_intent_pending(&self, session_id: &str) -> bool {
-        self.inner.sessions.lock().get(session_id).is_some_and(|s| {
-            s.explicit_wait
-                && s.explicit
-                    .row
-                    .as_ref()
-                    .is_some_and(|row| s.queue.iter().any(|queued| &queued.id == row))
-        })
-    }
-
-    /// Write the session's explicit intent into its persisted wait, and its
-    /// ended held commands beside it; both carry across a Controller restart.
-    pub fn persist_explicit_wait(&self, session_id: &str) {
-        self.edit_resource_wait(session_id, |wait| wait);
-    }
-
-    /// Replace the session's persisted resource wait with `edit(current)`
-    /// (`None` ends it), with the intent binding taken from the Hub. Every
-    /// writer goes through here, serialized: a reason or binding read before
-    /// another writer's change is never written back over it.
-    pub fn edit_resource_wait(
+    /// Move a queued prompt to the front under `caller`'s send intent without
+    /// dispatching it, holding it there as an explicit send that waits for
+    /// `reason` (see [`next_wait`]). The wait is written first, so an
+    /// automatic drain that sees the held row already finds the session
+    /// waiting (and the wait commits before the row in the store FIFO). A
+    /// `command` this Hub already recorded is a replay, recognized in the same
+    /// section that would install it, so a late duplicate never reopens a
+    /// superseded hold. A row another terminal removed leaves the previous
+    /// wait exactly as it was.
+    pub fn hold_queued(
         &self,
         session_id: &str,
-        edit: impl FnOnce(Option<serde_json::Value>) -> Option<serde_json::Value>,
-    ) {
-        static PERSIST: parking_lot::Mutex<()> = parking_lot::Mutex::new(());
-        let _serial = PERSIST.lock();
-        // A session not loaded (yet) has no intent; its wait is still written.
-        let (explicit, row, cmid, settled) = self
-            .inner
-            .sessions
-            .lock()
-            .get(session_id)
-            .map(|s| {
-                (
-                    s.explicit_wait,
-                    s.explicit.row.clone(),
-                    s.explicit.cmid.clone(),
-                    s.explicit.settled.clone(),
-                )
-            })
-            .unwrap_or_default();
-        let settled = serde_json::json!(settled);
-        let held_key = held_sends_key(session_id);
-        if settled.as_array().is_some_and(|list| !list.is_empty())
-            && self.setting(&held_key).as_ref() != Some(&settled)
+        id: &str,
+        caller: &crate::prompt_origin::RequestCaller,
+        command: Option<&str>,
+        reason: &str,
+    ) -> HoldOutcome {
+        if self.is_managed_child(session_id) {
+            return HoldOutcome::Missing;
+        }
+        let _serial = wait_serial();
+        if let Some(command) = command
+            && let Some(waiting) = self.held_send_replay(session_id, command)
         {
-            self.set_setting(held_key, settled);
+            return HoldOutcome::Replayed { waiting };
         }
         let key = format!(
             "{}{session_id}",
             settings_keys::SESSION_RESOURCE_WAIT_PREFIX
         );
-        let current = self.setting(&key);
-        let edited = edit(current.clone());
-        let awaits_target = edited.as_ref().is_some_and(|wait| {
-            wait.get("reason").and_then(serde_json::Value::as_str) == Some(TARGET_WAIT_REASON)
+        let previous = self.setting(&key);
+        let previous_reason = self
+            .inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .and_then(|s| s.meta.resource_wait.clone());
+        self.set_resource_wait(session_id, Some(reason.to_owned()));
+        self.edit_resource_wait_locked(session_id, |current| {
+            Some(next_wait(current.as_ref(), reason))
         });
-        if let Some(s) = self.inner.sessions.lock().get_mut(session_id) {
-            s.explicit.awaits_target = awaits_target;
-            s.explicit.waiting = edited.is_some();
-        }
-        let Some(serde_json::Value::Object(mut wait)) = edited else {
-            if current.is_some() {
-                self.set_setting(key, serde_json::Value::Null);
-            }
-            return;
-        };
-        {
-            wait.insert("explicit".to_owned(), serde_json::Value::Bool(explicit));
-            for (field, value) in [("row", row), ("cmid", cmid)] {
-                match value {
-                    Some(value) => {
-                        wait.insert(field.to_owned(), serde_json::Value::String(value));
-                    }
-                    None => {
-                        wait.remove(field);
-                    }
+        let trigger = crate::prompt_origin::DeliveryOrigin::from_caller(caller);
+        let held = {
+            let mut sessions = self.inner.sessions.lock();
+            sessions.get_mut(session_id).is_some_and(|s| {
+                if s.steer_reservations.values().any(|r| r.row_id == id) {
+                    return false;
                 }
+                let Some(pos) = s.queue.iter().position(|m| m.id == id) else {
+                    return false;
+                };
+                let mut row = s.queue.remove(pos);
+                row.initiator = Some(trigger);
+                if let Some(old) = row.explicit.take().and_then(|intent| intent.command) {
+                    s.explicit.settle(old);
+                }
+                row.explicit = Some(ExplicitSend {
+                    command: command.map(str::to_owned),
+                });
+                s.queue.insert(0, row);
+                self.settle_explicit_locked(session_id, s);
+                true
+            })
+        };
+        if held {
+            self.emit_pending(session_id);
+            HoldOutcome::Held
+        } else {
+            self.set_resource_wait(session_id, previous_reason);
+            self.edit_resource_wait_locked(session_id, |_| previous);
+            HoldOutcome::Missing
+        }
+    }
+
+    /// Clear the session's resource wait, unless its head is a held explicit
+    /// send (held meanwhile for another row): that keeps the wait it needs.
+    /// Checked under the section that installs a hold. Whether it cleared.
+    pub fn clear_resource_wait_unless_held(&self, session_id: &str) -> bool {
+        let _serial = wait_serial();
+        if self
+            .inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(Session::explicit_head)
+        {
+            return false;
+        }
+        self.set_resource_wait(session_id, None);
+        self.edit_resource_wait_locked(session_id, |_| None);
+        true
+    }
+
+    /// Clear the wait of a session with nothing left to deliver: no queued
+    /// row and no prompt in flight, checked in the section that installs a
+    /// hold, so a requeue that just returned an explicit row keeps its retry.
+    /// Whether it cleared.
+    pub fn clear_idle_resource_wait(&self, session_id: &str) -> bool {
+        let _serial = wait_serial();
+        if self
+            .inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .is_some_and(|s| !s.queue.is_empty() || s.in_flight)
+        {
+            return false;
+        }
+        self.set_resource_wait(session_id, None);
+        self.edit_resource_wait_locked(session_id, |_| None);
+        true
+    }
+
+    /// End the session's resource wait and the head's explicit intent with it.
+    pub fn clear_resource_wait(&self, session_id: &str) {
+        let _serial = wait_serial();
+        self.set_resource_wait(session_id, None);
+        self.end_explicit_intent(session_id);
+        self.edit_resource_wait_locked(session_id, |_| None);
+    }
+
+    /// Replace the session's persisted resource wait with `edit(current)`
+    /// (`None` ends it). Every writer goes through here, serialized: a reason
+    /// read before another writer's change is never written back over it.
+    pub fn edit_resource_wait(
+        &self,
+        session_id: &str,
+        edit: impl FnOnce(Option<serde_json::Value>) -> Option<serde_json::Value>,
+    ) {
+        let _serial = wait_serial();
+        self.edit_resource_wait_locked(session_id, edit);
+    }
+
+    fn edit_resource_wait_locked(
+        &self,
+        session_id: &str,
+        edit: impl FnOnce(Option<serde_json::Value>) -> Option<serde_json::Value>,
+    ) {
+        let key = format!(
+            "{}{session_id}",
+            settings_keys::SESSION_RESOURCE_WAIT_PREFIX
+        );
+        let current = self.setting(&key);
+        let mut edited = edit(current.clone());
+        // The intent binding moved onto the rows; a legacy one is dropped.
+        if let Some(serde_json::Value::Object(wait)) = &mut edited {
+            for legacy in ["explicit", "row", "cmid"] {
+                wait.remove(legacy);
             }
-            let wait = serde_json::Value::Object(wait);
-            if current.as_ref() != Some(&wait) {
-                self.set_setting(key, wait);
-            }
+        }
+        if let Some(s) = self.inner.sessions.lock().get_mut(session_id) {
+            s.explicit.awaits_target = edited.as_ref().is_some_and(wait_awaits_target);
+        }
+        match edited {
+            Some(wait) if current.as_ref() != Some(&wait) => self.set_setting(key, wait),
+            None if current.is_some() => self.set_setting(key, serde_json::Value::Null),
+            _ => {}
         }
     }
 }

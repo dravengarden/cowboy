@@ -83,15 +83,17 @@ pub fn queue_initial_prompt(
     }
 }
 
+/// The reason shown while a held explicit send has lost its wait record (a
+/// Controller crash between two writes, a fence that returned it): the
+/// maintenance retry that sends it is recreated under this reason.
+pub const EXPLICIT_RETRY_WAIT: &str = "waiting to send";
+
 pub fn wait(hub: &Hub, session: &str, reason: &str) {
     hub.set_resource_wait(session, Some(reason.to_owned()));
-    // The Hub serializes every wait write and adds the intent binding itself.
+    // The Hub serializes every wait write. The wait keeps when it began and
+    // an admitted prompt's right to the execution-Machine retry.
     hub.edit_resource_wait(session, |current| {
-        let since = current
-            .as_ref()
-            .and_then(|v| v.get("since_ms").and_then(serde_json::Value::as_i64))
-            .unwrap_or_else(now_ms);
-        Some(serde_json::json!({"reason": reason, "since_ms": since}))
+        Some(crate::core::next_wait(current.as_ref(), reason))
     });
 }
 
@@ -101,6 +103,59 @@ pub(crate) fn waiting(hub: &Hub, session: &str) -> Option<(i64, String)> {
         value.get("since_ms")?.as_i64()?,
         value.get("reason")?.as_str()?.to_owned(),
     ))
+}
+
+/// A held explicit send always has a wait that retries it. Its row and the
+/// wait are separate records: a Controller crash between their writes, or a
+/// fence that returned the row by itself, can leave the row without one.
+fn restore_held_waits(hub: &Hub, sessions: &[crate::core::SessionMeta]) {
+    for meta in sessions {
+        let key = format!("{SESSION_RESOURCE_WAIT_PREFIX}{}", meta.id);
+        match hub.setting(&key) {
+            None if hub.explicit_wait(&meta.id) => wait(hub, &meta.id, EXPLICIT_RETRY_WAIT),
+            // A wait from before intents moved onto rows still names one; its
+            // head took it on restore. Rewriting it drops the binding, so a
+            // later restart cannot apply it again.
+            Some(stale) if stale.get("explicit").is_some() => {
+                hub.edit_resource_wait(&meta.id, |current| current);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// End a wait with nothing left to retry: an empty queue with nothing in
+/// flight, or a crashed or interrupted session whose wait is neither for its
+/// execution Machine nor for an explicit send. An explicit send keeps its
+/// intent across a transient wait: it bypasses Pause and revives a crashed
+/// session once, as the original send would have; an admitted send that only
+/// waits for its execution Machine still revives once. Both clears recheck
+/// where a hold is installed: a requeue may have just returned a held row.
+fn wait_ended(
+    hub: &Hub,
+    meta: &crate::core::SessionMeta,
+    queued: usize,
+    target_wait: bool,
+    explicit: bool,
+) -> bool {
+    if queued == 0
+        && !hub.session_has_in_flight_prompt(&meta.id)
+        && hub.clear_idle_resource_wait(&meta.id)
+    {
+        return true;
+    }
+    matches!(meta.status, Status::Crashed | Status::Interrupted)
+        && !target_wait
+        && !explicit
+        && hub.clear_resource_wait_unless_held(&meta.id)
+}
+
+/// Whether the session's wait keeps the execution-Machine retry: its reason
+/// is that Machine, or it was when the prompt was admitted and another
+/// resource blocks it now.
+fn awaits_target(hub: &Hub, session: &str) -> bool {
+    hub.setting(&format!("{SESSION_RESOURCE_WAIT_PREFIX}{session}"))
+        .is_some_and(|wait| crate::core::wait_awaits_target(&wait))
 }
 
 fn resource_block(state: &AppState, machine: &str) -> Option<&'static str> {
@@ -159,7 +214,24 @@ pub(crate) fn execution_target_connected(
 fn retry_blocked(state: &Arc<AppState>, meta: &crate::core::SessionMeta, explicit: bool) -> bool {
     !execution_target_connected(state, meta)
         || account_parked(state, meta)
+        || provider_fenced(state, &meta.id)
+        // A held send waits for a running workspace preparation; retrying it
+        // meanwhile would pop and return the row on every tick. Without one
+        // running, the retry's preflight starts it.
+        || (explicit && state.workspace_preparations.lock().contains(&meta.id))
         || state.hub.retry_held_for_editing(&meta.id, explicit)
+}
+
+/// The session's Provider is being uninstalled or reconciled on its Machine:
+/// a retry would only return the prompt, spending the Machine's one wake.
+fn provider_fenced(state: &AppState, session: &str) -> bool {
+    provider_fence_key_for_session(&state.hub, session).is_some_and(|key| {
+        state
+            .plugin_lifecycle_fences
+            .read()
+            .get(&key)
+            .is_some_and(|fence| *fence != PluginFenceState::Installing)
+    })
 }
 
 /// A named-only account parks the session's queue: show why and skip it.
@@ -171,10 +243,9 @@ fn account_parked(state: &Arc<AppState>, meta: &crate::core::SessionMeta) -> boo
     reason.is_some()
 }
 
+/// End the session's wait, and the explicit intent of a send it held.
 pub fn clear_wait(hub: &Hub, session: &str) {
-    hub.set_resource_wait(session, None);
-    hub.set_explicit_wait(session, false);
-    hub.edit_resource_wait(session, |_| None);
+    hub.clear_resource_wait(session);
 }
 
 pub fn has_waiters(state: &AppState, machine: &str) -> bool {
@@ -307,6 +378,7 @@ pub fn start(state: &Arc<AppState>) {
                 state.machine_snapshots.publish().await;
                 last_projection = projection;
             }
+            restore_held_waits(&state.hub, &sessions);
             let mut waiting_sessions = sessions
                 .iter()
                 .filter_map(|meta| {
@@ -316,27 +388,13 @@ pub fn start(state: &Arc<AppState>) {
             waiting_sessions.sort_by_key(|(since, meta, _)| (*since, meta.id.as_str()));
             let mut resumed = std::collections::HashSet::new();
             for (_, meta, reason) in waiting_sessions {
-                let target_wait = reason == TARGET_WAIT_REASON;
+                let target_wait = awaits_target(&state.hub, &meta.id);
                 state.hub.set_resource_wait(&meta.id, Some(reason));
                 let Some(info) = state.hub.session_info(&meta.id) else {
                     continue;
                 };
-                if info.queue_count == 0 && !state.hub.session_has_in_flight_prompt(&meta.id) {
-                    clear_wait(&state.hub, &meta.id);
-                    continue;
-                }
-                // An explicit send keeps its intent across a transient wait:
-                // it bypasses Pause and revives a crashed session once, as the
-                // original send would have. An admitted send to a crashed or
-                // interrupted session that only waits for its execution Machine
-                // still revives once; any other wait in those states stops
-                // automatic delivery.
                 let explicit = state.hub.explicit_wait(&meta.id);
-                if matches!(meta.status, Status::Crashed | Status::Interrupted)
-                    && !target_wait
-                    && !explicit
-                {
-                    clear_wait(&state.hub, &meta.id);
+                if wait_ended(&state.hub, meta, info.queue_count, target_wait, explicit) {
                     continue;
                 }
                 if (!meta.paused || explicit)
@@ -533,5 +591,78 @@ mod tests {
         assert_eq!(waiting(&restored, "a"), waiting(&hub, "a"));
         clear_wait(&restored, "a");
         assert_eq!(waiting(&restored, "a"), None);
+    }
+
+    // A crashed session whose execution Machine came back but whose worker
+    // slots are full shows the capacity reason; it keeps the retry right it
+    // was admitted with, so maintenance neither clears it nor lets an
+    // automatic drain take the head.
+    #[test]
+    fn a_second_blocker_keeps_the_target_retry_right() {
+        let hub = Hub::new();
+        assert!(!awaits_target(&hub, "a"));
+        wait(&hub, "a", TARGET_WAIT_REASON);
+        assert!(awaits_target(&hub, "a"));
+        wait(&hub, "a", "all worker slots are occupied");
+        assert_eq!(
+            waiting(&hub, "a").map(|(_, reason)| reason).as_deref(),
+            Some("all worker slots are occupied")
+        );
+        assert!(awaits_target(&hub, "a"));
+        let restored = Hub::new();
+        restored.load_settings(hub.settings_snapshot().into_iter().collect());
+        assert!(awaits_target(&restored, "a"));
+        clear_wait(&hub, "a");
+        assert!(!awaits_target(&hub, "a"));
+        // An ordinary wait never gains it.
+        wait(&hub, "b", "memory");
+        assert!(!awaits_target(&hub, "b"));
+    }
+
+    // A held row whose wait record was lost gets one back, so maintenance
+    // still sends it through Pause; a session without one is left alone.
+    #[test]
+    fn a_held_row_without_a_wait_gets_one_back() {
+        let hub = Hub::new();
+        for id in ["held", "plain"] {
+            hub.create_local_session(
+                id.into(),
+                "codex".into(),
+                "/tmp".into(),
+                "test".into(),
+                crate::core::SessionOrigin::Web,
+                false,
+            );
+            hub.set_paused(id, true);
+            hub.submit(
+                id,
+                "m".into(),
+                vec![],
+                Some(format!("c-{id}")),
+                &crate::prompt_origin::RequestCaller::Person,
+            );
+        }
+        let Some(Outbound::SyncPatch { value, .. }) = hub.queue_resync("held") else {
+            panic!("queue missing");
+        };
+        let row = value["queue"][0]["id"].as_str().unwrap().to_owned();
+        assert_eq!(
+            hub.hold_queued(
+                "held",
+                &row,
+                &crate::prompt_origin::RequestCaller::Person,
+                Some("send"),
+                "r",
+            ),
+            crate::core::HoldOutcome::Held
+        );
+        hub.edit_resource_wait("held", |_| None);
+        assert!(waiting(&hub, "held").is_none());
+        restore_held_waits(&hub, &hub.session_list());
+        assert_eq!(
+            waiting(&hub, "held").map(|(_, reason)| reason).as_deref(),
+            Some(EXPLICIT_RETRY_WAIT)
+        );
+        assert!(waiting(&hub, "plain").is_none());
     }
 }

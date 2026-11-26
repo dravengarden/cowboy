@@ -14,6 +14,8 @@ import { createAuthoredSendGate } from "./authoredSendGate";
 import { useCallback, useEffect, useRef, useSyncExternalStore } from "react";
 import {
   type ArgsOf,
+  type ClientSnapshot,
+  type LocalPersistence,
   type Mutators,
   replicatedStore,
   type ReplicatedStore,
@@ -24,6 +26,28 @@ import { IdbPersistenceError } from "@cowboy/state-sync-idb";
 import { createSyncShutdown } from "./syncShutdown";
 import { createReplica, type ReplicaTail } from "./replica";
 import { replicaTailConflicts, trimReplicaTail } from "./replicaTail";
+import {
+  fetchHistoryPage as fetchHistoryPageVersioned,
+  fetchPreviousQuestionPage as fetchPreviousQuestionPageVersioned,
+  fetchQuestionPage as fetchQuestionPageVersioned,
+  HISTORY_FETCH_TIMEOUT_MS,
+  SNAPSHOT_GAP_FILL_PAGES,
+} from "./historyFetch";
+import {
+  type AuthoritativeLinkMeta,
+  authoritativeLinkMetaMap,
+  boundSocketUrl,
+  classifyReplicaSnapshot,
+  diffAuthoritativeLinkMeta,
+  dropStaleReplicaPrefix,
+  removeSessionById,
+  upsertSession,
+} from "./sessionDelta";
+import { buildQueueMutationCommand } from "./queueMutationCommand";
+import {
+  interactiveClientKind,
+  stableInteractiveClientId,
+} from "./productSocketClient";
 import { deriveSyncStatus, type SyncStatus, type SyncStatusInput } from "./syncStatus";
 import { ProductSessionEndEvent, productSessionSignal } from "./productSessionEnd";
 import { productSyncPrincipal } from "./productSyncIdentity";
@@ -70,7 +94,7 @@ import {
 } from "./localFirstDelivery.ts";
 import {
   type DraftActivation,
-  draftActivationSourceId,
+  type QueuedSendArgs,
   deliveryConfirmations,
   emptyQueueValue,
   QUEUE_TRANSITION_MUTATORS,
@@ -90,6 +114,7 @@ import {
 } from "./providerCatalogRegistry";
 import {
   attachDraftDatabase,
+  discardDraft,
   draftsDurable,
   getDraft,
   pruneDrafts,
@@ -100,10 +125,12 @@ import { createCurrentTurnRegistry, type CurrentTurnConsumeSource, type CurrentT
 import { bindPendingEditRecovery, parkStaleEditOnce, recoverPendingEditsFrom } from "./pendingEditRecovery";
 import {
   attachPendingEditDatabase,
+  discardPendingEdits,
   pendingEditsDurable,
   prunePendingEdits,
   retryPendingEditRestore,
 } from "./pendingEditStore";
+import { clearSessionRemoved, setRemovalFenceDataset } from "./removedSessionFence";
 import { revealPendingArrival } from "./pendingPanelState";
 import { linkTimeline } from "./derive";
 import { acknowledgedCommand, latestClearBoundary } from "./acknowledgedCommand";
@@ -114,8 +141,8 @@ import { notifyHaptic } from "./haptic";
 import { reportClientDuration, reportClientLog, reportClientMetric, startClientSpan } from "./observability";
 import { ClientOperations } from "./otelOperations.ts";
 import { isTurnActivityUpdate } from "./turnWaiting.ts";
-import { ContextNavigationNotice, loadSessionContext, requireCurrentAgentContext, sendWithContext, stagedNextAgent } from "./sessionContext";
-import { bulkActivatableDrafts, wrapUpOutboxPatch, wrapUpQueueAddOptions, wrapUpSubmitFields, type WrapUpOutboxFields } from "./wrapUpDelivery";
+import { ContextNavigationNotice, evictSessionContext, invalidateReferencingContexts, loadSessionContext, requireCurrentAgentContext, sendWithContext, stagedNextAgent } from "./sessionContext";
+import { bulkActivatableDrafts, wrapUpOutboxPatch, wrapUpQueueAddOptions, type WrapUpOutboxFields } from "./wrapUpDelivery";
 import { composeDraftForStagedAgent } from "./contextPendingPrompt";
 
 const telemetryOperations = new ClientOperations(
@@ -438,6 +465,7 @@ function evictTranscriptSessions(sessionIds: readonly string[]): void {
     if (retry !== undefined) clearTimeout(retry);
     sessionHydrationRetryTimers.delete(sessionId);
     completeQuestionPages.delete(sessionId);
+    replicaTails.delete(sessionId);
     transcriptEpoch.set(sessionId, (transcriptEpoch.get(sessionId) ?? 0) + 1);
   }
 
@@ -506,6 +534,11 @@ function touchTranscriptSession(sessionId: string): void {
   evictTranscriptSessions(update.evicted);
 }
 
+function dropTranscriptSession(sessionId: string): void {
+  transcriptSessionCache = transcriptSessionCache.filter((id) => id !== sessionId);
+  evictTranscriptSessions([sessionId]);
+}
+
 function retainTranscriptSessions(valid: ReadonlySet<string>): void {
   const update = retainTranscriptSessionCache(transcriptSessionCache, valid);
   transcriptSessionCache = update.order;
@@ -539,6 +572,9 @@ function abandonProductSocket(reason: AbandonReason): Promise<void> {
   syncDatabase.stopAdmission();
   productSessionPausedForAuth = false;
   if (reason === "dataset_changed") datasetFenced = true;
+  replicaTails.clear();
+  lastAuthoritativeLinkMeta = null;
+  retainedReplicaKey = undefined;
   clearReconnectTimer();
   stopLiveness();
   const current = socket;
@@ -1064,45 +1100,12 @@ function sameQueuedContent(
       JSON.stringify(contentOf(right.text, right.attachments));
 }
 
-// Fetch the next OLDER page of a session's history and prepend it. Pages come
-// from the immutable HTTP route (GET /api/history/:id) so a re-fetch
-// (scroll back, reload, post-recycle) is a cache hit — zero network. One fetch
-// at a time per session; no-op once the window already reaches the first event.
-//
-// VERSION-SCOPED url (`?v=<build>`): the cache is `immutable`, so without this a
-// redeploy could keep serving pages cached under the OLD build (if a future
-// version ever changes the event shape, that's stale/incompatible). Keying the
-// url on the build id means a new version's pages are fresh fetches, while
-// reloads of the SAME build stay cache hits. (`conn.version()` is the id the tab
-// loaded against; until the first /version probe lands it's a harmless "0".)
-const HISTORY_FETCH_TIMEOUT_MS = 6_000;
-const SNAPSHOT_GAP_FILL_PAGES = 32;
-
-type HistoryPage = {
-  events: Envelope[];
-  next_before_seq: number | null;
-  reached_start: boolean;
-};
-
-function historyPageUrl(sessionId: string, beforeSeq: number): string {
-  return `/api/history/${encodeURIComponent(sessionId)}?before_seq=${String(beforeSeq)}&v=${encodeURIComponent(conn.version() ?? "0")}`;
-}
-
-async function fetchHistoryPage(
+function fetchHistoryPage(
   sessionId: string,
   beforeSeq: number,
   signal?: AbortSignal,
-): Promise<HistoryPage | null> {
-  try {
-    const res = await fetch(
-      historyPageUrl(sessionId, beforeSeq),
-      signal === undefined ? undefined : { signal },
-    );
-    if (!res.ok) return null;
-    return (await res.json()) as HistoryPage;
-  } catch {
-    return null;
-  }
+) {
+  return fetchHistoryPageVersioned(sessionId, beforeSeq, conn.version() ?? "0", signal);
 }
 
 const snapshotGapFills = new Map<string, number>();
@@ -1225,11 +1228,11 @@ export async function loadOlder(sessionId: string): Promise<boolean> {
   setPagination(sessionId, { ...pg, loadingOlder: true });
   try {
     const data = await fetchHistoryPage(sessionId, beforeSeq, controller.signal);
+    if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
     if (!data) {
       setPagination(sessionId, { ...pg, loadingOlder: false });
       return false;
     }
-    if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
     setState({ ...state, timelines: mergeEvents(state.timelines, sessionId, data.events) });
     // Always step to the next OLDER page (don't recompute from the oldest seq —
     // a gap at a boundary would re-request the same page forever). Page 0 was
@@ -1242,7 +1245,9 @@ export async function loadOlder(sessionId: string): Promise<boolean> {
     return data.reached_start || data.next_before_seq !== beforeSeq ||
       data.events.length > 0;
   } catch {
-    setPagination(sessionId, { ...pg, loadingOlder: false });
+    if ((transcriptEpoch.get(sessionId) ?? 0) === epoch) {
+      setPagination(sessionId, { ...pg, loadingOlder: false });
+    }
     return false;
   } finally {
     globalThis.clearTimeout(timeout);
@@ -1255,34 +1260,19 @@ export async function loadPreviousQuestionPage(sessionId: string): Promise<boole
   const epoch = transcriptEpoch.get(sessionId) ?? 0;
   const beforeSeq = pg.beforeSeq;
   setPagination(sessionId, { ...pg, loadingOlder: true });
-  try {
-    const res = await fetch(
-      `/api/history/${encodeURIComponent(sessionId)}?before_seq=${String(beforeSeq)}&question_page=true&v=${encodeURIComponent(conn.version() ?? "0")}`,
-    );
-    if (!res.ok) {
-      setPagination(sessionId, { ...pg, loadingOlder: false });
-      return false;
-    }
-    const data = (await res.json()) as {
-      events: Envelope[];
-      next_before_seq: number | null;
-      reached_start: boolean;
-    };
-    if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
-    setState({
-      ...state,
-      timelines: mergeEvents(state.timelines, sessionId, data.events),
-    });
-    setPagination(sessionId, {
-      reachedStart: data.reached_start,
-      loadingOlder: false,
-      beforeSeq: data.next_before_seq,
-    });
-    return data.events.length > 0;
-  } catch {
+  const data = await fetchPreviousQuestionPageVersioned(sessionId, beforeSeq, conn.version() ?? "0");
+  if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
+  if (!data) {
     setPagination(sessionId, { ...pg, loadingOlder: false });
     return false;
   }
+  setState({ ...state, timelines: mergeEvents(state.timelines, sessionId, data.events) });
+  setPagination(sessionId, {
+    reachedStart: data.reached_start,
+    loadingOlder: false,
+    beforeSeq: data.next_before_seq,
+  });
+  return data.events.length > 0;
 }
 
 export async function loadQuestionPage(
@@ -1294,36 +1284,20 @@ export async function loadQuestionPage(
   const rootSeq = Number(pageId);
   if (!Number.isSafeInteger(rootSeq) || rootSeq < 0) return false;
   if (completeQuestionPages.get(sessionId)?.has(pageId)) return true;
-  try {
-    const response = await fetch(
-      `/api/sessions/${encodeURIComponent(sessionId)}/question-pages/${encodeURIComponent(pageId)}?v=${
-        encodeURIComponent(conn.version() ?? "0")
-      }`,
-      // The newest page may still be growing. Never let WebKit reuse a partial
-      // response captured between the user prompt and the agent answer.
-      { cache: "no-store" },
-    );
-    if (!response.ok) return false;
-    const data = (await response.json()) as { events: Envelope[] };
-    if ((transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
-    const complete = data.events.some((event) => event.seq === rootSeq);
-    if (complete) {
-      const pages = completeQuestionPages.get(sessionId) ?? new Set<string>();
-      pages.add(pageId);
-      completeQuestionPages.set(sessionId, pages);
-    }
-    // Publish completeness before notifying store subscribers. Page View reads
-    // this side cache during the render caused by setState; doing it afterwards
-    // left the completed response behind an eternal skeleton until some
-    // unrelated state change (most visibly switching sessions) rendered again.
-    setState({
-      ...state,
-      timelines: mergeEvents(state.timelines, sessionId, data.events),
-    });
-    return complete;
-  } catch {
-    return false;
+  const data = await fetchQuestionPageVersioned(sessionId, pageId, conn.version() ?? "0");
+  if (!data || (transcriptEpoch.get(sessionId) ?? 0) !== epoch) return false;
+  const complete = data.events.some((event) => event.seq === rootSeq);
+  if (complete) {
+    const pages = completeQuestionPages.get(sessionId) ?? new Set<string>();
+    pages.add(pageId);
+    completeQuestionPages.set(sessionId, pages);
   }
+  // Publish completeness before notifying store subscribers. Page View reads
+  // this side cache during the render caused by setState; doing it afterwards
+  // left the completed response behind an eternal skeleton until some
+  // unrelated state change (most visibly switching sessions) rendered again.
+  setState({ ...state, timelines: mergeEvents(state.timelines, sessionId, data.events) });
+  return complete;
 }
 
 const completeQuestionPages = new Map<string, Set<string>>();
@@ -1407,6 +1381,216 @@ function setPagination(
   setState({ ...state, pagination });
 }
 
+function syncSessionDelta(next: SessionMeta[], removed: boolean): void {
+  rawSessions = next;
+  if (!removed && (!state.sessionsLoaded || state.sessionsSource !== "live")) {
+    setState({ ...withoutReplicaSyncedAt(state), sessionsLoaded: true, sessionsSource: "live" });
+  }
+  commitSessions();
+  reportRetainedClosures(rawSessions);
+  replica.recordSessions(rawSessions);
+  const machines = projectMachineOccupancy(state.machines, rawSessions);
+  if (machines !== state.machines) setState({ ...state, machines });
+}
+
+function applySessionUpdated(session: SessionMeta): void {
+  clearSessionRemoved(session.id);
+  const { sessions, previous } = upsertSession(rawSessions, session);
+  unlistedCreatedSessions.delete(session.id);
+  syncSessionDelta(sessions, false);
+  if (previous === undefined || previous.status !== session.status) schedulePrefetch();
+  if (
+    openedSessionId === session.id && !state.hydrated.has(openedSessionId) &&
+    !sessionHydrations.has(openedSessionId) && !sessionHydrationRetryTimers.has(openedSessionId) &&
+    state.connected && globalThis.document?.visibilityState !== "hidden"
+  ) {
+    touchTranscriptSession(openedSessionId);
+    void hydrateSession(openedSessionId);
+  }
+  if (state.connected && peekedSessions.has(session.id)) ensurePeeked(session.id);
+}
+
+function applySessionRemoved(sessionId: string): void {
+  unlistedCreatedSessions.delete(sessionId);
+  clearBoundaries.delete(sessionId);
+  prefetch.drop(sessionId);
+  syncSessionDelta(removeSessionById(rawSessions, sessionId).sessions, true);
+  // Targeted deletion only: an individual removal never prunes unrelated
+  // drafts or caches in shared storage (whole-list pruning stays on `sessions`).
+  discardDraft(sessionId);
+  discardPendingEdits(sessionId);
+  dropTranscriptSession(sessionId);
+  dropReplicaSession(sessionId);
+  evictSessionContext(sessionId);
+  schedulePrefetch();
+}
+
+function applySnapshot(msg: Extract<Outbound, { type: "snapshot" }>): void {
+  // A hydration response can race an LRU eviction. Reopening the session
+  // starts a fresh bootstrap; retaining this stale response would defeat the
+  // cache bound and can overwrite a newer transcript epoch.
+  // The OPENED session's snapshot is never a cache miss to discard: that is
+  // the one transcript the user is looking at, so it takes an MRU slot
+  // instead of leaving the skeleton up with no further snapshot coming.
+  if (!transcriptIsCached(msg.session_id)) {
+    if (msg.session_id !== openedSessionId) return;
+    touchTranscriptSession(msg.session_id);
+  }
+  const cachedReplicaTail = replicaTails.get(msg.session_id);
+  const currentTimeline = state.timelines.get(msg.session_id) ?? [];
+  const source = state.transcriptSources.get(msg.session_id)?.source;
+  const reconciliation = classifyReplicaSnapshot(
+    source,
+    cachedReplicaTail ?? currentTimeline,
+    msg.events,
+  );
+  let existingTimeline: Envelope[] = currentTimeline;
+  let baseTimelines = state.timelines;
+  let reseedPagination = false;
+  if (reconciliation === "conflict") {
+    discardReplicaTimeline(msg.session_id);
+    existingTimeline = [];
+    baseTimelines = state.timelines;
+  } else if (reconciliation === "stale_prefix") {
+    existingTimeline = dropStaleReplicaPrefix(
+      currentTimeline,
+      cachedReplicaTail ?? currentTimeline,
+    );
+    baseTimelines = new Map(state.timelines).set(msg.session_id, existingTimeline);
+    reseedPagination = true;
+  } else if (reconciliation === "reseed_empty") {
+    reseedPagination = true;
+  }
+  if (reseedPagination) {
+    // Supersede any in-flight history page request started against the old
+    // replica cursor so it cannot overwrite the reseeded pagination cursor.
+    transcriptEpoch.set(msg.session_id, (transcriptEpoch.get(msg.session_id) ?? 0) + 1);
+    completeQuestionPages.delete(msg.session_id);
+  }
+  replicaTails.delete(msg.session_id);
+  // Clear is destructive: every row before the newest boundary in either the
+  // fresh tail or the live timeline was deleted durably. Drop pre-clear rows
+  // so an older snapshot can neither resurrect cleared history nor page for it.
+  const clearedBefore = [
+    lastContextClearSeq(msg.events),
+    reconciliation === "conflict" ? null : lastContextClearSeq(existingTimeline),
+    clearBoundaries.get(msg.session_id) ?? null,
+  ].reduce<number | null>((max, seq) => (seq === null ? max : max === null ? seq : Math.max(max, seq)), null);
+  if (clearedBefore !== null) clearBoundaries.set(msg.session_id, clearedBefore);
+  if (clearedBefore !== null && existingTimeline.some((event) => event.seq < clearedBefore)) {
+    dropClearedPrefix(msg.session_id, clearedBefore);
+    existingTimeline = existingTimeline.filter((event) => event.seq >= clearedBefore);
+    baseTimelines = new Map(state.timelines).set(msg.session_id, existingTimeline);
+  }
+  const incomingEvents = clearedBefore !== null
+    ? msg.events.filter((event) => event.seq >= clearedBefore)
+    : msg.events;
+  const joinGap = reconciliation === "stale_prefix"
+    ? null
+    : snapshotJoinGap(existingTimeline, incomingEvents);
+  const timelines = mergeEvents(baseTimelines, msg.session_id, incomingEvents);
+  const finalTimeline = timelines.get(msg.session_id) ?? [];
+  const hydrated = state.hydrated.has(msg.session_id)
+    ? state.hydrated
+    : new Set(state.hydrated).add(msg.session_id);
+  const pagination = !reseedPagination && state.pagination.has(msg.session_id)
+    ? state.pagination
+    : new Map(state.pagination).set(msg.session_id, {
+        reachedStart: msg.reached_start,
+        loadingOlder: false,
+        beforeSeq: incomingEvents[0]?.seq ?? null,
+      });
+  const confirmedCmids = new Set(
+    incomingEvents.flatMap((event) => {
+      if (event.cmid === undefined) return [];
+      const local = state.optimisticMessages.get(msg.session_id)?.find((row) => row.cmid === event.cmid);
+      return local !== undefined && !promptEchoReadyToReplaceOptimistic(local, finalTimeline)
+        ? [] : [event.cmid];
+    }),
+  );
+  const optimisticMessages = confirmedCmids.size === 0
+    ? state.optimisticMessages
+    : reconcileReadyOptimistic(
+      state.optimisticMessages,
+      msg.session_id,
+      finalTimeline,
+    );
+  setState({
+    ...state,
+    timelines,
+    hydrated,
+    pagination,
+    optimisticMessages,
+    transcriptSources: markTranscriptLive(state.transcriptSources, msg.session_id),
+  });
+  scheduleReplicaTail(msg.session_id, true);
+  if (joinGap) {
+    void fillSnapshotJoinGap(
+      msg.session_id,
+      joinGap.beforeSeq,
+      joinGap.untilSeq,
+    );
+  }
+  if (confirmedCmids.size > 0) {
+    const client = qClients.get(msg.session_id);
+    const confirmedMutations = (client?.pending() ?? []).filter((mutation) => {
+      const args = mutation.args as { row?: QueuedMessage };
+      const cmid = args.row?.cmid;
+      return confirmedCmids.has(mutation.id) || (cmid !== undefined && confirmedCmids.has(cmid));
+    });
+    if (client !== undefined && confirmedMutations.length > 0) {
+      for (const mutation of confirmedMutations) {
+        const args = mutation.args as { row?: QueuedMessage };
+        const cmid = args.row?.cmid ?? mutation.id;
+        suppressedInFlight.add(cmid);
+        clearOptTimers(mutation.id);
+        qStatus.delete(mutation.id);
+        qStatus.delete(cmid);
+        forgetDeliveryFailure(mutation.id, cmid);
+      }
+      client.confirm(confirmedMutations.map((mutation) => mutation.id));
+      commitQueue(msg.session_id);
+      for (const mutation of confirmedMutations) {
+        const args = mutation.args as { row?: QueuedMessage };
+        const cmid = args.row?.cmid ?? mutation.id;
+        suppressedInFlight.delete(cmid);
+      }
+    }
+  }
+  retireEchoedRecoveryDrafts(msg.session_id, incomingEvents);
+  const retry = sessionHydrationRetryTimers.get(msg.session_id);
+  if (retry !== undefined) clearTimeout(retry);
+  sessionHydrationRetryTimers.delete(msg.session_id);
+}
+
+function applyCommandResult(
+  msg: Extract<Outbound, { type: "command_result" }>,
+): void {
+  // A refusal only changes the outbox that owns its operation ID.
+  const client = qClients.get(msg.session_id);
+  const pending = client?.pending().find((mutation) => {
+    const args = mutation.args as { row?: QueuedMessage };
+    return mutation.id === msg.cmid || args.row?.cmid === msg.cmid;
+  });
+  if (client === undefined || pending === undefined) return;
+  clearOptTimers(pending.id);
+  if (msg.outcome === "stale") {
+    // The session is fine; only the targeted row is gone. Keep an edit's
+    // text, retire the mutation, and say what happened once.
+    void settleStaleRowMutation(msg.session_id, pending);
+    return;
+  }
+  const reason = msg.outcome === "not_found" ? "This session no longer exists" : msg.message;
+  for (const id of deliveryStatusIds(pending.id, (pending.args as { row?: QueuedMessage }).row?.cmid)) {
+    qStatus.set(id, "failed");
+    qFailure.set(id, reason);
+  }
+  commitQueue(msg.session_id);
+  persistHeld(msg.session_id);
+  if (msg.outcome === "not_found") void rescueOrphanedDelivery(msg.session_id, pending);
+  else if (msg.outcome === "rejected" && isQueuedSend(pending.name)) void restoreRefusedQueuedSend(msg.session_id, pending.id, reason);
+}
+
 function handle(msg: Outbound): void {
   switch (msg.type) {
     case "connection_probe":
@@ -1457,6 +1641,7 @@ function handle(msg: Outbound): void {
       // order overlays so a synced rename/reorder isn't clobbered by an unrelated
       // `sessions` broadcast (status flip, new/deleted session). The overlays are
       // the client's source of truth for title + order.
+      const prev = rawSessions;
       rawSessions = msg.sessions;
       if (!state.sessionsLoaded || state.sessionsSource !== "live") {
         setState({ ...withoutReplicaSyncedAt(state), sessionsLoaded: true, sessionsSource: "live" });
@@ -1464,18 +1649,16 @@ function handle(msg: Outbound): void {
       commitSessions();
       reportRetainedClosures(msg.sessions);
       replica.recordSessions(msg.sessions);
-      // A session that just turned busy is the likeliest next switch.
       schedulePrefetch();
       const machines = projectMachineOccupancy(state.machines, msg.sessions);
       if (machines !== state.machines) setState({ ...state, machines });
-      // The list is authoritative: drop composer drafts for sessions that no
-      // longer exist (deleted here or on another terminal). Tolerant + off the
-      // input path.
       const validSessions = listedOrJustCreatedSessions(
         new Set(msg.sessions.map((s) => s.id)),
         unlistedCreatedSessions,
         Date.now(),
       );
+      for (const s of prev) if (!validSessions.has(s.id)) clearBoundaries.delete(s.id);
+      for (const s of msg.sessions) clearSessionRemoved(s.id);
       pruneDrafts(validSessions);
       prunePendingEdits(validSessions);
       retainTranscriptSessions(validSessions);
@@ -1519,129 +1702,19 @@ function handle(msg: Outbound): void {
       reconcileProviderCatalog(msg.machines.map((machine) => machine.plugins));
       break;
     }
-    case "snapshot": {
-      // A hydration response can race an LRU eviction. Reopening the session
-      // starts a fresh bootstrap; retaining this stale response would defeat the
-      // cache bound and can overwrite a newer transcript epoch.
-      // The OPENED session's snapshot is never a cache miss to discard: that is
-      // the one transcript the user is looking at, so it takes an MRU slot
-      // instead of leaving the skeleton up with no further snapshot coming.
-      if (!transcriptIsCached(msg.session_id)) {
-        if (msg.session_id !== openedSessionId) break;
-        touchTranscriptSession(msg.session_id);
-      }
-      let existingTimeline = state.timelines.get(msg.session_id) ?? [];
-      if (
-        state.transcriptSources.get(msg.session_id)?.source === "replica" &&
-        replicaTailConflicts(existingTimeline, msg.events)
-      ) {
-        // The cached tail belongs to another transcript epoch (cleared or
-        // restored elsewhere while this device was away). Never interleave two
-        // histories: drop the replica and start from the live snapshot.
-        discardReplicaTimeline(msg.session_id);
-        existingTimeline = [];
-      }
-      // Clear is destructive: every row before the newest boundary in the fresh
-      // tail was deleted durably while this device was away. Drop that prefix
-      // here instead of paging history for a hole that can never be filled.
-      const clearedBefore = lastContextClearSeq(msg.events);
-      if (
-        clearedBefore !== null &&
-        existingTimeline.some((event) => event.seq < clearedBefore)
-      ) {
-        dropClearedPrefix(msg.session_id, clearedBefore);
-        existingTimeline = state.timelines.get(msg.session_id) ?? [];
-      }
-      const joinGap = snapshotJoinGap(existingTimeline, msg.events);
-      const timelines = mergeEvents(state.timelines, msg.session_id, msg.events);
-      // Mark hydrated even when `events` is empty: the snapshot's arrival IS the
-      // "history loaded" signal. Reconnects re-send snapshots but the flag stays
-      // set (cached history shown, no skeleton flash). Reuse the same Set when
-      // already present so the snapshot reference stays stable.
-      const hydrated = state.hydrated.has(msg.session_id)
-        ? state.hydrated
-        : new Set(state.hydrated).add(msg.session_id);
-      // Seed pagination on the FIRST snapshot only — a reconnect re-sends the
-      // tail, but if we'd already paged older history in we must keep that
-      // window's `reachedStart`, not reset it to the tail's.
-      const pagination = state.pagination.has(msg.session_id)
-        ? state.pagination
-        : new Map(state.pagination).set(msg.session_id, {
-            reachedStart: msg.reached_start,
-            loadingOlder: false,
-            // First older page = the one containing (oldestSeq − 1), so its lower
-            // part (if any) is filled before going further back.
-            beforeSeq: msg.events[0]?.seq ?? null,
-          });
-      const confirmedCmids = new Set(
-        msg.events.flatMap((event) => {
-          if (event.cmid === undefined) return [];
-          const local = state.optimisticMessages.get(msg.session_id)?.find((row) => row.cmid === event.cmid);
-          return local !== undefined && !promptEchoReadyToReplaceOptimistic(local, timelines.get(msg.session_id) ?? [])
-            ? [] : [event.cmid];
-        }),
-      );
-      const optimisticMessages = confirmedCmids.size === 0
-        ? state.optimisticMessages
-        : reconcileReadyOptimistic(
-          state.optimisticMessages,
-          msg.session_id,
-          timelines.get(msg.session_id) ?? [],
-        );
-      setState({
-        ...state,
-        timelines,
-        hydrated,
-        pagination,
-        optimisticMessages,
-        transcriptSources: markTranscriptLive(state.transcriptSources, msg.session_id),
-      });
-      scheduleReplicaTail(msg.session_id, true);
-      if (joinGap) {
-        void fillSnapshotJoinGap(
-          msg.session_id,
-          joinGap.beforeSeq,
-          joinGap.untilSeq,
-        );
-      }
-      // A reload may hydrate the durable outbox before this bootstrap arrives.
-      // If the daemon had already accepted the prompt, the snapshot's user echo
-      // is the acknowledgement: retire the persisted mutation so reconnect
-      // cannot resend it or paint a duplicate optimistic bubble.
-      if (confirmedCmids.size > 0) {
-        const client = qClients.get(msg.session_id);
-        const confirmedMutations = (client?.pending() ?? []).filter((mutation) => {
-          const rowCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid;
-          return confirmedCmids.has(mutation.id) ||
-            (rowCmid !== undefined && confirmedCmids.has(rowCmid));
-        });
-        if (client !== undefined && confirmedMutations.length > 0) {
-          for (const mutation of confirmedMutations) {
-            const rowCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid ??
-              mutation.id;
-            suppressedInFlight.add(rowCmid);
-            clearOptTimers(mutation.id);
-            qStatus.delete(mutation.id);
-            qStatus.delete(rowCmid);
-            forgetDeliveryFailure(mutation.id, rowCmid);
-          }
-          client.confirm(confirmedMutations.map((mutation) => mutation.id));
-          commitQueue(msg.session_id);
-          for (const mutation of confirmedMutations) {
-            const rowCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid ??
-              mutation.id;
-            suppressedInFlight.delete(rowCmid);
-          }
-        }
-      }
-      retireEchoedRecoveryDrafts(msg.session_id, msg.events);
-      const retry = sessionHydrationRetryTimers.get(msg.session_id);
-      if (retry !== undefined) clearTimeout(retry);
-      sessionHydrationRetryTimers.delete(msg.session_id);
+    case "session_updated":
+      applySessionUpdated(msg.session);
       break;
-    }
+    case "session_removed":
+      applySessionRemoved(msg.session_id);
+      break;
+    case "snapshot":
+      applySnapshot(msg);
+      break;
     case "event": {
       const env = msg.envelope;
+      const clearFloor = clearBoundaries.get(env.session_id);
+      if (clearFloor !== undefined && env.seq < clearFloor) break;
       if (!containsSeq(state.timelines.get(env.session_id) ?? [], env.seq)) {
         observeRecoveredSend(env);
         observePromptSuggestion(env);
@@ -1690,6 +1763,10 @@ function handle(msg: Outbound): void {
         : state.pagination;
       let optimisticMessages = state.optimisticMessages;
       if (clearsContext) {
+        clearBoundaries.set(
+          env.session_id,
+          Math.max(clearBoundaries.get(env.session_id) ?? 0, env.seq),
+        );
         resetExploreAfterContextClear(env.session_id);
         completeQuestionPages.delete(env.session_id);
         transcriptEpoch.set(
@@ -1755,7 +1832,14 @@ function handle(msg: Outbound): void {
       }
       // Checkpoint the replica on turn boundaries and lifecycle changes at
       // once; streaming chunks coalesce into the debounced write.
-      if (cached) scheduleReplicaTail(env.session_id, env.kind !== "update" || clearsContext);
+      if (clearsContext && (!cached || state.transcriptSources.get(env.session_id)?.source !== "live")) {
+        if (cached || cachedTailSessions.has(env.session_id)) {
+          replica.session(env.session_id).scheduleTail(
+            () => ({ receivedAt: Date.now(), lastSeq: env.seq, reachedStart: true, events: [env] }),
+            { immediate: true },
+          );
+        } else dropReplicaSession(env.session_id);
+      } else if (cached) scheduleReplicaTail(env.session_id, env.kind !== "update" || clearsContext);
       break;
     }
     case "config_options": {
@@ -1798,32 +1882,9 @@ function handle(msg: Outbound): void {
       // Compatibility tombstone from controllers spanning the rollout.
       break;
     }
-    case "command_result": {
-      // A refusal only changes the outbox that owns its operation ID.
-      const client = qClients.get(msg.session_id);
-      const pending = client?.pending().find((mutation) => {
-        const rowCmid = (mutation.args as { row?: QueuedMessage }).row?.cmid;
-        return mutation.id === msg.cmid || rowCmid === msg.cmid;
-      });
-      if (client === undefined || pending === undefined) break;
-      clearOptTimers(pending.id);
-      if (msg.outcome === "stale") {
-        // The session is fine; only the targeted row is gone. Keep an edit's
-        // text, retire the mutation, and say what happened once.
-        void settleStaleRowMutation(msg.session_id, pending);
-        break;
-      }
-      const reason = msg.outcome === "not_found" ? "This session no longer exists" : msg.message;
-      for (const id of deliveryStatusIds(pending.id, (pending.args as { row?: QueuedMessage }).row?.cmid)) {
-        qStatus.set(id, "failed");
-        qFailure.set(id, reason);
-      }
-      commitQueue(msg.session_id);
-      persistHeld(msg.session_id);
-      if (msg.outcome === "not_found") void rescueOrphanedDelivery(msg.session_id, pending);
-      else if (msg.outcome === "rejected" && isQueuedSend(pending.name)) void restoreRefusedQueuedSend(msg.session_id, pending.id, reason);
+    case "command_result":
+      applyCommandResult(msg);
       break;
-    }
     case "error": {
       errorSeq += 1;
       // exactOptionalPropertyTypes: only include sessionId if non-undefined.
@@ -1875,6 +1936,7 @@ async function hydrateSession(
   }, 30_000);
   const startedAt = performance.now();
   const bootstrapGen = socketGeneration;
+  const epochAtRequestStart = transcriptEpoch.get(sessionId) ?? 0;
   const configOptionsRevisionAtRequestStart =
     configOptionsRevisions.get(sessionId) ?? 0;
   const promise = (async (): Promise<void> => {
@@ -1894,6 +1956,15 @@ async function hydrateSession(
       }
       const bootstrap = (await response.json()) as SessionBootstrapResponse;
       if (controller.signal.aborted) { if (strict) throw new Error("Conversation sync was interrupted; nothing was cleared."); return; }
+      if ((transcriptEpoch.get(sessionId) ?? 0) !== epochAtRequestStart) {
+        // A live Clear (or eviction) advanced the transcript epoch while this
+        // bootstrap was in flight; reject stale pre-clear messages and subagents.
+        if (state.connected && (openedSessionId === sessionId || peekedSessions.has(sessionId) || needsDraftSource(sessionId))) {
+          void hydrateSession(sessionId, true);
+        } else retryableFailure = true;
+        if (strict) throw new Error("Conversation sync was interrupted; nothing was cleared.");
+        return;
+      }
       const applyHydratedConfigOptions = shouldApplyHydratedConfigOptions(
         configOptionsRevisionAtRequestStart,
         configOptionsRevisions.get(sessionId) ?? 0,
@@ -2020,33 +2091,21 @@ export function notify(message: string, severity: "error" | "warning" | "info" =
 // Schedule the next reconnect after `delay` ms (the backoff `conn.connectionLost`
 // computed off the consecutive-failure count). One pending attempt at a time.
 const PRODUCT_AUTH_LOST_EVENT = "cowboy:product-auth-lost";
-
 type MeHandshake = "reconnect" | "logout" | "keep";
-
 function classifyMeHandshake(status: number | "network"): MeHandshake {
   if (status === 200) return "reconnect";
   if (status === 401 || status === 403) return "logout";
   return "keep";
 }
-
 async function probeProductAuth(): Promise<MeHandshake> {
   try {
     const response = await fetch("/api/auth/me", {
-      signal: AbortSignal.timeout(4_000),
-      cache: "no-store",
-      credentials: "same-origin",
-      headers: { accept: "application/json" },
+      signal: AbortSignal.timeout(4_000), cache: "no-store", credentials: "same-origin", headers: { accept: "application/json" },
     });
-    if (response.status === 200) {
-      // The cookie may have changed in another tab. Ask the auth owner to
-      // compare immutable principal identity, not just the HTTP success code.
-      globalThis.dispatchEvent(new Event(PRODUCT_AUTH_LOST_EVENT));
-    }
+    if (response.status === 200) globalThis.dispatchEvent(new Event(PRODUCT_AUTH_LOST_EVENT));
     await response.body?.cancel();
     return classifyMeHandshake(response.status);
-  } catch {
-    return classifyMeHandshake("network");
-  }
+  } catch { return classifyMeHandshake("network"); }
 }
 
 function logoutProductSession(): void {
@@ -2155,35 +2214,6 @@ function connect(): void {
   })();
 }
 
-function stableInteractiveClientId(): string {
-  const key = "cowboy:interactive-client-id";
-  try {
-    const existing = globalThis.localStorage.getItem(key);
-    if (existing !== null && existing.length >= 16 && existing.length <= 128) {
-      return existing;
-    }
-    const created = newUuid();
-    globalThis.localStorage.setItem(key, created);
-    return created;
-  } catch {
-    // Storage may be unavailable in a private or transient WebView. The server
-    // still namespaces this ephemeral id to the authenticated account.
-    return `ephemeral-${newUuid()}`;
-  }
-}
-
-function interactiveClientKind(): "browser" | "native_shell" {
-  const runtime = globalThis as typeof globalThis & { __TAURI_INTERNALS__?: unknown };
-  const navigator = globalThis.navigator;
-  return isAppleTouchWebView(
-      navigator?.userAgent ?? "",
-      navigator?.platform ?? "",
-      navigator?.maxTouchPoints ?? 0,
-    ) || runtime.__TAURI_INTERNALS__ !== undefined
-    ? "native_shell"
-    : "browser";
-}
-
 let openingDataset = false;
 function openSocket(): void {
   if (productSessionAbandoned || productSessionPausedForAuth || openingDataset) return;
@@ -2193,6 +2223,7 @@ function openSocket(): void {
   // check and adds a round trip to every foreground recovery. No command is
   // sent until that protocol is selected and bootstrap_complete arrives.
   void Promise.resolve().then(() => syncDatabase.ready()).then(async (dataset) => {
+    setRemovalFenceDataset(dataset.dataset_id);
     // This module loads before a reloaded page has bound its account, so the
     // first read of the drafts' attachment bytes failed. The dataset is known
     // now: read them before anything can mistake the wait for a loss.
@@ -2227,7 +2258,6 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
   ) {
     return;
   }
-  const proto = globalThis.location.protocol === "https:" ? "wss:" : "ws:";
   const connectStartedAt = performance.now();
   const connectReason = nextConnectReason;
   const reconnecting = outage.active;
@@ -2241,13 +2271,12 @@ async function openBoundSocket(dataset: SyncDataset): Promise<void> {
     visibility: document.visibilityState,
   });
   nextConnectReason = "unspecified";
-  const params = new URLSearchParams({
-    bootstrap: "lazy",
-    client_id: stableInteractiveClientId(),
-    client_kind: interactiveClientKind(),
-    dataset: dataset.dataset_id,
-  });
-  const socketUrl = `${proto}//${globalThis.location.host}/ws?${params.toString()}`;
+  const socketUrl = boundSocketUrl(
+    globalThis.location,
+    dataset.dataset_id,
+    stableInteractiveClientId(),
+    interactiveClientKind(),
+  );
   let deviceProtocol: string;
   try {
     deviceProtocol = await browserDeviceProtocol(socketUrl);
@@ -2545,6 +2574,7 @@ const syncBase = newCmid(); // namespaces mutation ids across states + this tab
 // Last known server-derived state, painted before the socket answers. Every
 // value is a cache the next broadcast replaces; nothing here is ever sent.
 // Composer drafts keep their attachment bytes beside the replica caches.
+setRemovalFenceDataset(syncDatabase.rememberedDatasetId());
 attachDraftDatabase(syncDatabase);
 attachPendingEditDatabase(syncDatabase);
 
@@ -2552,7 +2582,8 @@ const replica = createReplica(syncDatabase, {
   onError: (error) => console.warn("replica persistence failed", error),
 });
 let machinesSource: "none" | "replica" | "live" = "none";
-let retainedReplicaKey = "";
+let retainedReplicaKey: string | undefined = undefined;
+let lastAuthoritativeLinkMeta: Map<string, AuthoritativeLinkMeta> | null = null;
 let datasetFenced = false;
 
 function withoutReplicaSyncedAt(current: State): Omit<State, "replicaSyncedAt"> {
@@ -2614,18 +2645,23 @@ async function restoreReplicaTail(sessionId: string): Promise<void> {
     tail === null || productSessionAbandoned || state.hydrated.has(sessionId) ||
     !transcriptIsCached(sessionId) || (transcriptEpoch.get(sessionId) ?? 0) !== epoch
   ) return;
+  const clearedBefore = clearBoundaries.get(sessionId);
+  const tailEvents = clearedBefore === undefined
+    ? tail.events
+    : dropEventsBefore(tail.events, clearedBefore);
+  if (clearedBefore !== undefined && tailEvents.length === 0) return;
   const existing = state.timelines.get(sessionId) ?? [];
   // Live events may already have arrived for this session. A cached tail that
   // disagrees with them belongs to another epoch and is simply skipped.
-  if (existing.length > 0 && replicaTailConflicts(tail.events, existing)) return;
-  const timelines = mergeEvents(state.timelines, sessionId, [...tail.events]);
+  if (existing.length > 0 && replicaTailConflicts(tailEvents, existing)) return;
+  const timelines = mergeEvents(state.timelines, sessionId, [...tailEvents]);
   const hydrated = new Set(state.hydrated).add(sessionId);
   const pagination = state.pagination.has(sessionId)
     ? state.pagination
     : new Map(state.pagination).set(sessionId, {
       reachedStart: tail.reachedStart,
       loadingOlder: false,
-      beforeSeq: tail.events[0]?.seq ?? null,
+      beforeSeq: tailEvents[0]?.seq ?? null,
     });
   const configOptions = tail.configOptions !== undefined && !state.configOptions.has(sessionId)
     ? new Map(state.configOptions).set(sessionId, [...tail.configOptions])
@@ -2634,11 +2670,16 @@ async function restoreReplicaTail(sessionId: string): Promise<void> {
     source: "replica",
     syncedAt: tail.receivedAt,
   });
+  replicaTails.set(sessionId, [...tailEvents]);
   setState({ ...state, timelines, hydrated, pagination, configOptions, transcriptSources });
 }
 
+const replicaTails = new Map<string, readonly Envelope[]>();
+const clearBoundaries = new Map<string, number>();
+
 function discardReplicaTimeline(sessionId: string): void {
   forgetSessionAuthority(sessionId);
+  replicaTails.delete(sessionId);
   transcriptEpoch.set(sessionId, (transcriptEpoch.get(sessionId) ?? 0) + 1);
   completeQuestionPages.delete(sessionId);
   const timelines = new Map(state.timelines);
@@ -2694,11 +2735,53 @@ function scheduleReplicaTail(sessionId: string, immediate: boolean): void {
   ) noteCachedTail(sessionId);
 }
 
+async function retainReplicaWithOutboxGuard(valid: ReadonlySet<string>): Promise<void> {
+  // Check live membership and delete settled delivery records atomically in
+  // ONE readwrite transaction gated on the durable :queue record.
+  await replica.retainSessions(valid, {
+    retireDelivery: async (sessionId) => {
+      if (isRemovedSession(sessionId)) await syncDatabase.retireDeliveryIfSettled(sessionId);
+    },
+  });
+}
+
+function queueOutboxPersistence(sessionId: string): LocalPersistence<ClientSnapshot<QValue>> {
+  const outbox = syncDatabase.outbox<QValue>({ kind: "session", session: sessionId, state: "queue" });
+  return {
+    ...outbox,
+    save: async (snapshot): Promise<void> => {
+      await outbox.save(snapshot);
+      if (snapshot.pending.length === 0 && isRemovedSession(sessionId)) void retireRemovedDelivery(sessionId);
+    },
+  };
+}
+
+function isRemovedSession(sessionId: string): boolean {
+  return state.sessionsLoaded && !rawSessions.some((s) => s.id === sessionId) && !unlistedCreatedSessions.has(sessionId);
+}
+
+async function retireRemovedDelivery(sessionId: string): Promise<void> {
+  if (!productSessionAbandoned && isRemovedSession(sessionId)) await syncDatabase.retireDeliveryIfSettled(sessionId);
+}
+
+function dropReplicaSession(sessionId: string): void {
+  retainedReplicaKey = undefined;
+  // Evict the transcript tail immediately; retire the delivery record as soon
+  // as no durable outbox mutations remain for a removed session.
+  void replica.session(sessionId).discardTail();
+  void retireRemovedDelivery(sessionId);
+  if (cachedTailSessions.has(sessionId)) {
+    const next = new Set(cachedTailSessions);
+    next.delete(sessionId);
+    setCachedTailSessions(next);
+  }
+}
+
 function retainReplicaSessions(valid: ReadonlySet<string>): void {
   const key = [...valid].sort().join("\n");
   if (key === retainedReplicaKey) return;
   retainedReplicaKey = key;
-  void replica.retainSessions(valid);
+  void retainReplicaWithOutboxGuard(valid);
   if ([...cachedTailSessions].some((id) => !valid.has(id))) {
     setCachedTailSessions(new Set([...cachedTailSessions].filter((id) => valid.has(id))));
   }
@@ -2743,6 +2826,7 @@ export function useCachedTailSessions(): ReadonlySet<string> {
 const prefetch = createPrefetchRunner({
   concurrency: 2,
   start: (sessionId): Promise<void> => {
+    if (!state.sessions.some((session) => session.id === sessionId)) return Promise.resolve();
     touchTranscriptSession(sessionId);
     return hydrateSession(sessionId);
   },
@@ -2799,6 +2883,10 @@ function persistHeld(sessionId: string): void {
   if (client === undefined || productSessionAbandoned) return;
   const held = client.pending().map((mutation) => mutation.id)
     .filter((id) => qStatus.get(id) === "failed");
+  if (held.length === 0 && client.pending().length === 0 && isRemovedSession(sessionId)) {
+    void retireRemovedDelivery(sessionId);
+    return;
+  }
   void replica.session(sessionId).saveDelivery({ held });
 }
 
@@ -3079,7 +3167,7 @@ function registerSync<T, M extends Mutators<T>>(
   mutators: M,
   initial: T,
   onChange: () => void = commitSessions,
-): { view: () => T; ready: () => boolean; pending: () => number; mutate: <K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>) => void } {
+): { base: () => T; view: () => T; ready: () => boolean; pending: () => number; mutate: <K extends keyof M & string>(name: K, args: ArgsOf<T, M, K>) => void } {
   if (productSessionAbandoned) throw new Error("product sync owner is closed");
   const previews = new Map<string, (value: T) => T>();
   let ready = false;
@@ -3134,6 +3222,7 @@ function registerSync<T, M extends Mutators<T>>(
   return {
     ready: () => ready,
     pending: () => previews.size + store.pending().length,
+    base: (): T => store.baseValue(),
     view: (): T => {
       let value = store.get();
       for (const project of previews.values()) value = project(value);
@@ -3290,6 +3379,14 @@ function commitSessions(): void {
     sessionFoldersReady: foldersSync.ready(),
     workspaceOrder: syncedKeyList(workspaceOrderSync.view()),
   });
+  if (state.sessionsSource === "live") {
+    const nextMeta = authoritativeLinkMetaMap(rawSessions, titleSync.base());
+    if (lastAuthoritativeLinkMeta !== null) {
+      const changed = diffAuthoritativeLinkMeta(lastAuthoritativeLinkMeta, nextMeta);
+      if (changed.length > 0) invalidateReferencingContexts(changed);
+    }
+    lastAuthoritativeLinkMeta = nextMeta;
+  }
 }
 
 // --- Sessions Trash (docs/sessions-folders.md#trash) ------------------------
@@ -3518,9 +3615,9 @@ const qMut = {
   frontQueue: (v: QValue, a: { row: QueuedMessage }): QValue => queueMutators.frontQueue(v, a),
   activateDraft: (v: QValue, a: DraftActivation<QueuedMessage>): QValue =>
     queueMutators.activateDraft(v, a),
-  sendQueued: (v: QValue, a: { id: string; row: QueuedMessage }): QValue =>
+  sendQueued: (v: QValue, a: QueuedSendArgs<QueuedMessage>): QValue =>
     queueMutators.sendQueued(v, a),
-  forceQueued: (v: QValue, a: { id: string; row: QueuedMessage }): QValue =>
+  forceQueued: (v: QValue, a: QueuedSendArgs<QueuedMessage>): QValue =>
     queueMutators.forceQueued(v, a),
   returnQueuedToDraft: (v: QValue, a: { id: string; row: QueuedMessage }): QValue =>
     queueMutators.returnQueuedToDraft(v, a),
@@ -3772,107 +3869,13 @@ function retireEchoedRecoveryDrafts(sessionId: string, events: readonly Envelope
 }
 
 function commandForQueueMutation(sessionId: string, m: { name: string; id: string; args: unknown }): Inbound | null {
-  const args = m.args as { id?: string; row?: QueuedMessage };
-  if (m.name === "addDraft" && args.row !== undefined) {
-    return {
-      type: "add_draft",
-      session_id: sessionId,
-      text: args.row.text,
-      content: contentOf(args.row.text, args.row.attachments),
-      cmid: m.id,
-    };
-  }
-  if (m.name === "scheduleDraft" && args.row?.schedule !== undefined) {
-    return {
-      type: "schedule_draft",
-      session_id: sessionId,
-      cmid: m.id,
-      text: args.row.text,
-      content: contentOf(args.row.text, args.row.attachments),
-      fire_at_ms: args.row.schedule.fire_at_ms,
-      delivery: args.row.schedule.delivery,
-    };
-  }
-  if (
-    m.name === "rescheduleDraft" &&
-    args.id !== undefined &&
-    args.row?.schedule !== undefined
-  ) {
-    return {
-      type: "schedule_draft",
-      session_id: sessionId,
-      id: args.id,
-      text: args.row.text,
-      content: contentOf(args.row.text, args.row.attachments),
-      fire_at_ms: args.row.schedule.fire_at_ms,
-      delivery: args.row.schedule.delivery,
-    };
-  }
-  if (
-    (m.name === "editDraft" || m.name === "editQueue") &&
-    args.id !== undefined &&
-    args.row !== undefined
-  ) {
-    const targetId = m.name === "editDraft"
-      ? draftActivationSourceId(
-        m.args as { id: string; sourceCmid?: string },
-        qClients.get(sessionId)?.baseValue().drafts ?? [],
-      )
-      : args.id;
-    return targetId === null ? null : {
-      type: m.name === "editDraft" ? "edit_draft" : "edit_queued",
-      session_id: sessionId,
-      id: targetId,
-      text: args.row.text,
-      content: contentOf(args.row.text, args.row.attachments),
-      cmid: m.id,
-    };
-  }
-  if (m.name === "removeDraft" && args.id !== undefined) {
-    return { type: "remove_draft", session_id: sessionId, id: args.id, cmid: m.id };
-  }
-  if (m.name === "removeQueue" && args.id !== undefined) {
-    return { type: "remove_queued", session_id: sessionId, id: args.id, cmid: m.id };
-  }
-  if (m.name === "unscheduleDraft" && args.id !== undefined) {
-    return { type: "unschedule_draft", session_id: sessionId, id: args.id };
-  }
-  if (m.name === "activateDraft" && args.id !== undefined) {
-    const activation = m.args as DraftActivation;
-    const id = draftActivationSourceId(
-      activation,
-      // The view already hides this source. Read the durable authoritative base
-      // so reconnect also works for cached sessions that are not currently open.
-      qClients.get(sessionId)?.baseValue().drafts ?? [],
-    );
-    return id === null ? null : {
-      type: "activate_draft",
-      session_id: sessionId,
-      id,
-      cmid: args.row?.cmid ?? m.id,
-      ...(activation.front ? { front: true } : {}),
-    };
-  }
-  if (isQueuedSend(m.name) && args.id !== undefined) {
-    return { type: m.name === "sendQueued" ? "request_send_queued" : "force_push_queued", session_id: sessionId, id: args.id, cmid: m.id };
-  }
-  if (m.name === "returnQueuedToDraft" && args.id !== undefined) {
-    return { type: "queued_to_draft", session_id: sessionId, id: args.id };
-  }
-  const row = args.row;
-  if (row === undefined) {
-    return { type: "activate_draft", session_id: sessionId, id: args.id ?? m.id };
-  }
-  return {
-    type: "submit",
-    session_id: sessionId,
-    text: row.text,
-    content: contentOf(row.text, row.attachments),
-    cmid: m.id,
-    ...(m.name === "forceQueue" && { force: true }),
-    ...(m.name === "frontQueue" && { front: true }),
-    ...wrapUpSubmitFields(state.sessions, sessionId, m.name, row),
-  };
+  return buildQueueMutationCommand(
+    sessionId,
+    m,
+    qClients.get(sessionId)?.baseValue().drafts ?? [],
+    state.sessions,
+    contentOf,
+  );
 }
 
 function needsDraftSource(sessionId: string): boolean {
@@ -3978,9 +3981,7 @@ function qClient(sessionId: string): ReplicatedStore<QValue, typeof qMut> {
       // connect()), so a staged/queued message painted instantly survives the
       // reload and re-sends; the per-session `queue_resync` (force) that follows
       // is the authority that corrects any stale cached base.
-      local: syncDatabase.outbox<QValue>(
-        { kind: "session", session: sessionId, state: "queue" },
-      ),
+      local: queueOutboxPersistence(sessionId),
     });
     qClients.set(sessionId, c);
     if (didHydrate) {
@@ -5252,7 +5253,7 @@ export async function requestSendQueued(sessionId: string, id: string): Promise<
   try {
     await mutateQueueDurably(sessionId,
       "sendQueued",
-      { id, row: presented },
+      { id, row: presented, issuedAtMs: Date.now() } satisfies QueuedSendArgs<QueuedMessage>,
       opId,
     );
   } catch (error) {
@@ -5690,6 +5691,10 @@ if (typeof globalThis.addEventListener === "function") {
 
 export function useStore(): State {
   return useSyncExternalStore(subscribe, () => presentedState);
+}
+
+export function currentSessions(): readonly SessionMeta[] {
+  return state.sessions;
 }
 
 /** Subscribe to one stable slice instead of re-rendering for every unrelated

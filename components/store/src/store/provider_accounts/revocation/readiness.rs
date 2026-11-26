@@ -99,14 +99,7 @@ impl Store {
             );
             missing.extend(grant_missing(&receipt, &grant));
         }
-        for target in &plan.browsers {
-            if !receipt.browser_revocations.contains_key(&target.machine_id) {
-                missing.push(Missing {
-                    kind: "browser_revocation",
-                    target: target.machine_id.clone(),
-                });
-            }
-        }
+        append_browser_missing(&receipt, plan, &mut missing);
         missing.extend(
             super::account_removals::missing(&receipt)
                 .into_iter()
@@ -213,4 +206,15 @@ pub(super) fn session_missing(
         });
     }
     missing
+}
+
+fn append_browser_missing(receipt: &Receipt, plan: &super::Plan, missing: &mut Vec<Missing>) {
+    for target in &plan.browsers {
+        if !receipt.browser_revocations.contains_key(&target.machine_id) {
+            missing.push(Missing {
+                kind: "browser_revocation",
+                target: target.machine_id.clone(),
+            });
+        }
+    }
 }

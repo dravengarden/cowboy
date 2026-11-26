@@ -118,9 +118,10 @@ static UIWindow *cowboyPasskeyWindow(void) {
                     reply:(NSDictionary *)reply;
 @end
 
-// SideStore/free-team signatures cannot carry Cowboy's Associated Domains
-// entitlement, so direct AuthenticationServices Passkeys correctly report as
-// unavailable. The secure fallback still needs a native lifecycle owner:
+// When the iOS build does not carry an active Associated Domains entitlement
+// (for example on a private tailnet origin unreachable by Apple's AASA CDN),
+// direct AuthenticationServices Passkeys report as unavailable. The secure
+// fallback still needs a native lifecycle owner:
 // ASWebAuthenticationSession observes a fixed callback from Cowboy's external
 // WebAuthn page and closes itself on success or cancellation, even while the
 // initiating WKWebView is suspended underneath it.

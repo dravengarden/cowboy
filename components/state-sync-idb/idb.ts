@@ -3,10 +3,7 @@
 // IndexedDB's event API requires promise holders installed before acquisition.
 // oxlint-disable promise/avoid-new
 
-import {
-  createOwnedResourceScope,
-  type ScopeSnapshot,
-} from "@cowboy/state-store/scope";
+import { createOwnedResourceScope, type ScopeSnapshot } from "@cowboy/state-store/scope";
 import type { ClientSnapshot, LocalPersistence } from "@cowboy/state-sync";
 import { IdbPersistenceError } from "./errors.ts";
 import { createOutboxPersistence } from "./outbox.ts";
@@ -17,6 +14,9 @@ import type { IdbFailureCode } from "./errors.ts";
 export interface IdbWriteOpts {
   /** Surface failed durability barriers. Ordinary UI caches default to false. */
   strictWrites?: boolean;
+  /** Reject a failed read instead of reporting the record absent, for data
+   * whose absence a caller acts on (deletes or rewrites). Default false. */
+  strictReads?: boolean;
 }
 
 export interface IdbOwnerOpts {
@@ -43,8 +43,11 @@ export interface IdbOpts extends IdbOwnerOpts, IdbWriteOpts {}
 export interface IdbListKeysOpts {
   /** Report unavailable/failed reads instead of claiming the dataset is empty. */
   strict?: boolean;
-  /** Fail closed if more keys exist; never return a misleading partial list. */
+  /** Fail closed if more matching keys exist; never return a misleading partial list. */
   limit?: number;
+  /** Enumerate only string keys with this prefix in bounded pages, so keys in
+   *  other datasets or namespaces cannot exhaust the scan limit. */
+  prefix?: string;
 }
 
 export interface IdbSnapshot extends ScopeSnapshot {
@@ -53,16 +56,35 @@ export interface IdbSnapshot extends ScopeSnapshot {
   readonly transactions: number;
 }
 
+/** A value record with one strict read-modify-write transaction. */
+export interface ValuePersistence<S> extends LocalPersistence<S> {
+  /** Replace the record with `merge(stored)` (`null` deletes it) in ONE
+   * readwrite transaction, so a concurrent writer in another tab is never
+   * overwritten from a stale read. Always strict: a failed read or write
+   * rejects, and `merge` never sees a failed read as an absent record. */
+  update(merge: (stored: S | null) => S | null): Promise<void>;
+}
+
 export interface IdbPersistenceOwner {
   /** Borrowed data access, without authority to close the shared database.
    * S is the caller's storage contract, NOT runtime validation of stored bytes.
    */
-  persistence<S>(key: string, opts?: IdbWriteOpts): LocalPersistence<S>;
+  persistence<S>(key: string, opts?: IdbWriteOpts): ValuePersistence<S>;
   /** Strict, atomic mutation-delta persistence for ONE replicated client.
    * Updated peers preserve each other's pending mutations. Legacy blind saves
    * are not fenced, and this does not establish principal/dataset authority.
    */
   outbox<T>(key: string): LocalPersistence<ClientSnapshot<T>>;
+  /** Read one stored record in a strict readonly transaction without claiming
+   *  value or outbox mode ownership on `key`. */
+  peek<S>(key: string): Promise<S | null>;
+  /** Atomically delete `targetKey` in one readwrite transaction when `guardKey`
+   *  satisfies `shouldDiscard`, without claiming record mode on `guardKey`. */
+  discardIf<S>(
+    targetKey: string,
+    guardKey: string,
+    shouldDiscard: (guard: S | null) => boolean,
+  ): Promise<boolean>;
   /** Best-effort by default; use strict + limit for recovery/owned datasets. */
   listKeys(opts?: IdbListKeysOpts): Promise<string[]>;
   /** Delete one stored record, reporting failure rather than swallowing it: a
@@ -111,24 +133,131 @@ interface TransactionRequest<R> extends EventTarget {
   readonly error?: DOMException | null;
 }
 
-export function createIdbPersistenceOwner(
-  opts: IdbOwnerOpts = {},
-): IdbPersistenceOwner {
+const KEY_SCAN_PAGE_SIZE = 1024;
+
+function nextPrefix(prefix: string): string | undefined {
+  for (let i = prefix.length - 1; i >= 0; i -= 1) {
+    const code = prefix.charCodeAt(i);
+    if (code < 0xffff) {
+      return prefix.slice(0, i) + String.fromCharCode(code + 1);
+    }
+  }
+  return undefined;
+}
+
+function makeKeyRange(lower: string, upper: string | undefined, lowerOpen: boolean): unknown {
+  if (typeof IDBKeyRange !== "undefined") {
+    if (upper === undefined && typeof IDBKeyRange.lowerBound === "function") {
+      return IDBKeyRange.lowerBound(lower, lowerOpen);
+    }
+    if (upper !== undefined && typeof IDBKeyRange.bound === "function") {
+      return IDBKeyRange.bound(lower, upper, lowerOpen, true);
+    }
+  }
+  return upper === undefined
+    ? { lower, lowerOpen }
+    : { lower, upper, lowerOpen, upperOpen: true };
+}
+
+async function readScopedKeys(
+  run: <R>(
+    mode: IDBTransactionMode,
+    request: (store: IDBObjectStore) => TransactionRequest<R>,
+  ) => Promise<R>,
+  opts: IdbListKeysOpts,
+): Promise<string[]> {
+  const { strict = false, limit, prefix } = opts;
+  if (limit !== undefined && (!Number.isInteger(limit) || limit < 1 || limit > 65_536)) {
+    throw new RangeError("IndexedDB key limit must be 1..65536");
+  }
+  try {
+    if (prefix === undefined) {
+      const keys = await run("readonly", (store) =>
+        store.getAllKeys(undefined, limit === undefined ? undefined : limit + 1),
+      );
+      if (limit !== undefined && keys.length > limit) {
+        throw new IdbPersistenceError("key_limit_exceeded");
+      }
+      return keys.filter((key): key is string => typeof key === "string");
+    }
+    const upper = nextPrefix(prefix);
+    const collected: string[] = [];
+    let after: string | undefined;
+    for (;;) {
+      const batch = limit === undefined
+        ? KEY_SCAN_PAGE_SIZE
+        : Math.min(KEY_SCAN_PAGE_SIZE, limit + 1 - collected.length);
+      const range = makeKeyRange(after ?? prefix, upper, after !== undefined);
+      const raw = await run("readonly", (store) =>
+        store.getAllKeys(range as IDBKeyRange, batch),
+      );
+      const page = raw.filter(
+        (key): key is string => typeof key === "string" && key.startsWith(prefix),
+      );
+      collected.push(...page);
+      if (limit !== undefined && collected.length > limit) {
+        throw new IdbPersistenceError("key_limit_exceeded");
+      }
+      if (raw.length < batch || page.length === 0) return collected;
+      const last = page[page.length - 1];
+      if (last === undefined || last === after) return collected;
+      after = last;
+    }
+  } catch (error) {
+    if (strict) throw error;
+    return [];
+  }
+}
+
+async function discardRecordIf<S>(
+  run: <R>(
+    mode: IDBTransactionMode,
+    make: (store: IDBObjectStore) => TransactionRequest<R>,
+    follow?: (value: R, store: IDBObjectStore) => TransactionRequest<R> | undefined,
+  ) => Promise<R>,
+  recordModes: Map<string, "value" | "outbox">,
+  targetKey: string,
+  guardKey: string,
+  shouldDiscard: (guard: S | null) => boolean,
+): Promise<boolean> {
+  const previousMode = recordModes.get(targetKey);
+  if (previousMode === "outbox") {
+    throw new IdbPersistenceError("record_mode_conflict");
+  }
+  // Reserve targetKey synchronously against concurrent outbox() acquisition
+  // until the conditional delete transaction completes or aborts.
+  recordModes.set(targetKey, "value");
+  let discarded = false;
+  try {
+    await run<unknown>(
+      "readwrite",
+      (store) => store.get(guardKey),
+      (stored, store) => {
+        if (!shouldDiscard((stored ?? null) as S | null)) return undefined;
+        discarded = true;
+        return store.delete(targetKey);
+      },
+    );
+    return discarded;
+  } finally {
+    if (discarded || previousMode === undefined) {
+      if (recordModes.get(targetKey) === "value") recordModes.delete(targetKey);
+    }
+  }
+}
+
+export function createIdbPersistenceOwner(opts: IdbOwnerOpts = {}): IdbPersistenceOwner {
   // Snapshot configuration before any externally supplied factory can reenter.
   const dbName = opts.dbName ?? "shared-utils-sync";
   const storeName = opts.storeName ?? "clients";
   const schemaVersion = opts.schemaVersion ?? 1;
   if (!Number.isSafeInteger(schemaVersion) || schemaVersion < 1) {
-    throw new RangeError(
-      "IndexedDB schema version must be a positive safe integer",
-    );
+    throw new RangeError("IndexedDB schema version must be a positive safe integer");
   }
   const factory = opts.factory;
   const connectionLifetime = opts.connectionLifetime ?? "owner";
   if (connectionLifetime !== "owner" && connectionLifetime !== "transaction") {
-    throw new RangeError(
-      "IndexedDB connection lifetime must be owner or transaction",
-    );
+    throw new RangeError("IndexedDB connection lifetime must be owner or transaction");
   }
   const timeoutMs = opts.openTimeoutMs ?? 10_000;
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1 || timeoutMs > 60_000) {
@@ -172,9 +301,7 @@ export function createIdbPersistenceOwner(
     const retained = [...generations];
     for (const gen of retained) retire(gen);
     await Promise.all(retained.map((gen) => gen.closed.promise));
-    const failures = retained.flatMap((gen) =>
-      gen.failure ? [gen.failure] : []
-    );
+    const failures = retained.flatMap((gen) => (gen.failure ? [gen.failure] : []));
     if (failures.length) {
       throw new AggregateError(failures, "IndexedDB cleanup failed");
     }
@@ -273,7 +400,7 @@ export function createIdbPersistenceOwner(
   const run = async <R>(
     mode: IDBTransactionMode,
     make: (store: IDBObjectStore) => TransactionRequest<R>,
-    follow?: (value: R, store: IDBObjectStore) => TransactionRequest<R>,
+    follow?: (value: R, store: IDBObjectStore) => TransactionRequest<R> | undefined,
     recoverRead = false,
   ): Promise<R> => {
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -285,19 +412,19 @@ export function createIdbPersistenceOwner(
         // Failed opens have already retired their native generation. Blocked
         // or timed-out opens remain owned and must never spawn another queue.
         if (
-          recoverRead && attempt === 0 &&
+          recoverRead &&
+          attempt === 0 &&
           error instanceof IdbPersistenceError &&
           error.code === "open_failed"
-        ) continue;
+        )
+          continue;
         throw error;
       }
       let transaction: IDBTransaction;
       try {
         transaction = db.transaction(storeName, mode);
       } catch (error) {
-        if (
-          error instanceof DOMException && error.name === "InvalidStateError"
-        ) {
+        if (error instanceof DOMException && error.name === "InvalidStateError") {
           retire(gen);
           if (attempt === 0) continue; // only before ANY transaction exists
         }
@@ -313,12 +440,15 @@ export function createIdbPersistenceOwner(
           let failure: IdbPersistenceError | undefined;
           let following = follow;
           const abortWith = (error: unknown): void => {
-            failure = error instanceof IdbPersistenceError
-              ? error
-              : new IdbPersistenceError("request_failed", error);
+            failure =
+              error instanceof IdbPersistenceError
+                ? error
+                : new IdbPersistenceError("request_failed", error);
             try {
               transaction.abort();
-            } catch { /* retain lease until native terminal event */ }
+            } catch {
+              /* retain lease until native terminal event */
+            }
           };
           const success = (): void => {
             if (following) {
@@ -327,12 +457,15 @@ export function createIdbPersistenceOwner(
               request!.removeEventListener("success", success);
               request!.removeEventListener("error", error);
               try {
-                // Enqueue the put synchronously in the get's success callback.
+                // Enqueue the follow-up synchronously in the get's success callback.
                 // No promise/await may split this read-modify-write transaction.
-                request = next(
-                  request!.result,
-                  transaction.objectStore(storeName),
-                );
+                const nextReq = next(request!.result, transaction.objectStore(storeName));
+                if (nextReq === undefined) {
+                  result = request!.result;
+                  hasResult = true;
+                  return;
+                }
+                request = nextReq;
                 request.addEventListener("success", success);
                 request.addEventListener("error", error);
               } catch (error) {
@@ -358,10 +491,7 @@ export function createIdbPersistenceOwner(
             request?.removeEventListener("success", success);
             request?.removeEventListener("error", error);
             gen.transactions.delete(transaction);
-            if (
-              connectionLifetime === "transaction" &&
-              gen.transactions.size === 0
-            ) retire(gen);
+            if (connectionLifetime === "transaction" && gen.transactions.size === 0) retire(gen);
             else finishClose(gen);
             if (aborted || failure || !hasResult) {
               reject(
@@ -393,10 +523,11 @@ export function createIdbPersistenceOwner(
         // Only an outbox's initial READ may retry, after the native transaction
         // has terminated. Never replay writes or discard an unread baseline.
         if (
-          recoverRead && mode === "readonly" && attempt === 0 &&
+          recoverRead &&
+          mode === "readonly" &&
+          attempt === 0 &&
           error instanceof IdbPersistenceError &&
-          (error.code === "request_failed" ||
-            error.code === "transaction_aborted")
+          (error.code === "request_failed" || error.code === "transaction_aborted")
         ) {
           retire(gen);
           continue;
@@ -408,10 +539,7 @@ export function createIdbPersistenceOwner(
   };
 
   return {
-    persistence: <S>(
-      key: string,
-      writeOpts: IdbWriteOpts = {},
-    ): LocalPersistence<S> => {
+    persistence: <S>(key: string, writeOpts: IdbWriteOpts = {}): ValuePersistence<S> => {
       scope.assertActive();
       if (recordModes.get(key) === "outbox") {
         throw new IdbPersistenceError("record_mode_conflict");
@@ -422,9 +550,14 @@ export function createIdbPersistenceOwner(
         load: (): Promise<S | null> =>
           scope.run(async () => {
             try {
-              return await run<S | undefined>("readonly", (store) =>
-                store.get(key) as IDBRequest<S | undefined>) ?? null;
-            } catch {
+              return (
+                (await run<S | undefined>(
+                  "readonly",
+                  (store) => store.get(key) as IDBRequest<S | undefined>,
+                )) ?? null
+              );
+            } catch (error) {
+              if (writeOpts.strictReads === true) throw error;
               return null;
             }
           }),
@@ -435,6 +568,17 @@ export function createIdbPersistenceOwner(
             } catch (error) {
               if (strict) throw error;
             }
+          }),
+        update: (merge): Promise<void> =>
+          scope.run(async () => {
+            await run<unknown>(
+              "readwrite",
+              (store) => store.get(key),
+              (stored, store) => {
+                const next = merge((stored ?? null) as S | null);
+                return next === null ? store.delete(key) : store.put(next, key);
+              },
+            );
           }),
       };
     },
@@ -449,8 +593,7 @@ export function createIdbPersistenceOwner(
       return createOutboxPersistence<T>({
         assertActive: () => scope.assertActive(),
         own: (task) => scope.run(task),
-        load: () =>
-          run<unknown>("readonly", (store) => store.get(key), undefined, true),
+        load: () => run<unknown>("readonly", (store) => store.get(key), undefined, true),
         update: async (merge) => {
           await run<unknown>(
             "readwrite",
@@ -460,31 +603,21 @@ export function createIdbPersistenceOwner(
         },
       });
     },
+    peek: <S>(key: string): Promise<S | null> =>
+      scope.run(async () =>
+        (await run<S | undefined>(
+          "readonly",
+          (store) => store.get(key) as IDBRequest<S | undefined>,
+        )) ?? null,
+      ),
+    discardIf: <S>(
+      targetKey: string,
+      guardKey: string,
+      shouldDiscard: (guard: S | null) => boolean,
+    ): Promise<boolean> =>
+      scope.run(() => discardRecordIf(run, recordModes, targetKey, guardKey, shouldDiscard)),
     listKeys: (opts: IdbListKeysOpts = {}): Promise<string[]> =>
-      scope.run(async () => {
-        const { strict = false, limit } = opts;
-        if (
-          limit !== undefined &&
-          (!Number.isInteger(limit) || limit < 1 || limit > 65_536)
-        ) throw new RangeError("IndexedDB key limit must be 1..65536");
-        try {
-          const keys = await run(
-            "readonly",
-            (store) =>
-              store.getAllKeys(
-                undefined,
-                limit === undefined ? undefined : limit + 1,
-              ),
-          );
-          if (limit !== undefined && keys.length > limit) {
-            throw new IdbPersistenceError("key_limit_exceeded");
-          }
-          return keys.filter((key): key is string => typeof key === "string");
-        } catch (error) {
-          if (strict) throw error;
-          return [];
-        }
-      }),
+      scope.run(() => readScopedKeys(run, opts)),
     discard: (key: string): Promise<void> =>
       scope.run(async () => {
         if (recordModes.get(key) === "outbox") {
@@ -499,10 +632,7 @@ export function createIdbPersistenceOwner(
         ...scope.snapshot(),
         openRequests: retained.filter((gen) => !gen.nativeFinished).length,
         connections: retained.filter((gen) => gen.db !== undefined).length,
-        transactions: retained.reduce(
-          (sum, gen) => sum + gen.transactions.size,
-          0,
-        ),
+        transactions: retained.reduce((sum, gen) => sum + gen.transactions.size, 0),
       });
     },
     dispose: (): Promise<void> => scope.dispose(),
@@ -517,10 +647,7 @@ export interface OwnedIdbPersistence<S> extends LocalPersistence<S> {
 /** Single-record convenience owner. Call dispose when its consumers drain.
  * @deprecated Share an explicit createIdbPersistenceOwner across related stores.
  */
-export function idbPersistence<S>(
-  key: string,
-  opts: IdbOpts = {},
-): OwnedIdbPersistence<S> {
+export function idbPersistence<S>(key: string, opts: IdbOpts = {}): OwnedIdbPersistence<S> {
   const owner = createIdbPersistenceOwner(opts);
   return {
     ...owner.persistence<S>(key, opts),

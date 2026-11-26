@@ -871,7 +871,7 @@ static NSString *cowboyAuthenticationBrowserScript(void) {
         @"postMessage({action:'close'})}catch(e){}};";
 }
 
-// A SideStore update can restore an already-running Release WKWebView whose
+// An app update can restore an already-running Release WKWebView whose
 // document outlives the configuration-time user-script installation. Rebind
 // both sides whenever UIKit brings Cowboy to the foreground: the handler on the
 // current content controller and the callable functions in the current page.

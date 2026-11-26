@@ -303,7 +303,7 @@ Wry 0.55.1 writes `bounces` after `init` returns) set
 document rubber-band (`bounces` / `alwaysBounceVertical` /
 `alwaysBounceHorizontal`). Inner Transcript/Code overflow stays on
 `WKChildScrollView` and keeps native edge elasticity. This is a native-shell
-contract and requires a SideStore release plus physical-device acceptance.
+contract and requires a TestFlight / App Store release plus physical-device acceptance.
 
 ## A house rule worth knowing
 

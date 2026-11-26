@@ -170,6 +170,7 @@ async function listen(facade, temporary) {
   const socketPath = join(directory, "facade.sock");
   if (Buffer.byteLength(socketPath) > 107) throw new Error("facade socket path is too long");
   const channels = new Map();
+  const channelSockets = new Map();
   const server = createServer((socket) => {
     let buffered = Buffer.alloc(0);
     const first = (chunk) => {
@@ -188,6 +189,18 @@ async function listen(facade, temporary) {
         return socket.destroy();
       }
       if (!channels.has(channel)) return socket.destroy();
+      let sockets = channelSockets.get(channel);
+      if (!sockets) {
+        sockets = new Set();
+        channelSockets.set(channel, sockets);
+      }
+      sockets.add(socket);
+      socket.once("close", () => {
+        sockets.delete(socket);
+        if (sockets.size === 0 && channelSockets.get(channel) === sockets) {
+          channelSockets.delete(channel);
+        }
+      });
       socket.unshift(buffered.subarray(newline + 1));
       serveMcp(socket, facade, () => channels.get(channel) ?? undefined);
       socket.resume();
@@ -199,7 +212,7 @@ async function listen(facade, temporary) {
     server.once("error", fail);
     server.listen(socketPath, done);
   });
-  return { server, socketPath, channels };
+  return { server, socketPath, channels, channelSockets };
 }
 
 /**
@@ -318,7 +331,7 @@ async function connectedRuntime({
   // Readiness only (OS, workspace, Git probe): the session projection is
   // built at session open, so initialize reads no skills and no home.
   await buildProjection(facade, facade.root, { ...projecting, skills: false, home: false });
-  const { server, socketPath, channels } = await listen(facade, temporary);
+  const { server, socketPath, channels, channelSockets } = await listen(facade, temporary);
   const runtime = {
     facade,
     connection,
@@ -356,8 +369,15 @@ async function connectedRuntime({
       return channel;
     },
     bindChannel: (channel, sessionId) => channels.set(channel, sessionId),
-    // A settled subagent's channel: a relay that connects with it is refused.
-    unbindChannel: (channel) => channels.delete(channel),
+    // A settled or failed session's channel: refuse future relays and close any open socket.
+    unbindChannel: (channel) => {
+      channels.delete(channel);
+      const sockets = channelSockets.get(channel);
+      if (sockets) {
+        channelSockets.delete(channel);
+        for (const socket of sockets) socket.destroy();
+      }
+    },
     mcpServer: (channel) => ({
       name: "cowboy",
       command: node,

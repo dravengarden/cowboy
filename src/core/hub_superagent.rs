@@ -271,6 +271,7 @@ mod tests {
                         schedule: None,
                         origin: Some(crate::prompt_origin::DeliveryOrigin::Owner),
                         initiator: Some(crate::prompt_origin::DeliveryOrigin::Owner),
+                        explicit: None,
                     }),
                     "hold" => s.delivery_hold = Some("interruption".into()),
                     _ => unreachable!(),

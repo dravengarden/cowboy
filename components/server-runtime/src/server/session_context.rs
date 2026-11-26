@@ -271,7 +271,7 @@ fn view(
     let links: Vec<_> = context.known_links().iter().filter(|link| link.session_id != id).map(|link| {
         match owned(state, principal, &link.session_id) {
             Ok(info) => serde_json::json!({"id":link.session_id,"available":true,"title":info.meta.title,"provider":info.meta.provider,"provider_account_id":info.meta.provider_account_id,"before":link.before}),
-            Err(_) => serde_json::json!({"id":link.session_id,"available":false,"title":link.title}),
+            Err(_) => serde_json::json!({"id":link.session_id,"available":false,"title":link.title,"before":link.before}),
         }
     }).collect();
     let sources: Vec<_> = context.sources.iter().map(|source| {
@@ -913,7 +913,7 @@ pub async fn send(
             let session = response_state
                 .hub
                 .session_info(&receipt.session_id)
-                .map(|info| info.meta);
+                .map(|info| info.meta.for_client());
             let mut value = serde_json::to_value(receipt).expect("receipt serializes");
             value["session"] = serde_json::to_value(session).expect("session serializes");
             (StatusCode::ACCEPTED, Json(value)).into_response()
@@ -950,7 +950,7 @@ pub async fn continue_here(
         });
     match result {
         Ok(()) => Json(serde_json::json!({
-            "session": state.hub.session_info(&id).map(|info| info.meta),
+            "session": state.hub.session_info(&id).map(|info| info.meta.for_client()),
         }))
         .into_response(),
         Err(error) => failure(error),

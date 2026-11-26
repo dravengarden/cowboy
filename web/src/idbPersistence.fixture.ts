@@ -90,8 +90,30 @@ export class FakeTransaction extends TrackedTarget {
         this.writes.set(key, DELETED);
         return request;
       },
-      getAllKeys: (_query?: unknown, count?: number): IDBRequest<unknown> =>
-        make([...this.database.factory.data.keys()].slice(0, count)),
+      getAllKeys: (query?: unknown, count?: number): IDBRequest<unknown> => {
+        let keys = [...this.database.factory.data.keys()];
+        if (query && typeof query === "object" && "lower" in query) {
+          const range = query as {
+            lower: string;
+            upper?: string;
+            lowerOpen?: boolean;
+            upperOpen?: boolean;
+          };
+          keys = keys
+            .filter((key) => {
+              const k = String(key);
+              const lo = range.lowerOpen ? k > range.lower : k >= range.lower;
+              const hi = range.upper === undefined
+                ? true
+                : range.upperOpen
+                ? k < range.upper
+                : k <= range.upper;
+              return lo && hi;
+            })
+            .sort((a, b) => (String(a) < String(b) ? -1 : String(a) > String(b) ? 1 : 0));
+        }
+        return make(count === undefined ? keys : keys.slice(0, count));
+      },
     } as IDBObjectStore;
   }
 

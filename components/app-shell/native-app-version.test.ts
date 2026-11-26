@@ -5,7 +5,7 @@ function assertEqual(actual: unknown, expected: unknown) {
   if (actual !== expected) throw new Error(`${actual} !== ${expected}`);
 }
 
-test("installed SideStore version wins over the compile-time Tauri version", async () => {
+test("installed iOS bundle version wins over the compile-time Tauri version", async () => {
   assertEqual(
     await getNativeAppVersion({
       __cowboyNativeApp: Object.freeze({
