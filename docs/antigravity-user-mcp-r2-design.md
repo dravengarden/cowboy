@@ -390,9 +390,15 @@ In `src/worker_execution/extension_broker.rs`:
     `cowboy/extensionCallAck` to `DRAIN_REQUESTS` and `extensions.mjs`
     advertises `ackProtocol: 1` + sends correlated acks before returning tool
     output.
-- **Coordinated pin advance**:
-  - Because `components/wire/src/execution_protocol.rs` changes alongside R4's
-    `components/wire/src/runtime_wire.rs`, R4 + R2 share one coordinated,
-    owner-approved `inputs.cowboy-workers` pin advance with Phase A reader
-    rollout first, followed by Phase B writer enablement + Hawk production
-    conformance.
+- **Two-phase pin advance (post-R4 baseline `worker-11af6d9b0b7925e98a9d`)**:
+  - R4 (`antigravity 0.2.39`, `worker-11af6d9b0b7925e98a9d`) is already landed on
+    `origin/main` and active in production.
+  - R2 ships as its own two-phase rollout on top of `origin/main`:
+    1. **Phase A (Reader Floor)**: Advance `inputs.cowboy-workers` with
+       dual-schema (`schema: 1 || 2`) ledger reader + additive protocol fields
+       (writing `schema: 1` only, user MCP execution fenced off) and verify all
+       rollback tiers across Hawk and OVH carry the Schema-2 reader.
+    2. **Phase B (Writer Enablement)**: Enable `schema: 2` ledger writes,
+       isolated `bwrap` user MCP execution, correlated `cowboy/extensionCallAck`,
+       and owner admission APIs, verified by the Hawk four-artifact
+       production-conformance matrix and live OVH <-> Hawk canary acceptance.
