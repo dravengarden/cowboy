@@ -114,12 +114,12 @@ impl Hub {
                         s.editing_token = None;
                     }
                 }
-                s.meta.continued_from = None;
+                let cleared_continued = s.meta.continued_from.take().is_some();
                 s.cancel_handoff_pending = false;
                 let queue = s.queue.clone();
                 let drafts = s.drafts.clone();
                 self.finish_in_flight_pending_commit(session_id, &queue, &drafts, &mut claims);
-                Some((queue, drafts))
+                Some((queue, drafts, cleared_continued))
             } else {
                 claims.in_flight_pending_commits.remove(session_id);
                 None
@@ -127,8 +127,11 @@ impl Hub {
             guard.released = true;
             result
         };
-        if let Some((queue, drafts)) = snapshot {
+        if let Some((queue, drafts, cleared_continued)) = snapshot {
             self.broadcast_pending_snapshot(session_id, &queue, &drafts);
+            if cleared_continued {
+                self.broadcast_session(session_id);
+            }
         }
         self.try_drain(session_id);
     }
@@ -479,7 +482,9 @@ impl Hub {
             let cancelled = crate::session_context::read(self, &delivery.session_id)
                 .ok()
                 .and_then(|context| context.delivery)
-                .is_some_and(|receipt| receipt.state == "cancelled");
+                .is_some_and(|receipt| {
+                    receipt.state == "cancelled" && receipt.session_id == delivery.session_id
+                });
             if !cancelled
                 && sessions.iter().any(|meta| meta.id == delivery.session_id)
                 && self.setting(&key(&delivery.session_id)).is_none()
@@ -491,7 +496,9 @@ impl Hub {
             let cancelled = crate::session_context::read(self, &meta.id)
                 .ok()
                 .and_then(|context| context.delivery)
-                .is_some_and(|receipt| receipt.state == "cancelled");
+                .is_some_and(|receipt| {
+                    receipt.state == "cancelled" && receipt.session_id == meta.id
+                });
             if let Some(source) = self
                 .setting(&key(&meta.id))
                 .and_then(|value| value.as_str().map(str::to_owned))
@@ -1023,6 +1030,103 @@ mod cancel_restore_tests {
                 settings_keys::SESSION_CONTINUED_FROM_PREFIX
             )),
             None
+        );
+    }
+
+    #[test]
+    fn restore_continuations_preserves_valid_mark_when_outgoing_handoff_is_cancelled() {
+        let hub = Hub::new();
+        for (id, title) in [("root-r", "Root"), ("mid-s", "Mid"), ("dst-d", "Dest")] {
+            hub.create_local_session(
+                id.into(),
+                "claude-code".into(),
+                "/tmp".into(),
+                title.into(),
+                SessionOrigin::Web,
+                false,
+            );
+        }
+        // R handed off to S, so S has a valid incoming continued_from = R.
+        hub.set_setting(
+            format!("{}mid-s", settings_keys::SESSION_CONTINUED_FROM_PREFIX),
+            json!("root-r"),
+        );
+        // Later S handed off to D and the user cancelled that outgoing handoff:
+        // S's own context.delivery is cancelled, naming D (not S).
+        hub.set_setting(
+            crate::session_context::key("mid-s"),
+            json!({
+                "revision": 3,
+                "applied_revision": 3,
+                "sources": [],
+                "waiting": [],
+                "delivery": {
+                    "operation": "op-out",
+                    "fingerprint": "fp-out",
+                    "session_id": "dst-d",
+                    "state": "cancelled"
+                }
+            }),
+        );
+        hub.restore_continuations();
+        assert_eq!(
+            hub.session_info("mid-s")
+                .unwrap()
+                .meta
+                .continued_from
+                .as_deref(),
+            Some("root-r"),
+            "cancelling an outgoing handoff must never delete S's valid incoming continuation mark"
+        );
+        assert_eq!(
+            hub.setting(&format!(
+                "{}mid-s",
+                settings_keys::SESSION_CONTINUED_FROM_PREFIX
+            )),
+            Some(json!("root-r"))
+        );
+    }
+
+    #[test]
+    fn commit_cancel_handoff_memory_broadcasts_cleared_continued_from() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "dst-b".into(),
+            "claude-code".into(),
+            "/tmp".into(),
+            "Dest".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.set_continued_from("dst-b", Some("src-b".into()));
+        hub.submit(
+            "dst-b",
+            "hello".into(),
+            vec![],
+            Some("cmid-b".into()),
+            &crate::prompt_origin::RequestCaller::Person,
+        );
+        let mut rx = hub.subscribe();
+        let (_taken, _expected, guard) = hub.begin_cancel_handoff("dst-b", "cmid-b").unwrap();
+        hub.commit_cancel_handoff_memory(
+            "dst-b",
+            "cmid-b",
+            crate::session_context::key("dst-b"),
+            json!({"revision": 2}),
+            guard,
+        );
+        let mut saw_cleared_meta = false;
+        while let Ok(frame) = rx.try_recv() {
+            if let super::super::Outbound::SessionUpdated { session } = frame.outbound()
+                && session.id == "dst-b"
+                && session.continued_from.is_none()
+            {
+                saw_cleared_meta = true;
+            }
+        }
+        assert!(
+            saw_cleared_meta,
+            "connected clients must receive a SessionUpdated broadcast with continued_from cleared"
         );
     }
 }

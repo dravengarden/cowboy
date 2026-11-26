@@ -184,9 +184,6 @@ async fn take_back(
     state
         .hub
         .commit_cancel_handoff_memory(&id, &cmid, target_key, target_value, cancel_guard);
-    // Notify connected clients that `continued_from` was cleared atomically in
-    // the cancellation transaction above (the setting was already removed).
-    state.hub.set_continued_from(&id, None);
     let note = super::super::session_trash::trash(
         &state,
         &auth.principal,
