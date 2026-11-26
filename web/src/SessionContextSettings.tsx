@@ -383,11 +383,9 @@ function NewSessionForm({
   const sameHome =
     nextAgent.cwd === (session.workspace_id || "") &&
     nextAgent.machine_id === (execution.machineId || null);
-  const copiesWorktree =
-    sameHome &&
-    machines.some(
-      (machine) => machine.id === nextAgent.machine_id && machine.capabilities?.native_fork,
-    );
+  const targetMachine = machines.find((machine) => machine.id === nextAgent.machine_id);
+  const copiesWorktree = sameHome && Boolean(targetMachine?.capabilities?.native_fork);
+  const supportsWorkspaceMode = copiesWorktree && Boolean(targetMachine?.capabilities?.fork_workspace_mode);
   // A fork stays in this session's project and Machines.
   const samePlacement =
     sameHome && (nextAgent.runtime_machine_id || session.machine_id) === session.machine_id;
@@ -457,7 +455,7 @@ function NewSessionForm({
                 preset: preset || null,
                 inherit_settings: inheritSettings,
                 config: overrides,
-                ...(copiesWorktree ? { include_uncommitted: session.status === "busy" || session.status === "starting" ? false : copyUncommitted } : {}),
+                ...(supportsWorkspaceMode ? { include_uncommitted: session.status === "busy" || session.status === "starting" ? false : copyUncommitted } : {}),
               },
               key,
             );
@@ -509,7 +507,7 @@ function NewSessionForm({
       />
       <SessionSubscription state={subscription} disabled={busy} desktop={desktop} helperText="" />
       </Box>
-      <ForkOutcome forkOnly={forkOnly} allowFork={allowFork} sameAccount={sameAccount} samePlacement={samePlacement} copiesWorktree={copiesWorktree} forkMode={forkMode} waitForTurn={waitForTurn && queued === 0} sourceBusy={session.status === "busy" || session.status === "starting"} copyUncommitted={copyUncommitted} onCopyUncommitted={setCopyUncommitted} />
+      <ForkOutcome forkOnly={forkOnly} allowFork={allowFork} sameAccount={sameAccount} samePlacement={samePlacement} copiesWorktree={copiesWorktree} supportsWorkspaceMode={supportsWorkspaceMode} forkMode={forkMode} waitForTurn={waitForTurn && queued === 0} sourceBusy={session.status === "busy" || session.status === "starting"} copyUncommitted={copyUncommitted} onCopyUncommitted={setCopyUncommitted} />
       {!placement.loading && !placement.error && !placement.project && (
         <Alert
           severity="warning"

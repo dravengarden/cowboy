@@ -29,6 +29,7 @@ export interface LineageBranch {
 
 export interface SessionLineageResponse {
   session_id: string;
+  display_detached?: boolean;
   hops: LineageHop[];
   branches: LineageBranch[];
 }
@@ -42,6 +43,13 @@ export interface LineageHistoryPageResponse {
   is_sealed: boolean;
 }
 
+export interface CachedAncestorSegment {
+  events: Envelope[];
+  nextBeforeSeq: number | null;
+  reachedStart: boolean;
+  isSealed: boolean;
+}
+
 export type LineageHistoryFetchResult =
   | { kind: "ok"; page: LineageHistoryPageResponse }
   | { kind: "conflict"; edgeVersion: number }
@@ -50,6 +58,11 @@ export type LineageHistoryFetchResult =
 export const LINEAGE_CHANGED = "cowboy:lineage-changed";
 
 const lineageCache = new Map<string, SessionLineageResponse>();
+const ancestorSegmentCache = new Map<string, CachedAncestorSegment>();
+
+function segmentCacheKey(childSessionId: string, hopSessionId: string, edgeVersion: number): string {
+  return `${childSessionId}:${hopSessionId}:${String(edgeVersion)}`;
+}
 
 export function cachedSessionLineage(sessionId: string): SessionLineageResponse | undefined {
   return lineageCache.get(sessionId);
@@ -59,9 +72,35 @@ export function setCachedSessionLineage(sessionId: string, data: SessionLineageR
   lineageCache.set(sessionId, data);
 }
 
+export function cachedAncestorSegment(
+  childSessionId: string,
+  hopSessionId: string,
+  edgeVersion: number,
+): CachedAncestorSegment | undefined {
+  return ancestorSegmentCache.get(segmentCacheKey(childSessionId, hopSessionId, edgeVersion));
+}
+
+export function setCachedAncestorSegment(
+  childSessionId: string,
+  hopSessionId: string,
+  edgeVersion: number,
+  segment: CachedAncestorSegment,
+): void {
+  ancestorSegmentCache.set(segmentCacheKey(childSessionId, hopSessionId, edgeVersion), segment);
+}
+
 export function clearLineageCache(sessionId?: string): void {
-  if (sessionId) lineageCache.delete(sessionId);
-  else lineageCache.clear();
+  if (sessionId) {
+    lineageCache.delete(sessionId);
+    for (const key of [...ancestorSegmentCache.keys()]) {
+      if (key.startsWith(`${sessionId}:`) || key.includes(`:${sessionId}:`)) {
+        ancestorSegmentCache.delete(key);
+      }
+    }
+  } else {
+    lineageCache.clear();
+    ancestorSegmentCache.clear();
+  }
 }
 
 export function notifyLineageChanged(sessionId?: string): void {

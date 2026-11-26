@@ -18,12 +18,18 @@ import LinkOutlined from "@mui/icons-material/LinkOutlined";
 import OpenInNewRounded from "@mui/icons-material/OpenInNewRounded";
 import RestoreFromTrashOutlined from "@mui/icons-material/RestoreFromTrashOutlined";
 import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
-import { mergeAncestorEvents } from "./ancestorHistory";
+import {
+  cachedAncestorSegment,
+  fetchLineageHistoryPage,
+  fetchSessionLineage,
+  mergeAncestorEvents,
+  setCachedAncestorSegment,
+} from "./ancestorHistory";
 import { derive } from "./derive";
 import { fetchHistoryPage } from "./historyFetch";
 import type { Envelope, SessionMeta } from "./protocol";
 import { SESSION_LINK_LABEL, type SessionLinkRow } from "./sessionLinks";
-import { canonicalTimeline, conn, useStoreSelector } from "./store";
+import { conn, useStoreSelector } from "./store";
 import { SurfaceContext } from "./surface/SurfaceProfile";
 import { Sheet } from "./Sheet";
 import { ReadOnlyAncestorItemView } from "./ReadOnlyAncestorItemView";
@@ -36,23 +42,112 @@ import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { sessionAccountIdentity } from "./accountIdentity";
 
+export interface LineagePeekTarget {
+  childSessionId: string;
+  hopId: string;
+  edgeVersion: number;
+  beforeSeq: number | null;
+}
 
-function useAncestorHistoryPeek(open: boolean, sessionId: string, before: number | undefined) {
+const MAX_PEEK_UNSEALED_RETRIES = 5;
+
+function useAncestorHistoryPeek(
+  open: boolean,
+  sessionId: string,
+  before: number | undefined,
+  lineage?: LineagePeekTarget,
+) {
   const [events, setEvents] = useState<Envelope[]>([]);
   const [nextBeforeSeq, setNextBeforeSeq] = useState<number | null>(null);
   const [reachedStart, setReachedStart] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const abortRef = useRef<AbortController | null>(null);
+  const edgeRef = useRef<{ edgeVersion: number; beforeSeq: number | null }>({
+    edgeVersion: lineage?.edgeVersion ?? 1,
+    beforeSeq: lineage?.beforeSeq ?? before ?? null,
+  });
+
+  useEffect(() => {
+    edgeRef.current = {
+      edgeVersion: lineage?.edgeVersion ?? 1,
+      beforeSeq: lineage?.beforeSeq ?? before ?? null,
+    };
+  }, [before, lineage?.beforeSeq, lineage?.edgeVersion]);
 
   const loadPage = useCallback(
-    async (cursor: number, replace: boolean): Promise<void> => {
-      abortRef.current?.abort();
-      const controller = new AbortController();
-      abortRef.current = controller;
-      setLoading(true);
-      setError("");
+    async (cursor: number, replace: boolean, attempt = 0): Promise<void> => {
+      if (attempt === 0) {
+        abortRef.current?.abort();
+        abortRef.current = new AbortController();
+        setLoading(true);
+        setError("");
+      }
+      const controller = abortRef.current;
+      if (!controller || controller.signal.aborted) return;
       try {
+        if (lineage) {
+          const cutoff = edgeRef.current.beforeSeq;
+          if (cutoff === null || cutoff === 0) {
+            setReachedStart(true);
+            setNextBeforeSeq(null);
+            return;
+          }
+          const result = await fetchLineageHistoryPage(
+            lineage.childSessionId,
+            lineage.hopId,
+            cursor,
+            edgeRef.current.edgeVersion,
+            conn.version() ?? "0",
+            controller.signal,
+          );
+          if (controller.signal.aborted) return;
+          if (result.kind === "conflict") {
+            const fresh = await fetchSessionLineage(lineage.childSessionId, controller.signal);
+            if (controller.signal.aborted) return;
+            const freshHop = fresh?.hops.find((h) => h.session_id === lineage.hopId);
+            if (!freshHop || freshHop.before_seq === null || freshHop.before_seq === 0) {
+              setEvents([]);
+              setNextBeforeSeq(null);
+              setReachedStart(true);
+              return;
+            }
+            edgeRef.current = { edgeVersion: freshHop.edge_version, beforeSeq: freshHop.before_seq };
+            await loadPage(freshHop.before_seq, true, 1);
+            return;
+          }
+          if (result.kind === "error") {
+            setError("Could not load this conversation's history.");
+            return;
+          }
+          const { page } = result;
+          const sealed = page.is_sealed !== false;
+          setEvents((current) => {
+            const merged = mergeAncestorEvents(replace ? [] : current, page.events, cutoff);
+            setCachedAncestorSegment(
+              lineage.childSessionId,
+              lineage.hopId,
+              edgeRef.current.edgeVersion,
+              {
+                events: merged,
+                nextBeforeSeq: sealed ? page.next_before_seq : cursor,
+                reachedStart: sealed && (page.reached_start || page.next_before_seq === null),
+                isSealed: sealed,
+              },
+            );
+            return merged;
+          });
+          setNextBeforeSeq(sealed ? page.next_before_seq : cursor);
+          setReachedStart(sealed && (page.reached_start || page.next_before_seq === null));
+          if (!sealed && attempt < MAX_PEEK_UNSEALED_RETRIES) {
+            const delayMs = Math.min(250 * 2 ** attempt, 2000);
+            const timer = setTimeout(() => {
+              if (!controller.signal.aborted) void loadPage(cursor, false, attempt + 1);
+            }, delayMs);
+            controller.signal.addEventListener("abort", () => clearTimeout(timer), { once: true });
+          }
+          return;
+        }
         const page = await fetchHistoryPage(sessionId, cursor, conn.version() ?? "0", controller.signal);
         if (controller.signal.aborted) return;
         if (!page) {
@@ -66,7 +161,7 @@ function useAncestorHistoryPeek(open: boolean, sessionId: string, before: number
         if (!controller.signal.aborted) setLoading(false);
       }
     },
-    [before, sessionId],
+    [before, lineage, sessionId],
   );
 
   useEffect(() => {
@@ -74,16 +169,32 @@ function useAncestorHistoryPeek(open: boolean, sessionId: string, before: number
       abortRef.current?.abort();
       return undefined;
     }
-    const warm = canonicalTimeline(sessionId);
-    const warmFiltered = warm ? mergeAncestorEvents([], warm, before) : [];
-    setEvents(warmFiltered);
+    if (lineage) {
+      const cached = cachedAncestorSegment(
+        lineage.childSessionId,
+        lineage.hopId,
+        edgeRef.current.edgeVersion,
+      );
+      if (cached) {
+        setEvents(cached.events);
+        setNextBeforeSeq(cached.nextBeforeSeq);
+        setReachedStart(cached.reachedStart);
+        if (cached.reachedStart && cached.isSealed) return undefined;
+        if (cached.nextBeforeSeq !== null && cached.nextBeforeSeq > 0) {
+          void loadPage(cached.nextBeforeSeq, false);
+        }
+        return () => abortRef.current?.abort();
+      }
+    }
+    setEvents([]);
     setReachedStart(false);
     setNextBeforeSeq(null);
-    void loadPage(before ?? Number.MAX_SAFE_INTEGER, warmFiltered.length === 0);
+    const startCursor = lineage ? (edgeRef.current.beforeSeq ?? 0) : (before ?? Number.MAX_SAFE_INTEGER);
+    void loadPage(startCursor, true);
     return () => {
       abortRef.current?.abort();
     };
-  }, [before, loadPage, open, sessionId]);
+  }, [before, lineage, loadPage, open, sessionId]);
 
   return { events, nextBeforeSeq, reachedStart, loading, error, loadPage };
 }
@@ -115,7 +226,13 @@ function HistoryPeekToolbar({
         <Chip
           size="small"
           variant="outlined"
-          label={link.state === "trash" ? "In Trash · Read-only" : "Read-only preview"}
+          label={
+            link.state === "trash"
+              ? "In Trash · Read-only"
+              : link.state === "deleted"
+                ? "Archived · Read-only"
+                : "Read-only preview"
+          }
           sx={{ height: 22, fontSize: "0.72rem" }}
         />
         {accountLabel && (
@@ -231,16 +348,15 @@ function HistoryPeekBody({
         }}
       >
         {!peek.reachedStart && peek.nextBeforeSeq !== null && (
-          <Box sx={{ display: "flex", justifyContent: "center", py: 0.5 }}>
+          <Box sx={{ display: "flex", justifyContent: "center", pb: 0.5 }}>
             <Button
               size="small"
               variant="text"
               disabled={peek.loading}
-              data-history-peek-load-older
               onClick={(): void => void peek.loadPage(peek.nextBeforeSeq!, false)}
               sx={{ textTransform: "none" }}
             >
-              {peek.loading ? "Loading earlier…" : "Load earlier messages"}
+              {peek.loading ? "Loading earlier messages…" : "Load earlier messages"}
             </Button>
           </Box>
         )}
@@ -310,14 +426,15 @@ function HistoryPeekBody({
   );
 }
 
-/** Read-only transcript preview for an ancestor session (live OR in Trash),
- *  allowing inspection of previous conversation without restoring Trash,
- *  waking workers, or leaving the current session. */
+/** Read-only transcript preview for an ancestor session (live, in Trash, or
+ *  archived after Purge), allowing inspection of previous conversation without
+ *  restoring Trash, waking workers, or leaving the current session. */
 export function SessionHistoryPeek({
   open,
   onClose,
   link,
   session,
+  lineage,
   onOpenSession,
   onRestore,
   restoring = false,
@@ -326,6 +443,7 @@ export function SessionHistoryPeek({
   onClose: () => void;
   link: SessionLinkRow;
   session: SessionMeta | undefined;
+  lineage?: LineagePeekTarget | undefined;
   onOpenSession?: (() => void) | undefined;
   onRestore?: (() => void) | undefined;
   restoring?: boolean | undefined;
@@ -334,7 +452,7 @@ export function SessionHistoryPeek({
   const trashedSession = useStoreSelector((state) =>
     state.trashedSessions.find((entry) => entry.id === link.id),
   );
-  const peek = useAncestorHistoryPeek(open, link.id, link.before);
+  const peek = useAncestorHistoryPeek(open, link.id, link.before, lineage);
   if (!open) return null;
 
   const meta = session ?? trashedSession;

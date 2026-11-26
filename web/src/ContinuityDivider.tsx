@@ -43,7 +43,7 @@ function DividerActions({
   onRestore: () => void;
 }): React.JSX.Element {
   const openable = hop.parent_state === "live";
-  const peekable = openable || hop.parent_state === "trashed";
+  const peekable = hop.history_state === "live" || hop.history_state === "archived";
   return (
     <>
       {openable && (
@@ -88,9 +88,11 @@ function DividerActions({
 
 export function ContinuityDivider({
   hop,
+  childSessionId,
   childProvider,
 }: {
   hop: LineageHop;
+  childSessionId?: string | undefined;
   childProvider?: string | undefined;
 }): React.JSX.Element {
   const session = useStoreSelector((state) =>
@@ -114,7 +116,7 @@ export function ContinuityDivider({
   const targetAgent = childProvider ? providerPresentation(childProvider).agent : "";
   const showTransition = Boolean(sourceAgent && targetAgent && sourceAgent !== targetAgent);
   const openable = hop.parent_state === "live";
-  const peekable = hop.parent_state === "live" || hop.parent_state === "trashed";
+  const peekable = hop.history_state === "live" || hop.history_state === "archived";
 
   return (
     <>
@@ -196,6 +198,7 @@ export function ContinuityDivider({
           onClose={(): void => setPeekOpen(false)}
           link={link}
           session={session}
+          lineage={childSessionId ? { childSessionId, hopId: hop.session_id, edgeVersion: hop.edge_version, beforeSeq: hop.before_seq } : undefined}
           onOpenSession={openable ? (): void => openSessionLink(link, session) : undefined}
           onRestore={hop.parent_state === "trashed" ? restore : undefined}
           restoring={busy}

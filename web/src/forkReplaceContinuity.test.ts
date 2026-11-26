@@ -5,7 +5,7 @@ import {
   shouldShowFreshSessionEmptyState,
 } from "./transcriptViewport";
 import { shouldPaintTranscriptLifecycle } from "./transcriptLoadingPresentation";
-import { cachedSessionLineage, clearLineageCache, formatLineageActionLabel, mergeAncestorEvents, setCachedSessionLineage } from "./ancestorHistory";
+import { cachedAncestorSegment, cachedSessionLineage, clearLineageCache, formatLineageActionLabel, mergeAncestorEvents, setCachedAncestorSegment, setCachedSessionLineage } from "./ancestorHistory";
 import { DESKTOP_WORKSPACE_KEYS } from "./desktop/commands/workspaceShortcuts";
 import type { Envelope } from "./protocol";
 
@@ -109,4 +109,48 @@ test("lineage action labels distinguish replace from forks and cache clears clea
 
 test("branch switcher desktop shortcut SB is registered alongside SF", () => {
   expect(DESKTOP_WORKSPACE_KEYS.sessionsBranches).toBe("SB");
+});
+
+test("ancestor segment cache isolates by (child, hop, edgeVersion) and clears on parent or child invalidation", () => {
+  clearLineageCache();
+  const ev = (seq: number): Envelope => ({
+    session_id: "parent-1",
+    seq,
+    kind: "update",
+    update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: `r${seq}` } },
+  });
+  setCachedAncestorSegment("child-a", "parent-1", 1, {
+    events: [ev(1), ev(2)],
+    nextBeforeSeq: null,
+    reachedStart: true,
+    isSealed: true,
+  });
+  setCachedAncestorSegment("child-b", "parent-1", 1, {
+    events: [ev(1)],
+    nextBeforeSeq: null,
+    reachedStart: true,
+    isSealed: true,
+  });
+  expect(cachedAncestorSegment("child-a", "parent-1", 1)?.events.map((e) => e.seq)).toEqual([1, 2]);
+  expect(cachedAncestorSegment("child-b", "parent-1", 1)?.events.map((e) => e.seq)).toEqual([1]);
+  // Bumped edge_version misses stale cached page.
+  expect(cachedAncestorSegment("child-a", "parent-1", 2)).toBeUndefined();
+  // Clearing child-a does not clobber child-b.
+  clearLineageCache("child-a");
+  expect(cachedAncestorSegment("child-a", "parent-1", 1)).toBeUndefined();
+  expect(cachedAncestorSegment("child-b", "parent-1", 1)?.events.length).toBe(1);
+  // Clearing parent-1 evicts any child segment referencing parent-1.
+  clearLineageCache("parent-1");
+  expect(cachedAncestorSegment("child-b", "parent-1", 1)).toBeUndefined();
+});
+
+test("lineage cache preserves display_detached flag for cleared children", () => {
+  setCachedSessionLineage("child-cleared", {
+    session_id: "child-cleared",
+    display_detached: true,
+    hops: [],
+    branches: [],
+  });
+  expect(cachedSessionLineage("child-cleared")?.display_detached).toBe(true);
+  clearLineageCache("child-cleared");
 });

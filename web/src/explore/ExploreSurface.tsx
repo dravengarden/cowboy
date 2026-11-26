@@ -1169,9 +1169,10 @@ function PageList({
 export function ExploreTranscript(
   props: ExploreTranscriptProps,
 ): React.JSX.Element {
-  const pagination = useStoreSelector((snapshot) =>
-    snapshot.pagination.get(props.sessionId)
-  );
+  const { pagination, hasLineage } = useStoreSelector((snapshot) => {
+    const s = snapshot.sessions.find((e) => e.id === props.sessionId);
+    return { pagination: snapshot.pagination.get(props.sessionId), hasLineage: Boolean(s?.forked_from || s?.continued_from) };
+  }, (a, b) => a.pagination === b.pagination && a.hasLineage === b.hasLineage);
   const { pages, current, currentIndex, select, state: pageState } = usePages(
     props.sessionId,
     props.timeline,
@@ -1647,11 +1648,11 @@ export function ExploreTranscript(
     >
       {props.desktop && (
         <DesktopQuestionDirectoryCommand
-          available={pages.length > 0}
+          available={pages.length > 0 || hasLineage}
           toggle={toggleDesktopDirectory}
         />
       )}
-      {props.desktop && pages.length > 0 && (
+      {props.desktop && (pages.length > 0 || hasLineage) && (
         <DesktopModal
           open={desktopDirectoryOpen}
           onClose={closeDesktopDirectory}
@@ -1748,7 +1749,7 @@ export function ExploreTranscript(
           ]}
         >
           <Box component="nav" aria-label="Page index" data-desktop-region="conversation.questions" sx={{ height: "min(640px, calc(100vh - 190px))", minHeight: 320 }}>
-            <LineageExploreQuestions sessionId={props.sessionId} desktop />
+            <LineageExploreQuestions sessionId={props.sessionId} desktop defaultExpanded={pages.length === 0} />
             <PageList
               active={desktopDirectoryOpen}
               dense
@@ -2337,7 +2338,7 @@ export function MobilePageDock({
             minHeight: 0,
           }}
         >
-          <LineageExploreQuestions sessionId={sessionId} desktop={false} />
+          <LineageExploreQuestions sessionId={sessionId} desktop={false} defaultExpanded={pages.length === 0} />
           <Box sx={{ flex: 1, minHeight: 0 }}>
             <PageList
               active={open}

@@ -961,6 +961,7 @@ export const ItemView = memo(function ItemView({
   onOpenTool,
   tasks,
   stops,
+  readOnly,
 }: {
   item: RenderItem;
   sessionId: string;
@@ -978,16 +979,13 @@ export const ItemView = memo(function ItemView({
   onOpenTool: (key: string) => void;
   /** Background-task summaries for subagent and Call anchor rows. */
   tasks?: Pick<BackgroundTasks, "byKey" | "callsObservedAt" | "unresolvedCalls"> | undefined;
-  stops?: ReadonlyMap<string, import("./useBackgroundTasks").StopState> | undefined;
+  stops?: ReadonlyMap<string, import("./useBackgroundTasks").StopState> | undefined; readOnly?: boolean;
 }): React.JSX.Element | null {
   switch (item.kind) {
     case "message": {
       const isStreaming = !!streaming && item.role === "assistant";
-      return (
-        <MessageWithFork item={item} sessionId={sessionId} streaming={isStreaming} desktop={desktop}>
-          <MessageBubble role={item.role} chunks={item.chunks} streaming={isStreaming} origin={item.origin} cmid={item.cmid} provider={provider} providerVersion={providerVersion} providerDigest={providerDigest} desktop={desktop} />
-        </MessageWithFork>
-      );
+      const bubble = <MessageBubble role={item.role} chunks={item.chunks} streaming={isStreaming} origin={item.origin} cmid={item.cmid} provider={provider} providerVersion={providerVersion} providerDigest={providerDigest} desktop={desktop} />;
+      return readOnly ? bubble : <MessageWithFork item={item} sessionId={sessionId} streaming={isStreaming} desktop={desktop}>{bubble}</MessageWithFork>;
     }
     case "thought":
       return (

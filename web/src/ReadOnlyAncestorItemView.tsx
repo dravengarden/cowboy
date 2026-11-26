@@ -133,6 +133,7 @@ export const ReadOnlyAncestorItemView = memo(function ReadOnlyAncestorItemView({
           desktop={desktop}
           selectedToolKey={selectedToolKey}
           onOpenTool={onOpenTool}
+          readOnly
         />
       );
   }

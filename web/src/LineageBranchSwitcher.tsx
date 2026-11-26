@@ -95,6 +95,10 @@ function buildEntries(
   return entries;
 }
 
+function isHopPeekable(hop: LineageHop | undefined): hop is LineageHop {
+  return Boolean(hop && (hop.history_state === "live" || hop.history_state === "archived"));
+}
+
 function hopToLink(hop: LineageHop): SessionLinkRow {
   return {
     id: hop.session_id,
@@ -187,7 +191,7 @@ function BranchListBody({
                 <Chip size="small" variant="outlined" label={entry.stateLabel} sx={{ height: 20, fontSize: "0.68rem" }} />
               )}
             </ButtonBase>
-            {entry.hop && (entry.hop.parent_state === "live" || entry.hop.parent_state === "trashed") && (
+            {isHopPeekable(entry.hop) && (
               <Tooltip title="Peek read-only (p)">
                 <IconButton
                   size="small"
@@ -275,7 +279,7 @@ function BranchSwitcherModal({
         requestPickSession(entry.sessionId, sessions.find((s) => s.id === entry.sessionId));
         return;
       }
-      if (entry.hop) setPeekHop(entry.hop);
+      if (isHopPeekable(entry.hop)) setPeekHop(entry.hop);
     },
     [onClose, sessions],
   );
@@ -298,10 +302,7 @@ function BranchSwitcherModal({
         }
       } else if (event.key === "p") {
         const chosen = entries[activeIndex];
-        if (chosen?.hop) {
-          event.preventDefault();
-          setPeekHop(chosen.hop);
-        }
+        if (isHopPeekable(chosen?.hop)) { event.preventDefault(); setPeekHop(chosen.hop); }
       } else if (event.key === "f") {
         event.preventDefault();
         onClose();
@@ -370,6 +371,7 @@ function BranchSwitcherModal({
           onClose={(): void => setPeekHop(null)}
           link={hopToLink(peekHop)}
           session={sessions.find((s) => s.id === peekHop.session_id)}
+          lineage={{ childSessionId: sessionId, hopId: peekHop.session_id, edgeVersion: peekHop.edge_version, beforeSeq: peekHop.before_seq }}
         />
       )}
     </>

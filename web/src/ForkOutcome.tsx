@@ -8,6 +8,7 @@ export function ForkOutcome({
   sameAccount,
   samePlacement,
   copiesWorktree,
+  supportsWorkspaceMode,
   forkMode,
   waitForTurn,
   sourceBusy,
@@ -19,6 +20,7 @@ export function ForkOutcome({
   sameAccount: boolean;
   samePlacement: boolean;
   copiesWorktree: boolean;
+  supportsWorkspaceMode: boolean;
   forkMode: "fork" | "linked";
   waitForTurn: boolean;
   sourceBusy: boolean;
@@ -49,14 +51,16 @@ export function ForkOutcome({
             : forkMode === "fork"
               ? "Fork starts a new session now and keeps this one, copying the conversation and uncommitted changes."
               : copiesWorktree
-                ? sourceBusy || !copyUncommitted
-                  ? "Fork starts a new session now from this session's committed HEAD and keeps this one. The new agent receives a handoff digest of this conversation."
-                  : "Fork starts a new session now with a handoff digest of this conversation and a copy of uncommitted changes."
+                ? !supportsWorkspaceMode
+                  ? "Fork starts a new session now with a handoff digest of this conversation and a copy of this worktree."
+                  : sourceBusy || !copyUncommitted
+                    ? "Fork starts a new session now from this session's committed HEAD and keeps this one. The new agent receives a handoff digest of this conversation."
+                    : "Fork starts a new session now with a handoff digest of this conversation and a copy of uncommitted changes."
                 : "Fork starts a new session now and keeps this one. The new agent reads this conversation; uncommitted changes stay here."}
           {samePlacement && waitForTurn && " Available after the current turn."}
         </Typography>
       )}
-      {allowFork && samePlacement && copiesWorktree && forkMode === "linked" && (
+      {allowFork && samePlacement && copiesWorktree && supportsWorkspaceMode && forkMode === "linked" && (
         <FormControlLabel
           control={
             <Checkbox

@@ -70,7 +70,7 @@ export interface MachineSummary {
   // Latest host observation; absent from Machines that do not report one.
   resources?: MachineHostResources;
   // Absent on a daemon that predates negotiated Machine capabilities.
-  capabilities?: { hibernation: boolean; native_fork?: boolean };
+  capabilities?: { hibernation: boolean; native_fork?: boolean; fork_workspace_mode?: boolean };
   pending_updates?: readonly { kind: string; slot?: string }[];
   // Why an automatic component has not converged yet. Absent entries are
   // converged; the Controller owns the decision, this is only its report.

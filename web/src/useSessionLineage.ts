@@ -1,22 +1,28 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
+  cachedAncestorSegment,
   cachedSessionLineage,
   fetchLineageHistoryPage,
   fetchSessionLineage,
   LINEAGE_CHANGED,
   mergeAncestorEvents,
+  setCachedAncestorSegment,
+  type LineageHistoryPageResponse,
   type LineageHop,
   type SessionLineageResponse,
 } from "./ancestorHistory";
 import { CONTEXT_CHANGED } from "./sessionContext";
 import type { Envelope } from "./protocol";
-import { canonicalTimeline, conn } from "./store";
+import { conn } from "./store";
+
+const MAX_UNSEALED_RETRIES = 5;
 
 export interface LoadedAncestorSegment {
   hop: LineageHop;
   events: Envelope[];
   nextBeforeSeq: number | null;
   reachedStart: boolean;
+  isSealed: boolean;
   loading: boolean;
   error: string;
 }
@@ -31,29 +37,35 @@ export interface SessionLineageView {
   refresh: () => void;
 }
 
-function seedSegment(hop: LineageHop): LoadedAncestorSegment {
+function seedSegment(childSessionId: string, hop: LineageHop): LoadedAncestorSegment {
   const canLoad =
     hop.before_seq !== null &&
     hop.before_seq > 0 &&
     (hop.history_state === "live" || hop.history_state === "archived");
-  const warm =
-    canLoad && hop.parent_state !== "purged"
-      ? canonicalTimeline(hop.session_id)
-      : undefined;
-  const events = warm ? mergeAncestorEvents([], warm, hop.before_seq ?? undefined) : [];
+  const cached = canLoad
+    ? cachedAncestorSegment(childSessionId, hop.session_id, hop.edge_version)
+    : undefined;
+  if (cached) {
+    return {
+      hop,
+      events: cached.events,
+      nextBeforeSeq: cached.nextBeforeSeq,
+      reachedStart: cached.reachedStart,
+      isSealed: cached.isSealed,
+      loading: false,
+      error: "",
+    };
+  }
   return {
     hop,
-    events,
+    events: [],
     nextBeforeSeq: canLoad ? hop.before_seq : null,
     reachedStart: !canLoad,
+    isSealed: !canLoad,
     loading: false,
     error: "",
   };
 }
-
-/** Loads child-scoped lineage metadata and independent read-only ancestor
- *  history segments. Kept completely outside `store.ts`'s `timelines` Map so
- *  ancestor paging never triggers live timeline invalidation or scrollback bugs. */
 
 function updateSegment(
   segments: LoadedAncestorSegment[],
@@ -63,6 +75,45 @@ function updateSegment(
   return segments.map((seg) => (seg.hop.session_id === hopId ? patch(seg) : seg));
 }
 
+function applyFetchedHopPage(
+  sessionId: string,
+  seg: LoadedAncestorSegment,
+  hop: LineageHop,
+  page: LineageHistoryPageResponse,
+  cursor: number,
+  replace: boolean,
+): LoadedAncestorSegment {
+  const sealed = page.is_sealed !== false;
+  const events = mergeAncestorEvents(replace ? [] : seg.events, page.events, hop.before_seq ?? undefined);
+  const nextBeforeSeq = sealed ? page.next_before_seq : cursor;
+  const reachedStart = sealed && (page.reached_start || page.next_before_seq === null);
+  setCachedAncestorSegment(sessionId, hop.session_id, hop.edge_version, {
+    events,
+    nextBeforeSeq,
+    reachedStart,
+    isSealed: sealed,
+  });
+  return { ...seg, events, nextBeforeSeq, reachedStart, isSealed: sealed, loading: false, error: "" };
+}
+
+function scheduleRetry(delayMs: number, signal: AbortSignal, fn: () => void): void {
+  if (signal.aborted) return;
+  const timer = setTimeout(() => {
+    signal.removeEventListener("abort", onAbort);
+    if (!signal.aborted) fn();
+  }, delayMs);
+  const onAbort = (): void => clearTimeout(timer);
+  signal.addEventListener("abort", onAbort, { once: true });
+}
+
+function segmentNeedsFetch(seg: LoadedAncestorSegment): boolean {
+  return (!seg.reachedStart || !seg.isSealed) && seg.nextBeforeSeq !== null && seg.nextBeforeSeq > 0;
+}
+
+/** Loads child-scoped lineage metadata and independent read-only ancestor
+ *  history segments. Never seeds from live `canonicalTimeline(parentId)` so
+ *  ancestor segments stay strictly bounded by `(childId, hopId, edgeVersion)`
+ *  and `< before_seq`, and unsealed tails retry until flushed. */
 export function useSessionLineage(
   sessionId: string,
   enabled: boolean,
@@ -75,19 +126,14 @@ export function useSessionLineage(
   const [refreshTick, setRefreshTick] = useState(0);
   const abortRef = useRef<AbortController | null>(null);
 
-  const refresh = useCallback(() => {
-    setRefreshTick((tick) => tick + 1);
-  }, []);
+  const refresh = useCallback(() => setRefreshTick((tick) => tick + 1), []);
 
   const fetchHopPage = useCallback(
-    async (
-      hop: LineageHop,
-      cursor: number,
-      replace: boolean,
-      signal: AbortSignal,
-    ): Promise<void> => {
+    async (hop: LineageHop, cursor: number, replace: boolean, signal: AbortSignal, attempt = 0): Promise<void> => {
       if (hop.before_seq === null || hop.before_seq === 0) return;
-      setSegments((current) => updateSegment(current, hop.session_id, (seg) => ({ ...seg, loading: true, error: "" })));
+      if (attempt === 0) {
+        setSegments((cur) => updateSegment(cur, hop.session_id, (seg) => ({ ...seg, loading: true, error: "" })));
+      }
       const result = await fetchLineageHistoryPage(
         sessionId,
         hop.session_id,
@@ -102,18 +148,20 @@ export function useSessionLineage(
         return;
       }
       if (result.kind === "error") {
-        setSegments((current) => updateSegment(current, hop.session_id, (seg) => ({ ...seg, loading: false, error: "Could not load earlier messages." })));
+        setSegments((cur) =>
+          updateSegment(cur, hop.session_id, (seg) => ({ ...seg, loading: false, error: "Could not load earlier messages." })),
+        );
         return;
       }
       const { page } = result;
-      setSegments((current) => updateSegment(current, hop.session_id, (seg) => ({
-        ...seg,
-        events: mergeAncestorEvents(replace ? [] : seg.events, page.events, hop.before_seq ?? undefined),
-        nextBeforeSeq: page.next_before_seq,
-        reachedStart: page.reached_start || page.next_before_seq === null,
-        loading: false,
-        error: "",
-      })));
+      setSegments((cur) =>
+        updateSegment(cur, hop.session_id, (seg) => applyFetchedHopPage(sessionId, seg, hop, page, cursor, replace)),
+      );
+      if (page.is_sealed === false && attempt < MAX_UNSEALED_RETRIES) {
+        scheduleRetry(Math.min(250 * 2 ** attempt, 2000), signal, () => {
+          void fetchHopPage(hop, cursor, false, signal, attempt + 1);
+        });
+      }
     },
     [refresh, sessionId],
   );
@@ -146,7 +194,7 @@ export function useSessionLineage(
     const cachedFirst = cached?.hops[0];
     if (cached && cachedFirst) {
       setLineage(cached);
-      setSegments((prev) => (prev.length > 0 ? prev : [seedSegment(cachedFirst)]));
+      setSegments((prev) => (prev.length > 0 ? prev : [seedSegment(sessionId, cachedFirst)]));
     }
     setLoadingLineage(!cached);
     void fetchSessionLineage(sessionId, controller.signal).then((data) => {
@@ -158,10 +206,10 @@ export function useSessionLineage(
         setSegments([]);
         return;
       }
-      const seeded = seedSegment(first);
+      const seeded = seedSegment(sessionId, first);
       setSegments([seeded]);
-      if (!seeded.reachedStart && first.before_seq !== null && first.before_seq > 0) {
-        void fetchHopPage(first, first.before_seq, seeded.events.length === 0, controller.signal);
+      if (segmentNeedsFetch(seeded)) {
+        void fetchHopPage(first, seeded.nextBeforeSeq!, seeded.events.length === 0, controller.signal);
       }
     });
     return () => {
@@ -171,12 +219,9 @@ export function useSessionLineage(
   }, [enabled, fetchHopPage, refreshTick, sessionId]);
 
   const oldestSegment = segments[0];
-  const nextHop = lineage && segments.length < lineage.hops.length
-    ? lineage.hops[segments.length]
-    : undefined;
+  const nextHop = lineage && segments.length < lineage.hops.length ? lineage.hops[segments.length] : undefined;
   const hasEarlier = Boolean(
-    (oldestSegment && !oldestSegment.reachedStart && oldestSegment.nextBeforeSeq !== null) ||
-      nextHop,
+    (oldestSegment && !oldestSegment.reachedStart && oldestSegment.nextBeforeSeq !== null) || nextHop,
   );
   const loadingEarlier = segments.some((seg) => seg.loading);
 
@@ -187,20 +232,12 @@ export function useSessionLineage(
       return;
     }
     if (!nextHop) return;
-    const seeded = seedSegment(nextHop);
+    const seeded = seedSegment(sessionId, nextHop);
     setSegments((current) => [seeded, ...current]);
-    if (!seeded.reachedStart && nextHop.before_seq !== null && nextHop.before_seq > 0) {
-      void fetchHopPage(nextHop, nextHop.before_seq, seeded.events.length === 0, signal);
+    if (segmentNeedsFetch(seeded)) {
+      void fetchHopPage(nextHop, seeded.nextBeforeSeq!, seeded.events.length === 0, signal);
     }
-  }, [fetchHopPage, nextHop, oldestSegment]);
+  }, [fetchHopPage, nextHop, oldestSegment, sessionId]);
 
-  return {
-    lineage,
-    segments,
-    loadingLineage,
-    hasEarlier,
-    loadingEarlier,
-    loadEarlier,
-    refresh,
-  };
+  return { lineage, segments, loadingLineage, hasEarlier, loadingEarlier, loadEarlier, refresh };
 }

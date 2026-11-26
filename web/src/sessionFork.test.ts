@@ -4,7 +4,9 @@ import {
   duplicateOptions,
   duplicateSession,
   forkAvailability,
+  ForkSessionError,
   forkSession,
+  type SessionForkFetch,
 } from "./sessionFork";
 
 const machines = [
@@ -175,4 +177,28 @@ test("duplicateSession forwards before_seq, copy_workspace, and include_uncommit
     copy_workspace: true,
     include_uncommitted: false,
   });
+});
+
+test("forkSession distinguishes definitive unsupported refusals from transient failures", async () => {
+  await expect(
+    forkSession("s", {}, () =>
+      Promise.resolve(new Response(JSON.stringify({ error: "Session cannot be forked" }), { status: 409 })),
+    ),
+  ).rejects.toMatchObject({ name: "ForkSessionError", status: 409, definitiveUnsupported: true });
+
+  await expect(
+    forkSession("s", {}, () =>
+      Promise.resolve(new Response(JSON.stringify({ error: "Gateway timeout" }), { status: 504 })),
+    ),
+  ).rejects.toMatchObject({ name: "ForkSessionError", status: 504, definitiveUnsupported: false });
+
+  try {
+    await forkSession("s", {}, () =>
+      Promise.resolve(new Response(JSON.stringify({ error: "Bad request" }), { status: 400 })),
+    );
+    throw new Error("expected failure");
+  } catch (err) {
+    expect(err).toBeInstanceOf(ForkSessionError);
+    expect((err as ForkSessionError).definitiveUnsupported).toBe(true);
+  }
 });

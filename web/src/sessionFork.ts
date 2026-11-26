@@ -8,6 +8,17 @@ export type SessionForkFetch = (
   init: RequestInit,
 ) => Promise<Response>;
 
+export class ForkSessionError extends Error {
+  readonly status: number;
+  readonly definitiveUnsupported: boolean;
+  constructor(message: string, status: number, definitiveUnsupported: boolean) {
+    super(message);
+    this.name = "ForkSessionError";
+    this.status = status;
+    this.definitiveUnsupported = definitiveUnsupported;
+  }
+}
+
 export interface SessionForkReceipt {
   session_id: string;
   session?: SessionMeta | null;
@@ -85,9 +96,13 @@ export async function forkSession(
     };
   }
   const error = typeof record.error === "string" ? record.error : text.trim();
-  throw new Error(
-    error || `Session fork failed (HTTP ${String(response.status)})`,
-  );
+  const message = error || `Session fork failed (HTTP ${String(response.status)})`;
+  const definitiveUnsupported =
+    response.status === 400 ||
+    response.status === 422 ||
+    (response.status === 409 &&
+      /cannot be forked|must be updated|no longer available as a fork point|Wait for this agent/i.test(message));
+  throw new ForkSessionError(message, response.status, definitiveUnsupported);
 }
 
 /** How Duplicate copies a session: a native fork keeps the whole native

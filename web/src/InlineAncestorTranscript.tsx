@@ -14,19 +14,27 @@ import { shouldPaintTranscriptLifecycle } from "./transcriptLoadingPresentation"
 import { type LoadedAncestorSegment, useSessionLineage } from "./useSessionLineage";
 import { glyphSize } from "./surface/desktopSize";
 
+const INITIAL_SEGMENT_ITEMS = 40;
+const SEGMENT_ITEMS_STEP = 60;
+
 function AncestorSegmentBlock({
+  childSessionId,
   segment,
   childProvider,
   desktop,
   selectedToolKey,
+  revealAll,
   onSelectTool,
 }: {
+  childSessionId: string;
   segment: LoadedAncestorSegment;
   childProvider?: string | undefined;
   desktop: boolean;
   selectedToolKey: string | null;
+  revealAll: boolean;
   onSelectTool: (segmentId: string, itemKey: string) => void;
 }): React.JSX.Element {
+  const [visibleLimit, setVisibleLimit] = useState(INITIAL_SEGMENT_ITEMS);
   const items = useMemo(
     () =>
       derive(segment.events).filter(
@@ -36,16 +44,31 @@ function AncestorSegmentBlock({
       ),
     [segment.events],
   );
+  const hiddenCount = revealAll ? 0 : Math.max(0, items.length - visibleLimit);
+  const visibleItems = hiddenCount > 0 ? items.slice(hiddenCount) : items;
   const prefix = `anc:${segment.hop.depth}:${segment.hop.session_id}:`;
 
   return (
     <Box data-ancestor-segment={segment.hop.session_id} sx={{ display: "flex", flexDirection: "column" }}>
+      {hiddenCount > 0 && (
+        <Box sx={{ display: "flex", justifyContent: "center", py: 0.5 }}>
+          <Button
+            size="small"
+            variant="text"
+            data-ancestor-reveal-more
+            onClick={(): void => setVisibleLimit((limit) => limit + SEGMENT_ITEMS_STEP)}
+            sx={{ borderRadius: 999, textTransform: "none", fontSize: "0.75rem", color: "text.secondary" }}
+          >
+            Show {Math.min(SEGMENT_ITEMS_STEP, hiddenCount)} earlier items ({hiddenCount} hidden)
+          </Button>
+        </Box>
+      )}
       {segment.error && (
         <Typography variant="caption" color="error" sx={{ textAlign: "center", py: 0.75 }}>
           {segment.error}
         </Typography>
       )}
-      {items.map((item) => (
+      {visibleItems.map((item) => (
         <Box
           key={`${prefix}${item.key}`}
           data-ancestor-item={`${prefix}${item.key}`}
@@ -63,14 +86,18 @@ function AncestorSegmentBlock({
           />
         </Box>
       ))}
-      <ContinuityDivider hop={segment.hop} childProvider={childProvider} />
+      <ContinuityDivider
+        hop={segment.hop}
+        childSessionId={childSessionId}
+        childProvider={childProvider}
+      />
     </Box>
   );
 }
 
 /** Renders inherited read-only ancestor conversation segments inline above a
  *  forked or replaced session's own messages, with a local read-only tool
- *  details drawer and on-demand pagination. Ordinary sessions render nothing. */
+ *  details drawer, bounded item windowing, and on-demand pagination. */
 export function InlineAncestorTranscript({
   sessionId,
   desktop,
@@ -87,6 +114,7 @@ export function InlineAncestorTranscript({
   const [selectedTool, setSelectedTool] = useState<{ segmentId: string; itemKey: string } | null>(
     null,
   );
+  const [revealedSegments, setRevealedSegments] = useState<ReadonlySet<string>>(() => new Set());
 
   const selectedSegment = selectedTool
     ? segments.find((seg) => seg.hop.session_id === selectedTool.segmentId)
@@ -102,9 +130,9 @@ export function InlineAncestorTranscript({
 
   if (!hasLineage) return null;
 
-  // Fallback to compact provenance card while lineage hasn't returned hops
-  // (e.g. legacy session without durable lineage edges or mock harness).
+  // Detached display lineage (after Clear on this branch) intentionally stays clean.
   if (!loadingLineage && (!lineage || lineage.hops.length === 0)) {
+    if (lineage?.display_detached) return null;
     return <SessionContinuedFrom sessionId={sessionId} />;
   }
 
@@ -140,6 +168,7 @@ export function InlineAncestorTranscript({
       {segments.map((segment, index) => (
         <AncestorSegmentBlock
           key={`${segment.hop.depth}:${segment.hop.session_id}:${segment.hop.edge_version}`}
+          childSessionId={sessionId}
           segment={segment}
           childProvider={
             index === segments.length - 1
@@ -148,6 +177,7 @@ export function InlineAncestorTranscript({
           }
           desktop={desktop}
           selectedToolKey={selectedToolKey}
+          revealAll={revealedSegments.has(segment.hop.session_id)}
           onSelectTool={(segmentId, itemKey): void => setSelectedTool({ segmentId, itemKey })}
         />
       ))}
@@ -163,8 +193,13 @@ export function InlineAncestorTranscript({
           onClose={(): void => setSelectedTool(null)}
           onLocate={(key): void => {
             setSelectedTool(null);
-            const target = document.querySelector(`[data-ancestor-item="anc:${selectedSegment.hop.depth}:${selectedSegment.hop.session_id}:${key}"]`);
-            target?.scrollIntoView({ behavior: "smooth", block: "center" });
+            const segId = selectedSegment.hop.session_id;
+            const depth = selectedSegment.hop.depth;
+            setRevealedSegments((prev) => (prev.has(segId) ? prev : new Set([...prev, segId])));
+            requestAnimationFrame(() => {
+              const target = document.querySelector(`[data-ancestor-item="anc:${depth}:${segId}:${key}"]`);
+              target?.scrollIntoView({ behavior: "smooth", block: "center" });
+            });
           }}
         />
       )}

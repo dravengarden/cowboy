@@ -1,9 +1,9 @@
 import { Box, Button, CircularProgress, Tooltip, Typography } from "@mui/material";
 import CallSplitOutlined from "@mui/icons-material/CallSplitOutlined";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { notifyLineageChanged } from "./ancestorHistory";
 import type { RenderItem } from "./derive";
-import { duplicateSession, forkAvailability, forkSession } from "./sessionFork";
+import { duplicateSession, forkAvailability, ForkSessionError, forkSession } from "./sessionFork";
 import { requestPickSession } from "./sessionPickRequest";
 import { useStoreSelector } from "./store";
 import { glyphSize } from "./surface/desktopSize";
@@ -11,7 +11,8 @@ import { newUuid } from "./uuid";
 
 /** Quiet "Fork from here" affordance beneath completed assistant responses.
  *  Uses native fork when eligible on the originating session, and cleanly
- *  falls back to Linked Fork (`duplicate` with exact `before_seq`) otherwise. */
+ *  falls back to Linked Fork (`duplicate` with exact `before_seq`) ONLY on a
+ *  definitive unsupported refusal — preserving operation IDs across retries. */
 export function MessageForkAction({
   originSessionId,
   messageId,
@@ -29,12 +30,36 @@ export function MessageForkAction({
   const machines = useStoreSelector((state) => state.machines);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const nativeOpRef = useRef<string | null>(null);
+  const linkedOpRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    nativeOpRef.current = null;
+    linkedOpRef.current = null;
+  }, [originSessionId, messageId, beforeSeq]);
 
   if (!session || session.system || !session.workspace_id) return null;
   const nativeAvail = forkAvailability(session, machines);
+  const supportsWorkspaceMode = machines.some(
+    (machine) => machine.id === session.machine_id && machine.capabilities?.fork_workspace_mode === true,
+  );
   const canNative = nativeAvail !== null && Boolean(messageId);
   const canLinked = beforeSeq !== undefined && beforeSeq > 0;
   if (!canNative && !canLinked) return null;
+
+  const runLinked = (): ReturnType<typeof duplicateSession> => {
+    const op = (linkedOpRef.current ??= `fork-turn-${newUuid()}`);
+    return duplicateSession(
+      originSessionId,
+      {
+        provider: session.provider,
+        provider_account_id: session.provider_account_id || "default",
+        before_seq: beforeSeq,
+        ...(supportsWorkspaceMode ? { include_uncommitted: false } : {}),
+      },
+      op,
+    );
+  };
 
   const runFork = async (): Promise<void> => {
     setBusy(true);
@@ -43,32 +68,20 @@ export function MessageForkAction({
       let receipt;
       if (canNative && messageId) {
         try {
-          receipt = await forkSession(originSessionId, { messageId });
+          const op = (nativeOpRef.current ??= `fork-msg-${newUuid()}`);
+          receipt = await forkSession(originSessionId, { messageId, operation: op });
         } catch (nativeErr) {
-          if (!canLinked) throw nativeErr;
-          receipt = await duplicateSession(
-            originSessionId,
-            {
-              provider: session.provider,
-              provider_account_id: session.provider_account_id || "default",
-              before_seq: beforeSeq,
-              include_uncommitted: false,
-            },
-            `fork-turn-${newUuid()}`,
-          );
+          if (!(nativeErr instanceof ForkSessionError && nativeErr.definitiveUnsupported && canLinked)) {
+            throw nativeErr;
+          }
+          nativeOpRef.current = null;
+          receipt = await runLinked();
         }
       } else {
-        receipt = await duplicateSession(
-          originSessionId,
-          {
-            provider: session.provider,
-            provider_account_id: session.provider_account_id || "default",
-            before_seq: beforeSeq,
-            include_uncommitted: false,
-          },
-          `fork-turn-${newUuid()}`,
-        );
+        receipt = await runLinked();
       }
+      nativeOpRef.current = null;
+      linkedOpRef.current = null;
       notifyLineageChanged(receipt.session_id);
       notifyLineageChanged(originSessionId);
       requestPickSession(receipt.session_id, receipt.session ?? undefined);
