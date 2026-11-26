@@ -272,9 +272,12 @@ export const TOOL_NAMES = Object.freeze(TOOLS.map((tool) => tool.name));
 export class ToolError extends Error {}
 /** A request whose reply was lost after the target may have applied it. */
 export class UncertainEffect extends Error {
-  constructor(method) {
+  constructor(method, callId = null) {
     super(`outcome unknown: ${method}`);
     this.method = method;
+    if (typeof callId === "string" && callId.length > 0) {
+      this.callId = callId;
+    }
   }
 }
 

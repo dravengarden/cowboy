@@ -1213,7 +1213,10 @@ ${WRAP_UP_NOTE}`,
           // (so before the turn can end), also when every transport call was
           // answered (a timed-out publish): the session parks until the owner
           // acknowledges it. A lost report still ends the turn here.
-          await this.connection.call(UNCERTAIN_REPORT, { method: error.method }).catch(() => {});
+          const uncertainParams = error.callId
+            ? { method: error.method, callId: error.callId }
+            : { method: error.method };
+          await this.connection.call(UNCERTAIN_REPORT, uncertainParams).catch(() => {});
           this.onUncertain(sessionId, error.method);
           return failure(
             `outcome unknown: the connection to the workspace Machine was lost after ${error.method} may have been applied. Cowboy ends this turn; do not retry.`,

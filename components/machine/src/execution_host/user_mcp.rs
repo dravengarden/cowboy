@@ -43,6 +43,7 @@ const MAX_GIT_WALK_DEPTH: usize = 64;
 pub struct ManagerGate {
     pub enabled: bool,
     pub allowlist: Vec<String>,
+    pub config_revision: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -80,11 +81,13 @@ pub(super) struct ActiveUserMcpProcess {
     pub server_name: String,
     pub native_id: u64,
     pub start_state: StartState,
+    pub ended: watch::Sender<bool>,
 }
 
 #[derive(Default)]
 pub(super) struct UserMcpState {
     pub stop_epoch: u64,
+    pub last_stop_config_revision: u64,
     pub latest_allowlist: Option<Vec<String>>,
     stopped_order: VecDeque<String>,
     stopped_set: HashSet<String>,
@@ -117,6 +120,7 @@ impl UserMcpState {
 
     pub fn register_pending(&mut self, process_id: String, server_name: String, native_id: u64) {
         let (tx, _rx) = watch::channel(None);
+        let (ended, _ended_rx) = watch::channel(false);
         self.native_id_to_process
             .insert(native_id, process_id.clone());
         self.active_processes.insert(
@@ -125,6 +129,7 @@ impl UserMcpState {
                 server_name,
                 native_id,
                 start_state: StartState::Pending(tx),
+                ended,
             },
         );
     }
@@ -141,10 +146,11 @@ impl UserMcpState {
                 }
                 entry.start_state = StartState::Confirmed;
             }
-        } else if let Some(entry) = self.active_processes.remove(&process_id)
-            && let StartState::Pending(tx) = entry.start_state
-        {
-            let _ = tx.send(Some(false));
+        } else if let Some(entry) = self.active_processes.remove(&process_id) {
+            let _ = entry.ended.send(true);
+            if let StartState::Pending(tx) = entry.start_state {
+                let _ = tx.send(Some(false));
+            }
         }
     }
 
@@ -154,8 +160,8 @@ impl UserMcpState {
         if let Some(entry) = self.active_processes.get(process_id)
             && matches!(entry.start_state, StartState::Confirmed)
         {
-            let removed = self.active_processes.remove(process_id);
-            if let Some(removed) = removed {
+            let _ = entry.ended.send(true);
+            if let Some(removed) = self.active_processes.remove(process_id) {
                 self.native_id_to_process.remove(&removed.native_id);
             }
         }
@@ -165,6 +171,7 @@ impl UserMcpState {
     /// pending starts and clear active processes (executor owns the process group).
     pub fn on_backend_lost(&mut self) {
         for (_, entry) in self.active_processes.drain() {
+            let _ = entry.ended.send(true);
             if let StartState::Pending(tx) = entry.start_state {
                 let _ = tx.send(Some(false));
             }
@@ -174,6 +181,7 @@ impl UserMcpState {
 
     pub fn remove_confirmed_or_failed(&mut self, process_id: &str) {
         if let Some(removed) = self.active_processes.remove(process_id) {
+            let _ = removed.ended.send(true);
             self.native_id_to_process.remove(&removed.native_id);
         }
     }
@@ -356,6 +364,18 @@ pub fn extract_manager_gate(params: &Value) -> Result<(ManagerGate, Value), Valu
             ));
         }
     };
+    let config_revision = match gate_obj.get("configRevision") {
+        None | Some(Value::Null) => None,
+        Some(value) => match value.as_u64() {
+            Some(rev) => Some(rev),
+            None => {
+                return Err(error_reply(
+                    "user_mcp_invalid",
+                    "invalid managerGate.configRevision",
+                ));
+            }
+        },
+    };
     if !enabled {
         return Err(error_reply(
             "user_mcp_disabled",
@@ -364,7 +384,14 @@ pub fn extract_manager_gate(params: &Value) -> Result<(ManagerGate, Value), Valu
     }
     let mut clean = object.clone();
     clean.remove("managerGate");
-    Ok((ManagerGate { enabled, allowlist }, Value::Object(clean)))
+    Ok((
+        ManagerGate {
+            enabled,
+            allowlist,
+            config_revision,
+        },
+        Value::Object(clean),
+    ))
 }
 
 /// Resolve and validate stdio user MCP servers from `$HOME/.claude.json`.
@@ -813,36 +840,161 @@ fn is_executable_file(path: &Path) -> bool {
         .is_ok_and(|meta| meta.is_file() && (meta.permissions().mode() & 0o111) != 0)
 }
 
+fn normalize_lexical(path: &Path) -> PathBuf {
+    use std::path::Component;
+    let mut out = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => out.push(prefix.as_os_str()),
+            Component::RootDir => out.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::Normal(part) => out.push(part),
+        }
+    }
+    out
+}
+
 fn path_in_forbidden(path: &Path, forbidden: &BTreeSet<PathBuf>) -> bool {
     forbidden.iter().any(|prefix| path.starts_with(prefix))
 }
 
-fn arg_violates_repo_guardrail(arg: &str, forbidden: &BTreeSet<PathBuf>) -> bool {
-    let candidates: [&str; 2] = match arg.split_once('=') {
-        Some((_, rhs)) => [arg, rhs],
-        None => [arg, ""],
+fn is_arg_boundary_byte(byte: u8) -> bool {
+    byte.is_ascii_whitespace()
+        || matches!(
+            byte,
+            b'=' | b':'
+                | b'\''
+                | b'"'
+                | b'('
+                | b')'
+                | b'['
+                | b']'
+                | b'{'
+                | b'}'
+                | b','
+                | b';'
+                | b'&'
+                | b'|'
+                | b'`'
+                | b'<'
+                | b'>'
+        )
+}
+
+fn has_left_path_boundary(before: &str) -> bool {
+    let bytes = before.as_bytes();
+    let Some(&last) = bytes.last() else {
+        return true;
     };
-    for candidate in candidates {
-        if candidate.is_empty() {
+    if is_arg_boundary_byte(last) || before.ends_with("file://") {
+        return true;
+    }
+    // Short-option attached path such as `-C/repo` or `git -C/repo`.
+    if bytes.len() >= 2
+        && bytes[bytes.len() - 1].is_ascii_alphabetic()
+        && bytes[bytes.len() - 2] == b'-'
+        && (bytes.len() == 2 || is_arg_boundary_byte(bytes[bytes.len() - 3]))
+    {
+        return true;
+    }
+    false
+}
+
+fn has_right_path_boundary(after: &str) -> bool {
+    let Some(&first) = after.as_bytes().first() else {
+        return true;
+    };
+    first == b'/' || is_arg_boundary_byte(first)
+}
+
+fn arg_contains_forbidden_prefix(arg: &str, forbidden: &BTreeSet<PathBuf>) -> bool {
+    for prefix in forbidden {
+        let Some(raw) = prefix.to_str() else {
+            continue;
+        };
+        let needle = raw.trim_end_matches('/');
+        if needle.is_empty() {
             continue;
         }
-        if candidate == "."
-            || candidate == ".."
-            || candidate.starts_with("./")
-            || candidate.starts_with("../")
-        {
+        let mut search_from = 0;
+        while let Some(rel) = arg[search_from..].find(needle) {
+            let start = search_from + rel;
+            let end = start + needle.len();
+            if has_left_path_boundary(&arg[..start]) && has_right_path_boundary(&arg[end..]) {
+                return true;
+            }
+            search_from = start + 1;
+        }
+    }
+    false
+}
+
+fn candidate_path_violates(
+    candidate: &str,
+    forbidden: &BTreeSet<PathBuf>,
+    allow_bare_dot: bool,
+) -> bool {
+    if candidate.is_empty() {
+        return false;
+    }
+    if candidate.starts_with("./")
+        || candidate.starts_with("../")
+        || (!allow_bare_dot && (candidate == "." || candidate == ".."))
+    {
+        return true;
+    }
+    let trimmed = candidate.strip_prefix("file://").unwrap_or_else(|| {
+        let b = candidate.as_bytes();
+        if b.len() >= 3 && b[0] == b'-' && b[1].is_ascii_alphabetic() && b[2] == b'/' {
+            &candidate[2..]
+        } else {
+            candidate
+        }
+    });
+    let path = Path::new(trimmed);
+    if path.is_absolute() {
+        if path_in_forbidden(path, forbidden) {
             return true;
         }
-        let path = Path::new(candidate);
-        if path.is_absolute() {
-            if path_in_forbidden(path, forbidden) {
-                return true;
+        let normalized = normalize_lexical(path);
+        if path_in_forbidden(&normalized, forbidden) {
+            return true;
+        }
+        for ancestor in normalized.ancestors() {
+            if ancestor == Path::new("/") {
+                break;
             }
-            if let Ok(canonical) = std::fs::canonicalize(path)
-                && path_in_forbidden(&canonical, forbidden)
-            {
-                return true;
+            if let Ok(canonical) = std::fs::canonicalize(ancestor) {
+                if path_in_forbidden(&canonical, forbidden) {
+                    return true;
+                }
+                break;
             }
+        }
+    }
+    false
+}
+
+fn arg_violates_repo_guardrail(arg: &str, forbidden: &BTreeSet<PathBuf>) -> bool {
+    if candidate_path_violates(arg, forbidden, false) {
+        return true;
+    }
+    // Check suffixes after every `=` (e.g. `--a=--b=/repo/x`).
+    for (idx, ch) in arg.char_indices() {
+        if ch == '=' && candidate_path_violates(&arg[idx + 1..], forbidden, false) {
+            return true;
+        }
+    }
+    if arg_contains_forbidden_prefix(arg, forbidden) {
+        return true;
+    }
+    // Check shell/flag-delimited tokens (e.g. `bash -lc "cd /symlink-to-repo && ./run"`).
+    for token in arg.split(|c: char| c.is_ascii() && is_arg_boundary_byte(c as u8) && c != ':') {
+        if candidate_path_violates(token, forbidden, true) {
+            return true;
         }
     }
     false
@@ -1099,6 +1251,56 @@ mod tests {
             assert_eq!(
                 res.omitted.iter().find(|o| o.name == bad).map(|o| o.reason),
                 Some("invalid_config")
+            );
+        }
+    }
+
+    #[test]
+    fn arg_guardrail_blocks_contains_forms_without_sibling_false_positives() {
+        let dir = tempdir().unwrap();
+        let source = dir.path().join("repo");
+        let worktree = dir.path().join("wt");
+        let sibling = dir.path().join("repo-other");
+        let link = dir.path().join("link-to-repo");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::create_dir_all(&worktree).unwrap();
+        std::fs::create_dir_all(&sibling).unwrap();
+        std::os::unix::fs::symlink(&source, &link).unwrap();
+
+        let mut forbidden = BTreeSet::new();
+        forbidden.insert(source.clone());
+        forbidden.insert(std::fs::canonicalize(&source).unwrap());
+        forbidden.insert(worktree.clone());
+        forbidden.insert(std::fs::canonicalize(&worktree).unwrap());
+
+        // Compound / embedded forms MUST be rejected (Finding 5).
+        let blocked = [
+            format!("cd {} && node server.js", source.display()),
+            format!("-C{}", source.display()),
+            format!("file://{}/x", source.display()),
+            format!("--a=--b={}/x", worktree.display()),
+            format!("file://{}/x", link.display()),
+            format!("'{}'", source.display()),
+            "cd ./sub && node run.js".to_owned(),
+        ];
+        for arg in blocked {
+            assert!(
+                arg_violates_repo_guardrail(&arg, &forbidden),
+                "expected guardrail rejection for arg: {arg}"
+            );
+        }
+
+        // Sibling path, nested unrelated prefix, and non-ASCII text MUST stay allowed.
+        let allowed = [
+            format!("--dir={}", sibling.display()),
+            format!("/other{}", source.display()),
+            "--label=中文说明".to_owned(),
+            "https://example.com/v1".to_owned(),
+        ];
+        for arg in allowed {
+            assert!(
+                !arg_violates_repo_guardrail(&arg, &forbidden),
+                "unexpected guardrail rejection for safe arg: {arg}"
             );
         }
     }

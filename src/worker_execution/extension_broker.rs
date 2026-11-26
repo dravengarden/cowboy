@@ -1,6 +1,15 @@
 //! The session extensions of an account-sandboxed session (Antigravity),
-//! brokered by the worker (`docs/antigravity-real-accounts-design.md` and
-//! `docs/antigravity-user-mcp-r2-design.md`).
+//! brokered by the worker (docs/antigravity-real-accounts-design.md,
+//! "Session extensions", and docs/antigravity-user-mcp-r2-design.md).
+//! The worker starts Cowboy MCP and the folder's bindings on the target from
+//! its own launch template, as a Claude or Codex session runs them, discovers
+//! their tools, and answers the unit's two requests: `cowboy/extensions` (the
+//! tools) and `cowboy/extensionCall` (one `tools/call`, admitted only inside
+//! the active turn, drained before the turn completes, and an uncertain effect
+//! when its outcome is lost). Memory's tools go to the session's relay the
+//! same way, limited to the signed tool list. Owner-authored `~/.claude.json`
+//! user MCP servers run in Phase 2 when `ackProtocol >= 1` is advertised. The
+//! unit never starts, writes to or reads these processes, nor sees their output.
 
 mod user_mcp;
 
@@ -10,13 +19,14 @@ pub use user_mcp::{
 };
 
 use std::collections::HashSet;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use base64::Engine as _;
 use parking_lot::Mutex;
 use serde_json::{Value, json};
-use tokio::sync::{Mutex as AsyncMutex, OnceCell, watch};
+use tokio::sync::{Mutex as AsyncMutex, watch};
 
 use super::Client;
 use super::ledger::{Ledger, SERVER_PREFIX, SettlementGuard};
@@ -24,8 +34,8 @@ use super::memory_bridge::MemoryBridge;
 use super::relay::AckState;
 use crate::execution_protocol::{Command, Response};
 use user_mcp::{
-    EXTENSION_ACK_TIMEOUT, PendingAckState, USER_MCP_DISCOVERY_TIMEOUT, USER_MCP_SWEEP_TIMEOUT,
-    UserDiscovery,
+    EXTENSION_ACK_TIMEOUT, KeeperSupport, PendingAckState, SweepState, USER_MCP_DISCOVERY_TIMEOUT,
+    USER_MCP_SWEEP_TIMEOUT, UserDiscovery,
 };
 
 /// The unit's request listing the session's extension tools.
@@ -162,9 +172,12 @@ pub struct Broker {
     memory_server: String,
     guidance: Vec<String>,
     discovery: watch::Receiver<Option<Discovery>>,
-    keeper_user_mcp: OnceLock<bool>,
-    sweep_done: watch::Receiver<Option<bool>>,
-    phase2: OnceCell<UserDiscovery>,
+    keeper_support: Mutex<KeeperSupport>,
+    sweep_state: watch::Receiver<SweepState>,
+    sweep_clean: AtomicBool,
+    phase2_lock: AsyncMutex<()>,
+    phase2_cache: Mutex<Option<UserDiscovery>>,
+    stopping: Arc<AtomicBool>,
     user_servers: Mutex<Vec<Arc<Server>>>,
     pending_acks: Mutex<PendingAckState>,
     #[cfg(test)]
@@ -198,10 +211,11 @@ impl Broker {
                 )))
             })
             .collect();
+        let memory = memory.filter(|_| !plan.memory_tools.is_empty());
         let phase1_server_names: Vec<String> =
             plan.servers.iter().map(|s| s.name.clone()).collect();
         let (sender, discovery) = watch::channel(None);
-        let (sweep_tx, sweep_done) = watch::channel(None);
+        let (sweep_tx, sweep_state) = watch::channel(SweepState::Pending);
         let broker = Arc::new(Self {
             servers,
             phase1_server_names,
@@ -210,9 +224,12 @@ impl Broker {
             memory_server: plan.memory_server.clone(),
             guidance: plan.guidance.iter().take(MAX_GUIDANCE).cloned().collect(),
             discovery,
-            keeper_user_mcp: OnceLock::new(),
-            sweep_done,
-            phase2: OnceCell::new(),
+            keeper_support: Mutex::new(KeeperSupport::Unknown),
+            sweep_state,
+            sweep_clean: AtomicBool::new(false),
+            phase2_lock: AsyncMutex::new(()),
+            phase2_cache: Mutex::new(None),
+            stopping: Arc::new(AtomicBool::new(false)),
             user_servers: Mutex::new(Vec::new()),
             pending_acks: Mutex::new(PendingAckState::default()),
             #[cfg(test)]
@@ -241,24 +258,38 @@ impl Broker {
         let sweeping = Arc::clone(&broker);
         tokio::spawn(async move {
             if client_sweep.binding.managed.is_some() {
-                let _ = sweeping.keeper_user_mcp.set(false);
-                let _ = sweep_tx.send(Some(true));
+                *sweeping.keeper_support.lock() = KeeperSupport::Unsupported;
+                sweeping.sweep_clean.store(true, Ordering::Release);
+                let _ = sweep_tx.send(SweepState::Clean);
                 return;
             }
-            let supported = matches!(
-                tokio::time::timeout(USER_MCP_SWEEP_TIMEOUT, client_sweep.call(Command::Describe))
-                    .await,
-                Ok(Ok(Response::Ready { initialization, .. }))
-                    if initialization
+            match tokio::time::timeout(USER_MCP_SWEEP_TIMEOUT, client_sweep.call(Command::Describe))
+                .await
+            {
+                Ok(Ok(Response::Ready { initialization, .. })) => {
+                    let supported = initialization
                         .get(USER_MCP_INITIALIZATION_KEY)
                         .and_then(|v| v.get("schema"))
                         .and_then(Value::as_u64)
-                        == Some(1)
-            );
-            let _ = sweeping.keeper_user_mcp.set(supported);
-            if !supported {
-                let _ = sweep_tx.send(Some(true));
-                return;
+                        == Some(1);
+                    if !supported {
+                        *sweeping.keeper_support.lock() = KeeperSupport::Unsupported;
+                        sweeping.sweep_clean.store(true, Ordering::Release);
+                        let _ = sweep_tx.send(SweepState::Clean);
+                        return;
+                    }
+                    *sweeping.keeper_support.lock() = KeeperSupport::Supported;
+                }
+                _ => {
+                    // Transient link/startup timeout: keep Unknown so Phase 2 retries
+                    // on demand instead of permanently disabling user MCP.
+                    tracing::warn!(
+                        reason = "orphan_sweep_timeout",
+                        "startup keeper user MCP probe incomplete; will retry on demand"
+                    );
+                    let _ = sweep_tx.send(SweepState::Incomplete);
+                    return;
+                }
             }
             let ok = match tokio::time::timeout(
                 USER_MCP_SWEEP_TIMEOUT,
@@ -269,13 +300,16 @@ impl Broker {
                 Ok(Ok(reply)) => reply.pointer("/result/failed").and_then(Value::as_u64) == Some(0),
                 _ => false,
             };
-            if !ok {
+            if ok {
+                sweeping.sweep_clean.store(true, Ordering::Release);
+                let _ = sweep_tx.send(SweepState::Clean);
+            } else {
                 tracing::warn!(
                     reason = "orphan_sweep_timeout",
                     "startup user MCP orphan sweep did not confirm clean"
                 );
+                let _ = sweep_tx.send(SweepState::Incomplete);
             }
-            let _ = sweep_tx.send(Some(ok));
         });
         broker
     }
@@ -413,10 +447,7 @@ impl Broker {
             .and_then(Value::as_u64)
             .unwrap_or(0);
         let user_found = if ack_protocol >= 1 && client.binding.managed.is_none() {
-            self.phase2
-                .get_or_init(|| self.discover_user_mcp(client, &found))
-                .await
-                .clone()
+            self.discover_user_mcp_cached(client, &found).await
         } else {
             UserDiscovery::default()
         };
@@ -490,8 +521,9 @@ impl Broker {
             .into_iter()
             .find(|tool| tool.name == name)
             .or_else(|| {
-                self.phase2
-                    .get()
+                self.phase2_cache
+                    .lock()
+                    .as_ref()
                     .and_then(|user| user.tools.iter().find(|tool| tool.name == name).cloned())
             });
         let Some(tool) = tool else {
@@ -720,10 +752,17 @@ impl Server {
 
     async fn write(&self, client: &Arc<Client>, message: &Value) -> Result<(), Failure> {
         let mut line =
-            serde_json::to_vec(message).map_err(|_| Failure::NotSent("unserializable".into()))?;
+            serde_json::to_vec(message).map_err(|_| Failure::NotSent("encode".into()))?;
         line.push(b'\n');
         let chunk = base64::engine::general_purpose::STANDARD.encode(line);
         let write_id = format!("{:032x}", rand::random::<u128>());
+        // A new write is an effect: refused while effects cannot be recorded
+        // durably (retries of one already sent keep going).
+        if client.ledger().is_some_and(|ledger| ledger.unwritable()) {
+            return Err(Failure::NotSent(
+                "the execution ledger cannot be written".into(),
+            ));
+        }
         for _ in 0..50 {
             let reply = client
                 .invoke_classified(
@@ -869,6 +908,8 @@ impl Server {
     }
 }
 
+/// A required binding's CLI must report the binding contract Claude's and
+/// Codex's runtimes check (`mcp --binding-capabilities`).
 async fn binding_capabilities(
     client: &Arc<Client>,
     ledger: &Ledger,
@@ -895,48 +936,41 @@ async fn binding_capabilities(
         let reply = client
             .invoke(
                 "process/read".into(),
-                json!({"processId": process, "afterSeq": after,
-                    "maxBytes": 65_536, "waitMs": 1000}),
+                json!({"processId": process, "afterSeq": after, "maxBytes": 8192, "waitMs": 1000}),
             )
             .await
-            .map_err(|_| "binding capability probe lost".to_owned())?;
-        let result = reply
-            .get("result")
-            .ok_or_else(|| "binding capability probe failed".to_owned())?;
+            .map_err(|error| error.to_string())?;
+        let result = reply.get("result").cloned().unwrap_or(Value::Null);
         for chunk in result
             .get("chunks")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
         {
-            if let Some(seq) = chunk.get("seq").and_then(Value::as_u64) {
-                if after.is_some_and(|seen| seq <= seen) {
-                    continue;
-                }
-                after = Some(seq);
-            }
+            after = chunk.get("seq").and_then(Value::as_u64).or(after);
             if chunk.get("stream").and_then(Value::as_str) == Some("stdout")
                 && let Some(bytes) = chunk
                     .get("chunk")
                     .and_then(Value::as_str)
                     .and_then(|text| base64::engine::general_purpose::STANDARD.decode(text).ok())
-                && output.len() + bytes.len() <= 65_536
+                && output.len() + bytes.len() <= 8192
             {
                 output.extend_from_slice(&bytes);
             }
         }
-        if result.get("exited") == Some(&Value::Bool(true))
-            || result.get("closed") == Some(&Value::Bool(true))
-        {
-            let ok = result.get("exitCode") == Some(&json!(0))
-                && serde_json::from_slice::<Value>(&output).is_ok_and(|value| {
-                    value.get("protocolVersion") == Some(&json!(1))
-                        && value
-                            .get("binding")
-                            .and_then(Value::as_array)
-                            .is_some_and(|list| list.iter().any(|v| v == "directory"))
-                });
-            return if ok {
+        if result.get("closed") == Some(&Value::Bool(true)) {
+            ledger.closed(&process);
+        }
+        if result.get("exited") == Some(&Value::Bool(true)) {
+            ledger.exited(&process);
+            if result.get("exitCode").and_then(Value::as_i64) != Some(0) || output.len() > 4096 {
+                return Err("binding capability probe failed".into());
+            }
+            let report: Value = serde_json::from_slice(&output)
+                .map_err(|_| "invalid binding capability report".to_owned())?;
+            let expected = json!({"schema": 1, "descriptor_schema": 1, "relay_schema": 1,
+                "grant_mcp": true, "transport": "stdio_tool_only_v1"});
+            return if report == expected {
                 Ok(())
             } else {
                 Err("incompatible binding capabilities".into())

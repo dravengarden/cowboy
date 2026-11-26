@@ -2970,3 +2970,271 @@ async fn r2_schema1_sentinel_reopen_twice_and_pre_floor_counterexample() {
     assert!(rewritten.get("active_processes").is_none());
     assert_eq!(rewritten["uncertain_sequence"], 5);
 }
+
+#[tokio::test]
+async fn r2_phase1_required_binding_capabilities_and_pending_call_prefix_reservation() {
+    use base64::Engine as _;
+    let temp = tempfile::tempdir().unwrap();
+    let ledger_path = temp.path().join("ledger.json");
+
+    // Finding 10: unit may not choose a processId starting with cowboy-pending-call:.
+    let ledger = Ledger::open("sess-p1", Some(ledger_path)).unwrap();
+    ledger.begin_turn("t1");
+    let refused = ledger.admit(
+        "process/start",
+        &json!({"processId": "cowboy-pending-call:0123456789abcdef0123456789abcdef"}),
+    );
+    assert!(
+        refused.is_err(),
+        "unit-chosen cowboy-pending-call: processId must be refused"
+    );
+
+    // Finding 1: required folder binding uses exact NativeBridgeCapabilities shape:
+    // {"schema":1,"descriptor_schema":1,"relay_schema":1,"grant_mcp":true,"transport":"stdio_tool_only_v1"}
+    let cap_payload = json!({
+        "schema": 1,
+        "descriptor_schema": 1,
+        "relay_schema": 1,
+        "grant_mcp": true,
+        "transport": "stdio_tool_only_v1"
+    })
+    .to_string();
+    let cap_b64 = base64::engine::general_purpose::STANDARD.encode(cap_payload.as_bytes());
+    let output: Arc<Mutex<BTreeMap<String, Vec<Value>>>> = Arc::default();
+    let output_h = Arc::clone(&output);
+    let probe_pid: Arc<Mutex<Option<String>>> = Arc::default();
+    let probe_pid_h = Arc::clone(&probe_pid);
+
+    let target = Target::new_with_init(
+        json!({}),
+        Arc::new(move |inv| match inv.method.as_str() {
+            "process/start" => {
+                let pid = inv.params["processId"].as_str().unwrap().to_owned();
+                let is_probe = inv.params["argv"]
+                    .as_array()
+                    .is_some_and(|a| a.iter().any(|v| v == "--binding-capabilities"));
+                if is_probe {
+                    *probe_pid_h.lock() = Some(pid.clone());
+                }
+                completed(json!({"result": {"processId": pid}}))
+            }
+            "process/write" => {
+                let pid = inv.params["processId"].as_str().unwrap().to_owned();
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(inv.params["chunk"].as_str().unwrap())
+                    .unwrap();
+                let msg: Value = serde_json::from_slice(&bytes).unwrap();
+                if let Some(req_id) = msg.get("id").and_then(Value::as_u64) {
+                    match msg["method"].as_str() {
+                        Some("initialize") => push_mcp_line(
+                            &output_h,
+                            &pid,
+                            json!({"jsonrpc": "2.0", "id": req_id, "result": {}}),
+                        ),
+                        Some("tools/list") => push_mcp_line(
+                            &output_h,
+                            &pid,
+                            json!({"jsonrpc": "2.0", "id": req_id, "result": {"tools": [{"name": "suger_ping"}]}}),
+                        ),
+                        _ => {}
+                    }
+                }
+                completed(json!({"result": {"status": "accepted"}}))
+            }
+            "process/read" => {
+                let pid = inv.params["processId"].as_str().unwrap().to_owned();
+                if probe_pid_h.lock().as_deref() == Some(pid.as_str()) {
+                    return completed(json!({
+                        "result": {
+                            "chunks": [{"seq": 1, "stream": "stdout", "chunk": cap_b64}],
+                            "exited": true,
+                            "closed": true,
+                            "exitCode": 0
+                        }
+                    }));
+                }
+                let after = inv.params["afterSeq"].as_u64().unwrap_or(0);
+                let chunks: Vec<Value> = output_h
+                    .lock()
+                    .get(&pid)
+                    .map(|l| {
+                        l.iter()
+                            .filter(|c| c["seq"].as_u64().unwrap() > after)
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                completed(json!({"result": {"chunks": chunks, "exited": false, "closed": false}}))
+            }
+            _ => completed(json!({"result": {}})),
+        }),
+    );
+    target.client.set_ledger(Arc::clone(&ledger));
+    let plan = ExtensionPlan {
+        servers: vec![extension_broker::ServerPlan {
+            name: "suger".into(),
+            argv: vec!["cowboy".into(), "mcp".into(), "--binding".into()],
+            required: true,
+        }],
+        ..ExtensionPlan::default()
+    };
+    let broker = ExtensionBroker::start(&target.client, plan, None);
+    target.client.set_extensions(broker);
+
+    let listed = target
+        .client
+        .relay("cowboy/extensions".into(), json!({"ackProtocol": 1}))
+        .await;
+    assert!(
+        listed.get("error").is_none(),
+        "required binding with NativeBridgeCapabilities must succeed: {listed:?}"
+    );
+    let tools = listed["result"]["tools"].as_array().unwrap();
+    assert!(tools.iter().any(|t| t["name"] == "suger_ping"));
+}
+
+#[tokio::test]
+async fn r2_transient_describe_failure_recovers_on_demand_and_stop_fences_phase2() {
+    use base64::Engine as _;
+    let temp = tempfile::tempdir().unwrap();
+    let ledger_path = temp.path().join("ledger.json");
+
+    // Custom Target where the FIRST Describe is refused (simulating transient startup disconnect),
+    // and subsequent Describe calls succeed with cowboyUserMcp.
+    let (notify, mut notified) = mpsc::unbounded_channel();
+    let client = Client::new("session".into(), "worker".into(), binding(), notify);
+    let describe_calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let describe_h = Arc::clone(&describe_calls);
+    let output: Arc<Mutex<BTreeMap<String, Vec<Value>>>> = Arc::default();
+    let output_h = Arc::clone(&output);
+    let relay = Arc::clone(&client);
+    let task = tokio::spawn(async move {
+        while notified.recv().await.is_some() {
+            for frame in relay.frames(false) {
+                relay.sending(&frame);
+                let Frame::ExecutionRequest { request } = frame else {
+                    continue;
+                };
+                let request = *request;
+                match &request.command {
+                    Command::Describe => {
+                        let n = describe_h.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                        if n == 0 {
+                            answer(
+                                &relay,
+                                request,
+                                Response::Refused {
+                                    reason: crate::execution_protocol::Refusal::Capacity,
+                                },
+                            );
+                        } else {
+                            answer(
+                                &relay,
+                                request,
+                                Response::Ready {
+                                    scope: Scope::from_binding(&binding()),
+                                    initialization: user_mcp_init(),
+                                    event_cursor: 0,
+                                },
+                            );
+                        }
+                    }
+                    Command::Invoke { invocation, .. } => {
+                        let reply = match invocation.method.as_str() {
+                            USER_MCP_STOP_METHOD => {
+                                completed(json!({"result": {"stopped": 0, "failed": 0}}))
+                            }
+                            USER_MCP_LIST_METHOD => completed(json!({
+                                "result": {
+                                    "servers": [{"name": "recovered", "scope": "user", "fingerprint": "b".repeat(64)}],
+                                    "omitted": []
+                                }
+                            })),
+                            USER_MCP_START_METHOD => completed(
+                                json!({"result": {"processId": invocation.params["processId"]}}),
+                            ),
+                            "process/write" => {
+                                let pid =
+                                    invocation.params["processId"].as_str().unwrap().to_owned();
+                                let bytes = base64::engine::general_purpose::STANDARD
+                                    .decode(invocation.params["chunk"].as_str().unwrap())
+                                    .unwrap();
+                                let msg: Value = serde_json::from_slice(&bytes).unwrap();
+                                if let Some(req_id) = msg.get("id").and_then(Value::as_u64) {
+                                    match msg["method"].as_str() {
+                                        Some("initialize") => push_mcp_line(
+                                            &output_h,
+                                            &pid,
+                                            json!({"jsonrpc": "2.0", "id": req_id, "result": {}}),
+                                        ),
+                                        Some("tools/list") => push_mcp_line(
+                                            &output_h,
+                                            &pid,
+                                            json!({"jsonrpc": "2.0", "id": req_id, "result": {"tools": [{"name": "hello"}]}}),
+                                        ),
+                                        _ => {}
+                                    }
+                                }
+                                completed(json!({"result": {"status": "accepted"}}))
+                            }
+                            "process/read" => {
+                                let pid =
+                                    invocation.params["processId"].as_str().unwrap().to_owned();
+                                let after = invocation.params["afterSeq"].as_u64().unwrap_or(0);
+                                let chunks: Vec<Value> = output_h
+                                    .lock()
+                                    .get(&pid)
+                                    .map(|l| {
+                                        l.iter()
+                                            .filter(|c| c["seq"].as_u64().unwrap() > after)
+                                            .cloned()
+                                            .collect()
+                                    })
+                                    .unwrap_or_default();
+                                completed(
+                                    json!({"result": {"chunks": chunks, "exited": false, "closed": false}}),
+                                )
+                            }
+                            _ => completed(json!({"result": {}})),
+                        };
+                        if let Reply::Answer(response) = reply {
+                            answer(&relay, request, response);
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+    });
+
+    let ledger = Ledger::open("sess-recover", Some(ledger_path)).unwrap();
+    client.set_ledger(Arc::clone(&ledger));
+    let broker = ExtensionBroker::with_test_timeouts(
+        &client,
+        ExtensionPlan::default(),
+        Some(Duration::from_millis(120)),
+        Some(Duration::from_secs(2)),
+    );
+    client.set_extensions(Arc::clone(&broker));
+
+    // Wait briefly so the initial startup Describe runs and fails once.
+    tokio::time::sleep(Duration::from_millis(80)).await;
+    assert!(
+        describe_calls.load(std::sync::atomic::Ordering::SeqCst) >= 1,
+        "startup probe must have attempted Describe"
+    );
+
+    // Phase 2 retries Describe + orphan sweep on demand and discovers `recovered_hello`!
+    let listed = client
+        .relay("cowboy/extensions".into(), json!({"ackProtocol": 1}))
+        .await;
+    let tools = listed["result"]["tools"].as_array().unwrap();
+    assert!(
+        tools.iter().any(|t| t["name"] == "recovered_hello"),
+        "transient startup Describe failure must recover on demand, got {listed:?}"
+    );
+
+    // Teardown stop_user_servers sets stopping fence cleanly.
+    broker.stop_user_servers(&client).await;
+    task.abort();
+}

@@ -63,6 +63,7 @@ pub struct Manager {
     gates: parking_lot::Mutex<HashMap<String, Arc<Semaphore>>>,
     calls: Option<Arc<crate::managed_calls::host::CallHost>>,
     device_config: Option<crate::config::Handle>,
+    user_mcp_policy_state: parking_lot::Mutex<(u64, bool, Vec<String>)>,
 }
 
 impl Manager {
@@ -211,6 +212,7 @@ impl Manager {
             gates: parking_lot::Mutex::new(HashMap::new()),
             calls: None,
             device_config: None,
+            user_mcp_policy_state: parking_lot::Mutex::new((1, true, Vec::new())),
         })
     }
 
@@ -222,6 +224,10 @@ impl Manager {
 
     /// Attach live-reloadable Device configuration for `execution.user_mcp*`.
     pub fn with_device_config(mut self, device_config: crate::config::Handle) -> Self {
+        let current = device_config.current();
+        let enabled = current.get(&crate::config::schema::DEVICE_EXECUTION_USER_MCP);
+        let allowlist = current.get(&crate::config::schema::DEVICE_EXECUTION_USER_MCP_ALLOWLIST);
+        *self.user_mcp_policy_state.lock() = (1, enabled, allowlist);
         self.device_config = Some(device_config);
         self
     }
@@ -233,8 +239,8 @@ impl Manager {
         manager
     }
 
-    fn user_mcp_policy(&self) -> (bool, Vec<String>) {
-        match &self.device_config {
+    fn user_mcp_policy_with_revision(&self) -> (u64, bool, Vec<String>) {
+        let (enabled, allowlist) = match &self.device_config {
             Some(handle) => {
                 let current = handle.current();
                 (
@@ -243,7 +249,14 @@ impl Manager {
                 )
             }
             None => (true, Vec::new()),
+        };
+        let mut state = self.user_mcp_policy_state.lock();
+        if state.1 != enabled || state.2 != allowlist {
+            state.0 = state.0.saturating_add(1);
+            state.1 = enabled;
+            state.2 = allowlist.clone();
         }
+        (state.0, enabled, allowlist)
     }
 
     /// Level-triggered 5-second reconciliation watcher: on Manager startup and
@@ -253,19 +266,12 @@ impl Manager {
     pub fn start_user_mcp_reconciler(self: &Arc<Self>) {
         let manager = Arc::clone(self);
         tokio::spawn(async move {
-            let mut config_revision: u64 = 1;
-            let mut last = manager.user_mcp_policy();
             let mut confirmed: HashMap<String, u64> = HashMap::new();
             let mut tick = tokio::time::interval(Duration::from_secs(5));
             tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
             loop {
                 tick.tick().await;
-                let current = manager.user_mcp_policy();
-                if current != last {
-                    config_revision = config_revision.saturating_add(1);
-                    last = current.clone();
-                }
-                let (enabled, allowlist) = current;
+                let (config_revision, enabled, allowlist) = manager.user_mcp_policy_with_revision();
                 if enabled && allowlist.is_empty() {
                     continue;
                 }
@@ -327,7 +333,7 @@ impl Manager {
                 let keep = keep_allowlist.clone();
                 async move {
                     let clean = self
-                        .stop_user_mcp_for_keeper(&directory, &contract, keep)
+                        .stop_user_mcp_for_keeper(&directory, &contract, keep, config_revision)
                         .await;
                     (session_id, clean)
                 }
@@ -350,10 +356,14 @@ impl Manager {
         directory: &Path,
         contract: &LaunchContract,
         keep_allowlist: Option<Vec<String>>,
+        config_revision: u64,
     ) -> bool {
         let params = match keep_allowlist {
-            Some(allowlist) => serde_json::json!({"keepAllowlist": allowlist}),
-            None => serde_json::json!({}),
+            Some(allowlist) => serde_json::json!({
+                "keepAllowlist": allowlist,
+                "configRevision": config_revision,
+            }),
+            None => serde_json::json!({"configRevision": config_revision}),
         };
         let command = keeper::Command::Invoke {
             invocation: keeper::Invocation {
@@ -390,6 +400,9 @@ impl Manager {
                             == Some("user_mcp_unsupported")
                 }
             }
+            Ok(Ok(keeper::Response::Refused {
+                reason: keeper::Refusal::EnvironmentLost,
+            })) => true,
             Ok(Err(error)) if liveness::missing_endpoint(&error) => true,
             _ => false,
         }
@@ -1115,13 +1128,13 @@ impl Manager {
             } if invocation.method == crate::execution_host::user_mcp::USER_MCP_LIST_METHOD
                 || invocation.method == crate::execution_host::user_mcp::USER_MCP_START_METHOD =>
             {
-                let (enabled, allowlist) = self.user_mcp_policy();
+                let (config_revision, enabled, allowlist) = self.user_mcp_policy_with_revision();
                 if let Some(obj) = invocation.params.as_object_mut() {
                     obj.remove("managerGate");
                 }
                 if !enabled {
                     let _ = self
-                        .stop_user_mcp_for_keeper(&directory, &contract, None)
+                        .stop_user_mcp_for_keeper(&directory, &contract, None, config_revision)
                         .await;
                     return Ok(keeper::Response::Operation {
                         outcome: keeper::Outcome::Completed {
@@ -1140,6 +1153,7 @@ impl Manager {
                     serde_json::json!({
                         "enabled": true,
                         "allowlist": allowlist,
+                        "configRevision": config_revision,
                     }),
                 );
                 keeper::Command::Invoke {
@@ -1151,9 +1165,10 @@ impl Manager {
                 mut invocation,
                 wait_ms,
             } if invocation.method == crate::execution_host::user_mcp::USER_MCP_STOP_METHOD => {
-                // Caller-originated stops may not forge keepAllowlist.
+                // Caller-originated stops may not forge keepAllowlist or configRevision.
                 if let Some(obj) = invocation.params.as_object_mut() {
                     obj.remove("keepAllowlist");
+                    obj.remove("configRevision");
                 }
                 keeper::Command::Invoke {
                     invocation,
@@ -1563,8 +1578,9 @@ mod user_mcp_manager_tests {
             inv.params["managerGate"]["allowlist"],
             serde_json::json!(["GitHub"])
         );
+        assert_eq!(inv.params["managerGate"]["configRevision"], 1);
 
-        // 2. Caller attempts to forge keepAllowlist on stopUserMcp -> stripped!
+        // 2. Caller attempts to forge keepAllowlist and configRevision on stopUserMcp -> stripped!
         let _ = mgr
             .call(
                 "sess-umcp-1",
@@ -1573,7 +1589,7 @@ mod user_mcp_manager_tests {
                     invocation: keeper::Invocation {
                         operation_id: "op-stop-caller".into(),
                         method: crate::execution_host::user_mcp::USER_MCP_STOP_METHOD.into(),
-                        params: serde_json::json!({"keepAllowlist": ["evil"]}),
+                        params: serde_json::json!({"keepAllowlist": ["evil"], "configRevision": 999}),
                     },
                     wait_ms: 1_000,
                 },
@@ -1582,6 +1598,7 @@ mod user_mcp_manager_tests {
             .unwrap();
         let inv = seen.lock().pop().unwrap();
         assert!(inv.params.get("keepAllowlist").is_none());
+        assert!(inv.params.get("configRevision").is_none());
 
         // 3. Level-triggered reconciler on restart with user_mcp=false:
         //    - bypasses saturated 24-permit semaphore!

@@ -3,6 +3,7 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
 
 use serde_json::{Value, json};
@@ -12,6 +13,7 @@ use super::{
     Broker, CALL_TIMEOUT, Discovery, FACADE_TOOLS, Failure, MCP_PROTOCOL, Route, Server, Tool,
     refused, tool_name,
 };
+use crate::execution_protocol::{Command, Response};
 use crate::worker_execution::Client;
 use crate::worker_execution::ledger::{Ledger, SettlementGuard};
 use crate::worker_execution::relay::AckState;
@@ -39,6 +41,20 @@ pub(super) const MAX_USER_MCP_RESULT_BYTES: usize = 4 * 1024 * 1024;
 /// Bounded proxy acknowledgement deadline started AT PendingAck registration.
 pub(super) const EXTENSION_ACK_TIMEOUT: Duration = Duration::from_secs(15);
 const MAX_CLOSED_CONNECTIONS: usize = 256;
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum KeeperSupport {
+    Unknown,
+    Supported,
+    Unsupported,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum SweepState {
+    Pending,
+    Clean,
+    Incomplete,
+}
 
 #[derive(Clone, Default)]
 pub(super) struct UserDiscovery {
@@ -88,61 +104,170 @@ impl PendingAckState {
 }
 
 impl Broker {
-    /// Demand-triggered Phase 2 user MCP discovery. Never fails the session:
-    /// returns whatever servers became ready before the 15 s wall budget,
-    /// cleans up stragglers via `cowboy/stopUserMcp`, and logs/emits ONLY
-    /// bounded closed reason codes.
-    pub(super) async fn discover_user_mcp(
+    fn is_stopping(&self, ledger: Option<&Ledger>) -> bool {
+        self.stopping.load(Ordering::Acquire) || ledger.is_some_and(Ledger::is_closed)
+    }
+
+    /// Serialized, demand-triggered Phase 2 user MCP discovery. Caches
+    /// definitive outcomes (Unsupported, disabled, or completed discovery),
+    /// while transient probe/sweep/list failures return a bounded note without
+    /// permanently poisoning the cache.
+    pub(super) async fn discover_user_mcp_cached(
         &self,
         client: &Arc<Client>,
         phase1: &Discovery,
     ) -> UserDiscovery {
-        let deadline = tokio::time::Instant::now() + self.phase2_timeout();
-        let mut sweep = self.sweep_done.clone();
-        let sweep_ok =
-            match tokio::time::timeout_at(deadline, sweep.wait_for(Option::is_some)).await {
-                Ok(Ok(val)) => (*val).unwrap_or(false),
+        if let Some(cached) = self.phase2_cache.lock().clone() {
+            return cached;
+        }
+        let _guard = self.phase2_lock.lock().await;
+        if let Some(cached) = self.phase2_cache.lock().clone() {
+            return cached;
+        }
+        let (result, cacheable) = self.discover_user_mcp(client, phase1).await;
+        if cacheable && !self.is_stopping(client.ledger().map(Arc::as_ref)) {
+            *self.phase2_cache.lock() = Some(result.clone());
+        }
+        result
+    }
+
+    async fn ensure_keeper_and_sweep_ready(
+        &self,
+        client: &Arc<Client>,
+        deadline: tokio::time::Instant,
+    ) -> Result<bool, UserDiscovery> {
+        let mut sweep = self.sweep_state.clone();
+        let _ = tokio::time::timeout_at(
+            deadline,
+            sweep.wait_for(|state| *state != SweepState::Pending),
+        )
+        .await;
+        let mut support = *self.keeper_support.lock();
+        if support == KeeperSupport::Unknown {
+            let probe_deadline = deadline.min(tokio::time::Instant::now() + USER_MCP_SWEEP_TIMEOUT);
+            match tokio::time::timeout_at(probe_deadline, client.call(Command::Describe)).await {
+                Ok(Ok(Response::Ready { initialization, .. })) => {
+                    let supported = initialization
+                        .get(USER_MCP_INITIALIZATION_KEY)
+                        .and_then(|v| v.get("schema"))
+                        .and_then(Value::as_u64)
+                        == Some(1);
+                    support = if supported {
+                        KeeperSupport::Supported
+                    } else {
+                        KeeperSupport::Unsupported
+                    };
+                    *self.keeper_support.lock() = support;
+                    if !supported {
+                        self.sweep_clean.store(true, Ordering::Release);
+                    }
+                }
+                _ => {
+                    tracing::warn!(
+                        reason = "orphan_sweep_timeout",
+                        "user MCP discovery skipped: keeper capability probe unavailable"
+                    );
+                    return Err(UserDiscovery {
+                        tools: Vec::new(),
+                        instructions: vec![
+                            "User MCP servers unavailable in this session (orphan_sweep_timeout)."
+                                .to_owned(),
+                        ],
+                    });
+                }
+            }
+        }
+        if support == KeeperSupport::Unsupported {
+            return Ok(false);
+        }
+        if !self.sweep_clean.load(Ordering::Acquire) {
+            let sweep_deadline = deadline.min(tokio::time::Instant::now() + USER_MCP_SWEEP_TIMEOUT);
+            let ok = match tokio::time::timeout_at(
+                sweep_deadline,
+                client.invoke_classified(USER_MCP_STOP_METHOD.into(), json!({})),
+            )
+            .await
+            {
+                Ok(Ok(reply)) => reply.pointer("/result/failed").and_then(Value::as_u64) == Some(0),
                 _ => false,
             };
-        if !sweep_ok {
-            tracing::warn!(
-                reason = "orphan_sweep_timeout",
-                "user MCP discovery skipped: orphan sweep incomplete"
-            );
-            return UserDiscovery {
-                tools: Vec::new(),
-                instructions: vec![
-                    "User MCP servers unavailable in this session (orphan_sweep_timeout)."
-                        .to_owned(),
-                ],
-            };
+            if ok {
+                self.sweep_clean.store(true, Ordering::Release);
+            } else {
+                tracing::warn!(
+                    reason = "orphan_sweep_timeout",
+                    "user MCP discovery skipped: orphan sweep incomplete"
+                );
+                return Err(UserDiscovery {
+                    tools: Vec::new(),
+                    instructions: vec![
+                        "User MCP servers unavailable in this session (orphan_sweep_timeout)."
+                            .to_owned(),
+                    ],
+                });
+            }
         }
-        if !self.keeper_user_mcp.get().copied().unwrap_or(false) {
-            return UserDiscovery::default();
-        }
+        Ok(true)
+    }
+
+    /// Demand-triggered Phase 2 user MCP discovery. Never fails the session:
+    /// returns whatever servers became ready before the 15 s wall budget,
+    /// cleans up stragglers via `cowboy/stopUserMcp`, and logs/emits ONLY
+    /// bounded closed reason codes.
+    async fn discover_user_mcp(
+        &self,
+        client: &Arc<Client>,
+        phase1: &Discovery,
+    ) -> (UserDiscovery, bool) {
         let Some(ledger) = client.ledger().cloned() else {
-            return UserDiscovery::default();
+            return (UserDiscovery::default(), false);
         };
+        if self.is_stopping(Some(&ledger)) {
+            return (UserDiscovery::default(), false);
+        }
+        let deadline = tokio::time::Instant::now() + self.phase2_timeout();
+        match self.ensure_keeper_and_sweep_ready(client, deadline).await {
+            Ok(false) => return (UserDiscovery::default(), true),
+            Ok(true) => {}
+            Err(transient) => return (transient, false),
+        }
+        if self.is_stopping(Some(&ledger)) {
+            return (UserDiscovery::default(), false);
+        }
         let (candidates, mut notes) = match self.fetch_user_mcp_candidates(client, deadline).await {
             Ok(parsed) => parsed,
-            Err(early) => return early,
+            Err((early, cacheable)) => return (early, cacheable),
         };
         if candidates.is_empty() {
-            return UserDiscovery {
-                tools: Vec::new(),
-                instructions: notes,
-            };
+            return (
+                UserDiscovery {
+                    tools: Vec::new(),
+                    instructions: notes,
+                },
+                true,
+            );
         }
-        let ready =
-            launch_user_mcp_candidates(client, &ledger, candidates, deadline, &mut notes).await;
-        self.assemble_user_discovery(phase1, ready, notes)
+        let ready = self
+            .launch_user_mcp_candidates(client, &ledger, candidates, deadline, &mut notes)
+            .await;
+        if self.is_stopping(Some(&ledger)) {
+            for (_, server, _, _) in ready {
+                server.mark_closed();
+                spawn_stop_user_process(Arc::clone(client), server.process.clone());
+            }
+            return (UserDiscovery::default(), false);
+        }
+        (
+            self.assemble_user_discovery(client, &ledger, phase1, ready, notes),
+            true,
+        )
     }
 
     async fn fetch_user_mcp_candidates(
         &self,
         client: &Arc<Client>,
         deadline: tokio::time::Instant,
-    ) -> Result<(Vec<(String, String)>, Vec<String>), UserDiscovery> {
+    ) -> Result<(Vec<(String, String)>, Vec<String>), (UserDiscovery, bool)> {
         let listed = match tokio::time::timeout_at(
             deadline,
             client.invoke_classified(USER_MCP_LIST_METHOD.into(), json!({})),
@@ -152,26 +277,33 @@ impl Broker {
             Ok(Ok(reply)) => reply,
             _ => {
                 tracing::warn!(reason = "list_failed", "user MCP listing unavailable");
-                return Err(UserDiscovery {
-                    tools: Vec::new(),
-                    instructions: vec![
-                        "User MCP servers unavailable in this session (list_failed).".to_owned(),
-                    ],
-                });
+                return Err((
+                    UserDiscovery {
+                        tools: Vec::new(),
+                        instructions: vec![
+                            "User MCP servers unavailable in this session (list_failed)."
+                                .to_owned(),
+                        ],
+                    },
+                    false,
+                ));
             }
         };
         if let Some(error) = listed.get("error") {
             let code = closed_reason_from_error(error);
             tracing::warn!(reason = code, "user MCP listing declined");
             if code == "disabled" {
-                return Err(UserDiscovery::default());
+                return Err((UserDiscovery::default(), true));
             }
-            return Err(UserDiscovery {
-                tools: Vec::new(),
-                instructions: vec![format!(
-                    "User MCP servers unavailable in this session ({code})."
-                )],
-            });
+            return Err((
+                UserDiscovery {
+                    tools: Vec::new(),
+                    instructions: vec![format!(
+                        "User MCP servers unavailable in this session ({code})."
+                    )],
+                },
+                false,
+            ));
         }
         let mut notes = Vec::new();
         if let Some(omitted) = listed.pointer("/result/omitted").and_then(Value::as_array) {
@@ -239,6 +371,8 @@ impl Broker {
 
     fn assemble_user_discovery(
         &self,
+        client: &Arc<Client>,
+        ledger: &Ledger,
         phase1: &Discovery,
         mut ready_servers: Vec<(String, Arc<Server>, String, Vec<Value>)>,
         notes: Vec<String>,
@@ -255,6 +389,14 @@ impl Broker {
         };
         let mut total_instr_chars: usize = 0;
         let mut stored_servers = self.user_servers.lock();
+        if self.is_stopping(Some(ledger)) {
+            drop(stored_servers);
+            for (_, server, _, _) in ready_servers {
+                server.mark_closed();
+                spawn_stop_user_process(Arc::clone(client), server.process.clone());
+            }
+            return UserDiscovery::default();
+        }
         for (name, server, instructions, tools) in ready_servers {
             let index = stored_servers.len();
             stored_servers.push(server);
@@ -409,13 +551,16 @@ impl Broker {
 
     /// Stop all keeper-owned user MCP servers on worker teardown.
     pub async fn stop_user_servers(&self, client: &Arc<Client>) {
+        self.stopping.store(true, Ordering::Release);
         {
             let servers = self.user_servers.lock();
             for server in servers.iter() {
                 server.mark_closed();
             }
         }
-        if !self.keeper_user_mcp.get().copied().unwrap_or(false) {
+        if client.binding.managed.is_some()
+            || *self.keeper_support.lock() == KeeperSupport::Unsupported
+        {
             return;
         }
         let _ = tokio::time::timeout(
@@ -537,89 +682,143 @@ type ServerInitOutcome = (
     Result<(Arc<Server>, String, Vec<Value>), &'static str>,
 );
 
-async fn launch_user_mcp_candidates(
-    client: &Arc<Client>,
-    ledger: &Arc<Ledger>,
-    candidates: Vec<(String, String)>,
-    deadline: tokio::time::Instant,
-    notes: &mut Vec<String>,
-) -> Vec<(String, Arc<Server>, String, Vec<Value>)> {
-    let sem = Arc::new(Semaphore::new(MAX_USER_MCP_CONCURRENCY));
-    let in_flight: Arc<parking_lot::Mutex<HashMap<String, String>>> =
-        Arc::new(parking_lot::Mutex::new(HashMap::new()));
-    let mut join_set: tokio::task::JoinSet<ServerInitOutcome> = tokio::task::JoinSet::new();
+impl Broker {
+    async fn launch_user_mcp_candidates(
+        &self,
+        client: &Arc<Client>,
+        ledger: &Arc<Ledger>,
+        candidates: Vec<(String, String)>,
+        deadline: tokio::time::Instant,
+        notes: &mut Vec<String>,
+    ) -> Vec<(String, Arc<Server>, String, Vec<Value>)> {
+        let sem = Arc::new(Semaphore::new(MAX_USER_MCP_CONCURRENCY));
+        let in_flight: Arc<parking_lot::Mutex<HashMap<String, String>>> =
+            Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        let mut join_set: tokio::task::JoinSet<ServerInitOutcome> = tokio::task::JoinSet::new();
 
-    for (name, fingerprint) in candidates {
-        let process_id = format!("{USER_MCP_PROCESS_PREFIX}{:032x}", rand::random::<u128>());
-        in_flight.lock().insert(name.clone(), process_id.clone());
-        let sem = Arc::clone(&sem);
-        let client = Arc::clone(client);
-        let ledger = Arc::clone(ledger);
-        let in_flight_ref = Arc::clone(&in_flight);
-        join_set.spawn(async move {
-            let Ok(_permit) = tokio::time::timeout_at(deadline, sem.acquire_owned()).await else {
-                return (name, Err("init_timeout"));
-            };
-            let Ok(_permit) = _permit else {
-                return (name, Err("start_failed"));
-            };
-            let server_deadline =
-                deadline.min(tokio::time::Instant::now() + USER_MCP_SERVER_INIT_TIMEOUT);
-            let result = start_and_init_user_server(
-                &client,
-                &ledger,
-                &name,
-                &fingerprint,
-                &process_id,
-                server_deadline,
-            )
-            .await;
-            in_flight_ref.lock().remove(&name);
-            (name, result)
-        });
-    }
-
-    let mut ready_servers = Vec::new();
-    loop {
-        match tokio::time::timeout_at(deadline, join_set.join_next()).await {
-            Ok(Some(Ok((name, Ok((server, instructions, tools)))))) => {
-                ready_servers.push((name, server, instructions, tools));
-            }
-            Ok(Some(Ok((name, Err(reason))))) => {
-                tracing::warn!(server = %name, reason, "user MCP server unavailable");
-                notes.push(format!("User MCP server {name} unavailable ({reason})."));
-            }
-            Ok(Some(Err(_))) => {}
-            Ok(None) => break,
-            Err(_) => {
-                join_set.abort_all();
-                let leftovers: Vec<(String, String)> = in_flight.lock().drain().collect();
-                for (name, process_id) in leftovers {
-                    tracing::warn!(
-                        server = %name,
-                        reason = "init_timeout",
-                        "user MCP server timed out during discovery"
-                    );
-                    notes.push(format!(
-                        "User MCP server {name} unavailable (init_timeout)."
-                    ));
-                    spawn_stop_user_process(Arc::clone(client), process_id);
-                }
+        for (name, fingerprint) in candidates {
+            if self.is_stopping(Some(ledger)) {
                 break;
             }
+            let process_id = format!("{USER_MCP_PROCESS_PREFIX}{:032x}", rand::random::<u128>());
+            in_flight.lock().insert(name.clone(), process_id.clone());
+            let sem = Arc::clone(&sem);
+            let client = Arc::clone(client);
+            let ledger = Arc::clone(ledger);
+            let in_flight_ref = Arc::clone(&in_flight);
+            let stopping = Arc::clone(&self.stopping);
+            join_set.spawn(async move {
+                if stopping.load(Ordering::Acquire) || ledger.is_closed() {
+                    in_flight_ref.lock().remove(&name);
+                    return (name, Err("stopped"));
+                }
+                let Ok(_permit) = tokio::time::timeout_at(deadline, sem.acquire_owned()).await
+                else {
+                    return (name, Err("init_timeout"));
+                };
+                let Ok(_permit) = _permit else {
+                    return (name, Err("start_failed"));
+                };
+                if stopping.load(Ordering::Acquire) || ledger.is_closed() {
+                    in_flight_ref.lock().remove(&name);
+                    return (name, Err("stopped"));
+                }
+                let server_deadline =
+                    deadline.min(tokio::time::Instant::now() + USER_MCP_SERVER_INIT_TIMEOUT);
+                let result = start_and_init_user_server(
+                    &client,
+                    &ledger,
+                    &stopping,
+                    &name,
+                    &fingerprint,
+                    &process_id,
+                    server_deadline,
+                )
+                .await;
+                in_flight_ref.lock().remove(&name);
+                (name, result)
+            });
         }
+
+        let mut ready_servers = Vec::new();
+        loop {
+            match tokio::time::timeout_at(deadline, join_set.join_next()).await {
+                Ok(Some(Ok((name, Ok((server, instructions, tools)))))) => {
+                    if self.is_stopping(Some(ledger)) {
+                        server.mark_closed();
+                        spawn_stop_user_process(Arc::clone(client), server.process.clone());
+                    } else {
+                        ready_servers.push((name, server, instructions, tools));
+                    }
+                }
+                Ok(Some(Ok((name, Err(reason))))) => {
+                    tracing::warn!(server = %name, reason, "user MCP server unavailable");
+                    notes.push(format!("User MCP server {name} unavailable ({reason})."));
+                }
+                Ok(Some(Err(_))) => {}
+                Ok(None) => break,
+                Err(_) => {
+                    // Drain any tasks that already finished before aborting so
+                    // their started processes are never dropped unrecorded.
+                    while let Some(joined) = join_set.try_join_next() {
+                        match joined {
+                            Ok((name, Ok((server, instructions, tools)))) => {
+                                if self.is_stopping(Some(ledger)) {
+                                    server.mark_closed();
+                                    spawn_stop_user_process(
+                                        Arc::clone(client),
+                                        server.process.clone(),
+                                    );
+                                } else {
+                                    ready_servers.push((name, server, instructions, tools));
+                                }
+                            }
+                            Ok((name, Err(reason))) => {
+                                tracing::warn!(
+                                    server = %name,
+                                    reason,
+                                    "user MCP server unavailable"
+                                );
+                                notes.push(format!(
+                                    "User MCP server {name} unavailable ({reason})."
+                                ));
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                    join_set.abort_all();
+                    let leftovers: Vec<(String, String)> = in_flight.lock().drain().collect();
+                    for (name, process_id) in leftovers {
+                        tracing::warn!(
+                            server = %name,
+                            reason = "init_timeout",
+                            "user MCP server timed out during discovery"
+                        );
+                        notes.push(format!(
+                            "User MCP server {name} unavailable (init_timeout)."
+                        ));
+                        spawn_stop_user_process(Arc::clone(client), process_id);
+                    }
+                    break;
+                }
+            }
+        }
+        ready_servers
     }
-    ready_servers
 }
 
 async fn start_and_init_user_server(
     client: &Arc<Client>,
     ledger: &Ledger,
+    stopping: &std::sync::atomic::AtomicBool,
     name: &str,
     fingerprint: &str,
     process_id: &str,
     deadline: tokio::time::Instant,
 ) -> Result<(Arc<Server>, String, Vec<Value>), &'static str> {
+    if stopping.load(Ordering::Acquire) || ledger.is_closed() {
+        return Err("stopped");
+    }
     let start_reply = match tokio::time::timeout_at(
         deadline,
         client.invoke_classified(

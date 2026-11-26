@@ -522,7 +522,9 @@ impl Ledger {
         // The worker's own MCP servers are not the unit's processes, also
         // those an earlier worker of the session started.
         if process_id(params).is_some_and(|process| {
-            state.servers.contains(&process) || process.starts_with(SERVER_PREFIX)
+            state.servers.contains(&process)
+                || process.starts_with(SERVER_PREFIX)
+                || process.starts_with(PENDING_CALL_PREFIX)
         }) {
             return Err("that process belongs to the worker; request refused");
         }
@@ -839,9 +841,13 @@ impl Ledger {
     }
 
     /// Whether the ledger refuses new effects (its durable write failed).
-    #[cfg(test)]
     pub(super) fn unwritable(&self) -> bool {
         self.state.lock().unwritable
+    }
+
+    /// Whether the session's ledger has been closed for teardown.
+    pub(super) fn is_closed(&self) -> bool {
+        self.state.lock().closed
     }
 
     pub fn mark_termination_uncertain(&self) {

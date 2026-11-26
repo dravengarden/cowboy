@@ -25,10 +25,10 @@ async function acknowledgeCall(connection, cowboyAck) {
       { timeoutMs: EXTENSION_ACK_TIMEOUT_MS },
     );
   } catch {
-    throw new UncertainEffect("tools/call");
+    throw new UncertainEffect("tools/call", callId);
   }
   if (ack?.acknowledged !== true) {
-    throw new UncertainEffect("tools/call");
+    throw new UncertainEffect("tools/call", callId);
   }
 }
 
@@ -104,7 +104,10 @@ export class Extensions {
       }
       return await connection.call("cowboy/extensionCall", params, options);
     } catch (error) {
-      if (error instanceof UncertainEffect || unknownOutcome(error)) {
+      if (error instanceof UncertainEffect) {
+        throw error;
+      }
+      if (unknownOutcome(error)) {
         throw new UncertainEffect("tools/call");
       }
       if (error?.cowboyAck?.callId) {

@@ -195,10 +195,14 @@ impl Host {
                 reason: Refusal::Unauthorized,
             };
         }
-        if matches!(
-            request.command,
-            Command::Invoke { .. } | Command::Observe { .. } | Command::Events { .. }
-        ) {
+        let refreshes_attended = match &request.command {
+            Command::Invoke { invocation, .. } => {
+                invocation.method != user_mcp::USER_MCP_STOP_METHOD
+            }
+            Command::Observe { .. } | Command::Events { .. } => true,
+            _ => false,
+        };
+        if refreshes_attended {
             *self.attended.lock() = std::time::Instant::now();
         }
         let result = match request.command {
@@ -243,6 +247,9 @@ impl Host {
             } => {
                 if wait_ms > wire::MAX_WAIT_MS {
                     Err(Refusal::InvalidRequest)
+                } else if invocation.method == user_mcp::USER_MCP_STOP_METHOD {
+                    // Kill switch / teardown stop stays reachable even if the workspace changed.
+                    self.handle_stop_user_mcp(&invocation).await
                 } else if !self.current_workspace() {
                     Err(Refusal::WorkspaceChanged)
                 } else if invocation.method == user_mcp::USER_MCP_LIST_METHOD {
@@ -253,8 +260,6 @@ impl Host {
                     })
                 } else if invocation.method == user_mcp::USER_MCP_START_METHOD {
                     self.handle_start_user_mcp(&invocation, wait_ms).await
-                } else if invocation.method == user_mcp::USER_MCP_STOP_METHOD {
-                    self.handle_stop_user_mcp(&invocation).await
                 } else {
                     // The one native frame this invocation may send. A read-only
                     // environment decides once; a refusal is never forwarded.
@@ -371,7 +376,7 @@ impl Host {
                 outcome: wait_outcome(receiver, wait_ms).await,
             });
         }
-        let Some(neutral_cwd) = &self.neutral_user_mcp_cwd else {
+        let Some(configured_cwd) = &self.neutral_user_mcp_cwd else {
             return Ok(Response::Operation {
                 outcome: Outcome::Completed {
                     reply: user_mcp::error_reply(
@@ -380,6 +385,27 @@ impl Host {
                     ),
                 },
             });
+        };
+        let neutral_cwd = if configured_cwd.exists() {
+            configured_cwd.clone()
+        } else {
+            match user_mcp::create_neutral_cwd(&self.scope.incarnation) {
+                Ok(recreated) => recreated,
+                Err(_) => {
+                    tracing::warn!(
+                        reason = "neutral_cwd_unavailable",
+                        "user MCP neutral cwd recreation failed"
+                    );
+                    return Ok(Response::Operation {
+                        outcome: Outcome::Completed {
+                            reply: user_mcp::error_reply(
+                                "user_mcp_unsupported",
+                                "user MCP neutral working directory unavailable",
+                            ),
+                        },
+                    });
+                }
+            }
         };
         let (name, process_id, fingerprint) =
             match parse_start_user_mcp_args(&clean_invocation.params) {
@@ -403,7 +429,7 @@ impl Host {
             &name,
             &process_id,
             &fingerprint,
-            neutral_cwd,
+            &neutral_cwd,
         ) {
             Ok(params) => params,
             Err(reply) => {
@@ -415,6 +441,7 @@ impl Host {
         let receiver = match self.admit_user_mcp_start(
             &clean_invocation,
             epoch,
+            gate.config_revision,
             name,
             process_id,
             native_params,
@@ -522,16 +549,29 @@ impl Host {
     }
 
     /// Single atomic critical section (strict lock order: `user_mcp` -> `ledger`).
+    /// Idempotency (`ledger.observe`) is checked FIRST so a concurrent duplicate
+    /// invocation never hits `active_processes.contains_key` and returns a
+    /// misleading deterministic error while the process is actually starting.
     fn admit_user_mcp_start(
         &self,
         clean_invocation: &wire::Invocation,
         epoch: u64,
+        gate_config_revision: Option<u64>,
         name: String,
         process_id: String,
         native_params: Value,
     ) -> Result<Result<watch::Receiver<Outcome>, Value>, Refusal> {
         let mut um = self.user_mcp.lock();
-        if um.stop_epoch != epoch || um.is_tombstoned(&process_id) {
+        let mut ledger = self.ledger.lock();
+        if ledger.observe(&clean_invocation.operation_id).is_some() || ledger.lost {
+            return match ledger.admit(clean_invocation)? {
+                Admission::Existing(receiver) | Admission::New { receiver, .. } => Ok(Ok(receiver)),
+            };
+        }
+        if um.stop_epoch != epoch
+            || um.is_tombstoned(&process_id)
+            || gate_config_revision.is_some_and(|rev| rev < um.last_stop_config_revision)
+        {
             return Ok(Err(user_mcp::error_reply(
                 "user_mcp_stopped",
                 "user MCP start fenced by concurrent stop",
@@ -552,12 +592,6 @@ impl Host {
                 "user_mcp_capacity",
                 "user MCP server capacity reached",
             )));
-        }
-        let mut ledger = self.ledger.lock();
-        if ledger.observe(&clean_invocation.operation_id).is_some() || ledger.lost {
-            return match ledger.admit(clean_invocation)? {
-                Admission::Existing(receiver) | Admission::New { receiver, .. } => Ok(Ok(receiver)),
-            };
         }
         let permit = self.writer.try_reserve().map_err(|_| Refusal::Capacity)?;
         let admission = ledger.admit(clean_invocation)?;
@@ -590,7 +624,7 @@ impl Host {
                 },
             });
         }
-        let (target_pid, keep_allowlist) = match parse_stop_user_mcp_args(&invocation.params) {
+        let args = match parse_stop_user_mcp_args(&invocation.params) {
             Ok(parsed) => parsed,
             Err(reply) => {
                 return Ok(Response::Operation {
@@ -598,13 +632,13 @@ impl Host {
                 });
             }
         };
-        let targets = self.select_user_mcp_stop_targets(target_pid, keep_allowlist);
+        let targets = self.select_user_mcp_stop_targets(args);
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         let mut stopped = 0_u32;
         let mut failed = 0_u32;
-        for (pid, maybe_pending) in targets {
+        for target in targets {
             if self
-                .stop_one_user_mcp_target(&pid, maybe_pending, deadline)
+                .stop_one_user_mcp_target(&target.pid, target.pending_start, target.ended, deadline)
                 .await
             {
                 stopped += 1;
@@ -619,46 +653,58 @@ impl Host {
         })
     }
 
-    fn select_user_mcp_stop_targets(
-        &self,
-        target_pid: Option<String>,
-        keep_allowlist: Option<Vec<String>>,
-    ) -> Vec<(String, Option<watch::Receiver<Option<bool>>>)> {
+    fn select_user_mcp_stop_targets(&self, args: StopUserMcpArgs) -> Vec<StopUserMcpTarget> {
         let mut um = self.user_mcp.lock();
-        if let Some(pid) = target_pid {
+        if let Some(pid) = args.target_pid {
             um.record_tombstone(&pid);
             return um
                 .active_processes
                 .get(&pid)
-                .map(|entry| vec![(pid, pending_rx(&entry.start_state))])
+                .map(|entry| {
+                    vec![StopUserMcpTarget {
+                        pid,
+                        pending_start: pending_rx(&entry.start_state),
+                        ended: entry.ended.subscribe(),
+                    }]
+                })
                 .unwrap_or_default();
         }
         um.stop_epoch = um.stop_epoch.saturating_add(1);
-        um.latest_allowlist = keep_allowlist.clone();
-        let selected: Vec<(String, Option<watch::Receiver<Option<bool>>>)> = um
+        if let Some(rev) = args.config_revision {
+            um.last_stop_config_revision = um.last_stop_config_revision.max(rev);
+        }
+        um.latest_allowlist = args.keep_allowlist.clone();
+        let selected: Vec<StopUserMcpTarget> = um
             .active_processes
             .iter()
             .filter(|(_, entry)| {
-                keep_allowlist.as_ref().is_none_or(|allowlist| {
+                args.keep_allowlist.as_ref().is_none_or(|allowlist| {
                     !allowlist
                         .iter()
                         .any(|allowed| allowed == &entry.server_name)
                 })
             })
-            .map(|(pid, entry)| (pid.clone(), pending_rx(&entry.start_state)))
+            .map(|(pid, entry)| StopUserMcpTarget {
+                pid: pid.clone(),
+                pending_start: pending_rx(&entry.start_state),
+                ended: entry.ended.subscribe(),
+            })
             .collect();
-        for (pid, _) in &selected {
-            um.record_tombstone(pid);
+        for target in &selected {
+            um.record_tombstone(&target.pid);
         }
         selected
     }
 
     /// Rule E1 confirmation: wait for a `Pending` start reply before terminating;
-    /// accept `unknown process id` ONLY after a confirmed start.
+    /// accept `unknown process id` ONLY after a confirmed start; confirm real
+    /// process exit (`running == false` or `process/exited`/`process/closed`)
+    /// before removing the entry or reporting clean.
     async fn stop_one_user_mcp_target(
         &self,
         pid: &str,
         maybe_pending: Option<watch::Receiver<Option<bool>>>,
+        mut ended_rx: watch::Receiver<bool>,
         deadline: tokio::time::Instant,
     ) -> bool {
         if let Some(mut rx) = maybe_pending {
@@ -682,6 +728,10 @@ impl Host {
                 _ => return false,
             }
         }
+        if *ended_rx.borrow_and_update() {
+            self.user_mcp.lock().remove_confirmed_or_failed(pid);
+            return true;
+        }
         let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
         if remaining.is_zero() {
             return false;
@@ -704,13 +754,35 @@ impl Host {
             return false;
         };
         let unknown_msg = format!("unknown process id {pid}");
-        let gone = reply.get("result").is_some()
+        let immediately_gone = reply.pointer("/result/running") == Some(&Value::Bool(false))
             || reply.pointer("/error/message").and_then(Value::as_str)
                 == Some(unknown_msg.as_str());
-        if gone {
+        if immediately_gone {
+            self.user_mcp.lock().remove_confirmed_or_failed(pid);
+            return true;
+        }
+        if reply.get("result").is_none() {
+            return false;
+        }
+        // `process/terminate` returned `result` (e.g. `{"running": true}`):
+        // wait within the remaining budget for `process/exited` / `process/closed`
+        // (via `on_process_ended`) before marking clean.
+        let exited = tokio::time::timeout_at(deadline, async {
+            loop {
+                if *ended_rx.borrow_and_update() {
+                    return true;
+                }
+                if ended_rx.changed().await.is_err() {
+                    return *ended_rx.borrow_and_update();
+                }
+            }
+        })
+        .await
+        .unwrap_or(false);
+        if exited {
             self.user_mcp.lock().remove_confirmed_or_failed(pid);
         }
-        gone
+        exited
     }
 
     /// Reserve before admitting so a full local queue proves non-admission.
@@ -825,9 +897,19 @@ fn parse_start_user_mcp_args(params: &Value) -> Result<(String, String, String),
     Ok((name, process_id, fingerprint))
 }
 
-fn parse_stop_user_mcp_args(
-    params: &Value,
-) -> Result<(Option<String>, Option<Vec<String>>), Value> {
+struct StopUserMcpArgs {
+    target_pid: Option<String>,
+    keep_allowlist: Option<Vec<String>>,
+    config_revision: Option<u64>,
+}
+
+struct StopUserMcpTarget {
+    pid: String,
+    pending_start: Option<watch::Receiver<Option<bool>>>,
+    ended: watch::Receiver<bool>,
+}
+
+fn parse_stop_user_mcp_args(params: &Value) -> Result<StopUserMcpArgs, Value> {
     let target_pid = match params.get("processId") {
         None | Some(Value::Null) => None,
         Some(Value::String(id)) if user_mcp::valid_user_mcp_process_id(id) => Some(id.clone()),
@@ -863,7 +945,23 @@ fn parse_stop_user_mcp_args(
             ));
         }
     };
-    Ok((target_pid, keep_allowlist))
+    let config_revision = match params.get("configRevision") {
+        None | Some(Value::Null) => None,
+        Some(value) => match value.as_u64() {
+            Some(rev) => Some(rev),
+            None => {
+                return Err(user_mcp::error_reply(
+                    "user_mcp_invalid",
+                    "invalid configRevision in stopUserMcp",
+                ));
+            }
+        },
+    };
+    Ok(StopUserMcpArgs {
+        target_pid,
+        keep_allowlist,
+        config_revision,
+    })
 }
 
 fn handle_native_message(
@@ -933,12 +1031,22 @@ fn annotate_execution_capabilities(
         );
         return Ok(None);
     }
-    let cwd = user_mcp::create_neutral_cwd(&contract.binding.environment.incarnation)?;
-    obj.insert(
-        user_mcp::USER_MCP_INITIALIZATION_KEY.to_owned(),
-        json!({"schema": 1}),
-    );
-    Ok(Some(cwd))
+    match user_mcp::create_neutral_cwd(&contract.binding.environment.incarnation) {
+        Ok(cwd) => {
+            obj.insert(
+                user_mcp::USER_MCP_INITIALIZATION_KEY.to_owned(),
+                json!({"schema": 1}),
+            );
+            Ok(Some(cwd))
+        }
+        Err(_) => {
+            tracing::warn!(
+                reason = "neutral_cwd_unavailable",
+                "user MCP neutral cwd unavailable; capability disabled for this keeper"
+            );
+            Ok(None)
+        }
+    }
 }
 
 pub async fn run(args: Args) -> Result<()> {
@@ -1732,5 +1840,181 @@ mod tests {
         assert_eq!(reply["result"]["stopped"], 1);
         assert_eq!(reply["result"]["failed"], 0);
         assert!(host.user_mcp.lock().active_processes.is_empty());
+    }
+
+    #[tokio::test]
+    async fn duplicate_start_returns_existing_stop_waits_for_exit_and_revision_fences_stale_gate() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let bin = dir.path().join("bin");
+        let source = dir.path().join("source");
+        let worktree = dir.path().join("worktree");
+        let neutral = dir.path().join("neutral");
+        for d in [&home, &bin, &source, &worktree, &neutral] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let srv = bin.join("echo-mcp");
+        std::fs::write(&srv, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&srv, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(
+            home.join(".claude.json"),
+            json!({ "mcpServers": { "demo": { "command": srv.to_string_lossy() } } }).to_string(),
+        )
+        .unwrap();
+
+        let (host, mut frames) =
+            test_host_with_user_mcp(dir.path(), &home, &bin, &source, &worktree, neutral);
+        let host = Arc::new(host);
+
+        let list = host
+            .request(req(
+                &host,
+                Command::Invoke {
+                    invocation: wire::Invocation {
+                        operation_id: "op-list-dup".into(),
+                        method: user_mcp::USER_MCP_LIST_METHOD.into(),
+                        params: json!({"managerGate": {"enabled": true, "allowlist": [], "configRevision": 2}}),
+                    },
+                    wait_ms: 1000,
+                },
+            ))
+            .await;
+        let Response::Operation {
+            outcome: Outcome::Completed { reply },
+        } = list
+        else {
+            panic!();
+        };
+        let fp = reply["result"]["servers"][0]["fingerprint"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let pid = format!(
+            "{}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            user_mcp::USER_MCP_PROCESS_PREFIX
+        );
+        let clean_inv = wire::Invocation {
+            operation_id: "op-dup-start".into(),
+            method: user_mcp::USER_MCP_START_METHOD.into(),
+            params: json!({"name": "demo", "processId": pid, "fingerprint": fp}),
+        };
+        let native = json!({"processId": pid, "argv": [srv.to_string_lossy()]});
+        // Finding 4: two calls reaching admit_user_mcp_start with same operation_id + processId
+        // must both return Ok(Ok(receiver)), NOT Completed{user_mcp_capacity}.
+        let rx1 = host
+            .admit_user_mcp_start(
+                &clean_inv,
+                0,
+                Some(2),
+                "demo".into(),
+                pid.clone(),
+                native.clone(),
+            )
+            .unwrap()
+            .expect("first admit");
+        let rx2 = host
+            .admit_user_mcp_start(&clean_inv, 0, Some(2), "demo".into(), pid.clone(), native)
+            .unwrap()
+            .expect("duplicate admit must return Existing receiver, not capacity error");
+        let frame = frames.recv().await.unwrap();
+        let start_id = frame["id"].as_u64().unwrap();
+        host.ledger
+            .lock()
+            .finish(start_id, json!({"result": {"processId": pid}}))
+            .unwrap();
+        host.user_mcp.lock().on_native_reply(start_id, true);
+        assert!(matches!(
+            wait_outcome(rx1, 100).await,
+            Outcome::Completed { .. }
+        ));
+        assert!(matches!(
+            wait_outcome(rx2, 100).await,
+            Outcome::Completed { .. }
+        ));
+
+        // Finding 9: stopUserMcp MUST NOT refresh `attended` and MUST work even if workspace changed.
+        let old_attended = std::time::Instant::now() - Duration::from_secs(600);
+        *host.attended.lock() = old_attended;
+        std::fs::remove_dir(&worktree).unwrap();
+        assert!(!host.current_workspace());
+
+        // Finding 8a: `process/terminate` returning `{"running": true}` must wait for `on_process_ended`.
+        let host_stop = Arc::clone(&host);
+        let stop_task = tokio::spawn(async move {
+            host_stop
+                .request(req(
+                    &host_stop,
+                    Command::Invoke {
+                        invocation: wire::Invocation {
+                            operation_id: "op-stop-rev3".into(),
+                            method: user_mcp::USER_MCP_STOP_METHOD.into(),
+                            params: json!({"configRevision": 3}),
+                        },
+                        wait_ms: 5000,
+                    },
+                ))
+                .await
+        });
+        let term = tokio::time::timeout(Duration::from_secs(2), frames.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(term["method"], "process/terminate");
+        let term_id = term["id"].as_u64().unwrap();
+        host.ledger
+            .lock()
+            .finish(term_id, json!({"result": {"running": true}}))
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(40)).await;
+        assert!(
+            !stop_task.is_finished(),
+            "stop must not report clean before process exit is confirmed"
+        );
+        host.user_mcp.lock().on_process_ended(&pid);
+        let stop_resp = stop_task.await.unwrap();
+        let Response::Operation {
+            outcome: Outcome::Completed { reply },
+        } = stop_resp
+        else {
+            panic!("stopUserMcp must succeed even after WorkspaceChanged");
+        };
+        assert_eq!(reply["result"]["stopped"], 1);
+        assert_eq!(reply["result"]["failed"], 0);
+        assert_eq!(
+            *host.attended.lock(),
+            old_attended,
+            "stopUserMcp must not refresh attended timestamp"
+        );
+
+        // Finding 8b: stale managerGate with configRevision < 3 is fenced by last_stop_config_revision.
+        let stale_pid = format!(
+            "{}bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            user_mcp::USER_MCP_PROCESS_PREFIX
+        );
+        let stale_inv = wire::Invocation {
+            operation_id: "op-stale-rev2".into(),
+            method: user_mcp::USER_MCP_START_METHOD.into(),
+            params: json!({"name": "demo", "processId": stale_pid, "fingerprint": fp}),
+        };
+        let current_epoch = host.user_mcp.lock().stop_epoch;
+        let fenced = host
+            .admit_user_mcp_start(
+                &stale_inv,
+                current_epoch,
+                Some(2),
+                "demo".into(),
+                stale_pid,
+                json!({}),
+            )
+            .unwrap();
+        let Err(err_reply) = fenced else {
+            panic!("stale configRevision gate must be fenced");
+        };
+        assert_eq!(
+            err_reply
+                .pointer("/error/data/code")
+                .and_then(Value::as_str),
+            Some("user_mcp_stopped")
+        );
     }
 }

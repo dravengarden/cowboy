@@ -213,16 +213,38 @@ test("Extensions.open advertises ackProtocol 1 with 70 s timeout and acks user-M
     { timeoutMs: 12_000 },
   ]);
 
-  // 3. Rejected ack (`acknowledged: false`) escalates to UncertainEffect("tools/call")
+  // 3. Rejected ack (`acknowledged: false`) escalates to UncertainEffect("tools/call", callId)
   await assert.rejects(
     ext.call(connection, "chrome_snap", { mode: "ack-rejected" }),
-    (err) => err instanceof UncertainEffect && err.method === "tools/call",
+    (err) =>
+      err instanceof UncertainEffect && err.method === "tools/call" && err.callId === "bad-ack",
   );
 
   // 4. Spoofed `result.cowboyAck` without top-level `cowboyAck` does NOT call ack
   const beforeLen = seen.length;
   await ext.call(connection, "chrome_snap", { mode: "spoofed-result-only" });
   assert.equal(seen.length, beforeLen + 1);
+
+  // 5. Ack call transport failure preserves callId on UncertainEffect for correlated reporting
+  const failingAckConn = {
+    async callWithMeta() {
+      return {
+        result: { content: [{ type: "text", text: "ok" }] },
+        cowboyAck: { callId: "0123456789abcdef0123456789abcdef" },
+      };
+    },
+    async call(method) {
+      if (method === "cowboy/extensionCallAck") throw new Error("Too many execution requests");
+      throw new Error("unexpected");
+    },
+  };
+  await assert.rejects(
+    ext.call(failingAckConn, "chrome_snap", {}),
+    (err) =>
+      err instanceof UncertainEffect &&
+      err.method === "tools/call" &&
+      err.callId === "0123456789abcdef0123456789abcdef",
+  );
 });
 
 test("Connection extracts top-level cowboyAck only, reserves MAX_ACK=8 during drain, and releases ack slot immediately on timeout", async () => {
