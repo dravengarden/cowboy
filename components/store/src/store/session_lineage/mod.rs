@@ -9,6 +9,7 @@
 
 mod pg;
 mod sqlite;
+mod turns_and_receipts;
 #[cfg(test)]
 mod tests;
 
@@ -25,6 +26,7 @@ static SEGMENT_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 pub(super) use pg::{purge_deleted_pg, seal_lineage_on_clear_pg};
 pub(super) use sqlite::{purge_deleted_sqlite, seal_lineage_on_clear_sqlite};
+pub use turns_and_receipts::{DuplicateReceipt, TurnCompletion};
 
 /// Durable provenance edge from a child session to its immediate parent.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

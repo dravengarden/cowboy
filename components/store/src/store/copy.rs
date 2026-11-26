@@ -72,6 +72,8 @@ const TABLES: &[&str] = &[
     "archived_lineage_segments",
     "archived_lineage_events",
     "session_lineage_edges",
+    "session_turn_completions",
+    "session_duplicate_receipts",
     "transcript_anchors",
     "subagent_events",
     "session_widgets",

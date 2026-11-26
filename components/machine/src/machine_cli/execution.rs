@@ -476,22 +476,8 @@ impl Manager {
                 Ok(()) => Response::Closed,
                 Err(reason) => Response::Refused { reason },
             },
-            Action::Prepare {
-                session_id,
-                workspace_id,
-                runtime,
-                base_session_id,
-            } => {
-                match self
-                    .prepare(
-                        &session_id,
-                        &workspace_id,
-                        runtime,
-                        base_session_id.as_deref(),
-                        workspaces,
-                    )
-                    .await
-                {
+            Action::Prepare { session_id, workspace_id, runtime, base_session_id, include_uncommitted } => {
+                match self.prepare(&session_id, &workspace_id, runtime, base_session_id.as_deref(), include_uncommitted, workspaces).await {
                     Ok(binding) => Response::Prepared { binding },
                     Err(reason) => Response::Refused { reason },
                 }
@@ -823,6 +809,7 @@ impl Manager {
         workspace_id: &str,
         runtime: RuntimeLocation,
         base_session_id: Option<&str>,
+        include_uncommitted: Option<bool>,
         workspaces: &[MachineWorkspace],
     ) -> Result<BindingV1, Refusal> {
         let config = self.configuration.as_ref().ok_or(Refusal::Unavailable)?;
@@ -906,6 +893,7 @@ impl Manager {
                 root: workspace.canonical_path.clone(),
                 session_id: session_id.to_owned(),
                 base_session_id: base_session_id.map(str::to_owned),
+                include_uncommitted,
                 base_worktree,
             },
             self.worktrees

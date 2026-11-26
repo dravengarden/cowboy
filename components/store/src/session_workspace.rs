@@ -185,11 +185,11 @@ impl WorktreeRoots {
 pub struct PrepareWorkspaceRequest {
     pub root: String,
     pub session_id: String,
-    /// A fork starts its new worktree from this session's worktree state.
     #[serde(default)]
     pub base_session_id: Option<String>,
-    /// The base session's worktree, resolved by the caller from
-    /// `base_session_id` against its own worktree roots.
+    #[serde(default)]
+    pub include_uncommitted: Option<bool>,
+    /// Base worktree resolved by the caller from `base_session_id`.
     #[serde(skip)]
     pub base_worktree: Option<PathBuf>,
 }
@@ -283,7 +283,7 @@ pub async fn prepare(
     let base_ref = format!("refs/cowboy/session-bases/{}", request.session_id);
     let branch_existed = git_ref_exists(&repository, &session_branch_ref).await?;
     let fork_base = match (&request.base_worktree, branch_existed) {
-        (Some(base), false) => Some(fork_base(&repository, base).await?),
+        (Some(base), false) => Some(fork_base(&repository, base, request.include_uncommitted.unwrap_or(true)).await?),
         _ => None,
     };
     let (revision, head_ref, base_ref_created) = if branch_existed {
@@ -3409,6 +3409,7 @@ mod tests {
             root: source.display().to_string(),
             session_id: id.to_owned(),
             base_session_id: base.map(str::to_owned),
+            include_uncommitted: None,
             base_worktree: base.map(|base| managed.join(base)),
         };
 
@@ -3641,5 +3642,67 @@ mod tests {
         )
         .await;
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    #[cfg(unix)]
+    async fn fork_worktree_with_include_uncommitted_false_branches_from_committed_head_only() {
+        let temp = TestDir::new();
+        let source = temp.0.join("source");
+        let managed = temp.0.join("managed");
+        git(&temp.0, &["init", source.to_str().unwrap()]);
+        git(&source, &["config", "user.name", "Cowboy Test"]);
+        git(&source, &["config", "user.email", "test@example.com"]);
+        std::fs::write(source.join("tracked.txt"), "base
+").unwrap();
+        git(&source, &["add", "tracked.txt"]);
+        git(&source, &["commit", "-m", "initial"]);
+
+        let parent = prepare(
+            PrepareWorkspaceRequest {
+                root: source.display().to_string(),
+                session_id: "sess-parent".to_owned(),
+                base_session_id: None,
+                include_uncommitted: None,
+                base_worktree: None,
+            },
+            &managed,
+        )
+        .await
+        .unwrap();
+        let parent_dir = PathBuf::from(&parent.path);
+        // Commit a new change on parent, plus leave dirty tracked + untracked files.
+        std::fs::write(parent_dir.join("tracked.txt"), "committed-on-parent
+").unwrap();
+        git(&parent_dir, &["add", "tracked.txt"]);
+        git(&parent_dir, &["commit", "-m", "parent commit"]);
+        std::fs::write(parent_dir.join("tracked.txt"), "dirty-uncommitted
+").unwrap();
+        std::fs::write(parent_dir.join("scratch.tmp"), "untracked
+").unwrap();
+
+        let child = prepare(
+            PrepareWorkspaceRequest {
+                root: source.display().to_string(),
+                session_id: "sess-child-head-only".to_owned(),
+                base_session_id: Some("sess-parent".to_owned()),
+                include_uncommitted: Some(false),
+                base_worktree: Some(managed.join("sess-parent")),
+            },
+            &managed,
+        )
+        .await
+        .unwrap();
+        let child_dir = PathBuf::from(&child.path);
+        assert_eq!(
+            std::fs::read_to_string(child_dir.join("tracked.txt")).unwrap(),
+            "committed-on-parent
+",
+            "child inherits parent committed HEAD without dirty tracked edits"
+        );
+        assert!(
+            !child_dir.join("scratch.tmp").exists(),
+            "child omits parent untracked files when include_uncommitted=false"
+        );
     }
 }

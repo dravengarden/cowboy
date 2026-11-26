@@ -32,6 +32,10 @@ pub enum Action {
         /// Machines before `NATIVE_FORK_PROTOCOL_VERSION` refuse the field.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         base_session_id: Option<String>,
+        /// When `Some(false)`, branch from `base_session_id`'s committed HEAD
+        /// without copying staged/unstaged/untracked files (`FORK_WORKSPACE_MODE_PROTOCOL_VERSION`).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        include_uncommitted: Option<bool>,
     },
     Call {
         session_id: String,

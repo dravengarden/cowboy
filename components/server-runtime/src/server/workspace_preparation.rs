@@ -162,6 +162,8 @@ async fn prepare(
     eager: bool,
 ) -> Result<(), String> {
     let base_session_id = crate::session_context::workspace_base(&state.hub, session_id);
+    let include_uncommitted =
+        crate::session_context::workspace_include_uncommitted(&state.hub, session_id);
     // An older Machine ignores the base and would start from the default branch.
     if base_session_id.is_some()
         && !state.machine_control.machine_supports(
@@ -173,17 +175,28 @@ async fn prepare(
             "Machine {machine_id} must be updated before it can prepare a forked workspace"
         ));
     }
+    if base_session_id.is_some()
+        && include_uncommitted == Some(false)
+        && !state.machine_control.machine_supports(
+            machine_id,
+            crate::machine_protocol::FORK_WORKSPACE_MODE_PROTOCOL_VERSION,
+        )
+    {
+        return Err(format!(
+            "Machine {machine_id} must be updated before it can fork from committed HEAD without uncommitted changes"
+        ));
+    }
+    let mut payload = serde_json::json!({
+        "root": source_path,
+        "session_id": session_id,
+        "base_session_id": base_session_id,
+    });
+    if let Some(include) = include_uncommitted {
+        payload["include_uncommitted"] = serde_json::json!(include);
+    }
     let prepared = state
         .machine_control
-        .adapter_request(
-            machine_id,
-            "workspace",
-            serde_json::json!({
-                "root": source_path,
-                "session_id": session_id,
-                "base_session_id": base_session_id,
-            }),
-        )
+        .adapter_request(machine_id, "workspace", payload)
         .await
         .map_err(|error| format!("Machine could not prepare an isolated workspace: {error}"))
         .and_then(|value| {

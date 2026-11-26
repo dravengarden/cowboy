@@ -588,6 +588,8 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), Failure> {
     }
     // A fork or continuation starts from its source's worktree state.
     let base_session_id = crate::session_context::workspace_base(&state.hub, session_id);
+    let include_uncommitted =
+        crate::session_context::workspace_include_uncommitted(&state.hub, session_id);
     // An older Machine would start from the default branch.
     if base_session_id.is_some()
         && !state.machine_control.machine_supports(
@@ -600,6 +602,18 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), Failure> {
             intent.machine_id
         )));
     }
+    if base_session_id.is_some()
+        && include_uncommitted == Some(false)
+        && !state.machine_control.machine_supports(
+            &intent.machine_id,
+            crate::machine_protocol::FORK_WORKSPACE_MODE_PROTOCOL_VERSION,
+        )
+    {
+        return Err(Failure::permanent(format!(
+            "Machine {} must be updated before it can fork from committed HEAD without uncommitted changes.",
+            intent.machine_id
+        )));
+    }
     let response = call(
         state,
         &intent.machine_id,
@@ -608,6 +622,7 @@ async fn prepare(state: &AppState, session_id: &str) -> Result<(), Failure> {
             workspace_id: intent.workspace_id.clone(),
             runtime: intent.runtime.clone(),
             base_session_id,
+            include_uncommitted: (include_uncommitted == Some(false)).then_some(false),
         },
     )
     .await?;

@@ -57,7 +57,7 @@ pub mod preferences;
 pub mod provider_accounts;
 pub mod session_lineage;
 mod session_metadata;
-pub use session_lineage::{ArchivedLineageSegment, LineageEdge, LineageHistoryPage};
+pub use session_lineage::{ArchivedLineageSegment, DuplicateReceipt, LineageEdge, LineageHistoryPage, TurnCompletion};
 pub mod session_widgets;
 pub mod subagent_events;
 mod workspace_documents;

@@ -394,6 +394,9 @@ impl Hub {
         }
         if let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::AppendEvent(envelope.clone()));
+            if matches!(envelope.event, Event::TurnEnd { .. }) {
+                self.record_turn_completion_from_hot_log(session_id, envelope.seq);
+            }
             if let Some(agent_session_id) = durable_agent_session_id {
                 let _ = tx.send(StoreWrite::SetAgentSessionId {
                     session_id: session_id.to_owned(),

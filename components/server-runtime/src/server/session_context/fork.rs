@@ -107,6 +107,19 @@ fn forkable(state: &AppState, source: &SessionMeta) -> Result<(), String> {
     Ok(())
 }
 
+
+async fn resolve_latest_completed(state: &AppState, id: &str) -> Result<String, String> {
+    if let Some(found) = state.hub.last_completed_answer_id(id) {
+        return Ok(found);
+    }
+    if let Some(store) = state.store.as_ref()
+        && let Ok(Some((mid, _))) = store.latest_turn_completion(id, 0).await
+    {
+        return Ok(mid);
+    }
+    Err("Wait for this agent's first answer before forking".into())
+}
+
 async fn fork_session(
     state: Arc<AppState>,
     auth: AuthenticatedProductRequest,
@@ -143,10 +156,7 @@ async fn fork_session(
         .agent_session_id_for_resume(&id)
         .ok_or("This conversation has nothing to fork yet")?;
     if request.latest_completed {
-        let latest = state
-            .hub
-            .last_completed_answer_id(&id)
-            .ok_or("Wait for this agent's first answer before forking")?;
+        let latest = resolve_latest_completed(&state, &id).await?;
         if let Some(fork) = request
             .reuse
             .as_deref()
@@ -277,11 +287,14 @@ async fn finish_native_fork(
     overrides: &serde_json::Map<String, serde_json::Value>,
     actor: &crate::session_folders::FolderActor,
 ) -> Result<(), String> {
-    let before_seq = record
-        .message_id
-        .as_deref()
-        .or(record.point.as_deref())
-        .and_then(|mid| state.hub.fork_turn_before_seq(id, mid))
+    let target_mid = record.message_id.as_deref().or(record.point.as_deref());
+    let mut before_seq = target_mid.and_then(|mid| state.hub.fork_turn_before_seq(id, mid));
+    if before_seq.is_none()
+        && let (Some(mid), Some(store)) = (target_mid, state.store.as_ref())
+    {
+        before_seq = store.turn_completion_before_seq(id, 0, mid).await.ok().flatten();
+    }
+    let before_seq = before_seq
         .or_else(|| state.hub.next_event_seq(id))
         .unwrap_or(0);
     if let Err(error) = lineage::record_edge(state, destination, source, "native_fork", before_seq, false).await {
@@ -292,16 +305,6 @@ async fn finish_native_fork(
     apply_overrides(state, destination, overrides)?;
     state.hub.place_fork(id, destination, actor)
 }
-
-/// Admitted copies by owner, source and operation, with the request they
-/// answered: a retried or dropped request returns the same copy, and the same
-/// operation never creates a second one for a different request.
-type DuplicateKey = (String, String, String);
-/// The copy's id and the request fingerprint it answered.
-type DuplicateAnswer = (String, String);
-static DUPLICATES: std::sync::LazyLock<
-    parking_lot::Mutex<std::collections::HashMap<DuplicateKey, DuplicateAnswer>>,
-> = std::sync::LazyLock::new(Default::default);
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -314,22 +317,96 @@ pub struct DuplicateRequest {
     #[serde(default)]
     pub preset: Option<String>,
     /// Explicit options for the copy, as the target offers them
-    /// (`duplicate/options`); saved before its first launch, whose replay
-    /// reconciles a value the agent no longer accepts.
+    /// (`duplicate/options`); saved before its first launch.
     #[serde(default)]
     pub config: serde_json::Map<String, serde_json::Value>,
     /// Copy compatible settings from the source (default on).
     #[serde(default = "inherit_by_default")]
     pub inherit_settings: bool,
+    /// Optional exclusive sequence cutoff (e.g. in-transcript "Fork from here").
+    #[serde(default)]
+    pub before_seq: Option<u64>,
+    /// Whether to branch the new worktree from the source worktree (default on
+    /// when the source has a workspace and the Machine supports fork worktrees).
+    #[serde(default)]
+    pub copy_workspace: Option<bool>,
+    /// Whether to copy staged/unstaged/untracked files alongside the source's
+    /// committed HEAD. When omitted on a busy source, safely defaults to
+    /// committed HEAD only (or conversation-only on older Machines).
+    #[serde(default)]
+    pub include_uncommitted: Option<bool>,
 }
 
 fn inherit_by_default() -> bool {
     true
 }
 
+fn resolve_duplicate_workspace(
+    state: &AppState,
+    info: &SessionInfo,
+    machine_id: &str,
+    copy_workspace: Option<bool>,
+    include_uncommitted: Option<bool>,
+) -> Result<(Option<String>, Option<bool>), String> {
+    if copy_workspace == Some(false) {
+        return Ok((None, None));
+    }
+    let has_fork_worktree = state
+        .machine_control
+        .machine_supports(machine_id, crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION);
+    if !has_fork_worktree {
+        return Ok((None, None));
+    }
+    let busy = matches!(info.meta.status, Status::Busy | Status::Starting)
+        || state.hub.session_has_in_flight_prompt(&info.meta.id);
+    let supports_head_only = state.machine_control.machine_supports(
+        machine_id,
+        crate::machine_protocol::FORK_WORKSPACE_MODE_PROTOCOL_VERSION,
+    );
+    match include_uncommitted {
+        Some(true) if busy => Err(
+            "Source agent is running; uncheck Copy uncommitted changes to branch from committed HEAD, or wait for the turn to finish".into(),
+        ),
+        Some(false) if !supports_head_only => Err(format!(
+            "Machine {machine_id} must be updated before it can fork from committed HEAD without uncommitted changes"
+        )),
+        Some(false) => Ok((Some(info.meta.id.clone()), Some(false))),
+        None if busy && supports_head_only => Ok((Some(info.meta.id.clone()), Some(false))),
+        None if busy => Ok((None, None)),
+        _ => Ok((Some(info.meta.id.clone()), None)),
+    }
+}
+
+async fn check_duplicate_receipt(
+    state: &AppState,
+    owner: &str,
+    source_id: &str,
+    operation: &str,
+    fingerprint: &str,
+) -> Result<Option<String>, String> {
+    let Some(store) = state.store.as_ref() else {
+        return Ok(None);
+    };
+    let existing = store
+        .duplicate_receipt(owner, source_id, operation)
+        .await
+        .map_err(|_| "Duplicate receipt storage unavailable")?;
+    let Some(receipt) = existing else {
+        return Ok(None);
+    };
+    if receipt.fingerprint != fingerprint {
+        return Err("This operation already created a different copy".into());
+    }
+    if state.hub.session_info(&receipt.destination_session_id).is_some() {
+        return Ok(Some(receipt.destination_session_id));
+    }
+    Ok(None)
+}
+
 /// A copy on another subscription or Provider (or where a native fork is
 /// unavailable): a new agent on the source's Machines and project that reads
-/// the source as linked context on its first message. The source is untouched.
+/// the source as linked context on its first message and shares its worktree
+/// base. The source is untouched.
 async fn duplicate_session(
     state: Arc<AppState>,
     auth: AuthenticatedProductRequest,
@@ -344,26 +421,27 @@ async fn duplicate_session(
     current_authority(&state, &auth)?;
     let info = owned(&state, &auth.principal, &id)?;
     valid_overrides(&request.config)?;
-    let replay_key = (
-        auth.principal.user_id.clone(),
-        id.clone(),
-        request.operation.clone(),
-    );
     let fingerprint = serde_json::json!({
         "provider": request.provider,
         "account": request.provider_account_id,
         "preset": request.preset,
         "config": request.config,
         "inherit": request.inherit_settings,
+        "before_seq": request.before_seq,
+        "copy_workspace": request.copy_workspace,
+        "include_uncommitted": request.include_uncommitted,
     })
     .to_string();
-    if let Some((destination, answered)) = DUPLICATES.lock().get(&replay_key).cloned() {
-        if answered != fingerprint {
-            return Err("This operation already created a different copy".into());
-        }
-        if state.hub.session_info(&destination).is_some() {
-            return Ok(destination);
-        }
+    if let Some(existing) = check_duplicate_receipt(
+        &state,
+        &auth.principal.user_id,
+        &id,
+        &request.operation,
+        &fingerprint,
+    )
+    .await?
+    {
+        return Ok(existing);
     }
     if state.hub.session_is_trashed(&id) {
         return Err("Restore this session from Trash before duplicating it".into());
@@ -373,6 +451,13 @@ async fn duplicate_session(
     }
     let source = info.meta.clone();
     let (machine_id, runtime_machine_id, project) = placement(&source)?;
+    let (ws_base, ws_include_uncommitted) = resolve_duplicate_workspace(
+        &state,
+        &info,
+        &machine_id,
+        request.copy_workspace,
+        request.include_uncommitted,
+    )?;
     let selection = NextAgent {
         provider: request.provider.clone(),
         provider_account_id: request.provider_account_id.clone(),
@@ -386,11 +471,35 @@ async fn duplicate_session(
     inheritance::preflight(&state, &auth, &source, &selection).await?;
     let actor = folder_actor(&state, &auth.principal);
     state.hub.continuation_folder(&id, &actor)?;
-    let before_seq = state.hub.next_event_seq(&id).unwrap_or(0);
+
+    let live_next = state.hub.next_event_seq(&id).unwrap_or(0);
+    let before_seq = request.before_seq.map_or(live_next, |req| req.min(live_next));
     let destination = state.supervisor.reserve_session_id();
-    // Fenced until placed, like a fork or continuation destination.
     let target_lock = write_lock(&destination);
     let _target_guard = target_lock.lock().await;
+
+    // Persist cutoff, waiting link, and workspace base BEFORE api_new_session
+    // schedules workspace preparation so preparation immediately sees ws_base
+    // and the first prompt carries the exact frozen before_seq.
+    save(
+        &state,
+        &destination,
+        &Context {
+            revision: 1,
+            applied_revision: 1,
+            sources: vec![id.clone()],
+            waiting: vec![Link {
+                session_id: id.clone(),
+                before: before_seq,
+                title: source.title.clone(),
+            }],
+            workspace_base: ws_base,
+            workspace_include_uncommitted: ws_include_uncommitted,
+            ..Context::default()
+        },
+    )
+    .await?;
+
     let create = NewSessionRequest {
         provider: request.provider.clone(),
         provider_account_id: Some(request.provider_account_id.clone()),
@@ -402,36 +511,58 @@ async fn duplicate_session(
         system: false,
         origin: SessionOrigin::Web,
         initial_prompt: None,
-        context_sources: vec![id.clone()],
+        context_sources: vec![],
         reserved_id: Some(destination.clone()),
         retained_auth_generation: None,
     };
     let response =
         api_new_session(State(state.clone()), Extension(auth.clone()), Json(create)).await;
     if !response.status().is_success() {
+        state
+            .hub
+            .set_setting(crate::session_context::key(&destination), serde_json::Value::Null);
         return Err(creation_error(response).await);
     }
-    DUPLICATES
-        .lock()
-        .insert(replay_key, (destination.clone(), fingerprint));
+    if let Some(store) = state.store.as_ref() {
+        let _ = store
+            .put_duplicate_receipt(&crate::store::DuplicateReceipt {
+                owner_user_id: auth.principal.user_id.clone(),
+                source_session_id: id.clone(),
+                operation_id: request.operation.clone(),
+                fingerprint,
+                destination_session_id: destination.clone(),
+                created_at_ms: chrono::Utc::now().timestamp_millis(),
+            })
+            .await;
+    }
     if let Err(error) = lineage::record_edge(&state, &destination, &source, "linked_fork", before_seq, false).await {
         tracing::warn!(session = %destination, source = %id, %error, "linked fork lineage edge not recorded");
     }
     state.hub.set_forked_from(&destination, Some(id.clone()));
-    let finish = || -> Result<(), String> {
-        current_authority(&state, &auth)?;
-        let source = owned(&state, &auth.principal, &id)?.meta;
-        let created = owned(&state, &auth.principal, &destination)?.meta;
-        if selection.inherit_settings {
-            inheritance::apply(&state, &source, &created, &selection)?;
-        }
-        apply_overrides(&state, &destination, &request.config)?;
-        state.hub.place_copy(&id, &destination, &actor)
-    };
-    finish().map_err(|error| {
-        format!("The copy {destination} was created but not finished ({error}); delete it and duplicate again")
-    })?;
+    finish_duplicate_session(&state, &auth, &id, &destination, &selection, &request.config, &actor)
+        .map_err(|error| {
+            format!("The copy {destination} was created but not finished ({error}); delete it and duplicate again")
+        })?;
     Ok(destination)
+}
+
+fn finish_duplicate_session(
+    state: &AppState,
+    auth: &AuthenticatedProductRequest,
+    id: &str,
+    destination: &str,
+    selection: &NextAgent,
+    overrides: &serde_json::Map<String, serde_json::Value>,
+    actor: &crate::session_folders::FolderActor,
+) -> Result<(), String> {
+    current_authority(state, auth)?;
+    let source = owned(state, &auth.principal, id)?.meta;
+    let created = owned(state, &auth.principal, destination)?.meta;
+    if selection.inherit_settings {
+        inheritance::apply(state, &source, &created, selection)?;
+    }
+    apply_overrides(state, destination, overrides)?;
+    state.hub.place_copy(id, destination, actor)
 }
 
 /// The target a duplicate would create, without creating it.

@@ -147,3 +147,32 @@ test("duplicateOptions previews the target agent's options before it exists", as
     ),
   ).rejects.toThrow("Target Machine is unavailable");
 });
+
+test("duplicateSession forwards before_seq, copy_workspace, and include_uncommitted", async () => {
+  const seen: { url: string; body: Record<string, unknown> }[] = [];
+  const fetcher: SessionForkFetch = async (input, init) => {
+    seen.push({ url: String(input), body: JSON.parse(String(init.body)) as Record<string, unknown> });
+    return Response.json({ session_id: "dst-linked" });
+  };
+  const receipt = await duplicateSession(
+    "src-1",
+    {
+      provider: "antigravity",
+      provider_account_id: "acct-1",
+      before_seq: 42,
+      copy_workspace: true,
+      include_uncommitted: false,
+    },
+    "op-linked-1",
+    fetcher,
+  );
+  expect(receipt.session_id).toBe("dst-linked");
+  expect(seen[0]?.body).toEqual({
+    operation: "op-linked-1",
+    provider: "antigravity",
+    provider_account_id: "acct-1",
+    before_seq: 42,
+    copy_workspace: true,
+    include_uncommitted: false,
+  });
+});

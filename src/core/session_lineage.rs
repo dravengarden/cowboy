@@ -123,6 +123,88 @@ impl Hub {
         }
         Some(session.next_seq)
     }
+    /// Snapshot a bounded slice of `session_id`'s held log strictly `< before_seq`
+    /// for building the Turn-0 Handoff Digest. Returns `(title, provider, events, reached_start)`.
+    #[must_use]
+    pub fn bounded_events_for_digest(
+        &self,
+        session_id: &str,
+        before_seq: u64,
+    ) -> Option<(String, String, Vec<crate::model::Envelope>, bool)> {
+        if before_seq == 0 {
+            return None;
+        }
+        let sessions = self.inner.sessions.lock();
+        let session = sessions.get(session_id)?;
+        let events: Vec<_> = session
+            .log
+            .iter()
+            .filter(|env| env.seq < before_seq)
+            .cloned()
+            .collect();
+        Some((
+            session.meta.title.clone(),
+            session.meta.provider.clone(),
+            events,
+            session.reached_start,
+        ))
+    }
+
+    /// Record a completed turn's `(message_id, before_seq)` into the durable
+    /// turn-completion index whenever `Event::TurnEnd` completes a turn.
+    pub(super) fn record_turn_completion_from_hot_log(&self, session_id: &str, turn_end_seq: u64) {
+        let log: Vec<crate::model::Envelope> = {
+            let sessions = self.inner.sessions.lock();
+            let Some(session) = sessions.get(session_id) else {
+                return;
+            };
+            session.log.clone()
+        };
+        self.maybe_record_turn_completion(session_id, turn_end_seq, &log);
+    }
+
+    fn maybe_record_turn_completion(
+        &self,
+        session_id: &str,
+        turn_end_seq: u64,
+        session_log: &[crate::model::Envelope],
+    ) {
+        let Some(tx) = self.inner.store_tx.as_ref() else {
+            return;
+        };
+        let mut message_id: Option<String> = None;
+        for env in session_log.iter().rev() {
+            let Event::Update { update } = &env.event else {
+                continue;
+            };
+            match update.get("sessionUpdate").and_then(serde_json::Value::as_str) {
+                Some("agent_message_chunk") => {
+                    if let Some(id) = update.get("messageId").and_then(serde_json::Value::as_str)
+                        && !id.is_empty()
+                    {
+                        message_id = Some(id.to_owned());
+                        break;
+                    }
+                }
+                Some("user_message_chunk" | "context_cleared" | crate::context_rollover::MARKER) => {
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let Some(message_id) = message_id else {
+            return;
+        };
+        let _ = tx.send(StoreWrite::RecordTurnCompletion(
+            crate::store::TurnCompletion {
+                session_id: session_id.to_owned(),
+                context_generation: 0,
+                message_id,
+                before_seq: turn_end_seq.saturating_add(1),
+                completed_at_ms: chrono::Utc::now().timestamp_millis(),
+            },
+        ));
+    }
 }
 
 #[cfg(test)]

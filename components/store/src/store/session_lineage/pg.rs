@@ -287,6 +287,12 @@ pub(in crate::store) async fn seal_lineage_on_clear_pg(
     .await
     .with_context(|| format!("detach lineage display edge on clear for {session_id}"))?;
 
+    sqlx::query("DELETE FROM session_turn_completions WHERE session_id = $1")
+        .bind(session_id)
+        .execute(&mut **tx)
+        .await
+        .with_context(|| format!("clear turn completions for {session_id}"))?;
+
     let max_before: Option<i64> = sqlx::query_scalar(
         "SELECT MAX(before_seq) FROM session_lineage_edges \
          WHERE parent_session_id = $1 AND segment_id IS NULL AND NOT display_detached",

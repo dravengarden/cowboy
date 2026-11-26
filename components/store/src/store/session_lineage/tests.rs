@@ -213,3 +213,66 @@ async fn live_seal_state_respects_write_behind_and_zero_cutoff() {
     assert!(empty.events.is_empty());
     assert!(empty.reached_start);
 }
+
+#[tokio::test]
+async fn turn_completions_and_duplicate_receipts_persist_and_clear_cleanly() {
+    let (store, _dir) = test_store().await;
+    store.insert_session(&session("src")).await.unwrap();
+
+    store
+        .record_turn_completion(&TurnCompletion {
+            session_id: "src".to_owned(),
+            context_generation: 0,
+            message_id: "m1".to_owned(),
+            before_seq: 4,
+            completed_at_ms: 100,
+        })
+        .await
+        .unwrap();
+    store
+        .record_turn_completion(&TurnCompletion {
+            session_id: "src".to_owned(),
+            context_generation: 0,
+            message_id: "m2".to_owned(),
+            before_seq: 9,
+            completed_at_ms: 200,
+        })
+        .await
+        .unwrap();
+    assert_eq!(
+        store.latest_turn_completion("src", 0).await.unwrap(),
+        Some(("m2".to_owned(), 9))
+    );
+    assert_eq!(
+        store.turn_completion_before_seq("src", 0, "m1").await.unwrap(),
+        Some(4)
+    );
+
+    // Clear wipes turn completions so stale message IDs cannot be forked after Clear.
+    store.clear_conversation("src", 0, None, None).await.unwrap();
+    assert_eq!(store.latest_turn_completion("src", 0).await.unwrap(), None);
+
+    // Duplicate receipt is idempotent and rejects conflicting second insert.
+    let receipt = DuplicateReceipt {
+        owner_user_id: "u1".to_owned(),
+        source_session_id: "src".to_owned(),
+        operation_id: "op-1".to_owned(),
+        fingerprint: "fp-a".to_owned(),
+        destination_session_id: "dst-1".to_owned(),
+        created_at_ms: 300,
+    };
+    assert!(store.put_duplicate_receipt(&receipt).await.unwrap());
+    assert!(!store.put_duplicate_receipt(&receipt).await.unwrap());
+    assert_eq!(
+        store.duplicate_receipt("u1", "src", "op-1").await.unwrap(),
+        Some(receipt)
+    );
+    store
+        .delete_duplicate_receipt("u1", "src", "op-1")
+        .await
+        .unwrap();
+    assert_eq!(
+        store.duplicate_receipt("u1", "src", "op-1").await.unwrap(),
+        None
+    );
+}

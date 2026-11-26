@@ -156,14 +156,17 @@ pub async fn initialize_with_prompt(
         };
         return save(state, id, &context).await;
     }
-    let links = if initial_cmid.is_some() {
-        delivered_links(state, &snapshots)
+    let captured_links = delivered_links(state, &snapshots);
+    let (links, waiting) = if initial_cmid.is_some() {
+        (captured_links, Vec::new())
     } else {
-        Vec::new()
+        // Park exact captured cutoffs in `waiting` so the first authored prompt
+        // promotes them verbatim rather than recapturing a newer head later.
+        (Vec::new(), captured_links)
     };
     let context = Context {
         revision: 1,
-        applied_revision: u64::from(initial_cmid.is_some()),
+        applied_revision: 1,
         sources,
         delivery: initial_cmid.as_ref().map(|cmid| Delivery {
             operation: format!("create-{id}"),
@@ -181,6 +184,7 @@ pub async fn initialize_with_prompt(
             follows_first_prompt: true,
         }),
         links,
+        waiting,
         ..Context::default()
     };
     save(state, id, &context).await
@@ -499,6 +503,7 @@ pub async fn set(
             links,
             waiting,
             workspace_base: current.workspace_base,
+            workspace_include_uncommitted: current.workspace_include_uncommitted,
             rollover: current.rollover,
         };
         current_authority(&state, &auth)?;

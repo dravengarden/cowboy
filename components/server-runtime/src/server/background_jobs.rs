@@ -767,6 +767,7 @@ pub async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Res
                 )
                 .await
         }
+        StoreWrite::RecordTurnCompletion(row) => store.record_turn_completion(row).await,
         StoreWrite::RecordOccurrence(occurrence) => {
             store.record_occurrence(occurrence, now_ms()).await
         }

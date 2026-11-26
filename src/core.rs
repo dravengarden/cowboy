@@ -1304,6 +1304,7 @@ pub enum StoreWrite {
         session_id: String,
         before_seq: u64,
     },
+    RecordTurnCompletion(crate::store::TurnCompletion),
     /// Persist a session's queue + drafts (whole lists, as JSONB) so staged
     /// messages survive a daemon restart — matching the durability the old
     /// client-side localStorage gave them. Any completion notices settled

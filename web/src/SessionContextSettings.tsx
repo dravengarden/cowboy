@@ -19,6 +19,7 @@ import { useProjectPlacement } from "./useProjectPlacement";
 import { WorkspacePicker } from "./WorkspacePicker";
 import { AiInstallationPicker } from "./AiInstallationPicker";
 import { ForkConfiguration, type ForkConfig, useForkTargetOptions } from "./ForkConfiguration";
+import { ForkOutcome } from "./ForkOutcome";
 import { NewSessionActions } from "./NewSessionActions";
 import { SessionSubscription, useSessionSubscription } from "./SessionSubscription";
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
@@ -331,9 +332,14 @@ function NewSessionForm({
   // reopen. Once the form was used, its choices wait for an explicit Reload.
   const [touched, setTouched] = useState(false);
   const [advanced, setAdvanced] = useState(false);
-  const [inheritSettings, setInheritSettings] = useState(
-    snapshot.next_agent?.inherit_settings ?? true,
-  );
+  const [forkOpts, setForkOpts] = useState(() => ({
+    inherit: snapshot.next_agent?.inherit_settings ?? true,
+    uncommitted: session.status !== "busy" && session.status !== "starting",
+  }));
+  const inheritSettings = forkOpts.inherit;
+  const setInheritSettings = (v: boolean) => setForkOpts((o) => ({ ...o, inherit: v }));
+  const copyUncommitted = forkOpts.uncommitted;
+  const setCopyUncommitted = (v: boolean) => setForkOpts((o) => ({ ...o, uncommitted: v }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [overrides, setOverrides] = useState<ForkConfig>({});
@@ -405,8 +411,7 @@ function NewSessionForm({
   const forkWaits = waitForTurn || (forkMode === "fork" && queued > 0);
   // One operation per distinct request: a retry returns the same copy, and
   // changing any choice asks for a new one.
-  const choice = JSON.stringify([provider, subscription.value, preset, inheritSettings, overrides]);
-  const key = useMemo(() => `duplicate-${newUuid()}`, [choice]);
+  const key = useMemo(() => `duplicate-${newUuid()}`, [JSON.stringify([provider, subscription.value, preset, inheritSettings, overrides, copyUncommitted])]);
   // The first send needs this session as a source unless it was removed from
   // an already staged continuation.
   const continueSources =
@@ -452,6 +457,7 @@ function NewSessionForm({
                 preset: preset || null,
                 inherit_settings: inheritSettings,
                 config: overrides,
+                ...(copiesWorktree ? { include_uncommitted: session.status === "busy" || session.status === "starting" ? false : copyUncommitted } : {}),
               },
               key,
             );
@@ -503,15 +509,7 @@ function NewSessionForm({
       />
       <SessionSubscription state={subscription} disabled={busy} desktop={desktop} helperText="" />
       </Box>
-      <ForkOutcome
-        forkOnly={forkOnly}
-        allowFork={allowFork}
-        sameAccount={sameAccount}
-        samePlacement={samePlacement}
-        copiesWorktree={copiesWorktree}
-        forkMode={forkMode}
-        waitForTurn={waitForTurn && queued === 0}
-      />
+      <ForkOutcome forkOnly={forkOnly} allowFork={allowFork} sameAccount={sameAccount} samePlacement={samePlacement} copiesWorktree={copiesWorktree} forkMode={forkMode} waitForTurn={waitForTurn && queued === 0} sourceBusy={session.status === "busy" || session.status === "starting"} copyUncommitted={copyUncommitted} onCopyUncommitted={setCopyUncommitted} />
       {!placement.loading && !placement.error && !placement.project && (
         <Alert
           severity="warning"
@@ -585,55 +583,6 @@ function NewSessionForm({
         onReplace={continueWork}
         onFork={forkWork}
       />
-    </Stack>
-  );
-}
-
-/** What each action does with this target, in the form's own words. */
-function ForkOutcome({
-  forkOnly,
-  allowFork,
-  sameAccount,
-  samePlacement,
-  copiesWorktree,
-  forkMode,
-  waitForTurn,
-}: {
-  forkOnly: boolean;
-  allowFork: boolean;
-  sameAccount: boolean;
-  samePlacement: boolean;
-  copiesWorktree: boolean;
-  forkMode: "fork" | "linked";
-  waitForTurn: boolean;
-}): React.JSX.Element {
-  return (
-    <Stack spacing={0.5} data-new-session-outcome>
-      {!forkOnly && (
-        <Typography variant="caption" color="text.secondary" data-new-session-continue>
-          {sameAccount && samePlacement
-            ? `Replace starts a new session with a fresh conversation on your next message${
-                copiesWorktree ? ", with uncommitted changes" : ""
-              }. This session then moves to Trash.`
-            : copiesWorktree
-              ? "Replace continues in a new session with this agent on your next message, with uncommitted changes. This session then moves to Trash."
-              : "Replace continues in a new session with this agent on your next message. This session then moves to Trash and keeps uncommitted changes."}
-        </Typography>
-      )}
-      {allowFork && (
-        <Typography
-          variant="caption"
-          color="text.secondary"
-          data-new-session-fork={!samePlacement ? "unavailable" : forkMode}
-        >
-          {!samePlacement
-            ? "Fork needs this project and Machine."
-            : forkMode === "fork"
-              ? "Fork starts a new session now and keeps this one, copying the conversation and uncommitted changes."
-              : "Fork starts a new session now and keeps this one. The new agent reads this conversation; uncommitted changes stay here."}
-          {samePlacement && waitForTurn && " Available after the current turn."}
-        </Typography>
-      )}
     </Stack>
   );
 }

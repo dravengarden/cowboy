@@ -116,6 +116,9 @@ export async function duplicateSession(
     preset?: string | null;
     config?: Record<string, string | boolean>;
     inherit_settings?: boolean;
+    before_seq?: number | undefined;
+    copy_workspace?: boolean | undefined;
+    include_uncommitted?: boolean | undefined;
   },
   key: string,
   fetcher: SessionForkFetch = globalThis.fetch,
@@ -134,6 +137,9 @@ export async function duplicateSession(
           ? { config: body.config }
           : {}),
         ...(body.inherit_settings === false ? { inherit_settings: false } : {}),
+        ...(body.before_seq !== undefined ? { before_seq: body.before_seq } : {}),
+        ...(body.copy_workspace !== undefined ? { copy_workspace: body.copy_workspace } : {}),
+        ...(body.include_uncommitted !== undefined ? { include_uncommitted: body.include_uncommitted } : {}),
       }),
     },
   );

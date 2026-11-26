@@ -20,17 +20,25 @@ const FORK_UNTRACKED_LIMIT_BYTES: u64 = 512 * 1024 * 1024;
 pub(super) struct ForkBase {
     worktree: PathBuf,
     pub(super) revision: String,
+    pub(super) include_uncommitted: bool,
     /// `git stash create` commit of staged and unstaged tracked changes.
     stash: Option<String>,
     /// Intent-to-add paths (`git add -N`) that exist in the source worktree.
     /// `git stash create` cannot record them, so they are copied like
     /// untracked files and marked intent-to-add again in the fork.
     intent_to_add: Vec<PathBuf>,
+    /// Pre-copy `(HEAD, status)` snapshot to detect concurrent writes during
+    /// dirty-worktree copying.
+    pre_status: Option<Vec<u8>>,
 }
 
 /// Read the source worktree without writing it. `git stash create` stores a
 /// dangling commit and leaves the worktree, index and stash list unchanged.
-pub(super) async fn fork_base(repository: &Path, worktree: &Path) -> Result<ForkBase> {
+pub(super) async fn fork_base(
+    repository: &Path,
+    worktree: &Path,
+    include_uncommitted: bool,
+) -> Result<ForkBase> {
     let worktree = worktree
         .canonicalize()
         .with_context(|| format!("fork source worktree {} is unavailable", worktree.display()))?;
@@ -53,6 +61,17 @@ pub(super) async fn fork_base(repository: &Path, worktree: &Path) -> Result<Fork
     let revision = git_output(&worktree, ["rev-parse", "--verify", "HEAD^{commit}"])
         .await
         .context("resolving fork source HEAD")?;
+    if !include_uncommitted {
+        return Ok(ForkBase {
+            worktree,
+            revision,
+            include_uncommitted: false,
+            stash: None,
+            intent_to_add: Vec::new(),
+            pre_status: None,
+        });
+    }
+    let pre_status = worktree_status_bytes(&worktree).await?;
     let intent_to_add = intent_to_add_paths(&worktree).await?;
     let stash = if intent_to_add.is_empty() {
         git_output(&worktree, ["stash", "create"]).await
@@ -63,8 +82,10 @@ pub(super) async fn fork_base(repository: &Path, worktree: &Path) -> Result<Fork
     Ok(ForkBase {
         worktree,
         revision,
+        include_uncommitted: true,
         stash: (!stash.is_empty()).then_some(stash),
         intent_to_add,
+        pre_status: Some(pre_status),
     })
 }
 
@@ -170,7 +191,21 @@ fn nul_separated(bytes: &[u8]) -> Vec<PathBuf> {
 
 /// Apply the source's tracked changes (keeping what was staged) and copy its
 /// untracked, non-ignored and intent-to-add files into the new worktree.
+async fn worktree_status_bytes(worktree: &Path) -> Result<Vec<u8>> {
+    let out = git_command(worktree, ["status", "--porcelain=v1", "-z"]).await?;
+    if !out.status.success() {
+        bail!(
+            "reading fork source status: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
+    }
+    Ok(out.stdout)
+}
+
 pub(super) async fn copy_fork_state(base: &ForkBase, destination: &Path) -> Result<()> {
+    if !base.include_uncommitted {
+        return Ok(());
+    }
     if let Some(stash) = &base.stash {
         git_output(destination, ["stash", "apply", "--index", stash.as_str()])
             .await
@@ -205,6 +240,17 @@ pub(super) async fn copy_fork_state(base: &ForkBase, destination: &Path) -> Resu
         git_output(destination, add)
             .await
             .context("marking fork intent-to-add files")?;
+    }
+    if let Some(pre) = &base.pre_status {
+        let post_head = git_output(&base.worktree, ["rev-parse", "--verify", "HEAD^{commit}"])
+            .await
+            .context("verifying fork source HEAD stability")?;
+        let post_status = worktree_status_bytes(&base.worktree).await?;
+        if post_head != base.revision || post_status != *pre {
+            bail!(
+                "source worktree changed while copying uncommitted files; retry once the source is idle or fork from committed HEAD"
+            );
+        }
     }
     Ok(())
 }
