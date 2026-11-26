@@ -1,0 +1,98 @@
+{
+ "schema": 1,
+ "source_revision": "6649ccb3f86b3029f0dd4b27158e2612100a92d7",
+ "pin_advance_revision": "a7f30ea81cdef743342c14d416f6a5a424d40613",
+ "worker_generation": "worker-4c343111b4d815e8f7af",
+ "production_activation": true,
+ "change": "Antigravity R2 user MCP servers from ~/.claude.json: Option 1 isolated keeper-managed stdio child processes (neutral 0500 cwd, strict env allowlist, repo-path arg guardrail), level-triggered config kill-switch/reconciler, worker-side broker discovery/fanout/pending-call uncertainty durability, and provider/ACP <server>_<tool> exposure",
+ "session_flags": [
+  "browser_device",
+  "native_projects",
+  "session_maintenance",
+  "execution_recovery",
+  "execution_boot_recovery",
+  "execution_attempt_recovery",
+  "runtime_reboot",
+  "subscription_lifecycle"
+ ],
+ "tests": [
+  {
+   "name": "worker-codex",
+   "receipt_sha256": "c69f91c589b325158f160b28c03301ce52e91736672ee7df5ffdc1b91c54c7ba",
+   "schema": "cowboy.execution-worker-conformance/v1",
+   "accepted": true,
+   "checks": 34
+  },
+  {
+   "name": "worker-claude",
+   "receipt_sha256": "0aec8aba091dc5ebd76fe6d7496c3055325f8b2a32f312a9f5fd9d2347b8bc20",
+   "schema": "cowboy.claude-execution-worker-conformance/v1",
+   "accepted": true,
+   "checks": 96
+  },
+  {
+   "name": "session",
+   "receipt_sha256": "20072c0fc71df9ab6a818115f32ff4a5a632296814b649d698e3f28bec5a69a3",
+   "schema": "cowboy.execution-session-conformance/v1",
+   "accepted": true,
+   "checks": 44
+  },
+  {
+   "name": "logs",
+   "receipt_sha256": "7d007b577f6dcac4484ea70b2d9b86c927e30211f27dd46e5136717ffcab8e22",
+   "schema": "cowboy.logs-conformance/v1",
+   "accepted": true,
+   "checks": 11
+  },
+  {
+   "name": "agent-codex",
+   "receipt_sha256": "8c9d8160a134a0989ff18def84eca4fa8a2efbca72db7555b78db27fb16abe51",
+   "plugin": "codex 3.6.42",
+   "previous": "3.6.41",
+   "probes": [
+    "node 24.21.0 passed",
+    "codex 0.171.0 passed",
+    "codex-acp 2.9.0 passed"
+   ]
+  },
+  {
+   "name": "agent-claude-code",
+   "receipt_sha256": "47b010ad860e58df9d62c8aacbbea6c1b32bb47d312aaaaaa612ea356d298001",
+   "plugin": "claude-code 3.20.84",
+   "previous": "3.20.83",
+   "probes": [
+    "node 24.21.0 passed",
+    "claude 2.1.330 passed",
+    "claude-agent-acp 0.109.1 passed"
+   ]
+  },
+  {
+   "name": "keeper",
+   "receipt_sha256": "784b2d7bff62fcb6859ea36bcf6db7f6a3ed975c147034b1104c75afde5112fe",
+   "schema": "cowboy.execution-keeper-conformance/v1",
+   "accepted": true,
+   "checks": 12
+  },
+  {
+   "name": "claude-task-stop",
+   "receipt_sha256": "0aeedffd2d6421ff1094374eab03ab17c98552887f70dbc20f118b9c0a021c78",
+   "schema": "cowboy.claude-native-task-stop-research/v1",
+   "accepted": true,
+   "cases": 4
+  },
+  {
+   "name": "managed-claude",
+   "receipt_sha256": "e18a9661aad3be53cc5f4e54e715c2e5770cb667b656f3dfeb03da1c1d43af95",
+   "schema": "cowboy.claude-managed-execution-conformance/v1",
+   "accepted": true,
+   "checks": 7
+  },
+  {
+   "name": "image-codex",
+   "receipt_sha256": "2e8f4c251b8ba5becb7d1301db5955257ae7aa970b151002ab6869f5e94e2b43",
+   "schema": 1,
+   "accepted": true,
+   "checks": 13
+  }
+ ]
+}
