@@ -64,6 +64,8 @@ export type RenderItem = { key: string } & (
     messageId?: string | undefined;
     /** A user message steered into the running turn; it does not end it. */
     steered?: boolean | undefined;
+    /** Sequence number of the newest envelope coalesced into this message. */
+    lastSeq?: number | undefined;
   }
   | { kind: "thought"; sections: string[] }
   | {
@@ -528,6 +530,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
               (role !== "user" || last.cmid === userCmid)
             ) {
               pushChunk(last, chunk);
+              last.lastSeq = env.seq;
             } else {
               const text = chunk.type === "text" ? chunk.text : "";
               const origin = role === "user" ? resolvePromptOrigin(u, text) : undefined;
@@ -536,6 +539,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
                 role,
                 chunks: [chunk],
                 key: String(env.seq),
+                lastSeq: env.seq,
                 origin,
                 ...(role === "user" && userCmid !== undefined
                   ? { cmid: userCmid }

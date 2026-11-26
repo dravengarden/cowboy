@@ -1,3 +1,4 @@
+import { MobileBranchSwitcherButton } from "./LineageBranchSwitcher";
 import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { DeliveryPicker } from "./DeliveryPicker";
 import { deliverySourceMatches, guardDeliveryChoice } from "./deliverySource.ts";
@@ -2211,6 +2212,7 @@ export function ComposerWorkspace({
             is space-evenly instead, so the spacer would defeat the even spread.
             (Stop + config + auto-scroll moved to the navbar — see SessionControls.) */
                   }
+                  {compact && <MobileBranchSwitcherButton sessionId={sessionId} />}
                   {!compact && <Box sx={{ flex: 1 }} />}
                   {
                     /* Send opens delivery choices while busy; startup sends enqueue.

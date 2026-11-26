@@ -1,3 +1,5 @@
+import { notifyLineageChanged } from "../ancestorHistory";
+import { ClearBranchNotice } from "../ClearBranchNotice";
 import { useCallback, useMemo, useState } from "react";
 import {
   Box,
@@ -118,7 +120,7 @@ export function useDesktopSessionActions(sessionId: string, status: Status): Des
   useConfirmEnter(open === "compact", confirmCompact);
   const confirmClear = useCallback(async (): Promise<void> => {
     setOpen(null);
-    await resetSession(sessionId);
+    await resetSession(sessionId); notifyLineageChanged(sessionId);
   }, [sessionId]);
   useConfirmEnter(open === "clear", () => {
     void confirmClear();
@@ -212,10 +214,8 @@ export function useDesktopSessionActions(sessionId: string, status: Status): Des
         <DialogTitle>Clear conversation?</DialogTitle>
         <DialogContent>
           <DialogContentText>{clearAction?.detail}</DialogContentText>
-          <ConfirmConsequence tone="error" irreversible>
-            Resets {provider} to a fresh context now
-            {queuedAfterTurn ? " (ends the current turn)" : ""}.
-          </ConfirmConsequence>
+          <ConfirmConsequence tone="error" irreversible>Resets {provider} to a fresh context now{queuedAfterTurn ? " (ends the current turn)" : ""}.</ConfirmConsequence>
+          <ClearBranchNotice sessionId={sessionId} />
         </DialogContent>
         <DialogActions>
           <Button color="inherit" onClick={close} sx={{ textTransform: "none" }}>

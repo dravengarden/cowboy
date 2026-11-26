@@ -276,3 +276,66 @@ async fn turn_completions_and_duplicate_receipts_persist_and_clear_cleanly() {
         None
     );
 }
+
+#[tokio::test]
+async fn lineage_question_pages_clamp_strictly_and_survive_parent_purge() {
+    let (store, _dir) = test_store().await;
+    store.insert_session(&session("parent-q")).await.unwrap();
+    store.insert_session(&session("child-q")).await.unwrap();
+    let user_msg = |seq: u64, text: &str| Envelope {
+        session_id: "parent-q".to_owned(),
+        seq,
+        event: Event::Update {
+            update: serde_json::json!({
+                "sessionUpdate": "user_message_chunk",
+                "content": {"type": "text", "text": text},
+            }),
+        },
+        cmid: None,
+    };
+    store
+        .upsert_event_batch(
+            &[
+                user_msg(0, "First question"),
+                msg("parent-q", 1, "First answer"),
+                user_msg(2, "Second question after fork"),
+                msg("parent-q", 3, "Second answer"),
+            ],
+            &HashMap::from([("parent-q".to_owned(), 4)]),
+        )
+        .await
+        .unwrap();
+    let edge = make_edge("child-q", "parent-q", "linked_fork", 2);
+    store.upsert_lineage_edge(&edge).await.unwrap();
+
+    // Purge parent -> archives `< 2`.
+    store.delete_session("parent-q").await.unwrap();
+    assert_eq!(store.purge_deleted(-1).await.unwrap(), 1);
+    let archived_edge = store.lineage_edge("child-q").await.unwrap().unwrap();
+    assert!(archived_edge.segment_id.is_some());
+
+    let (pages, next_before, total) = store
+        .lineage_question_pages(&archived_edge, None, 20)
+        .await
+        .unwrap();
+    assert_eq!(total, 1);
+    assert_eq!(pages.len(), 1);
+    assert_eq!(pages[0].id, 0);
+    assert_eq!(next_before, None);
+
+    // Reading page 0 succeeds and includes seq 0..2; reading post-cutoff page 2 returns None.
+    let detail = store
+        .lineage_question_page_at(&archived_edge, 0)
+        .await
+        .unwrap()
+        .expect("page 0");
+    assert_eq!(detail.len(), 2);
+    assert!(
+        store
+            .lineage_question_page_at(&archived_edge, 2)
+            .await
+            .unwrap()
+            .is_none(),
+        "post-cutoff question page must be refused"
+    );
+}

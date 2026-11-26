@@ -1,3 +1,4 @@
+import { LineageExploreQuestions } from "./LineageExploreQuestions";
 import { desktopSize } from "../surface/desktopSize";
 import {
   ArrowDownward,
@@ -1746,12 +1747,8 @@ export function ExploreTranscript(
             },
           ]}
         >
-          <Box
-            component="nav"
-            aria-label="Page index"
-            data-desktop-region="conversation.questions"
-            sx={{ height: "min(640px, calc(100vh - 190px))", minHeight: 320 }}
-          >
+          <Box component="nav" aria-label="Page index" data-desktop-region="conversation.questions" sx={{ height: "min(640px, calc(100vh - 190px))", minHeight: 320 }}>
+            <LineageExploreQuestions sessionId={props.sessionId} desktop />
             <PageList
               active={desktopDirectoryOpen}
               dense
@@ -2340,7 +2337,7 @@ export function MobilePageDock({
             minHeight: 0,
           }}
         >
-
+          <LineageExploreQuestions sessionId={sessionId} desktop={false} />
           <Box sx={{ flex: 1, minHeight: 0 }}>
             <PageList
               active={open}

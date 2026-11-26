@@ -7,6 +7,7 @@
 //! and `archived_lineage_events`, releasing the parent's `sessions` row and
 //! retired provider auth generations cleanly.
 
+mod explore;
 mod pg;
 mod sqlite;
 mod turns_and_receipts;

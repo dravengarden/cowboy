@@ -446,3 +446,82 @@ pub async fn history(
         ([(header::CACHE_CONTROL.as_str(), "private, no-store")], body).into_response()
     }
 }
+
+/// `GET /api/sessions/{id}/lineage/{hop_id}/question-pages` — child-scoped
+/// Explore question index strictly clamped to `edge.before_seq`.
+pub async fn question_pages(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthenticatedProductRequest>,
+    Path((id, hop_id)): Path<(String, String)>,
+    Query(query): Query<QuestionPagesQuery>,
+) -> Response {
+    if let Err(status) = owner_can_see_session(&state, &auth.principal, &id) {
+        return status.into_response();
+    }
+    let edges = match walk_display_edges(&state, &auth.principal, &id).await {
+        Ok(edges) => edges,
+        Err(status) => return status.into_response(),
+    };
+    let Some(edge) = edges.into_iter().find(|edge| edge.parent_session_id == hop_id) else {
+        return (StatusCode::NOT_FOUND, "ancestor not in session lineage").into_response();
+    };
+    let Some(store) = state.store.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "lineage store unavailable").into_response();
+    };
+    let limit = query.limit.unwrap_or(64).clamp(1, 100);
+    let clamped_before = query.before.map(|before| before.min(edge.before_seq));
+    match store.lineage_question_pages(&edge, clamped_before, limit).await {
+        Ok((pages, next_before_seq, total)) => (
+            [(header::CACHE_CONTROL.as_str(), "private, no-store")],
+            Json(QuestionPagesResponse {
+                total,
+                exact: true,
+                pages,
+                next_before_seq,
+            }),
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::warn!(session = %id, hop = %hop_id, %error, "lineage question pages query failed");
+            (StatusCode::SERVICE_UNAVAILABLE, "lineage question pages unavailable").into_response()
+        }
+    }
+}
+
+/// `GET /api/sessions/{id}/lineage/{hop_id}/question-pages/{page_id}` —
+/// child-scoped Explore question page detail strictly `< edge.before_seq`.
+pub async fn question_page(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthenticatedProductRequest>,
+    Path((id, hop_id, page_id)): Path<(String, String, u64)>,
+) -> Response {
+    if let Err(status) = owner_can_see_session(&state, &auth.principal, &id) {
+        return status.into_response();
+    }
+    let edges = match walk_display_edges(&state, &auth.principal, &id).await {
+        Ok(edges) => edges,
+        Err(status) => return status.into_response(),
+    };
+    let Some(edge) = edges.into_iter().find(|edge| edge.parent_session_id == hop_id) else {
+        return (StatusCode::NOT_FOUND, "ancestor not in session lineage").into_response();
+    };
+    let Some(store) = state.store.as_ref() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "lineage store unavailable").into_response();
+    };
+    match store.lineage_question_page_at(&edge, page_id).await {
+        Ok(Some(events)) => (
+            [(header::CACHE_CONTROL.as_str(), "private, no-store")],
+            Json(HistoryResponse {
+                events,
+                next_before_seq: None,
+                reached_start: false,
+            }),
+        )
+            .into_response(),
+        Ok(None) => StatusCode::NOT_FOUND.into_response(),
+        Err(error) => {
+            tracing::warn!(session = %id, hop = %hop_id, page_id, %error, "lineage question page query failed");
+            (StatusCode::SERVICE_UNAVAILABLE, "lineage question page unavailable").into_response()
+        }
+    }
+}

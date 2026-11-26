@@ -1,3 +1,4 @@
+import { MessageWithFork } from "./MessageForkAction";
 import { NoticeRow } from "./NoticeRow";
 import { ScrollEdges } from "@cowboy/app-shell";
 import { desktopSize, glyphSize } from "./surface/desktopSize";
@@ -981,20 +982,12 @@ export const ItemView = memo(function ItemView({
 }): React.JSX.Element | null {
   switch (item.kind) {
     case "message": {
-      const bubble = (
-        <MessageBubble
-          role={item.role}
-          chunks={item.chunks}
-          streaming={!!streaming && item.role === "assistant"}
-          origin={item.origin}
-          cmid={item.cmid}
-          provider={provider}
-          providerVersion={providerVersion}
-          providerDigest={providerDigest}
-          desktop={desktop}
-        />
+      const isStreaming = !!streaming && item.role === "assistant";
+      return (
+        <MessageWithFork item={item} sessionId={sessionId} streaming={isStreaming} desktop={desktop}>
+          <MessageBubble role={item.role} chunks={item.chunks} streaming={isStreaming} origin={item.origin} cmid={item.cmid} provider={provider} providerVersion={providerVersion} providerDigest={providerDigest} desktop={desktop} />
+        </MessageWithFork>
       );
-      return bubble;
     }
     case "thought":
       return (

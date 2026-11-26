@@ -106,3 +106,7 @@ test("lineage action labels distinguish replace from forks and cache clears clea
   clearLineageCache();
   expect(cachedSessionLineage("sess-a")).toBeUndefined();
 });
+
+test("branch switcher desktop shortcut SB is registered alongside SF", () => {
+  expect(DESKTOP_WORKSPACE_KEYS.sessionsBranches).toBe("SB");
+});

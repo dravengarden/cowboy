@@ -228,6 +228,14 @@ fn with_session_context_routes(
             get(session_context::lineage_history),
         )
         .route(
+            "/api/sessions/{id}/lineage/{hop_id}/question-pages",
+            get(session_context::lineage_question_pages),
+        )
+        .route(
+            "/api/sessions/{id}/lineage/{hop_id}/question-pages/{page_id}",
+            get(session_context::lineage_question_page),
+        )
+        .route(
             "/api/sessions/{id}/continue-here",
             post(session_context::continue_here),
         )

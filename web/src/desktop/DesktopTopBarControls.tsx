@@ -1,3 +1,4 @@
+import { DesktopBranchSwitcherTrigger } from "../LineageBranchSwitcher";
 import { desktopSize } from "../surface/desktopSize";
 import { refreshAllUsage } from "../usageRefresh";
 import { ProviderUsageCredits } from "../ProviderUsageCredits";
@@ -1541,6 +1542,7 @@ export const DesktopTopBarControls = memo(function DesktopTopBarControls({
           </Tooltip>
         )}
 
+        {session !== undefined && <DesktopBranchSwitcherTrigger sessionId={sessionId} />}
         <Tooltip title="Reload session runtime · keep history, queue, drafts, and configuration">
           <span>
             <Button
