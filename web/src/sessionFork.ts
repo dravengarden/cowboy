@@ -218,3 +218,41 @@ export async function duplicateOptions(
   const error = typeof record.error === "string" ? record.error : text.trim();
   throw new Error(error || `Options unavailable (HTTP ${String(response.status)})`);
 }
+
+export type PendingForkAttempt =
+  | { mode: "native"; operation: string; messageId: string }
+  | {
+      mode: "linked";
+      operation: string;
+      body: {
+        provider: string;
+        provider_account_id: string;
+        before_seq?: number;
+        include_uncommitted?: boolean;
+      };
+    };
+
+export async function executeForkAttempt(
+  originSessionId: string,
+  attempt: PendingForkAttempt,
+  canLinked: boolean,
+  makeLinked: () => Extract<PendingForkAttempt, { mode: "linked" }>,
+  setAttempt: (next: PendingForkAttempt) => void,
+): ReturnType<typeof duplicateSession> {
+  if (attempt.mode === "linked") {
+    return duplicateSession(originSessionId, attempt.body, attempt.operation);
+  }
+  try {
+    return await forkSession(originSessionId, {
+      messageId: attempt.messageId,
+      operation: attempt.operation,
+    });
+  } catch (nativeErr) {
+    if (!(nativeErr instanceof ForkSessionError && nativeErr.definitiveUnsupported && canLinked)) {
+      throw nativeErr;
+    }
+    const linked = makeLinked();
+    setAttempt(linked);
+    return duplicateSession(originSessionId, linked.body, linked.operation);
+  }
+}

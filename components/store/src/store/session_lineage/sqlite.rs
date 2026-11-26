@@ -480,7 +480,8 @@ pub(in crate::store) async fn seal_lineage_on_clear_sqlite(
 
     let max_before: Option<i64> = sqlx::query_scalar(
         "SELECT MAX(before_seq) FROM session_lineage_edges \
-         WHERE parent_session_id = ?1 AND segment_id IS NULL AND NOT display_detached",
+         WHERE parent_session_id = ?1 AND segment_id IS NULL AND NOT display_detached \
+           AND child_session_id IN (SELECT id FROM sessions)",
     )
     .bind(session_id)
     .fetch_one(&mut **tx)
@@ -510,7 +511,8 @@ pub(in crate::store) async fn seal_lineage_on_delete_sqlite(
 
     let max_before: Option<i64> = sqlx::query_scalar(
         "SELECT MAX(before_seq) FROM session_lineage_edges \
-         WHERE parent_session_id = ?1 AND segment_id IS NULL AND NOT display_detached",
+         WHERE parent_session_id = ?1 AND segment_id IS NULL AND NOT display_detached \
+           AND child_session_id IN (SELECT id FROM sessions WHERE id <> ?1)",
     )
     .bind(session_id)
     .fetch_one(&mut **tx)
@@ -692,9 +694,11 @@ pub(in crate::store) async fn purge_deleted_sqlite(
 async fn gc_lineage_edges_sqlite(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>) -> Result<()> {
     sqlx::query(
         "UPDATE session_lineage_edges \
-         SET segment_id = NULL, edge_version = edge_version + 1 \
-         WHERE segment_id IS NOT NULL \
-           AND (display_detached OR child_session_id NOT IN (SELECT id FROM sessions))",
+         SET segment_id = NULL, \
+             display_detached = CASE WHEN child_session_id NOT IN (SELECT id FROM sessions) THEN 1 ELSE display_detached END, \
+             edge_version = edge_version + 1 \
+         WHERE (segment_id IS NOT NULL AND (display_detached OR child_session_id NOT IN (SELECT id FROM sessions))) \
+            OR (NOT display_detached AND child_session_id NOT IN (SELECT id FROM sessions))",
     )
     .execute(&mut **tx)
     .await

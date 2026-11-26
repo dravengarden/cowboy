@@ -21,6 +21,19 @@ impl PendingEventBatch {
         }
     }
 
+    fn is_empty(&self) -> bool {
+        self.events.is_empty()
+            && self.highwaters.is_empty()
+            && self.anchors.is_empty()
+            && self.occurrences.is_empty()
+    }
+
+    fn has_uncommitted_for(&self, session_id: &str) -> bool {
+        self.events.keys().any(|(sid, _)| sid == session_id)
+            || self.highwaters.contains_key(session_id)
+            || self.anchors.iter().any(|a| a.session_id == session_id)
+    }
+
     async fn flush(&mut self, store: &Store, reducer: &mut EventReducer) -> bool {
         flush_event_batch(
             store,
@@ -87,6 +100,9 @@ pub async fn run_store_writer_with_floors(
     for (session_id, before_seq) in initial_freeze_floors {
         reducer.set_freeze_floor(&session_id, before_seq);
     }
+    // Retained across loop iterations so a failed flush is never discarded
+    // before a later FreezeLineagePrefix, Barrier, or ClearEvents arrives.
+    let mut pending = PendingEventBatch::new();
     let mut draining = *shutdown.borrow();
     if draining {
         rx.close();
@@ -115,9 +131,14 @@ pub async fn run_store_writer_with_floors(
                 Ok(None) | Err(_) => break,
             }
         }
-        if !apply_store_batch_with_acks(&store, &mut reducer, batch, acks.as_ref()).await {
+        if !apply_store_batch_with_acks(&store, &mut reducer, &mut pending, batch, acks.as_ref())
+            .await
+        {
             health.mark_failed_batch();
         }
+    }
+    if !pending.is_empty() && !pending.flush(&store, &mut reducer).await {
+        health.mark_failed_batch();
     }
     if let Some(acks) = acks {
         acks.fail_all("store writer shut down");
@@ -131,7 +152,8 @@ pub async fn apply_store_batch(
     reducer: &mut EventReducer,
     writes: Vec<StoreWrite>,
 ) -> bool {
-    apply_store_batch_with_acks(store, reducer, writes, None).await
+    let mut pending = PendingEventBatch::new();
+    apply_store_batch_with_acks(store, reducer, &mut pending, writes, None).await
 }
 
 async fn apply_append_event(
@@ -238,7 +260,7 @@ async fn apply_clear_events(
     else {
         return true;
     };
-    let flushed = pending.flush(store, reducer).await;
+    let flushed = pending.flush(store, reducer).await && !pending.has_uncommitted_for(session_id);
     if !flushed {
         if let (Some(id), Some(acks)) = (ack_id, acks) {
             acks.complete(
@@ -268,10 +290,10 @@ async fn apply_clear_events(
 async fn apply_store_batch_with_acks(
     store: &Store,
     reducer: &mut EventReducer,
+    pending: &mut PendingEventBatch,
     writes: Vec<StoreWrite>,
     acks: Option<&crate::core::StoreAckSink>,
 ) -> bool {
-    let mut pending = PendingEventBatch::new();
     let mut usages: BTreeMap<String, StoreWrite> = BTreeMap::new();
     let mut ok = true;
     for write in writes {
@@ -283,7 +305,8 @@ async fn apply_store_batch_with_acks(
             } => {
                 reducer.set_freeze_floor(&session_id, before_seq);
                 if let Some(id) = ack_id {
-                    let flushed = pending.flush(store, reducer).await;
+                    let flushed = pending.flush(store, reducer).await
+                        && !pending.has_uncommitted_for(&session_id);
                     ok &= flushed;
                     if let Some(acks) = acks {
                         acks.complete(
@@ -298,15 +321,29 @@ async fn apply_store_batch_with_acks(
                     }
                 }
             }
+            StoreWrite::Barrier { ack_id: Some(id) } => {
+                let flushed = pending.flush(store, reducer).await && pending.is_empty();
+                ok &= flushed;
+                if let Some(acks) = acks {
+                    acks.complete(
+                        id,
+                        if flushed {
+                            Ok(true)
+                        } else {
+                            Err("Pending store writes could not be flushed".to_owned())
+                        },
+                    );
+                }
+            }
             StoreWrite::RecordOccurrence(occurrence) => pending.occurrences.push(occurrence),
             StoreWrite::UpdateSessionUsage { ref session_id, .. } => {
                 usages.insert(session_id.clone(), write);
             }
             StoreWrite::AppendEvent(env) => {
-                apply_append_event(store, reducer, &mut pending, env).await;
+                apply_append_event(store, reducer, pending, env).await;
             }
             StoreWrite::ClearEvents { .. } => {
-                ok &= apply_clear_events(store, reducer, &mut pending, &write, acks).await;
+                ok &= apply_clear_events(store, reducer, pending, &write, acks).await;
             }
             other => {
                 ok &= pending.flush(store, reducer).await;

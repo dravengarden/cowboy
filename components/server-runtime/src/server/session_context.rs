@@ -60,6 +60,42 @@ fn current_authority(state: &AppState, auth: &AuthenticatedProductRequest) -> Re
     Ok(())
 }
 
+async fn validate_sources_for_session(
+    state: &AppState,
+    principal: &ProductPrincipal,
+    session_id: &str,
+    ids: &[String],
+) -> Result<(), String> {
+    crate::session_context::validate_sources(ids)?;
+    let mut missing = Vec::new();
+    for id in ids {
+        if owned(state, principal, id).is_err() {
+            missing.push(id.as_str());
+        }
+    }
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let hops = match state.store.as_ref() {
+        Some(store) => store
+            .child_display_lineage(session_id)
+            .await
+            .map(|l| l.hops)
+            .unwrap_or_default(),
+        None => Vec::new(),
+    };
+    for source in missing {
+        let valid_archived = hops.iter().any(|edge| {
+            edge.parent_session_id == source
+                && (edge.owner_user_id.is_empty() || edge.owner_user_id == principal.user_id)
+        });
+        if !valid_archived {
+            return Err("A linked session is no longer available".into());
+        }
+    }
+    Ok(())
+}
+
 pub fn validate_sources(
     state: &AppState,
     principal: &ProductPrincipal,
@@ -513,9 +549,10 @@ pub async fn set(
             .ok_or("Context revision exhausted")?;
         let links = current.known_links();
         // Staging a new agent leaves the waiting links in place: going back
-        // must not move their point.
+        // must not move their point. Hold source pins until after `save` commits.
+        let mut _pin_guards = Vec::new();
         let waiting = if links_only {
-            let (captured, _pin_guards) = capture_and_freeze(
+            let (captured, guards) = capture_and_freeze(
                 &state,
                 &auth.principal,
                 &edit.sources,
@@ -523,6 +560,7 @@ pub async fn set(
                 Some(&id),
             )
             .await?;
+            _pin_guards = guards;
             let links = delivered_links(&state, &captured);
             links
                 .into_iter()
@@ -721,7 +759,7 @@ async fn prepare_target(
     {
         return Err("The pending handoff changed during preparation; inspect its destination before retrying".into());
     }
-    validate_sources(state, &auth.principal, &context.sources)?;
+    validate_sources_for_session(state, &auth.principal, id, &context.sources).await?;
     owned(state, &auth.principal, target_id)?;
     Ok(())
 }

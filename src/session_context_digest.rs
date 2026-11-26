@@ -461,20 +461,56 @@ pub(super) fn build_preamble(hub: &Hub, sources: &[Source]) -> String {
 /// Build the linked-context preamble asynchronously, falling back to durable
 /// live or archived lineage storage when a source's cutoff is cold, cleared,
 /// or purged.
+async fn read_checked_lineage_source(
+    hub: &Hub,
+    store: &crate::store::Store,
+    child_session_id: &str,
+    source: &Source,
+) -> Option<(String, String, Vec<Envelope>, bool)> {
+    // Retry on concurrent Clear/Purge version bumps so archive cutover never
+    // produces an empty digest excerpt.
+    for _ in 0..3 {
+        match store
+            .lineage_history_page_checked(
+                child_session_id,
+                &source.session_id,
+                None,
+                None,
+                source.before,
+                120,
+            )
+            .await
+        {
+            Ok(crate::store::LineageHistoryOutcome::Page(page)) if !page.events.is_empty() => {
+                let (title, provider) = match hub.session_info(&source.session_id) {
+                    Some(info) => (info.meta.title, info.meta.provider),
+                    None => store
+                        .child_display_lineage(child_session_id)
+                        .await
+                        .ok()
+                        .and_then(|l| {
+                            l.hops
+                                .into_iter()
+                                .find(|e| e.parent_session_id == source.session_id)
+                                .map(|e| (e.source_title, e.source_provider))
+                        })
+                        .unwrap_or_else(|| (source.session_id.clone(), String::new())),
+                };
+                return Some((title, provider, page.events, page.reached_start));
+            }
+            Ok(crate::store::LineageHistoryOutcome::VersionConflict { .. }) => continue,
+            _ => break,
+        }
+    }
+    None
+}
+
 pub async fn build_preamble_async(
     hub: &Hub,
     store: Option<&crate::store::Store>,
     child_session_id: &str,
     sources: &[Source],
 ) -> String {
-    let lineage_hops = match store {
-        Some(store) => store
-            .child_display_lineage(child_session_id)
-            .await
-            .map(|lineage| lineage.hops)
-            .unwrap_or_default(),
-        None => Vec::new(),
-    };
     let mut extracted = Vec::new();
     for (index, source) in sources.iter().enumerate() {
         if source.before == 0 {
@@ -486,20 +522,9 @@ pub async fn build_preamble_async(
         if resolved.is_none()
             && let Some(store) = store
         {
-            if let Some(hop) = lineage_hops
-                .iter()
-                .find(|edge| edge.parent_session_id == source.session_id)
-            {
-                if let Ok(page) = store.lineage_history_page(hop, source.before, 120).await
-                    && !page.events.is_empty()
-                {
-                    let (title, provider) = hub.session_info(&source.session_id).map_or_else(
-                        || (hop.source_title.clone(), hop.source_provider.clone()),
-                        |info| (info.meta.title, info.meta.provider),
-                    );
-                    resolved = Some((title, provider, page.events, page.reached_start));
-                }
-            } else if let Some(info) = hub.session_info(&source.session_id)
+            resolved = read_checked_lineage_source(hub, store, child_session_id, source).await;
+            if resolved.is_none()
+                && let Some(info) = hub.session_info(&source.session_id)
                 && let Ok((events, _, reached_start)) = store
                     .history_page(&source.session_id, source.before, 120)
                     .await

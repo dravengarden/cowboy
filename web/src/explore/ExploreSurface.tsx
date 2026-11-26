@@ -1618,22 +1618,6 @@ export function ExploreTranscript(
     return () => root.removeEventListener("keydown", onKeyDown);
   }, [goFooterNext, goFooterPrevious, props.desktop]);
 
-  if (!current && !props.loading) {
-    return (
-      <Stack
-        alignItems="center"
-        justifyContent="center"
-        spacing={1}
-        sx={{ flex: 1, color: "text.secondary" }}
-      >
-        <Typography variant="h6">No pages yet</Typography>
-        <Typography variant="body2">
-          Send the first prompt below to begin.
-        </Typography>
-      </Stack>
-    );
-  }
-
   return (
     <Box
       ref={rootRef}
@@ -1771,7 +1755,17 @@ export function ExploreTranscript(
         </DesktopModal>
       )}
       <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
-        {unresolvedQuestionRoot || restorePageBlocksPresentation
+        {!current && !props.loading
+          ? (
+            <Stack alignItems="center" justifyContent="center" spacing={1} sx={{ flex: 1, color: "text.secondary" }}>
+              <Typography variant="h6">No pages yet</Typography>
+              <Typography variant="body2">Send the first prompt below to begin.</Typography>
+              {props.desktop && hasLineage && (
+                <Button size="small" variant="outlined" onClick={toggleDesktopDirectory} sx={{ mt: 0.5, textTransform: "none" }}>Browse earlier pages</Button>
+              )}
+            </Stack>
+          )
+          : unresolvedQuestionRoot || restorePageBlocksPresentation
           ? (
             <Stack
               role="status"

@@ -239,13 +239,7 @@ impl Hub {
         // same worker incarnation never becomes a newer observation.
         let subagent_child = live_subagent_child(&event).map(str::to_owned);
         let mut subagent_anchor = None;
-        let (
-            envelope,
-            durable_agent_session_id,
-            attention_changed,
-            native_wait_started,
-            turn_completion,
-        ) = {
+        let (envelope, attention_changed, native_wait_started) = {
             let mut sessions = self.inner.sessions.lock();
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
@@ -343,27 +337,34 @@ impl Hub {
             } else {
                 None
             };
+            // Enqueue transcript writes under the same sessions lock that
+            // allocated `seq` so a concurrent `pin_and_freeze_source` barrier
+            // can never overtake an `AppendEvent` inside its captured cutoff.
+            if let Some(tx) = self.inner.store_tx.as_ref() {
+                if !tx.send(StoreWrite::AppendEvent(envelope.clone())) {
+                    s.unpersisted_min_seq = Some(
+                        s.unpersisted_min_seq
+                            .map_or(seq, |existing| existing.min(seq)),
+                    );
+                }
+                if let Some(completion) = turn_completion {
+                    let _ = tx.send(StoreWrite::RecordTurnCompletion(completion));
+                }
+                if let Some(agent_session_id) = durable_agent_session_id {
+                    let _ = tx.send(StoreWrite::SetAgentSessionId {
+                        session_id: session_id.to_owned(),
+                        agent_session_id: Some(agent_session_id),
+                    });
+                }
+            }
             if let (Some(child), Some(anchor), Event::Update { update }) =
                 (subagent_child, subagent_anchor, &envelope.event)
             {
                 self.record_subagent_observation(session_id, child, anchor, update.clone());
             }
-            (
-                envelope,
-                durable_agent_session_id,
-                attention_changed,
-                native_wait_started,
-                turn_completion,
-            )
+            (envelope, attention_changed, native_wait_started)
         };
-        self.finish_pushed_event(
-            session_id,
-            envelope,
-            durable_agent_session_id,
-            attention_changed,
-            native_wait_started,
-            turn_completion,
-        );
+        self.finish_pushed_event(session_id, envelope, attention_changed, native_wait_started);
     }
 
     fn apply_canonical_hot_log(s: &mut Session, seq: u64, canonical: Envelope) {
@@ -393,10 +394,8 @@ impl Hub {
         &self,
         session_id: &str,
         envelope: Envelope,
-        durable_agent_session_id: Option<String>,
         attention_changed: bool,
         native_wait_started: bool,
-        turn_completion: Option<crate::store::TurnCompletion>,
     ) {
         self.observe_compaction(session_id, &envelope.event);
         if is_user_message_chunk(&envelope)
@@ -406,18 +405,6 @@ impl Hub {
                 .filter(|id| id.starts_with(crate::agent_model::CALL_NOTICE_PREFIX))
         {
             self.clear_notice_claim(session_id, cmid);
-        }
-        if let Some(tx) = self.inner.store_tx.as_ref() {
-            let _ = tx.send(StoreWrite::AppendEvent(envelope.clone()));
-            if let Some(completion) = turn_completion {
-                let _ = tx.send(StoreWrite::RecordTurnCompletion(completion));
-            }
-            if let Some(agent_session_id) = durable_agent_session_id {
-                let _ = tx.send(StoreWrite::SetAgentSessionId {
-                    session_id: session_id.to_owned(),
-                    agent_session_id: Some(agent_session_id),
-                });
-            }
         }
         self.publish_frame(Outbound::Event { envelope }, native_wait_started);
         if attention_changed {

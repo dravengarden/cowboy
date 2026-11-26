@@ -28,6 +28,7 @@ static SEGMENT_COUNTER: AtomicU64 = AtomicU64::new(1);
 /// Maximum display hops materialized onto a child session.
 pub const MAX_MATERIALIZED_HOPS: u32 = 16;
 
+pub use explore::LineageQuestionPageDetail;
 pub(super) use pg::{purge_deleted_pg, seal_lineage_on_clear_pg, seal_lineage_on_delete_pg};
 pub(super) use sqlite::{
     purge_deleted_sqlite, seal_lineage_on_clear_sqlite, seal_lineage_on_delete_sqlite,
@@ -186,12 +187,6 @@ impl Store {
     /// Load every persisted lineage edge (startup auth ancestry & freeze floors).
     pub async fn load_all_lineage_edges(&self) -> Result<Vec<LineageEdge>> {
         dispatch!(self, load_all_lineage_edges())
-    }
-
-    /// Load the maximum completed-turn `before_seq` per session so restarted
-    /// reducers preserve freeze floors for historical completed turns.
-    pub async fn load_max_turn_completion_floors(&self) -> Result<Vec<(String, u64)>> {
-        dispatch!(self, load_max_turn_completion_floors())
     }
 
     /// List direct (`hop_order = 1`) children of `parent_session_id`, newest first.

@@ -407,9 +407,15 @@ function NewSessionForm({
   const submittedRunning = observed.injection_pending === true && session.status === "busy";
   const replaceWaits = queued > 0 || submittedRunning;
   const forkWaits = waitForTurn || (forkMode === "fork" && queued > 0);
+  const sourceBusy = session.status === "busy" || session.status === "starting";
+  const effectiveIncludeUncommitted = supportsWorkspaceMode
+    ? sourceBusy
+      ? false
+      : copyUncommitted
+    : undefined;
   // One operation per distinct request: a retry returns the same copy, and
-  // changing any choice asks for a new one.
-  const key = useMemo(() => `duplicate-${newUuid()}`, [JSON.stringify([provider, subscription.value, preset, inheritSettings, overrides, copyUncommitted])]);
+  // changing any choice (including effective workspace mode) asks for a new one.
+  const key = useMemo(() => `duplicate-${newUuid()}`, [JSON.stringify([provider, subscription.value, preset, inheritSettings, overrides, effectiveIncludeUncommitted])]);
   // The first send needs this session as a source unless it was removed from
   // an already staged continuation.
   const continueSources =
@@ -455,7 +461,7 @@ function NewSessionForm({
                 preset: preset || null,
                 inherit_settings: inheritSettings,
                 config: overrides,
-                ...(supportsWorkspaceMode ? { include_uncommitted: session.status === "busy" || session.status === "starting" ? false : copyUncommitted } : {}),
+                ...(effectiveIncludeUncommitted !== undefined ? { include_uncommitted: effectiveIncludeUncommitted } : {}),
               },
               key,
             );
@@ -507,7 +513,7 @@ function NewSessionForm({
       />
       <SessionSubscription state={subscription} disabled={busy} desktop={desktop} helperText="" />
       </Box>
-      <ForkOutcome forkOnly={forkOnly} allowFork={allowFork} sameAccount={sameAccount} samePlacement={samePlacement} copiesWorktree={copiesWorktree} supportsWorkspaceMode={supportsWorkspaceMode} forkMode={forkMode} waitForTurn={waitForTurn && queued === 0} sourceBusy={session.status === "busy" || session.status === "starting"} copyUncommitted={copyUncommitted} onCopyUncommitted={setCopyUncommitted} />
+      <ForkOutcome forkOnly={forkOnly} allowFork={allowFork} sameAccount={sameAccount} samePlacement={samePlacement} copiesWorktree={copiesWorktree} supportsWorkspaceMode={supportsWorkspaceMode} forkMode={forkMode} waitForTurn={waitForTurn && queued === 0} sourceBusy={sourceBusy} copyUncommitted={copyUncommitted} onCopyUncommitted={setCopyUncommitted} />
       {!placement.loading && !placement.error && !placement.project && (
         <Alert
           severity="warning"

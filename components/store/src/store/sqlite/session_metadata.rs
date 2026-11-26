@@ -112,7 +112,7 @@ impl SqliteStorage {
         fence: Option<crate::store::session_metadata::ClearFence<'_>>,
         turn_lost: Option<crate::store::session_metadata::ClearFence<'_>>,
     ) -> Result<()> {
-        let mut tx = self.pool.begin().await?;
+        let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
         let now = now_ms();
         if let Some(calls_before_ms) = transcript {
             crate::store::session_lineage::seal_lineage_on_clear_sqlite(&mut tx, session_id, now)

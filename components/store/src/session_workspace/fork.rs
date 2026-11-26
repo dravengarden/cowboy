@@ -268,6 +268,7 @@ async fn worktree_content_fingerprint(worktree: &Path, head: &str) -> Result<[u8
         hasher.update((status_bytes.len() as u64).to_le_bytes());
         hasher.update(&status_bytes);
         let mut buf = [0u8; 16_384];
+        let mut total_bytes = 0_u64;
         for rel in parse_porcelain_paths(&status_bytes) {
             hasher.update(b"\0FILE\0");
             hasher.update(rel.as_os_str().as_bytes());
@@ -277,8 +278,10 @@ async fn worktree_content_fingerprint(worktree: &Path, head: &str) -> Result<[u8
                     .components()
                     .any(|part| !matches!(part, std::path::Component::Normal(_)))
             {
-                continue;
+                bail!("unexpected path in fork source status: {}", rel.display());
             }
+            // Confine traversal identically to copy_files before opening anything.
+            real_ancestors(&root, &rel, false)?;
             let full = root.join(&rel);
             match std::fs::symlink_metadata(&full) {
                 Err(err) if err.kind() == std::io::ErrorKind::NotFound => {
@@ -295,16 +298,34 @@ async fn worktree_content_fingerprint(worktree: &Path, head: &str) -> Result<[u8
                         let target = std::fs::read_link(&full)?;
                         hasher.update(target.as_os_str().as_bytes());
                     } else if ft.is_file() {
+                        total_bytes = total_bytes.saturating_add(meta.len());
+                        if total_bytes > FORK_UNTRACKED_LIMIT_BYTES {
+                            bail!(
+                                "the source worktree has more than {} MiB of uncommitted files; ignore build output or commit it before forking",
+                                FORK_UNTRACKED_LIMIT_BYTES / 1024 / 1024
+                            );
+                        }
                         hasher.update(b"REG\0");
                         hasher.update(meta.len().to_le_bytes());
                         let mut f = std::fs::OpenOptions::new()
                             .read(true)
                             .custom_flags(libc::O_NOFOLLOW)
                             .open(&full)?;
+                        let mut read_this = 0_u64;
                         loop {
                             let n = f.read(&mut buf)?;
                             if n == 0 {
                                 break;
+                            }
+                            read_this = read_this.saturating_add(n as u64);
+                            if total_bytes
+                                .saturating_add(read_this.saturating_sub(meta.len()))
+                                > FORK_UNTRACKED_LIMIT_BYTES
+                            {
+                                bail!(
+                                    "source file {} grew past the fork copy budget during fingerprinting",
+                                    rel.display()
+                                );
                             }
                             hasher.update(&buf[..n]);
                         }
@@ -512,5 +533,41 @@ mod fingerprint_tests {
         std::fs::write(repo.join("u.txt"), b"untracked-2").unwrap();
         let fp4 = worktree_content_fingerprint(repo, &head).await.unwrap();
         assert_ne!(fp3, fp4);
+    }
+
+    #[tokio::test]
+    async fn content_fingerprint_stays_confined_when_symlink_points_outside() {
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(outside.path().join("secret.txt"), b"top-secret").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let repo = dir.path();
+        git(repo, &["init", "-q"]);
+        git(repo, &["config", "user.email", "test@example.com"]);
+        git(repo, &["config", "user.name", "Test"]);
+        std::fs::write(repo.join("a.txt"), b"ok\n").unwrap();
+        git(repo, &["add", "a.txt"]);
+        git(repo, &["commit", "-q", "-m", "init"]);
+        let head = String::from_utf8(
+            std::process::Command::new("git")
+                .current_dir(repo)
+                .args(["rev-parse", "HEAD"])
+                .output()
+                .unwrap()
+                .stdout,
+        )
+        .unwrap()
+        .trim()
+        .to_owned();
+
+        // Untracked symlink to outside file must hash link target, never read outside contents.
+        std::os::unix::fs::symlink(outside.path().join("secret.txt"), repo.join("link.txt"))
+            .unwrap();
+        let fp1 = worktree_content_fingerprint(repo, &head).await.unwrap();
+        std::fs::write(outside.path().join("secret.txt"), b"changed-outside").unwrap();
+        let fp2 = worktree_content_fingerprint(repo, &head).await.unwrap();
+        assert_eq!(
+            fp1, fp2,
+            "mutating outside symlink target must not affect confined worktree fingerprint"
+        );
     }
 }

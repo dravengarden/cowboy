@@ -3,7 +3,7 @@ import CallSplitOutlined from "@mui/icons-material/CallSplitOutlined";
 import { useEffect, useRef, useState } from "react";
 import { notifyLineageChanged } from "./ancestorHistory";
 import type { RenderItem } from "./derive";
-import { duplicateSession, forkAvailability, ForkSessionError, forkSession } from "./sessionFork";
+import { executeForkAttempt, forkAvailability, type PendingForkAttempt } from "./sessionFork";
 import { requestPickSession } from "./sessionPickRequest";
 import { useStoreSelector } from "./store";
 import { glyphSize } from "./surface/desktopSize";
@@ -30,12 +30,10 @@ export function MessageForkAction({
   const machines = useStoreSelector((state) => state.machines);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const nativeOpRef = useRef<string | null>(null);
-  const linkedOpRef = useRef<string | null>(null);
+  const pendingAttemptRef = useRef<PendingForkAttempt | null>(null);
 
   useEffect(() => {
-    nativeOpRef.current = null;
-    linkedOpRef.current = null;
+    pendingAttemptRef.current = null;
   }, [originSessionId, messageId, beforeSeq]);
 
   if (!session || session.system || !session.workspace_id) return null;
@@ -47,41 +45,35 @@ export function MessageForkAction({
   const canLinked = beforeSeq !== undefined && beforeSeq > 0;
   if (!canNative && !canLinked) return null;
 
-  const runLinked = (): ReturnType<typeof duplicateSession> => {
-    const op = (linkedOpRef.current ??= `fork-turn-${newUuid()}`);
-    return duplicateSession(
-      originSessionId,
-      {
-        provider: session.provider,
-        provider_account_id: session.provider_account_id || "default",
-        before_seq: beforeSeq,
-        ...(supportsWorkspaceMode ? { include_uncommitted: false } : {}),
-      },
-      op,
-    );
-  };
+  const makeLinkedAttempt = (): Extract<PendingForkAttempt, { mode: "linked" }> => ({
+    mode: "linked",
+    operation: `fork-turn-${newUuid()}`,
+    body: {
+      provider: session.provider,
+      provider_account_id: session.provider_account_id || "default",
+      ...(beforeSeq !== undefined ? { before_seq: beforeSeq } : {}),
+      ...(supportsWorkspaceMode ? { include_uncommitted: false } : {}),
+    },
+  });
 
   const runFork = async (): Promise<void> => {
     setBusy(true);
     setError("");
     try {
-      let receipt;
-      if (canNative && messageId) {
-        try {
-          const op = (nativeOpRef.current ??= `fork-msg-${newUuid()}`);
-          receipt = await forkSession(originSessionId, { messageId, operation: op });
-        } catch (nativeErr) {
-          if (!(nativeErr instanceof ForkSessionError && nativeErr.definitiveUnsupported && canLinked)) {
-            throw nativeErr;
-          }
-          nativeOpRef.current = null;
-          receipt = await runLinked();
-        }
-      } else {
-        receipt = await runLinked();
-      }
-      nativeOpRef.current = null;
-      linkedOpRef.current = null;
+      const attempt = (pendingAttemptRef.current ??=
+        canNative && messageId
+          ? { mode: "native", operation: `fork-msg-${newUuid()}`, messageId }
+          : makeLinkedAttempt());
+      const receipt = await executeForkAttempt(
+        originSessionId,
+        attempt,
+        canLinked,
+        makeLinkedAttempt,
+        (next) => {
+          pendingAttemptRef.current = next;
+        },
+      );
+      pendingAttemptRef.current = null;
       notifyLineageChanged(receipt.session_id);
       notifyLineageChanged(originSessionId);
       requestPickSession(receipt.session_id, receipt.session ?? undefined);

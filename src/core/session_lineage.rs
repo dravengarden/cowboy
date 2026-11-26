@@ -173,6 +173,15 @@ impl Hub {
                 Some(explicit) => explicit.min(session.next_seq),
                 None => session.next_seq,
             };
+            if session
+                .unpersisted_min_seq
+                .is_some_and(|dropped| dropped < before_seq)
+            {
+                return Err(
+                    "Recent transcript events could not be queued durably; wait or refresh before forking"
+                        .into(),
+                );
+            }
             session.lineage_pins = session.lineage_pins.saturating_add(1);
             if before_seq > 0 {
                 self.inner
@@ -208,6 +217,47 @@ impl Hub {
                 session_id: source_session_id.to_owned(),
             },
         ))
+    }
+
+    /// Atomically capture `(agent_session_id, context_generation)` under the
+    /// same sessions lock as `pin_and_freeze_source`, ensuring a native fork
+    /// never mixes a native thread ID and cutoff across different Clear epochs.
+    pub fn snapshot_native_source_identity(
+        &self,
+        source_session_id: &str,
+    ) -> Result<(String, Option<u64>), String> {
+        let sessions = self.inner.sessions.lock();
+        let session = sessions
+            .get(source_session_id)
+            .ok_or("Source session no longer exists")?;
+        if session.clear_pending {
+            return Err(
+                "This session is clearing its conversation; retry once Clear finishes".into(),
+            );
+        }
+        let has_context = session.log.iter().any(|env| {
+            matches!(
+                &env.event,
+                Event::Update { update }
+                    if matches!(
+                        update.get("sessionUpdate").and_then(serde_json::Value::as_str),
+                        Some("user_message_chunk" | "cowboy_fork_origin")
+                    )
+            )
+        });
+        let thread = session
+            .meta
+            .agent_session_id
+            .clone()
+            .filter(|id| {
+                !id.is_empty()
+                    && (has_context
+                        || !session.reached_start
+                        || self.native_fork_settled(source_session_id))
+            })
+            .ok_or("This conversation has nothing to fork yet")?;
+        let generation = Self::session_context_generation(session);
+        Ok((thread, generation))
     }
 
     /// Freeze canonical rows `< before_seq` on both the Hub reducer and the

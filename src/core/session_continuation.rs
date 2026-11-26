@@ -42,6 +42,68 @@ impl Hub {
         Ok(())
     }
 
+    /// Fence dispatch on `session_id` and peek its sole queued prompt without
+    /// mutating durable queue state yet. Drop the guard to release the fence
+    /// if the atomic DB commit fails; call [`Self::commit_cancel_handoff_memory`]
+    /// once the DB transaction has committed.
+    pub fn begin_cancel_handoff(
+        &self,
+        session_id: &str,
+        cmid: &str,
+    ) -> Option<(QueuedMessage, HandoffCancelGuard)> {
+        let peeked = {
+            let mut sessions = self.inner.sessions.lock();
+            let s = sessions.get_mut(session_id)?;
+            if s.cancel_handoff_pending
+                || s.in_flight
+                || s.dispatch_pending.is_some()
+                || s.queue.len() != 1
+                || s.queue[0].cmid.as_deref() != Some(cmid)
+            {
+                return None;
+            }
+            s.cancel_handoff_pending = true;
+            s.queue[0].clone()
+        };
+        Some((
+            peeked,
+            HandoffCancelGuard {
+                hub: self.clone(),
+                session_id: session_id.to_owned(),
+            },
+        ))
+    }
+
+    /// Apply an already-committed handoff cancellation in memory (queue emptied,
+    /// cancelled receipt setting stored, auth parent removed) without emitting a
+    /// duplicate async queue/setting write.
+    pub fn commit_cancel_handoff_memory(
+        &self,
+        session_id: &str,
+        cmid: &str,
+        setting_key: String,
+        setting_value: serde_json::Value,
+    ) {
+        self.inner
+            .settings
+            .lock()
+            .insert(setting_key, setting_value);
+        self.remove_auth_parent(session_id);
+        {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
+                return;
+            };
+            if s.queue.len() == 1 && s.queue[0].cmid.as_deref() == Some(cmid) {
+                if s.editing.as_deref() == Some(s.queue[0].id.as_str()) {
+                    s.editing = None;
+                }
+                s.queue.clear();
+            }
+        }
+        self.emit_pending(session_id);
+    }
+
     /// Take back a continuation's first message while it is the only queued
     /// prompt. `None` once it was dispatched, or while other work is queued.
     pub fn take_sole_queued(&self, session_id: &str, cmid: &str) -> Option<QueuedMessage> {
@@ -840,3 +902,19 @@ mod tests {
 #[cfg(test)]
 #[path = "session_spawn_tests.rs"]
 mod spawn_tests;
+
+/// RAII guard fencing prompt dispatch on `session_id` while Cancel Switch
+/// commits its single database transaction.
+pub struct HandoffCancelGuard {
+    hub: Hub,
+    session_id: String,
+}
+
+impl Drop for HandoffCancelGuard {
+    fn drop(&mut self) {
+        if let Some(session) = self.hub.inner.sessions.lock().get_mut(&self.session_id) {
+            session.cancel_handoff_pending = false;
+        }
+        self.hub.try_drain(&self.session_id);
+    }
+}

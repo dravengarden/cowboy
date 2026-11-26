@@ -1,5 +1,5 @@
+import { notifyLineageChanged } from "./ancestorHistory";
 import { createBootstrapPresentation } from "./bootstrapPresentation";
-
 import { transcriptNeedsHydration, transcriptRetryDelay } from "./transcriptHydrationPolicy";
 import { browserDeviceProtocol, resetBrowserDeviceChallenge } from "./browserDevice";
 import { createAuthoredSendGate } from "./authoredSendGate";
@@ -1767,7 +1767,7 @@ function handle(msg: Outbound): void {
           env.session_id,
           Math.max(clearBoundaries.get(env.session_id) ?? 0, env.seq),
         );
-        resetExploreAfterContextClear(env.session_id);
+        resetExploreAfterContextClear(env.session_id); notifyLineageChanged(env.session_id);
         completeQuestionPages.delete(env.session_id);
         transcriptEpoch.set(
           env.session_id,

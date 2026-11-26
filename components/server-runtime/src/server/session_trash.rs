@@ -232,6 +232,12 @@ fn delete_claimed(
 /// more events into a soon-to-be-gone Hub session), then drop Hub state and
 /// broadcast. A remote environment confirms its stop before the row goes.
 pub fn delete_now(state: &Arc<AppState>, session_id: &str) -> Result<(), String> {
+    if handoff_cancel_pinned(state, session_id) {
+        return Err(
+            "Wait until the new agent starts or cancel the switch before permanently deleting the original session"
+                .into(),
+        );
+    }
     let binding = state
         .hub
         .session_info(session_id)

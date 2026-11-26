@@ -84,7 +84,7 @@ fn reusable_fork(hub: &crate::core::Hub, source: &str, fork: &str, latest: &str)
     hub.session_fork(fork).is_some_and(|record| {
         record.source_session_id == source
             && record.message_id.as_deref() == Some(latest)
-            && record.state != ForkState::Refused
+            && !matches!(record.state, ForkState::Refused | ForkState::Staging)
     }) && hub.session_info(fork).is_some()
         && !hub.session_is_trashed(fork)
 }
@@ -126,12 +126,16 @@ fn check_fork_machines(
     Ok(())
 }
 
-async fn resolve_latest_completed(state: &AppState, id: &str) -> Result<String, String> {
+async fn resolve_latest_completed(
+    state: &AppState,
+    id: &str,
+    generation: Option<u64>,
+) -> Result<String, String> {
     if let Some(found) = state.hub.last_completed_answer_id(id) {
         return Ok(found);
     }
     if let Some(store) = state.store.as_ref()
-        && let Some(generation) = state.hub.context_generation(id)
+        && let Some(generation) = generation
         && let Ok(Some((mid, _))) = store.latest_turn_completion(id, generation).await
     {
         return Ok(mid);
@@ -142,6 +146,7 @@ async fn resolve_latest_completed(state: &AppState, id: &str) -> Result<String, 
 async fn resolve_native_fork_before_seq(
     state: &AppState,
     id: &str,
+    generation: Option<u64>,
     explicit_mid: Option<&str>,
 ) -> Result<Option<u64>, String> {
     let Some(mid) = explicit_mid else {
@@ -153,7 +158,7 @@ async fn resolve_native_fork_before_seq(
     let Some(store) = state.store.as_ref() else {
         return Err("The selected historical answer is no longer available as a fork point".into());
     };
-    if let Some(generation) = state.hub.context_generation(id) {
+    if let Some(generation) = generation {
         let found = store
             .turn_completion_before_seq(id, generation, mid)
             .await
@@ -171,6 +176,148 @@ async fn resolve_native_fork_before_seq(
     })
 }
 
+fn fork_setting_key(destination: &str) -> String {
+    format!(
+        "{}{destination}",
+        crate::core::settings_keys::SESSION_FORK_PREFIX
+    )
+}
+
+fn native_selection(
+    source: &SessionMeta,
+    machine_id: &str,
+    runtime_machine_id: Option<&str>,
+    project: &str,
+) -> NextAgent {
+    NextAgent {
+        provider: source.provider.clone(),
+        provider_account_id: source.provider_account_id.clone(),
+        machine_id: machine_id.to_owned(),
+        cwd: project.to_owned(),
+        runtime_machine_id: runtime_machine_id.map(str::to_owned),
+        preset: None,
+        inherit_settings: true,
+        config: serde_json::Map::new(),
+    }
+}
+
+fn destination_matches_native_source(created: &SessionMeta, source: &SessionMeta) -> bool {
+    created.provider == source.provider
+        && created.provider_account_id == source.provider_account_id
+        && created.machine_id == source.machine_id
+        && created.provider_auth_generation == source.provider_auth_generation
+}
+
+async fn persist_fork_state(
+    state: &AppState,
+    destination: &str,
+    record: &ForkRecord,
+    next_state: ForkState,
+) -> Result<(), String> {
+    let store = state.store.as_ref().ok_or("Fork storage unavailable")?;
+    let mut updated = record.clone();
+    updated.state = next_state;
+    let value = serde_json::to_value(&updated).expect("fork record serializes");
+    store
+        .put_setting(&fork_setting_key(destination), &value)
+        .await
+        .map_err(|_| "Fork storage unavailable".to_owned())
+}
+
+async fn resume_native_fork(
+    state: &Arc<AppState>,
+    auth: &AuthenticatedProductRequest,
+    id: &str,
+    info: &SessionInfo,
+    request: &ForkRequest,
+    destination: &str,
+    record: &ForkRecord,
+) -> Result<(String, bool), String> {
+    if !request.latest_completed && record.message_id != request.message_id {
+        return Err("This operation already forked another point".into());
+    }
+    if record.state == ForkState::Refused {
+        return Err(format!(
+            "The new session {destination} could not fork this conversation; delete it and fork again"
+        ));
+    }
+    if record.state != ForkState::Staging {
+        owned(state, &auth.principal, destination)?;
+        return Ok((destination.to_owned(), false));
+    }
+    let target_lock = write_lock(destination);
+    let _target_guard = target_lock.lock().await;
+    let current = state
+        .hub
+        .session_fork(destination)
+        .unwrap_or_else(|| record.clone());
+    if current.state == ForkState::Refused {
+        return Err(format!(
+            "The new session {destination} could not fork this conversation; delete it and fork again"
+        ));
+    }
+    if current.state != ForkState::Staging {
+        owned(state, &auth.principal, destination)?;
+        return Ok((destination.to_owned(), false));
+    }
+    let source = info.meta.clone();
+    let (machine_id, runtime_machine_id, project) = placement(&source)?;
+    let selection = native_selection(
+        &source,
+        &machine_id,
+        runtime_machine_id.as_deref(),
+        &project,
+    );
+    let actor = folder_actor(state, &auth.principal);
+    if state.hub.session_info(destination).is_none() {
+        if state.hub.session_is_trashed(id) {
+            return Err("Restore this session from Trash before forking it".into());
+        }
+        let create = NewSessionRequest {
+            provider: source.provider.clone(),
+            provider_account_id: Some(source.provider_account_id.clone()),
+            machine_id,
+            runtime_machine_id,
+            cwd: Some(project),
+            preset: None,
+            folder_id: None,
+            system: false,
+            origin: SessionOrigin::Web,
+            initial_prompt: None,
+            context_sources: vec![],
+            reserved_id: Some(destination.to_owned()),
+            retained_auth_generation: source.provider_auth_generation,
+        };
+        let response =
+            api_new_session(State(state.clone()), Extension(auth.clone()), Json(create)).await;
+        if !response.status().is_success() {
+            return Err(creation_error(response).await);
+        }
+    }
+    let created = owned(state, &auth.principal, destination)?.meta;
+    if !destination_matches_native_source(&created, &source) {
+        let _ = persist_fork_state(state, destination, &current, ForkState::Refused).await;
+        state.hub.refuse_native_fork(destination);
+        return Err(format!(
+            "The new session {destination} was admitted on another login or Machine and cannot fork this conversation; delete it and retry"
+        ));
+    }
+    finish_native_fork(
+        state,
+        id,
+        destination,
+        &source,
+        &created,
+        &current,
+        &selection,
+        &request.config,
+        &actor,
+        current.before_seq.unwrap_or(0),
+    )
+    .await?;
+    Ok((destination.to_owned(), false))
+}
+
 async fn fork_session(
     state: Arc<AppState>,
     auth: AuthenticatedProductRequest,
@@ -186,33 +333,21 @@ async fn fork_session(
     }
     valid_overrides(&request.config)?;
     if let Some((destination, record)) = state.hub.fork_by_operation(&id, &request.operation) {
-        // The latest answer moves, so a retry cannot restate the point it took.
-        if !request.latest_completed && record.message_id != request.message_id {
-            return Err("This operation already forked another point".into());
-        }
-        if record.state == ForkState::Refused {
-            return Err(format!(
-                "The new session {destination} could not fork this conversation; delete it and fork again"
-            ));
-        }
-        return Ok((destination, false));
+        return resume_native_fork(&state, &auth, &id, &info, &request, &destination, &record)
+            .await;
     }
     if state.hub.session_is_trashed(&id) {
         return Err("Restore this session from Trash before forking it".into());
     }
     let source = info.meta.clone();
     forkable(&state, &source)?;
-    let source_thread = state
-        .hub
-        .agent_session_id_for_resume(&id)
-        .ok_or("This conversation has nothing to fork yet")?;
+    let (source_thread, source_generation) = state.hub.snapshot_native_source_identity(&id)?;
     if request.latest_completed {
-        let latest = resolve_latest_completed(&state, &id).await?;
-        if let Some(fork) = request
-            .reuse
-            .as_deref()
-            .filter(|fork| reusable_fork(&state.hub, &id, fork, &latest))
-        {
+        let latest = resolve_latest_completed(&state, &id, source_generation).await?;
+        if let Some(fork) = request.reuse.as_deref().filter(|fork| {
+            reusable_fork(&state.hub, &id, fork, &latest)
+                && owned(&state, &auth.principal, fork).is_ok()
+        }) {
             return Ok((fork.to_owned(), false));
         }
         request.message_id = Some(latest);
@@ -220,21 +355,12 @@ async fn fork_session(
     admit_point(&state.hub, &info, request.message_id.as_deref())?;
     let (machine_id, runtime_machine_id, project) = placement(&source)?;
     check_fork_machines(&state, &machine_id, runtime_machine_id.as_deref())?;
-    let selection = NextAgent {
-        provider: source.provider.clone(),
-        provider_account_id: source.provider_account_id.clone(),
-        machine_id: machine_id.clone(),
-        cwd: project.clone(),
-        runtime_machine_id: runtime_machine_id.clone(),
-        preset: None,
-        inherit_settings: true,
-        config: serde_json::Map::new(),
-    };
-    // The adapter reads the source thread from the login's native home on
-    // this Machine, and each auth generation has its own home. A Service
-    // token refresh advances the generation about every eight hours without
-    // a new sign-in, so the fork keeps the source's generation; only a named
-    // subscription that really signed in again is refused.
+    let selection = native_selection(
+        &source,
+        &machine_id,
+        runtime_machine_id.as_deref(),
+        &project,
+    );
     let mut generation = inheritance::target_generation(&state, &auth, &selection).await?;
     if let Some(retained) = source.provider_auth_generation {
         provider_accounts::registration::retain_auth_generation(
@@ -249,10 +375,28 @@ async fn fork_session(
     let actor = folder_actor(&state, &auth.principal);
     state.hub.continuation_folder(&id, &actor)?;
 
-    let explicit_before =
-        resolve_native_fork_before_seq(&state, &id, request.message_id.as_deref()).await?;
+    let explicit_before = resolve_native_fork_before_seq(
+        &state,
+        &id,
+        source_generation,
+        request.message_id.as_deref(),
+    )
+    .await?;
     let (before_seq, _pin_guard) =
         lineage::pin_and_freeze_source(&state, &id, explicit_before).await?;
+    // Revalidate source thread & generation under the Clear-blocking pin so an
+    // interleaved context reset cannot pair an old thread/cutoff with new state.
+    if state.hub.snapshot_native_source_identity(&id)? != (source_thread.clone(), source_generation)
+    {
+        return Err("Source conversation context changed while preparing the fork; retry".into());
+    }
+    let fresh_info = owned(&state, &auth.principal, &id)?;
+    admit_point(&state.hub, &fresh_info, request.message_id.as_deref())?;
+    let point = request
+        .message_id
+        .is_none()
+        .then(|| state.hub.last_answer_id(&id))
+        .flatten();
     let destination = state.supervisor.reserve_session_id();
     let target_lock = write_lock(&destination);
     let _target_guard = target_lock.lock().await;
@@ -260,21 +404,13 @@ async fn fork_session(
         source_session_id: id.clone(),
         source_agent_session_id: source_thread,
         message_id: request.message_id.clone(),
-        point: request
-            .message_id
-            .is_none()
-            .then(|| state.hub.last_answer_id(&id))
-            .flatten(),
+        point,
+        before_seq: Some(before_seq),
         operation: request.operation.clone(),
-        state: ForkState::Pending,
+        state: ForkState::Staging,
     };
-    // Durable before the destination exists: a restart must never restore it
-    // without its fork intent, and its workspace preparation reads the base.
     let store = state.store.as_ref().ok_or("Fork storage unavailable")?;
-    let key = format!(
-        "{}{destination}",
-        crate::core::settings_keys::SESSION_FORK_PREFIX
-    );
+    let key = fork_setting_key(&destination);
     let value = serde_json::to_value(&record).expect("fork record serializes");
     if !store
         .compare_and_put_setting(&key, None, &value)
@@ -306,11 +442,8 @@ async fn fork_session(
         return Err(creation_error(response).await);
     }
     let created = owned(&state, &auth.principal, &destination)?.meta;
-    if created.provider != source.provider
-        || created.provider_account_id != source.provider_account_id
-        || created.machine_id != source.machine_id
-        || created.provider_auth_generation != source.provider_auth_generation
-    {
+    if !destination_matches_native_source(&created, &source) {
+        let _ = persist_fork_state(&state, &destination, &record, ForkState::Refused).await;
         state.hub.refuse_native_fork(&destination);
         return Err(format!(
             "The new session {destination} was admitted on another login or Machine and cannot fork this conversation; delete it and retry"
@@ -345,16 +478,48 @@ async fn finish_native_fork(
     actor: &crate::session_folders::FolderActor,
     before_seq: u64,
 ) -> Result<(), String> {
-    lineage::record_edge(state, destination, source, "native_fork", before_seq, false)
+    ensure_lineage_edge(state, destination, source, "native_fork", before_seq)
         .await
         .map_err(|error| {
-            state.hub.refuse_native_fork(destination);
-            format!("Fork lineage could not be saved ({error}); delete {destination} and retry")
+            format!(
+                "The new session {destination} was created but its lineage could not be saved ({error}); retry with the same operation to finish setup"
+            )
         })?;
     state.hub.open_fork(destination, record, &source.title);
     inheritance::apply(state, source, created, selection)?;
     apply_overrides(state, destination, overrides)?;
-    state.hub.place_fork(id, destination, actor)
+    state.hub.place_fork(id, destination, actor)?;
+    lineage::flush_store_barrier(state).await.map_err(|error| {
+        format!(
+            "The new session {destination} was created but durable persistence did not finish ({error}); retry with the same operation"
+        )
+    })?;
+    persist_fork_state(state, destination, record, ForkState::Pending).await?;
+    state.hub.activate_native_fork(destination);
+    Ok(())
+}
+
+/// Record a direct lineage edge once; on setup retry keep any already-committed
+/// edge/cutoff instead of overwriting it with a newer source state.
+async fn ensure_lineage_edge(
+    state: &AppState,
+    destination: &str,
+    source: &SessionMeta,
+    kind: &str,
+    before_seq: u64,
+) -> Result<(), String> {
+    if let Some(store) = state.store.as_ref()
+        && let Some(existing) = store
+            .lineage_edge(destination)
+            .await
+            .map_err(|error| format!("lineage lookup failed: {error}"))?
+    {
+        if existing.parent_session_id != source.id {
+            return Err("destination already belongs to another lineage".into());
+        }
+        return Ok(());
+    }
+    lineage::record_edge(state, destination, source, kind, before_seq, false).await
 }
 
 #[derive(Debug, Deserialize)]
@@ -407,13 +572,27 @@ fn resolve_duplicate_workspace(
         crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
     );
     if !has_fork_worktree {
-        return Ok((None, None));
+        return if copy_workspace == Some(true) {
+            Err(format!(
+                "Machine {machine_id} does not support forking worktrees yet"
+            ))
+        } else {
+            Ok((None, None))
+        };
     }
     // Only branch from a materialized source worktree; an unmaterialized or
     // still-preparing session cannot serve as a base worktree.
-    let materialized = info.meta.workspace_id.is_some()
+    let materialized = info
+        .meta
+        .workspace_id
+        .as_deref()
+        .is_some_and(|w| !w.is_empty())
         && !info.meta.cwd.is_empty()
-        && info.meta.status != Status::Starting;
+        && !info.meta.awaits_workspace_preparation()
+        && !state.workspace_preparations.lock().contains(&info.meta.id)
+        && info.meta.status != Status::Starting
+        && (info.meta.workspace_source_path.as_deref() != Some(info.meta.cwd.as_str())
+            || info.meta.agent_session_id.is_some());
     if !materialized {
         return if copy_workspace == Some(true) {
             Err("Source worktree is not materialized yet; retry once the session is ready".into())
@@ -438,38 +617,120 @@ fn resolve_duplicate_workspace(
         )),
         Some(false) => Ok((Some(info.meta.id.clone()), Some(false))),
         None if busy && supports_head_only => Ok((Some(info.meta.id.clone()), Some(false))),
+        None if busy && copy_workspace == Some(true) => Err(format!(
+            "Machine {machine_id} must be updated before it can fork an active session's worktree"
+        )),
         None if busy => Ok((None, None)),
         _ => Ok((Some(info.meta.id.clone()), None)),
     }
 }
 
-enum DuplicateReservation {
+struct DuplicatePlan {
+    destination: String,
+    before_seq: u64,
+    ws_base: Option<String>,
+    ws_include_uncommitted: Option<bool>,
+    resumed: bool,
+}
+
+enum DuplicateLookup {
     AlreadyReady(String),
-    Proceed { destination: String, resumed: bool },
+    Reserved(DuplicatePlan),
+    Fresh,
+}
+
+async fn interpret_existing_duplicate(
+    state: &AppState,
+    auth: &AuthenticatedProductRequest,
+    source_id: &str,
+    operation: &str,
+    fingerprint: &str,
+    receipt: crate::store::DuplicateReceipt,
+) -> Result<DuplicateLookup, String> {
+    if receipt.fingerprint != fingerprint {
+        return Err("This operation already created a different copy".into());
+    }
+    if receipt.state == "deleted" {
+        return Err("The copy created by this operation was deleted; start a new fork".into());
+    }
+    if receipt.state == "ready" {
+        if owned(state, &auth.principal, &receipt.destination_session_id).is_ok() {
+            return Ok(DuplicateLookup::AlreadyReady(
+                receipt.destination_session_id,
+            ));
+        }
+        if let Some(store) = state.store.as_ref() {
+            let _ = store
+                .mark_duplicate_receipt_deleted(
+                    &auth.principal.user_id,
+                    source_id,
+                    operation,
+                    chrono::Utc::now().timestamp_millis(),
+                )
+                .await;
+        }
+        return Err("The copy created by this operation was deleted; start a new fork".into());
+    }
+    Ok(DuplicateLookup::Reserved(DuplicatePlan {
+        destination: receipt.destination_session_id,
+        before_seq: receipt.before_seq,
+        ws_base: receipt.workspace_base,
+        ws_include_uncommitted: receipt.workspace_include_uncommitted,
+        resumed: true,
+    }))
+}
+
+async fn lookup_existing_duplicate(
+    state: &AppState,
+    auth: &AuthenticatedProductRequest,
+    source_id: &str,
+    operation: &str,
+    fingerprint: &str,
+) -> Result<DuplicateLookup, String> {
+    let Some(store) = state.store.as_ref() else {
+        return Ok(DuplicateLookup::Fresh);
+    };
+    let Some(receipt) = store
+        .duplicate_receipt(&auth.principal.user_id, source_id, operation)
+        .await
+        .map_err(|_| "Duplicate receipt storage unavailable".to_owned())?
+    else {
+        return Ok(DuplicateLookup::Fresh);
+    };
+    interpret_existing_duplicate(state, auth, source_id, operation, fingerprint, receipt).await
 }
 
 async fn reserve_duplicate_operation(
     state: &AppState,
-    owner: &str,
+    auth: &AuthenticatedProductRequest,
     source_id: &str,
     operation: &str,
     fingerprint: &str,
-) -> Result<DuplicateReservation, String> {
+    before_seq: u64,
+    workspace: (Option<String>, Option<bool>),
+) -> Result<DuplicateLookup, String> {
+    let (ws_base, ws_include_uncommitted) = workspace;
     let candidate = state.supervisor.reserve_session_id();
     let Some(store) = state.store.as_ref() else {
-        return Ok(DuplicateReservation::Proceed {
+        return Ok(DuplicateLookup::Reserved(DuplicatePlan {
             destination: candidate,
+            before_seq,
+            ws_base,
+            ws_include_uncommitted,
             resumed: false,
-        });
+        }));
     };
     let now = chrono::Utc::now().timestamp_millis();
     let outcome = store
         .reserve_duplicate_receipt(&crate::store::DuplicateReceipt {
-            owner_user_id: owner.to_owned(),
+            owner_user_id: auth.principal.user_id.clone(),
             source_session_id: source_id.to_owned(),
             operation_id: operation.to_owned(),
             fingerprint: fingerprint.to_owned(),
             destination_session_id: candidate.clone(),
+            before_seq,
+            workspace_base: ws_base.clone(),
+            workspace_include_uncommitted: ws_include_uncommitted,
             state: "reserved".to_owned(),
             created_at_ms: now,
             updated_at_ms: now,
@@ -477,47 +738,70 @@ async fn reserve_duplicate_operation(
         .await
         .map_err(|_| "Duplicate receipt storage unavailable".to_owned())?;
     match outcome {
-        crate::store::ReserveOutcome::Reserved => Ok(DuplicateReservation::Proceed {
+        crate::store::ReserveOutcome::Reserved => Ok(DuplicateLookup::Reserved(DuplicatePlan {
             destination: candidate,
+            before_seq,
+            ws_base,
+            ws_include_uncommitted,
             resumed: false,
-        }),
+        })),
         crate::store::ReserveOutcome::Existing(receipt) => {
-            if receipt.fingerprint != fingerprint {
-                return Err("This operation already created a different copy".into());
-            }
-            if receipt.state == "deleted" {
-                return Err(
-                    "The copy created by this operation was deleted; start a new fork".into(),
-                );
-            }
-            if receipt.state == "ready" {
-                if state
-                    .hub
-                    .session_info(&receipt.destination_session_id)
-                    .is_some()
-                {
-                    return Ok(DuplicateReservation::AlreadyReady(
-                        receipt.destination_session_id,
-                    ));
-                }
-                let _ = store
-                    .mark_duplicate_receipt_deleted(owner, source_id, operation, now)
-                    .await;
-                return Err(
-                    "The copy created by this operation was deleted; start a new fork".into(),
-                );
-            }
-            Ok(DuplicateReservation::Proceed {
-                destination: receipt.destination_session_id,
-                resumed: true,
-            })
+            interpret_existing_duplicate(state, auth, source_id, operation, fingerprint, receipt)
+                .await
         }
     }
 }
 
+async fn verify_duplicate_destination_binding(
+    state: &AppState,
+    auth: &AuthenticatedProductRequest,
+    source_id: &str,
+    destination: &str,
+) -> Result<(), String> {
+    let info = owned(state, &auth.principal, destination)?;
+    if info.meta.forked_from.as_deref() == Some(source_id) {
+        return Ok(());
+    }
+    if state
+        .hub
+        .setting(&crate::session_context::key(destination))
+        .and_then(|v| serde_json::from_value::<Context>(v).ok())
+        .is_some_and(|ctx| {
+            ctx.sources.iter().any(|s| s == source_id)
+                || ctx.waiting.iter().any(|l| l.session_id == source_id)
+        })
+    {
+        return Ok(());
+    }
+    if let Some(store) = state.store.as_ref()
+        && let Ok(Some(edge)) = store.lineage_edge(destination).await
+        && edge.parent_session_id == source_id
+    {
+        return Ok(());
+    }
+    Err(format!(
+        "Reserved destination {destination} does not belong to this fork operation; start a new fork"
+    ))
+}
+
+fn duplicate_fingerprint(request: &DuplicateRequest) -> String {
+    serde_json::json!({
+        "provider": request.provider,
+        "account": request.provider_account_id,
+        "preset": request.preset,
+        "config": request.config,
+        "inherit": request.inherit_settings,
+        "before_seq": request.before_seq,
+        "copy_workspace": request.copy_workspace,
+        "include_uncommitted": request.include_uncommitted,
+    })
+    .to_string()
+}
+
 /// A copy on another subscription or Provider (or where a native fork is
-/// unavailable): reserves its durable receipt before creation, resumes
-/// incomplete setup on retry, and guarantees durable lineage + cutoff freeze.
+/// unavailable): replays ready receipts before source preflight, reserves its
+/// durable capture plan before creation, resumes incomplete setup on retry, and
+/// waits for durable storage before marking the receipt ready.
 async fn duplicate_session(
     state: Arc<AppState>,
     auth: AuthenticatedProductRequest,
@@ -532,32 +816,11 @@ async fn duplicate_session(
     current_authority(&state, &auth)?;
     let info = owned(&state, &auth.principal, &id)?;
     valid_overrides(&request.config)?;
-    let fingerprint = serde_json::json!({
-        "provider": request.provider,
-        "account": request.provider_account_id,
-        "preset": request.preset,
-        "config": request.config,
-        "inherit": request.inherit_settings,
-        "before_seq": request.before_seq,
-        "copy_workspace": request.copy_workspace,
-        "include_uncommitted": request.include_uncommitted,
-    })
-    .to_string();
-    if state.hub.session_is_trashed(&id) {
-        return Err("Restore this session from Trash before duplicating it".into());
-    }
-    if state.hub.is_managed_child(&id) {
-        return Err("A managed call cannot be duplicated".into());
-    }
+    let fingerprint = duplicate_fingerprint(&request);
+    let existing =
+        lookup_existing_duplicate(&state, &auth, &id, &request.operation, &fingerprint).await?;
     let source = info.meta.clone();
     let (machine_id, runtime_machine_id, project) = placement(&source)?;
-    let (ws_base, ws_include_uncommitted) = resolve_duplicate_workspace(
-        &state,
-        &info,
-        &machine_id,
-        request.copy_workspace,
-        request.include_uncommitted,
-    )?;
     let selection = NextAgent {
         provider: request.provider.clone(),
         provider_account_id: request.provider_account_id.clone(),
@@ -568,62 +831,107 @@ async fn duplicate_session(
         inherit_settings: request.inherit_settings,
         config: serde_json::Map::new(),
     };
-    inheritance::preflight(&state, &auth, &source, &selection).await?;
     let actor = folder_actor(&state, &auth.principal);
-    state.hub.continuation_folder(&id, &actor)?;
 
-    let (destination, resumed) = match reserve_duplicate_operation(
-        &state,
-        &auth.principal.user_id,
-        &id,
-        &request.operation,
-        &fingerprint,
-    )
-    .await?
-    {
-        DuplicateReservation::AlreadyReady(existing) => return Ok(existing),
-        DuplicateReservation::Proceed {
-            destination,
-            resumed,
-        } => (destination, resumed),
+    let (plan, _pin_guard) = match existing {
+        DuplicateLookup::AlreadyReady(dest) => return Ok(dest),
+        DuplicateLookup::Reserved(plan) => {
+            let needs_create = state.hub.session_info(&plan.destination).is_none();
+            if needs_create {
+                preflight_duplicate_source(&state, &auth, &id, &source, &selection, &actor).await?;
+            }
+            let pin = if plan.before_seq > 0 {
+                Some(
+                    lineage::pin_and_freeze_source(&state, &id, Some(plan.before_seq))
+                        .await?
+                        .1,
+                )
+            } else {
+                None
+            };
+            (plan, pin)
+        }
+        DuplicateLookup::Fresh => {
+            preflight_duplicate_source(&state, &auth, &id, &source, &selection, &actor).await?;
+            let (ws_base, ws_include_uncommitted) = resolve_duplicate_workspace(
+                &state,
+                &info,
+                &machine_id,
+                request.copy_workspace,
+                request.include_uncommitted,
+            )?;
+            let (before_seq, pin_guard) =
+                lineage::pin_and_freeze_source(&state, &id, request.before_seq).await?;
+            match reserve_duplicate_operation(
+                &state,
+                &auth,
+                &id,
+                &request.operation,
+                &fingerprint,
+                before_seq,
+                (ws_base, ws_include_uncommitted),
+            )
+            .await?
+            {
+                DuplicateLookup::AlreadyReady(dest) => return Ok(dest),
+                DuplicateLookup::Reserved(plan) => (plan, Some(pin_guard)),
+                DuplicateLookup::Fresh => unreachable!(),
+            }
+        }
     };
-    let target_lock = write_lock(&destination);
-    let _target_guard = target_lock.lock().await;
-    let (before_seq, _pin_guard) =
-        lineage::pin_and_freeze_source(&state, &id, request.before_seq).await?;
 
-    if state.hub.session_info(&destination).is_none() {
+    let target_lock = write_lock(&plan.destination);
+    let _target_guard = target_lock.lock().await;
+    if state.hub.session_info(&plan.destination).is_none() {
         create_duplicate_destination(
             &state,
             &auth,
             &id,
             &source.title,
-            &destination,
+            &plan,
             &request,
             machine_id,
             runtime_machine_id,
             project,
-            before_seq,
-            ws_base,
-            ws_include_uncommitted,
-            resumed,
         )
         .await?;
+    } else {
+        verify_duplicate_destination_binding(&state, &auth, &id, &plan.destination).await?;
     }
-    lineage::record_edge(&state, &destination, &source, "linked_fork", before_seq, false)
+    ensure_lineage_edge(&state, &plan.destination, &source, "linked_fork", plan.before_seq)
         .await
         .map_err(|error| {
             format!(
-                "The copy {destination} was created but its lineage could not be saved ({error}); retry with the same operation to finish setup"
+                "The copy {} was created but its lineage could not be saved ({error}); retry with the same operation to finish setup",
+                plan.destination
             )
         })?;
-    state.hub.set_forked_from(&destination, Some(id.clone()));
-    finish_duplicate_session(&state, &auth, &id, &destination, &selection, &request.config, &actor)
-        .map_err(|error| {
-            format!("The copy {destination} was created but not finished ({error}); retry with the same operation to finish setup")
-        })?;
+    state
+        .hub
+        .set_forked_from(&plan.destination, Some(id.clone()));
+    finish_duplicate_session(
+        &state,
+        &auth,
+        &id,
+        &plan.destination,
+        &selection,
+        &request.config,
+        &actor,
+    )
+    .map_err(|error| {
+        format!(
+            "The copy {} was created but not finished ({error}); retry with the same operation to finish setup",
+            plan.destination
+        )
+    })?;
+    lineage::flush_store_barrier(&state).await.map_err(|error| {
+        format!(
+            "The copy {} was created but durable persistence did not finish ({error}); retry with the same operation",
+            plan.destination
+        )
+    })?;
     if let Some(store) = state.store.as_ref() {
-        store
+        let completed = store
             .complete_duplicate_receipt(
                 &auth.principal.user_id,
                 &id,
@@ -634,8 +942,33 @@ async fn duplicate_session(
             .map_err(|_| {
                 "Duplicate receipt completion failed; retry with the same operation".to_owned()
             })?;
+        if !completed {
+            return Err(
+                "The copy created by this operation is no longer available; start a new fork"
+                    .into(),
+            );
+        }
     }
-    Ok(destination)
+    Ok(plan.destination)
+}
+
+async fn preflight_duplicate_source(
+    state: &AppState,
+    auth: &AuthenticatedProductRequest,
+    id: &str,
+    source: &SessionMeta,
+    selection: &NextAgent,
+    actor: &crate::session_folders::FolderActor,
+) -> Result<(), String> {
+    if state.hub.session_is_trashed(id) {
+        return Err("Restore this session from Trash before duplicating it".into());
+    }
+    if state.hub.is_managed_child(id) {
+        return Err("A managed call cannot be duplicated".into());
+    }
+    inheritance::preflight(state, auth, source, selection).await?;
+    state.hub.continuation_folder(id, actor)?;
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -644,36 +977,34 @@ async fn create_duplicate_destination(
     auth: &AuthenticatedProductRequest,
     id: &str,
     source_title: &str,
-    destination: &str,
+    plan: &DuplicatePlan,
     request: &DuplicateRequest,
     machine_id: String,
     runtime_machine_id: Option<String>,
     project: String,
-    before_seq: u64,
-    ws_base: Option<String>,
-    ws_include_uncommitted: Option<bool>,
-    resumed: bool,
 ) -> Result<(), String> {
     if let Err(error) = save(
         state,
-        destination,
+        &plan.destination,
         &Context {
             revision: 1,
             applied_revision: 1,
             sources: vec![id.to_owned()],
             waiting: vec![Link {
                 session_id: id.to_owned(),
-                before: before_seq,
+                before: plan.before_seq,
                 title: source_title.to_owned(),
             }],
-            workspace_base: ws_base,
-            workspace_include_uncommitted: ws_include_uncommitted,
+            workspace_base: plan.ws_base.clone(),
+            workspace_include_uncommitted: plan.ws_include_uncommitted,
             ..Context::default()
         },
     )
     .await
     {
-        if !resumed && let Some(store) = state.store.as_ref() {
+        if !plan.resumed
+            && let Some(store) = state.store.as_ref()
+        {
             let _ = store
                 .delete_duplicate_receipt(&auth.principal.user_id, id, &request.operation)
                 .await;
@@ -692,17 +1023,17 @@ async fn create_duplicate_destination(
         origin: SessionOrigin::Web,
         initial_prompt: None,
         context_sources: vec![],
-        reserved_id: Some(destination.to_owned()),
+        reserved_id: Some(plan.destination.clone()),
         retained_auth_generation: None,
     };
     let response =
         api_new_session(State(state.clone()), Extension(auth.clone()), Json(create)).await;
     if !response.status().is_success() {
         state.hub.set_setting(
-            crate::session_context::key(destination),
+            crate::session_context::key(&plan.destination),
             serde_json::Value::Null,
         );
-        if state.hub.session_info(destination).is_none()
+        if state.hub.session_info(&plan.destination).is_none()
             && let Some(store) = state.store.as_ref()
         {
             let _ = store
@@ -912,6 +1243,7 @@ mod tests {
                     source_agent_session_id: "thread".to_owned(),
                     message_id: Some(message.to_owned()),
                     point: None,
+                    before_seq: None,
                     operation: id.to_owned(),
                     state,
                 },

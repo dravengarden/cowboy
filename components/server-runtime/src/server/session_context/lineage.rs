@@ -71,6 +71,21 @@ struct LineageHistoryResponse {
     is_sealed: bool,
 }
 
+/// Wait for all previously queued FIFO store writes (such as `InsertSession`
+/// and `PutSetting`) to become durable before marking a receipt ready.
+pub(super) async fn flush_store_barrier(state: &AppState) -> Result<(), String> {
+    let Some(rx) = state.hub.store_barrier() else {
+        return Ok(());
+    };
+    match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
+        Ok(Ok(Ok(true))) => Ok(()),
+        Ok(Ok(Err(reason))) => Err(reason),
+        Ok(Ok(Ok(false))) => Err("Durable store barrier was not acknowledged".into()),
+        Ok(Err(_)) => Err("Durable store writer stopped before barrier completed".into()),
+        Err(_) => Err("Timed out waiting for durable session persistence".into()),
+    }
+}
+
 /// Pin `source_id` against concurrent Clear, freeze `< before_seq` on both
 /// reducers in FIFO event order, and wait for the store writer to flush any
 /// buffered pre-cutoff events before returning the RAII pin guard.
@@ -165,19 +180,6 @@ pub(super) async fn record_replace_edge(
         display_detached,
     )
     .await
-}
-
-/// Remove a rolled-back lineage edge (Cancel Switch). Persists storage removal
-/// before dropping the in-memory auth-parent entry.
-pub(super) async fn delete_edge(state: &AppState, child_session_id: &str) -> Result<(), String> {
-    if let Some(store) = state.store.as_ref() {
-        store
-            .delete_lineage_edge(child_session_id)
-            .await
-            .map_err(|error| format!("Lineage storage unavailable ({error})"))?;
-    }
-    state.hub.remove_auth_parent(child_session_id);
-    Ok(())
 }
 
 fn edge_owner_matches(state: &AppState, principal: &ProductPrincipal, edge: &LineageEdge) -> bool {
@@ -552,12 +554,28 @@ pub async fn question_pages(
     }
 }
 
+#[derive(Debug, Deserialize, Default)]
+pub struct LineageQuestionPageQuery {
+    #[serde(default)]
+    pub after_seq: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+struct LineageQuestionPageResponse {
+    events: Vec<crate::core::Envelope>,
+    next_before_seq: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    next_after_seq: Option<u64>,
+    reached_start: bool,
+}
+
 /// `GET /api/sessions/{id}/lineage/{hop_id}/question-pages/{page_id}` —
 /// child-scoped Explore question page detail strictly `< edge.before_seq`.
 pub async fn question_page(
     State(state): State<Arc<AppState>>,
     Extension(auth): Extension<AuthenticatedProductRequest>,
     Path((id, hop_id, page_id)): Path<(String, String, u64)>,
+    Query(query): Query<LineageQuestionPageQuery>,
 ) -> Response {
     if let Err(status) = owner_can_see_session(&state, &auth.principal, &id) {
         return status.into_response();
@@ -575,13 +593,17 @@ pub async fn question_page(
     let Some(store) = state.store.as_ref() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "lineage store unavailable").into_response();
     };
-    match store.lineage_question_page_at(&edge, page_id).await {
-        Ok(Some(events)) => (
+    match store
+        .lineage_question_page_at(&edge, page_id, query.after_seq)
+        .await
+    {
+        Ok(Some(detail)) => (
             [(header::CACHE_CONTROL.as_str(), "private, no-store")],
-            Json(HistoryResponse {
-                events,
+            Json(LineageQuestionPageResponse {
+                events: detail.events,
                 next_before_seq: None,
-                reached_start: false,
+                next_after_seq: detail.next_after_seq,
+                reached_start: detail.reached_start,
             }),
         )
             .into_response(),

@@ -195,6 +195,8 @@ impl Hub {
             };
             if s.delivery_hold.as_deref() != Some(operation)
                 || s.clear_pending
+                || s.cancel_handoff_pending
+                || self.native_fork_staging(session_id)
                 || !self.context_allows_dispatch(session_id, Some(operation))
                 || s.meta.status != Status::Running
                 || s.in_flight
@@ -298,6 +300,8 @@ impl Hub {
             && s.dispatch_pending.is_none()
             && s.delivery_hold.is_none()
             && !s.clear_pending
+            && !s.cancel_handoff_pending
+            && !s.native_fork_staging
     }
 
     /// Dispatch the head of a session's queue if it can take a turn and the head

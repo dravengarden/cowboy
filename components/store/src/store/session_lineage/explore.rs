@@ -8,8 +8,12 @@
 
 use anyhow::{Context as _, Result};
 
-use super::{LineageEdge, decode_lineage_events, to_i64_seq};
-use crate::model::{Envelope, QuestionPageSummary, question_summary_title};
+use super::{LineageEdge, to_i64_seq};
+use crate::agent_model::Event;
+use crate::model::{
+    Envelope, HISTORY_MAX_BYTES, QuestionPageSummary, estimated_envelope_bytes,
+    question_summary_title,
+};
 use crate::store::{PostgresStorage, SqliteStorage, StorageBackend, Store};
 
 const PG_LIVE_SUMMARIES_SQL: &str = "\
@@ -237,19 +241,83 @@ impl Store {
         }
     }
 
-    /// Read one bounded question page in an ancestor hop strictly `< edge.before_seq`.
+    /// Read one bounded question page in an ancestor hop strictly `< edge.before_seq`,
+    /// preserving the opening question root, honoring the turn-end boundary, and
+    /// returning a forward continuation cursor when truncated by row/byte budget.
     pub async fn lineage_question_page_at(
         &self,
         edge: &LineageEdge,
         page_id: u64,
-    ) -> Result<Option<Vec<Envelope>>> {
+        after_seq: Option<u64>,
+    ) -> Result<Option<LineageQuestionPageDetail>> {
         if page_id >= edge.before_seq {
             return Ok(None);
         }
         match &self.backend {
-            StorageBackend::Postgres(db) => db.lineage_question_page_at(edge, page_id).await,
-            StorageBackend::Sqlite(db) => db.lineage_question_page_at(edge, page_id).await,
+            StorageBackend::Postgres(db) => {
+                db.lineage_question_page_at(edge, page_id, after_seq).await
+            }
+            StorageBackend::Sqlite(db) => {
+                db.lineage_question_page_at(edge, page_id, after_seq).await
+            }
         }
+    }
+}
+
+/// Bounded question-page detail preserving the question root and returning a
+/// continuation cursor (`next_after_seq`) when a long turn exceeds one page.
+#[derive(Debug, Clone)]
+pub struct LineageQuestionPageDetail {
+    pub events: Vec<Envelope>,
+    pub next_after_seq: Option<u64>,
+    pub reached_start: bool,
+}
+
+const MAX_QUESTION_PAGE_ROWS: i64 = 2000;
+
+fn decode_question_page_asc(
+    session_id: &str,
+    rows: Vec<(i64, serde_json::Value)>,
+    has_more_rows: bool,
+    reached_start: bool,
+) -> LineageQuestionPageDetail {
+    let mut events = Vec::with_capacity(rows.len());
+    let mut bytes = 0usize;
+    let mut truncated_by_bytes = false;
+    for (seq, mut payload) in rows {
+        let Ok(seq_u64) = u64::try_from(seq) else {
+            continue;
+        };
+        let cmid = payload
+            .as_object_mut()
+            .and_then(|obj| obj.remove("cmid"))
+            .and_then(|value| value.as_str().map(str::to_owned));
+        let Ok(event) = serde_json::from_value::<Event>(payload) else {
+            continue;
+        };
+        let env = Envelope {
+            session_id: session_id.to_owned(),
+            seq: seq_u64,
+            event,
+            cmid,
+        };
+        let size = estimated_envelope_bytes(&env);
+        if !events.is_empty() && bytes.saturating_add(size) > HISTORY_MAX_BYTES {
+            truncated_by_bytes = true;
+            break;
+        }
+        bytes = bytes.saturating_add(size);
+        events.push(env);
+    }
+    let next_after_seq = if truncated_by_bytes || has_more_rows {
+        events.last().map(|env| env.seq.saturating_add(1))
+    } else {
+        None
+    };
+    LineageQuestionPageDetail {
+        events,
+        next_after_seq,
+        reached_start,
     }
 }
 
@@ -282,7 +350,8 @@ impl PostgresStorage {
         &self,
         edge: &LineageEdge,
         page_id: u64,
-    ) -> Result<Option<Vec<Envelope>>> {
+        after_seq: Option<u64>,
+    ) -> Result<Option<LineageQuestionPageDetail>> {
         let cutoff = to_i64_seq(edge.before_seq)?;
         let root = to_i64_seq(page_id)?;
         let (bounds_sql, key) = match edge.segment_id.as_deref() {
@@ -299,33 +368,69 @@ impl PostgresStorage {
         let Some((start, next_root)) = bounds else {
             return Ok(None);
         };
-        let upper = next_root.map_or(cutoff, |n| n.min(cutoff));
-        let rows: Vec<(i64, serde_json::Value)> = if let Some(seg) = edge.segment_id.as_deref() {
-            sqlx::query_as(
-                "SELECT seq, payload FROM archived_lineage_events \
-                 WHERE segment_id = $1 AND seq >= $2 AND seq < $3 \
-                 ORDER BY seq DESC LIMIT 2000",
+        let bound_upper = next_root.map_or(cutoff, |n| n.min(cutoff));
+        let turn_end: Option<i64> = if let Some(seg) = edge.segment_id.as_deref() {
+            sqlx::query_scalar(
+                "SELECT MIN(seq) FROM archived_lineage_events                  WHERE segment_id = $1 AND seq >= $2 AND seq < $3 AND payload->>'kind' = 'turn_end'",
             )
             .bind(seg)
             .bind(start)
+            .bind(bound_upper)
+            .fetch_one(&self.pool)
+            .await
+            .context("SELECT PG archived question turn end")?
+        } else {
+            sqlx::query_scalar(
+                "SELECT MIN(seq) FROM events                  WHERE session_id = $1 AND seq >= $2 AND seq < $3 AND payload->>'kind' = 'turn_end'",
+            )
+            .bind(&edge.parent_session_id)
+            .bind(start)
+            .bind(bound_upper)
+            .fetch_one(&self.pool)
+            .await
+            .context("SELECT PG live question turn end")?
+        };
+        let upper = turn_end
+            .and_then(|s| s.checked_add(1))
+            .map_or(bound_upper, |e| e.min(bound_upper));
+        let lower = after_seq
+            .map(to_i64_seq)
+            .transpose()?
+            .map_or(start, |a| a.max(start));
+        let mut rows: Vec<(i64, serde_json::Value)> = if let Some(seg) = edge.segment_id.as_deref()
+        {
+            sqlx::query_as(
+                "SELECT seq, payload FROM archived_lineage_events                  WHERE segment_id = $1 AND seq >= $2 AND seq < $3                  ORDER BY seq ASC LIMIT $4",
+            )
+            .bind(seg)
+            .bind(lower)
             .bind(upper)
+            .bind(MAX_QUESTION_PAGE_ROWS + 1)
             .fetch_all(&self.pool)
             .await
             .context("SELECT PG archived lineage question page")?
         } else {
             sqlx::query_as(
-                "SELECT seq, payload FROM events \
-                 WHERE session_id = $1 AND seq >= $2 AND seq < $3 \
-                 ORDER BY seq DESC LIMIT 2000",
+                "SELECT seq, payload FROM events                  WHERE session_id = $1 AND seq >= $2 AND seq < $3                  ORDER BY seq ASC LIMIT $4",
             )
             .bind(&edge.parent_session_id)
-            .bind(start)
+            .bind(lower)
             .bind(upper)
+            .bind(MAX_QUESTION_PAGE_ROWS + 1)
             .fetch_all(&self.pool)
             .await
             .context("SELECT PG live lineage question page")?
         };
-        Ok(Some(decode_lineage_events(&edge.parent_session_id, rows)))
+        let has_more = i64::try_from(rows.len()).unwrap_or(0) > MAX_QUESTION_PAGE_ROWS;
+        if has_more {
+            rows.truncate(usize::try_from(MAX_QUESTION_PAGE_ROWS).unwrap_or(2000));
+        }
+        Ok(Some(decode_question_page_asc(
+            &edge.parent_session_id,
+            rows,
+            has_more,
+            lower == start,
+        )))
     }
 }
 
@@ -358,7 +463,8 @@ impl SqliteStorage {
         &self,
         edge: &LineageEdge,
         page_id: u64,
-    ) -> Result<Option<Vec<Envelope>>> {
+        after_seq: Option<u64>,
+    ) -> Result<Option<LineageQuestionPageDetail>> {
         let cutoff = to_i64_seq(edge.before_seq)?;
         let root = to_i64_seq(page_id)?;
         let (bounds_sql, key) = match edge.segment_id.as_deref() {
@@ -375,32 +481,62 @@ impl SqliteStorage {
         let Some((start, next_root)) = bounds else {
             return Ok(None);
         };
-        let upper = next_root.map_or(cutoff, |n| n.min(cutoff));
-        let raw: Vec<(i64, String)> = if let Some(seg) = edge.segment_id.as_deref() {
-            sqlx::query_as(
-                "SELECT seq, payload FROM archived_lineage_events \
-                 WHERE segment_id = ?1 AND seq >= ?2 AND seq < ?3 \
-                 ORDER BY seq DESC LIMIT 2000",
+        let bound_upper = next_root.map_or(cutoff, |n| n.min(cutoff));
+        let turn_end: Option<i64> = if let Some(seg) = edge.segment_id.as_deref() {
+            sqlx::query_scalar(
+                "SELECT MIN(seq) FROM archived_lineage_events                  WHERE segment_id = ?1 AND seq >= ?2 AND seq < ?3                    AND json_extract(payload, '$.kind') = 'turn_end'",
             )
             .bind(seg)
             .bind(start)
+            .bind(bound_upper)
+            .fetch_one(&self.pool)
+            .await
+            .context("SELECT SQLite archived question turn end")?
+        } else {
+            sqlx::query_scalar(
+                "SELECT MIN(seq) FROM events                  WHERE session_id = ?1 AND seq >= ?2 AND seq < ?3                    AND json_extract(payload, '$.kind') = 'turn_end'",
+            )
+            .bind(&edge.parent_session_id)
+            .bind(start)
+            .bind(bound_upper)
+            .fetch_one(&self.pool)
+            .await
+            .context("SELECT SQLite live question turn end")?
+        };
+        let upper = turn_end
+            .and_then(|s| s.checked_add(1))
+            .map_or(bound_upper, |e| e.min(bound_upper));
+        let lower = after_seq
+            .map(to_i64_seq)
+            .transpose()?
+            .map_or(start, |a| a.max(start));
+        let mut raw: Vec<(i64, String)> = if let Some(seg) = edge.segment_id.as_deref() {
+            sqlx::query_as(
+                "SELECT seq, payload FROM archived_lineage_events                  WHERE segment_id = ?1 AND seq >= ?2 AND seq < ?3                  ORDER BY seq ASC LIMIT ?4",
+            )
+            .bind(seg)
+            .bind(lower)
             .bind(upper)
+            .bind(MAX_QUESTION_PAGE_ROWS + 1)
             .fetch_all(&self.pool)
             .await
             .context("SELECT SQLite archived lineage question page")?
         } else {
             sqlx::query_as(
-                "SELECT seq, payload FROM events \
-                 WHERE session_id = ?1 AND seq >= ?2 AND seq < ?3 \
-                 ORDER BY seq DESC LIMIT 2000",
+                "SELECT seq, payload FROM events                  WHERE session_id = ?1 AND seq >= ?2 AND seq < ?3                  ORDER BY seq ASC LIMIT ?4",
             )
             .bind(&edge.parent_session_id)
-            .bind(start)
+            .bind(lower)
             .bind(upper)
+            .bind(MAX_QUESTION_PAGE_ROWS + 1)
             .fetch_all(&self.pool)
             .await
             .context("SELECT SQLite live lineage question page")?
         };
+        let has_more = i64::try_from(raw.len()).unwrap_or(0) > MAX_QUESTION_PAGE_ROWS;
+        if has_more {
+            raw.truncate(usize::try_from(MAX_QUESTION_PAGE_ROWS).unwrap_or(2000));
+        }
         let rows = raw
             .into_iter()
             .filter_map(|(seq, text)| {
@@ -409,6 +545,11 @@ impl SqliteStorage {
                     .map(|val| (seq, val))
             })
             .collect();
-        Ok(Some(decode_lineage_events(&edge.parent_session_id, rows)))
+        Ok(Some(decode_question_page_asc(
+            &edge.parent_session_id,
+            rows,
+            has_more,
+            lower == start,
+        )))
     }
 }

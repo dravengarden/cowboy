@@ -14,6 +14,8 @@ pub const FORK_ORIGIN_UPDATE: &str = "cowboy_fork_origin";
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ForkState {
+    /// Destination admission is still finishing lineage & settings setup; never launchable yet.
+    Staging,
     /// The destination's first worker must still run `session/fork`.
     Pending,
     /// The forked thread exists; later launches resume it like any other.
@@ -36,6 +38,10 @@ pub struct ForkRecord {
     /// answer at admission, so later source turns never leak into it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub point: Option<String>,
+    /// Exclusive cutoff captured at admission so setup replay reuses the
+    /// exact prefix instead of recapturing a newer source state.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub before_seq: Option<u64>,
     /// Caller operation that created this destination; a retry with the same
     /// operation and request observes this destination instead of forking twice.
     pub operation: String,
@@ -189,6 +195,9 @@ impl Hub {
             key(destination),
             serde_json::to_value(record).expect("fork record serializes"),
         );
+        if let Some(session) = self.inner.sessions.lock().get_mut(destination) {
+            session.native_fork_staging = record.state == ForkState::Staging;
+        }
     }
 
     /// Discard a staged fork whose destination was never created.
@@ -196,23 +205,51 @@ impl Hub {
         if self.session_info(destination).is_none() && self.setting(&key(destination)).is_some() {
             self.set_setting(key(destination), serde_json::Value::Null);
         }
+        if let Some(session) = self.inner.sessions.lock().get_mut(destination) {
+            session.native_fork_staging = false;
+        }
     }
 
     /// Open the created destination's transcript with the fork marker before
     /// its first worker launch.
     pub fn open_fork(&self, destination: &str, record: &ForkRecord, source_title: &str) {
         self.set_forked_from(destination, Some(record.source_session_id.clone()));
-        self.push(
-            destination,
-            Event::Update {
-                update: serde_json::json!({
-                    "sessionUpdate": FORK_ORIGIN_UPDATE,
-                    "sourceSessionId": record.source_session_id,
-                    "sourceTitle": source_title,
-                    "messageId": record.message_id,
-                }),
-            },
-        );
+        let already_marked = self
+            .inner
+            .sessions
+            .lock()
+            .get(destination)
+            .is_some_and(|session| {
+                session.log.iter().any(
+                    |env| matches!(&env.event, Event::Update { update } if is_fork_origin(update)),
+                )
+            });
+        if !already_marked {
+            self.push(
+                destination,
+                Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": FORK_ORIGIN_UPDATE,
+                        "sourceSessionId": record.source_session_id,
+                        "sourceTitle": source_title,
+                        "messageId": record.message_id,
+                    }),
+                },
+            );
+        }
+    }
+
+    /// True while a native fork destination is still finishing mandatory setup
+    /// (lineage edge, settings, placement) and must not be launched yet.
+    #[must_use]
+    pub fn native_fork_staging(&self, destination: &str) -> bool {
+        self.session_fork(destination)
+            .is_some_and(|record| record.state == ForkState::Staging)
+    }
+
+    /// Mark a staging native fork ready for launch once mandatory setup is durable.
+    pub fn activate_native_fork(&self, destination: &str) {
+        self.set_fork_state(destination, ForkState::Pending);
     }
 
     pub(super) fn native_fork_pending(&self, destination: &str) -> bool {
@@ -338,6 +375,7 @@ mod tests {
             source_agent_session_id: "native-source".to_owned(),
             message_id: message_id.map(str::to_owned),
             point: None,
+            before_seq: None,
             operation: "op-1".to_owned(),
             state: ForkState::Pending,
         }

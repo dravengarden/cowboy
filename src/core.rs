@@ -613,6 +613,14 @@ struct Session {
     clear_pending: bool,
     /// Active fork/handoff captures pinning this session against concurrent Clear.
     lineage_pins: usize,
+    /// Lowest event seq whose `AppendEvent` was rejected by the store queue
+    /// since the last Clear (prevents freezing a lineage prefix over lost rows).
+    unpersisted_min_seq: Option<u64>,
+    /// True while Cancel Switch is atomically committing queue removal, receipt,
+    /// and lineage deletion so the dispatcher cannot start the prompt meanwhile.
+    cancel_handoff_pending: bool,
+    /// True while a native fork destination is still in `ForkState::Staging`.
+    native_fork_staging: bool,
     /// Hot event tail when persistence is enabled; the full log in memory-only
     /// development mode.
     log: Vec<Envelope>,
@@ -2316,6 +2324,9 @@ impl Hub {
                         runtime_epochs: Default::default(),
                         clear_pending: false,
                         lineage_pins: 0,
+                        unpersisted_min_seq: None,
+                        cancel_handoff_pending: false,
+                        native_fork_staging: self.native_fork_staging(&id),
                         log,
                         log_bytes,
                         event_count,
@@ -3065,6 +3076,9 @@ impl Hub {
                     runtime_epochs: Default::default(),
                     clear_pending: false,
                     lineage_pins: 0,
+                    unpersisted_min_seq: None,
+                    cancel_handoff_pending: false,
+                    native_fork_staging: self.native_fork_staging(&id),
                     log: Vec::new(),
                     log_bytes: 0,
                     event_count: 0,

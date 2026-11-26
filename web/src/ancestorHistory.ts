@@ -182,3 +182,13 @@ export async function fetchLineageHistoryPage(
     return { kind: "error" };
   }
 }
+
+export function hopQuestionsUrl(
+  sessionId: string,
+  hopId: string,
+  beforeSeq?: number,
+): string {
+  const query =
+    beforeSeq !== undefined ? `limit=64&before=${String(beforeSeq)}` : "limit=64";
+  return `/api/sessions/${encodeURIComponent(sessionId)}/lineage/${encodeURIComponent(hopId)}/question-pages?${query}`;
+}

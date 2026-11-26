@@ -252,7 +252,7 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
     ),
     (
         "0094_fork_turns_and_receipts.sql",
-        "6b1fd68e8e82767699641407d558902ab63aaf4e8ba8f15c0d9d8872047eeb72",
+        "44e7a0b50fbf71727a791a2657841b81480768ce1c62e4bee5ef2482c4be99f7",
     ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
@@ -498,7 +498,7 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     ),
     (
         "0068_fork_turns_and_receipts.sql",
-        "6effb655ca761c1b0c99ee51aa4529aaa1e59e3428b05976bcebfc4b665868da",
+        "ee65a44aa66366f78f022f81044e7ca1600ce3596a69d751feedff677becaf50",
     ),
 ];
 

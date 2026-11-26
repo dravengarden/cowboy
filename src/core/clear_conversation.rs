@@ -93,6 +93,7 @@ impl Hub {
     pub fn end_clear_conversation(&self, session_id: &str) {
         if let Some(session) = self.inner.sessions.lock().get_mut(session_id) {
             session.clear_pending = false;
+            session.unpersisted_min_seq = None;
         }
         self.try_drain(session_id);
     }

@@ -151,11 +151,12 @@ async fn take_back(
         return Err(refused.into());
     }
     restore_source_if_trashed(&state, &auth.principal, &source)?;
-    let taken = state.hub.take_sole_queued(&id, &cmid).ok_or(refused)?;
-    let (text, content, origin, initiator) =
-        (taken.text, taken.content, taken.origin, taken.initiator);
-    // The receipt holds the message before anything else changes; without it
-    // the message goes back to the queue rather than exist only in a reply.
+    // Fence dispatch without emptying the queue yet, then commit empty queue,
+    // cancelled receipt (with the returned prompt), and lineage edge deletion
+    // in a single database transaction so no crash can lose the prompt or
+    // leave orphaned lineage.
+    let (taken, cancel_guard) = state.hub.begin_cancel_handoff(&id, &cmid).ok_or(refused)?;
+    let (text, content) = (taken.text, taken.content);
     if let Some(delivery) = target.delivery.as_mut() {
         delivery.state = CANCELLED.into();
         delivery.returned = Some(crate::session_context::Returned {
@@ -165,27 +166,19 @@ async fn take_back(
         });
     }
     target.injection = None;
-    if let Err(error) = advance_applied(&mut target) {
-        state
-            .hub
-            .requeue_prompt(&id, text, content, Some(cmid), origin, initiator);
-        return Err(error);
+    advance_applied(&mut target)?;
+    let target_key = crate::session_context::key(&id);
+    let target_value = serde_json::to_value(&target).expect("session context serializes");
+    if let Some(store) = state.store.as_ref() {
+        store
+            .commit_handoff_cancellation(&id, &target_key, &target_value)
+            .await
+            .map_err(|error| format!("Could not cancel switch ({error})"))?;
     }
-    // Remove the durable lineage edge BEFORE finalizing the cancelled receipt
-    // so a transient storage failure safely requeues the message and never
-    // leaves a cancelled destination linked in lineage or auth ancestry.
-    if let Err(error) = super::lineage::delete_edge(&state, &id).await {
-        state
-            .hub
-            .requeue_prompt(&id, text, content, Some(cmid), origin, initiator);
-        return Err(error);
-    }
-    if let Err(error) = save(&state, &id, &target).await {
-        state
-            .hub
-            .requeue_prompt(&id, text, content, Some(cmid), origin, initiator);
-        return Err(error);
-    }
+    state
+        .hub
+        .commit_cancel_handoff_memory(&id, &cmid, target_key, target_value);
+    drop(cancel_guard);
     // The work did not move: the destination stops naming the original, so
     // restoring it later cannot turn the original into history again. Its
     // cancelled receipt keeps startup from recording the mark once more.

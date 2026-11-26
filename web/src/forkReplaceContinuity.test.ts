@@ -5,7 +5,8 @@ import {
   shouldShowFreshSessionEmptyState,
 } from "./transcriptViewport";
 import { shouldPaintTranscriptLifecycle } from "./transcriptLoadingPresentation";
-import { cachedAncestorSegment, cachedSessionLineage, clearLineageCache, formatLineageActionLabel, mergeAncestorEvents, setCachedAncestorSegment, setCachedSessionLineage } from "./ancestorHistory";
+import { cachedAncestorSegment, cachedSessionLineage, clearLineageCache, formatLineageActionLabel, hopQuestionsUrl, mergeAncestorEvents, notifyLineageChanged, setCachedAncestorSegment, setCachedSessionLineage } from "./ancestorHistory";
+import { executeForkAttempt, type PendingForkAttempt } from "./sessionFork";
 import { DESKTOP_WORKSPACE_KEYS } from "./desktop/commands/workspaceShortcuts";
 import type { Envelope } from "./protocol";
 
@@ -153,4 +154,93 @@ test("lineage cache preserves display_detached flag for cleared children", () =>
   });
   expect(cachedSessionLineage("child-cleared")?.display_detached).toBe(true);
   clearLineageCache("child-cleared");
+});
+
+
+test("hopQuestionsUrl emits the server-expected `before` query parameter", () => {
+  expect(hopQuestionsUrl("child-1", "parent-1")).toBe(
+    "/api/sessions/child-1/lineage/parent-1/question-pages?limit=64",
+  );
+  expect(hopQuestionsUrl("child-1", "parent-1", 42)).toBe(
+    "/api/sessions/child-1/lineage/parent-1/question-pages?limit=64&before=42",
+  );
+});
+
+test("notifyLineageChanged drops cached lineage and dependent ancestor segments", () => {
+  clearLineageCache();
+  setCachedSessionLineage("sess-sync", {
+    session_id: "sess-sync",
+    display_detached: false,
+    hops: [],
+    branches: [],
+  });
+  setCachedAncestorSegment("sess-sync", "parent-sync", 1, {
+    events: [],
+    nextBeforeSeq: null,
+    reachedStart: true,
+    isSealed: true,
+  });
+  notifyLineageChanged("sess-sync");
+  expect(cachedSessionLineage("sess-sync")).toBeUndefined();
+  expect(cachedAncestorSegment("sess-sync", "parent-sync", 1)).toBeUndefined();
+});
+
+test("executeForkAttempt preserves native attempt on transient error and switches to linked only on definitive unsupported", async () => {
+  const originalFetch = globalThis.fetch;
+  const calls: Array<{ url: string; body: string }> = [];
+  let responseMode: "transient" | "unsupported" | "ok" = "transient";
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === "string" ? input : input.toString();
+    const body = typeof init?.body === "string" ? init.body : "";
+    calls.push({ url, body });
+    if (url.endsWith("/fork")) {
+      if (responseMode === "transient") {
+        return new Response("Temporary backend error", { status: 503 });
+      }
+      return new Response("codex sessions cannot be forked yet", { status: 400 });
+    }
+    return new Response(JSON.stringify({ session_id: "sess-linked", session: null }), {
+      status: 201,
+      headers: { "content-type": "application/json" },
+    });
+  }) as typeof fetch;
+
+  try {
+    let attempt: PendingForkAttempt = {
+      mode: "native",
+      operation: "fork-msg-stable",
+      messageId: "msg-1",
+    };
+    const makeLinked = (): Extract<PendingForkAttempt, { mode: "linked" }> => ({
+      mode: "linked",
+      operation: "fork-turn-stable",
+      body: { provider: "codex", provider_account_id: "default", before_seq: 10 },
+    });
+
+    // Transient 503 failure must NOT switch to linked or mutate attempt.
+    await expect(
+      executeForkAttempt("src-1", attempt, true, makeLinked, (next) => {
+        attempt = next;
+      }),
+    ).rejects.toThrow("Temporary backend error");
+    expect(attempt.mode).toBe("native");
+    expect(attempt.operation).toBe("fork-msg-stable");
+    expect(calls.length).toBe(1);
+
+    // Definitive unsupported 400 switches to linked and records linked attempt.
+    responseMode = "unsupported";
+    const receipt = await executeForkAttempt("src-1", attempt, true, makeLinked, (next) => {
+      attempt = next;
+    });
+    expect(receipt.session_id).toBe("sess-linked");
+    expect(attempt.mode).toBe("linked");
+    expect(attempt.operation).toBe("fork-turn-stable");
+    expect(calls.map((c) => c.url)).toEqual([
+      "/api/sessions/src-1/fork",
+      "/api/sessions/src-1/fork",
+      "/api/sessions/src-1/duplicate",
+    ]);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });

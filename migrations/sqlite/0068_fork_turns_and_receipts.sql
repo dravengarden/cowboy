@@ -1,31 +1,29 @@
--- Durable completed-turn cursor index and Linked Fork reservation receipts.
--- Mirrors PostgreSQL migration 0094_fork_turns_and_receipts.sql.
-CREATE TABLE session_turn_completions (
+CREATE TABLE IF NOT EXISTS session_turn_completions (
     session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
-    context_generation BIGINT NOT NULL DEFAULT 0,
+    context_generation INTEGER NOT NULL DEFAULT 0,
     message_id TEXT NOT NULL,
-    before_seq BIGINT NOT NULL,
-    completed_at_ms BIGINT NOT NULL,
+    before_seq INTEGER NOT NULL,
+    created_at_ms INTEGER NOT NULL,
     PRIMARY KEY (session_id, context_generation, message_id)
-) WITHOUT ROWID;
+);
 
-CREATE INDEX idx_session_turn_completions_latest
+CREATE INDEX IF NOT EXISTS session_turn_completions_latest_idx
     ON session_turn_completions (session_id, context_generation, before_seq DESC);
 
-CREATE TABLE session_duplicate_receipts (
-    owner_user_id TEXT NOT NULL DEFAULT '',
+CREATE TABLE IF NOT EXISTS session_duplicate_receipts (
+    owner_user_id TEXT NOT NULL,
     source_session_id TEXT NOT NULL,
     operation_id TEXT NOT NULL,
     fingerprint TEXT NOT NULL,
     destination_session_id TEXT NOT NULL,
-    state TEXT NOT NULL DEFAULT 'reserved',
-    created_at_ms BIGINT NOT NULL,
-    updated_at_ms BIGINT NOT NULL DEFAULT 0,
+    before_seq INTEGER NOT NULL DEFAULT 0,
+    workspace_base TEXT,
+    workspace_include_uncommitted INTEGER,
+    state TEXT NOT NULL DEFAULT 'ready',
+    created_at_ms INTEGER NOT NULL,
+    updated_at_ms INTEGER NOT NULL,
     PRIMARY KEY (owner_user_id, source_session_id, operation_id)
-) WITHOUT ROWID;
+);
 
-CREATE INDEX idx_session_duplicate_receipts_source
-    ON session_duplicate_receipts (source_session_id);
-
-CREATE INDEX idx_session_duplicate_receipts_dest
+CREATE INDEX IF NOT EXISTS session_duplicate_receipts_dest_idx
     ON session_duplicate_receipts (destination_session_id);

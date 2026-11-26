@@ -211,7 +211,7 @@ impl Store {
 }
 
 macro_rules! implement_journal {
-    ($backend:ty, $durability:literal, $lock:literal, $delete:literal, $current:literal) => {
+    ($backend:ty, $durability:literal, $lock:literal, $delete:literal, $current:literal, $seal_delete:expr) => {
         impl $backend {
             async fn plugin_uninstall_resolution(&self, operation: &str) -> Result<Option<ResolutionReceipt>> {
                 sqlx::query_as::<_, ResolutionRecord>(
@@ -364,6 +364,7 @@ macro_rules! implement_journal {
                     let changed = sqlx::query($delete).bind(session).bind(now).bind(intent.purge_after_ms)
                         .bind(&intent.machine_id).bind(&intent.plugin_id).execute(&mut *tx).await?;
                     ensure!(changed.rows_affected() == 1, "uninstall session identity or deletion state changed");
+                    ($seal_delete)(&mut tx, session, now).await?;
                 }
                 tx.commit().await.context("committing uninstall and session deletion")
             }
@@ -377,7 +378,8 @@ implement_journal!(
     "LOCK TABLE plugin_uninstall_operations, plugin_install_operations, plugin_install_staging_resolutions IN SHARE ROW EXCLUSIVE MODE",
     "UPDATE sessions SET deleted_at = to_timestamp($2::bigint::double precision / 1000), purge_after_at = to_timestamp($3::bigint::double precision / 1000) \
      WHERE id = $1 AND machine_id = $4 AND provider = $5 AND deleted_at IS NULL",
-    "UPDATE machines SET id = id WHERE id = $1 AND connection_epoch = $2 AND revoked_at IS NULL"
+    "UPDATE machines SET id = id WHERE id = $1 AND connection_epoch = $2 AND revoked_at IS NULL",
+    |tx, session, _now| crate::store::session_lineage::seal_lineage_on_delete_pg(tx, session)
 );
 implement_journal!(
     SqliteStorage,
@@ -389,7 +391,10 @@ implement_journal!(
     "UPDATE plugin_uninstall_operations SET phase = phase WHERE 0",
     "UPDATE sessions SET deleted_at_ms = $2, purge_after_at_ms = $3 \
      WHERE id = $1 AND machine_id = $4 AND provider = $5 AND deleted_at_ms IS NULL",
-    "UPDATE machines SET id = id WHERE id = $1 AND connection_epoch = $2 AND revoked_at_ms IS NULL"
+    "UPDATE machines SET id = id WHERE id = $1 AND connection_epoch = $2 AND revoked_at_ms IS NULL",
+    |tx, session, now| crate::store::session_lineage::seal_lineage_on_delete_sqlite(
+        tx, session, now
+    )
 );
 
 #[cfg(test)]

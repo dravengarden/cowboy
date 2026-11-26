@@ -78,6 +78,15 @@ pub async fn restore_hub_from_store(store: &Store, hub: &Hub) -> anyhow::Result<
     hub.restore_continuations();
     hub.restore_forks();
     hub.warm_lineage_edges(&lineage_edges);
+    for meta in hub.session_list() {
+        if let Ok(ctx) = crate::session_context::read(hub, &meta.id) {
+            for link in ctx.waiting {
+                if link.before > 0 {
+                    hub.freeze_lineage_prefix(&link.session_id, link.before);
+                }
+            }
+        }
+    }
     hub.set_artifacts(store.artifacts());
     tracing::info!(restored = restored_count, "persistence wired",);
     Ok(())

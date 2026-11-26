@@ -527,7 +527,7 @@ export function ConversationEmptyState({
         },
       }}
     >
-      <SessionContinuedFrom sessionId={sessionId} />
+      {kind !== "cleared" && <SessionContinuedFrom sessionId={sessionId} />}
       <Stack direction="row" alignItems="center" justifyContent="center" spacing={1} sx={{ width: "100%", maxWidth: 360 }}>
         <Box
           sx={{

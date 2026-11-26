@@ -83,10 +83,39 @@ SELECT child_session_id, hop_order, parent_session_id, parent_is_root, owner_use
        edge_version, created_at_ms \
 FROM session_lineage_edges";
 
+async fn lock_lineage_ancestors_pg(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    parent_session_id: &str,
+) -> Result<()> {
+    // Lock every affected ancestor session row in ascending id order so
+    // concurrent Clear or Purge on A or B cannot interleave with hop
+    // materialization and leave a grandchild pointing at an empty live prefix.
+    let mut lock_ids: Vec<String> = sqlx::query_scalar(
+        "SELECT parent_session_id FROM session_lineage_edges \
+         WHERE child_session_id = $1 AND NOT display_detached",
+    )
+    .bind(parent_session_id)
+    .fetch_all(&mut **tx)
+    .await
+    .context("collect ancestor session ids to lock for PG lineage upsert")?;
+    lock_ids.push(parent_session_id.to_owned());
+    lock_ids.sort();
+    lock_ids.dedup();
+    sqlx::query("SELECT id FROM sessions WHERE id = ANY($1::text[]) ORDER BY id FOR UPDATE")
+        .bind(&lock_ids)
+        .fetch_all(&mut **tx)
+        .await
+        .context("lock ancestor session rows for PG lineage upsert")?;
+    Ok(())
+}
+
 impl PostgresStorage {
     pub(super) async fn upsert_lineage_edge(&self, edge: &LineageEdge) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         let hop_order = i32::try_from(edge.hop_order.max(1)).unwrap_or(1);
+        if hop_order == 1 && !edge.display_detached {
+            lock_lineage_ancestors_pg(&mut tx, &edge.parent_session_id).await?;
+        }
         sqlx::query(
             "INSERT INTO session_lineage_edges ( \
                child_session_id, hop_order, parent_session_id, parent_is_root, owner_user_id, \
@@ -441,6 +470,11 @@ pub(in crate::store) async fn seal_lineage_on_clear_pg(
     session_id: &str,
 ) -> Result<()> {
     let now_ms = Utc::now().timestamp_millis();
+    sqlx::query("SELECT id FROM sessions WHERE id = $1 FOR UPDATE")
+        .bind(session_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .with_context(|| format!("lock PG session row for lineage clear {session_id}"))?;
     sqlx::query("DELETE FROM session_lineage_edges WHERE child_session_id = $1 AND hop_order > 1")
         .bind(session_id)
         .execute(&mut **tx)
@@ -466,7 +500,8 @@ pub(in crate::store) async fn seal_lineage_on_clear_pg(
 
     let max_before: Option<i64> = sqlx::query_scalar(
         "SELECT MAX(before_seq) FROM session_lineage_edges \
-         WHERE parent_session_id = $1 AND segment_id IS NULL AND NOT display_detached",
+         WHERE parent_session_id = $1 AND segment_id IS NULL AND NOT display_detached \
+           AND child_session_id IN (SELECT id FROM sessions)",
     )
     .bind(session_id)
     .fetch_one(&mut **tx)
@@ -498,7 +533,8 @@ pub(in crate::store) async fn seal_lineage_on_delete_pg(
 
     let max_before: Option<i64> = sqlx::query_scalar(
         "SELECT MAX(before_seq) FROM session_lineage_edges \
-         WHERE parent_session_id = $1 AND segment_id IS NULL AND NOT display_detached",
+         WHERE parent_session_id = $1 AND segment_id IS NULL AND NOT display_detached \
+           AND child_session_id IN (SELECT id FROM sessions WHERE id <> $1)",
     )
     .bind(session_id)
     .fetch_one(&mut **tx)
@@ -683,9 +719,11 @@ pub(in crate::store) async fn purge_deleted_pg(
 async fn gc_lineage_edges_pg(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<()> {
     sqlx::query(
         "UPDATE session_lineage_edges \
-         SET segment_id = NULL, edge_version = edge_version + 1 \
-         WHERE segment_id IS NOT NULL \
-           AND (display_detached OR child_session_id NOT IN (SELECT id FROM sessions))",
+         SET segment_id = NULL, \
+             display_detached = CASE WHEN child_session_id NOT IN (SELECT id FROM sessions) THEN TRUE ELSE display_detached END, \
+             edge_version = edge_version + 1 \
+         WHERE (segment_id IS NOT NULL AND (display_detached OR child_session_id NOT IN (SELECT id FROM sessions))) \
+            OR (NOT display_detached AND child_session_id NOT IN (SELECT id FROM sessions))",
     )
     .execute(&mut **tx)
     .await

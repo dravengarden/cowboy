@@ -3299,8 +3299,17 @@ impl PostgresStorage {
     /// rejects its INSERT, and later metadata updates corrupt the tombstone.
     pub async fn next_session_number(&self) -> Result<u64> {
         let max: Option<i64> = sqlx::query_scalar(
-            "SELECT max((substring(id FROM 6))::bigint) FROM sessions \
-             WHERE id ~ '^sess-[0-9]+$'",
+            "SELECT max(n) FROM ( \
+               SELECT (substring(id FROM 6))::bigint AS n FROM sessions \
+               WHERE id ~ '^sess-[0-9]+$' \
+               UNION ALL \
+               SELECT (substring(destination_session_id FROM 6))::bigint AS n \
+               FROM session_duplicate_receipts \
+               WHERE destination_session_id ~ '^sess-[0-9]+$' \
+               UNION ALL \
+               SELECT (substring(key FROM 19))::bigint AS n FROM settings \
+               WHERE key ~ '^session_fork:sess-[0-9]+$' \
+             ) AS ids",
         )
         .fetch_one(&self.pool)
         .await

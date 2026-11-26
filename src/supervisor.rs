@@ -490,6 +490,9 @@ impl Supervisor {
         let configuration = session_configuration(&meta);
         let budget = self.managed_context_budget(session_id, &configuration);
         let cache_protection = self.managed_cache_protection(session_id, &configuration);
+        if self.hub.native_fork_staging(session_id) {
+            return Err("Native fork setup has not finished yet; retry the fork operation".into());
+        }
         let native_fork = if resume.is_none() {
             self.hub.pending_native_fork(session_id).map(Box::new)
         } else {

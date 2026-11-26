@@ -14,7 +14,7 @@ import CallSplitOutlined from "@mui/icons-material/CallSplitOutlined";
 import CloseRounded from "@mui/icons-material/CloseRounded";
 import ExpandMore from "@mui/icons-material/ExpandMore";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { LineageHop } from "../ancestorHistory";
+import { hopQuestionsUrl, type LineageHop } from "../ancestorHistory";
 import { derive } from "../derive";
 import type { Envelope } from "../protocol";
 import { ReadOnlyAncestorItemView } from "../ReadOnlyAncestorItemView";
@@ -119,13 +119,24 @@ function LineageExploreHopSection({
   );
 }
 
+interface SelectedAncestorPage {
+  hop: LineageHop;
+  pageId: number;
+  title: string;
+  events: Envelope[];
+  nextAfterSeq: number | null;
+  loadingMore: boolean;
+}
+
 function LineageExplorePageDialog({
   selected,
   desktop,
+  onLoadMore,
   onClose,
 }: {
-  selected: { hop: LineageHop; title: string; events: Envelope[] };
+  selected: SelectedAncestorPage;
   desktop: boolean;
+  onLoadMore: () => void;
   onClose: () => void;
 }): React.JSX.Element {
   const items = useMemo(
@@ -155,6 +166,17 @@ function LineageExplorePageDialog({
               onOpenTool={(): void => {}}
             />
           ))}
+          {selected.nextAfterSeq !== null && (
+            <Button
+              size="small"
+              variant="text"
+              disabled={selected.loadingMore}
+              onClick={onLoadMore}
+              sx={{ alignSelf: "flex-start", textTransform: "none" }}
+            >
+              {selected.loadingMore ? "Loading more of this page…" : "Load rest of this page"}
+            </Button>
+          )}
         </Stack>
       </DialogContent>
     </Dialog>
@@ -168,12 +190,43 @@ async function fetchHopQuestions(
   signal?: AbortSignal,
 ): Promise<QuestionPagesResponse | null> {
   try {
-    const query = beforeSeq !== undefined ? `limit=64&before_seq=${String(beforeSeq)}` : "limit=64";
     const res = await fetch(
-      `/api/sessions/${encodeURIComponent(sessionId)}/lineage/${encodeURIComponent(hopId)}/question-pages?${query}`,
+      hopQuestionsUrl(sessionId, hopId, beforeSeq),
       { credentials: "same-origin", signal: signal ?? null },
     );
     return res.ok ? ((await res.json()) as QuestionPagesResponse) : null;
+  } catch {
+    return null;
+  }
+}
+
+function mergeEarlierPages(
+  existing: HopPagesState | undefined,
+  data: QuestionPagesResponse | null,
+): HopPagesState | undefined {
+  if (!existing) return undefined;
+  if (!data || !Array.isArray(data.pages)) return { ...existing, loading: false };
+  const seen = new Set(existing.pages.map((p) => p.id));
+  return {
+    pages: [...data.pages.filter((p) => !seen.has(p.id)), ...existing.pages],
+    nextBeforeSeq: typeof data.next_before_seq === "number" ? data.next_before_seq : null,
+    loading: false,
+  };
+}
+
+async function fetchQuestionPageDetail(
+  sessionId: string,
+  hopId: string,
+  pageId: number,
+  afterSeq?: number,
+): Promise<{ events: Envelope[]; next_after_seq?: number | null } | null> {
+  try {
+    const suffix = afterSeq !== undefined ? `?after_seq=${String(afterSeq)}` : "";
+    const res = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/lineage/${encodeURIComponent(hopId)}/question-pages/${String(pageId)}${suffix}`,
+      { credentials: "same-origin" },
+    );
+    return res.ok ? ((await res.json()) as { events: Envelope[]; next_after_seq?: number | null }) : null;
   } catch {
     return null;
   }
@@ -211,7 +264,7 @@ export function LineageExploreQuestions({
   );
   const [byHop, setByHop] = useState<Record<string, HopPagesState>>({});
   const [expandedByHop, setExpandedByHop] = useState<Record<string, boolean>>({});
-  const [selected, setSelected] = useState<{ hop: LineageHop; title: string; events: Envelope[] } | null>(null);
+  const [selected, setSelected] = useState<SelectedAncestorPage | null>(null);
 
   useEffect(() => {
     if (eligibleHops.length === 0) {
@@ -247,47 +300,47 @@ export function LineageExploreQuestions({
       const cursor = current.nextBeforeSeq;
       setByHop((prev) => ({ ...prev, [hop.session_id]: { ...current, loading: true } }));
       void fetchHopQuestions(sessionId, hop.session_id, cursor).then((data) => {
-          setByHop((prev) => {
-            const existing = prev[hop.session_id];
-            if (!existing) return prev;
-            if (!data || !Array.isArray(data.pages)) {
-              return { ...prev, [hop.session_id]: { ...existing, loading: false } };
-            }
-            const seen = new Set(existing.pages.map((p) => p.id));
-            return {
-              ...prev,
-              [hop.session_id]: {
-                pages: [...data.pages.filter((p) => !seen.has(p.id)), ...existing.pages],
-                nextBeforeSeq: typeof data.next_before_seq === "number" ? data.next_before_seq : null,
-                loading: false,
-              },
-            };
-          });
-        })
-        .catch(() => {
-          setByHop((prev) => {
-            const existing = prev[hop.session_id];
-            return existing ? { ...prev, [hop.session_id]: { ...existing, loading: false } } : prev;
-          });
+        setByHop((prev) => {
+          const updated = mergeEarlierPages(prev[hop.session_id], data);
+          return updated ? { ...prev, [hop.session_id]: updated } : prev;
         });
+      });
     },
     [byHop, sessionId],
   );
 
-  const openPage = useCallback(
-    (hop: LineageHop, page: QuestionSummary): void => {
-      void fetch(
-        `/api/sessions/${encodeURIComponent(sessionId)}/lineage/${encodeURIComponent(hop.session_id)}/question-pages/${String(page.id)}`,
-        { credentials: "same-origin" },
-      )
-        .then((res) => (res.ok ? (res.json() as Promise<{ events: Envelope[] }>) : null))
-        .then((data) => {
-          if (data && Array.isArray(data.events)) setSelected({ hop, title: page.title, events: data.events });
-        })
-        .catch(() => {});
-    },
-    [sessionId],
-  );
+  const openPage = useCallback((hop: LineageHop, page: QuestionSummary): void => {
+    void fetchQuestionPageDetail(sessionId, hop.session_id, page.id).then((data) => {
+      if (!data || !Array.isArray(data.events)) return;
+      setSelected({
+        hop,
+        pageId: page.id,
+        title: page.title,
+        events: data.events,
+        nextAfterSeq: typeof data.next_after_seq === "number" ? data.next_after_seq : null,
+        loadingMore: false,
+      });
+    });
+  }, [sessionId]);
+
+  const loadMoreSelected = useCallback((): void => {
+    if (!selected || selected.loadingMore || selected.nextAfterSeq === null) return;
+    const { hop, pageId, nextAfterSeq } = selected;
+    setSelected((prev) => (prev ? { ...prev, loadingMore: true } : prev));
+    void fetchQuestionPageDetail(sessionId, hop.session_id, pageId, nextAfterSeq).then((data) => {
+      setSelected((prev) => {
+        if (!prev || prev.pageId !== pageId || prev.hop.session_id !== hop.session_id) return prev;
+        if (!data || !Array.isArray(data.events)) return { ...prev, loadingMore: false };
+        const seen = new Set(prev.events.map((ev) => ev.seq));
+        return {
+          ...prev,
+          events: [...prev.events, ...data.events.filter((ev) => !seen.has(ev.seq))],
+          nextAfterSeq: typeof data.next_after_seq === "number" ? data.next_after_seq : null,
+          loadingMore: false,
+        };
+      });
+    });
+  }, [selected, sessionId]);
 
   const populatedHops = eligibleHops.filter((hop) => (byHop[hop.session_id]?.pages.length ?? 0) > 0);
   if (populatedHops.length === 0) return null;
@@ -314,6 +367,7 @@ export function LineageExploreQuestions({
         <LineageExplorePageDialog
           selected={selected}
           desktop={desktop}
+          onLoadMore={loadMoreSelected}
           onClose={(): void => setSelected(null)}
         />
       )}

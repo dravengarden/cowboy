@@ -2225,9 +2225,22 @@ impl SqliteStorage {
 impl SqliteStorage {
     pub(super) async fn next_session_number(&self) -> Result<u64> {
         let max: Option<i64> = sqlx::query_scalar(
-            "SELECT max(CAST(substr(id, 6) AS INTEGER)) FROM sessions \
-             WHERE id LIKE 'sess-%' AND substr(id, 6) <> '' \
-             AND substr(id, 6) NOT GLOB '*[^0-9]*'",
+            "SELECT max(n) FROM ( \
+               SELECT CAST(substr(id, 6) AS INTEGER) AS n FROM sessions \
+               WHERE id LIKE 'sess-%' AND substr(id, 6) <> '' \
+                 AND substr(id, 6) NOT GLOB '*[^0-9]*' \
+               UNION ALL \
+               SELECT CAST(substr(destination_session_id, 6) AS INTEGER) AS n \
+               FROM session_duplicate_receipts \
+               WHERE destination_session_id LIKE 'sess-%' \
+                 AND substr(destination_session_id, 6) <> '' \
+                 AND substr(destination_session_id, 6) NOT GLOB '*[^0-9]*' \
+               UNION ALL \
+               SELECT CAST(substr(key, 19) AS INTEGER) AS n FROM settings \
+               WHERE key LIKE 'session_fork:sess-%' \
+                 AND substr(key, 19) <> '' \
+                 AND substr(key, 19) NOT GLOB '*[^0-9]*' \
+             )",
         )
         .fetch_one(&self.pool)
         .await
