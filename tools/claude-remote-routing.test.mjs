@@ -10,6 +10,8 @@ import {
   TASK_OUTPUT_PREFIX,
   WorkspaceTools,
 } from "../plugins/claude-code/runtime/tools.mjs";
+import { Connection } from "../components/provider-runtime/execution-connection.mjs";
+import { fakeEndpoint } from "../components/provider-runtime/packages/antigravity-acp/test-endpoint.mjs";
 
 test("unknown file mutations preserve read authority and never replay on cold load", async (t) => {
   const cases = [
@@ -1007,4 +1009,77 @@ test("a main-agent shell command asks for watched changes; background and subage
     );
     assert.equal(watched.length, expected, JSON.stringify(extra));
   }
+});
+
+test("reconcileCancellation sends terminate and confirming process/read cleanly with 14 ordinary requests pending (R20-L1)", async (t) => {
+  const dir = await mkdtemp(join(tmpdir(), "cowboy-claude-r20-l1-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  let fillNow = false;
+  const endpoint = await fakeEndpoint(socket, repo, {
+    home,
+    notifications: false,
+    delay: (method) => (fillNow && method === "fs/getMetadata" ? 4000 : 0),
+  });
+  const connection = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-claude-test", requestTimeoutMs: 20000 },
+  );
+  t.after(async () => {
+    connection.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  });
+  const tools = new WorkspaceTools(
+    connection,
+    { workspace: { cwd: repo }, environment: { id: "env" } },
+    join(dir, "state.json"),
+  );
+  await tools.load();
+  t.after(() => clearTimeout(tools.cancelTimer));
+  const started = await connection.call("process/start", {
+    processId: "job-r20-l1",
+    argv: ["/bin/sh", "-c", "sleep 30"],
+    cwd: `file://${repo}`,
+    env: {},
+    tty: false,
+    pipeStdin: false,
+    arg0: null,
+  });
+  tools.state.jobs[started.processId] = {
+    afterSeq: null,
+    exited: false,
+    closed: false,
+    cancelRequested: true,
+  };
+  fillNow = true;
+  const fillers = [];
+  for (let i = 0; i < 14; i += 1) {
+    const p = connection.call("fs/getMetadata", { path: `file://${repo}` });
+    p.catch(() => {});
+    fillers.push(p);
+  }
+  await new Promise((r) => setTimeout(r, 15));
+  assert.equal(connection.pending.size, 14);
+  // Both process/terminate (slot 15) and confirming process/read ({ cleanup: true }, slot 16)
+  // must succeed while all 14 ordinary slots stay occupied.
+  for (
+    let attempt = 0;
+    attempt < 15 && tools.state.jobs[started.processId]?.cancelRequested;
+    attempt += 1
+  ) {
+    await tools.reconcileCancellation(started.processId);
+    if (tools.state.jobs[started.processId]?.cancelRequested) {
+      await new Promise((r) => setTimeout(r, 40));
+    }
+  }
+  assert.equal(tools.state.jobs[started.processId]?.cancelRequested, false);
 });

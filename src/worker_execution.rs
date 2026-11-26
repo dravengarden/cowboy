@@ -1131,6 +1131,65 @@ where
     }
 }
 
+/// Bounded in-flight ID tracking for one mutation socket, giving worker-local
+/// control requests (`cowboy/uncertainEffect`, `cowboy/drained`) an admission
+/// lane independent of the 16 forwarded execution requests (R20-M3).
+struct MutationInflightIds {
+    forwarded: HashSet<String>,
+    control: HashSet<String>,
+}
+
+impl MutationInflightIds {
+    const MAX_FORWARDED: usize = 16;
+    const MAX_CONTROL: usize = 4;
+
+    fn new() -> Self {
+        Self {
+            forwarded: HashSet::new(),
+            control: HashSet::new(),
+        }
+    }
+
+    fn is_control(method: &str) -> bool {
+        matches!(
+            method,
+            ledger::UNCERTAIN_REPORT | crate::account_sandbox::DRAINED
+        )
+    }
+
+    fn try_admit(&mut self, id: &Value, method: &str) -> Result<bool> {
+        let key = id.to_string();
+        ensure!(
+            valid_id(id) && !self.forwarded.contains(&key) && !self.control.contains(&key),
+            "invalid or duplicate execution request id"
+        );
+        let (set, limit) = if Self::is_control(method) {
+            (&mut self.control, Self::MAX_CONTROL)
+        } else {
+            (&mut self.forwarded, Self::MAX_FORWARDED)
+        };
+        if set.len() >= limit {
+            return Ok(false);
+        }
+        set.insert(key);
+        Ok(true)
+    }
+
+    fn remove(&mut self, id: &Value) {
+        let key = id.to_string();
+        self.forwarded.remove(&key);
+        self.control.remove(&key);
+    }
+
+    fn pending_for(&self, method: &str) -> usize {
+        if Self::is_control(method) {
+            self.control.len()
+        } else {
+            self.forwarded.len()
+        }
+    }
+}
+
 async fn serve_mutation<S>(
     mut socket: tokio_tungstenite::WebSocketStream<S>,
     initialized: Arc<std::sync::atomic::AtomicBool>,
@@ -1176,7 +1235,7 @@ where
 
     let (mut writer, mut reader) = socket.split();
     let mut relays = relay::Relays::new(Arc::clone(&client));
-    let mut ids = HashSet::new();
+    let mut inflight_ids = MutationInflightIds::new();
     let mut cursor = *client.event_cursor.lock().get_or_insert(event_cursor);
     tracing::info!(event_name = "cowboy.execution.connected", session = %client.session, environment_id = %client.binding.environment.id, cursor, "execution endpoint connected");
     let mut events = Box::pin(client.call(Command::Events {
@@ -1195,20 +1254,21 @@ where
                         let message: Value = serde_json::from_str(&text)?;
                         if message["method"] == "initialized" && message.get("id").is_none() { continue; }
                         let id = message.get("id").context("execution request id missing")?.clone();
-                        ensure!(valid_id(&id) && !ids.contains(&id.to_string()), "invalid or duplicate execution request id");
-                        if ids.len() >= 16 {
-                            tracing::warn!(event_name = "cowboy.execution.request_rejected", session = %client.session, reason = "request_capacity", pending = ids.len(), "execution request not admitted");
-                            // No effect was admitted. Limit this request, not
-                            // the transport carrying other commands/results.
+                        let method = message["method"].as_str().context("execution method missing")?.to_owned();
+                        if !inflight_ids.try_admit(&id, &method)? {
+                            let reason = if MutationInflightIds::is_control(&method) {
+                                "control_capacity"
+                            } else {
+                                "request_capacity"
+                            };
+                            tracing::warn!(event_name = "cowboy.execution.request_rejected", session = %client.session, reason, pending = inflight_ids.pending_for(&method), "execution request not admitted");
                             send_bounded(&mut writer, refusal(&id, "Execution request capacity reached; this request was not admitted")).await?;
                             continue;
                         }
-                        ids.insert(id.to_string());
-                        let method = message["method"].as_str().context("execution method missing")?.to_owned();
                         let params = native_params(&message);
                         // A unit being stopped sends only cleanup (L1c).
                         let Some(in_flight) = client.relays.try_enter(&method) else {
-                            ids.remove(&id.to_string());
+                            inflight_ids.remove(&id);
                             send_bounded(&mut writer, refusal(&id, "The session is ending; this request was not admitted")).await?;
                             continue;
                         };
@@ -1218,7 +1278,7 @@ where
                 }
             }
             done = relays.next(), if relays.pending() > 0 => {
-                ids.remove(&done.id.to_string());
+                inflight_ids.remove(&done.id);
                 if let Err(error) = send_bounded(&mut writer, Message::Text(done.frame()?.into())).await {
                     relays.undelivered(&done);
                     return Err(error);

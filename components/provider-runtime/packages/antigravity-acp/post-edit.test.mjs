@@ -4739,8 +4739,8 @@ test("session/load and session/resume refuse empty or missing sessionId before f
   assert.deepEqual(boundChannels, []);
 });
 
-test("Rejected executor error on dispatched stdin process/write at or after deadline stays uncertain (R19-L1)", async () => {
-  const dir = await mkdtemp(join(tmpdir(), "r19-l1-"));
+test("Controlled-clock rejected stdin process/write after deadline preserves uncertainty for executor errors and fails cleanly for definitive worker refusals (R19-L1, R20-M2)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r20-m2-"));
   const repo = join(dir, "repo");
   const home = join(dir, "home");
   await mkdir(repo);
@@ -4758,28 +4758,136 @@ test("Rejected executor error on dispatched stdin process/write at or after dead
     { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
   );
   const origCall = conn.call.bind(conn);
+  let clock = 1000;
+  let nextWriteError;
   conn.call = async (method, params, opts) => {
     if (method === "process/write") {
       opts?.beforeSend?.();
-      // Reject with a non--32000 executor error AFTER publishTimeoutMs expires.
-      await new Promise((r) => setTimeout(r, 90));
-      const err = new Error("Target operation failed");
-      err.remote = { code: -32600, message: "process closed" };
-      throw err;
+      // Advance controlled clock past the 5000ms publishTimeoutMs BEFORE rejecting
+      // synchronously so the rejection reaches catch() after deadline and well
+      // before the 5000ms timer fires.
+      clock += 6000;
+      throw nextWriteError;
     }
     return await origCall(method, params, opts);
   };
   try {
-    const facade = new Facade(conn, { root: repo, shell: "/bin/sh", publishTimeoutMs: 50 });
+    const facade = new Facade(conn, {
+      root: repo,
+      shell: "/bin/sh",
+      publishTimeoutMs: 5000,
+      now: () => clock,
+    });
+    const large = Buffer.from("x".repeat(64 * 1024));
+
+    // Subcase A & B: definitive worker-side non-admission refusals observed past
+    // deadline must NOT park the turn or throw UncertainEffect.
+    for (const msg of [
+      "The session is ending; this request was not admitted",
+      "no Cowboy turn is running; the process mutation was refused",
+    ]) {
+      facade.beginTurn("s-refused", { turnNonce: "n-refused" });
+      const turn = facade.session("s-refused").turn;
+      nextWriteError = Object.assign(new Error("Target operation failed"), {
+        remote: { code: -32000, message: msg },
+      });
+      await assert.rejects(
+        () => facade.publishOnce(turn, targetFile, undefined, large),
+        (err) => !(err instanceof UncertainEffect) && /nothing was written/i.test(err.message),
+        `definitive worker refusal (${msg}) must fail cleanly without parking`,
+      );
+      assert.equal(
+        turn.uncertain,
+        undefined,
+        `definitive refusal (${msg}) must not set turn.uncertain`,
+      );
+    }
+
+    // Subcase C: non--32000 executor rejection observed past deadline BEFORE timer
+    // fires must preserve UncertainEffect("process/write") and fence the turn.
+    facade.beginTurn("s-exec", { turnNonce: "n-exec" });
+    const turnExec = facade.session("s-exec").turn;
+    nextWriteError = Object.assign(new Error("Target operation failed"), {
+      remote: { code: -32600, message: "process closed" },
+    });
+    await assert.rejects(
+      () => facade.publishOnce(turnExec, targetFile, undefined, large),
+      (err) => err instanceof UncertainEffect && err.method === "process/write",
+      "post-deadline executor rejection after dispatched stdin write must stay uncertain",
+    );
+    assert.equal(turnExec.uncertain, "process/write");
+  } finally {
+    conn.close();
+    endpoint.close();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test("With 14 ordinary requests pending and a held confirming process/read, process/terminate still uses the remaining reserved cleanup slot (R20-M1)", async () => {
+  const dir = await mkdtemp(join(tmpdir(), "r20-m1-"));
+  const repo = join(dir, "repo");
+  const home = join(dir, "home");
+  await mkdir(repo);
+  await mkdir(home);
+  const socket = join(dir, "exec.sock");
+  let fillNow = false;
+  const endpoint = await fakeEndpoint(socket, repo, {
+    home,
+    notifications: false,
+    delay: (method) => {
+      if (fillNow && method === "fs/getMetadata") return 4000;
+      if (fillNow && method === "process/read") return 3000;
+      return 0;
+    },
+  });
+  const conn = await Connection.open(
+    {
+      schema: 1,
+      endpoint: `unix:${socket}`,
+      bearer_token: "a".repeat(64),
+      binding: { schema: 1, environment: { id: "env" }, workspace: { cwd: repo } },
+    },
+    { clientName: "cowboy-antigravity-test", requestTimeoutMs: 20000 },
+  );
+  const fillers = [];
+  try {
+    const facade = new Facade(conn, { root: repo, shell: "/bin/sh" });
     facade.beginTurn("s1", { turnNonce: "n1" });
     const turn = facade.session("s1").turn;
-    const large = Buffer.from("x".repeat(64 * 1024));
-    await assert.rejects(
-      () => facade.publishOnce(turn, targetFile, undefined, large),
-      (err) => err instanceof UncertainEffect && err.method === "process/write",
-      "late rejected executor error after dispatched stdin write must stay uncertain",
+    const p1 = await facade.start(turn, ["/bin/sh", "-c", "sleep 30"]);
+    const p2 = await facade.start(turn, ["/bin/sh", "-c", "sleep 30"]);
+    fillNow = true;
+    for (let i = 0; i < 14; i += 1) {
+      const p = conn.call("fs/getMetadata", { path: `file://${repo}` });
+      p.catch(() => {});
+      fillers.push(p);
+    }
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(conn.pending.size, 14);
+    // Hold a confirming process/read on p1 FIRST (takes confirm_read slot 15).
+    const heldConfirmRead = conn.call(
+      "process/read",
+      { processId: p1.processId, afterSeq: null, maxBytes: 65536, waitMs: 500 },
+      { cleanup: true },
     );
-    assert.equal(turn.uncertain, "process/write");
+    heldConfirmRead.catch(() => {});
+    await new Promise((r) => setTimeout(r, 15));
+    assert.equal(conn.pending.size, 15, "14 ordinary + 1 held confirming read should be pending");
+    // A second confirming read must be refused to keep the stop reservation intact.
+    await assert.rejects(
+      () =>
+        conn.call(
+          "process/read",
+          { processId: p2.processId, afterSeq: null, maxBytes: 65536, waitMs: 500 },
+          { cleanup: true },
+        ),
+      /Too many execution requests/,
+    );
+    // Now process/terminate for p2 MUST succeed on the dedicated stop reservation (slot 16)!
+    const stopResult = await conn.call("process/terminate", { processId: p2.processId });
+    assert.equal(typeof stopResult.running, "boolean");
+    // Clean up p1 too.
+    await conn.call("process/terminate", { processId: p1.processId });
   } finally {
     conn.close();
     endpoint.close();

@@ -74,18 +74,40 @@ const MAX_STDIN_APPLY_BYTES = 5 * 1024 * 1024;
 /** Private Symbol channel for trusted WriteFile/EditFile post-edit receipts (unforgeable by JSON MCP results). */
 const POST_EDIT_META = Symbol("postEditMeta");
 /**
- * Exact worker-side `-32000` messages that definitively prove a request was
- * refused before transport admission (never matches `unavailable()` unknown outcomes).
+ * Exact worker-side `-32000` messages that prove a request was refused before
+ * transport admission and MAY be retried on cleanup (never matches `unavailable()` unknown outcomes).
  */
 const WORKER_PRE_ADMISSION_MESSAGES = new Set([
   "Execution request capacity reached; this request was not admitted",
   "Execution unavailable; the request was not sent",
+]);
+/**
+ * Exact worker-side `-32000` refusals proving non-admission that must NOT be
+ * retried because the session or turn is already fenced (R20-M2).
+ */
+const WORKER_DEFINITIVE_REFUSAL_MESSAGES = new Set([
+  "The session is ending; this request was not admitted",
+  "the execution ledger cannot be written; the change was refused",
+  "that process belongs to the worker; request refused",
+  "no Cowboy turn is running; the process mutation was refused",
+  "no Cowboy turn is running; the filesystem change was refused",
+  "the turn was cancelled or ended; process start refused",
+  "no Cowboy turn is running; process start refused",
 ]);
 
 function workerNotAdmitted(error) {
   return (
     error?.remote?.code === -32000 &&
     WORKER_PRE_ADMISSION_MESSAGES.has(error.remote.message) &&
+    !unknownOutcome(error)
+  );
+}
+
+function workerDefinitivelyRefused(error) {
+  return (
+    error?.remote?.code === -32000 &&
+    (WORKER_PRE_ADMISSION_MESSAGES.has(error.remote.message) ||
+      WORKER_DEFINITIVE_REFUSAL_MESSAGES.has(error.remote.message)) &&
     !unknownOutcome(error)
   );
 }
@@ -273,9 +295,11 @@ export class Facade {
       publishTimeoutMs = LIMITS.publishTimeoutMs,
       diagnostics = undefined,
       canaryTrace = false,
+      now = nowMs,
     },
   ) {
     this.connection = connection;
+    this.now = now;
     this.managed = managed;
     this.stopConfirmMs = stopConfirmMs;
     this.publishTimeoutMs = publishTimeoutMs;
@@ -523,13 +547,13 @@ export class Facade {
     // Combined budget aligns with Controller EXECUTION_FORCE_CANCEL_GRACE (75s =
     // 10s start registration + 60s Stop confirmation + 5s report flush margin).
     const deadlineEntry = isRoot
-      ? { deadline: nowMs() + startWaitMs + confirmMs + reportMarginMs }
+      ? { deadline: this.now() + startWaitMs + confirmMs + reportMarginMs }
       : undefined;
     if (deadlineEntry) this.rootCleanupDeadlines.add(deadlineEntry);
     const cleanup = (async () => {
       try {
         // Bounded start/publish registration phase (joins detached quiesce work too).
-        const startDeadline = nowMs() + startWaitMs;
+        const startDeadline = this.now() + startWaitMs;
         let inflightTimedOut = false;
         const awaited = new Set();
         while (true) {
@@ -537,7 +561,7 @@ export class Facade {
             (work) => !awaited.has(work),
           );
           if (pending.length === 0) break;
-          const remaining = startDeadline - nowMs();
+          const remaining = startDeadline - this.now();
           if (remaining <= 0) {
             inflightTimedOut = true;
             break;
@@ -571,7 +595,7 @@ export class Facade {
         const commands = [...session.commands.values()];
         if (deadlineEntry) {
           if (commands.length > 0) {
-            deadlineEntry.deadline = nowMs() + confirmMs + reportMarginMs;
+            deadlineEntry.deadline = this.now() + confirmMs + reportMarginMs;
           } else {
             this.rootCleanupDeadlines.delete(deadlineEntry);
           }
@@ -661,7 +685,7 @@ export class Facade {
     if (maxDeadline === 0) return 0;
     return Math.max(
       0,
-      Math.min(this.startWaitMs + this.stopConfirmMs + 10_000, maxDeadline - nowMs()),
+      Math.min(this.startWaitMs + this.stopConfirmMs + 10_000, maxDeadline - this.now()),
     );
   }
 
@@ -718,7 +742,7 @@ export class Facade {
    * bound ended the wait.
    */
   async settled(ms) {
-    const floorDeadline = nowMs() + Math.max(0, ms);
+    const floorDeadline = this.now() + Math.max(0, ms);
     const awaited = new Set();
     while (true) {
       const work = [
@@ -731,8 +755,8 @@ export class Facade {
       if (work.length === 0) return true;
       const allDone = Promise.allSettled(work).then(() => "done");
       while (true) {
-        const targetDeadline = Math.max(floorDeadline, nowMs() + this.remainingRootStopMs());
-        const remaining = targetDeadline - nowMs();
+        const targetDeadline = Math.max(floorDeadline, this.now() + this.remainingRootStopMs());
+        const remaining = targetDeadline - this.now();
         if (remaining <= 0) return false;
         let timer;
         const expired = new Promise((resolve) => {
@@ -1868,7 +1892,7 @@ ${WRAP_UP_NOTE}`,
     if (process.closed) return [];
     let remaining;
     if (deadline !== undefined) {
-      remaining = deadline - nowMs();
+      remaining = deadline - this.now();
       if (remaining <= 0) return [];
       // Leave headroom before the absolute deadline on publish/cleanup reads
       // so normal quiet waits finish before the transport timeout fires (R16-M3).
@@ -1890,7 +1914,7 @@ ${WRAP_UP_NOTE}`,
             ...(cleanup ? { cleanup: true } : {}),
             timeoutMs: Math.max(1, Math.ceil(remaining)),
             beforeSend: () => {
-              if (closedBeforeDispatch || process.closed || nowMs() >= deadline) {
+              if (closedBeforeDispatch || process.closed || this.now() >= deadline) {
                 throw new Error("Execution unavailable; read deadline expired before dispatch");
               }
               dispatched = true;
@@ -1919,7 +1943,7 @@ ${WRAP_UP_NOTE}`,
           );
         });
         const raced = await Promise.race([call, expired]);
-        if (raced === deadlineSentinel || nowMs() >= deadline) {
+        if (raced === deadlineSentinel || this.now() >= deadline) {
           closedBeforeDispatch = true;
           if (dispatched && lostIsUncertain) throw new UncertainEffect("process/read");
           return [];
@@ -1930,7 +1954,7 @@ ${WRAP_UP_NOTE}`,
       }
     } catch (error) {
       // Apply the hard deadline to rejected replies BEFORE interpreting E1 (R18-L1).
-      if (hardDeadline && nowMs() >= deadline) {
+      if (hardDeadline && this.now() >= deadline) {
         closedBeforeDispatch = true;
         if (dispatched && lostIsUncertain) throw new UncertainEffect("process/read");
         return [];
@@ -1993,7 +2017,7 @@ ${WRAP_UP_NOTE}`,
    */
   async poll(process, remaining, options) {
     const listeners = this.connection.listeners;
-    const deadline = nowMs() + remaining;
+    const deadline = this.now() + remaining;
     options = { ...options, deadline };
     const chunks =
       (process.quiet ?? 0) >= LIMITS.quietReads && listeners && remaining > 2000
@@ -2035,7 +2059,7 @@ ${WRAP_UP_NOTE}`,
     try {
       const chunks = await this.read(process, 0, options);
       if (chunks.length || process.closed) return chunks;
-      if (!(await notified) || process.closed || nowMs() >= deadline) return [];
+      if (!(await notified) || process.closed || this.now() >= deadline) return [];
       return await this.read(process, 0, options);
     } finally {
       clearTimeout(timer);
@@ -2052,7 +2076,7 @@ ${WRAP_UP_NOTE}`,
     // reconnects and confirming reads (R18-M3, R18-L2). Each active caller
     // keeps its open confirmation window in `process.stopWaiters` so a queued
     // stop never dispatches after every caller has timed out.
-    const deadline = nowMs() + confirmMs;
+    const deadline = this.now() + confirmMs;
     const waiter = { deadline };
     process.stopWaiters ??= new Set();
     process.stopWaiters.add(waiter);
@@ -2070,15 +2094,15 @@ ${WRAP_UP_NOTE}`,
           const failed = joinedAttempt;
           joinedAttempt = undefined;
           if (retryNotSent && failed.retryable) {
-            const left = deadline - nowMs();
+            const left = deadline - this.now();
             if (left <= 25 || process.closed) break;
             await new Promise((resolve) => setTimeout(resolve, 25));
-            if (process.closed || nowMs() >= deadline) break;
+            if (process.closed || this.now() >= deadline) break;
             continue;
           }
           throw failed.error;
         }
-        const remaining = deadline - nowMs();
+        const remaining = deadline - this.now();
         if (remaining <= 0) break;
         if (!process.stopAttempt) {
           let resolveDispatched;
@@ -2102,7 +2126,7 @@ ${WRAP_UP_NOTE}`,
               { processId: process.processId },
               {
                 beforeSend: () => {
-                  const now = nowMs();
+                  const now = this.now();
                   let hasOpenWaiter = false;
                   for (const active of process.stopWaiters) {
                     if (now < active.deadline) {
@@ -2150,7 +2174,7 @@ ${WRAP_UP_NOTE}`,
         }
         // Phase 1: wait for pre-dispatch admission (or pre-dispatch refusal).
         if (!current.settled && !current.dispatched) {
-          const waitMs = deadline - nowMs();
+          const waitMs = deadline - this.now();
           if (waitMs <= 0) break;
           let timer;
           const expired = new Promise((resolve) => {
@@ -2161,14 +2185,14 @@ ${WRAP_UP_NOTE}`,
           } finally {
             clearTimeout(timer);
           }
-          if (process.closed || nowMs() >= deadline) break;
+          if (process.closed || this.now() >= deadline) break;
         }
         // Phase 2: once dispatched, give the stop reply a bounded grace window
         // so a stalled terminate reply on an open connection never starves
         // confirming process/read checks (R18-M3).
         if (!current.settled && current.dispatched && !waitedStopGrace) {
           waitedStopGrace = true;
-          const left = deadline - nowMs();
+          const left = deadline - this.now();
           if (left <= 0) break;
           const graceMs = Math.min(500, Math.max(25, Math.floor(confirmMs / 4)), left);
           let timer;
@@ -2180,22 +2204,22 @@ ${WRAP_UP_NOTE}`,
           } finally {
             clearTimeout(timer);
           }
-          if (process.closed || nowMs() >= deadline) break;
+          if (process.closed || this.now() >= deadline) break;
         }
         if (current.settled && current.error !== undefined && joinedBeforeSettled) {
           if (retryNotSent && current.retryable) {
-            const left = deadline - nowMs();
+            const left = deadline - this.now();
             // Do not sleep and retry when the 25ms backoff itself exceeds the deadline.
             if (left <= 25 || process.closed) break;
             await new Promise((resolve) => setTimeout(resolve, 25));
-            if (process.closed || nowMs() >= deadline) break;
+            if (process.closed || this.now() >= deadline) break;
             continue;
           }
           throw current.error;
         }
         if (!current.settled && !current.dispatched) continue;
         // Phase 3: confirm closure via process/read without sending another signal.
-        const readLeft = deadline - nowMs();
+        const readLeft = deadline - this.now();
         if (readLeft <= 0 || process.closed) break;
         let readTimer;
         const readExpired = new Promise((resolve) => {
@@ -2214,10 +2238,10 @@ ${WRAP_UP_NOTE}`,
           ]);
         } catch (error) {
           if (retryNotSent && retryablePreAdmission(error)) {
-            const left = deadline - nowMs();
+            const left = deadline - this.now();
             if (left <= 25 || process.closed) break;
             await new Promise((resolve) => setTimeout(resolve, 25));
-            if (process.closed || nowMs() >= deadline) break;
+            if (process.closed || this.now() >= deadline) break;
             continue;
           }
           throw error;
@@ -2266,7 +2290,7 @@ ${WRAP_UP_NOTE}`,
       beforeSend,
     });
     const out = { stdout: [], stderr: [], size: 0, lines: 0 };
-    const deadline = nowMs() + timeoutMs;
+    const deadline = this.now() + timeoutMs;
     let truncated = false;
     let timedOut = false;
     let stdinTimedOutBeforeDispatch = false;
@@ -2278,7 +2302,7 @@ ${WRAP_UP_NOTE}`,
         const writeId = randomUUID();
         const deadlineSentinel = Symbol("stdin-write-deadline");
         for (;;) {
-          const remaining = deadline - nowMs();
+          const remaining = deadline - this.now();
           if (remaining <= 0) {
             stdinTimedOutBeforeDispatch = true;
             break;
@@ -2288,7 +2312,7 @@ ${WRAP_UP_NOTE}`,
           let writeClosed = false;
           const writeBeforeSend = () => {
             if (typeof beforeSend === "function") beforeSend();
-            if (writeClosed || nowMs() >= deadline) {
+            if (writeClosed || this.now() >= deadline) {
               preSendExpired = true;
               throw new ToolError("Timed out before delivering apply request to workspace helper.");
             }
@@ -2311,7 +2335,7 @@ ${WRAP_UP_NOTE}`,
               );
             });
             const raced = await Promise.race([writeCall, expired]);
-            if (raced === deadlineSentinel || nowMs() >= deadline) {
+            if (raced === deadlineSentinel || this.now() >= deadline) {
               writeClosed = true;
               if (dispatched) {
                 turn.uncertain ??= "process/write";
@@ -2327,7 +2351,7 @@ ${WRAP_UP_NOTE}`,
               stdinTimedOutBeforeDispatch = true;
               break;
             }
-            if (workerNotAdmitted(error) || (!dispatched && notSent(error))) {
+            if (workerDefinitivelyRefused(error) || (!dispatched && notSent(error))) {
               writeClosed = true;
               throw new ToolError(
                 "Execution unavailable before delivering the edit request to the workspace helper; nothing was written.",
@@ -2335,8 +2359,8 @@ ${WRAP_UP_NOTE}`,
             }
             // Enforce the monotonic deadline before interpreting any other rejected
             // executor reply; a dispatched write preserves uncertainty unless the
-            // reply proved non-admission above (R19-L1).
-            if (nowMs() >= deadline) {
+            // reply proved non-admission above (R19-L1, R20-M2).
+            if (this.now() >= deadline) {
               writeClosed = true;
               if (dispatched) {
                 turn.uncertain ??= "process/write";
@@ -2369,7 +2393,7 @@ ${WRAP_UP_NOTE}`,
             break;
           }
           if (reply?.status === "starting") {
-            const pause = Math.min(100, deadline - nowMs());
+            const pause = Math.min(100, deadline - this.now());
             if (pause <= 0) {
               stdinTimedOutBeforeDispatch = true;
               break;
@@ -2380,10 +2404,10 @@ ${WRAP_UP_NOTE}`,
           break;
         }
       }
-      const pollDeadline = stdinDelivered ? deadline : Math.min(deadline, nowMs() + 5000);
+      const pollDeadline = stdinDelivered ? deadline : Math.min(deadline, this.now() + 5000);
       let readRefusedByCapacity = false;
       while (!process.closed && !timedOut && !stdinTimedOutBeforeDispatch) {
-        const remaining = pollDeadline - nowMs();
+        const remaining = pollDeadline - this.now();
         if (remaining <= 0) {
           if (readRefusedByCapacity && lostIsUncertain && (stdinDelivered || !stdinPayload)) {
             throw new UncertainEffect("process/read");
@@ -2405,7 +2429,7 @@ ${WRAP_UP_NOTE}`,
         } catch (error) {
           if (retryablePreAdmission(error)) {
             readRefusedByCapacity = true;
-            const left = pollDeadline - nowMs();
+            const left = pollDeadline - this.now();
             if (left > 0) {
               await new Promise((resolve) => setTimeout(resolve, Math.min(25, left)));
               continue;
@@ -2515,7 +2539,7 @@ ${WRAP_UP_NOTE}`,
       const registering = (async () => {
         beforeSend();
         const started = await this.start(turn, this.commandArgv(command), { beforeSend });
-        started.deadline = nowMs() + seconds * 1000;
+        started.deadline = this.now() + seconds * 1000;
         // Every reader's chunks land here (see `read`).
         started.output = new Retained(LIMITS.commandOutput);
         session.commands.set(started.processId, started);
@@ -2535,18 +2559,18 @@ ${WRAP_UP_NOTE}`,
     if (running.busy) throw new ToolError("Another call is reading this command");
     running.busy = true;
     try {
-      const until = Math.min(running.deadline, nowMs() + (wait ?? Infinity) * 1000);
+      const until = Math.min(running.deadline, this.now() + (wait ?? Infinity) * 1000);
       // Output so far is shown while the command runs: a bounded tail, at
       // most every `progressMs` and only when it changed. No extra request
       // reaches the target; the reads are the ones the command needs anyway.
-      let shown = nowMs();
+      let shown = this.now();
       let changed = false;
-      while (!running.closed && nowMs() < until) {
-        for (const { bytes } of await this.poll(running, until - nowMs())) {
+      while (!running.closed && this.now() < until) {
+        for (const { bytes } of await this.poll(running, until - this.now())) {
           changed ||= bytes.length > 0;
         }
-        if (changed && !running.closed && nowMs() - shown >= LIMITS.progressMs) {
-          shown = nowMs();
+        if (changed && !running.closed && this.now() - shown >= LIMITS.progressMs) {
+          shown = this.now();
           changed = false;
           progress(running.output.peek(LIMITS.progressBytes));
         }
@@ -2558,7 +2582,7 @@ ${WRAP_UP_NOTE}`,
           status +=
             " (the command's process ended while the connection to the workspace Machine was interrupted; its remaining output is unavailable)";
         }
-      } else if (nowMs() >= running.deadline) {
+      } else if (this.now() >= running.deadline) {
         let stopped;
         try {
           stopped = await this.terminate(running);
@@ -2572,7 +2596,7 @@ ${WRAP_UP_NOTE}`,
       } else {
         // Each continuation costs the agent a whole turn; say how long one
         // may wait so a long gate is read in few, long waits.
-        const left = Math.max(1, Math.ceil((running.deadline - nowMs()) / 1000));
+        const left = Math.max(1, Math.ceil((running.deadline - this.now()) / 1000));
         status =
           `Still running (command_id: ${running.processId}). ` +
           `Continue it with wait_seconds ${Math.min(left, LIMITS.commandMaxSeconds)} to wait for the rest of its ${left} s.`;

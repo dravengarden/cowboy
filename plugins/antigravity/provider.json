@@ -282,7 +282,7 @@
         "id": "cowboy-antigravity-acp",
         "version": "1.0.29",
         "source": "cowboy:components/provider-runtime/packages/antigravity-acp",
-        "integrity": "sha256:47e20c798e3753e31f65bb06d49704a957b2ace6763495ede8e2559314c56db8",
+        "integrity": "sha256:d77ffa96cd7e03b0c25406ec0ee662bbee0ea65e2063453da29397b165e36e7f",
         "private": true
       },
       {

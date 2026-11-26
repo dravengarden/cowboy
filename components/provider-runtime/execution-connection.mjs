@@ -72,7 +72,7 @@ export class Connection {
         }
         const call = connection.pending.get(frame.id);
         if (!call && connection.retired.has(frame.id)) {
-          clearTimeout(connection.abandoned.get(frame.id));
+          clearTimeout(connection.abandoned.get(frame.id)?.timer);
           connection.abandoned.delete(frame.id);
           connection.retired.delete(frame.id);
           return;
@@ -175,15 +175,45 @@ export class Connection {
     }
     // Abandoned requests may still run on the executor, so they count.
     // Check capacity BEFORE running `beforeSend` so a capacity refusal never
-    // marks a request dispatched; reserve slot 15 for `process/terminate` and
-    // slot 16 for confirming `process/read` so a stalled stop in pending never
-    // starves closure confirmation, while staying within the worker's 16-slot
-    // cap and keeping drain/uncertainty notifications uncapped (R14-M4, R19-M1).
-    const isConfirmRead = cleanup === true && method === "process/read";
-    const isStop = CLEANUP_REQUESTS.has(method);
-    const limit = isConfirmRead ? 16 : isStop ? 15 : 14;
-    if (!DRAIN_REQUESTS.has(method) && this.pending.size + this.abandoned.size >= limit) {
-      return Promise.reject(new Error("Too many execution requests"));
+    // marks a request dispatched. Track active requests by class so both
+    // cleanup reservations (`process/terminate` and confirming `process/read`)
+    // work in either arrival order within the worker's 16-forwarded-request cap,
+    // while worker-local control requests use a separate bounded lane (R20-M1, R20-M3).
+    const kind = DRAIN_REQUESTS.has(method)
+      ? "control"
+      : cleanup === true && method === "process/read"
+        ? "confirm_read"
+        : CLEANUP_REQUESTS.has(method)
+          ? "stop"
+          : "ordinary";
+    let ordinaryCount = 0;
+    let stopCount = 0;
+    let confirmReadCount = 0;
+    let controlCount = 0;
+    for (const entry of this.pending.values()) {
+      if (entry.kind === "control") controlCount += 1;
+      else if (entry.kind === "stop") stopCount += 1;
+      else if (entry.kind === "confirm_read") confirmReadCount += 1;
+      else ordinaryCount += 1;
+    }
+    for (const entry of this.abandoned.values()) {
+      if (entry.kind === "control") controlCount += 1;
+      else if (entry.kind === "stop") stopCount += 1;
+      else if (entry.kind === "confirm_read") confirmReadCount += 1;
+      else ordinaryCount += 1;
+    }
+    if (kind === "control") {
+      if (controlCount >= 4) {
+        return Promise.reject(new Error("Too many execution requests"));
+      }
+    } else {
+      const forwardedTotal = ordinaryCount + stopCount + confirmReadCount;
+      const reserve =
+        (kind !== "stop" && stopCount === 0 ? 1 : 0) +
+        (kind !== "confirm_read" && confirmReadCount === 0 ? 1 : 0);
+      if (forwardedTotal + reserve >= 16) {
+        return Promise.reject(new Error("Too many execution requests"));
+      }
     }
     // R3-H3: Run synchronous pre-send authorization guard AFTER ensureConnected()
     // and capacity checks, immediately BEFORE pending registration or socket.send().
@@ -209,13 +239,13 @@ export class Connection {
               this.requestTimeoutMs - timeoutMs,
             );
             release.unref?.();
-            this.abandoned.set(id, release);
+            this.abandoned.set(id, { timer: release, kind });
             if (this.retired.size >= 4096) this.retired.delete(this.retired.values().next().value);
             this.retired.add(id);
             reject(new Error("Target request timed out"));
           }, timeoutMs)
         : setTimeout(() => this.disconnect(), this.requestTimeoutMs);
-      this.pending.set(id, { resolve, reject, timer });
+      this.pending.set(id, { resolve, reject, timer, kind });
       try {
         this.socket.send(JSON.stringify({ id, method, params }));
       } catch {
@@ -271,7 +301,7 @@ export class Connection {
       reject(new Error("Execution unavailable or result unknown; no local fallback and no replay"));
     }
     this.pending.clear();
-    for (const release of this.abandoned.values()) clearTimeout(release);
+    for (const entry of this.abandoned.values()) clearTimeout(entry.timer);
     this.abandoned.clear();
     this.retired.clear();
     for (const listener of this.listeners) listener({ method: "closed" });
