@@ -495,8 +495,8 @@ fn review_line(value: &Value) -> String {
             match (count("used"), count("limit")) {
                 (Some(used), Some(limit)) => format!(
                     "skipped: review budget for this turn reached ({code}: {used} of {limit} calls used; \
-                     do not retry this turn: the owner's next message, or a creator's message in a \
-                     new turn, resets it, and only the owner can raise it in Tools)"
+                     do not retry this turn: the owner's next message, or its creator's first \
+                     message in each creator turn, resets it, and only the owner can raise it in Tools)"
                 ),
                 _ => format!("skipped: review budget for this turn reached ({code})"),
             }
@@ -945,7 +945,10 @@ mod tests {
         assert!(line.starts_with("skipped: "), "{line}");
         assert!(line.contains("32 of 32 calls used"), "{line}");
         assert!(line.contains("do not retry this turn"), "{line}");
-        assert!(line.contains("a creator's message in a new turn"), "{line}");
+        assert!(
+            line.contains("first message in each creator turn"),
+            "{line}"
+        );
     }
 
     #[test]
