@@ -204,11 +204,12 @@ test("memory switches travel under the schema-1 matrix key", () => {
 });
 
 test("the call budget is per owner turn, with the new default among its choices", () => {
-  assertEquals([...TURN_LIMIT_CHOICES], [4, 8, 16, 32, 64]);
+  assertEquals([...TURN_LIMIT_CHOICES], [4, 8, 16, 32, 64, 128]);
   assert(TURN_LIMIT_CHOICES.includes(defaults.calls.max_per_turn as 16));
-  // A session override never carries the limit: it is an agent-kind default.
+  // A session may change the limit; equal to the defaults it is inherited.
   assertEquals(
-    overrideFor(defaults, { ...defaults, calls: { ...defaults.calls, max_per_turn: 4 } }),
-    { schema: 1 },
+    overrideFor(defaults, { ...defaults, calls: { ...defaults.calls, max_per_turn: 64 } }),
+    { schema: 1, calls: { max_per_turn: 64 } },
   );
+  assertEquals(overrideFor(defaults, defaults), { schema: 1 });
 });

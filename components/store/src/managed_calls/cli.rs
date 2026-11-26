@@ -486,7 +486,21 @@ fn review_line(value: &Value) -> String {
             format!("skipped: reviews are off for this session ({code})")
         }
         "concurrency_limit" => format!("skipped: review budget reached ({code})"),
-        "call_limit" => format!("skipped: review budget for this turn reached ({code})"),
+        "call_limit" => {
+            let count = |key: &str| {
+                value
+                    .pointer(&format!("/error/{key}"))
+                    .and_then(Value::as_u64)
+            };
+            match (count("used"), count("limit")) {
+                (Some(used), Some(limit)) => format!(
+                    "skipped: review budget for this turn reached ({code}: {used} of {limit} calls used; \
+                     do not retry this turn: the owner's next message, or its creator's first \
+                     message in each creator turn, resets it, and only the owner can raise it in Tools)"
+                ),
+                _ => format!("skipped: review budget for this turn reached ({code})"),
+            }
+        }
         _ => format!("review unavailable: {code}"),
     }
 }
@@ -915,6 +929,25 @@ mod tests {
         assert_eq!(
             review_line(&error("gateway_unavailable", "unknown")),
             "review unavailable: gateway_unavailable"
+        );
+    }
+
+    #[test]
+    fn a_spent_turn_budget_names_its_counts_when_the_controller_sends_them() {
+        let mut spent = error("call_limit", "not_submitted");
+        assert_eq!(
+            review_line(&spent),
+            "skipped: review budget for this turn reached (call_limit)"
+        );
+        spent["error"]["limit"] = json!(32);
+        spent["error"]["used"] = json!(32);
+        let line = review_line(&spent);
+        assert!(line.starts_with("skipped: "), "{line}");
+        assert!(line.contains("32 of 32 calls used"), "{line}");
+        assert!(line.contains("do not retry this turn"), "{line}");
+        assert!(
+            line.contains("first message in each creator turn"),
+            "{line}"
         );
     }
 

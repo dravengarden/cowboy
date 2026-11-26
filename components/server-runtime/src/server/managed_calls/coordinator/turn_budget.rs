@@ -186,7 +186,29 @@ pub async fn admit(
         .await
         .map_err(|_| unavailable())?;
     if used >= u64::from(policy.max_per_turn) {
-        return Err(error("call_limit", "not_submitted"));
+        return Err(call_limit(policy.max_per_turn, used));
     }
     Ok(turn)
+}
+
+/// The refusal of a call past the turn's budget, with what an agent needs to
+/// report it accurately: the limit, the calls this turn already admitted and
+/// how the budget comes back.
+fn call_limit(limit: u16, used: u64) -> Value {
+    let mut refusal = error("call_limit", "not_submitted");
+    refusal["error"]["limit"] = json!(limit);
+    refusal["error"]["used"] = json!(used);
+    refusal["error"]["retryable"] = json!(false);
+    refusal["error"]["resets_on"] = json!("owner_prompt");
+    refusal["error"]["message"] = json!(format!(
+        "this turn already admitted {used} of its {limit} managed calls; nothing was submitted"
+    ));
+    refusal["error"]["hint"] = json!(
+        "the budget resets when the session's owner sends a new message (for a session another \
+         session created, also its creator's first message in a new turn); notices and \
+         results do not reset it. Only the owner can raise it: Settings > Tools > Calls per \
+         turn for the agent kind, or this session's Tools (1-256). Agents cannot raise their \
+         own limit (tools_widening_denied). Do not retry in this turn; report the skipped call."
+    );
+    refusal
 }

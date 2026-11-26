@@ -845,6 +845,50 @@ mod machine_scope_and_tools {
             Ok(())
         );
     }
+
+    #[test]
+    fn an_agent_may_lower_but_never_raise_its_calls_per_turn_limit() {
+        let hub = Hub::new();
+        let parent = add(&hub, "parent", "hawk", None);
+        let limit = |limit: u16| json!({"schema":1,"calls":{"max_per_turn":limit}});
+        let default = crate::server::agent_tools::DEFAULT_MAX_PER_TURN;
+        assert_eq!(
+            set(&hub, &parent, "parent", limit(default + 1)),
+            Err("tools_widening_denied"),
+            "the per-turn limit is a runaway guard the agent must not lift"
+        );
+        assert_eq!(set(&hub, &parent, "parent", limit(default)), Ok(()));
+        assert_eq!(set(&hub, &parent, "parent", limit(4)), Ok(()));
+        // An owner-raised limit stays: replacing it with a lower one narrows.
+        hub.set_setting(
+            format!("{}parent", crate::core::settings_keys::SESSION_TURN_BUDGET_PREFIX),
+            json!({"max_per_turn": 64, "document": crate::managed_calls::canonical_digest(&Value::Null)}),
+        );
+        assert_eq!(set(&hub, &parent, "parent", limit(64)), Ok(()));
+        assert_eq!(set(&hub, &parent, "parent", limit(48)), Ok(()));
+        assert_eq!(
+            set(&hub, &parent, "parent", limit(65)),
+            Err("tools_widening_denied")
+        );
+        // A fresh session must not shed a lower limit either.
+        let create = json!({"body":{"provider":"codex"}});
+        let shed = json!({"session_id":"parent","body":{"inherit_settings":false}});
+        assert_eq!(
+            tools_widening(&hub, &parent, "sessions.create", &create),
+            Ok(())
+        );
+        hub.set_setting(
+            format!("{}parent", crate::core::settings_keys::SESSION_TURN_BUDGET_PREFIX),
+            json!({"max_per_turn": 4, "document": crate::managed_calls::canonical_digest(&Value::Null)}),
+        );
+        for (name, input) in [("sessions.create", &create), ("sessions.duplicate", &shed)] {
+            assert_eq!(
+                tools_widening(&hub, &parent, name, input),
+                Err("tools_widening_denied"),
+                "{name}"
+            );
+        }
+    }
 }
 
 #[test]

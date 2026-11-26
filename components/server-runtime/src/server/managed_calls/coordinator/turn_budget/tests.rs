@@ -181,10 +181,28 @@ async fn a_turn_admits_its_limit_and_refuses_the_next_call_unsubmitted() {
     // A call from before the turn column belongs to no turn and costs none.
     fixture.record(None).await;
     let turn = fixture.spend(3).await;
+    let refusal = fixture.call().await.expect_err("the budget refuses");
     assert_eq!(
-        refused(fixture.call().await),
+        refused(Err(refusal.clone())),
         ("call_limit".into(), "not_submitted".into())
     );
+    // The refusal says the limit, what this turn used and how it comes back.
+    let detail = &refusal["error"];
+    assert_eq!((&detail["limit"], &detail["used"]), (&json!(3), &json!(3)));
+    assert_eq!(detail["resets_on"], "owner_prompt");
+    assert_eq!(detail["retryable"], false);
+    assert_eq!(
+        detail["message"],
+        "this turn already admitted 3 of its 3 managed calls; nothing was submitted"
+    );
+    let hint = detail["hint"].as_str().unwrap();
+    for needle in [
+        "owner sends a new message",
+        "Calls per turn",
+        "tools_widening_denied",
+    ] {
+        assert!(hint.contains(needle), "{needle}: {hint}");
+    }
     // The refusal recorded nothing: the boundary is the limit exactly.
     assert_eq!(
         fixture
