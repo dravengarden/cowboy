@@ -460,7 +460,7 @@ pub async fn duplicate(
             let session = response_state
                 .hub
                 .session_info(&session_id)
-                .map(|info| info.meta);
+                .map(|info| info.meta.for_client());
             (
                 StatusCode::CREATED,
                 Json(serde_json::json!({"session_id": session_id, "session": session})),
@@ -487,7 +487,7 @@ pub async fn fork(
             let session = response_state
                 .hub
                 .session_info(&session_id)
-                .map(|info| info.meta);
+                .map(|info| info.meta.for_client());
             (
                 if created {
                     StatusCode::CREATED

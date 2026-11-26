@@ -70,6 +70,28 @@ test("unconsumed shell-only releases retain exact historical worker registry byt
   assertEquals(workerRegistryProjection(encode(registry)).source, encode(baseline));
 });
 
+test("an unconsumed IndexedDB adapter release retains the worker registry bytes", async () => {
+  const registry = fixture();
+  for (const release of registry.releases) {
+    release.components.push({ id: "cowboy.state-sync-idb", version: "1.0.0", digest: "idb-old" });
+    release.closure.component_dependencies["cowboy.state-sync-idb"] = [];
+  }
+  const before = await workerRegistryInput(encode(registry));
+  const next = structuredClone(registry.releases[1]!);
+  next.version = "3.2.0";
+  next.components.at(-1)!.digest = "idb-new";
+  registry.releases.push(next);
+  registry.active_release = next.version;
+  assertEquals(await workerRegistryInput(encode(registry)), before);
+  // Once anything depends on it, its releases are worker input again.
+  const consumed = structuredClone(next);
+  consumed.version = "3.3.0";
+  consumed.closure.component_dependencies["cowboy.plugin-sdk"] = ["cowboy.state-sync-idb"];
+  registry.releases.push(consumed);
+  registry.active_release = consumed.version;
+  assertEquals((await workerRegistryInput(encode(registry))).component_release, "3.3.0");
+});
+
 test("worker components, Plugin sources, pins and graph changes retain the latest input", async () => {
   for (const change of [
     "sdk",

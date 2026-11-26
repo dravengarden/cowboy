@@ -8,14 +8,23 @@ use std::sync::OnceLock;
 pub struct FanoutFrame {
     outbound: Outbound,
     native_wait_started: bool,
+    sessions_seq: Option<u64>,
+    session_owner: Option<Option<String>>,
     json: OnceLock<String>,
 }
 
 impl FanoutFrame {
-    fn new(outbound: Outbound, native_wait_started: bool) -> Arc<Self> {
+    fn new(
+        outbound: Outbound,
+        native_wait_started: bool,
+        sessions_seq: Option<u64>,
+        session_owner: Option<Option<String>>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             outbound,
             native_wait_started,
+            sessions_seq,
+            session_owner,
             json: OnceLock::new(),
         })
     }
@@ -32,6 +41,24 @@ impl FanoutFrame {
         self.native_wait_started
     }
 
+    /// Monotonic Hub session-metadata watermark for `Sessions`,
+    /// `SessionUpdated`, and `SessionRemoved` frames. Never serialized to the
+    /// wire; used by WebSocket fan-out to skip frames already reflected in the
+    /// client's bootstrap session snapshot.
+    #[must_use]
+    pub fn sessions_seq(&self) -> Option<u64> {
+        self.sessions_seq
+    }
+
+    /// Owner user ID for a single-session metadata frame (`Some(None)` means an
+    /// unowned shared session; `None` means not a single-session frame). Never
+    /// serialized to the wire; preserves visibility checks on `SessionRemoved`
+    /// after the session leaves `HubInner::sessions`.
+    #[must_use]
+    pub fn session_owner(&self) -> Option<Option<&str>> {
+        self.session_owner.as_ref().map(Option::as_deref)
+    }
+
     /// Cached JSON for this frame. Concurrent first writers may serialize twice;
     /// `OnceLock` keeps one buffer for the ring's lifetime.
     pub fn json(&self) -> Result<&str, serde_json::Error> {
@@ -40,6 +67,87 @@ impl FanoutFrame {
         }
         let encoded = serde_json::to_string(&self.outbound)?;
         Ok(self.json.get_or_init(|| encoded))
+    }
+}
+
+fn estimated_session_meta_bytes(meta: &SessionMeta) -> usize {
+    let opt = |value: &Option<String>| value.as_ref().map_or(0, String::len);
+    let mut size = 256usize
+        .saturating_add(meta.id.len())
+        .saturating_add(meta.provider.len())
+        .saturating_add(meta.provider_version.len())
+        .saturating_add(meta.provider_generation_digest.len())
+        .saturating_add(meta.machine_id.len())
+        .saturating_add(meta.cwd.len())
+        .saturating_add(meta.title.len())
+        .saturating_add(opt(&meta.workspace_id))
+        .saturating_add(opt(&meta.workspace_name))
+        .saturating_add(opt(&meta.workspace_source_path))
+        .saturating_add(opt(&meta.owner_user_id))
+        .saturating_add(opt(&meta.owner_username))
+        .saturating_add(opt(&meta.resource_wait))
+        .saturating_add(opt(&meta.continued_from))
+        .saturating_add(opt(&meta.forked_from))
+        .saturating_add(opt(&meta.agent_session_id));
+    if let Some(usage) = meta.usage.as_ref() {
+        size = size
+            .saturating_add(128)
+            .saturating_add(estimated_json_bytes(&usage.raw));
+    }
+    if let Some(binding) = meta.execution_binding.as_ref() {
+        let mut count = SerializedBytes(0);
+        if serde_json::to_writer(&mut count, binding).is_ok() {
+            size = size.saturating_add(count.0);
+        }
+    }
+    if let Some(behavior) = meta.provider_behavior.as_ref() {
+        let mut count = SerializedBytes(0);
+        if serde_json::to_writer(&mut count, behavior).is_ok() {
+            size = size.saturating_add(count.0);
+        }
+    }
+    size
+}
+
+fn estimated_outbound_bytes(outbound: &Outbound) -> usize {
+    match outbound {
+        Outbound::Event { envelope } => estimated_envelope_bytes(envelope),
+        Outbound::Sessions { sessions } => sessions.iter().fold(32usize, |total, meta| {
+            total.saturating_add(estimated_session_meta_bytes(meta))
+        }),
+        Outbound::SessionUpdated { session } => {
+            32usize.saturating_add(estimated_session_meta_bytes(session))
+        }
+        Outbound::SessionRemoved { session_id } => 48usize.saturating_add(session_id.len()),
+        Outbound::Snapshot {
+            session_id, events, ..
+        } => events
+            .iter()
+            .fold(64usize.saturating_add(session_id.len()), |total, env| {
+                total.saturating_add(estimated_envelope_bytes(env))
+            }),
+        Outbound::SyncPatch {
+            state,
+            value,
+            confirmed,
+            ..
+        } => 64usize
+            .saturating_add(state.len())
+            .saturating_add(estimated_json_bytes(value))
+            .saturating_add(
+                confirmed
+                    .iter()
+                    .fold(0usize, |total, id| total.saturating_add(id.len() + 3)),
+            ),
+        Outbound::Usage { snapshot } => 32usize.saturating_add(estimated_json_bytes(snapshot)),
+        Outbound::ConfigOptions {
+            session_id,
+            options,
+        } => 48usize
+            .saturating_add(session_id.len())
+            .saturating_add(estimated_json_bytes(options)),
+        Outbound::Machines { machines, .. } => 64usize.saturating_add(machines.len() * 512),
+        _ => 256,
     }
 }
 
@@ -56,20 +164,35 @@ impl Hub {
         self.publish_frame(outbound, false);
     }
 
+    pub(super) fn publish_session_frame(
+        &self,
+        outbound: Outbound,
+        sessions_seq: u64,
+        session_owner: Option<Option<String>>,
+    ) {
+        let bytes = estimated_outbound_bytes(&outbound);
+        self.inner
+            .broadcast_last_bytes
+            .store(bytes, Ordering::Relaxed);
+        let _ = self.inner.tx.send(FanoutFrame::new(
+            outbound,
+            false,
+            Some(sessions_seq),
+            session_owner,
+        ));
+    }
+
     fn publish_frame(&self, outbound: Outbound, native_wait_started: bool) {
         // A send error just means no clients or internal observers are
         // connected. The canonical hot tail remains authoritative.
-        let bytes = match &outbound {
-            Outbound::Event { envelope } => estimated_envelope_bytes(envelope),
-            _ => 256,
-        };
+        let bytes = estimated_outbound_bytes(&outbound);
         self.inner
             .broadcast_last_bytes
             .store(bytes, Ordering::Relaxed);
         let _ = self
             .inner
             .tx
-            .send(FanoutFrame::new(outbound, native_wait_started));
+            .send(FanoutFrame::new(outbound, native_wait_started, None, None));
     }
 
     fn prepare_attention_event(&self, session_id: &str, event: Event) -> Event {
@@ -280,7 +403,7 @@ impl Hub {
         }
         self.publish_frame(Outbound::Event { envelope }, native_wait_started);
         if attention_changed {
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
     }
 }

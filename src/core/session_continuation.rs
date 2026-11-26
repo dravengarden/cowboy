@@ -436,7 +436,7 @@ impl Hub {
             }
             session.meta.handoff_resumed = resumed;
         }
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
     }
 }
 

@@ -18,8 +18,10 @@ test("quota groups read as rows of labelled windows", () => {
     ["Gemini", ["5h 34%", "W 8%"]],
     ["Claude/GPT", ["5h 100%", "W 99%"]],
   ]);
-  // Only a window that needs attention shows its countdown; the hover keeps all.
-  assertEquals(rows.flatMap((row) => row.cells.map((cell) => cell.countdown !== undefined)), [false, true, false, false]);
+  // Every window that has spent quota shows its countdown; a full one has
+  // nothing to recover. Only a low window takes the attention tone.
+  assertEquals(rows.flatMap((row) => row.cells.map((cell) => cell.countdown)), ["2h", "1d6h", undefined, "4d4h"]);
+  assertEquals(rows.flatMap((row) => row.cells.map((cell) => cell.attention)), [false, true, false, false]);
   assertEquals(rows[0]?.detail.startsWith("Gemini: 5h 34% ("), true);
   // Groups stack as rows: the width follows the windows per group, not the group count.
   assertEquals(usageGroupSegmentWidth(2), usageGroupSegmentWidth(1) + USAGE_GROUP_WINDOW_WIDTH_PX + USAGE_GROUP_ATTENTION_WIDTH_PX);

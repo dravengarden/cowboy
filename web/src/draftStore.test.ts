@@ -66,6 +66,14 @@ function fakeDatabase(): Database & Parameters<DraftStore["attachDraftDatabase"]
         await tick();
         if (!state.dropWrites) state.records.delete(scope.session!);
       },
+      update: async (merge: (current: T | null) => T | null): Promise<void> => {
+        admit();
+        await tick();
+        const next = merge((state.records.get(scope.session!) ?? null) as T | null);
+        if (state.dropWrites) return;
+        if (next === null) state.records.delete(scope.session!);
+        else state.records.set(scope.session!, next as StoredDraft);
+      },
     }),
     cacheSessions: async (): Promise<string[]> => {
       admit();
@@ -248,4 +256,42 @@ test("a reload leaves a text draft exactly as typed", async () => {
   leavePage();
   const second = await loadPage(storage);
   assertEquals(second.getDraft("code").text, text);
+});
+
+test("discardDraft deletes IndexedDB attachment drafts immediately before listing without leaving keys", async () => {
+  const storage = fakeStorage();
+  const database = fakeDatabase();
+  const tabB = await loadPage(storage);
+  tabB.attachDraftDatabase(database);
+  await settle();
+  tabB.setDraft("cross-tab-removed", { text: TEXT, attachments: [image("a1")] });
+  await settle();
+  assertEquals(database.records.get("cross-tab-removed")?.attachments.length, 1);
+
+  // Tab A receives removal even before its initial cacheSessions scan finishes.
+  const tabA = await loadPage(storage);
+  tabA.attachDraftDatabase({
+    ...database,
+    cacheSessions: async () => {
+      throw new Error("scan failed");
+    },
+  });
+  tabA.discardDraft("cross-tab-removed");
+  await settle();
+  assertEquals(database.records.has("cross-tab-removed"), false);
+  assertEquals(storage.records.has(KEY + "cross-tab-removed"), false);
+
+  // Both the receiving tab and a stale peer tab sharing localStorage are
+  // fenced from recreating the removed session's draft without IndexedDB tombstones.
+  tabA.setDraft("cross-tab-removed", { text: `${TEXT} late`, attachments: [image("a2")] });
+  tabB.setDraft("cross-tab-removed", { text: `${TEXT} peer-late`, attachments: [image("a3")] });
+  await settle();
+  assertEquals(database.records.has("cross-tab-removed"), false);
+  assertEquals(storage.records.has(KEY + "cross-tab-removed"), false);
+
+  // A reloaded page sees no restored draft.
+  const reloaded = await loadPage(storage);
+  reloaded.attachDraftDatabase(database);
+  await settle();
+  assertEquals(reloaded.getDraft("cross-tab-removed"), { text: "", attachments: [] });
 });

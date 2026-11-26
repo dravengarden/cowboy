@@ -21,7 +21,13 @@ import {
   resetTarget,
   shownTarget,
 } from "./browserModel";
-import { activeBrowserLink, linkEntry, linkTarget, resumeBlockedByIdentity } from "./linkNavigation";
+import {
+  activeBrowserLink,
+  linkEntry,
+  linkRequiresControllerUpgrade,
+  linkTarget,
+  resumeBlockedByIdentity,
+} from "./linkNavigation";
 import { reconcileBinding } from "./shareRules";
 import { type ViewerControls, addressCommand, chromeState, controlsFor } from "./browserChrome";
 import type { KeyboardSink } from "./touchKeyboard";
@@ -318,8 +324,22 @@ test("a link opens and navigates only this account's browser on the login's Mach
   assertEquals(linkEntry({ ...onOvh, state: { ...onOvh.state!, state: "starting" } }), undefined);
   assertEquals(linkEntry({ ...onOvh, state: { ...onOvh.state!, state: "hibernated" } }), "open");
   assertEquals(linkEntry(onOvh), "attach");
-  assertEquals(linkEntry({ ...onOvh, browser_identity: "share:s1:1" }, undefined, "own"), undefined);
-  assertEquals(linkEntry({ ...onOvh, browser_identity: "own" }, undefined, "own"), "attach");
+  // Share-capable Controllers without `navigate_identity_fenced` require an upgrade
+  // before opening identity-bound links (avoids viewer open -> HTTP 422).
+  assertEquals(linkRequiresControllerUpgrade({ ...onOvh, browser_identity: "own" }, "own"), true);
+  assertEquals(linkRequiresControllerUpgrade({ ...onOvh, browser_identity: "own" }), true);
+  assertEquals(
+    linkRequiresControllerUpgrade(
+      { ...onOvh, browser_identity: "own", navigate_identity_fenced: true },
+      "own",
+    ),
+    false,
+  );
+  assertEquals(linkRequiresControllerUpgrade(onOvh), false);
+  assertEquals(linkEntry({ ...onOvh, browser_identity: "own" }, undefined, "own"), undefined);
+  const fencedOvh: BrowserRead = { ...onOvh, browser_identity: "own", navigate_identity_fenced: true };
+  assertEquals(linkEntry({ ...fencedOvh, browser_identity: "share:s1:1" }, undefined, "own"), undefined);
+  assertEquals(linkEntry(fencedOvh, undefined, "own"), "attach");
   const otherAttachedRead: BrowserRead = {
     ...onOvh,
     state: { ...onOvh.state!, state: "attached" },
@@ -343,13 +363,25 @@ test("a link opens and navigates only this account's browser on the login's Mach
     target: shownTarget(takenOverConfirmed)!,
     attachmentId: "att-ovh-2",
   });
+  const takenOverFenced: typeof takenOverConfirmed = {
+    ...takenOverConfirmed,
+    read: { ...takenOverConfirmed.read!, browser_identity: "own", navigate_identity_fenced: true },
+  };
+  // On a share-capable Controller lacking navigate_identity_fenced, linkTarget refuses.
   assertEquals(
-    linkTarget({ ...takenOverConfirmed, observedIdentity: "share:s1:1" }, undefined, "own"),
+    linkTarget({ ...takenOverConfirmed, observedIdentity: "own" }, undefined, "own"),
+    undefined,
+  );
+  // On a fenced Controller, linkTarget waits for a bound expected identity and refuses
+  // when a snapshot reply advances the share revision before panel rebind.
+  assertEquals(linkTarget(takenOverFenced, undefined, undefined), undefined);
+  assertEquals(
+    linkTarget({ ...takenOverFenced, observedIdentity: "share:s1:2" }, undefined, "share:s1:1"),
     undefined,
   );
   assertEquals(
-    linkTarget({ ...takenOverConfirmed, observedIdentity: "own" }, undefined, "own"),
-    { target: shownTarget(takenOverConfirmed)!, attachmentId: "att-ovh-2" },
+    linkTarget({ ...takenOverFenced, observedIdentity: "own" }, undefined, "own"),
+    { target: shownTarget(takenOverFenced)!, attachmentId: "att-ovh-2" },
   );
   assertEquals(linkTarget(starting), undefined);
 
@@ -368,6 +400,9 @@ test("a link opens and navigates only this account's browser on the login's Mach
   assertEquals(resumeBlockedByIdentity("own", undefined), false);
   assertEquals(resumeBlockedByIdentity(undefined, "share:s1:1"), false);
   assertEquals(resumeBlockedByIdentity("own", "share:s1:1"), true);
+  // Controller rollback to a share-capable build without fenced navigate blocks resume too.
+  assertEquals(resumeBlockedByIdentity("own", "own", true), true);
+  assertEquals(resumeBlockedByIdentity(undefined, undefined, true), true);
 
   // The calls: a tab open pinned to hawk, then a navigation fenced by this
   // viewer's confirmed attachment_id. No route names a login, and nothing reads a code back.
@@ -386,6 +421,7 @@ test("a link opens and navigates only this account's browser on the login's Mach
     "https://claude.ai/oauth/x",
     signal,
     confirmed.attachmentId,
+    "own",
   );
   assertEquals(
     calls.map((call) => call.path),
@@ -404,6 +440,7 @@ test("a link opens and navigates only this account's browser on the login's Mach
     instance: openA.state.instance,
     url: "https://claude.ai/oauth/x",
     attachment_id: "att-hawk-1",
+    expected_browser: "own",
   });
   assertEquals("openSignIn" in api, false);
 });

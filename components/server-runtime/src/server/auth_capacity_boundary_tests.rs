@@ -67,6 +67,7 @@ fn device_request(
 fn websocket_query(kind: &str) -> WebSocketQuery {
     WebSocketQuery {
         bootstrap: None,
+        session_deltas: None,
         client_id: Some("stable-client-0000000000000001".to_owned()),
         client_kind: Some(kind.to_owned()),
         dataset: None,

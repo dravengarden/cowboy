@@ -88,7 +88,7 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
-Component release 3.152.0 records provider-runtime 1.3.35, whose
+Component release 3.154.0 records provider-runtime 1.3.35, whose
 `cowboy-antigravity-acp` 1.0.29 adds Antigravity post-edit diagnostics
 ([design](antigravity-post-edit-r4-design.md)): descriptor-gated `/diagnostics`
 WebSocket pulls (`diagnostics-client.mjs`), BOM-excluded LF-SHA256 hashing and
@@ -809,6 +809,15 @@ external package. Cardea's repository owns its own release recipes using this
 tool, rather than copying the SDK or relying on an ambient compiler.
 
 ## Dependency-closure release rule
+
+Release 3.152.0 records state-sync-idb 1.8.4: a value record gains a strict
+`update(merge)` that reads and writes in one readwrite transaction, and an
+opt-in `strictReads`, so the Web's shared pending-edit attachment record is
+merged into across tabs instead of rewritten from a stale or failed read. No
+component or Plugin depends on this package, so every Plugin keeps its pin.
+Like the app shell, it is Web-only: `tools/worker-registry-input.ts` leaves a
+release that changes only it out of the worker input while nothing in the
+registry consumes it, so the worker generation does not change.
 
 Release 3.60.2 records state-sync-idb 1.8.2 for the already-committed source
 whose digest differed from the 1.8.1 record. No Plugin depends on that package;

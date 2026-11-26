@@ -52,7 +52,7 @@ impl Hub {
             }
         };
         if changed {
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
     }
 
@@ -183,8 +183,10 @@ impl Hub {
                         schedule: None,
                         origin: content_origin,
                         initiator: Some(initiator),
+                        explicit: None,
                     },
                 );
+                self.settle_explicit_locked(session_id, s);
             }
         }
         if let Some(cmid) = duplicate {
@@ -212,20 +214,7 @@ impl Hub {
             Some(tx) => match tx.try_send(req) {
                 Ok(()) => true,
                 Err(error) => {
-                    let req = error.into_inner();
-                    tracing::error!(session = %req.session_id, "dispatch queue rejected a prompt");
-                    self.requeue_prompt(
-                        &req.session_id,
-                        req.text,
-                        req.content,
-                        req.cmid,
-                        req.origin,
-                        req.initiator,
-                    );
-                    self.broadcast_error(
-                        Some(req.session_id),
-                        "dispatch queue is full; prompt remains queued".to_owned(),
-                    );
+                    self.retain_rejected_dispatch(error.into_inner());
                     false
                 }
             },

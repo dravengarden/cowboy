@@ -71,9 +71,20 @@ export function mobilePresentationMovingRootSx(
   attr: "data-mobile-drawer-moving" | "data-mobile-product-moving",
 ): Record<string, unknown> {
   const flatten = attr === "data-mobile-product-moving"
-    ? { ...mobileCompositorFlattenSx, ...mobileFrostStripSx }
+    ? {
+      ...mobileCompositorFlattenSx,
+      ...mobileFrostStripSx,
+      "& [data-mobile-review-loading] .MuiCircularProgress-root": {
+        animationPlayState: "paused",
+      },
+    }
     : { ...mobileCompositorFlattenSx };
   return {
+    ...(attr === "data-mobile-product-moving" && {
+      "&[data-mobile-product-settling='true'] [data-mobile-review-loading] .MuiCircularProgress-root": {
+        animationPlayState: "paused",
+      },
+    }),
     [`&[${attr}='true']`]: {
       ...flatten,
       // The rail also translates during the gesture (drawer parallax or

@@ -72,6 +72,8 @@ impl Store {
                 .bind(owner).bind(operation).bind(serde_json::to_string(&receipt)?).execute(&mut *tx).await?;
             sqlx::query("DELETE FROM browser_placements WHERE owner_user_id=$1 AND account_id=$2 AND machine_id=$3")
                 .bind(owner).bind(receipt.account_id.as_str()).bind(&evidence.machine_id).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM browser_pending_navigations WHERE owner_user_id=$1 AND browser_key=$2 AND machine_id=$3")
+                .bind(owner).bind(receipt.account_id.as_str()).bind(&evidence.machine_id).execute(&mut *tx).await?;
             tx.commit().await?;
             evidence.clone()
         }}; }

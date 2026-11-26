@@ -7,6 +7,7 @@ import {
   type IdbOwnerOpts,
   IdbPersistenceError,
   type IdbPersistenceOwner,
+  type ValuePersistence,
 } from "@cowboy/state-sync-idb";
 import { productSyncPrincipal } from "./productSyncIdentity.ts";
 import { productSessionSignal } from "./productSessionEnd.ts";
@@ -29,9 +30,7 @@ export class ProductSyncDatasetChangedError extends Error {
 }
 
 function invalid(): never {
-  throw new Error(
-    "Product dataset unavailable or changed; reload before sending",
-  );
+  throw new Error("Product dataset unavailable or changed; reload before sending");
 }
 
 export function decodeSyncDataset(value: unknown, user: string): SyncDataset {
@@ -43,9 +42,12 @@ export function decodeSyncDataset(value: unknown, user: string): SyncDataset {
     row.schema !== "dravengarden.cowboy.product-sync-dataset/v1" ||
     typeof row.dataset_id !== "string" ||
     !/^dataset-[0-9a-f]{64}$/.test(row.dataset_id) ||
-    !/^[A-Za-z0-9_-]{1,128}$/.test(user) || row.user_id !== user ||
-    row.database_version !== 2 || row.outbox_contract !== "atomic-delta-v1"
-  ) invalid();
+    !/^[A-Za-z0-9_-]{1,128}$/.test(user) ||
+    row.user_id !== user ||
+    row.database_version !== 2 ||
+    row.outbox_contract !== "atomic-delta-v1"
+  )
+    invalid();
   return Object.freeze({
     schema: row.schema,
     dataset_id: row.dataset_id,
@@ -64,10 +66,7 @@ export async function discoverSyncDataset(user: string): Promise<SyncDataset> {
   const reader = response.body?.getReader();
   if (!reader) invalid();
   try {
-    if (
-      !response.ok ||
-      !response.headers.get("content-type")?.includes("application/json")
-    ) {
+    if (!response.ok || !response.headers.get("content-type")?.includes("application/json")) {
       invalid();
     }
     const bytes: number[] = [];
@@ -78,9 +77,7 @@ export async function discoverSyncDataset(user: string): Promise<SyncDataset> {
       bytes.push(...value);
     }
     return decodeSyncDataset(
-      JSON.parse(
-        new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes)),
-      ),
+      JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(new Uint8Array(bytes))),
       user,
     );
   } catch {
@@ -145,14 +142,14 @@ export function localStorageDatasetCache(
 export type ProductSyncScope =
   | { readonly kind: "document"; readonly document: string; readonly state: "entry" }
   | {
-    readonly kind: "service";
-    readonly state: "title" | "order" | "folders" | "workspace-order";
-  }
+      readonly kind: "service";
+      readonly state: "title" | "order" | "folders" | "workspace-order";
+    }
   | {
-    readonly kind: "session";
-    readonly session: string;
-    readonly state: "queue" | "mobile-review";
-  };
+      readonly kind: "session";
+      readonly session: string;
+      readonly state: "queue" | "mobile-review";
+    };
 
 function suffix(scope: ProductSyncScope): string {
   if (scope.kind === "document") {
@@ -161,16 +158,21 @@ function suffix(scope: ProductSyncScope): string {
   }
   if (scope.kind === "service") {
     if (
-      scope.state !== "title" && scope.state !== "order" &&
-      scope.state !== "folders" && scope.state !== "workspace-order"
-    ) invalid();
+      scope.state !== "title" &&
+      scope.state !== "order" &&
+      scope.state !== "folders" &&
+      scope.state !== "workspace-order"
+    )
+      invalid();
     return `service:${scope.state}`;
   }
   if (
-    scope.kind !== "session" || typeof scope.session !== "string" ||
+    scope.kind !== "session" ||
+    typeof scope.session !== "string" ||
     !/^[A-Za-z0-9_-]{1,128}$/.test(scope.session) ||
     (scope.state !== "queue" && scope.state !== "mobile-review")
-  ) invalid();
+  )
+    invalid();
   return `session:${scope.session}:${scope.state}`;
 }
 
@@ -179,36 +181,41 @@ function suffix(scope: ProductSyncScope): string {
  * device can open before the socket answers. */
 export type ProductCacheScope =
   | {
-    readonly kind: "service";
-    // `editor-plugins` is device-local installed editor plugins (code,
-    // settings, data). It shares the dataset fence but survives sign-out.
-    readonly state: "sessions" | "machines" | "drafts" | "editor-plugins";
-  }
+      readonly kind: "service";
+      // `editor-plugins` is device-local installed editor plugins (code,
+      // settings, data). It shares the dataset fence but survives sign-out.
+      readonly state: "sessions" | "machines" | "drafts" | "editor-plugins";
+    }
   | {
-    readonly kind: "session";
-    readonly session: string;
-    // `draft` holds the composer's staged attachments (bytes too large for
-    // the localStorage text mirror); it is device-local, never server-derived,
-    // but shares the dataset fence and the sign-out discard. `edits` holds the
-    // attachments of the session's in-progress Queue/Draft row edits likewise.
-    readonly state: "tail" | "delivery" | "draft" | "edits";
-  };
+      readonly kind: "session";
+      readonly session: string;
+      // `draft` holds the composer's staged attachments (bytes too large for
+      // the localStorage text mirror); it is device-local, never server-derived,
+      // but shares the dataset fence and the sign-out discard. `edits` holds the
+      // attachments of the session's in-progress Queue/Draft row edits likewise.
+      readonly state: "tail" | "delivery" | "draft" | "edits";
+    };
 
 const CACHE_SESSION_STATES = ["tail", "delivery", "draft", "edits"] as const;
 
 function cacheSuffix(scope: ProductCacheScope): string {
   if (scope.kind === "service") {
     if (
-      scope.state !== "sessions" && scope.state !== "machines" &&
-      scope.state !== "drafts" && scope.state !== "editor-plugins"
-    ) invalid();
+      scope.state !== "sessions" &&
+      scope.state !== "machines" &&
+      scope.state !== "drafts" &&
+      scope.state !== "editor-plugins"
+    )
+      invalid();
     return `service:${scope.state}`;
   }
   if (
-    scope.kind !== "session" || typeof scope.session !== "string" ||
+    scope.kind !== "session" ||
+    typeof scope.session !== "string" ||
     !/^[A-Za-z0-9_-]{1,128}$/.test(scope.session) ||
     !CACHE_SESSION_STATES.includes(scope.state)
-  ) invalid();
+  )
+    invalid();
   return `session:${scope.session}:${scope.state}`;
 }
 
@@ -216,6 +223,74 @@ export interface ProductCache<T> {
   load(): Promise<T | null>;
   save(value: T): Promise<void>;
   discard(): Promise<void>;
+  /** Strict read-modify-write in one transaction (`null` deletes): a value
+   * other tabs share is merged into, never overwritten from a stale or failed
+   * read. */
+  update(merge: (stored: T | null) => T | null): Promise<void>;
+}
+
+async function readQueueHasPending(
+  owner: IdbPersistenceOwner,
+  resolvePrefix: () => Promise<string>,
+  assertCurrent: () => void,
+  sessionId: string,
+): Promise<boolean> {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) return false;
+  try {
+    const key = `${await resolvePrefix()}session:${sessionId}:queue`;
+    assertCurrent();
+    const snapshot = await owner.peek<{ pending?: unknown[] }>(key);
+    assertCurrent();
+    if (snapshot === null) return false;
+    return !Array.isArray(snapshot.pending) || snapshot.pending.length > 0;
+  } catch {
+    return true;
+  }
+}
+
+async function retireDeliveryWhenQueueSettled(
+  owner: IdbPersistenceOwner,
+  resolvePrefix: () => Promise<string>,
+  assertCurrent: () => void,
+  sessionId: string,
+): Promise<boolean> {
+  if (!/^[A-Za-z0-9_-]{1,128}$/.test(sessionId)) return false;
+  try {
+    const base = `${await resolvePrefix()}session:${sessionId}:`;
+    assertCurrent();
+    const discarded = await owner.discardIf<{ pending?: unknown[] }>(
+      `${base}delivery`,
+      `${base}queue`,
+      (snapshot) =>
+        snapshot === null || (Array.isArray(snapshot.pending) && snapshot.pending.length === 0),
+    );
+    assertCurrent();
+    return discarded;
+  } catch {
+    return false;
+  }
+}
+
+async function listScopedIds(
+  owner: IdbPersistenceOwner,
+  resolvePrefix: () => Promise<string>,
+  assertAdmission: () => void,
+  kind: string,
+  suffixText: string,
+  limit?: number,
+): Promise<string[]> {
+  const start = `${await resolvePrefix()}${kind}:`;
+  assertAdmission();
+  const keys = await owner.listKeys({ strict: true, prefix: start });
+  assertAdmission();
+  const matched = keys
+    .filter((key) => key.startsWith(start) && key.endsWith(suffixText))
+    .map((key) => key.slice(start.length, -suffixText.length))
+    .filter((id) => /^[A-Za-z0-9_-]{1,128}$/.test(id));
+  if (limit !== undefined && matched.length > limit) {
+    throw new IdbPersistenceError("key_limit_exceeded");
+  }
+  return matched;
 }
 
 export function createProductSyncDatabase(
@@ -265,9 +340,7 @@ export function createProductSyncDatabase(
     if (loading) return loading;
     const principal = currentPrincipal();
     if (!principal) {
-      return Promise.reject(
-        new Error("Product dataset requires an authenticated principal"),
-      );
+      return Promise.reject(new Error("Product dataset requires an authenticated principal"));
     }
     // The identity this device adopted last time opens local data at once.
     // `connection()` still verifies it against the Service before any socket
@@ -279,22 +352,23 @@ export function createProductSyncDatabase(
     }
     // Only discovery before ownership may be retried. Never change an adopted
     // dataset to follow a new cookie, Service, user or schema version.
-    loading = discover(principal).then((value) => {
-      assertAdmission();
-      if (currentPrincipal() !== principal) {
-        seal();
-        invalid();
-      }
-      dataset = decodeSyncDataset(value, principal);
-      datasetCache?.write(dataset);
-      return dataset;
-    }).finally(() => {
-      loading = undefined;
-    });
+    loading = discover(principal)
+      .then((value) => {
+        assertAdmission();
+        if (currentPrincipal() !== principal) {
+          seal();
+          invalid();
+        }
+        dataset = decodeSyncDataset(value, principal);
+        datasetCache?.write(dataset);
+        return dataset;
+      })
+      .finally(() => {
+        loading = undefined;
+      });
     return loading;
   };
-  const prefix = (identity: SyncDataset): string =>
-    `cowboy:dataset:${identity.dataset_id}:`;
+  const prefix = (identity: SyncDataset): string => `cowboy:dataset:${identity.dataset_id}:`;
   return {
     /** Invalidation only, not a serialized grant or permission to open buffers.
      * Borrowers must await ready() before acquiring the bound Service context.
@@ -307,15 +381,16 @@ export function createProductSyncDatabase(
      */
     stopAdmission: endAdmission,
     ready,
+    rememberedDatasetId: (): string | undefined => {
+      const principal = currentPrincipal();
+      return dataset?.dataset_id ?? (principal ? datasetCache?.read(principal)?.dataset_id : undefined);
+    },
     async connection(): Promise<SyncDataset> {
       const identity = await ready();
       assertAdmission();
       // A new Controller at the same origin is not the original Service. A
       // reconnect may verify the adopted dataset but may never replace it.
-      const fresh = decodeSyncDataset(
-        await discover(identity.user_id),
-        identity.user_id,
-      );
+      const fresh = decodeSyncDataset(await discover(identity.user_id), identity.user_id);
       assertAdmission();
       if (fresh.dataset_id !== identity.dataset_id) {
         // The reload that follows must discover the replacement, not adopt
@@ -336,12 +411,10 @@ export function createProductSyncDatabase(
       }
       borrowed.add(localKey);
       let local: LocalPersistence<ClientSnapshot<T>> | undefined;
-      const acquire = async (): Promise<
-        LocalPersistence<ClientSnapshot<T>>
-      > => {
+      const acquire = async (): Promise<LocalPersistence<ClientSnapshot<T>>> => {
         // Already-borrowed local writers may drain their original dataset
         // after authority ends. Do not rediscover or acquire a new namespace.
-        const identity = dataset ?? await ready();
+        const identity = dataset ?? (await ready());
         assertCurrent();
         local ??= owner.outbox<T>(`${prefix(identity)}${localKey}`);
         return local;
@@ -368,41 +441,32 @@ export function createProductSyncDatabase(
         },
       };
     },
-    async draftDocumentIds(): Promise<string[]> {
-      const identity = await ready();
-      assertAdmission();
-      const keys = await owner.listKeys({ strict: true, limit: 20000 });
-      assertAdmission();
-      const start = `${prefix(identity)}document:`;
-      return keys.filter((key) => key.startsWith(start) && key.endsWith(":entry"))
-        .map((key) => key.slice(start.length, -6))
-        .filter((id) => /^[A-Za-z0-9_-]{1,128}$/.test(id));
-    },
-    async queueSessions(): Promise<string[]> {
-      const identity = await ready();
-      assertAdmission();
-      const keys = await owner.listKeys({ strict: true, limit: 4096 });
-      assertAdmission();
-      const start = `${prefix(identity)}session:`;
-      return keys.filter((key) =>
-        key.startsWith(start) && key.endsWith(":queue")
-      )
-        .map((key) => key.slice(start.length, -6))
-        .filter((id) => /^[A-Za-z0-9_-]{1,128}$/.test(id));
-    },
+    draftDocumentIds: (): Promise<string[]> =>
+      listScopedIds(owner, async () => prefix(await ready()), assertAdmission, "document", ":entry", 20000),
+    queueSessions: (): Promise<string[]> =>
+      listScopedIds(owner, async () => prefix(await ready()), assertAdmission, "session", ":queue", 4096),
+    queueHasPending: (sessionId: string): Promise<boolean> =>
+      readQueueHasPending(owner, async () => prefix(dataset ?? (await ready())), assertCurrent, sessionId),
+    retireDeliveryIfSettled: (sessionId: string): Promise<boolean> =>
+      retireDeliveryWhenQueueSettled(owner, async () => prefix(dataset ?? (await ready())), assertCurrent, sessionId),
     /** Borrow one paint cache. Like an outbox, an already-borrowed cache may
      * finish its original dataset's writes after admission ends; it never
      * rediscovers or adopts a new dataset. */
-    cache<T>(scope: ProductCacheScope): ProductCache<T> {
+    /** `strict`: failed reads and writes reject instead of reading as absent
+     * or passing silently, for a record whose absence the caller acts on. */
+    cache<T>(scope: ProductCacheScope, opts: { strict?: boolean } = {}): ProductCache<T> {
       assertAdmission();
       const localKey = cacheSuffix(scope);
-      let local: LocalPersistence<T> | undefined;
+      let local: ValuePersistence<T> | undefined;
       let key: string | undefined;
-      const acquire = async (): Promise<LocalPersistence<T>> => {
-        const identity = dataset ?? await ready();
+      const acquire = async (): Promise<ValuePersistence<T>> => {
+        const identity = dataset ?? (await ready());
         assertCurrent();
         key ??= `${prefix(identity)}${localKey}`;
-        local ??= owner.persistence<T>(key);
+        local ??= owner.persistence<T>(
+          key,
+          opts.strict === true ? { strictReads: true, strictWrites: true } : {},
+        );
         return local;
       };
       return {
@@ -422,50 +486,43 @@ export function createProductSyncDatabase(
           assertCurrent();
           await owner.discard(key!);
         },
+        update: async (merge) => {
+          const record = await acquire();
+          assertCurrent();
+          await record.update(merge);
+          assertCurrent();
+        },
       };
     },
     /** Session ids that own a cache of `state` in this dataset. */
-    async cacheSessions(
-      state: (typeof CACHE_SESSION_STATES)[number],
-    ): Promise<string[]> {
-      const identity = dataset ?? await ready();
-      assertCurrent();
-      const keys = await owner.listKeys({ strict: true, limit: 4096 });
-      assertCurrent();
-      const start = `${prefix(identity)}session:`;
-      const end = `:${state}`;
-      return keys.filter((key) => key.startsWith(start) && key.endsWith(end))
-        .map((key) => key.slice(start.length, -end.length))
-        .filter((id) => /^[A-Za-z0-9_-]{1,128}$/.test(id));
-    },
+    cacheSessions: (state: (typeof CACHE_SESSION_STATES)[number]): Promise<string[]> =>
+      listScopedIds(owner, async () => prefix(dataset ?? (await ready())), assertCurrent, "session", `:${state}`),
     /** Delete every paint cache of this dataset. Outboxes are untouched: a
      * sign-out ends what this device shows, not what it still owes. */
     async discardCaches(): Promise<void> {
-      const identity = dataset ?? await ready();
-      assertCurrent();
-      const keys = await owner.listKeys({ strict: true, limit: 4096 });
+      const identity = dataset ?? (await ready());
       assertCurrent();
       const start = prefix(identity);
-      const owned = keys.filter((key) =>
-        key.startsWith(start) && (
-          key === `${start}service:sessions` ||
-          key === `${start}service:machines` ||
-          key === `${start}service:drafts` ||
-          CACHE_SESSION_STATES.some((state) =>
-            key.startsWith(`${start}session:`) && key.endsWith(`:${state}`)
-          )
-        )
+      const keys = await owner.listKeys({ strict: true, prefix: start });
+      assertCurrent();
+      const owned = keys.filter(
+        (key) =>
+          key.startsWith(start) &&
+          (key === `${start}service:sessions` ||
+            key === `${start}service:machines` ||
+            key === `${start}service:drafts` ||
+            CACHE_SESSION_STATES.some(
+              (state) => key.startsWith(`${start}session:`) && key.endsWith(`:${state}`),
+            )),
       );
-      const outcomes = await Promise.allSettled(
-        owned.map((key) => owner.discard(key)),
-      );
+      const outcomes = await Promise.allSettled(owned.map((key) => owner.discard(key)));
       const failed = outcomes.find((outcome) => outcome.status === "rejected");
       if (failed?.status === "rejected") throw failed.reason;
     },
     async legacyRecords(): Promise<string[]> {
       await ready();
       assertAdmission();
-      const keys = await owner.listKeys({ strict: true, limit: 4096 });
+      const keys = await owner.listKeys({ strict: true, prefix: "cowboy:sync:", limit: 4096 });
       assertAdmission();
       return keys.filter((key) => key.startsWith("cowboy:sync:"));
     },
@@ -487,7 +544,8 @@ export function createProductSyncDatabase(
           return;
         }
         if (
-          item === null || typeof item === "boolean" ||
+          item === null ||
+          typeof item === "boolean" ||
           (typeof item === "number" && Number.isFinite(item))
         ) {
           budget -= 32;
@@ -497,10 +555,7 @@ export function createProductSyncDatabase(
           for (const child of item) visit(child, depth + 1);
           return;
         }
-        if (
-          item && typeof item === "object" &&
-          Object.getPrototypeOf(item) === Object.prototype
-        ) {
+        if (item && typeof item === "object" && Object.getPrototypeOf(item) === Object.prototype) {
           for (const [name, child] of Object.entries(item)) {
             budget -= name.length * 6 + 4;
             visit(child, depth + 1);
@@ -511,14 +566,12 @@ export function createProductSyncDatabase(
       };
       visit(value, 0);
       if (budget < 0) invalid();
-      const serialized = JSON.stringify(
-        {
-          schema: "dravengarden.cowboy.unowned-outbox-export/v1",
-          replay_authorized: false,
-          key,
-          value,
-        },
-      );
+      const serialized = JSON.stringify({
+        schema: "dravengarden.cowboy.unowned-outbox-export/v1",
+        replay_authorized: false,
+        key,
+        value,
+      });
       if (new TextEncoder().encode(serialized).byteLength > 8 * 1024 * 1024) {
         invalid();
       }

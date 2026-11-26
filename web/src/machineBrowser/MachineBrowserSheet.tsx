@@ -48,15 +48,16 @@ import {
   type BrowserLink,
   activeBrowserLink,
   linkEntry,
+  linkRequiresControllerUpgrade,
   linkTarget,
   resumeBlockedByIdentity,
 } from "./linkNavigation";
 import {
   type SharedBrowser,
-  browserIdentityKey,
   type EntryLatch,
   type IdentityBinding,
   identityRequiredFor,
+  inventoryBrowserIdentity,
   newEntryLatch,
   panelShared,
   reconcileBinding,
@@ -94,12 +95,13 @@ export interface MachineBrowserSheetProps {
 /** Commands over the controller; the screen mode is chosen from the frame
  * and the device orientation at the moment of the request. `pinned` keeps
  * every open on that Machine. */
-function browserCommands(
+export function browserCommands(
   browser: MachineBrowserController,
   areaRef: RefObject<HTMLDivElement | null>,
   touch: boolean,
   link: BrowserLink | undefined,
   entry: EntryLatch,
+  linkUpgradeRequired = false,
 ): BrowserCommands {
   const viewportNow = (): BrowserViewport => {
     const rect = areaRef.current?.getBoundingClientRect();
@@ -127,7 +129,9 @@ function browserCommands(
     hibernate: browser.hibernate,
     snapshot: browser.snapshot,
     reset: browser.reset,
-    restart: (target) => browser.restart(viewportNow(), target),
+    restart: (target) => {
+      if (!linkUpgradeRequired) browser.restart(viewportNow(), target);
+    },
     refresh: browser.refresh,
     dismiss: () => dispatch({ type: "dismiss" }),
     notice: (message) => dispatch({ type: "notice", message }),
@@ -137,16 +141,17 @@ function browserCommands(
 /** Open or attach once when asked to, and show a link once in the running
  * browser on its Machine only. */
 function useAutoEntry(
-  props: MachineBrowserSheetProps & { entry: EntryLatch },
+  props: MachineBrowserSheetProps & { entry: EntryLatch; boundIdentity: string | undefined },
   browser: MachineBrowserController,
   commands: BrowserCommands,
 ): void {
-  const { open, link, autoOpen = false } = props;
+  const { open, link, autoOpen = false, boundIdentity } = props;
   const { model } = browser;
   const state = model.read?.state ?? null;
   const commandsRef = useRef(commands);
   commandsRef.current = commands;
   const latch = props.entry;
+  const expectedIdentity = link?.expectedBrowser ?? boundIdentity;
   const readyToAutoOpen =
     (autoOpen || link !== undefined) &&
     open &&
@@ -157,18 +162,18 @@ function useAutoEntry(
   useEffect(() => {
     if (!readyToAutoOpen) return;
     const entry = link
-      ? linkEntry(model.read, link.machine, link.expectedBrowser)
+      ? linkEntry(model.read, link.machine, expectedIdentity)
       : autoEntry(state?.state);
     if (entry === undefined || !takeLatch(latch, "autoOpened")) return;
     if (entry === "attach") commandsRef.current.attach(false);
     else commandsRef.current.open();
-  }, [readyToAutoOpen, latch, link, model.read, state]);
+  }, [readyToAutoOpen, expectedIdentity, latch, link, model.read, state]);
   const shownLink =
-    link && !model.busy ? linkTarget(model, link.machine, link.expectedBrowser) : undefined;
+    link && !model.busy ? linkTarget(model, link.machine, expectedIdentity) : undefined;
   useEffect(() => {
     if (!link || !shownLink || !takeLatch(latch, "linked")) return;
-    browser.navigate(link.url, shownLink.target, shownLink.attachmentId);
-  }, [browser, latch, link, shownLink]);
+    browser.navigate(link.url, shownLink.target, shownLink.attachmentId, expectedIdentity);
+  }, [browser, expectedIdentity, latch, link, shownLink]);
 }
 
 function usePageVisible(): boolean {
@@ -190,11 +195,12 @@ function useResume(
   browser: MachineBrowserController,
   commands: BrowserCommands,
   boundIdentity: string | undefined,
+  linkUpgradeRequired: boolean,
 ): void {
   const { model, dispatch } = browser;
   const visible = usePageVisible();
   const identity = model.observedIdentity ?? model.read?.browser_identity;
-  const blocked = resumeBlockedByIdentity(boundIdentity, identity);
+  const blocked = resumeBlockedByIdentity(boundIdentity, identity, linkUpgradeRequired);
   const step = open && visible && !blocked ? resumeStep(model, Date.now()) : undefined;
   const machine = model.resume?.target.machine_id;
   // Why the browser is not reopened: the stop's own reason.
@@ -258,7 +264,7 @@ function useCapWarning(open: boolean, browser: MachineBrowserController): void {
   }, [stopsAt, dispatch]);
 }
 
-function browserMenuItems({
+export function browserMenuItems({
   model,
   chrome,
   commands,
@@ -354,28 +360,43 @@ function useBrowserChrome(account: string, model: BrowserModel) {
  * Sharing metadata comes from one source for every opener. */
 export function MachineBrowserSheet(props: MachineBrowserSheetProps): React.JSX.Element {
   const { shared, snapshot } = useSharedBrowser(props.account.id);
+  return <MachineBrowserSheetView {...props} shared={shared} snapshot={snapshot} />;
+}
+
+/** Shared-inventory wiring of `MachineBrowserSheet`, exported for direct
+ * legacy-inventory binding tests without mocking the shared subscription store. */
+export function MachineBrowserSheetView(
+  props: MachineBrowserSheetProps & {
+    shared: SharedBrowser | undefined;
+    snapshot: SubscriptionSnapshot | undefined;
+    Panel?: React.ComponentType<MachineBrowserPanelProps> | undefined;
+  },
+): React.JSX.Element {
+  const { shared, snapshot, Panel = MachineBrowserPanel, ...sheetProps } = props;
+  // Only bind from an inventory that advertises sharing (`browser_shares`
+  // present); a pre-share Controller must not have `"own"` synthesized locally.
+  const inventoryIdentity = inventoryBrowserIdentity(snapshot, shared);
   // One binding for the inventory's and the reads' view of the browser
   // identity: the first one binds, an equal one (from either source) keeps
   // the panel, another one re-binds it.
   const [binding, setBinding] = useState<IdentityBinding>(() => ({
-    identity: props.link?.expectedBrowser ?? (snapshot ? browserIdentityKey(shared) : undefined),
+    identity: sheetProps.link?.expectedBrowser ?? inventoryIdentity,
     epoch: 0,
   }));
   const observe = useCallback(
     (identity: string | undefined) => setBinding((old) => reconcileBinding(old, identity)),
     [],
   );
-  const inventoryIdentity = snapshot ? browserIdentityKey(shared) : undefined;
   useEffect(() => observe(inventoryIdentity), [inventoryIdentity, observe]);
   // The link-opening action is consumed once per sheet, above the keyed
   // panel: a re-bound panel never opens or navigates the link again, and an
   // identity-bound link is cancelled when the browser identity changes.
   const [entry] = useState(newEntryLatch);
-  const activeLink = activeBrowserLink(props.link, binding);
+  const activeLink = activeBrowserLink(sheetProps.link, binding);
   return (
-    <MachineBrowserPanel
+    <Panel
       key={binding.epoch}
-      {...props}
+      {...sheetProps}
       link={activeLink}
       boundIdentity={binding.identity}
       entry={entry}
@@ -419,7 +440,7 @@ function usePanelSharing(
   return { shared, confirm, chrome };
 }
 
-interface MachineBrowserPanelProps extends MachineBrowserSheetProps {
+export interface MachineBrowserPanelProps extends MachineBrowserSheetProps {
   shared: SharedBrowser | undefined;
   snapshot: SubscriptionSnapshot | undefined;
   onIdentity: (identity: string | undefined) => void;
@@ -448,9 +469,12 @@ function MachineBrowserPanel(props: MachineBrowserPanelProps): React.JSX.Element
   const machineLabel = machineId
     ? machines.find((machine) => machine.id === machineId)?.display_name || machineId
     : "no Machine yet";
-  const commands = browserCommands(browser, areaRef, touch, link, props.entry);
+  const linkUpgradeRequired =
+    link !== undefined &&
+    linkRequiresControllerUpgrade(model.read, link.expectedBrowser ?? props.boundIdentity);
+  const commands = browserCommands(browser, areaRef, touch, link, props.entry, linkUpgradeRequired);
   useAutoEntry(props, browser, commands);
-  useResume(open, browser, commands, props.boundIdentity);
+  useResume(open, browser, commands, props.boundIdentity, linkUpgradeRequired);
   useCapWarning(open, browser);
   const ui = useBrowserChrome(account.id, model);
   const paste = useDevicePaste(ui.controls);
@@ -462,7 +486,8 @@ function MachineBrowserPanel(props: MachineBrowserPanelProps): React.JSX.Element
   }, [open, dispatch]);
   // The Service's read names the browser a reset deletes; before it
   // arrives the inventory's view stands in.
-  const { shared, confirm, chrome } = usePanelSharing(props, model, commands, ui.chrome);
+  const { shared, confirm, chrome: sharedChrome } = usePanelSharing(props, model, commands, ui.chrome);
+  const chrome = linkUpgradeRequired ? { ...sharedChrome, restart: false } : sharedChrome;
   const uiCommands = commands;
   const status = model.loaded ? browserStateLabel(state?.state) : "Loading";
   const menu = (
@@ -489,8 +514,9 @@ function MachineBrowserPanel(props: MachineBrowserPanelProps): React.JSX.Element
     machineLabel,
     touch,
     link: link !== undefined,
+    linkUpgradeRequired,
     pinned,
-    retry: retryOffered(model, pinned),
+    retry: !linkUpgradeRequired && retryOffered(model, pinned),
     commands: uiCommands,
     enabling,
     onEnableBrowser: props.onEnableBrowser,

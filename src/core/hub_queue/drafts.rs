@@ -182,6 +182,7 @@ impl Hub {
                     schedule: None,
                     origin,
                     initiator: None,
+                    explicit: None,
                 });
             }
         }
@@ -272,13 +273,14 @@ impl Hub {
                         schedule,
                         origin: Some(author),
                         initiator: None,
+                        explicit: None,
                     });
                     did
                 }
             }
         };
         self.emit_pending(session_id);
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
         self.arm_draft_timer(session_id, &draft_id, fire_at_ms);
     }
 
@@ -306,7 +308,7 @@ impl Hub {
         };
         if cleared {
             self.emit_pending(session_id);
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
             self.cancel_draft_timer(session_id, id);
         }
     }
@@ -376,7 +378,7 @@ impl Hub {
         // The draft left the drafts list → refresh the pending panel and the
         // session list (its next_schedule_ms just changed).
         self.emit_pending(session_id);
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
 
         let front = m
             .schedule
@@ -436,9 +438,11 @@ impl Hub {
                     schedule: None,
                     origin: m.origin,
                     initiator: Some(trigger),
+                    explicit: None,
                 };
                 if front {
                     s.queue.insert(0, msg);
+                    self.settle_explicit_locked(session_id, s);
                 } else {
                     s.queue.push(msg);
                 }
@@ -498,7 +502,7 @@ impl Hub {
         self.emit_pending(session_id);
         if unscheduled {
             self.cancel_draft_timer(session_id, id);
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
         found
     }
@@ -578,7 +582,7 @@ impl Hub {
         self.emit_pending(session_id);
         if unscheduled {
             self.cancel_draft_timer(session_id, id);
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
         removed
     }
@@ -643,7 +647,8 @@ impl Hub {
         if let Some(fire_at_ms) = scheduled {
             self.cancel_draft_timer(from, id);
             self.arm_draft_timer(to, id, fire_at_ms);
-            self.broadcast_sessions();
+            self.broadcast_session(from);
+            self.broadcast_session(to);
         }
     }
 
@@ -693,7 +698,7 @@ impl Hub {
             self.cancel_draft_timer(session_id, did);
         }
         if !scheduled_ids.is_empty() {
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
     }
 
@@ -808,6 +813,7 @@ impl Hub {
                 schedule: None,
                 origin: original.origin.clone(),
                 initiator: Some(trigger),
+                explicit: None,
             };
             if !self.has_store_writer() {
                 s.drafts.remove(pos);
@@ -819,6 +825,7 @@ impl Hub {
                 let new_qid = new_row.id.clone();
                 if front {
                     s.queue.insert(0, new_row);
+                    self.settle_explicit_locked(&sid, s);
                 } else {
                     s.queue.push(new_row);
                 }
@@ -832,6 +839,12 @@ impl Hub {
                 let mut preview_queue = s.queue.clone();
                 if front {
                     preview_queue.insert(0, new_row.clone());
+                    // The displaced command ends now, its receipt ahead of the
+                    // preview write: a crash before the commit cannot leave it
+                    // replayable against a row persisted without its intent.
+                    super::explicit_intent::strip_displaced_intents(&mut preview_queue);
+                    s.settle_head_command();
+                    self.write_receipts_locked(&sid, s);
                 } else {
                     preview_queue.push(new_row.clone());
                 }
@@ -846,6 +859,11 @@ impl Hub {
                     s.pending_retired_dispatches.clone(),
                     false,
                 ) else {
+                    if front {
+                        // The head stays first: its command did not end.
+                        s.unsettle_head_command();
+                        self.write_receipts_locked(&sid, s);
+                    }
                     return Err("Failed to persist recovery draft activation; draft retained");
                 };
                 claims
@@ -868,7 +886,7 @@ impl Hub {
         self.emit_pending(&sid);
         if sync_had_scheduled {
             self.cancel_draft_timer(&sid, &draft_id);
-            self.broadcast_sessions();
+            self.broadcast_session(&sid);
         }
         if let Some(new_qid) = sync_row {
             self.drain_specific_head(&sid, &new_qid, true, Some(caller));
@@ -903,6 +921,7 @@ impl Hub {
                 }
                 if commit.front {
                     s.queue.insert(0, commit.new_row.clone());
+                    self.settle_explicit_locked(&sid, s);
                 } else {
                     s.queue.push(commit.new_row.clone());
                 }
@@ -919,7 +938,7 @@ impl Hub {
             self.broadcast_pending_snapshot(&sid, &q, &d);
             if commit.had_scheduled {
                 self.cancel_draft_timer(&sid, &draft_id);
-                self.broadcast_sessions();
+                self.broadcast_session(&sid);
             }
             self.drain_specific_head(&sid, &new_qid, true, Some(caller));
         }
@@ -937,6 +956,12 @@ impl Hub {
         let mut claims = self.inner.notice_claims.lock();
         if let Some(s) = sessions.get_mut(&sid) {
             commit.reservation.release_in_session(s);
+            if commit.front {
+                // The held head stays first: its command did not end. Written
+                // ahead of the snapshot that restores the queue.
+                s.unsettle_head_command();
+                self.write_receipts_locked(&sid, s);
+            }
             self.finish_in_flight_pending_commit(&sid, &s.queue, &s.drafts, &mut claims);
         } else {
             claims.in_flight_pending_commits.remove(&sid);
@@ -1042,7 +1067,7 @@ impl Hub {
         self.emit_pending(session_id);
         if had_scheduled {
             self.cancel_draft_timer(session_id, id);
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
         if let Some(req) = dispatch {
             self.send_dispatch(req);
@@ -1156,9 +1181,11 @@ impl Hub {
                 schedule: None,
                 origin: m.origin,
                 initiator: Some(trigger),
+                explicit: None,
             };
             if front {
                 s.queue.insert(0, row);
+                self.settle_explicit_locked(session_id, s);
             } else {
                 s.queue.push(row);
             }
@@ -1230,7 +1257,7 @@ impl Hub {
             );
         }
         if had_scheduled {
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
     }
 }

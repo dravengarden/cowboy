@@ -297,6 +297,7 @@
           ./packaging/cowboy-machine.service
           ./src/session_deletion_admission.rs
           ./src/session_deletion_admission
+          ./src/machine_auth.rs
           ./src/machine_lanes.rs
           ./src/machine_transport.rs
           ./src/machine_transport

@@ -291,7 +291,7 @@ impl Hub {
             }
             s.meta.forked_from = source;
         }
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
     }
 
     /// Project persisted fork marks after settings and sessions load.

@@ -151,7 +151,7 @@ impl Hub {
                 });
             }
         }
-        self.broadcast_sessions();
+        self.broadcast_session(session_id);
     }
 
     /// A committed boundary stays known when the hot tail rolls forward.
@@ -269,7 +269,7 @@ impl Hub {
             }
         };
         if changed {
-            self.broadcast_sessions();
+            self.broadcast_session(session_id);
         }
     }
 

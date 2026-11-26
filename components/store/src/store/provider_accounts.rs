@@ -6,6 +6,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 pub mod browser_families;
+pub mod browser_pending_navigations;
 pub mod browser_placements;
 pub mod browser_shares;
 pub mod grants;
@@ -537,7 +538,10 @@ impl Store {
                 let browsers: Vec<(String, String)> = sqlx::query_as("SELECT machine_id,instance_id FROM browser_placements WHERE owner_user_id=$1 AND account_id=$2 ORDER BY machine_id")
                     .bind(owner).bind(account_id.as_str()).fetch_all(&mut *tx).await?;
                 let portable = registry.accounts.iter().any(|account| account.id == account_id && account.portable_credentials);
-                Some(revocation::Plan::capture(&account_id, logins, grants, sessions, browsers)?.with_portable(portable))
+                Some(
+                    revocation::Plan::capture(&account_id, logins, grants, sessions, browsers)?
+                        .with_portable(portable),
+                )
             } else { None };
             if matches!(input.change, Change::BeginRevocation { .. }) {
                 // Same transaction and owner lock as the admission fence. This
@@ -549,9 +553,13 @@ impl Store {
                 // still require vault/replica revocation, never cancellation.
                 sqlx::query($cancel_grants).bind(owner).bind(account_id.as_str())
                     .execute(&mut *tx).await?;
-                // The account leaves any shared browser; the share's profile
-                // stays with its other members. The membership revision
-                // moves, so a reset captured before is refused.
+                // Deliberate non-blocking exception to the pending-navigation
+                // fence: emergency revocation always removes the member row
+                // immediately while preserving its family binding until a
+                // confirmed reset, and `browser_pending_navigations` continues
+                // fencing share edits, deletions, and resets until settlement.
+                // The share's profile stays with its other members, and moving
+                // the membership revision refuses any stale reset.
                 sqlx::query("UPDATE provider_browser_shares SET revision=revision+1 WHERE owner_user_id=$1 AND share_id IN (SELECT share_id FROM provider_browser_share_members WHERE owner_user_id=$1 AND member=$2)")
                     .bind(owner).bind(browser_shares::Member::account(account_id.clone()).encode()).execute(&mut *tx).await?;
                 sqlx::query("DELETE FROM provider_browser_share_members WHERE owner_user_id=$1 AND member=$2")

@@ -11,6 +11,14 @@ import { BrowserFrame, type BrowserFrameProps } from "./MachineBrowserFrame";
 import { MobileBrowserToolbar } from "./MachineBrowserToolbar";
 import { sharedHibernateNote, sharedIdentityLabel } from "./shareRules";
 import { AccountBrowserEntry } from "./AccountBrowserEntry";
+import {
+  browserCommands,
+  browserMenuItems,
+  type MachineBrowserPanelProps,
+  MachineBrowserSheetView,
+} from "./MachineBrowserSheet";
+import { newEntryLatch } from "./shareRules";
+import { linkEntry, linkRequiresControllerUpgrade, linkTarget } from "./linkNavigation";
 import { restartOn } from "./useMachineBrowser";
 
 const LYNX = "aaaaaaaa-bbbb-8ccc-8ddd-eeeeeeeeeeee";
@@ -279,4 +287,163 @@ test("groups are offered unused animal names and cards name their group and peer
     "Group Otter · with B",
   );
   assertEquals(sharedCardLabel({ share_id: "s", revision: 1, label: "Otter", members: ["A"] }), "Group Otter");
+});
+
+test("linkUpgradeRequired suppresses viewer mount and primary actions and shows upgrade notice", () => {
+  const runningWithViewer = model("attached", true);
+  const upgraded = render(
+    React.createElement(BrowserFrame, {
+      areaRef: { current: null },
+      browser: { model: runningWithViewer, dispatch: () => {}, refresh: () => {} },
+      account: { id: PIKA, label: "Pika" },
+      machineLabel: "OVH Matrix",
+      touch: false,
+      link: true,
+      linkUpgradeRequired: true,
+      pinned: false,
+      retry: false,
+      commands: { open: () => {} },
+      enabling: false,
+      onEnableBrowser: undefined,
+      onConfirm: () => {},
+      onControls: () => {},
+      onKeyboard: () => {},
+    } as unknown as BrowserFrameProps),
+  );
+  assertEquals(upgraded.includes("Update the Cowboy Controller"), true);
+  assertEquals(upgraded.includes("Loading the viewer"), false);
+  assertEquals(upgraded.includes("data-machine-browser-empty"), true);
+  assertEquals(upgraded.includes("Open browser"), false);
+});
+
+test("MachineBrowserSheet with a loaded pre-share inventory does not block links", () => {
+  const legacySnapshot: SubscriptionSnapshot = {
+    dataset: { dataset_id: "d", user_id: "owner" },
+    registry: {
+      revision: 1,
+      defaults: {},
+      accounts: [
+        { id: PIKA, provider_id: "grok", label: "Fox", enabled: true, browser_enabled: true },
+      ],
+    },
+    session_admission: "enabled",
+    machine_browser: "enabled",
+  };
+  let captured: MachineBrowserPanelProps | undefined;
+  const CapturePanel = (props: MachineBrowserPanelProps): React.JSX.Element => {
+    captured = props;
+    return React.createElement("div", { "data-bound": props.boundIdentity ?? "none" });
+  };
+  render(
+    React.createElement(MachineBrowserSheetView, {
+      open: true,
+      onClose: () => {},
+      account: { id: PIKA, label: "Fox", browserEnabled: true },
+      owner: "owner",
+      dataset: "d",
+      link: { url: "https://grok.com/?_s=usage" },
+      shared: undefined,
+      snapshot: legacySnapshot,
+      Panel: CapturePanel,
+    }),
+  );
+  // Pre-share inventory (`browser_shares === undefined`) leaves the sheet
+  // unbound (`undefined`) instead of synthesizing `"own"`.
+  assertEquals(captured?.boundIdentity, undefined);
+  assertEquals(captured?.link?.url, "https://grok.com/?_s=usage");
+  const preShareRead = {
+    machine_id: "ovh",
+    state: state("attached"),
+    placements: [],
+    admission: null,
+  };
+  const legacyExpected = captured?.link?.expectedBrowser ?? captured?.boundIdentity;
+  assertEquals(linkRequiresControllerUpgrade(preShareRead, legacyExpected), false);
+  assertEquals(linkEntry({ ...preShareRead, state: state("hibernated") }, undefined, legacyExpected), "open");
+  assertEquals(linkEntry({ ...preShareRead, state: state("detached") }, undefined, legacyExpected), "attach");
+  const preShareModel: BrowserModel = {
+    ...INITIAL_BROWSER_MODEL,
+    loaded: true,
+    read: { ...preShareRead, state: { ...state("attached"), attachment_id: "att-1" } },
+    viewer: {
+      takeover: false,
+      generation: 1,
+      attachmentId: "att-1",
+      target: { machine_id: "ovh", instance: state("attached").instance },
+    },
+  };
+  assertEquals(linkTarget(preShareModel, undefined, legacyExpected)?.attachmentId, "att-1");
+
+  // Contrast: a share-capable inventory (`browser_shares` present) DOES seed `"own"`,
+  // so an unpatched share-capable Controller without `navigate_identity_fenced` is gated.
+  captured = undefined;
+  render(
+    React.createElement(MachineBrowserSheetView, {
+      open: true,
+      onClose: () => {},
+      account: { id: PIKA, label: "Fox", browserEnabled: true },
+      owner: "owner",
+      dataset: "d",
+      link: { url: "https://grok.com/?_s=usage" },
+      shared: undefined,
+      snapshot: { ...legacySnapshot, browser_shares: [] },
+      Panel: CapturePanel,
+    }),
+  );
+  assertEquals(captured?.boundIdentity, "own");
+  const unpatchedShareRead = { ...preShareRead, browser_identity: "own" };
+  assertEquals(linkRequiresControllerUpgrade(unpatchedShareRead, captured?.boundIdentity), true);
+  assertEquals(linkEntry(unpatchedShareRead, undefined, captured?.boundIdentity), undefined);
+});
+
+test("linkUpgradeRequired hides the Restart menu item and suppresses commands.restart", () => {
+  const m = model("attached", true);
+  const chrome = {
+    navigation: true,
+    keyboard: false,
+    paste: false,
+    hibernate: true,
+    snapshot: true,
+    restart: true,
+    detach: true,
+    reset: true,
+    refresh: true,
+  };
+  let restarted = 0;
+  const cmds = browserCommands(
+    {
+      model: m,
+      dispatch: () => {},
+      open: () => {},
+      hibernate: () => {},
+      snapshot: () => {},
+      reset: () => {},
+      restart: () => {
+        restarted += 1;
+      },
+      navigate: () => {},
+      refresh: () => {},
+    },
+    { current: null },
+    false,
+    { url: "https://grok.com/?_s=usage", expectedBrowser: "own" },
+    newEntryLatch(),
+    true,
+  );
+  cmds.restart(m.viewer!.target);
+  assertEquals(restarted, 0);
+  const gatedChrome = { ...chrome, restart: false };
+  const items = browserMenuItems({
+    model: m,
+    chrome: gatedChrome,
+    commands: cmds,
+    ask: () => {},
+    onPaste: () => {},
+    onClipboard: () => {},
+    onClose: () => {},
+  });
+  assertEquals(
+    items.some((item) => item.key === "restart"),
+    false,
+  );
 });

@@ -13,7 +13,7 @@ import { openAppSettings } from "../appSettings";
 import type { SubscriptionSnapshot } from "../subscriptionAccounts";
 import { accountBrowserEntry } from "./entryRules";
 import { MachineBrowserSheet } from "./MachineBrowserSheet";
-import { browserIdentityKey, identityRequiredFor, sharedBrowser, sharedCardLabel } from "./shareRules";
+import { inventoryBrowserIdentity, sharedBrowser, sharedCardLabel } from "./shareRules";
 
 export function AccountBrowserEntry({
   snapshot,
@@ -38,7 +38,7 @@ export function AccountBrowserEntry({
   if (entry.kind === "none" || !snapshot) return null;
   const { account } = entry;
   const shared = sharedBrowser(snapshot, account.id);
-  const expectedBrowser = identityRequiredFor(snapshot) ? browserIdentityKey(shared) : undefined;
+  const expectedBrowser = inventoryBrowserIdentity(snapshot, shared);
   return (
     <Stack spacing={0.25} data-account-browser-entry={account.id}>
       <Stack direction="row" spacing={0.5} flexWrap="wrap" alignItems="center">

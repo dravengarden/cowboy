@@ -32,6 +32,7 @@ impl Hub {
                 schedule: None,
                 origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
                 initiator: None,
+                explicit: None,
             };
             drafts.push(draft.clone());
             added_drafts.push(draft);
@@ -189,9 +190,12 @@ impl Hub {
                 if !changed {
                     return OwnerQueueMutation::AppliedSync(false);
                 }
-                s.queue = queue.clone();
+                s.queue = queue;
                 s.drafts = drafts.clone();
                 s.editing = editing;
+                // A withdrawn held row's command ends with this write.
+                self.settle_explicit_locked(session_id, s);
+                let queue = s.queue.clone();
                 let mut claims = self.inner.notice_claims.lock();
                 if let Some(deferred) = claims.in_flight_pending_commits.get_mut(session_id) {
                     deferred.dirty = true;
@@ -215,6 +219,8 @@ impl Hub {
                         "another pending queue commit is in progress; retry shortly",
                     );
                 }
+                // Never persist a displaced intent; the commit settles it.
+                crate::core::hub_queue::strip_displaced_intents(&mut queue);
                 let Some(rx) = self.send_acked_update_pending_with_retired(
                     session_id,
                     queue.clone(),
@@ -294,6 +300,7 @@ impl Hub {
         if settled_notices.is_empty() {
             return None;
         }
+        crate::core::hub_queue::strip_displaced_intents(&mut queue);
         let mut claims = self.inner.notice_claims.lock();
         if claims.in_flight_pending_commits.contains_key(session_id) {
             return Some(Err(
@@ -411,6 +418,7 @@ impl Hub {
                 op,
                 &preview.clear_ids,
             );
+            self.settle_explicit_locked(&preview.session_id, s);
             let queue = s.queue.clone();
             let drafts = s.drafts.clone();
             let mut claims = self.inner.notice_claims.lock();
@@ -544,6 +552,7 @@ impl Hub {
                     schedule: None,
                     origin: None,
                     initiator: None,
+                    explicit: None,
                 });
                 let queue = s.queue.clone();
                 let drafts = s.drafts.clone();
@@ -626,6 +635,7 @@ impl Hub {
                 schedule: None,
                 origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
                 initiator: None,
+                explicit: None,
             });
             let mut claims = self.inner.notice_claims.lock();
             let key = (session_id.to_owned(), notice_cid.clone());

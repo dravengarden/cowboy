@@ -59,6 +59,8 @@ export interface PrefetchRunner {
    * `except` keeps one fetch running: the session being opened may already
    * be in flight as a prefetch, and its bootstrap must not be thrown away. */
   cancel(except?: string): void;
+  /** Remove one deleted session from the queue and abort it if in flight. */
+  drop(id: string): void;
   readonly inFlight: readonly string[];
   readonly queued: readonly string[];
 }
@@ -100,6 +102,10 @@ export function createPrefetchRunner(opts: {
       for (const id of inFlight) {
         if (id !== except) opts.abort(id);
       }
+    },
+    drop(id: string): void {
+      queue = queue.filter((queued) => queued !== id);
+      if (inFlight.has(id)) opts.abort(id);
     },
     get inFlight(): readonly string[] {
       return [...inFlight];

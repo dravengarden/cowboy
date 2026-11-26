@@ -324,6 +324,307 @@ pub fn run_effects(state: &Arc<AppState>, owner: &str, change: &Change, effects:
     }
 }
 
+/// Identity binding for [`super::instance_command`]: explicit
+/// `expected_browser`, server-recorded viewer attachment identity (for cached
+/// pre-upgrade Web clients), or unbound.
+#[derive(Clone, Copy, Debug)]
+pub enum IdentityFence<'a> {
+    None,
+    /// Navigate without explicit `expected_browser` or `attachment_id` (such as
+    /// manual address bar or MCP `accounts.browser_navigate`): still acquires
+    /// `share_lock(owner)` and records a durable pending-navigation fence.
+    UnboundNavigate,
+    Expected(&'a str),
+    Attachment(&'a str),
+}
+
+/// An identity-bound request names the browser identity the member's card
+/// uses now, or is refused.
+pub fn expected_identity(
+    expected: Option<&str>,
+    resolved: &super::Resolved,
+) -> Result<(), &'static str> {
+    match expected {
+        Some(expected) if expected != resolved.identity() => Err("browser_identity_changed"),
+        _ => Ok(()),
+    }
+}
+
+/// Enforce [`IdentityFence`] under the owner's share lock against `resolved`.
+pub fn verify_identity_fence(
+    state: &AppState,
+    owner: &str,
+    (account_id, machine_id): (&ProviderAccountId, &str),
+    resolved: &super::Resolved,
+    identity_fence: IdentityFence<'_>,
+) -> Result<(), &'static str> {
+    match identity_fence {
+        IdentityFence::None | IdentityFence::UnboundNavigate => Ok(()),
+        IdentityFence::Expected(expected) => expected_identity(Some(expected), resolved),
+        IdentityFence::Attachment(attachment_id) => {
+            let recorded = state
+                .browsers
+                .viewer_identity(
+                    machine_id,
+                    resolved.key.as_str(),
+                    owner,
+                    account_id.as_str(),
+                    attachment_id,
+                )
+                .ok_or("browser_identity_changed")?;
+            expected_identity(Some(&recorded), resolved)
+        }
+    }
+}
+
+/// Drop guard ensuring a cancelled or failed durable insert immediately
+/// tombstones the request id in memory so `reconcile_orphaned_navigations`
+/// deletes any committed row without hibernating the live browser.
+struct PendingInsertGuard<'a> {
+    browsers: &'a super::coordinator::Coordinator,
+    request_id: &'a str,
+    armed: bool,
+}
+
+impl Drop for PendingInsertGuard<'_> {
+    fn drop(&mut self) {
+        if self.armed {
+            self.browsers.settle_navigation(self.request_id);
+        }
+    }
+}
+
+/// Track a pending navigation fence in memory first (so the orphan reconciler
+/// never mistakes an in-progress insert for a pre-restart orphan), then persist
+/// it durably before dispatch so both live observations and Controller restarts
+/// keep share membership changes fenced.
+pub async fn begin_durable_navigation(
+    state: &AppState,
+    owner: &str,
+    browser_key: &ProviderAccountId,
+    observed: &super::Observed,
+    request_id: &str,
+) -> Result<(), &'static str> {
+    let store = state.store.as_ref().ok_or("unavailable")?;
+    let started_at_ms = super::now_ms();
+    let record =
+        crate::store::provider_accounts::browser_pending_navigations::PendingNavigationRecord {
+            request_id: request_id.to_owned(),
+            owner_user_id: owner.to_owned(),
+            browser_key: browser_key.clone(),
+            machine_id: observed.machine_id.clone(),
+            instance_id: observed.event.instance.instance_id.clone(),
+            incarnation: observed.event.instance.incarnation,
+            observed_at_ms: observed.event.observed_at_ms,
+            started_at_ms,
+        };
+    state
+        .browsers
+        .begin_navigation(super::coordinator::PendingNavigation {
+            request_id: request_id.to_owned(),
+            owner: owner.to_owned(),
+            browser_key: browser_key.clone(),
+            machine_id: observed.machine_id.clone(),
+            connection: Some(observed.connection.clone()),
+            instance: observed.event.instance.clone(),
+            observed_at_ms: observed.event.observed_at_ms,
+            started_at_ms,
+        });
+    let mut guard = PendingInsertGuard {
+        browsers: &state.browsers,
+        request_id,
+        armed: true,
+    };
+    store
+        .record_browser_pending_navigation(&record)
+        .await
+        .map_err(|_| "unavailable")?;
+    guard.armed = false;
+    Ok(())
+}
+
+/// Clear a tracked navigation fence from both memory and durable storage,
+/// keeping the in-memory settled tombstone until the SQL DELETE commits.
+pub async fn clear_durable_navigation(state: &AppState, request_id: &str) {
+    state.browsers.settle_navigation(request_id);
+    drain_settled_navigations(state).await;
+}
+
+/// Flush any request ids settled by synchronous Machine observation callbacks
+/// or cancelled inserts out of durable storage (`browser_pending_navigations`).
+/// Tombstones stay in memory until the SQL DELETE succeeds so concurrent
+/// reconcilers never re-seed and hibernate a live browser.
+pub async fn drain_settled_navigations(state: &AppState) {
+    let Some(store) = state.store.as_ref() else {
+        return;
+    };
+    let ids = state.browsers.settled_navigation_ids();
+    if ids.is_empty() {
+        return;
+    }
+    match store.delete_browser_pending_navigations(&ids).await {
+        Ok(()) => state.browsers.confirm_settled_navigations_deleted(&ids),
+        Err(error) => {
+            tracing::info!(%error, "settled browser navigation rows not deleted; retrying");
+        }
+    }
+}
+
+/// Whether `(owner, browser_key)` has an unsettled navigation in either memory
+/// or unexpired durable storage (including immediately after a Controller
+/// restart).
+pub async fn has_pending_navigation(
+    state: &AppState,
+    owner: &str,
+    browser_key: &ProviderAccountId,
+) -> Result<bool, &'static str> {
+    drain_settled_navigations(state).await;
+    if state.browsers.has_pending_navigation(owner, browser_key) {
+        return Ok(true);
+    }
+    let store = state.store.as_ref().ok_or("unavailable")?;
+    store
+        .has_pending_browser_navigation(owner, browser_key, super::now_ms())
+        .await
+        .map_err(|_| "unavailable")
+}
+
+/// Settle durable or in-memory navigations whose dispatching connection dropped
+/// or that survived a Controller restart:
+/// - Expired rows (older than `PENDING_NAVIGATION_TTL_MS` while not live on the
+///   dispatching connection) or rows for a revoked Machine are pruned cleanly.
+/// - Live connected Machines are queried first (settling immediately if the
+///   instance exited or was replaced), and only after confirming the durable
+///   row still exists and is neither live nor settled is `Command::Hibernate`
+///   sent for that exact incarnation.
+pub async fn reconcile_orphaned_navigations(state: &Arc<AppState>, machine_id: Option<&str>) {
+    drain_settled_navigations(state).await;
+    let Some(store) = state.store.as_ref() else {
+        return;
+    };
+    let Ok(rows) = store.pending_browser_navigations(machine_id).await else {
+        tracing::info!("pending browser navigations not read; retrying");
+        return;
+    };
+    let now = super::now_ms();
+    let ttl =
+        crate::store::provider_accounts::browser_pending_navigations::PENDING_NAVIGATION_TTL_MS;
+    state.browsers.prune_expired_navigations(now, ttl);
+    for row in rows {
+        if state
+            .browsers
+            .is_navigation_live_on_current(&row.request_id)
+        {
+            continue;
+        }
+        if state.browsers.is_navigation_settled(&row.request_id) {
+            // Re-delete in case a cancelled SQL INSERT committed after an
+            // earlier drain finished, without ever seeding or hibernating.
+            let _ = store
+                .delete_browser_pending_navigation(&row.request_id)
+                .await;
+            continue;
+        }
+        if now.saturating_sub(row.started_at_ms) >= ttl
+            || store
+                .is_machine_revoked(&row.machine_id)
+                .await
+                .unwrap_or(false)
+        {
+            clear_durable_navigation(state, &row.request_id).await;
+            continue;
+        }
+        let Ok(connection) = super::connection_for(state, &row.machine_id) else {
+            continue;
+        };
+        // Re-verify the durable row still exists (earlier `query_machine` awaits
+        // in this loop may have allowed the row to settle and delete) before
+        // seeding an in-memory entry.
+        if !store
+            .has_pending_browser_navigation_request(&row.request_id)
+            .await
+            .unwrap_or(false)
+        {
+            continue;
+        }
+        let instance = crate::machine_protocol::machine_browser::InstanceRef {
+            account_id: row.browser_key.clone(),
+            instance_id: row.instance_id.clone(),
+            incarnation: row.incarnation,
+        };
+        state
+            .browsers
+            .seed_durable_navigation(super::coordinator::PendingNavigation {
+                request_id: row.request_id.clone(),
+                owner: row.owner_user_id.clone(),
+                browser_key: row.browser_key.clone(),
+                machine_id: row.machine_id.clone(),
+                connection: None,
+                instance: instance.clone(),
+                observed_at_ms: row.observed_at_ms,
+                started_at_ms: row.started_at_ms,
+            });
+        let Some(event) = super::query_machine(state, &row.machine_id, &row.browser_key).await
+        else {
+            continue;
+        };
+        drain_settled_navigations(state).await;
+        if state
+            .browsers
+            .is_navigation_live_on_current(&row.request_id)
+            || state.browsers.is_navigation_settled(&row.request_id)
+            || !state.browsers.is_navigation_pending(&row.request_id)
+        {
+            continue;
+        }
+        if !store
+            .has_pending_browser_navigation_request(&row.request_id)
+            .await
+            .unwrap_or(false)
+        {
+            clear_durable_navigation(state, &row.request_id).await;
+            continue;
+        }
+        if matches!(
+            event.state,
+            BrowserState::Starting | BrowserState::Detached | BrowserState::Attached
+        ) && event.instance == instance
+        {
+            let request = super::request_id("browser-hibernate");
+            super::hibernate_sent(&row.machine_id, &instance, &request, "navigation_reconcile");
+            match state
+                .machine_control
+                .browser_command(
+                    &connection,
+                    request,
+                    Command::Hibernate {
+                        instance: instance.clone(),
+                    },
+                    super::HIBERNATE_TIMEOUT,
+                )
+                .await
+            {
+                Ok(hib_event) => {
+                    if hib_event.state == BrowserState::Hibernated
+                        && !matches!(hib_event.reason, Some(Reason::Busy | Reason::Failed))
+                    {
+                        state.browsers.record_authoritative(&connection, &hib_event);
+                    }
+                    drain_settled_navigations(state).await;
+                }
+                Err(error) => {
+                    tracing::info!(
+                        %error,
+                        machine = %row.machine_id,
+                        "browser hibernate to settle orphaned navigation did not complete"
+                    );
+                }
+            }
+        }
+    }
+    drain_settled_navigations(state).await;
+}
+
 /// Apply a share change through the registry writer, under the owner's
 /// share fence (held by the caller), and report whether it was a no-op (the
 /// member already in exactly that share), whose browser effects are none.
@@ -342,19 +643,46 @@ pub async fn update(
 ) -> Result<(MutationResult, bool), &'static str> {
     let store = state.store.as_ref().ok_or("unavailable")?;
     let mut noop = false;
-    if let Change::SetBrowserShare { member, share_id } = &input.change
-        && fresh_join(store, owner, operation, input.expected_revision).await?
-    {
-        let shares = store
-            .browser_shares(owner)
-            .await
-            .map_err(|_| "unavailable")?;
-        noop = shares.membership(member).map(|row| &row.share_id) == share_id.as_ref();
-        if let Some(share_id) = share_id
-            && !noop
+    match &input.change {
+        Change::SetBrowserShare { member, share_id }
+            if fresh_join(store, owner, operation, input.expected_revision).await? =>
         {
-            super::network::join_refusal(state, owner, (member, share_id)).await?;
+            let shares = store
+                .browser_shares(owner)
+                .await
+                .map_err(|_| "unavailable")?;
+            let current = shares.membership(member).map(|row| row.share_id.as_str());
+            noop = current == share_id.as_deref();
+            if !noop {
+                let mut keys = vec![member.own_key(owner)];
+                if let Some(id) = current {
+                    keys.push(browser_shares::share_key(owner, id));
+                }
+                if let Some(id) = share_id.as_deref() {
+                    keys.push(browser_shares::share_key(owner, id));
+                }
+                for key in keys {
+                    if has_pending_navigation(state, owner, &key).await? {
+                        return Err("browser_navigation_pending");
+                    }
+                }
+                if let Some(share_id) = share_id {
+                    super::network::join_refusal(state, owner, (member, share_id)).await?;
+                }
+            }
         }
+        Change::DeleteBrowserShare { share_id }
+            if fresh_join(store, owner, operation, input.expected_revision).await?
+                && has_pending_navigation(
+                    state,
+                    owner,
+                    &browser_shares::share_key(owner, share_id),
+                )
+                .await? =>
+        {
+            return Err("browser_navigation_pending");
+        }
+        _ => {}
     }
     let result = store
         .mutate_browser_shares(owner, operation, input)
@@ -521,12 +849,35 @@ impl DeletionRetries {
 /// timed-out revoke (an open holding the lifecycle lock) converges without
 /// a human step.
 pub fn start_deletion_reconciler(state: &Arc<AppState>) {
+    // Dedicated notification task so frequent navigation settlements flush
+    // durable fences promptly without ever postponing the periodic
+    // share-recovery interval below.
+    let weak_notify = Arc::downgrade(state);
+    let nav_settled = state.browsers.navigation_settled_notify();
+    tokio::spawn(async move {
+        loop {
+            let woken = tokio::select! {
+                () = nav_settled.notified() => true,
+                () = tokio::time::sleep(DELETION_TICK) => false,
+            };
+            let Some(state) = weak_notify.upgrade() else {
+                return;
+            };
+            if woken {
+                drain_settled_navigations(&state).await;
+            }
+        }
+    });
     let weak = Arc::downgrade(state);
     tokio::spawn(async move {
         let mut retries = DeletionRetries::default();
+        let mut tick = tokio::time::interval(DELETION_TICK);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        tick.tick().await;
         loop {
-            tokio::time::sleep(DELETION_TICK).await;
+            tick.tick().await;
             let Some(state) = weak.upgrade() else { return };
+            reconcile_orphaned_navigations(&state, None).await;
             let Some(store) = state.store.as_ref() else {
                 return;
             };

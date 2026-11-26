@@ -850,6 +850,8 @@ impl Store {
             anyhow::ensure!(connection_is_current(), "machine_connection_changed");
             sqlx::query("DELETE FROM browser_placements WHERE owner_user_id=$1 AND account_id=$2 AND machine_id=$3")
                 .bind(owner).bind(key.as_str()).bind(machine_id).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM browser_pending_navigations WHERE owner_user_id=$1 AND browser_key=$2 AND machine_id=$3")
+                .bind(owner).bind(key.as_str()).bind(machine_id).execute(&mut *tx).await?;
             let remaining: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM browser_placements WHERE owner_user_id=$1 AND account_id=$2")
                 .bind(owner).bind(key.as_str()).fetch_one(&mut *tx).await?;
             if remaining == 0 {

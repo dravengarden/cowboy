@@ -4,6 +4,7 @@ import type { Attachment } from "./attachments.ts";
 import {
   claimOrphanedPendingEdits,
   clearPendingEdit,
+  discardPendingEdits,
   finishOrphanedPendingEdit,
   flushPendingEdits,
   getPendingEdit,
@@ -116,4 +117,94 @@ test("an edit whose server row drained is claimed once for parked-draft recovery
   assertEquals(retry[0]?.recoveryCmid, first[0]?.recoveryCmid);
   finishOrphanedPendingEdit(retry[0]!, true);
   assertEquals(getPendingEdit(sessionId, "queued", id), null);
+});
+
+test("discardPendingEdits removes only the target session from memory and localStorage", () => {
+  const gone = "pending-edit-discard-gone";
+  const kept = "pending-edit-discard-kept";
+  const entries = new Map<string, string>();
+  const fakeStorage: Storage = {
+    get length() {
+      return entries.size;
+    },
+    key: (index: number) => [...entries.keys()][index] ?? null,
+    getItem: (key: string) => entries.get(key) ?? null,
+    setItem: (key: string, value: string) => {
+      entries.set(key, value);
+    },
+    removeItem: (key: string) => {
+      entries.delete(key);
+    },
+    clear: () => {
+      entries.clear();
+    },
+  };
+  const globals = globalThis as { localStorage?: Storage };
+  const previousStorage = globals.localStorage;
+  globals.localStorage = fakeStorage;
+  try {
+    setPendingEdit({
+      sessionId: gone,
+      kind: "draft",
+      id: "d1",
+      text: "delete me",
+      attachments: [],
+      baseText: "before",
+      baseAttachments: [],
+    });
+    setPendingEdit({
+      sessionId: kept,
+      kind: "queued",
+      id: "q1",
+      text: "keep me",
+      attachments: [],
+      baseText: "before",
+      baseAttachments: [],
+    });
+    flushPendingEdits();
+    // Also seed a mirror written by another tab that is not in this tab's memory map.
+    const otherTabKey = `cowboy:pending-edit:${JSON.stringify([gone, "queued", "from-other-tab"])}`;
+    const keptKey = `cowboy:pending-edit:${JSON.stringify([kept, "queued", "q1"])}`;
+    fakeStorage.setItem(
+      otherTabKey,
+      JSON.stringify({
+        sessionId: gone,
+        kind: "queued",
+        id: "from-other-tab",
+        text: "other tab",
+        attachments: [],
+        baseFingerprint: "[]",
+        recoveryCmid: "pending-edit-other",
+        updatedAt: Date.now(),
+      }),
+    );
+
+    discardPendingEdits(gone);
+
+    assertEquals(getPendingEdit(gone, "draft", "d1"), null);
+    assertEquals(fakeStorage.getItem(otherTabKey), null);
+    assertEquals(getPendingEdit(kept, "queued", "q1")?.text, "keep me");
+    assertEquals(fakeStorage.getItem(keptKey) !== null, true);
+
+    // A stale peer tab with a buffered dirty edit must not rewrite localStorage
+    // after another tab records permanent removal in the shared fence.
+    const gonePeer = `sess-gone-peer-${Date.now()}`;
+    setPendingEdit({
+      sessionId: gonePeer,
+      kind: "draft",
+      id: "d-peer",
+      text: "stale peer edit",
+      attachments: [],
+      baseText: "before",
+      baseAttachments: [],
+    });
+    fakeStorage.setItem("cowboy:removed-sessions", JSON.stringify([gone, gonePeer]));
+    flushPendingEdits();
+    const gonePeerKey = `cowboy:pending-edit:${JSON.stringify([gonePeer, "draft", "d-peer"])}`;
+    assertEquals(fakeStorage.getItem(gonePeerKey), null);
+
+    clearPendingEdit(kept, "queued", "q1");
+  } finally {
+    globals.localStorage = previousStorage;
+  }
 });

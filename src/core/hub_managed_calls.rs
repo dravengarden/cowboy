@@ -113,10 +113,11 @@ impl Hub {
         released_claims: Vec<NoticeClaimRelease>,
     ) {
         let (queue, drafts) = {
-            let sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get(session_id) else {
+            let mut sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            self.settle_explicit_locked(session_id, s);
             let queue = s.queue.clone();
             let drafts = s.drafts.clone();
             let retired_dispatches = s.pending_retired_dispatches.clone();
@@ -142,6 +143,8 @@ impl Hub {
                     ack_id: None,
                 });
             }
+            drop(claims);
+            self.write_receipts_locked(session_id, s);
             (queue, drafts)
         };
         self.broadcast_pending_snapshot(session_id, &queue, &drafts);
@@ -776,6 +779,20 @@ impl Hub {
             ));
     }
 
+    /// Acknowledged once every store write admitted before it was applied.
+    /// `None` without a store writer (nothing is durable to wait for).
+    pub fn store_barrier(&self) -> Option<StoreAckRx> {
+        let tx = self.inner.store_tx.as_ref()?;
+        let (ack_id, rx) = self.inner.store_acks.allocate();
+        if !tx.send(StoreWrite::Barrier {
+            ack_id: Some(ack_id),
+        }) {
+            self.inner.store_acks.cancel(ack_id);
+            return None;
+        }
+        Some(rx)
+    }
+
     /// Enqueue an acknowledged `StoreWrite::UpdatePending` through the same FIFO
     /// store writer as all other pending snapshots so earlier buffered writes
     /// can never overwrite a committed withdrawal, edit, requeue, or recovery park.
@@ -884,8 +901,9 @@ impl Hub {
                 schedule: None,
                 origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
                 initiator: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
+                explicit: None,
             };
-            next_queue.insert(0, msg.clone());
+            next_queue.insert(held_front(&next_queue), msg.clone());
             Some(msg)
         };
         let drafts = s.drafts.clone();
@@ -917,7 +935,7 @@ impl Hub {
         if self.inner.store_tx.is_none() {
             // In-memory test mode without durable store.
             if let Some(msg) = added_message {
-                s.queue.insert(0, msg);
+                s.queue.insert(held_front(&s.queue), msg);
             }
             if expected_in_flight_epoch == Some(s.in_flight_epoch)
                 && s.dispatched_cmids
@@ -1012,7 +1030,7 @@ impl Hub {
                     .iter()
                     .any(|m| m.cmid.as_deref() == Some(preview.cmid.as_str()))
             {
-                s.queue.insert(0, msg.clone());
+                s.queue.insert(held_front(&s.queue), msg.clone());
             }
             if preview.expected_in_flight_epoch == Some(s.in_flight_epoch)
                 && s.dispatched_cmids
@@ -1175,7 +1193,7 @@ impl Hub {
                     .iter()
                     .any(|m| m.cmid.as_deref() == Some(preview.cmid.as_str()))
             {
-                s.queue.insert(0, msg.clone());
+                s.queue.insert(held_front(&s.queue), msg.clone());
             }
             if preview.expected_in_flight_epoch == Some(s.in_flight_epoch)
                 && s.dispatched_cmids
@@ -1253,8 +1271,9 @@ impl Hub {
                 .any(|m| m.cmid.as_deref() == Some(req.cmid.as_str()))
             {
                 let id = self.next_qid();
+                let at = held_front(&s.queue);
                 s.queue.insert(
-                    0,
+                    at,
                     QueuedMessage {
                         id,
                         text,
@@ -1265,6 +1284,7 @@ impl Hub {
                         initiator: Some(crate::prompt_origin::DeliveryOrigin::cowboy(
                             "managed_call",
                         )),
+                        explicit: None,
                     },
                 );
             }
@@ -1333,8 +1353,9 @@ impl Hub {
                 schedule: None,
                 origin: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
                 initiator: Some(crate::prompt_origin::DeliveryOrigin::cowboy("managed_call")),
+                explicit: None,
             };
-            next_queue.insert(0, msg.clone());
+            next_queue.insert(held_front(&next_queue), msg.clone());
             Some(msg)
         };
         let drafts = s.drafts.clone();
@@ -1360,7 +1381,7 @@ impl Hub {
             .then_some(s.in_flight_epoch);
         if self.inner.store_tx.is_none() {
             if let Some(msg) = added_message {
-                s.queue.insert(0, msg);
+                s.queue.insert(held_front(&s.queue), msg);
             }
             let mut claims = self.inner.notice_claims.lock();
             let key = (session_id.to_owned(), cmid.to_owned());
@@ -1456,4 +1477,10 @@ impl Hub {
             .insert(key, (stamp, command_id.clone()));
         Some((completion_id.to_owned(), stamp, command_id))
     }
+}
+
+/// Where a returned notice re-enters the queue: first, unless the head is a
+/// held Send now, which stays first as it was promised.
+fn held_front(queue: &[QueuedMessage]) -> usize {
+    usize::from(queue.first().is_some_and(|head| head.explicit.is_some()))
 }

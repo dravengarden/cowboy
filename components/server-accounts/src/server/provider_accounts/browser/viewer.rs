@@ -216,14 +216,18 @@ async fn attach(
     );
     let instance = observed.instance();
     let connection = observed.connection.clone();
-    let cancelled = state.browsers.register_viewer(
+    let viewer_identity = resolved.identity();
+    let cancelled = state.browsers.register_viewer_with_identity(
         (account.as_str(), owner, member.as_str()),
         &attachment_id,
         instance.incarnation,
         &connection,
+        viewer_identity.clone(),
     );
     let still = match super::admit(state, owner, member).await {
-        Ok(now) if now.key != *account => Err("browser_share_changed"),
+        Ok(now) if now.key != *account || now.identity() != viewer_identity => {
+            Err("browser_share_changed")
+        }
         // A share's browser is attached only over a connection its gate
         // admits (an uninstalled Provider, a Machine that stopped enforcing
         // IPv4-only): the viewer never reaches a refused placement.

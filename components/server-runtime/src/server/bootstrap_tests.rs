@@ -349,3 +349,323 @@ fn focused_bootstrap_does_not_replay_another_session() {
         _ => true,
     }));
 }
+
+#[test]
+fn fanout_delta_projection_enforces_seq_visibility_and_legacy_fallback() {
+    use super::client_ws::{FanoutDelivery, LegacySessionTracker, resolve_fanout_delivery};
+    use super::connect_bootstrap_with_seq;
+    use crate::core::SessionRegistration;
+
+    let hub = Hub::new();
+    let mut rx = hub.subscribe();
+    let register = |id: &str, owner: Option<&str>| {
+        hub.create_session(SessionRegistration {
+            id: id.to_owned(),
+            provider: "codex".to_owned(),
+            provider_version: "1.0.0".to_owned(),
+            provider_generation_digest: "sha256:abc".to_owned(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
+            provider_auth_generation: None,
+            provider_behavior: Some(crate::provider::legacy_behavior("codex")),
+            machine_id: "hawk".to_owned(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: None,
+            cwd: "/tmp".to_owned(),
+            title: id.to_owned(),
+            origin: SessionOrigin::Web,
+            system: false,
+            owner_user_id: owner.map(str::to_owned),
+            owner_username: owner.map(str::to_owned),
+        });
+    };
+    let owner = test_owner_principal();
+    let member = ProductPrincipal {
+        user_id: "member-a".to_owned(),
+        username: "member-a".to_owned(),
+        role: crate::admin::AdminRole::Operator,
+    };
+    let other_member = ProductPrincipal {
+        user_id: "member-b".to_owned(),
+        username: "member-b".to_owned(),
+        role: crate::admin::AdminRole::Operator,
+    };
+
+    register("s-a", Some("member-a"));
+    let pre_bootstrap = rx.try_recv().expect("pre-bootstrap frame");
+    let (bootstrap, bootstrap_seq) = connect_bootstrap_with_seq(&hub, true, &member, None);
+    let Some(Outbound::Sessions { sessions }) = bootstrap.first() else {
+        panic!("expected bootstrap Sessions frame");
+    };
+    assert_eq!(sessions.len(), 1);
+    assert!(
+        sessions[0].provider_behavior.is_none(),
+        "bootstrap must strip provider_behavior"
+    );
+
+    // Pre-bootstrap frame is skipped regardless of client delta support.
+    let mut no_legacy = None;
+    let mut member_legacy = LegacySessionTracker::from_bootstrap(&bootstrap, false);
+    let mut other_legacy = Some(LegacySessionTracker::default());
+    assert!(matches!(
+        resolve_fanout_delivery(
+            &hub,
+            &member,
+            true,
+            bootstrap_seq,
+            &mut no_legacy,
+            &pre_bootstrap
+        ),
+        FanoutDelivery::Skip
+    ));
+    assert!(matches!(
+        resolve_fanout_delivery(
+            &hub,
+            &member,
+            false,
+            bootstrap_seq,
+            &mut member_legacy,
+            &pre_bootstrap
+        ),
+        FanoutDelivery::Skip
+    ));
+
+    // Post-bootstrap mutations to member-a's session: queue closing=true, then
+    // closing=false BEFORE draining on the legacy socket to verify legacy
+    // clients replay each delta in order instead of reading newer Hub state.
+    hub.set_background_tasks("s-a", 3);
+    let updated = rx.try_recv().expect("update frame");
+    hub.set_closing("s-a", true);
+    let closing_true = rx.try_recv().expect("closing true frame");
+    hub.set_closing("s-a", false);
+    let closing_false = rx.try_recv().expect("closing false frame");
+
+    assert!(matches!(
+        resolve_fanout_delivery(&hub, &member, true, bootstrap_seq, &mut no_legacy, &updated),
+        FanoutDelivery::Shared(frame) if matches!(frame.outbound(), Outbound::SessionUpdated { .. })
+    ));
+    assert!(matches!(
+        resolve_fanout_delivery(&hub, &owner, true, bootstrap_seq, &mut no_legacy, &updated),
+        FanoutDelivery::Shared(frame) if matches!(frame.outbound(), Outbound::SessionUpdated { .. })
+    ));
+    assert!(matches!(
+        resolve_fanout_delivery(
+            &hub,
+            &other_member,
+            true,
+            bootstrap_seq,
+            &mut no_legacy,
+            &updated
+        ),
+        FanoutDelivery::Skip
+    ));
+    assert!(matches!(
+        resolve_fanout_delivery(
+            &hub,
+            &other_member,
+            false,
+            bootstrap_seq,
+            &mut other_legacy,
+            &updated
+        ),
+        FanoutDelivery::Skip
+    ));
+    match resolve_fanout_delivery(
+        &hub,
+        &member,
+        false,
+        bootstrap_seq,
+        &mut member_legacy,
+        &updated,
+    ) {
+        FanoutDelivery::Owned(outbound) => match *outbound {
+            Outbound::Sessions { sessions } => {
+                assert_eq!(sessions.len(), 1);
+                assert_eq!(sessions[0].background_tasks, 3);
+                assert!(!sessions[0].closing);
+                assert!(sessions[0].provider_behavior.is_none());
+            }
+            _ => panic!("legacy client must receive translated full Sessions list"),
+        },
+        _ => panic!("legacy client must receive translated full Sessions list"),
+    }
+    match resolve_fanout_delivery(
+        &hub,
+        &member,
+        false,
+        bootstrap_seq,
+        &mut member_legacy,
+        &closing_true,
+    ) {
+        FanoutDelivery::Owned(outbound) => match *outbound {
+            Outbound::Sessions { sessions } => assert!(
+                sessions[0].closing,
+                "legacy client must observe transient closing=true in sequence"
+            ),
+            _ => panic!("expected translated Sessions list"),
+        },
+        _ => panic!("expected translated Sessions list"),
+    }
+    match resolve_fanout_delivery(
+        &hub,
+        &member,
+        false,
+        bootstrap_seq,
+        &mut member_legacy,
+        &closing_false,
+    ) {
+        FanoutDelivery::Owned(outbound) => match *outbound {
+            Outbound::Sessions { sessions } => assert!(!sessions[0].closing),
+            _ => panic!("expected translated Sessions list"),
+        },
+        _ => panic!("expected translated Sessions list"),
+    }
+
+    // Deletion of member-a's session reaches member-a and owner, never member-b.
+    assert!(hub.delete_session("s-a"));
+    let removed = rx.try_recv().expect("remove frame");
+    assert!(matches!(
+        resolve_fanout_delivery(&hub, &member, true, bootstrap_seq, &mut no_legacy, &removed),
+        FanoutDelivery::Shared(frame) if matches!(frame.outbound(), Outbound::SessionRemoved { session_id } if session_id == "s-a")
+    ));
+    assert!(matches!(
+        resolve_fanout_delivery(&hub, &owner, true, bootstrap_seq, &mut no_legacy, &removed),
+        FanoutDelivery::Shared(frame) if matches!(frame.outbound(), Outbound::SessionRemoved { session_id } if session_id == "s-a")
+    ));
+    assert!(matches!(
+        resolve_fanout_delivery(
+            &hub,
+            &other_member,
+            true,
+            bootstrap_seq,
+            &mut no_legacy,
+            &removed
+        ),
+        FanoutDelivery::Skip
+    ));
+    assert!(matches!(
+        resolve_fanout_delivery(
+            &hub,
+            &other_member,
+            false,
+            bootstrap_seq,
+            &mut other_legacy,
+            &removed
+        ),
+        FanoutDelivery::Skip
+    ));
+    match resolve_fanout_delivery(
+        &hub,
+        &member,
+        false,
+        bootstrap_seq,
+        &mut member_legacy,
+        &removed,
+    ) {
+        FanoutDelivery::Owned(outbound) => match *outbound {
+            Outbound::Sessions { sessions } => assert!(sessions.is_empty()),
+            _ => panic!("legacy client must receive translated empty Sessions list after delete"),
+        },
+        _ => panic!("legacy client must receive translated empty Sessions list after delete"),
+    }
+
+    // Web renames and reorders travel as SyncPatch frames; legacy session lists
+    // fold those patches in version order so a subsequent delta for session B
+    // never synthesizes session A with its stale title or order.
+    register("s-1", Some("member-a"));
+    let _ = rx.try_recv().expect("create s-1");
+    register("s-2", Some("member-a"));
+    let _ = rx.try_recv().expect("create s-2");
+    hub.sync_apply(
+        "title",
+        "m-rename-pre".to_owned(),
+        "rename",
+        &serde_json::json!({ "session_id": "s-1", "title": "Renamed Before Connect" }),
+    )
+    .expect("pre-bootstrap rename");
+    let stale_title_patch = rx.try_recv().expect("pre-bootstrap title patch");
+    hub.sync_apply(
+        "title",
+        "m-rename-latest".to_owned(),
+        "rename",
+        &serde_json::json!({ "session_id": "s-1", "title": "Latest Before Connect" }),
+    )
+    .expect("latest pre-bootstrap rename");
+    let _ = rx.try_recv().expect("latest title patch");
+
+    let (sync_bootstrap, sync_bootstrap_seq) =
+        connect_bootstrap_with_seq(&hub, true, &member, None);
+    let mut synced_legacy = LegacySessionTracker::from_bootstrap(&sync_bootstrap, false);
+
+    // A stale pre-bootstrap title SyncPatch must not overwrite the bootstrap title.
+    let _ = resolve_fanout_delivery(
+        &hub,
+        &member,
+        false,
+        sync_bootstrap_seq,
+        &mut synced_legacy,
+        &stale_title_patch,
+    );
+
+    hub.sync_apply(
+        "title",
+        "m-rename-live".to_owned(),
+        "rename",
+        &serde_json::json!({ "session_id": "s-1", "title": "Renamed Live" }),
+    )
+    .expect("live rename");
+    let live_title_patch = rx.try_recv().expect("live title patch");
+    let _ = resolve_fanout_delivery(
+        &hub,
+        &member,
+        false,
+        sync_bootstrap_seq,
+        &mut synced_legacy,
+        &live_title_patch,
+    );
+
+    hub.sync_apply(
+        "order",
+        "m-reorder-live".to_owned(),
+        "reorder",
+        &serde_json::json!({ "order": ["s-2", "s-1"] }),
+    )
+    .expect("live reorder");
+    let live_order_patch = rx.try_recv().expect("live order patch");
+    let _ = resolve_fanout_delivery(
+        &hub,
+        &member,
+        false,
+        sync_bootstrap_seq,
+        &mut synced_legacy,
+        &live_order_patch,
+    );
+
+    // Mutate only s-2; the synthesized legacy Sessions list must preserve s-1's
+    // live title and the reordered [s-2, s-1] sequence.
+    hub.set_background_tasks("s-2", 1);
+    let s2_delta = rx.try_recv().expect("s-2 delta");
+    match resolve_fanout_delivery(
+        &hub,
+        &member,
+        false,
+        sync_bootstrap_seq,
+        &mut synced_legacy,
+        &s2_delta,
+    ) {
+        FanoutDelivery::Owned(outbound) => match *outbound {
+            Outbound::Sessions { sessions } => {
+                assert_eq!(
+                    sessions
+                        .iter()
+                        .map(|s| (s.id.as_str(), s.title.as_str()))
+                        .collect::<Vec<_>>(),
+                    vec![("s-2", "s-2"), ("s-1", "Renamed Live")]
+                );
+            }
+            _ => panic!("expected translated Sessions list"),
+        },
+        _ => panic!("expected translated Sessions list"),
+    }
+}

@@ -1,7 +1,11 @@
 import { afterEach, expect, test } from "bun:test";
+import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import { derive } from "./derive";
 import {
   announceContext,
+  CONTEXT_CHANGED,
+  evictSessionContext,
+  invalidateReferencingContexts,
   loadSessionContext,
   saveSessionContext,
   sendWithContext,
@@ -169,4 +173,151 @@ test("going back from a staged agent keeps independent links", () => {
     sources: ["other"],
     next_agent: null,
   });
+});
+
+test("unchanged preferences resync skips only after a successful read and retries failures", async () => {
+  const announced: (string | null)[] = [];
+  const listener = (event: Event) => {
+    announced.push((event as CustomEvent<string | null>).detail);
+  };
+  let failNext = true;
+  globalThis.fetch = (() => {
+    if (failNext) return Promise.reject(new TypeError("offline"));
+    return Promise.resolve(Response.json({
+      revision: 1,
+      applied_revision: 1,
+      sources: [],
+      next_agent: null,
+      delivery: {
+        operation: "op-1",
+        session_id: "s-dest",
+        state: "cancelled",
+        returned: { source_session_id: "resync-dedupe", text: "huge", content: [{ type: "image" }] },
+      },
+    }));
+  }) as typeof fetch;
+  globalThis.addEventListener(CONTEXT_CHANGED, listener);
+  try {
+    globalThis.dispatchEvent(
+      new CustomEvent(PREFERENCES_CHANGED, {
+        detail: { "session_context:resync-dedupe": 4 },
+      }),
+    );
+    await expect(loadSessionContext("resync-dedupe")).rejects.toThrow("offline");
+    // Reconnect announcing the same revision must retry because the prior GET failed.
+    globalThis.dispatchEvent(
+      new CustomEvent(PREFERENCES_CHANGED, {
+        detail: { "session_context:resync-dedupe": 4 },
+      }),
+    );
+    failNext = false;
+    await loadSessionContext("resync-dedupe");
+    // Now that rev 4 succeeded, another reconnect announcing rev 4 is skipped.
+    globalThis.dispatchEvent(
+      new CustomEvent(PREFERENCES_CHANGED, {
+        detail: { "session_context:resync-dedupe": 4 },
+      }),
+    );
+    // A newer revision announces a real change.
+    globalThis.dispatchEvent(
+      new CustomEvent(PREFERENCES_CHANGED, {
+        detail: { "session_context:resync-dedupe": 8 },
+      }),
+    );
+    // Blanket invalidation (undefined detail) refreshes every listener.
+    globalThis.dispatchEvent(new CustomEvent(PREFERENCES_CHANGED));
+    evictSessionContext("resync-dedupe");
+  } finally {
+    globalThis.removeEventListener(CONTEXT_CHANGED, listener);
+  }
+  expect(announced).toEqual(["resync-dedupe", "resync-dedupe", "resync-dedupe", null]);
+});
+
+test("invalidateReferencingContexts refreshes cached views referencing a changed linked session", async () => {
+  const announced: (string | null)[] = [];
+  const listener = (event: Event) => {
+    announced.push((event as CustomEvent<string | null>).detail);
+  };
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    const url = String(input);
+    const isReader = url.includes("reader-sess");
+    return Promise.resolve(Response.json({
+      revision: 1,
+      applied_revision: 1,
+      sources: isReader ? ["linked-src"] : [],
+      source_sessions: isReader ? [{ id: "linked-src", available: false }] : [],
+      links: isReader ? [{ id: "linked-src", available: false, title: "Old", before: 42 }] : [],
+      next_agent: null,
+      delivery: null,
+      max_sources: 32,
+    }));
+  }) as typeof fetch;
+  globalThis.dispatchEvent(
+    new CustomEvent(PREFERENCES_CHANGED, {
+      detail: { "session_context:reader-sess": 1 },
+    }),
+  );
+  await loadSessionContext("reader-sess");
+  // Evict reader-sess from the 64-entry display LRU; mounted dependencies must survive.
+  for (let i = 0; i < 66; i += 1) {
+    const filler = `filler-ctx-${String(i)}`;
+    globalThis.dispatchEvent(
+      new CustomEvent(PREFERENCES_CHANGED, {
+        detail: { [`session_context:${filler}`]: 1 },
+      }),
+    );
+    await loadSessionContext(filler);
+  }
+  globalThis.addEventListener(CONTEXT_CHANGED, listener);
+  try {
+    invalidateReferencingContexts("unrelated-session");
+    invalidateReferencingContexts(["linked-src"]);
+    evictSessionContext("reader-sess");
+    for (let i = 0; i < 66; i += 1) evictSessionContext(`filler-ctx-${String(i)}`);
+  } finally {
+    globalThis.removeEventListener(CONTEXT_CHANGED, listener);
+  }
+  expect(announced).toEqual(["reader-sess"]);
+});
+
+test("first context read revalidates if a returned linked session changed while in flight", async () => {
+  const first = Promise.withResolvers<Response>();
+  let reads = 0;
+  globalThis.fetch = (() => {
+    reads += 1;
+    return reads === 1
+      ? first.promise
+      : Promise.resolve(Response.json({
+          revision: 1,
+          applied_revision: 1,
+          sources: ["linked-inflight"],
+          source_sessions: [{ id: "linked-inflight", available: true, title: "Fresh" }],
+          links: [{ id: "linked-inflight", available: true, title: "Fresh", before: 10 }],
+          next_agent: null,
+          delivery: null,
+          max_sources: 32,
+        }));
+  }) as typeof fetch;
+  globalThis.dispatchEvent(
+    new CustomEvent(PREFERENCES_CHANGED, {
+      detail: { "session_context:first-read-race": 1 },
+    }),
+  );
+  const pending = loadSessionContext("first-read-race");
+  // Linked session changes BEFORE first-read-race's first GET returns.
+  invalidateReferencingContexts(["linked-inflight"]);
+  first.resolve(Response.json({
+    revision: 1,
+    applied_revision: 1,
+    sources: ["linked-inflight"],
+    source_sessions: [{ id: "linked-inflight", available: false }],
+    links: [{ id: "linked-inflight", available: false, title: "Stale", before: 10 }],
+    next_agent: null,
+    delivery: null,
+    max_sources: 32,
+  }));
+  const resolved = await pending;
+  expect(reads).toBe(2);
+  expect(resolved.links?.[0]?.title).toBe("Fresh");
+  evictSessionContext("first-read-race");
 });
