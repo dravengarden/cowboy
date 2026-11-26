@@ -1,8 +1,10 @@
-# Antigravity User MCP Servers (R2) — Design Document (Revision 3)
+# Antigravity User MCP Servers (R2) — Design Document (Revision 4)
 
-Status: **Design Revision 3** (Owner-approved Option 1 pragmatic same-UID parity;
-addresses all 14 Round 1 findings from `call-471f3a5bc14a499bcbc732e8` and all 15
-Round 2 findings from `call-ae42c7df5b133bae153ba7cf`).
+Status: **Design Revision 4 — Ready for Implementation** (Owner-approved Option 1
+pragmatic same-UID parity; addresses all 14 Round 1 findings from
+`call-471f3a5bc14a499bcbc732e8`, all 15 Round 2 findings from
+`call-ae42c7df5b133bae153ba7cf`, and all 5 Medium + 6 Low findings from Round 3
+`call-719fbc3668635f53f30cd8fa`, which confirmed zero critical/high blockers).
 
 Related documents:
 - [`antigravity-parity-round-2.md`](antigravity-parity-round-2.md) — Round 2 parity requirements (R2 and D1 aligned to the 2026-11-26 Option 1 decision)
@@ -89,10 +91,14 @@ On 2026-11-26 the owner explicitly approved **Option 1**:
      `cowboy/listUserMcp` and `cowboy/startUserMcp`; the keeper **fails closed**
      if `managerGate` is absent (protecting against old-Machine rollback with a
      retained new keeper).
-   - A 5-second live-reload watcher in `execution::Manager` (mirroring
-     `src/config/file_buffers.rs`) detects `user_mcp: true -> false` or
-     `user_mcp_allowlist` narrowing and immediately invokes `cowboy/stopUserMcp`
-     across active keepers so already-running servers stop promptly.
+   - A **level-triggered** 5-second reconciliation watcher in
+     `execution::Manager` (mirroring `src/config/file_buffers.rs`) tracks a
+     monotonic `config_revision` (starting at `1` on Manager startup) and
+     per-session `confirmed_clean_rev`. On startup and every 5 s tick while
+     `!enabled || !allowlist.is_empty()`, it sweeps all unconfirmed active
+     keepers with bounded concurrency (8), bypassing the 24-permit regular call
+     semaphore, and retries on failure until `cowboy/stopUserMcp` succeeds with
+     `failed == 0`.
 5. **Durable pending-call recovery & bounded correlated proxy acks**:
    - Pending user-MCP calls are recorded in Schema-1 `record.active_processes`
      as `cowboy-pending-call:<call_id>` (zero ledger schema bump), gated on an
@@ -217,12 +223,24 @@ Implemented in `components/machine/src/execution_host/user_mcp.rs`:
      maximum list size (`MAX_USER_MCP_SERVERS = 16`, sorted deterministically by
      server name). This guarantees allowlisted servers are never dropped by
      truncation when `~/.claude.json` defines >16 entries.
-4. **Variable expansion**:
+4. **Variable expansion & documented Claude Code parity gaps**:
    - Expand `${VAR}` and `${VAR:-default}` across `command`, `args`, and `env`
-     values (identical to `plugins/claude-code/runtime/mcp.mjs:39-57`) using
-     `contract.environment` (minus `COWBOY_*` and keeper-private `CODEX_HOME`)
-     plus `CLAUDE_PROJECT_DIR = binding.workspace.source_path`. Unset variables
-     without default stay literal.
+     values (matching `plugins/claude-code/runtime/mcp.mjs:39-57`) using
+     `contract.environment` (minus `COWBOY_*` and keeper-private `CODEX_HOME`).
+   - **Documented parity gap — `CLAUDE_PROJECT_DIR` omitted**: R2 intentionally
+     does NOT expand or set `CLAUDE_PROJECT_DIR` (pointing it at `source_path`
+     would risk mutating the shared stable checkout, while pointing it at the
+     worktree `cwd` contradicts the neutral-cwd guardrail). Servers needing
+     project paths receive them via tool arguments.
+   - **Documented parity gap — host session/secret env vars**: Because
+     `contract.environment` contains only the 12 BASE names plus operator-
+     allowed non-secret names (`components/store/src/execution_target_environment.rs:28-66`),
+     variables such as `${GITHUB_TOKEN}`, `SSH_AUTH_SOCK`, or `XDG_RUNTIME_DIR`
+     absent from `contract.environment` are not expanded (literal values in
+     `server.env` still work as authored). If any `${VAR}` placeholder remains
+     unresolved in `command`, `args`, or `env` after expansion, the server is
+     omitted with closed reason code `"unresolved_variable"` rather than
+     launching with a literal `${VAR}`.
 5. **Executable, argument & environment validation**:
    - `command` must not contain NUL, must not be a relative path containing `/`
      (e.g. `./foo`, `../foo`, `sub/foo`).
@@ -253,14 +271,12 @@ Implemented in `components/machine/src/execution_host/user_mcp.rs`:
        "includeOnly": []
      }
      ```
-     (`CLAUDE_PROJECT_DIR` is both expanded to and set to
-     `binding.workspace.source_path` — never the worktree `cwd` — matching
-     `plugins/claude-code/runtime/tools.mjs:2987` without pointing servers into
-     an unvetted branch worktree.)
-6. **Keyed ephemeral fingerprint**:
-   - Computed as `SHA-256(keeper_ephemeral_32B_key || canonical_json(name, scope, logical_executable, args, sorted_env))`
-     (64 lowercase hex chars). Never leaks config content; detects drift
-     between `listUserMcp` and `startUserMcp`.
+     (`CLAUDE_PROJECT_DIR` is intentionally omitted per §2.4.4.)
+6. **Keyed ephemeral fingerprint (HMAC-SHA-256)**:
+   - Computed as standard RFC 2104 `HMAC-SHA-256(keeper_ephemeral_32B_key, canonical_json(name, scope, logical_executable, args, sorted_env))`
+     (64 lowercase hex chars), implemented directly over the existing `sha2`
+     crate (zero new crate / zero `Cargo.lock` change). Never leaks config
+     content; detects drift between `listUserMcp` and `startUserMcp`.
 
 ### 2.5 Target Manager Enforcement, Fail-Closed Gate & Keeper Methods
 
@@ -288,14 +304,24 @@ Implemented in `components/machine/src/execution_host/user_mcp.rs`:
      - Forward directly to keeper regardless of `enabled` (always safe; only
        terminates user servers; strips any caller-supplied `keepAllowlist` so
        only the Manager's live watcher can supply allowlist-scoped stops).
-2. **On 5-second live-reload watcher**:
-   - Track `(last_enabled, last_allowlist)`.
-   - When `enabled` flips `true -> false`: sweep all active non-stopped,
-     non-managed session directories under `self.root` and send best-effort
-     `cowboy/stopUserMcp {}` (5 s per-keeper bound).
-   - When `enabled` remains `true` and `allowlist` narrows (becomes non-empty
-     where it was empty, or drops any previously allowed name): sweep active
-     keepers with `cowboy/stopUserMcp { "keepAllowlist": allowlist }`.
+2. **Level-triggered 5-second reconciliation watcher**:
+   - Track `(config_revision: u64, last_enabled, last_allowlist)` starting at
+     `config_revision = 1` on Manager startup (bumping `config_revision` on any
+     change to `enabled` or `allowlist`), plus `confirmed_clean_rev: HashMap<String, u64>`.
+   - On startup AND on every 5-second tick whenever `!enabled || !allowlist.is_empty()`:
+     enumerate active non-stopped, non-managed session directories under
+     `self.root` whose `confirmed_clean_rev.get(session) < Some(&config_revision)`.
+   - Sweep unconfirmed keepers with **bounded concurrency (8)**, sending
+     `cowboy/stopUserMcp {}` (if `!enabled`) or
+     `cowboy/stopUserMcp { "keepAllowlist": allowlist }` (if `enabled`),
+     **bypassing** the per-session 24-permit regular call semaphore (using a
+     dedicated control path so a saturated session cannot block kill-switch
+     enforcement).
+   - Record `confirmed_clean_rev[session] = config_revision` ONLY when the
+     keeper responds `Outcome::Completed` with `result.failed == 0` (or the
+     session is gone / `EnvironmentLost`); any timeout, transport error, or
+     `failed > 0` leaves the session unconfirmed so the next 5 s tick retries
+     automatically.
 
 #### Keeper (`components/machine/src/execution_host.rs` & `execution_host/ledger.rs`)
 
@@ -335,41 +361,60 @@ Implemented in `components/machine/src/execution_host/user_mcp.rs`:
         `name`, verify `fingerprint` matches (else return `Outcome::Completed`
         error `"user_mcp_config_drift"` / `"user_mcp_not_allowed"` /
         `"user_mcp_invalid"` — NEVER `Refused`!).
-     7. Re-acquire `self.user_mcp` mutex, verify `stop_epoch == epoch` and
-        `!stopped_process_ids.contains(&processId)` and active count `< 32`.
-        Reserve `self.writer` permit, call `ledger.admit(&clean_invocation)` —
-        extending `execution_host/ledger.rs:132-137` so **both**
-        `method == "process/start"` AND `method == "cowboy/startUserMcp"` record
-        `processId` in `self.processes` (so `reap_unattended()` also covers user
-        servers!).
-     8. Record `(processId -> server_name)` in `self.user_mcp.active_processes`
-        and send native `process/start` (`cwd = file:///tmp/cowboy-user-mcp-<uid>/<incarnation>`,
+     7–8. **Single atomic critical section & strict lock order (`user_mcp` → `ledger` everywhere)**:
+        Hold `self.user_mcp` lock continuously across: verifying `stop_epoch == epoch`,
+        verifying `!stopped_process_ids.contains(&processId)`, verifying
+        `latest_allowlist` (if set by a scoped stop) still permits `name`,
+        verifying active count `< 32`, reserving `self.writer` permit, calling
+        `ledger.admit(&clean_invocation)` (extending `execution_host/ledger.rs:132-137`
+        so **both** `method == "process/start"` AND `method == "cowboy/startUserMcp"`
+        record `processId` in `self.processes` for `reap_unattended()`),
+        inserting `(processId -> UserMcpProcess { server_name, start_state: Pending(rx) })`
+        into `self.user_mcp.active_processes`, and sending native `process/start`
+        (`cwd = file:///tmp/cowboy-user-mcp-<uid>/<incarnation>`,
         `argv = [logical_executable, ...args]`, `envPolicy = { inherit: "none", set: ... }`,
         `tty: false`, `pipeStdin: true`, `arg0: null`) on `self.writer`
-        **WITHOUT** calling `wire::with_call_context`.
-     9. On `process/exited` / `process/closed` events for a tracked user-MCP
-        `processId`, remove it from `self.user_mcp.active_processes`.
+        **WITHOUT** calling `wire::with_call_context`. Release `self.user_mcp`.
+     9. **Backend-loop bookkeeping (AFTER dropping `self.ledger` lock!)**:
+        In the keeper's native stdout loop (`execution_host.rs:618`), drop the
+        `backend_host.ledger.lock()` guard FIRST before acquiring `self.user_mcp`
+        (never reversing `user_mcp` → `ledger`!):
+        - When the `process/start` reply for a tracked user-MCP `processId`
+          arrives: mark `start_state = Confirmed` (on `result`) or `Failed`
+          (on `error`, removing from `active_processes`), notifying its waiter.
+        - When `process/exited` or `process/closed` arrives for a confirmed
+          user-MCP `processId`, remove it from `self.user_mcp.active_processes`.
 
 3. **`cowboy/stopUserMcp`**:
    - Params: `{ "processId"?: string, "keepAllowlist"?: string[] }`.
    - Does **not** require `managerGate` (safe-only destructive cleanup, so R2
      workers can still sweep orphans in a retained new keeper during Machine
      rollback).
-   - Behavior:
+   - **Rule E1 confirmation discipline (never accept `unknown process id` for an unconfirmed start)**:
+     For each target entry in `active_processes`:
+     - If `start_state` is `Pending(rx)`: await `rx` (bounded within the `5 s`
+       stop budget) BEFORE sending `process/terminate`.
+       - If `process/start` replied with `error` (`Failed`): process never
+         started → remove entry and count as `stopped += 1`.
+       - If `process/start` replied `Ok` (`Confirmed`): send `process/terminate`
+         and await reply within remaining budget; now `unknown process id` IS
+         authoritative confirmation (matching `closed_if_confirmed` in
+         `src/worker_execution/ledger.rs:692-717`) → remove entry, `stopped += 1`.
+       - If `process/start` or `process/terminate` does NOT confirm within the
+         `5 s` budget: **retain** the entry in `active_processes` and increment
+         `failed += 1` so the Manager's level-triggered reconciliation retries!
+   - Modes:
      - **Targeted (`processId` present)**: validate `^cowboy-worker-mcp-user-[0-9a-f]{32}$`;
-       insert `processId` into bounded `stopped_process_ids` (FIFO cap 512) so
-       any late-arriving `cowboy/startUserMcp` for that ID is rejected; if
-       present in `active_processes`, remove and send `process/terminate` on
-       `self.writer` (FIFO-ordered after any already-queued `process/start`!),
-       awaiting confirmation up to `5 s`. Executor `unknown process id` is
-       authoritative confirmation that the process is gone.
-     - **Allowlist-scoped (`keepAllowlist` present)**: select every active
-       `(processId, server_name)` where `!keepAllowlist.contains(&server_name)`,
-       insert their IDs into `stopped_process_ids`, and terminate each (total
-       bound `5 s`).
-     - **Stop-all (both omitted)**: bump `stop_epoch += 1`, drain all entries
-       from `active_processes`, insert their IDs into `stopped_process_ids`, and
-       terminate every one via `self.writer` (total bound `5 s`).
+       insert `processId` into bounded `stopped_process_ids` (FIFO cap 512);
+       apply E1 stop above if present in `active_processes`.
+     - **Allowlist-scoped (`keepAllowlist` present)**: bump `stop_epoch += 1`
+       AND store `latest_allowlist = Some(keepAllowlist)` (fencing any
+       in-flight `startUserMcp` carrying a stale `managerGate` allowlist!);
+       select every active entry where `!keepAllowlist.contains(&server_name)`,
+       insert their IDs into `stopped_process_ids`, and apply E1 stop.
+     - **Stop-all (both omitted)**: bump `stop_epoch += 1`, clear
+       `latest_allowlist`, select all entries in `active_processes`, insert
+       their IDs into `stopped_process_ids`, and apply E1 stop.
    - Returns `Outcome::Completed` with `{"result": {"stopped": u32, "failed": u32}}`
      (zero paths/secrets).
 
@@ -429,7 +474,15 @@ cowboy-pending-call:<32hex-call-id>
    `Ledger::convert_pending_call_to_uncertain(call_id)` removes the sentinel AND
    sets `uncertain_effect = "tools/call"` + increments `uncertain_sequence` in
    **one atomic persist**.
-4. **On valid proxy `cowboy/extensionCallAck`**:
+4. **On `Failure::NotSent` (including calls to a kill-switch-stopped server)**:
+   `Ledger::clear_pending_call(call_id)` removes the sentinel and persists
+   atomically **before** returning the refused reply (with `AckState::None`;
+   no `PendingAck` registered and no `uncertain_effect` recorded). In addition,
+   when `cowboy/stopUserMcp` or a `process/exited`/`process/closed` event
+   arrives for a user server, the worker marks that server `io.closed = true`
+   so subsequent tool calls refuse locally (`NotSent`) before ever persisting a
+   sentinel.
+5. **On valid proxy `cowboy/extensionCallAck`**:
    `Ledger::clear_pending_call(call_id)` removes the sentinel and persists
    atomically. If persist fails, fail closed (convert to uncertain in memory and
    return `{ acknowledged: false }`).
@@ -529,32 +582,40 @@ Because `MAX_CALLS = 8` extension calls can complete simultaneously while
   - Add `"cowboy/extensionCallAck"` to `DRAIN_REQUESTS` with dedicated slot
     class `kind = "ack"` (`MAX_ACK = 8`), separate from ordinary (15), cleanup
     (1), and control (4) slots.
+  - **Immediate slot release on local 12 s ack timeout**: When a `kind === "ack"`
+    request hits its `12_000 ms` local `timeoutMs`, release its `ack` slot
+    **immediately** (recording its request id directly in `retired` so a late
+    reply is silently absorbed without failing the socket, rather than holding
+    the slot in `abandoned` for `185 s - 12 s = 173 s`). Because the worker
+    already fails closed on its own 15 s timer, this prevents transient stalls
+    from starving the `MAX_ACK = 8` lane.
 
 ### 4.3 Bounded `PendingAck` State Machine & Deadlock-Free Lock Ordering
 
 Every `Route::UserServer` call that completes with `Ok` or `Failure::Refused`
 registers a `PendingAck` entry holding `{ call_id, connection_id, ledger, guard: SettlementGuard, timer_abort: AbortHandle }`:
 
-1. **Timer starts AT REGISTRATION (not after frame write!)**:
+1. **Explicit `AckState` enum on `Done` (`None | Pending(String) | AlreadySettled`)**:
+   - `Done` carries `ack: AckState` instead of `Option<String>` so the relay
+     layer distinguishes *not broker-managed* (`AckState::None`) from
+     *broker-owned pending ack* (`AckState::Pending(call_id)`) and *already
+     settled by broker* (`AckState::AlreadySettled`).
    - `Broker::register_pending_ack(call_id, connection_id, ledger, guard)`
      checks under `pending_acks` mutex whether `connection_id` is already closed
      (closed connection IDs are tracked in a small bounded set per Broker).
    - **If `connection_id` is already closed**: do NOT insert! Release
      `pending_acks` lock, call `ledger.convert_pending_call_to_uncertain(&call_id)`,
-     then drop `guard` outside every lock, and return `None` (`ack_call_id = None`).
+     then drop `guard` outside every lock, and return **`AckState::AlreadySettled`**
+     (so downstream `Relays::drop`/`SendError`/`undelivered` skip `unread_effects`
+     and never double-bump `uncertain_sequence`!).
    - **Otherwise**: insert entry AND immediately spawn the
-     `EXTENSION_ACK_TIMEOUT = 15 s` deadline task right here.
+     `EXTENSION_ACK_TIMEOUT = 15 s` deadline task right here, returning
+     **`AckState::Pending(call_id)`**.
 2. **Exclusive ownership across ALL four relay paths (zero hang, zero duplicate L1c)**:
-   - Whenever `done.ack_call_id` is `Some(call_id)`:
-     - **`Relays::delivered(&done)`**: **skips** `unread_effects` (PendingAck
-       owns settlement until ack / timeout / close / uncertainReport).
-     - **`Relays::undelivered(&done)`**: **skips** `client.undelivered(...)` and
-       calls `broker.fail_pending_ack(&call_id)` (converts sentinel →
-       `uncertain_effect = "tools/call"`, aborts timer, drops `SettlementGuard`).
-     - **`Relays::drop` drain task**: **skips** `client.undelivered(...)` and
-       calls `broker.fail_pending_ack(&call_id)`.
-     - **`mpsc::SendError(done)` & WebSocket `send_bounded` error**: **skips**
-       `client.undelivered(...)` and calls `broker.fail_pending_ack(&call_id)`.
+   - Across **`Relays::delivered`**, **`Relays::undelivered`**, **`Relays::drop`**, and **`mpsc::SendError` / WebSocket `send_bounded` error**:
+     - `AckState::None`: existing Phase-1 behavior unchanged.
+     - `AckState::AlreadySettled`: **skip** `unread_effects` and `client.undelivered(...)` completely (broker already converted sentinel & incremented `uncertain_sequence` exactly once).
+     - `AckState::Pending(call_id)`: on `delivered`, **skip** `unread_effects` (PendingAck owns settlement until ack / timeout / close / uncertainReport); on `undelivered` / `Relays::drop` / `SendError`, **skip** `client.undelivered(...)` and call `broker.fail_pending_ack(&call_id)` (converts sentinel → `uncertain_effect = "tools/call"`, aborts timer, drops `SettlementGuard`).
 3. **Socket close (`serve_mutation` exit)**:
    - Calls `broker.connection_closed(connection_id)` which records
      `connection_id` closed, removes all `PendingAck` entries matching
@@ -645,7 +706,7 @@ registers a `PendingAck` entry holding `{ call_id, connection_id, ledger, guard:
   a closed enum (`disabled`, `init_timeout`, `process_exited`, `protocol_error`,
   `start_failed`, `reserved_name_collision`, `result_too_large`, `call_timeout`,
   `config_drift`, `not_allowed`, `invalid_config`, `unsupported_transport`,
-  `orphan_sweep_timeout`) — NEVER raw server stderr/error text, paths, args, or
+  `unresolved_variable`, `orphan_sweep_timeout`) — NEVER raw server stderr/error text, paths, args, or
   env values.
 
 ---
@@ -680,8 +741,10 @@ registers a `PendingAck` entry holding `{ call_id, connection_id, ledger, guard:
    - Merges user + local `projects` (via git toplevel & symlinked alias
      canonicalization), honors `disabledMcpServers`, ignores `.mcp.json`,
      enforces 4 MiB file cap, skips non-stdio entries with closed reason code.
-   - Expands `${VAR}`, `${VAR:-default}`, `${CLAUDE_PROJECT_DIR}` while
-     stripping `COWBOY_*` and keeper-private `CODEX_HOME`.
+   - Expands `${VAR}` / `${VAR:-default}` from `contract.environment`,
+     omits `CLAUDE_PROJECT_DIR` (asserted absent from child env), omits
+     servers retaining unresolved `${VAR}` with `unresolved_variable`, and
+     strips `COWBOY_*` and keeper-private `CODEX_HOME`.
    - Symlink-preserving `argv[0]`: executes logical PATH path while checking
      realpath against both `source_path` and `cwd`.
    - Rejects relative `/` commands, executables inside `source_path` OR `cwd`,
@@ -701,16 +764,21 @@ registers a `PendingAck` entry holding `{ call_id, connection_id, ledger, guard:
      (never `Refused`).
    - `execution_host/ledger.rs` registers `cowboy/startUserMcp` processes in
      `self.processes` for `reap_unattended()`.
-   - `cowboy/stopUserMcp` targeted (tombstones unseen ID + terminates running
-     ID), allowlist-scoped, and stop-all (bumps `stop_epoch` + terminates all).
+   - `cowboy/stopUserMcp` enforces E1 confirmation (waits for `Pending` start,
+     never accepts `unknown process id` for an unconfirmed start, returns
+     `failed > 0` and retains entry on timeout), bumps `stop_epoch` + updates
+     `latest_allowlist` on allowlist-scoped stop (fencing in-flight starts),
+     and preserves strict `user_mcp` → `ledger` lock ordering.
    - Managed read-only keeper omits `cowboyUserMcp` and refuses all three
      methods.
 5. **Target Manager live-reload tests (`machine_cli/execution.rs`)**:
    - Strips spoofed caller `managerGate`; injects live `enabled` & `allowlist`.
    - When `user_mcp == false`, returns `Outcome::Completed` `"user_mcp_disabled"`
      and stops running user servers.
-   - Live reload `true -> false` and allowlist narrowing invoke
-     `cowboy/stopUserMcp` on active keepers.
+   - Level-triggered watcher stops running servers on Manager restart when
+     `user_mcp = false` is already set, retries after transient failure,
+     bypasses the 24-permit call semaphore, and stops newly disallowed servers
+     on allowlist narrowing.
 6. **Worker isolation, Phase 2 & PendingAck tests (`src/worker_execution/`)**:
    - Unit sending `cowboy/memory` **succeeds**; unit sending `cowboy/listUserMcp`,
      `cowboy/startUserMcp`, `cowboy/stopUserMcp`, or `cowboy/anythingUnknown` is
@@ -728,9 +796,14 @@ registers a `PendingAck` entry holding `{ call_id, connection_id, ledger, guard:
      `>4 MiB` tool result returns bounded `isError: true` and still completes
      normal `cowboyAck` without closing socket.
    - **High-1 regression**: Mutation socket closes **while user-MCP `tools/call`
-     is in flight** → turn terminates boundedly (no hang, no self-deadlock) and
-     records **exactly one** `uncertain_effect = "tools/call"` (no duplicate
-     from `undelivered`).
+     is in flight** → `register_pending_ack` returns `AckState::AlreadySettled`,
+     turn terminates boundedly (no hang, no self-deadlock), and records
+     **exactly one** `uncertain_effect = "tools/call"` (no duplicate from
+     `Relays::drop` / `undelivered`).
+   - **`Failure::NotSent` & stopped-server call**: Calling a server stopped by
+     kill-switch or failing before send clears `cowboy-pending-call:<id>`
+     atomically (zero leftover sentinel on reopen) and marks the server closed
+     on stop/`process/closed`.
    - **High-1 timeout & ack**: Ack received within 15 s clears sentinel cleanly
      (no uncertain); ack omitted times out at 15 s and converts sentinel once;
      `cowboy/uncertainEffect({ method, callId })` settles immediately without
@@ -745,7 +818,8 @@ registers a `PendingAck` entry holding `{ call_id, connection_id, ledger, guard:
    - `execution-connection.mjs`: `cowboy/extensionCallAck` uses dedicated `ack`
      lane (`MAX_ACK = 8`), permitted during drain, extracts ONLY top-level
      `frame.cowboyAck` (ignores spoofed `result.cowboyAck`), enforces
-     `timeoutMs: 12000`.
+     `timeoutMs: 12000`, and releases the `ack` slot immediately on local 12 s
+     timeout (8 consecutive ack timeouts do NOT starve subsequent acks).
    - `antigravity-acp/extensions.mjs`: sends `ackProtocol: 1` on
      `cowboy/extensions` (`70 s` timeout) & `cowboy/extensionCall`; acks both
      result and refused error; throws `UncertainEffect("tools/call")` if ack

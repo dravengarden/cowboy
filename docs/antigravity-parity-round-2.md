@@ -1,6 +1,6 @@
 # Antigravity parity, round 2 — gap analysis and design
 
-Status: design, revision 4 (2026-11-22), scoped to **round 2a**, which is
+Status: design, revision 5 (2026-11-26; R2/D1 updated per 2026-11-26 Option 1 decision, originally revision 4 scoped to **round 2a**), which is
 implemented on the branch that carries this revision. Round 2a is the model label
 for subagents (A2), the built-in skills note (A3) and the Web provider labels
 (A4). Post-edit diagnostics (formerly A1), steering, user MCP servers and plan
@@ -48,7 +48,7 @@ tools on another.
 | A4 | Web labels | **round 2a** | Web |
 | R4 | Post-edit diagnostics from the Controller (formerly A1) | deferred to round 3 | Controller, proxy, facade, wire, worker |
 | R1 | Current-turn steering | deferred to round 3 | proxy, worker, wire, Controller |
-| R2 | User MCP servers from owner configuration | deferred to round 3 | worker, keeper, wire |
+| R2 | User MCP servers from owner configuration | round 3 (Option 1) | worker, keeper, Machine, proxy, config (no wire) |
 | R3 | Plan mode enforced at dispatch | deferred to round 3 | proxy |
 | D1 | Repository `.mcp.json` servers | deferred | — |
 | D2 | Repository hooks | deferred | — |
