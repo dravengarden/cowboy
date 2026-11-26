@@ -141,7 +141,7 @@ test("official Apple shells isolate their WebAuthn association", async () => {
   ) as { bundle?: { macOS?: Record<string, unknown> } };
 
   assertEquals(association.webcredentials?.apps, [
-    "9Z95WKM9DT.top.thundersparrow.cowboy",
+    "6SFGHFY924.top.thundersparrow.cowboy",
   ]);
   assertEquals(defaultMacConfig.bundle?.macOS?.signingIdentity, "-");
   assertEquals(defaultMacConfig.bundle?.macOS?.entitlements, undefined);

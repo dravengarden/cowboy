@@ -58,7 +58,7 @@ type TauriGlobal = {
   core?: { invoke?: (command: string, args?: Record<string, unknown>) => Promise<unknown> };
 };
 
-const UPDATE_PROTOCOLS = new Set(["https:", "sidestore:", "itms-apps:"]);
+const UPDATE_PROTOCOLS = new Set(["https:", "itms-apps:"]);
 
 function tauri(): TauriGlobal | undefined {
   return (globalThis as { __TAURI__?: TauriGlobal }).__TAURI__;
@@ -133,14 +133,14 @@ function validManifest(value: unknown, appId: string): value is NativeReleaseMan
     typeof manifest.latest_version === "string" && Array.isArray(manifest.channels) &&
     manifest.channels.every((channel) =>
       !!channel && typeof channel === "object" &&
-      (channel.kind === "sidestore" || channel.kind === "app_store") &&
+      (channel.kind === "testflight" || channel.kind === "app_store") &&
       typeof channel.url === "string" &&
       validChannelPlatforms(channel.platforms)
     );
 }
 
 function channelLabel(channel: NativeReleaseChannel): string {
-  return channel.label ?? (channel.kind === "sidestore" ? "Open SideStore" : "View in App Store");
+  return channel.label ?? (channel.kind === "testflight" ? "Open TestFlight" : "View in App Store");
 }
 
 export function NativeReleaseUpdatePrompt({
@@ -165,8 +165,8 @@ export function NativeReleaseUpdatePrompt({
         const candidate: unknown = await response.json();
         if (!active || !validManifest(candidate, appId)) return;
         // A release is news only for a shell one of its channels installs:
-        // the macOS desktop shell must not be offered the iOS SideStore
-        // build (its Tauri version, 0.1.0, is always "older").
+        // the macOS desktop shell must not be offered an iOS TestFlight or
+        // App Store build (its Tauri version, 0.1.0, is always "older").
         const channels = nativeReleaseChannelsFor(candidate.channels, getPlatform());
         if (channels.length === 0) return;
         const comparison = compareNativeVersions(current, candidate.latest_version);

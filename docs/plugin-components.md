@@ -575,6 +575,10 @@ state-store's dependent packages and the plugin-api consumers without changing
 native pins. It removes the temporary root `@std/assert` dependency; package
 closure validation remains strict and historical release records stay unchanged.
 
+Scoped release 3.154.0 records app-shell 1.1.44 for retiring SideStore
+release channels and switching native update discovery to standard TestFlight
+and App Store channels. No Plugin closure or native pin changes.
+
 Scoped release 3.144.0 records app-shell 1.1.43 for the already-committed
 `ScrollEdges` change in `ede6ce8c5`, which 3.143.0 did not cover. No Plugin
 closure or native pin changes; the worker registry input stays at 3.143.0.

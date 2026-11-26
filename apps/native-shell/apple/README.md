@@ -32,7 +32,8 @@ Passkey-specific globals remain during the shell compatibility window, but new
 plugin integrations use the generic capability host rather than adding a new
 global bridge per plugin.
 
-SideStore/free-team builds leave the key absent. The shared web transport
+Private tailnet iOS builds leave the key absent because Apple's Associated
+Domains CDN cannot fetch AASA from a tailnet-only origin. The shared web transport
 registry then uses Cowboy's PKCE-bound system-Safari ceremony. This is an
 intentional secure fallback, not a local-biometric substitute for WebAuthn.
 The same bridge owns that fallback through `ASWebAuthenticationSession` so the

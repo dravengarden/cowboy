@@ -132,5 +132,5 @@ repair, without substituting a CSS compensation.
 The screenshot's physical WeType prediction/guide sequence was not captured.
 This is a reproduced failure mode in the owning code, not physical-device
 acceptance for WeType, split keyboards, image paste or PITFALLS #69. Verify the
-reported workflow after updating the native App from SideStore; a Web update
+reported workflow after updating the native App from TestFlight or the App Store; a Web update
 cannot replace the native avoider.

@@ -106,9 +106,9 @@ test("entry points use the current icon and the service worker changes generatio
   assert(sw.includes('icon: "/cowboy-app-icon-192-v10.png"'));
 });
 
-// SideStore re-signs every bundled file on device under a free team, so the
-// asset catalog carries only icons the picker can actually select. Archived
-// catalog entries keep their web artwork and lose Home Screen switching.
+// Keep the iOS bundle compact and predictable: the asset catalog carries only
+// icons the picker can actually select. Archived catalog entries keep their
+// web artwork and lose Home Screen switching.
 test("native alternate icons ship exactly the curated picker styles", async () => {
   const styles = JSON.parse(await read("web/src/appIconStyles.json")) as {
     groups: { styles: { id: string }[] }[];

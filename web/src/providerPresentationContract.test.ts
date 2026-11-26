@@ -191,7 +191,7 @@ test("Service authentication keeps Cowboy alive while Provider sign-in opens ext
     true,
   );
   assertEquals(
-    managementSource.includes("Update Cowboy in SideStore"),
+    managementSource.includes("Update Cowboy in TestFlight or the App Store"),
     true,
   );
   assertEquals(managementSource.includes("closeAuthenticationBrowser()"), true);

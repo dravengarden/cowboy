@@ -157,8 +157,9 @@ primary hard cap. Status, logout, Passkey assertion, and password/provider login
 remain available for recovery. Admin keeps its separate five-minute idle-view
 lock and 12-hour cookie.
 
-The SideStore iOS shell cannot rely on the Associated Domains entitlement for
-WebAuthn inside `WKWebView`. It therefore opens the fixed `/passkey.html` page
+An iOS shell serving a private tailnet origin cannot rely on Apple's CDN-backed
+Associated Domains entitlement for WebAuthn inside `WKWebView`. It therefore
+opens the fixed `/passkey.html` page
 in a system authentication session. For an assertion, the page invokes WebAuthn
 as soon as the initiating Cowboy tap opens it, so there is no second page-level
 Continue action before Face ID, Touch ID, or the device passcode. Registration
