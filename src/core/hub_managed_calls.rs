@@ -5,7 +5,7 @@ use crate::store::NoticeClaimRelease;
 
 mod types;
 mod withdrawals;
-use types::DeferredPendingFlush;
+pub(super) use types::DeferredPendingFlush;
 pub(in crate::core) use types::NoticeClaims;
 pub use types::{
     NoticeClaimGuard, NoticeRequeueRequest, OwnerNoticeWithdrawalOp, OwnerQueueMutation,

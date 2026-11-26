@@ -863,6 +863,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
+            if s.cancel_handoff_pending {
+                return false;
+            }
             let settled = submit::extract_notice_settlements(s.queue.iter().filter(|m| m.id == id));
             let before = s.queue.len();
             s.queue.retain(|m| m.id != id);
@@ -899,6 +902,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
+            if s.cancel_handoff_pending {
+                return false;
+            }
             let before = s.queue.len();
             let res = &s.steer_reservations;
             s.queue.retain(|m| {
@@ -929,6 +935,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return false;
             };
+            if s.cancel_handoff_pending {
+                return false;
+            }
             if s.steer_reservations.values().any(|r| r.row_id == id) {
                 return false;
             }
@@ -970,6 +979,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            if s.cancel_handoff_pending {
+                return;
+            }
             let settled = submit::extract_notice_settlements(
                 s.queue
                     .iter()
@@ -1383,6 +1395,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
+            if s.cancel_handoff_pending {
+                return;
+            }
             sort_by_id_order(&mut s.queue, order, |m| &m.id);
             self.settle_explicit_locked(session_id, s);
         }

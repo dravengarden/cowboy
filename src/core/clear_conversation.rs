@@ -82,6 +82,9 @@ impl Hub {
                 fence,
             });
         }
+        if let Some(session) = self.inner.sessions.lock().get_mut(session_id) {
+            session.unpersisted_min_seq = None;
+        }
         self.clear_transcript_memory(session_id);
         self.mark_context_cleared(session_id);
     }
@@ -93,7 +96,6 @@ impl Hub {
     pub fn end_clear_conversation(&self, session_id: &str) {
         if let Some(session) = self.inner.sessions.lock().get_mut(session_id) {
             session.clear_pending = false;
-            session.unpersisted_min_seq = None;
         }
         self.try_drain(session_id);
     }
@@ -292,6 +294,46 @@ mod tests {
                 .agent_session_id
                 .as_deref(),
             Some("native-1")
+        );
+    }
+
+    #[tokio::test]
+    async fn failed_clear_preserves_unpersisted_min_seq_until_committed_clear() {
+        let (hub, mut writes) = hub_with_writes();
+        hub.inner
+            .sessions
+            .lock()
+            .get_mut("s")
+            .unwrap()
+            .unpersisted_min_seq = Some(0);
+        let (ack, _commit) = hub.begin_clear_conversation("s").unwrap().unwrap();
+        let _ = writes.try_recv();
+        hub.store_ack_sink().fail_all("disk full");
+        assert!(matches!(ack.await, Ok(Err(_))));
+        hub.end_clear_conversation("s");
+        assert_eq!(
+            hub.inner
+                .sessions
+                .lock()
+                .get("s")
+                .unwrap()
+                .unpersisted_min_seq,
+            Some(0),
+            "failed Clear must keep dropped-event marker so forks refuse incomplete prefix"
+        );
+        let (_ack2, commit2) = hub.begin_clear_conversation("s").unwrap().unwrap();
+        let _ = writes.try_recv();
+        hub.finish_clear_conversation("s", Some(commit2));
+        hub.end_clear_conversation("s");
+        assert_eq!(
+            hub.inner
+                .sessions
+                .lock()
+                .get("s")
+                .unwrap()
+                .unpersisted_min_seq,
+            None,
+            "committed Clear discards the old transcript and resets the dropped-event marker"
         );
     }
 }

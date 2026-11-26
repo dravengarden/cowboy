@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Alert, Box, Button, Stack, type SxProps, type Theme, Typography } from "@mui/material";
 import { ExpandMore, ForkRightOutlined } from "@mui/icons-material";
 import { isManagedChild } from "./managedCalls";
@@ -298,6 +298,54 @@ function LinkedSessions({
   );
 }
 
+type PendingSettingsFork =
+  | { mode: "fork"; operation: string; config: ForkConfig }
+  | {
+      mode: "linked";
+      operation: string;
+      body: {
+        provider: string;
+        provider_account_id: string;
+        preset: string | null;
+        inherit_settings: boolean;
+        config: ForkConfig;
+        include_uncommitted?: boolean;
+      };
+    };
+
+function buildSettingsForkAttempt(input: {
+  forkMode: "fork" | "linked";
+  provider: string;
+  account: string;
+  preset: string | undefined;
+  inheritSettings: boolean;
+  overrides: ForkConfig;
+  effectiveIncludeUncommitted: boolean | undefined;
+}): PendingSettingsFork {
+  return input.forkMode === "fork"
+    ? { mode: "fork", operation: `duplicate-${newUuid()}`, config: input.overrides }
+    : {
+        mode: "linked",
+        operation: `duplicate-${newUuid()}`,
+        body: {
+          provider: input.provider,
+          provider_account_id: input.account,
+          preset: input.preset || null,
+          inherit_settings: input.inheritSettings,
+          config: input.overrides,
+          ...(input.effectiveIncludeUncommitted !== undefined
+            ? { include_uncommitted: input.effectiveIncludeUncommitted }
+            : {}),
+        },
+      };
+}
+
+function submitSettingsFork(sessionId: string, attempt: PendingSettingsFork) {
+  return attempt.mode === "fork"
+    ? forkSession(sessionId, { operation: attempt.operation, config: attempt.config })
+    : duplicateSession(sessionId, attempt.body, attempt.operation);
+}
+
 /** Where the work goes: one target, then either move the work there or keep
  *  both lines live. How history travels follows from the target. */
 function NewSessionForm({
@@ -413,9 +461,8 @@ function NewSessionForm({
       ? false
       : copyUncommitted
     : undefined;
-  // One operation per distinct request: a retry returns the same copy, and
-  // changing any choice (including effective workspace mode) asks for a new one.
-  const key = useMemo(() => `duplicate-${newUuid()}`, [JSON.stringify([provider, subscription.value, preset, inheritSettings, overrides, effectiveIncludeUncommitted])]);
+  const choiceSignature = JSON.stringify([provider, subscription.value, preset, inheritSettings, overrides, copyUncommitted]);
+  const pendingForkRef = useRef<{ signature: string; attempt: PendingSettingsFork } | null>(null);
   // The first send needs this session as a source unless it was removed from
   // an already staged continuation.
   const continueSources =
@@ -450,21 +497,14 @@ function NewSessionForm({
     }, "Could not save context");
   const forkWork = () =>
     run(async () => {
-      const receipt =
-        forkMode === "fork"
-          ? await forkSession(session.id, { operation: key, config: overrides })
-          : await duplicateSession(
-              session.id,
-              {
-                provider,
-                provider_account_id: subscription.value,
-                preset: preset || null,
-                inherit_settings: inheritSettings,
-                config: overrides,
-                ...(effectiveIncludeUncommitted !== undefined ? { include_uncommitted: effectiveIncludeUncommitted } : {}),
-              },
-              key,
-            );
+      if (pendingForkRef.current?.signature !== choiceSignature) {
+        pendingForkRef.current = {
+          signature: choiceSignature,
+          attempt: buildSettingsForkAttempt({ forkMode, provider, account: subscription.value, preset, inheritSettings, overrides, effectiveIncludeUncommitted }),
+        };
+      }
+      const receipt = await submitSettingsFork(session.id, pendingForkRef.current.attempt);
+      pendingForkRef.current = null;
       onForked();
       closeSessionSettings(session.id);
       requestPickSession(receipt.session_id, receipt.session ?? undefined);

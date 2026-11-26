@@ -98,10 +98,8 @@ export async function forkSession(
   const error = typeof record.error === "string" ? record.error : text.trim();
   const message = error || `Session fork failed (HTTP ${String(response.status)})`;
   const definitiveUnsupported =
-    response.status === 400 ||
-    response.status === 422 ||
-    (response.status === 409 &&
-      /cannot be forked|must be updated|no longer available as a fork point|Wait for this agent/i.test(message));
+    response.headers.get("x-cowboy-fork-fallback") === "unsupported" ||
+    record.code === "native_fork_unsupported";
   throw new ForkSessionError(message, response.status, definitiveUnsupported);
 }
 

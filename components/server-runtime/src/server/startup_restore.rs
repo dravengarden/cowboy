@@ -87,6 +87,14 @@ pub async fn restore_hub_from_store(store: &Store, hub: &Hub) -> anyhow::Result<
             }
         }
     }
+    for (source_id, before_seq) in hub.staging_fork_freeze_floors() {
+        hub.freeze_lineage_prefix(&source_id, before_seq);
+    }
+    if let Ok(reserved_floors) = store.load_reserved_duplicate_freeze_floors().await {
+        for (source_id, before_seq) in reserved_floors {
+            hub.freeze_lineage_prefix(&source_id, before_seq);
+        }
+    }
     hub.set_artifacts(store.artifacts());
     tracing::info!(restored = restored_count, "persistence wired",);
     Ok(())

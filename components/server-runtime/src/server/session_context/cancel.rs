@@ -151,11 +151,14 @@ async fn take_back(
         return Err(refused.into());
     }
     restore_source_if_trashed(&state, &auth.principal, &source)?;
-    // Fence dispatch without emptying the queue yet, then commit empty queue,
-    // cancelled receipt (with the returned prompt), and lineage edge deletion
-    // in a single database transaction so no crash can lose the prompt or
-    // leave orphaned lineage.
-    let (taken, cancel_guard) = state.hub.begin_cancel_handoff(&id, &cmid).ok_or(refused)?;
+    // Flush any queued bootstrap UpdatePending to durable storage before
+    // taking the pending-commit fence and CAS-committing cancellation.
+    lineage::flush_store_barrier(&state).await?;
+    // Fence dispatch and write-behind queue flushes without emptying the queue
+    // yet, then CAS-commit empty queue, cancelled receipt, and lineage edge
+    // deletion in one database transaction.
+    let (taken, expected_queue, cancel_guard) =
+        state.hub.begin_cancel_handoff(&id, &cmid).ok_or(refused)?;
     let (text, content) = (taken.text, taken.content);
     if let Some(delivery) = target.delivery.as_mut() {
         delivery.state = CANCELLED.into();
@@ -170,15 +173,17 @@ async fn take_back(
     let target_key = crate::session_context::key(&id);
     let target_value = serde_json::to_value(&target).expect("session context serializes");
     if let Some(store) = state.store.as_ref() {
-        store
-            .commit_handoff_cancellation(&id, &target_key, &target_value)
+        let committed = store
+            .commit_handoff_cancellation(&id, &expected_queue, &target_key, &target_value)
             .await
             .map_err(|error| format!("Could not cancel switch ({error})"))?;
+        if !committed {
+            return Err(refused.into());
+        }
     }
     state
         .hub
-        .commit_cancel_handoff_memory(&id, &cmid, target_key, target_value);
-    drop(cancel_guard);
+        .commit_cancel_handoff_memory(&id, &cmid, target_key, target_value, cancel_guard);
     // The work did not move: the destination stops naming the original, so
     // restoring it later cannot turn the original into history again. Its
     // cancelled receipt keeps startup from recording the mark once more.

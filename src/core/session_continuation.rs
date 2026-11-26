@@ -50,58 +50,82 @@ impl Hub {
         &self,
         session_id: &str,
         cmid: &str,
-    ) -> Option<(QueuedMessage, HandoffCancelGuard)> {
-        let peeked = {
+    ) -> Option<(QueuedMessage, Vec<QueuedMessage>, HandoffCancelGuard)> {
+        let (peeked, expected_queue) = {
             let mut sessions = self.inner.sessions.lock();
             let s = sessions.get_mut(session_id)?;
+            let mut claims = self.inner.notice_claims.lock();
             if s.cancel_handoff_pending
                 || s.in_flight
                 || s.dispatch_pending.is_some()
                 || s.queue.len() != 1
                 || s.queue[0].cmid.as_deref() != Some(cmid)
+                || claims.in_flight_pending_commits.contains_key(session_id)
             {
                 return None;
             }
             s.cancel_handoff_pending = true;
-            s.queue[0].clone()
+            claims.in_flight_pending_commits.insert(
+                session_id.to_owned(),
+                super::hub_managed_calls::DeferredPendingFlush::default(),
+            );
+            (s.queue[0].clone(), s.queue.clone())
         };
         Some((
             peeked,
+            expected_queue,
             HandoffCancelGuard {
                 hub: self.clone(),
                 session_id: session_id.to_owned(),
+                released: false,
             },
         ))
     }
 
-    /// Apply an already-committed handoff cancellation in memory (queue emptied,
-    /// cancelled receipt setting stored, auth parent removed) without emitting a
-    /// duplicate async queue/setting write.
+    /// Apply an already-committed handoff cancellation in memory while still
+    /// holding the pending-commit fence, publish the committed queue snapshot,
+    /// and release the fence atomically so no delayed write-behind snapshot can
+    /// restore the cancelled bootstrap prompt.
     pub fn commit_cancel_handoff_memory(
         &self,
         session_id: &str,
         cmid: &str,
         setting_key: String,
         setting_value: serde_json::Value,
+        mut guard: HandoffCancelGuard,
     ) {
         self.inner
             .settings
             .lock()
             .insert(setting_key, setting_value);
         self.remove_auth_parent(session_id);
-        {
+        let snapshot = {
             let mut sessions = self.inner.sessions.lock();
-            let Some(s) = sessions.get_mut(session_id) else {
-                return;
-            };
-            if s.queue.len() == 1 && s.queue[0].cmid.as_deref() == Some(cmid) {
-                if s.editing.as_deref() == Some(s.queue[0].id.as_str()) {
-                    s.editing = None;
+            let mut claims = self.inner.notice_claims.lock();
+            let result = if let Some(s) = sessions.get_mut(session_id) {
+                if let Some(pos) = s.queue.iter().position(|m| m.cmid.as_deref() == Some(cmid)) {
+                    let removed = s.queue.remove(pos);
+                    if s.editing.as_deref() == Some(removed.id.as_str()) {
+                        s.editing = None;
+                        s.editing_token = None;
+                    }
                 }
-                s.queue.clear();
-            }
+                s.cancel_handoff_pending = false;
+                let queue = s.queue.clone();
+                let drafts = s.drafts.clone();
+                self.finish_in_flight_pending_commit(session_id, &queue, &drafts, &mut claims);
+                Some((queue, drafts))
+            } else {
+                claims.in_flight_pending_commits.remove(session_id);
+                None
+            };
+            guard.released = true;
+            result
+        };
+        if let Some((queue, drafts)) = snapshot {
+            self.broadcast_pending_snapshot(session_id, &queue, &drafts);
         }
-        self.emit_pending(session_id);
+        self.try_drain(session_id);
     }
 
     /// Take back a continuation's first message while it is the only queued
@@ -908,12 +932,28 @@ mod spawn_tests;
 pub struct HandoffCancelGuard {
     hub: Hub,
     session_id: String,
+    released: bool,
 }
 
 impl Drop for HandoffCancelGuard {
     fn drop(&mut self) {
-        if let Some(session) = self.hub.inner.sessions.lock().get_mut(&self.session_id) {
-            session.cancel_handoff_pending = false;
+        if self.released {
+            return;
+        }
+        {
+            let mut sessions = self.hub.inner.sessions.lock();
+            let mut claims = self.hub.inner.notice_claims.lock();
+            if let Some(session) = sessions.get_mut(&self.session_id) {
+                session.cancel_handoff_pending = false;
+                self.hub.finish_in_flight_pending_commit(
+                    &self.session_id,
+                    &session.queue,
+                    &session.drafts,
+                    &mut claims,
+                );
+            } else {
+                claims.in_flight_pending_commits.remove(&self.session_id);
+            }
         }
         self.hub.try_drain(&self.session_id);
     }

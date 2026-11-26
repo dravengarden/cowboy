@@ -761,11 +761,38 @@ async fn commit_handoff_cancellation_atomically_clears_queue_writes_receipt_and_
         .update_pending("dst-cancel", &queued, &[])
         .await
         .unwrap();
-    let receipt_val = serde_json::json!({"cancelled": true});
-    store
-        .commit_handoff_cancellation("dst-cancel", "session_context:src-cancel", &receipt_val)
-        .await
-        .unwrap();
+    let receipt_val = serde_json::json!({"delivery": {"state": "cancelled"}});
+    // Mismatched expected queue must be refused without wiping queue or lineage.
+    let wrong_queue: Vec<crate::model::QueuedMessage> = vec![
+        serde_json::from_value(
+            serde_json::json!({"id": "q-other", "text": "edited", "cmid": "op-other"}),
+        )
+        .unwrap(),
+    ];
+    assert!(
+        !store
+            .commit_handoff_cancellation(
+                "dst-cancel",
+                &wrong_queue,
+                "session_context:src-cancel",
+                &receipt_val,
+            )
+            .await
+            .unwrap()
+    );
+    assert!(store.lineage_edge("dst-cancel").await.unwrap().is_some());
+    // Exact expected queue succeeds atomically.
+    assert!(
+        store
+            .commit_handoff_cancellation(
+                "dst-cancel",
+                &queued,
+                "session_context:src-cancel",
+                &receipt_val,
+            )
+            .await
+            .unwrap()
+    );
 
     assert!(store.lineage_edge("dst-cancel").await.unwrap().is_none());
     let settings = store.load_settings().await.unwrap();
@@ -829,4 +856,106 @@ async fn lineage_question_page_at_stops_at_turn_end_and_preserves_question_root(
     assert_eq!(detail.events.first().map(|e| e.seq), Some(0));
     assert_eq!(detail.events.last().map(|e| e.seq), Some(2));
     assert!(detail.next_after_seq.is_none());
+}
+
+#[tokio::test]
+async fn cold_find_message_rejects_pre_context_rolled_over_and_tracks_clear_seq() {
+    let (store, _dir) = test_store().await;
+    let mut meta = session("cold-rollover");
+    meta.status = crate::agent_model::Status::Running;
+    store.insert_session(&meta).await.unwrap();
+
+    let user_msg = |seq: u64, text: &str| Envelope {
+        session_id: "cold-rollover".to_owned(),
+        seq,
+        event: Event::Update {
+            update: serde_json::json!({
+                "sessionUpdate": "user_message_chunk",
+                "content": {"type": "text", "text": text},
+            }),
+        },
+        cmid: None,
+    };
+    let assistant_msg = |seq: u64, mid: &str, text: &str| Envelope {
+        session_id: "cold-rollover".to_owned(),
+        seq,
+        event: Event::Update {
+            update: serde_json::json!({
+                "sessionUpdate": "agent_message_chunk",
+                "messageId": mid,
+                "content": {"type": "text", "text": text},
+            }),
+        },
+        cmid: None,
+    };
+    let rollover = Envelope {
+        session_id: "cold-rollover".to_owned(),
+        seq: 2,
+        event: Event::Update {
+            update: serde_json::json!({
+                "sessionUpdate": crate::context_rollover::MARKER,
+                "before": 2,
+            }),
+        },
+        cmid: None,
+    };
+
+    store
+        .upsert_event_batch(
+            &[
+                user_msg(0, "before rollover"),
+                assistant_msg(1, "pre-rollover-ans", "old"),
+                rollover,
+                user_msg(3, "after rollover"),
+                assistant_msg(4, "post-rollover-ans", "new"),
+            ],
+            &HashMap::from([("cold-rollover".to_owned(), 5)]),
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        store
+            .find_message_turn_before_seq("cold-rollover", "pre-rollover-ans")
+            .await
+            .unwrap(),
+        None,
+        "cold scan must reject answers before context_rolled_over"
+    );
+    assert_eq!(
+        store
+            .find_message_turn_before_seq("cold-rollover", "post-rollover-ans")
+            .await
+            .unwrap(),
+        Some(5)
+    );
+    assert_eq!(
+        store
+            .latest_context_clear_seq("cold-rollover")
+            .await
+            .unwrap(),
+        None
+    );
+    let cleared = Envelope {
+        session_id: "cold-rollover".to_owned(),
+        seq: 5,
+        event: Event::Update {
+            update: serde_json::json!({"sessionUpdate": "context_cleared"}),
+        },
+        cmid: None,
+    };
+    store
+        .upsert_event_batch(
+            &[cleared],
+            &HashMap::from([("cold-rollover".to_owned(), 6)]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        store
+            .latest_context_clear_seq("cold-rollover")
+            .await
+            .unwrap(),
+        Some(5)
+    );
 }

@@ -188,7 +188,7 @@ test("notifyLineageChanged drops cached lineage and dependent ancestor segments"
 test("executeForkAttempt preserves native attempt on transient error and switches to linked only on definitive unsupported", async () => {
   const originalFetch = globalThis.fetch;
   const calls: Array<{ url: string; body: string }> = [];
-  let responseMode: "transient" | "unsupported" | "ok" = "transient";
+  let responseMode: "transient" | "post-admission" | "unsupported" = "transient";
   globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === "string" ? input : input.toString();
     const body = typeof init?.body === "string" ? init.body : "";
@@ -197,7 +197,27 @@ test("executeForkAttempt preserves native attempt on transient error and switche
       if (responseMode === "transient") {
         return new Response("Temporary backend error", { status: 503 });
       }
-      return new Response("codex sessions cannot be forked yet", { status: 400 });
+      if (responseMode === "post-admission") {
+        return new Response(
+          JSON.stringify({
+            error: "The new session sess-9 was admitted on another login and cannot fork this conversation",
+          }),
+          { status: 409, headers: { "content-type": "application/json" } },
+        );
+      }
+      return new Response(
+        JSON.stringify({
+          error: "codex sessions cannot be forked yet",
+          code: "native_fork_unsupported",
+        }),
+        {
+          status: 409,
+          headers: {
+            "content-type": "application/json",
+            "x-cowboy-fork-fallback": "unsupported",
+          },
+        },
+      );
     }
     return new Response(JSON.stringify({ session_id: "sess-linked", session: null }), {
       status: 201,
@@ -227,7 +247,17 @@ test("executeForkAttempt preserves native attempt on transient error and switche
     expect(attempt.operation).toBe("fork-msg-stable");
     expect(calls.length).toBe(1);
 
-    // Definitive unsupported 400 switches to linked and records linked attempt.
+    // Post-admission 409 containing "cannot fork" WITHOUT typed fallback code must NOT fall back.
+    responseMode = "post-admission";
+    await expect(
+      executeForkAttempt("src-1", attempt, true, makeLinked, (next) => {
+        attempt = next;
+      }),
+    ).rejects.toThrow("admitted on another login");
+    expect(attempt.mode).toBe("native");
+    expect(attempt.operation).toBe("fork-msg-stable");
+
+    // Typed pre-admission unsupported switches to linked and records linked attempt.
     responseMode = "unsupported";
     const receipt = await executeForkAttempt("src-1", attempt, true, makeLinked, (next) => {
       attempt = next;
@@ -236,6 +266,7 @@ test("executeForkAttempt preserves native attempt on transient error and switche
     expect(attempt.mode).toBe("linked");
     expect(attempt.operation).toBe("fork-turn-stable");
     expect(calls.map((c) => c.url)).toEqual([
+      "/api/sessions/src-1/fork",
       "/api/sessions/src-1/fork",
       "/api/sessions/src-1/fork",
       "/api/sessions/src-1/duplicate",

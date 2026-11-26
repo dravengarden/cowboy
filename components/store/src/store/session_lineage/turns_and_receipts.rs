@@ -167,19 +167,41 @@ impl Store {
         )
     }
 
-    /// Commit Cancel Switch atomically in one database transaction: clear the
-    /// destination queue, write the cancelled receipt holding the returned
-    /// prompt, and delete the destination's lineage edge.
+    /// Atomically CAS-clear the cancelled handoff destination's persisted queue
+    /// (requiring exact match with `expected_queue`), record the cancelled
+    /// destination receipt setting (requiring it is not already cancelled), and
+    /// delete its lineage edge in one database transaction. Returns `Ok(false)`
+    /// if the durable queue or receipt changed concurrently.
     pub async fn commit_handoff_cancellation(
         &self,
         destination_session_id: &str,
+        expected_queue: &[crate::model::QueuedMessage],
         setting_key: &str,
         setting_value: &serde_json::Value,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         dispatch!(
             self,
-            commit_handoff_cancellation(destination_session_id, setting_key, setting_value)
+            commit_handoff_cancellation(
+                destination_session_id,
+                expected_queue,
+                setting_key,
+                setting_value,
+            )
         )
+    }
+
+    /// Highest `seq` of a `context_cleared` event persisted for `session_id`.
+    /// Used by reserved fork recovery to detect whether a Clear wiped an
+    /// un-edged prefix after crash/restart.
+    pub async fn latest_context_clear_seq(&self, session_id: &str) -> Result<Option<u64>> {
+        dispatch!(self, latest_context_clear_seq(session_id))
+    }
+
+    /// Return `(source_session_id, before_seq)` pairs for all `"reserved"`
+    /// duplicate receipts with `before_seq > 0` so startup restores freeze
+    /// floors before any new events arrive.
+    pub async fn load_reserved_duplicate_freeze_floors(&self) -> Result<Vec<(String, u64)>> {
+        dispatch!(self, load_reserved_duplicate_freeze_floors())
     }
 }
 
@@ -275,9 +297,10 @@ impl PostgresStorage {
             return Ok(None);
         };
         let boundary_floor: Option<i64> = sqlx::query_scalar(
-            "SELECT MAX(seq) FROM events WHERE session_id = $1                AND payload->>'kind' = 'update'                AND payload->'update'->>'sessionUpdate' IN ('context_cleared', 'cowboy_context_renewed')",
+            "SELECT MAX(seq) FROM events WHERE session_id = $1                AND payload->>'kind' = 'update'                AND payload->'update'->>'sessionUpdate' IN ('context_cleared', $2)",
         )
         .bind(session_id)
+        .bind(crate::context_rollover::MARKER)
         .fetch_one(&mut *tx)
         .await
         .with_context(|| format!("scan PG context boundary for {session_id}"))?;
@@ -469,17 +492,38 @@ impl PostgresStorage {
     pub(super) async fn commit_handoff_cancellation(
         &self,
         destination_session_id: &str,
+        expected_queue: &[crate::model::QueuedMessage],
         setting_key: &str,
         setting_value: &serde_json::Value,
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        let expected_queue_json =
+            serde_json::to_value(expected_queue).context("serialize PG expected queue")?;
         let mut tx = self.pool.begin().await?;
-        sqlx::query("UPDATE sessions SET queue = '[]'::jsonb, updated_at = now() WHERE id = $1")
-            .bind(destination_session_id)
-            .execute(&mut *tx)
-            .await
-            .with_context(|| {
-                format!("clear PG queue for cancelled handoff {destination_session_id}")
-            })?;
+        let updated = sqlx::query(
+            "UPDATE sessions SET queue = '[]'::jsonb, updated_at = now()              WHERE id = $1 AND queue = $2::jsonb",
+        )
+        .bind(destination_session_id)
+        .bind(&expected_queue_json)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| {
+            format!("CAS clear PG queue for cancelled handoff {destination_session_id}")
+        })?;
+        if updated.rows_affected() != 1 {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        let existing_state: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT value->'delivery'->>'state' FROM settings WHERE key = $1 FOR UPDATE",
+        )
+        .bind(setting_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .with_context(|| format!("check PG handoff receipt {setting_key}"))?;
+        if existing_state.flatten().as_deref() == Some("cancelled") {
+            tx.rollback().await?;
+            return Ok(false);
+        }
         sqlx::query(
             "INSERT INTO settings (key, value, updated_at) VALUES ($1, $2, now())              ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
         )
@@ -496,7 +540,31 @@ impl PostgresStorage {
                 format!("delete PG cancelled handoff lineage {destination_session_id}")
             })?;
         tx.commit().await?;
-        Ok(())
+        Ok(true)
+    }
+
+    pub(super) async fn latest_context_clear_seq(&self, session_id: &str) -> Result<Option<u64>> {
+        let seq: Option<i64> = sqlx::query_scalar(
+            "SELECT MAX(seq) FROM events WHERE session_id = $1                AND payload->>'kind' = 'update'                AND payload->'update'->>'sessionUpdate' = 'context_cleared'",
+        )
+        .bind(session_id)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("read PG latest context_cleared seq for {session_id}"))?;
+        Ok(seq.and_then(|v| u64::try_from(v).ok()))
+    }
+
+    pub(super) async fn load_reserved_duplicate_freeze_floors(&self) -> Result<Vec<(String, u64)>> {
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT source_session_id, before_seq FROM session_duplicate_receipts              WHERE state = 'reserved' AND before_seq > 0",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("SELECT PG reserved duplicate freeze floors")?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(sid, seq)| u64::try_from(seq).ok().map(|s| (sid, s)))
+            .collect())
     }
 }
 
@@ -567,9 +635,10 @@ impl SqliteStorage {
             return Ok(None);
         };
         let boundary_floor: Option<i64> = sqlx::query_scalar(
-            "SELECT MAX(seq) FROM events WHERE session_id = ?1                AND json_extract(payload, '$.kind') = 'update'                AND json_extract(payload, '$.update.sessionUpdate') IN ('context_cleared', 'cowboy_context_renewed')",
+            "SELECT MAX(seq) FROM events WHERE session_id = ?1                AND json_extract(payload, '$.kind') = 'update'                AND json_extract(payload, '$.update.sessionUpdate') IN ('context_cleared', ?2)",
         )
         .bind(session_id)
+        .bind(crate::context_rollover::MARKER)
         .fetch_one(&mut *tx)
         .await
         .with_context(|| format!("scan SQLite context boundary for {session_id}"))?;
@@ -761,21 +830,42 @@ impl SqliteStorage {
     pub(super) async fn commit_handoff_cancellation(
         &self,
         destination_session_id: &str,
+        expected_queue: &[crate::model::QueuedMessage],
         setting_key: &str,
         setting_value: &serde_json::Value,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let now_ms = chrono::Utc::now().timestamp_millis();
+        let expected_queue_json =
+            serde_json::to_string(expected_queue).context("serialize SQLite expected queue")?;
         let value_json =
             serde_json::to_string(setting_value).context("serialize cancelled setting")?;
         let mut tx = self.pool.begin_with("BEGIN IMMEDIATE").await?;
-        sqlx::query("UPDATE sessions SET queue = '[]', updated_at_ms = ?2 WHERE id = ?1")
-            .bind(destination_session_id)
-            .bind(now_ms)
-            .execute(&mut *tx)
-            .await
-            .with_context(|| {
-                format!("clear SQLite queue for cancelled handoff {destination_session_id}")
-            })?;
+        let updated = sqlx::query(
+            "UPDATE sessions SET queue = '[]', updated_at_ms = ?2 WHERE id = ?1 AND queue = ?3",
+        )
+        .bind(destination_session_id)
+        .bind(now_ms)
+        .bind(&expected_queue_json)
+        .execute(&mut *tx)
+        .await
+        .with_context(|| {
+            format!("CAS clear SQLite queue for cancelled handoff {destination_session_id}")
+        })?;
+        if updated.rows_affected() != 1 {
+            tx.rollback().await?;
+            return Ok(false);
+        }
+        let existing_state: Option<Option<String>> = sqlx::query_scalar(
+            "SELECT json_extract(value, '$.delivery.state') FROM settings WHERE key = ?1",
+        )
+        .bind(setting_key)
+        .fetch_optional(&mut *tx)
+        .await
+        .with_context(|| format!("check SQLite handoff receipt {setting_key}"))?;
+        if existing_state.flatten().as_deref() == Some("cancelled") {
+            tx.rollback().await?;
+            return Ok(false);
+        }
         sqlx::query(
             "INSERT INTO settings (key, value, updated_at_ms) VALUES (?1, ?2, ?3)              ON CONFLICT (key) DO UPDATE SET value = excluded.value, updated_at_ms = excluded.updated_at_ms",
         )
@@ -793,6 +883,30 @@ impl SqliteStorage {
                 format!("delete SQLite cancelled handoff lineage {destination_session_id}")
             })?;
         tx.commit().await?;
-        Ok(())
+        Ok(true)
+    }
+
+    pub(super) async fn latest_context_clear_seq(&self, session_id: &str) -> Result<Option<u64>> {
+        let seq: Option<i64> = sqlx::query_scalar(
+            "SELECT MAX(seq) FROM events WHERE session_id = ?1                AND json_extract(payload, '$.kind') = 'update'                AND json_extract(payload, '$.update.sessionUpdate') = 'context_cleared'",
+        )
+        .bind(session_id)
+        .fetch_one(&self.pool)
+        .await
+        .with_context(|| format!("read SQLite latest context_cleared seq for {session_id}"))?;
+        Ok(seq.and_then(|v| u64::try_from(v).ok()))
+    }
+
+    pub(super) async fn load_reserved_duplicate_freeze_floors(&self) -> Result<Vec<(String, u64)>> {
+        let rows: Vec<(String, i64)> = sqlx::query_as(
+            "SELECT source_session_id, before_seq FROM session_duplicate_receipts              WHERE state = 'reserved' AND before_seq > 0",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .context("SELECT SQLite reserved duplicate freeze floors")?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(sid, seq)| u64::try_from(seq).ok().map(|s| (sid, s)))
+            .collect())
     }
 }

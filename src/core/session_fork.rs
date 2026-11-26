@@ -42,6 +42,14 @@ pub struct ForkRecord {
     /// exact prefix instead of recapturing a newer source state.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub before_seq: Option<u64>,
+    /// Source context generation captured at admission so staging resume can
+    /// verify the source did not clear or roll over before setup committed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_context_generation: Option<u64>,
+    /// Requested config overrides captured at admission so staging retries can
+    /// detect mismatched request parameters.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub config: Option<serde_json::Map<String, serde_json::Value>>,
     /// Caller operation that created this destination; a retry with the same
     /// operation and request observes this destination instead of forking twice.
     pub operation: String,
@@ -178,14 +186,39 @@ impl Hub {
             .and_then(|value| serde_json::from_value(value).ok())
     }
 
-    /// The destination `source` already created for `operation`.
+    /// The destination `source` already created or staged for `operation`,
+    /// scanning fork settings directly so a staging intent survives even if the
+    /// destination session was never inserted before a crash.
     #[must_use]
     pub fn fork_by_operation(&self, source: &str, operation: &str) -> Option<(String, ForkRecord)> {
-        self.session_list().into_iter().find_map(|meta| {
-            let record = self.session_fork(&meta.id)?;
-            (record.source_session_id == source && record.operation == operation)
-                .then_some((meta.id, record))
-        })
+        let settings = self.inner.settings.lock();
+        let mut matches: Vec<(String, ForkRecord)> = settings
+            .iter()
+            .filter_map(|(k, v)| {
+                let destination = k.strip_prefix(settings_keys::SESSION_FORK_PREFIX)?;
+                let record: ForkRecord = serde_json::from_value(v.clone()).ok()?;
+                (record.source_session_id == source && record.operation == operation)
+                    .then_some((destination.to_owned(), record))
+            })
+            .collect();
+        matches.sort_by(|a, b| a.0.cmp(&b.0));
+        matches.into_iter().next()
+    }
+
+    /// Return `(source_session_id, before_seq)` pairs for all staging native
+    /// fork settings so startup restores freeze floors before any new events.
+    #[must_use]
+    pub fn staging_fork_freeze_floors(&self) -> Vec<(String, u64)> {
+        let settings = self.inner.settings.lock();
+        settings
+            .iter()
+            .filter_map(|(k, v)| {
+                k.strip_prefix(settings_keys::SESSION_FORK_PREFIX)?;
+                let record: ForkRecord = serde_json::from_value(v.clone()).ok()?;
+                let before = record.before_seq.filter(|&seq| seq > 0)?;
+                (record.state == ForkState::Staging).then_some((record.source_session_id, before))
+            })
+            .collect()
     }
 
     /// Record a reserved destination before it is created, so its workspace
@@ -250,6 +283,10 @@ impl Hub {
     /// Mark a staging native fork ready for launch once mandatory setup is durable.
     pub fn activate_native_fork(&self, destination: &str) {
         self.set_fork_state(destination, ForkState::Pending);
+        if let Some(session) = self.inner.sessions.lock().get_mut(destination) {
+            session.native_fork_staging = false;
+        }
+        self.try_drain(destination);
     }
 
     pub(super) fn native_fork_pending(&self, destination: &str) -> bool {
@@ -276,14 +313,17 @@ impl Hub {
         let Some(mut record) = self.session_fork(destination) else {
             return;
         };
-        if record.state == state {
-            return;
+        let is_staging = state == ForkState::Staging;
+        if record.state != state {
+            record.state = state;
+            self.set_setting(
+                key(destination),
+                serde_json::to_value(record).expect("fork record serializes"),
+            );
         }
-        record.state = state;
-        self.set_setting(
-            key(destination),
-            serde_json::to_value(record).expect("fork record serializes"),
-        );
+        if let Some(session) = self.inner.sessions.lock().get_mut(destination) {
+            session.native_fork_staging = is_staging;
+        }
     }
 
     /// The fork the destination's next worker must perform, if it has no
@@ -376,6 +416,8 @@ mod tests {
             message_id: message_id.map(str::to_owned),
             point: None,
             before_seq: None,
+            source_context_generation: None,
+            config: None,
             operation: "op-1".to_owned(),
             state: ForkState::Pending,
         }
@@ -558,5 +600,55 @@ mod tests {
         );
         assert_eq!(hub.fork_by_operation("source", "op-2"), None);
         assert_eq!(hub.fork_by_operation("other", "op-1"), None);
+    }
+
+    #[test]
+    fn activate_native_fork_clears_staging_flag_and_wakes_queued_prompt() {
+        let hub = Hub::new();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        hub.set_dispatch_tx(tx);
+        session(&hub, "source");
+        let mut rec = record(None);
+        rec.state = ForkState::Staging;
+        hub.stage_fork("fork-staged", &rec);
+        session(&hub, "fork-staged");
+        hub.set_status("fork-staged", crate::agent_model::Status::Running, None);
+        hub.submit(
+            "fork-staged",
+            "hello after promotion".into(),
+            vec![],
+            Some("cmid-1".into()),
+            &crate::prompt_origin::RequestCaller::Person,
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "staging fork must not dispatch before activation"
+        );
+        hub.activate_native_fork("fork-staged");
+        let dispatched = rx
+            .try_recv()
+            .expect("activate_native_fork must clear staging flag and wake queued prompt");
+        assert_eq!(dispatched.session_id, "fork-staged");
+        assert_eq!(dispatched.cmid.as_deref(), Some("cmid-1"));
+    }
+
+    #[test]
+    fn fork_by_operation_finds_staging_intent_without_registered_destination() {
+        let hub = Hub::new();
+        session(&hub, "source");
+        let mut rec = record(None);
+        rec.state = ForkState::Staging;
+        rec.before_seq = Some(9);
+        hub.stage_fork("sess-ghost", &rec);
+        assert!(hub.session_info("sess-ghost").is_none());
+        let found = hub.fork_by_operation("source", "op-1");
+        assert_eq!(
+            found.as_ref().map(|(id, r)| (id.as_str(), r.state.clone())),
+            Some(("sess-ghost", ForkState::Staging))
+        );
+        assert_eq!(
+            hub.staging_fork_freeze_floors(),
+            vec![("source".to_owned(), 9)]
+        );
     }
 }

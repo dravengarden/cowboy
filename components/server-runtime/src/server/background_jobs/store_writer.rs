@@ -1,8 +1,84 @@
 //! Write-behind store writer batching, transcript anchor rebasing, and
 //! acknowledged lineage-freeze / clear serialization.
 
+use std::collections::VecDeque;
+
 use super::super::*;
 use super::apply_non_event_write;
+
+/// Cap retained failed fire-and-forget non-event writes (such as InsertSession
+/// and PutSetting) so a sustained DB outage cannot grow memory unboundedly.
+const MAX_PENDING_NON_EVENTS: usize = 2048;
+
+struct PendingNonEvents {
+    queue: VecDeque<StoreWrite>,
+    overflowed: bool,
+}
+
+impl PendingNonEvents {
+    fn new() -> Self {
+        Self {
+            queue: VecDeque::new(),
+            overflowed: false,
+        }
+    }
+
+    fn is_clean(&self) -> bool {
+        self.queue.is_empty() && !self.overflowed
+    }
+
+    fn is_retriable(write: &StoreWrite) -> bool {
+        !matches!(
+            write,
+            StoreWrite::UpdatePending {
+                ack_id: Some(_),
+                ..
+            } | StoreWrite::Barrier { .. }
+                | StoreWrite::ClearEvents { .. }
+                | StoreWrite::FreezeLineagePrefix { .. }
+        )
+    }
+
+    async fn drain(&mut self, store: &Store, acks: Option<&crate::core::StoreAckSink>) -> bool {
+        while let Some(front) = self.queue.front() {
+            if !apply_non_event_write(store, front, acks).await {
+                return false;
+            }
+            self.queue.pop_front();
+        }
+        true
+    }
+
+    fn enqueue(&mut self, write: StoreWrite) {
+        if self.queue.len() >= MAX_PENDING_NON_EVENTS {
+            self.overflowed = true;
+            return;
+        }
+        self.queue.push_back(write);
+    }
+
+    async fn apply_or_retain(
+        &mut self,
+        store: &Store,
+        write: StoreWrite,
+        acks: Option<&crate::core::StoreAckSink>,
+    ) -> bool {
+        let drained = self.drain(store, acks).await;
+        if !Self::is_retriable(&write) {
+            return drained && apply_non_event_write(store, &write, acks).await;
+        }
+        if !self.queue.is_empty() {
+            self.enqueue(write);
+            return false;
+        }
+        if apply_non_event_write(store, &write, acks).await {
+            true
+        } else {
+            self.enqueue(write);
+            false
+        }
+    }
+}
 
 struct PendingEventBatch {
     events: BTreeMap<(String, u64), Envelope>,
@@ -85,6 +161,9 @@ pub async fn run_store_writer_with_acks(
             return;
         }
     }
+    if let Ok(reserved_floors) = store.load_reserved_duplicate_freeze_floors().await {
+        initial_floors.extend(reserved_floors);
+    }
     run_store_writer_with_floors(store, rx, health, shutdown, acks, initial_floors).await;
 }
 
@@ -100,9 +179,11 @@ pub async fn run_store_writer_with_floors(
     for (session_id, before_seq) in initial_freeze_floors {
         reducer.set_freeze_floor(&session_id, before_seq);
     }
-    // Retained across loop iterations so a failed flush is never discarded
-    // before a later FreezeLineagePrefix, Barrier, or ClearEvents arrives.
+    // Retained across loop iterations so failed event batches and failed
+    // session/setting writes are retried in FIFO order and never silently
+    // acknowledged by a later Barrier or FreezeLineagePrefix.
     let mut pending = PendingEventBatch::new();
+    let mut pending_non_events = PendingNonEvents::new();
     let mut draining = *shutdown.borrow();
     if draining {
         rx.close();
@@ -131,11 +212,21 @@ pub async fn run_store_writer_with_floors(
                 Ok(None) | Err(_) => break,
             }
         }
-        if !apply_store_batch_with_acks(&store, &mut reducer, &mut pending, batch, acks.as_ref())
-            .await
+        if !apply_store_batch_with_acks(
+            &store,
+            &mut reducer,
+            &mut pending,
+            &mut pending_non_events,
+            batch,
+            acks.as_ref(),
+        )
+        .await
         {
             health.mark_failed_batch();
         }
+    }
+    if !pending_non_events.drain(&store, acks.as_ref()).await {
+        health.mark_failed_batch();
     }
     if !pending.is_empty() && !pending.flush(&store, &mut reducer).await {
         health.mark_failed_batch();
@@ -153,7 +244,16 @@ pub async fn apply_store_batch(
     writes: Vec<StoreWrite>,
 ) -> bool {
     let mut pending = PendingEventBatch::new();
-    apply_store_batch_with_acks(store, reducer, &mut pending, writes, None).await
+    let mut pending_non_events = PendingNonEvents::new();
+    apply_store_batch_with_acks(
+        store,
+        reducer,
+        &mut pending,
+        &mut pending_non_events,
+        writes,
+        None,
+    )
+    .await
 }
 
 async fn apply_append_event(
@@ -291,6 +391,7 @@ async fn apply_store_batch_with_acks(
     store: &Store,
     reducer: &mut EventReducer,
     pending: &mut PendingEventBatch,
+    pending_non_events: &mut PendingNonEvents,
     writes: Vec<StoreWrite>,
     acks: Option<&crate::core::StoreAckSink>,
 ) -> bool {
@@ -322,15 +423,18 @@ async fn apply_store_batch_with_acks(
                 }
             }
             StoreWrite::Barrier { ack_id: Some(id) } => {
+                let drained = pending_non_events.drain(store, acks).await;
                 let flushed = pending.flush(store, reducer).await && pending.is_empty();
-                ok &= flushed;
+                let all_durable = drained && pending_non_events.is_clean() && flushed;
+                ok &= all_durable;
                 if let Some(acks) = acks {
                     acks.complete(
                         id,
-                        if flushed {
+                        if all_durable {
                             Ok(true)
                         } else {
-                            Err("Pending store writes could not be flushed".to_owned())
+                            Err("Pending store writes could not be persisted before barrier"
+                                .to_owned())
                         },
                     );
                 }
@@ -343,14 +447,16 @@ async fn apply_store_batch_with_acks(
                 apply_append_event(store, reducer, pending, env).await;
             }
             StoreWrite::ClearEvents { .. } => {
+                ok &= pending_non_events.drain(store, acks).await;
                 ok &= apply_clear_events(store, reducer, pending, &write, acks).await;
             }
             other => {
                 ok &= pending.flush(store, reducer).await;
-                ok &= apply_non_event_write(store, &other, acks).await;
+                ok &= pending_non_events.apply_or_retain(store, other, acks).await;
             }
         }
     }
+    ok &= pending_non_events.drain(store, acks).await;
     ok &= pending.flush(store, reducer).await;
     for write in usages.into_values() {
         ok &= retry_store_write(store, &write).await;

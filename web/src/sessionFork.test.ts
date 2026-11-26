@@ -179,12 +179,30 @@ test("duplicateSession forwards before_seq, copy_workspace, and include_uncommit
   });
 });
 
-test("forkSession distinguishes definitive unsupported refusals from transient failures", async () => {
+test("forkSession distinguishes typed pre-admission unsupported refusals from post-admission and transient failures", async () => {
   await expect(
     forkSession("s", {}, () =>
-      Promise.resolve(new Response(JSON.stringify({ error: "Session cannot be forked" }), { status: 409 })),
+      Promise.resolve(
+        new Response(
+          JSON.stringify({ error: "Session cannot be forked", code: "native_fork_unsupported" }),
+          { status: 409, headers: { "x-cowboy-fork-fallback": "unsupported" } },
+        ),
+      ),
     ),
   ).rejects.toMatchObject({ name: "ForkSessionError", status: 409, definitiveUnsupported: true });
+
+  await expect(
+    forkSession("s", {}, () =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            error: "The new session s2 was admitted on another login and cannot fork this conversation",
+          }),
+          { status: 409 },
+        ),
+      ),
+    ),
+  ).rejects.toMatchObject({ name: "ForkSessionError", status: 409, definitiveUnsupported: false });
 
   await expect(
     forkSession("s", {}, () =>
@@ -194,7 +212,11 @@ test("forkSession distinguishes definitive unsupported refusals from transient f
 
   try {
     await forkSession("s", {}, () =>
-      Promise.resolve(new Response(JSON.stringify({ error: "Bad request" }), { status: 400 })),
+      Promise.resolve(
+        new Response(JSON.stringify({ error: "Unsupported", code: "native_fork_unsupported" }), {
+          status: 409,
+        }),
+      ),
     );
     throw new Error("expected failure");
   } catch (err) {
