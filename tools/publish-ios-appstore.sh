@@ -196,11 +196,9 @@ if destination == "export":
     ipa = ipas[0]
     report.update(ipa=str(ipa), ipa_sha256=digest(ipa))
 
-(out_dir / "appstore-receipt.json").write_text(json.dumps(report, indent=2) + "
-")
+(out_dir / "appstore-receipt.json").write_text(json.dumps(report, indent=2) + "\n")
 if report_target:
     with pathlib.Path(report_target).open("x") as receipt:
-        receipt.write(json.dumps(report, indent=2) + "
-")
+        receipt.write(json.dumps(report, indent=2) + "\n")
 print(json.dumps(report, indent=2))
 PY
