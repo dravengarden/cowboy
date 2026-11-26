@@ -253,22 +253,39 @@ else
   cp -R ../apple/Sources ../apple/Assets.xcassets ../apple/cowboy-app_iOS gen/apple/
   cp ../apple/project.yml ../apple/LaunchScreen.storyboard ../apple/ExportOptions.plist gen/apple/
   if [ -n "$native_version" ] || [ -n "$native_build_number" ]; then
-    python3 - gen/apple/project.yml gen/apple/cowboy-app_iOS/Info.plist "$native_version" "$native_build_number" <<'PY'
-import pathlib, plistlib, re, sys
-project_path, info_path, version, build_number = sys.argv[1:]
-project = pathlib.Path(project_path)
-text = project.read_text()
+    python3 - tauri.conf.json gen/apple/project.yml gen/apple/cowboy-app_iOS/Info.plist "$native_version" "$native_build_number" <<'PY'
+import json, pathlib, plistlib, sys
+conf_path, project_path, info_path, version, build_number = sys.argv[1:]
+conf_file = pathlib.Path(conf_path)
+conf = json.loads(conf_file.read_text())
 if version:
-    text, n = re.subn(r"(CFBundleShortVersionString:\s*)[^
-]+", lambda m: m.group(1) + version, text, count=1)
-    if n != 1:
-        raise SystemExit("project.yml missing CFBundleShortVersionString")
+    conf["version"] = version
 if build_number:
-    text, n = re.subn(r'(CFBundleVersion:\s*)[^
-]+', lambda m: f'{m.group(1)}"{build_number}"', text, count=1)
-    if n != 1:
-        raise SystemExit("project.yml missing CFBundleVersion")
-project.write_text(text)
+    conf.setdefault("bundle", {}).setdefault("iOS", {})["bundleVersion"] = build_number
+conf_file.write_text(json.dumps(conf, indent=2) + "\n")
+
+project = pathlib.Path(project_path)
+lines = project.read_text().splitlines(keepends=True)
+out = []
+saw_ver = False
+saw_bld = False
+for line in lines:
+    if version and "CFBundleShortVersionString:" in line and not saw_ver:
+        prefix = line.split("CFBundleShortVersionString:", 1)[0]
+        out.append(f"{prefix}CFBundleShortVersionString: {version}\n")
+        saw_ver = True
+    elif build_number and "CFBundleVersion:" in line and not saw_bld:
+        prefix = line.split("CFBundleVersion:", 1)[0]
+        out.append(f'{prefix}CFBundleVersion: "{build_number}"\n')
+        saw_bld = True
+    else:
+        out.append(line)
+if version and not saw_ver:
+    raise SystemExit("project.yml missing CFBundleShortVersionString")
+if build_number and not saw_bld:
+    raise SystemExit("project.yml missing CFBundleVersion")
+project.write_text("".join(out))
+
 plist_file = pathlib.Path(info_path)
 info = plistlib.loads(plist_file.read_bytes())
 if version:
