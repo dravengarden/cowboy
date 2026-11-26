@@ -43,5 +43,8 @@ export function workspaceCommandKey(event: {
     PageUp: "PageUp",
     PageDown: "PageDown",
   } as Readonly<Record<string, string>>)[event.code];
-  return physical ?? event.key;
+  if (physical) return physical;
+  if (event.key === "【") return "[";
+  if (event.key === "】") return "]";
+  return event.key;
 }
