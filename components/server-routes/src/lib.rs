@@ -222,7 +222,10 @@ fn with_session_context_routes(
             post(session_context::cancel),
         )
         .route("/api/sessions/{id}/fork", post(session_context::fork))
-        .route("/api/sessions/{id}/lineage", get(session_context::lineage_get))
+        .route(
+            "/api/sessions/{id}/lineage",
+            get(session_context::lineage_get),
+        )
         .route(
             "/api/sessions/{id}/lineage/{hop_id}/history",
             get(session_context::lineage_history),

@@ -21,7 +21,6 @@ static PENDING_FOLDER_PURGES: std::sync::LazyLock<parking_lot::Mutex<HashSet<Str
 /// execution environment confirms the stop.
 const RETENTION_DELAY: std::time::Duration = std::time::Duration::from_secs(2 * 60);
 
-
 /// True while a continuation destination can still invoke Cancel Switch on
 /// `source_id` (starting up or holding its sole queued bootstrap message).
 fn handoff_cancel_pinned(state: &AppState, source_id: &str) -> bool {

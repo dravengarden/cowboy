@@ -107,6 +107,24 @@ fn forkable(state: &AppState, source: &SessionMeta) -> Result<(), String> {
     Ok(())
 }
 
+fn check_fork_machines(
+    state: &AppState,
+    machine_id: &str,
+    runtime_machine_id: Option<&str>,
+) -> Result<(), String> {
+    let runtime = runtime_machine_id.unwrap_or(machine_id);
+    for machine in [machine_id, runtime] {
+        if !state.machine_control.machine_supports(
+            machine,
+            crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
+        ) {
+            return Err(format!(
+                "Machine {machine} must be updated before it can fork sessions"
+            ));
+        }
+    }
+    Ok(())
+}
 
 async fn resolve_latest_completed(state: &AppState, id: &str) -> Result<String, String> {
     if let Some(found) = state.hub.last_completed_answer_id(id) {
@@ -168,17 +186,7 @@ async fn fork_session(
     }
     admit_point(&state.hub, &info, request.message_id.as_deref())?;
     let (machine_id, runtime_machine_id, project) = placement(&source)?;
-    let runtime = runtime_machine_id.as_deref().unwrap_or(&machine_id);
-    for machine in [machine_id.as_str(), runtime] {
-        if !state.machine_control.machine_supports(
-            machine,
-            crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
-        ) {
-            return Err(format!(
-                "Machine {machine} must be connected and updated before it can fork sessions"
-            ));
-        }
-    }
+    check_fork_machines(&state, &machine_id, runtime_machine_id.as_deref())?;
     let selection = NextAgent {
         provider: source.provider.clone(),
         provider_account_id: source.provider_account_id.clone(),
@@ -271,7 +279,18 @@ async fn fork_session(
             "The new session {destination} was admitted on another login or Machine and cannot fork this conversation; delete it and retry"
         ));
     }
-    finish_native_fork(&state, &id, &destination, &source, &created, &record, &selection, &request.config, &actor).await?;
+    finish_native_fork(
+        &state,
+        &id,
+        &destination,
+        &source,
+        &created,
+        &record,
+        &selection,
+        &request.config,
+        &actor,
+    )
+    .await?;
     Ok((destination, true))
 }
 
@@ -292,12 +311,18 @@ async fn finish_native_fork(
     if before_seq.is_none()
         && let (Some(mid), Some(store)) = (target_mid, state.store.as_ref())
     {
-        before_seq = store.turn_completion_before_seq(id, 0, mid).await.ok().flatten();
+        before_seq = store
+            .turn_completion_before_seq(id, 0, mid)
+            .await
+            .ok()
+            .flatten();
     }
     let before_seq = before_seq
         .or_else(|| state.hub.next_event_seq(id))
         .unwrap_or(0);
-    if let Err(error) = lineage::record_edge(state, destination, source, "native_fork", before_seq, false).await {
+    if let Err(error) =
+        lineage::record_edge(state, destination, source, "native_fork", before_seq, false).await
+    {
         tracing::warn!(session = %destination, source = %id, %error, "native fork lineage edge not recorded");
     }
     state.hub.open_fork(destination, record, &source.title);
@@ -351,9 +376,10 @@ fn resolve_duplicate_workspace(
     if copy_workspace == Some(false) {
         return Ok((None, None));
     }
-    let has_fork_worktree = state
-        .machine_control
-        .machine_supports(machine_id, crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION);
+    let has_fork_worktree = state.machine_control.machine_supports(
+        machine_id,
+        crate::machine_protocol::NATIVE_FORK_PROTOCOL_VERSION,
+    );
     if !has_fork_worktree {
         return Ok((None, None));
     }
@@ -397,7 +423,11 @@ async fn check_duplicate_receipt(
     if receipt.fingerprint != fingerprint {
         return Err("This operation already created a different copy".into());
     }
-    if state.hub.session_info(&receipt.destination_session_id).is_some() {
+    if state
+        .hub
+        .session_info(&receipt.destination_session_id)
+        .is_some()
+    {
         return Ok(Some(receipt.destination_session_id));
     }
     Ok(None)
@@ -473,7 +503,9 @@ async fn duplicate_session(
     state.hub.continuation_folder(&id, &actor)?;
 
     let live_next = state.hub.next_event_seq(&id).unwrap_or(0);
-    let before_seq = request.before_seq.map_or(live_next, |req| req.min(live_next));
+    let before_seq = request
+        .before_seq
+        .map_or(live_next, |req| req.min(live_next));
     let destination = state.supervisor.reserve_session_id();
     let target_lock = write_lock(&destination);
     let _target_guard = target_lock.lock().await;
@@ -518,9 +550,10 @@ async fn duplicate_session(
     let response =
         api_new_session(State(state.clone()), Extension(auth.clone()), Json(create)).await;
     if !response.status().is_success() {
-        state
-            .hub
-            .set_setting(crate::session_context::key(&destination), serde_json::Value::Null);
+        state.hub.set_setting(
+            crate::session_context::key(&destination),
+            serde_json::Value::Null,
+        );
         return Err(creation_error(response).await);
     }
     if let Some(store) = state.store.as_ref() {
@@ -535,7 +568,16 @@ async fn duplicate_session(
             })
             .await;
     }
-    if let Err(error) = lineage::record_edge(&state, &destination, &source, "linked_fork", before_seq, false).await {
+    if let Err(error) = lineage::record_edge(
+        &state,
+        &destination,
+        &source,
+        "linked_fork",
+        before_seq,
+        false,
+    )
+    .await
+    {
         tracing::warn!(session = %destination, source = %id, %error, "linked fork lineage edge not recorded");
     }
     state.hub.set_forked_from(&destination, Some(id.clone()));

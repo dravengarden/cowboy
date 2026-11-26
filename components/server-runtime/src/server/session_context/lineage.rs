@@ -103,11 +103,12 @@ pub(super) async fn record_edge(
     }
     state.hub.record_auth_parent(child_session_id, &source.id);
     if !display_detached && effective_before > 0 {
-        state.hub.freeze_lineage_prefix(&source.id, effective_before);
+        state
+            .hub
+            .freeze_lineage_prefix(&source.id, effective_before);
     }
     Ok(())
 }
-
 
 /// Record the durable lineage edge for a Replace handoff (`target_id != id`).
 pub(super) async fn record_replace_edge(
@@ -363,13 +364,8 @@ pub async fn get(
         hops.push(legacy);
     }
 
-    let branches = collect_branches(
-        &state,
-        &auth.principal,
-        &id,
-        immediate_parent.as_deref(),
-    )
-    .await;
+    let branches =
+        collect_branches(&state, &auth.principal, &id, immediate_parent.as_deref()).await;
 
     (
         [(header::CACHE_CONTROL.as_str(), "private, no-store")],
@@ -397,7 +393,10 @@ pub async fn history(
         Ok(edges) => edges,
         Err(status) => return status.into_response(),
     };
-    let Some(edge) = edges.into_iter().find(|edge| edge.parent_session_id == hop_id) else {
+    let Some(edge) = edges
+        .into_iter()
+        .find(|edge| edge.parent_session_id == hop_id)
+    else {
         return (StatusCode::NOT_FOUND, "ancestor not in session lineage").into_response();
     };
     if let Some(expected) = query.edge_version
@@ -422,7 +421,11 @@ pub async fn history(
         Ok(page) => page,
         Err(error) => {
             tracing::warn!(session = %id, hop = %hop_id, %error, "lineage history query failed");
-            return (StatusCode::SERVICE_UNAVAILABLE, "lineage history unavailable").into_response();
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "lineage history unavailable",
+            )
+                .into_response();
         }
     };
     let body = Json(LineageHistoryResponse {
@@ -443,7 +446,11 @@ pub async fn history(
         )
             .into_response()
     } else {
-        ([(header::CACHE_CONTROL.as_str(), "private, no-store")], body).into_response()
+        (
+            [(header::CACHE_CONTROL.as_str(), "private, no-store")],
+            body,
+        )
+            .into_response()
     }
 }
 
@@ -462,7 +469,10 @@ pub async fn question_pages(
         Ok(edges) => edges,
         Err(status) => return status.into_response(),
     };
-    let Some(edge) = edges.into_iter().find(|edge| edge.parent_session_id == hop_id) else {
+    let Some(edge) = edges
+        .into_iter()
+        .find(|edge| edge.parent_session_id == hop_id)
+    else {
         return (StatusCode::NOT_FOUND, "ancestor not in session lineage").into_response();
     };
     let Some(store) = state.store.as_ref() else {
@@ -470,7 +480,10 @@ pub async fn question_pages(
     };
     let limit = query.limit.unwrap_or(64).clamp(1, 100);
     let clamped_before = query.before.map(|before| before.min(edge.before_seq));
-    match store.lineage_question_pages(&edge, clamped_before, limit).await {
+    match store
+        .lineage_question_pages(&edge, clamped_before, limit)
+        .await
+    {
         Ok((pages, next_before_seq, total)) => (
             [(header::CACHE_CONTROL.as_str(), "private, no-store")],
             Json(QuestionPagesResponse {
@@ -483,7 +496,11 @@ pub async fn question_pages(
             .into_response(),
         Err(error) => {
             tracing::warn!(session = %id, hop = %hop_id, %error, "lineage question pages query failed");
-            (StatusCode::SERVICE_UNAVAILABLE, "lineage question pages unavailable").into_response()
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "lineage question pages unavailable",
+            )
+                .into_response()
         }
     }
 }
@@ -502,7 +519,10 @@ pub async fn question_page(
         Ok(edges) => edges,
         Err(status) => return status.into_response(),
     };
-    let Some(edge) = edges.into_iter().find(|edge| edge.parent_session_id == hop_id) else {
+    let Some(edge) = edges
+        .into_iter()
+        .find(|edge| edge.parent_session_id == hop_id)
+    else {
         return (StatusCode::NOT_FOUND, "ancestor not in session lineage").into_response();
     };
     let Some(store) = state.store.as_ref() else {
@@ -521,7 +541,11 @@ pub async fn question_page(
         Ok(None) => StatusCode::NOT_FOUND.into_response(),
         Err(error) => {
             tracing::warn!(session = %id, hop = %hop_id, page_id, %error, "lineage question page query failed");
-            (StatusCode::SERVICE_UNAVAILABLE, "lineage question page unavailable").into_response()
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "lineage question page unavailable",
+            )
+                .into_response()
         }
     }
 }

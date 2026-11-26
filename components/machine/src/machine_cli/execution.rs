@@ -476,11 +476,22 @@ impl Manager {
                 Ok(()) => Response::Closed,
                 Err(reason) => Response::Refused { reason },
             },
-            Action::Prepare { session_id, workspace_id, runtime, base_session_id, include_uncommitted } => {
-                match self.prepare(&session_id, &workspace_id, runtime, base_session_id.as_deref(), include_uncommitted, workspaces).await {
-                    Ok(binding) => Response::Prepared { binding },
-                    Err(reason) => Response::Refused { reason },
-                }
+            Action::Prepare {
+                session_id,
+                workspace_id,
+                runtime,
+                base_session_id,
+                include_uncommitted,
+            } => {
+                self.prepare_response(
+                    &session_id,
+                    &workspace_id,
+                    runtime,
+                    base_session_id.as_deref(),
+                    include_uncommitted,
+                    workspaces,
+                )
+                .await
             }
             Action::Call {
                 session_id,
@@ -801,6 +812,31 @@ impl Manager {
             .and_then(|file| file.sync_all())
             .map_err(|_| Refusal::PreparationFailed)?;
         Ok(runtime)
+    }
+
+    async fn prepare_response(
+        &self,
+        session_id: &str,
+        workspace_id: &str,
+        runtime: RuntimeLocation,
+        base_session_id: Option<&str>,
+        include_uncommitted: Option<bool>,
+        workspaces: &[MachineWorkspace],
+    ) -> Response {
+        match self
+            .prepare(
+                session_id,
+                workspace_id,
+                runtime,
+                base_session_id,
+                include_uncommitted,
+                workspaces,
+            )
+            .await
+        {
+            Ok(binding) => Response::Prepared { binding },
+            Err(reason) => Response::Refused { reason },
+        }
     }
 
     async fn prepare(

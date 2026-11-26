@@ -32,6 +32,24 @@ pub(super) struct ForkBase {
     pre_status: Option<Vec<u8>>,
 }
 
+pub(super) async fn resolve_fork_base(
+    repository: &Path,
+    request: &super::PrepareWorkspaceRequest,
+    branch_existed: bool,
+) -> Result<Option<ForkBase>> {
+    match (&request.base_worktree, branch_existed) {
+        (Some(base), false) => Ok(Some(
+            fork_base(
+                repository,
+                base,
+                request.include_uncommitted.unwrap_or(true),
+            )
+            .await?,
+        )),
+        _ => Ok(None),
+    }
+}
+
 /// Read the source worktree without writing it. `git stash create` stores a
 /// dangling commit and leaves the worktree, index and stash list unchanged.
 pub(super) async fn fork_base(

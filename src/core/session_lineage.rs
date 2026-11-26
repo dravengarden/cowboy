@@ -177,7 +177,10 @@ impl Hub {
             let Event::Update { update } = &env.event else {
                 continue;
             };
-            match update.get("sessionUpdate").and_then(serde_json::Value::as_str) {
+            match update
+                .get("sessionUpdate")
+                .and_then(serde_json::Value::as_str)
+            {
                 Some("agent_message_chunk") => {
                     if let Some(id) = update.get("messageId").and_then(serde_json::Value::as_str)
                         && !id.is_empty()
@@ -186,7 +189,9 @@ impl Hub {
                         break;
                     }
                 }
-                Some("user_message_chunk" | "context_cleared" | crate::context_rollover::MARKER) => {
+                Some(
+                    "user_message_chunk" | "context_cleared" | crate::context_rollover::MARKER,
+                ) => {
                     break;
                 }
                 _ => {}
@@ -284,7 +289,8 @@ mod tests {
     }
 
     #[test]
-    fn warm_lineage_edges_preserves_auth_parent_across_missing_intermediate_and_sets_freeze_floor() {
+    fn warm_lineage_edges_preserves_auth_parent_across_missing_intermediate_and_sets_freeze_floor()
+    {
         let hub = Hub::new();
         add_session(&hub, "c");
         let edges = vec![

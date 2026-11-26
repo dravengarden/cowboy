@@ -596,7 +596,10 @@ pub fn preamble(
     {
         return Ok(Some(saved));
     }
-    Ok(Some(handoff_digest::build_preamble(hub, &injection.sources)))
+    Ok(Some(handoff_digest::build_preamble(
+        hub,
+        &injection.sources,
+    )))
 }
 
 #[cfg(test)]

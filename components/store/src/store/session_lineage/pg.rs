@@ -123,13 +123,12 @@ impl PostgresStorage {
     }
 
     pub(super) async fn lineage_edge(&self, child_session_id: &str) -> Result<Option<LineageEdge>> {
-        let row = sqlx::query_as::<_, PgEdgeRow>(&format!(
-            "{EDGE_SELECT} WHERE child_session_id = $1"
-        ))
-        .bind(child_session_id)
-        .fetch_optional(&self.pool)
-        .await
-        .with_context(|| format!("SELECT lineage edge for {child_session_id}"))?;
+        let row =
+            sqlx::query_as::<_, PgEdgeRow>(&format!("{EDGE_SELECT} WHERE child_session_id = $1"))
+                .bind(child_session_id)
+                .fetch_optional(&self.pool)
+                .await
+                .with_context(|| format!("SELECT lineage edge for {child_session_id}"))?;
         Ok(row.map(LineageEdge::from))
     }
 
@@ -141,7 +140,10 @@ impl PostgresStorage {
         Ok(rows.into_iter().map(LineageEdge::from).collect())
     }
 
-    pub(super) async fn lineage_children(&self, parent_session_id: &str) -> Result<Vec<LineageEdge>> {
+    pub(super) async fn lineage_children(
+        &self,
+        parent_session_id: &str,
+    ) -> Result<Vec<LineageEdge>> {
         let rows = sqlx::query_as::<_, PgEdgeRow>(&format!(
             "{EDGE_SELECT} WHERE parent_session_id = $1 ORDER BY created_at_ms DESC"
         ))
@@ -491,7 +493,10 @@ async fn prune_pg_artifacts(storage: &PostgresStorage) -> Result<()> {
         .context("scan retained PostgreSQL artifact references")?
     {
         let reference: String = row.try_get("reference")?;
-        crate::artifacts::collect_references(&serde_json::Value::String(reference), &mut referenced);
+        crate::artifacts::collect_references(
+            &serde_json::Value::String(reference),
+            &mut referenced,
+        );
     }
     let artifacts_removed = storage
         .artifacts

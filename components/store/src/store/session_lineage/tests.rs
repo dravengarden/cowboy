@@ -45,7 +45,8 @@ fn make_edge(child: &str, parent: &str, kind: &str, before_seq: u64) -> LineageE
 }
 
 #[tokio::test]
-async fn transitive_purge_archives_ancestors_without_pinning_auth_generation_and_gcs_on_leaf_purge() {
+async fn transitive_purge_archives_ancestors_without_pinning_auth_generation_and_gcs_on_leaf_purge()
+{
     let (store, _dir) = test_store().await;
 
     let mut a = session("sess-a");
@@ -82,14 +83,8 @@ async fn transitive_purge_archives_ancestors_without_pinning_auth_generation_and
         .unwrap();
 
     // Soft-delete A and B so both expire on purge_deleted(-1), while C stays alive.
-    store
-        .delete_session("sess-a")
-        .await
-        .unwrap();
-    store
-        .delete_session("sess-b")
-        .await
-        .unwrap();
+    store.delete_session("sess-a").await.unwrap();
+    store.delete_session("sess-b").await.unwrap();
     assert_eq!(store.purge_deleted(-1).await.unwrap(), 2);
 
     // Neither A nor B pins provider_auth_generation anymore.
@@ -99,8 +94,16 @@ async fn transitive_purge_archives_ancestors_without_pinning_auth_generation_and
     );
 
     // Both edges survived and now reference immutable archived segments.
-    let edge_cb = store.lineage_edge("sess-c").await.unwrap().expect("edge C->B");
-    let edge_ba = store.lineage_edge("sess-b").await.unwrap().expect("edge B->A");
+    let edge_cb = store
+        .lineage_edge("sess-c")
+        .await
+        .unwrap()
+        .expect("edge C->B");
+    let edge_ba = store
+        .lineage_edge("sess-b")
+        .await
+        .unwrap()
+        .expect("edge B->A");
     assert!(edge_cb.segment_id.is_some());
     assert!(edge_ba.segment_id.is_some());
 
@@ -186,13 +189,19 @@ async fn live_seal_state_respects_write_behind_and_zero_cutoff() {
 
     // Unflushed prefix: store next_seq is 1 while edge.before_seq is 3.
     store
-        .upsert_event_batch(&[msg("src", 0, "s0")], &HashMap::from([("src".to_owned(), 1)]))
+        .upsert_event_batch(
+            &[msg("src", 0, "s0")],
+            &HashMap::from([("src".to_owned(), 1)]),
+        )
         .await
         .unwrap();
     let edge = make_edge("dst", "src", "replace", 3);
     store.upsert_lineage_edge(&edge).await.unwrap();
     let unsealed = store.lineage_history_page(&edge, 3, 50).await.unwrap();
-    assert!(!unsealed.is_sealed, "unflushed write-behind must not mark sealed");
+    assert!(
+        !unsealed.is_sealed,
+        "unflushed write-behind must not mark sealed"
+    );
 
     // Once flushed past before_seq, page becomes sealed.
     store
@@ -208,7 +217,10 @@ async fn live_seal_state_respects_write_behind_and_zero_cutoff() {
 
     // Zero cutoff admits 0 events and is sealed.
     let zero_edge = make_edge("dst-zero", "src", "replace", 0);
-    let empty = store.lineage_history_page(&zero_edge, 10, 50).await.unwrap();
+    let empty = store
+        .lineage_history_page(&zero_edge, 10, 50)
+        .await
+        .unwrap();
     assert!(empty.is_sealed);
     assert!(empty.events.is_empty());
     assert!(empty.reached_start);
@@ -244,12 +256,18 @@ async fn turn_completions_and_duplicate_receipts_persist_and_clear_cleanly() {
         Some(("m2".to_owned(), 9))
     );
     assert_eq!(
-        store.turn_completion_before_seq("src", 0, "m1").await.unwrap(),
+        store
+            .turn_completion_before_seq("src", 0, "m1")
+            .await
+            .unwrap(),
         Some(4)
     );
 
     // Clear wipes turn completions so stale message IDs cannot be forked after Clear.
-    store.clear_conversation("src", 0, None, None).await.unwrap();
+    store
+        .clear_conversation("src", 0, None, None)
+        .await
+        .unwrap();
     assert_eq!(store.latest_turn_completion("src", 0).await.unwrap(), None);
 
     // Duplicate receipt is idempotent and rejects conflicting second insert.

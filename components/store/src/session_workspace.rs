@@ -17,7 +17,7 @@ use tokio::process::Command;
 mod fork;
 mod storage;
 
-use fork::{copy_fork_state, fork_base};
+use fork::{copy_fork_state, resolve_fork_base};
 pub use storage::WorkspaceStorage;
 
 const GIT_TIMEOUT: Duration = Duration::from_secs(30);
@@ -282,10 +282,7 @@ pub async fn prepare(
 
     let base_ref = format!("refs/cowboy/session-bases/{}", request.session_id);
     let branch_existed = git_ref_exists(&repository, &session_branch_ref).await?;
-    let fork_base = match (&request.base_worktree, branch_existed) {
-        (Some(base), false) => Some(fork_base(&repository, base, request.include_uncommitted.unwrap_or(true)).await?),
-        _ => None,
-    };
+    let fork_base = resolve_fork_base(&repository, &request, branch_existed).await?;
     let (revision, head_ref, base_ref_created) = if branch_existed {
         (
             git_output(
@@ -3653,8 +3650,12 @@ mod tests {
         git(&temp.0, &["init", source.to_str().unwrap()]);
         git(&source, &["config", "user.name", "Cowboy Test"]);
         git(&source, &["config", "user.email", "test@example.com"]);
-        std::fs::write(source.join("tracked.txt"), "base
-").unwrap();
+        std::fs::write(
+            source.join("tracked.txt"),
+            "base
+",
+        )
+        .unwrap();
         git(&source, &["add", "tracked.txt"]);
         git(&source, &["commit", "-m", "initial"]);
 
@@ -3672,14 +3673,26 @@ mod tests {
         .unwrap();
         let parent_dir = PathBuf::from(&parent.path);
         // Commit a new change on parent, plus leave dirty tracked + untracked files.
-        std::fs::write(parent_dir.join("tracked.txt"), "committed-on-parent
-").unwrap();
+        std::fs::write(
+            parent_dir.join("tracked.txt"),
+            "committed-on-parent
+",
+        )
+        .unwrap();
         git(&parent_dir, &["add", "tracked.txt"]);
         git(&parent_dir, &["commit", "-m", "parent commit"]);
-        std::fs::write(parent_dir.join("tracked.txt"), "dirty-uncommitted
-").unwrap();
-        std::fs::write(parent_dir.join("scratch.tmp"), "untracked
-").unwrap();
+        std::fs::write(
+            parent_dir.join("tracked.txt"),
+            "dirty-uncommitted
+",
+        )
+        .unwrap();
+        std::fs::write(
+            parent_dir.join("scratch.tmp"),
+            "untracked
+",
+        )
+        .unwrap();
 
         let child = prepare(
             PrepareWorkspaceRequest {

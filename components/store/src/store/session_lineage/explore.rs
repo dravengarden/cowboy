@@ -14,7 +14,10 @@ fn root_user_question_text(event: &Event) -> Option<&str> {
     let Event::Update { update } = event else {
         return None;
     };
-    if update.get("sessionUpdate").and_then(serde_json::Value::as_str) != Some("user_message_chunk")
+    if update
+        .get("sessionUpdate")
+        .and_then(serde_json::Value::as_str)
+        != Some("user_message_chunk")
     {
         return None;
     }
@@ -127,30 +130,30 @@ impl PostgresStorage {
         edge: &LineageEdge,
     ) -> Result<Vec<Envelope>> {
         let before_i64 = to_i64_seq(edge.before_seq)?;
-        let rows: Vec<(i64, serde_json::Value)> = if let Some(segment_id) = edge.segment_id.as_deref()
-        {
-            sqlx::query_as(
-                "SELECT seq, payload FROM archived_lineage_events \
+        let rows: Vec<(i64, serde_json::Value)> =
+            if let Some(segment_id) = edge.segment_id.as_deref() {
+                sqlx::query_as(
+                    "SELECT seq, payload FROM archived_lineage_events \
                  WHERE segment_id = $1 AND seq < $2 ORDER BY seq DESC LIMIT $3",
-            )
-            .bind(segment_id)
-            .bind(before_i64)
-            .bind(MAX_LINEAGE_EXPLORE_ROWS)
-            .fetch_all(&self.pool)
-            .await
-            .context("SELECT archived lineage explore rows")?
-        } else {
-            sqlx::query_as(
-                "SELECT seq, payload FROM events \
+                )
+                .bind(segment_id)
+                .bind(before_i64)
+                .bind(MAX_LINEAGE_EXPLORE_ROWS)
+                .fetch_all(&self.pool)
+                .await
+                .context("SELECT archived lineage explore rows")?
+            } else {
+                sqlx::query_as(
+                    "SELECT seq, payload FROM events \
                  WHERE session_id = $1 AND seq < $2 ORDER BY seq DESC LIMIT $3",
-            )
-            .bind(&edge.parent_session_id)
-            .bind(before_i64)
-            .bind(MAX_LINEAGE_EXPLORE_ROWS)
-            .fetch_all(&self.pool)
-            .await
-            .context("SELECT live lineage explore rows")?
-        };
+                )
+                .bind(&edge.parent_session_id)
+                .bind(before_i64)
+                .bind(MAX_LINEAGE_EXPLORE_ROWS)
+                .fetch_all(&self.pool)
+                .await
+                .context("SELECT live lineage explore rows")?
+            };
         Ok(decode_lineage_events(&edge.parent_session_id, rows))
     }
 }

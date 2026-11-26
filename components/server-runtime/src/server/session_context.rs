@@ -11,7 +11,10 @@ pub mod lineage;
 pub mod rollover;
 pub use cancel::cancel;
 pub use fork::{duplicate, duplicate_options, fork};
-pub use lineage::{get as lineage_get, history as lineage_history, question_page as lineage_question_page, question_pages as lineage_question_pages};
+pub use lineage::{
+    get as lineage_get, history as lineage_history, question_page as lineage_question_page,
+    question_pages as lineage_question_pages,
+};
 
 // Serializes short durable mutations and creation admission, including requests
 // coming through MCP. A dropped HTTP request does not cancel the transaction.
@@ -78,10 +81,7 @@ fn capture(
         .map(|id| {
             Ok(Source {
                 session_id: id.clone(),
-                before: state
-                    .hub
-                    .next_event_seq(id)
-                    .ok_or("Session unavailable")?,
+                before: state.hub.next_event_seq(id).ok_or("Session unavailable")?,
             })
         })
         .collect()

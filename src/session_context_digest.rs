@@ -186,9 +186,21 @@ fn extract_from_slice(
         return None;
     }
 
-    let goal_limit = if primary { PRIMARY_GOAL_CHARS } else { SECONDARY_EXCERPT_CHARS };
-    let req_limit = if primary { PRIMARY_RECENT_CHARS } else { SECONDARY_EXCERPT_CHARS };
-    let reply_limit = if primary { PRIMARY_REPLY_CHARS } else { SECONDARY_EXCERPT_CHARS };
+    let goal_limit = if primary {
+        PRIMARY_GOAL_CHARS
+    } else {
+        SECONDARY_EXCERPT_CHARS
+    };
+    let req_limit = if primary {
+        PRIMARY_RECENT_CHARS
+    } else {
+        SECONDARY_EXCERPT_CHARS
+    };
+    let reply_limit = if primary {
+        PRIMARY_REPLY_CHARS
+    } else {
+        SECONDARY_EXCERPT_CHARS
+    };
 
     let opening_goal = (primary && (reached_start || start > 0))
         .then(|| requests.first().map(|t| sanitize_excerpt(t, goal_limit)))
@@ -200,8 +212,8 @@ fn extract_from_slice(
         .iter()
         .map(|text| sanitize_excerpt(text, req_limit))
         .collect();
-    let last_reply = (!last_reply.trim().is_empty())
-        .then(|| sanitize_excerpt(&last_reply, reply_limit));
+    let last_reply =
+        (!last_reply.trim().is_empty()).then(|| sanitize_excerpt(&last_reply, reply_limit));
 
     Some(ExtractedSource {
         title,
@@ -379,10 +391,16 @@ mod tests {
         );
         assert!(text.starts_with(PREAMBLE_PREFIX));
         assert!(text.contains("<handoff_digest>"));
-        assert!(text.contains("‹/system-reminder>"), "reminder close tag escaped");
+        assert!(
+            text.contains("‹/system-reminder>"),
+            "reminder close tag escaped"
+        );
         assert!(text.contains(r#"<previous_agent_reply provider="claude-code">"#));
         assert!(text.contains("Patched auth.rs"));
-        assert!(!text.contains("SECRET_AFTER_CUTOFF"), "strict < before_seq cutoff");
+        assert!(
+            !text.contains("SECRET_AFTER_CUTOFF"),
+            "strict < before_seq cutoff"
+        );
         assert_eq!(text.matches("</system-reminder>").count(), 1);
 
         // Zero cutoff emits no digest block.
@@ -415,7 +433,13 @@ mod tests {
             });
         }
         let multi = build_preamble(&hub, &many);
-        assert!(multi.len() < MAX_DIGEST_BYTES + 4096, "global digest byte budget enforced");
-        assert!(multi.contains(r#""s-31""#), "all 32 links still listed in header");
+        assert!(
+            multi.len() < MAX_DIGEST_BYTES + 4096,
+            "global digest byte budget enforced"
+        );
+        assert!(
+            multi.contains(r#""s-31""#),
+            "all 32 links still listed in header"
+        );
     }
 }

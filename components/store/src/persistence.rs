@@ -848,7 +848,10 @@ mod tests {
         let Event::Update { update } = &t2.event else {
             panic!("expected update");
         };
-        assert_eq!(update["title"], "Run test", "rebased tool keeps original title");
+        assert_eq!(
+            update["title"], "Run test",
+            "rebased tool keeps original title"
+        );
         assert_eq!(update["status"], "completed");
 
         // Post-freeze anchor allocates fresh seq 6 instead of mutating seq 3.

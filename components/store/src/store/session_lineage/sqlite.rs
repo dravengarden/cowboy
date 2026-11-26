@@ -79,13 +79,15 @@ FROM session_lineage_edges";
 
 fn decode_json_rows(raw: Vec<(i64, String)>) -> Vec<(i64, serde_json::Value)> {
     raw.into_iter()
-        .filter_map(|(seq, text)| match serde_json::from_str::<serde_json::Value>(&text) {
-            Ok(value) => Some((seq, value)),
-            Err(error) => {
-                tracing::warn!(%error, seq, "skipping malformed SQLite lineage event JSON");
-                None
-            }
-        })
+        .filter_map(
+            |(seq, text)| match serde_json::from_str::<serde_json::Value>(&text) {
+                Ok(value) => Some((seq, value)),
+                Err(error) => {
+                    tracing::warn!(%error, seq, "skipping malformed SQLite lineage event JSON");
+                    None
+                }
+            },
+        )
         .collect()
 }
 
@@ -153,7 +155,10 @@ impl SqliteStorage {
         Ok(rows.into_iter().map(LineageEdge::from).collect())
     }
 
-    pub(super) async fn lineage_children(&self, parent_session_id: &str) -> Result<Vec<LineageEdge>> {
+    pub(super) async fn lineage_children(
+        &self,
+        parent_session_id: &str,
+    ) -> Result<Vec<LineageEdge>> {
         let rows = sqlx::query_as::<_, SqliteEdgeRow>(&format!(
             "{EDGE_SELECT} WHERE parent_session_id = ?1 ORDER BY created_at_ms DESC"
         ))
@@ -206,7 +211,12 @@ impl SqliteStorage {
         .bind(limit)
         .fetch_all(&self.pool)
         .await
-        .with_context(|| format!("SELECT SQLite live lineage page for {}", edge.parent_session_id))?;
+        .with_context(|| {
+            format!(
+                "SELECT SQLite live lineage page for {}",
+                edge.parent_session_id
+            )
+        })?;
         let events = decode_lineage_events(&edge.parent_session_id, decode_json_rows(raw));
         let oldest = events.first().map(|event| event.seq);
         let reached_start = match oldest {
@@ -504,7 +514,10 @@ async fn prune_sqlite_artifacts(storage: &SqliteStorage) -> Result<()> {
         .context("scan retained SQLite artifact references")?
     {
         let reference: String = row.try_get("reference")?;
-        crate::artifacts::collect_references(&serde_json::Value::String(reference), &mut referenced);
+        crate::artifacts::collect_references(
+            &serde_json::Value::String(reference),
+            &mut referenced,
+        );
     }
     let artifacts_removed = storage
         .artifacts

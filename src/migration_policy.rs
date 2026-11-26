@@ -246,6 +246,14 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
         "0092_browser_pending_navigations.sql",
         "759d4d29d8f7d02c5878c6fe345085b1f29f043c01f79c53f3dc095f9ea9a5fb",
     ),
+    (
+        "0093_session_lineage.sql",
+        "25888d5b980fa28816d045ab4f091e3ee42fdefbca1edf1f41e0d0d4c33ff0ff",
+    ),
+    (
+        "0094_fork_turns_and_receipts.sql",
+        "809b61bfabe0230fa2d7de49b7c81dce3b67e34f26ca5b8f911370a5f6d61a50",
+    ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
@@ -483,6 +491,14 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     (
         "0066_browser_pending_navigations.sql",
         "759d4d29d8f7d02c5878c6fe345085b1f29f043c01f79c53f3dc095f9ea9a5fb",
+    ),
+    (
+        "0067_session_lineage.sql",
+        "d3d7e47ec939fad7d0462df88372806e898b935d5fc2844ccf47888cc9e45865",
+    ),
+    (
+        "0068_fork_turns_and_receipts.sql",
+        "06858d87e624a0928982f4fdcc6de5fadb29ec37878946388de8635642b5b83e",
     ),
 ];
 

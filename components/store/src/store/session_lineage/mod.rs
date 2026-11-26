@@ -10,9 +10,9 @@
 mod explore;
 mod pg;
 mod sqlite;
-mod turns_and_receipts;
 #[cfg(test)]
 mod tests;
+mod turns_and_receipts;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
