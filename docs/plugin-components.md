@@ -88,6 +88,18 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
+Component release 3.156.0 records provider-runtime 1.3.36, whose
+`cowboy-antigravity-acp` 1.0.30 adds owner-authored `~/.claude.json` stdio user
+MCP servers for Antigravity ([design](antigravity-user-mcp-r2-design.md)):
+`execution-connection.mjs` adds a dedicated `MAX_ACK = 8` acknowledgement lane,
+top-level-only `cowboyAck` frame extraction, and immediate ack slot release on
+local timeout (`retired` absorbs late replies), while `extensions.mjs`,
+`facade-tools.mjs`, and `facade.mjs` advertise `ackProtocol: 1`, acknowledge
+both results and refused errors within 12 s, and forward correlated
+`UncertainEffect("tools/call", callId)` reports when ack delivery fails.
+Antigravity 0.2.40 pins it; the other six Providers pinning provider-runtime
+advance one patch version.
+
 Component release 3.155.0 records provider-runtime 1.3.35, whose
 `cowboy-antigravity-acp` 1.0.29 adds Antigravity post-edit diagnostics
 ([design](antigravity-post-edit-r4-design.md)): descriptor-gated `/diagnostics`

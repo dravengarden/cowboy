@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "id": "claude-code",
-  "version": "3.20.83",
-  "component_release": "3.155.0",
+  "version": "3.20.84",
+  "component_release": "3.156.0",
   "publisher": "cowboy-first-party",
   "kind": "agent_provider",
   "entrypoint": "provider.json",
@@ -29,7 +29,7 @@
     },
     {
       "id": "cowboy.provider-runtime",
-      "version": "1.3.35"
+      "version": "1.3.36"
     },
     {
       "id": "cowboy.memory-client",
