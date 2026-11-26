@@ -2,7 +2,7 @@ import { desktopSize } from "../surface/desktopSize";
 import { refreshAllUsage } from "../usageRefresh";
 import { ProviderUsageCredits } from "../ProviderUsageCredits";
 import { useSessionSettingsRequests } from "./useSessionSettingsRequests";
-import { pendingSessionSettings } from "../sessionSettingsOpen";
+import { pendingSessionSettings, requestNewFrom } from "../sessionSettingsOpen";
 import {
   alpha,
   Box,
@@ -113,7 +113,11 @@ import {
   type DesktopCommand,
   useDesktopCommand,
 } from "./commands/DesktopCommandProvider";
-import { DESKTOP_WORKSPACE_PREFIX } from "./commands/workspaceShortcuts";
+import {
+  DESKTOP_WORKSPACE_KEYS,
+  DESKTOP_WORKSPACE_PREFIX,
+  desktopLeaderSequence,
+} from "./commands/workspaceShortcuts";
 import { LeaderKeycap } from "./commands/DesktopKeycap";
 import {
   ACTION_ICON_WIDTH_PX,
@@ -1001,6 +1005,18 @@ export const DesktopTopBarControls = memo(function DesktopTopBarControls({
         document.querySelector<HTMLButtonElement>(
           "[data-desktop-topbar-action='config']",
         )?.click(),
+    },
+    {
+      id: "session.replaceOrFork",
+      title: "Replace or Fork Session",
+      description: "Switch this session to another agent or fork a new branch",
+      group: "Session",
+      sequence: desktopLeaderSequence(
+        DESKTOP_WORKSPACE_KEYS.sessionsReplaceOrFork,
+      ),
+      surface: "session",
+      when: () => session !== undefined && !session.system,
+      run: () => requestNewFrom(sessionId),
     },
     {
       id: "topbar.usage",

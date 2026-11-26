@@ -72,7 +72,7 @@ export interface DesktopComposerToolbarProps {
   pending: boolean;
   progress: boolean;
   primaryAction?: "submit" | "save";
-  sendLabel: "Send" | "Queue" | "Send…" | "Enqueue" | "Save" | "Deliver…";
+  sendLabel: "Send" | "Send & switch" | "Queue" | "Send…" | "Enqueue" | "Save" | "Deliver…";
   sendIcon?: ReactNode;
   sendDescription: string;
   saveLabel?: string;

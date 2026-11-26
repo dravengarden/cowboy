@@ -1492,6 +1492,8 @@ export function ComposerWorkspace({
               progress: submitFeedback.progress,
               sendLabel: busy || queue.length > 0
                 ? "Send…"
+                : nextAgentContext
+                ? "Send & switch"
                 : starting || paused || !serverConnected
                 ? "Enqueue"
                 : "Send",
@@ -1499,6 +1501,8 @@ export function ComposerWorkspace({
                 ? "Queue until Cowboy is reachable"
                 : busy || queue.length > 0
                 ? "Choose delivery timing and queue position"
+                : nextAgentContext
+                ? "Send message and switch to the selected agent"
                 : paused
                 ? "Queue until the paused queue is resumed"
                 : starting
@@ -2549,7 +2553,7 @@ export function ComposerWorkspace({
           }}
           onSchedule={(): void =>
             setScheduleTarget({ id: undefined, initial: null })}
-          submitLabel={busy || queue.length > 0 ? "Send…" : starting || paused ? "Enqueue" : "Send"}
+          submitLabel={busy || queue.length > 0 ? "Send…" : nextAgentContext ? "Send & switch" : starting || paused ? "Enqueue" : "Send"}
           onCollapse={(): void => {
             // Carry fullscreen edits back to the inline editor. The inline editor
             // REMOUNTS on close (it only renders while !composeFs) and seeds from

@@ -84,7 +84,7 @@ import { markTranscriptScrollActivity } from "./transcriptRenderPacing";
 
 import {
   columnReverseVisualFirstRowIndex,
-  conversationEmptyPresentation,
+  conversationEmptyPresentation, countVisibleTranscriptItems,
   historyPrefetchTransition,
   magneticHapticTransition,
   scrollbackBoundaryRequestKey,
@@ -891,14 +891,13 @@ export function Transcript({
     scrollbackBoundaryBootstrapKeyRef.current = scrollbackBoundaryBootstrapKey;
     scrollbackBoundaryBootstrapRequestedRef.current = false;
   }
-  const renderableItemCountRef = useRef(items.length);
-  renderableItemCountRef.current = items.length;
-  const timelineEventCountRef = useRef(timeline.length);
-  timelineEventCountRef.current = timeline.length;
+  const visibleItemCount = countVisibleTranscriptItems(items, shouldPaintTranscriptLifecycle);
+  const renderableItemCountRef = useRef(visibleItemCount); renderableItemCountRef.current = visibleItemCount;
+  const timelineEventCountRef = useRef(timeline.length); timelineEventCountRef.current = timeline.length;
   const semanticRecoveryCursorRef = useRef<number | null>(null);
   const showFreshSessionEmptyState = shouldShowFreshSessionEmptyState({
     loading,
-    itemCount: items.length,
+    itemCount: visibleItemCount,
     isLive: isLive || status === "exited",
     busy,
     reachedStart: paging?.reachedStart,
@@ -1386,20 +1385,16 @@ export function Transcript({
   // prompt; its position is never evidence of delivery identity.
   const blockingTranscriptRestore = shouldShowBlockingTranscriptRestore(
     loading,
-    items.length,
+    visibleItemCount,
     pendingMessages.length,
   );
-  // One decision for all three empty flavours, so the startup fact can outrank
-  // the emptiness flavour instead of being lost in a ternary chain (a cleared
-  // session used to render "…is ready with a fresh context" while its agent was
-  // still booting — see conversationEmptyPresentation).
   const emptyPresentation = conversationEmptyPresentation({
     status,
-    itemCount: items.length,
+    itemCount: visibleItemCount,
     optimisticCount: optimisticMsgs.length,
     cleared: showClearedEmptyState,
     fresh: showFreshSessionEmptyState,
-    unstarted: !loading && (paging?.reachedStart ?? true) && allItems.every((item) => item.kind === "lifecycle"),
+    unstarted: !loading && (paging?.reachedStart ?? true) && allItems.every((item) => item.kind === "lifecycle" || item.kind === "forked"),
   });
   // "stick-to-bottom" UX, done properly this time:
   //

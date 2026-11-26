@@ -31,6 +31,7 @@ import { contextCue } from "./contextCue";
 import { trashItems, useStoreSelector } from "./store";
 import { SESSION_LINK_LABEL, sessionLinks, type SessionLinkRow } from "./sessionLinks";
 import { openSessionLink, SessionHandoffSource, useRestoreSession } from "./SessionHandoffSource";
+import { SessionHistoryPeek } from "./SessionHistoryPeek";
 import { hibernateAvailability, hibernateSession } from "./sessionHibernate";
 
 /** Context for one session, read only after the Service announced it. */
@@ -295,19 +296,23 @@ function useSessionLinks(sessionId: string): SessionLinkRow[] {
   const session = useStoreSelector((state) =>
     state.sessions.find((entry) => entry.id === sessionId)
   );
-  const context = useAnnouncedSessionContext(sessionId, session?.continued_from !== undefined);
+  const context = useAnnouncedSessionContext(
+    sessionId,
+    session?.continued_from !== undefined || session?.forked_from !== undefined,
+  );
   const sessions = useStoreSelector((state) => state.sessions);
   const trashed = useStoreSelector((state) => state.trashedSessions);
   return sessionLinks(session, context?.links, sessions, trashed);
 }
 
-/** The first thing a continuation shows: one link back to where its work
- *  came from. Following it lands on the moment of the handoff. */
+/** The first thing a continuation or fork shows: one link back to where its
+ *  work came from. Live sources open at the handoff point or preview in place;
+ *  trashed sources open read-only without forcing Restore. */
 export function SessionContinuedFrom(
   { sessionId }: { sessionId: string },
 ): React.JSX.Element | null {
   const links = useSessionLinks(sessionId);
-  const source = links.find((link) => link.kind === "continued");
+  const source = links.find((link) => link.kind === "continued" || link.kind === "forked");
   if (!source) return null;
   return (
     <Box data-session-handoff="start" sx={{ alignSelf: "center", maxWidth: "100%", minWidth: 0 }}>
@@ -426,75 +431,103 @@ function SessionLink({ link }: { link: SessionLinkRow }): React.JSX.Element {
   const session = useStoreSelector((state) =>
     state.sessions.find((entry) => entry.id === link.id)
   );
+  const trashedSession = useStoreSelector((state) =>
+    state.trashedSessions.find((entry) => entry.id === link.id)
+  );
+  const meta = session ?? trashedSession;
   const { data: accounts } = useSubscriptionAccounts();
   const { busy, failure, restore } = useRestoreSession(link.id);
+  const [peekOpen, setPeekOpen] = useState(false);
   const note = link.state === "trash" ? "In Trash" : link.state === "deleted" ? "Deleted" : "";
   const detail = [
     SESSION_LINK_LABEL[link.kind],
-    session && sessionAccountIdentity(accounts, session).short,
+    meta && sessionAccountIdentity(accounts, meta).short,
     note,
   ].filter(Boolean).join(" · ");
   const open = link.state === "open";
+  const peekable = link.state === "open" || link.state === "trash";
   const Icon = link.state === "deleted"
     ? LinkOffOutlined
     : link.kind === "forked"
     ? CallSplitOutlined
     : LinkOutlined;
   return (
-    <Stack direction="row" alignItems="center" spacing={0.5} sx={{ minWidth: 0, maxWidth: "100%" }}>
-      <ButtonBase
-        data-session-link={link.state}
-        disabled={!open}
-        title={open ? "Open at the point it was linked" : link.title}
-        onClick={(): void => openSessionLink(link, session)}
-        sx={{
-          flex: 1,
-          minWidth: 0,
-          minHeight: 44,
-          gap: 1,
-          px: 0.5,
-          borderRadius: 1,
-          justifyContent: "flex-start",
-          textAlign: "left",
-        }}
-      >
-        <Icon
-          sx={{
-            fontSize: glyphSize(18),
-            flexShrink: 0,
-            color: open ? "primary.main" : "text.disabled",
+    <>
+      <Stack direction="row" alignItems="center" spacing={0.5} sx={{ minWidth: 0, maxWidth: "100%" }}>
+        <ButtonBase
+          data-session-link={link.state}
+          disabled={!peekable}
+          title={
+            open
+              ? "Open at the point it was linked"
+              : link.state === "trash"
+              ? "Preview conversation without restoring"
+              : link.title
+          }
+          onClick={(): void => {
+            if (open) openSessionLink(link, session);
+            else if (link.state === "trash") setPeekOpen(true);
           }}
-        />
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="body2" noWrap color={open ? "text.primary" : "text.secondary"}>
-            {link.title}
-          </Typography>
-          {(failure || detail) && <Typography
-            variant="caption"
-            noWrap
-            color={failure ? "error" : "text.secondary"}
-            sx={{ display: "block" }}
-          >
-            {failure || detail}
-          </Typography>}
-        </Box>
-        {open && (
-          <ChevronRightRounded
-            sx={{ fontSize: glyphSize(18), flexShrink: 0, color: "text.secondary" }}
-          />
-        )}
-      </ButtonBase>
-      {link.state === "trash" && (
-        <Button
-          size="small"
-          disabled={busy}
-          onClick={restore}
-          sx={{ flexShrink: 0, minWidth: 0, minHeight: 44, textTransform: "none" }}
+          sx={{
+            flex: 1,
+            minWidth: 0,
+            minHeight: 44,
+            gap: 1,
+            px: 0.5,
+            borderRadius: 1,
+            justifyContent: "flex-start",
+            textAlign: "left",
+          }}
         >
-          Restore
-        </Button>
+          <Icon
+            sx={{
+              fontSize: glyphSize(18),
+              flexShrink: 0,
+              color: peekable ? "primary.main" : "text.disabled",
+            }}
+          />
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography variant="body2" noWrap color={peekable ? "text.primary" : "text.secondary"}>
+              {link.title}
+            </Typography>
+            {(failure || detail) && <Typography
+              variant="caption"
+              noWrap
+              color={failure ? "error" : "text.secondary"}
+              sx={{ display: "block" }}
+            >
+              {failure || detail}
+            </Typography>}
+          </Box>
+          {peekable && (
+            <ChevronRightRounded
+              sx={{ fontSize: glyphSize(18), flexShrink: 0, color: "text.secondary" }}
+            />
+          )}
+        </ButtonBase>
+        {link.state === "trash" && (
+          <Button
+            size="small"
+            disabled={busy}
+            onClick={restore}
+            sx={{ flexShrink: 0, minWidth: 0, minHeight: 44, textTransform: "none" }}
+          >
+            Restore
+          </Button>
+        )}
+      </Stack>
+      {peekable && (
+        <SessionHistoryPeek
+          open={peekOpen}
+          onClose={(): void => setPeekOpen(false)}
+          link={link}
+          session={session}
+          onOpenSession={open ? (): void => openSessionLink(link, session) : undefined}
+          onRestore={link.state === "trash" ? restore : undefined}
+          restoring={busy}
+        />
       )}
-    </Stack>
+    </>
   );
 }
 

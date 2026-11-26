@@ -1,5 +1,6 @@
 import { useState } from "react";
-import { Alert, Button, CircularProgress, Stack, Typography } from "@mui/material";
+import { Alert, Box, Button, CircularProgress, Paper, Stack, Typography } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import { ErrorOutline } from "@mui/icons-material";
 import { SessionContinuedFrom } from "./SessionContextCue";
 import { prettifyCrashDetail } from "./crashDetail";
@@ -30,20 +31,58 @@ export function PreparingConversation({ sessionId, location, blocked }: {
     return undefined;
   });
   return (
-    <Stack data-conversation-empty-state={blocked ? "blocked" : "preparing"} spacing={3} sx={{ flex: "1 1 0 !important", minHeight: 180, width: "100%", px: 2, py: 3, minWidth: 0, alignItems: "center", justifyContent: "safe center" }}>
-      <Stack spacing={1.5} alignItems="center" sx={{ width: "100%", maxWidth: blocked ? "28rem" : "22rem", textAlign: "center" }}>
-        {blocked ? <BlockedStartup sessionId={sessionId} location={location} detail={blocked.detail} /> : (
-          <Stack role="status" spacing={0.75} alignItems="center">
-            <Stack direction="row" spacing={1} alignItems="center">
-              <CircularProgress size="1rem" thickness={3} sx={{ color: "text.secondary" }} />
-              <Typography sx={{ fontSize: "1rem", fontWeight: 500 }}>Preparing session</Typography>
+    <Stack
+      data-conversation-empty-state={blocked ? "blocked" : "preparing"}
+      spacing={2.5}
+      sx={{
+        flex: "1 1 0 !important",
+        minHeight: 180,
+        width: "100%",
+        px: 2,
+        py: 3,
+        minWidth: 0,
+        alignItems: "center",
+        justifyContent: "safe center",
+      }}
+    >
+      <Paper
+        elevation={0}
+        sx={(theme) => ({
+          width: "100%",
+          maxWidth: blocked ? "28rem" : "24rem",
+          px: 2.5,
+          py: 2.5,
+          borderRadius: 3.5,
+          border: 1,
+          borderColor: blocked
+            ? alpha(theme.palette.error.main, theme.palette.mode === "dark" ? 0.4 : 0.25)
+            : "divider",
+          bgcolor: alpha(theme.palette.background.paper, theme.palette.mode === "dark" ? 0.72 : 0.85),
+          boxShadow: `0 8px 28px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.22 : 0.05)}`,
+        })}
+      >
+        <Stack spacing={1.75} alignItems="center" sx={{ width: "100%", textAlign: "center" }}>
+          {blocked ? (
+            <BlockedStartup sessionId={sessionId} location={location} detail={blocked.detail} />
+          ) : (
+            <Stack role="status" spacing={0.75} alignItems="center">
+              <Stack direction="row" spacing={1} alignItems="center">
+                <CircularProgress size="1rem" thickness={3.5} sx={{ color: "primary.main" }} />
+                <Typography sx={{ fontSize: "1rem", fontWeight: 600 }}>Preparing session</Typography>
+              </Stack>
+              {location && (
+                <Typography variant="caption" color="text.secondary">
+                  {location}
+                </Typography>
+              )}
             </Stack>
-            {location && <Typography variant="caption" color="text.secondary">{location}</Typography>}
-          </Stack>
-        )}
-        <SessionContinuedFrom sessionId={sessionId} />
-        {operation !== undefined && <SessionHandoffCancel sessionId={sessionId} operation={operation} />}
-      </Stack>
+          )}
+          <Box sx={{ width: "100%", display: "flex", justifyContent: "center" }}>
+            <SessionContinuedFrom sessionId={sessionId} />
+          </Box>
+          {operation !== undefined && <SessionHandoffCancel sessionId={sessionId} operation={operation} />}
+        </Stack>
+      </Paper>
     </Stack>
   );
 }
@@ -66,7 +105,7 @@ function BlockedStartup({ sessionId, location, detail }: {
     <Stack role="alert" spacing={1} alignItems="center" sx={{ width: "100%" }}>
       <Stack direction="row" spacing={1} alignItems="center">
         <ErrorOutline fontSize="small" color="error" />
-        <Typography sx={{ fontSize: "1rem", fontWeight: 500 }}>Session didn't start</Typography>
+        <Typography sx={{ fontSize: "1rem", fontWeight: 600 }}>Session didn't start</Typography>
       </Stack>
       {location && <Typography variant="caption" color="text.secondary">{location}</Typography>}
       <Typography variant="body2" color="text.secondary" sx={{ overflowWrap: "anywhere" }}>

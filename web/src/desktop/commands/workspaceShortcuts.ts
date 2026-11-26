@@ -122,6 +122,7 @@ export const DESKTOP_WORKSPACE_KEYS = {
   sessionsNewFolder: "SN",
   sessionsOrganize: "SP",
   sessionsMove: "SM",
+  sessionsReplaceOrFork: "SF",
   // `␣P` returns to the Prompt as it was; `␣I` enters it ready to type, as
   // Vim's `i`. Compact and Clear are Prompt chords, not a leader group.
   focusPrompt: "P",
@@ -242,6 +243,9 @@ export const DESKTOP_SHORTCUTS = {
   ),
   focusSessions: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusSessions),
   sessionsFold: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.sessionsFold),
+  sessionsReplaceOrFork: desktopWorkspaceSequence(
+    DESKTOP_WORKSPACE_KEYS.sessionsReplaceOrFork,
+  ),
   reconnect: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.reconnect),
   focusPrompt: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.focusPrompt),
   insertPrompt: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.insertPrompt),

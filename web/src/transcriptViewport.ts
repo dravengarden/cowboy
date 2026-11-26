@@ -12,6 +12,28 @@ export interface TranscriptViewportBackfillInput {
   visibleTopGap?: number;
 }
 
+/** Count only rows that Transcript actually paints. Structural markers such as
+ *  `forked` and unpainted lifecycle rows never render a DOM row, so counting
+ *  them made freshly forked sessions bypass every empty state into a blank void. */
+export function countVisibleTranscriptItems<TStatus extends string>(
+  items: readonly ({ kind: "lifecycle"; status: TStatus } | { kind: string })[],
+  shouldPaintLifecycle: (status: TStatus) => boolean,
+): number {
+  let count = 0;
+  for (const item of items) {
+    if (item.kind === "forked") continue;
+    if (
+      item.kind === "lifecycle" &&
+      "status" in item &&
+      !shouldPaintLifecycle(item.status as TStatus)
+    ) {
+      continue;
+    }
+    count += 1;
+  }
+  return count;
+}
+
 export function shouldShowFreshSessionEmptyState(input: {
   loading: boolean;
   itemCount: number;

@@ -25,7 +25,7 @@ export interface NewPromptCallbacks {
   canCurrentTurn: boolean;
   pending: boolean;
   progress: boolean;
-  sendLabel: "Send" | "Queue" | "Send…" | "Enqueue";
+  sendLabel: "Send" | "Send & switch" | "Queue" | "Send…" | "Enqueue";
   sendDescription: string;
   unavailableReason: string;
   onAttach: () => void;
