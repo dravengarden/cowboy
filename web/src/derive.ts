@@ -1118,10 +1118,15 @@ export function forkableAnswerKeys(
   };
   for (const item of items) {
     if (item.kind === "cleared") {
+      keys.clear();
       last = null;
     } else if (item.kind === "message" && item.role === "user") {
       if (!item.steered) settle();
     } else if (item.kind === "message" && item.role === "assistant") {
+      const text = messageText(item);
+      if (text === COMPACTING_NOTICE || (text !== null && isCompactionCompletionText(text))) {
+        continue;
+      }
       last = { key: item.key, messageId: item.messageId };
     }
   }

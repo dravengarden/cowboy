@@ -685,7 +685,7 @@ export function MobileBranchSwitcherButton({
             setOpen(true);
             event.currentTarget.blur();
           }}
-          sx={{ minWidth: 44, minHeight: 44, color: "primary.main" }}
+          sx={{ flexShrink: 0, minWidth: 44, minHeight: 44, color: "primary.main" }}
         >
           <AccountTreeOutlined fontSize="small" />
         </IconButton>

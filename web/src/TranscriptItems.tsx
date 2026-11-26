@@ -1,4 +1,5 @@
 import { MessageWithFork } from "./MessageForkAction";
+import type { TurnForkPoint } from "./turnForkPoints";
 import { NoticeRow } from "./NoticeRow";
 import { ScrollEdges } from "@cowboy/app-shell";
 import { desktopSize, glyphSize } from "./surface/desktopSize";
@@ -962,6 +963,7 @@ export const ItemView = memo(function ItemView({
   tasks,
   stops,
   readOnly,
+  forkPoint,
 }: {
   item: RenderItem;
   sessionId: string;
@@ -980,12 +982,13 @@ export const ItemView = memo(function ItemView({
   /** Background-task summaries for subagent and Call anchor rows. */
   tasks?: Pick<BackgroundTasks, "byKey" | "callsObservedAt" | "unresolvedCalls"> | undefined;
   stops?: ReadonlyMap<string, import("./useBackgroundTasks").StopState> | undefined; readOnly?: boolean;
+  forkPoint?: TurnForkPoint | undefined;
 }): React.JSX.Element | null {
   switch (item.kind) {
     case "message": {
       const isStreaming = !!streaming && item.role === "assistant";
       const bubble = <MessageBubble role={item.role} chunks={item.chunks} streaming={isStreaming} origin={item.origin} cmid={item.cmid} provider={provider} providerVersion={providerVersion} providerDigest={providerDigest} desktop={desktop} />;
-      return readOnly ? bubble : <MessageWithFork item={item} sessionId={sessionId} streaming={isStreaming} desktop={desktop}>{bubble}</MessageWithFork>;
+      return readOnly ? bubble : <MessageWithFork item={item} sessionId={sessionId} streaming={isStreaming} desktop={desktop} forkPoint={forkPoint}>{bubble}</MessageWithFork>;
     }
     case "thought":
       return (

@@ -14,6 +14,7 @@ export function ForkOutcome({
   sourceBusy,
   copyUncommitted,
   onCopyUncommitted,
+  forkPointLabel,
 }: {
   forkOnly: boolean;
   allowFork: boolean;
@@ -26,7 +27,9 @@ export function ForkOutcome({
   sourceBusy: boolean;
   copyUncommitted: boolean;
   onCopyUncommitted: (value: boolean) => void;
+  forkPointLabel?: string | undefined;
 }): React.JSX.Element {
+  const fromTurn = forkPointLabel ? ` from ${forkPointLabel}` : "";
   return (
     <Stack spacing={0.5} data-new-session-outcome>
       {!forkOnly && (
@@ -49,14 +52,14 @@ export function ForkOutcome({
           {!samePlacement
             ? "Fork needs this project and Machine."
             : forkMode === "fork"
-              ? "Fork starts a new session now and keeps this one, copying the conversation and uncommitted changes."
+              ? `Fork starts a new session${fromTurn} now and keeps this one, copying the conversation and uncommitted changes.`
               : copiesWorktree
                 ? !supportsWorkspaceMode
-                  ? "Fork starts a new session now with a handoff digest of this conversation and a copy of this worktree."
+                  ? `Fork starts a new session${fromTurn} now with a handoff digest of this conversation and a copy of this worktree.`
                   : sourceBusy || !copyUncommitted
-                    ? "Fork starts a new session now from this session's committed HEAD and keeps this one. The new agent receives a handoff digest of this conversation."
-                    : "Fork starts a new session now with a handoff digest of this conversation and a copy of uncommitted changes."
-                : "Fork starts a new session now and keeps this one. The new agent reads this conversation; uncommitted changes stay here."}
+                    ? `Fork starts a new session${fromTurn} now from this session's committed HEAD and keeps this one. The new agent receives a handoff digest of this conversation.`
+                    : `Fork starts a new session${fromTurn} now with a handoff digest of this conversation and a copy of uncommitted changes.`
+                : `Fork starts a new session${fromTurn} now and keeps this one. The new agent reads this conversation; uncommitted changes stay here.`}
           {samePlacement && waitForTurn && " Available after the current turn."}
         </Typography>
       )}

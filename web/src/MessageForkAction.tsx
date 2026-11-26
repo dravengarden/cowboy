@@ -1,173 +1,115 @@
-import { Box, Button, CircularProgress, Tooltip, Typography } from "@mui/material";
+import { Box, Button, Tooltip } from "@mui/material";
+import { alpha } from "@mui/material/styles";
 import CallSplitOutlined from "@mui/icons-material/CallSplitOutlined";
-import { useEffect, useRef, useState } from "react";
-import { notifyLineageChanged } from "./ancestorHistory";
 import type { RenderItem } from "./derive";
-import { executeForkAttempt, forkAvailability, type PendingForkAttempt } from "./sessionFork";
-import { requestPickSession } from "./sessionPickRequest";
+import { requestNewFrom } from "./sessionSettingsOpen";
 import { useStoreSelector } from "./store";
 import { glyphSize } from "./surface/desktopSize";
-import { newUuid } from "./uuid";
+import type { TurnForkPoint } from "./turnForkPoints";
 
-/** Quiet "Fork from here" affordance beneath completed assistant responses.
- *  Uses native fork when eligible on the originating session, and cleanly
- *  falls back to Linked Fork (`duplicate` with exact `before_seq`) ONLY on a
- *  definitive unsupported refusal — preserving operation IDs across retries. */
+/** Zero-height Desktop hover affordance straddling the bottom-right corner of
+ *  a completed turn-final assistant response. Opens Replace or fork already
+ *  targeted at this turn so the reader can confirm and pick options without
+ *  cluttering the transcript or risking accidental one-click forks. */
 export function MessageForkAction({
   originSessionId,
-  messageId,
-  beforeSeq,
-  desktop,
+  forkPoint,
 }: {
   originSessionId: string;
-  messageId?: string | undefined;
-  beforeSeq?: number | undefined;
-  desktop: boolean;
+  forkPoint: TurnForkPoint;
 }): React.JSX.Element | null {
-  const session = useStoreSelector((state) =>
-    state.sessions.find((entry) => entry.id === originSessionId),
-  );
-  const machines = useStoreSelector((state) => state.machines);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const pendingAttemptRef = useRef<PendingForkAttempt | null>(null);
-
-  useEffect(() => {
-    pendingAttemptRef.current = null;
-  }, [originSessionId, messageId, beforeSeq]);
-
-  if (!session || session.system || !session.workspace_id) return null;
-  const nativeAvail = forkAvailability(session, machines);
-  const supportsWorkspaceMode = machines.some(
-    (machine) => machine.id === session.machine_id && machine.capabilities?.fork_workspace_mode === true,
-  );
-  const canNative = nativeAvail !== null && Boolean(messageId);
-  const canLinked = beforeSeq !== undefined && beforeSeq > 0;
-  if (!canNative && !canLinked) return null;
-
-  const makeLinkedAttempt = (): Extract<PendingForkAttempt, { mode: "linked" }> => ({
-    mode: "linked",
-    operation: `fork-turn-${newUuid()}`,
-    body: {
-      provider: session.provider,
-      provider_account_id: session.provider_account_id || "default",
-      ...(beforeSeq !== undefined ? { before_seq: beforeSeq } : {}),
-      ...(supportsWorkspaceMode ? { include_uncommitted: false } : {}),
-    },
+  const forkEligible = useStoreSelector((state) => {
+    const session = state.sessions.find((entry) => entry.id === originSessionId);
+    return Boolean(session && !session.system && session.workspace_id);
   });
-
-  const runFork = async (): Promise<void> => {
-    setBusy(true);
-    setError("");
-    try {
-      const attempt = (pendingAttemptRef.current ??=
-        canNative && messageId
-          ? { mode: "native", operation: `fork-msg-${newUuid()}`, messageId }
-          : makeLinkedAttempt());
-      const receipt = await executeForkAttempt(
-        originSessionId,
-        attempt,
-        canLinked,
-        makeLinkedAttempt,
-        (next) => {
-          pendingAttemptRef.current = next;
-        },
-      );
-      pendingAttemptRef.current = null;
-      notifyLineageChanged(receipt.session_id);
-      notifyLineageChanged(originSessionId);
-      requestPickSession(receipt.session_id, receipt.session ?? undefined);
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not fork from this message");
-    } finally {
-      setBusy(false);
-    }
-  };
+  if (!forkEligible) return null;
 
   return (
     <Box
       data-message-fork-bar
       sx={{
-        display: "flex",
-        alignItems: "center",
-        gap: 0.75,
-        mt: 0.25,
-        px: 0.25,
-        opacity: desktop ? 0 : 0.78,
-        transition: "opacity 140ms ease",
+        position: "absolute",
+        right: 10,
+        bottom: -11,
+        zIndex: 1,
+        visibility: "hidden",
+        opacity: 0,
+        pointerEvents: "none",
         ".cowboy-msg-wrap:hover &, .cowboy-msg-wrap:focus-within &": {
+          visibility: "visible",
           opacity: 1,
+          pointerEvents: "auto",
         },
       }}
     >
-      <Tooltip title="Create a new branch from this response">
+      <Tooltip title={`Fork from Turn ${String(forkPoint.turnNumber)}`}>
         <Button
           size="small"
-          variant="text"
+          variant="outlined"
           color="inherit"
           data-fork-from-here
-          disabled={busy}
-          startIcon={
-            busy
-              ? <CircularProgress size={12} color="inherit" />
-              : <CallSplitOutlined sx={{ fontSize: glyphSize(14) }} />
-          }
+          data-desktop-transcript-stop="action"
+          startIcon={<CallSplitOutlined sx={{ fontSize: glyphSize(13) }} />}
           onClick={(): void => {
-            void runFork();
+            requestNewFrom(originSessionId, {
+              itemKey: forkPoint.itemKey,
+              messageId: forkPoint.messageId,
+              beforeSeq: forkPoint.beforeSeq,
+              turnNumber: forkPoint.turnNumber,
+              promptPreview: forkPoint.promptPreview,
+            });
           }}
-          sx={{
+          sx={(theme) => ({
             minWidth: 0,
-            minHeight: desktop ? 24 : 32,
-            px: 0.75,
+            minHeight: 22,
+            px: 0.85,
             py: 0,
-            borderRadius: 999,
-            fontSize: "0.72rem",
+            borderRadius: "999px",
+            fontSize: "0.7rem",
+            lineHeight: 1.2,
             color: "text.secondary",
+            bgcolor: theme.palette.background.paper,
+            borderColor: alpha(theme.palette.divider, 0.9),
+            boxShadow: theme.shadows[1],
             textTransform: "none",
-            "&:hover": { color: "primary.main", bgcolor: "action.hover" },
-          }}
+            "& .MuiButton-startIcon": { mr: 0.4 },
+            "&:hover": {
+              color: "primary.main",
+              borderColor: alpha(theme.palette.primary.main, 0.45),
+              bgcolor: theme.palette.background.paper,
+            },
+          })}
         >
-          {busy ? "Forking…" : "Fork from here"}
+          Fork from here
         </Button>
       </Tooltip>
-      {error && (
-        <Typography variant="caption" color="error" noWrap title={error}>
-          {error}
-        </Typography>
-      )}
     </Box>
   );
 }
 
-/** Wraps an assistant MessageBubble with the quiet in-transcript "Fork from here"
- *  action when the message is settled (non-streaming). Keeps TranscriptItems.tsx
- *  clean and strictly within its structural line budget. */
+/** Wraps a completed turn-final assistant MessageBubble with a zero-height
+ *  Desktop hover trigger. Mobile keeps the reading transcript completely free
+ *  of inline fork chrome — turn-point forking lives in Replace or fork. */
 export function MessageWithFork({
   item,
   sessionId,
   streaming,
   desktop,
+  forkPoint,
   children,
 }: {
   item: Extract<RenderItem, { kind: "message" }>;
   sessionId: string;
   streaming: boolean;
   desktop: boolean;
+  forkPoint?: TurnForkPoint | undefined;
   children: React.JSX.Element;
 }): React.JSX.Element {
-  if (item.role !== "assistant" || streaming) return children;
-  const seq = Number(item.key);
-  const lastSeq = item.lastSeq ?? (Number.isFinite(seq) ? seq : undefined);
-  const beforeSeq = lastSeq !== undefined ? lastSeq + 1 : undefined;
+  if (!desktop || item.role !== "assistant" || streaming || !forkPoint) return children;
   return (
-    <Box className="cowboy-msg-wrap" sx={{ display: "flex", flexDirection: "column", alignItems: "flex-start", maxWidth: "100%" }}>
+    <Box className="cowboy-msg-wrap" sx={{ position: "relative", width: "100%", maxWidth: "100%" }}>
       {children}
-      <MessageForkAction
-        originSessionId={sessionId}
-        messageId={item.messageId}
-        beforeSeq={beforeSeq}
-        desktop={desktop}
-      />
+      <MessageForkAction originSessionId={sessionId} forkPoint={forkPoint} />
     </Box>
   );
 }

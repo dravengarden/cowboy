@@ -2213,7 +2213,6 @@ export function ComposerWorkspace({
             is space-evenly instead, so the spacer would defeat the even spread.
             (Stop + config + auto-scroll moved to the navbar — see SessionControls.) */
                   }
-                  {compact && <MobileBranchSwitcherButton sessionId={sessionId} />}
                   {!compact && <Box sx={{ flex: 1 }} />}
                   {
                     /* Send opens delivery choices while busy; startup sends enqueue.
@@ -2322,6 +2321,7 @@ export function ComposerWorkspace({
                         </span>
                       </Tooltip>
                     )}
+                  {compact && <MobileBranchSwitcherButton sessionId={sessionId} />}
                   {
                     /* Secondary actions: Draft, Schedule and Clear. Delivery
             timing and queue position share the send picker. The narrow-phone ⋮ fold

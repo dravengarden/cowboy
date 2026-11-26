@@ -40,9 +40,12 @@ reconciles a value the agent no longer offers.
 The form states which of the two it will do, and what happens to uncommitted
 changes.
 
-- Forking through an earlier answer is available to agents and scripts with
-  `message_id` (below). The Transcript shows no fork action: switches and
-  branches are made in Session Settings.
+- Forking through an earlier completed turn is available in **Replace or
+  fork** via the **Fork from** selector (and via a zero-height hover chip on
+  completed turn-final answers on Desktop, which opens **Replace or fork**
+  pre-targeted to that turn), as well as to agents and scripts with
+  `message_id` (below). Mobile keeps the reading Transcript free of inline fork
+  rows.
 - `sessions.fork` in Cowboy MCP and `POST /api/sessions/:id/fork` expose the
   same operation to agents and scripts. `latest_completed` forks from the
   answer that ended the newest finished turn, without waiting for a running

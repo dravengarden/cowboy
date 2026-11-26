@@ -5,13 +5,24 @@ export const COMPOSER_FOCUS_EVENT = "cowboy:composer-focus";
 
 export type SessionSettingsFocus = "session" | "agent" | "new_from";
 
+export interface ForkPointSelection {
+  itemKey: string;
+  messageId?: string | undefined;
+  beforeSeq: number;
+  turnNumber?: number | undefined;
+  promptPreview?: string | undefined;
+}
+
 /** A request made while another session was selected is honored by the
  *  target's settings surfaces when they mount, within a short window. */
 const PENDING_MS = 3_000;
 let pendingOpen:
   | { sessionId: string; focus: SessionSettingsFocus; at: number }
   | undefined;
-const newFromRequests = new Map<string, number>();
+const newFromRequests = new Map<
+  string,
+  { at: number; forkPoint?: ForkPointSelection | undefined }
+>();
 
 export function openSessionSettings(
   focus: SessionSettingsFocus = "agent",
@@ -45,19 +56,32 @@ export function closeSessionSettings(sessionId: string): void {
   );
 }
 
-/** Open this session's settings at Replace or fork. */
-export function requestNewFrom(sessionId: string): void {
-  newFromRequests.set(sessionId, Date.now());
+/** Open this session's settings at Replace or fork, optionally pre-selecting
+ *  a completed turn as the fork point. */
+export function requestNewFrom(
+  sessionId: string,
+  forkPoint?: ForkPointSelection,
+): void {
+  newFromRequests.set(sessionId, { at: Date.now(), forkPoint });
   document.dispatchEvent(
-    new CustomEvent(SESSION_NEW_FROM_EVENT, { detail: { sessionId } }),
+    new CustomEvent(SESSION_NEW_FROM_EVENT, { detail: { sessionId, forkPoint } }),
   );
   openSessionSettings("new_from", sessionId);
 }
 
-export function takeNewFromRequest(sessionId: string): boolean {
-  const at = newFromRequests.get(sessionId);
+export function takeNewFromRequestDetail(
+  sessionId: string,
+): { matched: boolean; forkPoint?: ForkPointSelection | undefined } {
+  const entry = newFromRequests.get(sessionId);
   newFromRequests.delete(sessionId);
-  return at !== undefined && Date.now() - at < PENDING_MS;
+  if (entry === undefined || Date.now() - entry.at >= PENDING_MS) {
+    return { matched: false };
+  }
+  return { matched: true, forkPoint: entry.forkPoint };
+}
+
+export function takeNewFromRequest(sessionId: string): boolean {
+  return takeNewFromRequestDetail(sessionId).matched;
 }
 
 export function requestComposerFocus(sessionId: string): void {

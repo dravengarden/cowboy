@@ -12,6 +12,7 @@ export function NewSessionActions({
   allowFork,
   canReplace,
   canFork,
+  emphasizeFork = false,
   busy,
   onReplace,
   onFork,
@@ -21,13 +22,14 @@ export function NewSessionActions({
   allowFork: boolean;
   canReplace: boolean;
   canFork: boolean;
+  emphasizeFork?: boolean;
   busy: boolean;
   onReplace: () => Promise<void>;
   onFork: () => Promise<void>;
 }): React.JSX.Element {
   const own = useRef<HTMLDivElement>(null);
-  const latest = useRef({ canReplace, canFork, onReplace, onFork, forkOnly });
-  latest.current = { canReplace, canFork, onReplace, onFork, forkOnly };
+  const latest = useRef({ canReplace, canFork, onReplace, onFork, forkOnly, emphasizeFork });
+  latest.current = { canReplace, canFork, onReplace, onFork, forkOnly, emphasizeFork };
   useEffect(() => {
     if (!desktop) return undefined;
     const onKey = (event: KeyboardEvent): void => {
@@ -36,7 +38,7 @@ export function NewSessionActions({
       const form = own.current?.closest("[data-new-session-editor]");
       if (!form || !(event.target instanceof Node) || !form.contains(event.target)) return;
       const current = latest.current;
-      const fork = event.shiftKey || current.forkOnly;
+      const fork = event.shiftKey || current.forkOnly || current.emphasizeFork;
       event.preventDefault();
       event.stopPropagation();
       if (fork && current.canFork) void current.onFork();
@@ -61,7 +63,7 @@ export function NewSessionActions({
       )}
       {allowFork && (
         <Button
-          variant={forkOnly ? "contained" : "outlined"}
+          variant={forkOnly || emphasizeFork ? "contained" : "outlined"}
           data-new-session-fork-run
           disabled={!canFork}
           onClick={() => void onFork()}
@@ -69,7 +71,7 @@ export function NewSessionActions({
         >
           Fork to new session
           <Kbd
-            keys={forkOnly ? `${MOD_LABEL}${ENTER_LABEL}` : `${MOD_LABEL}⇧${ENTER_LABEL}`}
+            keys={forkOnly || emphasizeFork ? `${MOD_LABEL}${ENTER_LABEL}` : `${MOD_LABEL}⇧${ENTER_LABEL}`}
             availability={canFork ? "available" : "inactive"}
           />
         </Button>

@@ -88,6 +88,7 @@ import {
   shouldTriggerSessionNonce,
 } from "./transcriptScrollAnchor";
 import { transcriptFrameIsolationSx, transcriptRowContainment, transcriptScrollerChildSx } from "./transcriptMotion";
+import { completedTurnForkPointMap } from "./turnForkPoints";
 import {
   liveTranscriptMountedRows,
   liveTranscriptWindow,
@@ -743,6 +744,9 @@ export function Transcript({
   // empty area + that bar (no duplicate).
   const isLive = status === "starting" || status === "running" ||
     status === "busy";
+  const desktopForkPoints = desktopNavigation
+    ? completedTurnForkPointMap(allItems, status === "busy" || status === "starting")
+    : undefined;
   const lastIdx = items.length - 1;
   const lastItem = lastIdx >= 0 ? items[lastIdx] : undefined;
   // Signature that changes whenever the last item grows (more chunks / text) or a
@@ -2924,6 +2928,7 @@ export function Transcript({
                       onOpenTool={openTool}
                       tasks={item.kind === "subagent" || item.kind === "call" ? background : undefined}
                       stops={item.kind === "subagent" || item.kind === "call" ? taskStops : undefined}
+                      forkPoint={desktopForkPoints?.get(item.key)}
                     />
                   </Box>
                 ))}

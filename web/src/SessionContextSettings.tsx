@@ -28,15 +28,16 @@ import { SessionProvenance } from "./SessionContextCue";
 import { useHistorySession } from "./sessionHistory";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
 import { accountIdentity } from "./accountIdentity";
-import { duplicateMode, duplicateSession, forkAvailability, forkSession } from "./sessionFork";
-import { requestPickSession } from "./sessionPickRequest";
+import {
+  ForkPointPicker,
+  useNewFromDisclosure,
+  useSettingsForkPlan,
+} from "./ForkPointPicker";
 import {
   closeSessionSettings,
+  type ForkPointSelection,
   requestComposerFocus,
-  SESSION_NEW_FROM_EVENT,
-  takeNewFromRequest,
 } from "./sessionSettingsOpen";
-import { newUuid } from "./uuid";
 import { useTargetPreset } from "./newSessionPreset";
 
 /** Three questions, one place each. How this agent runs lives in the Agent
@@ -56,49 +57,18 @@ export function SessionContextSettings({
    *  place, filling the rest of the pane. */
   inlineLinks?: boolean;
 }): React.JSX.Element {
-  const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<string[] | null>(null);
-  const [reveal, setReveal] = useState(false);
   // Remounting the form takes a fresh snapshot of the context it replaces.
   const [formGeneration, setFormGeneration] = useState(0);
   const actions = useRef<HTMLDivElement>(null);
   const { data, error, reload } = useSessionContext(session.id);
   const handedOff = useHistorySession(session.id);
-  useEffect(() => {
-    const take = () => {
-      if (!takeNewFromRequest(session.id)) return;
-      setOpen(true);
-      setReveal(true);
-    };
-    take();
-    document.addEventListener(SESSION_NEW_FROM_EVENT, take);
-    return () => document.removeEventListener(SESSION_NEW_FROM_EVENT, take);
-  }, [session.id]);
-  // Requested from the session menu: land on the form, once it exists. The
-  // settings surface and the form's pickers settle after the first frame.
-  const ready = open && Boolean(data);
-  useEffect(() => {
-    if (!reveal || !ready) return undefined;
-    const show = () => {
-      const target = actions.current;
-      if (!target) return;
-      // On the Desktop workbench (`inlineLinks`), Replace or fork already opens
-      // at the top of the Context pane unless a provenance/delivery block sits
-      // above it — avoid forcing a synchronous scrollIntoView layout pass.
-      if (inlineLinks && target.parentElement?.firstElementChild === target &&
-          target.parentElement.previousElementSibling === null) return;
-      target.scrollIntoView({ block: "start" });
-    };
-    const frame = requestAnimationFrame(show);
-    const settled = setTimeout(() => {
-      show();
-      setReveal(false);
-    }, 400);
-    return () => {
-      cancelAnimationFrame(frame);
-      clearTimeout(settled);
-    };
-  }, [inlineLinks, reveal, ready]);
+  const { open, setOpen, requestedForkPoint, toggleOpen } = useNewFromDisclosure(
+    session.id,
+    Boolean(data),
+    inlineLinks,
+    actions,
+  );
   const onSaved = () => {
     void reload();
     setOpen(false);
@@ -145,7 +115,7 @@ export function SessionContextSettings({
             disabled={!data}
             // Functional: a save that just closed the form may not have
             // re-rendered yet, and a stale `open` would close it again.
-            onClick={() => setOpen((value) => !value)}
+            onClick={toggleOpen}
             sx={{ justifyContent: "flex-start", textTransform: "none" }}
           >
             {handedOff ? "Fork" : "Replace or fork"}
@@ -166,6 +136,7 @@ export function SessionContextSettings({
             sources={draft ?? pendingSources(data)}
             allowFork={allowFork && !session.system && !isManagedChild(session)}
             forkOnly={handedOff}
+            initialForkPoint={requestedForkPoint}
             onContinued={() => {
               onSaved();
               // A staged choice applies to the next message: go write it.
@@ -298,54 +269,6 @@ function LinkedSessions({
   );
 }
 
-type PendingSettingsFork =
-  | { mode: "fork"; operation: string; config: ForkConfig }
-  | {
-      mode: "linked";
-      operation: string;
-      body: {
-        provider: string;
-        provider_account_id: string;
-        preset: string | null;
-        inherit_settings: boolean;
-        config: ForkConfig;
-        include_uncommitted?: boolean;
-      };
-    };
-
-function buildSettingsForkAttempt(input: {
-  forkMode: "fork" | "linked";
-  provider: string;
-  account: string;
-  preset: string | undefined;
-  inheritSettings: boolean;
-  overrides: ForkConfig;
-  effectiveIncludeUncommitted: boolean | undefined;
-}): PendingSettingsFork {
-  return input.forkMode === "fork"
-    ? { mode: "fork", operation: `duplicate-${newUuid()}`, config: input.overrides }
-    : {
-        mode: "linked",
-        operation: `duplicate-${newUuid()}`,
-        body: {
-          provider: input.provider,
-          provider_account_id: input.account,
-          preset: input.preset || null,
-          inherit_settings: input.inheritSettings,
-          config: input.overrides,
-          ...(input.effectiveIncludeUncommitted !== undefined
-            ? { include_uncommitted: input.effectiveIncludeUncommitted }
-            : {}),
-        },
-      };
-}
-
-function submitSettingsFork(sessionId: string, attempt: PendingSettingsFork) {
-  return attempt.mode === "fork"
-    ? forkSession(sessionId, { operation: attempt.operation, config: attempt.config })
-    : duplicateSession(sessionId, attempt.body, attempt.operation);
-}
-
 /** Where the work goes: one target, then either move the work there or keep
  *  both lines live. How history travels follows from the target. */
 function NewSessionForm({
@@ -354,6 +277,7 @@ function NewSessionForm({
   sources,
   allowFork,
   forkOnly,
+  initialForkPoint,
   onContinued,
   onForked,
   onRestart,
@@ -364,6 +288,7 @@ function NewSessionForm({
   allowFork: boolean;
   /** History: Replace would split the work that moved on; a fork keeps both. */
   forkOnly: boolean;
+  initialForkPoint: ForkPointSelection | null;
   onContinued: () => void;
   onForked: () => void;
   /** Start over from the latest context. */
@@ -437,32 +362,27 @@ function NewSessionForm({
   // A fork stays in this session's project and Machines.
   const samePlacement =
     sameHome && (nextAgent.runtime_machine_id || session.machine_id) === session.machine_id;
-  const fork = forkAvailability(session, machines);
-  // A native fork takes the conversation as it is, so a chosen preset or
-  // cleared inheritance needs a new agent rather than being ignored.
-  const forkMode = duplicateMode({
-    sourceProvider: session.provider,
-    sourceAccount,
-    provider,
-    account: subscription.value,
-    forkAvailable: fork !== null && !preset && inheritSettings,
-  });
-  // The server refuses a new agent while prompts wait here, so the form says
-  // so first and follows the live queue and status instead of answering a
-  // press with an error.
   const queued = useStoreSelector((state) => state.queues.get(session.id)?.length ?? 0);
-  const waitForTurn = forkMode === "fork" && fork === "busy";
   const submittedRunning = observed.injection_pending === true && session.status === "busy";
   const replaceWaits = queued > 0 || submittedRunning;
-  const forkWaits = waitForTurn || (forkMode === "fork" && queued > 0);
-  const sourceBusy = session.status === "busy" || session.status === "starting";
-  const effectiveIncludeUncommitted = supportsWorkspaceMode
-    ? sourceBusy
-      ? false
-      : copyUncommitted
-    : undefined;
-  const choiceSignature = JSON.stringify([provider, subscription.value, preset, inheritSettings, overrides, copyUncommitted]);
-  const pendingForkRef = useRef<{ signature: string; attempt: PendingSettingsFork } | null>(null);
+  const { forkPoints, selectedTurn, forkMode, sourceBusy, waitForTurn, forkWaits, executeFork } =
+    useSettingsForkPlan({
+      session,
+      machines,
+      allowFork,
+      samePlacement,
+      supportsWorkspaceMode,
+      sourceAccount,
+      provider,
+      account: subscription.value,
+      preset,
+      inheritSettings,
+      overrides,
+      copyUncommitted,
+      queued,
+      initialForkPoint,
+      onForked,
+    });
   // The first send needs this session as a source unless it was removed from
   // an already staged continuation.
   const continueSources =
@@ -495,21 +415,8 @@ function NewSessionForm({
       });
       onContinued();
     }, "Could not save context");
-  const forkWork = () =>
-    run(async () => {
-      if (pendingForkRef.current?.signature !== choiceSignature) {
-        pendingForkRef.current = {
-          signature: choiceSignature,
-          attempt: buildSettingsForkAttempt({ forkMode, provider, account: subscription.value, preset, inheritSettings, overrides, effectiveIncludeUncommitted }),
-        };
-      }
-      const receipt = await submitSettingsFork(session.id, pendingForkRef.current.attempt);
-      pendingForkRef.current = null;
-      onForked();
-      closeSessionSettings(session.id);
-      requestPickSession(receipt.session_id, receipt.session ?? undefined);
-    }, "Fork failed");
-  const canReplace = !forkOnly && !locked && ready && !full && !replaceWaits;
+  const forkWork = () => run(executeFork, "Fork failed");
+  const canReplace = !forkOnly && !selectedTurn && !locked && ready && !full && !replaceWaits;
   const canFork = allowFork && !locked && ready && samePlacement && !forkWaits;
   return (
     <Stack
@@ -553,7 +460,18 @@ function NewSessionForm({
       />
       <SessionSubscription state={subscription} disabled={busy} desktop={desktop} helperText="" />
       </Box>
-      <ForkOutcome forkOnly={forkOnly} allowFork={allowFork} sameAccount={sameAccount} samePlacement={samePlacement} copiesWorktree={copiesWorktree} supportsWorkspaceMode={supportsWorkspaceMode} forkMode={forkMode} waitForTurn={waitForTurn && queued === 0} sourceBusy={sourceBusy} copyUncommitted={copyUncommitted} onCopyUncommitted={setCopyUncommitted} />
+      {allowFork && samePlacement && (
+        <ForkPointPicker
+          turns={forkPoints.turns}
+          selectedKey={forkPoints.selectedKey}
+          selectedTurn={selectedTurn}
+          sourceBusy={sourceBusy}
+          disabled={locked}
+          desktop={desktop}
+          onChange={forkPoints.selectKey}
+        />
+      )}
+      <ForkOutcome forkOnly={forkOnly} allowFork={allowFork} sameAccount={sameAccount} samePlacement={samePlacement} copiesWorktree={copiesWorktree} supportsWorkspaceMode={supportsWorkspaceMode} forkMode={forkMode} waitForTurn={waitForTurn && queued === 0} sourceBusy={sourceBusy} copyUncommitted={copyUncommitted} onCopyUncommitted={setCopyUncommitted} forkPointLabel={selectedTurn ? `Turn ${String(selectedTurn.turnNumber)}` : undefined} />
       {!placement.loading && !placement.error && !placement.project && (
         <Alert
           severity="warning"
@@ -604,11 +522,11 @@ function NewSessionForm({
           Replace is available once the submitted message finishes.
         </Typography>
       )}
-      {queued > 0 && (!forkOnly || forkMode === "fork") && (
+      {queued > 0 && (!forkOnly || (forkMode === "fork" && !selectedTurn)) && (
         <Typography variant="caption" color="text.secondary" data-new-session-wait>
           {forkOnly
             ? "Fork is"
-            : allowFork && forkMode === "fork" && samePlacement
+            : allowFork && forkMode === "fork" && samePlacement && !selectedTurn
             ? "Replace and Fork are"
             : "Replace is"}{" "}
           available once{" "}
@@ -623,6 +541,7 @@ function NewSessionForm({
         allowFork={allowFork}
         canReplace={canReplace}
         canFork={canFork}
+        emphasizeFork={selectedTurn !== null}
         busy={busy}
         onReplace={continueWork}
         onFork={forkWork}

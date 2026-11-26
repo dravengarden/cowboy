@@ -287,3 +287,23 @@ test("mobile LineageBranchSwitcher and SessionHistoryPeek sheets portal out of c
   expect(switcherSrc).not.toContain("borderRadius: 2");
   expect(peekSrc).toContain("cover portal");
 });
+
+test("MessageWithFork keeps Mobile transcript free of inline fork chrome and Desktop hover chip zero-height", async () => {
+  const fs = await import("node:fs/promises");
+  const forkActionSrc = await fs.readFile(new URL("./MessageForkAction.tsx", import.meta.url), "utf8");
+  expect(forkActionSrc).toContain('if (!desktop || item.role !== "assistant" || streaming || !forkPoint) return children;');
+  expect(forkActionSrc).toContain('position: "absolute"');
+  expect(forkActionSrc).toContain("requestNewFrom(originSessionId");
+  expect(forkActionSrc).not.toContain("executeForkAttempt");
+});
+
+test("Composer places MobileBranchSwitcherButton after Send and before Save as draft", async () => {
+  const fs = await import("node:fs/promises");
+  const composerSrc = await fs.readFile(new URL("./Composer.tsx", import.meta.url), "utf8");
+  const sendIdx = composerSrc.indexOf('aria-label="send"');
+  const branchIdx = composerSrc.indexOf("{compact && <MobileBranchSwitcherButton sessionId={sessionId} />}");
+  const draftIdx = composerSrc.indexOf('aria-label="save as draft"');
+  expect(sendIdx).toBeGreaterThan(0);
+  expect(branchIdx).toBeGreaterThan(sendIdx);
+  expect(draftIdx).toBeGreaterThan(branchIdx);
+});
