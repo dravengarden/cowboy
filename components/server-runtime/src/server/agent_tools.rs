@@ -149,9 +149,12 @@ pub struct CallsPolicy {
     pub self_images: bool,
 }
 
-/// The built-in calls an owner turn may admit.
-pub const DEFAULT_MAX_PER_TURN: u16 = 16;
-/// The valid calls-per-turn range.
+/// The built-in calls an owner turn may admit: room for a multi-round review
+/// workflow and a planned test pass in one turn. It is a runaway guard; cost
+/// is bounded by quota mode and review routing.
+pub const DEFAULT_MAX_PER_TURN: u16 = 32;
+/// The valid calls-per-turn range, for agent-kind defaults and session
+/// overrides alike.
 pub const MAX_PER_TURN: std::ops::RangeInclusive<u16> = 1..=256;
 
 /// What a stored or submitted `calls` object may carry: the current fields,
@@ -289,6 +292,10 @@ pub struct CallsOverride {
     pub targets: Option<Vec<CallTarget>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<String>,
+    /// Calls one owner turn of this session may admit. Stored beside the
+    /// override document (`effort_store`); raising it is widening.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_per_turn: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub images: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -444,12 +451,13 @@ mod turn_limit_tests {
     #[test]
     fn a_stored_lifetime_cap_becomes_the_default_unless_a_person_lowered_it() {
         for (cap, limit) in [
-            (64, 16),
-            (1000, 16),
-            (256, 16),
-            (128, 16),
-            (32, 16),
-            (17, 16),
+            (64, 32),
+            (1000, 32),
+            (256, 32),
+            (128, 32),
+            (33, 32),
+            (32, 32),
+            (17, 17),
             (16, 16),
             (15, 15),
             (8, 8),
@@ -479,7 +487,7 @@ mod turn_limit_tests {
             .remove("max_per_session");
         let tools: AgentTools = serde_json::from_value(neither).unwrap();
         assert_eq!(tools.calls.max_per_turn, DEFAULT_MAX_PER_TURN);
-        assert_eq!(AgentTools::builtin("claude-code").calls.max_per_turn, 16);
+        assert_eq!(AgentTools::builtin("claude-code").calls.max_per_turn, 32);
         // Other unknown fields are still refused.
         let mut unknown = legacy_document(json!(8));
         unknown["calls"]["max_per_lifetime"] = json!(8);
@@ -496,13 +504,44 @@ mod turn_limit_tests {
     }
 
     #[test]
+    fn a_session_override_sets_its_own_limit_within_the_same_range() {
+        let mut defaults = AgentTools::builtin("codex");
+        defaults.calls.max_per_turn = 8;
+        let session = |limit: serde_json::Value| -> SessionTools {
+            serde_json::from_value(json!({"schema":1,"calls":{"max_per_turn":limit}})).unwrap()
+        };
+        let raised = session(json!(64));
+        assert!(raised.validate());
+        assert_eq!(defaults.clone().overlay(&raised).calls.max_per_turn, 64);
+        let inherited: SessionTools = serde_json::from_value(json!({"schema":1})).unwrap();
+        assert_eq!(defaults.clone().overlay(&inherited).calls.max_per_turn, 8);
+        for (limit, valid) in [(0, false), (1, true), (256, true), (257, false)] {
+            assert_eq!(session(json!(limit)).validate(), valid, "{limit}");
+        }
+        // The override keeps refusing unknown fields.
+        assert!(
+            serde_json::from_value::<SessionTools>(
+                json!({"schema":1,"calls":{"max_per_session":8}})
+            )
+            .is_err()
+        );
+        // A continuation copies an explicit limit with the other preferences.
+        assert_eq!(
+            continuation_settings(raised, "claude-code")
+                .calls
+                .max_per_turn,
+            Some(64)
+        );
+    }
+
+    #[test]
     fn a_stale_client_still_saves_through_the_legacy_field() {
         // A Web bundle from before the change submits `max_per_session`.
         let update: AgentUpdate =
             serde_json::from_value(json!({"settings": legacy_document(json!(64))})).unwrap();
         let settings = update.tools().unwrap().unwrap();
         assert!(settings.validate());
-        assert_eq!(settings.calls.max_per_turn, 16);
+        assert_eq!(settings.calls.max_per_turn, 32);
         // Restoring the built-in defaults carries no settings at all.
         let restore: AgentUpdate = serde_json::from_value(json!({"settings": null})).unwrap();
         assert_eq!(restore.tools(), Ok(None));
@@ -562,7 +601,7 @@ mod turn_limit_tests {
     #[test]
     fn a_policy_stored_before_per_turn_budgets_keeps_loading() {
         let hub = crate::core::Hub::new();
-        for (cap, limit) in [(64, 16), (128, 16), (8, 8)] {
+        for (cap, limit) in [(64, 32), (128, 32), (8, 8)] {
             let mut document = legacy_document(json!(cap));
             document["calls"]["enabled"] = json!(false);
             hub.with_settings_mut(|settings| {
@@ -687,6 +726,9 @@ impl AgentTools {
         if let Some(default) = &session.calls.default {
             self.calls.default.clone_from(default);
         }
+        if let Some(limit) = session.calls.max_per_turn {
+            self.calls.max_per_turn = limit;
+        }
         if let Some(images) = session.calls.images {
             self.calls.images = images;
         }
@@ -718,6 +760,10 @@ impl SessionTools {
                 .default
                 .as_ref()
                 .is_none_or(|default| default == AUTO || CALL_TARGETS.contains(&default.as_str()))
+            && self
+                .calls
+                .max_per_turn
+                .is_none_or(|limit| MAX_PER_TURN.contains(&limit))
     }
 
     fn is_empty(&self) -> bool {
@@ -795,8 +841,9 @@ fn hub_effective(hub: &crate::core::Hub, session: &crate::core::SessionMeta) -> 
 }
 
 /// Whether replacing `session`'s override grants anything its current policy
-/// refuses: a memory switch, the calls switch, or a call target. Order, review
-/// preference and narrowing are not widening.
+/// refuses: a memory switch, the calls switch, a call target or a larger
+/// calls-per-turn limit (an agent must not lift its own runaway guard). Order,
+/// review preference and narrowing are not widening.
 pub fn override_widens(
     hub: &crate::core::Hub,
     session: &crate::core::SessionMeta,
@@ -811,6 +858,7 @@ pub fn override_widens(
         || (after.memory.recall && !before.memory.recall)
         || (after.calls.enabled && !before.calls.enabled)
         || image_widens(&before.calls, &after.calls)
+        || after.calls.max_per_turn > before.calls.max_per_turn
         || after
             .calls
             .targets
@@ -1514,6 +1562,7 @@ mod tests {
                     options: None,
                 }]),
                 default: Some("claude-code".into()),
+                max_per_turn: None,
                 images: None,
                 self_images: None,
             },

@@ -224,7 +224,7 @@ kind (`codex`, `claude-code`):
   A stored global default wins over the built-in one, so a Service that saved
   "off" keeps it until an Owner changes it.
   Built-in defaults: calls on, both targets allowed with the other agent kind
-  first, default `auto`, at most 4 concurrent calls and 16 calls per owner
+  first, default `auto`, at most 4 concurrent calls and 32 calls per owner
   turn (see [Call budgets](#call-budgets)); Matrix memory tools and automatic
   recall on.
 - **Session override** (`session_tools:<session>`; the session's **Tools**
@@ -268,20 +268,39 @@ Refusals happen before anything is recorded (`admission: not_submitted`):
 not an allowed target, `concurrency_limit` when the parent already has its
 maximum running calls (safe to resubmit the same request later) and
 `call_limit` when the budget of the current owner turn is spent (also
-`not_submitted`: resubmit after the owner's next prompt). The limits are a soft
+`not_submitted`: resubmit after the owner's next prompt; the refusal carries
+`limit`, `used`, `resets_on: "owner_prompt"`, `retryable: false`, a `message`
+and a `hint` naming how the budget comes back and who may raise it, so an agent
+reports the skipped call accurately instead of guessing). The limits are a soft
 admission budget; concurrent submissions may pass them together. `cowboy call
 capabilities` reports `enabled`, `default`, the limits (`max_concurrent`,
-`max_per_turn`) and a per-Provider reason.
+`max_per_turn`, the session's effective values) and a per-Provider reason.
 
 ### Call budgets
 
 Two limits bound a parent's calls. `max_concurrent` (default 4, 1–16) is the
-number of calls running at once. `max_per_turn` (default 16, valid 1–256;
-Settings offers 4, 8, 16, 32 and 64) is the number of calls one **owner turn**
-may admit. There is no lifetime cap: a long-lived session that talks with its
-owner for many turns gets a fresh budget with each of the owner's prompts.
+number of calls running at once. `max_per_turn` (default 32, valid 1–256;
+Settings offers 4, 8, 16, 32, 64 and 128) is the number of calls one **owner
+turn** may admit. There is no lifetime cap: a long-lived session that talks with
+its owner for many turns gets a fresh budget with each of the owner's prompts.
 It replaced `max_per_session` (default 64), which ran out in long sessions and
 forced new sessions just to get review budget.
+
+The per-turn limit is a runaway guard, not a cost control: quota mode and
+review routing bound spend. The default of 32 (16 until 2026-11-26) leaves room
+for one multi-round review workflow and a planned test pass with its audit in a
+single owner request; 16 refused the audit of such a request. Two layers set it,
+like every Tools field: the agent kind's default (Settings → Agent tools, or
+`tools.defaults_set`, Owners only) and the session's own override (the
+session's Tools, `PUT /api/sessions/{id}/tools` or `tools.session_set` with
+`calls.max_per_turn`; omitted inherits the default). Raising a session's limit
+is widening, so an agent can lower its own or its lineage's limit but never
+raise it (`tools_widening_denied`); the owner raises it. A session's limit is
+stored beside its override document under `session_turn_budget:<session>`,
+bound to that document's digest, so a predecessor Controller still parses the
+override (and keeps the switches it holds); after a rollback the session
+follows its agent kind's limit, and a predecessor edit orphans the stored
+value.
 
 A turn starts at the latest prompt a person sent to the session: a user-role
 event whose client message id and stamped origin are the owner's
@@ -441,10 +460,11 @@ the session again. A creator-link write retried after the created session's
 deletion can land after the deletion's tombstone and leave a stale, unread row.
 
 **Migration and compatibility window.** Stored Tools defaults that carry
-`max_per_session` keep loading: the lifetime cap becomes `max_per_turn` 16
-(the new default) unless a person had lowered it below 16, which is kept
-(`legacy_turn_limit`; 64 → 16, 128 → 16, 8 → 8). Session overrides never
-carried the field. The same mapping reads a `PUT /api/agent-tools/{agent}` from
+`max_per_session` keep loading: the lifetime cap becomes the built-in
+`max_per_turn` (32 since 2026-11-26, 16 before) unless a person had lowered it
+below that, which is kept (`legacy_turn_limit`; 64 → 32, 128 → 32, 17 → 17,
+8 → 8). Session overrides never carried `max_per_session`; their own
+`max_per_turn` is stored beside them (see [Call budgets](#call-budgets)). The same mapping reads a `PUT /api/agent-tools/{agent}` from
 a Web bundle that predates the change (a save carrying both fields, which that
 bundle sends when it echoes the response it loaded, is refused with 400 so the
 page reloads instead of losing an edit); every response carries only

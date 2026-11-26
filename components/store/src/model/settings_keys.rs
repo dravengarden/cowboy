@@ -92,6 +92,10 @@ pub const SESSION_REVIEW_EFFORT_PREFIX: &str = "session_review_effort:";
 /// schema-one Tools document (which keeps its legacy `max_per_session` for a
 /// predecessor Controller); the agent id follows.
 pub const AGENT_TURN_BUDGET_PREFIX: &str = "agent_turn_budget:";
+/// A session's calls-per-owner-turn override, kept beside its schema-one
+/// Tools override so a predecessor Controller still parses that document;
+/// the session id follows.
+pub const SESSION_TURN_BUDGET_PREFIX: &str = "session_turn_budget:";
 /// Explicit MCP selections are session-owned; cloning a session grants none.
 pub const SESSION_MCP_BINDINGS_PREFIX: &str = "session_mcp_bindings:";
 /// The directory MCP default resolved at creation and its visible outcome.
@@ -126,6 +130,7 @@ pub const SESSION_STATE_PREFIXES: &[&str] = &[
     SESSION_MCP_BINDINGS_PREFIX,
     SESSION_MCP_DEFAULT_PREFIX,
     SESSION_REVIEW_EFFORT_PREFIX,
+    SESSION_TURN_BUDGET_PREFIX,
 ];
 
 #[must_use]
@@ -161,6 +166,7 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             AGENT_REVIEW_EFFORT_PREFIX,
             SESSION_REVIEW_EFFORT_PREFIX,
             AGENT_TURN_BUDGET_PREFIX,
+            SESSION_TURN_BUDGET_PREFIX,
             SESSION_MCP_BINDINGS_PREFIX,
             SESSION_MCP_DEFAULT_PREFIX,
             SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX,
@@ -209,6 +215,7 @@ pub fn examples() -> Vec<String> {
         format!("{AGENT_REVIEW_EFFORT_PREFIX}codex"),
         format!("{SESSION_REVIEW_EFFORT_PREFIX}sess-1"),
         format!("{AGENT_TURN_BUDGET_PREFIX}codex"),
+        format!("{SESSION_TURN_BUDGET_PREFIX}sess-1"),
         format!("{SESSION_MCP_BINDINGS_PREFIX}sess-1"),
         format!("{SESSION_MCP_DEFAULT_PREFIX}sess-1"),
         format!("{SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX}sess-1"),
@@ -238,6 +245,7 @@ mod tests {
             AGENT_REVIEW_EFFORT_PREFIX,
             SESSION_REVIEW_EFFORT_PREFIX,
             AGENT_TURN_BUDGET_PREFIX,
+            SESSION_TURN_BUDGET_PREFIX,
             SESSION_MCP_BINDINGS_PREFIX,
             SESSION_MCP_DEFAULT_PREFIX,
             SESSION_PROVIDER_UPDATE_WHEN_IDLE_PREFIX,

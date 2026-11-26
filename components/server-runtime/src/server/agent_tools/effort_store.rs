@@ -13,10 +13,15 @@
 //! A rollback keeps every other setting and goes back to its own lifetime cap;
 //! a document no newer Controller has saved reads as a limit migrated from
 //! that cap (`legacy_turn_limit`).
+//!
+//! A session's own limit sits under `session_turn_budget:<session>` for the
+//! same reason: a predecessor would refuse the whole override and lose the
+//! switches a person turned off for that session. It is bound to the digest
+//! of the override document it was saved with, like the agent-kind limit.
 
 use crate::core::settings_keys::{
     AGENT_REVIEW_EFFORT_PREFIX, AGENT_TOOLS_PREFIX, AGENT_TURN_BUDGET_PREFIX,
-    SESSION_REVIEW_EFFORT_PREFIX, SESSION_TOOLS_PREFIX,
+    SESSION_REVIEW_EFFORT_PREFIX, SESSION_TOOLS_PREFIX, SESSION_TURN_BUDGET_PREFIX,
 };
 use serde_json::{Map, Value, json};
 
@@ -108,6 +113,26 @@ fn split_budget(mut document: Value, previous: Option<&Value>) -> (Value, Value)
     )
 }
 
+/// Remove a session override's calls-per-turn limit; returns the document and
+/// the limit (null when there is none). The binding digest is added once the
+/// document that will be stored is known ([`bind`]).
+fn split_session_budget(mut document: Value) -> (Value, Option<Value>) {
+    let limit = document
+        .get_mut("calls")
+        .and_then(Value::as_object_mut)
+        .and_then(|calls| calls.remove("max_per_turn"))
+        .filter(|value| !value.is_null());
+    (document, limit)
+}
+
+/// The record kept beside a session override: its limit and the digest of the
+/// document stored with it (null for none).
+fn bind(limit: Option<Value>, stored: &Value) -> Value {
+    limit.map_or(Value::Null, |limit| {
+        json!({ "max_per_turn": limit, "document": crate::managed_calls::canonical_digest(stored) })
+    })
+}
+
 /// Put a stored limit back into a Tools document read from its own key, when
 /// the limit was saved with exactly that document (`stored`'s digest). The
 /// document's legacy `max_per_session` stays; the typed reader prefers the
@@ -166,13 +191,17 @@ pub fn agent_document(hub: &crate::core::Hub, agent: &str) -> Option<Value> {
 pub fn session_document(hub: &crate::core::Hub, session: &str) -> Option<Value> {
     let _turn = SAVES.lock();
     let effort = hub.setting(&format!("{SESSION_REVIEW_EFFORT_PREFIX}{session}"));
-    // An effort-only override has no Tools document of its own.
-    match hub.setting(&format!("{SESSION_TOOLS_PREFIX}{session}")) {
-        Some(document) => Some(merge(document, effort)),
-        None => {
-            effort.map(|effort| merge(serde_json::json!({"schema":1,"calls":{}}), Some(effort)))
-        }
+    let stored = hub.setting(&format!("{SESSION_TOOLS_PREFIX}{session}"));
+    let digest = crate::managed_calls::canonical_digest(stored.as_ref().unwrap_or(&Value::Null));
+    let budget = hub
+        .setting(&format!("{SESSION_TURN_BUDGET_PREFIX}{session}"))
+        .filter(|budget| budget.get("document").and_then(Value::as_str) == Some(digest.as_str()));
+    // An override of only effort or the limit has no Tools document of its own.
+    if stored.is_none() && effort.is_none() && budget.is_none() {
+        return None;
     }
+    let document = stored.unwrap_or_else(|| json!({"schema":1,"calls":{}}));
+    Some(merge_budget(merge(document, effort), budget, &digest))
 }
 
 pub fn store_agent(hub: &crate::core::Hub, agent: &str, document: Option<Value>) {
@@ -195,7 +224,9 @@ pub fn store_agent(hub: &crate::core::Hub, agent: &str, document: Option<Value>)
 pub fn store_session(hub: &crate::core::Hub, session: &str, document: Option<Value>) {
     let _turn = SAVES.lock();
     let (document, effort) = document.map_or((Value::Null, Value::Null), split);
-    // Keep the schema-one document absent when only effort was overridden.
+    let (document, limit) = split_session_budget(document);
+    // Keep the schema-one document absent when only effort or the limit was
+    // overridden.
     let document = if serde_json::from_value::<super::SessionTools>(document.clone())
         .is_ok_and(|tools| tools.is_empty())
     {
@@ -203,11 +234,15 @@ pub fn store_session(hub: &crate::core::Hub, session: &str, document: Option<Val
     } else {
         document
     };
+    let budget = bind(limit, &document);
     write_group(
         hub,
         format!("{SESSION_TOOLS_PREFIX}{session}"),
         document,
-        vec![(format!("{SESSION_REVIEW_EFFORT_PREFIX}{session}"), effort)],
+        vec![
+            (format!("{SESSION_REVIEW_EFFORT_PREFIX}{session}"), effort),
+            (format!("{SESSION_TURN_BUDGET_PREFIX}{session}"), budget),
+        ],
     );
 }
 
@@ -330,7 +365,7 @@ mod tests {
         });
         let (tools, _) = super::super::hub_agent_defaults(&hub, "codex");
         assert!(!tools.calls.enabled, "the predecessor's edit is kept");
-        assert_eq!(tools.calls.max_per_turn, 16, "from its lifetime cap of 64");
+        assert_eq!(tools.calls.max_per_turn, 32, "from its lifetime cap of 64");
     }
 
     #[test]
@@ -355,7 +390,7 @@ mod tests {
         for _ in 0..600 {
             let (tools, _) = super::super::hub_agent_defaults(&hub, "codex");
             // A document paired with another save's limit would fail the
-            // digest and read as the lifetime cap's 16.
+            // digest and read as the lifetime cap's 32.
             assert!(
                 matches!(
                     (tools.calls.enabled, tools.calls.max_per_turn),
@@ -379,7 +414,7 @@ mod tests {
         assert!(hub.setting("agent_turn_budget:codex").is_none());
         let (tools, customized) = super::super::hub_agent_defaults(&hub, "codex");
         assert!(!customized);
-        assert_eq!(tools.calls.max_per_turn, 16);
+        assert_eq!(tools.calls.max_per_turn, 32);
         // Without a stored limit, the document's own cap is what migrates.
         saved(&hub, 4);
         hub.with_settings_mut(|settings| {
@@ -387,7 +422,7 @@ mod tests {
         });
         let (tools, customized) = super::super::hub_agent_defaults(&hub, "codex");
         assert!(customized);
-        assert_eq!(tools.calls.max_per_turn, 16);
+        assert_eq!(tools.calls.max_per_turn, 32);
     }
 
     #[test]
@@ -401,5 +436,114 @@ mod tests {
             json!({"schema":1,"calls":{"review":{"gpt_effort":"standard"}}})
         );
         assert_eq!(split(json!({"schema":1,"calls":{}})).1, Value::Null);
+    }
+
+    /// The session override shape a predecessor Controller parses.
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct PredecessorSession {
+        schema: u16,
+        #[serde(default)]
+        matrix: Value,
+        #[serde(default)]
+        calls: PredecessorSessionCalls,
+    }
+
+    #[derive(Default, serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    #[allow(dead_code)]
+    struct PredecessorSessionCalls {
+        #[serde(default)]
+        review: Value,
+        #[serde(default)]
+        enabled: Option<bool>,
+        #[serde(default)]
+        targets: Value,
+        #[serde(default)]
+        default: Option<String>,
+        #[serde(default)]
+        images: Option<bool>,
+        #[serde(default)]
+        self_images: Option<bool>,
+    }
+
+    fn session_limit(hub: &crate::core::Hub) -> Option<u16> {
+        super::super::hub_session_override(hub, "sess-1")
+            .calls
+            .max_per_turn
+    }
+
+    #[test]
+    fn a_session_limit_sits_beside_an_override_a_predecessor_still_reads() {
+        let hub = crate::core::Hub::new();
+        store_session(
+            &hub,
+            "sess-1",
+            Some(json!({"schema":1,"calls":{"enabled":false,"max_per_turn":64}})),
+        );
+        let stored = hub.setting("session_tools:sess-1").unwrap();
+        assert!(stored["calls"].get("max_per_turn").is_none());
+        let predecessor: PredecessorSession = serde_json::from_value(stored.clone()).unwrap();
+        assert_eq!(predecessor.calls.enabled, Some(false));
+        let beside = hub.setting("session_turn_budget:sess-1").unwrap();
+        assert_eq!(
+            beside,
+            json!({"max_per_turn": 64, "document": crate::managed_calls::canonical_digest(&stored)})
+        );
+        let read = super::super::hub_session_override(&hub, "sess-1");
+        assert_eq!(
+            (read.calls.enabled, read.calls.max_per_turn),
+            (Some(false), Some(64))
+        );
+        // A predecessor's edit of the override orphans the limit saved with it.
+        let mut edited = stored;
+        edited["calls"]["enabled"] = json!(true);
+        hub.with_settings_mut(|settings| {
+            settings.insert("session_tools:sess-1".into(), edited);
+        });
+        assert_eq!(session_limit(&hub), None);
+    }
+
+    #[test]
+    fn a_limit_only_session_override_has_no_document_and_clears_with_it() {
+        let hub = crate::core::Hub::new();
+        store_session(
+            &hub,
+            "sess-1",
+            Some(json!({"schema":1,"calls":{"max_per_turn":48}})),
+        );
+        assert!(hub.setting("session_tools:sess-1").is_none());
+        assert_eq!(session_limit(&hub), Some(48));
+        // A later save that leaves the limit out inherits the default again.
+        store_session(
+            &hub,
+            "sess-1",
+            Some(json!({"schema":1,"calls":{"enabled":false}})),
+        );
+        assert!(hub.setting("session_turn_budget:sess-1").is_none());
+        assert_eq!(session_limit(&hub), None);
+        // An orphan for an absent document is not read either.
+        store_session(
+            &hub,
+            "sess-1",
+            Some(json!({"schema":1,"calls":{"max_per_turn":8}})),
+        );
+        store_session(&hub, "sess-1", None);
+        assert_eq!(session_limit(&hub), None);
+        assert!(session_document(&hub, "sess-1").is_none());
+    }
+
+    #[test]
+    fn a_session_limit_outside_the_valid_range_falls_back_to_the_defaults() {
+        for (limit, kept) in [(0, None), (1, Some(1)), (256, Some(256)), (257, None)] {
+            let hub = crate::core::Hub::new();
+            store_session(
+                &hub,
+                "sess-1",
+                Some(json!({"schema":1,"calls":{"max_per_turn":limit}})),
+            );
+            assert_eq!(session_limit(&hub), kept, "{limit}");
+        }
     }
 }

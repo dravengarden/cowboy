@@ -57,6 +57,8 @@ export interface SessionToolsOverride {
     enabled?: boolean;
     targets?: CallTarget[];
     default?: string;
+    /** This session's calls per owner turn; only the owner may raise it. */
+    max_per_turn?: number;
     review?: Partial<ReviewPreferences>;
     images?: boolean;
     self_images?: boolean;
@@ -174,7 +176,7 @@ export interface AgentToolsList {
 
 export const AUTO = "auto";
 export const CONCURRENCY_CHOICES = [1, 2, 4, 8] as const;
-export const TURN_LIMIT_CHOICES = [4, 8, 16, 32, 64] as const;
+export const TURN_LIMIT_CHOICES = [4, 8, 16, 32, 64, 128] as const;
 
 export function agentLabel(agent: string): string {
   if (agent === "codex") return "Codex";
@@ -281,6 +283,9 @@ export function overrideFor(defaults: AgentTools, next: AgentTools): SessionTool
   }
   if (normalizedDefault(next.calls) !== normalizedDefault(defaults.calls)) {
     calls.default = normalizedDefault(next.calls);
+  }
+  if (next.calls.max_per_turn !== defaults.calls.max_per_turn) {
+    calls.max_per_turn = next.calls.max_per_turn;
   }
   if ((next.calls.images ?? true) !== (defaults.calls.images ?? true)) {
     calls.images = next.calls.images ?? true;

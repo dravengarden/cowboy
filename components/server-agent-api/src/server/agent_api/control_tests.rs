@@ -845,6 +845,32 @@ mod machine_scope_and_tools {
             Ok(())
         );
     }
+
+    #[test]
+    fn an_agent_may_lower_but_never_raise_its_calls_per_turn_limit() {
+        let hub = Hub::new();
+        let parent = add(&hub, "parent", "hawk", None);
+        let limit = |limit: u16| json!({"schema":1,"calls":{"max_per_turn":limit}});
+        let default = crate::server::agent_tools::DEFAULT_MAX_PER_TURN;
+        assert_eq!(
+            set(&hub, &parent, "parent", limit(default + 1)),
+            Err("tools_widening_denied"),
+            "the per-turn limit is a runaway guard the agent must not lift"
+        );
+        assert_eq!(set(&hub, &parent, "parent", limit(default)), Ok(()));
+        assert_eq!(set(&hub, &parent, "parent", limit(4)), Ok(()));
+        // An owner-raised limit stays: replacing it with a lower one narrows.
+        hub.set_setting(
+            format!("{}parent", crate::core::settings_keys::SESSION_TURN_BUDGET_PREFIX),
+            json!({"max_per_turn": 64, "document": crate::managed_calls::canonical_digest(&Value::Null)}),
+        );
+        assert_eq!(set(&hub, &parent, "parent", limit(64)), Ok(()));
+        assert_eq!(set(&hub, &parent, "parent", limit(48)), Ok(()));
+        assert_eq!(
+            set(&hub, &parent, "parent", limit(65)),
+            Err("tools_widening_denied")
+        );
+    }
 }
 
 #[test]
