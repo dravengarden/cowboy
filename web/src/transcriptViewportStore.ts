@@ -8,6 +8,7 @@ export interface TranscriptViewport {
   sessionId: string;
   mode: TranscriptViewportMode;
   pageId: string | null;
+  anchorAttr?: "data-key" | "data-ancestor-item" | undefined;
   anchorKey: string | null;
   anchorOffset: number;
   scrollOffset: number;

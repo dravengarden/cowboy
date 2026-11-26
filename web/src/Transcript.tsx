@@ -85,6 +85,7 @@ import {
   revealLocatedTranscriptRow,
   scrollColumnReverseAway,
   scrollColumnReverseTowardLatest,
+  shouldTriggerSessionNonce,
 } from "./transcriptScrollAnchor";
 import { transcriptFrameIsolationSx, transcriptRowContainment, transcriptScrollerChildSx } from "./transcriptMotion";
 import {
@@ -790,6 +791,7 @@ export function Transcript({
     );
     if (!row) return;
     stick.current = false;
+    setFollowingLive(false);
     setSticky(sessionId, false);
     row.scrollIntoView({ block: "center", behavior: "auto" });
     onAnchorRestored?.();
@@ -1260,7 +1262,7 @@ export function Transcript({
   // and re-measure through the existing RAF-coalesced loader whenever their
   // actual layout changes. Filled/desktop/page-view guards remain centralized
   // in requestViewportBackfillRef, so streaming rows do not create extra loads.
-  const needsViewportBackfillObserver = managesScrollHistory && !desktopNavigation && Boolean(paging && !paging.reachedStart && paging.beforeSeq !== null);
+  const needsViewportBackfillObserver = managesScrollHistory && Boolean(paging && !paging.reachedStart && paging.beforeSeq !== null);
   useEffect(() => {
     const el = needsViewportBackfillObserver && typeof ResizeObserver !== "undefined" ? parentRef.current : null;
     if (!el) return undefined;
@@ -1688,6 +1690,7 @@ export function Transcript({
         sessionId: sessionIdRef.current,
         mode,
         pageId: mode === "page" ? pageIdRef.current ?? null : null,
+        anchorAttr: stick.current ? undefined : freezeRef.current.attr,
         anchorKey: stick.current ? null : freezeRef.current.key,
         anchorOffset: freezeRef.current.top,
         scrollOffset: el.scrollTop,
@@ -1848,17 +1851,13 @@ export function Transcript({
       startDrawerCatchupRef.current();
     };
     const onWheel = (event: WheelEvent): void => {
-      // Nested scrollable blocks (error `<pre>`, retained summaries) own their
-      // own vertical wheel while they still have room to scroll.
-      if (canNestedElementScrollVertically(event.target, el, event.deltaY)) {
-        return;
-      }
-      // A wheel/trackpad gesture that continues toward the bottom can still
-      // emit events after `scroll` has re-enabled Following. Detaching for
-      // every wheel event therefore produced an on -> off flicker at the
-      // boundary. Only an upward, vertically-dominant gesture pauses following.
+      // Always keep native scroll ownership armed: an outer-latched trackpad
+      // gesture can pass over a nested scrollable block mid-inertia.
       markNativeScrollActive();
-      if (wheelLeavesLatest(event.deltaY, event.deltaX)) detach();
+      if (
+        !canNestedElementScrollVertically(event.target, el, event.deltaY) &&
+        wheelLeavesLatest(event.deltaY, event.deltaX)
+      ) detach();
     };
     const onPointerDown = (event: PointerEvent): void => {
       if (event.pointerType !== "mouse" || event.button !== 0) return;
@@ -1973,7 +1972,7 @@ export function Transcript({
     const scrollAway = (distance: number): void => {
       markNativeScrollActive();
       detach();
-      scrollColumnReverseAway(el, distance, freezeRef.current);
+      scrollColumnReverseAway(el, distance);
     };
     const scrollTowardLatest = (distance: number): void => {
       markNativeScrollActive();
@@ -2046,7 +2045,7 @@ export function Transcript({
       else if (action === "oldest") {
         markNativeScrollActive();
         detach();
-        el.scrollTo({ top: columnReverseAwayDirection(el, freezeRef.current) * el.scrollHeight, behavior: "auto" });
+        el.scrollTo({ top: columnReverseAwayDirection(el) * el.scrollHeight, behavior: "auto" });
       } else if (action === "latest") followLatest();
       else if (action === "toggle-following") {
         if (stick.current) detach();
@@ -2264,9 +2263,10 @@ export function Transcript({
       if (!viewportRestoreActiveRef.current) return;
       const el = parentRef.current;
       if (el) {
+        const anchorAttr = saved?.anchorAttr ?? "data-key";
         const anchorRow = restoreDetached && saved.anchorKey !== null
           ? el.querySelector<HTMLElement>(
-            `[data-key="${CSS.escape(saved.anchorKey)}"]`,
+            `[${anchorAttr}="${CSS.escape(saved.anchorKey)}"]`,
           )
           : null;
         const expected = restoreOffset
@@ -2281,17 +2281,14 @@ export function Transcript({
           })
           : stick.current
           ? 0
-          : columnReverseAwayDirection(el, freezeRef.current) *
+          : columnReverseAwayDirection(el) *
             Math.max(0, el.scrollHeight - el.clientHeight);
-        // Position and completion must agree on the same target. Reapplying
-        // the old offset before correcting a mounted anchor makes each frame
-        // jump twice and can keep the restore mask up until timeout.
         if (Math.abs(el.scrollTop - expected) >= 0.5) {
           el.scrollTop = expected;
         }
         if (restoreDetached) {
           freezeRef.current = {
-            attr: "data-key",
+            attr: anchorAttr,
             key: saved.anchorKey,
             top: saved.anchorOffset,
             self: false,
@@ -2445,6 +2442,7 @@ export function Transcript({
     ) return undefined;
 
     stick.current = false;
+    setFollowingLive(false);
     setSticky(sessionId, false);
     let raf = 0;
     let tries = 0;
@@ -2456,6 +2454,7 @@ export function Transcript({
           sessionId,
           mode: "page",
           pageId: pageId ?? null,
+          anchorAttr: freezeRef.current.attr,
           anchorKey: freezeRef.current.key,
           anchorOffset: freezeRef.current.top,
           scrollOffset: el.scrollTop,
@@ -2512,10 +2511,9 @@ export function Transcript({
   // The composer toggle's "catch up" tap bumps scrollNonce → scroll to the
   // bottom and resume following. Guarded so it only fires on an actual bump
   // (not on mount / session switch, where the sessionId effect already pins).
-  const lastNonceRef = useRef(scrollNonce);
+  const lastNonceRef = useRef({ sessionId, nonce: scrollNonce });
   useEffect(() => {
-    if (scrollNonce === lastNonceRef.current) return undefined;
-    lastNonceRef.current = scrollNonce;
+    if (!shouldTriggerSessionNonce(lastNonceRef.current, sessionId, scrollNonce)) return undefined;
     nativeScrollActiveRef.current = false;
     if (renderPausedRef.current || drawerCatchupActiveRef.current) {
       renderPausedRef.current = false;
@@ -2537,21 +2535,20 @@ export function Transcript({
     };
     pin();
     return () => cancelAnimationFrame(raf);
-  }, [scrollNonce]);
+  }, [scrollNonce, sessionId]);
 
   // A "to the start" request: stop following, un-window recycled rows, and
   // scroll to the oldest loaded row using the engine's column-reverse sign.
-  const lastTopNonceRef = useRef(topNonce);
+  const lastTopNonceRef = useRef({ sessionId, nonce: topNonce });
   useEffect(() => {
-    if (topNonce === lastTopNonceRef.current) return;
-    lastTopNonceRef.current = topNonce;
+    if (!shouldTriggerSessionNonce(lastTopNonceRef.current, sessionId, topNonce)) return;
     stick.current = false;
     setFollowingLive(false);
     setSticky(sessionId, false);
     freezeRef.current.key = null;
     cancelHistoryRelease();
     const el = parentRef.current;
-    if (el) el.scrollTo({ top: columnReverseAwayDirection(el, freezeRef.current) * el.scrollHeight, behavior: "smooth" });
+    if (el) el.scrollTo({ top: columnReverseAwayDirection(el) * el.scrollHeight, behavior: "smooth" });
   }, [sessionId, topNonce]);
 
   return (
