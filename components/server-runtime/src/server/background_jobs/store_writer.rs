@@ -12,19 +12,21 @@ const MAX_PENDING_NON_EVENTS: usize = 2048;
 
 struct PendingNonEvents {
     queue: VecDeque<StoreWrite>,
-    overflowed: bool,
 }
 
 impl PendingNonEvents {
     fn new() -> Self {
         Self {
             queue: VecDeque::new(),
-            overflowed: false,
         }
     }
 
     fn is_clean(&self) -> bool {
-        self.queue.is_empty() && !self.overflowed
+        self.queue.is_empty()
+    }
+
+    fn at_capacity(&self) -> bool {
+        self.queue.len() >= MAX_PENDING_NON_EVENTS
     }
 
     fn is_retriable(write: &StoreWrite) -> bool {
@@ -49,14 +51,6 @@ impl PendingNonEvents {
         true
     }
 
-    fn enqueue(&mut self, write: StoreWrite) {
-        if self.queue.len() >= MAX_PENDING_NON_EVENTS {
-            self.overflowed = true;
-            return;
-        }
-        self.queue.push_back(write);
-    }
-
     async fn apply_or_retain(
         &mut self,
         store: &Store,
@@ -65,16 +59,29 @@ impl PendingNonEvents {
     ) -> bool {
         let drained = self.drain(store, acks).await;
         if !Self::is_retriable(&write) {
-            return drained && apply_non_event_write(store, &write, acks).await;
+            if !drained {
+                if let StoreWrite::UpdatePending {
+                    ack_id: Some(id), ..
+                } = write
+                    && let Some(acks) = acks
+                {
+                    acks.complete(
+                        id,
+                        Err("Blocked by an earlier failed durable write; retry shortly".to_owned()),
+                    );
+                }
+                return false;
+            }
+            return apply_non_event_write(store, &write, acks).await;
         }
         if !self.queue.is_empty() {
-            self.enqueue(write);
+            self.queue.push_back(write);
             return false;
         }
         if apply_non_event_write(store, &write, acks).await {
             true
         } else {
-            self.enqueue(write);
+            self.queue.push_back(write);
             false
         }
     }
@@ -189,6 +196,23 @@ pub async fn run_store_writer_with_floors(
         rx.close();
     }
     loop {
+        if pending_non_events.at_capacity()
+            && !draining
+            && !pending_non_events.drain(&store, acks.as_ref()).await
+        {
+            health.mark_failed_batch();
+            tokio::select! {
+                biased;
+                changed = shutdown.changed() => {
+                    if changed.is_err() || *shutdown.borrow() {
+                        rx.close();
+                        draining = true;
+                    }
+                }
+                () = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
+            }
+            continue;
+        }
         let first = tokio::select! {
             biased;
             changed = shutdown.changed(), if !draining => {

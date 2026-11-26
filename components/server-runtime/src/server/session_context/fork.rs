@@ -273,24 +273,24 @@ async fn verify_staging_source_intact(
             .is_some(),
         None => false,
     };
-    if has_edge {
-        return Ok(None);
-    }
     let before_seq = record.before_seq.unwrap_or(0);
-    let pin_guard = if before_seq > 0 {
-        Some(
-            lineage::pin_and_freeze_source(state, id, Some(before_seq))
-                .await?
-                .1,
-        )
-    } else {
-        None
+    // Always pin the source and revalidate native thread + context generation
+    // before promoting a staging native fork, even if the display edge already
+    // exists, so a Clear or context rollover cannot leave a discarded thread ID.
+    let pin_guard = lineage::pin_and_freeze_source(state, id, Some(before_seq))
+        .await?
+        .1;
+    let identity = state.hub.snapshot_native_source_identity(id);
+    let epoch_changed = match identity {
+        Ok((live_thread, live_gen)) => {
+            live_thread != record.source_agent_session_id
+                || (record.source_context_generation.is_some()
+                    && live_gen != record.source_context_generation)
+        }
+        Err(_) => true,
     };
-    let (live_thread, live_gen) = state.hub.snapshot_native_source_identity(id)?;
-    let epoch_changed = live_thread != record.source_agent_session_id
-        || (record.source_context_generation.is_some()
-            && live_gen != record.source_context_generation);
-    let cleared_prefix = if before_seq > 0
+    let cleared_prefix = if !has_edge
+        && before_seq > 0
         && let Some(store) = state.store.as_ref()
     {
         store
@@ -309,7 +309,7 @@ async fn verify_staging_source_intact(
                 .into(),
         );
     }
-    Ok(pin_guard)
+    Ok(Some(pin_guard))
 }
 
 async fn resume_native_fork(
@@ -808,6 +808,12 @@ fn interpret_existing_duplicate(
 ) -> Result<DuplicateLookup, String> {
     if receipt.fingerprint != fingerprint {
         return Err("This operation already created a different copy".into());
+    }
+    if receipt.state == "cleared" {
+        return Err(
+            "The source conversation was cleared before this fork finished setting up; start a new fork"
+                .into(),
+        );
     }
     if receipt.state == "deleted" {
         return Err("The copy created by this operation was deleted; start a new fork".into());

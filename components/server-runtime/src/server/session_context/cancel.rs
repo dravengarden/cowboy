@@ -184,16 +184,8 @@ async fn take_back(
     state
         .hub
         .commit_cancel_handoff_memory(&id, &cmid, target_key, target_value, cancel_guard);
-    // The work did not move: the destination stops naming the original, so
-    // restoring it later cannot turn the original into history again. Its
-    // cancelled receipt keeps startup from recording the mark once more.
-    state.hub.set_setting(
-        format!(
-            "{}{id}",
-            crate::core::settings_keys::SESSION_CONTINUED_FROM_PREFIX
-        ),
-        serde_json::Value::Null,
-    );
+    // Notify connected clients that `continued_from` was cleared atomically in
+    // the cancellation transaction above (the setting was already removed).
     state.hub.set_continued_from(&id, None);
     let note = super::super::session_trash::trash(
         &state,

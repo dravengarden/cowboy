@@ -94,10 +94,14 @@ impl Hub {
         setting_value: serde_json::Value,
         mut guard: HandoffCancelGuard,
     ) {
-        self.inner
-            .settings
-            .lock()
-            .insert(setting_key, setting_value);
+        {
+            let mut settings = self.inner.settings.lock();
+            settings.insert(setting_key, setting_value);
+            settings.remove(&format!(
+                "{}{session_id}",
+                settings_keys::SESSION_CONTINUED_FROM_PREFIX
+            ));
+        }
         self.remove_auth_parent(session_id);
         let snapshot = {
             let mut sessions = self.inner.sessions.lock();
@@ -110,6 +114,7 @@ impl Hub {
                         s.editing_token = None;
                     }
                 }
+                s.meta.continued_from = None;
                 s.cancel_handoff_pending = false;
                 let queue = s.queue.clone();
                 let drafts = s.drafts.clone();
@@ -483,11 +488,19 @@ impl Hub {
             }
         }
         for meta in &sessions {
+            let cancelled = crate::session_context::read(self, &meta.id)
+                .ok()
+                .and_then(|context| context.delivery)
+                .is_some_and(|receipt| receipt.state == "cancelled");
             if let Some(source) = self
                 .setting(&key(&meta.id))
                 .and_then(|value| value.as_str().map(str::to_owned))
             {
-                self.set_continued_from(&meta.id, Some(source));
+                if cancelled {
+                    self.set_setting(key(&meta.id), serde_json::Value::Null);
+                } else {
+                    self.set_continued_from(&meta.id, Some(source));
+                }
             }
             if self.setting(&resumed_key(&meta.id)) == Some(json!(true)) {
                 self.project_handoff_resumed(&meta.id, true);
@@ -956,5 +969,60 @@ impl Drop for HandoffCancelGuard {
             }
         }
         self.hub.try_drain(&self.session_id);
+    }
+}
+
+#[cfg(test)]
+mod cancel_restore_tests {
+    use super::*;
+    use crate::model::SessionOrigin;
+
+    #[test]
+    fn restore_continuations_ignores_stale_mark_on_cancelled_destination() {
+        let hub = Hub::new();
+        hub.create_local_session(
+            "src-c".into(),
+            "claude-code".into(),
+            "/tmp".into(),
+            "Source".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.create_local_session(
+            "dst-c".into(),
+            "claude-code".into(),
+            "/tmp".into(),
+            "Dest".into(),
+            SessionOrigin::Web,
+            false,
+        );
+        hub.set_setting(
+            format!("{}dst-c", settings_keys::SESSION_CONTINUED_FROM_PREFIX),
+            json!("src-c"),
+        );
+        hub.set_setting(
+            crate::session_context::key("dst-c"),
+            json!({
+                "revision": 2,
+                "applied_revision": 2,
+                "sources": [],
+                "waiting": [],
+                "delivery": {
+                    "operation": "op-1",
+                    "fingerprint": "fp-1",
+                    "session_id": "dst-c",
+                    "state": "cancelled"
+                }
+            }),
+        );
+        hub.restore_continuations();
+        assert_eq!(hub.session_info("dst-c").unwrap().meta.continued_from, None);
+        assert_eq!(
+            hub.setting(&format!(
+                "{}dst-c",
+                settings_keys::SESSION_CONTINUED_FROM_PREFIX
+            )),
+            None
+        );
     }
 }

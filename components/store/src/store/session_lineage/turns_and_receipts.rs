@@ -539,6 +539,15 @@ impl PostgresStorage {
             .with_context(|| {
                 format!("delete PG cancelled handoff lineage {destination_session_id}")
             })?;
+        let continued_key = format!(
+            "{}{destination_session_id}",
+            crate::model::settings_keys::SESSION_CONTINUED_FROM_PREFIX
+        );
+        sqlx::query("DELETE FROM settings WHERE key = $1")
+            .bind(&continued_key)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("delete PG cancelled continuation mark {continued_key}"))?;
         tx.commit().await?;
         Ok(true)
     }
@@ -881,6 +890,17 @@ impl SqliteStorage {
             .await
             .with_context(|| {
                 format!("delete SQLite cancelled handoff lineage {destination_session_id}")
+            })?;
+        let continued_key = format!(
+            "{}{destination_session_id}",
+            crate::model::settings_keys::SESSION_CONTINUED_FROM_PREFIX
+        );
+        sqlx::query("DELETE FROM settings WHERE key = ?1")
+            .bind(&continued_key)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| {
+                format!("delete SQLite cancelled continuation mark {continued_key}")
             })?;
         tx.commit().await?;
         Ok(true)

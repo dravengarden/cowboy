@@ -478,6 +478,25 @@ pub(in crate::store) async fn seal_lineage_on_clear_sqlite(
         .await
         .with_context(|| format!("clear SQLite turn completions for {session_id}"))?;
 
+    sqlx::query(
+        "UPDATE session_duplicate_receipts \
+         SET state = 'cleared', updated_at_ms = ?2 \
+         WHERE source_session_id = ?1 \
+           AND state = 'reserved' \
+           AND before_seq > 0 \
+           AND NOT EXISTS ( \
+             SELECT 1 FROM session_lineage_edges e \
+             WHERE e.child_session_id = session_duplicate_receipts.destination_session_id \
+           )",
+    )
+    .bind(session_id)
+    .bind(now_ms)
+    .execute(&mut **tx)
+    .await
+    .with_context(|| {
+        format!("invalidate SQLite un-edged reserved duplicates on clear for {session_id}")
+    })?;
+
     let max_before: Option<i64> = sqlx::query_scalar(
         "SELECT MAX(before_seq) FROM session_lineage_edges \
          WHERE parent_session_id = ?1 AND segment_id IS NULL AND NOT display_detached \

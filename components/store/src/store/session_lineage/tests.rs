@@ -761,6 +761,16 @@ async fn commit_handoff_cancellation_atomically_clears_queue_writes_receipt_and_
         .update_pending("dst-cancel", &queued, &[])
         .await
         .unwrap();
+    store
+        .put_setting(
+            &format!(
+                "{}dst-cancel",
+                crate::model::settings_keys::SESSION_CONTINUED_FROM_PREFIX
+            ),
+            &serde_json::json!("src-cancel"),
+        )
+        .await
+        .unwrap();
     let receipt_val = serde_json::json!({"delivery": {"state": "cancelled"}});
     // Mismatched expected queue must be refused without wiping queue or lineage.
     let wrong_queue: Vec<crate::model::QueuedMessage> = vec![
@@ -802,6 +812,15 @@ async fn commit_handoff_cancellation_atomically_clears_queue_writes_receipt_and_
             .find(|(k, _)| k == "session_context:src-cancel")
             .map(|(_, v)| v),
         Some(&receipt_val)
+    );
+    assert!(
+        !settings.iter().any(|(k, _)| {
+            k == &format!(
+                "{}dst-cancel",
+                crate::model::settings_keys::SESSION_CONTINUED_FROM_PREFIX
+            )
+        }),
+        "commit_handoff_cancellation must atomically delete session_continued_from"
     );
     let restored = store.load_all().await.unwrap();
     let dst = restored.iter().find(|s| s.meta.id == "dst-cancel").unwrap();
@@ -957,5 +976,85 @@ async fn cold_find_message_rejects_pre_context_rolled_over_and_tracks_clear_seq(
             .await
             .unwrap(),
         Some(5)
+    );
+}
+
+#[tokio::test]
+async fn clear_conversation_atomically_invalidates_un_edged_reserved_duplicate_receipt() {
+    let (store, _dir) = test_store().await;
+    store.insert_session(&session("src-clr")).await.unwrap();
+    store
+        .upsert_event_batch(
+            &[msg("src-clr", 0, "hello")],
+            &HashMap::from([("src-clr".to_owned(), 1)]),
+        )
+        .await
+        .unwrap();
+    let un_edged = DuplicateReceipt {
+        owner_user_id: "u1".to_owned(),
+        source_session_id: "src-clr".to_owned(),
+        operation_id: "op-unedged".to_owned(),
+        fingerprint: "fp-1".to_owned(),
+        destination_session_id: "sess-unedged".to_owned(),
+        before_seq: 1,
+        workspace_base: None,
+        workspace_include_uncommitted: None,
+        state: "reserved".to_owned(),
+        created_at_ms: 1000,
+        updated_at_ms: 1000,
+    };
+    assert_eq!(
+        store.reserve_duplicate_receipt(&un_edged).await.unwrap(),
+        ReserveOutcome::Reserved
+    );
+    // Also create an edged reserved receipt whose prefix Clear SHOULD archive and keep reserved.
+    store.insert_session(&session("sess-edged")).await.unwrap();
+    let edged = DuplicateReceipt {
+        operation_id: "op-edged".to_owned(),
+        destination_session_id: "sess-edged".to_owned(),
+        ..un_edged.clone()
+    };
+    assert_eq!(
+        store.reserve_duplicate_receipt(&edged).await.unwrap(),
+        ReserveOutcome::Reserved
+    );
+    store
+        .upsert_lineage_edge(&make_edge("sess-edged", "src-clr", "linked_fork", 1))
+        .await
+        .unwrap();
+
+    // Commit Clear SQL transaction WITHOUT ever appending a context_cleared event (simulating crash).
+    store
+        .clear_conversation("src-clr", 2000, None, None)
+        .await
+        .unwrap();
+
+    let got_unedged = store
+        .duplicate_receipt("u1", "src-clr", "op-unedged")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        got_unedged.state, "cleared",
+        "Clear must atomically invalidate un-edged reserved duplicate receipts before events are deleted"
+    );
+
+    let got_edged = store
+        .duplicate_receipt("u1", "src-clr", "op-edged")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        got_edged.state, "reserved",
+        "edged reserved duplicate receipt has its prefix archived and stays recoverable"
+    );
+    assert!(
+        store
+            .lineage_edge("sess-edged")
+            .await
+            .unwrap()
+            .unwrap()
+            .segment_id
+            .is_some()
     );
 }
