@@ -7,12 +7,13 @@ function assertEqual(actual: unknown, expected: unknown) {
   }
 }
 
-const sidestore = { kind: "sidestore" as const, url: "sidestore://source" };
+const testflight = { kind: "testflight" as const, url: "https://testflight.apple.com/" };
+const appStore = { kind: "app_store" as const, url: "https://apps.apple.com/app/id0" };
 
 test("store channels serve the iOS shell only, unless declared otherwise", () => {
-  assertEqual(nativeReleaseChannelsFor([sidestore], "ios"), [sidestore]);
-  assertEqual(nativeReleaseChannelsFor([sidestore], "macos"), []);
-  assertEqual(nativeReleaseChannelsFor([sidestore], "other"), []);
+  assertEqual(nativeReleaseChannelsFor([testflight, appStore], "ios"), [testflight, appStore]);
+  assertEqual(nativeReleaseChannelsFor([testflight, appStore], "macos"), []);
+  assertEqual(nativeReleaseChannelsFor([testflight, appStore], "other"), []);
   const mac = { kind: "app_store" as const, url: "itms-apps://x", platforms: ["macos" as const] };
-  assertEqual(nativeReleaseChannelsFor([sidestore, mac], "macos"), [mac]);
+  assertEqual(nativeReleaseChannelsFor([testflight, mac], "macos"), [mac]);
 });

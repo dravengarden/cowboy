@@ -652,7 +652,7 @@ function ProviderManagement(
     ) return;
     if (isNativeShell() && !hasNativeAuthenticationBrowser()) {
       owners?.authentication.error(
-        "Update Cowboy in SideStore, reopen the app, then try sign-in again.",
+        "Update Cowboy in TestFlight or the App Store, reopen the app, then try sign-in again.",
       );
       return;
     }

@@ -80,7 +80,7 @@ iOS Xcode 27 builds use the build-local Swift runtime export adapter described
 in `apps/native-shell/README.md`. Keep registry dependency checksums and the
 single-runtime-owner invariant; do not fork swift-rs through
 `[patch.crates-io]`. Source checks alone never prove an iOS release shipped:
-require the exact successful build receipt and published SideStore version.
+require the exact successful build receipt and App Store Connect / TestFlight upload receipt.
 - Cowboy application releases use project-owned Nix artifacts rather than a
   full NixOS generation. From a clean committed task worktree, build the
   narrowest affected output: `.#cowboy-web-release`,

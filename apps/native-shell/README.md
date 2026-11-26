@@ -149,13 +149,31 @@ provisioning. Distribution signing, device installation, Associated Domains,
 real login and physical keyboard/swipe acceptance remain separate release steps.
 An unsigned device archive cannot be installed without explicit signing.
 
-Device builds also package that exact App as `Cowboy.ipa` and record its path
-and SHA-256 in the build receipt. A machine-owned publisher may request an
-exclusive copy with `--receipt-path /absolute/new.json`; an existing file is
-never overwritten. The SideStore workflow fetches the clean public Cowboy
-revision through Git into a fresh Mac task checkout, calls this entry, verifies
-the receipt and IPA digest on Hawk, and then publishes through its normal
-versioned source. The old external Mac shell is not a source or artifact fallback.
+Device builds preserve the full unsigned `Cowboy.xcarchive` and record its path,
+bundle identifier, version, build number, and executable SHA-256 in the build
+receipt. Optional `--version X.Y.Z` and `--build-number N` flags stamp
+`CFBundleShortVersionString` and `CFBundleVersion` before `xcodegen` and
+`xcodebuild archive` run. A release helper may request an exclusive copy with
+`--receipt-path /absolute/new.json`; an existing file is never overwritten.
+
+App Store Connect and TestFlight publication is its own step and accepts only an
+exact release receipt:
+
+```sh
+APPLE_TEAM_ID=<TEAM_ID> \
+APPLE_API_KEY_ID=<KEY_ID> \
+APPLE_API_ISSUER_ID=<ISSUER_UUID> \
+APPLE_API_KEY_PATH="$HOME/.appstoreconnect/private_keys/AuthKey_<KEY_ID>.p8" \
+  bash tools/publish-ios-appstore.sh /absolute/dist/native-shell/ios-<rev>.<nonce>/receipt.json
+```
+
+Pass `--internal-only` to mark the build `testFlightInternalTestingOnly` (unable
+to be submitted to external TestFlight or App Store review), or
+`--destination export` to export a locally signed App Store IPA without
+uploading. Signing uses Xcode automatic cloud-managed distribution signing with
+`-allowProvisioningUpdates` and the external App Store Connect API key, so no
+credentials live in the repository and no manual distribution certificate slot
+is consumed. The old external Mac shell is not a source or artifact fallback.
 
 ## Android
 

@@ -6,19 +6,52 @@ native_platform="${1:-ios-sim}"
 shift || true
 native_flags=(--ci)
 native_profile=release
-if [ "${1:-}" = --debug ]; then native_flags+=(--debug); native_profile=debug; shift; fi
 native_report_target=
-if [ "${1:-}" = --receipt-path ]; then
-  native_report_target="${2:?--receipt-path requires an absolute path}"
-  shift 2
-  case "$native_report_target" in /*) ;; *) echo "receipt path must be absolute" >&2; exit 2;; esac
-  test ! -e "$native_report_target" && test ! -L "$native_report_target" || {
-    echo "refusing to overwrite a native receipt" >&2; exit 1;
-  }
-fi
-if [ "$#" != 0 ]; then
-  echo "usage: bash tools/build-native-shell.sh {macos|ios-sim|ios|android|android-emu} [--debug] [--receipt-path /absolute/new.json]" >&2
-  exit 2
+native_version=
+native_build_number=
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --debug)
+      native_flags+=(--debug)
+      native_profile=debug
+      shift
+      ;;
+    --receipt-path)
+      native_report_target="${2:?--receipt-path requires an absolute path}"
+      shift 2
+      case "$native_report_target" in /*) ;; *) echo "receipt path must be absolute" >&2; exit 2;; esac
+      test ! -e "$native_report_target" && test ! -L "$native_report_target" || {
+        echo "refusing to overwrite a native receipt" >&2; exit 1;
+      }
+      ;;
+    --version)
+      native_version="${2:?--version requires X.Y.Z}"
+      shift 2
+      ;;
+    --build-number)
+      native_build_number="${2:?--build-number requires a CFBundleVersion}"
+      shift 2
+      ;;
+    *)
+      echo "usage: bash tools/build-native-shell.sh {macos|ios-sim|ios|android|android-emu} [--debug] [--version X.Y.Z] [--build-number N] [--receipt-path /absolute/new.json]" >&2
+      exit 2
+      ;;
+  esac
+done
+if [ -n "$native_version" ] || [ -n "$native_build_number" ]; then
+  case "$native_platform" in
+    ios|ios-sim) ;;
+    *) echo "--version and --build-number apply only to ios and ios-sim builds" >&2; exit 2;;
+  esac
+  python3 - "$native_version" "$native_build_number" <<'PY'
+import re, sys
+version, build_number = sys.argv[1:]
+if version and not re.fullmatch(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)", version):
+    raise SystemExit("invalid --version (expected X.Y.Z): " + version)
+if build_number:
+    if len(build_number) > 18 or not re.fullmatch(r"(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){0,2}", build_number):
+        raise SystemExit("invalid --build-number for App Store Connect CFBundleVersion: " + build_number)
+PY
 fi
 case "$native_platform" in macos|ios-sim|ios|android|android-emu) ;; *) echo "unknown native platform" >&2; exit 2;; esac
 native_repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)"
@@ -219,6 +252,49 @@ else
   # entitlements, launch resources and XcodeGen settings come from this commit.
   cp -R ../apple/Sources ../apple/Assets.xcassets ../apple/cowboy-app_iOS gen/apple/
   cp ../apple/project.yml ../apple/LaunchScreen.storyboard ../apple/ExportOptions.plist gen/apple/
+  if [ -n "$native_version" ] || [ -n "$native_build_number" ]; then
+    python3 - tauri.conf.json gen/apple/project.yml gen/apple/cowboy-app_iOS/Info.plist "$native_version" "$native_build_number" <<'PY'
+import json, pathlib, plistlib, sys
+conf_path, project_path, info_path, version, build_number = sys.argv[1:]
+conf_file = pathlib.Path(conf_path)
+conf = json.loads(conf_file.read_text())
+if version:
+    conf["version"] = version
+if build_number:
+    conf.setdefault("bundle", {}).setdefault("iOS", {})["bundleVersion"] = build_number
+conf_file.write_text(json.dumps(conf, indent=2) + "\n")
+
+project = pathlib.Path(project_path)
+lines = project.read_text().splitlines(keepends=True)
+out = []
+saw_ver = False
+saw_bld = False
+for line in lines:
+    if version and "CFBundleShortVersionString:" in line and not saw_ver:
+        prefix = line.split("CFBundleShortVersionString:", 1)[0]
+        out.append(f"{prefix}CFBundleShortVersionString: {version}\n")
+        saw_ver = True
+    elif build_number and "CFBundleVersion:" in line and not saw_bld:
+        prefix = line.split("CFBundleVersion:", 1)[0]
+        out.append(f'{prefix}CFBundleVersion: "{build_number}"\n')
+        saw_bld = True
+    else:
+        out.append(line)
+if version and not saw_ver:
+    raise SystemExit("project.yml missing CFBundleShortVersionString")
+if build_number and not saw_bld:
+    raise SystemExit("project.yml missing CFBundleVersion")
+project.write_text("".join(out))
+
+plist_file = pathlib.Path(info_path)
+info = plistlib.loads(plist_file.read_bytes())
+if version:
+    info["CFBundleShortVersionString"] = version
+if build_number:
+    info["CFBundleVersion"] = build_number
+plist_file.write_bytes(plistlib.dumps(info, fmt=plistlib.FMT_XML))
+PY
+  fi
   mkdir -p gen/apple/Externals gen/apple/assets
   xcodegen generate --spec gen/apple/project.yml
   native_target=aarch64
@@ -229,23 +305,25 @@ fi
 test -d "$native_app" || { echo "Build returned no app at its exact output path: $native_app" >&2; exit 1; }
 cmp "$native_source/tauri/Cargo.lock" "$native_repo/apps/native-shell/tauri/Cargo.lock"
 if [ "$native_platform" = ios ]; then
-  # The exact unsigned archive becomes a SideStore input. Signing and version
-  # publication stay with the machine-owned publisher, never this build step.
-  mkdir "$native_build/Payload"
-  ditto "$native_app" "$native_build/Payload/Cowboy.app"
-  ditto -c -k --keepParent "$native_build/Payload" "$native_build/Cowboy.ipa"
+  # Preserve the complete unsigned Xcode archive for App Store Connect /
+  # TestFlight signing and upload in publish-ios-appstore.sh.
+  ditto "$native_source/tauri/gen/apple/build/cowboy-app_iOS.xcarchive" "$native_build/Cowboy.xcarchive"
 fi
 # Record the actual executable and source bytes, not a glob-selected DerivedData
 # product or an old receipt. Failure above leaves no success receipt.
-python3 - "$native_app" "$native_revision" "$native_platform" "$native_profile" "$native_build" "$native_report_target" <<'PY'
+python3 - "$native_app" "$native_revision" "$native_platform" "$native_profile" "$native_build" "$native_report_target" "$native_version" "$native_build_number" <<'PY'
 import hashlib, json, pathlib, plistlib, subprocess, sys
-app, revision, platform, profile, build, receipt_target = sys.argv[1:]
+app, revision, platform, profile, build, receipt_target, expected_version, expected_build = sys.argv[1:]
 app, build = pathlib.Path(app), pathlib.Path(build)
 info_path = app / ("Contents/Info.plist" if platform == "macos" else "Info.plist")
 info = plistlib.loads(info_path.read_bytes())
 binary = app / ("Contents/MacOS" if platform == "macos" else "") / info["CFBundleExecutable"]
 if info["CFBundleIdentifier"] != "top.thundersparrow.cowboy":
     raise SystemExit("Unexpected native bundle identifier")
+if expected_version and info.get("CFBundleShortVersionString") != expected_version:
+    raise SystemExit(f"Compiled CFBundleShortVersionString {info.get('CFBundleShortVersionString')!r} != {expected_version!r}")
+if expected_build and info.get("CFBundleVersion") != expected_build:
+    raise SystemExit(f"Compiled CFBundleVersion {info.get('CFBundleVersion')!r} != {expected_build!r}")
 scene_manifest = info.get("UIApplicationSceneManifest", {})
 if platform != "macos":
     configurations = scene_manifest.get("UISceneConfigurations", {}).get("UIWindowSceneSessionRoleApplication", [])
@@ -281,6 +359,9 @@ if platform != "macos":
             raise SystemExit(f"Incomplete compiled alternate icons in {key}: missing {sorted(expected - actual)}, unexpected {sorted(actual - expected)}")
     alternate_icons = sorted(expected)
 report = dict(source_revision=revision, platform=platform, profile=profile,
+    bundle_id=info["CFBundleIdentifier"],
+    version=info.get("CFBundleShortVersionString"),
+    build_version=info.get("CFBundleVersion"),
     app=str(app), executable_sha256=hashlib.sha256(binary.read_bytes()).hexdigest(),
     lock_sha256=hashlib.sha256((build / "apps/native-shell/tauri/Cargo.lock").read_bytes()).hexdigest(),
     xcode=subprocess.check_output(["xcodebuild", "-version"], text=True).strip(),
@@ -295,8 +376,21 @@ if platform != "macos" and int(report["xcode"].split()[1].split(".")[0]) >= 27:
     if report["swift_rs_compat"]["validated_at"] != "cowboy_app_lib":
         raise SystemExit("Incomplete Swift runtime compatibility validation")
 if platform == "ios":
-    ipa = build / "Cowboy.ipa"
-    report.update(ipa=str(ipa), ipa_sha256=hashlib.sha256(ipa.read_bytes()).hexdigest())
+    xcarchive = build / "Cowboy.xcarchive"
+    archive_info = plistlib.loads((xcarchive / "Info.plist").read_bytes())
+    archive_props = archive_info.get("ApplicationProperties", {})
+    archive_app = xcarchive / "Products/Applications/Cowboy.app"
+    archive_app_info = plistlib.loads((archive_app / "Info.plist").read_bytes())
+    archive_bin = archive_app / archive_app_info["CFBundleExecutable"]
+    if hashlib.sha256(archive_bin.read_bytes()).hexdigest() != report["executable_sha256"]:
+        raise SystemExit("Preserved xcarchive executable digest differs from compiled app")
+    if (
+        archive_props.get("CFBundleIdentifier") != report["bundle_id"]
+        or archive_props.get("CFBundleShortVersionString") != report["version"]
+        or archive_props.get("CFBundleVersion") != report["build_version"]
+    ):
+        raise SystemExit("Preserved xcarchive ApplicationProperties differ from compiled app Info.plist")
+    report.update(xcarchive=str(xcarchive))
 (build / "receipt.json").write_text(json.dumps(report, indent=2) + "\n")
 if receipt_target:
     # Exclusive creation rejects a racing file/symlink too. The caller owns

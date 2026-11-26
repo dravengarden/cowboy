@@ -618,12 +618,11 @@ export function BackgroundTasksInspector({
                 minHeight: 0,
                 display: "flex",
                 flexDirection: conversation ? "row" : "column",
-                gap: 2,
                 overflow: "hidden",
               }}
             >
               {selected?.source === "call" && selected.call && (
-                <CallConversation call={selected.call} desktop detailsOpen onDetails={(): void => undefined} />
+                <CallConversation call={selected.call} desktop />
               )}
               {conversation && selected?.subagent && (
                 <SubagentConversation sessionId={sessionId} subagent={selected.subagent} state={child} desktop />

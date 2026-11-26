@@ -6,8 +6,9 @@ type NativeVersionHost = {
   };
 };
 
-// SideStore stamps the installed bundle after compilation. Tauri's package
-// version remains the Cargo/config version, so prefer the OS bundle metadata.
+// Release archives stamp CFBundleShortVersionString onto the installed iOS
+// bundle while Tauri's package version may remain at the Cargo/config floor,
+// so prefer the OS bundle metadata.
 export async function getNativeAppVersion(
   host: NativeVersionHost = globalThis as NativeVersionHost,
 ): Promise<string | null> {

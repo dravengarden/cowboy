@@ -623,6 +623,11 @@ export async function runManagedCallsBrowserConformance(): Promise<string[]> {
         `${part} overflows the modal (${edge} > ${bounds.right})`,
       );
     }
+    const callDetailsButton = modal.querySelector<HTMLButtonElement>("[data-call-conversation-header] button[aria-pressed]")!;
+    check(
+      callDetailsButton && getComputedStyle(callDetailsButton).textTransform === "none",
+      "legacy call modal keeps a sentence-case Details toggle",
+    );
     modal.dispatchEvent(
       new KeyboardEvent("keydown", { key: "i", bubbles: true }),
     );

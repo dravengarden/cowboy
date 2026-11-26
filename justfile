@@ -277,7 +277,7 @@ native-shell-check:
     python3 -m unittest discover -s tools -p 'native_shell_smoke_test.py'
     python3 -m unittest discover -s tools -p 'native_swift_rs_compat_test.py'
     bun tools/check-native-shell.ts
-    bash -n tools/build-native-shell.sh tools/sign-android-apk.sh tools/cowboysim.sh tools/cowboysim-remote.sh
+    bash -n tools/build-native-shell.sh tools/publish-ios-appstore.sh tools/sign-android-apk.sh tools/cowboysim.sh tools/cowboysim-remote.sh
     bash tools/check-keyboard-geometry.sh
     cargo metadata --locked --no-deps --format-version 1 --manifest-path apps/native-shell/tauri/Cargo.toml >/dev/null
 
@@ -286,6 +286,10 @@ native-shell-build PLATFORM="ios-sim" *ARGS:
     bash tools/build-native-shell.sh {{PLATFORM}} {{ARGS}}
 
 # Sign a disposable copy and launch it only in an exclusively-created Simulator.
+# Export and upload an unsigned iOS release archive from its build receipt to App Store Connect / TestFlight.
+native-shell-publish-ios RECEIPT *ARGS:
+    bash tools/publish-ios-appstore.sh "{{RECEIPT}}" {{ARGS}}
+
 # Sign an unsigned Android release APK from its build receipt (native-android shell).
 native-shell-sign-android RECEIPT *ARGS:
     bash tools/sign-android-apk.sh "{{RECEIPT}}" {{ARGS}}

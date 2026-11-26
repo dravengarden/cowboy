@@ -803,9 +803,12 @@ export function CallConversation({
   call: ManagedCallSummary;
   desktop: boolean;
   detailsOpen?: boolean;
-  onDetails: () => void;
+  onDetails?: (() => void) | undefined;
 }): React.JSX.Element {
   const end = callActive(call.state) ? Date.now() : call.updated_at_ms;
+  const verdict = (call.verdict || call.finding_count !== undefined)
+    ? <VerdictChip verdict={call.verdict ?? null} findings={call.finding_count} desktop />
+    : null;
   return (
     <Box
       data-call-conversation={call.call_id}
@@ -827,9 +830,10 @@ export function CallConversation({
         direction="row"
         alignItems="center"
         spacing={1}
+        data-call-conversation-header
         sx={{
-          px: desktop ? 0 : 2,
-          pb: desktop ? 1 : 0.75,
+          px: 2,
+          py: 1,
           borderBottom: 1,
           borderColor: "divider",
           minWidth: 0,
@@ -851,26 +855,21 @@ export function CallConversation({
           {placementLabel(call)} · {startedLabel(call.created_at_ms)} ·{" "}
           {elapsedLabel(call.created_at_ms, end)}
         </Typography>
-        {
-          /* A verdict already says the review finished. */
-        }
         {(call.state !== "completed" || !call.verdict) && (
           <StateChip call={call} desktop />
         )}
-        {(call.verdict || call.finding_count !== undefined) && (
-          <ButtonBase
-            aria-label="Open review result"
-            onClick={onDetails}
-            sx={{ borderRadius: 999, minWidth: 0, flexShrink: 0 }}
-          >
-            <VerdictChip
-              verdict={call.verdict ?? null}
-              findings={call.finding_count}
-              desktop
-            />
-          </ButtonBase>
-        )}
-        {desktop && (
+        {verdict && (onDetails
+          ? (
+            <ButtonBase
+              aria-label="Open review result"
+              onClick={onDetails}
+              sx={{ borderRadius: 999, minWidth: 0, flexShrink: 0 }}
+            >
+              {verdict}
+            </ButtonBase>
+          )
+          : verdict)}
+        {onDetails && (
           <Button
             size="small"
             variant={detailsOpen ? "contained" : "outlined"}
@@ -878,7 +877,7 @@ export function CallConversation({
             startIcon={<InfoOutlined fontSize="small" />}
             onClick={onDetails}
             aria-pressed={detailsOpen}
-            sx={{ minHeight: 30, flexShrink: 0 }}
+            sx={{ minHeight: desktopSize(26), py: 0.25, px: 1, textTransform: "none", fontSize: "0.75rem", lineHeight: 1.2, flexShrink: 0 }}
           >
             Details
           </Button>
@@ -1593,7 +1592,6 @@ export const ManagedCallsDock = memo(function ManagedCallsDock({
               </Stack>
               <Stack
                 direction="row"
-                spacing={2}
                 sx={{ flex: 1, minHeight: 0 }}
               >
                 {calls.length > 1 && (

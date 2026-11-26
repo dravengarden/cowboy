@@ -11,7 +11,7 @@ test("PWA uses the origin-bound browser WebAuthn ceremony", () => {
   }), ["browser"]);
 });
 
-test("SideStore shell uses native Passkeys only when signed capability exists", () => {
+test("iOS shell uses native Passkeys only when signed capability exists", () => {
   assertEquals(resolvePasskeyTransports({
     embeddedNativeShell: true,
     nativeBridgeAvailable: true,

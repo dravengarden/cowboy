@@ -88,7 +88,7 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
-Component release 3.154.0 records provider-runtime 1.3.35, whose
+Component release 3.155.0 records provider-runtime 1.3.35, whose
 `cowboy-antigravity-acp` 1.0.29 adds Antigravity post-edit diagnostics
 ([design](antigravity-post-edit-r4-design.md)): descriptor-gated `/diagnostics`
 WebSocket pulls (`diagnostics-client.mjs`), BOM-excluded LF-SHA256 hashing and
@@ -586,6 +586,10 @@ tests' external assertion imports with Node built-ins. It versions those package
 state-store's dependent packages and the plugin-api consumers without changing
 native pins. It removes the temporary root `@std/assert` dependency; package
 closure validation remains strict and historical release records stay unchanged.
+
+Scoped release 3.154.0 records app-shell 1.1.44 for retiring SideStore
+release channels and switching native update discovery to standard TestFlight
+and App Store channels. No Plugin closure or native pin changes.
 
 Scoped release 3.144.0 records app-shell 1.1.43 for the already-committed
 `ScrollEdges` change in `ede6ce8c5`, which 3.143.0 did not cover. No Plugin

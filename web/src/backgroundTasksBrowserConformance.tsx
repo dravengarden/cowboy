@@ -676,6 +676,25 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
     render(<BackgroundTasksInspector sessionId="s" desktop background={backgroundOf([], [call({ request_id: "cli-7" })])} onOpenTool={() => undefined} />);
     await waitFor(inspector, "the inspector opens");
     check(!document.querySelector("[data-task-open-origin]"), "a shell-started call has no structured link");
+    const callConv = document.querySelector<HTMLElement>("[data-call-conversation='call-1']")!;
+    const callConvHeader = callConv.querySelector<HTMLElement>("[data-call-conversation-header]")!;
+    const callHeaderStyle = getComputedStyle(callConvHeader);
+    const detailsPane = document.querySelector<HTMLElement>("[data-task-detail='call:call-1']")!.parentElement!;
+    check(
+      parseFloat(callHeaderStyle.paddingTop) >= 6 &&
+        Math.abs(parseFloat(callHeaderStyle.paddingTop) - parseFloat(callHeaderStyle.paddingBottom)) <= 1 &&
+        parseFloat(callHeaderStyle.paddingLeft) >= 12 &&
+        Math.abs(parseFloat(callHeaderStyle.paddingLeft) - parseFloat(callHeaderStyle.paddingRight)) <= 1,
+      "desktop call conversation header keeps balanced inset padding",
+    );
+    check(
+      !callConvHeader.querySelector("button"),
+      "desktop inspector omits the dead Details toggle when details stay visible beside the transcript",
+    );
+    check(
+      Math.abs(detailsPane.getBoundingClientRect().left - callConv.getBoundingClientRect().right) <= 1,
+      "desktop call conversation meets the adjacent details pane divider without a dead gap",
+    );
     closeBackgroundTasks();
     passed.push("T11 only structured MCP identity links a call to its tool card");
 
