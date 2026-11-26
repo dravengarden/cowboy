@@ -117,7 +117,7 @@ export function InlineHandoffStatusStrip({
           mt: 1.5,
           px: 1.75,
           py: 1.25,
-          borderRadius: 2.5,
+          borderRadius: "12px",
           border: 1,
           borderStyle: "dashed",
           borderColor: alpha(theme.palette.divider, 0.9),
@@ -159,7 +159,7 @@ export function InlineHandoffStatusStrip({
         mt: 1.5,
         px: 1.75,
         py: 1.35,
-        borderRadius: 3,
+        borderRadius: "12px",
         border: 1,
         borderColor: isBlocked
           ? alpha(theme.palette.error.main, theme.palette.mode === "dark" ? 0.45 : 0.3)

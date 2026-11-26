@@ -275,3 +275,15 @@ test("executeForkAttempt preserves native attempt on transient error and switche
     globalThis.fetch = originalFetch;
   }
 });
+
+test("mobile LineageBranchSwitcher and SessionHistoryPeek sheets portal out of composer/scroller and offer footer dismiss", async () => {
+  const fs = await import("node:fs/promises");
+  const switcherSrc = await fs.readFile(new URL("./LineageBranchSwitcher.tsx", import.meta.url), "utf8");
+  const peekSrc = await fs.readFile(new URL("./SessionHistoryPeek.tsx", import.meta.url), "utf8");
+  expect(switcherSrc).toContain('mobileDismiss="footer"');
+  expect(switcherSrc).toContain("forceSheet");
+  expect(switcherSrc).toContain("portal");
+  expect(switcherSrc).toContain("releaseMobileComposerFocus()");
+  expect(switcherSrc).not.toContain("borderRadius: 2");
+  expect(peekSrc).toContain("cover portal");
+});

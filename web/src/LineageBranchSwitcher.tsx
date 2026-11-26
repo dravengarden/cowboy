@@ -2,7 +2,6 @@ import {
   Box,
   Button,
   ButtonBase,
-  Chip,
   CircularProgress,
   Dialog,
   DialogContent,
@@ -15,11 +14,13 @@ import {
 import { alpha } from "@mui/material/styles";
 import AccountTreeOutlined from "@mui/icons-material/AccountTreeOutlined";
 import CallSplitOutlined from "@mui/icons-material/CallSplitOutlined";
+import ChevronRightRounded from "@mui/icons-material/ChevronRightRounded";
 import CloseRounded from "@mui/icons-material/CloseRounded";
 import SwapHorizRounded from "@mui/icons-material/SwapHorizRounded";
 import VisibilityOutlined from "@mui/icons-material/VisibilityOutlined";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { LineageBranch, LineageHop } from "./ancestorHistory";
+import { releaseMobileComposerFocus } from "./composer/mobileComposerFocus";
 import { desktopDialogSlotProps, InstantModalTransition, isImeBlockedEscape } from "./desktop/DesktopModal";
 import { desktopSessionActionSx } from "./desktop/DesktopEmbeddedControl";
 import { desktopEmbeddedControlIconSx } from "./desktop/DesktopEmbeddedIcon";
@@ -44,7 +45,7 @@ interface SwitcherEntry {
   title: string;
   provider: string;
   kind: string;
-  stateLabel?: string | undefined;
+  badge?: string | undefined;
   openable: boolean;
   hop?: LineageHop | undefined;
 }
@@ -65,7 +66,7 @@ function buildEntries(
       title: hop.title || hop.session_id,
       provider: hop.provider,
       kind: hop.kind,
-      stateLabel: hop.parent_state === "trashed" ? "In Trash" : hop.parent_state === "purged" ? "Archived" : undefined,
+      badge: hop.parent_state === "trashed" ? "In Trash" : hop.parent_state === "purged" ? "Archived" : undefined,
       openable: hop.parent_state === "live",
       hop,
     });
@@ -77,7 +78,7 @@ function buildEntries(
     title: currentTitle || sessionId,
     provider: currentProvider,
     kind: "current",
-    stateLabel: "Current",
+    badge: "Current",
     openable: false,
   });
   for (const branch of branches) {
@@ -88,7 +89,7 @@ function buildEntries(
       title: branch.title || branch.session_id,
       provider: branch.provider,
       kind: branch.kind,
-      stateLabel: branch.trashed ? "In Trash" : branch.relation === "child" ? "Branch" : "Sibling",
+      badge: branch.trashed ? "In Trash" : undefined,
       openable: !branch.trashed,
     });
   }
@@ -109,8 +110,238 @@ function hopToLink(hop: LineageHop): SessionLinkRow {
   };
 }
 
+function entrySubtitle(entry: SwitcherEntry): string {
+  const agent = entry.provider ? providerPresentation(entry.provider).agent : "";
+  if (entry.section === "current") return agent || "Active session";
+  if (entry.section === "ancestor") {
+    const role = entry.kind === "replace" ? "Continued from" : "Forked from";
+    return [role, agent].filter(Boolean).join(" · ");
+  }
+  const role = entry.section === "child"
+    ? entry.kind === "replace" ? "Continuation" : "Branch"
+    : entry.kind === "replace" ? "Sibling handoff" : "Sibling branch";
+  return [role, agent].filter(Boolean).join(" · ");
+}
+
+function EntryBadge({ label, active }: { label: string; active: boolean }): React.JSX.Element {
+  return (
+    <Typography
+      component="span"
+      variant="caption"
+      sx={(theme) => ({
+        flexShrink: 0,
+        px: 0.9,
+        borderRadius: "999px",
+        lineHeight: "1.35rem",
+        fontSize: "0.7rem",
+        fontWeight: active ? 600 : 500,
+        color: active ? "primary.main" : "text.secondary",
+        bgcolor: active
+          ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.22 : 0.12)
+          : theme.palette.action.hover,
+      })}
+    >
+      {label}
+    </Typography>
+  );
+}
+
+function LineageNodeRail({
+  entry,
+  hasAbove,
+  hasBelow,
+}: {
+  entry: SwitcherEntry;
+  hasAbove: boolean;
+  hasBelow: boolean;
+}): React.JSX.Element {
+  const isCurrent = entry.section === "current";
+  const Icon = entry.kind === "replace" ? SwapHorizRounded : CallSplitOutlined;
+  return (
+    <Box
+      aria-hidden
+      data-lineage-rail-node
+      sx={{
+        position: "relative",
+        width: 24,
+        alignSelf: "stretch",
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+      }}
+    >
+      {hasAbove && (
+        <Box
+          sx={(theme) => ({
+            position: "absolute",
+            top: -4,
+            bottom: "50%",
+            width: "1.5px",
+            bgcolor: alpha(theme.palette.text.primary, theme.palette.mode === "dark" ? 0.16 : 0.12),
+          })}
+        />
+      )}
+      {hasBelow && (
+        <Box
+          sx={(theme) => ({
+            position: "absolute",
+            top: "50%",
+            bottom: -4,
+            width: "1.5px",
+            bgcolor: alpha(theme.palette.text.primary, theme.palette.mode === "dark" ? 0.16 : 0.12),
+          })}
+        />
+      )}
+      <Box
+        sx={(theme) => ({
+          position: "relative",
+          zIndex: 1,
+          width: 22,
+          height: 22,
+          borderRadius: "999px",
+          display: "grid",
+          placeItems: "center",
+          bgcolor: isCurrent
+            ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.24 : 0.14)
+            : theme.palette.background.paper,
+          border: isCurrent ? "none" : `1px solid ${theme.palette.divider}`,
+        })}
+      >
+        {isCurrent ? (
+          <Box sx={{ width: 8, height: 8, borderRadius: "999px", bgcolor: "primary.main" }} />
+        ) : (
+          <Icon sx={{ fontSize: glyphSize(13), color: "text.secondary" }} />
+        )}
+      </Box>
+    </Box>
+  );
+}
+
+function BranchRow({
+  entry,
+  idx,
+  total,
+  desktop,
+  selected,
+  onSelect,
+  onOpen,
+  onPeek,
+}: {
+  entry: SwitcherEntry;
+  idx: number;
+  total: number;
+  desktop: boolean;
+  selected: boolean;
+  onSelect: (index: number) => void;
+  onOpen: (entry: SwitcherEntry) => void;
+  onPeek: (hop: LineageHop) => void;
+}): React.JSX.Element {
+  const isCurrent = entry.section === "current";
+  const keyboardSelected = desktop && selected;
+  const peekable = isHopPeekable(entry.hop);
+  const interactive = isCurrent || entry.openable || peekable;
+  const rowInner = (
+    <>
+      <LineageNodeRail entry={entry} hasAbove={idx > 0} hasBelow={idx < total - 1} />
+      <Box sx={{ flex: 1, minWidth: 0, py: 0.75 }}>
+        <Typography
+          variant="body2"
+          noWrap
+          sx={{
+            fontWeight: isCurrent ? 600 : 500,
+            lineHeight: 1.35,
+            color: interactive ? "text.primary" : "text.secondary",
+          }}
+        >
+          {entry.title}
+        </Typography>
+        <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block", lineHeight: 1.35 }}>
+          {entrySubtitle(entry)}
+        </Typography>
+      </Box>
+      {entry.badge && <EntryBadge label={entry.badge} active={isCurrent} />}
+      {entry.openable && !entry.badge && (
+        <ChevronRightRounded sx={{ fontSize: glyphSize(18), color: "text.disabled", flexShrink: 0 }} />
+      )}
+    </>
+  );
+  const mainSx = {
+    flex: 1,
+    minWidth: 0,
+    minHeight: desktop ? 46 : 54,
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "flex-start",
+    textAlign: "left" as const,
+    gap: 1.25,
+    pl: 1,
+    pr: peekable ? 0.5 : 1.25,
+    borderRadius: "12px",
+  };
+  return (
+    <Stack
+      component="li"
+      direction="row"
+      alignItems="center"
+      sx={(theme) => ({
+        borderRadius: "12px",
+        bgcolor: keyboardSelected
+          ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.16 : 0.09)
+          : isCurrent
+            ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.13 : 0.07)
+            : "transparent",
+        boxShadow: keyboardSelected
+          ? `inset 0 0 0 1px ${alpha(theme.palette.primary.main, 0.38)}`
+          : "none",
+        transition: "background-color 120ms ease",
+        ...(interactive && desktop
+          ? {
+              "&:hover": {
+                bgcolor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.14 : 0.07),
+              },
+            }
+          : {}),
+      })}
+    >
+      {interactive ? (
+        <ButtonBase
+          onMouseEnter={desktop ? (): void => onSelect(idx) : undefined}
+          onClick={(): void => onOpen(entry)}
+          sx={mainSx}
+        >
+          {rowInner}
+        </ButtonBase>
+      ) : (
+        <Box sx={{ ...mainSx, opacity: 0.78 }}>{rowInner}</Box>
+      )}
+      {peekable && (
+        <Tooltip title="Peek read-only (p)">
+          <IconButton
+            size="small"
+            aria-label="Peek ancestor"
+            onClick={(): void => {
+              if (entry.hop) onPeek(entry.hop);
+            }}
+            sx={{
+              width: desktop ? 34 : 40,
+              height: desktop ? 34 : 40,
+              mr: 0.5,
+              color: "text.secondary",
+              "& .MuiSvgIcon-root": { fontSize: "1.125rem" },
+            }}
+          >
+            <VisibilityOutlined />
+          </IconButton>
+        </Tooltip>
+      )}
+    </Stack>
+  );
+}
+
 function BranchListBody({
   sessionId,
+  desktop,
   entries,
   loading,
   activeIndex,
@@ -120,6 +351,7 @@ function BranchListBody({
   onNewFork,
 }: {
   sessionId: string;
+  desktop: boolean;
   entries: readonly SwitcherEntry[];
   loading: boolean;
   activeIndex: number;
@@ -129,95 +361,50 @@ function BranchListBody({
   onNewFork: () => void;
 }): React.JSX.Element {
   return (
-    <Stack spacing={1} data-lineage-branch-list={sessionId}>
+    <Box data-lineage-branch-list={sessionId}>
       {loading && entries.length <= 1 && (
         <Stack direction="row" spacing={1} alignItems="center" justifyContent="center" sx={{ py: 2, color: "text.secondary" }}>
           <CircularProgress size={14} color="inherit" />
           <Typography variant="caption">Loading branches…</Typography>
         </Stack>
       )}
-      {entries.map((entry, idx) => {
-        const selected = idx === activeIndex;
-        const Icon = entry.kind === "replace" ? SwapHorizRounded : CallSplitOutlined;
-        const agent = entry.provider ? providerPresentation(entry.provider).agent : "";
-        return (
-          <Stack
+      <Stack component="ul" spacing={0.5} sx={{ listStyle: "none", m: 0, p: 0 }}>
+        {entries.map((entry, idx) => (
+          <BranchRow
             key={entry.key}
-            direction="row"
-            spacing={0.5}
-            alignItems="center"
-            sx={(theme) => ({
-              borderRadius: 2,
-              border: 1,
-              borderColor: entry.section === "current"
-                ? alpha(theme.palette.primary.main, 0.45)
-                : selected
-                  ? "primary.main"
-                  : "divider",
-              bgcolor: selected
-                ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.16 : 0.08)
-                : entry.section === "current"
-                  ? alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.08 : 0.03)
-                  : "transparent",
-              pl: entry.section === "child" ? 2 : 0.75,
-              pr: 0.5,
-            })}
-          >
-            <ButtonBase
-              onMouseEnter={(): void => onSelectIndex(idx)}
-              onClick={(): void => onOpen(entry)}
-              sx={{
-                flex: 1,
-                minWidth: 0,
-                minHeight: 44,
-                justifyContent: "flex-start",
-                textAlign: "left",
-                gap: 1,
-                px: 0.75,
-                py: 0.5,
-                borderRadius: 1.5,
-              }}
-            >
-              <Icon sx={{ fontSize: glyphSize(16), color: entry.section === "current" ? "primary.main" : "text.secondary", flexShrink: 0 }} />
-              <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography variant="body2" noWrap sx={{ fontWeight: entry.section === "current" ? 600 : 500 }}>
-                  {entry.title}
-                </Typography>
-                <Typography variant="caption" color="text.secondary" noWrap sx={{ display: "block" }}>
-                  {[agent, entry.section === "ancestor" ? "Parent" : entry.stateLabel].filter(Boolean).join(" · ")}
-                </Typography>
-              </Box>
-              {entry.stateLabel && (
-                <Chip size="small" variant="outlined" label={entry.stateLabel} sx={{ height: 20, fontSize: "0.68rem" }} />
-              )}
-            </ButtonBase>
-            {isHopPeekable(entry.hop) && (
-              <Tooltip title="Peek read-only (p)">
-                <IconButton
-                  size="small"
-                  aria-label="Peek ancestor"
-                  onClick={(): void => {
-                    if (entry.hop) onPeek(entry.hop);
-                  }}
-                  sx={{ minWidth: 36, minHeight: 36, color: "text.secondary" }}
-                >
-                  <VisibilityOutlined sx={{ fontSize: glyphSize(16) }} />
-                </IconButton>
-              </Tooltip>
-            )}
-          </Stack>
-        );
-      })}
-      <Button
-        size="small"
-        variant="outlined"
-        startIcon={<CallSplitOutlined sx={{ fontSize: glyphSize(16) }} />}
-        onClick={onNewFork}
-        sx={{ mt: 0.5, minHeight: 40, borderRadius: 2, textTransform: "none" }}
-      >
-        New fork or switch agent…
-      </Button>
-    </Stack>
+            entry={entry}
+            idx={idx}
+            total={entries.length}
+            desktop={desktop}
+            selected={idx === activeIndex}
+            onSelect={onSelectIndex}
+            onOpen={onOpen}
+            onPeek={onPeek}
+          />
+        ))}
+      </Stack>
+      <Box sx={{ mt: 1.25, pt: 1.25, borderTop: 1, borderColor: "divider" }}>
+        <Button
+          fullWidth
+          variant="text"
+          startIcon={<CallSplitOutlined />}
+          onClick={onNewFork}
+          sx={(theme) => ({
+            minHeight: 44,
+            borderRadius: "12px",
+            textTransform: "none",
+            fontWeight: 600,
+            color: "primary.main",
+            bgcolor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.14 : 0.08),
+            "&:hover": {
+              bgcolor: alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.2 : 0.13),
+            },
+          })}
+        >
+          New fork or switch agent…
+        </Button>
+      </Box>
+    </Box>
   );
 }
 
@@ -231,6 +418,49 @@ function useBranchRelationCount(sessionId: string): number {
     }
     return count;
   });
+}
+
+function useBranchModalKeys({
+  active,
+  entries,
+  activeIndex,
+  setActiveIndex,
+  onOpen,
+  onPeek,
+  onNewFork,
+}: {
+  active: boolean;
+  entries: readonly SwitcherEntry[];
+  activeIndex: number;
+  setActiveIndex: React.Dispatch<React.SetStateAction<number>>;
+  onOpen: (entry: SwitcherEntry) => void;
+  onPeek: (hop: LineageHop) => void;
+  onNewFork: () => void;
+}): void {
+  useEffect(() => {
+    if (!active) return undefined;
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
+      if (event.key === "j" || event.key === "ArrowDown") {
+        event.preventDefault();
+        setActiveIndex((i) => Math.min(entries.length - 1, i + 1));
+      } else if (event.key === "k" || event.key === "ArrowUp") {
+        event.preventDefault();
+        setActiveIndex((i) => Math.max(0, i - 1));
+      } else if (event.key === "Enter") {
+        const chosen = entries[activeIndex];
+        if (chosen) { event.preventDefault(); onOpen(chosen); }
+      } else if (event.key === "p") {
+        const chosen = entries[activeIndex];
+        if (isHopPeekable(chosen?.hop)) { event.preventDefault(); onPeek(chosen.hop); }
+      } else if (event.key === "f") {
+        event.preventDefault();
+        onNewFork();
+      }
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [active, activeIndex, entries, onNewFork, onOpen, onPeek, setActiveIndex]);
 }
 
 function BranchSwitcherModal({
@@ -270,10 +500,7 @@ function BranchSwitcherModal({
 
   const openEntry = useCallback(
     (entry: SwitcherEntry): void => {
-      if (entry.section === "current") {
-        onClose();
-        return;
-      }
+      if (entry.section === "current") { onClose(); return; }
       if (entry.openable) {
         onClose();
         requestPickSession(entry.sessionId, sessions.find((s) => s.id === entry.sessionId));
@@ -284,48 +511,32 @@ function BranchSwitcherModal({
     [onClose, sessions],
   );
 
-  useEffect(() => {
-    if (!open || !desktop || peekHop !== null) return undefined;
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.isComposing || event.metaKey || event.ctrlKey || event.altKey) return;
-      if (event.key === "j" || event.key === "ArrowDown") {
-        event.preventDefault();
-        setActiveIndex((i) => Math.min(entries.length - 1, i + 1));
-      } else if (event.key === "k" || event.key === "ArrowUp") {
-        event.preventDefault();
-        setActiveIndex((i) => Math.max(0, i - 1));
-      } else if (event.key === "Enter") {
-        const chosen = entries[activeIndex];
-        if (chosen) {
-          event.preventDefault();
-          openEntry(chosen);
-        }
-      } else if (event.key === "p") {
-        const chosen = entries[activeIndex];
-        if (isHopPeekable(chosen?.hop)) { event.preventDefault(); setPeekHop(chosen.hop); }
-      } else if (event.key === "f") {
-        event.preventDefault();
-        onClose();
-        requestNewFrom(sessionId);
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [activeIndex, desktop, entries, onClose, open, openEntry, peekHop, sessionId]);
+  const handleNewFork = useCallback((): void => {
+    onClose();
+    requestNewFrom(sessionId);
+  }, [onClose, sessionId]);
+
+  useBranchModalKeys({
+    active: open && desktop && peekHop === null,
+    entries,
+    activeIndex,
+    setActiveIndex,
+    onOpen: openEntry,
+    onPeek: setPeekHop,
+    onNewFork: handleNewFork,
+  });
 
   const body = (
     <BranchListBody
       sessionId={sessionId}
+      desktop={desktop}
       entries={entries}
       loading={loadingLineage}
       activeIndex={activeIndex}
       onSelectIndex={setActiveIndex}
       onOpen={openEntry}
       onPeek={setPeekHop}
-      onNewFork={(): void => {
-        onClose();
-        requestNewFrom(sessionId);
-      }}
+      onNewFork={handleNewFork}
     />
   );
 
@@ -361,8 +572,8 @@ function BranchSwitcherModal({
           <DialogContent sx={{ pt: 0.5, pb: 2 }}>{body}</DialogContent>
         </Dialog>
       ) : (
-        <Sheet open={open} onClose={onClose} title="Branches & lineage">
-          <Box sx={{ pb: 1 }}>{body}</Box>
+        <Sheet open={open} onClose={onClose} title="Branches & lineage" forceSheet mobileDismiss="footer" portal>
+          <Box sx={{ pt: 0.5, pb: 0.5 }}>{body}</Box>
         </Sheet>
       )}
       {peekHop && (
@@ -450,7 +661,8 @@ export function DesktopBranchSwitcherTrigger({
 }
 
 /** Mobile bottom-workbench branch trigger (docs/ux-principles.md: operate
- *  below, >= 44px touch target). Opens a bottom Sheet preserving draft/scroll. */
+ *  below, >= 44px touch target). Opens a portaled bottom Sheet with footer
+ *  dismiss while preserving draft/scroll. */
 export function MobileBranchSwitcherButton({
   sessionId,
 }: {
@@ -465,7 +677,14 @@ export function MobileBranchSwitcherButton({
         <IconButton
           aria-label="branches and lineage"
           data-mobile-branch-switcher
-          onClick={(): void => setOpen(true)}
+          onPointerDown={(event): void => {
+            if (event.pointerType === "touch") releaseMobileComposerFocus();
+          }}
+          onClick={(event): void => {
+            releaseMobileComposerFocus();
+            setOpen(true);
+            event.currentTarget.blur();
+          }}
           sx={{ minWidth: 44, minHeight: 44, color: "primary.main" }}
         >
           <AccountTreeOutlined fontSize="small" />

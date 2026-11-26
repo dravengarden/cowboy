@@ -472,7 +472,7 @@ export function SessionHistoryPeek({
 
   if (!desktop) {
     return (
-      <Sheet open={open} onClose={onClose} cover title={`${SESSION_LINK_LABEL[link.kind]} · ${link.title}`}>
+      <Sheet open={open} onClose={onClose} cover portal title={`${SESSION_LINK_LABEL[link.kind]} · ${link.title}`}>
         <Box sx={{ pt: 1 }}>{content}</Box>
       </Sheet>
     );
