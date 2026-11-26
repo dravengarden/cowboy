@@ -16,7 +16,7 @@ export function ClearBranchNotice({ sessionId }: { sessionId: string }): React.J
       childCount: children,
       isChild: Boolean(self?.forked_from || self?.continued_from),
     };
-  });
+  }, (a, b) => a.childCount === b.childCount && a.isChild === b.isChild);
 
   if (childCount === 0 && !isChild) return null;
   return (

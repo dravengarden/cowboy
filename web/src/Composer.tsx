@@ -1,3 +1,4 @@
+import { notifyLineageChanged } from "./ancestorHistory";
 import { MobileBranchSwitcherButton } from "./LineageBranchSwitcher";
 import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { DeliveryPicker } from "./DeliveryPicker";
@@ -837,7 +838,7 @@ export function ComposerWorkspace({
     haptic();
     if (a.kind === "reset") {
       // Clear: a cowboy session reset (fresh agent context), not a prompt.
-      return resetSession(sessionId);
+      return resetSession(sessionId).then(() => { notifyLineageChanged(sessionId); });
     } else if (a.command !== undefined) {
       // Compact: send the agent's slash-command down the normal prompt path.
       compactContext.beginRefresh();
@@ -2520,6 +2521,7 @@ export function ComposerWorkspace({
       }
       {cmdConfirm !== null && <SessionActionConfirmDialog
         action={cmdConfirm}
+        sessionId={sessionId}
         provider={providerName(provider, providerVersion, providerDigest)}
         activeTurn={busy || starting}
         disableRestoreFocus={touchInput && cmdConfirm.kind === "reset"}
@@ -2899,7 +2901,7 @@ export function SessionControls({
   );
   const runSessionAction = (action: SessionAction): Promise<void> => {
     haptic();
-    if (action.kind === "reset") return resetSession(sessionId);
+    if (action.kind === "reset") return resetSession(sessionId).then(() => { notifyLineageChanged(sessionId); });
     if (action.command !== undefined) {
       return submitPrompt(sessionId, action.command, []);
     }

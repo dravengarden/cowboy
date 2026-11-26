@@ -190,7 +190,7 @@ export function ContinuityDivider({
           {failure}
         </Typography>
       )}
-      {peekable && (
+      {peekable && peekOpen && (
         <SessionHistoryPeek
           open={peekOpen}
           onClose={(): void => setPeekOpen(false)}

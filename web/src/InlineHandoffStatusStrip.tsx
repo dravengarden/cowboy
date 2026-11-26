@@ -105,7 +105,7 @@ export function InlineHandoffStatusStrip({
       }
     }
     return { operation: op, queuedCount: queue.length };
-  });
+  }, (a, b) => a.operation === b.operation && a.queuedCount === b.queuedCount);
 
   if (kind === "ready") {
     return (

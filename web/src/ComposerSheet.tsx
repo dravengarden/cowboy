@@ -5,6 +5,7 @@ import { alpha, Box, Button, ButtonBase, Chip, CircularProgress, Collapse, Dialo
 import { Check, CleaningServices, Close, Compress, ExpandMore, Refresh } from "@mui/icons-material";
 import { MobileDecisionActions } from "./MobileDecisionActions";
 import { type SessionAction } from "./agentCommands";
+import { ClearBranchNotice } from "./ClearBranchNotice";
 import { ConfirmConsequence } from "./ConfirmConsequence";
 import { currentProviderEntry, useProviderCatalog } from "./providerCatalog";
 import { providerName } from "./providerPresentation";
@@ -44,6 +45,7 @@ import { ContextRolloverSettings, useCacheProtectionStatus } from "./ContextRoll
 
 export function SessionActionConfirmDialog({
   action,
+  sessionId,
   provider,
   activeTurn,
   disableRestoreFocus = false,
@@ -51,6 +53,7 @@ export function SessionActionConfirmDialog({
   onConfirm,
 }: {
   action: SessionAction | null;
+  sessionId?: string | undefined;
   provider: string;
   activeTurn: boolean;
   disableRestoreFocus?: boolean;
@@ -116,6 +119,7 @@ export function SessionActionConfirmDialog({
                 activeTurn ? " (ends the current turn)" : ""
               }.`}
           </ConfirmConsequence>
+          {action.destructive && sessionId && <ClearBranchNotice sessionId={sessionId} />}
         </>
       )}
     </ConfirmSheet>
@@ -643,7 +647,7 @@ export function ComposerSheet({
         </>
       )}
       <SessionActionConfirmDialog
-        action={cmdConfirm}
+        action={cmdConfirm} sessionId={session?.id}
         provider={providerName(
           session?.provider ?? "",
           session?.provider_version,

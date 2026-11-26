@@ -516,7 +516,7 @@ function SessionLink({ link }: { link: SessionLinkRow }): React.JSX.Element {
           </Button>
         )}
       </Stack>
-      {peekable && (
+      {peekable && peekOpen && (
         <SessionHistoryPeek
           open={peekOpen}
           onClose={(): void => setPeekOpen(false)}

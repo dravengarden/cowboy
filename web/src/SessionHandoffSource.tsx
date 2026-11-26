@@ -209,7 +209,7 @@ export function SessionHandoffSource({ link }: { link: SessionLinkRow }): React.
           </Button>
         )}
       </Box>
-      {peekable && (
+      {peekable && peekOpen && (
         <SessionHistoryPeek
           open={peekOpen}
           onClose={(): void => setPeekOpen(false)}

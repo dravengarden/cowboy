@@ -17,14 +17,14 @@ import CloseRounded from "@mui/icons-material/CloseRounded";
 import LinkOutlined from "@mui/icons-material/LinkOutlined";
 import OpenInNewRounded from "@mui/icons-material/OpenInNewRounded";
 import RestoreFromTrashOutlined from "@mui/icons-material/RestoreFromTrashOutlined";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { mergeAncestorEvents } from "./ancestorHistory";
 import { derive } from "./derive";
 import { fetchHistoryPage } from "./historyFetch";
 import type { Envelope, SessionMeta } from "./protocol";
 import { SESSION_LINK_LABEL, type SessionLinkRow } from "./sessionLinks";
 import { canonicalTimeline, conn, useStoreSelector } from "./store";
-import { useSurfaceProfile } from "./surface/SurfaceProfile";
+import { SurfaceContext } from "./surface/SurfaceProfile";
 import { Sheet } from "./Sheet";
 import { ReadOnlyAncestorItemView } from "./ReadOnlyAncestorItemView";
 import { ToolDetailsBrowser } from "./ToolDetailsBrowser";
@@ -330,7 +330,7 @@ export function SessionHistoryPeek({
   onRestore?: (() => void) | undefined;
   restoring?: boolean | undefined;
 }): React.JSX.Element | null {
-  const desktop = useSurfaceProfile().kind === "desktop";
+  const desktop = useContext(SurfaceContext)?.kind === "desktop";
   const trashedSession = useStoreSelector((state) =>
     state.trashedSessions.find((entry) => entry.id === link.id),
   );

@@ -21,6 +21,9 @@ import VisibilityOutlined from "@mui/icons-material/VisibilityOutlined";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { LineageBranch, LineageHop } from "./ancestorHistory";
 import { desktopDialogSlotProps, InstantModalTransition, isImeBlockedEscape } from "./desktop/DesktopModal";
+import { desktopSessionActionSx } from "./desktop/DesktopEmbeddedControl";
+import { desktopEmbeddedControlIconSx } from "./desktop/DesktopEmbeddedIcon";
+import { LeaderKeycap } from "./desktop/commands/DesktopKeycap";
 import { useDesktopCommand } from "./desktop/commands/DesktopCommandProvider";
 import { DESKTOP_WORKSPACE_KEYS, desktopLeaderSequence } from "./desktop/commands/workspaceShortcuts";
 import { Kbd } from "./Kbd";
@@ -413,26 +416,26 @@ export function DesktopBranchSwitcherTrigger({
   return (
     <>
       <Tooltip title="Switch branch or inspect conversation lineage (␣SB)">
-        <Button
-          size="small"
-          color="inherit"
-          variant="outlined"
-          data-desktop-branch-switcher
-          startIcon={<AccountTreeOutlined sx={{ fontSize: glyphSize(15), color: "primary.main" }} />}
-          onClick={(): void => setOpen(true)}
-          sx={{
-            minWidth: 0,
-            px: 1,
-            height: 28,
-            borderRadius: 1.5,
-            borderColor: "divider",
-            textTransform: "none",
-            fontSize: "0.75rem",
-            fontWeight: 600,
-          }}
-        >
-          Branches
-        </Button>
+        <span>
+          <Button
+            data-desktop-item="topbar-branches"
+            data-desktop-topbar-action="branches"
+            data-desktop-branch-switcher
+            size="small"
+            color="inherit"
+            variant="outlined"
+            startIcon={<AccountTreeOutlined sx={{ ...desktopEmbeddedControlIconSx(), color: "primary.main" }} />}
+            onClick={(): void => setOpen(true)}
+            sx={desktopSessionActionSx({ open, minWidth: 96 })}
+          >
+            <Stack direction="row" spacing={0.5} alignItems="center">
+              <Typography component="span" variant="caption" sx={{ fontWeight: 600, lineHeight: 1 }}>
+                Branches
+              </Typography>
+              <LeaderKeycap leaderKey={DESKTOP_WORKSPACE_KEYS.sessionsBranches} />
+            </Stack>
+          </Button>
+        </span>
       </Tooltip>
       <BranchSwitcherModal
         sessionId={sessionId}

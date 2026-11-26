@@ -108,6 +108,10 @@ export async function runDormantSessionBrowserConformance(
     send(data: string): void {
       const command = JSON.parse(data);
       commands.push(command.type);
+      if (command.type === "connection_probe") {
+        this.publish(command);
+        return;
+      }
       if (command.type === "set_config_option") {
         options = options.map((option) =>
           option.id === command.config_id

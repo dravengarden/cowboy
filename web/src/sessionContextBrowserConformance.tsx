@@ -1221,14 +1221,14 @@ export async function runSessionContextBrowserConformance(
         resync: true,
       });
     const waits = () => container.querySelector("[data-new-session-wait]");
-    queue(1, [{ id: "q1", text: "one", content: [] }, { id: "q2", text: "two", content: [] }]);
+    queue(3, [{ id: "q1", text: "one", content: [] }, { id: "q2", text: "two", content: [] }]);
     await until(() => Boolean(waits()));
     check(
       continueRun().disabled && forkRun().disabled &&
         waits()!.textContent!.includes("the 2 queued messages are sent or removed"),
       "queue: Replace and Fork say why they wait before being pressed",
     );
-    queue(2, []);
+    queue(4, []);
     await until(() => !waits());
     check(!continueRun().disabled && !forkRun().disabled, "queue: the form reopens when the queue drains");
     // The prompt carrying this session's context holds Replace the same way,
