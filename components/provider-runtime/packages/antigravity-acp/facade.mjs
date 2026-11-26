@@ -794,7 +794,6 @@ export class Facade {
       rel === "." ||
       rel === ".." ||
       rel.startsWith("/") ||
-      rel.startsWith("../") ||
       rel.includes("\0") ||
       rel.includes("//") ||
       rel.split("/").some((part) => part === "" || part === "." || part === "..")
