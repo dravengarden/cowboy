@@ -295,12 +295,23 @@ like every Tools field: the agent kind's default (Settings → Agent tools, or
 session's Tools, `PUT /api/sessions/{id}/tools` or `tools.session_set` with
 `calls.max_per_turn`; omitted inherits the default). Raising a session's limit
 is widening, so an agent can lower its own or its lineage's limit but never
-raise it (`tools_widening_denied`); the owner raises it. A session's limit is
+raise it (`tools_widening_denied`); the owner raises it. For the same reason
+an agent cannot shed a lower limit through a fresh session (`sessions.create`,
+or `sessions.duplicate` without inherited settings, is refused when the new
+session's defaults allow more), and a continuation that inherits settings writes
+down a lower limit its source only inherited, so a destination kind with a
+higher default does not raise it. A session's limit is
 stored beside its override document under `session_turn_budget:<session>`,
 bound to that document's digest, so a predecessor Controller still parses the
 override (and keeps the switches it holds); after a rollback the session
 follows its agent kind's limit, and a predecessor edit orphans the stored
-value.
+value. Known limits, shared with the other Tools fields and the agent-kind
+limit: the widening check reads the policy before the save commits, so an agent
+save racing an owner's lower limit can land after it; a crash between the two
+keys reads as the default limit; a predecessor rewrite of a byte-identical
+override cannot be told from the original; and a Web bundle that predates the
+session field rebuilds an override without it, which clears the session's limit
+when the owner edits another Tools field there.
 
 A turn starts at the latest prompt a person sent to the session: a user-role
 event whose client message id and stamped origin are the owner's

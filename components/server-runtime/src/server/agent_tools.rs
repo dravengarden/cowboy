@@ -535,6 +535,55 @@ mod turn_limit_tests {
     }
 
     #[test]
+    fn a_continuation_never_raises_the_limit_its_source_runs_with() {
+        let hub = crate::core::Hub::new();
+        hub.create_session(crate::core::SessionRegistration {
+            id: "source".into(),
+            provider: "codex".into(),
+            provider_version: String::new(),
+            provider_generation_digest: String::new(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            machine_id: "hawk".into(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: None,
+            cwd: "/workspace".into(),
+            title: "source".into(),
+            origin: crate::core::SessionOrigin::Web,
+            system: false,
+            owner_user_id: None,
+            owner_username: None,
+        });
+        let source = hub.session_info("source").unwrap().meta;
+        // Equal defaults: nothing is written down, the link stays live.
+        let copied = hub_inherited_settings(&hub, &source, "claude-code");
+        assert_eq!(copied.calls.max_per_turn, None);
+        // A lower limit the source only inherits from its kind is carried.
+        let mut lowered = AgentTools::builtin("codex");
+        lowered.calls.max_per_turn = 4;
+        effort_store::store_agent(&hub, "codex", Some(json!(lowered)));
+        let copied = hub_inherited_settings(&hub, &source, "claude-code");
+        assert_eq!(copied.calls.max_per_turn, Some(4));
+        // A higher limit is not: the destination's own default applies.
+        let mut raised = AgentTools::builtin("codex");
+        raised.calls.max_per_turn = 128;
+        effort_store::store_agent(&hub, "codex", Some(json!(raised)));
+        let copied = hub_inherited_settings(&hub, &source, "claude-code");
+        assert_eq!(copied.calls.max_per_turn, None);
+        // An explicit session limit travels as a preference.
+        effort_store::store_session(
+            &hub,
+            "source",
+            Some(json!({"schema":1,"calls":{"max_per_turn":8}})),
+        );
+        let copied = hub_inherited_settings(&hub, &source, "claude-code");
+        assert_eq!(copied.calls.max_per_turn, Some(8));
+    }
+
+    #[test]
     fn a_stale_client_still_saves_through_the_legacy_field() {
         // A Web bundle from before the change submits `max_per_session`.
         let update: AgentUpdate =
@@ -867,7 +916,8 @@ pub fn override_widens(
 }
 
 /// Whether a new session under `provider`'s defaults holds a switch `parent`
-/// lacks. Targets are skipped: they legitimately differ between providers.
+/// lacks or a larger calls-per-turn limit. Targets are skipped: they
+/// legitimately differ between providers.
 pub fn fresh_session_widens(
     hub: &crate::core::Hub,
     parent: &crate::core::SessionMeta,
@@ -879,6 +929,7 @@ pub fn fresh_session_widens(
         || (after.memory.recall && !before.memory.recall)
         || (after.calls.enabled && !before.calls.enabled)
         || image_widens(&before.calls, &after.calls)
+        || after.calls.max_per_turn > before.calls.max_per_turn
 }
 
 fn image_widens(before: &CallsPolicy, after: &CallsPolicy) -> bool {
@@ -893,13 +944,27 @@ pub fn inherited_settings(
     source: &crate::core::SessionMeta,
     provider: &str,
 ) -> SessionTools {
-    let mut settings = continuation_settings(session_override(state, &source.id), provider);
-    let policy = effective(state, source).calls;
+    hub_inherited_settings(&state.hub, source, provider)
+}
+
+fn hub_inherited_settings(
+    hub: &crate::core::Hub,
+    source: &crate::core::SessionMeta,
+    provider: &str,
+) -> SessionTools {
+    let mut settings = continuation_settings(hub_session_override(hub, &source.id), provider);
+    let policy = hub_effective(hub, source).calls;
     if !policy.images {
         settings.calls.images = Some(false);
     }
     if !policy.self_images {
         settings.calls.self_images = Some(false);
+    }
+    // A lower limit the source only inherits must not rise to the
+    // destination kind's default.
+    let destination = hub_agent_defaults(hub, provider).0.overlay(&settings);
+    if policy.max_per_turn < destination.calls.max_per_turn {
+        settings.calls.max_per_turn = Some(policy.max_per_turn);
     }
     settings
 }

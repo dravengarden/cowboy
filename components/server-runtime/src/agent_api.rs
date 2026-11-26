@@ -513,10 +513,8 @@ export type CallCapabilities = {
   providers:{id:string;available:boolean;reason:string|null;presets:unknown[];review_candidates:string[];preset:string|null;options:Record<string,string>|null;quota_account:string|null}[];
   review_selection:string;review_preferences:{claude:string[];gpt:string[]};
   quota:{observed_now_ms?:number;accounts?:{account:string;status:string;observed_at_ms:number|null;stale:boolean;limits:unknown;needs_read:boolean}[];unavailable_accounts?:string[];status?:string};
-  purposes:string[];
-  limits:{max_request_bytes:number;max_wait_ms:number;max_context_files:number;max_concurrent:number;max_per_turn:number}; // max_per_turn: this session's effective calls per owner turn (agent-kind Tools default or session Tools override, 1-256); the owner's next message resets it; only the owner may raise it
+  purposes:string[];limits:Record<string,number>;
 };
-// A spent turn refuses with error {code:'call_limit',admission:'not_submitted',limit,used,resets_on,message,hint}: report it, do not retry in the turn.
 export interface Cowboy {
   calls: {
     list(q?:{before?:string;limit?:number}):Promise<{calls:CallSummary[];next_before:string|null}>; // newest first; default20/max100

@@ -117,6 +117,13 @@ fn native_command_instruction(instruction: &str) -> bool {
     instruction.trim_start().starts_with('/')
 }
 
+/// What `limits` means, served with the values rather than in the resident SDK.
+const LIMITS_HELP: &str = "max_per_turn: calls one owner turn of this session may admit (its agent \
+    kind's Tools default or this session's Tools override, 1-256); the owner's next message \
+    resets it; only the owner may raise it. A spent turn refuses call_limit with \
+    error.limit/used/hint: report it, do not retry in the turn. max_concurrent: calls running \
+    at once.";
+
 pub fn error(code: &str, admission: &str) -> Value {
     json!({"schema":1,"state":"error","error":{"code":code,"admission":admission}})
 }
@@ -792,6 +799,7 @@ async fn capabilities(state: &AppState, meta: &crate::core::SessionMeta, ledger:
             "max_concurrent": policy.max_concurrent,
             "max_per_turn": policy.max_per_turn,
         },
+        "limits_help": LIMITS_HELP,
         "placement": {
             "runtime_machine_id": meta.machine_id,
             "machine_id": placement.machine_id,

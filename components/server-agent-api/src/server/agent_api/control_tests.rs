@@ -870,6 +870,24 @@ mod machine_scope_and_tools {
             set(&hub, &parent, "parent", limit(65)),
             Err("tools_widening_denied")
         );
+        // A fresh session must not shed a lower limit either.
+        let create = json!({"body":{"provider":"codex"}});
+        let shed = json!({"session_id":"parent","body":{"inherit_settings":false}});
+        assert_eq!(
+            tools_widening(&hub, &parent, "sessions.create", &create),
+            Ok(())
+        );
+        hub.set_setting(
+            format!("{}parent", crate::core::settings_keys::SESSION_TURN_BUDGET_PREFIX),
+            json!({"max_per_turn": 4, "document": crate::managed_calls::canonical_digest(&Value::Null)}),
+        );
+        for (name, input) in [("sessions.create", &create), ("sessions.duplicate", &shed)] {
+            assert_eq!(
+                tools_widening(&hub, &parent, name, input),
+                Err("tools_widening_denied"),
+                "{name}"
+            );
+        }
     }
 }
 
