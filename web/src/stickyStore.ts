@@ -74,6 +74,14 @@ export function resetSticky(sessionId: string): void {
   emit();
 }
 
+export function getSticky(sessionId: string): boolean {
+  return get(sessionId).sticky;
+}
+
+export function subscribeSticky(listener: () => void): () => void {
+  return subscribe(listener);
+}
+
 export function useSticky(sessionId: string): boolean {
   return useSyncExternalStore(
     subscribe,

@@ -56,19 +56,36 @@ import { useReadingSettings } from "./readingSettings";
 import { mobileTranscriptTailGap } from "./mobileComposerPrimitives";
 
 import {
+  getSticky,
   requestStickToBottom,
   resetSticky,
   setSticky,
+  subscribeSticky,
   useScrollNonce,
   useTopNonce,
 } from "./stickyStore";
 import {
+  canNestedElementScrollVertically,
   keyLeavesLatest,
   keyMovesTranscriptViewport,
+  shouldFollowAtBottomEdge,
   shouldRestoreDetachedAnchor,
   transcriptScrollHasReaderIntent,
   wheelLeavesLatest,
 } from "./transcriptFollowIntent";
+import {
+  applyScrollbackReplacement,
+  captureFreezeAnchor,
+  columnReverseAwayDirection,
+  createFreezeAnchor,
+  desktopTranscriptScrollSteps,
+  type FreezeAnchor,
+  pinTranscriptToLatest,
+  restoreFreezeAnchor,
+  revealLocatedTranscriptRow,
+  scrollColumnReverseAway,
+  scrollColumnReverseTowardLatest,
+} from "./transcriptScrollAnchor";
 import { transcriptFrameIsolationSx, transcriptRowContainment, transcriptScrollerChildSx } from "./transcriptMotion";
 import {
   liveTranscriptMountedRows,
@@ -346,62 +363,7 @@ function SessionStatusBar({
   );
 }
 
-// FREEZE-WHILE-DETACHED anchor (see the scroll effect). Held in a ref so both
-// the scroll listener (capture) and the per-chunk timeline layout effect
-// (restore) share one anchor. `self` flags our own corrective scrollTop write so
-// the listener swallows the scroll event it triggers.
-interface FreezeAnchor {
-  key: string | null;
-  top: number;
-  self: boolean;
-}
 
-// `column-reverse` already keeps a followed transcript at scrollTop 0. Writing
-// the same value for every streamed ACP envelope is not a harmless no-op on
-// iOS WebKit: it schedules a scroll-layer update while adjacent thought and
-// tool rows are still being laid out, so one frame can paint the old card layer
-// over the newly positioned thought. Only correct real drift from the live
-// edge; leave an already-pinned compositor completely alone.
-function pinTranscriptToLatest(el: HTMLElement): void {
-  if (Math.abs(el.scrollTop) > 0.5) el.scrollTop = 0;
-}
-
-// Snapshot the message row at the viewport CENTRE + its offset from the
-// container top. Centre (not the top edge) so the probe always lands on a row,
-// never in the container's top padding / status-strip inset.
-function captureFreezeAnchor(el: HTMLElement, a: FreezeAnchor): void {
-  const r = el.getBoundingClientRect();
-  const hit = el.ownerDocument.elementFromPoint(
-    r.left + r.width / 2,
-    r.top + r.height / 2,
-  );
-  const row = hit?.closest<HTMLElement>("[data-key]");
-  if (!row) {
-    a.key = null;
-    return;
-  }
-  a.key = row.getAttribute("data-key");
-  a.top = row.getBoundingClientRect().top - r.top;
-}
-
-// Re-assert the captured anchor's offset. d(anchor.screenTop)/d(scrollTop) = -1
-// in any container, so `scrollTop += delta` pulls the anchor back to where it
-// was — sign-agnostic, so it works for column-reverse's negative scrollTop too.
-// Bottom-bubble growth moves the anchor (→ corrected); a top prepend
-// (loadOlder) leaves it put (→ delta≈0, no-op). Sub-pixel deltas are skipped so
-// a streamed token doesn't churn a scroll write every frame.
-function restoreFreezeAnchor(el: HTMLElement, a: FreezeAnchor): void {
-  if (a.key === null) return;
-  const row = el.querySelector<HTMLElement>(
-    `[data-key="${CSS.escape(a.key)}"]`,
-  );
-  if (!row) return;
-  const delta = row.getBoundingClientRect().top -
-    el.getBoundingClientRect().top - a.top;
-  if (Math.abs(delta) < 0.5) return;
-  a.self = true;
-  el.scrollTop += delta;
-}
 
 /** After a Busy turn has been quiet (no timeline growth, no live terminal
  *  output, no open tool) this many minutes, show a count-up "still waiting"
@@ -650,10 +612,19 @@ export function Transcript({
   const background = useBackgroundTasks(sessionId, allItems);
   const taskStops = useStopStates();
   const locateTask = useCallback((key: string): void => {
-    const row = document.querySelector<HTMLElement>(`[data-task-row="${CSS.escape(key)}"]`);
-    if (!row) return;
-    row.scrollIntoView({ block: "center" });
-    row.querySelector<HTMLElement>("[data-task-open]")?.focus({ preventScroll: true });
+    stick.current = false;
+    setFollowingLive(false);
+    setSticky(sessionIdRef.current, false);
+    freezeRef.current.key = null;
+    if (historyReleaseTimerRef.current !== undefined) {
+      globalThis.clearTimeout(historyReleaseTimerRef.current);
+      historyReleaseTimerRef.current = undefined;
+    }
+    globalThis.setTimeout(() => {
+      const sel = `[data-task-row="${CSS.escape(key)}"]`;
+      const row = parentRef.current?.querySelector<HTMLElement>(sel) ?? document.querySelector<HTMLElement>(sel);
+      revealLocatedTranscriptRow(parentRef.current, row, freezeRef.current, "[data-task-open]");
+    }, 40);
   }, []);
   const crashDetail = useMemo(() => latestCrashDetail(allItems), [allItems]);
   const liveItems = useMemo(
@@ -865,7 +836,7 @@ export function Transcript({
   };
   // Shared FREEZE-WHILE-DETACHED anchor (captured by the scroll listener,
   // restored by the per-chunk timeline effect). See the scroll effect below.
-  const freezeRef = useRef<FreezeAnchor>({ key: null, top: 0, self: false });
+  const freezeRef = useRef<FreezeAnchor>(createFreezeAnchor());
   // Native scrolling temporarily owns scrollTop on both products. Streaming
   // chunks must not replay the detached anchor while touch momentum, wheel
   // inertia, keyboard scrolling, or a scrollbar drag is still moving the
@@ -1082,30 +1053,8 @@ export function Transcript({
           if (mountedContent) {
             requestAnimationFrame(() =>
               requestAnimationFrame(() => {
-                if (scrollbackFillRunRef.current !== run) return;
-                const currentEl = parentRef.current;
-                const boundary = currentEl?.querySelector<HTMLElement>(
-                  "[data-transcript-scrollback-fill]",
-                );
-                if (!currentEl || !boundary) return;
-                const fromBottom = Math.abs(currentEl.scrollTop);
-                const currentFromTop = Math.max(
-                  0,
-                  currentEl.scrollHeight - currentEl.clientHeight - fromBottom,
-                );
-                const desiredFromTop = scrollbackReplacementFromTop({
-                  currentFromTop,
-                  boundaryHeight: boundary.getBoundingClientRect().height,
-                  mountedContent: true,
-                });
-                if (desiredFromTop === null) return;
-                const desiredFromBottom = Math.max(
-                  0,
-                  currentEl.scrollHeight - currentEl.clientHeight -
-                    desiredFromTop,
-                );
-                const direction = currentEl.scrollTop > 0.5 ? 1 : -1;
-                currentEl.scrollTop = direction * desiredFromBottom;
+                if (scrollbackFillRunRef.current !== run || nativeScrollActiveRef.current || stick.current || !parentRef.current) return;
+                applyScrollbackReplacement(parentRef.current, freezeRef.current, scrollbackReplacementFromTop);
               })
             );
           }
@@ -1114,6 +1063,7 @@ export function Transcript({
     })();
   };
   useEffect(() => {
+    rowHeightsRef.current.clear();
     setBackfillingViewport(false);
     setScrollbackLoading(false);
     setScrollbackFailed(false);
@@ -1199,6 +1149,12 @@ export function Transcript({
           });
         return;
       }
+      const automaticBackfillAllowed = shouldAllowTranscriptViewportBackfill({ following: stick.current, restoring: viewportRestoreActiveRef.current });
+      if (!automaticBackfillAllowed || paging.reachedStart || paging.beforeSeq === null || (desktopNavigation && fromResize)) {
+        setBackfillingViewport(false);
+        setViewportBackfillPaused(false);
+        return;
+      }
       if (viewportHeightRef.current === null) {
         viewportHeightRef.current = el.clientHeight;
       }
@@ -1219,10 +1175,6 @@ export function Transcript({
         paddingTop:
           Number.parseFloat(globalThis.getComputedStyle(el).paddingTop) || 0,
         firstContentTop: firstContent?.getBoundingClientRect().top ?? null,
-      });
-      const automaticBackfillAllowed = shouldAllowTranscriptViewportBackfill({
-        following: stick.current,
-        restoring: viewportRestoreActiveRef.current,
       });
       const hasVisibleGap = shouldBackfillTranscriptViewport({
         managed: managesScrollHistoryRef.current,
@@ -1308,20 +1260,14 @@ export function Transcript({
   // and re-measure through the existing RAF-coalesced loader whenever their
   // actual layout changes. Filled/desktop/page-view guards remain centralized
   // in requestViewportBackfillRef, so streaming rows do not create extra loads.
+  const needsViewportBackfillObserver = managesScrollHistory && !desktopNavigation && Boolean(paging && !paging.reachedStart && paging.beforeSeq !== null);
   useEffect(() => {
-    if (!managesScrollHistory || typeof ResizeObserver === "undefined") {
-      return undefined;
-    }
-    const el = parentRef.current;
+    const el = needsViewportBackfillObserver && typeof ResizeObserver !== "undefined" ? parentRef.current : null;
     if (!el) return undefined;
-    const observer = new ResizeObserver(() => {
-      requestViewportBackfillRef.current(false);
-    });
-    for (const row of el.querySelectorAll<HTMLElement>("[data-key]")) {
-      observer.observe(row);
-    }
+    const observer = new ResizeObserver(() => requestViewportBackfillRef.current(false));
+    for (const row of el.querySelectorAll<HTMLElement>("[data-key]")) observer.observe(row);
     return () => observer.disconnect();
-  }, [items.length, managesScrollHistory, sessionId]);
+  }, [items.length, needsViewportBackfillObserver, sessionId]);
   // This device's optimistic chat sends awaiting the daemon echo — rendered as
   // user bubbles below the latest real item (newest at the very bottom). Image
   // prompts stay on this overlay until every content block has been echoed, so
@@ -1582,22 +1528,17 @@ export function Transcript({
   const locateTool = useCallback((key: string): void => {
     setSelectedToolKey(null);
     stick.current = false;
+    setFollowingLive(false);
     setSticky(sessionIdRef.current, false);
+    freezeRef.current.key = null;
     setLocatedToolKey(key);
     if (locateTimerRef.current !== null) {
       globalThis.clearTimeout(locateTimerRef.current);
     }
     // Let the cover sheet unmount before scrolling the transcript beneath it.
     globalThis.setTimeout(() => {
-      const row = [
-        ...(parentRef.current?.querySelectorAll<HTMLElement>("[data-key]") ??
-          []),
-      ]
-        .find((candidate) => candidate.dataset["key"] === key);
-      // Tool history can be tens of thousands of pixels away. An animated
-      // journey delays the destination highlight until after it has already
-      // faded; jump atomically, then let the 1.4s highlight orient the reader.
-      row?.scrollIntoView({ block: "center", behavior: "auto" });
+      const row = parentRef.current?.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]`) ?? null;
+      revealLocatedTranscriptRow(parentRef.current, row, freezeRef.current);
       locateTimerRef.current = globalThis.setTimeout(() => {
         setLocatedToolKey((current) => current === key ? null : current);
         locateTimerRef.current = null;
@@ -1781,20 +1722,21 @@ export function Transcript({
           history: managesScrollHistoryRef.current,
           working: workingRef.current,
           detached: !stick.current,
-          touching,
+          touching: touching || pointerScrolling,
           fromBottom,
           threshold: magneticThreshold(),
         });
         if (settleDecision === "defer") {
           // A long pull can outlive this inactivity timer while sitting at the
           // contained live edge, where no further scroll event is available to
-          // restart it. Keep native ownership; touchend below performs the
+          // restart it. Keep native ownership; touchend/pointerup performs the
           // authoritative post-gesture settle.
           nativeScrollSettleTimer = undefined;
           return;
         }
         if (settleDecision === "follow") {
           stick.current = true;
+          setFollowingLive(true);
           setSticky(sessionIdRef.current, true);
           freezeRef.current.key = null;
           el.scrollTo({
@@ -1842,7 +1784,7 @@ export function Transcript({
       const fromBottom = Math.abs(el.scrollTop);
       const prefetch = historyPrefetchTransition({
         managed: managesScrollHistoryRef.current,
-        detached: true,
+        detached: !stick.current,
         armed: historyPrefetchArmedRef.current,
         fromTop: el.scrollHeight - el.clientHeight - fromBottom,
         // Begin the bounded skeleton fill before the reader reaches the
@@ -1888,6 +1830,7 @@ export function Transcript({
       directManipulationActive = false;
       if (directManipulationShouldFollow) {
         stick.current = true;
+        setFollowingLive(true);
         setSticky(sessionIdRef.current, true);
         freezeRef.current.key = null;
         saveViewport();
@@ -1905,13 +1848,17 @@ export function Transcript({
       startDrawerCatchupRef.current();
     };
     const onWheel = (event: WheelEvent): void => {
+      // Nested scrollable blocks (error `<pre>`, retained summaries) own their
+      // own vertical wheel while they still have room to scroll.
+      if (canNestedElementScrollVertically(event.target, el, event.deltaY)) {
+        return;
+      }
       // A wheel/trackpad gesture that continues toward the bottom can still
       // emit events after `scroll` has re-enabled Following. Detaching for
       // every wheel event therefore produced an on -> off flicker at the
-      // boundary. Only an upward (away-from-latest) gesture expresses intent
-      // to pause following.
+      // boundary. Only an upward, vertically-dominant gesture pauses following.
       markNativeScrollActive();
-      if (wheelLeavesLatest(event.deltaY)) detach();
+      if (wheelLeavesLatest(event.deltaY, event.deltaX)) detach();
     };
     const onPointerDown = (event: PointerEvent): void => {
       if (event.pointerType !== "mouse" || event.button !== 0) return;
@@ -1925,7 +1872,14 @@ export function Transcript({
       markNativeScrollActive();
     };
     const onPointerEnd = (): void => {
+      if (!pointerScrolling) return;
       pointerScrolling = false;
+      if (nativeScrollActiveRef.current && !directManipulationActive) {
+        markNativeScrollActive();
+      }
+    };
+    const onPointerMove = (event: PointerEvent): void => {
+      if (pointerScrolling && event.buttons === 0) onPointerEnd();
     };
     const onKeyDown = (event: KeyboardEvent): void => {
       if (isImeKeyEvent(event)) return;
@@ -1977,7 +1931,6 @@ export function Transcript({
       // column-reverse: the bottom is scrollTop 0 (abs handles the sign).
       const fromBottom = Math.abs(el.scrollTop);
       if (readerOwned && fromBottom > 1 && stick.current) detach();
-      else setFollowingLive(fromBottom <= 1);
       if (!readerOwned) {
         if (!stick.current) captureAnchor();
         saveViewport();
@@ -2017,35 +1970,23 @@ export function Transcript({
       }
       reportScrollableRef.current();
     };
-    const awayDirection = (): 1 | -1 => {
-      if (el.scrollTop > 0.5) return 1;
-      if (el.scrollTop < -0.5) return -1;
-      // column-reverse uses opposite scrollTop signs across engines. Probe one
-      // pixel from the bottom once instead of UA-sniffing Chrome vs WebKit.
-      el.scrollBy({ top: -1, behavior: "auto" });
-      if (el.scrollTop < -0.5) return -1;
-      el.scrollBy({ top: 1, behavior: "auto" });
-      return el.scrollTop > 0.5 ? 1 : -1;
-    };
     const scrollAway = (distance: number): void => {
       markNativeScrollActive();
       detach();
-      const direction = awayDirection();
-      el.scrollBy({ top: direction * distance, behavior: "auto" });
+      scrollColumnReverseAway(el, distance, freezeRef.current);
     };
     const scrollTowardLatest = (distance: number): void => {
       markNativeScrollActive();
-      const fromBottom = Math.abs(el.scrollTop);
-      if (fromBottom <= distance) {
-        el.scrollTop = 0;
+      if (
+        scrollColumnReverseTowardLatest(el, distance, freezeRef.current) &&
+        shouldFollowAtBottomEdge(managesScrollHistoryRef.current, workingRef.current)
+      ) {
         stick.current = true;
+        setFollowingLive(true);
         setSticky(sessionIdRef.current, true);
         freezeRef.current.key = null;
         scheduleHistoryRelease();
-        return;
       }
-      const direction = el.scrollTop > 0 ? -1 : 1;
-      el.scrollBy({ top: direction * distance, behavior: "auto" });
     };
     const followLatest = (): void => {
       markNativeScrollActive();
@@ -2094,14 +2035,8 @@ export function Transcript({
       saveViewport();
     };
     const onDesktopNavigation = (rawEvent: Event): void => {
-      const action = (rawEvent as CustomEvent<{ action?: string }>).detail
-        ?.action;
-      const line = Math.max(
-        32,
-        Number.parseFloat(globalThis.getComputedStyle(el).lineHeight) || 24,
-      );
-      const halfPage = Math.max(line, el.clientHeight * 0.5);
-      const page = Math.max(line, el.clientHeight * 0.9);
+      const action = (rawEvent as CustomEvent<{ action?: string }>).detail?.action;
+      const { line, halfPage, page } = desktopTranscriptScrollSteps(el);
       if (action === "line-up") scrollAway(line);
       else if (action === "line-down") scrollTowardLatest(line);
       else if (action === "half-page-up") scrollAway(halfPage);
@@ -2111,10 +2046,7 @@ export function Transcript({
       else if (action === "oldest") {
         markNativeScrollActive();
         detach();
-        el.scrollTo({
-          top: awayDirection() * el.scrollHeight,
-          behavior: "auto",
-        });
+        el.scrollTo({ top: columnReverseAwayDirection(el, freezeRef.current) * el.scrollHeight, behavior: "auto" });
       } else if (action === "latest") followLatest();
       else if (action === "toggle-following") {
         if (stick.current) detach();
@@ -2131,11 +2063,18 @@ export function Transcript({
       capture: true,
       passive: true,
     });
+    globalThis.addEventListener("pointermove", onPointerMove, { passive: true });
     globalThis.addEventListener("pointerup", onPointerEnd, { passive: true });
     globalThis.addEventListener("pointercancel", onPointerEnd, {
       passive: true,
     });
     globalThis.addEventListener("blur", onPointerEnd);
+    const unsubscribeSticky = subscribeSticky(() => {
+      if (!getSticky(sessionIdRef.current) && stick.current) {
+        detach();
+        if (!nativeScrollActiveRef.current) captureAnchor();
+      }
+    });
     el.addEventListener("cowboy:desktop-transcript-nav", onDesktopNavigation);
     globalThis.addEventListener(
       "cowboy:explore-current-page-bottom",
@@ -2179,15 +2118,8 @@ export function Transcript({
     let roTries = 0;
     const repin = (): void => {
       roRaf = 0;
-      if (!stick.current) return;
-      if (roTries === 0 && Math.abs(el.scrollTop) > 0.5) {
-        // Queue/draft disclosure changes the transcript viewport. Let WebKit's
-        // scrolling thread carry the short correction instead of visibly
-        // teleporting the final lines; later frames still converge exactly.
-        el.scrollTo({ top: 0, behavior: "smooth" });
-      } else {
-        pinTranscriptToLatest(el); // column-reverse: 0 = bottom
-      }
+      if (!stick.current || touching || pointerScrolling || nativeScrollActiveRef.current) return;
+      pinTranscriptToLatest(el, freezeRef.current);
       if (++roTries < 5) roRaf = requestAnimationFrame(repin);
     };
     const ro = new ResizeObserver(() => {
@@ -2228,9 +2160,11 @@ export function Transcript({
       el.removeEventListener("touchcancel", onTouchEnd);
       el.removeEventListener("scroll", onScroll);
       el.removeEventListener("scroll", onNestedScroll, true);
+      globalThis.removeEventListener("pointermove", onPointerMove);
       globalThis.removeEventListener("pointerup", onPointerEnd);
       globalThis.removeEventListener("pointercancel", onPointerEnd);
       globalThis.removeEventListener("blur", onPointerEnd);
+      unsubscribeSticky();
       el.removeEventListener(
         "cowboy:desktop-transcript-nav",
         onDesktopNavigation,
@@ -2347,7 +2281,8 @@ export function Transcript({
           })
           : stick.current
           ? 0
-          : el.clientHeight - el.scrollHeight;
+          : columnReverseAwayDirection(el, freezeRef.current) *
+            Math.max(0, el.scrollHeight - el.clientHeight);
         // Position and completion must agree on the same target. Reapplying
         // the old offset before correcting a mounted anchor makes each frame
         // jump twice and can keep the restore mask up until timeout.
@@ -2356,6 +2291,7 @@ export function Transcript({
         }
         if (restoreDetached) {
           freezeRef.current = {
+            attr: "data-key",
             key: saved.anchorKey,
             top: saved.anchorOffset,
             self: false,
@@ -2580,33 +2516,43 @@ export function Transcript({
   useEffect(() => {
     if (scrollNonce === lastNonceRef.current) return undefined;
     lastNonceRef.current = scrollNonce;
+    nativeScrollActiveRef.current = false;
+    if (renderPausedRef.current || drawerCatchupActiveRef.current) {
+      renderPausedRef.current = false;
+      drawerCatchupActiveRef.current = false;
+      presentedTimelineRef.current = latestTimelineRef.current;
+      setRenderPausedForScroll(false);
+    }
     stick.current = true;
-    // Converge across a few frames (column-reverse: 0 = bottom). 0 stays pinned
-    // to the bottom as the last bubble's markdown/images settle, so this is
-    // really just "re-stick + ensure we're at 0" — the few frames cover the case
-    // where the container is mid-resize (keyboard) when the tap lands.
+    setFollowingLive(true);
+    freezeRef.current.key = null;
+    scheduleHistoryRelease();
     let raf = 0;
     let tries = 0;
     const pin = (): void => {
+      if (!stick.current) return;
       const el = parentRef.current;
-      if (el) pinTranscriptToLatest(el);
+      if (el) pinTranscriptToLatest(el, freezeRef.current);
       if (++tries < 5) raf = requestAnimationFrame(pin);
     };
-    raf = requestAnimationFrame(pin);
+    pin();
     return () => cancelAnimationFrame(raf);
   }, [scrollNonce]);
 
-  // A "to the start" request: stop following and scroll to the oldest loaded
-  // row (column-reverse: the most negative scrollTop). Reaching it lets the
-  // ordinary scroll-threshold paging load earlier history as usual.
+  // A "to the start" request: stop following, un-window recycled rows, and
+  // scroll to the oldest loaded row using the engine's column-reverse sign.
   const lastTopNonceRef = useRef(topNonce);
   useEffect(() => {
     if (topNonce === lastTopNonceRef.current) return;
     lastTopNonceRef.current = topNonce;
     stick.current = false;
+    setFollowingLive(false);
+    setSticky(sessionId, false);
+    freezeRef.current.key = null;
+    cancelHistoryRelease();
     const el = parentRef.current;
-    if (el) el.scrollTo({ top: -el.scrollHeight, behavior: "smooth" });
-  }, [topNonce]);
+    if (el) el.scrollTo({ top: columnReverseAwayDirection(el, freezeRef.current) * el.scrollHeight, behavior: "smooth" });
+  }, [sessionId, topNonce]);
 
   return (
     <Box
@@ -2705,6 +2651,7 @@ export function Transcript({
           // bottom navbar when present). Transcript must not recombine child
           // heights or add another boundary token here.
           pb: bottomInset ?? "12px",
+          scrollPaddingBottom: bottomInset ?? "12px",
           // Reading prose line-height. The markdown paragraph renderer inherits
           // this (MarkdownImpl `p`); headings + code keep their own fixed
           // leading, and MUI Typography chrome sets its own, so only body text

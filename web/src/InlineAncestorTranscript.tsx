@@ -7,6 +7,7 @@ import { InlineHandoffStatusStrip } from "./InlineHandoffStatusStrip";
 import { providerPresentation } from "./providerPresentation";
 import { ReadOnlyAncestorItemView } from "./ReadOnlyAncestorItemView";
 import { SessionContinuedFrom } from "./SessionContextCue";
+import { setSticky } from "./stickyStore";
 import { useStoreSelector } from "./store";
 import { ToolDetailsBrowser } from "./ToolDetailsBrowser";
 import { toolRuns } from "./tools/runs";
@@ -193,6 +194,7 @@ export function InlineAncestorTranscript({
           onClose={(): void => setSelectedTool(null)}
           onLocate={(key): void => {
             setSelectedTool(null);
+            setSticky(sessionId, false);
             const segId = selectedSegment.hop.session_id;
             const depth = selectedSegment.hop.depth;
             setRevealedSegments((prev) => (prev.has(segId) ? prev : new Set([...prev, segId])));
