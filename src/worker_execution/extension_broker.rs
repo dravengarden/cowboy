@@ -1,25 +1,32 @@
 //! The session extensions of an account-sandboxed session (Antigravity),
-//! brokered by the worker (docs/antigravity-real-accounts-design.md,
-//! "Session extensions"). The worker starts Cowboy MCP and the folder's
-//! bindings on the target from its own launch template, as a Claude or Codex
-//! session runs them, discovers their tools, and answers the unit's two
-//! requests: `cowboy/extensions` (the tools) and `cowboy/extensionCall` (one
-//! `tools/call`, admitted only inside the active turn, drained before the
-//! turn completes, and an uncertain effect when its outcome is lost).
-//! Memory's tools go to the session's relay the same way, limited to the
-//! signed tool list. The unit never starts, writes to or reads these
-//! processes, nor sees their output.
+//! brokered by the worker (`docs/antigravity-real-accounts-design.md` and
+//! `docs/antigravity-user-mcp-r2-design.md`).
 
-use std::sync::Arc;
+mod user_mcp;
+
+pub use user_mcp::{
+    USER_MCP_INITIALIZATION_KEY, USER_MCP_LIST_METHOD, USER_MCP_PROCESS_PREFIX,
+    USER_MCP_START_METHOD, USER_MCP_STOP_METHOD,
+};
+
+use std::collections::HashSet;
+use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
 use base64::Engine as _;
+use parking_lot::Mutex;
 use serde_json::{Value, json};
-use tokio::sync::{Mutex as AsyncMutex, watch};
+use tokio::sync::{Mutex as AsyncMutex, OnceCell, watch};
 
 use super::Client;
-use super::ledger::{Ledger, SERVER_PREFIX};
+use super::ledger::{Ledger, SERVER_PREFIX, SettlementGuard};
 use super::memory_bridge::MemoryBridge;
+use super::relay::AckState;
+use crate::execution_protocol::{Command, Response};
+use user_mcp::{
+    EXTENSION_ACK_TIMEOUT, PendingAckState, USER_MCP_DISCOVERY_TIMEOUT, USER_MCP_SWEEP_TIMEOUT,
+    UserDiscovery,
+};
 
 /// The unit's request listing the session's extension tools.
 pub const EXTENSIONS_REQUEST: &str = "cowboy/extensions";
@@ -27,7 +34,7 @@ pub const EXTENSIONS_REQUEST: &str = "cowboy/extensions";
 pub const EXTENSION_CALL: &str = "cowboy/extensionCall";
 
 const MCP_PROTOCOL: &str = "2025-06-18";
-/// One deadline for all of discovery, required and optional alike.
+/// One deadline for all of Phase 1 discovery, required and optional alike.
 const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(40);
 /// Below the proxy connection's own request timer (185 s), so the worker
 /// classifies a slow call before the unit gives up on it.
@@ -71,6 +78,7 @@ pub struct Plan {
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Route {
     Server(usize),
+    UserServer(usize),
     Memory,
 }
 
@@ -98,6 +106,26 @@ struct Discovery {
 struct Server {
     process: String,
     io: AsyncMutex<Io>,
+    closed_hint: std::sync::atomic::AtomicBool,
+}
+
+impl Server {
+    fn new(process: String) -> Self {
+        Self {
+            process,
+            io: AsyncMutex::new(Io::default()),
+            closed_hint: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+
+    fn mark_closed(&self) {
+        self.closed_hint
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    fn is_closed_hint(&self) -> bool {
+        self.closed_hint.load(std::sync::atomic::Ordering::Acquire)
+    }
 }
 
 #[derive(Default)]
@@ -128,40 +156,75 @@ impl Failure {
 
 pub struct Broker {
     servers: Vec<Arc<Server>>,
+    phase1_server_names: Vec<String>,
     memory: Option<MemoryBridge>,
     memory_tools: Vec<String>,
+    memory_server: String,
     guidance: Vec<String>,
     discovery: watch::Receiver<Option<Discovery>>,
+    keeper_user_mcp: OnceLock<bool>,
+    sweep_done: watch::Receiver<Option<bool>>,
+    phase2: OnceCell<UserDiscovery>,
+    user_servers: Mutex<Vec<Arc<Server>>>,
+    pending_acks: Mutex<PendingAckState>,
+    #[cfg(test)]
+    ack_timeout_override: Option<Duration>,
+    #[cfg(test)]
+    phase2_timeout_override: Option<Duration>,
 }
 
 impl Broker {
-    /// Start every planned server in the background; discovery completes on
-    /// its own and `cowboy/extensions` waits for it (bounded).
+    /// Start every planned server in the background; Phase 1 discovery completes
+    /// independently and `cowboy/extensions` waits for it (bounded). Also runs
+    /// an unconditional startup orphan sweep when the keeper advertises `cowboyUserMcp`.
     pub fn start(client: &Arc<Client>, plan: Plan, memory: Option<MemoryBridge>) -> Arc<Self> {
+        Self::start_inner(client, plan, memory, None, None)
+    }
+
+    fn start_inner(
+        client: &Arc<Client>,
+        plan: Plan,
+        memory: Option<MemoryBridge>,
+        #[cfg_attr(not(test), allow(unused_variables))] ack_timeout_override: Option<Duration>,
+        #[cfg_attr(not(test), allow(unused_variables))] phase2_timeout_override: Option<Duration>,
+    ) -> Arc<Self> {
         let servers: Vec<Arc<Server>> = plan
             .servers
             .iter()
             .map(|_| {
-                Arc::new(Server {
-                    process: format!("{SERVER_PREFIX}{:032x}", rand::random::<u128>()),
-                    io: AsyncMutex::new(Io::default()),
-                })
+                Arc::new(Server::new(format!(
+                    "{SERVER_PREFIX}{:032x}",
+                    rand::random::<u128>()
+                )))
             })
             .collect();
-        let memory = memory.filter(|_| !plan.memory_tools.is_empty());
-        let (sender, receiver) = watch::channel(None);
+        let phase1_server_names: Vec<String> =
+            plan.servers.iter().map(|s| s.name.clone()).collect();
+        let (sender, discovery) = watch::channel(None);
+        let (sweep_tx, sweep_done) = watch::channel(None);
         let broker = Arc::new(Self {
             servers,
+            phase1_server_names,
             memory,
             memory_tools: plan.memory_tools.clone(),
+            memory_server: plan.memory_server.clone(),
             guidance: plan.guidance.iter().take(MAX_GUIDANCE).cloned().collect(),
-            discovery: receiver,
+            discovery,
+            keeper_user_mcp: OnceLock::new(),
+            sweep_done,
+            phase2: OnceCell::new(),
+            user_servers: Mutex::new(Vec::new()),
+            pending_acks: Mutex::new(PendingAckState::default()),
+            #[cfg(test)]
+            ack_timeout_override,
+            #[cfg(test)]
+            phase2_timeout_override,
         });
-        let client = Arc::clone(client);
+        let client_p1 = Arc::clone(client);
         let discovering = Arc::clone(&broker);
         tokio::spawn(async move {
             let discovery =
-                tokio::time::timeout(DISCOVERY_TIMEOUT, discovering.discover(&client, &plan))
+                tokio::time::timeout(DISCOVERY_TIMEOUT, discovering.discover(&client_p1, &plan))
                     .await
                     .unwrap_or_else(|_| Discovery {
                         failed: plan
@@ -173,7 +236,74 @@ impl Broker {
                     });
             let _ = sender.send(Some(discovery));
         });
+
+        let client_sweep = Arc::clone(client);
+        let sweeping = Arc::clone(&broker);
+        tokio::spawn(async move {
+            if client_sweep.binding.managed.is_some() {
+                let _ = sweeping.keeper_user_mcp.set(false);
+                let _ = sweep_tx.send(Some(true));
+                return;
+            }
+            let supported = matches!(
+                tokio::time::timeout(USER_MCP_SWEEP_TIMEOUT, client_sweep.call(Command::Describe))
+                    .await,
+                Ok(Ok(Response::Ready { initialization, .. }))
+                    if initialization
+                        .get(USER_MCP_INITIALIZATION_KEY)
+                        .and_then(|v| v.get("schema"))
+                        .and_then(Value::as_u64)
+                        == Some(1)
+            );
+            let _ = sweeping.keeper_user_mcp.set(supported);
+            if !supported {
+                let _ = sweep_tx.send(Some(true));
+                return;
+            }
+            let ok = match tokio::time::timeout(
+                USER_MCP_SWEEP_TIMEOUT,
+                client_sweep.invoke_classified(USER_MCP_STOP_METHOD.into(), json!({})),
+            )
+            .await
+            {
+                Ok(Ok(reply)) => reply.pointer("/result/failed").and_then(Value::as_u64) == Some(0),
+                _ => false,
+            };
+            if !ok {
+                tracing::warn!(
+                    reason = "orphan_sweep_timeout",
+                    "startup user MCP orphan sweep did not confirm clean"
+                );
+            }
+            let _ = sweep_tx.send(Some(ok));
+        });
         broker
+    }
+
+    #[cfg(test)]
+    pub(super) fn with_test_timeouts(
+        client: &Arc<Client>,
+        plan: Plan,
+        ack_timeout: Option<Duration>,
+        phase2_timeout: Option<Duration>,
+    ) -> Arc<Self> {
+        Self::start_inner(client, plan, None, ack_timeout, phase2_timeout)
+    }
+
+    fn phase2_timeout(&self) -> Duration {
+        #[cfg(test)]
+        if let Some(d) = self.phase2_timeout_override {
+            return d;
+        }
+        USER_MCP_DISCOVERY_TIMEOUT
+    }
+
+    fn ack_timeout(&self) -> Duration {
+        #[cfg(test)]
+        if let Some(d) = self.ack_timeout_override {
+            return d;
+        }
+        EXTENSION_ACK_TIMEOUT
     }
 
     async fn discover(&self, client: &Arc<Client>, plan: &Plan) -> Discovery {
@@ -191,7 +321,7 @@ impl Broker {
         };
         let (servers, memory) = tokio::join!(servers, memory);
         let mut discovery = Discovery::default();
-        let mut taken: std::collections::HashSet<String> =
+        let mut taken: HashSet<String> =
             FACADE_TOOLS.iter().map(|name| (*name).to_owned()).collect();
         for (index, (result, plan)) in servers.into_iter().zip(&plan.servers).enumerate() {
             match result {
@@ -253,7 +383,7 @@ impl Broker {
         discovery
     }
 
-    /// The finished discovery (bounded wait), or why there is none.
+    /// The finished Phase 1 discovery (bounded wait), or why there is none.
     async fn discovered(&self) -> Result<Discovery, String> {
         let mut discovery = self.discovery.clone();
         let ready = tokio::time::timeout(
@@ -271,74 +401,131 @@ impl Broker {
         }
     }
 
-    /// The tools, instructions and call guidance, once discovery finished.
-    pub async fn list(&self) -> Value {
+    /// The tools, instructions and call guidance. Phase 1 publishes
+    /// independently; Phase 2 runs only when `ackProtocol >= 1` is advertised.
+    pub async fn list(&self, client: &Arc<Client>, params: &Value) -> Value {
         let found = match self.discovered().await {
             Ok(found) => found,
             Err(reason) => return refused(&reason),
         };
+        let ack_protocol = params
+            .get("ackProtocol")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let user_found = if ack_protocol >= 1 && client.binding.managed.is_none() {
+            self.phase2
+                .get_or_init(|| self.discover_user_mcp(client, &found))
+                .await
+                .clone()
+        } else {
+            UserDiscovery::default()
+        };
+        let tools: Vec<Value> = found
+            .tools
+            .iter()
+            .chain(user_found.tools.iter())
+            .map(|tool| {
+                json!({
+                    "name": tool.name,
+                    "server": tool.server,
+                    "tool": tool.original,
+                    "description": tool.description,
+                    "inputSchema": tool.input_schema,
+                })
+            })
+            .collect();
+        let instructions: Vec<&str> = found
+            .instructions
+            .iter()
+            .chain(user_found.instructions.iter())
+            .map(String::as_str)
+            .collect();
         json!({"result": {
-            "tools": found.tools.iter().map(|tool| json!({
-                "name": tool.name,
-                "server": tool.server,
-                "tool": tool.original,
-                "description": tool.description,
-                "inputSchema": tool.input_schema,
-            })).collect::<Vec<_>>(),
-            "instructions": found.instructions.join("\n\n"),
+            "tools": tools,
+            "instructions": instructions.join("\n\n"),
             "guidance": self.guidance,
         }})
     }
 
     /// One `tools/call` for the unit, inside its active turn.
     #[cfg(test)]
-    pub async fn call(&self, client: &Arc<Client>, params: &Value) -> Value {
-        self.call_guarded(client, params).await.0
+    pub async fn call(self: &Arc<Self>, client: &Arc<Client>, params: &Value) -> Value {
+        self.call_guarded(client, params, 0).await.0
     }
 
-    /// One `tools/call` returning a `SettlementGuard` that keeps the ledger call
-    /// admission open until the endpoint classifies reply delivery (Finding 9).
+    /// One `tools/call` returning a `SettlementGuard` (Phase 1 / Memory) or
+    /// transferring ownership into `PendingAck` (`Route::UserServer`).
     pub(super) async fn call_guarded(
-        &self,
+        self: &Arc<Self>,
         client: &Arc<Client>,
         params: &Value,
-    ) -> (Value, Option<super::ledger::SettlementGuard>) {
+        connection_id: u64,
+    ) -> (Value, Option<SettlementGuard>, AckState) {
         let Some(ledger) = client.ledger().cloned() else {
-            return (refused("no execution ledger"), None);
+            return (refused("no execution ledger"), None, AckState::None);
         };
-        // A session whose required binding failed has no extension tools.
         let found = match self.discovery.borrow().clone() {
             Some(found) if found.failed.is_none() => found,
             Some(found) => {
                 return (
                     refused(found.failed.as_deref().unwrap_or("unavailable")),
                     None,
+                    AckState::None,
                 );
             }
-            None => return (refused("session extensions are still starting"), None),
+            None => {
+                return (
+                    refused("session extensions are still starting"),
+                    None,
+                    AckState::None,
+                );
+            }
         };
         let name = params
             .get("name")
             .and_then(Value::as_str)
             .unwrap_or_default();
-        let Some(tool) = found.tools.into_iter().find(|tool| tool.name == name) else {
-            return (refused("unknown extension tool"), None);
+        let tool = found
+            .tools
+            .into_iter()
+            .find(|tool| tool.name == name)
+            .or_else(|| {
+                self.phase2
+                    .get()
+                    .and_then(|user| user.tools.iter().find(|tool| tool.name == name).cloned())
+            });
+        let Some(tool) = tool else {
+            return (refused("unknown extension tool"), None, AckState::None);
         };
         let arguments = params
             .get("arguments")
             .filter(|value| value.is_object())
             .cloned()
             .unwrap_or_else(|| json!({}));
+
+        if let Route::UserServer(index) = tool.route {
+            return self
+                .call_user_server_guarded(
+                    client,
+                    &ledger,
+                    &tool,
+                    index,
+                    params,
+                    arguments,
+                    connection_id,
+                )
+                .await;
+        }
+
         let admitted = match ledger.admit_call() {
             Ok(admitted) => admitted,
-            Err(reason) => return (refused(reason), None),
+            Err(reason) => return (refused(reason), None, AckState::None),
         };
         let turn = Ledger::admitted_turn(&admitted).to_owned();
         let request = json!({"name": tool.original, "arguments": arguments});
         let exchange = async {
             match tool.route {
                 Route::Memory => {
-                    // The signed list decides again at dispatch.
                     if !self.memory_tools.contains(&tool.original) {
                         return Err(Failure::NotSent("memory tool not enabled".into()));
                     }
@@ -360,12 +547,12 @@ impl Broker {
                     }
                     None => Err(Failure::NotSent("server unavailable".into())),
                 },
+                Route::UserServer(_) => unreachable!("handled above"),
             }
         };
         let outcome = tokio::time::timeout(CALL_TIMEOUT, exchange)
             .await
             .unwrap_or_else(|_| Err(Failure::MaybeSent("timed out".into())));
-        // The outcome is decided before the turn may complete.
         let reply = match outcome {
             Ok(result) => json!({"result": result}),
             Err(Failure::NotSent(reason) | Failure::Refused(reason)) => {
@@ -381,14 +568,13 @@ impl Broker {
             }
         };
         let guard = ledger.guard_call(admitted);
-        (reply, Some(guard))
+        (reply, Some(guard), AckState::None)
     }
 }
 
-/// Add `tools` of `server` under unique aliases within the gate's names.
 fn add_tools(
     discovery: &mut Discovery,
-    taken: &mut std::collections::HashSet<String>,
+    taken: &mut HashSet<String>,
     server: &str,
     route: Route,
     tools: Vec<Value>,
@@ -418,13 +604,7 @@ fn add_tools(
     }
 }
 
-/// The tool's own name, else `<server>_<name>`, else a numbered alias, all
-/// within 64 characters; deterministic for the same discovery order.
-fn alias(
-    taken: &mut std::collections::HashSet<String>,
-    server: &str,
-    original: &str,
-) -> Option<String> {
+fn alias(taken: &mut HashSet<String>, server: &str, original: &str) -> Option<String> {
     let base = format!("{server}_{original}");
     let candidates = std::iter::once(original.to_owned())
         .chain(std::iter::once(base.chars().take(64).collect()))
@@ -470,7 +650,6 @@ fn launch(process: &str, argv: &[String], cwd: &str, stdin: bool) -> Value {
     })
 }
 
-/// Start a target process the worker owns, recorded before it is sent.
 async fn start(
     client: &Arc<Client>,
     ledger: &Ledger,
@@ -491,7 +670,6 @@ async fn start(
 }
 
 impl Server {
-    /// Start the server, initialize it and list its tools.
     async fn initialize(
         &self,
         client: &Arc<Client>,
@@ -542,17 +720,10 @@ impl Server {
 
     async fn write(&self, client: &Arc<Client>, message: &Value) -> Result<(), Failure> {
         let mut line =
-            serde_json::to_vec(message).map_err(|_| Failure::NotSent("encode".into()))?;
+            serde_json::to_vec(message).map_err(|_| Failure::NotSent("unserializable".into()))?;
         line.push(b'\n');
         let chunk = base64::engine::general_purpose::STANDARD.encode(line);
         let write_id = format!("{:032x}", rand::random::<u128>());
-        // A new write is an effect: refused while effects cannot be recorded
-        // durably (retries of one already sent keep going).
-        if client.ledger().is_some_and(|ledger| ledger.unwritable()) {
-            return Err(Failure::NotSent(
-                "the execution ledger cannot be written".into(),
-            ));
-        }
         for _ in 0..50 {
             let reply = client
                 .invoke_classified(
@@ -585,9 +756,6 @@ impl Server {
         .await
     }
 
-    /// One request and its answer; other messages the server sends are
-    /// skipped (it has no client capabilities to ask for). With `turn`, the
-    /// request is written only while that turn is still active.
     async fn request(
         &self,
         client: &Arc<Client>,
@@ -596,8 +764,22 @@ impl Server {
         method: &str,
         params: Value,
     ) -> Result<Value, Failure> {
+        self.request_bounded(client, ledger, turn, method, params, None)
+            .await
+    }
+
+    async fn request_bounded(
+        &self,
+        client: &Arc<Client>,
+        ledger: &Ledger,
+        turn: Option<&str>,
+        method: &str,
+        params: Value,
+        max_result_bytes: Option<usize>,
+    ) -> Result<Value, Failure> {
         let mut io = self.io.lock().await;
-        if io.closed {
+        if io.closed || self.is_closed_hint() {
+            io.closed = true;
             return Err(Failure::NotSent("the server has ended".into()));
         }
         if turn.is_some_and(|turn| !ledger.turn_open(turn)) {
@@ -613,11 +795,12 @@ impl Server {
         )
         .await?;
         loop {
-            if let Some(answer) = take_answer(&mut io.buffer, id) {
+            if let Some(answer) = take_answer_bounded(&mut io.buffer, id, max_result_bytes) {
                 return answer.map_err(Failure::Refused);
             }
             if io.buffer.len() > MAX_LINE {
                 io.closed = true;
+                self.mark_closed();
                 return Err(Failure::MaybeSent("the server's line is too long".into()));
             }
             let result = self.read(client, io.after_seq).await?;
@@ -634,11 +817,10 @@ impl Server {
                 if io.after_seq.is_some_and(|after| seq <= after) {
                     continue;
                 }
-                // Output the executor no longer holds would splice two
-                // replies; only the exit's own number may be skipped.
                 let expected = io.after_seq.map_or(1, |after| after + 1);
                 if seq != expected && !(exited && seq == expected + 1) {
                     io.closed = true;
+                    self.mark_closed();
                     return Err(Failure::MaybeSent("server output was lost".into()));
                 }
                 io.after_seq = Some(seq);
@@ -647,6 +829,7 @@ impl Server {
                         base64::engine::general_purpose::STANDARD.decode(text).ok()
                     }) else {
                         io.closed = true;
+                        self.mark_closed();
                         return Err(Failure::MaybeSent("undecodable server output".into()));
                     };
                     io.buffer.extend_from_slice(&bytes);
@@ -654,13 +837,12 @@ impl Server {
             }
             if result.get("closed") == Some(&Value::Bool(true)) && chunks.is_empty() {
                 io.closed = true;
+                self.mark_closed();
                 return Err(Failure::MaybeSent("the server exited".into()));
             }
         }
     }
 
-    /// One `process/read` at `after`; a read the transport never sent is
-    /// retried from the same cursor, an error answer ends the exchange.
     async fn read(&self, client: &Arc<Client>, after: Option<u64>) -> Result<Value, Failure> {
         for attempt in 0..5u64 {
             match client
@@ -687,8 +869,6 @@ impl Server {
     }
 }
 
-/// A required binding's CLI must report the binding contract Claude's and
-/// Codex's runtimes check (`mcp --binding-capabilities`).
 async fn binding_capabilities(
     client: &Arc<Client>,
     ledger: &Ledger,
@@ -715,40 +895,48 @@ async fn binding_capabilities(
         let reply = client
             .invoke(
                 "process/read".into(),
-                json!({"processId": process, "afterSeq": after, "maxBytes": 8192, "waitMs": 1000}),
+                json!({"processId": process, "afterSeq": after,
+                    "maxBytes": 65_536, "waitMs": 1000}),
             )
             .await
-            .map_err(|error| error.to_string())?;
-        let result = reply.get("result").cloned().unwrap_or(Value::Null);
+            .map_err(|_| "binding capability probe lost".to_owned())?;
+        let result = reply
+            .get("result")
+            .ok_or_else(|| "binding capability probe failed".to_owned())?;
         for chunk in result
             .get("chunks")
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
         {
-            after = chunk.get("seq").and_then(Value::as_u64).or(after);
+            if let Some(seq) = chunk.get("seq").and_then(Value::as_u64) {
+                if after.is_some_and(|seen| seq <= seen) {
+                    continue;
+                }
+                after = Some(seq);
+            }
             if chunk.get("stream").and_then(Value::as_str) == Some("stdout")
                 && let Some(bytes) = chunk
                     .get("chunk")
                     .and_then(Value::as_str)
                     .and_then(|text| base64::engine::general_purpose::STANDARD.decode(text).ok())
+                && output.len() + bytes.len() <= 65_536
             {
                 output.extend_from_slice(&bytes);
             }
         }
-        if result.get("closed") == Some(&Value::Bool(true)) {
-            ledger.closed(&process);
-        }
-        if result.get("exited") == Some(&Value::Bool(true)) {
-            ledger.exited(&process);
-            if result.get("exitCode").and_then(Value::as_i64) != Some(0) || output.len() > 4096 {
-                return Err("binding capability probe failed".into());
-            }
-            let report: Value = serde_json::from_slice(&output)
-                .map_err(|_| "invalid binding capability report".to_owned())?;
-            let expected = json!({"schema": 1, "descriptor_schema": 1, "relay_schema": 1,
-                "grant_mcp": true, "transport": "stdio_tool_only_v1"});
-            return if report == expected {
+        if result.get("exited") == Some(&Value::Bool(true))
+            || result.get("closed") == Some(&Value::Bool(true))
+        {
+            let ok = result.get("exitCode") == Some(&json!(0))
+                && serde_json::from_slice::<Value>(&output).is_ok_and(|value| {
+                    value.get("protocolVersion") == Some(&json!(1))
+                        && value
+                            .get("binding")
+                            .and_then(Value::as_array)
+                            .is_some_and(|list| list.iter().any(|v| v == "directory"))
+                });
+            return if ok {
                 Ok(())
             } else {
                 Err("incompatible binding capabilities".into())
@@ -758,20 +946,32 @@ async fn binding_capabilities(
     Err("binding capability probe timed out".into())
 }
 
-/// The answer to request `id` among the complete lines in `buffer` (other
-/// lines are consumed and skipped); a line is decoded only once complete.
-fn take_answer(buffer: &mut Vec<u8>, id: u64) -> Option<Result<Value, String>> {
+fn take_answer_bounded(
+    buffer: &mut Vec<u8>,
+    id: u64,
+    max_result_bytes: Option<usize>,
+) -> Option<Result<Value, String>> {
     while let Some(newline) = buffer.iter().position(|byte| *byte == b'\n') {
         let line: Vec<u8> = buffer.drain(..=newline).collect();
+        let line_len = line.len();
         let Ok(message) = serde_json::from_slice::<Value>(&line) else {
             continue;
         };
-        // A response carries our id and a result or an error; a request
-        // from the server has a method and is not an answer.
         if message.get("method").is_some() || message.get("id") != Some(&json!(id)) {
             continue;
         }
         if let Some(result) = message.get("result") {
+            if max_result_bytes.is_some_and(|limit| line_len > limit) {
+                tracing::warn!(
+                    reason = "result_too_large",
+                    bytes = line_len,
+                    "user MCP tool result exceeded size bound"
+                );
+                return Some(Ok(json!({
+                    "content": [{"type": "text", "text": "user MCP tool result exceeded 4 MiB limit"}],
+                    "isError": true,
+                })));
+            }
             return Some(Ok(result.clone()));
         }
         if let Some(error) = message.get("error") {
@@ -785,7 +985,11 @@ fn take_answer(buffer: &mut Vec<u8>, id: u64) -> Option<Result<Value, String>> {
     None
 }
 
-/// Memory's tool list from the relay's MCP endpoint, after the handshake.
+#[cfg(test)]
+fn take_answer(buffer: &mut Vec<u8>, id: u64) -> Option<Result<Value, String>> {
+    take_answer_bounded(buffer, id, None)
+}
+
 async fn memory_tools(bridge: &MemoryBridge) -> Result<Vec<Value>, String> {
     bridge
         .mcp(&json!({"jsonrpc": "2.0", "id": 1, "method": "initialize",
@@ -841,12 +1045,29 @@ not json
     }
 
     #[test]
+    fn oversized_user_mcp_result_returns_bounded_tool_error_and_drains_line() {
+        let big = "x".repeat(2048);
+        let mut buffer = format!(
+            "{{\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{{\"content\":[{{\"type\":\"text\",\"text\":\"{big}\"}}]}}}}\n{{\"jsonrpc\":\"2.0\",\"id\":2,\"result\":{{\"ok\":true}}}}\n"
+        )
+        .into_bytes();
+        let res = take_answer_bounded(&mut buffer, 1, Some(512))
+            .unwrap()
+            .unwrap();
+        assert_eq!(res["isError"], true);
+        assert_eq!(
+            take_answer_bounded(&mut buffer, 2, Some(512)),
+            Some(Ok(json!({"ok": true})))
+        );
+    }
+
+    #[test]
     fn tool_names_stay_in_the_gate_namespace_and_aliases_are_unique() {
         assert!(tool_name("cowboy_read") && tool_name("suger-query"));
         assert!(
             !tool_name("") && !tool_name("a b") && !tool_name("x.y") && !tool_name(&"a".repeat(65))
         );
-        let mut taken = std::collections::HashSet::new();
+        let mut taken = HashSet::new();
         assert_eq!(alias(&mut taken, "s", "read").as_deref(), Some("read"));
         assert_eq!(alias(&mut taken, "s", "read").as_deref(), Some("s_read"));
         assert_eq!(alias(&mut taken, "s", "read").as_deref(), Some("s_read_2"));
@@ -857,5 +1078,22 @@ not json
         );
         let second = alias(&mut taken, "s", &long).unwrap();
         assert!(second.len() <= 64 && second != long);
+    }
+
+    #[test]
+    fn user_tool_alias_always_enforces_mandatory_server_prefix() {
+        let mut taken = HashSet::new();
+        assert_eq!(
+            user_mcp::user_tool_alias(&mut taken, "chrome-devtools", "screenshot").as_deref(),
+            Some("chrome-devtools_screenshot")
+        );
+        assert_eq!(
+            user_mcp::user_tool_alias(&mut taken, "chrome-devtools", "screenshot").as_deref(),
+            Some("chrome-devtools_screenshot_2")
+        );
+        assert_eq!(
+            user_mcp::user_tool_alias(&mut taken, "my.server", "run").as_deref(),
+            Some("my_server_run")
+        );
     }
 }

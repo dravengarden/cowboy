@@ -129,7 +129,8 @@ impl Ledger {
         {
             return Err(Refusal::Capacity);
         }
-        if invocation.method == "process/start"
+        if (invocation.method == "process/start"
+            || invocation.method == super::user_mcp::USER_MCP_START_METHOD)
             && let Some(process) = invocation.params["processId"].as_str()
             && self.processes.len() < MAX_PROCESSES
         {

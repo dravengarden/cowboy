@@ -16,6 +16,8 @@
 //! makes the session's effect uncertain, durably, until the owner
 //! acknowledges that exact sequence.
 
+mod pending_calls;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::Write as _;
 use std::os::unix::fs::OpenOptionsExt as _;
@@ -49,6 +51,9 @@ type Tracked = (String, u64);
 /// the session: the unit may never name one, also one a previous worker
 /// left running.
 pub(super) const SERVER_PREFIX: &str = "cowboy-worker-mcp-";
+/// Schema-1 sentinel stored inside `Record.active_processes` for in-flight or
+/// unacknowledged user-MCP `tools/call` operations (rollback floor >= f2aa86175).
+pub(super) const PENDING_CALL_PREFIX: &str = "cowboy-pending-call:";
 /// Whether an execution event concerns a worker-run server or probe.
 pub(super) fn worker_event(message: &Value) -> bool {
     message
@@ -114,7 +119,10 @@ pub(super) fn effectful(method: &str) -> bool {
     MUTATIONS.contains(&method)
         || matches!(
             method,
-            "process/write" | "process/signal" | "process/terminate"
+            "process/write"
+                | "process/signal"
+                | "process/terminate"
+                | super::extension_broker::USER_MCP_START_METHOD
         )
 }
 
@@ -269,8 +277,17 @@ impl Ledger {
         session_id.clone_into(&mut record.session_id);
         let mut unwritable = false;
         if !record.active_processes.is_empty() {
+            let has_process = record
+                .active_processes
+                .iter()
+                .any(|entry| !entry.starts_with(PENDING_CALL_PREFIX));
+            let method = if has_process {
+                "process/terminate"
+            } else {
+                "tools/call"
+            };
             record.active_processes.clear();
-            record.uncertain_effect = Some("process/terminate".to_owned());
+            record.uncertain_effect = Some(method.to_owned());
             record.uncertain_sequence = next_sequence(record.uncertain_sequence);
             if let Some(ledger_path) = &path
                 && let Err(error) = write_record(ledger_path, &record)
@@ -764,24 +781,34 @@ impl Ledger {
     /// forces exit before `settle_all` completes.
     pub fn mark_unresolved_effects_uncertain(&self) -> bool {
         let mut state = self.state.lock();
-        // The worker's own servers are not session effects (the keeper
-        // reaps them); only turn processes and their starts park.
         let has_processes = state
             .processes
             .keys()
             .any(|process| !state.servers.contains(process))
-            || !state.record.active_processes.is_empty()
+            || state
+                .record
+                .active_processes
+                .iter()
+                .any(|entry| !entry.starts_with(PENDING_CALL_PREFIX))
             || state
                 .starting
                 .iter()
                 .any(|process| !state.servers.contains(process));
+        let has_pending_calls = state
+            .record
+            .active_processes
+            .iter()
+            .any(|entry| entry.starts_with(PENDING_CALL_PREFIX))
+            || state.calls > 0;
         let has_effects =
-            !state.admitted.is_empty() || !state.result_relays.is_empty() || state.calls > 0;
+            !state.admitted.is_empty() || !state.result_relays.is_empty() || has_pending_calls;
         if !has_processes && !has_effects {
             return false;
         }
         let method = if has_processes {
             "process/terminate"
+        } else if has_pending_calls {
+            "tools/call"
         } else {
             "request"
         };
@@ -812,6 +839,7 @@ impl Ledger {
     }
 
     /// Whether the ledger refuses new effects (its durable write failed).
+    #[cfg(test)]
     pub(super) fn unwritable(&self) -> bool {
         self.state.lock().unwritable
     }
@@ -1040,7 +1068,7 @@ impl Client {
     /// is the plain invocation; with one, effects are admitted (and starts
     /// recorded) first and lost replies mark the session's effect uncertain.
     pub async fn relay(self: &Arc<Self>, method: String, params: Value) -> Value {
-        let (reply, _guard) = self.relay_guarded(method, params).await;
+        let (reply, _guard, _ack) = self.relay_guarded(method, params, 0).await;
         reply
     }
 
@@ -1048,67 +1076,41 @@ impl Client {
         self: &Arc<Self>,
         method: String,
         params: Value,
-    ) -> (Value, Option<SettlementGuard>) {
+        connection_id: u64,
+    ) -> (Value, Option<SettlementGuard>, super::relay::AckState) {
+        use super::relay::AckState;
         if method == crate::account_sandbox::DRAINED {
-            // The unit read every reply it awaited before its stop (L1c).
-            // Always handled locally, even without a ledger, so it never falls
-            // through to target `invoke` (R21-M1).
             self.relays.acknowledge();
-            return (json!({"result": {}}), None);
+            return (json!({"result": {}}), None, AckState::None);
+        }
+        if method == crate::account_sandbox::EXTENSION_CALL_ACK {
+            let reply = match self.extensions.get() {
+                Some(broker) => broker.acknowledge_call(&params),
+                None => json!({"result": {"acknowledged": false}}),
+            };
+            return (reply, None, AckState::None);
         }
         let Some(ledger) = self.ledger().cloned() else {
             if method == UNCERTAIN_REPORT {
-                return (refused("no execution ledger"), None);
+                return (refused("no execution ledger"), None, AckState::None);
+            }
+            if method.starts_with("cowboy/") {
+                return (refused("reserved cowboy method"), None, AckState::None);
             }
             let reply = self
                 .invoke(method, params)
                 .await
                 .unwrap_or_else(|_| unavailable());
-            return (reply, None);
+            return (reply, None, AckState::None);
         };
-        if method == super::memory_bridge::MEMORY_REQUEST {
-            if params.get("path").and_then(Value::as_str) == Some("/v1/observe")
-                && !ledger.observation_open()
-            {
-                return (refused("memory evidence is accepted only for a turn"), None);
-            }
-            let reply = match self.memory.get() {
-                Some(memory) => memory.forward(&params).await,
-                None => refused("memory is not available in this session"),
-            };
-            return (reply, None);
-        }
-        if method == super::extension_broker::EXTENSIONS_REQUEST {
-            let reply = match self.extensions.get() {
-                Some(broker) => broker.list().await,
-                None => json!({"result": {"tools": [], "instructions": ""}}),
-            };
-            return (reply, None);
-        }
-        if method == super::extension_broker::EXTENSION_CALL {
-            return match self.extensions.get().cloned() {
-                Some(broker) => broker.call_guarded(self, &params).await,
-                None => (refused("this session has no extensions"), None),
-            };
-        }
-        if method == UNCERTAIN_REPORT {
-            let reported = params
-                .get("method")
-                .and_then(Value::as_str)
-                .filter(|reported| {
-                    !reported.is_empty()
-                        && reported.len() <= 64
-                        && reported
-                            .bytes()
-                            .all(|byte| byte.is_ascii_graphic() || byte == b' ')
-                })
-                .unwrap_or("request");
-            ledger.mark_uncertain(reported);
-            return (json!({"result": {}}), None);
+        if let Some(local) =
+            pending_calls::relay_local_cowboy(self, &ledger, &method, &params, connection_id).await
+        {
+            return local;
         }
         let admitted = match ledger.admit(&method, &params) {
             Ok(admitted) => admitted,
-            Err(reason) => return (refused(reason), None),
+            Err(reason) => return (refused(reason), None, AckState::None),
         };
         let process = process_id(&params);
         let start = (method == "process/start")
@@ -1172,7 +1174,7 @@ impl Client {
                 }
             }
         };
-        (response, guard)
+        (response, guard, AckState::None)
     }
 
     /// Whether a lost reply of this request hides a result the agent acts
@@ -1221,8 +1223,22 @@ impl Client {
             return;
         };
         match message.get("method").and_then(Value::as_str) {
-            Some("process/closed") => ledger.closed(&process),
-            Some("process/exited") => ledger.exited(&process),
+            Some("process/closed") => {
+                ledger.closed(&process);
+                if process.starts_with(super::extension_broker::USER_MCP_PROCESS_PREFIX)
+                    && let Some(broker) = self.extensions.get()
+                {
+                    broker.mark_user_server_closed(&process);
+                }
+            }
+            Some("process/exited") => {
+                ledger.exited(&process);
+                if process.starts_with(super::extension_broker::USER_MCP_PROCESS_PREFIX)
+                    && let Some(broker) = self.extensions.get()
+                {
+                    broker.mark_user_server_closed(&process);
+                }
+            }
             _ => {}
         }
     }
@@ -1294,6 +1310,9 @@ impl Client {
                         .any(|process| state.servers.contains(process))
                 })
                 .await;
+            if let Some(broker) = self.extensions.get() {
+                broker.stop_user_servers(self).await;
+            }
             self.terminate_all(ledger.server_processes(), false).await;
             ledger
                 .wait_until(|ledger| ledger.mutations_drained(None))

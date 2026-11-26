@@ -352,6 +352,9 @@ pub const DEVICE_FILE_BUFFERS_CACHE_MAX_AGE: Key<Duration> =
     Key::new(Scope::Device, "file_buffers.cache_max_age");
 pub const DEVICE_FILE_BUFFERS_TARGET_TEMP_MAX_AGE: Key<Duration> =
     Key::new(Scope::Device, "file_buffers.target_temp_max_age");
+pub const DEVICE_EXECUTION_USER_MCP: Key<bool> = Key::new(Scope::Device, "execution.user_mcp");
+pub const DEVICE_EXECUTION_USER_MCP_ALLOWLIST: Key<Vec<String>> =
+    Key::new(Scope::Device, "execution.user_mcp_allowlist");
 
 /// Secrets, binary media and live databases never get a local buffer copy.
 const FILE_BUFFERS_EXCLUDED: &[std::borrow::Cow<'static, str>] = &[
@@ -663,4 +666,37 @@ pub static DEVICE_FIELDS: &[Field] = &[
         reload: Reload::Restart,
         doc: "Run every browser unit on this Device IPv4-only (ipv4_only_v1), whatever\nthe open requests, and report it to the Controller, which places a\nshared browser with an IPv4-only member only on such a Device. At start\na surviving unit without the policy is stopped (snapshotted) first.",
     },
+    Field {
+        key: "execution.user_mcp",
+        kind: Kind::Bool,
+        default: Value::Bool(true),
+        reload: Reload::Live,
+        doc: "Allow Antigravity execution keepers on this Device to discover and run\nowner-authored stdio MCP servers from ~/.claude.json. Flipping to false\nblocks new starts and stops running user MCP servers promptly. Host-owner\ndevice.toml only (no AI Cowboy MCP write action).",
+    },
+    Field {
+        key: "execution.user_mcp_allowlist",
+        kind: Kind::McpServerNames { max_items: 32 },
+        default: Value::Patterns(std::borrow::Cow::Borrowed(&[])),
+        reload: Reload::Live,
+        doc: "Optional allowlist of ~/.claude.json MCP server names permitted on this\nDevice. Empty allows all valid stdio servers; non-empty restricts discovery,\nstart, and running user MCP servers to the listed names. Host-owner\ndevice.toml only (no AI Cowboy MCP write action).",
+    },
 ];
+
+/// Exact MCP server name grammar accepted in `execution.user_mcp_allowlist`.
+#[must_use]
+pub fn valid_mcp_server_name(text: &str) -> bool {
+    !text.is_empty()
+        && text.len() <= 64
+        && text
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
+}
+
+pub(super) fn valid_identifier(text: &str) -> bool {
+    text.len() <= 128
+        && text.split('-').all(|p| {
+            !p.is_empty()
+                && p.bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        })
+}

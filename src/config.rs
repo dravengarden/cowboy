@@ -125,6 +125,10 @@ pub enum Kind {
     Identifiers {
         max_items: usize,
     },
+    /// Exact MCP server names (`A-Z`, `a-z`, `0-9`, `.`, `_`, `-`, 1..=64 chars).
+    McpServerNames {
+        max_items: usize,
+    },
 }
 
 /// The longest accepted glob pattern.
@@ -154,6 +158,9 @@ impl Kind {
             Self::Identifiers { max_items } => {
                 format!("array of at most {max_items} distinct lowercase slug identifiers")
             }
+            Self::McpServerNames { max_items } => format!(
+                "array of at most {max_items} distinct MCP server names (A-Z, a-z, 0-9, ., _, -, 1-64 characters)"
+            ),
         }
     }
 
@@ -162,7 +169,9 @@ impl Kind {
             Self::Bool => "boolean",
             Self::Integer { .. } => "integer",
             Self::Duration { .. } | Self::Bytes { .. } | Self::Choice(_) => "string",
-            Self::Patterns { .. } | Self::Identifiers { .. } => "array",
+            Self::Patterns { .. } | Self::Identifiers { .. } | Self::McpServerNames { .. } => {
+                "array"
+            }
         }
     }
 }
@@ -939,26 +948,18 @@ fn parse_value(kind: &Kind, value: &toml::de::DeValue<'_>) -> Result<Value, Prob
                     quoted_list(options)
                 ))
             }),
-        (Kind::Identifiers { max_items }, DeValue::Array(items)) => {
-            if items.len() > *max_items {
-                return Err(Problem::Range);
-            }
-            let mut unique = std::collections::BTreeSet::new();
-            items
-                .iter()
-                .map(|item| match item.get_ref() {
-                    DeValue::String(text)
-                        if valid_identifier(text) && unique.insert(text.to_string()) =>
-                    {
-                        Ok(std::borrow::Cow::Owned(text.to_string()))
-                    }
-                    _ => Err(Problem::Syntax(
-                        "expected distinct lowercase slug identifiers, without wildcards".into(),
-                    )),
-                })
-                .collect::<Result<Vec<_>, _>>()
-                .map(|values| Value::Patterns(std::borrow::Cow::Owned(values)))
-        }
+        (Kind::Identifiers { max_items }, DeValue::Array(items)) => parse_unique_strings(
+            items,
+            *max_items,
+            schema::valid_identifier,
+            "expected distinct lowercase slug identifiers, without wildcards",
+        ),
+        (Kind::McpServerNames { max_items }, DeValue::Array(items)) => parse_unique_strings(
+            items,
+            *max_items,
+            valid_mcp_server_name,
+            "expected distinct MCP server names (1-64 chars of A-Z, a-z, 0-9, ., _, -)",
+        ),
         (Kind::Patterns { max_items }, DeValue::Array(items)) => {
             if items.len() > *max_items {
                 return Err(Problem::Range);
@@ -987,14 +988,28 @@ fn parse_value(kind: &Kind, value: &toml::de::DeValue<'_>) -> Result<Value, Prob
     }
 }
 
-fn valid_identifier(text: &str) -> bool {
-    text.len() <= 128
-        && text.split('-').all(|part| {
-            !part.is_empty()
-                && part
-                    .bytes()
-                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+pub use schema::valid_mcp_server_name;
+
+fn parse_unique_strings(
+    items: &[toml::Spanned<toml::de::DeValue<'_>>],
+    max_items: usize,
+    valid: fn(&str) -> bool,
+    syntax_error: &str,
+) -> Result<Value, Problem> {
+    if items.len() > max_items {
+        return Err(Problem::Range);
+    }
+    let mut unique = std::collections::BTreeSet::new();
+    let values = items
+        .iter()
+        .map(|item| match item.get_ref() {
+            toml::de::DeValue::String(text) if valid(text) && unique.insert(text.to_string()) => {
+                Ok(std::borrow::Cow::Owned(text.to_string()))
+            }
+            _ => Err(Problem::Syntax(syntax_error.into())),
         })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(Value::Patterns(std::borrow::Cow::Owned(values)))
 }
 
 /// `"90s"`, `"10m"`, `"6h"`, `"7d"`; one unit, whole numbers.

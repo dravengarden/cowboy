@@ -62,6 +62,7 @@ pub struct Manager {
     prepare: Mutex<()>,
     gates: parking_lot::Mutex<HashMap<String, Arc<Semaphore>>>,
     calls: Option<Arc<crate::managed_calls::host::CallHost>>,
+    device_config: Option<crate::config::Handle>,
 }
 
 impl Manager {
@@ -209,6 +210,7 @@ impl Manager {
             prepare: Mutex::new(()),
             gates: parking_lot::Mutex::new(HashMap::new()),
             calls: None,
+            device_config: None,
         })
     }
 
@@ -216,6 +218,181 @@ impl Manager {
     pub fn with_calls(mut self, calls: Arc<crate::managed_calls::host::CallHost>) -> Self {
         self.calls = Some(calls);
         self
+    }
+
+    /// Attach live-reloadable Device configuration for `execution.user_mcp*`.
+    pub fn with_device_config(mut self, device_config: crate::config::Handle) -> Self {
+        self.device_config = Some(device_config);
+        self
+    }
+
+    /// Wrap in `Arc`, attach Device config, and start the level-triggered user MCP reconciler.
+    pub fn start_with_device_config(self, device_config: crate::config::Handle) -> Arc<Self> {
+        let manager = Arc::new(self.with_device_config(device_config));
+        manager.start_user_mcp_reconciler();
+        manager
+    }
+
+    fn user_mcp_policy(&self) -> (bool, Vec<String>) {
+        match &self.device_config {
+            Some(handle) => {
+                let current = handle.current();
+                (
+                    current.get(&crate::config::schema::DEVICE_EXECUTION_USER_MCP),
+                    current.get(&crate::config::schema::DEVICE_EXECUTION_USER_MCP_ALLOWLIST),
+                )
+            }
+            None => (true, Vec::new()),
+        }
+    }
+
+    /// Level-triggered 5-second reconciliation watcher: on Manager startup and
+    /// every tick while `user_mcp == false` or `user_mcp_allowlist` is non-empty,
+    /// stops disallowed user MCP servers across all unconfirmed active keepers
+    /// with bounded concurrency (8), bypassing the regular 24-permit semaphore.
+    pub fn start_user_mcp_reconciler(self: &Arc<Self>) {
+        let manager = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut config_revision: u64 = 1;
+            let mut last = manager.user_mcp_policy();
+            let mut confirmed: HashMap<String, u64> = HashMap::new();
+            let mut tick = tokio::time::interval(Duration::from_secs(5));
+            tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            loop {
+                tick.tick().await;
+                let current = manager.user_mcp_policy();
+                if current != last {
+                    config_revision = config_revision.saturating_add(1);
+                    last = current.clone();
+                }
+                let (enabled, allowlist) = current;
+                if enabled && allowlist.is_empty() {
+                    continue;
+                }
+                manager
+                    .reconcile_user_mcp_once(enabled, &allowlist, config_revision, &mut confirmed)
+                    .await;
+            }
+        });
+    }
+
+    async fn reconcile_user_mcp_once(
+        &self,
+        enabled: bool,
+        allowlist: &[String],
+        config_revision: u64,
+        confirmed: &mut HashMap<String, u64>,
+    ) {
+        use futures::StreamExt as _;
+        let Ok(entries) = std::fs::read_dir(&self.root) else {
+            return;
+        };
+        let mut active_sessions = std::collections::HashSet::new();
+        let mut pending = Vec::new();
+        for entry in entries.flatten() {
+            let Some(session_id) = entry.file_name().to_str().map(str::to_owned) else {
+                continue;
+            };
+            if !keeper::valid_operation_id(&session_id) {
+                continue;
+            }
+            let directory = entry.path();
+            if directory.join("stopped.json").exists() || directory.join("closed.json").exists() {
+                continue;
+            }
+            let contract_path = directory.join("contract.json");
+            let Ok(contract) = read_contract(&contract_path) else {
+                continue;
+            };
+            if contract.managed.is_some() || contract.session_id != session_id {
+                continue;
+            }
+            active_sessions.insert(session_id.clone());
+            if confirmed.get(&session_id).copied().unwrap_or(0) >= config_revision {
+                continue;
+            }
+            pending.push((session_id, directory, contract));
+        }
+        confirmed.retain(|session_id, _| active_sessions.contains(session_id));
+        if pending.is_empty() {
+            return;
+        }
+        let keep_allowlist = if enabled {
+            Some(allowlist.to_vec())
+        } else {
+            None
+        };
+        let results: Vec<(String, bool)> = futures::stream::iter(pending)
+            .map(|(session_id, directory, contract)| {
+                let keep = keep_allowlist.clone();
+                async move {
+                    let clean = self
+                        .stop_user_mcp_for_keeper(&directory, &contract, keep)
+                        .await;
+                    (session_id, clean)
+                }
+            })
+            .buffer_unordered(8)
+            .collect()
+            .await;
+        for (session_id, clean) in results {
+            if clean {
+                confirmed.insert(session_id, config_revision);
+            }
+        }
+    }
+
+    /// Direct keeper stop bypassing the 24-permit regular call semaphore.
+    /// Returns `true` when the keeper confirmed zero remaining failures (or is
+    /// gone / legacy pre-R2 returning `-32601`).
+    async fn stop_user_mcp_for_keeper(
+        &self,
+        directory: &Path,
+        contract: &LaunchContract,
+        keep_allowlist: Option<Vec<String>>,
+    ) -> bool {
+        let params = match keep_allowlist {
+            Some(allowlist) => serde_json::json!({"keepAllowlist": allowlist}),
+            None => serde_json::json!({}),
+        };
+        let command = keeper::Command::Invoke {
+            invocation: keeper::Invocation {
+                operation_id: format!("cowboy-mgr-stop-umcp-{}", random_id()),
+                method: crate::execution_host::user_mcp::USER_MCP_STOP_METHOD.to_owned(),
+                params,
+            },
+            wait_ms: 5_000,
+        };
+        match tokio::time::timeout(
+            Duration::from_secs(6),
+            exchange(directory, contract, command),
+        )
+        .await
+        {
+            Ok(Ok(keeper::Response::Operation {
+                outcome: keeper::Outcome::Completed { reply },
+            })) => {
+                if let Some(failed) = reply
+                    .pointer("/result/failed")
+                    .and_then(serde_json::Value::as_u64)
+                {
+                    failed == 0
+                } else {
+                    // Legacy pre-R2 keeper forwards unknown method to codex exec-server (-32601)
+                    // or managed child returns user_mcp_unsupported; neither can host user MCP.
+                    reply
+                        .pointer("/error/code")
+                        .and_then(serde_json::Value::as_i64)
+                        == Some(-32601)
+                        || reply
+                            .pointer("/error/data/code")
+                            .and_then(serde_json::Value::as_str)
+                            == Some("user_mcp_unsupported")
+                }
+            }
+            Ok(Err(error)) if liveness::missing_endpoint(&error) => true,
+            _ => false,
+        }
     }
 
     pub fn calls(&self) -> Option<&Arc<crate::managed_calls::host::CallHost>> {
@@ -931,6 +1108,60 @@ impl Manager {
             )
         };
         let _permit = gate.try_acquire().map_err(|_| Refusal::Capacity)?;
+        let command = match command {
+            keeper::Command::Invoke {
+                mut invocation,
+                wait_ms,
+            } if invocation.method == crate::execution_host::user_mcp::USER_MCP_LIST_METHOD
+                || invocation.method == crate::execution_host::user_mcp::USER_MCP_START_METHOD =>
+            {
+                let (enabled, allowlist) = self.user_mcp_policy();
+                if let Some(obj) = invocation.params.as_object_mut() {
+                    obj.remove("managerGate");
+                }
+                if !enabled {
+                    let _ = self
+                        .stop_user_mcp_for_keeper(&directory, &contract, None)
+                        .await;
+                    return Ok(keeper::Response::Operation {
+                        outcome: keeper::Outcome::Completed {
+                            reply: crate::execution_host::user_mcp::error_reply(
+                                "user_mcp_disabled",
+                                "user MCP servers disabled by device configuration",
+                            ),
+                        },
+                    });
+                }
+                if !invocation.params.is_object() {
+                    invocation.params = serde_json::json!({});
+                }
+                invocation.params.as_object_mut().expect("object").insert(
+                    "managerGate".to_owned(),
+                    serde_json::json!({
+                        "enabled": true,
+                        "allowlist": allowlist,
+                    }),
+                );
+                keeper::Command::Invoke {
+                    invocation,
+                    wait_ms,
+                }
+            }
+            keeper::Command::Invoke {
+                mut invocation,
+                wait_ms,
+            } if invocation.method == crate::execution_host::user_mcp::USER_MCP_STOP_METHOD => {
+                // Caller-originated stops may not forge keepAllowlist.
+                if let Some(obj) = invocation.params.as_object_mut() {
+                    obj.remove("keepAllowlist");
+                }
+                keeper::Command::Invoke {
+                    invocation,
+                    wait_ms,
+                }
+            }
+            other => other,
+        };
         match exchange(&directory, &contract, command).await {
             Ok(response) => Ok(response),
             Err(error)
@@ -1180,4 +1411,212 @@ fn control_socket(directory: &Path, binding: &BindingV1) -> Result<PathBuf> {
         Err(error) => return Err(error.into()),
     }
     Ok(alias.join("keeper.sock"))
+}
+
+#[cfg(test)]
+mod user_mcp_manager_tests {
+    use super::*;
+    use tokio::net::UnixListener;
+
+    async fn mock_keeper(
+        dir: &Path,
+        contract: &LaunchContract,
+        replies: Arc<parking_lot::Mutex<Vec<serde_json::Value>>>,
+    ) -> (
+        tokio::task::JoinHandle<()>,
+        Arc<parking_lot::Mutex<Vec<keeper::Invocation>>>,
+    ) {
+        let seen = Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let seen_task = Arc::clone(&seen);
+        let sock_path = control_socket(dir, &contract.binding).unwrap();
+        let listener = UnixListener::bind(&sock_path).unwrap();
+        let expected_cap = contract.capability.clone();
+        let handle = tokio::spawn(async move {
+            loop {
+                let Ok((stream, _)) = listener.accept().await else {
+                    break;
+                };
+                let (read, mut write) = stream.into_split();
+                let mut reader = BufReader::new(read);
+                let mut line = String::new();
+                if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
+                    continue;
+                }
+                let req: keeper::Request = serde_json::from_str(&line).unwrap();
+                assert_eq!(req.capability, expected_cap);
+                let response = match req.command {
+                    keeper::Command::Invoke { invocation, .. } => {
+                        seen_task.lock().push(invocation);
+                        let reply = replies.lock().pop().unwrap_or_else(
+                            || serde_json::json!({"result": {"stopped": 1, "failed": 0}}),
+                        );
+                        keeper::Response::Operation {
+                            outcome: keeper::Outcome::Completed { reply },
+                        }
+                    }
+                    _ => keeper::Response::Closed,
+                };
+                let mut bytes = serde_json::to_vec(&response).unwrap();
+                bytes.push(b'\n');
+                let _ = write.write_all(&bytes).await;
+            }
+        });
+        (handle, seen)
+    }
+
+    fn write_test_contract(root: &Path, session_id: &str) -> (PathBuf, LaunchContract) {
+        let dir = root.join(session_id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let binding = BindingV1 {
+            schema: 1,
+            id: "binding-1".into(),
+            revision: 1,
+            runtime: RuntimeLocation {
+                machine_id: "ovh".into(),
+                cwd: "/runtime".into(),
+            },
+            environment: EnvironmentLocation {
+                machine_id: "hawk".into(),
+                id: "env-1".into(),
+                incarnation: format!("inc-{session_id}-{}", random_id()),
+                executor_digest: format!("sha256:{}", "a".repeat(64)),
+                protocol: 1,
+            },
+            workspace: WorkspaceLocation {
+                id: "ws-1".into(),
+                worktree_id: session_id.into(),
+                source_path: "/source".into(),
+                cwd: "/worktree".into(),
+            },
+            access: ExecutionAccess::Project,
+            managed: None,
+        };
+        let contract = LaunchContract {
+            schema: keeper::SCHEMA,
+            session_id: session_id.into(),
+            capability: "b".repeat(64),
+            binding,
+            executor: keeper::Executor {
+                command: "/bin/codex".into(),
+                sha256: "a".repeat(64),
+                version: "0.159.3".into(),
+            },
+            agent_cli: None,
+            environment: BTreeMap::new(),
+            call_context: None,
+            managed: None,
+        };
+        std::fs::write(
+            dir.join("contract.json"),
+            serde_json::to_vec(&contract).unwrap(),
+        )
+        .unwrap();
+        std::fs::set_permissions(
+            dir.join("contract.json"),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+        (dir, contract)
+    }
+
+    #[tokio::test]
+    async fn manager_injects_gate_strips_spoof_and_reconciles_level_triggered_with_retry() {
+        let tmp = tempfile::tempdir().unwrap();
+        let device_cfg = crate::config::Handle::new(
+            crate::config::check_text(
+                crate::config::Scope::Device,
+                "schema = 1\n\n[execution]\nuser_mcp = true\nuser_mcp_allowlist = [\"GitHub\"]\n",
+                None,
+            )
+            .config
+            .unwrap(),
+        );
+        let mgr = Manager::new(Some("svc-1".into()), "hawk".into(), tmp.path(), None, false)
+            .unwrap()
+            .with_device_config(device_cfg.clone());
+        let (dir, contract) = write_test_contract(&mgr.root, "sess-umcp-1");
+        let replies = Arc::new(parking_lot::Mutex::new(vec![
+            serde_json::json!({"result": {"servers": [], "omitted": []}}),
+        ]));
+        let (handle, seen) = mock_keeper(&dir, &contract, Arc::clone(&replies)).await;
+
+        // 1. Caller attempts to spoof managerGate -> stripped and replaced with live allowlist.
+        let resp = mgr
+            .call(
+                "sess-umcp-1",
+                &contract.binding,
+                keeper::Command::Invoke {
+                    invocation: keeper::Invocation {
+                        operation_id: "op-list-1".into(),
+                        method: crate::execution_host::user_mcp::USER_MCP_LIST_METHOD.into(),
+                        params: serde_json::json!({"managerGate": {"enabled": true, "allowlist": ["spoof"]}}),
+                    },
+                    wait_ms: 1_000,
+                },
+            )
+            .await
+            .unwrap();
+        assert!(matches!(resp, keeper::Response::Operation { .. }));
+        let inv = seen.lock().pop().unwrap();
+        assert_eq!(
+            inv.params["managerGate"]["allowlist"],
+            serde_json::json!(["GitHub"])
+        );
+
+        // 2. Caller attempts to forge keepAllowlist on stopUserMcp -> stripped!
+        let _ = mgr
+            .call(
+                "sess-umcp-1",
+                &contract.binding,
+                keeper::Command::Invoke {
+                    invocation: keeper::Invocation {
+                        operation_id: "op-stop-caller".into(),
+                        method: crate::execution_host::user_mcp::USER_MCP_STOP_METHOD.into(),
+                        params: serde_json::json!({"keepAllowlist": ["evil"]}),
+                    },
+                    wait_ms: 1_000,
+                },
+            )
+            .await
+            .unwrap();
+        let inv = seen.lock().pop().unwrap();
+        assert!(inv.params.get("keepAllowlist").is_none());
+
+        // 3. Level-triggered reconciler on restart with user_mcp=false:
+        //    - bypasses saturated 24-permit semaphore!
+        //    - retries when first stop returns failed=1, succeeds on second tick when failed=0!
+        let sem = Arc::new(Semaphore::new(24));
+        let _drain_all_permits = sem.acquire_many(24).await.unwrap();
+        mgr.gates
+            .lock()
+            .insert("sess-umcp-1".into(), Arc::clone(&sem));
+
+        // First reply: failed=1 (retry needed); second reply: failed=0 (confirmed clean).
+        *replies.lock() = vec![
+            serde_json::json!({"result": {"stopped": 1, "failed": 0}}),
+            serde_json::json!({"result": {"stopped": 0, "failed": 1}}),
+        ];
+        let mut confirmed = HashMap::new();
+        mgr.reconcile_user_mcp_once(false, &[], 1, &mut confirmed)
+            .await;
+        assert!(
+            !confirmed.contains_key("sess-umcp-1"),
+            "failed=1 must remain unconfirmed for retry"
+        );
+        assert_eq!(seen.lock().len(), 1);
+
+        mgr.reconcile_user_mcp_once(false, &[], 1, &mut confirmed)
+            .await;
+        assert_eq!(confirmed.get("sess-umcp-1"), Some(&1));
+        assert_eq!(seen.lock().len(), 2);
+
+        // Third tick at same revision skips already-confirmed keeper.
+        mgr.reconcile_user_mcp_once(false, &[], 1, &mut confirmed)
+            .await;
+        assert_eq!(seen.lock().len(), 2);
+
+        handle.abort();
+        remove_control_alias(&contract.binding);
+    }
 }

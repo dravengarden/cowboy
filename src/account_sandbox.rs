@@ -237,14 +237,21 @@ impl Drop for RelayGuard {
 /// The unit's acknowledgement that every reply it awaited arrived; answered
 /// by the worker endpoint itself, never forwarded.
 pub const DRAINED: &str = "cowboy/drained";
+/// The unit's correlated acknowledgement of a user-MCP extension call reply;
+/// answered locally by the worker endpoint and permitted while draining.
+pub const EXTENSION_CALL_ACK: &str = "cowboy/extensionCallAck";
 
 /// Requests a draining unit may still send: reading and stopping what it
-/// started, its report of an unknown outcome and its drain acknowledgement
-/// (both answered by the worker, never forwarded).
+/// started, its report of an unknown outcome, correlated user-MCP call
+/// acknowledgements, and its drain acknowledgement (answered by the worker).
 fn cleanup(method: &str) -> bool {
     matches!(
         method,
-        "process/read" | "process/terminate" | "cowboy/uncertainEffect" | DRAINED
+        "process/read"
+            | "process/terminate"
+            | "cowboy/uncertainEffect"
+            | DRAINED
+            | EXTENSION_CALL_ACK
     )
 }
 

@@ -6,6 +6,7 @@ use crate::execution_environment::{
     EnvironmentLocation, ExecutionAccess, RuntimeLocation, WorkspaceLocation,
 };
 use futures::SinkExt as _;
+use std::collections::HashSet;
 use tokio_tungstenite::tungstenite::client::IntoClientRequest as _;
 
 fn binding() -> BindingV1 {
@@ -1066,7 +1067,7 @@ async fn a_relay_counts_in_flight_until_its_reply_is_handled() {
         quiet.drained(Duration::from_millis(10)).await,
         "idle: immediate"
     );
-    let mut relays = relay::Relays::new(Arc::clone(&target.client));
+    let mut relays = relay::Relays::new(Arc::clone(&target.client), 1);
     relays.spawn(
         json!(1),
         "fs/readFile".into(),
@@ -1100,7 +1101,7 @@ async fn a_relay_whose_socket_closed_counts_until_recorded_undelivered() {
     }));
     let ledger = ledger(&target.client, None);
     let quiet = Arc::clone(&target.client.relays);
-    let mut relays = relay::Relays::new(Arc::clone(&target.client));
+    let mut relays = relay::Relays::new(Arc::clone(&target.client), 1);
     relays.spawn(
         json!(1),
         "process/terminate".into(),
@@ -2272,4 +2273,700 @@ async fn drain_acknowledgement_without_ledger_is_local_under_16_slot_saturation(
     );
 
     fixture.target.release(json!({"result": {}}));
+}
+
+impl Target {
+    fn new_with_init(initialization: Value, handler: Handler) -> Self {
+        let (notify, mut notified) = mpsc::unbounded_channel();
+        let client = Client::new("session".into(), "worker".into(), binding(), notify);
+        let log = Arc::<Mutex<Vec<String>>>::default();
+        let held = Arc::<Mutex<Vec<RuntimeRequest>>>::default();
+        let (relay, relay_log, relay_held) =
+            (Arc::clone(&client), Arc::clone(&log), Arc::clone(&held));
+        let task = tokio::spawn(async move {
+            while notified.recv().await.is_some() {
+                for frame in relay.frames(false) {
+                    relay.sending(&frame);
+                    let Frame::ExecutionRequest { request } = frame else {
+                        continue;
+                    };
+                    let request = *request;
+                    match &request.command {
+                        Command::Describe => {
+                            let response = Response::Ready {
+                                scope: Scope::from_binding(&binding()),
+                                initialization: initialization.clone(),
+                                event_cursor: 0,
+                            };
+                            answer(&relay, request, response);
+                        }
+                        Command::Invoke { invocation, .. } => {
+                            let id = invocation.params["processId"].as_str().unwrap_or("");
+                            relay_log.lock().push(format!("{} {id}", invocation.method));
+                            match handler(invocation) {
+                                Reply::Answer(response) => answer(&relay, request, response),
+                                Reply::Hold => relay_held.lock().push(request),
+                            }
+                        }
+                        Command::Observe { operation_id, .. } => {
+                            relay_log.lock().push(format!("observe {operation_id}"));
+                            std::thread::sleep(Duration::from_millis(20));
+                            let response = Response::Operation {
+                                outcome: Outcome::Pending,
+                            };
+                            answer(&relay, request, response);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        });
+        Self {
+            client,
+            log,
+            held,
+            task,
+        }
+    }
+}
+
+fn user_mcp_init() -> Value {
+    json!({"sessionId": "native", USER_MCP_INITIALIZATION_KEY: {"schema": 1}})
+}
+
+fn push_mcp_line(output: &Mutex<BTreeMap<String, Vec<Value>>>, id: &str, msg: Value) {
+    use base64::Engine as _;
+    let mut map = output.lock();
+    let list = map.entry(id.to_owned()).or_default();
+    let seq = (list.len() as u64) + 1;
+    let line = format!("{msg}\n");
+    list.push(json!({
+        "seq": seq,
+        "stream": "stdout",
+        "chunk": base64::engine::general_purpose::STANDARD.encode(line.as_bytes()),
+    }));
+}
+
+#[tokio::test]
+async fn r2_unit_isolation_blocks_keeper_methods_preserves_memory_and_hides_user_prefix() {
+    let target = Target::new_with_init(
+        user_mcp_init(),
+        Arc::new(|_| completed(json!({"result": {}}))),
+    );
+    let ledger = ledger(&target.client, None);
+    ledger.set_readiness(false);
+    ledger.begin_turn("t1");
+
+    // 1. Unit cannot invoke cowboy/listUserMcp, startUserMcp, stopUserMcp, or unknown cowboy/*.
+    for method in [
+        USER_MCP_LIST_METHOD,
+        USER_MCP_START_METHOD,
+        USER_MCP_STOP_METHOD,
+        "cowboy/unknownInternal",
+    ] {
+        let reply = target.client.relay(method.into(), json!({})).await;
+        assert_eq!(
+            reply.pointer("/error/message").and_then(Value::as_str),
+            Some("reserved cowboy method"),
+            "{method} must be refused locally"
+        );
+    }
+    assert!(
+        target.log().is_empty(),
+        "reserved cowboy/* methods must never reach the target"
+    );
+
+    // 2. cowboy/memory STILL reaches the local memory handler (not blocked by catch-all!).
+    let mem = target
+        .client
+        .relay(
+            memory_bridge::MEMORY_REQUEST.into(),
+            json!({"path": "/v1/context"}),
+        )
+        .await;
+    assert_eq!(
+        mem.pointer("/error/message").and_then(Value::as_str),
+        Some("memory is not available in this session"),
+        "cowboy/memory must hit its local branch, not the reserved cowboy/* catch-all"
+    );
+
+    // 3. cowboy-worker-mcp-user-* inherits SERVER_PREFIX isolation in worker_event() and admit().
+    let user_pid = format!("{USER_MCP_PROCESS_PREFIX}0123456789abcdef0123456789abcdef");
+    assert!(ledger::worker_event(&json!({
+        "method": "process/output",
+        "params": {"processId": user_pid}
+    })));
+    for op in ["process/read", "process/write", "process/terminate"] {
+        let reply = target
+            .client
+            .relay(op.into(), json!({"processId": user_pid}))
+            .await;
+        assert!(
+            reply.get("error").is_some(),
+            "unit {op} on user server must be refused"
+        );
+    }
+    assert!(target.log().is_empty());
+
+    // 4. cowboy/startUserMcp is classified effectful().
+    assert!(ledger::effectful(USER_MCP_START_METHOD));
+}
+
+#[tokio::test]
+async fn r2_phase2_is_demand_triggered_filters_collisions_and_handles_hanging_server() {
+    use base64::Engine as _;
+    let output: Arc<Mutex<BTreeMap<String, Vec<Value>>>> = Arc::default();
+    let output_h = Arc::clone(&output);
+    let started_names: Arc<Mutex<std::collections::HashMap<String, String>>> = Arc::default();
+    let started_h = Arc::clone(&started_names);
+
+    let target = Target::new_with_init(
+        user_mcp_init(),
+        Arc::new(move |inv| match inv.method.as_str() {
+            USER_MCP_STOP_METHOD => completed(json!({"result": {"stopped": 0, "failed": 0}})),
+            USER_MCP_LIST_METHOD => completed(json!({
+                "result": {
+                    "servers": [
+                        {"name": "chrome-dev", "scope": "user", "fingerprint": "a".repeat(64)},
+                        {"name": "hanging-srv", "scope": "user", "fingerprint": "b".repeat(64)},
+                        {"name": "suger", "scope": "user", "fingerprint": "c".repeat(64)},
+                        {"name": "matrix", "scope": "user", "fingerprint": "d".repeat(64)},
+                        {"name": "cowboy-evil", "scope": "user", "fingerprint": "e".repeat(64)}
+                    ],
+                    "omitted": [
+                        {"name": "bad-env", "reason": "unresolved_variable"}
+                    ]
+                }
+            })),
+            USER_MCP_START_METHOD => {
+                let name = inv.params["name"].as_str().unwrap().to_owned();
+                let pid = inv.params["processId"].as_str().unwrap().to_owned();
+                started_h.lock().insert(pid.clone(), name);
+                completed(json!({"result": {"processId": pid}}))
+            }
+            "process/write" => {
+                let pid = inv.params["processId"].as_str().unwrap().to_owned();
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(inv.params["chunk"].as_str().unwrap())
+                    .unwrap();
+                let msg: Value = serde_json::from_slice(&bytes).unwrap();
+                let server_name = started_h.lock().get(&pid).cloned().unwrap_or_default();
+                if server_name == "hanging-srv" {
+                    // Never responds to initialize -> triggers Phase 2 timeout & cleanup!
+                    return completed(json!({"result": {"status": "accepted"}}));
+                }
+                if let Some(req_id) = msg.get("id").and_then(Value::as_u64) {
+                    let result = match msg["method"].as_str() {
+                        Some("initialize") => json!({"instructions": "i".repeat(2000)}),
+                        Some("tools/list") => {
+                            json!({"tools": [{"name": "snap", "description": "s"}]})
+                        }
+                        _ => json!({}),
+                    };
+                    push_mcp_line(
+                        &output_h,
+                        &pid,
+                        json!({"jsonrpc": "2.0", "id": req_id, "result": result}),
+                    );
+                }
+                completed(json!({"result": {"status": "accepted"}}))
+            }
+            "process/read" => {
+                let pid = inv.params["processId"].as_str().unwrap().to_owned();
+                let after = inv.params["afterSeq"].as_u64().unwrap_or(0);
+                let chunks: Vec<Value> = output_h
+                    .lock()
+                    .get(&pid)
+                    .map(|l| {
+                        l.iter()
+                            .filter(|c| c["seq"].as_u64().unwrap() > after)
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                completed(json!({"result": {"chunks": chunks, "exited": false, "closed": false}}))
+            }
+            _ => completed(json!({"result": {}})),
+        }),
+    );
+    let ledger = ledger(&target.client, None);
+    ledger.set_readiness(false);
+    let broker = ExtensionBroker::with_test_timeouts(
+        &target.client,
+        ExtensionPlan {
+            servers: vec![ServerPlan {
+                name: "suger".into(),
+                argv: vec!["suger".into()],
+                required: false,
+            }],
+            memory_tools: Vec::new(),
+            memory_server: "matrix".into(),
+            guidance: Vec::new(),
+        },
+        Some(Duration::from_millis(200)),
+        Some(Duration::from_millis(350)),
+    );
+    target.client.set_extensions(broker);
+
+    // 1. Legacy 0.2.39 proxy (ackProtocol omitted): MUST NOT trigger Phase 2!
+    let legacy = target
+        .client
+        .relay("cowboy/extensions".into(), json!({}))
+        .await;
+    assert!(legacy.get("result").is_some());
+    assert!(
+        !target
+            .log()
+            .iter()
+            .any(|l| l.starts_with(USER_MCP_LIST_METHOD)),
+        "0.2.39 without ackProtocol must skip Phase 2 completely"
+    );
+
+    // 2. 0.2.40 proxy (ackProtocol: 1): triggers Phase 2 once, returns chrome-dev_snap
+    //    despite hanging-srv timing out, filters suger/matrix/cowboy-evil collisions,
+    //    caps instructions to <=1024 chars, and cleans up hanging-srv via stopUserMcp.
+    let v2 = target
+        .client
+        .relay("cowboy/extensions".into(), json!({"ackProtocol": 1}))
+        .await;
+    let tools = v2["result"]["tools"].as_array().unwrap();
+    assert!(
+        tools
+            .iter()
+            .any(|t| t["name"] == "chrome-dev_snap" && t["tool"] == "snap"),
+        "expected mandatory <server>_ prefixed tool, got {tools:?}"
+    );
+    let instructions = v2["result"]["instructions"].as_str().unwrap();
+    assert!(instructions.contains("reserved_name_collision"));
+    assert!(instructions.contains("unresolved_variable"));
+    assert!(instructions.contains("init_timeout"));
+    assert!(
+        !instructions.contains(&"i".repeat(1200)),
+        "instructions must be capped at 1024 chars"
+    );
+
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    let stop_count = target
+        .log()
+        .iter()
+        .filter(|l| l.starts_with(USER_MCP_STOP_METHOD))
+        .count();
+    // 1 unconditional startup sweep + at least 1 straggler stop for hanging-srv
+    assert!(
+        stop_count >= 2,
+        "expected startup sweep + hanging straggler stop, got {stop_count}"
+    );
+}
+
+#[tokio::test]
+async fn r2_pending_ack_happy_path_timeout_closed_socket_high1_and_notsent() {
+    use base64::Engine as _;
+    let temp = tempfile::tempdir().unwrap();
+    let ledger_path = temp.path().join("ledger.json");
+    let output: Arc<Mutex<BTreeMap<String, Vec<Value>>>> = Arc::default();
+    let output_h = Arc::clone(&output);
+    let mode = Arc::new(Mutex::new("ok".to_owned()));
+    let mode_h = Arc::clone(&mode);
+    let hold_call_tx: Arc<Mutex<Option<tokio::sync::oneshot::Sender<()>>>> = Arc::default();
+    let hold_call_h = Arc::clone(&hold_call_tx);
+
+    let target = Target::new_with_init(
+        user_mcp_init(),
+        Arc::new(move |inv| match inv.method.as_str() {
+            USER_MCP_STOP_METHOD => completed(json!({"result": {"stopped": 0, "failed": 0}})),
+            USER_MCP_LIST_METHOD => completed(json!({
+                "result": {
+                    "servers": [{"name": "demo", "scope": "user", "fingerprint": "a".repeat(64)}],
+                    "omitted": []
+                }
+            })),
+            USER_MCP_START_METHOD => {
+                completed(json!({"result": {"processId": inv.params["processId"]}}))
+            }
+            "process/write" => {
+                let pid = inv.params["processId"].as_str().unwrap().to_owned();
+                let bytes = base64::engine::general_purpose::STANDARD
+                    .decode(inv.params["chunk"].as_str().unwrap())
+                    .unwrap();
+                let msg: Value = serde_json::from_slice(&bytes).unwrap();
+                let cur_mode = mode_h.lock().clone();
+                if msg["method"] == "tools/call" && cur_mode == "not_sent" {
+                    return completed(json!({"result": {"status": "closed"}}));
+                }
+                if let Some(req_id) = msg.get("id").and_then(Value::as_u64) {
+                    match msg["method"].as_str() {
+                        Some("initialize") => push_mcp_line(
+                            &output_h,
+                            &pid,
+                            json!({"jsonrpc": "2.0", "id": req_id, "result": {}}),
+                        ),
+                        Some("tools/list") => push_mcp_line(
+                            &output_h,
+                            &pid,
+                            json!({"jsonrpc": "2.0", "id": req_id, "result": {"tools": [{"name": "act"}]}}),
+                        ),
+                        Some("tools/call") => {
+                            if cur_mode == "hold_then_reply" {
+                                let (tx, rx) = tokio::sync::oneshot::channel();
+                                *hold_call_h.lock() = Some(tx);
+                                let out_async = Arc::clone(&output_h);
+                                let pid_async = pid.clone();
+                                tokio::spawn(async move {
+                                    let _ = rx.await;
+                                    push_mcp_line(
+                                        &out_async,
+                                        &pid_async,
+                                        json!({"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": "late-ok"}]}}),
+                                    );
+                                });
+                            } else if cur_mode == "tool_error" {
+                                push_mcp_line(
+                                    &output_h,
+                                    &pid,
+                                    json!({"jsonrpc": "2.0", "id": req_id, "error": {"message": "bad args"}}),
+                                );
+                            } else {
+                                push_mcp_line(
+                                    &output_h,
+                                    &pid,
+                                    json!({"jsonrpc": "2.0", "id": req_id, "result": {"content": [{"type": "text", "text": "ok"}]}}),
+                                );
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                completed(json!({"result": {"status": "accepted"}}))
+            }
+            "process/read" => {
+                let pid = inv.params["processId"].as_str().unwrap().to_owned();
+                let after = inv.params["afterSeq"].as_u64().unwrap_or(0);
+                let chunks: Vec<Value> = output_h
+                    .lock()
+                    .get(&pid)
+                    .map(|l| {
+                        l.iter()
+                            .filter(|c| c["seq"].as_u64().unwrap() > after)
+                            .cloned()
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                completed(json!({"result": {"chunks": chunks, "exited": false, "closed": false}}))
+            }
+            _ => completed(json!({"result": {}})),
+        }),
+    );
+    let ledger = Ledger::open("session", Some(ledger_path.clone())).unwrap();
+    let observed = Arc::new(Mutex::new(Vec::<(String, u64)>::new()));
+    let obs_ref = Arc::clone(&observed);
+    ledger.set_observer(Box::new(move |method, seq| {
+        obs_ref.lock().push((method.to_owned(), seq));
+    }));
+    ledger.set_readiness(false);
+    target.client.set_ledger(Arc::clone(&ledger));
+
+    let broker = ExtensionBroker::with_test_timeouts(
+        &target.client,
+        ExtensionPlan::default(),
+        Some(Duration::from_millis(120)),
+        Some(Duration::from_secs(2)),
+    );
+    target.client.set_extensions(Arc::clone(&broker));
+
+    let listed = target
+        .client
+        .relay("cowboy/extensions".into(), json!({"ackProtocol": 1}))
+        .await;
+    assert_eq!(listed["result"]["tools"][0]["name"], "demo_act");
+
+    // 0. Calling user-MCP tool without ackProtocol is refused.
+    ledger.begin_turn("t1");
+    let no_ack = target
+        .client
+        .relay(
+            "cowboy/extensionCall".into(),
+            json!({"name": "demo_act", "arguments": {}}),
+        )
+        .await;
+    assert!(no_ack.get("error").is_some());
+
+    // 1. Happy path: call returns Pending(call_id), sentinel persisted, ack clears sentinel & releases guard.
+    let (reply, guard, ack) = target
+        .client
+        .relay_guarded(
+            "cowboy/extensionCall".into(),
+            json!({"name": "demo_act", "arguments": {}, "ackProtocol": 1}),
+            10,
+        )
+        .await;
+    assert!(reply.get("result").is_some());
+    assert!(
+        guard.is_none(),
+        "SettlementGuard must be owned by PendingAck"
+    );
+    let relay::AckState::Pending(call_id) = ack else {
+        panic!("expected Pending ack, got {ack:?}");
+    };
+    let on_disk: Value = serde_json::from_slice(&std::fs::read(&ledger_path).unwrap()).unwrap();
+    assert!(
+        on_disk["active_processes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|v| v.as_str() == Some(&format!("cowboy-pending-call:{call_id}"))),
+        "Schema-1 sentinel must be persisted while awaiting ack"
+    );
+    let ack_reply = target
+        .client
+        .relay(
+            crate::account_sandbox::EXTENSION_CALL_ACK.into(),
+            json!({"callId": call_id}),
+        )
+        .await;
+    assert_eq!(ack_reply["result"]["acknowledged"], true);
+    let on_disk: Value = serde_json::from_slice(&std::fs::read(&ledger_path).unwrap()).unwrap();
+    assert!(on_disk.get("active_processes").is_none());
+    assert!(observed.lock().is_empty());
+
+    // 2. Failure::NotSent clears sentinel cleanly (Round 3 Medium 5).
+    *mode.lock() = "not_sent".into();
+    let (ns_reply, ns_guard, ns_ack) = target
+        .client
+        .relay_guarded(
+            "cowboy/extensionCall".into(),
+            json!({"name": "demo_act", "arguments": {}, "ackProtocol": 1}),
+            10,
+        )
+        .await;
+    assert!(ns_reply.get("error").is_some());
+    assert_eq!(ns_ack, relay::AckState::None);
+    drop(ns_guard);
+    let on_disk: Value = serde_json::from_slice(&std::fs::read(&ledger_path).unwrap()).unwrap();
+    assert!(
+        on_disk.get("active_processes").is_none(),
+        "NotSent must clear sentinel"
+    );
+    assert!(observed.lock().is_empty());
+
+    // 3. Refused user-server tool error ALSO returns Pending(call_id); timeout converts once.
+    *mode.lock() = "tool_error".into();
+    let (err_reply, _, err_ack) = target
+        .client
+        .relay_guarded(
+            "cowboy/extensionCall".into(),
+            json!({"name": "demo_act", "arguments": {}, "ackProtocol": 1}),
+            10,
+        )
+        .await;
+    assert!(err_reply.get("error").is_some());
+    let relay::AckState::Pending(err_call_id) = err_ack else {
+        panic!("refused tool error must require ack");
+    };
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(observed.lock().len(), 1);
+    assert_eq!(observed.lock()[0].0, "tools/call");
+    // Late ack after timeout returns acknowledged: false.
+    let late_ack = target
+        .client
+        .relay(
+            crate::account_sandbox::EXTENSION_CALL_ACK.into(),
+            json!({"callId": err_call_id}),
+        )
+        .await;
+    assert_eq!(late_ack["result"]["acknowledged"], false);
+
+    // 4. HIGH-1 REGRESSION: socket closes WHILE user-MCP tools/call is in flight!
+    //    - Must NOT hang finish_turn
+    //    - Must NOT deadlock on SettlementGuard drop
+    //    - Must record EXACTLY ONE uncertain_effect ("tools/call") even through Relays::drop!
+    observed.lock().clear();
+    let seq_before = ledger.uncertain_sequence();
+    ledger.try_begin_turn("t2", Some(seq_before)).unwrap();
+    *mode.lock() = "hold_then_reply".into();
+
+    let mut relays = relay::Relays::new(Arc::clone(&target.client), 42);
+    let in_flight = target
+        .client
+        .relays
+        .try_enter("cowboy/extensionCall")
+        .unwrap();
+    relays.spawn(
+        json!(99),
+        "cowboy/extensionCall".into(),
+        json!({"name": "demo_act", "arguments": {}, "ackProtocol": 1}),
+        in_flight,
+    );
+    // Wait until the call is in flight inside tools/call.
+    for _ in 0..50 {
+        if hold_call_tx.lock().is_some() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    assert!(hold_call_tx.lock().is_some(), "call should be in flight");
+
+    // Socket closes BEFORE the server replies! Drop BrokerConnectionGuard order:
+    // connection_closed(42) runs FIRST, then Relays drops!
+    broker.connection_closed(42);
+    drop(relays);
+
+    // Now release the server reply so call_guarded completes after socket close.
+    hold_call_tx.lock().take().unwrap().send(()).unwrap();
+
+    // finish_turn MUST complete boundedly (no hang, no deadlock!).
+    if let Some(finishing) = target.client.finish_turn("t2") {
+        tokio::time::timeout(Duration::from_secs(2), finishing)
+            .await
+            .expect("finish_turn must terminate boundedly after mid-call socket close");
+    }
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(
+        observed.lock().len(),
+        1,
+        "High-1: must record EXACTLY ONE uncertain_effect, got {:?}",
+        *observed.lock()
+    );
+    assert_eq!(observed.lock()[0].0, "tools/call");
+
+    // 4b. Correlated cowboy/uncertainEffect({ callId }) settles PendingAck ONCE without double bump.
+    observed.lock().clear();
+    let seq_before_rep = ledger.uncertain_sequence();
+    ledger.try_begin_turn("t3", Some(seq_before_rep)).unwrap();
+    *mode.lock() = "ok".into();
+    let (_, _, rep_ack) = target
+        .client
+        .relay_guarded(
+            "cowboy/extensionCall".into(),
+            json!({"name": "demo_act", "arguments": {}, "ackProtocol": 1}),
+            11,
+        )
+        .await;
+    let relay::AckState::Pending(rep_call_id) = rep_ack else {
+        panic!("expected Pending ack");
+    };
+    let rep_res = target
+        .client
+        .relay(
+            ledger::UNCERTAIN_REPORT.into(),
+            json!({"method": "tools/call", "callId": rep_call_id}),
+        )
+        .await;
+    assert_eq!(rep_res["result"], json!({}));
+    assert_eq!(
+        observed.lock().len(),
+        1,
+        "uncertainEffect(callId) must bump sequence ONCE"
+    );
+    assert_eq!(observed.lock()[0].0, "tools/call");
+
+    // 4c. observe_event(process/closed) marks user server closed so next call fails locally without sentinel.
+    let started_pid = target
+        .log()
+        .iter()
+        .find_map(|entry| entry.strip_prefix(&format!("{USER_MCP_START_METHOD} ")))
+        .unwrap()
+        .to_owned();
+    target.client.observe_event(&json!({
+        "method": "process/closed",
+        "params": {"processId": started_pid}
+    }));
+    let seq_closed = ledger.uncertain_sequence();
+    ledger.try_begin_turn("t4", Some(seq_closed)).unwrap();
+    let (closed_reply, closed_guard, closed_ack) = target
+        .client
+        .relay_guarded(
+            "cowboy/extensionCall".into(),
+            json!({"name": "demo_act", "arguments": {}, "ackProtocol": 1}),
+            11,
+        )
+        .await;
+    assert!(closed_reply.get("error").is_some());
+    assert_eq!(closed_ack, relay::AckState::None);
+    drop(closed_guard);
+    let on_disk_closed: Value =
+        serde_json::from_slice(&std::fs::read(&ledger_path).unwrap()).unwrap();
+    assert!(on_disk_closed.get("active_processes").is_none());
+
+    // 5. MutationInflightIds MAX_ACK = 8 lane is independent of control (4) and forwarded (16).
+    let mut ids = MutationInflightIds::new();
+    for i in 0..16 {
+        assert!(
+            ids.try_admit(&json!(format!("f{i}")), "process/read")
+                .unwrap()
+        );
+    }
+    for i in 0..4 {
+        assert!(
+            ids.try_admit(&json!(format!("c{i}")), "cowboy/drained")
+                .unwrap()
+        );
+    }
+    for i in 0..8 {
+        assert!(
+            ids.try_admit(
+                &json!(format!("a{i}")),
+                crate::account_sandbox::EXTENSION_CALL_ACK
+            )
+            .unwrap()
+        );
+    }
+    assert!(
+        !ids.try_admit(&json!("a8"), crate::account_sandbox::EXTENSION_CALL_ACK)
+            .unwrap()
+    );
+}
+
+#[tokio::test]
+async fn r2_schema1_sentinel_reopen_twice_and_pre_floor_counterexample() {
+    let temp = tempfile::tempdir().unwrap();
+    let path = temp.path().join("ledger.json");
+
+    // Write a Schema-1 ledger populated with a pending user-MCP call sentinel.
+    let populated = json!({
+        "schema": 1,
+        "session_id": "sess-r2",
+        "uncertain_effect": null,
+        "uncertain_sequence": 5,
+        "active_processes": ["cowboy-pending-call:0123456789abcdef0123456789abcdef"]
+    });
+    std::fs::write(&path, serde_json::to_vec(&populated).unwrap()).unwrap();
+
+    // 1. First reopen on R2 (>= f2aa86175 floor): consumes sentinel, records tools/call, bumps sequence.
+    let first = Ledger::open("sess-r2", Some(path.clone())).unwrap();
+    let effect1 = first
+        .uncertain_effect()
+        .expect("reopen must record uncertainty");
+    let seq1 = first.uncertain_sequence();
+    assert_eq!(effect1, "tools/call");
+    assert!(seq1 > 5);
+    assert!(
+        first.try_begin_turn("t1", Some(5)).is_err(),
+        "stale ack must stay fenced"
+    );
+
+    // 2. Second reopen (R4 §7.1 durability check): retains incremented sequence & fence.
+    let second = Ledger::open("sess-r2", Some(path.clone())).unwrap();
+    let effect2 = second
+        .uncertain_effect()
+        .expect("second reopen must keep uncertainty");
+    let seq2 = second.uncertain_sequence();
+    assert_eq!(effect2, "tools/call");
+    assert_eq!(seq2, seq1);
+    assert!(second.try_begin_turn("t2", Some(5)).is_err());
+
+    // 3. Counterexample (High-2): a pre-d3b59b8ca worker Record (lacking `active_processes`)
+    //    silently drops the sentinel on deserialize + re-serialize, proving why the
+    //    `>= f2aa86175` rollback worker floor is mandatory before enabling R2.
+    #[derive(serde::Serialize, serde::Deserialize)]
+    struct PreD3b59b8caRecord {
+        schema: u16,
+        session_id: String,
+        uncertain_effect: Option<String>,
+        #[serde(default)]
+        uncertain_sequence: u64,
+    }
+    let legacy: PreD3b59b8caRecord = serde_json::from_value(populated).unwrap();
+    let rewritten = serde_json::to_value(&legacy).unwrap();
+    assert!(rewritten.get("active_processes").is_none());
+    assert_eq!(rewritten["uncertain_sequence"], 5);
 }

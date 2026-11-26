@@ -6,6 +6,7 @@ pub mod file_helper;
 mod identity;
 mod ledger;
 mod read_only;
+pub mod user_mcp;
 
 use crate::execution_protocol::{
     self as wire, Command, LaunchContract, Outcome, Refusal, Request, Response, Scope,
@@ -55,6 +56,14 @@ struct Host {
     capability_digest: [u8; 32],
     initialization: Value,
     cwd: PathBuf,
+    source_path: PathBuf,
+    state_dir: PathBuf,
+    environment: std::collections::BTreeMap<String, String>,
+    neutral_user_mcp_cwd: Option<PathBuf>,
+    user_mcp_key: [u8; 32],
+    /// Strict lock order across the keeper: ALWAYS acquire `user_mcp` BEFORE
+    /// `ledger`, never `ledger` before `user_mcp`.
+    user_mcp: Mutex<user_mcp::UserMcpState>,
     inode: (u64, u64),
     ledger: Mutex<Ledger>,
     writer: mpsc::Sender<Value>,
@@ -232,33 +241,45 @@ impl Host {
                 invocation,
                 wait_ms,
             } => {
-                // The one native frame this invocation may send. A read-only
-                // environment decides once; a refusal is never forwarded.
-                let native = if self.read_only {
-                    read_only::decide(&invocation.method, &invocation.params, &self.cwd)
-                } else {
-                    read_only::Decision::Forward(invocation.params.clone())
-                };
                 if wait_ms > wire::MAX_WAIT_MS {
                     Err(Refusal::InvalidRequest)
                 } else if !self.current_workspace() {
                     Err(Refusal::WorkspaceChanged)
-                } else if let read_only::Decision::Refuse(reply) = native {
-                    // Deterministic and effect-free: answered without admission.
+                } else if invocation.method == user_mcp::USER_MCP_LIST_METHOD {
                     Ok(Response::Operation {
-                        outcome: Outcome::Completed { reply },
+                        outcome: Outcome::Completed {
+                            reply: self.handle_list_user_mcp(&invocation),
+                        },
                     })
+                } else if invocation.method == user_mcp::USER_MCP_START_METHOD {
+                    self.handle_start_user_mcp(&invocation, wait_ms).await
+                } else if invocation.method == user_mcp::USER_MCP_STOP_METHOD {
+                    self.handle_stop_user_mcp(&invocation).await
                 } else {
-                    let read_only::Decision::Forward(native) = native else {
-                        unreachable!("refusals return above")
+                    // The one native frame this invocation may send. A read-only
+                    // environment decides once; a refusal is never forwarded.
+                    let native = if self.read_only {
+                        read_only::decide(&invocation.method, &invocation.params, &self.cwd)
+                    } else {
+                        read_only::Decision::Forward(invocation.params.clone())
                     };
-                    match self.admit(&invocation, &native) {
-                        Ok(Admission::Existing(receiver) | Admission::New { receiver, .. }) => {
-                            Ok(Response::Operation {
-                                outcome: wait_outcome(receiver, wait_ms).await,
-                            })
+                    if let read_only::Decision::Refuse(reply) = native {
+                        // Deterministic and effect-free: answered without admission.
+                        Ok(Response::Operation {
+                            outcome: Outcome::Completed { reply },
+                        })
+                    } else {
+                        let read_only::Decision::Forward(native) = native else {
+                            unreachable!("refusals return above")
+                        };
+                        match self.admit(&invocation, &native) {
+                            Ok(Admission::Existing(receiver) | Admission::New { receiver, .. }) => {
+                                Ok(Response::Operation {
+                                    outcome: wait_outcome(receiver, wait_ms).await,
+                                })
+                            }
+                            Err(reason) => Err(reason),
                         }
-                        Err(reason) => Err(reason),
                     }
                 }
             }
@@ -287,6 +308,409 @@ impl Host {
             }
         };
         result.unwrap_or_else(|reason| Response::Refused { reason })
+    }
+
+    fn handle_list_user_mcp(&self, invocation: &wire::Invocation) -> Value {
+        if self.read_only || self.neutral_user_mcp_cwd.is_none() {
+            return user_mcp::error_reply(
+                "user_mcp_unsupported",
+                "user MCP servers are not supported in read-only environments",
+            );
+        }
+        let (gate, _) = match user_mcp::extract_manager_gate(&invocation.params) {
+            Ok(parsed) => parsed,
+            Err(reply) => return reply,
+        };
+        let catalog = user_mcp::resolve_catalog(
+            &self.environment,
+            &self.state_dir,
+            &self.source_path,
+            &self.cwd,
+            &gate.allowlist,
+            &self.user_mcp_key,
+        );
+        let servers: Vec<Value> = catalog
+            .servers
+            .into_iter()
+            .map(|server| {
+                json!({
+                    "name": server.name,
+                    "scope": server.scope,
+                    "fingerprint": server.fingerprint,
+                })
+            })
+            .collect();
+        let omitted: Vec<Value> = catalog
+            .omitted
+            .into_iter()
+            .map(|entry| {
+                json!({
+                    "name": entry.name,
+                    "reason": entry.reason,
+                })
+            })
+            .collect();
+        json!({"result": {"servers": servers, "omitted": omitted}})
+    }
+
+    async fn handle_start_user_mcp(
+        &self,
+        invocation: &wire::Invocation,
+        wait_ms: u64,
+    ) -> Result<Response, Refusal> {
+        let (gate, clean_invocation) = match self.prepare_start_user_mcp(invocation) {
+            Ok(parsed) => parsed,
+            Err(reply) => {
+                return Ok(Response::Operation {
+                    outcome: Outcome::Completed { reply },
+                });
+            }
+        };
+        if let Some(receiver) = self.observe_existing_user_mcp(&clean_invocation)? {
+            return Ok(Response::Operation {
+                outcome: wait_outcome(receiver, wait_ms).await,
+            });
+        }
+        let Some(neutral_cwd) = &self.neutral_user_mcp_cwd else {
+            return Ok(Response::Operation {
+                outcome: Outcome::Completed {
+                    reply: user_mcp::error_reply(
+                        "user_mcp_unsupported",
+                        "user MCP neutral working directory unavailable",
+                    ),
+                },
+            });
+        };
+        let (name, process_id, fingerprint) =
+            match parse_start_user_mcp_args(&clean_invocation.params) {
+                Ok(args) => args,
+                Err(reply) => {
+                    return Ok(Response::Operation {
+                        outcome: Outcome::Completed { reply },
+                    });
+                }
+            };
+        let epoch = match self.snapshot_user_mcp_epoch(&process_id) {
+            Ok(epoch) => epoch,
+            Err(reply) => {
+                return Ok(Response::Operation {
+                    outcome: Outcome::Completed { reply },
+                });
+            }
+        };
+        let native_params = match self.resolve_user_mcp_start(
+            &gate.allowlist,
+            &name,
+            &process_id,
+            &fingerprint,
+            neutral_cwd,
+        ) {
+            Ok(params) => params,
+            Err(reply) => {
+                return Ok(Response::Operation {
+                    outcome: Outcome::Completed { reply },
+                });
+            }
+        };
+        let receiver = match self.admit_user_mcp_start(
+            &clean_invocation,
+            epoch,
+            name,
+            process_id,
+            native_params,
+        )? {
+            Ok(receiver) => receiver,
+            Err(reply) => {
+                return Ok(Response::Operation {
+                    outcome: Outcome::Completed { reply },
+                });
+            }
+        };
+        Ok(Response::Operation {
+            outcome: wait_outcome(receiver, wait_ms).await,
+        })
+    }
+
+    fn prepare_start_user_mcp(
+        &self,
+        invocation: &wire::Invocation,
+    ) -> Result<(user_mcp::ManagerGate, wire::Invocation), Value> {
+        if self.read_only {
+            return Err(user_mcp::error_reply(
+                "user_mcp_unsupported",
+                "user MCP servers are not supported in read-only environments",
+            ));
+        }
+        let (gate, clean_params) = user_mcp::extract_manager_gate(&invocation.params)?;
+        Ok((
+            gate,
+            wire::Invocation {
+                operation_id: invocation.operation_id.clone(),
+                method: invocation.method.clone(),
+                params: clean_params,
+            },
+        ))
+    }
+
+    fn observe_existing_user_mcp(
+        &self,
+        clean_invocation: &wire::Invocation,
+    ) -> Result<Option<watch::Receiver<Outcome>>, Refusal> {
+        let mut ledger = self.ledger.lock();
+        if ledger.observe(&clean_invocation.operation_id).is_some() {
+            match ledger.admit(clean_invocation)? {
+                Admission::Existing(receiver) | Admission::New { receiver, .. } => {
+                    Ok(Some(receiver))
+                }
+            }
+        } else if ledger.lost {
+            Err(Refusal::EnvironmentLost)
+        } else {
+            Ok(None)
+        }
+    }
+
+    fn snapshot_user_mcp_epoch(&self, process_id: &str) -> Result<u64, Value> {
+        let um = self.user_mcp.lock();
+        if um.is_tombstoned(process_id) {
+            return Err(user_mcp::error_reply(
+                "user_mcp_stopped",
+                "user MCP process was stopped",
+            ));
+        }
+        Ok(um.stop_epoch)
+    }
+
+    fn resolve_user_mcp_start(
+        &self,
+        allowlist: &[String],
+        name: &str,
+        process_id: &str,
+        fingerprint: &str,
+        neutral_cwd: &Path,
+    ) -> Result<Value, Value> {
+        let catalog = user_mcp::resolve_catalog(
+            &self.environment,
+            &self.state_dir,
+            &self.source_path,
+            &self.cwd,
+            allowlist,
+            &self.user_mcp_key,
+        );
+        let Some(server) = catalog.servers.iter().find(|entry| entry.name == name) else {
+            let code = catalog
+                .omitted
+                .iter()
+                .find(|entry| entry.name == name)
+                .map_or("user_mcp_config_drift", |entry| match entry.reason {
+                    "not_allowed" => "user_mcp_not_allowed",
+                    "unresolved_variable" => "unresolved_variable",
+                    "unsupported_transport" => "unsupported_transport",
+                    _ => "user_mcp_invalid",
+                });
+            return Err(user_mcp::error_reply(code, "user MCP server unavailable"));
+        };
+        if server.fingerprint != fingerprint {
+            return Err(user_mcp::error_reply(
+                "user_mcp_config_drift",
+                "user MCP server configuration changed since discovery",
+            ));
+        }
+        user_mcp::build_native_start_params(process_id, server, neutral_cwd).map_err(|_| {
+            user_mcp::error_reply("user_mcp_invalid", "invalid user MCP launch parameters")
+        })
+    }
+
+    /// Single atomic critical section (strict lock order: `user_mcp` -> `ledger`).
+    fn admit_user_mcp_start(
+        &self,
+        clean_invocation: &wire::Invocation,
+        epoch: u64,
+        name: String,
+        process_id: String,
+        native_params: Value,
+    ) -> Result<Result<watch::Receiver<Outcome>, Value>, Refusal> {
+        let mut um = self.user_mcp.lock();
+        if um.stop_epoch != epoch || um.is_tombstoned(&process_id) {
+            return Ok(Err(user_mcp::error_reply(
+                "user_mcp_stopped",
+                "user MCP start fenced by concurrent stop",
+            )));
+        }
+        if let Some(latest) = &um.latest_allowlist
+            && !latest.iter().any(|allowed| allowed == &name)
+        {
+            return Ok(Err(user_mcp::error_reply(
+                "user_mcp_not_allowed",
+                "user MCP server excluded by updated allowlist",
+            )));
+        }
+        if um.active_processes.len() >= user_mcp::MAX_ACTIVE_USER_SERVERS
+            || um.active_processes.contains_key(&process_id)
+        {
+            return Ok(Err(user_mcp::error_reply(
+                "user_mcp_capacity",
+                "user MCP server capacity reached",
+            )));
+        }
+        let mut ledger = self.ledger.lock();
+        if ledger.observe(&clean_invocation.operation_id).is_some() || ledger.lost {
+            return match ledger.admit(clean_invocation)? {
+                Admission::Existing(receiver) | Admission::New { receiver, .. } => Ok(Ok(receiver)),
+            };
+        }
+        let permit = self.writer.try_reserve().map_err(|_| Refusal::Capacity)?;
+        let admission = ledger.admit(clean_invocation)?;
+        let receiver = match admission {
+            Admission::Existing(receiver) => receiver,
+            Admission::New { id, receiver } => {
+                um.register_pending(process_id, name, id);
+                permit.send(json!({
+                    "id": id,
+                    "method": "process/start",
+                    "params": native_params,
+                }));
+                receiver
+            }
+        };
+        Ok(Ok(receiver))
+    }
+
+    async fn handle_stop_user_mcp(
+        &self,
+        invocation: &wire::Invocation,
+    ) -> Result<Response, Refusal> {
+        if self.read_only {
+            return Ok(Response::Operation {
+                outcome: Outcome::Completed {
+                    reply: user_mcp::error_reply(
+                        "user_mcp_unsupported",
+                        "user MCP servers are not supported in read-only environments",
+                    ),
+                },
+            });
+        }
+        let (target_pid, keep_allowlist) = match parse_stop_user_mcp_args(&invocation.params) {
+            Ok(parsed) => parsed,
+            Err(reply) => {
+                return Ok(Response::Operation {
+                    outcome: Outcome::Completed { reply },
+                });
+            }
+        };
+        let targets = self.select_user_mcp_stop_targets(target_pid, keep_allowlist);
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        let mut stopped = 0_u32;
+        let mut failed = 0_u32;
+        for (pid, maybe_pending) in targets {
+            if self
+                .stop_one_user_mcp_target(&pid, maybe_pending, deadline)
+                .await
+            {
+                stopped += 1;
+            } else {
+                failed += 1;
+            }
+        }
+        Ok(Response::Operation {
+            outcome: Outcome::Completed {
+                reply: json!({"result": {"stopped": stopped, "failed": failed}}),
+            },
+        })
+    }
+
+    fn select_user_mcp_stop_targets(
+        &self,
+        target_pid: Option<String>,
+        keep_allowlist: Option<Vec<String>>,
+    ) -> Vec<(String, Option<watch::Receiver<Option<bool>>>)> {
+        let mut um = self.user_mcp.lock();
+        if let Some(pid) = target_pid {
+            um.record_tombstone(&pid);
+            return um
+                .active_processes
+                .get(&pid)
+                .map(|entry| vec![(pid, pending_rx(&entry.start_state))])
+                .unwrap_or_default();
+        }
+        um.stop_epoch = um.stop_epoch.saturating_add(1);
+        um.latest_allowlist = keep_allowlist.clone();
+        let selected: Vec<(String, Option<watch::Receiver<Option<bool>>>)> = um
+            .active_processes
+            .iter()
+            .filter(|(_, entry)| {
+                keep_allowlist.as_ref().is_none_or(|allowlist| {
+                    !allowlist
+                        .iter()
+                        .any(|allowed| allowed == &entry.server_name)
+                })
+            })
+            .map(|(pid, entry)| (pid.clone(), pending_rx(&entry.start_state)))
+            .collect();
+        for (pid, _) in &selected {
+            um.record_tombstone(pid);
+        }
+        selected
+    }
+
+    /// Rule E1 confirmation: wait for a `Pending` start reply before terminating;
+    /// accept `unknown process id` ONLY after a confirmed start.
+    async fn stop_one_user_mcp_target(
+        &self,
+        pid: &str,
+        maybe_pending: Option<watch::Receiver<Option<bool>>>,
+        deadline: tokio::time::Instant,
+    ) -> bool {
+        if let Some(mut rx) = maybe_pending {
+            let outcome = tokio::time::timeout_at(deadline, async {
+                loop {
+                    if let Some(started) = *rx.borrow_and_update() {
+                        return Some(started);
+                    }
+                    if rx.changed().await.is_err() {
+                        return *rx.borrow_and_update();
+                    }
+                }
+            })
+            .await;
+            match outcome {
+                Ok(Some(false)) => {
+                    self.user_mcp.lock().remove_confirmed_or_failed(pid);
+                    return true;
+                }
+                Ok(Some(true)) => {}
+                _ => return false,
+            }
+        }
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            return false;
+        }
+        let op_id = self.user_mcp.lock().next_stop_operation_id();
+        let term_invocation = wire::Invocation {
+            operation_id: op_id,
+            method: "process/terminate".into(),
+            params: json!({"processId": pid}),
+        };
+        let Ok(Admission::Existing(receiver) | Admission::New { receiver, .. }) =
+            self.admit(&term_invocation, &term_invocation.params)
+        else {
+            return false;
+        };
+        let wait_ms = u64::try_from(remaining.as_millis())
+            .unwrap_or(5_000)
+            .min(wire::MAX_WAIT_MS);
+        let Outcome::Completed { reply } = wait_outcome(receiver, wait_ms).await else {
+            return false;
+        };
+        let unknown_msg = format!("unknown process id {pid}");
+        let gone = reply.get("result").is_some()
+            || reply.pointer("/error/message").and_then(Value::as_str)
+                == Some(unknown_msg.as_str());
+        if gone {
+            self.user_mcp.lock().remove_confirmed_or_failed(pid);
+        }
+        gone
     }
 
     /// Reserve before admitting so a full local queue proves non-admission.
@@ -372,6 +796,151 @@ async fn connection(host: Arc<Host>, stream: UnixStream) -> Result<()> {
 
 /// Start exactly one target executor. The Machine must supply an owned pinned
 /// component; using another Plugin's installed private CLI is not a launch path.
+fn pending_rx(state: &user_mcp::StartState) -> Option<watch::Receiver<Option<bool>>> {
+    match state {
+        user_mcp::StartState::Pending(tx) => Some(tx.subscribe()),
+        user_mcp::StartState::Confirmed => None,
+    }
+}
+
+fn parse_start_user_mcp_args(params: &Value) -> Result<(String, String, String), Value> {
+    let name = params
+        .get("name")
+        .and_then(Value::as_str)
+        .filter(|name| user_mcp::valid_server_name(name))
+        .map(str::to_owned)
+        .ok_or_else(|| user_mcp::error_reply("user_mcp_invalid", "invalid user MCP server name"))?;
+    let process_id = params
+        .get("processId")
+        .and_then(Value::as_str)
+        .filter(|id| user_mcp::valid_user_mcp_process_id(id))
+        .map(str::to_owned)
+        .ok_or_else(|| user_mcp::error_reply("user_mcp_invalid", "invalid user MCP processId"))?;
+    let fingerprint = params
+        .get("fingerprint")
+        .and_then(Value::as_str)
+        .filter(|fp| fp.len() == 64 && fp.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f')))
+        .map(str::to_owned)
+        .ok_or_else(|| user_mcp::error_reply("user_mcp_invalid", "invalid user MCP fingerprint"))?;
+    Ok((name, process_id, fingerprint))
+}
+
+fn parse_stop_user_mcp_args(
+    params: &Value,
+) -> Result<(Option<String>, Option<Vec<String>>), Value> {
+    let target_pid = match params.get("processId") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(id)) if user_mcp::valid_user_mcp_process_id(id) => Some(id.clone()),
+        _ => {
+            return Err(user_mcp::error_reply(
+                "user_mcp_invalid",
+                "invalid processId in stopUserMcp",
+            ));
+        }
+    };
+    let keep_allowlist = match params.get("keepAllowlist") {
+        None | Some(Value::Null) => None,
+        Some(Value::Array(items)) if items.len() <= 32 => {
+            let mut list = Vec::with_capacity(items.len());
+            for item in items {
+                let Some(name) = item
+                    .as_str()
+                    .filter(|s| crate::config::valid_mcp_server_name(s))
+                else {
+                    return Err(user_mcp::error_reply(
+                        "user_mcp_invalid",
+                        "invalid server name in keepAllowlist",
+                    ));
+                };
+                list.push(name.to_owned());
+            }
+            Some(list)
+        }
+        _ => {
+            return Err(user_mcp::error_reply(
+                "user_mcp_invalid",
+                "invalid keepAllowlist in stopUserMcp",
+            ));
+        }
+    };
+    Ok((target_pid, keep_allowlist))
+}
+
+fn handle_native_message(
+    backend_host: &Host,
+    mut message: Value,
+    pending_event: &mut Option<Value>,
+) -> Result<(), ()> {
+    let mut reply_notify: Option<(u64, bool)> = None;
+    let mut ended_process: Option<String> = None;
+    let result = {
+        let mut ledger = backend_host.ledger.lock();
+        if let Some(id) = message.get("id").and_then(Value::as_u64) {
+            if message.get("method").is_some()
+                || message.get("result").is_some() == message.get("error").is_some()
+            {
+                return Err(());
+            }
+            message
+                .as_object_mut()
+                .expect("response object")
+                .remove("id");
+            let succeeded = message.get("result").is_some();
+            if serde_json::to_vec(&message)
+                .map_or(true, |bytes| bytes.len() > wire::MAX_FRAME_BYTES - 4096)
+            {
+                message = json!({"error":{"code":-32000,"message":"Execution finished, but its reply exceeds the retained transport limit; do not repeat a write or command. Use a bounded read to inspect the result."}});
+            }
+            let res = ledger.finish(id, message);
+            if res.is_ok() {
+                reply_notify = Some((id, succeeded));
+            }
+            res
+        } else if let Some(method) = message.get("method").and_then(Value::as_str) {
+            if matches!(method, "process/exited" | "process/closed")
+                && let Some(pid) = message.pointer("/params/processId").and_then(Value::as_str)
+                && pid.starts_with(user_mcp::USER_MCP_PROCESS_PREFIX)
+            {
+                ended_process = Some(pid.to_owned());
+            }
+            *pending_event = Some(message);
+            Ok(())
+        } else {
+            Err(())
+        }
+    };
+    // Strictly AFTER dropping `ledger` lock (user_mcp -> ledger lock order).
+    if let Some((id, succeeded)) = reply_notify {
+        backend_host.user_mcp.lock().on_native_reply(id, succeeded);
+    }
+    if let Some(pid) = ended_process {
+        backend_host.user_mcp.lock().on_process_ended(&pid);
+    }
+    result
+}
+
+fn annotate_execution_capabilities(
+    initialization: &mut Value,
+    contract: &LaunchContract,
+) -> Result<Option<PathBuf>> {
+    let obj = initialization
+        .as_object_mut()
+        .context("executor initialization is not an object")?;
+    if let Some(managed) = &contract.managed {
+        obj.insert(
+            wire::MANAGED_INITIALIZATION_KEY.to_owned(),
+            json!({"schema": 1, "profile": managed.profile, "roundPath": managed.round_path}),
+        );
+        return Ok(None);
+    }
+    let cwd = user_mcp::create_neutral_cwd(&contract.binding.environment.incarnation)?;
+    obj.insert(
+        user_mcp::USER_MCP_INITIALIZATION_KEY.to_owned(),
+        json!({"schema": 1}),
+    );
+    Ok(Some(cwd))
+}
+
 pub async fn run(args: Args) -> Result<()> {
     let contract_metadata = std::fs::symlink_metadata(&args.contract)?;
     ensure!(
@@ -498,16 +1067,7 @@ pub async fn run(args: Args) -> Result<()> {
     }).await??;
     let mut initialization = initialization;
     identity::annotate(&mut initialization, &contract)?;
-    if let Some(managed) = &contract.managed {
-        // The Provider learns its constraint from the target it executes on.
-        initialization
-            .as_object_mut()
-            .context("executor initialization is not an object")?
-            .insert(
-                wire::MANAGED_INITIALIZATION_KEY.to_owned(),
-                json!({"schema": 1, "profile": managed.profile, "roundPath": managed.round_path}),
-            );
-    }
+    let neutral_user_mcp_cwd = annotate_execution_capabilities(&mut initialization, &contract)?;
     let (writer, mut requests) = mpsc::channel(64);
     tracing::info!(
         event_name = "cowboy.execution.ready",
@@ -515,6 +1075,8 @@ pub async fn run(args: Args) -> Result<()> {
     );
     let (stop, mut stopped) = tokio::sync::oneshot::channel();
     let (finished, finished_rx) = watch::channel(false);
+    let mut user_mcp_key = [0_u8; 32];
+    rand::RngCore::fill_bytes(&mut rand::rngs::OsRng, &mut user_mcp_key);
     let host = Arc::new(Host {
         scope: Scope::from_binding(&contract.binding),
         call_context: contract.call_context.clone(),
@@ -522,6 +1084,12 @@ pub async fn run(args: Args) -> Result<()> {
         capability_digest: Sha256::digest(contract.capability.as_bytes()).into(),
         initialization,
         cwd,
+        source_path: PathBuf::from(&contract.binding.workspace.source_path),
+        state_dir: args.state_dir.clone(),
+        environment: contract.environment.clone(),
+        neutral_user_mcp_cwd,
+        user_mcp_key,
+        user_mcp: Mutex::new(user_mcp::UserMcpState::default()),
         inode: (metadata.dev(), metadata.ino()),
         ledger: Mutex::new(Ledger::new()),
         writer,
@@ -611,23 +1179,13 @@ pub async fn run(args: Args) -> Result<()> {
                     break;
                 }
                 message = native_messages.recv(), if pending_event.is_none() => {
-                    let Some(Ok(mut message)) = message else {
+                    let Some(Ok(message)) = message else {
                         tracing::warn!(event_name = "cowboy.execution.backend_stopped", reason = "native_stream_closed", "execution backend stopped");
                         break;
                     };
-                    let mut ledger = backend_host.ledger.lock();
-                    let result = if let Some(id) = message.get("id").and_then(Value::as_u64) {
-                        if message.get("method").is_some() || message.get("result").is_some() == message.get("error").is_some() { break; }
-                        message.as_object_mut().expect("response object").remove("id");
-                        if serde_json::to_vec(&message).map_or(true, |bytes| bytes.len() > wire::MAX_FRAME_BYTES - 4096) {
-                            message = json!({"error":{"code":-32000,"message":"Execution finished, but its reply exceeds the retained transport limit; do not repeat a write or command. Use a bounded read to inspect the result."}});
-                        }
-                        ledger.finish(id, message)
-                    } else if message.get("method").and_then(Value::as_str).is_some() {
-                        pending_event = Some(message);
-                        Ok(())
-                    } else { Err(()) };
-                    if result.is_err() { break; }
+                    if handle_native_message(&backend_host, message, &mut pending_event).is_err() {
+                        break;
+                    }
                 }
                 _ = event_space.changed(), if pending_event.is_some() => {},
                 status = child.wait() => {
@@ -641,6 +1199,7 @@ pub async fn run(args: Args) -> Result<()> {
             }
         }
         backend_host.ledger.lock().lose();
+        backend_host.user_mcp.lock().on_backend_lost();
         // EOF gives the executor a chance to reap its owned process groups.
         // The Machine service additionally owns the complete cgroup.
         drop(native_writer);
@@ -681,6 +1240,9 @@ pub async fn run(args: Args) -> Result<()> {
         let _ = stop.send(());
     }
     let _ = backend.await;
+    if let Some(cwd) = &host.neutral_user_mcp_cwd {
+        user_mcp::remove_neutral_cwd(cwd);
+    }
     tracing::info!(
         event_name = "cowboy.execution.stopped",
         "execution environment stopped"
@@ -707,6 +1269,12 @@ mod tests {
             capability_digest: [0; 32],
             initialization: json!({}),
             cwd: PathBuf::from("/"),
+            source_path: PathBuf::from("/"),
+            state_dir: PathBuf::from("/tmp"),
+            environment: std::collections::BTreeMap::new(),
+            neutral_user_mcp_cwd: None,
+            user_mcp_key: [0x11; 32],
+            user_mcp: Mutex::new(user_mcp::UserMcpState::default()),
             inode: (0, 0),
             ledger: Mutex::new(Ledger::new()),
             writer,
@@ -767,5 +1335,402 @@ mod tests {
         assert_eq!(host.reap_unattended(&mut sequence), 0);
         assert_eq!(frames.try_recv().unwrap()["method"], "process/start");
         assert!(frames.try_recv().is_err());
+    }
+
+    fn test_host_with_user_mcp(
+        dir: &Path,
+        home: &Path,
+        bin: &Path,
+        source: &Path,
+        worktree: &Path,
+        neutral_cwd: PathBuf,
+    ) -> (Host, mpsc::Receiver<Value>) {
+        let (writer, frames) = mpsc::channel(16);
+        let (stop, _) = tokio::sync::oneshot::channel();
+        let meta = std::fs::metadata(worktree).unwrap();
+        let mut environment = std::collections::BTreeMap::new();
+        environment.insert("HOME".into(), home.to_string_lossy().into_owned());
+        environment.insert("PATH".into(), bin.to_string_lossy().into_owned());
+        let host = Host {
+            scope: Scope {
+                binding_id: "binding".into(),
+                revision: 1,
+                incarnation: "incarnation".into(),
+            },
+            call_context: Some("/tmp/secret-call-context.json".into()),
+            read_only: false,
+            capability_digest: Sha256::digest(b"cap").into(),
+            initialization: json!({ user_mcp::USER_MCP_INITIALIZATION_KEY: {"schema": 1} }),
+            cwd: worktree.to_path_buf(),
+            source_path: source.to_path_buf(),
+            state_dir: dir.join("keeper-state"),
+            environment,
+            neutral_user_mcp_cwd: Some(neutral_cwd),
+            user_mcp_key: [0x22; 32],
+            user_mcp: Mutex::new(user_mcp::UserMcpState::default()),
+            inode: (meta.dev(), meta.ino()),
+            ledger: Mutex::new(Ledger::new()),
+            writer,
+            stop: Mutex::new(Some(stop)),
+            stopped: watch::channel(false).1,
+            close: tokio::sync::Notify::new(),
+            attended: Mutex::new(std::time::Instant::now()),
+        };
+        (host, frames)
+    }
+
+    fn req(host: &Host, command: Command) -> Request {
+        Request {
+            schema: wire::SCHEMA,
+            scope: host.scope.clone(),
+            capability: "cap".into(),
+            command,
+        }
+    }
+
+    #[tokio::test]
+    async fn user_mcp_requires_manager_gate_and_start_observes_before_config_drift() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let bin = dir.path().join("bin");
+        let source = dir.path().join("source");
+        let worktree = dir.path().join("worktree");
+        let neutral = dir.path().join("neutral");
+        for d in [&home, &bin, &source, &worktree, &neutral] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let tool = bin.join("mcp-bin");
+        std::fs::write(&tool, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(
+            home.join(".claude.json"),
+            json!({"mcpServers": {"demo": {"command": "mcp-bin", "args": ["--v1"]}}}).to_string(),
+        )
+        .unwrap();
+
+        let (host, mut frames) =
+            test_host_with_user_mcp(dir.path(), &home, &bin, &source, &worktree, neutral);
+
+        // Missing managerGate fails closed (old Machine rollback protection).
+        let no_gate = host
+            .request(req(
+                &host,
+                Command::Invoke {
+                    invocation: wire::Invocation {
+                        operation_id: "op-no-gate".into(),
+                        method: user_mcp::USER_MCP_LIST_METHOD.into(),
+                        params: json!({}),
+                    },
+                    wait_ms: 0,
+                },
+            ))
+            .await;
+        let Response::Operation {
+            outcome: Outcome::Completed { reply },
+        } = no_gate
+        else {
+            panic!("expected Completed error");
+        };
+        assert_eq!(
+            reply.pointer("/error/data/code").and_then(Value::as_str),
+            Some("user_mcp_manager_gate_required")
+        );
+
+        // List with managerGate succeeds and returns only name/scope/fingerprint.
+        let listed = host
+            .request(req(
+                &host,
+                Command::Invoke {
+                    invocation: wire::Invocation {
+                        operation_id: "op-list".into(),
+                        method: user_mcp::USER_MCP_LIST_METHOD.into(),
+                        params: json!({"managerGate": {"enabled": true, "allowlist": []}}),
+                    },
+                    wait_ms: 0,
+                },
+            ))
+            .await;
+        let Response::Operation {
+            outcome: Outcome::Completed { reply },
+        } = listed
+        else {
+            panic!("expected list Completed");
+        };
+        let fp = reply["result"]["servers"][0]["fingerprint"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let pid = format!(
+            "{}0123456789abcdef0123456789abcdef",
+            user_mcp::USER_MCP_PROCESS_PREFIX
+        );
+
+        // Start demo server.
+        let start_resp = host
+            .request(req(
+                &host,
+                Command::Invoke {
+                    invocation: wire::Invocation {
+                        operation_id: "op-start-1".into(),
+                        method: user_mcp::USER_MCP_START_METHOD.into(),
+                        params: json!({
+                            "name": "demo",
+                            "processId": pid,
+                            "fingerprint": fp,
+                            "managerGate": {"enabled": true, "allowlist": []}
+                        }),
+                    },
+                    wait_ms: 0,
+                },
+            ))
+            .await;
+        assert!(matches!(
+            start_resp,
+            Response::Operation {
+                outcome: Outcome::Pending
+            }
+        ));
+        let frame = frames.try_recv().unwrap();
+        assert_eq!(frame["method"], "process/start");
+        assert_eq!(frame["params"]["envPolicy"]["inherit"], "none");
+        assert!(
+            frame["params"]["envPolicy"]["set"]
+                .get("COWBOY_CALL_CONTEXT")
+                .is_none()
+        );
+        let native_id = frame["id"].as_u64().unwrap();
+        // Complete native start.
+        host.ledger
+            .lock()
+            .finish(native_id, json!({"result": {"processId": pid}}))
+            .unwrap();
+        host.user_mcp.lock().on_native_reply(native_id, true);
+
+        // Mutate ~/.claude.json (config drift) AND change allowlist in managerGate:
+        // retrying the SAME operation_id MUST replay cached Completed result!
+        std::fs::write(
+            home.join(".claude.json"),
+            json!({"mcpServers": {"demo": {"command": "mcp-bin", "args": ["--v2"]}}}).to_string(),
+        )
+        .unwrap();
+        let retry = host
+            .request(req(
+                &host,
+                Command::Invoke {
+                    invocation: wire::Invocation {
+                        operation_id: "op-start-1".into(),
+                        method: user_mcp::USER_MCP_START_METHOD.into(),
+                        params: json!({
+                            "name": "demo",
+                            "processId": pid,
+                            "fingerprint": fp,
+                            "managerGate": {"enabled": true, "allowlist": ["other"]}
+                        }),
+                    },
+                    wait_ms: 0,
+                },
+            ))
+            .await;
+        let Response::Operation {
+            outcome: Outcome::Completed { reply },
+        } = retry
+        else {
+            panic!("expected idempotent Completed replay, got {retry:?}");
+        };
+        assert_eq!(reply["result"]["processId"], pid);
+
+        // Verify keeper ledger tracked processId for unattended reaping.
+        let tracked = host.ledger.lock().take_processes();
+        assert!(tracked.contains(&pid));
+    }
+
+    #[tokio::test]
+    async fn stop_user_mcp_respects_e1_pending_start_and_fences_tombstoned_ids() {
+        let dir = tempfile::tempdir().unwrap();
+        let home = dir.path().join("home");
+        let bin = dir.path().join("bin");
+        let source = dir.path().join("source");
+        let worktree = dir.path().join("worktree");
+        let neutral = dir.path().join("neutral");
+        for d in [&home, &bin, &source, &worktree, &neutral] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let tool = bin.join("mcp-bin");
+        std::fs::write(&tool, "#!/bin/sh\nexit 0\n").unwrap();
+        std::fs::set_permissions(&tool, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::write(
+            home.join(".claude.json"),
+            json!({"mcpServers": {"demo": {"command": "mcp-bin"}}}).to_string(),
+        )
+        .unwrap();
+
+        let (host, mut frames) =
+            test_host_with_user_mcp(dir.path(), &home, &bin, &source, &worktree, neutral);
+        let host = Arc::new(host);
+
+        // Stop an unseen processId first -> tombstones it so later startUserMcp is rejected.
+        let pid_tomb = format!(
+            "{}aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            user_mcp::USER_MCP_PROCESS_PREFIX
+        );
+        let stop_unseen = host
+            .request(req(
+                &host,
+                Command::Invoke {
+                    invocation: wire::Invocation {
+                        operation_id: "op-stop-unseen".into(),
+                        method: user_mcp::USER_MCP_STOP_METHOD.into(),
+                        params: json!({"processId": pid_tomb}),
+                    },
+                    wait_ms: 0,
+                },
+            ))
+            .await;
+        let Response::Operation {
+            outcome: Outcome::Completed { reply },
+        } = stop_unseen
+        else {
+            panic!("expected stop Completed");
+        };
+        assert_eq!(reply["result"]["stopped"], 0);
+        assert_eq!(reply["result"]["failed"], 0);
+
+        let listed = host
+            .request(req(
+                &host,
+                Command::Invoke {
+                    invocation: wire::Invocation {
+                        operation_id: "op-list-2".into(),
+                        method: user_mcp::USER_MCP_LIST_METHOD.into(),
+                        params: json!({"managerGate": {"enabled": true, "allowlist": []}}),
+                    },
+                    wait_ms: 0,
+                },
+            ))
+            .await;
+        let Response::Operation {
+            outcome: Outcome::Completed { reply },
+        } = listed
+        else {
+            panic!();
+        };
+        let fp = reply["result"]["servers"][0]["fingerprint"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+
+        let late_start = host
+            .request(req(
+                &host,
+                Command::Invoke {
+                    invocation: wire::Invocation {
+                        operation_id: "op-start-tomb".into(),
+                        method: user_mcp::USER_MCP_START_METHOD.into(),
+                        params: json!({
+                            "name": "demo",
+                            "processId": pid_tomb,
+                            "fingerprint": fp,
+                            "managerGate": {"enabled": true, "allowlist": []}
+                        }),
+                    },
+                    wait_ms: 0,
+                },
+            ))
+            .await;
+        let Response::Operation {
+            outcome: Outcome::Completed { reply },
+        } = late_start
+        else {
+            panic!();
+        };
+        assert_eq!(
+            reply.pointer("/error/data/code").and_then(Value::as_str),
+            Some("user_mcp_stopped")
+        );
+
+        // Start a real pending process, then issue stopUserMcp concurrently:
+        // stop MUST wait for start confirmation before sending process/terminate!
+        let pid_live = format!(
+            "{}bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            user_mcp::USER_MCP_PROCESS_PREFIX
+        );
+        let _ = host
+            .request(req(
+                &host,
+                Command::Invoke {
+                    invocation: wire::Invocation {
+                        operation_id: "op-start-live".into(),
+                        method: user_mcp::USER_MCP_START_METHOD.into(),
+                        params: json!({
+                            "name": "demo",
+                            "processId": pid_live,
+                            "fingerprint": fp,
+                            "managerGate": {"enabled": true, "allowlist": []}
+                        }),
+                    },
+                    wait_ms: 0,
+                },
+            ))
+            .await;
+        let start_frame = frames.try_recv().unwrap();
+        let start_id = start_frame["id"].as_u64().unwrap();
+
+        let host_stop = Arc::clone(&host);
+        let stop_task = tokio::spawn(async move {
+            host_stop
+                .request(req(
+                    &host_stop,
+                    Command::Invoke {
+                        invocation: wire::Invocation {
+                            operation_id: "op-stop-all".into(),
+                            method: user_mcp::USER_MCP_STOP_METHOD.into(),
+                            params: json!({}),
+                        },
+                        wait_ms: 0,
+                    },
+                ))
+                .await
+        });
+
+        // Give stop_task a tick: no process/terminate should be sent yet while start is Pending!
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(
+            frames.try_recv().is_err(),
+            "terminate must wait for start confirmation"
+        );
+
+        // Confirm start -> stop_task now sends process/terminate.
+        host.ledger
+            .lock()
+            .finish(start_id, json!({"result": {"processId": pid_live}}))
+            .unwrap();
+        host.user_mcp.lock().on_native_reply(start_id, true);
+
+        let term_frame = tokio::time::timeout(Duration::from_secs(2), frames.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(term_frame["method"], "process/terminate");
+        assert_eq!(term_frame["params"]["processId"], pid_live);
+        let term_id = term_frame["id"].as_u64().unwrap();
+        // Now `unknown process id` IS accepted (E1: start was confirmed).
+        host.ledger
+            .lock()
+            .finish(
+                term_id,
+                json!({"error": {"code": -32001, "message": format!("unknown process id {pid_live}")}}),
+            )
+            .unwrap();
+
+        let stop_resp = stop_task.await.unwrap();
+        let Response::Operation {
+            outcome: Outcome::Completed { reply },
+        } = stop_resp
+        else {
+            panic!();
+        };
+        assert_eq!(reply["result"]["stopped"], 1);
+        assert_eq!(reply["result"]["failed"], 0);
+        assert!(host.user_mcp.lock().active_processes.is_empty());
     }
 }

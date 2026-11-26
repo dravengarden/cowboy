@@ -152,3 +152,17 @@ schema = 1
 # a surviving unit without the policy is stopped (snapshotted) first.
 # boolean (true or false); needs a restart.
 # ipv4_only = false
+
+[execution]
+# Allow Antigravity execution keepers on this Device to discover and run
+# owner-authored stdio MCP servers from ~/.claude.json. Flipping to false
+# blocks new starts and stops running user MCP servers promptly. Host-owner
+# device.toml only (no AI Cowboy MCP write action).
+# boolean (true or false); applies live.
+# user_mcp = true
+# Optional allowlist of ~/.claude.json MCP server names permitted on this
+# Device. Empty allows all valid stdio servers; non-empty restricts discovery,
+# start, and running user MCP servers to the listed names. Host-owner
+# device.toml only (no AI Cowboy MCP write action).
+# array of at most 32 distinct MCP server names (A-Z, a-z, 0-9, ., _, -, 1-64 characters); applies live.
+# user_mcp_allowlist = []

@@ -9,7 +9,10 @@ mod memory_bridge;
 mod post_edit;
 mod pre_auth;
 mod relay;
-pub use extension_broker::{Broker as ExtensionBroker, Plan as ExtensionPlan, ServerPlan};
+pub use extension_broker::{
+    Broker as ExtensionBroker, Plan as ExtensionPlan, ServerPlan, USER_MCP_INITIALIZATION_KEY,
+    USER_MCP_LIST_METHOD, USER_MCP_PROCESS_PREFIX, USER_MCP_START_METHOD, USER_MCP_STOP_METHOD,
+};
 pub use ledger::{LEDGER_ENV, Ledger, MAX_PROCESSES};
 pub use memory_bridge::MemoryBridge;
 pub use post_edit::{PostEditBrokerSession, QueuedPostEdit, unix_socket_has_post_edit_headroom};
@@ -17,7 +20,7 @@ pub use post_edit::{PostEditBrokerSession, QueuedPostEdit, unix_socket_has_post_
 use pre_auth::classify_request_line;
 use pre_auth::{PrefixedHandshakeStream, RequestLineRoute, peek_request_line};
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::OpenOptionsExt as _;
 use std::path::{Path, PathBuf};
@@ -1131,64 +1134,7 @@ where
     }
 }
 
-/// Bounded in-flight ID tracking for one mutation socket, giving worker-local
-/// control requests (`cowboy/uncertainEffect`, `cowboy/drained`) an admission
-/// lane independent of the 16 forwarded execution requests (R20-M3).
-struct MutationInflightIds {
-    forwarded: HashSet<String>,
-    control: HashSet<String>,
-}
-
-impl MutationInflightIds {
-    const MAX_FORWARDED: usize = 16;
-    const MAX_CONTROL: usize = 4;
-
-    fn new() -> Self {
-        Self {
-            forwarded: HashSet::new(),
-            control: HashSet::new(),
-        }
-    }
-
-    fn is_control(method: &str) -> bool {
-        matches!(
-            method,
-            ledger::UNCERTAIN_REPORT | crate::account_sandbox::DRAINED
-        )
-    }
-
-    fn try_admit(&mut self, id: &Value, method: &str) -> Result<bool> {
-        let key = id.to_string();
-        ensure!(
-            valid_id(id) && !self.forwarded.contains(&key) && !self.control.contains(&key),
-            "invalid or duplicate execution request id"
-        );
-        let (set, limit) = if Self::is_control(method) {
-            (&mut self.control, Self::MAX_CONTROL)
-        } else {
-            (&mut self.forwarded, Self::MAX_FORWARDED)
-        };
-        if set.len() >= limit {
-            return Ok(false);
-        }
-        set.insert(key);
-        Ok(true)
-    }
-
-    fn remove(&mut self, id: &Value) {
-        let key = id.to_string();
-        self.forwarded.remove(&key);
-        self.control.remove(&key);
-    }
-
-    fn pending_for(&self, method: &str) -> usize {
-        if Self::is_control(method) {
-            self.control.len()
-        } else {
-            self.forwarded.len()
-        }
-    }
-}
+use relay::{BrokerConnectionGuard, MutationInflightIds, next_mutation_connection_id};
 
 async fn serve_mutation<S>(
     mut socket: tokio_tungstenite::WebSocketStream<S>,
@@ -1234,7 +1180,15 @@ where
     send_bounded(&mut socket, Message::Text(init_frame.into())).await?;
 
     let (mut writer, mut reader) = socket.split();
-    let mut relays = relay::Relays::new(Arc::clone(&client));
+    let connection_id = next_mutation_connection_id();
+    let mut relays = relay::Relays::new(Arc::clone(&client), connection_id);
+    // Declared AFTER `relays` so `_broker_conn` drops FIRST when `serve_mutation`
+    // exits, marking `connection_id` closed and settling registered `PendingAck`s
+    // before `Relays::drop` drains still-in-flight tasks.
+    let _broker_conn = BrokerConnectionGuard {
+        client: Arc::clone(&client),
+        connection_id,
+    };
     let mut inflight_ids = MutationInflightIds::new();
     let mut cursor = *client.event_cursor.lock().get_or_insert(event_cursor);
     tracing::info!(event_name = "cowboy.execution.connected", session = %client.session, environment_id = %client.binding.environment.id, cursor, "execution endpoint connected");
@@ -1256,7 +1210,9 @@ where
                         let id = message.get("id").context("execution request id missing")?.clone();
                         let method = message["method"].as_str().context("execution method missing")?.to_owned();
                         if !inflight_ids.try_admit(&id, &method)? {
-                            let reason = if MutationInflightIds::is_control(&method) {
+                            let reason = if MutationInflightIds::is_ack(&method) {
+                                "ack_capacity"
+                            } else if MutationInflightIds::is_control(&method) {
                                 "control_capacity"
                             } else {
                                 "request_capacity"

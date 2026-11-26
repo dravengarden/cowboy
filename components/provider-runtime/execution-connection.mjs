@@ -6,7 +6,13 @@ import WebSocket from "ws";
 // One authenticated connection per native process. New calls can reconnect to
 // the same executor session. A lost reply is never resubmitted here.
 /** Requests still sent while a connection drains (`idle`). */
-const DRAIN_REQUESTS = new Set(["cowboy/uncertainEffect", "cowboy/drained"]);
+const DRAIN_REQUESTS = new Set([
+  "cowboy/uncertainEffect",
+  "cowboy/drained",
+  "cowboy/extensionCallAck",
+]);
+/** Dedicated correlated-ack lane (MAX_ACK = 8) independent of control (4) and forwarded (16). */
+const ACK_REQUESTS = new Set(["cowboy/extensionCallAck"]);
 /** Cleanup requests get one reserved slot above the 15 ordinary slots (R14-M4). */
 const CLEANUP_REQUESTS = new Set(["process/terminate"]);
 
@@ -80,11 +86,24 @@ export class Connection {
         if (!call) throw new Error("Unexpected execution reply");
         connection.pending.delete(frame.id);
         clearTimeout(call.timer);
+        // Extract top-level `cowboyAck` ONLY (never inside `frame.result` or `frame.error`).
+        const cowboyAck =
+          frame.cowboyAck &&
+          typeof frame.cowboyAck === "object" &&
+          typeof frame.cowboyAck.callId === "string" &&
+          frame.cowboyAck.callId.length > 0
+            ? { callId: frame.cowboyAck.callId }
+            : null;
         if (frame.error) {
           const error = new Error("Target operation failed");
           error.remote = frame.error;
+          if (cowboyAck) error.cowboyAck = cowboyAck;
           call.reject(error);
-        } else call.resolve(frame.result);
+        } else if (call.withMeta) {
+          call.resolve({ result: frame.result, cowboyAck });
+        } else {
+          call.resolve(frame.result);
+        }
       } catch {
         connection.close();
       }
@@ -159,6 +178,12 @@ export class Connection {
     return await this.request(method, params, options);
   }
 
+  /** Like `call`, but returns `{ result, cowboyAck }` exposing top-level frame ack metadata. */
+  async callWithMeta(method, params, options = {}) {
+    await this.ensureConnected();
+    return await this.request(method, params, { ...options, withMeta: true });
+  }
+
   /**
    * One request. Without `timeoutMs` a request unanswered within the
    * connection's `requestTimeoutMs` ends the connection (its outcome is
@@ -166,43 +191,46 @@ export class Connection {
    * request is rejected then, and its late reply is ignored. Use it only for
    * reads whose outcome does not matter.
    */
-  request(method, params, { timeoutMs, beforeSend, cleanup = false } = {}) {
-    // While draining only a report of an unknown outcome and the drain's own
-    // acknowledgement are sent (answered by the worker, never forwarded).
+  request(method, params, { timeoutMs, beforeSend, cleanup = false, withMeta = false } = {}) {
+    // While draining only reports of unknown outcomes, correlated user-MCP
+    // call acks, and the drain's own acknowledgement are sent.
     const draining = this.draining && !DRAIN_REQUESTS.has(method);
     if (this.closed || this.stopped || draining) {
       return Promise.reject(new Error("Execution unavailable; no replay"));
     }
-    // Abandoned requests may still run on the executor, so they count.
-    // Check capacity BEFORE running `beforeSend` so a capacity refusal never
-    // marks a request dispatched. Track active requests by class so both
-    // cleanup reservations (`process/terminate` and confirming `process/read`)
-    // work in either arrival order within the worker's 16-forwarded-request cap,
-    // while worker-local control requests use a separate bounded lane (R20-M1, R20-M3).
-    const kind = DRAIN_REQUESTS.has(method)
-      ? "control"
-      : cleanup === true && method === "process/read"
-        ? "confirm_read"
-        : CLEANUP_REQUESTS.has(method)
-          ? "stop"
-          : "ordinary";
+    const kind = ACK_REQUESTS.has(method)
+      ? "ack"
+      : DRAIN_REQUESTS.has(method)
+        ? "control"
+        : cleanup === true && method === "process/read"
+          ? "confirm_read"
+          : CLEANUP_REQUESTS.has(method)
+            ? "stop"
+            : "ordinary";
     let ordinaryCount = 0;
     let stopCount = 0;
     let confirmReadCount = 0;
     let controlCount = 0;
+    let ackCount = 0;
     for (const entry of this.pending.values()) {
-      if (entry.kind === "control") controlCount += 1;
+      if (entry.kind === "ack") ackCount += 1;
+      else if (entry.kind === "control") controlCount += 1;
       else if (entry.kind === "stop") stopCount += 1;
       else if (entry.kind === "confirm_read") confirmReadCount += 1;
       else ordinaryCount += 1;
     }
     for (const entry of this.abandoned.values()) {
-      if (entry.kind === "control") controlCount += 1;
+      if (entry.kind === "ack") ackCount += 1;
+      else if (entry.kind === "control") controlCount += 1;
       else if (entry.kind === "stop") stopCount += 1;
       else if (entry.kind === "confirm_read") confirmReadCount += 1;
       else ordinaryCount += 1;
     }
-    if (kind === "control") {
+    if (kind === "ack") {
+      if (ackCount >= 8) {
+        return Promise.reject(new Error("Too many execution requests"));
+      }
+    } else if (kind === "control") {
       if (controlCount >= 4) {
         return Promise.reject(new Error("Too many execution requests"));
       }
@@ -231,21 +259,23 @@ export class Connection {
       const timer = local
         ? setTimeout(() => {
             if (!this.pending.delete(id)) return;
-            // Its slot stays taken until the connection's own deadline for
-            // it, as an unanswered request would have ended the connection
-            // by then; its id stays recognized for the socket's life.
-            const release = setTimeout(
-              () => this.abandoned.delete(id),
-              this.requestTimeoutMs - timeoutMs,
-            );
-            release.unref?.();
-            this.abandoned.set(id, { timer: release, kind });
+            // Ack timeouts release the ack slot immediately because the worker
+            // fails closed via its own 15 s timer; keeping the id in `retired`
+            // silently absorbs any late ack reply without failing the socket.
+            if (kind !== "ack") {
+              const release = setTimeout(
+                () => this.abandoned.delete(id),
+                this.requestTimeoutMs - timeoutMs,
+              );
+              release.unref?.();
+              this.abandoned.set(id, { timer: release, kind });
+            }
             if (this.retired.size >= 4096) this.retired.delete(this.retired.values().next().value);
             this.retired.add(id);
             reject(new Error("Target request timed out"));
           }, timeoutMs)
         : setTimeout(() => this.disconnect(), this.requestTimeoutMs);
-      this.pending.set(id, { resolve, reject, timer, kind });
+      this.pending.set(id, { resolve, reject, timer, kind, withMeta });
       try {
         this.socket.send(JSON.stringify({ id, method, params }));
       } catch {

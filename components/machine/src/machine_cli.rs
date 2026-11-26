@@ -699,7 +699,7 @@ async fn run_args(args: Args) -> anyhow::Result<()> {
             Err(error) => tracing::warn!(%error, "managed call ingress unavailable"),
         }
     }
-    let execution = Arc::new(execution);
+    let execution = execution.start_with_device_config(device_config.clone());
     let deletion_service_id = args.service_id.clone();
     let durable_state = crate::machine_broker::DurableStateView::default();
     let controller = reconnect::run(ControllerConfig {

@@ -572,3 +572,51 @@ fn the_deprecated_antigravity_admission_key_is_accepted_and_ignored() {
             .is_empty()
     );
 }
+
+#[test]
+fn device_execution_user_mcp_defaults_and_allowlist_grammar() {
+    let defaults = Config::defaults(Scope::Device);
+    assert!(defaults.get(&schema::DEVICE_EXECUTION_USER_MCP));
+    assert!(
+        defaults
+            .get(&schema::DEVICE_EXECUTION_USER_MCP_ALLOWLIST)
+            .is_empty()
+    );
+
+    let valid = check_text(
+        Scope::Device,
+        "schema = 1\n\n[execution]\nuser_mcp = false\nuser_mcp_allowlist = [\"ios_sim\", \"GitHub\", \"chrome-devtools-draven\", \"my.server\"]\n",
+        None,
+    );
+    assert!(valid.is_valid(), "{:?}", codes(&valid));
+    let parsed = valid.config.unwrap();
+    assert!(!parsed.get(&schema::DEVICE_EXECUTION_USER_MCP));
+    assert_eq!(
+        parsed.get(&schema::DEVICE_EXECUTION_USER_MCP_ALLOWLIST),
+        vec!["ios_sim", "GitHub", "chrome-devtools-draven", "my.server"]
+    );
+
+    // Reject spaces, slashes, duplicates, and >32 entries.
+    let bad_space = check_text(
+        Scope::Device,
+        "schema = 1\n\n[execution]\nuser_mcp_allowlist = [\"bad name\"]\n",
+        None,
+    );
+    assert!(!bad_space.is_valid());
+    let bad_dup = check_text(
+        Scope::Device,
+        "schema = 1\n\n[execution]\nuser_mcp_allowlist = [\"dup\", \"dup\"]\n",
+        None,
+    );
+    assert!(!bad_dup.is_valid());
+    let too_many_list = (0..33)
+        .map(|i| format!("\"s{i}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let too_many = check_text(
+        Scope::Device,
+        &format!("schema = 1\n\n[execution]\nuser_mcp_allowlist = [{too_many_list}]\n"),
+        None,
+    );
+    assert!(!too_many.is_valid());
+}
