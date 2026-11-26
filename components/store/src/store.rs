@@ -33,7 +33,6 @@ use std::time::Duration;
 use anyhow::{Context as _, Result};
 use base64::Engine as _;
 use chrono::{DateTime, Utc};
-use futures::TryStreamExt as _;
 use sqlx::Row as _;
 use sqlx::postgres::{PgPool, PgPoolOptions};
 
@@ -56,7 +55,9 @@ pub use managed_calls::{
 };
 pub mod preferences;
 pub mod provider_accounts;
+pub mod session_lineage;
 mod session_metadata;
+pub use session_lineage::{ArchivedLineageSegment, LineageEdge, LineageHistoryPage};
 pub mod session_widgets;
 pub mod subagent_events;
 mod workspace_documents;
@@ -6351,60 +6352,7 @@ impl PostgresStorage {
     }
 
     pub async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
-        let done = sqlx::query(
-            "DELETE FROM sessions WHERE deleted_at IS NOT NULL \
-             AND COALESCE( \
-               purge_after_at, \
-               deleted_at + make_interval(days => $1::int) \
-             ) < now() \
-             AND NOT EXISTS (SELECT 1 FROM managed_agent_calls AS call \
-                 WHERE (call.parent_session_id = sessions.id OR call.child_session_id = sessions.id) \
-                 AND call.state NOT IN ('completed', 'failed', 'cancelled')) \
-             AND NOT EXISTS (SELECT 1 FROM plugin_uninstall_operations AS operation \
-                 WHERE operation.machine_id = sessions.machine_id AND operation.plugin_id = sessions.provider \
-                 AND operation.phase NOT IN ('completed', 'compensated', 'aborted'))",
-        )
-        .bind(i32::try_from(retention_days).unwrap_or(3))
-        .execute(&self.pool)
-        .await
-        .context("purge soft-deleted sessions")?;
-        let mut referenced = HashSet::new();
-        // Extract only the small artifact URLs in Postgres. Pulling every
-        // matching JSON payload across the driver made startup GC deserialize
-        // hundreds of large transcript events, adding avoidable allocation and
-        // latency even though rows were consumed as a stream.
-        let mut rows = sqlx::query(
-            "SELECT DISTINCT value #>> ARRAY[]::text[] AS reference \
-             FROM events \
-             CROSS JOIN LATERAL jsonb_path_query( \
-                 payload, \
-                 'strict $.** ? (@.type() == \"string\" && @ starts with \"/api/artifacts/\")'::jsonpath \
-             ) AS value \
-             UNION SELECT value #>> ARRAY[]::text[] AS reference \
-             FROM managed_agent_calls \
-             CROSS JOIN LATERAL jsonb_path_query(document::jsonb, 'lax $.result.artifacts[*].url') AS value \
-             WHERE jsonb_typeof(value) = 'string'",
-        )
-        .fetch(&self.pool);
-        while let Some(row) = rows
-            .try_next()
-            .await
-            .context("scan retained PostgreSQL artifact references")?
-        {
-            let reference: String = row.try_get("reference")?;
-            crate::artifacts::collect_references(
-                &serde_json::Value::String(reference),
-                &mut referenced,
-            );
-        }
-        let artifacts_removed = self
-            .artifacts
-            .prune_unreferenced(&referenced, Duration::from_hours(24))
-            .context("prune unreferenced PostgreSQL event artifacts")?;
-        if artifacts_removed > 0 {
-            tracing::info!(artifacts_removed, "purged unreferenced event artifacts");
-        }
-        Ok(done.rows_affected())
+        session_lineage::purge_deleted_pg(self, retention_days).await
     }
 
     /// Insert an incident idempotently. Raw evidence is retained by Victoria;

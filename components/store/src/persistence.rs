@@ -57,6 +57,10 @@ pub struct EventReducer {
     /// store writer resolves a miss through `transcript_anchors` before it
     /// treats a key as new (docs/background-tasks.md#durable-anchors).
     anchors: crate::transcript_anchors::AnchorIndex,
+    /// Exclusive sequence floor per session below which canonical rows are
+    /// frozen for child lineage branches. Updates after a freeze allocate a
+    /// fresh `seq >= floor` instead of mutating frozen rows in place.
+    freeze_floors: HashMap<String, u64>,
 }
 
 impl EventReducer {
@@ -73,7 +77,35 @@ impl EventReducer {
         self.text.remove(session_id);
         self.tools.retain(|(session, _), _| session != session_id);
         self.anchors.remove_session(session_id);
+        self.freeze_floors.remove(session_id);
         self.shrink_tools_if_sparse();
+    }
+
+    /// Freeze every canonical row `< before_seq` for `session_id` so later
+    /// streaming chunks, tool updates, and subagent/Call anchor snapshots
+    /// never overwrite an inherited prefix in place.
+    pub fn set_freeze_floor(&mut self, session_id: &str, before_seq: u64) {
+        if before_seq == 0 {
+            return;
+        }
+        let floor = self
+            .freeze_floors
+            .entry(session_id.to_owned())
+            .and_modify(|existing| *existing = (*existing).max(before_seq))
+            .or_insert(before_seq);
+        let floor = *floor;
+        if self
+            .text
+            .get(session_id)
+            .is_some_and(|slot| slot.envelope.seq < floor)
+        {
+            self.text.remove(session_id);
+        }
+    }
+
+    #[must_use]
+    pub fn freeze_floor(&self, session_id: &str) -> u64 {
+        self.freeze_floors.get(session_id).copied().unwrap_or(0)
     }
 
     /// Whether this reducer already knows the anchor, without counting a hit.
@@ -85,6 +117,9 @@ impl EventReducer {
     /// Adopt a durable anchor resolved outside the reducer (the store, or the
     /// table rows warmed at start). Later snapshots replace that row.
     pub fn adopt_anchor(&mut self, session_id: &str, key: &str, seq: u64) {
+        if seq < self.freeze_floor(session_id) {
+            return;
+        }
         self.anchors.insert(session_id, key, seq);
     }
 
@@ -103,7 +138,10 @@ impl EventReducer {
     /// in place. It survives turn ends (a subagent can outlive the prompt that
     /// launched it) and never interrupts the parent's streamed message.
     fn reduce_anchor(&mut self, mut env: Envelope, key: &str) -> Envelope {
-        if let Some(seq) = self.anchors.get(&env.session_id, key) {
+        let floor = self.freeze_floor(&env.session_id);
+        if let Some(seq) = self.anchors.get(&env.session_id, key)
+            && seq >= floor
+        {
             env.seq = seq;
             return env;
         }
@@ -171,7 +209,9 @@ impl EventReducer {
                 .and_then(serde_json::Value::as_str)
                 .map(str::to_owned);
             if let (Some(kind), Some(chunk)) = (kind, text) {
+                let floor = self.freeze_floor(&sid);
                 if let Some(slot) = self.text.get_mut(&sid)
+                    && slot.envelope.seq >= floor
                     && slot.kind == kind
                     && slot.message_id == message_id
                     && let Event::Update { update } = &mut slot.envelope.event
@@ -207,7 +247,13 @@ impl EventReducer {
                 if kind == Some("tool_call_update") {
                     let mut terminal = false;
                     let mut canonical = None;
+                    let floor = self.freeze_floor(&key.0);
                     if let Some(tool_env) = self.tools.get_mut(&key) {
+                        if tool_env.seq < floor {
+                            // Keep the pre-fork tool row immutable; rebase the
+                            // accumulated tool snapshot onto the new post-freeze seq.
+                            tool_env.seq = env.seq;
+                        }
                         let mut merged = false;
                         if let (
                             Event::Update {
@@ -708,5 +754,123 @@ mod tests {
             update["content"][0]["value"]["result"]["content"][0]["data"],
             "image-bytes"
         );
+    }
+
+    #[test]
+    fn freeze_floor_prevents_in_place_mutation_of_frozen_prefix() {
+        let mut reducer = EventReducer::default();
+        // 1. Streaming message chunk at seq 1.
+        let c1 = reducer
+            .reduce(Envelope {
+                session_id: "s".to_owned(),
+                seq: 1,
+                event: Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "agent_message_chunk",
+                        "messageId": "m1",
+                        "content": {"type": "text", "text": "hello "},
+                    }),
+                },
+                cmid: None,
+            })
+            .unwrap();
+        assert_eq!(c1.seq, 1);
+        // 2. Running tool at seq 2.
+        let t1 = reducer
+            .reduce(Envelope {
+                session_id: "s".to_owned(),
+                seq: 2,
+                event: Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "tool_call",
+                        "toolCallId": "tool-1",
+                        "title": "Run test",
+                        "status": "in_progress",
+                    }),
+                },
+                cmid: None,
+            })
+            .unwrap();
+        assert_eq!(t1.seq, 2);
+        // 3. Anchor at seq 3.
+        let a1 = reducer
+            .reduce(Envelope {
+                session_id: "s".to_owned(),
+                seq: 3,
+                event: Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "cowboy_subagent",
+                        "subagentId": "sub-1",
+                        "status": "running",
+                    }),
+                },
+                cmid: None,
+            })
+            .unwrap();
+        assert_eq!(a1.seq, 3);
+
+        // Freeze prefix `< 4`.
+        reducer.set_freeze_floor("s", 4);
+
+        // Post-freeze text chunk allocates fresh seq 4 instead of mutating seq 1.
+        let c2 = reducer
+            .reduce(Envelope {
+                session_id: "s".to_owned(),
+                seq: 4,
+                event: Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "agent_message_chunk",
+                        "messageId": "m1",
+                        "content": {"type": "text", "text": "world"},
+                    }),
+                },
+                cmid: None,
+            })
+            .unwrap();
+        assert_eq!(c2.seq, 4);
+
+        // Post-freeze tool update rebases onto seq 5 instead of mutating seq 2.
+        let t2 = reducer
+            .reduce(Envelope {
+                session_id: "s".to_owned(),
+                seq: 5,
+                event: Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "tool_call_update",
+                        "toolCallId": "tool-1",
+                        "status": "completed",
+                    }),
+                },
+                cmid: None,
+            })
+            .unwrap();
+        assert_eq!(t2.seq, 5);
+        let Event::Update { update } = &t2.event else {
+            panic!("expected update");
+        };
+        assert_eq!(update["title"], "Run test", "rebased tool keeps original title");
+        assert_eq!(update["status"], "completed");
+
+        // Post-freeze anchor allocates fresh seq 6 instead of mutating seq 3.
+        let a2 = reducer
+            .reduce(Envelope {
+                session_id: "s".to_owned(),
+                seq: 6,
+                event: Event::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "cowboy_subagent",
+                        "subagentId": "sub-1",
+                        "status": "completed",
+                    }),
+                },
+                cmid: None,
+            })
+            .unwrap();
+        assert_eq!(a2.seq, 6);
+
+        // Adopting a frozen anchor seq is ignored.
+        reducer.forget_anchor("s", "subagent:sub-1");
+        reducer.adopt_anchor("s", "subagent:sub-1", 3);
+        assert!(!reducer.knows_anchor("s", "subagent:sub-1"));
     }
 }

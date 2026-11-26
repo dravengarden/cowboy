@@ -1,3 +1,4 @@
+import { clearLineageCache } from "../ancestorHistory";
 import { desktopSize } from "../surface/desktopSize";
 import {
   Alert,
@@ -109,6 +110,7 @@ export async function signOutProductSession(options: {
     if (isRecentProductAuthRequired(reason)) throw reason;
     // Logout is best-effort: still drop the socket graph and local history.
   }
+  clearLineageCache();
   const ending = announceProductSessionEnd();
   await Promise.all([deleteProductHistoryCache(), ending]);
   if (providerLogoutUrl) {

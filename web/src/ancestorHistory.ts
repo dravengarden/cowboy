@@ -1,4 +1,75 @@
-import type { Envelope } from "./protocol";
+import type { Envelope, Status } from "./protocol";
+
+export interface LineageHop {
+  depth: number;
+  session_id: string;
+  child_session_id: string;
+  kind: "native_fork" | "linked_fork" | "replace" | string;
+  before_seq: number | null;
+  title: string;
+  provider: string;
+  parent_state: "live" | "trashed" | "purged";
+  history_state: "live" | "archived" | "legacy_unknown" | "unavailable";
+  edge_version: number;
+  segment_id: string | null;
+  created_at_ms: number;
+}
+
+export interface LineageBranch {
+  session_id: string;
+  parent_session_id: string;
+  relation: "child" | "sibling";
+  kind: string;
+  title: string;
+  provider: string;
+  status: Status;
+  trashed: boolean;
+  created_at_ms: number;
+}
+
+export interface SessionLineageResponse {
+  session_id: string;
+  hops: LineageHop[];
+  branches: LineageBranch[];
+}
+
+export interface LineageHistoryPageResponse {
+  session_id: string;
+  events: Envelope[];
+  next_before_seq: number | null;
+  reached_start: boolean;
+  edge_version: number;
+  is_sealed: boolean;
+}
+
+export type LineageHistoryFetchResult =
+  | { kind: "ok"; page: LineageHistoryPageResponse }
+  | { kind: "conflict"; edgeVersion: number }
+  | { kind: "error" };
+
+export const LINEAGE_CHANGED = "cowboy:lineage-changed";
+
+const lineageCache = new Map<string, SessionLineageResponse>();
+
+export function cachedSessionLineage(sessionId: string): SessionLineageResponse | undefined {
+  return lineageCache.get(sessionId);
+}
+
+export function setCachedSessionLineage(sessionId: string, data: SessionLineageResponse): void {
+  lineageCache.set(sessionId, data);
+}
+
+export function clearLineageCache(sessionId?: string): void {
+  if (sessionId) lineageCache.delete(sessionId);
+  else lineageCache.clear();
+}
+
+export function notifyLineageChanged(sessionId?: string): void {
+  clearLineageCache(sessionId);
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent(LINEAGE_CHANGED, { detail: { sessionId } }));
+  }
+}
 
 /** Merge immutable history pages for one ancestor segment, strictly enforcing
  *  an exclusive upper sequence cutoff (`seq < before`). A `before` of 0 (an
@@ -18,4 +89,57 @@ export function mergeAncestorEvents(
     bySeq.set(env.seq, env);
   }
   return [...bySeq.values()].sort((left, right) => left.seq - right.seq);
+}
+
+export function formatLineageActionLabel(kind: string): string {
+  return kind === "replace" ? "Continued from" : "Forked from";
+}
+
+export async function fetchSessionLineage(
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<SessionLineageResponse | null> {
+  try {
+    const response = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/lineage`,
+      { credentials: "same-origin", signal: signal ?? null },
+    );
+    if (!response.ok) return null;
+    const data = (await response.json()) as SessionLineageResponse;
+    if (!data || !Array.isArray(data.hops)) return null;
+    setCachedSessionLineage(sessionId, data);
+    return data;
+  } catch {
+    return null;
+  }
+}
+
+export async function fetchLineageHistoryPage(
+  sessionId: string,
+  hopId: string,
+  beforeSeq: number,
+  edgeVersion: number,
+  version: string,
+  signal?: AbortSignal,
+): Promise<LineageHistoryFetchResult> {
+  try {
+    const params = new URLSearchParams({
+      before_seq: String(beforeSeq),
+      edge_version: String(edgeVersion),
+      v: version,
+    });
+    const response = await fetch(
+      `/api/sessions/${encodeURIComponent(sessionId)}/lineage/${encodeURIComponent(hopId)}/history?${params}`,
+      { credentials: "same-origin", signal: signal ?? null },
+    );
+    if (response.status === 409) {
+      const body = (await response.json().catch(() => null)) as { edge_version?: number } | null;
+      return { kind: "conflict", edgeVersion: body?.edge_version ?? edgeVersion + 1 };
+    }
+    if (!response.ok) return { kind: "error" };
+    const page = (await response.json()) as LineageHistoryPageResponse;
+    return { kind: "ok", page };
+  } catch {
+    return { kind: "error" };
+  }
 }

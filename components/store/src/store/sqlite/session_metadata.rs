@@ -115,6 +115,8 @@ impl SqliteStorage {
         let mut tx = self.pool.begin().await?;
         let now = now_ms();
         if let Some(calls_before_ms) = transcript {
+            crate::store::session_lineage::seal_lineage_on_clear_sqlite(&mut tx, session_id, now)
+                .await?;
             sqlx::query("DELETE FROM events WHERE session_id = ?1")
                 .bind(session_id)
                 .execute(&mut *tx)

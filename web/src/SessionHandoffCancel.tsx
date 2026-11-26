@@ -2,6 +2,7 @@ import { Button, Stack, Typography } from "@mui/material";
 import { useState } from "react";
 import { blocksToAttachments } from "./attachments";
 import { appendComposerDraft } from "./draftStore";
+import { notifyLineageChanged } from "./ancestorHistory";
 import { cancelHandoff } from "./sessionContext";
 import { requestPickSession } from "./sessionPickRequest";
 
@@ -29,6 +30,7 @@ export function SessionHandoffCancel(
           text: cancelled.text,
           attachments: blocksToAttachments(cancelled.content, cancelled.text),
         });
+        notifyLineageChanged(sessionId);
         requestPickSession(cancelled.source_session_id, cancelled.session ?? undefined);
       })
       .catch((error: unknown) =>

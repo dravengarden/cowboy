@@ -33,6 +33,7 @@ mod review_defaults;
 pub use review_defaults::LanguageServerTrust;
 mod session_continuation;
 mod session_fork;
+mod session_lineage;
 pub use session_fork::{FORK_ORIGIN_UPDATE, ForkPoint, ForkRecord, ForkState};
 mod hub_config;
 mod hub_dispatch_origin;
@@ -1299,6 +1300,10 @@ pub enum StoreWrite {
         turn_lost: Option<(String, serde_json::Value)>,
     },
     DeleteSession(String),
+    FreezeLineagePrefix {
+        session_id: String,
+        before_seq: u64,
+    },
     /// Persist a session's queue + drafts (whole lists, as JSONB) so staged
     /// messages survive a daemon restart — matching the durability the old
     /// client-side localStorage gave them. Any completion notices settled
@@ -1508,6 +1513,7 @@ struct HubInner {
     mcp_launch: Mutex<Option<std::sync::Arc<mcp_launch::Resolver>>>,
     sessions: Mutex<HashMap<String, Session>>,
     context_edits: Mutex<HashSet<String>>,
+    auth_parents: Mutex<HashMap<String, String>>,
     /// Internal auth/admin state restored from the durable settings table.
     settings: Mutex<HashMap<String, serde_json::Value>>,
     product_permissions: Mutex<product_permissions::Observations>,
@@ -1790,6 +1796,7 @@ impl Hub {
                 sessions: Mutex::new(HashMap::new()),
                 settings: Mutex::new(HashMap::new()),
                 context_edits: Mutex::new(HashSet::new()),
+                auth_parents: Mutex::new(HashMap::new()),
                 product_permissions: Mutex::new(product_permissions::Observations::default()),
                 runtime_reconciliation: Mutex::new(HashSet::new()),
                 restart_interrupted: Mutex::new(HashSet::new()),

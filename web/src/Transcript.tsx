@@ -21,7 +21,7 @@ import { Bedtime, ErrorOutline, Stop, WarningAmberRounded } from "@mui/icons-mat
 import { BackgroundTasksInspector } from "./BackgroundTasksInspector";
 import { applySubagentAuthority, useSessionAuthority } from "./backgroundTasks";
 import { useBackgroundTasks, useStopStates } from "./useBackgroundTasks";
-import { SessionContinuedFrom } from "./SessionContextCue";
+import { InlineAncestorTranscript } from "./InlineAncestorTranscript";
 import { lastRowBefore, SESSION_REVEAL_EVENT, takeSessionReveal } from "./sessionReveal";
 import { providerPresentation } from "./providerPresentation";
 
@@ -2996,7 +2996,7 @@ export function Transcript({
               )}
               {/* The conversation's true first row: where it came from. */}
               {recycledHeight === 0 && (paging?.reachedStart ?? true) && (
-                <SessionContinuedFrom sessionId={sessionId} />
+                <InlineAncestorTranscript sessionId={sessionId} desktop={desktopNavigation} />
               )}
               {paging != null && shouldShowScrollbackLoadingSkeleton({
                 managed: managesScrollHistory,

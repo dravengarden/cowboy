@@ -7,9 +7,11 @@ use crate::session_context::{Context, Delivery, Injection, Link, NextAgent, Sour
 mod cancel;
 mod fork;
 mod inheritance;
+pub mod lineage;
 pub mod rollover;
 pub use cancel::cancel;
 pub use fork::{duplicate, duplicate_options, fork};
+pub use lineage::{get as lineage_get, history as lineage_history};
 
 // Serializes short durable mutations and creation admission, including requests
 // coming through MCP. A dropped HTTP request does not cancel the transaction.
@@ -78,9 +80,8 @@ fn capture(
                 session_id: id.clone(),
                 before: state
                     .hub
-                    .last_event_seq(id)
-                    .ok_or("Session unavailable")?
-                    .saturating_add(1),
+                    .next_event_seq(id)
+                    .ok_or("Session unavailable")?,
             })
         })
         .collect()
@@ -815,6 +816,9 @@ async fn deliver(
     if let Err(error) = save(&state, &target_id, &target_context).await {
         preparation_failed(&state, &id, &mut context, &mut delivery, error).await?;
         return Ok(delivery);
+    }
+    if target_id != id {
+        lineage::record_replace_edge(&state, &target_id, &info.meta, &target_context).await;
     }
     // No retry ever reaches this dispatch twice: the durable intent above is
     // observation-only, even if the process dies before recording acceptance.

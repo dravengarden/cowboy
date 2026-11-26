@@ -5371,58 +5371,7 @@ impl SqliteStorage {
     }
 
     pub(super) async fn purge_deleted(&self, retention_days: i64) -> Result<u64> {
-        let retention_ms = retention_days.saturating_mul(86_400_000);
-        let result = sqlx::query(
-            "DELETE FROM sessions WHERE deleted_at_ms IS NOT NULL \
-             AND COALESCE(purge_after_at_ms, deleted_at_ms + ?1) <= ?2 \
-             AND NOT EXISTS (SELECT 1 FROM managed_agent_calls AS call \
-                 WHERE (call.parent_session_id = sessions.id OR call.child_session_id = sessions.id) \
-                 AND call.state NOT IN ('completed', 'failed', 'cancelled')) \
-             AND NOT EXISTS (SELECT 1 FROM plugin_uninstall_operations AS operation \
-                 WHERE operation.machine_id = sessions.machine_id AND operation.plugin_id = sessions.provider \
-                 AND operation.phase NOT IN ('completed', 'compensated', 'aborted'))",
-        )
-        .bind(retention_ms)
-        .bind(now_ms())
-        .execute(&self.pool)
-        .await
-        .context("purge soft-deleted SQLite sessions")?;
-        let mut referenced = HashSet::new();
-        // Expand json_tree only for the few payloads that can hold a reference:
-        // the substring test is far cheaper than walking every transcript event.
-        let mut rows = sqlx::query(
-            "SELECT DISTINCT tree.value AS reference \
-             FROM events \
-             CROSS JOIN json_tree(events.payload) AS tree \
-             WHERE instr(events.payload, '/api/artifacts/') > 0 \
-             AND tree.type = 'text' AND tree.value LIKE '/api/artifacts/%' \
-             UNION SELECT json_extract(image.value, '$.url') AS reference \
-             FROM managed_agent_calls CROSS JOIN json_each(document, '$.result.artifacts') AS image \
-             WHERE json_type(image.value, '$.url') = 'text'",
-        )
-        .fetch(&self.pool);
-        while let Some(row) = rows
-            .try_next()
-            .await
-            .context("scan retained SQLite artifact references")?
-        {
-            let reference: String = row.try_get("reference")?;
-            crate::artifacts::collect_references(
-                &serde_json::Value::String(reference),
-                &mut referenced,
-            );
-        }
-        let artifacts_removed = self
-            .artifacts
-            .prune_unreferenced(&referenced, Duration::from_hours(24))
-            .context("prune unreferenced SQLite event artifacts")?;
-        if artifacts_removed > 0 {
-            tracing::info!(
-                artifacts_removed,
-                "purged unreferenced SQLite event artifacts"
-            );
-        }
-        Ok(result.rows_affected())
+        crate::store::session_lineage::purge_deleted_sqlite(self, retention_days).await
     }
 
     /// Return free pages to the filesystem in bounded steps. Each step is its

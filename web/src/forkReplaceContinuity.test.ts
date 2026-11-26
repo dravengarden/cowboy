@@ -5,7 +5,7 @@ import {
   shouldShowFreshSessionEmptyState,
 } from "./transcriptViewport";
 import { shouldPaintTranscriptLifecycle } from "./transcriptLoadingPresentation";
-import { mergeAncestorEvents } from "./ancestorHistory";
+import { cachedSessionLineage, clearLineageCache, formatLineageActionLabel, mergeAncestorEvents, setCachedSessionLineage } from "./ancestorHistory";
 import { DESKTOP_WORKSPACE_KEYS } from "./desktop/commands/workspaceShortcuts";
 import type { Envelope } from "./protocol";
 
@@ -92,4 +92,17 @@ test("mergeAncestorEvents enforces exclusive before cutoff and sorts ascending w
 
 test("Desktop leader registers SF for Replace or Fork Session", () => {
   expect(DESKTOP_WORKSPACE_KEYS.sessionsReplaceOrFork).toBe("SF");
+});
+
+test("lineage action labels distinguish replace from forks and cache clears cleanly", () => {
+  expect(formatLineageActionLabel("replace")).toBe("Continued from");
+  expect(formatLineageActionLabel("native_fork")).toBe("Forked from");
+  expect(formatLineageActionLabel("linked_fork")).toBe("Forked from");
+  setCachedSessionLineage("sess-child", { session_id: "sess-child", hops: [], branches: [] });
+  expect(cachedSessionLineage("sess-child")?.session_id).toBe("sess-child");
+  clearLineageCache("sess-child");
+  expect(cachedSessionLineage("sess-child")).toBeUndefined();
+  setCachedSessionLineage("sess-a", { session_id: "sess-a", hops: [], branches: [] });
+  clearLineageCache();
+  expect(cachedSessionLineage("sess-a")).toBeUndefined();
 });

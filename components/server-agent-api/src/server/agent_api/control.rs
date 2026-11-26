@@ -335,22 +335,19 @@ fn stored_next_agent(
 /// unknown, and callers must not read that as an unrelated session.
 fn lineage_root(hub: &crate::core::Hub, session: &SessionMeta) -> Option<String> {
     let mut current = session.id.clone();
-    let mut source = session
-        .forked_from
-        .clone()
-        .or(session.continued_from.clone());
-    // A corrupt cycle ends the walk; the links are otherwise bounded by history.
+    let mut visited = std::collections::HashSet::with_capacity(8);
+    visited.insert(current.clone());
+    // Walk durable auth_parent edges (independent of Clear display detachment
+    // and archived/purged intermediates). Cycles or depth > 256 return None so
+    // callers fail closed (`same_lineage` treats unknown roots as related).
     for _ in 0..256 {
-        let Some(id) = source else {
+        let Some(parent) = hub.auth_parent(&current) else {
             return Some(current);
         };
-        let info = hub.session_info(&id)?;
-        source = info
-            .meta
-            .forked_from
-            .clone()
-            .or(info.meta.continued_from.clone());
-        current = id;
+        if !visited.insert(parent.clone()) {
+            return None;
+        }
+        current = parent;
     }
     None
 }

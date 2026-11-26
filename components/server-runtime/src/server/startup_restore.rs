@@ -48,6 +48,16 @@ pub async fn restore_hub_from_store(store: &Store, hub: &Hub) -> anyhow::Result<
     let restored_count = restored.len();
     // Adopt durable anchors before any reducer sees a new event, so a
     // restarted Controller never starts a second subagent/Call row.
+    let lineage_edges = match store.load_all_lineage_edges().await {
+        Ok(edges) => {
+            hub.warm_lineage_edges(&edges);
+            edges
+        }
+        Err(error) => {
+            tracing::warn!(%error, "warming lineage edges failed");
+            Vec::new()
+        }
+    };
     match store
         .recent_transcript_anchors(crate::transcript_anchors::HUB_WARM_ANCHORS)
         .await
@@ -75,6 +85,7 @@ pub async fn restore_hub_from_store(store: &Store, hub: &Hub) -> anyhow::Result<
     crate::session_context::restore_announcements(hub);
     hub.restore_continuations();
     hub.restore_forks();
+    hub.warm_lineage_edges(&lineage_edges);
     hub.set_artifacts(store.artifacts());
     tracing::info!(restored = restored_count, "persistence wired",);
     Ok(())

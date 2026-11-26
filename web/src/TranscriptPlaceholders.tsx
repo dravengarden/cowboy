@@ -5,6 +5,7 @@ import { Box, Button, ButtonBase, CircularProgress, Skeleton, Stack, Typography 
 import { alpha } from "@mui/material/styles";
 import { shortcutKey } from "./desktop/commands/imeShortcut";
 import { ChatBubbleOutline, CleaningServices, Terminal, Tune } from "@mui/icons-material";
+import { LineageEmptyContinuation } from "./InlineAncestorTranscript";
 import { SessionContinuedFrom } from "./SessionContextCue";
 import { providerPresentation } from "./providerPresentation";
 import { useStoreSelector } from "./store";
@@ -387,6 +388,19 @@ export function focusPrimaryComposer(): void {
   )?.focus();
 }
 
+
+function selectConversationEmptyMode(
+  state: { sessions: readonly { id: string; forked_from?: string | undefined; continued_from?: string | undefined }[]; queues: ReadonlyMap<string, readonly unknown[]> },
+  sessionId: string,
+  kind: ConversationEmptyKind,
+): "lineage" | "committed" | "plain" {
+  const entry = state.sessions.find((item) => item.id === sessionId);
+  if (kind !== "cleared" && (entry?.forked_from !== undefined || entry?.continued_from !== undefined)) {
+    return "lineage";
+  }
+  return kind === "preparing" && (state.queues.get(sessionId)?.length ?? 0) > 0 ? "committed" : "plain";
+}
+
 export function ConversationEmptyState({
   sessionId,
   kind,
@@ -423,14 +437,8 @@ export function ConversationEmptyState({
   const readiness = preparing ? "is starting" : "is ready";
   // Once a first message is on its way there is nothing left to set up before
   // it: the page only has to say the wait is working, not offer a form.
-  const committed = useStoreSelector((state) =>
-    kind === "preparing" && (
-      (state.queues.get(sessionId)?.length ?? 0) > 0 ||
-      state.sessions.some((entry) =>
-        entry.id === sessionId && entry.continued_from !== undefined
-      )
-    )
-  );
+  const emptyMode = useStoreSelector((state) => selectConversationEmptyMode(state, sessionId, kind));
+  const committed = emptyMode === "committed";
   const detail = kind === "preparing"
     ? `${location
       ? `Creating an isolated workspace for ${location}.`
@@ -470,6 +478,7 @@ export function ConversationEmptyState({
     return event.target.closest("[data-conversation-empty-settings], [data-session-start-settings], [data-session-handoff]") ===
       null;
   };
+  if (emptyMode === "lineage" && kind !== "cleared") return <LineageEmptyContinuation sessionId={sessionId} kind={kind} location={location} provider={context.provider} providerVersion={context.providerVersion} providerDigest={context.providerDigest} sleeping={sleeping} crashDetail={crashDetail} desktop={desktop} />;
   if (kind === "blocked") return <PreparingConversation sessionId={sessionId} location={location} blocked={{ detail: crashDetail }} />;
   if (kind === "preparing" && committed) return <PreparingConversation sessionId={sessionId} location={location} />;
   return (

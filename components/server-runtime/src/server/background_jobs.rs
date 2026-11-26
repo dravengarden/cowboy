@@ -198,6 +198,13 @@ pub async fn run_store_writer_with_acks(
     acks: Option<crate::core::StoreAckSink>,
 ) {
     let mut reducer = EventReducer::default();
+    if let Ok(edges) = store.load_all_lineage_edges().await {
+        for edge in edges {
+            if edge.segment_id.is_none() && !edge.display_detached && edge.before_seq > 0 {
+                reducer.set_freeze_floor(&edge.parent_session_id, edge.before_seq);
+            }
+        }
+    }
     let mut draining = *shutdown.borrow();
     if draining {
         rx.close();
@@ -263,6 +270,10 @@ async fn apply_store_batch_with_acks(
     for write in writes {
         match write {
             // Committed with the batch, so it never splits one.
+            StoreWrite::FreezeLineagePrefix {
+                session_id,
+                before_seq,
+            } => reducer.set_freeze_floor(&session_id, before_seq),
             StoreWrite::RecordOccurrence(occurrence) => occurrences.push(occurrence),
             StoreWrite::UpdateSessionUsage { ref session_id, .. } => {
                 usages.insert(session_id.clone(), write);
@@ -292,7 +303,14 @@ async fn apply_store_batch_with_acks(
                     && !reducer.knows_anchor(&env.session_id, key)
                 {
                     match resolve_durable_anchor(store, &env.session_id, key).await {
-                        Ok(Some(seq)) => reducer.adopt_anchor(&env.session_id, key, seq),
+                        Ok(Some(seq)) if seq >= reducer.freeze_floor(&env.session_id) => {
+                            reducer.adopt_anchor(&env.session_id, key, seq);
+                        }
+                        Ok(Some(_)) => anchors.push(crate::transcript_anchors::AnchorWrite {
+                            session_id: env.session_id.clone(),
+                            key: key.to_owned(),
+                            seq: env.seq,
+                        }),
                         Ok(None) => anchors.push(crate::transcript_anchors::AnchorWrite {
                             session_id: env.session_id.clone(),
                             key: key.to_owned(),
@@ -841,7 +859,7 @@ pub async fn apply_store_write(store: &Store, write: &StoreWrite) -> anyhow::Res
         } => store.upsert_wakeup(session_id, *fire_at_ms, prompt).await,
         StoreWrite::DeleteWakeup { session_id } => store.delete_wakeup(session_id).await,
         StoreWrite::PutSetting { key, value } => store.put_setting(key, value).await,
-        StoreWrite::Barrier { .. } => Ok(()),
+        StoreWrite::FreezeLineagePrefix { .. } | StoreWrite::Barrier { .. } => Ok(()),
     }
 }
 

@@ -145,6 +145,7 @@ async fn take_back(
         serde_json::Value::Null,
     );
     state.hub.set_continued_from(&id, None);
+    super::lineage::delete_edge(&state, &id).await;
     let note = super::super::session_trash::trash(
         &state,
         &auth.principal,

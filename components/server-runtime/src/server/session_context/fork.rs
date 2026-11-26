@@ -261,11 +261,36 @@ async fn fork_session(
             "The new session {destination} was admitted on another login or Machine and cannot fork this conversation; delete it and retry"
         ));
     }
-    state.hub.open_fork(&destination, &record, &source.title);
-    inheritance::apply(&state, &source, &created, &selection)?;
-    apply_overrides(&state, &destination, &request.config)?;
-    state.hub.place_fork(&id, &destination, &actor)?;
+    finish_native_fork(&state, &id, &destination, &source, &created, &record, &selection, &request.config, &actor).await?;
     Ok((destination, true))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn finish_native_fork(
+    state: &AppState,
+    id: &str,
+    destination: &str,
+    source: &SessionMeta,
+    created: &SessionMeta,
+    record: &ForkRecord,
+    selection: &NextAgent,
+    overrides: &serde_json::Map<String, serde_json::Value>,
+    actor: &crate::session_folders::FolderActor,
+) -> Result<(), String> {
+    let before_seq = record
+        .message_id
+        .as_deref()
+        .or(record.point.as_deref())
+        .and_then(|mid| state.hub.fork_turn_before_seq(id, mid))
+        .or_else(|| state.hub.next_event_seq(id))
+        .unwrap_or(0);
+    if let Err(error) = lineage::record_edge(state, destination, source, "native_fork", before_seq, false).await {
+        tracing::warn!(session = %destination, source = %id, %error, "native fork lineage edge not recorded");
+    }
+    state.hub.open_fork(destination, record, &source.title);
+    inheritance::apply(state, source, created, selection)?;
+    apply_overrides(state, destination, overrides)?;
+    state.hub.place_fork(id, destination, actor)
 }
 
 /// Admitted copies by owner, source and operation, with the request they
@@ -361,6 +386,7 @@ async fn duplicate_session(
     inheritance::preflight(&state, &auth, &source, &selection).await?;
     let actor = folder_actor(&state, &auth.principal);
     state.hub.continuation_folder(&id, &actor)?;
+    let before_seq = state.hub.next_event_seq(&id).unwrap_or(0);
     let destination = state.supervisor.reserve_session_id();
     // Fenced until placed, like a fork or continuation destination.
     let target_lock = write_lock(&destination);
@@ -388,6 +414,10 @@ async fn duplicate_session(
     DUPLICATES
         .lock()
         .insert(replay_key, (destination.clone(), fingerprint));
+    if let Err(error) = lineage::record_edge(&state, &destination, &source, "linked_fork", before_seq, false).await {
+        tracing::warn!(session = %destination, source = %id, %error, "linked fork lineage edge not recorded");
+    }
+    state.hub.set_forked_from(&destination, Some(id.clone()));
     let finish = || -> Result<(), String> {
         current_authority(&state, &auth)?;
         let source = owned(&state, &auth.principal, &id)?.meta;
