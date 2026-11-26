@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "app_id": "top.thundersparrow.cowboy",
-  "latest_version": "0.1.35",
+  "latest_version": "0.1.36",
   "minimum_version": "0.1.0",
   "release_notes": "Native Cowboy iOS releases are distributed through TestFlight and the App Store. Update through TestFlight, then reopen Cowboy.",
   "preferred_channel": "testflight",
