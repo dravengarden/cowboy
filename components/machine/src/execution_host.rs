@@ -441,6 +441,7 @@ impl Host {
         let receiver = match self.admit_user_mcp_start(
             &clean_invocation,
             epoch,
+            gate.manager_id.as_deref(),
             gate.config_revision,
             name,
             process_id,
@@ -552,10 +553,12 @@ impl Host {
     /// Idempotency (`ledger.observe`) is checked FIRST so a concurrent duplicate
     /// invocation never hits `active_processes.contains_key` and returns a
     /// misleading deterministic error while the process is actually starting.
+    #[allow(clippy::too_many_arguments)]
     fn admit_user_mcp_start(
         &self,
         clean_invocation: &wire::Invocation,
         epoch: u64,
+        gate_manager_id: Option<&str>,
         gate_config_revision: Option<u64>,
         name: String,
         process_id: String,
@@ -570,7 +573,7 @@ impl Host {
         }
         if um.stop_epoch != epoch
             || um.is_tombstoned(&process_id)
-            || gate_config_revision.is_some_and(|rev| rev < um.last_stop_config_revision)
+            || um.is_fenced_by_revision(gate_manager_id, gate_config_revision)
         {
             return Ok(Err(user_mcp::error_reply(
                 "user_mcp_stopped",
@@ -670,8 +673,8 @@ impl Host {
                 .unwrap_or_default();
         }
         um.stop_epoch = um.stop_epoch.saturating_add(1);
-        if let Some(rev) = args.config_revision {
-            um.last_stop_config_revision = um.last_stop_config_revision.max(rev);
+        if let (Some(manager_id), Some(rev)) = (args.manager_id.as_deref(), args.config_revision) {
+            um.record_stop_revision(manager_id, rev);
         }
         um.latest_allowlist = args.keep_allowlist.clone();
         let selected: Vec<StopUserMcpTarget> = um
@@ -900,6 +903,7 @@ fn parse_start_user_mcp_args(params: &Value) -> Result<(String, String, String),
 struct StopUserMcpArgs {
     target_pid: Option<String>,
     keep_allowlist: Option<Vec<String>>,
+    manager_id: Option<String>,
     config_revision: Option<u64>,
 }
 
@@ -945,6 +949,16 @@ fn parse_stop_user_mcp_args(params: &Value) -> Result<StopUserMcpArgs, Value> {
             ));
         }
     };
+    let manager_id = match params.get("managerId") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(id)) if wire::valid_operation_id(id) => Some(id.clone()),
+        _ => {
+            return Err(user_mcp::error_reply(
+                "user_mcp_invalid",
+                "invalid managerId in stopUserMcp",
+            ));
+        }
+    };
     let config_revision = match params.get("configRevision") {
         None | Some(Value::Null) => None,
         Some(value) => match value.as_u64() {
@@ -960,6 +974,7 @@ fn parse_stop_user_mcp_args(params: &Value) -> Result<StopUserMcpArgs, Value> {
     Ok(StopUserMcpArgs {
         target_pid,
         keep_allowlist,
+        manager_id,
         config_revision,
     })
 }
@@ -1905,6 +1920,7 @@ mod tests {
             .admit_user_mcp_start(
                 &clean_inv,
                 0,
+                Some("mgr-1"),
                 Some(2),
                 "demo".into(),
                 pid.clone(),
@@ -1913,7 +1929,15 @@ mod tests {
             .unwrap()
             .expect("first admit");
         let rx2 = host
-            .admit_user_mcp_start(&clean_inv, 0, Some(2), "demo".into(), pid.clone(), native)
+            .admit_user_mcp_start(
+                &clean_inv,
+                0,
+                Some("mgr-1"),
+                Some(2),
+                "demo".into(),
+                pid.clone(),
+                native,
+            )
             .unwrap()
             .expect("duplicate admit must return Existing receiver, not capacity error");
         let frame = frames.recv().await.unwrap();
@@ -1948,7 +1972,7 @@ mod tests {
                         invocation: wire::Invocation {
                             operation_id: "op-stop-rev3".into(),
                             method: user_mcp::USER_MCP_STOP_METHOD.into(),
-                            params: json!({"configRevision": 3}),
+                            params: json!({"managerId": "mgr-1", "configRevision": 3}),
                         },
                         wait_ms: 5000,
                     },
@@ -1986,7 +2010,7 @@ mod tests {
             "stopUserMcp must not refresh attended timestamp"
         );
 
-        // Finding 8b: stale managerGate with configRevision < 3 is fenced by last_stop_config_revision.
+        // Stale managerGate from same Manager (mgr-1, rev 2 < 3) is fenced.
         let stale_pid = format!(
             "{}bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             user_mcp::USER_MCP_PROCESS_PREFIX
@@ -2001,6 +2025,7 @@ mod tests {
             .admit_user_mcp_start(
                 &stale_inv,
                 current_epoch,
+                Some("mgr-1"),
                 Some(2),
                 "demo".into(),
                 stale_pid,
@@ -2008,13 +2033,39 @@ mod tests {
             )
             .unwrap();
         let Err(err_reply) = fenced else {
-            panic!("stale configRevision gate must be fenced");
+            panic!("stale configRevision gate from same Manager must be fenced");
         };
         assert_eq!(
             err_reply
                 .pointer("/error/data/code")
                 .and_then(Value::as_str),
             Some("user_mcp_stopped")
+        );
+
+        // Restarted Manager (mgr-2, rev 1) MUST NOT be fenced by mgr-1's stop revision.
+        let restarted_pid = format!(
+            "{}cccccccccccccccccccccccccccccccc",
+            user_mcp::USER_MCP_PROCESS_PREFIX
+        );
+        let restarted_inv = wire::Invocation {
+            operation_id: "op-restarted-mgr2-rev1".into(),
+            method: user_mcp::USER_MCP_START_METHOD.into(),
+            params: json!({"name": "demo", "processId": restarted_pid, "fingerprint": fp}),
+        };
+        let admitted = host
+            .admit_user_mcp_start(
+                &restarted_inv,
+                current_epoch,
+                Some("mgr-2"),
+                Some(1),
+                "demo".into(),
+                restarted_pid,
+                json!({"processId": "ok"}),
+            )
+            .unwrap();
+        assert!(
+            admitted.is_ok(),
+            "restarted Manager instance must not be fenced by prior Manager's stop revision"
         );
     }
 }

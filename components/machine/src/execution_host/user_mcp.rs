@@ -43,6 +43,7 @@ const MAX_GIT_WALK_DEPTH: usize = 64;
 pub struct ManagerGate {
     pub enabled: bool,
     pub allowlist: Vec<String>,
+    pub manager_id: Option<String>,
     pub config_revision: Option<u64>,
 }
 
@@ -84,10 +85,13 @@ pub(super) struct ActiveUserMcpProcess {
     pub ended: watch::Sender<bool>,
 }
 
+const MAX_TRACKED_MANAGERS: usize = 32;
+
 #[derive(Default)]
 pub(super) struct UserMcpState {
     pub stop_epoch: u64,
-    pub last_stop_config_revision: u64,
+    manager_order: VecDeque<String>,
+    stop_revision_by_manager: HashMap<String, u64>,
     pub latest_allowlist: Option<Vec<String>>,
     stopped_order: VecDeque<String>,
     stopped_set: HashSet<String>,
@@ -100,6 +104,35 @@ impl UserMcpState {
     pub fn next_stop_operation_id(&mut self) -> String {
         self.stop_seq = self.stop_seq.saturating_add(1);
         format!("cowboy-stop-user-mcp-{}", self.stop_seq)
+    }
+
+    pub fn record_stop_revision(&mut self, manager_id: &str, rev: u64) {
+        if !self.stop_revision_by_manager.contains_key(manager_id) {
+            self.manager_order.push_back(manager_id.to_owned());
+            while self.manager_order.len() > MAX_TRACKED_MANAGERS {
+                if let Some(oldest) = self.manager_order.pop_front() {
+                    self.stop_revision_by_manager.remove(&oldest);
+                }
+            }
+        }
+        let entry = self
+            .stop_revision_by_manager
+            .entry(manager_id.to_owned())
+            .or_insert(0);
+        *entry = (*entry).max(rev);
+    }
+
+    pub fn is_fenced_by_revision(
+        &self,
+        manager_id: Option<&str>,
+        config_revision: Option<u64>,
+    ) -> bool {
+        let (Some(manager_id), Some(rev)) = (manager_id, config_revision) else {
+            return false;
+        };
+        self.stop_revision_by_manager
+            .get(manager_id)
+            .is_some_and(|last_rev| rev < *last_rev)
     }
 
     pub fn is_tombstoned(&self, process_id: &str) -> bool {
@@ -248,46 +281,32 @@ pub fn create_neutral_cwd(incarnation: &str) -> Result<PathBuf> {
     );
     let root = neutral_cwd_root();
     let uid = rustix::process::geteuid().as_raw();
-    match std::fs::symlink_metadata(&root) {
-        Ok(meta) => {
-            ensure!(
-                meta.is_dir()
-                    && !meta.file_type().is_symlink()
-                    && meta.uid() == uid
-                    && meta.mode() & 0o077 == 0,
-                "user MCP neutral cwd root has unsafe ownership or permissions"
-            );
-        }
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-            std::fs::DirBuilder::new()
-                .mode(0o700)
-                .create(&root)
-                .context("creating user MCP neutral cwd root")?;
-            let meta = std::fs::symlink_metadata(&root)?;
-            ensure!(
-                meta.is_dir()
-                    && !meta.file_type().is_symlink()
-                    && meta.uid() == uid
-                    && meta.mode() & 0o077 == 0,
-                "user MCP neutral cwd root verification failed"
-            );
-        }
-        Err(error) => return Err(error).context("inspecting user MCP neutral cwd root"),
+    match std::fs::DirBuilder::new().mode(0o700).create(&root) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(err) => return Err(err).context("creating user MCP neutral cwd root"),
     }
+    let root_meta = std::fs::symlink_metadata(&root)?;
+    ensure!(
+        root_meta.is_dir()
+            && !root_meta.file_type().is_symlink()
+            && root_meta.uid() == uid
+            && root_meta.mode() & 0o077 == 0,
+        "user MCP neutral cwd root has unsafe ownership or permissions"
+    );
+
     let leaf = root.join(incarnation);
-    if let Ok(meta) = std::fs::symlink_metadata(&leaf) {
-        ensure!(
-            meta.is_dir() && !meta.file_type().is_symlink() && meta.uid() == uid,
-            "existing user MCP neutral cwd leaf is unsafe"
-        );
-        std::fs::set_permissions(&leaf, std::fs::Permissions::from_mode(0o500))?;
-    } else {
-        std::fs::DirBuilder::new()
-            .mode(0o700)
-            .create(&leaf)
-            .context("creating user MCP neutral cwd")?;
-        std::fs::set_permissions(&leaf, std::fs::Permissions::from_mode(0o500))?;
+    match std::fs::DirBuilder::new().mode(0o700).create(&leaf) {
+        Ok(()) => {}
+        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+        Err(err) => return Err(err).context("creating user MCP neutral cwd"),
     }
+    let meta = std::fs::symlink_metadata(&leaf)?;
+    ensure!(
+        meta.is_dir() && !meta.file_type().is_symlink() && meta.uid() == uid,
+        "existing user MCP neutral cwd leaf is unsafe"
+    );
+    std::fs::set_permissions(&leaf, std::fs::Permissions::from_mode(0o500))?;
     let meta = std::fs::symlink_metadata(&leaf)?;
     ensure!(
         meta.is_dir()
@@ -364,6 +383,18 @@ pub fn extract_manager_gate(params: &Value) -> Result<(ManagerGate, Value), Valu
             ));
         }
     };
+    let manager_id = match gate_obj.get("managerId") {
+        None | Some(Value::Null) => None,
+        Some(Value::String(id)) if crate::execution_protocol::valid_operation_id(id) => {
+            Some(id.clone())
+        }
+        _ => {
+            return Err(error_reply(
+                "user_mcp_invalid",
+                "invalid managerGate.managerId",
+            ));
+        }
+    };
     let config_revision = match gate_obj.get("configRevision") {
         None | Some(Value::Null) => None,
         Some(value) => match value.as_u64() {
@@ -388,6 +419,7 @@ pub fn extract_manager_gate(params: &Value) -> Result<(ManagerGate, Value), Valu
         ManagerGate {
             enabled,
             allowlist,
+            manager_id,
             config_revision,
         },
         Value::Object(clean),
@@ -697,7 +729,8 @@ fn validate_server(
         if expanded.len() > MAX_ARG_BYTES || expanded.contains('\0') {
             return Err("invalid_config");
         }
-        if arg_violates_repo_guardrail(&expanded, forbidden) {
+        let home = clean_env.get("HOME").map(String::as_str);
+        if arg_violates_repo_guardrail(&expanded, forbidden, home) {
             return Err("invalid_config");
         }
         args.push(expanded);
@@ -932,9 +965,42 @@ fn arg_contains_forbidden_prefix(arg: &str, forbidden: &BTreeSet<PathBuf>) -> bo
     false
 }
 
+fn deepest_existing_canonical_in_forbidden(path: &Path, forbidden: &BTreeSet<PathBuf>) -> bool {
+    for ancestor in path.ancestors() {
+        if ancestor == Path::new("/") {
+            break;
+        }
+        if let Ok(canonical) = std::fs::canonicalize(ancestor) {
+            if path_in_forbidden(&canonical, forbidden) {
+                return true;
+            }
+            break;
+        }
+    }
+    false
+}
+
+fn expand_home_candidate(candidate: &str, home: Option<&str>) -> Option<String> {
+    let home = home?.trim_end_matches('/');
+    if home.is_empty() {
+        return None;
+    }
+    if let Some(rest) = candidate.strip_prefix("~/") {
+        return Some(format!("{home}/{rest}"));
+    }
+    if candidate == "~" {
+        return Some(home.to_owned());
+    }
+    if candidate.contains("$HOME") || candidate.contains("${HOME}") {
+        return Some(candidate.replace("${HOME}", home).replace("$HOME", home));
+    }
+    None
+}
+
 fn candidate_path_violates(
     candidate: &str,
     forbidden: &BTreeSet<PathBuf>,
+    home: Option<&str>,
     allow_bare_dot: bool,
 ) -> bool {
     if candidate.is_empty() {
@@ -954,46 +1020,57 @@ fn candidate_path_violates(
             candidate
         }
     });
+    if let Some(expanded) = expand_home_candidate(trimmed, home)
+        && candidate_path_violates(&expanded, forbidden, None, allow_bare_dot)
+    {
+        return true;
+    }
     let path = Path::new(trimmed);
     if path.is_absolute() {
         if path_in_forbidden(path, forbidden) {
+            return true;
+        }
+        // Check raw non-normalized path first so `/tmp/symlink-to-repo-sub/..`
+        // resolves through the symlink rather than dropping `..` lexically.
+        if deepest_existing_canonical_in_forbidden(path, forbidden) {
             return true;
         }
         let normalized = normalize_lexical(path);
         if path_in_forbidden(&normalized, forbidden) {
             return true;
         }
-        for ancestor in normalized.ancestors() {
-            if ancestor == Path::new("/") {
-                break;
-            }
-            if let Ok(canonical) = std::fs::canonicalize(ancestor) {
-                if path_in_forbidden(&canonical, forbidden) {
-                    return true;
-                }
-                break;
-            }
+        if normalized != path && deepest_existing_canonical_in_forbidden(&normalized, forbidden) {
+            return true;
         }
     }
     false
 }
 
-fn arg_violates_repo_guardrail(arg: &str, forbidden: &BTreeSet<PathBuf>) -> bool {
-    if candidate_path_violates(arg, forbidden, false) {
+fn arg_violates_repo_guardrail(
+    arg: &str,
+    forbidden: &BTreeSet<PathBuf>,
+    home: Option<&str>,
+) -> bool {
+    if candidate_path_violates(arg, forbidden, home, false) {
         return true;
     }
     // Check suffixes after every `=` (e.g. `--a=--b=/repo/x`).
     for (idx, ch) in arg.char_indices() {
-        if ch == '=' && candidate_path_violates(&arg[idx + 1..], forbidden, false) {
+        if ch == '=' && candidate_path_violates(&arg[idx + 1..], forbidden, home, false) {
             return true;
         }
     }
     if arg_contains_forbidden_prefix(arg, forbidden) {
         return true;
     }
+    if let Some(expanded_arg) = expand_home_candidate(arg, home)
+        && arg_contains_forbidden_prefix(&expanded_arg, forbidden)
+    {
+        return true;
+    }
     // Check shell/flag-delimited tokens (e.g. `bash -lc "cd /symlink-to-repo && ./run"`).
     for token in arg.split(|c: char| c.is_ascii() && is_arg_boundary_byte(c as u8) && c != ':') {
-        if candidate_path_violates(token, forbidden, true) {
+        if candidate_path_violates(token, forbidden, home, true) {
             return true;
         }
     }
@@ -1259,33 +1336,42 @@ mod tests {
     fn arg_guardrail_blocks_contains_forms_without_sibling_false_positives() {
         let dir = tempdir().unwrap();
         let source = dir.path().join("repo");
+        let source_sub = source.join("sub");
         let worktree = dir.path().join("wt");
         let sibling = dir.path().join("repo-other");
         let link = dir.path().join("link-to-repo");
-        std::fs::create_dir_all(&source).unwrap();
+        let sub_link = dir.path().join("link-to-sub");
+        std::fs::create_dir_all(&source_sub).unwrap();
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::create_dir_all(&sibling).unwrap();
         std::os::unix::fs::symlink(&source, &link).unwrap();
+        std::os::unix::fs::symlink(&source_sub, &sub_link).unwrap();
 
+        let home = dir.path().to_str().unwrap();
         let mut forbidden = BTreeSet::new();
         forbidden.insert(source.clone());
         forbidden.insert(std::fs::canonicalize(&source).unwrap());
         forbidden.insert(worktree.clone());
         forbidden.insert(std::fs::canonicalize(&worktree).unwrap());
 
-        // Compound / embedded forms MUST be rejected (Finding 5).
+        // Compound / embedded / symlink+.. / shell-home forms MUST be rejected.
         let blocked = [
             format!("cd {} && node server.js", source.display()),
             format!("-C{}", source.display()),
             format!("file://{}/x", source.display()),
             format!("--a=--b={}/x", worktree.display()),
             format!("file://{}/x", link.display()),
+            format!("--root={}/..", sub_link.display()),
+            format!("cd {}/.. && node x", sub_link.display()),
+            "cd ~/repo && node x".to_owned(),
+            "cd $HOME/repo && node x".to_owned(),
+            "cd ${HOME}/repo/sub && node x".to_owned(),
             format!("'{}'", source.display()),
             "cd ./sub && node run.js".to_owned(),
         ];
         for arg in blocked {
             assert!(
-                arg_violates_repo_guardrail(&arg, &forbidden),
+                arg_violates_repo_guardrail(&arg, &forbidden, Some(home)),
                 "expected guardrail rejection for arg: {arg}"
             );
         }
@@ -1296,10 +1382,11 @@ mod tests {
             format!("/other{}", source.display()),
             "--label=中文说明".to_owned(),
             "https://example.com/v1".to_owned(),
+            "cd ~/repo-other && node x".to_owned(),
         ];
         for arg in allowed {
             assert!(
-                !arg_violates_repo_guardrail(&arg, &forbidden),
+                !arg_violates_repo_guardrail(&arg, &forbidden, Some(home)),
                 "unexpected guardrail rejection for safe arg: {arg}"
             );
         }

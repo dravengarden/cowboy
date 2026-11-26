@@ -692,8 +692,10 @@ impl Broker {
         notes: &mut Vec<String>,
     ) -> Vec<(String, Arc<Server>, String, Vec<Value>)> {
         let sem = Arc::new(Semaphore::new(MAX_USER_MCP_CONCURRENCY));
-        let in_flight: Arc<parking_lot::Mutex<HashMap<String, String>>> =
-            Arc::new(parking_lot::Mutex::new(HashMap::new()));
+        // Owned solely by the joiner: removed ONLY once the joiner consumes
+        // a completed result, so no finished task can slip out between timeout
+        // and `abort_all()`.
+        let mut in_flight: HashMap<String, String> = HashMap::new();
         let mut join_set: tokio::task::JoinSet<ServerInitOutcome> = tokio::task::JoinSet::new();
 
         for (name, fingerprint) in candidates {
@@ -701,15 +703,13 @@ impl Broker {
                 break;
             }
             let process_id = format!("{USER_MCP_PROCESS_PREFIX}{:032x}", rand::random::<u128>());
-            in_flight.lock().insert(name.clone(), process_id.clone());
+            in_flight.insert(name.clone(), process_id.clone());
             let sem = Arc::clone(&sem);
             let client = Arc::clone(client);
             let ledger = Arc::clone(ledger);
-            let in_flight_ref = Arc::clone(&in_flight);
             let stopping = Arc::clone(&self.stopping);
             join_set.spawn(async move {
                 if stopping.load(Ordering::Acquire) || ledger.is_closed() {
-                    in_flight_ref.lock().remove(&name);
                     return (name, Err("stopped"));
                 }
                 let Ok(_permit) = tokio::time::timeout_at(deadline, sem.acquire_owned()).await
@@ -720,7 +720,6 @@ impl Broker {
                     return (name, Err("start_failed"));
                 };
                 if stopping.load(Ordering::Acquire) || ledger.is_closed() {
-                    in_flight_ref.lock().remove(&name);
                     return (name, Err("stopped"));
                 }
                 let server_deadline =
@@ -735,7 +734,6 @@ impl Broker {
                     server_deadline,
                 )
                 .await;
-                in_flight_ref.lock().remove(&name);
                 (name, result)
             });
         }
@@ -743,52 +741,59 @@ impl Broker {
         let mut ready_servers = Vec::new();
         loop {
             match tokio::time::timeout_at(deadline, join_set.join_next()).await {
-                Ok(Some(Ok((name, Ok((server, instructions, tools)))))) => {
-                    if self.is_stopping(Some(ledger)) {
-                        server.mark_closed();
-                        spawn_stop_user_process(Arc::clone(client), server.process.clone());
-                    } else {
-                        ready_servers.push((name, server, instructions, tools));
+                Ok(Some(Ok((name, outcome)))) => {
+                    in_flight.remove(&name);
+                    match outcome {
+                        Ok((server, instructions, tools)) => {
+                            if self.is_stopping(Some(ledger)) {
+                                server.mark_closed();
+                                spawn_stop_user_process(Arc::clone(client), server.process.clone());
+                            } else {
+                                ready_servers.push((name, server, instructions, tools));
+                            }
+                        }
+                        Err(reason) => {
+                            tracing::warn!(server = %name, reason, "user MCP server unavailable");
+                            notes.push(format!("User MCP server {name} unavailable ({reason})."));
+                        }
                     }
-                }
-                Ok(Some(Ok((name, Err(reason))))) => {
-                    tracing::warn!(server = %name, reason, "user MCP server unavailable");
-                    notes.push(format!("User MCP server {name} unavailable ({reason})."));
                 }
                 Ok(Some(Err(_))) => {}
                 Ok(None) => break,
                 Err(_) => {
-                    // Drain any tasks that already finished before aborting so
-                    // their started processes are never dropped unrecorded.
-                    while let Some(joined) = join_set.try_join_next() {
-                        match joined {
-                            Ok((name, Ok((server, instructions, tools)))) => {
-                                if self.is_stopping(Some(ledger)) {
-                                    server.mark_closed();
-                                    spawn_stop_user_process(
-                                        Arc::clone(client),
-                                        server.process.clone(),
+                    // Abort remaining tasks and drain EVERY JoinSet outcome so
+                    // any task that finished concurrently before abort is never
+                    // dropped unrecorded, and every aborted task stays in `in_flight`.
+                    join_set.abort_all();
+                    while let Some(joined) = join_set.join_next().await {
+                        if let Ok((name, outcome)) = joined {
+                            in_flight.remove(&name);
+                            match outcome {
+                                Ok((server, instructions, tools)) => {
+                                    if self.is_stopping(Some(ledger)) {
+                                        server.mark_closed();
+                                        spawn_stop_user_process(
+                                            Arc::clone(client),
+                                            server.process.clone(),
+                                        );
+                                    } else {
+                                        ready_servers.push((name, server, instructions, tools));
+                                    }
+                                }
+                                Err(reason) => {
+                                    tracing::warn!(
+                                        server = %name,
+                                        reason,
+                                        "user MCP server unavailable"
                                     );
-                                } else {
-                                    ready_servers.push((name, server, instructions, tools));
+                                    notes.push(format!(
+                                        "User MCP server {name} unavailable ({reason})."
+                                    ));
                                 }
                             }
-                            Ok((name, Err(reason))) => {
-                                tracing::warn!(
-                                    server = %name,
-                                    reason,
-                                    "user MCP server unavailable"
-                                );
-                                notes.push(format!(
-                                    "User MCP server {name} unavailable ({reason})."
-                                ));
-                            }
-                            Err(_) => {}
                         }
                     }
-                    join_set.abort_all();
-                    let leftovers: Vec<(String, String)> = in_flight.lock().drain().collect();
-                    for (name, process_id) in leftovers {
+                    for (name, process_id) in in_flight.drain() {
                         tracing::warn!(
                             server = %name,
                             reason = "init_timeout",

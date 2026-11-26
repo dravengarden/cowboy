@@ -953,8 +953,10 @@ async fn binding_capabilities(
                     .get("chunk")
                     .and_then(Value::as_str)
                     .and_then(|text| base64::engine::general_purpose::STANDARD.decode(text).ok())
-                && output.len() + bytes.len() <= 8192
             {
+                if output.len().saturating_add(bytes.len()) > 4096 {
+                    return Err("binding capability probe failed".into());
+                }
                 output.extend_from_slice(&bytes);
             }
         }

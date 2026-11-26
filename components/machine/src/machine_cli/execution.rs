@@ -63,6 +63,7 @@ pub struct Manager {
     gates: parking_lot::Mutex<HashMap<String, Arc<Semaphore>>>,
     calls: Option<Arc<crate::managed_calls::host::CallHost>>,
     device_config: Option<crate::config::Handle>,
+    manager_id: String,
     user_mcp_policy_state: parking_lot::Mutex<(u64, bool, Vec<String>)>,
 }
 
@@ -212,6 +213,7 @@ impl Manager {
             gates: parking_lot::Mutex::new(HashMap::new()),
             calls: None,
             device_config: None,
+            manager_id: random_id(),
             user_mcp_policy_state: parking_lot::Mutex::new((1, true, Vec::new())),
         })
     }
@@ -361,9 +363,13 @@ impl Manager {
         let params = match keep_allowlist {
             Some(allowlist) => serde_json::json!({
                 "keepAllowlist": allowlist,
+                "managerId": self.manager_id,
                 "configRevision": config_revision,
             }),
-            None => serde_json::json!({"configRevision": config_revision}),
+            None => serde_json::json!({
+                "managerId": self.manager_id,
+                "configRevision": config_revision,
+            }),
         };
         let command = keeper::Command::Invoke {
             invocation: keeper::Invocation {
@@ -1153,6 +1159,7 @@ impl Manager {
                     serde_json::json!({
                         "enabled": true,
                         "allowlist": allowlist,
+                        "managerId": self.manager_id,
                         "configRevision": config_revision,
                     }),
                 );
@@ -1165,9 +1172,10 @@ impl Manager {
                 mut invocation,
                 wait_ms,
             } if invocation.method == crate::execution_host::user_mcp::USER_MCP_STOP_METHOD => {
-                // Caller-originated stops may not forge keepAllowlist or configRevision.
+                // Caller-originated stops may not forge keepAllowlist, managerId, or configRevision.
                 if let Some(obj) = invocation.params.as_object_mut() {
                     obj.remove("keepAllowlist");
+                    obj.remove("managerId");
                     obj.remove("configRevision");
                 }
                 keeper::Command::Invoke {
