@@ -256,16 +256,31 @@ fn with_session_context_routes(
         )
 }
 
-/// Session, execution, draft, managed-call, history and WebSocket routes.
-pub fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
-    with_session_context_routes(Router::new(), state)
+fn with_draft_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
+    router
         .route("/api/drafts", get(draft_documents::list))
         .route(
             "/api/drafts/mutations",
             post(draft_documents::mutate).layer(DefaultBodyLimit::max(12 * 1024 * 1024)),
         )
-        .route("/api/drafts/purge", post(draft_documents::purge))
+        .route(
+            "/api/drafts/purge",
+            get(draft_documents::read_literal_purge).post(draft_documents::purge),
+        )
         .route("/api/drafts/{id}", get(draft_documents::read))
+        .route(
+            "/api/drafts/{id}/restore-to-session",
+            post(draft_documents::restore_to_session),
+        )
+        .route(
+            "/api/sessions/{id}/drafts/{draft_id}/trash",
+            post(draft_documents::trash_session_draft)
+                .layer(DefaultBodyLimit::max(12 * 1024 * 1024)),
+        )
+        .route(
+            "/api/folders/{id}/trash-only",
+            post(draft_documents::trash_folder_only),
+        )
         .route("/api/drafts/{id}/history", get(draft_documents::history))
         .route(
             "/api/drafts/{id}/history/index",
@@ -279,6 +294,11 @@ pub fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             "/api/sessions/{id}/draft-copies/{cmid}",
             delete(draft_documents::undo_copy).layer(DefaultBodyLimit::max(12 * 1024 * 1024)),
         )
+}
+
+/// Session, execution, draft, managed-call, history and WebSocket routes.
+pub fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
+    with_draft_routes(with_session_context_routes(Router::new(), state))
         .route(
             "/api/sessions",
             post(api_new_session).layer(middleware::from_fn_with_state(

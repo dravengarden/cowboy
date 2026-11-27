@@ -30,6 +30,32 @@ pub struct Restored {
     pub notes: Vec<String>,
 }
 
+/// Holds folder-purge claims until the database commit + announcement complete.
+pub struct FolderDraftPurgeGuard {
+    hub: std::sync::Weak<super::HubInner>,
+    folder_ids: Vec<String>,
+}
+
+impl Drop for FolderDraftPurgeGuard {
+    fn drop(&mut self) {
+        if self.folder_ids.is_empty() {
+            return;
+        }
+        if let Some(inner) = self.hub.upgrade() {
+            let mut purging = inner.purging_draft_folders.lock();
+            for id in &self.folder_ids {
+                if let Some(count) = purging.get_mut(id) {
+                    if *count <= 1 {
+                        purging.remove(id);
+                    } else {
+                        *count -= 1;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Why a session cannot move to Trash now, or `None` when it can.
 fn trash_refusal(meta: &super::SessionMeta, in_flight: bool) -> Option<&'static str> {
     if meta.closing {
@@ -184,6 +210,12 @@ impl Hub {
             let mut folders = self.inner.folders.lock();
             let mut candidate = folders.clone();
             let (restored_folders, owners, mut notes) = candidate.restore(actor, folder_ids)?;
+            {
+                let purging = self.inner.purging_draft_folders.lock();
+                if restored_folders.iter().any(|id| purging.contains_key(id)) {
+                    return Err("Folder is being deleted permanently; try again".into());
+                }
+            }
             let mut targets: Vec<String> = Vec::new();
             for id in session_ids {
                 let session = sessions.get(id).ok_or("Session no longer exists")?;
@@ -332,6 +364,131 @@ impl Hub {
             .placement_of(session_id)
             .filter(|folder| !folder.is_empty())
             .map(str::to_owned)
+    }
+
+    /// RAII claim preventing concurrent `restore_items` from restoring any
+    /// trashed folder whose drafts are currently being permanently purged.
+    pub fn claim_folder_draft_purge(
+        &self,
+        owner: &str,
+        expected: &[(String, i64)],
+    ) -> Result<FolderDraftPurgeGuard, String> {
+        if expected.is_empty() {
+            return Ok(FolderDraftPurgeGuard {
+                hub: std::sync::Arc::downgrade(&self.inner),
+                folder_ids: Vec::new(),
+            });
+        }
+        let _guard = self.inner.sync_apply_gate.lock();
+        let folders = self.inner.folders.lock();
+        let mut claimed = Vec::with_capacity(expected.len());
+        for (folder_id, expected_ts) in expected {
+            let Some(folder) = folders.folders().iter().find(|f| f.id == *folder_id) else {
+                return Err("Folder is no longer in Trash; refresh and try again".into());
+            };
+            if folder
+                .owner_user_id
+                .as_deref()
+                .is_some_and(|folder_owner| folder_owner != owner)
+            {
+                return Err("Not allowed to delete drafts in this folder".into());
+            }
+            if folder.trashed_at_ms != Some(*expected_ts) {
+                return Err("Folder changed since Trash was opened; refresh and try again".into());
+            }
+            if !claimed.contains(folder_id) {
+                claimed.push(folder_id.clone());
+            }
+        }
+        let mut purging = self.inner.purging_draft_folders.lock();
+        for id in &claimed {
+            *purging.entry(id.clone()).or_insert(0) += 1;
+        }
+        Ok(FolderDraftPurgeGuard {
+            hub: std::sync::Arc::downgrade(&self.inner),
+            folder_ids: claimed,
+        })
+    }
+
+    /// Atomically move a folder's direct child subfolders and explicit sessions
+    /// to its parent and move ONLY the now-empty folder to Trash.
+    pub fn trash_folder_only(
+        &self,
+        actor: &FolderActor,
+        folder_id: &str,
+        now_ms: i64,
+    ) -> Result<crate::session_folders::TrashFolderOnlyDelta, String> {
+        let _guard = self.inner.sync_apply_gate.lock();
+        let (delta, folders_by_owner) = {
+            let _sessions = self.inner.sessions.lock();
+            let mut folders = self.inner.folders.lock();
+            let mut candidate = folders.clone();
+            let delta = candidate.trash_folder_only(actor, folder_id, now_ms)?;
+            *folders = candidate;
+            let folders_by_owner = vec![(
+                delta.owner.clone(),
+                folders.folders_of(delta.owner.as_deref()),
+            )];
+            (delta, folders_by_owner)
+        };
+        self.persist_trash(&[], None, delta.pins.clone(), folders_by_owner, false);
+        Ok(delta)
+    }
+
+    /// Ensure a restored legacy Draft folder exists and is live in the shared
+    /// sidebar folder tree and broadcast the update.
+    pub fn ensure_restored_draft_folder(
+        &self,
+        owner: FolderOwner,
+        folder_id: &str,
+        name: &str,
+        parent: Option<&str>,
+    ) {
+        let _guard = self.inner.sync_apply_gate.lock();
+        let folders_by_owner = {
+            let mut folders = self.inner.folders.lock();
+            if !folders.ensure_imported_live(owner.clone(), folder_id, name, parent) {
+                return;
+            }
+            vec![(owner.clone(), folders.folders_of(owner.as_deref()))]
+        };
+        self.persist_trash(&[], None, Vec::new(), folders_by_owner, false);
+    }
+
+    pub fn announce_draft_purged(&self, owner: &str, purged: &[(String, i64)]) {
+        if purged.is_empty() {
+            return;
+        }
+        let mut payload = serde_json::Map::new();
+        {
+            let mut announcements = self.inner.draft_announcements.lock();
+            let documents = announcements.entry(owner.to_owned()).or_default();
+            for (id, revision) in purged {
+                let newer = documents
+                    .get(id)
+                    .and_then(|previous| previous.get("revision"))
+                    .and_then(serde_json::Value::as_i64)
+                    .is_none_or(|previous| *revision > previous);
+                if !newer {
+                    continue;
+                }
+                let entry = serde_json::json!({
+                    "id": id,
+                    "purged": true,
+                    "revision": revision,
+                });
+                documents.insert(id.clone(), entry.clone());
+                payload.insert(id.clone(), entry);
+            }
+        }
+        if payload.is_empty() {
+            return;
+        }
+        self.sync_emit(
+            "drafts",
+            serde_json::json!({ owner: serde_json::Value::Object(payload) }),
+            Vec::new(),
+        );
     }
 
     /// Every trashed session (id, owner, trashed-at ms) and trashed folder,
@@ -624,5 +781,45 @@ mod tests {
         let error = hub.restore_items(&actor, &[], &ids(&["s"])).unwrap_err();
         assert!(error.contains("being deleted"), "{error}");
         assert!(hub.session_is_trashed("s"));
+    }
+
+    #[test]
+    fn folder_draft_purge_claim_blocks_restore_and_folder_only_trash_keeps_contents() {
+        let hub = hub(&["s"]);
+        folders(
+            &hub,
+            "create",
+            "c1",
+            json!({"id": "f-parent", "name": "Parent", "parent": null}),
+        );
+        folders(
+            &hub,
+            "create",
+            "c2",
+            json!({"id": "f-child", "name": "Child", "parent": "f-parent"}),
+        );
+        folders(
+            &hub,
+            "place",
+            "p1",
+            json!({"session_ids": ["s"], "folder": "f-parent"}),
+        );
+        let actor = FolderActor::local();
+        let delta = hub.trash_folder_only(&actor, "f-parent", 42).unwrap();
+        assert_eq!(delta.moved_folders, ids(&["f-child"]));
+        assert_eq!(delta.moved_sessions, ids(&["s"]));
+        assert!(!hub.session_is_trashed("s"));
+        assert_eq!(placement(&hub, "s"), "");
+
+        let guard = hub
+            .claim_folder_draft_purge("local", &[("f-parent".into(), 42)])
+            .unwrap();
+        let err = hub
+            .restore_items(&actor, &ids(&["f-parent"]), &[])
+            .unwrap_err();
+        assert!(err.contains("being deleted permanently"), "{err}");
+        drop(guard);
+        let restored = hub.restore_items(&actor, &ids(&["f-parent"]), &[]).unwrap();
+        assert_eq!(restored.folders, ids(&["f-parent"]));
     }
 }

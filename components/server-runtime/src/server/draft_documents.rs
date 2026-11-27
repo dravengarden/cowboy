@@ -1,6 +1,11 @@
 //! Product writing routes deliberately have no session/Machine extractor.
 use super::*;
-use crate::store::draft_documents::{DraftMutation, DraftResult};
+use crate::store::draft_documents::{DraftChange, DraftKind, DraftMutation, DraftResult};
+
+mod trash_routes;
+pub use trash_routes::{
+    purge, read_literal_purge, restore_to_session, trash_folder_only, trash_session_draft,
+};
 
 fn error(status: StatusCode, message: &str) -> Response {
     (status, Json(serde_json::json!({"error": message}))).into_response()
@@ -179,7 +184,39 @@ pub async fn mutate(
             "Durable storage is unavailable",
         );
     };
-    let folders = state.hub.sync_value("folders")["folders"]
+    let folders = owner_folders(&state, &auth.principal.user_id);
+    match store.mutate_draft_document_in_workspace(&auth.principal.user_id, &mutation, &folders).await {
+        Ok(DraftResult::Applied(document)) => {
+            if matches!(mutation.change, DraftChange::Restore) && document.kind == DraftKind::Folder
+                && let Ok(Some(folder_id)) = store.draft_folder_import_id(&auth.principal.user_id, &document.id).await
+            {
+                let actor = folder_actor(&state, &auth.principal);
+                state.hub.ensure_restored_draft_folder(
+                    actor.user_id,
+                    &folder_id,
+                    &document.title,
+                    document.parent_id.as_deref(),
+                );
+            }
+            state.hub.announce_draft(&auth.principal.user_id, metadata(&document));
+            Json(document).into_response()
+        }
+        Ok(DraftResult::Conflict(document)) => (StatusCode::CONFLICT, Json(serde_json::json!({"error": "This draft changed elsewhere. Your local version has been kept.", "current": document}))).into_response(),
+        Ok(DraftResult::Invalid(message)) => error(StatusCode::UNPROCESSABLE_ENTITY, &message),
+        Ok(DraftResult::Purged { id, revision }) => (
+            StatusCode::GONE,
+            Json(serde_json::json!({"error": "This draft was permanently deleted", "id": id, "purged": true, "revision": revision})),
+        )
+            .into_response(),
+        Err(e) => { tracing::error!(error = %e, "persist draft"); error(StatusCode::INTERNAL_SERVER_ERROR, "Could not save draft; retry with the same operation") }
+    }
+}
+
+fn owner_folders(
+    state: &Arc<AppState>,
+    owner_id: &str,
+) -> Vec<crate::session_folders::SessionFolder> {
+    state.hub.sync_value("folders")["folders"]
         .as_array()
         .cloned()
         .unwrap_or_default()
@@ -191,103 +228,9 @@ pub async fn mutate(
             folder
                 .owner_user_id
                 .as_deref()
-                .is_none_or(|owner| owner == auth.principal.user_id)
+                .is_none_or(|owner| owner == owner_id)
         })
-        .collect::<Vec<_>>();
-    match store.mutate_draft_document_in_workspace(&auth.principal.user_id, &mutation, &folders).await {
-        Ok(DraftResult::Applied(document)) => {
-            state.hub.announce_draft(&auth.principal.user_id, metadata(&document));
-            Json(document).into_response()
-        }
-        Ok(DraftResult::Conflict(document)) => (StatusCode::CONFLICT, Json(serde_json::json!({"error": "This draft changed elsewhere. Your local version has been kept.", "current": document}))).into_response(),
-        Ok(DraftResult::Invalid(message)) => error(StatusCode::UNPROCESSABLE_ENTITY, &message),
-        Err(e) => { tracing::error!(error = %e, "persist draft"); error(StatusCode::INTERNAL_SERVER_ERROR, "Could not save draft; retry with the same operation") }
-    }
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PurgeDraftsRequest {
-    ids: Vec<String>,
-}
-
-pub async fn purge(
-    State(state): State<Arc<AppState>>,
-    Extension(auth): Extension<AuthenticatedProductRequest>,
-    headers: HeaderMap,
-    Json(request): Json<PurgeDraftsRequest>,
-) -> Response {
-    if !auth.principal.can_reorder() {
-        return error(
-            StatusCode::FORBIDDEN,
-            "Deleting drafts requires an operator account",
-        );
-    }
-    let Some(dataset) = headers
-        .get("x-cowboy-dataset")
-        .and_then(|v| v.to_str().ok())
-    else {
-        return error(StatusCode::CONFLICT, "Draft dataset is required");
-    };
-    if !sync_dataset::matches(&state.service_id, &auth.principal, dataset) {
-        return error(
-            StatusCode::CONFLICT,
-            "Draft dataset changed; reload before deleting",
-        );
-    }
-    if request.ids.is_empty() || request.ids.len() > 500 {
-        return error(
-            StatusCode::UNPROCESSABLE_ENTITY,
-            "Provide between 1 and 500 draft ids",
-        );
-    }
-    let Some(store) = &state.store else {
-        return error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Durable storage is unavailable",
-        );
-    };
-    let trashed_folders: std::collections::HashSet<String> =
-        state.hub.sync_value("folders")["folders"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|value| {
-                serde_json::from_value::<crate::session_folders::SessionFolder>(value).ok()
-            })
-            .filter(|folder| {
-                folder.trashed_at_ms.is_some()
-                    && folder
-                        .owner_user_id
-                        .as_deref()
-                        .is_none_or(|owner| owner == auth.principal.user_id)
-            })
-            .map(|folder| folder.id)
-            .collect();
-    match store
-        .purge_trashed_drafts(&auth.principal.user_id, &request.ids, &trashed_folders)
-        .await
-    {
-        Ok(Ok(purged)) => {
-            state
-                .hub
-                .announce_draft_purged(&auth.principal.user_id, &purged);
-            (
-                [(header::CACHE_CONTROL, "no-store")],
-                Json(serde_json::json!({ "purged": purged })),
-            )
-                .into_response()
-        }
-        Ok(Err(message)) => error(StatusCode::UNPROCESSABLE_ENTITY, &message),
-        Err(e) => {
-            tracing::error!(error = %e, "purge trashed drafts");
-            error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Could not delete drafts permanently",
-            )
-        }
-    }
+        .collect()
 }
 
 #[derive(Deserialize)]
@@ -356,5 +299,37 @@ mod route_tests {
             (200, "version 7".to_owned())
         );
         assert_eq!(read("/api/drafts/doc/history/latest").await.0, 400);
+    }
+
+    #[tokio::test]
+    async fn purge_route_does_not_mask_reading_draft_named_purge() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let app = Router::new()
+            .route(
+                "/api/drafts/purge",
+                get(|| async { "read:purge" }).post(|| async { "post:purge" }),
+            )
+            .route(
+                "/api/drafts/{id}",
+                get(|Path(id): Path<String>| async move { format!("read:{id}") }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let client = reqwest::Client::new();
+        let get_purge = client
+            .get(format!("http://{address}/api/drafts/purge"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(get_purge.status().as_u16(), 200);
+        assert_eq!(get_purge.text().await.unwrap(), "read:purge");
+        let post_purge = client
+            .post(format!("http://{address}/api/drafts/purge"))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(post_purge.status().as_u16(), 200);
+        assert_eq!(post_purge.text().await.unwrap(), "post:purge");
     }
 }

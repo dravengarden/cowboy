@@ -372,7 +372,7 @@ pub async fn retention_pass(state: &Arc<AppState>, now_ms: i64) {
         );
     }
     if let Some(store) = state.store.as_ref() {
-        let mut purged_by_owner: HashMap<String, Vec<String>> = HashMap::new();
+        let mut purged_by_owner: HashMap<String, Vec<(String, i64)>> = HashMap::new();
         for (owner, draft_id, trashed_at_ms) in trashed_drafts {
             if !expired(&Some(owner.clone()), trashed_at_ms) {
                 continue;
@@ -381,18 +381,21 @@ pub async fn retention_pass(state: &Arc<AppState>, now_ms: i64) {
                 .purge_expired_draft(&owner, &draft_id, trashed_at_ms)
                 .await
             {
-                Ok(true) => {
-                    purged_by_owner.entry(owner).or_default().push(draft_id);
+                Ok(Some(purged_rev)) => {
+                    purged_by_owner
+                        .entry(owner)
+                        .or_default()
+                        .push((draft_id, purged_rev));
                 }
-                Ok(false) => {}
+                Ok(None) => {}
                 Err(error) => {
                     tracing::warn!(draft = %draft_id, %error, "Trash retention could not delete draft");
                 }
             }
         }
-        for (owner, ids) in purged_by_owner {
-            tracing::info!(owner = %owner, drafts = ids.len(), "deleted drafts after Trash retention");
-            state.hub.announce_draft_purged(&owner, &ids);
+        for (owner, purged) in purged_by_owner {
+            tracing::info!(owner = %owner, drafts = purged.len(), "deleted drafts after Trash retention");
+            state.hub.announce_draft_purged(&owner, &purged);
         }
     }
 }

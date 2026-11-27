@@ -1582,6 +1582,9 @@ struct HubInner {
     /// the `"drafts"` announcement state. Documents converge over HTTP; this
     /// only tells the owner's other devices which revision to fetch.
     draft_announcements: Mutex<HashMap<String, serde_json::Map<String, serde_json::Value>>>,
+    /// Trashed folder IDs currently claimed by an in-flight draft purge
+    /// so `restore_items` refuses concurrent restores until commit finishes.
+    purging_draft_folders: Mutex<HashMap<String, usize>>,
     preference_announcements: Mutex<HashMap<String, serde_json::Map<String, serde_json::Value>>>,
     /// Live fan-out to all connected clients. Lagging receivers are dropped by
     /// `broadcast` and simply miss events until their next reconnect snapshot.
@@ -1830,6 +1833,7 @@ impl Hub {
                 folders: Mutex::new(crate::session_folders::SessionFolders::default()),
                 workspace_orders: Mutex::new(HashMap::new()),
                 draft_announcements: Mutex::new(HashMap::new()),
+                purging_draft_folders: Mutex::new(HashMap::new()),
                 preference_announcements: Mutex::new(HashMap::new()),
                 tx,
                 session_fanout_seq: AtomicU64::new(0),
@@ -2156,29 +2160,6 @@ impl Hub {
         self.sync_emit(
             "drafts",
             serde_json::json!({ owner: { id: metadata } }),
-            Vec::new(),
-        );
-    }
-
-    pub fn announce_draft_purged(&self, owner: &str, ids: &[String]) {
-        if ids.is_empty() {
-            return;
-        }
-        let mut payload = serde_json::Map::new();
-        {
-            let mut announcements = self.inner.draft_announcements.lock();
-            if let Some(documents) = announcements.get_mut(owner) {
-                for id in ids {
-                    documents.remove(id);
-                }
-            }
-        }
-        for id in ids {
-            payload.insert(id.clone(), serde_json::json!({ "id": id, "purged": true }));
-        }
-        self.sync_emit(
-            "drafts",
-            serde_json::json!({ owner: serde_json::Value::Object(payload) }),
             Vec::new(),
         );
     }

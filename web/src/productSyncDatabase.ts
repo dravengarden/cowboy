@@ -443,6 +443,11 @@ export function createProductSyncDatabase(
     },
     draftDocumentIds: (): Promise<string[]> =>
       listScopedIds(owner, async () => prefix(await ready()), assertAdmission, "document", ":entry", 20000),
+    async discardDocument(id: string): Promise<void> {
+      const identity = dataset ?? (await ready());
+      assertCurrent();
+      await owner.discard(`${prefix(identity)}document:${id}:entry`);
+    },
     queueSessions: (): Promise<string[]> =>
       listScopedIds(owner, async () => prefix(await ready()), assertAdmission, "session", ":queue", 4096),
     queueHasPending: (sessionId: string): Promise<boolean> =>

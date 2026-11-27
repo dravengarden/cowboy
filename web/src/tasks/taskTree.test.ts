@@ -490,4 +490,22 @@ test("resolveMobileActivityState unifies branches and background tasks without n
   assertEquals(legacyMode.hasBranches, true);
   assertEquals(legacyMode.dotTone, null);
   assertEquals(legacyMode.defaultTab, "branches");
+
+  // Unreported tasks are announced as unconfirmed, never ended.
+  const unreported = taskTabSummary(
+    buildTaskSummaries({
+      subagents: [{
+        subagent: subagent({ id: "u1", state: "running", reporting: false }),
+        anchorSeq: 1,
+        reconciledBy: "not_found",
+        reconciledAt: 100,
+      }],
+      calls: [],
+      approval: null,
+      pending: [],
+    }),
+    0,
+  );
+  const unconfirmedState = resolveMobileActivityState(unreported, 0, true);
+  assertEquals(unconfirmedState.label, "Background tasks: 1 unconfirmed");
 });

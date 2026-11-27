@@ -38,8 +38,17 @@ export type UndoStep =
     kind: "restore_session_draft";
     draftId: string;
     sessionId: string;
-    text: string;
-    attachments: Attachment[];
+    expectedRevision: number;
+    expectedTrashedAtMs: number;
+  }
+  | {
+    kind: "restore_folder_only";
+    folderId: string;
+    destination: string | null;
+    previousProject: string | null;
+    movedFolders: string[];
+    movedSessions: string[];
+    movedDrafts: { id: string; metadataRevision: number }[];
   }
   | { kind: "restore_calls"; parent: string; ids: string[] };
 
@@ -105,6 +114,7 @@ const STEP_KINDS = new Set([
   "remove_session_draft",
   "copy_to_session",
   "restore_session_draft",
+  "restore_folder_only",
   "restore_calls",
 ]);
 const STATES = new Set(["available", "undoing", "used", "unavailable"]);
@@ -160,6 +170,13 @@ export function trashUndoBlocker(
 ): string | undefined {
   if (!view.ready || !steps) return undefined;
   for (const step of steps) {
+    if (step.kind === "restore_folder_only") {
+      const trashed = view.folders.get(step.folderId);
+      if (trashed === true) continue;
+      return trashed === false
+        ? "Already restored from Trash."
+        : "No longer in Trash: deleted permanently.";
+    }
     if (step.kind !== "restore_trash") continue;
     for (const id of step.sessions ?? []) {
       if (view.trashedSessions.has(id)) continue;

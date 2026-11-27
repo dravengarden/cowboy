@@ -8,7 +8,6 @@ import { Box, IconButton, Tooltip } from "@mui/material";
 import { LayersOutlined } from "@mui/icons-material";
 import { openBackgroundTask } from "../backgroundTaskInspectorState";
 import { releaseMobileComposerFocus } from "../composer/mobileComposerFocus";
-import { useExploreSessionState } from "../explore/exploreStore";
 import { GitForkIcon } from "../GitForkIcon";
 import { BranchSwitcherModal, useBranchRelationCount } from "../LineageBranchSwitcher";
 import { useBackgroundTasks } from "../useBackgroundTasks";
@@ -28,7 +27,6 @@ export const MobileSessionActivityButton = memo(function MobileSessionActivityBu
   const background = useBackgroundTasks(sessionId);
   const summary = taskTabSummary(background.tasks, background.backgroundActivity);
   const state = resolveMobileActivityState(summary, relationCount, showTasks);
-  const projection = useExploreSessionState(sessionId).projection;
   const [legacyBranchOpen, setLegacyBranchOpen] = useState(false);
 
   if (!state.visible) return null;
@@ -114,9 +112,18 @@ export const MobileSessionActivityButton = memo(function MobileSessionActivityBu
           onClose={(): void => setLegacyBranchOpen(false)}
         />
       )}
-      {!useStandaloneBranchModal && projection === "explore" && (
-        <MobileTasksSheet sessionId={sessionId} background={background} />
-      )}
     </>
   );
+});
+
+/** Mounted by ExploreTranscript ONLY when `<Transcript>` is not rendered (empty
+ *  or loading Explore page), so a mobile Explore session always has exactly one
+ *  MobileTasksSheet instance. */
+export const MobileExploreTasksFallback = memo(function MobileExploreTasksFallback({
+  sessionId,
+}: {
+  sessionId: string;
+}): React.JSX.Element {
+  const background = useBackgroundTasks(sessionId);
+  return <MobileTasksSheet sessionId={sessionId} background={background} />;
 });

@@ -2,6 +2,7 @@ import { test } from "bun:test";
 import { assertEquals, assertRejects } from "../../../tools/test-assert.ts";
 import type { ClientSnapshot, LocalPersistence } from "@cowboy/state-sync";
 import { createDraftRepository } from "./repository.ts";
+import { sanitizeDraftTitle } from "./repositoryPurge.ts";
 import {
   type DraftDocument,
   type DraftMutationArgs,
@@ -51,6 +52,10 @@ function fixture() {
         discard: () => Promise.resolve(),
       },
       localIds: () => Promise.resolve([...local.keys()]),
+      discardLocal: (id) => {
+        local.delete(id);
+        return Promise.resolve();
+      },
       notify: (message) => notices.push(message),
       request: (path, init) => {
         if (offline()) return Promise.reject(new Error("offline"));
@@ -61,21 +66,22 @@ function fixture() {
           );
         }
         if (path === "/api/drafts/purge") {
-          const body = JSON.parse(String(init?.body)) as { ids: string[] };
-          const purged: string[] = [];
-          const failed: { id: string; error: string }[] = [];
-          for (const id of body.ids) {
-            const current = server.get(id);
-            if (!current) {
-              purged.push(id);
-            } else if (!current.deleted) {
-              failed.push({ id, error: "Draft is not in Trash" });
-            } else {
-              server.delete(id);
-              purged.push(id);
+          const body = JSON.parse(String(init?.body)) as {
+            targets: { id: string; expected_revision: number; expected_trashed_at_ms: number }[];
+          };
+          const entries: { id: string; revision: number }[] = [];
+          for (const target of body.targets) {
+            const current = server.get(target.id);
+            if (!current || !current.deleted || current.revision !== target.expected_revision || current.trashed_at_ms !== target.expected_trashed_at_ms) {
+              return Promise.resolve(Response.json({ error: "Draft changed since Trash was opened" }, { status: 409 }));
             }
           }
-          return Promise.resolve(Response.json({ purged, failed }));
+          for (const target of body.targets) {
+            const current = server.get(target.id)!;
+            server.delete(target.id);
+            entries.push({ id: target.id, revision: current.revision + 1 });
+          }
+          return Promise.resolve(Response.json({ purged: entries.map((e) => e.id), entries }));
         }
         if (path === "/api/drafts/mutations") {
           // A proxy in front of a restarting controller: no JSON body.
@@ -731,7 +737,7 @@ test("History lists versions without content and fetches one at a time", async (
   }
 });
 
-test("purge permanently removes trashed drafts and purge announcements evict peer replicas", async () => {
+test("purge uses optimistic targets, deletes local IndexedDB storage, and blocks stale announcements", async () => {
   const f = fixture();
   const primary = f.create();
   const peer = f.device();
@@ -740,21 +746,51 @@ test("purge permanently removes trashed drafts and purge announcements evict pee
     source_session_id: "sess-origin",
   });
   await settle(() => primary.document(id).get().phase === "saved");
-  assertEquals(f.server.get(id)?.deleted, true);
-  assertEquals(typeof f.server.get(id)?.trashed_at_ms, "number");
-  assertEquals(f.server.get(id)?.source_session_id, "sess-origin");
+  const saved = f.server.get(id)!;
+  assertEquals(saved.deleted, true);
+  assertEquals(typeof saved.trashed_at_ms, "number");
+  assertEquals(saved.source_session_id, "sess-origin");
 
   await peer.repository.refresh();
   assertEquals(peer.repository.get().entries.some((entry) => entry.id === id), true);
 
-  const purged = await primary.purge([id]);
-  assertEquals(purged, [id]);
-  assertEquals(f.server.has(id), false);
-  assertEquals(primary.get().entries.some((entry) => entry.id === id), false);
+  // Stale revision is rejected without removing the draft.
+  await assertRejects(
+    () => primary.purge([{ id, expected_revision: saved.revision + 1, expected_trashed_at_ms: saved.trashed_at_ms! }]),
+    Error,
+    "Draft changed",
+  );
+  assertEquals(f.server.has(id), true);
 
-  peer.repository.announce({ [id]: { id, purged: true } });
+  // Exact optimistic target succeeds, deletes IndexedDB record, and survives reload without resurrecting.
+  const purged = await primary.purge([{
+    id,
+    expected_revision: saved.revision,
+    expected_trashed_at_ms: saved.trashed_at_ms!,
+  }]);
+  assertEquals(purged, [{ id, revision: saved.revision + 1 }]);
+  assertEquals(f.server.has(id), false);
+  assertEquals(f.local.has(id), false);
+  assertEquals(primary.get().entries.some((entry) => entry.id === id), false);
+  await primary.dispose();
+
+  const reloaded = f.create();
+  await reloaded.start();
+  await reloaded.refresh();
+  assertEquals(reloaded.get().entries.some((entry) => entry.id === id), false);
+
+  // Peer evicts on revisioned purge announcement and ignores an older out-of-order announcement.
+  peer.repository.announce({ [id]: { id, purged: true, revision: saved.revision + 1 } });
+  assertEquals(peer.repository.get().entries.some((entry) => entry.id === id), false);
+  peer.repository.announce({ [id]: { ...saved } });
   assertEquals(peer.repository.get().entries.some((entry) => entry.id === id), false);
 
-  await primary.dispose();
+  await reloaded.dispose();
   await peer.repository.dispose();
+});
+
+test("sanitizeDraftTitle normalizes tabs and control characters while keeping readable text", () => {
+  assertEquals(sanitizeDraftTitle("col1\tcol2\r\n"), "col1 col2");
+  assertEquals(sanitizeDraftTitle("\u0000\t\u0007  "), "Draft");
+  assertEquals(sanitizeDraftTitle("  hello\t\tworld  "), "hello world");
 });

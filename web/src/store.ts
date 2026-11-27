@@ -5687,6 +5687,7 @@ if (typeof globalThis.addEventListener === "function") {
   });
 }
 
+export function readLiveFolders(): SessionFoldersValue { return foldersSync.view(); }
 export function useStore(): State {
   return useSyncExternalStore(subscribe, () => presentedState);
 }

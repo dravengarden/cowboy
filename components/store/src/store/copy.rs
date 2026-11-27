@@ -43,6 +43,8 @@ const TABLES: &[&str] = &[
     "workspace_item_order",
     "draft_document_operations",
     "draft_document_history",
+    "draft_document_trash_meta",
+    "draft_document_tombstones",
     "core_security_authority",
     "cardea_operation_capacity",
     "cardea_operations",

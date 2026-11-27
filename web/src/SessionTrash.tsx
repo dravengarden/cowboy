@@ -31,6 +31,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DraftMetadata } from "./documents/model";
 import { draftRepository } from "./documents/store";
 import { restoreSessionDraftFromTrash } from "./documents/sessionDraftTrash";
+import type { PurgeDraftTarget } from "./documents/repositoryPurge";
 import { documentNotice } from "./documents/DocumentNotifications";
 import { openUndoHistory } from "./UndoHistorySheet";
 import { Kbd, useConfirmEnter } from "./Kbd";
@@ -383,17 +384,34 @@ export async function restoreTrashRow(row: TrashRow, folders: SessionFoldersValu
   if (target !== parent) await owner.change({ type: "move", parent_id: target });
 }
 
+function draftPurgeTarget(
+  draft: TrashTree["drafts"][number],
+  folders: SessionFoldersValue,
+): PurgeDraftTarget {
+  const trashedAt = draft.deleted
+    ? draft.trashed_at_ms
+    : sessionFolderById(folders, draft.parent_id)?.trashed_at_ms;
+  if (typeof trashedAt !== "number") {
+    throw new Error("Trash metadata is still syncing; refresh and try again.");
+  }
+  return {
+    id: draft.id,
+    expected_revision: draft.revision,
+    expected_trashed_at_ms: trashedAt,
+  };
+}
+
 async function purgeTrashRow(row: TrashRow, tree: TrashTree, folders: SessionFoldersValue): Promise<void> {
   if (row.kind === "trash-folder") {
-    const folderDraftIds = tree.drafts
+    const folderDraftTargets = tree.drafts
       .filter((draft) => folderIsWithin(folders, draft.parent_id, row.folder.id))
-      .map((draft) => draft.id);
+      .map((draft) => draftPurgeTarget(draft, folders));
+    if (folderDraftTargets.length > 0) await draftRepository().purge(folderDraftTargets);
     await purgeItems({ folders: [row.folder.id] });
-    if (folderDraftIds.length > 0) await draftRepository().purge(folderDraftIds);
   } else if (row.kind === "trash-session") {
     await purgeItems({ sessions: [row.session.id] });
   } else {
-    await draftRepository().purge([row.draft.id]);
+    await draftRepository().purge([draftPurgeTarget(row.draft, folders)]);
   }
 }
 
@@ -486,8 +504,10 @@ export function TrashItemSheet(
   };
   const restoreToSession = (): void => {
     if (row.kind !== "trash-draft" || !liveSourceSession) return;
+    const trashedAt = row.draft.trashed_at_ms ?? row.trashedAt;
+    if (typeof trashedAt !== "number") return;
     run(
-      () => restoreSessionDraftFromTrash(row.draft.id, liveSourceSession.id),
+      () => restoreSessionDraftFromTrash(row.draft.id, liveSourceSession.id, row.draft.revision, trashedAt),
       () => documentNotice(`Restored "${rowTitle(row)}" to "${liveSourceSession.title || "Session"}"`),
     );
   };
@@ -591,16 +611,15 @@ export function TrashMenuSheet(
   const rootFolders = tree.folders
     .filter((folder) => !tree.folders.some((other) => other.id === folder.parent))
     .map((folder) => folder.id);
+  const trashFolders = useStoreSelector((state) => state.trashFolders);
   const empty = (): void => {
     setBusy(true);
     const sessionIds = tree.sessions.map((session) => session.id);
-    const draftIds = tree.drafts.map((draft) => draft.id);
     void (async (): Promise<void> => {
+      const draftTargets = tree.drafts.map((draft) => draftPurgeTarget(draft, trashFolders));
+      if (draftTargets.length > 0) await draftRepository().purge(draftTargets);
       if (sessionIds.length > 0 || rootFolders.length > 0) {
         await purgeItems({ sessions: sessionIds, folders: rootFolders });
-      }
-      if (draftIds.length > 0) {
-        await draftRepository().purge(draftIds);
       }
     })()
       .then(() => {

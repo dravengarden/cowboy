@@ -24,7 +24,7 @@ import {
   snapshotSummary,
 } from "./model";
 import { whenBackgroundTransferAllowed } from "../network/bandwidth";
-import { purgedAnnouncementId, requestPurgeDrafts } from "./repositoryPurge";
+import { clearDocumentSnapshots, collectOfflinePurged, purgedAnnouncement, type PurgeDraftTarget, type PurgedDraftReceipt, requestPurgeDrafts } from "./repositoryPurge";
 
 /** Automatic rebases per drain; a server that keeps refusing is a bug, not
  * a race, and falls back to the recoverable conflict state. */
@@ -62,6 +62,7 @@ interface RepositoryOptions {
   ): LocalPersistence<ClientSnapshot<DraftDocument | null>>;
   cache: ProductCache<readonly DraftMetadata[]>;
   localIds(): Promise<string[]>;
+  discardLocal?(id: string): Promise<void>;
   request(path: string, init?: RequestInit): Promise<Response>;
   signal: AbortSignal;
   /** One-line user notice, e.g. a version kept as a separate draft. */
@@ -165,6 +166,7 @@ export function createDraftRepository(options: RepositoryOptions) {
   }
   /** Highest server revision of each document the server has reported. */
   const served = new Map<string, number>();
+  const purgedRevisions = new Map<string, number>();
   /** Documents whose index entry is their own local view. */
   const ownViews = new Set<string>();
   function heard({ id, revision }: DraftMetadata): void {
@@ -501,6 +503,7 @@ export function createDraftRepository(options: RepositoryOptions) {
                 error?: string;
                 current?: unknown;
               };
+            if (response.status === 410) { await replica.confirmDurably(replica.pending().map((m) => m.id)); evictPurged([{ id, revision: typeof (detail as { revision?: unknown }).revision === "number" ? (detail as { revision: number }).revision : Number.MAX_SAFE_INTEGER }]); break; }
             if (response.status === 409 && "current" in detail) {
               const remote = detail.current
                 ? decodeDraft(detail.current)
@@ -739,14 +742,9 @@ export function createDraftRepository(options: RepositoryOptions) {
         publish({ phase: "saved", remote: null, error: null });
         await refresh();
       },
-      /** Server revision announced by the push channel. */
-      revisionKnown: (revision: number): boolean =>
-        (replica.baseValue()?.revision ?? 0) >= revision,
-      dispose: async () => {
-        sealed = true;
-        subscribers.clear();
-        await replica.dispose();
-      },
+      revisionKnown: (revision: number): boolean => (replica.baseValue()?.revision ?? 0) >= revision,
+      isCleanServerDoc: (): boolean => replica.pending().length === 0 && replica.baseValue() !== null,
+      dispose: async () => { sealed = true; subscribers.clear(); await replica.dispose(); },
     };
   }
   function document(id: string) {
@@ -777,12 +775,12 @@ export function createDraftRepository(options: RepositoryOptions) {
         if (!Array.isArray(payload.entries)) {
           throw new Error("Invalid draft library");
         }
-        const entries = payload.entries.map((e) =>
-          draftMetadata(
-            decodeDraft({ ...(e as object), body: "", attachments: [] }),
-          )
-        );
+        const entries = payload.entries
+          .map((e) => draftMetadata(decodeDraft({ ...(e as object), body: "", attachments: [] })))
+          .filter((entry) => entry.revision > (purgedRevisions.get(entry.id) ?? 0));
         assertActive();
+        const goneOffline = collectOfflinePurged(owners, new Set(entries.map((e) => e.id)), served);
+        if (goneOffline.length > 0) evictPurged(goneOffline);
         for (const entry of entries) heard(entry);
         ownViews.clear();
         library = { entries, loaded: true, error: null };
@@ -825,19 +823,22 @@ export function createDraftRepository(options: RepositoryOptions) {
       if (!stopped) void refresh();
     })();
   }
-  function evictPurged(ids: readonly string[]): void {
-    if (stopped || ids.length === 0) return;
-    const gone = new Set(ids);
-    for (const id of gone) {
-      served.delete(id); ownViews.delete(id);
+  function evictPurged(receipts: readonly PurgedDraftReceipt[]): void {
+    if (stopped || receipts.length === 0) return;
+    const gone = new Set<string>();
+    for (const { id, revision } of receipts) {
+      if ((served.get(id) ?? 0) >= revision && !owners.has(id) && !library.entries.some((e) => e.id === id)) continue;
+      purgedRevisions.set(id, Math.max(purgedRevisions.get(id) ?? 0, revision));
+      served.set(id, Math.max(served.get(id) ?? 0, revision));
+      ownViews.delete(id); gone.add(id);
+      clearDocumentSnapshots(snapshots, id);
       const owner = owners.get(id);
       if (owner) { owners.delete(id); void owner.dispose().catch(() => undefined); }
+      void options.discardLocal?.(id).catch(() => undefined);
     }
     const next = library.entries.filter((entry) => !gone.has(entry.id));
     if (next.length !== library.entries.length) {
-      library = { ...library, entries: next };
-      void options.cache.save(library.entries).catch(() => undefined);
-      emit();
+      library = { ...library, entries: next }; void options.cache.save(library.entries).catch(() => undefined); emit();
     }
   }
   async function create(
@@ -849,9 +850,9 @@ export function createDraftRepository(options: RepositoryOptions) {
     await document(id).change({ type: "create", title, parent_id, kind, body, attachments, ...extra });
     return id;
   }
-  async function purge(ids: readonly string[]): Promise<string[]> {
+  async function purge(targets: readonly PurgeDraftTarget[]): Promise<PurgedDraftReceipt[]> {
     assertActive();
-    const purged = await requestPurgeDrafts(options.request, ids);
+    const purged = await requestPurgeDrafts(options.request, targets);
     assertActive();
     evictPurged(purged);
     return purged;
@@ -862,18 +863,17 @@ export function createDraftRepository(options: RepositoryOptions) {
   }
   function announce(value: unknown): void {
     if (stopped || value === null || typeof value !== "object") return;
-    const purgedIds: string[] = [];
+    const purged: PurgedDraftReceipt[] = [];
     for (const entry of Object.values(value)) {
-      const purgedId = purgedAnnouncementId(entry);
-      if (purgedId) { purgedIds.push(purgedId); continue; }
+      const receipt = purgedAnnouncement(entry);
+      if (receipt) { purged.push(receipt); continue; }
       let metadata: DraftDocument;
       try { metadata = decodeDraft({ ...(entry as object), body: "", attachments: [] }); } catch { continue; }
-      heard(metadata);
-      if (library.loaded) updateIndex(metadata);
-      const owner = owners.get(metadata.id);
-      if (owner && !owner.revisionKnown(metadata.revision)) void owner.refresh();
+      if (metadata.revision <= (purgedRevisions.get(metadata.id) ?? 0)) continue;
+      heard(metadata); if (library.loaded) updateIndex(metadata);
+      const owner = owners.get(metadata.id); if (owner && !owner.revisionKnown(metadata.revision)) void owner.refresh();
     }
-    if (purgedIds.length > 0) evictPurged(purgedIds);
+    if (purged.length > 0) evictPurged(purged);
   }
   options.signal.addEventListener("abort", () => { void dispose().catch(() => undefined); }, { once: true });
   return {

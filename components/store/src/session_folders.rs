@@ -31,6 +31,19 @@ pub const TOP_LEVEL: &str = "";
 /// is disabled (every folder is then shared by the single local user).
 pub type FolderOwner = Option<String>;
 
+/// Result of atomically reparenting a folder's direct contents and trashing
+/// only the emptied folder.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TrashFolderOnlyDelta {
+    pub folder_id: String,
+    pub owner: FolderOwner,
+    pub destination: Option<String>,
+    pub previous_project: Option<String>,
+    pub moved_folders: Vec<String>,
+    pub moved_sessions: Vec<String>,
+    pub pins: Vec<(String, Option<String>)>,
+}
+
 /// Restored folder ids, the owners whose folder set changed, and a
 /// user-facing note per adjustment.
 pub type FolderRestore = (Vec<String>, Vec<FolderOwner>, Vec<String>);
@@ -522,6 +535,121 @@ impl SessionFolders {
         self.folders.retain(|folder| !removed.contains(&folder.id));
         self.placement.retain(|_, folder| !removed.contains(folder));
         (removed, owners)
+    }
+
+    /// Move direct live child subfolders and explicit direct session placements
+    /// up to `folder.parent`, then move only the emptied `folder` to Trash.
+    pub fn trash_folder_only(
+        &mut self,
+        actor: &FolderActor,
+        id: &str,
+        now_ms: i64,
+    ) -> Result<TrashFolderOnlyDelta, String> {
+        let folder = self.touchable(actor, id)?.clone();
+        if folder.trashed_at_ms.is_some() {
+            return Err("Folder is already in Trash".into());
+        }
+        let destination = folder.parent.clone();
+        let previous_project = folder.project.clone();
+        let owner = folder.owner_user_id.clone();
+
+        let moved_folders: Vec<String> = self
+            .folders
+            .iter()
+            .filter(|child| child.parent.as_deref() == Some(id) && child.trashed_at_ms.is_none())
+            .map(|child| child.id.clone())
+            .collect();
+        for child_id in &moved_folders {
+            let _ = self.touchable(actor, child_id)?;
+        }
+        let mut next_pos = self
+            .folders
+            .iter()
+            .filter(|f| {
+                f.owner_user_id == owner && f.parent == destination && f.trashed_at_ms.is_none()
+            })
+            .map(|f| f.position)
+            .max()
+            .unwrap_or(-1)
+            + 1;
+        for f in &mut self.folders {
+            if moved_folders.contains(&f.id) {
+                f.parent = destination.clone();
+                f.position = next_pos;
+                next_pos += 1;
+            }
+        }
+        let target_placement = destination.clone().unwrap_or_default();
+        let mut moved_sessions: Vec<String> = Vec::new();
+        let mut pins: Vec<(String, Option<String>)> = Vec::new();
+        for (session_id, placed) in &mut self.placement {
+            if placed == id {
+                moved_sessions.push(session_id.clone());
+                *placed = target_placement.clone();
+                pins.push((session_id.clone(), Some(target_placement.clone())));
+            }
+        }
+        if let Some(target) = self.folders.iter_mut().find(|f| f.id == id) {
+            target.trashed_at_ms = Some(now_ms);
+            target.project = None;
+        }
+        self.changed();
+        self.folders
+            .sort_by(|a, b| a.position.cmp(&b.position).then_with(|| a.id.cmp(&b.id)));
+        Ok(TrashFolderOnlyDelta {
+            folder_id: id.to_owned(),
+            owner,
+            destination,
+            previous_project,
+            moved_folders,
+            moved_sessions,
+            pins,
+        })
+    }
+
+    /// Ensure an imported legacy Draft folder exists and is live in the shared
+    /// sidebar folder tree. Returns `true` when the folder set changed.
+    pub fn ensure_imported_live(
+        &mut self,
+        owner: FolderOwner,
+        id: &str,
+        name: &str,
+        parent: Option<&str>,
+    ) -> bool {
+        let resolved_parent = self.nearest_live(parent);
+        if let Some(existing) = self.folders.iter_mut().find(|f| f.id == id) {
+            if existing.trashed_at_ms.is_none() {
+                return false;
+            }
+            existing.trashed_at_ms = None;
+            existing.parent = resolved_parent;
+            self.changed();
+            return true;
+        }
+        let next_pos = self
+            .folders
+            .iter()
+            .filter(|f| {
+                f.owner_user_id == owner && f.parent == resolved_parent && f.trashed_at_ms.is_none()
+            })
+            .map(|f| f.position)
+            .max()
+            .unwrap_or(-1)
+            + 1;
+        self.folders.push(SessionFolder {
+            id: id.to_owned(),
+            owner_user_id: owner,
+            name: name.to_owned(),
+            parent: resolved_parent,
+            project: None,
+            position: next_pos,
+            defaults: Default::default(),
+            trashed_at_ms: None,
+        });
+        self.changed();
+        self.folders
+            .sort_by(|a, b| a.position.cmp(&b.position).then_with(|| a.id.cmp(&b.id)));
+        true
     }
 
     /// Every trashed folder of every owner, for the retention sweep.

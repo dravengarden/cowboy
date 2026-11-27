@@ -15,11 +15,12 @@ import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { InAppRoot } from "./SessionFolderUi";
 import { ConfirmSheet } from "./Sheet";
-import { effectiveSessionFolder, projectFolderIndex, type SessionFolder, type SessionFoldersValue } from "./sessionFolders";
+import type { SessionFolder, SessionFoldersValue } from "./sessionFolders";
 import type { FolderDeletePlan } from "./trashModel";
 import type { SessionMeta } from "./protocol";
 import type { DraftMetadata } from "./documents/model";
 import { trashFolderKeeping } from "./store";
+import { trashFolderOnlyOnController } from "./documents/sessionDraftTrash";
 import { desktopSize } from "./surface/desktopSize";
 
 interface PlanItem {
@@ -117,39 +118,13 @@ function FolderDeleteItemList({
   );
 }
 
-async function moveFolderOnlyToTrash(
-  folder: SessionFolder,
-  destination: string | null,
-  liveFolders: SessionFoldersValue,
-  sessions: readonly SessionMeta[],
-  drafts: readonly DraftMetadata[],
-): Promise<void> {
-  const directSubfolders = liveFolders.folders
-    .filter((candidate) => candidate.parent === folder.id)
-    .map((candidate) => candidate.id);
-  const projects = projectFolderIndex(liveFolders);
-  const directSessions = sessions
-    .filter((session) => effectiveSessionFolder(session, liveFolders, projects) === folder.id)
-    .map((session) => session.id);
-  const directDrafts = drafts.filter(
-    (draft) => !draft.deleted && draft.kind === "document" && draft.parent_id === folder.id,
-  );
-  for (const draft of directDrafts) {
-    const owner = draftRepository().document(draft.id);
-    await owner.hydrate();
-    await owner.change({ type: "move", parent_id: destination });
-    await owner.whenSynced();
-  }
-  await trashFolderKeeping(folder.id, directSessions, destination, directSubfolders);
-}
-
 export function DeleteFolderToTrashShell(
-  { folder, plan, liveFolders, sessions, drafts, destination, destinationName, retentionDays, onClose }: {
+  { folder, plan, destination, destinationName, retentionDays, onClose }: {
     folder: SessionFolder;
     plan: FolderDeletePlan;
-    liveFolders: SessionFoldersValue;
-    sessions: readonly SessionMeta[];
-    drafts: readonly DraftMetadata[];
+    liveFolders?: SessionFoldersValue;
+    sessions?: readonly SessionMeta[];
+    drafts?: readonly DraftMetadata[];
     /** Where kept items go: the folder's parent, `null` = Global. */
     destination: string | null;
     destinationName: string;
@@ -263,12 +238,18 @@ export function DeleteFolderToTrashShell(
               onClick={(): void => {
                 if (busy) return;
                 setBusy(true);
-                void moveFolderOnlyToTrash(folder, destination, liveFolders, sessions, drafts)
-                  .then(() => {
+                void trashFolderOnlyOnController(folder.id)
+                  .then((delta) => {
                     onClose();
-                    recordUndo(`"${folder.name}" moved to Trash; contents kept in ${destinationName}`, [
-                      { kind: "restore_trash", folders: [folder.id] },
-                    ]);
+                    recordUndo(`"${folder.name}" moved to Trash; contents kept in ${destinationName}`, [{
+                      kind: "restore_folder_only",
+                      folderId: delta.folder_id,
+                      destination: delta.destination,
+                      previousProject: delta.previous_project,
+                      movedFolders: delta.moved_folders,
+                      movedSessions: delta.moved_sessions,
+                      movedDrafts: delta.moved_drafts.map((d) => ({ id: d.id, metadataRevision: d.metadata_revision })),
+                    }]);
                   })
                   .catch((error: unknown) => {
                     documentNotice(error instanceof Error ? error.message : "Could not move the folder to Trash.");

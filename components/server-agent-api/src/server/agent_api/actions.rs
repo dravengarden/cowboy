@@ -786,6 +786,9 @@ async fn execute(
                 DraftResult::Invalid(message) => Ok(
                     json!({"state":"error","error":{"code":"invalid_mutation","message":message}}),
                 ),
+                DraftResult::Purged { id, revision } => Ok(
+                    json!({"state":"error","error":{"code":"purged","message":"This draft was permanently deleted"},"id":id,"revision":revision}),
+                ),
             }
         }
         _ => Err("unknown_operation"),

@@ -48,7 +48,7 @@ import {
 import { documentNotice } from "./documents/DocumentNotifications";
 import { type Attachment, filesToAttachments, fileToAttachment, pendingImageAttachment, imageTokensInText, promoteUnplacedImageTokens, reconcileDeletedInlineImages, settlePendingAttachments, stripImageTokens } from "./attachments";
 import { getInlineAttachment, registerInlineAttachment, seedInlineAttachments } from "./inlineImages";
-import { activateAllDrafts, activateDraft, clearQueue, discardQueued, returnFailedQueued, editDraft, editQueued, type QueuedMessage, notify, queuedToDraft, removeDraft, removeQueued, reorderDrafts, reorderQueue, retryQueued, setQueueEditing, useConnected, useStoreSelector } from "./store";
+import { activateAllDrafts, activateDraft, clearQueue, discardQueued, returnFailedQueued, editDraft, editQueued, type QueuedMessage, notify, queuedToDraft, removeQueued, reorderDrafts, reorderQueue, retryQueued, setQueueEditing, useConnected, useStoreSelector } from "./store";
 import { type SessionContext, stagedNextAgent } from "./sessionContext";
 import { isOnlyConfirmedQueuedMessage, loadStagedQueuePrompt } from "./stagedQueuePrompt";
 import { fireLabel } from "./scheduleTime";
@@ -2042,8 +2042,11 @@ export function PendingRow({
     editTextRef.current = text;
     setDraft(text);
     if (pendingContentCleared(text, editAttachments)) {
-      if (kind === "draft") await removeDraft(sessionId, message.id);
-      else await removeQueued(sessionId, message.id);
+      if (kind === "draft") {
+        await trashSessionDraft(sessionId, message);
+      } else {
+        await removeQueued(sessionId, message.id);
+      }
       clearPendingEdit(sessionId, kind, message.id);
       setOverlayOpen(false);
       onEditDone();

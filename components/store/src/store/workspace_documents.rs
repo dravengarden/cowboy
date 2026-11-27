@@ -145,15 +145,24 @@ macro_rules! reparent_workspace_documents {
                     let mut document: $crate::store::draft_documents::DraftDocument = serde_json::from_str(&value)?;
                     document.parent_id = parent;
                     document.deleted |= trash;
-                    if trash && document.trashed_at_ms.is_none() {
-                        document.trashed_at_ms = trashed_at;
-                    }
+                    document.trashed_at_ms = None;
+                    document.source_session_id = None;
                     document.revision += 1;
                     document.metadata_revision += 1;
                     let mut metadata = document.clone(); metadata.body.clear(); metadata.attachments.clear();
                     sqlx::query("UPDATE draft_documents SET value=$3,metadata=$4 WHERE owner_user_id=$1 AND id=$2")
                         .bind(&owner).bind(&document.id).bind(serde_json::to_string(&document)?)
                         .bind(serde_json::to_string(&metadata)?).execute(&mut *$tx).await?;
+                    if let Some(at) = trashed_at {
+                        sqlx::query(
+                            "INSERT INTO draft_document_trash_meta (owner_user_id, document_id, trashed_at_ms)                              VALUES ($1, $2, $3) ON CONFLICT (owner_user_id, document_id) DO NOTHING",
+                        )
+                        .bind(&owner)
+                        .bind(&document.id)
+                        .bind(at)
+                        .execute(&mut *$tx)
+                        .await?;
+                    }
                 }
             }
         }

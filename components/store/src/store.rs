@@ -6202,6 +6202,22 @@ impl PostgresStorage {
         folders: &[SessionFolder],
     ) -> Result<()> {
         let mut tx = self.pool.begin().await.context("begin tx")?;
+        if let Some(owner) = owner_user_id {
+            sqlx::query(
+                "INSERT INTO draft_document_owners (owner_user_id, revision) VALUES ($1, 0)                  ON CONFLICT (owner_user_id) DO UPDATE SET revision = draft_document_owners.revision",
+            )
+            .bind(owner)
+            .execute(&mut *tx)
+            .await
+            .context("lock draft_document_owners before session_folders")?;
+        } else {
+            let _ = sqlx::query_scalar::<_, String>(
+                "SELECT owner_user_id FROM draft_document_owners ORDER BY owner_user_id FOR UPDATE",
+            )
+            .fetch_all(&mut *tx)
+            .await
+            .context("lock all draft_document_owners before session_folders")?;
+        }
         workspace_documents::reparent_workspace_documents!(tx, owner_user_id, folders);
         let previous: std::collections::HashMap<String, String> = sqlx::query_as::<_, (String, String)>(
             "SELECT id, defaults_json FROM session_folders WHERE owner_user_id IS NOT DISTINCT FROM $1 FOR UPDATE",

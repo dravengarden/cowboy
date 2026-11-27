@@ -3,7 +3,8 @@
 import { type MutableRefObject, useCallback, useEffect, useRef, useState } from "react";
 import { acknowledgeTask, taskHash, taskKeyFromHash, type TaskSummary } from "../backgroundTasks";
 import { closeBackgroundTasks, inspectorState, openBackgroundTask, OPEN_BACKGROUND_TASKS_EVENT, selectBackgroundTask, useInspectorState } from "../backgroundTaskInspectorState";
-import { getActiveSessionId, setActiveSessionId, subscribeActiveSession } from "../controlPlane";
+import { getActiveSessionId, subscribeActiveSession } from "../controlPlane";
+import { requestPickSession } from "../sessionPickRequest";
 import type { BackgroundTasks } from "../useBackgroundTasks";
 import { clearConsumedDeepLinks, consumeDeepLink, isDeepLinkConsumed } from "./taskEvents";
 import { defaultReaderMode, type TaskReaderContentMode } from "./TaskResultReader";
@@ -161,7 +162,7 @@ function unwindAndSwitchSession(
     if (taskKeyFromHash(currentHash) || currentHash === "#tasks") {
       globalThis.history?.replaceState(globalThis.history.state, "", `${globalThis.location.pathname}${globalThis.location.search}`);
     }
-    setActiveSessionId(childId);
+    requestPickSession(childId);
   };
   if (steps <= 0) { finish(); return; }
   unsubscribeSession = subscribeActiveSession(() => {
