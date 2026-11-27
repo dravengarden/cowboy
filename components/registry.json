@@ -41565,7 +41565,7 @@
           "sources": [
             "components/provider-runtime"
           ],
-          "digest": "sha256:76218ebf44f68540900ff42bf095cb058752ef686704de52fce8ecd061c049fb",
+          "digest": "sha256:2d7b44f59e50ace3c4381444ced558e13398feefa86eafbd124bad2419c90fc6",
           "package": {
             "kind": "npm",
             "name": "@cowboy/provider-runtime",
