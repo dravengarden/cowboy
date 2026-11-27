@@ -1073,6 +1073,7 @@ impl Broker {
             return false;
         }
         let mut accepted = false;
+        let mut cleared_drain_fence = false;
         if let Some(worker) = self.workers.lock().get_mut(&session_id)
             && worker.connection_id == connection_id
             && worker.epoch == snapshot.worker_epoch
@@ -1081,10 +1082,18 @@ impl Broker {
             worker.raw_wrap_up_steering = snapshot.wrap_up_steering;
             worker.snapshot = snapshot;
             worker.last_seen = Instant::now();
+            cleared_drain_fence = self.maybe_abort_crashed_drain_on_uncertain_effect(
+                &session_id,
+                connection_id,
+                worker,
+            );
             accepted = true;
         }
         if !accepted {
             return false;
+        }
+        if cleared_drain_fence {
+            self.flush_pending(&session_id);
         }
         if cancelled.contains(&session_id) {
             return false;

@@ -52,6 +52,7 @@ struct ActiveDrain {
     epoch: String,
     connection_id: u64,
     confirmed: bool,
+    acknowledged_uncertain_sequence: u64,
     peer_pid: Option<u32>,
     retired_launch: Option<uuid::Uuid>,
 }
@@ -354,6 +355,7 @@ impl Broker {
         }
         let peer_pid = entry.peer_pid;
         let retired_launch = entry.retired_launch;
+        let ack_seq = entry.acknowledged_uncertain_sequence;
         state.pending.remove(command_id);
         if accepted {
             let already_confirmed = state.active.get(session_id).is_some_and(|active| {
@@ -365,6 +367,7 @@ impl Broker {
                     epoch: epoch.to_owned(),
                     connection_id,
                     confirmed: already_confirmed,
+                    acknowledged_uncertain_sequence: ack_seq,
                     peer_pid,
                     retired_launch,
                 },
@@ -450,6 +453,7 @@ impl Broker {
                 epoch: epoch.to_owned(),
                 connection_id,
                 confirmed: true,
+                acknowledged_uncertain_sequence: 0,
                 peer_pid: worker.peer_pid,
                 retired_launch,
             },
@@ -517,6 +521,44 @@ impl Broker {
         state.active.remove(session_id);
         state.unconfirmed_teardown.remove(session_id);
         drain_pending_for_session(&mut state.pending, session_id)
+    }
+
+    /// Un-fence an unconfirmed active drain if the worker aborted drain due to
+    /// a newly observed unacknowledged `uncertain_effect` (holding live snapshot).
+    pub(super) fn maybe_abort_crashed_drain_on_uncertain_effect(
+        &self,
+        session_id: &str,
+        connection_id: u64,
+        worker: &mut WorkerPeer,
+    ) -> bool {
+        let Some(seq) = worker
+            .snapshot
+            .uncertain_effect
+            .as_ref()
+            .map(|e| e.sequence.max(1))
+        else {
+            return false;
+        };
+        let mut state = self.crashed_drains.inner.lock();
+        let aborted = state.active.get(session_id).is_some_and(|active| {
+            !active.confirmed
+                && active.epoch == worker.epoch
+                && active.connection_id == connection_id
+                && seq > active.acknowledged_uncertain_sequence
+        });
+        if !aborted {
+            return false;
+        }
+        state.active.remove(session_id);
+        let has_pending = state
+            .pending
+            .values()
+            .any(|p| p.session_id == session_id && p.epoch == worker.epoch);
+        if !has_pending {
+            worker.crashed_drain_fenced = false;
+            return true;
+        }
+        false
     }
 
     pub(super) fn has_crashed_drain_for_epoch(&self, session_id: &str, epoch: &str) -> bool {
