@@ -240,29 +240,29 @@ test("Codex auto-resolution parses and counts down from first sight", () => {
 test("Antigravity ask_question form elicitation parses single, multi, and optional Other fields", () => {
   const elicitation = elicitationOf(
     carrying({
+      sessionId: "agy-sess-1",
+      toolCallId: "call_2211613383716556954",
       mode: "form",
-      sessionId: "s-agy",
-      toolCallId: "call_ask_1",
       message: "The agent has 2 questions.",
       requestedSchema: {
         type: "object",
         properties: {
           q1: {
             type: "string",
-            title: "Which approach?",
+            title: "Copy format?",
             oneOf: [
-              { const: "1", title: "Option A - keep existing API" },
-              { const: "2", title: "Option B - add v2 endpoint" },
+              { const: "1", title: "(Recommended) HTML + plain" },
+              { const: "2", title: "Plain only" },
             ],
           },
           q1_other: {
             type: "string",
             title: "Other",
-            description: "Optional free-form answer to: Which approach?",
+            description: "Optional free-form answer to: Copy format?",
           },
           q2: {
             type: "array",
-            title: "Target platforms",
+            title: "Surfaces?",
             items: {
               anyOf: [
                 { const: "1", title: "Mobile" },
@@ -273,7 +273,7 @@ test("Antigravity ask_question form elicitation parses single, multi, and option
           q2_other: {
             type: "string",
             title: "Other",
-            description: "Optional free-form answer to: Target platforms",
+            description: "Optional free-form answer to: Surfaces?",
           },
         },
       },
@@ -281,18 +281,23 @@ test("Antigravity ask_question form elicitation parses single, multi, and option
   );
   if (elicitation?.mode !== "form") throw new Error("expected a form");
   assertEquals(
-    elicitation.fields.map((field) => [field.name, field.kind, field.required]),
+    elicitation.fields.map((field) => [field.id, field.kind, field.required]),
     [
       ["q1", "single", false],
-      ["q1_other", "string", false],
+      ["q1_other", "text", false],
       ["q2", "multi", false],
-      ["q2_other", "string", false],
+      ["q2_other", "text", false],
     ],
   );
-  const draft = { q1: "1", q1_other: "", q2: ["1", "2"], q2_other: "iPad" };
-  assertEquals(serializedFormAnswers(elicitation, draft), {
-    q1: "1",
-    q2: ["1", "2"],
-    q2_other: "iPad",
-  });
+  const values = initialElicitationValues(elicitation.fields);
+  if (!elicitationComplete(elicitation.fields, values)) {
+    throw new Error("optional fields allow submitting write-in or partial answers");
+  }
+  values["q1"] = "1";
+  values["q2"] = ["1", "2"];
+  values["q2_other"] = "prioritize iOS";
+  assertEquals(
+    elicitationAnswer(elicitation.fields, values),
+    'accept:{"q1":"1","q2":["1","2"],"q2_other":"prioritize iOS"}',
+  );
 });
