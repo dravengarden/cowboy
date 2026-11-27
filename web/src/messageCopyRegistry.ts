@@ -16,6 +16,14 @@ const mobileListeners = new Set<() => void>();
 let mobileActive: MobileMessageActionState | null = null;
 let dismissCleanup: (() => void) | null = null;
 
+/** True when the user has any non-collapsed selection, including whitespace. */
+export function hasActiveTextSelection(): boolean {
+  const selection = globalThis.getSelection?.();
+  if (!selection) return false;
+  if (selection.rangeCount > 0 && !selection.isCollapsed) return true;
+  return selection.toString().length > 0;
+}
+
 export function registerMessageCopyHandler(copyId: string, handler: MessageCopyHandler): () => void {
   handlers.set(copyId, handler);
   return () => {
@@ -47,26 +55,31 @@ function installGlobalDismiss(): void {
     }
     closeMobileMessageActions();
   };
-  const onScroll = (): void => {
+  const onDismiss = (): void => {
     closeMobileMessageActions();
   };
   const onSelectionChange = (): void => {
-    if ((globalThis.getSelection?.()?.toString() ?? "").trim().length > 0) {
-      closeMobileMessageActions();
-    }
+    if (hasActiveTextSelection()) closeMobileMessageActions();
   };
   const onKeyDown = (event: KeyboardEvent): void => {
     if (event.key === "Escape") closeMobileMessageActions();
   };
   document.addEventListener("pointerdown", onPointerDown, true);
-  document.addEventListener("scroll", onScroll, true);
+  document.addEventListener("scroll", onDismiss, true);
   document.addEventListener("selectionchange", onSelectionChange);
   document.addEventListener("keydown", onKeyDown, true);
+  globalThis.addEventListener?.("resize", onDismiss);
+  const vv = globalThis.visualViewport;
+  vv?.addEventListener("resize", onDismiss);
+  vv?.addEventListener("scroll", onDismiss);
   dismissCleanup = () => {
     document.removeEventListener("pointerdown", onPointerDown, true);
-    document.removeEventListener("scroll", onScroll, true);
+    document.removeEventListener("scroll", onDismiss, true);
     document.removeEventListener("selectionchange", onSelectionChange);
     document.removeEventListener("keydown", onKeyDown, true);
+    globalThis.removeEventListener?.("resize", onDismiss);
+    vv?.removeEventListener("resize", onDismiss);
+    vv?.removeEventListener("scroll", onDismiss);
   };
 }
 

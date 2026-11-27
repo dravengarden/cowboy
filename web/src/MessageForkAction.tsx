@@ -44,7 +44,7 @@ export function MessageForkButton({
         }}
         sx={(theme) => ({
           minWidth: 0,
-          minHeight: 22,
+          minHeight: "1.375rem",
           px: inline ? 0.75 : 0.85,
           py: 0,
           borderRadius: inline ? 0 : "999px",
@@ -75,7 +75,9 @@ export function MessageForkButton({
 /** Zero-height Desktop hover affordance straddling the bottom-right corner of
  *  a completed turn-final assistant response. Opens Replace or fork already
  *  targeted at this turn so the reader can confirm and pick options without
- *  cluttering the transcript or risking accidental one-click forks. */
+ *  cluttering the transcript or risking accidental one-click forks.
+ *  Uses opacity (not visibility: hidden) so keyboard Tab stops can focus it
+ *  and reveal the bar via :focus-within. */
 export function MessageForkAction({
   originSessionId,
   forkPoint,
@@ -97,11 +99,10 @@ export function MessageForkAction({
         right: 10,
         bottom: -11,
         zIndex: 1,
-        visibility: "hidden",
         opacity: 0,
         pointerEvents: "none",
+        transition: "opacity 120ms ease",
         ".cowboy-msg-wrap:hover &, .cowboy-msg-wrap:focus-within &": {
-          visibility: "visible",
           opacity: 1,
           pointerEvents: "auto",
         },

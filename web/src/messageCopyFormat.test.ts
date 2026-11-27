@@ -84,7 +84,6 @@ test("formatMessageForCopy renders headings, lists, task lists, nested items, bl
 
   const { html, plain } = formatMessageForCopy(md);
 
-  // Semantic HTML without dark-mode styles or broken file:// hrefs
   expect(html).toContain("<h3>一、现状诊断与方案</h3>");
   expect(html).toContain("<strong>高亮状态</strong>");
   expect(html).toContain("<code>snake_case_name</code>");
@@ -99,7 +98,6 @@ test("formatMessageForCopy renders headings, lists, task lists, nested items, bl
   expect(html).toContain("行内批注 | 批量回传");
   expect(html).toContain("<blockquote><p>引用说明：<em>斜体</em> 与 <del>删除线</del></p></blockquote>");
 
-  // Clean readable plain text without Markdown punctuation clutter
   expect(plain).toContain("一、现状诊断与方案");
   expect(plain).not.toContain("###");
   expect(plain).not.toContain("**");
@@ -110,6 +108,79 @@ test("formatMessageForCopy renders headings, lists, task lists, nested items, bl
   expect(plain).toContain("对标工具\t核心机制");
   expect(plain).toContain("Zed\tAll Changes 视图");
   expect(plain).toContain("> 引用说明：斜体 与 删除线");
+});
+
+test("formatMessageForCopy handles R1 edge cases: mismatched table columns, bounded parsing, table terminators, escaped pipes in code, inline triple backticks", () => {
+  // Finding 1: mismatched header/delimiter column count must NEVER hang
+  const mismatchedTable = formatMessageForCopy("| A | B |\n| --- | --- | --- |\n| 1 | 2 |");
+  expect(mismatchedTable.plain).toContain("| A | B |");
+  expect(mismatchedTable.html).not.toContain("<table");
+
+  // Finding 2: pathological unmatched brackets, asterisks, and deep blockquotes stay fast & stack-safe
+  const start = Date.now();
+  const pathological = `${"[".repeat(8000)} ${"*".repeat(8000)}\n\n${"> ".repeat(200)}deep quote`;
+  const bounded = formatMessageForCopy(pathological);
+  expect(Date.now() - start).toBeLessThan(500);
+  expect(bounded.plain).toContain("deep quote");
+
+  // Finding 4: table terminates on list item containing |, and \| inside inline code unescapes per GFM
+  const tableThenList = formatMessageForCopy([
+    "| Expr | Meaning |",
+    "| --- | --- |",
+    "| `a \\| b` | bitwise OR |",
+    "- follow-up item with | pipe",
+  ].join("\n"));
+  expect(tableThenList.html).toContain("<code>a | b</code>");
+  expect(tableThenList.html).toContain("<ul><li>follow-up item with | pipe</li></ul>");
+  expect(tableThenList.plain).toContain("a | b\tbitwise OR");
+  expect(tableThenList.plain).toContain("- follow-up item with | pipe");
+
+  // Finding 5: line-opening ```inline``` code span does NOT swallow the rest of the reply
+  const inlineTriple = formatMessageForCopy("```inline code``` and **bold**\n\nNext paragraph.");
+  expect(inlineTriple.html).toContain("<code>inline code</code>");
+  expect(inlineTriple.html).toContain("<strong>bold</strong>");
+  expect(inlineTriple.html).toContain("<p>Next paragraph.</p>");
+  expect(inlineTriple.plain).toContain("inline code and bold");
+  expect(inlineTriple.plain).toContain("Next paragraph.");
+});
+
+test("formatMessageForCopy preserves list code indentation, nested children across blank lines, links, LaTeX, and empty-alt images", () => {
+  // Finding 6: Python indentation inside fenced code in list + nested list across blank lines
+  const listWithCode = formatMessageForCopy([
+    "- Python example:",
+    "",
+    "  ```python",
+    "  def greet(name):",
+    "      return f'hi {name}'",
+    "  ```",
+    "",
+    "  - Nested child after blank line",
+  ].join("\n"));
+  expect(listWithCode.html).toContain("<pre><code>def greet(name):\n    return f'hi {name}'</code></pre>");
+  expect(listWithCode.html).toContain("<ul><li>Nested child after blank line</li></ul>");
+  expect(listWithCode.plain).toContain("      return f'hi {name}'");
+  expect(listWithCode.plain).toContain("  - Nested child after blank line");
+
+  // Finding 7: HTML entities & escaped parens in links; prose [Plan](read the attached document) stays intact
+  const links = formatMessageForCopy(
+    'See [Docs](https://example.com/a?x=1&amp;y=2), [Wiki](https://en.wikipedia.org/wiki/Foo_\\(bar\\)), and [Plan](read the attached document).',
+  );
+  expect(links.html).toContain('<a href="https://example.com/a?x=1&amp;y=2">Docs</a>');
+  expect(links.html).not.toContain("&amp;amp;");
+  expect(links.html).toContain('<a href="https://en.wikipedia.org/wiki/Foo_(bar)">Wiki</a>');
+  expect(links.plain).toContain("[Plan](read the attached document)");
+
+  // Finding 14: LaTeX \(...\) and \[...\] preserve backslashes and formulas
+  const latex = formatMessageForCopy("Inline \\(\\frac{a}{b}\\) and spaced \\( x + y \\)\n\n\\[\\sum_{i=1}^n i\\]");
+  expect(latex.plain).toContain("\\frac{a}{b}");
+  expect(latex.plain).toContain("x + y");
+  expect(latex.plain).toContain("\\sum_{i=1}^n i");
+  expect(latex.html).toContain("\\frac{a}{b}");
+
+  // Finding 15: empty-alt image never produces empty clipboard text
+  const emptyImg = formatMessageForCopy("![](https://example.com/a.png)");
+  expect(emptyImg.plain).toBe("[Image]");
+  expect(emptyImg.html).toContain("[Image]");
 });
 
 test("formatMessageForCopy preserves fenced code verbatim, neutralizes XSS/unsafe links, and avoids snake_case italic corruption", () => {

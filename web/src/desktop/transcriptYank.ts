@@ -8,6 +8,16 @@ export interface MessageRectCandidate {
   readonly bottom: number;
 }
 
+export function rectIntersectsViewport(
+  top: number,
+  bottom: number,
+  viewTop: number,
+  viewBottom: number,
+  margin = 8,
+): boolean {
+  return bottom > viewTop + margin && top < viewBottom - margin;
+}
+
 /** Pick the message the reader is looking at for Conversation Vim `y`/`Y`:
  *  1. If a message spans the viewport reading focal line (45% from top), pick
  *     it immediately — tall replies always win while reading them.
@@ -18,8 +28,7 @@ export function pickViewportMessageCopyId(
   viewTop: number,
   viewBottom: number,
 ): string | null {
-  const margin = 8;
-  const visible = candidates.filter((c) => c.bottom > viewTop + margin && c.top < viewBottom - margin);
+  const visible = candidates.filter((c) => rectIntersectsViewport(c.top, c.bottom, viewTop, viewBottom));
   if (visible.length === 0) return null;
   const focalY = viewTop + (viewBottom - viewTop) * 0.45;
   const spanning = visible.find((c) => c.top <= focalY && c.bottom >= focalY);
@@ -40,13 +49,20 @@ export function pickViewportMessageCopyId(
 }
 
 function resolveTranscriptCopyId(region: HTMLElement): string | null {
+  const scroller = region.querySelector<HTMLElement>("[data-desktop-transcript-scroller]") ?? region;
+  const viewRect = scroller.getBoundingClientRect();
   const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const focusedWrap = active?.closest<HTMLElement>("[data-message-copy-id]") ?? null;
   if (focusedWrap && region.contains(focusedWrap) && focusedWrap.dataset.messageCopyId) {
-    return focusedWrap.dataset.messageCopyId;
+    const focusedRect = focusedWrap.getBoundingClientRect();
+    if (
+      focusedRect.height > 0 &&
+      focusedRect.width > 0 &&
+      rectIntersectsViewport(focusedRect.top, focusedRect.bottom, viewRect.top, viewRect.bottom)
+    ) {
+      return focusedWrap.dataset.messageCopyId;
+    }
   }
-  const scroller = region.querySelector<HTMLElement>("[data-desktop-transcript-scroller]") ?? region;
-  const viewRect = scroller.getBoundingClientRect();
   const wraps = [...region.querySelectorAll<HTMLElement>("[data-message-copy-id]")];
   const candidates: MessageRectCandidate[] = [];
   for (const el of wraps) {

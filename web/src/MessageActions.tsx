@@ -2,17 +2,19 @@ import {
   type PointerEvent as ReactPointerEvent,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useSyncExternalStore,
 } from "react";
 import { createPortal } from "react-dom";
+import { floatingIslandSurfaceSx } from "@cowboy/app-shell";
 import { Box, Button, Tooltip } from "@mui/material";
 import { alpha, type Theme } from "@mui/material/styles";
 import Check from "@mui/icons-material/Check";
 import Code from "@mui/icons-material/Code";
 import ContentCopy from "@mui/icons-material/ContentCopy";
-import { copyRichText, copyText } from "./clipboard";
+import { copyRichTextDetailed, copyText } from "./clipboard";
 import { writeVimRegister } from "./desktop/vim/vimRegister";
 import type { RenderItem } from "./derive";
 import { magneticHaptic } from "./haptic";
@@ -21,12 +23,13 @@ import { extractCopyableMessage, formatMessageForCopy } from "./messageCopyForma
 import {
   closeMobileMessageActions,
   getMobileMessageActions,
+  hasActiveTextSelection,
   type MessageCopyMode,
   openMobileMessageActions,
   registerMessageCopyHandler,
   subscribeMobileMessageActions,
 } from "./messageCopyRegistry";
-import { MessageForkButton } from "./MessageForkAction";
+import { MessageForkButton, MessageWithFork } from "./MessageForkAction";
 import { notify, useStoreSelector } from "./store";
 import { glyphSize } from "./surface/desktopSize";
 import { RELIABLE_TOUCH_TAP_MOVE_SLOP_PX } from "./touchGestures";
@@ -65,21 +68,25 @@ export function clampMobilePillPosition(
   viewportHeight: number,
   pillWidth = 228,
   pillHeight = 44,
+  offsetLeft = 0,
+  offsetTop = 0,
 ): { left: number; top: number } {
   const margin = 12;
-  const maxLeft = Math.max(margin, viewportWidth - pillWidth - margin);
-  const left = Math.min(Math.max(margin, Math.round(tapX - pillWidth / 2)), maxLeft);
+  const minLeft = offsetLeft + margin;
+  const maxLeft = Math.max(minLeft, offsetLeft + viewportWidth - pillWidth - margin);
+  const left = Math.min(Math.max(minLeft, Math.round(tapX - pillWidth / 2)), maxLeft);
+  const minTop = offsetTop + 56;
   const preferAbove = tapY - pillHeight - 14;
-  const topCandidate = preferAbove >= 56 ? preferAbove : tapY + 16;
-  const maxTop = Math.max(56, viewportHeight - pillHeight - 76);
-  const top = Math.min(Math.max(56, Math.round(topCandidate)), maxTop);
+  const topCandidate = preferAbove >= minTop ? preferAbove : tapY + 16;
+  const maxTop = Math.max(minTop, offsetTop + viewportHeight - pillHeight - 76);
+  const top = Math.min(Math.max(minTop, Math.round(topCandidate)), maxTop);
   return { left, top };
 }
 
 function pillButtonSx(activeSuccess: boolean, mobile: boolean): (theme: Theme) => Record<string, unknown> {
   return (theme) => ({
     minWidth: 0,
-    minHeight: mobile ? 40 : 22,
+    minHeight: mobile ? 40 : "1.375rem",
     px: mobile ? 1.5 : 0.75,
     py: 0,
     borderRadius: 0,
@@ -144,6 +151,7 @@ function DesktopHoverPill({
 
   return (
     <Box
+      aria-hidden={focusable ? undefined : true}
       data-message-action-bar={position}
       data-message-fork-bar={forkEligible ? "" : undefined}
       sx={(theme) => ({
@@ -158,12 +166,22 @@ function DesktopHoverPill({
         bgcolor: theme.palette.background.paper,
         border: `1px solid ${alpha(theme.palette.divider, 0.9)}`,
         boxShadow: theme.shadows[1],
-        visibility: keepVisible ? "visible" : "hidden",
-        opacity: keepVisible ? 1 : 0,
-        pointerEvents: keepVisible ? "auto" : "none",
+        // Primary bottom pill uses opacity (never visibility: hidden) so
+        // Desktop Tab traversal can focus its action stops and reveal the bar
+        // via :focus-within. Decorative top mirror stays visibility: hidden.
+        ...(focusable
+          ? {
+              opacity: keepVisible ? 1 : 0,
+              pointerEvents: keepVisible ? "auto" : "none",
+            }
+          : {
+              visibility: keepVisible ? "visible" : "hidden",
+              opacity: keepVisible ? 1 : 0,
+              pointerEvents: keepVisible ? "auto" : "none",
+            }),
         transition: "opacity 120ms ease",
         ".cowboy-msg-wrap:hover &, .cowboy-msg-wrap:focus-within &": {
-          visibility: "visible",
+          ...(focusable ? {} : { visibility: "visible" }),
           opacity: 1,
           pointerEvents: "auto",
         },
@@ -175,6 +193,7 @@ function DesktopHoverPill({
           variant="text"
           color="inherit"
           tabIndex={focusable ? 0 : -1}
+          aria-keyshortcuts={focusable ? "y" : undefined}
           data-message-copy="rich"
           data-desktop-transcript-stop={focusable ? "action" : undefined}
           aria-label={copyDone ? "Copied" : "Copy message"}
@@ -196,6 +215,7 @@ function DesktopHoverPill({
           variant="text"
           color="inherit"
           tabIndex={focusable ? 0 : -1}
+          aria-keyshortcuts={focusable ? "Shift+Y" : undefined}
           data-message-copy="markdown"
           data-desktop-transcript-stop={focusable ? "action" : undefined}
           aria-label={mdDone ? "Copied as Markdown" : "Copy message as Markdown"}
@@ -231,18 +251,36 @@ function MobileFloatingCopyPill({
   copiedKind: MessageCopyMode | null;
   onCopy: (mode: MessageCopyMode) => void;
 }): React.JSX.Element | null {
-  if (typeof document === "undefined") return null;
-  const vw = globalThis.innerWidth || 390;
-  const vh = globalThis.innerHeight || 844;
-  const pos = clampMobilePillPosition(x, y, vw, vh);
-  const copyDone = copiedKind === "rich";
-  const mdDone = copiedKind === "markdown";
+  const pillRef = useRef<HTMLDivElement>(null);
+  const [size, setSize] = useState<{ w: number; h: number }>({ w: 228, h: 44 });
+
+  useLayoutEffect(() => {
+    const el = pillRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const w = Math.ceil(rect.width);
+    const h = Math.ceil(rect.height);
+    if (w > 0 && h > 0 && (w !== size.w || h !== size.h)) {
+      setSize({ w, h });
+    }
+  }, [copiedKind, size.h, size.w]);
 
   const copyTap = useReliableTouchTap<HTMLButtonElement>(() => onCopy("rich"));
   const mdTap = useReliableTouchTap<HTMLButtonElement>(() => onCopy("markdown"));
 
+  if (typeof document === "undefined") return null;
+  const vv = globalThis.visualViewport;
+  const vw = vv?.width || globalThis.innerWidth || 390;
+  const vh = vv?.height || globalThis.innerHeight || 844;
+  const offsetLeft = vv?.offsetLeft ?? 0;
+  const offsetTop = vv?.offsetTop ?? 0;
+  const pos = clampMobilePillPosition(x, y, vw, vh, size.w, size.h, offsetLeft, offsetTop);
+  const copyDone = copiedKind === "rich";
+  const mdDone = copiedKind === "markdown";
+
   return createPortal(
     <Box
+      ref={pillRef}
       role="toolbar"
       aria-label="Message copy actions"
       data-message-action-bar="mobile"
@@ -255,11 +293,7 @@ function MobileFloatingCopyPill({
         alignItems: "center",
         borderRadius: "999px",
         overflow: "hidden",
-        bgcolor: alpha(theme.palette.background.paper, 0.96),
-        backdropFilter: "blur(14px)",
-        WebkitBackdropFilter: "blur(14px)",
-        border: `1px solid ${alpha(theme.palette.divider, 0.95)}`,
-        boxShadow: theme.shadows[6],
+        ...floatingIslandSurfaceSx(theme, { compact: true }),
       })}
     >
       <Button
@@ -308,95 +342,95 @@ function useMobileMessageTap(
   onPointerMove?: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerUp?: (event: ReactPointerEvent<HTMLDivElement>) => void;
   onPointerCancel?: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onContextMenu?: () => void;
 } {
   const tapRef = useRef<{ pointerId: number; x: number; y: number; at: number } | null>(null);
   const onPointerDown = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (!enabled || !event.isPrimary || isInteractiveMessageTarget(event.target, event.currentTarget)) {
+    if (
+      !enabled ||
+      !event.isPrimary ||
+      (event.pointerType !== "touch" && event.button !== 0) ||
+      isInteractiveMessageTarget(event.target, event.currentTarget)
+    ) {
       tapRef.current = null;
       return;
     }
-    if ((globalThis.getSelection?.()?.toString() ?? "").trim().length > 0) {
+    if (hasActiveTextSelection()) {
       tapRef.current = null;
       return;
     }
-    tapRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, at: event.timeStamp };
+    tapRef.current = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, at: Date.now() };
   }, [enabled]);
+
   const onPointerMove = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
     const start = tapRef.current;
     if (!start || start.pointerId !== event.pointerId) return;
-    if (
-      Math.abs(event.clientX - start.x) > RELIABLE_TOUCH_TAP_MOVE_SLOP_PX ||
-      Math.abs(event.clientY - start.y) > RELIABLE_TOUCH_TAP_MOVE_SLOP_PX
-    ) {
+    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > RELIABLE_TOUCH_TAP_MOVE_SLOP_PX) {
       tapRef.current = null;
+      closeMobileMessageActions();
     }
   }, []);
+
   const onPointerUp = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
     const start = tapRef.current;
     tapRef.current = null;
-    if (!start || start.pointerId !== event.pointerId || event.timeStamp - start.at > MOBILE_TAP_MAX_MS) return;
-    if ((globalThis.getSelection?.()?.toString() ?? "").trim().length > 0) return;
-    if (getMobileMessageActions()?.copyId === copyId) closeMobileMessageActions(copyId);
-    else openMobileMessageActions(copyId, event.clientX, event.clientY);
+    if (!start || start.pointerId !== event.pointerId) return;
+    if (Date.now() - start.at > MOBILE_TAP_MAX_MS) return;
+    if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > RELIABLE_TOUCH_TAP_MOVE_SLOP_PX) return;
+    if (hasActiveTextSelection()) return;
+    if (getMobileMessageActions()?.copyId === copyId) {
+      closeMobileMessageActions(copyId);
+    } else {
+      openMobileMessageActions(copyId, event.clientX, event.clientY);
+    }
   }, [copyId]);
-  const onPointerCancel = useCallback((event: ReactPointerEvent<HTMLDivElement>): void => {
-    if (tapRef.current?.pointerId === event.pointerId) tapRef.current = null;
+
+  const clearTap = useCallback((): void => {
+    tapRef.current = null;
   }, []);
-  return enabled ? { onPointerDown, onPointerMove, onPointerUp, onPointerCancel } : {};
+
+  return enabled
+    ? { onPointerDown, onPointerMove, onPointerUp, onPointerCancel: clearTap, onContextMenu: clearTap }
+    : {};
 }
 
-/** Unified discreet message action wrapper for both Desktop and Mobile:
- *  - Desktop: zero-height bottom-right hover/focus capsule combining Copy,
- *    Copy as Markdown, and (on mutable turn-final assistant replies) Fork from
- *    here; tall replies (> 480px) mirror Copy/Markdown straddling the outer
- *    top edge; Vim `y`/`Y` in Conversation invoke the registered handler.
- *  - Mobile: zero chrome at rest; native iOS long-press text selection stays
- *    untouched; a stationary tap on non-interactive prose pops a viewport-safe
- *    floating [ Copy | Markdown ] pill near the thumb. */
-export function MessageWithActions({
-  item,
-  sessionId,
-  streaming,
-  desktop,
-  readOnly = false,
-  forkPoint,
-  children,
-}: {
-  item: Extract<RenderItem, { kind: "message" }>;
-  sessionId: string;
-  streaming: boolean;
-  desktop: boolean;
-  readOnly?: boolean | undefined;
-  forkPoint?: TurnForkPoint | undefined;
-  children: React.JSX.Element;
-}): React.JSX.Element {
-  const copyable = streaming ? null : extractCopyableMessage(item);
-  const copyId = `${sessionId}:${readOnly ? "anc:" : ""}${item.key}`;
-  const wrapperRef = useRef<HTMLDivElement>(null);
+function useMessageCopyRunner(
+  copyId: string,
+  desktop: boolean,
+  markdown: string,
+  enabled: boolean,
+): { copiedKind: MessageCopyMode | null; runCopy: (mode: MessageCopyMode) => Promise<boolean> } {
   const [copiedKind, setCopiedKind] = useState<MessageCopyMode | null>(null);
-  const [tall, setTall] = useState(false);
   const copiedTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
   const mobileDismissTimerRef = useRef<ReturnType<typeof globalThis.setTimeout> | undefined>(undefined);
+  const preferPlainRetryRef = useRef(false);
 
-  const mobileActive = useSyncExternalStore(
-    subscribeMobileMessageActions,
-    getMobileMessageActions,
-    () => null,
-  );
-  const mobileOpen = !desktop && copyable !== null && mobileActive?.copyId === copyId;
-
-  const markdown = copyable?.markdown ?? "";
+  useEffect(() => {
+    preferPlainRetryRef.current = false;
+  }, [markdown]);
 
   const runCopy = useCallback(async (mode: MessageCopyMode): Promise<boolean> => {
     if (!markdown.trim()) return false;
     let ok = false;
     if (mode === "markdown") {
+      if (desktop) writeVimRegister(markdown, false);
       ok = await copyText(markdown);
-      if (ok && desktop) writeVimRegister(markdown, false);
     } else {
       const { html, plain } = formatMessageForCopy(markdown);
-      ok = await copyRichText(plain, html);
-      if (ok && desktop) writeVimRegister(plain, false);
+      const plainText = plain.trim() ? plain : markdown;
+      if (desktop) writeVimRegister(plainText, false);
+      if (preferPlainRetryRef.current) {
+        ok = await copyText(plainText);
+        if (ok) preferPlainRetryRef.current = false;
+      } else {
+        const res = await copyRichTextDetailed(plainText, html);
+        ok = res.ok;
+        if (!ok && res.retryPlainText) {
+          preferPlainRetryRef.current = true;
+          notify("Could not copy formatted text — tap Copy again for plain text", "info");
+          return false;
+        }
+      }
     }
     if (!ok) {
       notify("Could not copy to clipboard", "error");
@@ -420,9 +454,9 @@ export function MessageWithActions({
   }, [copyId, desktop, markdown]);
 
   useEffect(() => {
-    if (!copyable) return undefined;
+    if (!enabled) return undefined;
     return registerMessageCopyHandler(copyId, runCopy);
-  }, [copyId, copyable, runCopy]);
+  }, [copyId, enabled, runCopy]);
 
   useEffect(() => () => {
     if (copiedTimerRef.current !== undefined) globalThis.clearTimeout(copiedTimerRef.current);
@@ -430,26 +464,84 @@ export function MessageWithActions({
     closeMobileMessageActions(copyId);
   }, [copyId]);
 
+  return { copiedKind, runCopy };
+}
+
+/** Unified hidden Copy / Copy as Markdown (and Desktop turn Fork) affordance
+ *  for completed transcript messages across Desktop and Mobile. */
+export function MessageWithActions({
+  item,
+  sessionId,
+  streaming,
+  desktop,
+  readOnly = false,
+  forkPoint,
+  children,
+}: {
+  item: Extract<RenderItem, { kind: "message" }>;
+  sessionId: string;
+  streaming: boolean;
+  desktop: boolean;
+  readOnly?: boolean | undefined;
+  forkPoint?: TurnForkPoint | undefined;
+  children: React.JSX.Element;
+}): React.JSX.Element {
+  const copyable = streaming ? null : extractCopyableMessage(item);
+  const copyId = `${sessionId}:${readOnly ? "anc:" : ""}${item.key}`;
+  const wrapperRef = useRef<HTMLDivElement>(null);
+  const [tall, setTall] = useState(false);
+
+  const mobileActive = useSyncExternalStore(
+    subscribeMobileMessageActions,
+    getMobileMessageActions,
+    () => null,
+  );
+  const mobileOpen = !desktop && copyable !== null && mobileActive?.copyId === copyId;
+  const { copiedKind, runCopy } = useMessageCopyRunner(
+    copyId,
+    desktop,
+    copyable?.markdown ?? "",
+    copyable !== null,
+  );
+
+  const hasCopyable = copyable !== null;
   useEffect(() => {
-    if (!desktop || !copyable || typeof ResizeObserver === "undefined") {
+    if (!desktop || !hasCopyable || typeof ResizeObserver === "undefined") {
       setTall(false);
       return undefined;
     }
     const el = wrapperRef.current;
     if (!el) return undefined;
+    const update = (height: number): void => {
+      setTall(height > TALL_MESSAGE_THRESHOLD_PX);
+    };
+    update(el.getBoundingClientRect().height);
     const ro = new ResizeObserver(([entry]) => {
-      if (entry) setTall(entry.contentRect.height > TALL_MESSAGE_THRESHOLD_PX);
+      if (entry) update(entry.contentRect.height);
     });
     ro.observe(el);
     return () => ro.disconnect();
-  }, [desktop, copyable]);
+  }, [desktop, hasCopyable]);
 
   const mobileTap = useMobileMessageTap(copyId, !desktop && copyable !== null);
+  const allowFork = desktop && !readOnly && item.role === "assistant" && !streaming && Boolean(forkPoint);
 
-  if (!copyable) return children;
+  if (!copyable) {
+    if (!allowFork) return children;
+    return (
+      <MessageWithFork
+        item={item}
+        sessionId={sessionId}
+        streaming={streaming}
+        desktop={desktop}
+        forkPoint={forkPoint}
+      >
+        {children}
+      </MessageWithFork>
+    );
+  }
 
   const isUser = copyable.role === "user";
-  const allowFork = desktop && !readOnly && copyable.role === "assistant" && Boolean(forkPoint);
   const alignRightEdge = isUser ? 0 : 10;
 
   return (

@@ -1,6 +1,6 @@
 import { expect, test } from "bun:test";
 import { clampMobilePillPosition } from "./MessageActions.tsx";
-import { pickViewportMessageCopyId } from "./desktop/transcriptYank.ts";
+import { pickViewportMessageCopyId, rectIntersectsViewport } from "./desktop/transcriptYank.ts";
 import {
   closeMobileMessageActions,
   getMobileMessageActions,
@@ -95,4 +95,18 @@ test("pickViewportMessageCopyId selects tall spanning reply first, then nearest 
       800,
     ),
   ).toBeNull();
+});
+
+test("clampMobilePillPosition respects measured pill size and zoomed visualViewport offsets", () => {
+  const pos = clampMobilePillPosition(350, 260, 320, 500, 240, 48, 80, 120);
+  expect(pos.left).toBeGreaterThanOrEqual(80 + 12);
+  expect(pos.left + 240).toBeLessThanOrEqual(80 + 320 - 12);
+  expect(pos.top).toBeGreaterThanOrEqual(120 + 56);
+  expect(pos.top + 48).toBeLessThanOrEqual(120 + 500 - 76);
+});
+
+test("rectIntersectsViewport rejects scrolled-offscreen focused message wrappers", () => {
+  expect(rectIntersectsViewport(-200, -10, 0, 700)).toBe(false);
+  expect(rectIntersectsViewport(710, 900, 0, 700)).toBe(false);
+  expect(rectIntersectsViewport(-50, 120, 0, 700)).toBe(true);
 });

@@ -827,7 +827,16 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
       const userWrap = await until(() => host.querySelector<HTMLElement>('[data-message-copy-id$=":m-user"]'), "user copy wrapper");
       const bottomBar = tallWrap.querySelector<HTMLElement>('[data-message-action-bar="bottom"]')!;
       check(Boolean(bottomBar), "assistant bubble mounts bottom hover action bar");
-      check(getComputedStyle(bottomBar).visibility === "hidden", `hover bar stays hidden at rest (${getComputedStyle(bottomBar).visibility})`);
+      check(
+        getComputedStyle(bottomBar).opacity === "0" && getComputedStyle(bottomBar).pointerEvents === "none",
+        `hover bar stays visually hidden at rest without visibility:hidden (${getComputedStyle(bottomBar).opacity}/${getComputedStyle(bottomBar).pointerEvents})`,
+      );
+      // Primary bottom pill must be keyboard-focusable (not trapped by visibility:hidden)
+      const focusableCopy = bottomBar.querySelector<HTMLButtonElement>('[data-message-copy="rich"]')!;
+      focusableCopy.focus();
+      check(document.activeElement === focusableCopy, "bottom pill Copy button receives keyboard focus directly");
+      check(getComputedStyle(bottomBar).opacity === "1" || bottomBar.matches(":focus-within"), "focusing bottom pill reveals it via :focus-within");
+      focusableCopy.blur();
       check(Boolean(userWrap.querySelector('[data-message-action-bar="bottom"]')), "user bubble mounts bottom hover action bar");
       const topBar = await until(() => tallWrap.querySelector<HTMLElement>('[data-message-action-bar="top"]'), "tall reply top-edge mirror pill");
       check(topBar.querySelector<HTMLButtonElement>('[data-message-copy="rich"]')?.tabIndex === -1, "top mirror buttons skip duplicate Tab stops");
@@ -915,6 +924,12 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
       check(!document.querySelector('[data-message-action-bar]'), "Mobile keeps zero action chrome at rest");
       check(!document.querySelector('[data-fork-from-here]'), "Mobile never renders inline Fork chrome");
 
+      // Secondary mouse/trackpad click must NOT open Mobile copy pill
+      wrap.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, pointerId: 9, pointerType: "mouse", button: 2, clientX: 160, clientY: 180 }));
+      wrap.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, isPrimary: true, pointerId: 9, pointerType: "mouse", button: 2, clientX: 160, clientY: 180 }));
+      await delay(30);
+      check(!document.querySelector('[data-message-action-bar="mobile"]'), "secondary button click never opens Mobile copy pill");
+
       // Drag (>10px) must NOT open pill
       wrap.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, pointerId: 1, pointerType: "touch", clientX: 120, clientY: 160 }));
       wrap.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, isPrimary: true, pointerId: 1, pointerType: "touch", clientX: 120, clientY: 195 }));
@@ -942,6 +957,14 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
       await until(() => writtenRaw.length === 1, "Mobile Markdown clipboard write");
       check(writtenRaw[0] === "Tap **prose** or open [Example](https://example.com)", "Mobile Copy as Markdown writes exact source");
       await gone(() => document.querySelector('[data-message-action-bar="mobile"]'), "Mobile copy pill after copy");
+
+      // Re-open and verify horizontal swipe drag (>10px) dismisses open pill
+      wrap.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, pointerId: 10, pointerType: "touch", clientX: 160, clientY: 180 }));
+      wrap.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, isPrimary: true, pointerId: 10, pointerType: "touch", clientX: 160, clientY: 180 }));
+      await until(() => document.querySelector<HTMLElement>('[data-message-action-bar="mobile"]'), "Mobile pill open before swipe");
+      wrap.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, pointerId: 11, pointerType: "touch", clientX: 160, clientY: 180 }));
+      wrap.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, isPrimary: true, pointerId: 11, pointerType: "touch", clientX: 195, clientY: 180 }));
+      await gone(() => document.querySelector('[data-message-action-bar="mobile"]'), "Mobile pill dismissed on horizontal drag");
 
       // Re-open and verify Copy + Escape dismiss
       wrap.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, pointerId: 4, pointerType: "touch", clientX: 160, clientY: 180 }));

@@ -26,23 +26,49 @@ export async function copyText(text: string): Promise<boolean> {
   }
 }
 
-/** Write both clean semantic HTML and readable plain text in one synchronous
- *  gesture frame (preserving iOS Safari / WKWebView activation). Falls back to
- *  plain-text copy when ClipboardItem or rich MIME writes are unavailable. */
-export async function copyRichText(plain: string, html: string): Promise<boolean> {
-  try {
-    const clipboard = globalThis.navigator?.clipboard;
-    const Item = globalThis.ClipboardItem;
-    if (clipboard?.write && typeof Item === "function" && typeof Blob === "function") {
-      const item = new Item({
-        "text/plain": new Blob([plain], { type: "text/plain" }),
-        "text/html": new Blob([html], { type: "text/html" }),
-      });
-      await clipboard.write([item]);
-      return true;
-    }
-  } catch {
-    // Fall back to plain-text clipboard write below.
+export interface RichCopyResult {
+  readonly ok: boolean;
+  /** True when dual-MIME write threw and the post-await plain fallback also
+   *  failed (e.g. iOS user-activation expired), so a fresh tap should retry
+   *  synchronously with plain text. */
+  readonly retryPlainText: boolean;
+}
+
+function supportsRichClipboardWrite(): boolean {
+  const clipboard = globalThis.navigator?.clipboard;
+  const Item = globalThis.ClipboardItem;
+  if (typeof clipboard?.write !== "function" || typeof Item !== "function" || typeof Blob !== "function") {
+    return false;
   }
-  return copyText(plain);
+  const supports = (Item as unknown as { supports?: (type: string) => boolean }).supports;
+  if (typeof supports === "function") {
+    return supports("text/html") && supports("text/plain");
+  }
+  return true;
+}
+
+/** Write both clean semantic HTML and readable plain text in one synchronous
+ *  gesture frame (preserving iOS Safari / WKWebView activation). Pre-checks
+ *  ClipboardItem.supports synchronously before calling clipboard.write so
+ *  unsupported engines fall straight into synchronous plain-text copy without
+ *  spending the user gesture on a doomed async write. */
+export async function copyRichTextDetailed(plain: string, html: string): Promise<RichCopyResult> {
+  if (!supportsRichClipboardWrite()) {
+    return { ok: await copyText(plain), retryPlainText: false };
+  }
+  try {
+    const item = new globalThis.ClipboardItem({
+      "text/plain": new Blob([plain], { type: "text/plain" }),
+      "text/html": new Blob([html], { type: "text/html" }),
+    });
+    await globalThis.navigator.clipboard.write([item]);
+    return { ok: true, retryPlainText: false };
+  } catch {
+    const ok = await copyText(plain);
+    return { ok, retryPlainText: !ok };
+  }
+}
+
+export async function copyRichText(plain: string, html: string): Promise<boolean> {
+  return (await copyRichTextDetailed(plain, html)).ok;
 }

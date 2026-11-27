@@ -118,3 +118,60 @@ test("copyRichText writes dual text/plain + text/html via ClipboardItem and fall
     Object.defineProperty(globalThis, "ClipboardItem", { value: origItem, configurable: true });
   }
 });
+
+test("copyRichTextDetailed pre-checks ClipboardItem.supports synchronously and signals retryPlainText when activation expires", async () => {
+  const { copyRichTextDetailed } = await import("./clipboard.ts");
+  const origNav = globalThis.navigator;
+  const origItem = globalThis.ClipboardItem;
+  let writeCalled = 0;
+  let plainWritten = "";
+  class UnsupportedHtmlClipboardItem {
+    static supports(type: string): boolean {
+      return type === "text/plain";
+    }
+    constructor(readonly items: Record<string, Blob>) {}
+  }
+  try {
+    Object.defineProperty(globalThis, "ClipboardItem", {
+      value: UnsupportedHtmlClipboardItem,
+      configurable: true,
+    });
+    Object.defineProperty(globalThis, "navigator", {
+      value: {
+        clipboard: {
+          write: async () => { writeCalled++; },
+          writeText: async (text: string) => { plainWritten = text; },
+        },
+      },
+      configurable: true,
+    });
+    const skipped = await copyRichTextDetailed("Sync plain", "<p>Sync plain</p>");
+    assertEquals(skipped, { ok: true, retryPlainText: false });
+    assertEquals(writeCalled, 0);
+    assertEquals(plainWritten, "Sync plain");
+
+    // When write throws AND plain fallback throws (expired iOS user activation), signal retryPlainText
+    class SupportedClipboardItem {
+      static supports(): boolean { return true; }
+      constructor(readonly items: Record<string, Blob>) {}
+    }
+    Object.defineProperty(globalThis, "ClipboardItem", {
+      value: SupportedClipboardItem,
+      configurable: true,
+    });
+    Object.defineProperty(globalThis, "navigator", {
+      value: {
+        clipboard: {
+          write: async () => { throw new Error("NotAllowedError"); },
+          writeText: async () => { throw new Error("NotAllowedError"); },
+        },
+      },
+      configurable: true,
+    });
+    const failed = await copyRichTextDetailed("Retry me", "<p>Retry me</p>");
+    assertEquals(failed, { ok: false, retryPlainText: true });
+  } finally {
+    Object.defineProperty(globalThis, "navigator", { value: origNav, configurable: true });
+    Object.defineProperty(globalThis, "ClipboardItem", { value: origItem, configurable: true });
+  }
+});
