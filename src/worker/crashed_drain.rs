@@ -45,6 +45,7 @@ pub(super) struct State {
     /// `DrainCrashed` after a lost acceptance/refusal ACK returns the exact
     /// original decision.
     decisions: Mutex<VecDeque<(String, bool, Option<String>)>>,
+    aborted_commands: Mutex<std::collections::HashSet<String>>,
     accepted_command_id: Mutex<Option<String>>,
     accepted_ack_seq: std::sync::atomic::AtomicU64,
     /// Pending explicit `CrashedDrainAborted` notice retained across reconnects
@@ -138,11 +139,16 @@ impl State {
     /// Overwrite any cached acceptance for an aborted drain command with the
     /// terminal refusal outcome so a broker reconnect replay never restores
     /// drain authority after abort (R13-M3).
+    fn was_aborted(&self, command_id: &str) -> bool {
+        self.aborted_commands.lock().contains(command_id)
+    }
+
     fn record_abort_decision(&self, command_id: Option<&str>, reason: &str) {
         *self.accepted_command_id.lock() = None;
         let Some(command_id) = command_id else {
             return;
         };
+        self.aborted_commands.lock().insert(command_id.to_owned());
         let mut decisions = self.decisions.lock();
         if let Some((_, accepted, stored_reason)) =
             decisions.iter_mut().find(|(id, _, _)| id == command_id)
@@ -240,11 +246,26 @@ pub(super) fn handle_drain_crashed(
     worker_epoch: String,
     acknowledged_uncertain_sequence: u64,
 ) -> Frame {
+    if shared.crashed_drain.was_aborted(&command_id) {
+        return command_ack(
+            shared,
+            command_id,
+            false,
+            Some("crashed_worker_drain_aborted: previous drain aborted".to_owned()),
+        );
+    }
     if let Some((accepted, reason)) = shared.crashed_drain.remembered_decision(&command_id) {
         return command_ack(shared, command_id, accepted, reason);
     }
     if shared.seen_commands.lock().contains(&command_id) {
-        return command_ack(shared, command_id, true, None);
+        // Evicted drain command decisions must fail closed rather than
+        // synthesizing a false acceptance after cache rotation (R14-L1).
+        return command_ack(
+            shared,
+            command_id,
+            false,
+            Some("crashed_worker_drain_decision_evicted: retry with a new command".to_owned()),
+        );
     }
     let refusal = {
         let _outbox = shared.outbox.lock();
@@ -609,5 +630,11 @@ mod r13_tests {
                 .as_deref()
                 .is_some_and(|r| r.starts_with("crashed_worker_drain_aborted:"))
         );
+        // Evicting the 8-entry decisions ring buffer must NOT forget the abort (R14-L1).
+        for i in 0..16 {
+            state.remember_decision(format!("dc-fill-{i}"), false, Some("busy".into()));
+        }
+        assert!(state.remembered_decision("dc-r13").is_none());
+        assert!(state.was_aborted("dc-r13"));
     }
 }

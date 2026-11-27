@@ -191,14 +191,16 @@ impl Shared {
         match event {
             RuntimeEvent::Ready { .. } => {
                 snapshot.state = WorkerState::Running;
+                snapshot.exit_detail = None;
                 self.readiness_window(false);
             }
-            RuntimeEvent::Status { state, .. } => {
+            RuntimeEvent::Status { state, detail } => {
                 snapshot.state = if *state == WorkerState::Running && snapshot.drain_requested {
                     WorkerState::Draining
                 } else {
                     *state
                 };
+                snapshot.exit_detail.clone_from(detail);
                 // Only a starting session may run the readiness probe.
                 self.readiness_window(*state == WorkerState::Starting);
                 // A late startup/idle Running edge can arrive after a prompt
@@ -232,6 +234,7 @@ impl Shared {
                 // self-started cycle when it receives the prompt.
                 snapshot.native_cycle_id = None;
                 snapshot.state = WorkerState::Busy;
+                snapshot.exit_detail = None;
             }
             RuntimeEvent::TurnEnded { turn_id, .. } => {
                 if snapshot.current_turn_id.as_deref() == Some(turn_id) {

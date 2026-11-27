@@ -77,9 +77,17 @@ impl Broker {
             // controller -> sessions -> workers -> pending_commands -> crashed_drains`
             // through exact-peer validation, state mutation, and snapshot enqueue so
             // permanent deletion cannot race snapshot publication (R12-M2, R13-M1).
+            // Serialize against `record_deletion` via `deletion_journal ->
+            // cancelled_sessions -> permanently_deleted_sessions` so a committed
+            // durable deletion is immediately visible before abort publication (R14-M1).
+            let journal = self.deletion_journal.lock();
+            let journal_deleted = journal
+                .as_ref()
+                .is_some_and(|j| j.deleted().contains(session_id));
             let _cancelled = self.cancelled_sessions.lock();
             let deleted = self.permanently_deleted_sessions.lock();
-            if deleted.contains(session_id) {
+            drop(journal);
+            if journal_deleted || deleted.contains(session_id) {
                 return;
             }
             let ctrl_guard = self.controller.lock();
@@ -94,7 +102,12 @@ impl Broker {
             let pending = self.pending_commands.lock();
             let mut state = self.crashed_drains.inner.lock();
             let matched_active = state.active.get(session_id).is_some_and(|a| {
-                !a.confirmed && a.epoch == epoch && a.connection_id == connection_id
+                !a.confirmed
+                    && a.epoch == epoch
+                    && a.connection_id == connection_id
+                    && (command_id.is_none()
+                        || a.command_id.is_none()
+                        || a.command_id.as_deref() == command_id)
             });
             let matched_pending = command_id.is_some_and(|cid| {
                 state.pending.get(cid).is_some_and(|p| {
@@ -126,7 +139,7 @@ impl Broker {
                 if matched_active {
                     state.active.remove(session_id);
                 }
-                if let Some(cid) = command_id {
+                if matched_pending && let Some(cid) = command_id {
                     state.pending.remove(cid);
                 }
                 let still_pending = state
@@ -552,6 +565,29 @@ impl Broker {
         self.record_session_uncertain_effect(session_id, effect);
     }
 
+    /// Record turn-completion and monotonic uncertainty outcomes for a
+    /// historical replay event below the current epoch's snapshot watermark
+    /// without rolling back lifecycle state or lowering `last_runtime_seq` (R14-H1).
+    pub(in crate::machine_broker) fn record_historical_replay_outcome(
+        &self,
+        session_id: &str,
+        worker: &mut WorkerPeer,
+        event: &RuntimeEvent,
+    ) {
+        if let RuntimeEvent::TurnEnded { turn_id, .. } = event {
+            self.dispatched_prompts
+                .lock()
+                .mark_acked_by_turn(session_id, &worker.epoch, turn_id);
+        } else if let RuntimeEvent::Update { update, .. } = event
+            && let Some(effect) = crate::runtime_wire::uncertain_effect(update)
+        {
+            crate::runtime_wire::merge_uncertain_effect(
+                &mut worker.snapshot.uncertain_effect,
+                effect,
+            );
+        }
+    }
+
     /// Flush queued rollout prompts immediately when a rollout-draining worker
     /// transitions to `Crashed` without a crashed-drain fence (R10-M1).
     pub(in crate::machine_broker) fn flush_if_crashed_rollout_event(
@@ -560,11 +596,11 @@ impl Broker {
         crashed_event: bool,
     ) {
         if crashed_event
-            && self
-                .workers
-                .lock()
-                .get(session_id)
-                .is_some_and(|w| w.snapshot.drain_requested && !w.crashed_drain_fenced)
+            && self.workers.lock().get(session_id).is_some_and(|w| {
+                w.snapshot.state == WorkerState::Crashed
+                    && w.snapshot.drain_requested
+                    && !w.crashed_drain_fenced
+            })
         {
             self.flush_pending(session_id);
         }

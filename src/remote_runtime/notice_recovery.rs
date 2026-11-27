@@ -427,6 +427,7 @@ pub(super) fn project_worker_outcome(
     idle_guard: Option<u64>,
     auto_permission: Option<(String, String)>,
     apply_lifecycle: bool,
+    owning_epoch_state: Option<crate::runtime_wire::WorkerState>,
 ) -> Option<PendingUndeliveredNotice> {
     if let Some((request_id, option_id)) = auto_permission {
         tracing::info!(
@@ -484,29 +485,13 @@ pub(super) fn project_worker_outcome(
             }
             other => {
                 if !apply_lifecycle {
-                    match other {
-                        RuntimeEvent::Ready {
-                            agent_session_id: Some(agent_session_id),
-                        } => {
-                            if shared.hub.accepts_runtime_projection(session_id) {
-                                shared
-                                    .hub
-                                    .set_agent_session_id(session_id, agent_session_id);
-                            }
-                            return None;
-                        }
-                        RuntimeEvent::Ready { .. }
-                        | RuntimeEvent::Status { .. }
-                        | RuntimeEvent::TurnStarted { .. } => return None,
-                        RuntimeEvent::Update { ref update, .. }
-                            if crate::runtime_wire::current_turn_support(update).is_some()
-                                || crate::runtime_wire::background_tasks_count(update)
-                                    .is_some() =>
-                        {
-                            return None;
-                        }
-                        _ => {}
-                    }
+                    project_historical_replay_event(
+                        &shared.hub,
+                        session_id,
+                        other,
+                        owning_epoch_state,
+                    );
+                    return None;
                 }
                 super::apply_event(&shared.hub, session_id, other);
                 None
@@ -514,6 +499,52 @@ pub(super) fn project_worker_outcome(
         });
     super::reconcile_idle_guard(shared, session_id, idle_guard);
     deferred
+}
+
+fn project_historical_replay_event(
+    hub: &crate::core::Hub,
+    session_id: &str,
+    event: RuntimeEvent,
+    owning_epoch_state: Option<crate::runtime_wire::WorkerState>,
+) {
+    match event {
+        RuntimeEvent::Ready {
+            agent_session_id: Some(agent_session_id),
+        } => {
+            if hub.accepts_runtime_projection(session_id) {
+                hub.set_agent_session_id(session_id, agent_session_id);
+            }
+        }
+        RuntimeEvent::Status {
+            state,
+            detail: Some(detail),
+        } if owning_epoch_state == Some(state) => {
+            // Recover crash/recoverable-hold detail matching the current
+            // authoritative state without rolling back state (R14-M5).
+            if hub.accepts_runtime_projection(session_id) {
+                super::apply_worker_status(hub, session_id, state, Some(detail));
+            }
+        }
+        RuntimeEvent::TurnEnded {
+            stop_reason, usage, ..
+        } => {
+            // Preserve historical transcript completion without mutating live
+            // Hub status or releasing a live turn's dispatch guard (R14-M3).
+            if hub.accepts_runtime_projection(session_id) {
+                hub.push(
+                    session_id,
+                    crate::agent_model::Event::TurnEnd { stop_reason, usage },
+                );
+            }
+        }
+        RuntimeEvent::Ready { .. }
+        | RuntimeEvent::Status { .. }
+        | RuntimeEvent::TurnStarted { .. } => {}
+        RuntimeEvent::Update { ref update, .. }
+            if crate::runtime_wire::current_turn_support(update).is_some()
+                || crate::runtime_wire::background_tasks_count(update).is_some() => {}
+        other => super::apply_event(hub, session_id, other),
+    }
 }
 
 /// Extract a `call-notice:` `UndeliveredPrompt` when transcript projection was

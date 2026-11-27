@@ -79,6 +79,7 @@ struct PendingDrain {
 struct ActiveDrain {
     epoch: String,
     connection_id: u64,
+    command_id: Option<String>,
     confirmed: bool,
     peer_pid: Option<u32>,
     retired_launch: RetiredLaunch,
@@ -423,6 +424,7 @@ impl Broker {
                 ActiveDrain {
                     epoch: epoch.to_owned(),
                     connection_id,
+                    command_id: Some(command_id.to_owned()),
                     confirmed: already_confirmed,
                     peer_pid,
                     retired_launch,
@@ -511,6 +513,7 @@ impl Broker {
             ActiveDrain {
                 epoch: epoch.to_owned(),
                 connection_id,
+                command_id: command_id.map(str::to_owned),
                 confirmed: true,
                 peer_pid: worker.peer_pid,
                 retired_launch,
@@ -603,6 +606,7 @@ impl Broker {
                 ActiveDrain {
                     epoch: epoch.to_owned(),
                     connection_id,
+                    command_id: None,
                     confirmed: false,
                     peer_pid: preserved_pid,
                     retired_launch,
@@ -2028,6 +2032,7 @@ mod tests {
             ActiveDrain {
                 epoch: "50-1".into(),
                 connection_id: 1,
+                command_id: None,
                 confirmed: false,
                 peer_pid: None,
                 retired_launch: RetiredLaunch::VerifiedNone,
@@ -2181,6 +2186,7 @@ mod tests {
             ActiveDrain {
                 epoch: "61-1".into(),
                 connection_id: 1,
+                command_id: None,
                 confirmed: false,
                 peer_pid: None,
                 retired_launch: RetiredLaunch::VerifiedNone,
@@ -2485,5 +2491,103 @@ mod tests {
             }
             other => panic!("expected refreshed Frame::Snapshot, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn historical_running_replay_cannot_roll_back_crashed_snapshot_or_trigger_rollout_stop() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let mut w_rx = attach_crashed_worker(
+            &broker,
+            "s-r14-h1",
+            "80-1",
+            1,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+        );
+        {
+            let mut workers = broker.workers.lock();
+            let peer = workers.get_mut("s-r14-h1").unwrap();
+            peer.snapshot.last_runtime_seq = 10;
+            peer.snapshot.drain_requested = true;
+            peer.snapshot.state = WorkerState::Crashed;
+        }
+        // Replayed Running event below watermark (seq 4 < 10) must NOT lower
+        // last_runtime_seq, flip state to Running, or send rollout Stop (R14-H1).
+        broker.handle_worker_event(
+            "s-r14-h1",
+            1,
+            "s-r14-h1".into(),
+            "80-1".into(),
+            4,
+            RuntimeEvent::Status {
+                state: WorkerState::Running,
+                detail: None,
+            },
+            Vec::new(),
+        );
+        {
+            let workers = broker.workers.lock();
+            let peer = workers.get("s-r14-h1").unwrap();
+            assert_eq!(peer.snapshot.state, WorkerState::Crashed);
+            assert_eq!(peer.snapshot.last_runtime_seq, 10);
+        }
+        assert!(
+            w_rx.try_recv().is_err(),
+            "historical Running replay on Crashed worker must never trigger rollout Stop"
+        );
+    }
+
+    #[tokio::test]
+    async fn abort_with_foreign_command_id_cannot_remove_another_sessions_pending_drain() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let _w_a = attach_crashed_worker(
+            &broker,
+            "s-a",
+            "81-1",
+            1,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+        );
+        let _w_b = attach_crashed_worker(
+            &broker,
+            "s-b",
+            "82-1",
+            2,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+        );
+        broker.crashed_drains.inner.lock().active.insert(
+            "s-a".into(),
+            ActiveDrain {
+                epoch: "81-1".into(),
+                connection_id: 1,
+                command_id: Some("dc-a".into()),
+                confirmed: false,
+                peer_pid: None,
+                retired_launch: RetiredLaunch::VerifiedNone,
+            },
+        );
+        broker.crashed_drains.inner.lock().pending.insert(
+            "dc-b".into(),
+            PendingDrain {
+                session_id: "s-b".into(),
+                epoch: "82-1".into(),
+                connection_id: 2,
+                acknowledged_uncertain_sequence: 0,
+                peer_pid: None,
+                retired_launch: RetiredLaunch::VerifiedNone,
+                needs_replay: false,
+            },
+        );
+        // Worker A sends an abort naming session B's pending command ID (R14-M2).
+        broker.handle_crashed_drain_aborted("s-a", "81-1", 1, Some("dc-b"), None);
+        let state = broker.crashed_drains.inner.lock();
+        assert!(
+            state.pending.contains_key("dc-b"),
+            "session A's abort must never remove session B's pending drain"
+        );
+        assert!(
+            state.active.contains_key("s-a"),
+            "mismatched command_id must not clear session A's active drain"
+        );
     }
 }

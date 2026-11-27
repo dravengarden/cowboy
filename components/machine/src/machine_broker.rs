@@ -1451,14 +1451,13 @@ impl Broker {
                 if journal.writer_enabled() {
                     journal.mark_deleted(&session_id)?;
                 }
-                // Expose permanent deletion immediately at journal commit before
-                // releasing the journal lock so concurrent abort/snapshot handlers
-                // cannot race tombstone installation (R13-M1).
-                broker.cancelled_sessions.lock().insert(session_id.clone());
-                broker
-                    .permanently_deleted_sessions
-                    .lock()
-                    .insert(session_id.clone());
+                // Hold both sets together before releasing `deletion_journal` so
+                // concurrent abort publication cannot observe a committed journal
+                // without both in-memory tombstones (R13-M1, R14-M1).
+                let mut cancelled = broker.cancelled_sessions.lock();
+                let mut deleted = broker.permanently_deleted_sessions.lock();
+                cancelled.insert(session_id.clone());
+                deleted.insert(session_id.clone());
             }
             Ok(())
         })
@@ -3087,7 +3086,11 @@ impl Broker {
         if worker.connection_id != connection_id {
             return Vec::new();
         }
-        worker.snapshot.last_runtime_seq = runtime_seq;
+        if runtime_seq > 0 && runtime_seq < worker.snapshot.last_runtime_seq {
+            self.record_historical_replay_outcome(session_id, worker, event);
+            return Vec::new();
+        }
+        worker.snapshot.last_runtime_seq = worker.snapshot.last_runtime_seq.max(runtime_seq);
         worker.snapshot.observe_native_thread(event);
         match event {
             RuntimeEvent::Ready { .. } => {

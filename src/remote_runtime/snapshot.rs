@@ -114,22 +114,35 @@ pub(super) fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     }
     let busy = worker.current_turn_id.is_some()
         && matches!(worker.state, WorkerState::Running | WorkerState::Draining);
-    let recoverable_detail = (!busy)
-        .then(|| shared.hub.latest_crash_detail(&worker.session_id))
+    let snapshot_recoverable = (!busy)
+        .then(|| worker.exit_detail.clone())
         .flatten()
         .filter(|detail| {
-            // TurnEnded clears current_turn_id before the trailing idle edge.
-            // A Busy snapshot in that gap must not release a refusal hold.
-            (detail == crate::core::MODEL_REFUSAL_DETAIL
-                && worker.state == WorkerState::Busy
-                && worker.current_turn_id.is_none())
-                || recoverable_live_worker_error(
-                    &shared.hub,
-                    &worker.session_id,
-                    worker.state,
-                    Some(detail.as_str()),
-                )
+            recoverable_live_worker_error(
+                &shared.hub,
+                &worker.session_id,
+                worker.state,
+                Some(detail.as_str()),
+            )
         });
+    let recoverable_detail = snapshot_recoverable.or_else(|| {
+        (!busy)
+            .then(|| shared.hub.latest_crash_detail(&worker.session_id))
+            .flatten()
+            .filter(|detail| {
+                // TurnEnded clears current_turn_id before the trailing idle edge.
+                // A Busy snapshot in that gap must not release a refusal hold.
+                (detail == crate::core::MODEL_REFUSAL_DETAIL
+                    && worker.state == WorkerState::Busy
+                    && worker.current_turn_id.is_none())
+                    || recoverable_live_worker_error(
+                        &shared.hub,
+                        &worker.session_id,
+                        worker.state,
+                        Some(detail.as_str()),
+                    )
+            })
+    });
     let preserves_refusal =
         recoverable_detail.as_deref() == Some(crate::core::MODEL_REFUSAL_DETAIL);
     let status = if busy {
@@ -532,9 +545,29 @@ fn authorize_draining_crashed_epoch_locked(
 /// projection guard and caches the verified snapshot in
 /// `draining_replay_snapshots` so `native_admission::event` admits trailing
 /// replay even when `shared.workers` holds an ownerless placeholder (R7-H2, R7-H3).
+fn revoke_ownerless_draining_state(shared: &Shared, session_id: &str) {
+    shared.crashed_worker_sightings.lock().remove(session_id);
+    shared.draining_crashed_epochs.lock().remove(session_id);
+    shared
+        .draining_replay_snapshots
+        .lock()
+        .retain(|(sid, _), _| sid != session_id);
+    if let Some(worker) = shared.workers.lock().get_mut(session_id) {
+        worker.crashed_drain_active = false;
+    }
+}
+
 pub(super) fn record_welcome_draining_crashed_epoch(shared: &Shared, worker: &WorkerSnapshot) {
     let fence = shared.projection_fence.lock();
     if *fence {
+        return;
+    }
+    if !worker.has_connected_owner() {
+        revoke_ownerless_draining_state(shared, &worker.session_id);
+        return;
+    }
+    if !worker.crashed_drain_active {
+        clear_draining_crashed_epoch_if_matches(shared, &worker.session_id, &worker.worker_epoch);
         return;
     }
     if !authorize_draining_crashed_epoch_locked(shared, worker, None) {
@@ -558,6 +591,13 @@ pub(super) fn observe_crashed_sighting(shared: &Shared, worker: &WorkerSnapshot)
     if is_retired_crashed_epoch(shared, &worker.session_id, &worker.worker_epoch) {
         return;
     }
+    if !worker.has_connected_owner() {
+        // Authoritative ownerless inventory clears any departing real epoch's
+        // drain authorization and sighting even if reset started from a
+        // `broker-` placeholder (R14-M7).
+        revoke_ownerless_draining_state(shared, &worker.session_id);
+        return;
+    }
     if shared.resetting.lock().contains(&worker.session_id) {
         let is_replaced_epoch = shared
             .reset_replacements
@@ -568,7 +608,7 @@ pub(super) fn observe_crashed_sighting(shared: &Shared, worker: &WorkerSnapshot)
             // Apply authoritative broker drain revocation for this exact epoch
             // before filtering reset lifecycle projection so a failed/withdrawn
             // reset never retains a stale drain marker (R13-M4).
-            if !worker.has_connected_owner() || !worker.crashed_drain_active {
+            if !worker.crashed_drain_active {
                 clear_draining_crashed_epoch_if_matches(
                     shared,
                     &worker.session_id,
@@ -744,11 +784,27 @@ pub(super) fn project_admitted_worker_event(
     if let Some((machine, telemetry)) = shared.telemetry.lock().as_ref() {
         telemetry.record_runtime_spans(machine, session_id, diagnostics);
     }
-    let stale_lifecycle_replay =
-        runtime_seq > 0
-            && shared.workers.lock().get(session_id).is_some_and(|w| {
-                w.worker_epoch == worker_epoch && runtime_seq < w.last_runtime_seq
-            });
+    let owning_worker = shared
+        .workers
+        .lock()
+        .get(session_id)
+        .filter(|w| w.has_connected_owner() && w.worker_epoch == worker_epoch)
+        .cloned();
+    let drain_replay_snap = shared
+        .draining_replay_snapshots
+        .lock()
+        .get(&(session_id.to_owned(), worker_epoch.to_owned()))
+        .cloned();
+    // Non-owning epoch replay (e.g. authorized via `draining_replay_snapshots`
+    // while `shared.workers` is empty, ownerless, or on a newer epoch) is
+    // limited strictly to historical outcomes; owning-epoch replay gates
+    // lifecycle mutations against the authoritative snapshot watermark (R14-M4).
+    let non_owning_epoch = owning_worker.is_none() && drain_replay_snap.is_some();
+    let authoritative_snap = owning_worker.as_ref().or(drain_replay_snap.as_ref());
+    let stale_lifecycle_replay = non_owning_epoch
+        || (runtime_seq > 0
+            && authoritative_snap.is_some_and(|w| runtime_seq < w.last_runtime_seq));
+    let owning_epoch_state = owning_worker.as_ref().map(|w| w.state);
     super::resolve_steering_update(shared, session_id, event);
     super::update_snapshot_from_event(shared, session_id, worker_epoch, runtime_seq, event);
     if !stale_lifecycle_replay
@@ -765,21 +821,24 @@ pub(super) fn project_admitted_worker_event(
                 .unwrap_or("worker exited before configuration completed"),
         );
     }
-    let draining_replay_only = shared
-        .workers
-        .lock()
-        .get(session_id)
-        .is_some_and(|w| w.worker_epoch != worker_epoch)
-        && shared
-            .draining_replay_snapshots
-            .lock()
-            .contains_key(&(session_id.to_owned(), worker_epoch.to_owned()));
+    let draining_replay_only = non_owning_epoch;
     let worker = if draining_replay_only || stale_lifecycle_replay {
         None
     } else {
         shared.workers.lock().get(session_id).cloned()
     };
-    let auto_permission = (!draining_replay_only && !stale_lifecycle_replay)
+    // Keep Codex Full Access auto-approval for live pending permissions even
+    // when their original PermissionRequest predates the reconnect snapshot
+    // watermark (R14-M6).
+    let live_pending_permission = !non_owning_epoch
+        && matches!(
+            event,
+            RuntimeEvent::PermissionRequest { request_id, .. }
+                if authoritative_snap
+                    .is_some_and(|w| w.pending_permissions.contains(request_id))
+        );
+    let auto_permission = (!draining_replay_only
+        && (!stale_lifecycle_replay || live_pending_permission))
         .then(|| codex_full_access_permission(shared, session_id, event))
         .flatten();
     let idle_guard = worker
@@ -799,6 +858,7 @@ pub(super) fn project_admitted_worker_event(
         idle_guard,
         auto_permission,
         !stale_lifecycle_replay,
+        owning_epoch_state,
     );
 }
 
@@ -1982,6 +2042,72 @@ mod crashed_drain_tests {
         assert!(
             !is_draining_crashed_epoch(&rt.shared, "s-r13", "130-1"),
             "broker revocation snapshot during reset must clear stale drain marker"
+        );
+    }
+
+    #[tokio::test]
+    async fn ownerless_snapshot_during_placeholder_reset_revokes_real_draining_epoch_and_same_state_detail_recovers()
+     {
+        let hub = crate::core::Hub::new();
+        let mut initial = crashed_snapshot("s-r14", "140-1");
+        initial.last_runtime_seq = 10;
+        initial.crashed_drain_active = true;
+        initial.exit_detail = None;
+        let rt = super::super::RemoteRuntime::for_test(hub.clone(), vec![initial.clone()]);
+        rt.connect_for_test();
+        assert!(project_snapshot_with_protocol(
+            &rt.shared,
+            &initial,
+            crate::runtime_wire::PROTOCOL_VERSION,
+        ));
+        assert!(is_draining_crashed_epoch(&rt.shared, "s-r14", "140-1"));
+
+        // Historical Crashed status at seq 8 < 10 recovers detail because it
+        // matches the owning epoch's Crashed state (R14-M5).
+        rt.project_trace_fixture(Frame::WorkerEvent {
+            session_id: "s-r14".into(),
+            worker_epoch: "140-1".into(),
+            runtime_seq: 8,
+            event: RuntimeEvent::Status {
+                state: WorkerState::Crashed,
+                detail: Some("token expired".into()),
+            },
+            diagnostics: Vec::new(),
+        })
+        .await;
+        // Historical refusal TurnEnded at seq 9 < 10 projects transcript TurnEnd only (R14-M3).
+        rt.project_trace_fixture(Frame::WorkerEvent {
+            session_id: "s-r14".into(),
+            worker_epoch: "140-1".into(),
+            runtime_seq: 9,
+            event: RuntimeEvent::TurnEnded {
+                turn_id: "t-old".into(),
+                stop_reason: "refusal".into(),
+                usage: None,
+            },
+            diagnostics: Vec::new(),
+        })
+        .await;
+
+        // Simulate reset started from a `broker-` placeholder while real epoch
+        // `140-1` holds drain authority; an ownerless snapshot MUST clear `140-1` (R14-M7).
+        rt.shared.resetting.lock().insert("s-r14".into());
+        rt.shared
+            .reset_replacements
+            .lock()
+            .insert("s-r14".into(), ("broker-s-r14".into(), None));
+        let mut ownerless = crashed_snapshot("s-r14", "broker-s-r14");
+        ownerless.crashed_drain_active = false;
+        observe_crashed_sighting(&rt.shared, &ownerless);
+        assert!(
+            !is_draining_crashed_epoch(&rt.shared, "s-r14", "140-1"),
+            "ownerless snapshot during placeholder reset must clear real draining epoch"
+        );
+        assert!(
+            !rt.shared
+                .draining_replay_snapshots
+                .lock()
+                .contains_key(&("s-r14".into(), "140-1".into()))
         );
     }
 }
