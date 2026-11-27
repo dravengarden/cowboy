@@ -363,7 +363,7 @@ export class Subagents {
     this.opening.set(sessionId, held);
   }
 
-  /** Drop any held-request ID reservations for discarded/drained frames. */
+  /** Drop any held-request ID reservation for a frame. */
   untrackHeldFrame(frame) {
     if (typeof frame?.method === "string" && frame.id !== undefined) {
       const key = JSON.stringify(frame.id);
@@ -371,21 +371,51 @@ export class Subagents {
     }
   }
 
-  /** Discard buffered frames of an abandoned/closed opening session cleanly. */
+  /** Settle a buffered JSON-RPC request that cannot be stored or replayed. */
+  settleDroppedRequest(frame, reason) {
+    if (typeof frame?.method !== "string" || frame.id === undefined) return;
+    if (frame.method === "session/request_permission") {
+      this.proxy.agent({
+        jsonrpc: "2.0",
+        id: frame.id,
+        result: { outcome: { outcome: "cancelled" } },
+      });
+    } else if (frame.method === "elicitation/create") {
+      this.proxy.agent({
+        jsonrpc: "2.0",
+        id: frame.id,
+        result: { action: "cancel" },
+      });
+    } else {
+      this.proxy.agent({
+        jsonrpc: "2.0",
+        id: frame.id,
+        error: { code: -32603, message: reason },
+      });
+    }
+  }
+
+  /** Discard buffered frames of an abandoned/closed opening session and settle any held requests. */
   discardOpening(sessionId) {
     const frames = this.opening.get(sessionId);
     if (frames) {
+      this.opening.delete(sessionId);
       for (const frame of frames) {
+        const isHeldReq =
+          typeof frame?.method === "string" &&
+          frame.id !== undefined &&
+          this.heldRequests.get(JSON.stringify(frame.id)) === frame;
         this.untrackHeldFrame(frame);
         this.heldTurns.delete(frame);
+        if (isHeldReq) this.settleDroppedRequest(frame, "Subagent session abandoned");
       }
-      this.opening.delete(sessionId);
     }
   }
 
   /**
-   * If `agyKey` matches a buffered JSON-RPC request in `opening` or `quarantine`,
-   * remove that frame from the buffer so it never replays later and return it.
+   * If `agyKey` matches a buffered JSON-RPC request in `opening`, `quarantine`,
+   * or a scheduled replay queue, remove its reservation and frame so it never
+   * replays later and return it.
    */
   takeHeldRequest(agyKey) {
     const frame = this.heldRequests.get(agyKey);
@@ -411,15 +441,28 @@ export class Subagents {
     return frame;
   }
 
+  /** Dispatch one previously buffered frame, skipping requests already consumed by collision/cancel. */
+  replayHeldFrame(frame) {
+    const arrival = this.heldTurns.get(frame);
+    this.heldTurns.delete(frame);
+    if (typeof frame?.method === "string" && frame.id !== undefined) {
+      const key = JSON.stringify(frame.id);
+      if (this.heldRequests.get(key) !== frame) return undefined;
+      this.heldRequests.delete(key);
+    }
+    return this.proxy.fromAgent(frame, arrival ? { arrival } : undefined);
+  }
+
   /** No start is opening a session any more: unclaimed frames take the ordinary path. */
   releaseQuarantine() {
     // A configuration update of a session nobody claimed (its open was refused,
     // or never answered) would be read as the parent's: it is dropped. The root
     // session's own configuration also arrives in its `session/new` answer.
+    // Keep held request ID reservations intact until each frame is dispatched.
     const frames = [];
     for (const frame of this.quarantine) {
-      this.untrackHeldFrame(frame);
       if (frame.params?.update?.sessionUpdate === "config_option_update") {
+        this.untrackHeldFrame(frame);
         this.heldTurns.delete(frame);
       } else {
         frames.push(frame);
@@ -427,11 +470,7 @@ export class Subagents {
     }
     this.quarantine = [];
     frames
-      .reduce((done, frame) => {
-        const arrival = this.heldTurns.get(frame);
-        this.heldTurns.delete(frame);
-        return done.then(() => this.proxy.fromAgent(frame, arrival ? { arrival } : undefined));
-      }, Promise.resolve())
+      .reduce((done, frame) => done.then(() => this.replayHeldFrame(frame)), Promise.resolve())
       .catch(() => {});
   }
 
@@ -444,7 +483,7 @@ export class Subagents {
     return this.pendingOpens > 0 && !this.setups.has(sessionId) && !this.children.has(sessionId);
   }
 
-  /** Keep one frame of a session still opening, bounded. */
+  /** Keep one frame of a session still opening, bounded; settle any request that overflows. */
   hold(message) {
     const sid = message.params?.sessionId;
     const arrivalTurn = typeof sid === "string" ? this.proxy.turns.get(sid) : undefined;
@@ -459,10 +498,14 @@ export class Subagents {
       if (frames.length < MAX_HELD) {
         recordArrival();
         frames.push(message);
+      } else {
+        this.settleDroppedRequest(message, "Opening buffer full");
       }
     } else if (this.quarantine.length < MAX_HELD) {
       recordArrival();
       this.quarantine.push(message);
+    } else {
+      this.settleDroppedRequest(message, "Quarantine buffer full");
     }
   }
 
@@ -470,14 +513,9 @@ export class Subagents {
   release(sessionId, publish = () => {}) {
     const frames = this.opening.get(sessionId) ?? [];
     this.opening.delete(sessionId);
-    for (const frame of frames) this.untrackHeldFrame(frame);
     const before = frames.beforeReply ?? 0;
     const drain = (done, list) =>
-      list.reduce((chain, frame) => {
-        const arrival = this.heldTurns.get(frame);
-        this.heldTurns.delete(frame);
-        return chain.then(() => this.proxy.fromAgent(frame, arrival ? { arrival } : undefined));
-      }, done);
+      list.reduce((chain, frame) => chain.then(() => this.replayHeldFrame(frame)), done);
     // In the order agy spoke: what it sent before its answer, then what that
     // answer confirmed (`publish`), then what it sent after.
     drain(

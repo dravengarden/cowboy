@@ -2008,6 +2008,15 @@ export class AcpProxy {
     if (requested) {
       requested.op = this.beginModeSwitch(requested.sessionId);
     }
+    // Reopening a proxy-owned child subagent session directly is refused:
+    // child sessions belong solely to the subagent lifecycle.
+    if (
+      SESSION_REQUESTS.has(method) &&
+      typeof forwarded.params?.sessionId === "string" &&
+      this.subagents.owns(forwarded.params.sessionId)
+    ) {
+      return refuseClient(id, "Subagent sessions cannot be reopened directly", -32602);
+    }
     // Reopening a session clears any cached mode so a load/resume omitting
     // `modes` cannot retain an earlier unrestricted mode.
     let modeOp;

@@ -95,6 +95,33 @@ export function useElicitationForm(
   return { values, setValue, choices };
 }
 
+/** Choices for a non-elicitation permission or an invalid/unrenderable
+ *  elicitation (which exposes only Decline, never raw Submit/accept). */
+export function permissionFallbackChoices(
+  options: readonly { optionId: string; name: string; kind: string }[],
+  invalidElicitation: boolean | undefined,
+  respond: (optionId: string) => void,
+): ElicitationChoiceButton[] {
+  if (invalidElicitation) {
+    const decline = options.find((o) => o.kind.toLowerCase().startsWith("reject"));
+    const id = decline?.optionId ?? ELICITATION_DECLINE;
+    return [{
+      id,
+      label: decline?.name ?? "Decline",
+      reject: true,
+      disabled: false,
+      run: () => respond(id),
+    }];
+  }
+  return options.map((option) => ({
+    id: option.optionId,
+    label: option.name,
+    reject: option.kind.toLowerCase().startsWith("reject"),
+    disabled: false,
+    run: () => respond(option.optionId),
+  }));
+}
+
 /** The answer an approval surface marks busy: a form answer carries content
  *  after the `accept` option id. */
 export function elicitationChoiceOf(optionId: string | null): string | null {

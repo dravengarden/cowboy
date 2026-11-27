@@ -30,6 +30,7 @@ import { usePermissionResponse } from "../permissionResponse";
 import {
   elicitationChoiceOf,
   ElicitationFields,
+  permissionFallbackChoices,
   useElicitationForm,
 } from "../ElicitationFields";
 import { useStoreSelector } from "../store";
@@ -104,22 +105,17 @@ export function DesktopPermissionDock({
   const firstAllow = item.options.findIndex((option) =>
     !option.kind.toLowerCase().startsWith("reject")
   );
-  const choices: DockChoice[] = item.elicitation
-    ? form.choices.map((choice) => ({
-      id: choice.id,
-      label: choice.label,
-      reject: choice.reject,
-      primary: !choice.reject,
-      disabled: choice.disabled,
-      run: choice.run,
-    }))
-    : item.options.map((option, index) => ({
-      id: option.optionId,
-      label: option.name,
-      reject: option.kind.toLowerCase().startsWith("reject"),
-      primary: index === firstAllow,
-      run: () => response.respond(option.optionId),
-    }));
+  const rawChoices = item.elicitation
+    ? form.choices
+    : permissionFallbackChoices(item.options, item.invalidElicitation, response.respond);
+  const choices: DockChoice[] = rawChoices.map((choice, index) => ({
+    id: choice.id,
+    label: choice.label,
+    reject: choice.reject,
+    primary: item.elicitation ? !choice.reject : !item.invalidElicitation && index === firstAllow,
+    disabled: choice.disabled,
+    run: choice.run,
+  }));
   return (
     <ApprovalDock
       kind="permission"

@@ -6,7 +6,7 @@
 import { placeNotice, widgetOfNotice, type WidgetRowData } from "./widgets/widgetRows";
 import { stripImageTokens } from "./attachments";
 import { crashDetailsMatch, prettifyCrashDetail, rpcErrorKind } from "./crashDetail";
-import { type Elicitation, elicitationOf } from "./elicitation";
+import { type Elicitation, elicitationOf, hasElicitationPayload } from "./elicitation";
 import type { AcpUpdate, Envelope, PermissionOption, PlanEntry, Status } from "./protocol";
 import { shouldPaintTranscriptLifecycle } from "./transcriptLoadingPresentation";
 import { isTurnActivityUpdate } from "./turnWaiting";
@@ -468,7 +468,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
   const toolIndex = new Map<string, number>();
   const permIndex = new Map<string, number>();
   // toolCallId -> index of the permission marker that asked for it.
-  const permByTool = new Map<string, number>();
+  const permByTool = new Map<string, number[]>();
   const compactionIndex = new Map<string, number>();
   const subagentIndex = new Map<string, number>();
   // The seq that last informed each subagent row: the Controller's receipt seq
@@ -594,10 +594,9 @@ export function derive(timeline: Envelope[]): RenderItem[] {
               // The request's own resolution row can be missing; a tool that
               // reached a terminal status is no longer asking.
               const tKey = scopedToolKey(u, id);
-              const asked = tKey !== null ? permByTool.get(tKey) : undefined;
-              const marker = asked === undefined ? undefined : items[asked];
-              if (marker?.kind === "permission" && !marker.resolved) {
-                marker.resolved = true;
+              for (const asked of (tKey !== null ? permByTool.get(tKey) : undefined) ?? []) {
+                const marker = items[asked];
+                if (marker?.kind === "permission" && !marker.resolved) marker.resolved = true;
               }
             }
             if (existing && existing.kind === "tool") {
@@ -723,7 +722,9 @@ export function derive(timeline: Envelope[]): RenderItem[] {
         });
         permIndex.set(env.request_id, items.length - 1);
         const asking = scopedToolKey(env.tool_call, toolCallIdOf(env.tool_call));
-        if (asking !== null) permByTool.set(asking, items.length - 1);
+        if (asking !== null) {
+          (permByTool.get(asking) ?? permByTool.set(asking, []).get(asking)!).push(items.length - 1);
+        }
         break;
       }
       case "permission_resolved": {
@@ -909,8 +910,10 @@ export interface PendingPermission {
   requestKind: "permission" | "question";
   title: string;
   options: PermissionOption[];
-  /** The form or link an elicitation asks for; null for a tool permission. */
+  /** The form or link an elicitation asks for; null for a tool permission or invalid form. */
   elicitation: Elicitation | null;
+  /** True when the payload carried an elicitation Cowboy could not validate/render. */
+  invalidElicitation?: boolean | undefined;
   /** Title of the subagent that asked, when a child session asked. */
   subagent?: string | undefined;
   /** Child session id of the subagent that asked, when one did. */
@@ -929,39 +932,39 @@ export interface PendingPermission {
 ///   - the turn ended or the worker stopped: nothing is waiting any more.
 export function pendingPermissions(timeline: Envelope[]): PendingPermission[] {
   const pending = new Map<string, PendingPermission>();
-  // toolCallId -> request id, for the requests still pending.
-  const byTool = new Map<string, string>();
+  const byTool = new Map<string, Set<string>>();
   const drop = (requestId: string): void => {
     pending.delete(requestId);
-    for (const [tool, request] of byTool) {
-      if (request === requestId) byTool.delete(tool);
+    for (const [tool, requests] of byTool) {
+      requests.delete(requestId);
+      if (requests.size === 0) byTool.delete(tool);
     }
   };
   for (const env of timeline) {
     if (env.kind === "permission_request") {
-      // Re-inserting moves a reused id to its real place in arrival order.
       drop(env.request_id);
       const subagent = requestingSubagent(env.tool_call);
       const subagentId = requestingSubagentId(env.tool_call);
+      const elicitation = elicitationOf(env.tool_call);
+      const invalidElicitation = elicitation === null && hasElicitationPayload(env.tool_call);
       pending.set(env.request_id, {
         seq: env.seq,
         requestId: env.request_id,
         requestKind: permissionRequestKind(env.tool_call),
         title: titleOfToolCall(env.tool_call),
         options: env.options,
-        elicitation: elicitationOf(env.tool_call),
+        elicitation,
+        ...(invalidElicitation ? { invalidElicitation } : {}),
         ...(subagent ? { subagent } : {}),
         ...(subagentId ? { subagentId } : {}),
       });
       const tKey = scopedToolKey(env.tool_call, toolCallIdOf(env.tool_call));
-      if (tKey !== null) byTool.set(tKey, env.request_id);
+      if (tKey !== null) (byTool.get(tKey) ?? byTool.set(tKey, new Set()).get(tKey)!).add(env.request_id);
     } else if (env.kind === "permission_resolved") {
       drop(env.request_id);
     } else if (pending.size === 0) {
       continue;
     } else if (env.kind === "turn_end") {
-      // A subagent can outlive the turn that launched it, and its requests
-      // still wait for an answer; the parent's own requests ended with it.
       for (const [requestId, request] of pending) {
         if (request.subagent === undefined) drop(requestId);
       }
@@ -975,8 +978,7 @@ export function pendingPermissions(timeline: Envelope[]): PendingPermission[] {
       (env.update.status === "completed" || env.update.status === "failed")
     ) {
       const key = scopedToolKey(env.update, env.update.toolCallId ?? null);
-      const request = key !== null ? byTool.get(key) : undefined;
-      if (request !== undefined) drop(request);
+      for (const request of [...((key !== null ? byTool.get(key) : undefined) ?? [])]) drop(request);
     }
   }
   // Map preserves insertion order.
@@ -1095,7 +1097,7 @@ function titleOfToolCall(tc: unknown): string {
 }
 
 function permissionRequestKind(tc: unknown): "permission" | "question" {
-  if (elicitationOf(tc)) return "question";
+  if (elicitationOf(tc) || hasElicitationPayload(tc)) return "question";
   if (!tc || typeof tc !== "object" || !("rawInput" in tc)) return "permission";
   const input = (tc as { rawInput?: unknown }).rawInput;
   if (!input || typeof input !== "object") return "permission";

@@ -1,5 +1,6 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../tools/test-assert.ts";
+import { permissionFallbackChoices } from "./ElicitationFields";
 import {
   autoResolutionSecondsLeft,
   elicitationAnswer,
@@ -439,4 +440,151 @@ test("elicitation bounds, verbatim choices, Unicode code-point lengths, and __pr
   });
   assertEquals(elicitationComplete(protoForm.fields, values), true);
   assertEquals(elicitationAnswer(protoForm.fields, values), 'accept:{"__proto__":"kept"}');
+});
+
+test("terminal tool update clears every pending form sharing that scoped toolCallId (R3)", () => {
+  const timeline: Envelope[] = [
+    {
+      seq: 1,
+      ts: 1,
+      kind: "permission_request",
+      request_id: "req-1",
+      tool_call: { toolCallId: "shared_tool", title: "First ask" },
+      options: [{ optionId: "accept", name: "Submit", kind: "allow_once" }],
+    },
+    {
+      seq: 2,
+      ts: 2,
+      kind: "permission_request",
+      request_id: "req-2",
+      tool_call: { toolCallId: "shared_tool", title: "Second ask" },
+      options: [{ optionId: "accept", name: "Submit", kind: "allow_once" }],
+    },
+    {
+      seq: 3,
+      ts: 3,
+      kind: "update",
+      update: { sessionUpdate: "tool_call_update", toolCallId: "shared_tool", status: "completed" },
+    },
+  ];
+  assertEquals(pendingPermissions(timeline), []);
+  const derived = derive(timeline).filter((item) => item.kind === "permission");
+  assertEquals(
+    derived.map((item) => [item.requestId, item.resolved]),
+    [
+      ["req-1", true],
+      ["req-2", true],
+    ],
+  );
+});
+
+test("invalid forms expose only Decline, empty-string choices require explicit selection, and bounded optional choices never trap Submit (R3)", () => {
+  // 1. Optional impossible integer range [1.2, 1.8] makes the whole form invalid -> only Decline.
+  const impossibleToolCall = carrying({
+    mode: "form",
+    sessionId: "s",
+    message: "Impossible optional int",
+    requestedSchema: {
+      type: "object",
+      properties: {
+        badInt: { type: "integer", title: "Bad", minimum: 1.2, maximum: 1.8 },
+        ok: { type: "string", title: "OK" },
+      },
+    },
+  });
+  assertEquals(elicitationOf(impossibleToolCall), null);
+  const pending = pendingPermissions([
+    {
+      seq: 1,
+      ts: 1,
+      kind: "permission_request",
+      request_id: "bad-form",
+      tool_call: impossibleToolCall,
+      options: [
+        { optionId: "accept", name: "Submit", kind: "allow_once" },
+        { optionId: "decline", name: "Decline", kind: "reject_once" },
+      ],
+    },
+  ]);
+  assertEquals(pending.length, 1);
+  assertEquals(pending[0]?.invalidElicitation, true);
+  assertEquals(pending[0]?.requestKind, "question");
+  const picked: string[] = [];
+  const fallback = permissionFallbackChoices(
+    pending[0]!.options,
+    pending[0]!.invalidElicitation,
+    (id) => picked.push(id),
+  );
+  assertEquals(
+    fallback.map((c) => [c.id, c.reject]),
+    [["decline", true]],
+  );
+  fallback[0]!.run();
+  assertEquals(picked, ["decline"]);
+
+  // 2. Required single-choice offering "" starts UNSET and does not enable Submit until selected.
+  const emptyChoiceForm = elicitationOf(
+    carrying({
+      mode: "form",
+      sessionId: "s",
+      message: "Empty choice",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          q1: {
+            type: "string",
+            title: "Pick",
+            oneOf: [
+              { const: "", title: "None" },
+              { const: "a", title: "A" },
+            ],
+          },
+        },
+        required: ["q1"],
+      },
+    }),
+  );
+  if (emptyChoiceForm?.mode !== "form") throw new Error("expected form");
+  const initVals = initialElicitationValues(emptyChoiceForm.fields);
+  assertEquals(Object.hasOwn(initVals, "q1"), false);
+  assertEquals(elicitationComplete(emptyChoiceForm.fields, initVals), false);
+  assertEquals(elicitationComplete(emptyChoiceForm.fields, { q1: "" }), true);
+  assertEquals(elicitationAnswer(emptyChoiceForm.fields, { q1: "" }), 'accept:{"q1":""}');
+
+  // 3. Optional bounded single-choice filters invalid choices, ignores invalid default, and omits when none fit.
+  const boundedOpt = elicitationOf(
+    carrying({
+      mode: "form",
+      sessionId: "s",
+      message: "Optional bounded choices",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          partial: {
+            type: "string",
+            title: "Partial",
+            oneOf: [
+              { const: "ok", title: "OK" },
+              { const: "too-long", title: "Too long" },
+            ],
+            maxLength: 2,
+            default: "too-long",
+          },
+          allInvalid: {
+            type: "string",
+            title: "None fit",
+            oneOf: [{ const: "too-long", title: "Too long" }],
+            maxLength: 2,
+          },
+        },
+      },
+    }),
+  );
+  if (boundedOpt?.mode !== "form") throw new Error("expected form");
+  assertEquals(
+    boundedOpt.fields.map((f) => [f.id, f.choices.map((c) => c.value), f.defaultValue]),
+    [["partial", ["ok"], undefined]],
+  );
+  const optVals = initialElicitationValues(boundedOpt.fields);
+  assertEquals(elicitationComplete(boundedOpt.fields, optVals), true);
 });

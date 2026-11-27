@@ -2167,3 +2167,155 @@ test("direct parent uncertainty retires running child form and pending parent re
     { jsonrpc: "2.0", id: "child-live-uncertain", result: { action: "cancel" } },
   );
 });
+
+test("failed child open keeps quarantine held-ID collision guard active until replay runs (R3)", async () => {
+  const made = await parent({}, { elicitation: { form: {} } });
+  const { proxy, agent, control } = made;
+  control.ignore.add("session/new");
+  const starting = proxy.subagents.start("s", { prompt: "work" }).then(
+    () => undefined,
+    (err) => err,
+  );
+  await flush(2);
+  const [newReq] = sent(agent, "session/new");
+  assert.ok(newReq);
+
+  // Buffer a quarantined permission request while session/new is pending.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "q-race-id",
+    method: "session/request_permission",
+    params: {
+      sessionId: "orphan-child",
+      toolCall: { toolCallId: "t1", name: "mcp_cowboy_ReadFile" },
+      options: [{ optionId: "yes", kind: "allow_once" }],
+    },
+  });
+  // Same stdout chunk (no microtask yield between frames): session/new fails,
+  // releaseQuarantine schedules replay, and a root permission reuses "q-race-id".
+  await Promise.all([
+    proxy.fromAgent({
+      jsonrpc: "2.0",
+      id: newReq.id,
+      error: { code: -32603, message: "open failed" },
+    }),
+    proxy.fromAgent({
+      jsonrpc: "2.0",
+      id: "q-race-id",
+      method: "session/request_permission",
+      params: {
+        sessionId: "s",
+        toolCall: { toolCallId: "t2", name: "mcp_cowboy_ReadFile" },
+        options: [{ optionId: "yes", kind: "allow_once" }],
+      },
+    }),
+  ]);
+  await starting;
+  await flush();
+  const replies = agent.filter((m) => m.id === "q-race-id");
+  assert.equal(
+    replies.length,
+    1,
+    "exactly one cancellation, no auto-approval and no duplicate replay",
+  );
+  assert.deepEqual(replies[0].result, { outcome: { outcome: "cancelled" } });
+});
+
+test("direct child session/load and session/resume are refused and opening buffer overflow/discard settles requests (R3)", async () => {
+  const made = await parent({}, { elicitation: { form: {} } });
+  const { proxy, agent, client } = made;
+  const childId = await startChild(made);
+
+  // Open a live child form.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "child-form-reopen-refused",
+    method: "elicitation/create",
+    params: {
+      sessionId: childId,
+      mode: "form",
+      message: "Stay open",
+      requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+    },
+  });
+  const formFwd = client.at(-1);
+  assert.equal(formFwd.method, "elicitation/create");
+
+  // Direct client session/load and session/resume for the child are refused.
+  for (const [reqId, method] of [
+    [81, "session/load"],
+    [82, "session/resume"],
+  ]) {
+    await proxy.fromClient(
+      request(reqId, method, { sessionId: childId, cwd: "/work/repo", mcpServers: [] }),
+    );
+    const errReply = client.find((m) => m.id === reqId);
+    assert.equal(errReply?.error?.code, -32602);
+    assert.equal(
+      sent(agent, method).some((m) => m.params?.sessionId === childId),
+      false,
+    );
+  }
+  // Child form is still answerable because the refused direct reopen did not disturb it.
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: formFwd.id,
+    result: { action: "accept", content: { q1: "ok" } },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: "child-form-reopen-refused",
+    result: { action: "accept", content: { q1: "ok" } },
+  });
+
+  // Opening buffer overflow settles request instead of silently dropping it.
+  proxy.subagents.adopt("overflow-child");
+  for (let i = 0; i < 256; i++) {
+    proxy.subagents.hold({
+      jsonrpc: "2.0",
+      method: "session/update",
+      params: {
+        sessionId: "overflow-child",
+        update: { sessionUpdate: "agent_message_chunk", content: { type: "text", text: "x" } },
+      },
+    });
+  }
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "overflow-perm",
+    method: "session/request_permission",
+    params: {
+      sessionId: "overflow-child",
+      toolCall: { toolCallId: "t", name: "mcp_cowboy_ReadFile" },
+      options: [{ optionId: "yes", kind: "allow_once" }],
+    },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: "overflow-perm",
+    result: { outcome: { outcome: "cancelled" } },
+  });
+
+  // Abandoning an opening session settles any held request inside it.
+  proxy.subagents.adopt("abandoned-child");
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "abandoned-perm",
+    method: "session/request_permission",
+    params: {
+      sessionId: "abandoned-child",
+      toolCall: { toolCallId: "t", name: "mcp_cowboy_ReadFile" },
+      options: [{ optionId: "yes", kind: "allow_once" }],
+    },
+  });
+  assert.equal(
+    agent.some((m) => m.id === "abandoned-perm"),
+    false,
+  );
+  proxy.subagents.discardOpening("abandoned-child");
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: "abandoned-perm",
+    result: { outcome: { outcome: "cancelled" } },
+  });
+});
