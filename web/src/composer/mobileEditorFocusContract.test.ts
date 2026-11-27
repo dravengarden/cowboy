@@ -932,7 +932,7 @@ test("mobile keyboard focus presents one floating composer surface", () => {
   );
   assertEquals(
     composerSource.indexOf("data-mobile-composer-utility-rail") <
-      composerSource.indexOf("<MobileBranchSwitcherButton"),
+      composerSource.indexOf("<MobileSessionActivityButton"),
     true,
   );
   assertEquals(
@@ -1107,7 +1107,7 @@ test("mobile keyboard dismissal belongs to the fixed lower editing rail", () => 
   assertEquals(actionRow.includes('<Tooltip title="Force push">'), false);
   assertEquals(
     actionRow.indexOf('<Tooltip title="Schedule send">') <
-      actionRow.indexOf("<MobileBranchSwitcherButton"),
+      actionRow.indexOf("<MobileSessionActivityButton"),
     true,
   );
 });

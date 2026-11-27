@@ -30,6 +30,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DraftMetadata } from "./documents/model";
 import { draftRepository } from "./documents/store";
+import { restoreSessionDraftFromTrash } from "./documents/sessionDraftTrash";
 import { documentNotice } from "./documents/DocumentNotifications";
 import { openUndoHistory } from "./UndoHistorySheet";
 import { Kbd, useConfirmEnter } from "./Kbd";
@@ -54,7 +55,7 @@ import {
   type TrashRow,
   type TrashTree,
 } from "./trashModel";
-import { sessionFolderById, sessionFolderLocation, type SessionFoldersValue } from "./sessionFolders";
+import { folderIsWithin, sessionFolderById, sessionFolderLocation, type SessionFoldersValue } from "./sessionFolders";
 
 const EXPANDED_KEY = "cowboy:sessions-trash:expanded";
 
@@ -174,10 +175,17 @@ export function useTrashTree(
   retentionDays: number,
 ): TrashTree {
   const sessions = useStoreSelector((state) => state.trashedSessions);
+  const liveSessions = useStoreSelector((state) => state.sessions);
   const folders = useStoreSelector((state) => state.trashFolders);
+  const sessionTitles = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const s of liveSessions) map.set(s.id, s.title || "Session");
+    for (const s of sessions) map.set(s.id, s.title || "Session");
+    return map;
+  }, [liveSessions, sessions]);
   return useMemo(
-    () => buildTrashTree(sessions, folders, drafts, expanded, retentionDays),
-    [sessions, folders, drafts, expanded, retentionDays],
+    () => buildTrashTree(sessions, folders, drafts, expanded, retentionDays, sessionTitles),
+    [sessions, folders, drafts, expanded, retentionDays, sessionTitles],
   );
 }
 
@@ -287,7 +295,7 @@ export function SessionTrashSection(
         {open && tree.rows.length === 0 && (
           <Box sx={[rowSx(1) as object, { py: 1, color: "text.disabled" }]}>
             <Typography variant="caption" sx={{ fontStyle: "italic" }}>
-              Trash is empty. Deleted sessions and folders stay here for {dayLabel(retentionDays)}.
+              Trash is empty. Deleted sessions, drafts and folders stay here for {dayLabel(retentionDays)}.
             </Typography>
           </Box>
         )}
@@ -310,7 +318,7 @@ export function SessionTrashSection(
             <ListItemText
               primary={
                 <Stack direction="row" spacing={0.75} alignItems="center" sx={{ minWidth: 0 }}>
-                  {row.kind === "trash-folder"
+                  {row.kind === "trash-folder" || (row.kind === "trash-draft" && row.draft.kind === "folder")
                     ? <FolderOutlined sx={iconSx} />
                     : row.kind === "trash-draft"
                     ? <DescriptionOutlined sx={iconSx} />
@@ -375,18 +383,96 @@ export async function restoreTrashRow(row: TrashRow, folders: SessionFoldersValu
   if (target !== parent) await owner.change({ type: "move", parent_id: target });
 }
 
+async function purgeTrashRow(row: TrashRow, tree: TrashTree, folders: SessionFoldersValue): Promise<void> {
+  if (row.kind === "trash-folder") {
+    const folderDraftIds = tree.drafts
+      .filter((draft) => folderIsWithin(folders, draft.parent_id, row.folder.id))
+      .map((draft) => draft.id);
+    await purgeItems({ folders: [row.folder.id] });
+    if (folderDraftIds.length > 0) await draftRepository().purge(folderDraftIds);
+  } else if (row.kind === "trash-session") {
+    await purgeItems({ sessions: [row.session.id] });
+  } else {
+    await draftRepository().purge([row.draft.id]);
+  }
+}
+
+function TrashItemDetails({
+  row, deadline, now, parentTrashed, alone, liveSourceSession, busy, onOpenSession, onOpenDraft, onRestoreAsDraft, onConfirmDelete,
+}: {
+  row: TrashRow;
+  deadline: number | null;
+  now: number;
+  parentTrashed: boolean;
+  alone: string | null;
+  liveSourceSession: boolean;
+  busy: boolean;
+  onOpenSession: () => void;
+  onOpenDraft?: (() => void) | undefined;
+  onRestoreAsDraft: () => void;
+  onConfirmDelete: () => void;
+}): React.JSX.Element {
+  return (
+    <Stack spacing={1}>
+      <Typography variant="body2" color="text.secondary">
+        {row.trashedAt !== null ? `Deleted ${describeTrashAge(now - row.trashedAt)}` : "In Trash"}
+        {row.origin ? ` from ${row.origin}` : parentTrashed ? " with its folder" : ""}.
+      </Typography>
+      {deadline !== null && (
+        <Typography variant="body2" color={deadline - now < TRASH_URGENT_MS ? "warning.main" : "text.secondary"}>
+          Deleted permanently in {describeTrashRemaining(Math.max(0, deadline - now))} ({deadlineText(deadline)}).
+        </Typography>
+      )}
+      {row.kind === "trash-session" && (
+        <Typography variant="caption" color="text.secondary">
+          {sessionListProjectLabel(row.session)} · {row.session.machine_id}. It stays asleep after restore and resumes when you send it work.
+        </Typography>
+      )}
+      {row.kind === "trash-folder" && (
+        <Typography variant="caption" color="text.secondary">
+          Restore brings back the folder with its {String(row.itemCount)} items and subfolders.
+        </Typography>
+      )}
+      {alone !== null && (
+        <Typography variant="caption" color="text.secondary">
+          Its folder is in Trash too, so restoring only this item puts it in {alone}.
+        </Typography>
+      )}
+      <Stack direction="row" spacing={1} sx={{ pt: 0.5, flexWrap: "wrap" }}>
+        {row.kind === "trash-session" && (
+          <Button size="small" disabled={busy} onClick={onOpenSession}>Restore and open</Button>
+        )}
+        {row.kind === "trash-draft" && liveSourceSession && (
+          <Button size="small" disabled={busy} onClick={onRestoreAsDraft}>Restore as draft</Button>
+        )}
+        {row.kind === "trash-draft" && !liveSourceSession && row.draft.kind === "document" && onOpenDraft && (
+          <Button size="small" disabled={busy} onClick={onOpenDraft}>Restore and open</Button>
+        )}
+        <Button size="small" color="error" disabled={busy} onClick={onConfirmDelete}>Delete permanently…</Button>
+      </Stack>
+    </Stack>
+  );
+}
+
 /** Actions for one Trash entry: Restore (and open), or delete permanently
  *  after a second, explicit confirmation. */
 export function TrashItemSheet(
-  { row, retentionDays, now, onClose, onOpenSession }: {
+  { row, tree, retentionDays, now, onClose, onOpenSession, onOpenDraft }: {
     row: TrashRow;
+    tree: TrashTree;
     retentionDays: number;
     now: number;
     onClose: () => void;
     onOpenSession: (id: string) => void;
+    onOpenDraft?: ((id: string) => void) | undefined;
   },
 ): React.JSX.Element {
   const folders = useStoreSelector((state) => state.trashFolders);
+  const liveSourceSession = useStoreSelector((state) =>
+    row.kind === "trash-draft" && row.draft.source_session_id
+      ? state.sessionsById.get(row.draft.source_session_id) ?? null
+      : null
+  );
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(false);
   const run = (action: () => Promise<void>, done?: () => void): void => {
@@ -398,16 +484,19 @@ export function TrashItemSheet(
       documentNotice(error instanceof Error ? error.message : "Could not finish. Try again.");
     }).finally(() => setBusy(false));
   };
-  const restore = (): void => run(() => restoreTrashRow(row, folders), () => documentNotice(`Restored "${rowTitle(row)}"`));
-  const purge = (): void =>
+  const restoreToSession = (): void => {
+    if (row.kind !== "trash-draft" || !liveSourceSession) return;
     run(
-      () => row.kind === "trash-folder"
-        ? purgeItems({ folders: [row.folder.id] })
-        : row.kind === "trash-session"
-        ? purgeItems({ sessions: [row.session.id] })
-        : Promise.reject(new Error("Drafts are deleted from Draft history; restore it to edit or copy it.")),
-      () => documentNotice(`Deleted "${rowTitle(row)}" permanently`),
+      () => restoreSessionDraftFromTrash(row.draft.id, liveSourceSession.id),
+      () => documentNotice(`Restored "${rowTitle(row)}" to "${liveSourceSession.title || "Session"}"`),
     );
+  };
+  const restore = (): void =>
+    row.kind === "trash-draft" && liveSourceSession
+      ? restoreToSession()
+      : run(() => restoreTrashRow(row, folders), () => documentNotice(`Restored "${rowTitle(row)}"`));
+  const purge = (): void =>
+    run(() => purgeTrashRow(row, tree, folders), () => documentNotice(`Deleted "${rowTitle(row)}" permanently`));
   useConfirmEnter(!busy, confirming ? purge : restore);
   const deadline = row.trashedAt === null ? null : trashDeadline(row.trashedAt, retentionDays);
   // An item inside a trashed folder restores alone to the nearest live folder.
@@ -449,7 +538,7 @@ export function TrashItemSheet(
                 <Kbd keys="Esc" />
               </Button>
               <Button onClick={restore} variant="contained" disabled={busy} startIcon={<RestoreFromTrashOutlined />}>
-                Restore
+                {liveSourceSession ? "Restore to session" : "Restore"}
                 <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
               </Button>
             </>
@@ -459,53 +548,26 @@ export function TrashItemSheet(
           ? (
             <Typography variant="body2" color="text.secondary">
               {row.kind === "trash-folder"
-                ? `The folder, its subfolders and the ${String(row.itemCount)} items inside are deleted now. Drafts inside stay recoverable from Trash. This cannot be undone.`
+                ? `The folder, its subfolders and the ${String(row.itemCount)} items inside are deleted now. This cannot be undone.`
+                : row.kind === "trash-draft"
+                ? "The draft and its recovery history are deleted now. This cannot be undone."
                 : "Its transcript, worktree and agent history are deleted now. This cannot be undone."}
             </Typography>
           )
           : (
-            <Stack spacing={1}>
-              <Typography variant="body2" color="text.secondary">
-                {row.trashedAt !== null ? `Deleted ${describeTrashAge(now - row.trashedAt)}` : "In Trash"}
-                {row.origin ? ` from ${row.origin}` : parentTrashed ? " with its folder" : ""}.
-              </Typography>
-              {deadline !== null && (
-                <Typography variant="body2" color={deadline - now < TRASH_URGENT_MS ? "warning.main" : "text.secondary"}>
-                  Deleted permanently in {describeTrashRemaining(Math.max(0, deadline - now))} ({deadlineText(deadline)}).
-                </Typography>
-              )}
-              {row.kind === "trash-session" && (
-                <Typography variant="caption" color="text.secondary">
-                  {sessionListProjectLabel(row.session)} · {row.session.machine_id}. It stays asleep after restore and resumes when you send it work.
-                </Typography>
-              )}
-              {row.kind === "trash-folder" && (
-                <Typography variant="caption" color="text.secondary">
-                  Restore brings back the folder with its {String(row.itemCount)} items and subfolders.
-                </Typography>
-              )}
-              {alone !== null && (
-                <Typography variant="caption" color="text.secondary">
-                  Its folder is in Trash too, so restoring only this item puts it in {alone}.
-                </Typography>
-              )}
-              <Stack direction="row" spacing={1} sx={{ pt: 0.5, flexWrap: "wrap" }}>
-                {row.kind === "trash-session" && (
-                  <Button
-                    size="small"
-                    disabled={busy}
-                    onClick={(): void => run(() => restoreTrashRow(row, folders), () => onOpenSession(row.session.id))}
-                  >
-                    Restore and open
-                  </Button>
-                )}
-                {row.kind !== "trash-draft" && (
-                  <Button size="small" color="error" disabled={busy} onClick={(): void => setConfirming(true)}>
-                    Delete permanently…
-                  </Button>
-                )}
-              </Stack>
-            </Stack>
+            <TrashItemDetails
+              row={row}
+              deadline={deadline}
+              now={now}
+              parentTrashed={parentTrashed}
+              alone={alone}
+              liveSourceSession={Boolean(liveSourceSession)}
+              busy={busy}
+              onOpenSession={(): void => { if (row.kind === "trash-session") run(() => restoreTrashRow(row, folders), () => onOpenSession(row.session.id)); }}
+              onOpenDraft={row.kind === "trash-draft" && onOpenDraft ? (): void => run(() => restoreTrashRow(row, folders), () => onOpenDraft(row.draft.id)) : undefined}
+              onRestoreAsDraft={(): void => run(() => restoreTrashRow(row, folders), () => documentNotice(`Restored "${rowTitle(row)}" as draft`))}
+              onConfirmDelete={(): void => setConfirming(true)}
+            />
           )}
       </ConfirmSheet>
     </InAppRoot>
@@ -531,7 +593,16 @@ export function TrashMenuSheet(
     .map((folder) => folder.id);
   const empty = (): void => {
     setBusy(true);
-    void purgeItems({ sessions: tree.sessions.map((session) => session.id), folders: rootFolders })
+    const sessionIds = tree.sessions.map((session) => session.id);
+    const draftIds = tree.drafts.map((draft) => draft.id);
+    void (async (): Promise<void> => {
+      if (sessionIds.length > 0 || rootFolders.length > 0) {
+        await purgeItems({ sessions: sessionIds, folders: rootFolders });
+      }
+      if (draftIds.length > 0) {
+        await draftRepository().purge(draftIds);
+      }
+    })()
       .then(() => {
         onClose();
         documentNotice("Trash emptied");
@@ -578,7 +649,7 @@ export function TrashMenuSheet(
         {confirming
           ? (
             <Typography variant="body2" color="text.secondary">
-              {`${String(count)} sessions and ${String(tree.folders.length)} folders are deleted now, with their transcripts and worktrees. Drafts stay recoverable from Trash. This cannot be undone.`}
+              {`${String(count)} sessions, ${String(tree.drafts.length)} drafts and ${String(tree.folders.length)} folders are deleted now. This cannot be undone.`}
             </Typography>
           )
           : (

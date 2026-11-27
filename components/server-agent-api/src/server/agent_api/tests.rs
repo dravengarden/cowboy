@@ -186,6 +186,8 @@ async fn unpaged_document_lists_never_silently_drop_the_last_document() {
                         parent_id: None,
                         body: "full body".into(),
                         attachments: vec![],
+                        trashed: false,
+                        source_session_id: None,
                     },
                 },
             )

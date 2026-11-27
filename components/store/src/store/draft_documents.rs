@@ -41,6 +41,10 @@ pub struct DraftDocument {
     pub metadata_revision: i64,
     pub updated_at_ms: i64,
     pub deleted: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trashed_at_ms: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_session_id: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -60,6 +64,10 @@ pub enum DraftChange {
         body: String,
         #[serde(default)]
         attachments: Vec<serde_json::Value>,
+        #[serde(default)]
+        trashed: bool,
+        #[serde(default)]
+        source_session_id: Option<String>,
     },
     Write {
         body: String,
@@ -138,6 +146,48 @@ fn normalized_title(title: &str) -> Option<String> {
         .then(|| title.to_owned())
 }
 
+fn apply_create(
+    next: &mut DraftDocument,
+    entries: &[DraftDocument],
+    shared: &[crate::session_folders::SessionFolder],
+    now: i64,
+    change: &DraftChange,
+) -> Result<(), String> {
+    let DraftChange::Create {
+        kind,
+        title,
+        parent_id,
+        body,
+        attachments,
+        trashed,
+        source_session_id,
+    } = change
+    else {
+        return Ok(());
+    };
+    if entries.len() >= MAX_ENTRIES {
+        return Err("Draft library is full".to_owned());
+    }
+    if source_session_id.as_deref().is_some_and(|id| !valid_id(id)) {
+        return Err("Invalid source session".to_owned());
+    }
+    next.kind = *kind;
+    next.title.clone_from(title);
+    next.parent_id = if *trashed {
+        nearest_live_parent(parent_id.as_deref(), entries, shared)
+    } else {
+        parent_id.clone()
+    };
+    next.body.clone_from(body);
+    next.attachments.clone_from(attachments);
+    next.deleted = *trashed;
+    next.trashed_at_ms = trashed.then_some(now);
+    next.source_session_id.clone_from(source_session_id);
+    next.body_revision = 1;
+    next.metadata_revision = 1;
+    Ok(())
+}
+
 fn apply(
     entries: &[DraftDocument],
     mutation: &DraftMutation,
@@ -179,25 +229,14 @@ fn apply(
         metadata_revision: 0,
         updated_at_ms: now,
         deleted: false,
+        trashed_at_ms: None,
+        source_session_id: None,
     });
     match &mutation.change {
-        Create {
-            kind,
-            title,
-            parent_id,
-            body,
-            attachments,
-        } => {
-            if entries.len() >= MAX_ENTRIES {
-                return DraftResult::Invalid("Draft library is full".to_owned());
+        Create { .. } => {
+            if let Err(err) = apply_create(&mut next, entries, shared, now, &mutation.change) {
+                return DraftResult::Invalid(err);
             }
-            next.kind = *kind;
-            next.title.clone_from(title);
-            next.parent_id.clone_from(parent_id);
-            next.body.clone_from(body);
-            next.attachments.clone_from(attachments);
-            next.body_revision = 1;
-            next.metadata_revision = 1;
         }
         Write { body, .. } | WriteText { body } => {
             if next.kind != DraftKind::Document {
@@ -227,16 +266,15 @@ fn apply(
                 );
             }
             next.deleted = true;
+            next.trashed_at_ms = Some(now);
         }
         Restore => {
             next.deleted = false;
-            if next.parent_id.as_ref().is_some_and(|id| {
-                !entries
-                    .iter()
-                    .any(|d| d.id == *id && !d.deleted && d.kind == DraftKind::Folder)
-                    && !shared.iter().any(|folder| folder.id == *id)
-            }) {
-                next.parent_id = None;
+            next.trashed_at_ms = None;
+            next.source_session_id = None;
+            let resolved = nearest_live_parent(next.parent_id.as_deref(), entries, shared);
+            if resolved != next.parent_id {
+                next.parent_id = resolved;
                 next.metadata_revision += 1;
             }
         }
@@ -246,11 +284,48 @@ fn apply(
 
 /// Nothing new is filed into Trash (a trashed folder's whole subtree is
 /// trashed); a Draft already there may still be edited or moved out.
+/// Nearest live ancestor folder (walking past trashed or missing folders).
+fn nearest_live_parent(
+    parent: Option<&str>,
+    entries: &[DraftDocument],
+    shared: &[crate::session_folders::SessionFolder],
+) -> Option<String> {
+    let mut cursor = parent;
+    let mut seen = std::collections::HashSet::new();
+    while let Some(id) = cursor {
+        if !seen.insert(id) {
+            return None;
+        }
+        if let Some(folder) = shared.iter().find(|f| f.id == id) {
+            if folder.trashed_at_ms.is_none() {
+                return Some(folder.id.clone());
+            }
+            cursor = folder.parent.as_deref();
+            continue;
+        }
+        if let Some(folder) = entries
+            .iter()
+            .find(|d| d.id == id && d.kind == DraftKind::Folder)
+        {
+            if !folder.deleted {
+                return Some(folder.id.clone());
+            }
+            cursor = folder.parent_id.as_deref();
+            continue;
+        }
+        return None;
+    }
+    None
+}
+
 fn files_into_trash(
     change: &DraftChange,
     next: &DraftDocument,
     shared: &[crate::session_folders::SessionFolder],
 ) -> bool {
+    if matches!(change, DraftChange::Create { trashed: true, .. }) {
+        return false;
+    }
     matches!(
         change,
         DraftChange::Create { .. } | DraftChange::Move { .. }
@@ -548,6 +623,144 @@ impl Store {
                 db,
                 "SELECT CAST(json_extract(value, '$.updated_at_ms') AS INTEGER) FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 ORDER BY revision DESC LIMIT 1"
             ),
+        })
+    }
+}
+
+impl Store {
+    /// Permanently delete trashed drafts owned by `owner`. Refuses the whole
+    /// batch if any existing requested draft is still live (neither deleted nor
+    /// inside a trashed folder).
+    pub async fn purge_trashed_drafts(
+        &self,
+        owner: &str,
+        ids: &[String],
+        trashed_folders: &std::collections::HashSet<String>,
+    ) -> Result<std::result::Result<Vec<String>, String>> {
+        let mut unique = Vec::new();
+        for id in ids {
+            if !valid_id(id) {
+                return Ok(Err("Invalid document id".to_owned()));
+            }
+            if !unique.contains(id) {
+                unique.push(id.clone());
+            }
+        }
+        if unique.is_empty() {
+            return Ok(Ok(Vec::new()));
+        }
+        macro_rules! purge_tx { ($db:expr) => {{
+            let mut tx = $db.pool.begin().await?;
+            sqlx::query("INSERT INTO draft_document_owners (owner_user_id, revision) VALUES ($1, 1) ON CONFLICT (owner_user_id) DO UPDATE SET revision = draft_document_owners.revision + 1")
+                .bind(owner).execute(&mut *tx).await?;
+            let mut doomed = Vec::new();
+            for id in &unique {
+                let meta: Option<String> = sqlx::query_scalar(
+                    "SELECT metadata FROM draft_documents WHERE owner_user_id = $1 AND id = $2",
+                )
+                .bind(owner)
+                .bind(id)
+                .fetch_optional(&mut *tx)
+                .await?;
+                let Some(meta) = meta else { continue; };
+                let doc: DraftDocument = serde_json::from_str(&meta)?;
+                let in_trashed_folder = doc
+                    .parent_id
+                    .as_deref()
+                    .is_some_and(|parent| trashed_folders.contains(parent));
+                if !doc.deleted && !in_trashed_folder {
+                    return Ok(Err(
+                        "Only items in Trash can be deleted permanently".to_owned(),
+                    ));
+                }
+                doomed.push(doc.id);
+            }
+            for id in &doomed {
+                sqlx::query("DELETE FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2")
+                    .bind(owner).bind(id).execute(&mut *tx).await?;
+                sqlx::query("DELETE FROM draft_document_operations WHERE owner_user_id = $1 AND document_id = $2")
+                    .bind(owner).bind(id).execute(&mut *tx).await?;
+                sqlx::query("DELETE FROM draft_documents WHERE owner_user_id = $1 AND id = $2")
+                    .bind(owner).bind(id).execute(&mut *tx).await?;
+            }
+            tx.commit().await?;
+            doomed
+        }}; }
+        let purged = match &self.backend {
+            StorageBackend::Postgres(db) => purge_tx!(db),
+            StorageBackend::Sqlite(db) => purge_tx!(db),
+        };
+        Ok(Ok(purged))
+    }
+
+    /// Every deleted draft across all owners for the Trash retention sweep:
+    /// `(owner_user_id, id, trashed_at_ms)`. Legacy trashed drafts without an
+    /// explicit `trashed_at_ms` fall back to `updated_at_ms`.
+    pub async fn list_trashed_drafts_for_retention(&self) -> Result<Vec<(String, String, i64)>> {
+        macro_rules! scan {
+            ($db:expr, $cond:literal) => {{
+                sqlx::query_as::<_, (String, String)>(concat!(
+                    "SELECT owner_user_id, metadata FROM draft_documents WHERE ",
+                    $cond,
+                ))
+                .fetch_all(&$db.pool)
+                .await?
+            }};
+        }
+        let rows = match &self.backend {
+            StorageBackend::Postgres(db) => scan!(db, "(metadata::jsonb->>'deleted') = 'true'"),
+            StorageBackend::Sqlite(db) => scan!(db, "json_extract(metadata, '$.deleted') = 1"),
+        };
+        let mut out = Vec::with_capacity(rows.len());
+        for (owner, raw) in rows {
+            let doc: DraftDocument = serde_json::from_str(&raw)?;
+            if doc.deleted {
+                out.push((
+                    owner,
+                    doc.id,
+                    doc.trashed_at_ms.unwrap_or(doc.updated_at_ms),
+                ));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Permanently purge one expired trashed draft only if it is still deleted
+    /// at the exact `expected_trashed_at_ms` judged by the retention pass.
+    pub async fn purge_expired_draft(
+        &self,
+        owner: &str,
+        id: &str,
+        expected_trashed_at_ms: i64,
+    ) -> Result<bool> {
+        macro_rules! purge_one { ($db:expr) => {{
+            let mut tx = $db.pool.begin().await?;
+            sqlx::query("INSERT INTO draft_document_owners (owner_user_id, revision) VALUES ($1, 1) ON CONFLICT (owner_user_id) DO UPDATE SET revision = draft_document_owners.revision + 1")
+                .bind(owner).execute(&mut *tx).await?;
+            let meta: Option<String> = sqlx::query_scalar(
+                "SELECT metadata FROM draft_documents WHERE owner_user_id = $1 AND id = $2",
+            )
+            .bind(owner)
+            .bind(id)
+            .fetch_optional(&mut *tx)
+            .await?;
+            let Some(meta) = meta else { return Ok(false); };
+            let doc: DraftDocument = serde_json::from_str(&meta)?;
+            if !doc.deleted || doc.trashed_at_ms.unwrap_or(doc.updated_at_ms) != expected_trashed_at_ms {
+                return Ok(false);
+            }
+            sqlx::query("DELETE FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2")
+                .bind(owner).bind(id).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM draft_document_operations WHERE owner_user_id = $1 AND document_id = $2")
+                .bind(owner).bind(id).execute(&mut *tx).await?;
+            sqlx::query("DELETE FROM draft_documents WHERE owner_user_id = $1 AND id = $2")
+                .bind(owner).bind(id).execute(&mut *tx).await?;
+            tx.commit().await?;
+            true
+        }}; }
+        Ok(match &self.backend {
+            StorageBackend::Postgres(db) => purge_one!(db),
+            StorageBackend::Sqlite(db) => purge_one!(db),
         })
     }
 }

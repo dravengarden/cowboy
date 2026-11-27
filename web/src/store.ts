@@ -3427,24 +3427,22 @@ function folderTrashed(snapshot: State, id: string): boolean | undefined {
   return folder ? isTrashedFolder(folder) : undefined;
 }
 
-/** Move a folder to Trash, first filing the sessions to keep into
- *  `destination` (`null` = Global). The placements must reach the Controller
- *  before the folder does, or it would take them along. */
+/** Move a folder to Trash, first filing kept sessions and subfolders into
+ *  `destination` (`null` = Global) and waiting for the Controller to apply them. */
 export async function trashFolderKeeping(
   folder: string,
   keep: readonly string[],
   destination: string | null,
+  keepFolders: readonly string[] = [],
 ): Promise<void> {
-  if (keep.length > 0) {
-    placeSessions(keep, destination);
-    await waitForState(() => foldersSync.pending() === 0, "Move kept sessions");
-    // A placement that failed locally leaves nothing pending either. Only an
-    // applied destination proves the kept sessions are out of the folder;
-    // otherwise nothing is deleted.
+  for (const child of keepFolders) moveSessionFolder(child, destination);
+  if (keep.length > 0) placeSessions(keep, destination);
+  if (keep.length > 0 || keepFolders.length > 0) {
+    await waitForState(() => foldersSync.pending() === 0, "Move kept items");
+    const view = foldersSync.view();
     const target = destination ?? TOP_LEVEL_PLACEMENT;
-    const placement = foldersSync.view().placement;
-    if (keep.some((id) => placement[id] !== target)) {
-      throw new Error("Could not move the sessions to keep. Nothing was moved to Trash.");
+    if (keep.some((id) => view.placement[id] !== target) || keepFolders.some((id) => view.folders.find((c) => c.id === id)?.parent !== destination)) {
+      throw new Error("Could not move the items to keep. Nothing was moved to Trash.");
     }
   }
   await trashItems({ folders: [folder] });

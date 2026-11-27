@@ -138,8 +138,8 @@ export interface TrashDraftRow {
   readonly key: string;
   readonly draft: DraftMetadata;
   readonly depth: number;
-  /** Drafts carry no deletion time; inside a folder they share its time. */
-  readonly trashedAt: number | null;
+  /** Epoch ms when the draft (or its containing folder) moved to Trash. */
+  readonly trashedAt: number;
   readonly origin: string | null;
   readonly sharesDeadline?: boolean;
 }
@@ -176,6 +176,7 @@ export function buildTrashTree(
   drafts: readonly DraftMetadata[],
   expanded: ReadonlySet<string>,
   retentionDays: number,
+  sessionTitles?: ReadonlyMap<string, string>,
 ): TrashTree {
   const trashedFolders = value.folders.filter(isTrashedFolder);
   const trashedIds = new Set(trashedFolders.map((folder) => folder.id));
@@ -185,7 +186,7 @@ export function buildTrashTree(
   const projects = projectFolderIndex(value);
   const sessionFolder = (session: SessionMeta): string | null =>
     effectiveSessionFolder(session, value, projects);
-  const trashDrafts = drafts.filter((draft) => draftInTrash(draft, value) && draft.kind === "document");
+  const trashDrafts = drafts.filter((draft) => draftInTrash(draft, value) && (draft.kind === "document" || draft.deleted));
   const origin = (folder: string | null): string | null => {
     // Name the live location an entry returns to: its folder path, or Global.
     if (folder === null || sessionFolderById(value, folder) === undefined) return "Global";
@@ -216,15 +217,23 @@ export function buildTrashTree(
       origin: container ? null : origin(folder),
     });
   }
+  const draftTrashedAt = (draft: DraftMetadata, container: string | null): number =>
+    draft.trashed_at_ms ??
+    (container ? sessionFolderById(value, container)?.trashed_at_ms : undefined) ??
+    draft.updated_at_ms ??
+    0;
   for (const draft of trashDrafts) {
     const container = containerOf(draft.parent_id);
+    const sourceOrigin = draft.source_session_id
+      ? sessionTitles?.get(draft.source_session_id) ?? "Session draft"
+      : null;
     push(container, {
       kind: "trash-draft",
       key: trashRowKey("draft", draft.id),
       draft,
       depth: 0,
-      trashedAt: container ? sessionFolderById(value, container)?.trashed_at_ms ?? null : null,
-      origin: container ? null : origin(draft.parent_id),
+      trashedAt: draftTrashedAt(draft, container),
+      origin: container ? null : sourceOrigin ?? origin(draft.parent_id),
     });
   }
   const countBelow = (id: string): number =>
@@ -268,7 +277,8 @@ export function buildTrashTree(
   const deadlines = [
     ...sessions.map((session) => session.trashed_at_ms ?? 0),
     ...trashedFolders.map((folder) => folder.trashed_at_ms ?? 0),
-  ].map((at) => trashDeadline(at, retentionDays));
+    ...trashDrafts.map((draft) => draftTrashedAt(draft, containerOf(draft.parent_id))),
+  ].filter((at) => at > 0).map((at) => trashDeadline(at, retentionDays));
   return {
     rows,
     entries: (childFolders.get(null)?.length ?? 0) + (itemsIn.get(null)?.length ?? 0),

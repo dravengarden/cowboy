@@ -47,6 +47,12 @@ async function runStep(step: UndoStep): Promise<void> {
         ...step.attachments,
       ]);
       return;
+    case "restore_session_draft":
+      await copyDocumentToSession(step.sessionId, step.text, [
+        ...step.attachments,
+      ]);
+      await draftRepository().purge([step.draftId]).catch(() => undefined);
+      return;
     case "restore_calls": {
       const restored: string[] = [];
       for (let i = 0; i < step.ids.length; i += CALLS_PAGE) {

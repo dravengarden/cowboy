@@ -53,6 +53,10 @@ fn independent_draft_routes_require_product_identity_and_operator_writes() {
         RouteAuth::ProductOperator
     );
     assert_eq!(
+        classify_route(&Method::POST, "/api/drafts/purge"),
+        RouteAuth::ProductOperator
+    );
+    assert_eq!(
         classify_route(&Method::DELETE, "/api/sessions/session/draft-copies/cmid"),
         RouteAuth::ProductSessionMutate
     );

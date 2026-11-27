@@ -297,18 +297,23 @@ test("MessageWithFork keeps Mobile transcript free of inline fork chrome and Des
   expect(forkActionSrc).not.toContain("executeForkAttempt");
 });
 
-test("Composer places MobileBranchSwitcherButton at the end of mobile actions without Clear composer and uses GitForkIcon", async () => {
+test("Composer integrates Branches and Background tasks into one unpinned MobileSessionActivityButton inside the scrollable track", async () => {
   const fs = await import("node:fs/promises");
   const composerSrc = await fs.readFile(new URL("./Composer.tsx", import.meta.url), "utf8");
   const switcherSrc = await fs.readFile(new URL("./LineageBranchSwitcher.tsx", import.meta.url), "utf8");
+  const activitySrc = await fs.readFile(new URL("./tasks/MobileSessionActivityButton.tsx", import.meta.url), "utf8");
   const scheduleIdx = composerSrc.indexOf('aria-label="schedule send"');
-  const branchIdx = composerSrc.indexOf("<MobileBranchSwitcherButton sessionId={sessionId} />");
+  const activityIdx = composerSrc.indexOf("<MobileSessionActivityButton");
   const stackEndIdx = composerSrc.indexOf("</Stack>", scheduleIdx);
   expect(scheduleIdx).toBeGreaterThan(0);
-  expect(branchIdx).toBeGreaterThan(scheduleIdx);
-  expect(stackEndIdx).toBeGreaterThan(branchIdx);
+  expect(activityIdx).toBeGreaterThan(scheduleIdx);
+  expect(stackEndIdx).toBeGreaterThan(activityIdx);
+  expect(composerSrc).not.toContain("MobileTasksButton");
   expect(composerSrc).not.toContain("data-mobile-composer-clear");
   expect(composerSrc).not.toContain('aria-label="clear composer"');
   expect(switcherSrc).toContain("GitForkIcon");
   expect(switcherSrc).not.toContain("AccountTreeOutlined");
+  expect(activitySrc).toContain("GitForkIcon");
+  expect(activitySrc).not.toContain("AccountTreeOutlined");
+  expect(activitySrc).not.toContain("borderLeft");
 });

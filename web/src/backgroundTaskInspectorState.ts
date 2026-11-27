@@ -4,6 +4,7 @@
 import { useSyncExternalStore } from "react";
 
 export type InspectorOrigin = "row" | "bar" | "command" | "link";
+export type MobileActivityTab = "tasks" | "branches";
 
 export interface InspectorState {
   sessionId: string | null;
@@ -12,6 +13,8 @@ export interface InspectorState {
   origin: InspectorOrigin;
   /** Restored on close: the originating row, or the composer from the bar. */
   returnFocus: HTMLElement | null;
+  /** Active tab inside the unified Mobile Session Activity sheet. */
+  tab: MobileActivityTab;
   /** Bumped on every open so a second open of the same key re-selects it. */
   revision: number;
 }
@@ -21,6 +24,7 @@ let current: InspectorState = {
   key: null,
   origin: "row",
   returnFocus: null,
+  tab: "tasks",
   revision: 0,
 };
 const listeners = new Set<() => void>();
@@ -38,6 +42,7 @@ export function openBackgroundTask(
   key: string | null,
   origin: InspectorOrigin,
   returnFocus: HTMLElement | null = null,
+  tab: MobileActivityTab = "tasks",
 ): void {
   const active = globalThis.document?.activeElement;
   current = {
@@ -45,8 +50,15 @@ export function openBackgroundTask(
     key,
     origin,
     returnFocus: returnFocus ?? (active instanceof HTMLElement ? active : null),
+    tab: key !== null ? "tasks" : tab,
     revision: current.revision + 1,
   };
+  emit();
+}
+
+export function selectInspectorTab(tab: MobileActivityTab): void {
+  if (current.sessionId === null || current.tab === tab) return;
+  current = { ...current, tab };
   emit();
 }
 
@@ -60,7 +72,7 @@ export function selectBackgroundTask(key: string | null): void {
 export function closeBackgroundTasks(): HTMLElement | null {
   if (current.sessionId === null) return null;
   const focus = current.returnFocus;
-  current = { ...current, sessionId: null, key: null, returnFocus: null };
+  current = { ...current, sessionId: null, key: null, returnFocus: null, tab: "tasks" };
   emit();
   return focus;
 }

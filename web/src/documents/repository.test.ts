@@ -60,6 +60,23 @@ function fixture() {
             Response.json({ entries: [...server.values()] }),
           );
         }
+        if (path === "/api/drafts/purge") {
+          const body = JSON.parse(String(init?.body)) as { ids: string[] };
+          const purged: string[] = [];
+          const failed: { id: string; error: string }[] = [];
+          for (const id of body.ids) {
+            const current = server.get(id);
+            if (!current) {
+              purged.push(id);
+            } else if (!current.deleted) {
+              failed.push({ id, error: "Draft is not in Trash" });
+            } else {
+              server.delete(id);
+              purged.push(id);
+            }
+          }
+          return Promise.resolve(Response.json({ purged, failed }));
+        }
         if (path === "/api/drafts/mutations") {
           // A proxy in front of a restarting controller: no JSON body.
           if (gateway) {
@@ -712,4 +729,32 @@ test("History lists versions without content and fetches one at a time", async (
     }
     await first.dispose();
   }
+});
+
+test("purge permanently removes trashed drafts and purge announcements evict peer replicas", async () => {
+  const f = fixture();
+  const primary = f.create();
+  const peer = f.device();
+  const id = await primary.create("Scratch note", null, "document", "temporary", [], {
+    trashed: true,
+    source_session_id: "sess-origin",
+  });
+  await settle(() => primary.document(id).get().phase === "saved");
+  assertEquals(f.server.get(id)?.deleted, true);
+  assertEquals(typeof f.server.get(id)?.trashed_at_ms, "number");
+  assertEquals(f.server.get(id)?.source_session_id, "sess-origin");
+
+  await peer.repository.refresh();
+  assertEquals(peer.repository.get().entries.some((entry) => entry.id === id), true);
+
+  const purged = await primary.purge([id]);
+  assertEquals(purged, [id]);
+  assertEquals(f.server.has(id), false);
+  assertEquals(primary.get().entries.some((entry) => entry.id === id), false);
+
+  peer.repository.announce({ [id]: { id, purged: true } });
+  assertEquals(peer.repository.get().entries.some((entry) => entry.id === id), false);
+
+  await primary.dispose();
+  await peer.repository.dispose();
 });

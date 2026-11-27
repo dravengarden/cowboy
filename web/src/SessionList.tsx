@@ -49,7 +49,7 @@ import { useProviderCatalog } from "./providerCatalog";
 import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import { type SessionMeta } from "./protocol";
 import { statusColor } from "./SessionStatusDot";
-import { bindSessionFolderProject, createSessionFolder, markSessionHydrated, moveSessionFolder, notify, prefetchSessionTail, organizeSessionsByProject, placeSessions, removeSessionFolder, renameSession, renameSessionFolder, reorderSessionFolders, reorderSessions, setSessionFolderDefaults, useStoreSelector } from "./store";
+import { bindSessionFolderProject, createSessionFolder, markSessionHydrated, moveSessionFolder, notify, prefetchSessionTail, organizeSessionsByProject, placeSessions, renameSession, renameSessionFolder, reorderSessionFolders, reorderSessions, setSessionFolderDefaults, useStoreSelector } from "./store";
 import { type SessionFolder, folderAncestors, normalizeSessionFolderName, sessionFolderById, sessionFolderLocation, unboundProjectLabels } from "./sessionFolders";
 import { buildSessionTree, displayedSessionOrder, dropTargetFolder, type FolderActivity, folderIdFromRowKey, foldersRevealing, movedRowKey, projectSessionDrop, rowInsideFolder, type SessionDropProjection, sessionTreeRowKey, type SessionTreeRow } from "./sessionTree";
 import { FolderNameShell, InAppRoot, FolderPickerShell, ProjectPickerShell, SESSION_FOLDER_CREATED_EVENT, type SessionFolderCreated, announceSessionFolderCreated, useCollapsedSessionFolders, withFoldersCollapsed } from "./SessionFolderUi";
@@ -2624,7 +2624,7 @@ export function SessionList({
                     sx={{ color: "error.main" }}
                 >
                     <ListItemIcon><DeleteOutline fontSize="medium" color="error" /></ListItemIcon>
-                    <ListItemText primary="Delete folder" />
+                    <ListItemText primary="Move to Trash" />
                 </MenuItem>
             </Menu>}
             {desktop && folderMenu !== null && (
@@ -2708,7 +2708,7 @@ export function SessionList({
                             <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Organize all projects ({unboundProjects.length})</Box><Kbd keys="P" />
                         </Button>}
                         <Button data-folder-shortcut="x" color="error" fullWidth startIcon={<DeleteOutline />} onClick={(): void => { setDeleteFolder(folderMenuFolder); setFolderMenu(null); }} sx={{ justifyContent: "flex-start" }}>
-                            <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Delete folder</Box>
+                            <Box component="span" sx={{ flex: 1, textAlign: "left" }}>Move to Trash</Box>
                             <Kbd keys="X" />
                         </Button>
                     </Stack>
@@ -2783,26 +2783,24 @@ export function SessionList({
                 <DeleteFolderToTrashShell
                     folder={deleteFolder}
                     plan={deleteFolderPlan}
+                    liveFolders={sessionFolders}
+                    sessions={sessions}
+                    drafts={treeDrafts}
                     destination={deleteFolder.parent}
                     destinationName={sessionFolderLocation(sessionFolders, deleteFolder.parent)}
                     retentionDays={trashRetention.days}
                     onClose={(): void => setDeleteFolder(null)}
-                    onDeleteFolderOnly={(): void => {
-                        removeSessionFolder(deleteFolder.id);
-                        setDeleteFolder(null);
-                    }}
                 />
             )}
             {trashRow && (
                 <TrashItemSheet
                     row={trashRow}
+                    tree={trashTree}
                     retentionDays={trashRetention.days}
                     now={Date.now()}
                     onClose={(): void => setTrashRow(null)}
-                    onOpenSession={(id): void => {
-                        revealSession(id);
-                        onPick(id);
-                    }}
+                    onOpenSession={(id): void => { revealSession(id); onPick(id); }}
+                    onOpenDraft={(id): void => onPick(`draft:${id}`)}
                 />
             )}
             {trashMenu && (

@@ -5,6 +5,7 @@ import { QueuedDeliveryAction } from "./QueuedDeliveryAction";
 import { bulkActivatableDrafts } from "./wrapUpDelivery";
 import { QueueDeliverySettings } from "./QueueDeliverySettings";
 import { moveSessionDraftToDocument } from "./documents/sessionDraftImport";
+import { trashAllSessionDrafts, trashSessionDraft } from "./documents/sessionDraftTrash";
 import { ProtectedImage } from "./ProtectedImage";
 import { lazy, memo, type ReactNode, Suspense, useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { alpha, Box, Button, ButtonBase, Chip, CircularProgress, Collapse, DialogContentText, IconButton, keyframes, ListItemIcon, ListItemText, Menu, MenuItem, Paper, Stack, Tooltip, Typography, useMediaQuery, useTheme, type Theme } from "@mui/material";
@@ -44,10 +45,10 @@ import {
   DesktopPendingHeaderTrailing,
   handleDesktopPendingRowEditEvent,
 } from "./desktop/DesktopPendingListChrome";
-import { recordUndo } from "./undoActions";
+import { documentNotice } from "./documents/DocumentNotifications";
 import { type Attachment, filesToAttachments, fileToAttachment, pendingImageAttachment, imageTokensInText, promoteUnplacedImageTokens, reconcileDeletedInlineImages, settlePendingAttachments, stripImageTokens } from "./attachments";
 import { getInlineAttachment, registerInlineAttachment, seedInlineAttachments } from "./inlineImages";
-import { activateAllDrafts, activateDraft, clearDrafts, clearQueue, discardQueued, returnFailedQueued, editDraft, editQueued, type QueuedMessage, notify, queuedToDraft, removeDraft, removeQueued, reorderDrafts, reorderQueue, retryQueued, setQueueEditing, useConnected, useStoreSelector } from "./store";
+import { activateAllDrafts, activateDraft, clearQueue, discardQueued, returnFailedQueued, editDraft, editQueued, type QueuedMessage, notify, queuedToDraft, removeDraft, removeQueued, reorderDrafts, reorderQueue, retryQueued, setQueueEditing, useConnected, useStoreSelector } from "./store";
 import { type SessionContext, stagedNextAgent } from "./sessionContext";
 import { isOnlyConfirmedQueuedMessage, loadStagedQueuePrompt } from "./stagedQueuePrompt";
 import { fireLabel } from "./scheduleTime";
@@ -813,7 +814,7 @@ export function PendingPanel({
       importantHaptic();
       if (kind === "queued" && items.some((item) => item.currentTurn)) return;
       if (kind === "queued") await clearQueue(sessionId);
-      else await clearDrafts(sessionId);
+      else await trashAllSessionDrafts(sessionId, items);
     }
     setBulkConfirm(null);
   };
@@ -1414,7 +1415,7 @@ export function PendingPanel({
           onClose={(): void => setBulkConfirm(null)}
           title={bulkConfirm === "send-all" ? "Send all drafts?" : kind === "queued"
             ? "Clear all queued messages?"
-            : "Clear all drafts?"}
+            : "Move all drafts to Trash?"}
           actions={
             <>
               <Button
@@ -1431,7 +1432,7 @@ export function PendingPanel({
                 networkAction={runBulkConfirm}
                 sx={{ textTransform: "none" }}
               >
-                {bulkConfirm === "send-all" ? "Send all" : "Clear all"}
+                {bulkConfirm === "send-all" ? "Send all" : kind === "draft" ? "Move to Trash" : "Clear all"}
                 <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
               </NetworkButton>
             </>
@@ -1442,7 +1443,7 @@ export function PendingPanel({
               ? `Send all ${String(count)} drafts to the agent?`
               : kind === "queued"
               ? `Clear all ${String(count)} queued messages?`
-              : `Clear all ${String(count)} drafts?`}
+              : `Move all ${String(count)} drafts to Trash? They can be restored from Trash.`}
           </DialogContentText>
         </ConfirmSheet>
       </Stack>
@@ -1911,9 +1912,11 @@ export function PendingRow({
   const doRemove = (): void => {
     importantHaptic();
     const removal = kind === "draft"
-      ? removeDraft(sessionId, message.id)
+      ? trashSessionDraft(sessionId, message)
       : removeQueued(sessionId, message.id);
-    void removal.catch(() => undefined);
+    void removal.catch((error: unknown) => {
+      documentNotice(error instanceof Error ? error.message : "Could not move draft to Trash.");
+    });
     setConfirmRemove(false);
   };
   useConfirmEnter(confirmRemove, doRemove);
@@ -2745,14 +2748,9 @@ export function PendingRow({
         icon: <Close fontSize="small" />,
         onClick: (): void => {
           if (desktop && !message.schedule) {
-            void removeDraft(sessionId, message.id).then(() => {
-              recordUndo("Draft removed", [{
-                kind: "copy_to_session",
-                sessionId,
-                text: message.text,
-                attachments: message.attachments,
-              }]);
-            }).catch(() => undefined);
+            void trashSessionDraft(sessionId, message).catch((error: unknown) => {
+              documentNotice(error instanceof Error ? error.message : "Could not move draft to Trash.");
+            });
             return;
           }
           setConfirmRemove(true);
@@ -3060,7 +3058,7 @@ export function PendingRow({
         open={confirmRemove}
         onClose={(): void => setConfirmRemove(false)}
         title={kind === "draft"
-          ? "Delete this draft?"
+          ? "Move this draft to Trash?"
           : "Delete this queued message?"}
         actions={
           <>
@@ -3078,7 +3076,7 @@ export function PendingRow({
               onClick={doRemove}
               sx={{ textTransform: "none" }}
             >
-              Delete
+              {kind === "draft" ? "Move to Trash" : "Delete"}
               <Kbd keys={`${MOD_LABEL}${ENTER_LABEL}`} />
             </Button>
           </>

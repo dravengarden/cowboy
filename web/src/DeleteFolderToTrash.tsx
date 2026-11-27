@@ -1,10 +1,9 @@
 import { ScrollEdges } from "@cowboy/app-shell";
-// Delete a folder that may hold sessions (docs/sessions-folders.md#trash).
+// Delete a folder that may hold sessions or drafts (docs/sessions-folders.md#trash).
 // The folder, its subfolders and every checked item go to Trash together and
 // restore together. Unchecking an item keeps it: it moves to the destination
-// first. A working session cannot go to Trash, so it starts unchecked and
-// says why. "Delete folder only" keeps the original behaviour: contents and
-// subfolders move up and nothing goes to Trash.
+// first. "Move folder only to Trash" moves direct subfolders, sessions and
+// drafts up to the destination first, then moves the emptied folder to Trash.
 
 import { Box, Button, Checkbox, Stack, Typography } from "@mui/material";
 import { ChatBubbleOutline, DeleteOutline, DescriptionOutlined } from "@mui/icons-material";
@@ -16,8 +15,10 @@ import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 import { InAppRoot } from "./SessionFolderUi";
 import { ConfirmSheet } from "./Sheet";
-import type { SessionFolder } from "./sessionFolders";
+import { effectiveSessionFolder, projectFolderIndex, type SessionFolder, type SessionFoldersValue } from "./sessionFolders";
 import type { FolderDeletePlan } from "./trashModel";
+import type { SessionMeta } from "./protocol";
+import type { DraftMetadata } from "./documents/model";
 import { trashFolderKeeping } from "./store";
 import { desktopSize } from "./surface/desktopSize";
 
@@ -62,16 +63,98 @@ export function deleteFolderActionLabel(total: number, kept: number): string {
   return `Trash ${String(total - kept)}, keep ${String(kept)}`;
 }
 
+function FolderDeleteItemList({
+  items, keep, busy, destinationName, onToggle,
+}: {
+  items: readonly PlanItem[];
+  keep: ReadonlySet<string>;
+  busy: boolean;
+  destinationName: string;
+  onToggle: (key: string) => void;
+}): React.JSX.Element {
+  return (
+    <Box
+      component="ul"
+      aria-label="Items in this folder"
+      sx={{ m: 0, p: 0, maxHeight: "min(40vh, 320px)", overflowY: "auto", border: 1, borderColor: "divider", borderRadius: 1 }}
+    >
+      {items.map((item) => {
+        const keeping = keep.has(item.key) || item.working;
+        return (
+          <Box
+            key={item.key}
+            component="li"
+            data-delete-folder-item={item.key}
+            sx={{ listStyle: "none", borderBottom: 1, borderColor: "divider", "&:last-child": { borderBottom: 0 } }}
+          >
+            <Box
+              component="label"
+              sx={{ display: "flex", alignItems: "center", gap: 1, pr: 1, minHeight: desktopSize(44), cursor: item.working ? "default" : "pointer" }}
+            >
+              <Checkbox
+                size="small"
+                checked={!keeping}
+                disabled={busy || item.working}
+                onChange={(): void => onToggle(item.key)}
+                slotProps={{ input: { "aria-label": `Delete ${item.title}` } }}
+                sx={{ flexShrink: 0 }}
+              />
+              {item.kind === "draft"
+                ? <DescriptionOutlined sx={{ fontSize: "1.1rem", color: "text.secondary", flexShrink: 0 }} />
+                : <ChatBubbleOutline sx={{ fontSize: "1.1rem", color: "text.secondary", flexShrink: 0 }} />}
+              <Box sx={{ minWidth: 0, flex: 1 }}>
+                <Typography variant="body2" noWrap>{item.title}</Typography>
+                <Typography variant="caption" noWrap component="div" color={item.working ? "warning.main" : "text.secondary"}>
+                  {item.working ? `Working, so it is kept in ${destinationName}` : keeping ? `Kept · moves to ${destinationName}` : item.path}
+                </Typography>
+              </Box>
+            </Box>
+          </Box>
+        );
+      })}
+      <ScrollEdges />
+    </Box>
+  );
+}
+
+async function moveFolderOnlyToTrash(
+  folder: SessionFolder,
+  destination: string | null,
+  liveFolders: SessionFoldersValue,
+  sessions: readonly SessionMeta[],
+  drafts: readonly DraftMetadata[],
+): Promise<void> {
+  const directSubfolders = liveFolders.folders
+    .filter((candidate) => candidate.parent === folder.id)
+    .map((candidate) => candidate.id);
+  const projects = projectFolderIndex(liveFolders);
+  const directSessions = sessions
+    .filter((session) => effectiveSessionFolder(session, liveFolders, projects) === folder.id)
+    .map((session) => session.id);
+  const directDrafts = drafts.filter(
+    (draft) => !draft.deleted && draft.kind === "document" && draft.parent_id === folder.id,
+  );
+  for (const draft of directDrafts) {
+    const owner = draftRepository().document(draft.id);
+    await owner.hydrate();
+    await owner.change({ type: "move", parent_id: destination });
+    await owner.whenSynced();
+  }
+  await trashFolderKeeping(folder.id, directSessions, destination, directSubfolders);
+}
+
 export function DeleteFolderToTrashShell(
-  { folder, plan, destination, destinationName, retentionDays, onClose, onDeleteFolderOnly }: {
+  { folder, plan, liveFolders, sessions, drafts, destination, destinationName, retentionDays, onClose }: {
     folder: SessionFolder;
     plan: FolderDeletePlan;
+    liveFolders: SessionFoldersValue;
+    sessions: readonly SessionMeta[];
+    drafts: readonly DraftMetadata[];
     /** Where kept items go: the folder's parent, `null` = Global. */
     destination: string | null;
     destinationName: string;
     retentionDays: number;
     onClose: () => void;
-    onDeleteFolderOnly: () => void;
   },
 ): React.JSX.Element {
   const items = useMemo(() => planItems(plan), [plan]);
@@ -91,6 +174,7 @@ export function DeleteFolderToTrashShell(
         const owner = draftRepository().document(item.id);
         await owner.hydrate();
         await owner.change({ type: "move", parent_id: destination });
+        await owner.whenSynced();
       }
       await trashFolderKeeping(
         folder.id,
@@ -168,70 +252,32 @@ export function DeleteFolderToTrashShell(
                   Not all of them? Uncheck the sessions to keep before deleting.
                 </Typography>
               )}
-              <Box
-                component="ul"
-                aria-label="Items in this folder"
-                sx={{ m: 0, p: 0, maxHeight: "min(40vh, 320px)", overflowY: "auto", border: 1, borderColor: "divider", borderRadius: 1 }}
-              >
-                {items.map((item) => {
-                  const keeping = keep.has(item.key) || item.working;
-                  return (
-                    <Box
-                      key={item.key}
-                      component="li"
-                      data-delete-folder-item={item.key}
-                      sx={{
-                        listStyle: "none",
-                        borderBottom: 1,
-                        borderColor: "divider",
-                        "&:last-child": { borderBottom: 0 },
-                      }}
-                    >
-                     {/* The whole row is the checkbox label: a 44px touch target. */}
-                     <Box
-                      component="label"
-                      sx={{
-                        display: "flex",
-                        alignItems: "center",
-                        gap: 1,
-                        pr: 1,
-                        minHeight: desktopSize(44),
-                        cursor: item.working ? "default" : "pointer",
-                      }}
-                    >
-                      <Checkbox
-                        size="small"
-                        checked={!keeping}
-                        disabled={busy || item.working}
-                        onChange={(): void => toggle(item.key)}
-                        slotProps={{ input: { "aria-label": `Delete ${item.title}` } }}
-                        sx={{ flexShrink: 0 }}
-                      />
-                      {item.kind === "draft"
-                        ? <DescriptionOutlined sx={{ fontSize: "1.1rem", color: "text.secondary", flexShrink: 0 }} />
-                        : <ChatBubbleOutline sx={{ fontSize: "1.1rem", color: "text.secondary", flexShrink: 0 }} />}
-                      <Box sx={{ minWidth: 0, flex: 1 }}>
-                        <Typography variant="body2" noWrap>
-                          {item.title}
-                        </Typography>
-                        <Typography variant="caption" noWrap component="div" color={item.working ? "warning.main" : "text.secondary"}>
-                          {item.working
-                            ? `Working, so it is kept in ${destinationName}`
-                            : keeping
-                            ? `Kept · moves to ${destinationName}`
-                            : item.path}
-                        </Typography>
-                      </Box>
-                     </Box>
-                    </Box>
-                  );
-                })}
-              <ScrollEdges /></Box>
+              <FolderDeleteItemList items={items} keep={keep} busy={busy} destinationName={destinationName} onToggle={toggle} />
             </>
           )}
           {contents.length > 0 && (
-            <Button size="small" color="inherit" disabled={busy} onClick={onDeleteFolderOnly} sx={{ alignSelf: "flex-start", textAlign: "left" }}>
-              Delete folder only — move everything to {destinationName}
+            <Button
+              size="small"
+              color="inherit"
+              disabled={busy}
+              onClick={(): void => {
+                if (busy) return;
+                setBusy(true);
+                void moveFolderOnlyToTrash(folder, destination, liveFolders, sessions, drafts)
+                  .then(() => {
+                    onClose();
+                    recordUndo(`"${folder.name}" moved to Trash; contents kept in ${destinationName}`, [
+                      { kind: "restore_trash", folders: [folder.id] },
+                    ]);
+                  })
+                  .catch((error: unknown) => {
+                    documentNotice(error instanceof Error ? error.message : "Could not move the folder to Trash.");
+                  })
+                  .finally(() => setBusy(false));
+              }}
+              sx={{ alignSelf: "flex-start", textAlign: "left" }}
+            >
+              Move folder only to Trash — keep everything in {destinationName}
             </Button>
           )}
         </Stack>

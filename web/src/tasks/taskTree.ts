@@ -417,3 +417,68 @@ export function isTaskEnded(task: TaskSummary): boolean {
   if (task.source === "call" && task.call) return !callActive(task.call.state);
   return terminalGroup(task.group) || task.group === "unavailable";
 }
+
+export type ActivityDotTone = "warning" | "error" | "active" | null;
+
+export interface MobileActivityState {
+  visible: boolean;
+  hasTasks: boolean;
+  hasBranches: boolean;
+  dotTone: ActivityDotTone;
+  defaultTab: "tasks" | "branches";
+  label: string;
+}
+
+export function resolveMobileActivityState(
+  summary: TaskTabSummary,
+  relationCount: number,
+  showTasks: boolean,
+): MobileActivityState {
+  const hasTasks = showTasks && summary.hasTasks;
+  const hasBranches = relationCount > 0;
+  if (!hasTasks && !hasBranches) {
+    return {
+      visible: false,
+      hasTasks: false,
+      hasBranches: false,
+      dotTone: null,
+      defaultTab: "tasks",
+      label: "",
+    };
+  }
+  const dotTone: ActivityDotTone = !hasTasks
+    ? null
+    : summary.needsYouCount > 0
+    ? "warning"
+    : summary.failedUnseenCount > 0
+    ? "error"
+    : summary.activeCount > 0 || summary.extraActivity
+    ? "active"
+    : null;
+  const defaultTab: "tasks" | "branches" = hasTasks && (dotTone !== null || !hasBranches)
+    ? "tasks"
+    : "branches";
+  const parts: string[] = [];
+  if (hasTasks) {
+    if (summary.needsYouCount > 0) parts.push(`${String(summary.needsYouCount)} needs you`);
+    if (summary.failedUnseenCount > 0) parts.push(`${String(summary.failedUnseenCount)} failed`);
+    if (summary.activeCount > 0) parts.push(`${String(summary.activeCount)} active`);
+    if (parts.length === 0 && summary.totalCount > 0) parts.push(`${String(summary.totalCount)} ended`);
+  }
+  if (hasBranches) {
+    parts.push(`${String(relationCount)} ${relationCount === 1 ? "branch" : "branches"}`);
+  }
+  const title = hasTasks && hasBranches
+    ? "Session activity"
+    : hasBranches
+    ? "Branches & lineage"
+    : "Background tasks";
+  return {
+    visible: true,
+    hasTasks,
+    hasBranches,
+    dotTone,
+    defaultTab,
+    label: parts.length > 0 ? `${title}: ${parts.join(", ")}` : title,
+  };
+}

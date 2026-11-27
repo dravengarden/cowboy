@@ -264,6 +264,7 @@ pub fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
             "/api/drafts/mutations",
             post(draft_documents::mutate).layer(DefaultBodyLimit::max(12 * 1024 * 1024)),
         )
+        .route("/api/drafts/purge", post(draft_documents::purge))
         .route("/api/drafts/{id}", get(draft_documents::read))
         .route("/api/drafts/{id}/history", get(draft_documents::history))
         .route(

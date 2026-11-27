@@ -2160,6 +2160,29 @@ impl Hub {
         );
     }
 
+    pub fn announce_draft_purged(&self, owner: &str, ids: &[String]) {
+        if ids.is_empty() {
+            return;
+        }
+        let mut payload = serde_json::Map::new();
+        {
+            let mut announcements = self.inner.draft_announcements.lock();
+            if let Some(documents) = announcements.get_mut(owner) {
+                for id in ids {
+                    documents.remove(id);
+                }
+            }
+        }
+        for id in ids {
+            payload.insert(id.clone(), serde_json::json!({ "id": id, "purged": true }));
+        }
+        self.sync_emit(
+            "drafts",
+            serde_json::json!({ owner: serde_json::Value::Object(payload) }),
+            Vec::new(),
+        );
+    }
+
     /// Restore persisted sessions while reconciling detached runtime workers.
     /// A persisted `Busy` row is interrupted only when no matching live worker
     /// exists. This prevents a control-plane deploy from generating a false

@@ -34,6 +34,13 @@ export type UndoStep =
     text: string;
     attachments: Attachment[];
   }
+  | {
+    kind: "restore_session_draft";
+    draftId: string;
+    sessionId: string;
+    text: string;
+    attachments: Attachment[];
+  }
   | { kind: "restore_calls"; parent: string; ids: string[] };
 
 export type UndoState = "available" | "undoing" | "used" | "unavailable";
@@ -97,6 +104,7 @@ const STEP_KINDS = new Set([
   "trash_draft",
   "remove_session_draft",
   "copy_to_session",
+  "restore_session_draft",
   "restore_calls",
 ]);
 const STATES = new Set(["available", "undoing", "used", "unavailable"]);

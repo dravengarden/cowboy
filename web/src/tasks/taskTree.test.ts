@@ -11,6 +11,7 @@ import {
   formatTaskQuote,
   isTaskEnded,
   taskHeadline,
+  resolveMobileActivityState,
   taskTabSummary,
   taskTimeLabel,
 } from "./taskTree.ts";
@@ -395,4 +396,98 @@ test("stopGrantKey invalidates when connection generation advances across reconn
   const g1 = stopGrantKey("sess-1", task!, true, 0, 1);
   const g2 = stopGrantKey("sess-1", task!, true, 0, 2);
   assertEquals(g1 !== null && g2 !== null && g1 !== g2, true);
+});
+
+test("resolveMobileActivityState unifies branches and background tasks without noisy badges", () => {
+  const emptySummary = taskTabSummary([], 0);
+  const none = resolveMobileActivityState(emptySummary, 0, true);
+  assertEquals(none.visible, false);
+  assertEquals(none.dotTone, null);
+
+  const branchesOnly = resolveMobileActivityState(emptySummary, 2, true);
+  assertEquals(branchesOnly.visible, true);
+  assertEquals(branchesOnly.hasBranches, true);
+  assertEquals(branchesOnly.hasTasks, false);
+  assertEquals(branchesOnly.dotTone, null);
+  assertEquals(branchesOnly.defaultTab, "branches");
+  assertEquals(branchesOnly.label, "Branches & lineage: 2 branches");
+
+  const endedTasks = taskTabSummary(
+    buildTaskSummaries({
+      subagents: [{
+        subagent: subagent({ id: "ended-1", state: "idle", stopReason: "end_turn", result: "Done" }),
+        anchorSeq: 1,
+        reconciledBy: "live",
+        reconciledAt: 100,
+      }],
+      calls: [],
+      approval: null,
+      pending: [],
+    }),
+    0,
+  );
+  const quietOnly = resolveMobileActivityState(endedTasks, 0, true);
+  assertEquals(quietOnly.visible, true);
+  assertEquals(quietOnly.dotTone, null);
+  assertEquals(quietOnly.defaultTab, "tasks");
+  assertEquals(quietOnly.label, "Background tasks: 1 ended");
+
+  const quietWithBranches = resolveMobileActivityState(endedTasks, 1, true);
+  assertEquals(quietWithBranches.visible, true);
+  assertEquals(quietWithBranches.hasTasks, true);
+  assertEquals(quietWithBranches.hasBranches, true);
+  assertEquals(quietWithBranches.dotTone, null);
+  assertEquals(quietWithBranches.defaultTab, "branches");
+  assertEquals(quietWithBranches.label, "Session activity: 1 ended, 1 branch");
+
+  const activeTasks = taskTabSummary(
+    buildTaskSummaries({
+      subagents: [],
+      calls: [call({ call_id: "c-live", state: "running" })],
+      approval: null,
+      pending: [],
+    }),
+    0,
+  );
+  const activeWithBranches = resolveMobileActivityState(activeTasks, 1, true);
+  assertEquals(activeWithBranches.dotTone, "active");
+  assertEquals(activeWithBranches.defaultTab, "tasks");
+
+  const failedTasks = taskTabSummary(
+    buildTaskSummaries({
+      subagents: [{
+        subagent: subagent({ id: "f1", state: "idle", stopReason: "error", error: "failed" }),
+        anchorSeq: 1,
+        reconciledBy: "live",
+        reconciledAt: 100,
+      }],
+      calls: [call({ call_id: "c-live", state: "running" })],
+      approval: null,
+      pending: [],
+    }),
+    0,
+  );
+  assertEquals(resolveMobileActivityState(failedTasks, 1, true).dotTone, "error");
+
+  const needsYouTasks = taskTabSummary(
+    buildTaskSummaries({
+      subagents: [
+        { subagent: subagent({ id: "w1", state: "requires_action" }), anchorSeq: 1, reconciledBy: "live", reconciledAt: 100 },
+        { subagent: subagent({ id: "f1", state: "idle", stopReason: "error", error: "failed" }), anchorSeq: 2, reconciledBy: "live", reconciledAt: 100 },
+      ],
+      calls: [],
+      approval: null,
+      pending: [{ requestId: "p1", subagentId: "w1", title: "Approve", options: [] }],
+    }),
+    0,
+  );
+  assertEquals(resolveMobileActivityState(needsYouTasks, 1, true).dotTone, "warning");
+
+  // Legacy dock mode suppresses tasks in the unified button while retaining branches.
+  const legacyMode = resolveMobileActivityState(needsYouTasks, 2, false);
+  assertEquals(legacyMode.visible, true);
+  assertEquals(legacyMode.hasTasks, false);
+  assertEquals(legacyMode.hasBranches, true);
+  assertEquals(legacyMode.dotTone, null);
+  assertEquals(legacyMode.defaultTab, "branches");
 });

@@ -24,8 +24,8 @@ function folder(id: string, parent: string | null, extra: Partial<SessionFolder>
   return { id, name: id.toUpperCase(), parent, position: 0, project: null, ...extra };
 }
 
-function draft(id: string, parent: string | null, deleted = false): DraftMetadata {
-  return { id, title: id, kind: "document", parent_id: parent, deleted } as DraftMetadata;
+function draft(id: string, parent: string | null, deleted = false, extra: Partial<DraftMetadata> = {}): DraftMetadata {
+  return { id, title: id, kind: "document", parent_id: parent, deleted, updated_at_ms: 1_500, ...extra } as DraftMetadata;
 }
 
 const value: SessionFoldersValue = {
@@ -126,4 +126,22 @@ test("countdowns read in the coarsest whole unit", () => {
   assertEquals(formatTrashRemaining(5 * 60_000), "5m");
   assertEquals(formatTrashRemaining(5 * 3_600_000), "5h");
   assertEquals(formatTrashRemaining(29 * DAY_MS + 5), "29d");
+});
+
+test("trashed standalone and session drafts carry timestamps, origin labels, and retention deadlines", () => {
+  const drafts = [
+    draft("doc-1", "live", true, { trashed_at_ms: 4_000 }),
+    draft("sess-draft", null, true, { trashed_at_ms: 5_000, source_session_id: "sess-a" }),
+  ];
+  const titles = new Map([["sess-a", "Cowboy UX"]]);
+  const tree = buildTrashTree([], { folders: [folder("live", null)], placement: {} }, drafts, new Set(), 30, titles);
+  assertEquals(tree.rows.map((row) => row.key), [
+    trashRowKey("draft", "sess-draft"),
+    trashRowKey("draft", "doc-1"),
+  ]);
+  assertEquals(tree.rows[0]?.trashedAt, 5_000);
+  assertEquals(tree.rows[0]?.origin, "Cowboy UX");
+  assertEquals(tree.rows[1]?.trashedAt, 4_000);
+  assertEquals(tree.rows[1]?.origin, "Global › LIVE");
+  assertEquals(tree.soonest, 4_000 + 30 * DAY_MS);
 });

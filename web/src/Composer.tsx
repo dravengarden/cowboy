@@ -1,5 +1,4 @@
 import { notifyLineageChanged } from "./ancestorHistory";
-import { MobileBranchSwitcherButton } from "./LineageBranchSwitcher";
 import { desktopSize, glyphSize } from "./surface/desktopSize";
 import { DeliveryPicker } from "./DeliveryPicker";
 import { deliverySourceMatches, guardDeliveryChoice } from "./deliverySource.ts";
@@ -50,7 +49,7 @@ import { ENTER_LABEL, MOD_LABEL } from "./platform";
 
 import { PlanDock } from "./PlanDock";
 import { ManagedCallsDock } from "./ManagedCallsDock";
-import { MobileTasksButton } from "./tasks/MobileTasksButton";
+import { MobileSessionActivityButton } from "./tasks/MobileSessionActivityButton";
 import { useCallsDockLegacy } from "./backgroundTasks";
 
 import { mobileComposerFocusMotion, mobileComposerIdleEditorMinHeight, mobileComposerKeyboardGap, mobileComposerPanelFrameSx, mobileComposerStackGap } from "./mobileComposerPrimitives";
@@ -2314,20 +2313,20 @@ export function ComposerWorkspace({
                       </IconButton>
                     </span>
                   </Tooltip>
-                  <MobileBranchSwitcherButton sessionId={sessionId} />
+                  {!desktop && (
+                    <MobileSessionActivityButton
+                      sessionId={sessionId}
+                      showTasks={touchInput && !callsDockLegacy}
+                      onBeforeOpen={(): void => {
+                        if (!keyboardOpen) return;
+                        noteMobileKeyboardDismissed();
+                        setMobileKeyboardDismissed(true);
+                        dismissMobileSoftwareKeyboard();
+                        releaseMobileComposerFocus();
+                      }}
+                    />
+                  )}
                 </Stack>
-                {touchInput && !desktop && !callsDockLegacy && (
-                  <MobileTasksButton
-                    sessionId={sessionId}
-                    onBeforeOpen={(): void => {
-                      if (!keyboardOpen) return;
-                      noteMobileKeyboardDismissed();
-                      setMobileKeyboardDismissed(true);
-                      dismissMobileSoftwareKeyboard();
-                      releaseMobileComposerFocus();
-                    }}
-                  />
-                )}
               </Box>
               {touchInput && (
                 <ComposerToolbarSettings

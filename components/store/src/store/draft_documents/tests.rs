@@ -15,6 +15,8 @@ fn create(kind: DraftKind, title: &str, parent: Option<&str>, body: &str) -> Dra
         parent_id: parent.map(str::to_owned),
         body: body.to_owned(),
         attachments: vec![],
+        trashed: false,
+        source_session_id: None,
     }
 }
 fn write(body: &str) -> DraftChange {
@@ -124,6 +126,8 @@ async fn contract(store: &Store) {
             parent_id: None,
             body: "Before".into(),
             attachments: vec![attachment.clone()],
+            trashed: false,
+            source_session_id: None,
         },
     );
     applied(
@@ -646,4 +650,174 @@ fn recovery_snapshots_are_spaced_like_obsidian_file_recovery() {
     ));
     // Resuming after a pause keeps the text as it was left.
     assert!(keeps_snapshot(60 * minute, 11 * minute, Some(10 * minute)));
+}
+
+fn create_trashed(title: &str, body: &str, source_session_id: Option<&str>) -> DraftChange {
+    DraftChange::Create {
+        kind: DraftKind::Document,
+        title: title.into(),
+        parent_id: None,
+        body: body.into(),
+        attachments: vec![],
+        trashed: true,
+        source_session_id: source_session_id.map(str::to_owned),
+    }
+}
+
+#[tokio::test]
+async fn draft_trash_lifecycle_stamps_timestamps_and_supports_trashed_session_drafts() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+
+    let live = applied(
+        store
+            .mutate_draft_document(
+                "alice",
+                &mutation(
+                    "d-live",
+                    "c-live",
+                    0,
+                    create(DraftKind::Document, "Live", None, "hello"),
+                ),
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(live.trashed_at_ms, None);
+    let trashed = applied(
+        store
+            .mutate_draft_document(
+                "alice",
+                &mutation("d-live", "t-live", 1, DraftChange::Trash),
+            )
+            .await
+            .unwrap(),
+    );
+    assert!(trashed.deleted && trashed.trashed_at_ms.is_some());
+
+    let archived = applied(
+        store
+            .mutate_draft_document(
+                "alice",
+                &mutation(
+                    "d-sess",
+                    "c-sess",
+                    0,
+                    create_trashed("Session draft", "unsent", Some("sess-42")),
+                ),
+            )
+            .await
+            .unwrap(),
+    );
+    assert!(archived.deleted && archived.trashed_at_ms.is_some());
+    assert_eq!(archived.source_session_id.as_deref(), Some("sess-42"));
+
+    let restored = applied(
+        store
+            .mutate_draft_document(
+                "alice",
+                &mutation("d-sess", "r-sess", 1, DraftChange::Restore),
+            )
+            .await
+            .unwrap(),
+    );
+    assert!(
+        !restored.deleted
+            && restored.trashed_at_ms.is_none()
+            && restored.source_session_id.is_none()
+    );
+}
+
+#[tokio::test]
+async fn draft_trash_purge_and_retention_cas_respect_live_documents() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+
+    let exp = applied(
+        store
+            .mutate_draft_document(
+                "alice",
+                &mutation("d-exp", "c-exp", 0, create_trashed("Expired", "old", None)),
+            )
+            .await
+            .unwrap(),
+    );
+    let trashed_at = exp.trashed_at_ms.expect("trashed_at_ms stamped");
+    assert_eq!(
+        store
+            .list_trashed_drafts_for_retention()
+            .await
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        !store
+            .purge_expired_draft("alice", "d-exp", trashed_at + 1)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .purge_expired_draft("alice", "d-exp", trashed_at)
+            .await
+            .unwrap()
+    );
+    assert!(
+        store
+            .draft_document("alice", "d-exp")
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    let c_keep = create(DraftKind::Document, "Keep", None, "body");
+    applied(
+        store
+            .mutate_draft_document("alice", &mutation("d-keep", "c-keep", 0, c_keep))
+            .await
+            .unwrap(),
+    );
+    let c_del = create_trashed("Trashed", "bye", Some("sess-9"));
+    applied(
+        store
+            .mutate_draft_document("alice", &mutation("d-del", "c-del", 0, c_del))
+            .await
+            .unwrap(),
+    );
+
+    let empty = std::collections::HashSet::new();
+    let err = store
+        .purge_trashed_drafts("alice", &["d-del".into(), "d-keep".into()], &empty)
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(err.contains("Only items in Trash"));
+    assert!(
+        store
+            .draft_document("alice", "d-del")
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    let purged = store
+        .purge_trashed_drafts("alice", &["d-del".into()], &empty)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(purged, vec!["d-del".to_owned()]);
+    assert!(
+        store
+            .draft_document("alice", "d-del")
+            .await
+            .unwrap()
+            .is_none()
+    );
 }

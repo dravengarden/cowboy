@@ -6,7 +6,7 @@ import { recordUndo } from "../undoActions";
 
 /** A standalone document must retain its image bytes even if its originating
  * Session is later purged and that Session's artifacts are collected. */
-async function independentAttachments(
+export async function independentAttachments(
   attachments: readonly Attachment[],
 ): Promise<Attachment[]> {
   return Promise.all(attachments.map(async (attachment) => {

@@ -80,9 +80,9 @@ reconnect, projected per principal.
   Desktop region entry) reveals it by expanding its ancestors.
 - Deleting a folder moves it, its subfolders and the sessions and Drafts the
   user leaves checked to [Trash](#trash); unchecked items move to its parent
-  first. **Delete folder only** keeps the original behaviour: subfolders and
-  contents move to the parent (root for a top-level folder) and nothing is
-  trashed.
+  first. **Move folder only to Trash** moves subfolders, sessions and Drafts to
+  the parent (root for a top-level folder) first, then moves the emptied folder
+  to Trash with Undo.
 
 ### Mutations (client mutator → arbiter)
 
@@ -612,11 +612,15 @@ run (execution environment stop, then the 3-day storage purge).
   holding sessions that retention would delete.
 - `POST /api/sessions/{id}/prompt` refuses a trashed session with 409; any
   other admitted work (a scheduled wakeup) stays queued, never dispatched.
-- Drafts keep their own document Trash (`deleted`). A Draft inside a trashed
-  folder is shown in that folder in Trash; if the folder is deleted
-  permanently, the Draft moves to Draft Trash at the nearest live ancestor
-  instead of resurfacing. Nothing new can be created in or moved into a
-  trashed folder.
+- Trashed Drafts (`deleted: true`) record `trashed_at_ms` and join the same
+  Trash list, retention countdown, `Empty Trash…`, `POST /api/drafts/purge`,
+  and Controller retention sweep as sessions and folders. A Draft inside a
+  trashed folder is shown in that folder in Trash; if the folder is deleted
+  permanently, the Draft either purges with it or preserves `trashed_at_ms` at
+  the nearest live ancestor instead of resurfacing. Deleted session unsent
+  drafts are archived as trashed Drafts carrying `source_session_id` so they
+  appear in Trash with **Restore to session** and **Restore as draft**. Nothing
+  new can be created in or moved into a trashed folder.
 
 Why 30 days: it is the convention users already know (macOS Finder, Google
 Drive, Gmail, Notion) and long enough to notice a mistaken folder deletion
@@ -651,17 +655,20 @@ Retention is `preferences.update` with scope `trash`.
   a spelled-out accessible label. Rows are dimmed and cannot be dragged.
 - Tapping an entry (or its kebab, or `Enter`/`s` on Desktop) opens its sheet:
   when and where it was deleted, when it will be deleted permanently,
-  **Restore** (primary, `Mod+Enter`), **Restore and open** for a session and
-  **Delete permanently…** behind a second confirmation. The Trash kebab offers
-  the retention picker and **Empty Trash…**, also behind confirmation.
+  **Restore** (primary, `Mod+Enter`), **Restore and open** for a session or
+  standalone Draft, **Restore to session** / **Restore as draft** for an
+  archived session unsent draft, and **Delete permanently…** behind a second
+  confirmation. The Trash kebab offers the retention picker and **Empty
+  Trash…** (covering sessions, folders, and Drafts), also behind confirmation.
 - Deleting an idle session needs no confirmation: it moves to Trash at once
   and the snackbar offers **Undo**. A working session asks first (see above).
 - Deleting a folder lists every session and Draft inside, all checked. The
   primary action names the outcome ("Move to Trash", "Trash 3, keep 2").
   Unchecking an item keeps it: it moves to the folder's parent before the
   folder goes to Trash. Working sessions start unchecked and say why. **Delete
-  all** and **Keep all** reset the list. **Delete folder only** keeps the
-  original non-destructive behaviour. The snackbar offers **Undo**.
+  all** and **Keep all** reset the list. **Move folder only to Trash** moves
+  subfolders, sessions and Drafts up to the parent first and then moves the
+  emptied folder to Trash. The snackbar offers **Undo**.
 - Desktop keyboard: Trash rows join the `sessions.list` cursor (`j/k`).
   `Enter`/`l` toggles a folder or opens an entry's sheet, `h` closes or goes to
   the Trash header, `s` opens the sheet. No other row command applies.
@@ -669,5 +676,4 @@ Retention is `preferences.update` with scope `trash`.
 ### Not yet
 
 - A read-only transcript preview inside Trash; the sheet shows metadata.
-- Permanent deletion of an individual Draft; Drafts still use Draft Trash.
 - A per-item "keep longer" override.

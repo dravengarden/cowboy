@@ -336,11 +336,14 @@ with counts/badges, and zero tasks removes the entry and its slot entirely.
 - **Desktop**: `Tasks ␣G` tab in `DesktopWorkViewTabs` replaces the Composer
   stack bar (saving ~28 px per active session). Plain tab for quiet completed
   history; compact badge for active, needs-you or unseen failure.
-- **Mobile**: `web/src/tasks/MobileTasksButton.tsx` sits at the fixed trailing
-  edge of the Composer's existing action row (outside the horizontal scroll
-  track, zero additional rows, visible even while the soft keyboard is open)
-  and opens Triage Peek in one tap. `web/src/BackgroundTasksBar.tsx` remains
-  for standalone fixtures and legacy reference.
+- **Mobile**: `web/src/tasks/MobileSessionActivityButton.tsx` combines
+  Branches & lineage with Background tasks inside the Composer's ordinary
+  scrollable action track (no right-edge pin, no divider border, zero extra
+  rows; a subtle 7 px tonal dot replaces numeric pills and vanishes when work
+  is quiet). Tapping opens `MobileTasksSheet` directly to the relevant section
+  or a calm segmented switcher (`Tasks` / `Branches`) when both exist.
+  `web/src/BackgroundTasksBar.tsx` remains for standalone fixtures and legacy
+  reference.
 
 #### Rollback switch
 

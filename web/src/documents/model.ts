@@ -14,6 +14,8 @@ export interface DraftDocument {
   readonly metadata_revision: number;
   readonly updated_at_ms: number;
   readonly deleted: boolean;
+  readonly trashed_at_ms?: number | undefined;
+  readonly source_session_id?: string | undefined;
 }
 
 export type DraftMetadata = Omit<DraftDocument, "body" | "attachments">;
@@ -25,6 +27,8 @@ export type DraftChange =
     parent_id: string | null;
     body: string;
     attachments: readonly Attachment[];
+    trashed?: boolean | undefined;
+    source_session_id?: string | null | undefined;
   }
   | { type: "write"; body: string; attachments: readonly Attachment[] }
   | { type: "rename"; title: string }
@@ -115,7 +119,9 @@ export function projectDraft(
       body_revision: 1,
       metadata_revision: 1,
       updated_at_ms: args.authored_at_ms,
-      deleted: false,
+      deleted: Boolean(change.trashed),
+      ...(change.trashed ? { trashed_at_ms: args.authored_at_ms } : {}),
+      ...(change.source_session_id ? { source_session_id: change.source_session_id } : {}),
     };
   }
   if (!document) return null;
@@ -145,9 +151,11 @@ export function projectDraft(
         metadata_revision: document.metadata_revision + 1,
       };
     case "trash":
-      return { ...base, deleted: true };
-    case "restore":
-      return { ...base, deleted: false };
+      return { ...base, deleted: true, trashed_at_ms: args.authored_at_ms };
+    case "restore": {
+      const { trashed_at_ms: _t, source_session_id: _s, ...rest } = base;
+      return { ...rest, deleted: false };
+    }
   }
 }
 
@@ -272,7 +280,9 @@ export function decodeDraft(value: unknown): DraftDocument {
     typeof d.deleted !== "boolean" ||
     ![d.revision, d.body_revision, d.metadata_revision, d.updated_at_ms].every((
       n,
-    ) => Number.isSafeInteger(n) && n >= 0)
+    ) => Number.isSafeInteger(n) && n >= 0) ||
+    (d.trashed_at_ms !== undefined && (!Number.isSafeInteger(d.trashed_at_ms) || d.trashed_at_ms < 0)) ||
+    (d.source_session_id !== undefined && typeof d.source_session_id !== "string")
   ) {
     throw new Error("Invalid draft response");
   }

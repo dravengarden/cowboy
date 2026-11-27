@@ -24,6 +24,7 @@ import {
   snapshotSummary,
 } from "./model";
 import { whenBackgroundTransferAllowed } from "../network/bandwidth";
+import { purgedAnnouncementId, requestPurgeDrafts } from "./repositoryPurge";
 
 /** Automatic rebases per drain; a server that keeps refusing is a bug, not
  * a race, and falls back to the recoverable conflict state. */
@@ -824,72 +825,60 @@ export function createDraftRepository(options: RepositoryOptions) {
       if (!stopped) void refresh();
     })();
   }
+  function evictPurged(ids: readonly string[]): void {
+    if (stopped || ids.length === 0) return;
+    const gone = new Set(ids);
+    for (const id of gone) {
+      served.delete(id); ownViews.delete(id);
+      const owner = owners.get(id);
+      if (owner) { owners.delete(id); void owner.dispose().catch(() => undefined); }
+    }
+    const next = library.entries.filter((entry) => !gone.has(entry.id));
+    if (next.length !== library.entries.length) {
+      library = { ...library, entries: next };
+      void options.cache.save(library.entries).catch(() => undefined);
+      emit();
+    }
+  }
   async function create(
-    title = "Untitled",
-    parent_id: string | null = null,
-    kind: DraftDocument["kind"] = "document",
-    body = "",
-    attachments: DraftDocument["attachments"] = [],
+    title = "Untitled", parent_id: string | null = null, kind: DraftDocument["kind"] = "document",
+    body = "", attachments: DraftDocument["attachments"] = [],
+    extra?: { trashed?: boolean; source_session_id?: string | null },
   ): Promise<string> {
     const id = crypto.randomUUID();
-    await document(id).change({
-      type: "create",
-      title,
-      parent_id,
-      kind,
-      body,
-      attachments,
-    });
+    await document(id).change({ type: "create", title, parent_id, kind, body, attachments, ...extra });
     return id;
   }
+  async function purge(ids: readonly string[]): Promise<string[]> {
+    assertActive();
+    const purged = await requestPurgeDrafts(options.request, ids);
+    assertActive();
+    evictPurged(purged);
+    return purged;
+  }
   async function dispose(): Promise<void> {
-    stopped = true;
-    listeners.clear();
+    stopped = true; listeners.clear();
     await Promise.all([...owners.values()].map((owner) => owner.dispose()));
   }
-  /** Pushed `{document id: metadata}` of this principal's documents changed
-   * since the controller started. The library index adopts newer metadata
-   * directly; an open document fetches only a revision it has not seen. */
   function announce(value: unknown): void {
     if (stopped || value === null || typeof value !== "object") return;
+    const purgedIds: string[] = [];
     for (const entry of Object.values(value)) {
+      const purgedId = purgedAnnouncementId(entry);
+      if (purgedId) { purgedIds.push(purgedId); continue; }
       let metadata: DraftDocument;
-      try {
-        metadata = decodeDraft({
-          ...(entry as object),
-          body: "",
-          attachments: [],
-        });
-      } catch {
-        continue;
-      }
+      try { metadata = decodeDraft({ ...(entry as object), body: "", attachments: [] }); } catch { continue; }
       heard(metadata);
       if (library.loaded) updateIndex(metadata);
       const owner = owners.get(metadata.id);
-      if (owner && !owner.revisionKnown(metadata.revision)) {
-        void owner.refresh();
-      }
+      if (owner && !owner.revisionKnown(metadata.revision)) void owner.refresh();
     }
+    if (purgedIds.length > 0) evictPurged(purgedIds);
   }
-  options.signal.addEventListener("abort", () => {
-    void dispose().catch(() => undefined);
-  }, { once: true });
+  options.signal.addEventListener("abort", () => { void dispose().catch(() => undefined); }, { once: true });
   return {
-    document,
-    create,
-    start,
-    refresh,
-    announce,
-    historyIndex,
-    historySnapshot,
-    prefetchHistory,
-    dispose,
+    document, create, purge, start, refresh, announce, historyIndex, historySnapshot, prefetchHistory, dispose,
     get: () => library,
-    subscribe: (listener: () => void) => {
-      listeners.add(listener);
-      return () => {
-        listeners.delete(listener);
-      };
-    },
+    subscribe: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener); }; },
   };
 }

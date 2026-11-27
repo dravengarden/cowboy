@@ -302,11 +302,26 @@ async fn retention_days(
 pub async fn retention_pass(state: &Arc<AppState>, now_ms: i64) {
     const DAY_MS: i64 = 86_400_000;
     let (sessions, folders) = state.hub.trash_contents();
+    let trashed_drafts = match state.store.as_ref() {
+        Some(store) => match store.list_trashed_drafts_for_retention().await {
+            Ok(drafts) => drafts,
+            Err(error) => {
+                tracing::warn!(%error, "Trash retention could not list trashed drafts");
+                Vec::new()
+            }
+        },
+        None => Vec::new(),
+    };
     let mut cache = HashMap::new();
     for owner in sessions
         .iter()
         .map(|(_, owner, _)| owner.clone())
         .chain(folders.iter().map(|folder| folder.owner_user_id.clone()))
+        .chain(
+            trashed_drafts
+                .iter()
+                .map(|(owner, _, _)| Some(owner.clone())),
+        )
     {
         retention_days(state, &mut cache, owner.as_ref()).await;
     }
@@ -341,20 +356,43 @@ pub async fn retention_pass(state: &Arc<AppState>, now_ms: i64) {
             purge.push(folder.id);
         }
     }
-    if purge.is_empty() {
-        return;
+    if !purge.is_empty() {
+        let removed = state
+            .hub
+            .purge_trashed_folders(&FolderActor::local(), &purge);
+        if !removed.is_empty() {
+            tracing::info!(folders = removed.len(), "deleted folders from Trash");
+        }
+        // Keep requested deletions that are still waiting for a session stop.
+        let (_, remaining) = state.hub.trash_contents();
+        PENDING_FOLDER_PURGES.lock().extend(
+            purge.into_iter().filter(|id| {
+                !removed.contains(id) && remaining.iter().any(|folder| folder.id == *id)
+            }),
+        );
     }
-    let removed = state
-        .hub
-        .purge_trashed_folders(&FolderActor::local(), &purge);
-    if !removed.is_empty() {
-        tracing::info!(folders = removed.len(), "deleted folders from Trash");
+    if let Some(store) = state.store.as_ref() {
+        let mut purged_by_owner: HashMap<String, Vec<String>> = HashMap::new();
+        for (owner, draft_id, trashed_at_ms) in trashed_drafts {
+            if !expired(&Some(owner.clone()), trashed_at_ms) {
+                continue;
+            }
+            match store
+                .purge_expired_draft(&owner, &draft_id, trashed_at_ms)
+                .await
+            {
+                Ok(true) => {
+                    purged_by_owner.entry(owner).or_default().push(draft_id);
+                }
+                Ok(false) => {}
+                Err(error) => {
+                    tracing::warn!(draft = %draft_id, %error, "Trash retention could not delete draft");
+                }
+            }
+        }
+        for (owner, ids) in purged_by_owner {
+            tracing::info!(owner = %owner, drafts = ids.len(), "deleted drafts after Trash retention");
+            state.hub.announce_draft_purged(&owner, &ids);
+        }
     }
-    // Keep requested deletions that are still waiting for a session stop.
-    let (_, remaining) = state.hub.trash_contents();
-    PENDING_FOLDER_PURGES.lock().extend(
-        purge
-            .into_iter()
-            .filter(|id| !removed.contains(id) && remaining.iter().any(|folder| folder.id == *id)),
-    );
 }

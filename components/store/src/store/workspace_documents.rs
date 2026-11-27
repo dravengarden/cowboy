@@ -98,9 +98,13 @@ macro_rules! reparent_workspace_documents {
         ).bind($owner).fetch_all(&mut *$tx).await?;
         // A trashed folder leaves the set only when its Trash retention ends;
         // the Drafts it still holds go to Draft Trash instead of resurfacing.
-        let purged: std::collections::HashSet<String> = old.iter()
-            .filter(|(id, _, trashed)| trashed.is_some() && !$folders.iter().any(|folder| &folder.id == id))
-            .map(|(id, _, _)| id.clone()).collect();
+        let purged: std::collections::HashMap<String, i64> = old.iter()
+            .filter_map(|(id, _, trashed)| {
+                trashed
+                    .filter(|_| !$folders.iter().any(|folder| &folder.id == id))
+                    .map(|at| (id.clone(), at))
+            })
+            .collect();
         let removed: std::collections::HashMap<String, Option<String>> = old.into_iter()
             .filter(|(id, _, _)| !$folders.iter().any(|folder| &folder.id == id))
             .map(|(id, parent, _)| (id, parent)).collect();
@@ -118,12 +122,15 @@ macro_rules! reparent_workspace_documents {
                     if metadata.kind != $crate::store::draft_documents::DraftKind::Document { continue; }
                     let mut parent = metadata.parent_id.clone();
                     let mut seen = std::collections::HashSet::new();
-                    let mut trash = false;
+                    let mut trashed_at: Option<i64> = None;
                     while let Some(id) = parent.as_ref().filter(|id| removed.contains_key(*id)) {
                         if !seen.insert(id.clone()) { parent = None; break; }
-                        trash |= purged.contains(id);
+                        if let Some(&at) = purged.get(id) {
+                            trashed_at.get_or_insert(at);
+                        }
                         parent = removed.get(id).cloned().flatten();
                     }
+                    let trash = trashed_at.is_some();
                     // A Draft of a purged folder lands at the nearest live
                     // ancestor, walking on through ancestors still in Trash.
                     while trash {
@@ -138,6 +145,9 @@ macro_rules! reparent_workspace_documents {
                     let mut document: $crate::store::draft_documents::DraftDocument = serde_json::from_str(&value)?;
                     document.parent_id = parent;
                     document.deleted |= trash;
+                    if trash && document.trashed_at_ms.is_none() {
+                        document.trashed_at_ms = trashed_at;
+                    }
                     document.revision += 1;
                     document.metadata_revision += 1;
                     let mut metadata = document.clone(); metadata.body.clear(); metadata.attachments.clear();

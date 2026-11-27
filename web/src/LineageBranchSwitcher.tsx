@@ -407,7 +407,7 @@ function BranchListBody({
   );
 }
 
-function useBranchRelationCount(sessionId: string): number {
+export function useBranchRelationCount(sessionId: string): number {
   return useStoreSelector((state) => {
     const self = state.sessions.find((entry) => entry.id === sessionId);
     if (!self || self.system) return 0;
@@ -462,7 +462,70 @@ function useBranchModalKeys({
   }, [active, activeIndex, entries, onNewFork, onOpen, onPeek, setActiveIndex]);
 }
 
-function BranchSwitcherModal({
+export function MobileBranchListSection({
+  sessionId,
+  open,
+  onClose,
+  onSwitchSession,
+}: {
+  sessionId: string;
+  open: boolean;
+  onClose: () => void;
+  onSwitchSession?: ((id: string) => void) | undefined;
+}): React.JSX.Element {
+  const session = useStoreSelector((state) => state.sessions.find((entry) => entry.id === sessionId));
+  const sessions = useStoreSelector((state) => state.sessions);
+  const { lineage, loadingLineage } = useSessionLineage(sessionId, open);
+  const [activeIndex, setActiveIndex] = useState(0);
+  const [peekHop, setPeekHop] = useState<LineageHop | null>(null);
+  const entries = useMemo(
+    () => buildEntries(sessionId, session?.title ?? sessionId, session?.provider ?? "", lineage?.hops ?? [], lineage?.branches ?? []),
+    [lineage, session?.provider, session?.title, sessionId],
+  );
+  const openEntry = useCallback((entry: SwitcherEntry): void => {
+    if (entry.section === "current") { onClose(); return; }
+    if (entry.openable) {
+      if (onSwitchSession) {
+        onSwitchSession(entry.sessionId);
+      } else {
+        onClose();
+        requestPickSession(entry.sessionId, sessions.find((s) => s.id === entry.sessionId));
+      }
+      return;
+    }
+    if (isHopPeekable(entry.hop)) setPeekHop(entry.hop);
+  }, [onClose, onSwitchSession, sessions]);
+  const handleNewFork = useCallback((): void => {
+    onClose();
+    requestNewFrom(sessionId);
+  }, [onClose, sessionId]);
+  return (
+    <>
+      <BranchListBody
+        sessionId={sessionId}
+        desktop={false}
+        entries={entries}
+        loading={loadingLineage}
+        activeIndex={activeIndex}
+        onSelectIndex={setActiveIndex}
+        onOpen={openEntry}
+        onPeek={setPeekHop}
+        onNewFork={handleNewFork}
+      />
+      {peekHop && (
+        <SessionHistoryPeek
+          open
+          onClose={(): void => setPeekHop(null)}
+          link={hopToLink(peekHop)}
+          session={sessions.find((s) => s.id === peekHop.session_id)}
+          lineage={{ childSessionId: sessionId, hopId: peekHop.session_id, edgeVersion: peekHop.edge_version, beforeSeq: peekHop.before_seq }}
+        />
+      )}
+    </>
+  );
+}
+
+export function BranchSwitcherModal({
   sessionId,
   open,
   desktop,

@@ -3,7 +3,9 @@
 
 import { FloatingActionIsland } from "@cowboy/app-shell";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { alpha, Box, ButtonBase, Chip, Stack, Typography } from "@mui/material";
+import { alpha, Box, ButtonBase, Chip, Stack, Typography, type Theme } from "@mui/material";
+import { selectInspectorTab, useInspectorState, type MobileActivityTab } from "../backgroundTaskInspectorState";
+import { MobileBranchListSection, useBranchRelationCount } from "../LineageBranchSwitcher";
 import { ChatBubbleOutline, ChevronLeft, ChevronRight, FormatListBulleted, FormatQuoteOutlined, InfoOutlined, SubjectOutlined, TerminalOutlined } from "@mui/icons-material";
 import type { TaskSummary } from "../backgroundTasks";
 import { Sheet } from "../Sheet";
@@ -91,6 +93,70 @@ function MobileReaderDock({ tasks, selected, mode, hasConversation, onClose, onS
   );
 }
 
+function MobileActivitySegmentBar({
+  tab, tasksCount, attention, branchesCount, onChange,
+}: {
+  tab: MobileActivityTab;
+  tasksCount: number;
+  attention: "warning" | "error" | "active" | null;
+  branchesCount: number;
+  onChange: (next: MobileActivityTab) => void;
+}): React.JSX.Element {
+  const pillSx = (active: boolean) => (theme: Theme) => ({
+    flex: 1,
+    minHeight: 34,
+    px: 1.25,
+    gap: 0.65,
+    borderRadius: "9px",
+    fontSize: "0.8125rem",
+    fontWeight: active ? 650 : 500,
+    color: active ? "text.primary" : "text.secondary",
+    bgcolor: active ? theme.palette.background.paper : "transparent",
+    boxShadow: active ? `0 1px 2px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.28 : 0.08)}` : "none",
+    transition: "background-color 140ms ease, color 140ms ease, box-shadow 140ms ease",
+  });
+  return (
+    <Box
+      role="tablist"
+      aria-label="Session activity sections"
+      data-mobile-activity-tabs
+      sx={(theme) => ({
+        display: "flex",
+        alignItems: "center",
+        gap: 0.35,
+        p: 0.35,
+        borderRadius: "11px",
+        bgcolor: alpha(theme.palette.text.primary, theme.palette.mode === "dark" ? 0.08 : 0.05),
+      })}
+    >
+      <ButtonBase role="tab" aria-selected={tab === "tasks"} data-mobile-activity-tab="tasks" onClick={(): void => onChange("tasks")} sx={pillSx(tab === "tasks")}>
+        {attention && (
+          <Box
+            component="span"
+            sx={(theme) => ({
+              width: 6,
+              height: 6,
+              borderRadius: "50%",
+              flexShrink: 0,
+              bgcolor: attention === "warning" ? theme.palette.warning.main : attention === "error" ? theme.palette.error.main : theme.palette.primary.main,
+            })}
+          />
+        )}
+        <span>Tasks</span>
+        <Typography component="span" variant="caption" color="text.secondary" sx={{ fontVariantNumeric: "tabular-nums" }}>
+          {tasksCount}
+        </Typography>
+      </ButtonBase>
+      <ButtonBase role="tab" aria-selected={tab === "branches"} data-mobile-activity-tab="branches" onClick={(): void => onChange("branches")} sx={pillSx(tab === "branches")}>
+        <span>Branches</span>
+        <Typography component="span" variant="caption" color="text.secondary" sx={{ fontVariantNumeric: "tabular-nums" }}>
+          {branchesCount}
+        </Typography>
+      </ButtonBase>
+    </Box>
+  );
+}
+
 export function MobileTasksSheet({ sessionId, background, onOpenTool }: { sessionId: string; background: BackgroundTasks; onOpenTool?: ((toolKey: string) => void) | undefined }): React.JSX.Element | null {
   const { tasks, calls, refreshCalls, backgroundActivity } = background;
   const [hideEnded, setHideEnded] = useState(false);
@@ -98,6 +164,8 @@ export function MobileTasksSheet({ sessionId, background, onOpenTool }: { sessio
   const forest = useMemo(() => buildTaskForest(tasks), [tasks]);
   const visibleTasks = useMemo(() => flattenTaskSections(forest, { collapsedKeys, hideEnded }).map((row) => row.task), [forest, collapsedKeys, hideEnded]);
   const summary = useMemo(() => taskTabSummary(tasks, backgroundActivity), [tasks, backgroundActivity]);
+  const relationCount = useBranchRelationCount(sessionId);
+  const inspectorTab = useInspectorState().tab;
   const nav = useMobileTasksHistory({ sessionId, background, visibleTasks });
   const subagentTranscript = useSubagentTranscript(sessionId, nav.open && nav.selected?.source === "subagent" ? (nav.selected.subagent ?? null) : null);
   const hasConversation = Boolean(nav.selected && (nav.selected.source === "call" || (nav.selected.source === "subagent" && subagentTranscript.observed)));
@@ -118,6 +186,17 @@ export function MobileTasksSheet({ sessionId, background, onOpenTool }: { sessio
 
   if (!nav.open) return null;
   const isPeek = nav.level === "peek" || !nav.selected;
+  const hasTasks = summary.hasTasks;
+  const hasBranches = relationCount > 0;
+  const bothSections = hasTasks && hasBranches;
+  const activeTab: MobileActivityTab = !hasTasks && hasBranches ? "branches" : !hasBranches ? "tasks" : inspectorTab;
+  const taskAttention = summary.needsYouCount > 0
+    ? "warning"
+    : summary.failedUnseenCount > 0
+    ? "error"
+    : summary.activeCount > 0 || summary.extraActivity
+    ? "active"
+    : null;
   const effectiveMode: TaskReaderViewMode = nav.level === "info" ? "info" : nav.readerMode;
   const statusPills = [
     summary.needsYouCount > 0 ? `${String(summary.needsYouCount)} needs you` : null,
@@ -125,6 +204,16 @@ export function MobileTasksSheet({ sessionId, background, onOpenTool }: { sessio
     summary.failedUnseenCount > 0 ? `${String(summary.failedUnseenCount)} failed` : null,
   ].filter((value): value is string => value !== null);
   if (statusPills.length === 0 && summary.endedCount > 0) statusPills.push(`${String(summary.endedCount)} ended`);
+  const sheetTitle = !isPeek
+    ? nav.selected!.title
+    : bothSections
+    ? "Session activity"
+    : activeTab === "branches"
+    ? "Branches & lineage"
+    : "Background tasks";
+  const footerSummary = activeTab === "branches"
+    ? `${String(relationCount)} ${relationCount === 1 ? "branch" : "branches"}`
+    : statusPills.join(" · ") || `${String(tasks.length)} tasks`;
 
   const peekFooter = (
     <Stack direction="row" alignItems="center" justifyContent="space-between" data-mobile-tasks-peek-footer sx={{ width: "100%", px: 0.5 }}>
@@ -133,7 +222,7 @@ export function MobileTasksSheet({ sessionId, background, onOpenTool }: { sessio
         Chat
       </ButtonBase>
       <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600 }}>
-        {statusPills.join(" · ") || `${String(tasks.length)} tasks`}
+        {footerSummary}
       </Typography>
     </Stack>
   );
@@ -142,7 +231,7 @@ export function MobileTasksSheet({ sessionId, background, onOpenTool }: { sessio
     <Sheet
       open
       onClose={nav.close}
-      title={isPeek ? "Background tasks" : nav.selected!.title}
+      title={sheetTitle}
       hideMobileTitle={!isPeek}
       detent
       forceSheet
@@ -172,14 +261,36 @@ export function MobileTasksSheet({ sessionId, background, onOpenTool }: { sessio
       <Box data-background-tasks-inspector={sessionId} data-mobile-task-level={nav.level} sx={{ color: "text.primary", typography: "body2", ...(isPeek ? { pb: 1 } : { flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", pt: "var(--cowboy-reader-top-inset, 0px)" }) }}>
         {isPeek
           ? (
-            <Stack spacing={1} data-mobile-triage-peek>
-              {statusPills.length > 0 && (
-                <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
-                  {statusPills.map((pill) => <Chip key={pill} size="small" variant="outlined" label={pill} sx={{ height: 22, fontSize: "0.7rem" }} />)}
-                </Stack>
+            <Stack spacing={1.25} data-mobile-triage-peek>
+              {bothSections && (
+                <MobileActivitySegmentBar
+                  tab={activeTab}
+                  tasksCount={tasks.length}
+                  attention={taskAttention}
+                  branchesCount={relationCount}
+                  onChange={selectInspectorTab}
+                />
               )}
-              <TaskRoster sessionId={sessionId} tasks={tasks} calls={calls} selectedKey={null} desktop={false} hideEnded={hideEnded} onToggleHideEnded={(): void => setHideEnded((value) => !value)} collapsedKeys={collapsedKeys} onToggleFold={(key): void => setCollapsedKeys((prev) => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })} onSelect={nav.openWorkerFromPeek} onRefreshCalls={refreshCalls} onReviewRequest={answerApproval} />
-              <LegacyCallsSwitch onSwitch={nav.close} />
+              {activeTab === "branches"
+                ? (
+                  <MobileBranchListSection
+                    sessionId={sessionId}
+                    open={isPeek && activeTab === "branches"}
+                    onClose={nav.close}
+                    onSwitchSession={nav.openChildSession}
+                  />
+                )
+                : (
+                  <>
+                    {statusPills.length > 0 && (
+                      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap>
+                        {statusPills.map((pill) => <Chip key={pill} size="small" variant="outlined" label={pill} sx={{ height: 22, fontSize: "0.7rem" }} />)}
+                      </Stack>
+                    )}
+                    <TaskRoster sessionId={sessionId} tasks={tasks} calls={calls} selectedKey={null} desktop={false} hideEnded={hideEnded} onToggleHideEnded={(): void => setHideEnded((value) => !value)} collapsedKeys={collapsedKeys} onToggleFold={(key): void => setCollapsedKeys((prev) => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })} onSelect={nav.openWorkerFromPeek} onRefreshCalls={refreshCalls} onReviewRequest={answerApproval} />
+                    <LegacyCallsSwitch onSwitch={nav.close} />
+                  </>
+                )}
             </Stack>
           )
           : (
