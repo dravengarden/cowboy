@@ -523,6 +523,74 @@ impl Broker {
         }
     }
 
+    /// Enforce broker-side execution forwarding policy: a live worker may run
+    /// any matching-binding request unless cancelled (where departing cleanup
+    /// applies); a broker-fenced draining crashed epoch is restricted strictly
+    /// to cleanup-only commands independent of replayed status events (R11-H2).
+    pub(in crate::machine_broker) fn execution_request_allowed(
+        &self,
+        session_id: &str,
+        epoch: &str,
+        request: &crate::execution_protocol::RuntimeRequest,
+    ) -> bool {
+        if request.session_id != session_id || request.worker_epoch != epoch {
+            return false;
+        }
+        let draining_crashed = self.has_crashed_drain_for_epoch(session_id, epoch)
+            || self
+                .workers
+                .lock()
+                .get(session_id)
+                .is_some_and(|w| w.epoch == epoch && w.crashed_drain_fenced);
+        let binding_matches = !self.cancelled_sessions.lock().contains(session_id)
+            && self
+                .sessions
+                .lock()
+                .get(session_id)
+                .and_then(|launch| launch.execution_binding.as_ref())
+                .and_then(|binding| binding.decode().ok())
+                .is_some_and(|binding| binding == request.binding);
+        if draining_crashed {
+            let cleanup_only = match &request.command {
+                crate::execution_protocol::Command::Invoke { invocation, .. } => matches!(
+                    invocation.method.as_str(),
+                    "process/terminate"
+                        | "process/read"
+                        | crate::execution_host::user_mcp::USER_MCP_STOP_METHOD
+                ),
+                crate::execution_protocol::Command::Observe { .. }
+                | crate::execution_protocol::Command::Events { .. } => true,
+                crate::execution_protocol::Command::Describe
+                | crate::execution_protocol::Command::Shutdown => false,
+            };
+            return (cleanup_only && binding_matches)
+                || wrap_up::departing_cleanup_allows(self, session_id, epoch, request);
+        }
+        binding_matches || wrap_up::departing_cleanup_allows(self, session_id, epoch, request)
+    }
+
+    /// Publish refreshed broker queue count after rejecting queued prompts for a
+    /// `Crashed` worker so Controller's sighting clears `pending_prompt_count`
+    /// and does not defer automatic drain (R11-M1).
+    pub(in crate::machine_broker) fn publish_snapshot_after_crashed_flush(
+        &self,
+        session_id: &str,
+        removed_prompts_for_crashed: bool,
+    ) {
+        if !removed_prompts_for_crashed {
+            return;
+        }
+        if let Some(worker) = self
+            .snapshots()
+            .into_iter()
+            .find(|w| w.session_id == session_id && w.has_connected_owner())
+        {
+            self.send_controller(Frame::Snapshot {
+                worker: Box::new(worker),
+            });
+        }
+    }
+
     pub(super) fn spawn_unconfirmed_sandbox_drain_retry(
         self: &Arc<Self>,
         lifecycle_guard: tokio::sync::OwnedMutexGuard<()>,

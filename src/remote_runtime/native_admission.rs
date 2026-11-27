@@ -371,8 +371,16 @@ fn classify_admission_error(error: &anyhow::Error) -> EventAdmission {
         "portable_session_binding_changed",
         "login_not_admitted",
         "native_identity_not_bound",
+        "invalid_native_generation",
         "native_generation_ambiguous",
         "native_completion_scope_mismatch",
+        "native_session_scope_mismatch",
+        "native_binding_scope_mismatch",
+        "native_login_scope_mismatch",
+        "native_transition_scope_mismatch",
+        "native_logout_scope_mismatch",
+        "portable_revocation_scope_mismatch",
+        "portable_wipe_scope_mismatch",
         "native_generation_superseded",
         "machine_unavailable",
         "machine_enrollment_changed",
@@ -978,6 +986,28 @@ mod tests {
         assert_eq!(
             classify_admission_error(&anyhow::anyhow!("sqlite database is locked")),
             EventAdmission::TransientlyDeferred
+        );
+    }
+
+    #[tokio::test]
+    async fn binding_lookup_classifies_invalid_native_generation_as_permanent_denial() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = fixture_store(dir.path()).await;
+        let account: crate::provider_account::ProviderAccountId =
+            serde_json::from_value(serde_json::json!("00000000-0000-4000-8000-000000000001"))
+                .unwrap();
+        let session = meta("codex", &account, 0);
+        // Insert a registered session row whose provider_auth_generation is 0
+        // (non-positive), triggering `invalid_native_generation` in Store lookup.
+        store
+            .insert_session(&session)
+            .await
+            .expect("insert session row with zero generation");
+        let outcome = binding(&store, OWNER, &session).await;
+        assert_eq!(
+            outcome.err(),
+            Some(EventAdmission::PermanentlyDenied),
+            "invalid_native_generation must classify as PermanentlyDenied"
         );
     }
 }

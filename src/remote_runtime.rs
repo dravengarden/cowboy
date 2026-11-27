@@ -152,7 +152,7 @@ pub struct Shared {
     workers: Mutex<HashMap<String, WorkerSnapshot>>,
     crashed_worker_sightings: Mutex<HashMap<String, snapshot::SightingActivity>>,
     /// Exact crashed epochs currently draining (preserved across replayed events and handover, R3-H2/R4-H6).
-    draining_crashed_epochs: Mutex<HashMap<String, String>>,
+    draining_crashed_epochs: Mutex<HashMap<String, snapshot::DrainingCrashedEpoch>>,
     draining_replay_snapshots: Mutex<HashMap<(String, String), WorkerSnapshot>>,
     blocked_draining_epochs: Mutex<HashSet<(String, String)>>,
     retired_crashed_epochs: Mutex<HashMap<(String, String), std::time::Instant>>,
@@ -1669,8 +1669,45 @@ async fn connect_once_stream(
 /// process startup. Until this settles, `Shared.workers` intentionally keeps its
 /// last snapshot so a Machine broker restart cannot race an `EnsureSession` into
 /// spawning a duplicate owner for a still-running turn.
-async fn connect_settled(
-    socket: &Path,
+/// Fold a post-Welcome settle frame into initial bootstrap `workers` ONLY for
+/// newly discovered / previously ownerless sessions that have no buffered
+/// `WorkerEvent` or `CrashedWorkerDrained` ahead of them. Connected `Welcome`
+/// snapshots (including `crashed_drain_active: true`) are never overwritten by
+/// a later settle snapshot ahead of buffered replay events; all settle frames
+/// still replay in exact wire order via `buffered` (R11-H4).
+fn fold_settle_frame(
+    workers: &mut Vec<WorkerSnapshot>,
+    seen_events: &mut HashSet<String>,
+    frame: &Frame,
+) {
+    match frame {
+        Frame::WorkerEvent { session_id, .. } | Frame::CrashedWorkerDrained { session_id, .. } => {
+            seen_events.insert(session_id.clone());
+        }
+        Frame::Snapshot { worker } => {
+            if seen_events.contains(&worker.session_id) {
+                return;
+            }
+            if let Some(existing) = workers
+                .iter_mut()
+                .find(|existing| existing.session_id == worker.session_id)
+            {
+                if !existing.has_connected_owner() {
+                    existing.clone_from(worker);
+                }
+            } else {
+                workers.push((**worker).clone());
+            }
+        }
+        _ => {}
+    }
+}
+
+async fn settle_frames(
+    mut reader: FrameReader<OwnedReadHalf>,
+    writer: OwnedWriteHalf,
+    mut workers: Vec<WorkerSnapshot>,
+    protocol: u16,
 ) -> Result<(
     FrameReader<OwnedReadHalf>,
     OwnedWriteHalf,
@@ -1678,8 +1715,8 @@ async fn connect_settled(
     Vec<Frame>,
     u16,
 )> {
-    let (mut reader, writer, mut workers, protocol) = connect_once(socket).await?;
     let mut buffered = Vec::new();
+    let mut seen_events = HashSet::new();
     let now = tokio::time::Instant::now();
     let minimum_settle = now + Duration::from_millis(500);
     let deadline = now + Duration::from_secs(1);
@@ -1691,16 +1728,7 @@ async fn connect_settled(
         let quiet = remaining.min(Duration::from_millis(250));
         match tokio::time::timeout(quiet, reader.next()).await {
             Ok(Ok(Some(frame))) => {
-                if let Frame::Snapshot { worker } = &frame {
-                    if let Some(existing) = workers
-                        .iter_mut()
-                        .find(|existing| existing.session_id == worker.session_id)
-                    {
-                        existing.clone_from(worker);
-                    } else {
-                        workers.push((**worker).clone());
-                    }
-                }
+                fold_settle_frame(&mut workers, &mut seen_events, &frame);
                 buffered.push(frame);
             }
             Ok(Ok(None)) => anyhow::bail!("Machine broker closed during runtime settle"),
@@ -1712,6 +1740,19 @@ async fn connect_settled(
     Ok((reader, writer, workers, buffered, protocol))
 }
 
+async fn connect_settled(
+    socket: &Path,
+) -> Result<(
+    FrameReader<OwnedReadHalf>,
+    OwnedWriteHalf,
+    Vec<WorkerSnapshot>,
+    Vec<Frame>,
+    u16,
+)> {
+    let (reader, writer, workers, protocol) = connect_once(socket).await?;
+    settle_frames(reader, writer, workers, protocol).await
+}
+
 async fn connect_settled_stream(
     stream: UnixStream,
 ) -> Result<(
@@ -1721,38 +1762,8 @@ async fn connect_settled_stream(
     Vec<Frame>,
     u16,
 )> {
-    let (mut reader, writer, mut workers, protocol) = connect_once_stream(stream).await?;
-    let mut buffered = Vec::new();
-    let now = tokio::time::Instant::now();
-    let minimum_settle = now + Duration::from_millis(500);
-    let deadline = now + Duration::from_secs(1);
-    loop {
-        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        let quiet = remaining.min(Duration::from_millis(250));
-        match tokio::time::timeout(quiet, reader.next()).await {
-            Ok(Ok(Some(frame))) => {
-                if let Frame::Snapshot { worker } = &frame {
-                    if let Some(existing) = workers
-                        .iter_mut()
-                        .find(|existing| existing.session_id == worker.session_id)
-                    {
-                        existing.clone_from(worker);
-                    } else {
-                        workers.push((**worker).clone());
-                    }
-                }
-                buffered.push(frame);
-            }
-            Ok(Ok(None)) => anyhow::bail!("Machine broker closed during runtime settle"),
-            Ok(Err(error)) => return Err(error.into()),
-            Err(_) if tokio::time::Instant::now() < minimum_settle => {}
-            Err(_) => break,
-        }
-    }
-    Ok((reader, writer, workers, buffered, protocol))
+    let (reader, writer, workers, protocol) = connect_once_stream(stream).await?;
+    settle_frames(reader, writer, workers, protocol).await
 }
 
 async fn connection_manager(
@@ -2269,6 +2280,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                 &session_id,
                 command.as_ref(),
                 accepted,
+                reason.as_deref(),
             );
             if !accepted && matches!(&command, Some(CoreCommand::CancelSubagent { .. })) {
                 shared.hub.broadcast_error(

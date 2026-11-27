@@ -594,34 +594,9 @@ pub(super) fn capture_departing_cleanup(
     })
 }
 
-pub(super) fn is_departing_cleanup_command(command: &crate::execution_protocol::Command) -> bool {
-    match command {
-        crate::execution_protocol::Command::Invoke { invocation, .. } => {
-            matches!(
-                invocation.method.as_str(),
-                "process/terminate" | "process/read"
-            )
-        }
-        crate::execution_protocol::Command::Observe { .. }
-        | crate::execution_protocol::Command::Events { .. } => true,
-        crate::execution_protocol::Command::Describe
-        | crate::execution_protocol::Command::Shutdown => false,
-    }
-}
-
-pub(super) fn departing_cleanup_allows(
-    broker: &super::Broker,
-    session_id: &str,
-    epoch: &str,
-    request: &crate::execution_protocol::RuntimeRequest,
-) -> bool {
-    is_departing_cleanup_command(&request.command)
-        && broker
-            .departing_cleanup
-            .lock()
-            .get(session_id)
-            .is_some_and(|entry| entry.epoch == epoch && entry.binding == request.binding)
-}
+pub(super) use super::account_unit::departing_cleanup_allows;
+#[cfg(test)]
+pub(super) use super::account_unit::is_departing_cleanup_command;
 
 #[derive(Clone)]
 struct DispatchedPromptRecord {
@@ -1123,7 +1098,7 @@ impl super::Broker {
                     reason
                 }
             };
-            if !dispatched.was_ingressed_or_uncertain(session_id, &command_id)
+            let reject_inner = if !dispatched.was_ingressed_or_uncertain(session_id, &command_id)
                 && dispatched.at_capacity()
             {
                 Some((
@@ -1152,11 +1127,6 @@ impl super::Broker {
                             expected_epoch.as_deref(),
                         )
                         .expect("checked above");
-                        if let Some(queue) = pending.get_mut(session_id) {
-                            queue.retain(|cmd| {
-                                !matches!(cmd, WorkerCommand::Prompt { command_id: cid, .. } if cid == &command_id)
-                            });
-                        }
                         dispatched.mark_acked(session_id, &command_id);
                         Some((command_id, refusal_reason(base.to_owned())))
                     }
@@ -1210,8 +1180,18 @@ impl super::Broker {
                         command,
                     ),
                 }
+            };
+            if let Some((ref cid, _)) = reject_inner
+                && let Some(queue) = pending.get_mut(session_id)
+            {
+                queue.retain(|cmd| {
+                    !matches!(cmd, WorkerCommand::Prompt { command_id: qid, .. } if qid == cid)
+                });
+                if queue.is_empty() {
+                    pending.remove(session_id);
+                }
             }
-            .map(|(cid, reason)| (bound_tx, cid, reason))
+            reject_inner.map(|(cid, reason)| (bound_tx, cid, reason))
         };
         if let Some((bound_tx, command_id, reason)) = reject {
             let frame = Frame::CommandAck {
@@ -1340,6 +1320,10 @@ impl super::Broker {
                 .permanently_deleted_sessions
                 .lock()
                 .contains(session_id);
+            if !permanently_deleted && self.worker_matches(session_id, connection_id, &worker_epoch)
+            {
+                self.observe_worker_event_uncertain_effect(session_id, &event);
+            }
             drop(cancelled);
             if permanently_deleted {
                 self.acknowledge_worker_event(session_id, connection_id, worker_epoch, runtime_seq);
@@ -1398,6 +1382,7 @@ impl super::Broker {
 
     pub(super) fn flush_pending_guarded(&self, session_id: &str) {
         let mut rejects = Vec::new();
+        let mut crashed_flush_removed = false;
         {
             let workers = self.workers.lock();
             let Some(worker) = workers.get(session_id).filter(|w| w.welcomed) else {
@@ -1499,6 +1484,11 @@ impl super::Broker {
                     rejects.push((cid, reason.to_owned()));
                 }
             }
+            if worker.snapshot.state == crate::runtime_wire::WorkerState::Crashed
+                && !rejects.is_empty()
+            {
+                crashed_flush_removed = true;
+            }
             if remaining.is_empty() {
                 pending.remove(session_id);
             } else {
@@ -1513,6 +1503,7 @@ impl super::Broker {
                 reason: Some(reason),
             });
         }
+        self.publish_snapshot_after_crashed_flush(session_id, crashed_flush_removed);
     }
 }
 
@@ -2701,5 +2692,111 @@ mod tests {
         // An ingress-stage prompt (epoch=None) still blocks any epoch.
         assert!(dispatched.mark_ingressed("s-m5", "cmd-ingress"));
         assert!(dispatched.has_unacked_for_epoch_or_ingress("s-m5", "2-1"));
+    }
+
+    #[test]
+    fn route_prompt_disconnect_refusal_purges_existing_queued_copy() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = Arc::new(super::super::Broker::new(super::super::MachineBrokerArgs {
+            socket: dir.path().join("broker.sock"),
+            worker_command: std::path::PathBuf::from("/bin/false"),
+            desired_generation: "g1".into(),
+            spawn_mode: super::super::SpawnMode::Direct,
+            worker_environment: std::collections::BTreeMap::new(),
+            provider_store: Arc::new(
+                crate::machine_plugins::MachinePluginStore::new(
+                    &dir.path().join("plugins"),
+                    crate::machine_protocol::Platform::Linux,
+                    "x86_64".into(),
+                )
+                .unwrap(),
+            ),
+            worktree_root: dir.path().join("worktrees").into(),
+            worker_ready_timeout: std::time::Duration::from_secs(1),
+            call_context_root: None,
+            memory_relay: None,
+        }));
+        let (ctrl_tx, mut ctrl_rx) = mpsc::unbounded_channel();
+        *broker.controller.lock() = Some(super::super::Controller {
+            lease: 1,
+            tx: ctrl_tx,
+            protocol: crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION,
+            outer_machine_protocol: Some(53),
+        });
+        let prompt = WorkerCommand::Prompt {
+            command_id: "cmd-r11-h6".into(),
+            content: Vec::new(),
+            turn_id: "turn-1".into(),
+            cmid: None,
+            expected_worker_epoch: None,
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            acknowledged_uncertain_sequence: None,
+        };
+        // Pre-seed a queued copy in pending_commands before a newly welcomed
+        // worker's channel closes before flush runs.
+        broker
+            .pending_commands
+            .lock()
+            .entry("s-r11-h6".into())
+            .or_default()
+            .push_back(prompt.clone());
+        let (w_tx, w_rx) = mpsc::unbounded_channel();
+        drop(w_rx); // simulate worker channel already closed
+        let mut snap = sample_snapshot(Some("codex"));
+        snap.session_id = "s-r11-h6".into();
+        snap.worker_epoch = "10-1".into();
+        broker.workers.lock().insert(
+            "s-r11-h6".into(),
+            super::super::WorkerPeer {
+                connection_id: 1,
+                epoch: "10-1".into(),
+                tx: w_tx,
+                snapshot: snap,
+                acked_runtime_seq: 0,
+                earliest_unacked_seq: None,
+                highest_runtime_seq: 0,
+                replay_gate: None,
+                welcomed: true,
+                replay_deferred: false,
+                last_seen: std::time::Instant::now(),
+                receive_probe: None,
+                liveness: None,
+                negotiated_protocol: crate::runtime_wire::WRAP_UP_STEERING_RUNTIME_PROTOCOL_VERSION,
+                raw_wrap_up_steering: false,
+                hint_tx: None,
+                diag_reply_tx: None,
+                last_hinted_target: None,
+                crashed_drain_fenced: false,
+                peer_pid: None,
+            },
+        );
+        broker.route_prompt_inner(Some(1), "s-r11-h6", prompt);
+        assert!(
+            broker
+                .pending_commands
+                .lock()
+                .get("s-r11-h6")
+                .is_none_or(|q| q.is_empty()),
+            "definitive unhanded refusal must purge the queued original from pending_commands"
+        );
+        match ctrl_rx.try_recv().expect("refusal ack") {
+            Frame::CommandAck {
+                command_id,
+                accepted,
+                reason,
+                ..
+            } => {
+                assert_eq!(command_id, "cmd-r11-h6");
+                assert!(!accepted);
+                assert!(
+                    reason
+                        .as_deref()
+                        .is_some_and(|r| r.starts_with("unhanded:"))
+                );
+            }
+            other => panic!("expected CommandAck, got {other:?}"),
+        }
     }
 }

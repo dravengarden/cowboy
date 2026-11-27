@@ -612,8 +612,7 @@ impl Broker {
         drain_pending_for_session(&mut state.pending, session_id)
     }
 
-    pub(super) fn has_crashed_drain_for_epoch(&self, session_id: &str, epoch: &str) -> bool {
-        let state = self.crashed_drains.inner.lock();
+    fn has_crashed_drain_for_epoch_locked(state: &Inner, session_id: &str, epoch: &str) -> bool {
         state
             .active
             .get(session_id)
@@ -622,6 +621,30 @@ impl Broker {
                 .pending
                 .values()
                 .any(|p| p.session_id == session_id && p.epoch == epoch)
+    }
+
+    pub(super) fn has_crashed_drain_for_epoch(&self, session_id: &str, epoch: &str) -> bool {
+        let state = self.crashed_drains.inner.lock();
+        Self::has_crashed_drain_for_epoch_locked(&state, session_id, epoch)
+    }
+
+    /// Stamp `crashed_drain_active` and enqueue `Frame::Snapshot` atomically
+    /// under the leaf `crashed_drains.inner` mutex so a concurrent drain
+    /// admission or cancellation can never reorder an older snapshot ahead of
+    /// or behind a newer drain transition (R11-H3).
+    pub(super) fn send_snapshot_ordered_with_crashed_drain(
+        &self,
+        tx: &mpsc::UnboundedSender<Frame>,
+        mut worker: Box<WorkerSnapshot>,
+    ) {
+        let state = self.crashed_drains.inner.lock();
+        worker.crashed_drain_active = worker.has_connected_owner()
+            && Self::has_crashed_drain_for_epoch_locked(
+                &state,
+                &worker.session_id,
+                &worker.worker_epoch,
+            );
+        let _ = tx.send(Frame::Snapshot { worker });
     }
 
     /// Atomically serialize rollout cutover admission against crashed-worker
@@ -2038,5 +2061,216 @@ mod tests {
             saw_dormant_starting,
             "expected dormant Starting snapshot on handover"
         );
+    }
+
+    #[tokio::test]
+    async fn reset_records_departing_worker_uncertain_effect_even_without_controller() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let _w_rx = attach_crashed_worker(
+            &broker,
+            "s-r11-h1",
+            "60-1",
+            1,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+        );
+        // Simulate non-permanent reset: cancelled_sessions set, no Controller connected.
+        broker.cancelled_sessions.lock().insert("s-r11-h1".into());
+        let event = RuntimeEvent::Update {
+            cmid: None,
+            update: serde_json::json!({
+                "sessionUpdate": "cowboy_uncertain_effect",
+                "method": "tool/write",
+                "sequence": 7
+            }),
+        };
+        broker.handle_worker_event(
+            "s-r11-h1",
+            1,
+            "s-r11-h1".into(),
+            "60-1".into(),
+            1,
+            event.clone(),
+            Vec::new(),
+        );
+        assert_eq!(
+            broker
+                .retained_receiptless_uncertain("s-r11-h1")
+                .map(|e| e.sequence),
+            Some(7),
+            "departing worker uncertain_effect during reset must persist even without Controller"
+        );
+        // Permanent deletion must NOT record new uncertain effects.
+        broker.clear_crashed_drain("s-r11-h1", "deleted", true);
+        broker
+            .permanently_deleted_sessions
+            .lock()
+            .insert("s-r11-h1".into());
+        broker.handle_worker_event(
+            "s-r11-h1",
+            1,
+            "s-r11-h1".into(),
+            "60-1".into(),
+            2,
+            event,
+            Vec::new(),
+        );
+        assert!(broker.retained_receiptless_uncertain("s-r11-h1").is_none());
+    }
+
+    #[tokio::test]
+    async fn broker_execution_boundary_restricts_draining_crashed_epoch_to_cleanup_only() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let _w_rx = attach_crashed_worker(
+            &broker,
+            "s-r11-h2",
+            "61-1",
+            1,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+        );
+        let binding = crate::execution_environment::BindingV1 {
+            schema: 1,
+            id: "binding-r11".into(),
+            revision: 1,
+            runtime: crate::execution_environment::RuntimeLocation {
+                machine_id: "runtime".into(),
+                cwd: "/runtime".into(),
+            },
+            environment: crate::execution_environment::EnvironmentLocation {
+                machine_id: "target".into(),
+                id: "environment".into(),
+                incarnation: "incarnation".into(),
+                executor_digest: format!("sha256:{}", "a".repeat(64)),
+                protocol: 1,
+            },
+            workspace: crate::execution_environment::WorkspaceLocation {
+                id: "project".into(),
+                worktree_id: "session".into(),
+                source_path: "/source".into(),
+                cwd: "/target".into(),
+            },
+            access: crate::execution_environment::ExecutionAccess::Project,
+            managed: None,
+        };
+        let encoded = crate::execution_environment::ExecutionBinding::from_record(
+            serde_json::to_value(&binding).unwrap(),
+        );
+        broker
+            .sessions
+            .lock()
+            .get_mut("s-r11-h2")
+            .unwrap()
+            .execution_binding = Some(encoded);
+        broker.crashed_drains.inner.lock().active.insert(
+            "s-r11-h2".into(),
+            ActiveDrain {
+                epoch: "61-1".into(),
+                connection_id: 1,
+                confirmed: false,
+                peer_pid: None,
+                retired_launch: RetiredLaunch::VerifiedNone,
+            },
+        );
+        let make_req = |command: crate::execution_protocol::Command| {
+            crate::execution_protocol::RuntimeRequest {
+                session_id: "s-r11-h2".into(),
+                worker_epoch: "61-1".into(),
+                request_id: "req-1".into(),
+                binding: binding.clone(),
+                command,
+            }
+        };
+        let terminate = make_req(crate::execution_protocol::Command::Invoke {
+            invocation: crate::execution_protocol::Invocation {
+                operation_id: "op-1".into(),
+                method: "process/terminate".into(),
+                params: serde_json::json!({}),
+            },
+            wait_ms: 1000,
+        });
+        let stop_mcp = make_req(crate::execution_protocol::Command::Invoke {
+            invocation: crate::execution_protocol::Invocation {
+                operation_id: "op-2".into(),
+                method: crate::execution_host::user_mcp::USER_MCP_STOP_METHOD.into(),
+                params: serde_json::json!({}),
+            },
+            wait_ms: 1000,
+        });
+        let start_proc = make_req(crate::execution_protocol::Command::Invoke {
+            invocation: crate::execution_protocol::Invocation {
+                operation_id: "op-3".into(),
+                method: "process/start".into(),
+                params: serde_json::json!({}),
+            },
+            wait_ms: 1000,
+        });
+        assert!(broker.execution_request_allowed("s-r11-h2", "61-1", &terminate));
+        assert!(broker.execution_request_allowed("s-r11-h2", "61-1", &stop_mcp));
+        assert!(!broker.execution_request_allowed("s-r11-h2", "61-1", &start_proc));
+        assert!(!broker.execution_request_allowed(
+            "s-r11-h2",
+            "61-1",
+            &make_req(crate::execution_protocol::Command::Describe),
+        ));
+    }
+
+    #[tokio::test]
+    async fn flushing_rollout_prompts_on_crashed_worker_publishes_refreshed_queue_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let mut ctrl_rx = attach_controller(
+            &broker,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+            Some(CRASHED_WORKER_DRAIN_PROTOCOL_VERSION),
+        );
+        let _w_rx = attach_crashed_worker(
+            &broker,
+            "s-r11-m1",
+            "62-1",
+            1,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+        );
+        broker
+            .workers
+            .lock()
+            .get_mut("s-r11-m1")
+            .unwrap()
+            .snapshot
+            .drain_requested = true;
+        broker
+            .pending_commands
+            .lock()
+            .entry("s-r11-m1".into())
+            .or_default()
+            .push_back(WorkerCommand::Prompt {
+                command_id: "cmd-r11-m1".into(),
+                content: Vec::new(),
+                turn_id: "t-1".into(),
+                cmid: None,
+                expected_worker_epoch: None,
+                trace: None,
+                echo_artifacts: false,
+                observe_subagents: false,
+                acknowledged_uncertain_sequence: None,
+            });
+        broker.flush_pending_guarded("s-r11-m1");
+        let first = ctrl_rx.try_recv().expect("rejection ack");
+        assert!(matches!(
+            first,
+            Frame::CommandAck {
+                ref command_id,
+                accepted: false,
+                ..
+            } if command_id == "cmd-r11-m1"
+        ));
+        let second = ctrl_rx.try_recv().expect("refreshed snapshot");
+        match second {
+            Frame::Snapshot { worker } => {
+                assert_eq!(worker.session_id, "s-r11-m1");
+                assert_eq!(worker.pending_prompt_count, 0);
+            }
+            other => panic!("expected refreshed Frame::Snapshot, got {other:?}"),
+        }
     }
 }

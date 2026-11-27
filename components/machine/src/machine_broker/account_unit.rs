@@ -307,3 +307,32 @@ pub(super) fn crashed_or_draining_prompt_refusal(
     }
     None
 }
+
+pub(super) fn is_departing_cleanup_command(command: &crate::execution_protocol::Command) -> bool {
+    match command {
+        crate::execution_protocol::Command::Invoke { invocation, .. } => {
+            matches!(
+                invocation.method.as_str(),
+                "process/terminate" | "process/read"
+            )
+        }
+        crate::execution_protocol::Command::Observe { .. }
+        | crate::execution_protocol::Command::Events { .. } => true,
+        crate::execution_protocol::Command::Describe
+        | crate::execution_protocol::Command::Shutdown => false,
+    }
+}
+
+pub(super) fn departing_cleanup_allows(
+    broker: &super::Broker,
+    session_id: &str,
+    epoch: &str,
+    request: &crate::execution_protocol::RuntimeRequest,
+) -> bool {
+    is_departing_cleanup_command(&request.command)
+        && broker
+            .departing_cleanup
+            .lock()
+            .get(session_id)
+            .is_some_and(|entry| entry.epoch == epoch && entry.binding == request.binding)
+}

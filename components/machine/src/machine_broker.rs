@@ -1097,7 +1097,12 @@ impl Broker {
                     session_retained,
                 );
             }
-            if let Some(effect) = snapshot.uncertain_effect.clone() {
+            if let Some(effect) = snapshot.uncertain_effect.clone()
+                && !self
+                    .permanently_deleted_sessions
+                    .lock()
+                    .contains(&session_id)
+            {
                 self.record_session_uncertain_effect(&session_id, effect);
             }
             worker.raw_wrap_up_steering = snapshot.wrap_up_steering;
@@ -1351,42 +1356,39 @@ impl Broker {
         outer: Option<u16>,
         mut frame: Frame,
     ) {
-        match &mut frame {
-            Frame::Snapshot { worker } => {
-                worker.crashed_drain_active = worker.has_connected_owner()
-                    && self.has_crashed_drain_for_epoch(&worker.session_id, &worker.worker_epoch);
-                worker.incarnation = self.reported_lineage(&worker.session_id);
-                self.sanitize_snapshot_for_controller_protocols(worker, outer, protocol);
+        if let Frame::Snapshot { mut worker } = frame {
+            worker.incarnation = self.reported_lineage(&worker.session_id);
+            self.sanitize_snapshot_for_controller_protocols(&mut worker, outer, protocol);
+            self.send_snapshot_ordered_with_crashed_drain(tx, worker);
+            return;
+        }
+        if let Frame::WorkerEvent {
+            session_id, event, ..
+        } = &mut frame
+        {
+            if protocol < crate::runtime_wire::SUBAGENT_OBSERVATION_PROTOCOL_VERSION {
+                crate::runtime_wire::retire_observation(event);
             }
-            Frame::WorkerEvent {
-                session_id, event, ..
-            } => {
-                if protocol < crate::runtime_wire::SUBAGENT_OBSERVATION_PROTOCOL_VERSION {
-                    crate::runtime_wire::retire_observation(event);
-                }
-                if let RuntimeEvent::Update { update, .. } = event
-                    && crate::runtime_wire::current_turn_support(update).is_some()
-                {
-                    let (raw, wproto) =
-                        self.workers.lock().get(session_id).map_or((false, 0), |p| {
-                            (p.raw_wrap_up_steering, p.negotiated_protocol)
-                        });
-                    let declared = self
-                        .sessions
-                        .lock()
-                        .get(session_id)
-                        .map(|s| s.provider.clone());
-                    wrap_up::sanitize_capability_event(
-                        update,
-                        raw,
-                        wproto,
-                        outer,
-                        protocol,
-                        declared.as_deref(),
-                    );
-                }
+            if let RuntimeEvent::Update { update, .. } = event
+                && crate::runtime_wire::current_turn_support(update).is_some()
+            {
+                let (raw, wproto) = self.workers.lock().get(session_id).map_or((false, 0), |p| {
+                    (p.raw_wrap_up_steering, p.negotiated_protocol)
+                });
+                let declared = self
+                    .sessions
+                    .lock()
+                    .get(session_id)
+                    .map(|s| s.provider.clone());
+                wrap_up::sanitize_capability_event(
+                    update,
+                    raw,
+                    wproto,
+                    outer,
+                    protocol,
+                    declared.as_deref(),
+                );
             }
-            _ => {}
         }
         let _ = tx.send(frame);
     }
@@ -4864,17 +4866,7 @@ async fn handle_worker(
                 );
             }
             Frame::ExecutionRequest { request } => {
-                let allowed = request.session_id == session_id
-                    && request.worker_epoch == epoch
-                    && ((!broker.cancelled_sessions.lock().contains(session_id)
-                        && broker
-                            .sessions
-                            .lock()
-                            .get(session_id)
-                            .and_then(|launch| launch.execution_binding.as_ref())
-                            .and_then(|binding| binding.decode().ok())
-                            .is_some_and(|binding| binding == request.binding))
-                        || wrap_up::departing_cleanup_allows(&broker, session_id, epoch, &request));
+                let allowed = broker.execution_request_allowed(session_id, epoch, &request);
                 if allowed {
                     broker.send_controller(Frame::ExecutionRequest { request });
                 } else if let Some(worker) = broker.workers.lock().get(session_id) {
