@@ -226,7 +226,7 @@ impl MachinePluginStore {
         &self,
         request: &PortableUsageRequest,
         admission: &HostAdmission,
-    ) -> Result<(Self, tokio::sync::OwnedMutexGuard<()>)> {
+    ) -> Result<(Self, tokio::sync::OwnedMutexGuard<()>, RefreshFree)> {
         portable_account(
             &request.account_id,
             &request.plugin_id,
@@ -255,8 +255,8 @@ impl MachinePluginStore {
         let plugin_id = request.plugin_id.clone();
         let digest = request.generation_digest.clone();
         let auth_generation = request.auth_generation;
-        let guard =
-            tokio::task::spawn_blocking(move || -> Result<tokio::sync::OwnedMutexGuard<()>> {
+        let (guard, refresh_free) = tokio::task::spawn_blocking(
+            move || -> Result<(tokio::sync::OwnedMutexGuard<()>, RefreshFree)> {
                 let _lifecycle = lifecycle;
                 for plugin in &participants {
                     ensure!(
@@ -270,12 +270,14 @@ impl MachinePluginStore {
                     );
                 }
                 store.require_refresh_free(&plugin_id, &digest)?;
-                Ok(guard)
-            })
-            .await
-            .context("portable_usage_collector_unavailable")??;
+                let refresh_free = store.refresh_free(&plugin_id, &digest);
+                Ok((guard, refresh_free))
+            },
+        )
+        .await
+        .context("portable_usage_collector_unavailable")??;
         admission.remaining()?;
-        Ok((scoped, guard))
+        Ok((scoped, guard, refresh_free))
     }
 
     /// A Provider whose CLI rotates credentials (`compare_and_swap`) needs a
@@ -462,19 +464,17 @@ impl MachinePluginStore {
             payload: serde_json::Value::Null,
             sidecars: Vec::new(),
         };
-        let (scoped, _guard) = self
-            .admit_portable(&usage, &admission)
-            .await
-            .map_err(|error| PluginHostInvocationFailure {
-                started: false,
-                error: anyhow::anyhow!(pre_spend_code(&format!("{error:#}"))),
-            })?;
-        if !self
-            .refresh_free(&request.plugin_id, &request.generation_digest)
-            .reset
-        {
+        let (scoped, guard, refresh_free) =
+            self.admit_portable(&usage, &admission)
+                .await
+                .map_err(|error| PluginHostInvocationFailure {
+                    started: false,
+                    error: anyhow::anyhow!(pre_spend_code(&format!("{error:#}"))),
+                })?;
+        if !refresh_free.reset {
             return Err(refuse("native_reset_unsupported"));
         }
+        admission.remaining()?;
         admission.sidecars = Some(BTreeMap::new());
         admission.private_home = Some((request.auth_generation, true));
         let mut payload = serde_json::to_value(&request.reset).map_err(anyhow::Error::from)?;
@@ -482,9 +482,9 @@ impl MachinePluginStore {
             object.insert("token_refresh".into(), serde_json::Value::Bool(false));
         }
         // The Service host path resolves exactly the selected release under
-        // the lifecycle lock and keeps it through the reset.
+        // the owned account and lifecycle locks and keeps them through the reset.
         scoped
-            .invoke_executable_host_admitted(
+            .invoke_executable_host_with_admission(
                 PluginHostRequest {
                     plugin_id: request.plugin_id,
                     plugin_version: request.plugin_version,
@@ -494,6 +494,7 @@ impl MachinePluginStore {
                     payload,
                 },
                 Some(&admission),
+                Some(guard),
             )
             .await
             .map(|reply| crate::machine_protocol::project_native_reset_reply(&reply))
@@ -546,14 +547,11 @@ impl MachinePluginStore {
             payload: serde_json::Value::Null,
             sidecars: Vec::new(),
         };
-        let (scoped, _guard) = self
+        let (scoped, guard, refresh_free) = self
             .admit_portable(&usage, &admission)
             .await
             .map_err(|error| refuse(portable_usage_error_code(&format!("{error:#}"))))?;
-        if !self
-            .refresh_free(&request.plugin_id, &request.generation_digest)
-            .renewal
-        {
+        if !refresh_free.renewal {
             return Err(refuse("portable_renewal_unsupported"));
         }
         // The session homes must hold exactly the admitted sealed credential:
@@ -568,10 +566,11 @@ impl MachinePluginStore {
         {
             return Err(refuse("portable_usage_replica_pending"));
         }
+        admission.remaining()?;
         // No sidecar and no private home: the session environment.
         admission.sidecars = Some(BTreeMap::new());
         let ran = scoped
-            .invoke_executable_host_admitted(
+            .invoke_executable_host_with_admission(
                 PluginHostRequest {
                     plugin_id: request.plugin_id.clone(),
                     plugin_version: request.plugin_version,
@@ -581,6 +580,7 @@ impl MachinePluginStore {
                     payload: serde_json::json!({"token_refresh": "renew"}),
                 },
                 Some(&admission),
+                Some(guard),
             )
             .await
             .map_err(|failure| PluginHostInvocationFailure {
@@ -669,7 +669,7 @@ impl MachinePluginStore {
             mut request,
             mut admission,
         } = invocation;
-        let (scoped, _guard) = self
+        let (scoped, guard, _refresh_free) = self
             .admit_portable(&request, &admission)
             .await
             .map_err(|error| anyhow::anyhow!(portable_usage_error_code(&format!("{error:#}"))))?;
@@ -690,7 +690,7 @@ impl MachinePluginStore {
         // (only the checked sidecars) and refuses an observation whose
         // generation changed while it ran.
         scoped
-            .invoke_executable_host_admitted(
+            .invoke_executable_host_with_admission(
                 PluginHostRequest {
                     plugin_id: request.plugin_id,
                     plugin_version: request.plugin_version,
@@ -700,6 +700,7 @@ impl MachinePluginStore {
                     payload: request.payload,
                 },
                 Some(&admission),
+                Some(guard),
             )
             .await
             .map_err(|failure| {

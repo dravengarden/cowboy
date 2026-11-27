@@ -266,6 +266,14 @@ pub struct SystemdWorker {
     pub cgroup: String,
 }
 
+/// Proof that an incoming named-worker launch carries over from a specific
+/// previously recorded exit binding, verified off the broker's Tokio threads.
+pub struct VerifiedReleaseCarry {
+    account: ProviderAccountId,
+    previous: WorkerBinding,
+    incoming: WorkerBinding,
+}
+
 impl MachinePluginStore {
     pub fn observe_account_worker_exit(
         &self,
@@ -448,17 +456,58 @@ impl MachinePluginStore {
         self.begin_contained_account_worker(launch, None)
     }
 
-    pub fn begin_contained_account_worker(
+    /// Pre-verify on a blocking thread whether a named worker launch's release
+    /// carries over from the session's recorded exit binding so the final
+    /// synchronous spawn fence never verifies retained Provider runtimes inline.
+    pub fn prepare_contained_account_worker_carry(
+        &self,
+        launch: &crate::runtime_wire::StartSession,
+    ) -> Result<Option<VerifiedReleaseCarry>> {
+        if launch.provider_account_id.is_default() {
+            return Ok(None);
+        }
+        let incoming = WorkerBinding::from_launch(launch)?;
+        let Some(old) = self.account_worker_exit(&launch.session_id)? else {
+            return Ok(None);
+        };
+        let Some(previous) = old.binding else {
+            return Ok(None);
+        };
+        if previous == incoming {
+            return Ok(None);
+        }
+        if self.account_release_carries(&launch.provider_account_id, &previous, &incoming) {
+            return Ok(Some(VerifiedReleaseCarry {
+                account: launch.provider_account_id.clone(),
+                previous,
+                incoming,
+            }));
+        }
+        Ok(None)
+    }
+
+    pub fn begin_contained_account_worker_with_carry(
         &self,
         launch: &crate::runtime_wire::StartSession,
         containment: Option<&crate::cgroup::ContainmentIdentity>,
+        carry: Option<&VerifiedReleaseCarry>,
     ) -> Result<uuid::Uuid> {
         self.begin_account_worker_binding(
             &launch.session_id,
             &launch.provider_account_id,
             Some(WorkerBinding::from_launch(launch)?),
             containment.cloned(),
+            carry,
         )
+    }
+
+    pub fn begin_contained_account_worker(
+        &self,
+        launch: &crate::runtime_wire::StartSession,
+        containment: Option<&crate::cgroup::ContainmentIdentity>,
+    ) -> Result<uuid::Uuid> {
+        let carry = self.prepare_contained_account_worker_carry(launch)?;
+        self.begin_contained_account_worker_with_carry(launch, containment, carry.as_ref())
     }
 
     /// Persist before spawn. Unknown prior launches cannot be overwritten even
@@ -469,7 +518,7 @@ impl MachinePluginStore {
         session: &str,
         account: &ProviderAccountId,
     ) -> Result<uuid::Uuid> {
-        self.begin_account_worker_binding(session, account, None, None)
+        self.begin_account_worker_binding(session, account, None, None, None)
     }
 
     fn begin_account_worker_binding(
@@ -478,6 +527,7 @@ impl MachinePluginStore {
         account: &ProviderAccountId,
         binding: Option<WorkerBinding>,
         containment: Option<crate::cgroup::ContainmentIdentity>,
+        carry: Option<&VerifiedReleaseCarry>,
     ) -> Result<uuid::Uuid> {
         ensure!(
             !account.is_default()
@@ -507,8 +557,13 @@ impl MachinePluginStore {
             );
             ensure!(
                 old.binding == binding
-                    || matches!((&old.binding, &binding), (Some(previous), Some(incoming))
-                        if self.account_release_carries(account, previous, incoming)),
+                    || matches!(
+                        (&old.binding, &binding, carry),
+                        (Some(previous), Some(incoming), Some(proof))
+                            if proof.account == *account
+                                && proof.previous == *previous
+                                && proof.incoming == *incoming
+                    ),
                 "worker native binding changed without readmission"
             );
         }

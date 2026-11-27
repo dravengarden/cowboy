@@ -511,11 +511,18 @@ impl BrowserManager {
             (reason, false)
         };
         let slot = self.slot(&instance.account_id);
-        let _lifecycle = slot.lifecycle.lock().await;
+        let mut lifecycle = Some(Arc::clone(&slot.lifecycle).lock_owned().await);
         // Nothing below awaits before the phase changes.
         authorized()?;
-        self.stop_locked_when(instance, reason, graceful, request_id, still)
-            .await
+        self.stop_locked_when(
+            instance,
+            reason,
+            graceful,
+            request_id,
+            &mut lifecycle,
+            still,
+        )
+        .await
     }
 
     /// A graceful stop that never waits for a snapshot copy, for callers
@@ -535,19 +542,19 @@ impl BrowserManager {
         still: impl FnOnce(&Live) -> Result<(), E>,
     ) -> Result<Option<StateEvent>, E> {
         let slot = self.slot(&instance.account_id);
-        let _lifecycle = match wait {
-            LifecycleWait::Until => slot.lifecycle.lock().await,
-            LifecycleWait::Never => match slot.lifecycle.try_lock() {
+        let mut lifecycle = Some(match wait {
+            LifecycleWait::Until => Arc::clone(&slot.lifecycle).lock_owned().await,
+            LifecycleWait::Never => match Arc::clone(&slot.lifecycle).try_lock_owned() {
                 Ok(lifecycle) => lifecycle,
                 Err(_) => return Ok(None),
             },
-        };
+        });
         if instance.copy_running() {
             return Ok(None);
         }
         // Nothing below awaits before the phase changes.
         authorized()?;
-        self.stop_locked_when(instance, reason, true, None, still)
+        self.stop_locked_when(instance, reason, true, None, &mut lifecycle, still)
             .await
             .map(Some)
     }
@@ -564,9 +571,10 @@ impl BrowserManager {
         reason: Reason,
         graceful: bool,
         request_id: Option<&str>,
+        lifecycle: &mut Option<tokio::sync::OwnedMutexGuard<()>>,
     ) -> StateEvent {
         let Ok(event) = self
-            .stop_locked_when(instance, reason, graceful, request_id, |_| {
+            .stop_locked_when(instance, reason, graceful, request_id, lifecycle, |_| {
                 Ok::<(), std::convert::Infallible>(())
             })
             .await;
@@ -581,6 +589,7 @@ impl BrowserManager {
         reason: Reason,
         graceful: bool,
         request_id: Option<&str>,
+        lifecycle: &mut Option<tokio::sync::OwnedMutexGuard<()>>,
         still: impl FnOnce(&Live) -> Result<(), E>,
     ) -> Result<StateEvent, E> {
         let stop_began = Instant::now();
@@ -647,7 +656,7 @@ impl BrowserManager {
         let mut unsaved = true;
         let mut published = None;
         if graceful {
-            match self.stop_with_snapshot(instance).await {
+            match self.stop_with_snapshot(instance, lifecycle).await {
                 Ok(Some((generation, flushed))) => {
                     published = Some(generation);
                     unsaved = !flushed;
@@ -746,6 +755,7 @@ impl BrowserManager {
     pub(super) async fn stop_with_snapshot(
         &self,
         instance: &Arc<Instance>,
+        lifecycle: &mut Option<tokio::sync::OwnedMutexGuard<()>>,
     ) -> Result<Option<(u64, bool)>> {
         let cap = instance.deadline();
         if Instant::now() >= cap {
@@ -806,8 +816,20 @@ impl BrowserManager {
                 .await;
             bail!("launcher made no stop-time copy");
         }
-        self.publish_snapshot_on_blocking(instance, account_dir, generation, reservation)
-            .await?;
+        let owned_lifecycle = lifecycle
+            .take()
+            .context("browser account lifecycle guard missing")?;
+        let (result, returned_lifecycle) = self
+            .publish_snapshot_async(
+                instance,
+                account_dir,
+                generation,
+                reservation,
+                owned_lifecycle,
+            )
+            .await;
+        *lifecycle = returned_lifecycle;
+        result?;
         Ok(Some((generation, outcome.graceful)))
     }
 
@@ -820,7 +842,7 @@ impl BrowserManager {
         expected_revision: Option<u64>,
     ) -> StateEvent {
         let slot = self.slot(&account_id);
-        let _lifecycle = slot.lifecycle.lock().await;
+        let mut lifecycle = Some(Arc::clone(&slot.lifecycle).lock_owned().await);
         let hibernated = |reason: Option<Reason>, revision: Option<u64>| StateEvent {
             request_id: Some(request_id.to_owned()),
             instance: InstanceRef {
@@ -892,7 +914,9 @@ impl BrowserManager {
         if let Some(instance) = running {
             // The fence is raised: the copy, if any, is interrupted with the
             // unit and its staging abandoned.
-            let event = self.stop_locked(&instance, reason, false, None).await;
+            let event = self
+                .stop_locked(&instance, reason, false, None, &mut lifecycle)
+                .await;
             self.send_state(event);
         }
         if slot.instance.lock().is_some() || self.fence_blocked(&account_id) {

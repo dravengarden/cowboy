@@ -1926,42 +1926,42 @@ async fn publish_provider_auth_observations(
     if !changed {
         return;
     }
-    let store = Arc::clone(providers);
-    let mut plugins = match tokio::task::spawn_blocking(move || store.inventory()).await {
-        Ok(Ok(plugins)) => plugins,
-        error => {
-            tracing::warn!(
-                ?error,
-                "could not publish credential reconciliation inventory"
-            );
-            return;
-        }
-    };
-    for plugin in &mut plugins {
-        // PluginInventory's legacy auth fields describe only the default account.
-        let scope = (
-            crate::provider_account::ProviderAccountId::default(),
-            plugin.plugin_id.clone(),
+    if let Err(error) = providers
+        .publish_inventory_with(|mut plugins| {
+            for plugin in &mut plugins {
+                // PluginInventory's legacy auth fields describe only the default account.
+                let scope = (
+                    crate::provider_account::ProviderAccountId::default(),
+                    plugin.plugin_id.clone(),
+                );
+                if observations.failed_provider_ids.contains(&scope) && !pending.contains_key(&scope)
+                {
+                    plugin.materialization_state = ProviderMaterializationState::Failed;
+                    plugin.detail = Some(
+                        "Provider runtime credentials are incomplete; restoring the authoritative Service generation."
+                            .to_owned(),
+                    );
+                } else if pending
+                    .get(&scope)
+                    .copied()
+                    .is_some_and(|generation| plugin.auth_generation == Some(generation))
+                {
+                    plugin.materialization_state = ProviderMaterializationState::Applying;
+                    plugin.detail = Some(
+                        "Provider credential refresh is awaiting Service compare-and-swap reconciliation."
+                            .to_owned(),
+                    );
+                }
+            }
+            publish_auth_refresh_events(events, plugins, refresh_events, protocol);
+        })
+        .await
+    {
+        tracing::warn!(
+            %error,
+            "could not publish credential reconciliation inventory"
         );
-        if observations.failed_provider_ids.contains(&scope) && !pending.contains_key(&scope) {
-            plugin.materialization_state = ProviderMaterializationState::Failed;
-            plugin.detail = Some(
-                "Provider runtime credentials are incomplete; restoring the authoritative Service generation."
-                    .to_owned(),
-            );
-        } else if pending
-            .get(&scope)
-            .copied()
-            .is_some_and(|generation| plugin.auth_generation == Some(generation))
-        {
-            plugin.materialization_state = ProviderMaterializationState::Applying;
-            plugin.detail = Some(
-                "Provider credential refresh is awaiting Service compare-and-swap reconciliation."
-                    .to_owned(),
-            );
-        }
     }
-    publish_auth_refresh_events(events, plugins, refresh_events, protocol);
 }
 
 fn publish_auth_refresh_events(

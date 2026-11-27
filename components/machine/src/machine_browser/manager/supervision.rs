@@ -287,61 +287,60 @@ impl BrowserManager {
         .await
         .unwrap_or(Err(Recheck::Unverified));
 
-        // Revalidate instance state after the blocking walk before latching or
-        // mutating scan_denied so a concurrent teardown is not misclassified.
-        let still_active = {
-            let live = instance.live.lock();
-            live.phase != Phase::Stopping && live.verified.pins_hold()
-        };
-        if !still_active {
-            if torn_down_by_stop(instance) {
-                return Ok(());
-            }
-            latch_forced(instance, Reason::ConfinementUnverified);
-            return Err(Reason::ConfinementUnverified);
-        }
-        if let Err(Recheck::Stop(reason)) = scan {
-            if !torn_down_by_stop(instance) {
-                latch_forced(instance, reason);
-            }
-            return Err(reason);
-        }
-        self.finish_periodic_scan(instance, scan)
-    }
-
-    fn finish_periodic_scan(
-        &self,
-        instance: &Arc<Instance>,
-        scan: Result<(), Recheck>,
-    ) -> Result<(), Reason> {
-        match scan {
-            Ok(()) => {
-                instance.live.lock().scan_denied = 0;
-                Ok(())
-            }
-            Err(Recheck::Stop(reason)) => Err(reason),
-            Err(Recheck::Unverified) => {
-                let attempt = {
-                    let mut live = instance.live.lock();
-                    live.scan_denied = live.scan_denied.saturating_add(1);
-                    if let Some(soon) = Instant::now()
-                        .checked_sub(SOCKET_SCAN_INTERVAL.saturating_sub(SCAN_DENIED_RETRY))
-                    {
-                        live.last_scan = soon;
+        // Apply phase validation, pin checks, and denial-counter updates under
+        // one live-state lock: ignore clean or inconclusive scans superseded by
+        // teardown while preserving definite violations in a populated cgroup.
+        let outcome = {
+            let mut live = instance.live.lock();
+            let stopping = live.phase == Phase::Stopping;
+            let pins_ok = live.verified.pins_hold();
+            match scan {
+                Ok(()) => {
+                    if stopping {
+                        Ok(())
+                    } else if !pins_ok {
+                        Err((Reason::ConfinementUnverified, false))
+                    } else {
+                        live.scan_denied = 0;
+                        Ok(())
                     }
-                    live.scan_denied
-                };
-                if attempt >= SCAN_DENIED_LIMIT {
-                    tracing::warn!(
-                        event_name = "browser.scan.unverified",
-                        browser_instance = %instance.instance_id,
-                        attempt,
-                        "browser socket scan denied repeatedly"
-                    );
-                    latch_forced(instance, Reason::ConfinementUnverified);
-                    return Err(Reason::ConfinementUnverified);
                 }
-                Ok(())
+                Err(Recheck::Unverified) => {
+                    if stopping {
+                        Ok(())
+                    } else if !pins_ok {
+                        Err((Reason::ConfinementUnverified, false))
+                    } else {
+                        live.scan_denied = live.scan_denied.saturating_add(1);
+                        if let Some(soon) = Instant::now()
+                            .checked_sub(SOCKET_SCAN_INTERVAL.saturating_sub(SCAN_DENIED_RETRY))
+                        {
+                            live.last_scan = soon;
+                        }
+                        if live.scan_denied >= SCAN_DENIED_LIMIT {
+                            tracing::warn!(
+                                event_name = "browser.scan.unverified",
+                                browser_instance = %instance.instance_id,
+                                attempt = live.scan_denied,
+                                "browser socket scan denied repeatedly"
+                            );
+                            Err((Reason::ConfinementUnverified, false))
+                        } else {
+                            Ok(())
+                        }
+                    }
+                }
+                Err(Recheck::Stop(reason)) => Err((reason, true)),
+            }
+        };
+        match outcome {
+            Ok(()) => Ok(()),
+            Err((reason, definite)) => {
+                if definite && torn_down_by_stop(instance) {
+                    return Ok(());
+                }
+                latch_forced(instance, reason);
+                Err(reason)
             }
         }
     }

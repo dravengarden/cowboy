@@ -68,10 +68,27 @@ fn explicit_inventory_kind(
 /// bound to `(plugin_id, gen_name)`, never letting an unsigned or defaulted
 /// `plugin-inventory.json` override the signed package or send a generation to
 /// the wrong sweeper. Returns `None` if records conflict or cannot be verified.
+pub(super) fn classify_signed_generation_kind(
+    plugin_id: &str,
+    gen_name: &str,
+    generation_dir: &Path,
+) -> Option<cowboy_plugin_sdk::PluginKind> {
+    classify_generation_kind_inner(plugin_id, gen_name, generation_dir, true)
+}
+
 pub(super) fn classify_generation_kind(
     plugin_id: &str,
     gen_name: &str,
     generation_dir: &Path,
+) -> Option<cowboy_plugin_sdk::PluginKind> {
+    classify_generation_kind_inner(plugin_id, gen_name, generation_dir, false)
+}
+
+fn classify_generation_kind_inner(
+    plugin_id: &str,
+    gen_name: &str,
+    generation_dir: &Path,
+    require_signed: bool,
 ) -> Option<cowboy_plugin_sdk::PluginKind> {
     let content = generation_dir.join("content");
     let expected_digest = format!("sha256:{gen_name}");
@@ -153,7 +170,7 @@ pub(super) fn classify_generation_kind(
         return Some(cowboy_plugin_sdk::PluginKind::AgentProvider);
     }
 
-    if has_inventory {
+    if !require_signed && has_inventory {
         return explicit_inventory_kind(&inventory_path, plugin_id, &expected_digest);
     }
     None
@@ -467,6 +484,12 @@ impl MachinePluginStore {
         referenced: BTreeSet<u64>,
         grace: Duration,
     ) -> Result<AuthRetention> {
+        ensure!(
+            self.account_id.is_default(),
+            "credential generation retention is limited to the default account"
+        );
+        validate_plugin_id(provider_id)?;
+        self.operations.ensure_unfenced(provider_id)?;
         let mut outcome = AuthRetention {
             provider_id: provider_id.to_owned(),
             ..AuthRetention::default()

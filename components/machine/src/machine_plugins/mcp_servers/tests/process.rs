@@ -585,7 +585,13 @@ async fn unconfirmed_native_receipts_expire_without_another_request() {
     tokio::time::pause();
     tokio::task::yield_now().await;
     tokio::time::advance(std::time::Duration::from_secs(32)).await;
-    tokio::task::yield_now().await;
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+        if !abandoned_path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert!(!abandoned_path.exists());
     assert!(!sessions.confirm_native(abandoned["handle"].as_str().unwrap()));
     assert!(owned_path.exists());

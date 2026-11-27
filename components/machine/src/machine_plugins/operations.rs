@@ -290,7 +290,7 @@ impl Journal {
 
 // Unlike the legacy inventory helper, malformed/dangling links and regular
 // files must not be mistaken for an absent installation during recovery.
-fn active_digest(root: &Path) -> Result<Option<String>> {
+pub(super) fn active_generation_strict(root: &Path) -> Result<Option<String>> {
     match root.symlink_metadata() {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         metadata => ensure!(metadata?.is_dir(), "invalid Plugin root"),
@@ -319,7 +319,11 @@ fn active_digest(root: &Path) -> Result<Option<String>> {
             "invalid active generation directory"
         );
     }
-    Ok(Some(digest))
+    Ok(Some(generation.to_owned()))
+}
+
+fn active_digest(root: &Path) -> Result<Option<String>> {
+    Ok(active_generation_strict(root)?.map(|generation| format!("sha256:{generation}")))
 }
 
 impl Journal {

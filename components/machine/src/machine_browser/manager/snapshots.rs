@@ -227,6 +227,7 @@ impl BrowserManager {
                     lifecycle,
                 )
                 .await
+                .0
             }
             None => {
                 self.retire_staging_async(account_dir, generation, reservation)
@@ -378,7 +379,9 @@ impl BrowserManager {
     /// all, or be an orphan to remove), and keeps its budget reserved while
     /// that cannot be done. The caller holds the account lifecycle lock.
     /// Run [`Self::publish_snapshot`] on Tokio's blocking pool while retaining
-    /// the owned account lifecycle guard and staging reservation through commit.
+    /// the owned account lifecycle guard and staging reservation through commit,
+    /// returning the guard on completion so cancelled callers cannot release
+    /// the account fence before publication finishes.
     pub(super) async fn publish_snapshot_async(
         &self,
         instance: &Arc<Instance>,
@@ -386,39 +389,27 @@ impl BrowserManager {
         generation: u64,
         reservation: StagingReservation,
         lifecycle: tokio::sync::OwnedMutexGuard<()>,
-    ) -> Result<()> {
+    ) -> (Result<()>, Option<tokio::sync::OwnedMutexGuard<()>>) {
         let Some(manager) = self.this.upgrade() else {
             self.retire_staging(&account_dir, generation, reservation);
-            bail!("browser manager shutting down");
+            return (
+                Err(anyhow!("browser manager shutting down")),
+                Some(lifecycle),
+            );
         };
         let instance = Arc::clone(instance);
-        tokio::task::spawn_blocking(move || {
-            let _lifecycle = lifecycle;
-            manager.publish_snapshot(&instance, &account_dir, generation, reservation)
+        match tokio::task::spawn_blocking(move || {
+            let result = manager.publish_snapshot(&instance, &account_dir, generation, reservation);
+            (result, lifecycle)
         })
         .await
-        .context("browser snapshot publication task failed")?
-    }
-
-    /// Run [`Self::publish_snapshot`] on Tokio's blocking pool when the caller
-    /// already holds the account lifecycle lock across a synchronous stop path.
-    pub(super) async fn publish_snapshot_on_blocking(
-        &self,
-        instance: &Arc<Instance>,
-        account_dir: PathBuf,
-        generation: u64,
-        reservation: StagingReservation,
-    ) -> Result<()> {
-        let Some(manager) = self.this.upgrade() else {
-            self.retire_staging(&account_dir, generation, reservation);
-            bail!("browser manager shutting down");
-        };
-        let instance = Arc::clone(instance);
-        tokio::task::spawn_blocking(move || {
-            manager.publish_snapshot(&instance, &account_dir, generation, reservation)
-        })
-        .await
-        .context("browser snapshot publication task failed")?
+        {
+            Ok((result, lifecycle)) => (result, Some(lifecycle)),
+            Err(error) => (
+                Err(anyhow::Error::from(error).context("browser snapshot publication task failed")),
+                None,
+            ),
+        }
     }
 
     pub(super) async fn retire_staging_async(
@@ -470,12 +461,10 @@ impl BrowserManager {
             &mut record,
             snapshot::Bounds::for_profile(instance.settings.profile_max_bytes),
             unix_ms(),
-            // Held across the commit: a latch set before it refuses the
-            // publication, and one set during it waits for the commit.
-            || {
-                let latch = instance.latch.lock();
-                latch.is_none().then_some(latch)
-            },
+            // Checked nonblockingly right before commit (never held across disk
+            // fsyncs, control writes, or pruning); account lifecycle mutex
+            // serializes concurrent stops, resets, and revocations asynchronously.
+            || instance.latch.lock().is_none().then_some(()),
         ) {
             Ok(stats) => {
                 drop(reservation);

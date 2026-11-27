@@ -262,8 +262,8 @@ impl BrowserManager {
                     enforced = ?self.enforced_network, identified,
                     "surviving browser unit not proven to run the Device network policy; stopping");
                 let slot = self.slot(&instance.account_id);
-                let _lifecycle = slot.lifecycle.lock().await;
-                self.stop_locked(&instance, Reason::Superseded, true, None)
+                let mut lifecycle = Some(Arc::clone(&slot.lifecycle).lock_owned().await);
+                self.stop_locked(&instance, Reason::Superseded, true, None, &mut lifecycle)
                     .await;
                 Ok(())
             }
@@ -513,13 +513,13 @@ impl BrowserManager {
                 continue;
             };
             let slot = self.slot(&account_id);
-            let _lifecycle = slot.lifecycle.lock().await;
+            let mut lifecycle = Some(Arc::clone(&slot.lifecycle).lock_owned().await);
             let mut record = state_file::read_control(&account_dir)?;
             if record.pending.is_some() {
                 let running = slot.instance.lock().clone();
                 if let Some(instance) = running {
                     let event = self
-                        .stop_locked(&instance, Reason::Revoked, false, None)
+                        .stop_locked(&instance, Reason::Revoked, false, None, &mut lifecycle)
                         .await;
                     self.send_state(event);
                 }

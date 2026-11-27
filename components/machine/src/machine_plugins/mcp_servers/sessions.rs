@@ -45,10 +45,20 @@ impl McpSessions {
         }
     }
 
+    pub async fn confirm_native_async(&self, handle: &str) -> bool {
+        self.scope.upgrade().is_some() && self.descriptors.confirm_async(handle).await
+    }
+
+    pub async fn release_native_async(&self, handle: &str) -> bool {
+        self.descriptors.release_async(handle).await
+    }
+
+    #[cfg(test)]
     pub fn confirm_native(&self, handle: &str) -> bool {
         self.scope.upgrade().is_some() && self.descriptors.confirm(handle)
     }
 
+    #[cfg(test)]
     pub fn release_native(&self, handle: &str) -> bool {
         self.descriptors.release(handle)
     }

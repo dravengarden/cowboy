@@ -8,12 +8,16 @@ use crate::machine_protocol::plugin_install::{
     InstallTarget, InstallTargetObservation, InstallTargetQuery, InstallUnavailable,
     InstallUncertainty,
 };
-use operations::install_attempts::{Attempts, PendingAttempt};
+use operations::install_attempts::PendingAttempt;
 use operations::lease::InstallationLease;
 
 pub(super) struct LeaseCheck(Option<InstallationLease>);
 
 impl LeaseCheck {
+    pub(super) fn none() -> Self {
+        Self(None)
+    }
+
     pub(super) fn check(&self) -> Result<()> {
         if let Some(lease) = &self.0 {
             lease
@@ -32,8 +36,7 @@ pub(super) enum InstallGuard<'a> {
 /// Private fields: another installer module cannot assemble a durable guard
 /// by pairing an unrelated receipt and still-live lease.
 pub(super) struct InstallAdmission<'a> {
-    journal: &'a Attempts,
-    pending: Box<PendingAttempt>,
+    pending: Option<Box<PendingAttempt>>,
     lease: &'a InstallationLease,
 }
 
@@ -54,7 +57,13 @@ impl InstallGuard<'_> {
             }
             Self::Durable(admission) => {
                 ensure!(
-                    admission.pending.receipt().step.matches_envelope(desired),
+                    admission
+                        .pending
+                        .as_ref()
+                        .expect("install continuation present")
+                        .receipt()
+                        .step
+                        .matches_envelope(desired),
                     "installation continuation targets another envelope"
                 );
             }
@@ -128,7 +137,13 @@ impl InstallGuard<'_> {
     pub(super) fn check(&self) -> Result<()> {
         if let Self::Durable(InstallAdmission { lease, pending, .. }) = self {
             ensure!(
-                lease.matches(&pending.receipt().step),
+                lease.matches(
+                    &pending
+                        .as_ref()
+                        .expect("install continuation present")
+                        .receipt()
+                        .step
+                ),
                 "installation continuation targets another request"
             );
             lease
@@ -157,15 +172,38 @@ impl InstallGuard<'_> {
         result
     }
 
-    pub(super) fn phase(&mut self, phase: InstallPhase) -> Result<()> {
+    pub(super) async fn phase(
+        &mut self,
+        store: &MachinePluginStore,
+        phase: InstallPhase,
+        lifecycle: &mut Option<LifecycleGuard>,
+    ) -> Result<()> {
         self.check()?;
-        if let Self::Durable(InstallAdmission {
-            journal, pending, ..
-        }) = self
-        {
-            journal.advance(pending, InstallOutcome::Pending { phase })?;
+        if let Self::Durable(InstallAdmission { pending, lease, .. }) = self {
+            let mut owned_pending = pending
+                .take()
+                .context("installation continuation already consumed")?;
+            let store_for_adv = store.clone();
+            let lease_check = LeaseCheck(Some(lease.clone_lease()));
+            let (adv_res, returned_pending) = MachinePluginStore::run_with_lifecycle(
+                lifecycle,
+                "installation phase transition task failed",
+                move || {
+                    let result = lease_check.check().and_then(|()| {
+                        store_for_adv
+                            .operations
+                            .install_attempts
+                            .advance(&mut owned_pending, InstallOutcome::Pending { phase })?;
+                        // A receipt fsync is not permitted to renew the original lease.
+                        lease_check.check()
+                    });
+                    Ok((result, owned_pending))
+                },
+            )
+            .await?;
+            *pending = Some(returned_pending);
+            return adv_res;
         }
-        // A receipt fsync is not permitted to renew the original lease.
         self.check()
     }
 
@@ -176,12 +214,17 @@ impl InstallGuard<'_> {
     ) -> Result<()> {
         self.check()?;
         if let Self::Durable(InstallAdmission { pending, .. }) = self {
-            let step = pending.receipt().step.clone();
-            let store = store.clone();
+            let step = pending
+                .as_ref()
+                .context("installation continuation already consumed")?
+                .receipt()
+                .step
+                .clone();
+            let store_for_target = store.clone();
             let target = MachinePluginStore::run_with_lifecycle(
                 lifecycle,
                 "installation target check task failed",
-                move || store.install_target(&step.plugin_id),
+                move || store_for_target.install_target(&step.plugin_id),
             )
             .await?;
             self.check()?;
@@ -190,24 +233,28 @@ impl InstallGuard<'_> {
                 "installation target changed during staging"
             );
         }
-        self.phase(InstallPhase::Activating)
+        self.phase(store, InstallPhase::Activating, lifecycle).await
     }
 
-    fn finish(&mut self, result: &Result<PluginInventory>) -> Result<()> {
-        let Self::Durable(InstallAdmission {
-            journal,
-            pending,
-            lease,
-        }) = self
-        else {
+    async fn finish(
+        &mut self,
+        store: &MachinePluginStore,
+        result: &Result<PluginInventory>,
+        lifecycle: &mut Option<LifecycleGuard>,
+    ) -> Result<()> {
+        let Self::Durable(InstallAdmission { pending, lease, .. }) = self else {
             return Ok(());
         };
-        let InstallOutcome::Pending { phase } = pending.receipt().outcome else {
+        let mut owned_pending = pending
+            .take()
+            .context("installation continuation already consumed")?;
+        let InstallOutcome::Pending { phase } = owned_pending.receipt().outcome else {
+            *pending = Some(owned_pending);
             bail!("installation continuation has already ended");
         };
         let outcome = match result {
             Ok(inventory) => {
-                let step = &pending.receipt().step;
+                let step = &owned_pending.receipt().step;
                 ensure!(
                     inventory.plugin_id == step.plugin_id
                         && inventory.plugin_kind == step.plugin_kind
@@ -240,7 +287,21 @@ impl InstallGuard<'_> {
         };
         // Completion records an already observed effect. It grants no next
         // effect and may acknowledge it after the original lease has ended.
-        journal.advance(pending, outcome)
+        let store_for_fin = store.clone();
+        let (adv_res, returned_pending) = MachinePluginStore::run_with_lifecycle(
+            lifecycle,
+            "installation completion transition task failed",
+            move || {
+                let result = store_for_fin
+                    .operations
+                    .install_attempts
+                    .advance(&mut owned_pending, outcome);
+                Ok((result, owned_pending))
+            },
+        )
+        .await?;
+        *pending = Some(returned_pending);
+        adv_res
     }
 }
 
@@ -461,19 +522,30 @@ impl MachinePluginStore {
             Ok(PrepareDecision::Rejected(reason)) => return unavailable(reason),
             Err(_) => return unavailable(InstallUnavailable::Storage),
         };
-        let journal = &self.operations.install_attempts;
         let mut guard = InstallGuard::Durable(InstallAdmission {
-            journal,
-            pending,
+            pending: Some(pending),
             lease,
         });
         let result = self
             .install_inner(desired, verified, &mut guard, lifecycle)
             .await;
-        if guard.finish(&result).is_err() {
+        if guard.finish(self, &result, lifecycle).await.is_err() {
             return unavailable(InstallUnavailable::Storage);
         }
-        journal.query(step)
+        let store_for_query = self.clone();
+        let step_for_query = step.clone();
+        MachinePluginStore::run_with_lifecycle(
+            lifecycle,
+            "installation receipt query task failed",
+            move || {
+                Ok(store_for_query
+                    .operations
+                    .install_attempts
+                    .query(&step_for_query))
+            },
+        )
+        .await
+        .unwrap_or_else(|_| unavailable(InstallUnavailable::Storage))
     }
     #[allow(clippy::too_many_lines)] // One fenced Agent Provider install flow.
     pub(super) async fn install_agent_plugin(
@@ -519,20 +591,37 @@ impl MachinePluginStore {
             self.root.parent(),
             account_sandbox::sandboxed(&package),
             lifecycle,
+            Some(std::sync::Arc::clone(&self.lifecycle)),
         )
         .await?;
         let runtime_ms = started.elapsed().as_millis();
         let probe_started = Instant::now();
         if !prepared.is_already_installed() {
-            let launch_command = prepared.command_path(&payload.launch_command)?;
+            let launch_command = match prepared.command_path(&payload.launch_command) {
+                Ok(cmd) => cmd,
+                Err(error) => {
+                    prepared.discard(lifecycle).await;
+                    return Err(error);
+                }
+            };
             prepared = prepared.verify_before_outer_probe(lifecycle).await?;
-            guard.check()?;
-            let exit_confirmed = guard
+            if let Err(error) = guard.check() {
+                prepared.discard(lifecycle).await;
+                return Err(error);
+            }
+            let exit_confirmed = match guard
                 .bounded(probe_provider_runtime(
                     &package.manifest.runtime,
                     &launch_command,
                 ))
-                .await?;
+                .await
+            {
+                Ok(confirmed) => confirmed,
+                Err(error) => {
+                    prepared.discard(lifecycle).await;
+                    return Err(error);
+                }
+            };
             prepared.record_outer_probe_exit_confirmed(exit_confirmed);
         }
         let probe_ms = probe_started.elapsed().as_millis();
@@ -568,15 +657,20 @@ impl MachinePluginStore {
             let generation_name_for_activate = generation_name.clone();
             let lease_check = guard.lease_check();
             Self::run_with_lifecycle(lifecycle, "Provider activation task failed", move || {
-                lease_check.check()?;
-                Self::activate(&plugin_root_for_activate, &generation_name_for_activate)
+                Self::activate_checked(
+                    &plugin_root_for_activate,
+                    &generation_name_for_activate,
+                    &lease_check,
+                )
             })
             .await?
         };
         // A sealed Service replica may predate installation. Materialize it as
         // part of activation so installation never asks for another login.
         if let (Some(envelope), Some(prepared)) = (auth_envelope.as_ref(), prepared_auth) {
-            guard.phase(InstallPhase::ProjectingAuthentication)?;
+            guard
+                .phase(self, InstallPhase::ProjectingAuthentication, lifecycle)
+                .await?;
             self.commit_install_auth_async(
                 envelope,
                 &package,
@@ -731,6 +825,7 @@ impl MachinePluginStore {
             self.root.parent(),
             false,
             lifecycle,
+            Some(std::sync::Arc::clone(&self.lifecycle)),
         )
         .await?;
         if !prepared.is_already_installed() {
@@ -796,11 +891,18 @@ impl MachinePluginStore {
             let generation_name_for_act = generation_name.clone();
             let lease_check = guard.lease_check();
             Self::run_with_lifecycle(lifecycle, "Plugin activation task failed", move || {
-                lease_check.check()?;
                 if matches!(package_for_act.payload, PluginPayload::CodeIntelligence(_)) {
-                    store.activate_code_generation(&package_for_act, &generation_name_for_act)
+                    store.activate_code_generation_checked(
+                        &package_for_act,
+                        &generation_name_for_act,
+                        &lease_check,
+                    )
                 } else {
-                    Self::activate(&plugin_root_for_act, &generation_name_for_act)?;
+                    Self::activate_checked(
+                        &plugin_root_for_act,
+                        &generation_name_for_act,
+                        &lease_check,
+                    )?;
                     Ok(())
                 }
             })

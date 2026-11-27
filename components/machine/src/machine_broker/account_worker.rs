@@ -92,9 +92,10 @@ pub(super) fn spawn_bound(
     store: &MachinePluginStore,
     session: &crate::runtime_wire::StartSession,
     containment: Option<&crate::cgroup::ContainmentIdentity>,
+    carry: Option<&crate::machine_plugins::VerifiedReleaseCarry>,
 ) -> Result<(Child, Option<uuid::Uuid>)> {
     let launch = (!session.provider_account_id.is_default())
-        .then(|| store.begin_contained_account_worker(session, containment))
+        .then(|| store.begin_contained_account_worker_with_carry(session, containment, carry))
         .transpose()?;
     spawn_reserved(
         command,
@@ -218,6 +219,22 @@ fn spawn_reserved(
             Err(error).context("spawning account worker")
         }
     }
+}
+
+pub(super) async fn prepare_carry_async(
+    store: &std::sync::Arc<MachinePluginStore>,
+    session: &StartSession,
+) -> Result<Option<crate::machine_plugins::VerifiedReleaseCarry>> {
+    if session.provider_account_id.is_default() {
+        return Ok(None);
+    }
+    let store = std::sync::Arc::clone(store);
+    let session_owned = session.clone();
+    tokio::task::spawn_blocking(move || {
+        store.prepare_contained_account_worker_carry(&session_owned)
+    })
+    .await
+    .context("worker release carry verification task failed")?
 }
 
 #[cfg(test)]

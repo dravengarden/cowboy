@@ -68,12 +68,14 @@ pub(super) fn handle(
                 if !query_only {
                     // An inventory read failure must not advertise an empty
                     // installation as proof of a completed uninstall.
-                    if let Ok(plugins) = providers.inventory_async().await {
-                        let _ = events.send(MachineEvent::PluginInventory {
-                            plugins,
-                            observed_at_ms: unix_ms(),
-                        });
-                    }
+                    let _ = providers
+                        .publish_inventory_with(|plugins| {
+                            let _ = events.send(MachineEvent::PluginInventory {
+                                plugins,
+                                observed_at_ms: unix_ms(),
+                            });
+                        })
+                        .await;
                 }
                 let _ = events.send(MachineEvent::PluginUninstallStep {
                     request_id,
@@ -143,12 +145,14 @@ pub(super) fn handle(
                 let result = providers.install(&plugin).await;
                 let accepted = result.is_ok();
                 let detail = result.as_ref().err().map(|error| format!("{error:#}"));
-                if let Ok(plugins) = providers.inventory_async().await {
-                    let _ = events.send(MachineEvent::PluginInventory {
-                        plugins,
-                        observed_at_ms: unix_ms(),
-                    });
-                }
+                let _ = providers
+                    .publish_inventory_with(|plugins| {
+                        let _ = events.send(MachineEvent::PluginInventory {
+                            plugins,
+                            observed_at_ms: unix_ms(),
+                        });
+                    })
+                    .await;
                 let _ = events.send(MachineEvent::CommandResult {
                     request_id,
                     accepted,
@@ -265,20 +269,20 @@ async fn refresh_inventory_task(
             workspace_owner: Some(snapshot.owner),
             observed_at_ms: unix_ms(),
         });
-        match providers.inventory_async().await {
-            Ok(plugins) => {
+        if let Err(error) = providers
+            .publish_inventory_with(|plugins| {
                 let _ = events.send(MachineEvent::PluginInventory {
                     plugins,
                     observed_at_ms: unix_ms(),
                 });
-            }
-            Err(error) => {
-                tracing::warn!(
-                    error = %format!("{error:#}"),
-                    "Plugin inventory refresh failed; preserving previous observed Plugins"
-                );
-                inventory_error = Some(error);
-            }
+            })
+            .await
+        {
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                "Plugin inventory refresh failed; preserving previous observed Plugins"
+            );
+            inventory_error = Some(error);
         }
     }
     let (accepted, detail) = match (workspace_result, inventory_error) {
@@ -304,19 +308,19 @@ async fn publish_plugin_inventory_if_ok(
     events: &tokio::sync::mpsc::UnboundedSender<MachineEvent>,
     context: &str,
 ) {
-    match providers.inventory_async().await {
-        Ok(plugins) => {
+    if let Err(error) = providers
+        .publish_inventory_with(|plugins| {
             let _ = events.send(MachineEvent::PluginInventory {
                 plugins,
                 observed_at_ms: unix_ms(),
             });
-        }
-        Err(error) => {
-            tracing::warn!(
-                error = %format!("{error:#}"),
-                context,
-                "Plugin inventory refresh failed; preserving previous observed Plugins"
-            );
-        }
+        })
+        .await
+    {
+        tracing::warn!(
+            error = %format!("{error:#}"),
+            context,
+            "Plugin inventory refresh failed; preserving previous observed Plugins"
+        );
     }
 }

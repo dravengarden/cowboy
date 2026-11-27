@@ -7,6 +7,7 @@ use std::{fs, path::PathBuf};
 pub mod transition;
 mod worker_exit;
 pub use worker_exit::SystemdWorker;
+pub use worker_exit::VerifiedReleaseCarry;
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]

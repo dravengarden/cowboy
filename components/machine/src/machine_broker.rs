@@ -1936,30 +1936,47 @@ impl Broker {
     async fn ensure_session(self: &Arc<Self>, session: StartSession) {
         let gate = self.session_lifecycle_gate(&session.session_id);
         let guard = gate.lock().await;
-        self.ensure_session_in_lifecycle(session, &guard).await;
+        self.ensure_session_in_lifecycle(session, &guard, true)
+            .await;
     }
 
-    async fn ensure_session_in_lifecycle(
-        self: &Arc<Self>,
-        session: StartSession,
-        _guard: &tokio::sync::MutexGuard<'_, ()>,
-    ) {
+    async fn admit_ensure_account_binding(
+        &self,
+        session: &StartSession,
+        require_active_lease: bool,
+    ) -> bool {
         if self.account_session_stopped(&session.session_id) {
             self.command_rejected(
                 &session.session_id,
                 format!("ensure:{}", session.session_id),
                 "account session is quiesced".into(),
             );
-            return;
+            return false;
         }
-        // Adopt-only declarations precede reset and never spawn; allow carried login releases.
-        let adopt = session.adopt_only;
-        if !self.account_binding_matches(&session, adopt).await {
+        if !self
+            .account_binding_matches(session, session.adopt_only)
+            .await
+        {
             self.command_rejected(
                 &session.session_id,
                 format!("ensure:{}", session.session_id),
                 "session subscription cannot change through worker adoption".into(),
             );
+            return false;
+        }
+        !require_active_lease || lease_active(self)
+    }
+
+    async fn ensure_session_in_lifecycle(
+        self: &Arc<Self>,
+        session: StartSession,
+        _guard: &tokio::sync::MutexGuard<'_, ()>,
+        require_active_lease: bool,
+    ) {
+        if !self
+            .admit_ensure_account_binding(&session, require_active_lease)
+            .await
+        {
             return;
         }
         if let Err(error) = self.check_deletion_journal() {
@@ -2149,6 +2166,9 @@ impl Broker {
             );
             return;
         }
+        if !lease_active(self) {
+            return;
+        }
         if self.account_session_stopped(&session_id) {
             self.command_rejected(
                 &session_id,
@@ -2242,7 +2262,7 @@ impl Broker {
         self.pending_commands.lock().remove(&session_id);
         self.cancelled_sessions.lock().remove(&session_id);
         self.resetting_sessions.lock().remove(&session_id);
-        self.ensure_session_in_lifecycle(session, &_cleanup_guard)
+        self.ensure_session_in_lifecycle(session, &_cleanup_guard, false)
             .await;
         self.send_controller(Frame::CommandAck {
             session_id,
@@ -3517,7 +3537,9 @@ impl Broker {
         // Close the final race between the async owner check above and spawn:
         // two concurrent launch tasks must never overwrite each other's PID.
         // `Command::spawn` is synchronous, so this lock is not held across an
-        // await point.
+        // await point. Pre-verify any carried release off Tokio before taking locks.
+        let carry_proof =
+            account_worker::prepare_carry_async(&self.args.provider_store, session).await?;
         let mut direct_workers = if self.args.spawn_mode == SpawnMode::Direct {
             let workers = self.direct_worker_pids.lock();
             ensure!(
@@ -3555,6 +3577,7 @@ impl Broker {
             containment
                 .as_ref()
                 .map(crate::cgroup::Containment::identity),
+            carry_proof.as_ref(),
         )
         .with_context(|| match self.args.spawn_mode {
             SpawnMode::Direct => "spawning worker process",

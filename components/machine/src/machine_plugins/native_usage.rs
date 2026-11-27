@@ -252,6 +252,34 @@ impl MachinePluginStore {
     /// collector starts after the Controller's dispatch expiry. `started` on a
     /// failure means the collector may have reached the Provider; such an
     /// outcome is unknown and never retried. Only the closed reply leaves.
+    fn prepare_native_reset_step_blocking(
+        &self,
+        profile: &NativeProfileReceipt,
+        dispatch: &crate::machine_protocol::NativeResetDispatch,
+        operation: PluginHostOperation,
+        mut payload: serde_json::Value,
+    ) -> Result<(ResolvedPluginHostInvocation, serde_json::Value)> {
+        let (active, active_digest) = self.selected_release(profile, dispatch)?;
+        // An account-sandbox credential never leaves its daemon's custody.
+        ensure!(
+            !account_sandbox::sandboxed(&active),
+            "native_reset_unsupported"
+        );
+        let resolved = self
+            .resolve_host_invocation(
+                &profile.provider_id,
+                &active.manifest.version,
+                &active_digest,
+                HostAuthentication::Native(profile),
+                operation,
+                &mut payload,
+            )
+            .context("native_usage_collector_unavailable")?;
+        verify_live_login(&active, profile, &resolved.environment)?;
+        Ok((resolved, payload))
+    }
+
+    #[allow(clippy::too_many_lines)] // One fenced two-step native reset flow.
     pub async fn consume_native_reset(
         &self,
         invocation: Invocation,
@@ -268,38 +296,43 @@ impl MachinePluginStore {
         let Some(spacing) = dispatch.min_spacing_ms.filter(|spacing| *spacing >= 0) else {
             return refuse("native_reset_unsupported");
         };
-        let _observation = tokio::time::timeout(
-            invocation.remaining()?,
-            self.native_observations
-                .account(&profile.account_id)
-                .lock_owned(),
-        )
-        .await
-        .context("native_usage_busy")?;
+        let mut observation = Some(
+            tokio::time::timeout(
+                invocation.remaining()?,
+                self.native_observations
+                    .account(&profile.account_id)
+                    .lock_owned(),
+            )
+            .await
+            .context("native_usage_busy")?,
+        );
         let mut lifecycle = Some(
-            tokio::time::timeout(invocation.remaining()?, self.lifecycle.lock())
+            tokio::time::timeout(invocation.remaining()?, self.lock_lifecycle_owned())
                 .await
                 .context("native_usage_busy")?,
         );
-        let (active, active_digest) = self.selected_release(profile, dispatch)?;
-        // An account-sandbox credential never leaves its daemon's custody.
-        if account_sandbox::sandboxed(&active) {
-            return refuse("native_reset_unsupported");
-        }
-        let resolve = |operation, payload: &mut serde_json::Value| {
-            self.resolve_host_invocation(
-                &profile.provider_id,
-                &active.manifest.version,
-                &active_digest,
-                HostAuthentication::Native(profile),
-                operation,
-                payload,
-            )
-            .context("native_usage_collector_unavailable")
+        before_expiry(&invocation, dispatch)?;
+        let (checked, check) = {
+            let store = self.clone();
+            let profile_owned = profile.clone();
+            let dispatch_owned = dispatch.clone();
+            let owned_obs = observation.take().context("native_usage_busy")?;
+            let owned_life = lifecycle.take().context("native_usage_busy")?;
+            let (result, owned_obs, owned_life) = tokio::task::spawn_blocking(move || {
+                let result = store.prepare_native_reset_step_blocking(
+                    &profile_owned,
+                    &dispatch_owned,
+                    PluginHostOperation::CollectUsage,
+                    serde_json::json!({"operation": "collect"}),
+                );
+                (result, owned_obs, owned_life)
+            })
+            .await
+            .context("native_usage_collector_unavailable")?;
+            observation = Some(owned_obs);
+            lifecycle = Some(owned_life);
+            result?
         };
-        let mut check = serde_json::json!({"operation": "collect"});
-        let checked = resolve(PluginHostOperation::CollectUsage, &mut check)?;
-        verify_live_login(&active, profile, &checked.environment)?;
         if !checked
             .environment
             .contains_key("CLAUDE_SECURESTORAGE_CONFIG_DIR")
@@ -321,15 +354,38 @@ impl MachinePluginStore {
             let remaining =
                 u64::try_from(dispatch.expires_at_ms.saturating_sub(unix_ms())).unwrap_or(0);
             lifecycle = Some(
-                tokio::time::timeout(Duration::from_millis(remaining), self.lifecycle.lock())
-                    .await
-                    .context("native_usage_busy")?,
+                tokio::time::timeout(
+                    Duration::from_millis(remaining),
+                    self.lock_lifecycle_owned(),
+                )
+                .await
+                .context("native_usage_busy")?,
             );
-            self.selected_release(profile, dispatch)?;
         }
-        let mut payload = serde_json::to_value(request).map_err(anyhow::Error::from)?;
-        let resolved = resolve(PluginHostOperation::ResetUsage, &mut payload)?;
-        verify_live_login(&active, profile, &resolved.environment)?;
+        before_expiry(&invocation, dispatch)?;
+        let initial_payload = serde_json::to_value(request).map_err(anyhow::Error::from)?;
+        let (resolved, payload) = {
+            let store = self.clone();
+            let profile_owned = profile.clone();
+            let dispatch_owned = dispatch.clone();
+            let owned_obs = observation.take().context("native_usage_busy")?;
+            let owned_life = lifecycle.take().context("native_usage_busy")?;
+            let (result, owned_obs, owned_life) = tokio::task::spawn_blocking(move || {
+                let result = store.prepare_native_reset_step_blocking(
+                    &profile_owned,
+                    &dispatch_owned,
+                    PluginHostOperation::ResetUsage,
+                    initial_payload,
+                );
+                (result, owned_obs, owned_life)
+            })
+            .await
+            .context("native_usage_collector_unavailable")?;
+            observation = Some(owned_obs);
+            lifecycle = Some(owned_life);
+            result?
+        };
+        let _observation = observation;
         before_expiry(&invocation, dispatch)?;
         let (program, arguments) = resolved
             .command

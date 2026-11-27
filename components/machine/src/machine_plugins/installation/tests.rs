@@ -84,8 +84,7 @@ async fn sealed_continuations_recheck_exact_lease_and_envelope_before_any_effect
     changed.operation_id = "mismatched-continuation-fixture".into();
     let wrong_lease = scope.installation(&changed).unwrap();
     let mut guard = InstallGuard::Durable(InstallAdmission {
-        journal: &store.operations.install_attempts,
-        pending: Box::new(pending),
+        pending: Some(Box::new(pending)),
         lease: &wrong_lease,
     });
     let mut lifecycle = Some(store.lock_lifecycle_owned().await);

@@ -310,6 +310,7 @@ pub fn publish<G>(
         (record.current_generation, record.current_generation_at_ms) = previous;
         return Err(renamed(error));
     }
+    drop(_admitted);
     if let Err(error) = prune(&snapshots_dir, Some(generation)) {
         tracing::warn!(%error, generation, "superseded browser snapshot not pruned; left for reconciliation");
     }

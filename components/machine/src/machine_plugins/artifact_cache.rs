@@ -161,27 +161,67 @@ pub(super) fn read(state: &Path, digest: &str) -> Result<Option<Vec<u8>>> {
 
 /// Drop guard that cleans up `.runtime.*.partial` even if `stage_provider_runtime`
 /// is cancelled or dropped by an `InstallGuard` timeout.
-pub(super) struct StagedRuntimeDirectory(Option<PathBuf>);
+pub(super) struct StagedRuntimeDirectory {
+    path: Option<PathBuf>,
+    lifecycle_lock: Option<std::sync::Arc<tokio::sync::Mutex<()>>>,
+}
 
 impl StagedRuntimeDirectory {
     pub(super) fn new(path: PathBuf) -> Self {
-        Self(Some(path))
+        Self {
+            path: Some(path),
+            lifecycle_lock: None,
+        }
+    }
+
+    pub(super) fn with_lifecycle_lock(
+        mut self,
+        lifecycle_lock: Option<std::sync::Arc<tokio::sync::Mutex<()>>>,
+    ) -> Self {
+        self.lifecycle_lock = lifecycle_lock;
+        self
     }
 
     pub(super) fn path(&self) -> &Path {
-        self.0
+        self.path
             .as_deref()
             .expect("staging directory already committed")
     }
 
     pub(super) fn commit(&mut self) {
-        self.0 = None;
+        self.path = None;
+    }
+
+    pub(super) fn remove_in_place(&mut self) {
+        if let Some(path) = self.path.take() {
+            let _ = remove_projection::remove(&path);
+        }
+    }
+
+    pub(super) fn remove_blocking(mut self) {
+        self.remove_in_place();
     }
 }
 
 impl Drop for StagedRuntimeDirectory {
     fn drop(&mut self) {
-        if let Some(path) = self.0.take() {
+        let Some(path) = self.path.take() else {
+            return;
+        };
+        let lifecycle_lock = self.lifecycle_lock.take();
+        if let Ok(handle) = tokio::runtime::Handle::try_current() {
+            handle.spawn(async move {
+                let guard = match lifecycle_lock {
+                    Some(lock) => Some(lock.lock_owned().await),
+                    None => None,
+                };
+                let _ = tokio::task::spawn_blocking(move || {
+                    let _guard = guard;
+                    let _ = remove_projection::remove(&path);
+                })
+                .await;
+            });
+        } else {
             let _ = remove_projection::remove(&path);
         }
     }

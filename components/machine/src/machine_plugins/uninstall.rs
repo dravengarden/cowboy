@@ -76,19 +76,12 @@ impl MachinePluginStore {
     /// signed descriptor; unreadable or inconsistent active slots fail closed.
     pub(super) fn is_browser_plugin_checked(&self, plugin_id: &str) -> Result<bool> {
         validate_plugin_id(plugin_id)?;
-        let active = self.plugin_root(plugin_id).join("active");
-        let Some(generation) = read_link_name(&active) else {
-            ensure!(
-                active.symlink_metadata().is_err(),
-                "invalid active link for Plugin {plugin_id}"
-            );
+        let root = self.plugin_root(plugin_id);
+        let Some(generation) = operations::active_generation_strict(&root)? else {
             return Ok(false);
         };
-        let gen_dir = self
-            .plugin_root(plugin_id)
-            .join("generations")
-            .join(&generation);
-        let kind = retirement::classify_generation_kind(plugin_id, &generation, &gen_dir)
+        let gen_dir = root.join("generations").join(&generation);
+        let kind = retirement::classify_signed_generation_kind(plugin_id, &generation, &gen_dir)
             .with_context(|| format!("cannot classify active generation for Plugin {plugin_id}"))?;
         Ok(kind == cowboy_plugin_sdk::PluginKind::MachineBrowser)
     }
