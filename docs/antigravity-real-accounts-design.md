@@ -876,7 +876,15 @@ query and force release of "Controller account controls (step 5a)" and the
   before the failure from the transcript, reading externalized images back
   from the artifact store, into the session's empty Composer; nothing is
   resent automatically and a file or unreadable image is reported, not
-  dropped (`web/src/refusedMessage.ts`). A Controller-side Draft restore was
+  dropped (`web/src/refusedMessage.ts`). Only a delivery identified by its
+  tagged opening chunk and within the densely loaded history is rebuilt; a
+  delivery ending in a repeat of its opening (an accept echo, or one
+  attachment sent twice), one quoting a literal attachment marker, or an
+  untagged run that repeats nothing is reported instead. Known limits: a
+  reconnect gap not yet filled is not visible to it, a legacy echo that
+  changed an image's storage form is reported as unidentified, and repeated
+  restores keep earlier image bytes in the page like pasted images do; the
+  owner always sees the restored message before sending it. A Controller-side Draft restore was
   reviewed and withdrawn: restored attachments could push a session's pending
   snapshot past its persistence limit, among other edge cases. With `agy` 1.5.14 the pending question need not reach the
   owner as a permission request: in sess-1795343291454 the `ask_question`

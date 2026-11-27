@@ -28,7 +28,19 @@ export interface LoadedImage {
  *  of its image extensions. Nothing else on this origin is read. */
 const ARTIFACT_URL = /^\/api\/artifacts\/[0-9a-f]{64}\.(?:png|jpg|webp|gif|avif)$/;
 const IMAGE_MIME = /^image\/[a-z0-9.+-]+$/;
-const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
+/** Standard base64 by a linear scan: a repeated regex group would exhaust
+ *  V8's stack on a multi-megabyte image. */
+function validBase64(data: string): boolean {
+  if (data.length === 0 || data.length % 4 !== 0) return false;
+  const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+  for (let index = 0; index < data.length - padding; index += 1) {
+    const code = data.charCodeAt(index);
+    const ok = (code >= 65 && code <= 90) || (code >= 97 && code <= 122) ||
+      (code >= 48 && code <= 57) || code === 43 || code === 47;
+    if (!ok) return false;
+  }
+  return true;
+}
 /** Bounds for one restore: decoded bytes per image and in total. */
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_RESTORE_BYTES = 40 * 1024 * 1024;
@@ -100,15 +112,14 @@ function runEndingAt(timeline: readonly Envelope[], last: number): Run {
 const same = (left: readonly ContentBlock[], right: readonly ContentBlock[]): boolean =>
   JSON.stringify(left) === JSON.stringify(right);
 
-/** A delivery followed by an adjacent accept echo of itself (legacy replay):
- *  keep the delivery once. */
-function withoutTrailingReplay(blocks: ContentBlock[]): ContentBlock[] {
+/** Whether a delivery ends by repeating its own opening blocks: an adjacent
+ *  legacy accept echo, or a person who sent the same attachment twice. The
+ *  record cannot tell them apart, so such a delivery is not rebuilt. */
+function endsWithRepeat(blocks: readonly ContentBlock[]): boolean {
   for (let split = Math.ceil(blocks.length / 2); split < blocks.length; split += 1) {
-    if (same(blocks.slice(split), blocks.slice(0, blocks.length - split))) {
-      return blocks.slice(0, split);
-    }
+    if (same(blocks.slice(split), blocks.slice(0, blocks.length - split))) return true;
   }
-  return blocks;
+  return false;
 }
 
 /** The newest prompt a person sent before the envelope `failureSeq` (the
@@ -148,7 +159,13 @@ export function sentPromptBefore(
     if (coveredFrom !== null && timeline[run.first]!.seq < coveredFrom) {
       return { unavailable: "history" };
     }
-    const blocks = withoutTrailingReplay(run.blocks);
+    const blocks = run.blocks;
+    // A literal attachment marker in the text would be parsed as a token and
+    // dropped on resend: the prompt cannot round-trip, so it is not rebuilt.
+    const literal = blocks.some((block) =>
+      block.type === "text" && String(block.text ?? "").includes("cowboy-att:")
+    );
+    if (literal || endsWithRepeat(blocks)) return { unavailable: "unidentified" };
     // A separated untagged run must repeat this delivery, or it was a prompt
     // whose identity was not kept: never substitute an older delivery.
     if (replay !== null && !same(replay, blocks.slice(0, replay.length))) {
@@ -192,7 +209,11 @@ export async function loadPromptImage(
     ? block.mimeType
     : undefined;
   if (typeof block.data === "string" && block.data !== "") {
-    if (!declared || !BASE64.test(block.data) || decodedBytes(block.data) === 0) return null;
+    // Size first: an image over the cap is never scanned.
+    if (!declared || block.data.length > Math.ceil(Math.min(budget, MAX_IMAGE_BYTES) / 3) * 4) {
+      return null;
+    }
+    if (!validBase64(block.data) || decodedBytes(block.data) === 0) return null;
     return decodedBytes(block.data) <= Math.min(budget, MAX_IMAGE_BYTES)
       ? { data: block.data, mimeType: declared }
       : null;
@@ -238,10 +259,10 @@ export async function draftFromBlocks(
 ): Promise<{ draft: Draft; missing: number }> {
   const texts = blocks.filter((block) => block.type === "text").map((block) => String(block.text ?? ""));
   // The Composer pairs inline tokens by Markdown image syntax: text that holds
-  // its own (`![`, `cowboy-att:`) could absorb a generated token and drop
-  // text on send, so such a prompt returns as text and its images are
-  // reported for attaching again.
-  const ambiguous = texts.some((text) => text.includes("![") || text.includes("cowboy-att:"));
+  // its own (`![`) could absorb a generated token and drop text on send, so
+  // such a prompt returns as text and its images are reported for attaching
+  // again. (A literal `cowboy-att:` marker is refused before this point.)
+  const ambiguous = texts.some((text) => text.includes("!["));
   let text = "";
   const attachments: Attachment[] = [];
   let missing = 0;

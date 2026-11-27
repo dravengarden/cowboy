@@ -87,10 +87,21 @@ test("a legacy accept echo of the delivery restores the delivery once", () => {
     { type: "image", mimeType: "image/png", data: "aW1n" },
   ];
   const delivery = [chunk(1, prompt[0]!, { cmid: "d" }), chunk(2, prompt[1]!)];
-  // Adjacent replay: the same blocks again, untagged.
+  // Adjacent repeat: an accept echo, or the same attachment sent twice. The
+  // record cannot tell them apart, so nothing is dropped or guessed.
   assertEquals(
     sentPromptBefore([...delivery, chunk(3, prompt[0]!), chunk(4, prompt[1]!), failure(5)], 5),
-    { blocks: prompt },
+    { unavailable: "unidentified" },
+  );
+  const image = prompt[1]!;
+  assertEquals(
+    sentPromptBefore([chunk(1, image, { cmid: "twice" }), chunk(2, image), failure(3)], 3),
+    { unavailable: "unidentified" },
+  );
+  // A literal attachment marker cannot round-trip through the Composer.
+  assertEquals(
+    sentPromptBefore([chunk(1, { type: "text", text: "see ![x](cowboy-att:a)" }, { cmid: "q" }), failure(2)], 2),
+    { unavailable: "unidentified" },
   );
   // Separated replay: it must repeat the delivery before it.
   assertEquals(
@@ -173,6 +184,7 @@ test("only validated inline images and exact artifact names are read back", asyn
       { type: "image", mimeType: "image/png", data: "not base64!" },
       { type: "image", mimeType: "image/png", data: "a" },
       { type: "image", mimeType: "image/png", data: "aW1=n" },
+      { type: "image", mimeType: "image/png", data: "a=b=" },
       { type: "image", mimeType: "image/png", url: "https://example.com/a.png" },
       { type: "image", mimeType: "image/png", url: "/api/artifacts/../sessions" },
       { type: "image", mimeType: "image/png", url: `/api/artifacts/${"b".repeat(64)}.svg` },
@@ -180,6 +192,13 @@ test("only validated inline images and exact artifact names are read back", asyn
   ) {
     assertEquals(await loadPromptImage(block, budget), null, JSON.stringify(block));
   }
+  // A valid multi-megabyte inline image is scanned linearly, not by a regex
+  // whose repeated group would exhaust the stack.
+  const large = "QUJD".repeat(4 * 1024 * 1024);
+  assertEquals(
+    (await loadPromptImage({ type: "image", mimeType: "image/png", data: large }, budget))?.data.length,
+    large.length,
+  );
   const original = globalThis.fetch;
   const requested: { url: string; init: RequestInit | undefined }[] = [];
   globalThis.fetch = ((input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
