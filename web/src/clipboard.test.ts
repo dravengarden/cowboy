@@ -64,3 +64,57 @@ test("explicit dock paste uses the platform clipboard port", () => {
   assertEquals(formatActionsSource.includes("mobile_paste_started"), true);
   assertEquals(formatActionsSource.includes("mobile_paste_finished"), true);
 });
+
+test("copyRichText writes dual text/plain + text/html via ClipboardItem and falls back cleanly", async () => {
+  const { copyRichText } = await import("./clipboard.ts");
+  const written: unknown[] = [];
+  const origNav = globalThis.navigator;
+  const origItem = globalThis.ClipboardItem;
+  class FakeClipboardItem {
+    readonly items: Record<string, Blob>;
+    constructor(items: Record<string, Blob>) {
+      this.items = items;
+    }
+  }
+  try {
+    Object.defineProperty(globalThis, "ClipboardItem", {
+      value: FakeClipboardItem,
+      configurable: true,
+    });
+    Object.defineProperty(globalThis, "navigator", {
+      value: {
+        clipboard: {
+          write: async (items: unknown[]) => {
+            written.push(...items);
+          },
+          writeText: async () => {},
+        },
+      },
+      configurable: true,
+    });
+    const ok = await copyRichText("Hello world", "<p><strong>Hello</strong> world</p>");
+    assertEquals(ok, true);
+    assertEquals(written.length, 1);
+    const entry = written[0] as FakeClipboardItem;
+    assertEquals(await entry.items["text/plain"]!.text(), "Hello world");
+    assertEquals(await entry.items["text/html"]!.text(), "<p><strong>Hello</strong> world</p>");
+
+    // Fallback to writeText when clipboard.write rejects
+    let fallbackText = "";
+    Object.defineProperty(globalThis, "navigator", {
+      value: {
+        clipboard: {
+          write: async () => { throw new Error("not allowed"); },
+          writeText: async (text: string) => { fallbackText = text; },
+        },
+      },
+      configurable: true,
+    });
+    const fallbackOk = await copyRichText("Fallback plain", "<p>Fallback plain</p>");
+    assertEquals(fallbackOk, true);
+    assertEquals(fallbackText, "Fallback plain");
+  } finally {
+    Object.defineProperty(globalThis, "navigator", { value: origNav, configurable: true });
+    Object.defineProperty(globalThis, "ClipboardItem", { value: origItem, configurable: true });
+  }
+});

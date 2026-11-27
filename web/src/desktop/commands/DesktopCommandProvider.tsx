@@ -27,6 +27,7 @@ import {
   parseShortcut,
 } from "./shortcut";
 import { workspaceCommandKey } from "./workspaceCommandKey";
+import { tryHandleTranscriptYank } from "../transcriptYank";
 import { assertMacShortcutAllowed } from "./macShortcutPolicy";
 import { assertChromeShortcutAllowed } from "./chromeShortcutPolicy";
 import { desktopImeOwnsKey } from "./imeShortcut";
@@ -1018,6 +1019,8 @@ export function DesktopCommandProvider(
             } as Record<string, string>)[key.toLowerCase()] ?? null;
           } else if (key.toLowerCase() === "f") {
             action = "toggle-following";
+          } else if (tryHandleTranscriptYank(event, region, key, activeOtherControl)) {
+            return;
           } else if (!event.shiftKey || key === "G") {
             if (key === "g") {
               event.preventDefault();

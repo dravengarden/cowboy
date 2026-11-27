@@ -138,7 +138,7 @@ first moving focus there.
 A group opens only when one of its commands can run in the current focus
 (Interface needs the Prompt pane or an open Draft; Sessions and Top bar run
 from anywhere) and otherwise leaves its key to the root meaning. New families
-become groups instead of taking root letters. Free Session root letters: `E`, `Y` (used by Draft actions).
+become groups instead of taking root letters. Free Session root letters: `E`, `Y` (used by Draft actions). Inside a focused Conversation reader, bare `y` copies the message in view (rich HTML + clean plain text) and `Y` copies it as raw Markdown.
 
 #### Vim in text fields
 

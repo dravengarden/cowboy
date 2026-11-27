@@ -18,6 +18,9 @@ import { isMac } from "./platform";
 import type { SessionMeta } from "./protocol";
 import { composePendingPrompt } from "./contextPendingPrompt";
 import { draftFromBlocks } from "./refusedMessage";
+import { MessageWithActions } from "./MessageActions";
+import { MessageBubble } from "./TranscriptItems";
+import { closeMobileMessageActions } from "./messageCopyRegistry";
 
 const SESSION = "surface-session";
 /** The newest in-page socket, so a test can deliver a live transcript event. */
@@ -742,5 +745,220 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
   filed.root.unmount();
   filed.container.remove();
   passed.push("New session here from a folder menu keeps the keyboard claim until Create's title takes focus");
+
+  // Hidden Copy + Copy as Markdown (Desktop): zero-height hover pills at rest,
+  // top-edge mirror on tall replies (>480px), dual-MIME Copy (HTML + clean plain),
+  // verbatim Copy as Markdown, streaming exclusion, and Conversation Vim y / Y.
+  {
+    const writtenPlain: string[] = [];
+    const writtenHtml: string[] = [];
+    const writtenRaw: string[] = [];
+    const origClipboard = navigator.clipboard;
+    const origClipboardItem = globalThis.ClipboardItem;
+    class StubClipboardItem {
+      readonly map: Record<string, Blob>;
+      constructor(map: Record<string, Blob>) { this.map = map; }
+    }
+    Object.defineProperty(globalThis, "ClipboardItem", { value: StubClipboardItem, configurable: true });
+    Object.defineProperty(navigator, "clipboard", {
+      value: {
+        write: async (items: StubClipboardItem[]) => {
+          for (const entry of items) {
+            if (entry.map["text/plain"]) writtenPlain.push(await entry.map["text/plain"].text());
+            if (entry.map["text/html"]) writtenHtml.push(await entry.map["text/html"].text());
+          }
+        },
+        writeText: async (text: string) => { writtenRaw.push(text); },
+      },
+      configurable: true,
+    });
+    const tallMarkdown = [
+      "### Architecture Summary",
+      "",
+      "- **Core**: inspect [App.tsx](file:///home/draven/App.tsx) and [Docs](https://example.com/docs)",
+      "",
+      "| Tool | Mechanism |",
+      "| --- | --- |",
+      "| **Cowboy** | `MessageWithActions` |",
+      "",
+      ...Array.from({ length: 24 }, (_, idx) => `Paragraph line ${String(idx + 1)} with \`snake_case_${String(idx)}\` detail.`),
+    ].join("\n");
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;inset:0;width:900px;height:720px;overflow:auto;z-index:2000;background:#fff;";
+    document.body.appendChild(host);
+    const copyRoot = createRoot(host);
+    try {
+      const tallItem = { key: "m-tall", kind: "message" as const, role: "assistant" as const, chunks: [{ type: "text" as const, text: tallMarkdown }] };
+      const streamItem = { key: "m-stream", kind: "message" as const, role: "assistant" as const, chunks: [{ type: "text" as const, text: "Still generating..." }] };
+      const userItem = { key: "m-user", kind: "message" as const, role: "user" as const, chunks: [{ type: "text" as const, text: "Check **this** prompt" }] };
+      flushSync(() => {
+        copyRoot.render(
+          <BrowserProductTheme>
+            <SurfaceProvider>
+              <DesktopWorkspaceProvider>
+                <DesktopCommandProvider>
+                  <div
+                    data-desktop-pane="conversation"
+                    data-desktop-region="conversation.transcript"
+                    data-desktop-navigation="scroll"
+                    style={{ height: 680, overflow: "auto", padding: 24, display: "flex", flexDirection: "column", gap: 16 }}
+                  >
+                    <div data-desktop-transcript-scroller="" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+                      <MessageWithActions item={userItem} sessionId={SESSION} streaming={false} desktop>
+                        <MessageBubble role="user" chunks={userItem.chunks} provider="codex" desktop />
+                      </MessageWithActions>
+                      <MessageWithActions item={tallItem} sessionId={SESSION} streaming={false} desktop>
+                        <MessageBubble role="assistant" chunks={tallItem.chunks} provider="codex" desktop />
+                      </MessageWithActions>
+                      <MessageWithActions item={streamItem} sessionId={SESSION} streaming desktop>
+                        <MessageBubble role="assistant" chunks={streamItem.chunks} streaming provider="codex" desktop />
+                      </MessageWithActions>
+                    </div>
+                  </div>
+                </DesktopCommandProvider>
+              </DesktopWorkspaceProvider>
+            </SurfaceProvider>
+          </BrowserProductTheme>,
+        );
+      });
+      // Streaming message never mounts a copy wrapper or action bar
+      check(!host.querySelector('[data-message-copy-id$=":m-stream"]'), "streaming message omits copy wrapper");
+      const tallWrap = await until(() => host.querySelector<HTMLElement>('[data-message-copy-id$=":m-tall"]'), "tall assistant copy wrapper");
+      const userWrap = await until(() => host.querySelector<HTMLElement>('[data-message-copy-id$=":m-user"]'), "user copy wrapper");
+      const bottomBar = tallWrap.querySelector<HTMLElement>('[data-message-action-bar="bottom"]')!;
+      check(Boolean(bottomBar), "assistant bubble mounts bottom hover action bar");
+      check(getComputedStyle(bottomBar).visibility === "hidden", `hover bar stays hidden at rest (${getComputedStyle(bottomBar).visibility})`);
+      check(Boolean(userWrap.querySelector('[data-message-action-bar="bottom"]')), "user bubble mounts bottom hover action bar");
+      const topBar = await until(() => tallWrap.querySelector<HTMLElement>('[data-message-action-bar="top"]'), "tall reply top-edge mirror pill");
+      check(topBar.querySelector<HTMLButtonElement>('[data-message-copy="rich"]')?.tabIndex === -1, "top mirror buttons skip duplicate Tab stops");
+
+      // Click Copy -> writes dual text/html + clean text/plain and flips to Copied
+      const copyBtn = bottomBar.querySelector<HTMLButtonElement>('[data-message-copy="rich"]')!;
+      copyBtn.click();
+      await until(() => writtenPlain.length === 1 && writtenHtml.length === 1, "dual-MIME Copy write");
+      check(writtenHtml[0]!.includes("<table") && writtenHtml[0]!.includes("<code>App.tsx</code>") && !writtenHtml[0]!.includes("file:///"), `clean HTML clipboard (${writtenHtml[0]!.slice(0, 120)})`);
+      check(writtenPlain[0]!.includes("Cowboy\tMessageWithActions") && !writtenPlain[0]!.includes("###"), `clean plain text clipboard (${writtenPlain[0]!.slice(0, 120)})`);
+      await until(() => copyBtn.textContent?.includes("Copied") === true, "Copied button confirmation");
+
+      // Click Markdown -> writes verbatim raw Markdown
+      const mdBtn = bottomBar.querySelector<HTMLButtonElement>('[data-message-copy="markdown"]')!;
+      mdBtn.click();
+      await until(() => writtenRaw.length === 1, "raw Markdown clipboard write");
+      check(writtenRaw[0] === tallMarkdown, "Copy as Markdown preserves exact raw Markdown source");
+
+      // Conversation Vim y / Y yanks focused/viewport message without needing bottom scroll
+      const convRegion = host.querySelector<HTMLElement>('[data-desktop-region="conversation.transcript"]')!;
+      convRegion.tabIndex = -1;
+      convRegion.focus();
+      await delay(50);
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "y", code: "KeyY", bubbles: true, cancelable: true }));
+      await until(() => writtenPlain.length === 2, "Vim y yank write");
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Y", code: "KeyY", shiftKey: true, bubbles: true, cancelable: true }));
+      await until(() => writtenRaw.length === 2, "Vim Y Markdown yank write");
+      check(writtenRaw[1] === tallMarkdown, "Vim Y yanks verbatim Markdown of viewport-anchored reply");
+    } finally {
+      copyRoot.unmount();
+      host.remove();
+      Object.defineProperty(navigator, "clipboard", { value: origClipboard, configurable: true });
+      Object.defineProperty(globalThis, "ClipboardItem", { value: origClipboardItem, configurable: true });
+    }
+    passed.push("Desktop hidden message Copy/Markdown pills stay zero-height, mirror at top for tall replies, and respond to Vim y/Y");
+  }
+
+  // Hidden Copy + Copy as Markdown (Mobile): zero chrome at rest, no Fork chrome,
+  // long-press/drag/link taps stay native, stationary prose tap pops clamped floating pill.
+  {
+    const writtenPlain: string[] = [];
+    const writtenRaw: string[] = [];
+    const origClipboard = navigator.clipboard;
+    const origClipboardItem = globalThis.ClipboardItem;
+    class StubClipboardItem {
+      readonly map: Record<string, Blob>;
+      constructor(map: Record<string, Blob>) { this.map = map; }
+    }
+    Object.defineProperty(globalThis, "ClipboardItem", { value: StubClipboardItem, configurable: true });
+    Object.defineProperty(navigator, "clipboard", {
+      value: {
+        write: async (items: StubClipboardItem[]) => {
+          for (const entry of items) {
+            if (entry.map["text/plain"]) writtenPlain.push(await entry.map["text/plain"].text());
+          }
+        },
+        writeText: async (text: string) => { writtenRaw.push(text); },
+      },
+      configurable: true,
+    });
+    closeMobileMessageActions();
+    const host = document.createElement("div");
+    host.style.cssText = "position:fixed;left:0;top:0;width:390px;height:780px;overflow:auto;z-index:2000;background:#fff;padding:16px;";
+    document.body.appendChild(host);
+    const mobileRoot = createRoot(host);
+    try {
+      const mobileItem = {
+        key: "m-mob",
+        kind: "message" as const,
+        role: "assistant" as const,
+        chunks: [{ type: "text" as const, text: "Tap **prose** or open [Example](https://example.com)" }],
+      };
+      flushSync(() => {
+        mobileRoot.render(
+          <BrowserProductTheme>
+            <SurfaceProvider>
+              <MessageWithActions item={mobileItem} sessionId={SESSION} streaming={false} desktop={false}>
+                <MessageBubble role="assistant" chunks={mobileItem.chunks} provider="codex" desktop={false} />
+              </MessageWithActions>
+            </SurfaceProvider>
+          </BrowserProductTheme>,
+        );
+      });
+      const wrap = await until(() => host.querySelector<HTMLElement>('[data-message-copy-id$=":m-mob"]'), "mobile message wrapper");
+      check(!document.querySelector('[data-message-action-bar]'), "Mobile keeps zero action chrome at rest");
+      check(!document.querySelector('[data-fork-from-here]'), "Mobile never renders inline Fork chrome");
+
+      // Drag (>10px) must NOT open pill
+      wrap.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, pointerId: 1, pointerType: "touch", clientX: 120, clientY: 160 }));
+      wrap.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, isPrimary: true, pointerId: 1, pointerType: "touch", clientX: 120, clientY: 195 }));
+      wrap.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, isPrimary: true, pointerId: 1, pointerType: "touch", clientX: 120, clientY: 195 }));
+      await delay(40);
+      check(!document.querySelector('[data-message-action-bar="mobile"]'), "scroll/drag gesture does not open Mobile copy pill");
+
+      // Long-press (>450ms) must NOT hijack native iOS text selection
+      wrap.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, pointerId: 2, pointerType: "touch", clientX: 120, clientY: 160 }));
+      await delay(500);
+      wrap.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, isPrimary: true, pointerId: 2, pointerType: "touch", clientX: 120, clientY: 160 }));
+      await delay(40);
+      check(!document.querySelector('[data-message-action-bar="mobile"]'), "long-press preserves native selection without popping copy pill");
+
+      // Stationary tap on prose opens portaled viewport-clamped Mobile pill
+      wrap.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, pointerId: 3, pointerType: "touch", clientX: 160, clientY: 180 }));
+      wrap.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, isPrimary: true, pointerId: 3, pointerType: "touch", clientX: 160, clientY: 180 }));
+      const mobileBar = await until(() => document.querySelector<HTMLElement>('[data-message-action-bar="mobile"]'), "Mobile floating copy pill");
+      const barRect = mobileBar.getBoundingClientRect();
+      check(barRect.left >= 12 && barRect.right <= window.innerWidth - 12 && barRect.top >= 56, `Mobile floating pill stays clamped inside viewport (${JSON.stringify(barRect)})`);
+
+      // Tap Markdown -> writes exact raw Markdown and auto-dismisses
+      const mdBtn = mobileBar.querySelector<HTMLButtonElement>('[data-message-copy="markdown"]')!;
+      mdBtn.click();
+      await until(() => writtenRaw.length === 1, "Mobile Markdown clipboard write");
+      check(writtenRaw[0] === "Tap **prose** or open [Example](https://example.com)", "Mobile Copy as Markdown writes exact source");
+      await gone(() => document.querySelector('[data-message-action-bar="mobile"]'), "Mobile copy pill after copy");
+
+      // Re-open and verify Copy + Escape dismiss
+      wrap.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, pointerId: 4, pointerType: "touch", clientX: 160, clientY: 180 }));
+      wrap.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, isPrimary: true, pointerId: 4, pointerType: "touch", clientX: 160, clientY: 180 }));
+      const mobileBar2 = await until(() => document.querySelector<HTMLElement>('[data-message-action-bar="mobile"]'), "Mobile pill reopen");
+      mobileBar2.querySelector<HTMLButtonElement>('[data-message-copy="rich"]')!.click();
+      await until(() => writtenPlain.length === 1, "Mobile Copy rich/plain write");
+      check(writtenPlain[0]!.includes("Tap prose or open Example (https://example.com/)"), `Mobile Copy strips Markdown (${writtenPlain[0]})`);
+    } finally {
+      closeMobileMessageActions();
+      mobileRoot.unmount();
+      host.remove();
+      Object.defineProperty(navigator, "clipboard", { value: origClipboard, configurable: true });
+      Object.defineProperty(globalThis, "ClipboardItem", { value: origClipboardItem, configurable: true });
+    }
+    passed.push("Mobile hidden message Copy/Markdown keeps zero rest chrome, preserves long-press selection, and copies from stationary tap pill");
+  }
+
   return passed;
 }

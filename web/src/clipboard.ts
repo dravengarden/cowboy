@@ -25,3 +25,24 @@ export async function copyText(text: string): Promise<boolean> {
     return false;
   }
 }
+
+/** Write both clean semantic HTML and readable plain text in one synchronous
+ *  gesture frame (preserving iOS Safari / WKWebView activation). Falls back to
+ *  plain-text copy when ClipboardItem or rich MIME writes are unavailable. */
+export async function copyRichText(plain: string, html: string): Promise<boolean> {
+  try {
+    const clipboard = globalThis.navigator?.clipboard;
+    const Item = globalThis.ClipboardItem;
+    if (clipboard?.write && typeof Item === "function" && typeof Blob === "function") {
+      const item = new Item({
+        "text/plain": new Blob([plain], { type: "text/plain" }),
+        "text/html": new Blob([html], { type: "text/html" }),
+      });
+      await clipboard.write([item]);
+      return true;
+    }
+  } catch {
+    // Fall back to plain-text clipboard write below.
+  }
+  return copyText(plain);
+}
