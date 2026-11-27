@@ -2,8 +2,10 @@ mod replay_guards;
 
 use replay_guards::upsert_draining_replay_snapshot;
 pub(super) use replay_guards::{
-    clear_blocked_draining_epochs, is_event_epoch_blocked, is_historical_replay_event,
-    provider_auth_expiry_target, settle_draining_event_admission, signal_admitted_turn_end,
+    ReplayScope, check_and_dedup_event_sequence, classify_replay_scope,
+    clear_blocked_draining_epochs, is_event_epoch_blocked, provider_auth_expiry_target,
+    record_processed_event_sequence, settle_draining_event_admission,
+    signal_admitted_turn_end_locked,
 };
 
 use super::{
@@ -95,6 +97,15 @@ pub(super) fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
             &worker.session_id,
             "worker exited before configuration completed",
         );
+    }
+    // Idempotently expire the admitted launch's credentials when Welcome/Snapshot
+    // carries an auth-required crash detail at a higher watermark (R18-M4).
+    if worker.has_connected_owner()
+        && worker.state == WorkerState::Crashed
+        && let (Some(launch), Some(detail)) =
+            (worker.launch.as_ref(), worker.exit_detail.as_deref())
+    {
+        super::mark_launch_provider_auth_expired(shared, &worker.session_id, launch, detail);
     }
     let idle_guard = idle_snapshot_guard(shared, worker);
     if let Some(agent_session_id) = &worker.agent_session_id {
@@ -744,7 +755,8 @@ pub(super) fn project_admitted_worker_event(
     if let Some((machine, telemetry)) = shared.telemetry.lock().as_ref() {
         telemetry.record_runtime_spans(machine, session_id, diagnostics);
     }
-    let historical_only = is_historical_replay_event(shared, session_id, worker_epoch, runtime_seq);
+    let replay_scope = classify_replay_scope(shared, session_id, worker_epoch, runtime_seq);
+    let preserve_snapshot = replay_scope != ReplayScope::Live;
     super::resolve_steering_update(shared, session_id, event);
     super::update_snapshot_from_event(
         shared,
@@ -752,9 +764,9 @@ pub(super) fn project_admitted_worker_event(
         worker_epoch,
         runtime_seq,
         event,
-        historical_only,
+        preserve_snapshot,
     );
-    if !historical_only
+    if replay_scope == ReplayScope::Live
         && let RuntimeEvent::Status {
             state: WorkerState::Crashed | WorkerState::Exited,
             detail,
@@ -768,12 +780,10 @@ pub(super) fn project_admitted_worker_event(
                 .unwrap_or("worker exited before configuration completed"),
         );
     }
-    let worker = if historical_only {
-        None
-    } else {
-        shared.workers.lock().get(session_id).cloned()
-    };
-    let auto_permission = (!historical_only)
+    let worker = (replay_scope == ReplayScope::Live)
+        .then(|| shared.workers.lock().get(session_id).cloned())
+        .flatten();
+    let auto_permission = (replay_scope == ReplayScope::Live)
         .then(|| codex_full_access_permission(shared, session_id, event))
         .flatten();
     let idle_guard = worker
@@ -792,7 +802,7 @@ pub(super) fn project_admitted_worker_event(
         event.clone(),
         idle_guard,
         auto_permission,
-        !historical_only,
+        replay_scope,
     );
 }
 
@@ -943,6 +953,10 @@ pub(super) fn retain_crashed_sightings_after_welcome(
         .draining_replay_snapshots
         .lock()
         .retain(|(id, _), _| ids.contains(id));
+    shared
+        .deferred_admission_snapshots
+        .lock()
+        .retain(|(id, _), _| ids.contains(id));
 }
 
 pub(super) fn handle_crashed_worker_drained_frame(
@@ -971,6 +985,10 @@ pub(super) fn retire_crashed_worker_drained(shared: &Shared, session_id: &str, w
     clear_draining_crashed_epoch_if_matches(shared, session_id, worker_epoch);
     shared
         .blocked_draining_epochs
+        .lock()
+        .remove(&(session_id.to_owned(), worker_epoch.to_owned()));
+    shared
+        .deferred_admission_snapshots
         .lock()
         .remove(&(session_id.to_owned(), worker_epoch.to_owned()));
     {
@@ -1047,6 +1065,10 @@ pub(super) fn discard_pending_crashed_drain(
         shared.draining_crashed_epochs.lock().remove(session_id);
         shared
             .draining_replay_snapshots
+            .lock()
+            .retain(|(sid, _), _| sid != session_id);
+        shared
+            .deferred_admission_snapshots
             .lock()
             .retain(|(sid, _), _| sid != session_id);
         shared
@@ -2411,10 +2433,13 @@ mod crashed_drain_tests {
         assert_eq!(sighting.last_runtime_seq, 15);
         assert_eq!(sighting.state, WorkerState::Crashed);
 
-        // R17-M2 & R17-M3: historical TurnEnded and SUBAGENT_UPDATE are excluded from
-        // Hub transcript projection so they never create live boundaries or replace
-        // live child observations.
-        let before_len = hub.snapshot("s-r17").unwrap().0.len();
+        // R18-H4 & R18-M3: first-delivery TurnEnded and terminal SUBAGENT_UPDATE
+        // from the CURRENT owning worker below its crash watermark ARE preserved
+        // (without regressing Crashed -> Running or displacing newer producers).
+        hub.set_status("s-r17", Status::Crashed, Some("acp crash".into()));
+        let signalled_r18 = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let sink_r18 = std::sync::Arc::clone(&signalled_r18);
+        rt.set_turn_end_listener(std::sync::Arc::new(move |end| sink_r18.lock().push(end)));
         rt.project_trace_fixture(Frame::WorkerEvent {
             session_id: "s-r17".into(),
             worker_epoch: "170-1".into(),
@@ -2427,6 +2452,27 @@ mod crashed_drain_tests {
             diagnostics: Vec::new(),
         })
         .await;
+        assert_eq!(
+            signalled_r18.lock().len(),
+            1,
+            "first-delivery TurnEnded from current owning worker below crash watermark must signal account listener (R18-H4)"
+        );
+        assert!(
+            hub.snapshot("s-r17")
+                .unwrap()
+                .0
+                .iter()
+                .any(|env| matches!(&env.event, crate::agent_model::Event::TurnEnd { stop_reason, .. } if stop_reason == "EndTurn")),
+            "first-delivery TurnEnded from current owning worker must record TurnEnd (R18-H4)"
+        );
+        assert_eq!(
+            hub.session_info("s-r17").unwrap().meta.status,
+            Status::Crashed,
+            "first-delivery TurnEnded must not regress Crashed back to Running"
+        );
+        // R18-M3: first-delivery terminal SUBAGENT_UPDATE from producer 170-1 settles
+        // cleanly, AND a subsequent older-producer historical update cannot displace
+        // a newer producer's observation.
         rt.project_trace_fixture(Frame::WorkerEvent {
             session_id: "s-r17".into(),
             worker_epoch: "170-1".into(),
@@ -2434,19 +2480,79 @@ mod crashed_drain_tests {
             event: RuntimeEvent::Update {
                 update: serde_json::json!({
                     "sessionUpdate": crate::runtime_wire::SUBAGENT_UPDATE,
-                    "childId": "child-1",
-                    "status": "failed",
-                    "revision": 1
+                    "sessionId": "child-1",
+                    "status": "completed",
+                    "revision": 2
                 }),
                 cmid: None,
             },
             diagnostics: Vec::new(),
         })
         .await;
+        assert!(
+            hub.snapshot("s-r17").unwrap().0.iter().any(|env| matches!(
+                &env.event,
+                crate::agent_model::Event::Update { update }
+                    if update.get("sessionId").and_then(serde_json::Value::as_str) == Some("child-1")
+                        && update.get("status").and_then(serde_json::Value::as_str) == Some("completed")
+            )),
+            "first-delivery terminal child snapshot below crash watermark must be retained (R18-M3)"
+        );
+        // R18-H3: Hub-persisted highwaters deduplicate seq <= 7 even on a brand-new
+        // RemoteRuntime after Machine tunnel replacement.
+        let rt_reconnected = super::super::RemoteRuntime::for_test(hub.clone(), vec![live.clone()]);
+        rt_reconnected.connect_for_test();
+        assert!(
+            check_and_dedup_event_sequence(
+                &rt_reconnected.shared,
+                &("s-r17".into(), "170-1".into()),
+                7
+            )
+            .unwrap(),
+            "new RemoteRuntime after tunnel replacement must deduplicate already-projected seq via Hub highwaters (R18-H3)"
+        );
+        // R18-M2: when raw sighting holds Crashed at higher seq while shared.workers
+        // still says Running and drain marker is absent (after drain abort),
+        // classify_replay_scope MUST agree with observe_crashed_event.
+        clear_draining_crashed_epoch_if_matches(&rt.shared, "s-r17", "170-1");
+        assert_eq!(
+            classify_replay_scope(&rt.shared, "s-r17", "170-1", 8),
+            ReplayScope::OwningBelowCrashWatermark,
+            "raw Crashed sighting watermark must classify below-watermark events identically after drain abort (R18-M2)"
+        );
+        // R17-M3/R18-M3: once a newer producer (170-2) reports child-2, a historical
+        // update from 170-1 cannot displace 170-2's observation.
+        hub.push_tagged_from_worker(
+            "s-r17",
+            crate::agent_model::Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": crate::runtime_wire::SUBAGENT_UPDATE,
+                    "sessionId": "child-2",
+                    "incarnation": "170-2",
+                    "status": "working",
+                    "revision": 1
+                }),
+            },
+            None,
+        );
+        let len_after_live_child = hub.snapshot("s-r17").unwrap().0.len();
+        hub.push_historical_from_worker(
+            "s-r17",
+            crate::agent_model::Event::Update {
+                update: serde_json::json!({
+                    "sessionUpdate": crate::runtime_wire::SUBAGENT_UPDATE,
+                    "sessionId": "child-2",
+                    "incarnation": "170-1",
+                    "status": "failed",
+                    "revision": 5
+                }),
+            },
+            None,
+        );
         assert_eq!(
             hub.snapshot("s-r17").unwrap().0.len(),
-            before_len,
-            "historical TurnEnded and SUBAGENT_UPDATE must not append live Hub rows"
+            len_after_live_child,
+            "older historical producer must never displace a newer producer's live child observation (R17-M3/R18-M3)"
         );
 
         // R17-M4: retiring an unprojected crash transitions stuck Busy -> Crashed

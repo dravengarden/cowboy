@@ -138,6 +138,7 @@ impl EventAdmission {
 
 /// Events carry no launch identity. Only the currently admitted worker's
 /// snapshot can supply it; an epoch from a replaced worker cannot borrow it.
+#[allow(clippy::too_many_lines)]
 pub(super) async fn event(
     shared: &Shared,
     session_id: &str,
@@ -145,6 +146,7 @@ pub(super) async fn event(
     project: impl FnOnce() + Send,
 ) -> EventAdmission {
     let cached = shared.workers.lock().get(session_id).cloned();
+    let mut from_deferred = false;
     let replay_snapshot = cached
         .as_ref()
         .filter(|worker| worker.worker_epoch == worker_epoch)
@@ -155,6 +157,17 @@ pub(super) async fn event(
                 .lock()
                 .get(&(session_id.to_owned(), worker_epoch.to_owned()))
                 .cloned()
+        })
+        .or_else(|| {
+            let deferred = shared
+                .deferred_admission_snapshots
+                .lock()
+                .get(&(session_id.to_owned(), worker_epoch.to_owned()))
+                .cloned();
+            if deferred.is_some() {
+                from_deferred = true;
+            }
+            deferred
         });
     let named = shared
         .hub
@@ -223,12 +236,37 @@ pub(super) async fn event(
                 .is_some_and(|current| {
                     current.worker_epoch == worker_epoch && current.launch == worker.launch
                 });
-        if matches_cached || matches_draining_replay {
+        let promoted_deferred = if !matches_cached && !matches_draining_replay && from_deferred {
+            let still_deferred = shared
+                .deferred_admission_snapshots
+                .lock()
+                .remove(&(session_id.to_owned(), worker_epoch.to_owned()))
+                .is_some_and(|current| {
+                    current.worker_epoch == worker_epoch && current.launch == worker.launch
+                });
+            if still_deferred {
+                if !shared.resetting.lock().contains(session_id) {
+                    let _ = super::project_snapshot(shared, &worker);
+                }
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if matches_cached || matches_draining_replay || promoted_deferred {
             project();
             projected.store(true, Ordering::Release);
         }
     })
     .await;
+    if outcome == EventAdmission::PermanentlyDenied && from_deferred {
+        shared
+            .deferred_admission_snapshots
+            .lock()
+            .remove(&(session_id.to_owned(), worker_epoch.to_owned()));
+    }
     if projected.load(Ordering::Acquire) {
         EventAdmission::Admitted
     } else if outcome == EventAdmission::Admitted {
@@ -240,14 +278,40 @@ pub(super) async fn event(
 
 /// Project a snapshot only while its current native binding is admitted.
 /// The callback includes cache/declaration updates, not just Hub projection.
+/// Retains transiently deferred connected snapshots so subsequent replayed
+/// events retry full admission instead of dropping events as `PermanentlyDenied`
+/// (R18-H1).
 pub(super) async fn snapshot(
     shared: &Shared,
     worker: &WorkerSnapshot,
     project: impl FnOnce() + Send,
 ) -> bool {
-    snapshot_outcome(shared, worker, project)
-        .await
-        .is_admitted()
+    let outcome = snapshot_outcome(shared, worker, project).await;
+    let key = (worker.session_id.clone(), worker.worker_epoch.clone());
+    match outcome {
+        EventAdmission::TransientlyDeferred if worker.has_connected_owner() => {
+            let mut deferred = shared.deferred_admission_snapshots.lock();
+            match deferred.get_mut(&key) {
+                Some(existing) if existing.last_runtime_seq > worker.last_runtime_seq => {
+                    if let Some(effect) = worker.uncertain_effect.clone() {
+                        crate::runtime_wire::merge_uncertain_effect(
+                            &mut existing.uncertain_effect,
+                            effect,
+                        );
+                    }
+                }
+                Some(existing) => *existing = worker.clone(),
+                None => {
+                    deferred.insert(key, worker.clone());
+                }
+            }
+        }
+        EventAdmission::Admitted | EventAdmission::PermanentlyDenied => {
+            shared.deferred_admission_snapshots.lock().remove(&key);
+        }
+        EventAdmission::TransientlyDeferred => {}
+    }
+    outcome.is_admitted()
 }
 
 #[allow(clippy::too_many_lines)]

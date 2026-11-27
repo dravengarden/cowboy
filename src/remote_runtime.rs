@@ -154,6 +154,10 @@ pub struct Shared {
     /// Exact crashed epochs currently draining (preserved across replayed events and handover, R3-H2/R4-H6).
     draining_crashed_epochs: Mutex<HashMap<String, snapshot::DrainingCrashedEpoch>>,
     draining_replay_snapshots: Mutex<HashMap<(String, String), WorkerSnapshot>>,
+    /// Untrusted snapshots whose admission was transiently deferred (e.g.
+    /// store outage on reconnect) so subsequent replayed events retry full
+    /// admission instead of failing `PermanentlyDenied` and losing events (R18-H1).
+    deferred_admission_snapshots: Mutex<HashMap<(String, String), WorkerSnapshot>>,
     blocked_draining_epochs: Mutex<HashSet<(String, String)>>,
     retired_crashed_epochs: Mutex<HashMap<(String, String), std::time::Instant>>,
     /// Worker epochs whose initial config snapshot has already triggered
@@ -314,6 +318,7 @@ impl RemoteRuntime {
                 crashed_worker_sightings: Mutex::new(HashMap::new()),
                 draining_crashed_epochs: Mutex::new(HashMap::new()),
                 draining_replay_snapshots: Mutex::new(HashMap::new()),
+                deferred_admission_snapshots: Mutex::new(HashMap::new()),
                 blocked_draining_epochs: Mutex::new(HashSet::new()),
                 retired_crashed_epochs: Mutex::new(HashMap::new()),
                 config_sync_epochs: Mutex::new(HashMap::new()),
@@ -401,6 +406,7 @@ impl RemoteRuntime {
                 draining_replay_snapshots: Mutex::new(snapshot::seed_draining_replay_snapshots(
                     &bootstrap.workers,
                 )),
+                deferred_admission_snapshots: Mutex::new(HashMap::new()),
                 blocked_draining_epochs: Mutex::new(HashSet::new()),
                 retired_crashed_epochs: Mutex::new(HashMap::new()),
                 config_sync_epochs: Mutex::new(HashMap::new()),
@@ -2192,18 +2198,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                 return Ok(());
             }
             let key = (session_id.clone(), worker_epoch.clone());
-            let previous = shared.highwaters.lock().get(&key).copied();
-            // After a Cowboy restart the worker has already discarded every
-            // ACKed prefix, so the first replayed sequence may be greater than
-            // one. Once this controller observes a sequence, gaps are errors.
-            if let Some(previous) = previous
-                && runtime_seq > previous.saturating_add(1)
-            {
-                anyhow::bail!(
-                    "runtime event gap for {session_id}/{worker_epoch}: have {previous}, got {runtime_seq}"
-                );
-            }
-            if previous.is_none_or(|previous| runtime_seq > previous) {
+            if !snapshot::check_and_dedup_event_sequence(shared, &key, runtime_seq)? {
                 let mut undelivered_ack = None;
                 snapshot::observe_crashed_event(
                     shared,
@@ -2215,21 +2210,17 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                 let admission = native_admission::event(shared, &session_id, &worker_epoch, || {
                     undelivered_ack =
                         notice_recovery::suppressed_undelivered(&key, runtime_seq, &event, true);
-                    // Account signals and uncertain effects of an admitted
-                    // epoch are observed even while its transcript is not
-                    // projected (a reset).
-                    // A turn ending retires its own pending prompt by turn id,
-                    // also when Clear fences the epoch that ran it.
+                    // Exact turn-ID prompt retirement stays independent of Clear (R17-H2).
                     turn_end::ended(shared, &session_id, &event);
                     snapshot::record_uncertain_effect(shared, &session_id, &worker_epoch, &event);
-                    snapshot::signal_admitted_turn_end(
+                    let _projection = shared.hub.runtime_projection_guard();
+                    snapshot::signal_admitted_turn_end_locked(
                         shared,
                         &session_id,
                         &worker_epoch,
                         runtime_seq,
                         &event,
                     );
-                    let _projection = shared.hub.runtime_projection_guard();
                     snapshot::project_admitted_worker_event(
                         shared,
                         &key,
@@ -2257,7 +2248,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                     undelivered_ack,
                 )
                 .await?;
-                shared.highwaters.lock().insert(key, runtime_seq);
+                snapshot::record_processed_event_sequence(shared, key, runtime_seq);
             }
             write_broker_frame(
                 writer,
@@ -2909,17 +2900,47 @@ fn mark_projected_provider_auth_expired(
     worker_epoch: &str,
     event: &RuntimeEvent,
 ) {
-    let Some(provider_auth) = shared.provider_auth.as_ref() else {
-        return;
-    };
     let Some((provider_id, account_id, generation)) =
         snapshot::provider_auth_expiry_target(shared, session_id, worker_epoch, event)
     else {
         return;
     };
-    let scope =
-        native_admission::credential_scope(shared, provider_auth, &account_id, &provider_id);
-    match scope.and_then(|scope| scope.mark_expired(&provider_id, generation)) {
+    expire_provider_auth_generation(shared, session_id, &provider_id, &account_id, generation);
+}
+
+pub(super) fn mark_launch_provider_auth_expired(
+    shared: &Shared,
+    session_id: &str,
+    launch: &StartSession,
+    detail: &str,
+) {
+    if !crate::provider_behavior::is_provider_auth_required_error(detail) {
+        return;
+    }
+    let Some(generation) = launch.provider_auth_generation else {
+        return;
+    };
+    expire_provider_auth_generation(
+        shared,
+        session_id,
+        &launch.provider,
+        &launch.provider_account_id,
+        generation,
+    );
+}
+
+fn expire_provider_auth_generation(
+    shared: &Shared,
+    session_id: &str,
+    provider_id: &str,
+    account_id: &crate::provider_account::ProviderAccountId,
+    generation: u64,
+) {
+    let Some(provider_auth) = shared.provider_auth.as_ref() else {
+        return;
+    };
+    let scope = native_admission::credential_scope(shared, provider_auth, account_id, provider_id);
+    match scope.and_then(|scope| scope.mark_expired(provider_id, generation)) {
         Ok(Some(status)) => tracing::warn!(
             session = session_id,
             provider = %provider_id,

@@ -2653,7 +2653,7 @@ mod tests {
             lease: 1,
             tx: ctrl_tx,
             protocol: CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
-            outer_machine_protocol: Some(CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION),
+            outer_machine_protocol: Some(CRASHED_WORKER_DRAIN_PROTOCOL_VERSION),
         });
         broker.handle_crashed_drain_aborted(
             "s-b",
@@ -2705,5 +2705,53 @@ mod tests {
             }
             other => panic!("expected Snapshot after CommandAck, got {other:?}"),
         }
+
+        // R18-M1: when a confirmed crashed-drain retirement finishes and the
+        // worker exits BEFORE the next Welcome is collected (so Welcome carries
+        // no connected owner), handover MUST still replay `CrashedWorkerDrained`
+        // so the Controller clears stuck Busy.
+        let (handover_tx, mut handover_rx) = mpsc::unbounded_channel();
+        let handover_ctrl = Controller {
+            lease: 2,
+            tx: handover_tx,
+            protocol: CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+            outer_machine_protocol: Some(CRASHED_WORKER_DRAIN_PROTOCOL_VERSION),
+        };
+        broker
+            .crashed_drains
+            .inner
+            .lock()
+            .recently_drained
+            .insert("s-gone".into(), ("99-1".into(), true, Instant::now()));
+        let sessions = HashMap::new();
+        let session_states = HashMap::new();
+        let startup_failures = HashMap::new();
+        let generation_commands = HashMap::new();
+        let empty_workers = HashMap::new();
+        broker.enqueue_handover_reconciliation_locked(
+            &handover_ctrl,
+            &sessions,
+            &session_states,
+            &startup_failures,
+            &generation_commands,
+            &empty_workers,
+            &[],
+        );
+        let mut saw_drained = false;
+        while let Ok(frame) = handover_rx.try_recv() {
+            if matches!(
+                frame,
+                Frame::CrashedWorkerDrained {
+                    ref session_id,
+                    ref worker_epoch,
+                } if session_id == "s-gone" && worker_epoch == "99-1"
+            ) {
+                saw_drained = true;
+            }
+        }
+        assert!(
+            saw_drained,
+            "confirmed retirement must replay on handover even after worker exited before Welcome (R18-M1)"
+        );
     }
 }

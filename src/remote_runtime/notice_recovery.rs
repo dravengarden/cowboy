@@ -426,8 +426,9 @@ pub(super) fn project_worker_outcome(
     event: RuntimeEvent,
     idle_guard: Option<u64>,
     auto_permission: Option<(String, String)>,
-    apply_lifecycle: bool,
+    replay_scope: super::snapshot::ReplayScope,
 ) -> Option<PendingUndeliveredNotice> {
+    use super::snapshot::ReplayScope;
     if let Some((request_id, option_id)) = auto_permission {
         tracing::info!(
             session = %session_id,
@@ -438,14 +439,14 @@ pub(super) fn project_worker_outcome(
         super::queue_permission(shared, session_id, request_id, option_id);
         return None;
     }
-    if apply_lifecycle {
+    if replay_scope != ReplayScope::NonOwningDraining {
         super::mark_projected_provider_auth_expired(shared, session_id, &key.1, &event);
     }
     super::prompt_tracking::observe_worker_event(shared, session_id, &event);
-    // Historical replay skips `super::divert`'s live `note_worker_incarnation`
-    // call so a replaying epoch never overwrites the live owner's worker
-    // incarnation (R16-M1).
-    let remaining = if apply_lifecycle {
+    // Only live owning events advance `hub.note_worker_incarnation` via `divert`;
+    // below-watermark/draining replay uses `intercept` and stamps producer epoch
+    // on subagent snapshots without changing live incarnation (R16-M1, R18-M3).
+    let remaining = if replay_scope == ReplayScope::Live {
         super::divert(&shared.hub, key, runtime_seq, event)
     } else {
         crate::subagent_transcripts::intercept(&key.0, &key.1, runtime_seq, event)
@@ -492,11 +493,15 @@ pub(super) fn project_worker_outcome(
             None
         }
         other => {
-            if !apply_lifecycle {
-                project_historical_replay_event(&shared.hub, session_id, other);
-                return None;
+            match replay_scope {
+                ReplayScope::Live => super::apply_event(&shared.hub, session_id, other),
+                ReplayScope::OwningBelowCrashWatermark => {
+                    project_owning_below_crash_event(&shared.hub, session_id, &key.1, other);
+                }
+                ReplayScope::NonOwningDraining => {
+                    project_non_owning_draining_event(&shared.hub, session_id, &key.1, other);
+                }
             }
-            super::apply_event(&shared.hub, session_id, other);
             None
         }
     });
@@ -504,37 +509,101 @@ pub(super) fn project_worker_outcome(
     deferred
 }
 
-/// Strict allowlist for historical replay outcomes (non-owning draining epochs
-/// or below-watermark replay of an already-Crashed/draining epoch): appends
-/// historical transcript rows via `push_historical_from_worker`, preserving
-/// producer epoch on subagent snapshots while skipping live worker incarnation,
-/// native thread ID, attention, compaction, permission, capability, config,
-/// wakeup, and credential-expiry hooks (R15-M3, R15-M6, R16-H2, R16-M1).
-fn project_historical_replay_event(hub: &crate::core::Hub, session_id: &str, event: RuntimeEvent) {
+fn stamp_producer_epoch_if_subagent(update: &mut serde_json::Value, worker_epoch: &str) {
+    if !worker_epoch.is_empty()
+        && update
+            .get("sessionUpdate")
+            .and_then(serde_json::Value::as_str)
+            == Some(crate::runtime_wire::SUBAGENT_UPDATE)
+        && let Some(object) = update.as_object_mut()
+    {
+        object.insert(
+            "incarnation".to_owned(),
+            serde_json::Value::String(worker_epoch.to_owned()),
+        );
+    }
+}
+
+fn is_content_or_subagent_update(update: &serde_json::Value) -> bool {
+    crate::runtime_wire::current_turn_support(update).is_none()
+        && crate::runtime_wire::background_tasks_count(update).is_none()
+        && crate::runtime_wire::native_cycle(update).is_none()
+        && crate::runtime_wire::uncertain_effect(update).is_none()
+        && update
+            .get("sessionUpdate")
+            .and_then(serde_json::Value::as_str)
+            != Some(crate::runtime_wire::STEERING_RESULT_UPDATE)
+}
+
+/// First-delivery replay from the CURRENT owning worker below its `Crashed`
+/// snapshot watermark: preserves first-delivery `TurnEnded` completion/refusal
+/// (so managed calls do not report `child_crashed` and refusals keep their
+/// hold, R18-H4), content updates, and producer-fenced `SUBAGENT_UPDATE`
+/// (R18-M3), while skipping stale Running/Busy status, permissions, config,
+/// wakeup, usage, and native-ID mutations.
+fn project_owning_below_crash_event(
+    hub: &crate::core::Hub,
+    session_id: &str,
+    worker_epoch: &str,
+    event: RuntimeEvent,
+) {
     if !hub.accepts_runtime_projection(session_id) {
         return;
     }
     match event {
-        // Content-only historical transcript updates. Excludes `SUBAGENT_UPDATE`
-        // (so historical snapshots never replace a live child observation,
-        // R17-M3) and `TurnEnded` (so historical turn endings never act as live
-        // completion/UI boundaries downstream, R17-M2; exact prompt retirement
-        // already ran via `turn_end::ended`).
-        RuntimeEvent::Update { update, cmid }
-            if crate::runtime_wire::current_turn_support(&update).is_none()
-                && crate::runtime_wire::background_tasks_count(&update).is_none()
-                && crate::runtime_wire::native_cycle(&update).is_none()
-                && crate::runtime_wire::uncertain_effect(&update).is_none()
-                && !matches!(
-                    update
-                        .get("sessionUpdate")
-                        .and_then(serde_json::Value::as_str),
-                    Some(
-                        crate::runtime_wire::STEERING_RESULT_UPDATE
-                            | crate::runtime_wire::SUBAGENT_UPDATE
-                    )
-                ) =>
-        {
+        RuntimeEvent::Update { mut update, cmid } if is_content_or_subagent_update(&update) => {
+            stamp_producer_epoch_if_subagent(&mut update, worker_epoch);
+            hub.push_historical_from_worker(
+                session_id,
+                crate::agent_model::Event::Update { update },
+                cmid,
+            );
+        }
+        RuntimeEvent::TurnEnded {
+            stop_reason, usage, ..
+        } => {
+            // Current owning worker's first-delivery turn completion before crash:
+            // record TurnEnd + durable completion without regressing Crashed -> Running.
+            let refused = stop_reason.eq_ignore_ascii_case("refusal");
+            hub.push(
+                session_id,
+                crate::agent_model::Event::TurnEnd { stop_reason, usage },
+            );
+            if refused {
+                hub.set_status(
+                    session_id,
+                    super::Status::Crashed,
+                    Some(crate::core::MODEL_REFUSAL_DETAIL.to_owned()),
+                );
+            } else {
+                hub.settle_restart_interruption(session_id);
+            }
+            hub.complete_turn(session_id);
+        }
+        RuntimeEvent::CommandRejected { message, .. } | RuntimeEvent::Error { message } => {
+            hub.broadcast_error(Some(session_id.to_owned()), message);
+        }
+        _ => {}
+    }
+}
+
+/// Strict allowlist for non-owning draining epochs (replaced worker or active
+/// reset): appends content updates and producer-fenced `SUBAGENT_UPDATE` (never
+/// displacing a newer producer's child observation, R17-M3/R18-M3) via
+/// `push_historical_from_worker`, excluding `TurnEnded`, `PermissionResolved`,
+/// `AgentSessionId`, and all live status/config/wakeup/permission hooks.
+fn project_non_owning_draining_event(
+    hub: &crate::core::Hub,
+    session_id: &str,
+    worker_epoch: &str,
+    event: RuntimeEvent,
+) {
+    if !hub.accepts_runtime_projection(session_id) {
+        return;
+    }
+    match event {
+        RuntimeEvent::Update { mut update, cmid } if is_content_or_subagent_update(&update) => {
+            stamp_producer_epoch_if_subagent(&mut update, worker_epoch);
             hub.push_historical_from_worker(
                 session_id,
                 crate::agent_model::Event::Update { update },

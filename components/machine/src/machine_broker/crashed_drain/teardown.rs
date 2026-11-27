@@ -429,22 +429,21 @@ impl Broker {
             &state,
             welcome,
         );
+        // Replay every active confirmed crashed-drain retirement not superseded
+        // by a replacement worker, including workers that already exited before
+        // Welcome was collected (R18-M1).
         if controller_capable {
-            for snap in welcome {
-                if !snap.has_connected_owner() || workers.contains_key(&snap.session_id) {
+            for (session_id, (ep, confirmed_receipt, at)) in &state.recently_drained {
+                if !*confirmed_receipt
+                    || workers.contains_key(session_id)
+                    || now.saturating_duration_since(*at) >= RECENTLY_DRAINED_TTL
+                {
                     continue;
                 }
-                if let Some((ep, confirmed_receipt, at)) =
-                    state.recently_drained.get(&snap.session_id)
-                    && *confirmed_receipt
-                    && now.saturating_duration_since(*at) < RECENTLY_DRAINED_TTL
-                    && ep == &snap.worker_epoch
-                {
-                    let _ = tx.send(Frame::CrashedWorkerDrained {
-                        session_id: snap.session_id.clone(),
-                        worker_epoch: ep.clone(),
-                    });
-                }
+                let _ = tx.send(Frame::CrashedWorkerDrained {
+                    session_id: session_id.clone(),
+                    worker_epoch: ep.clone(),
+                });
             }
         }
     }
@@ -475,17 +474,12 @@ impl Broker {
                 continue;
             }
             let replayed_drained = controller_capable
-                && welcome.iter().any(|w| {
-                    w.session_id == *session_id
-                        && w.has_connected_owner()
-                        && state.recently_drained.get(session_id).is_some_and(
-                            |(ep, confirmed_receipt, at)| {
-                                *confirmed_receipt
-                                    && now.saturating_duration_since(*at) < RECENTLY_DRAINED_TTL
-                                    && ep == &w.worker_epoch
-                            },
-                        )
-                });
+                && state.recently_drained.get(session_id).is_some_and(
+                    |(_, confirmed_receipt, at)| {
+                        *confirmed_receipt
+                            && now.saturating_duration_since(*at) < RECENTLY_DRAINED_TTL
+                    },
+                );
             if replayed_drained {
                 continue;
             }
