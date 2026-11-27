@@ -1,11 +1,10 @@
 //! Indexed turn-level prompt-cache telemetry projection (`turn_cache_facts`).
 //!
 //! Each completed `Event::TurnEnd` is projected into `turn_cache_facts` inside
-//! the event-batch transaction (and backfilled in bounded keyset batches from
-//! historical `events`). Unlike `events`, rows survive transcript `Clear` and
-//! short-lived session purges so account- and session-level cache visibility
-//! stays accurate over 24h / 7d / 30d windows until pruned by explicit
-//! retention (`DEFAULT_RETENTION_DAYS`).
+//! the event-batch transaction, preserved transactionally before `Clear` or
+//! session purge, and reconciled in bounded keyset batches on startup so
+//! historical turns (including turns written during a Controller rollback) are
+//! filled without ever overwriting live-captured turn-time attribution.
 //!
 //! Token accounting invariant: `TurnUsage.uncached_input_tokens` equals
 //! `input_tokens - cached_input_tokens` and therefore already includes
@@ -23,16 +22,19 @@ use serde_json::Value;
 
 use crate::agent_model::TurnUsage;
 
-pub(in crate::store) use queries::{project_events_pg, project_events_sqlite};
+pub(in crate::store) use queries::{
+    project_events_pg, project_events_sqlite, project_missing_for_session_pg,
+    project_missing_for_session_sqlite,
+};
 
 /// Default retention window for `turn_cache_facts` rows (days).
 pub const DEFAULT_RETENTION_DAYS: i64 = 90;
 /// Maximum safe integer (JS `Number.MAX_SAFE_INTEGER`) matching `TurnUsage`.
 const MAX_SAFE_TOKENS: u64 = 9_007_199_254_740_991;
 const MAX_MODEL_BYTES: usize = 120;
-const MAX_STOP_REASON_BYTES: usize = 64;
 const MAX_PROMPT_ORIGIN_BYTES: usize = 32;
-const MAX_MODELS_IN_RESPONSE: usize = 16;
+const MAX_VERSION_BYTES: usize = 128;
+const MAX_MODELS_IN_RESPONSE: i64 = 16;
 const MAX_RECENT_TURNS: usize = 100;
 
 /// Disjoint token breakdown for one turn.
@@ -111,8 +113,13 @@ pub fn normalize_turn_usage(usage: Option<&TurnUsage>) -> Option<NormalizedTurnC
     })
 }
 
-fn truncate_utf8(input: &str, max_bytes: usize) -> String {
-    let trimmed = input.trim();
+pub(super) fn sanitize_text(input: &str, max_bytes: usize) -> String {
+    let cleaned = if input.contains('\0') {
+        input.replace('\0', "")
+    } else {
+        input.to_owned()
+    };
+    let trimmed = cleaned.trim();
     if trimmed.len() <= max_bytes {
         return trimmed.to_owned();
     }
@@ -124,57 +131,63 @@ fn truncate_utf8(input: &str, max_bytes: usize) -> String {
 }
 
 /// Normalize arbitrary stop-reason strings (including multi-line provider error
-/// payloads) into a short bounded label suitable for indexed storage.
+/// payloads or strings containing embedded NUL bytes) onto a closed, safe label
+/// set so malformed runtime stop reasons can never abort PostgreSQL writes.
 #[must_use]
-pub fn normalize_stop_reason(raw: &str) -> String {
-    let trimmed = raw.trim();
+pub fn normalize_stop_reason(raw: &str) -> &'static str {
+    let cleaned = if raw.contains('\0') {
+        raw.replace('\0', "")
+    } else {
+        raw.to_owned()
+    };
+    let trimmed = cleaned.trim();
     if trimmed.eq_ignore_ascii_case("endturn") || trimmed.eq_ignore_ascii_case("end_turn") {
-        return "end_turn".to_owned();
-    }
-    if trimmed.eq_ignore_ascii_case("cancelled") || trimmed.eq_ignore_ascii_case("canceled") {
-        return "cancelled".to_owned();
-    }
-    if trimmed.eq_ignore_ascii_case("maxtokens") || trimmed.eq_ignore_ascii_case("max_tokens") {
-        return "max_tokens".to_owned();
-    }
-    if trimmed.eq_ignore_ascii_case("maxturnrequests")
+        "end_turn"
+    } else if trimmed.eq_ignore_ascii_case("cancelled") || trimmed.eq_ignore_ascii_case("canceled")
+    {
+        "cancelled"
+    } else if trimmed.eq_ignore_ascii_case("maxtokens")
+        || trimmed.eq_ignore_ascii_case("max_tokens")
+    {
+        "max_tokens"
+    } else if trimmed.eq_ignore_ascii_case("maxturnrequests")
         || trimmed.eq_ignore_ascii_case("max_turn_requests")
     {
-        return "max_turn_requests".to_owned();
-    }
-    if trimmed.eq_ignore_ascii_case("refusal") {
-        return "refusal".to_owned();
-    }
-    if trimmed.eq_ignore_ascii_case("error") || trimmed.starts_with("error:") {
-        return "error".to_owned();
-    }
-    let lowered = truncate_utf8(&trimmed.to_ascii_lowercase(), MAX_STOP_REASON_BYTES);
-    if lowered.is_empty() {
-        "unknown".to_owned()
+        "max_turn_requests"
+    } else if trimmed.eq_ignore_ascii_case("refusal") {
+        "refusal"
+    } else if trimmed.eq_ignore_ascii_case("error") || trimmed.starts_with("error:") {
+        "error"
+    } else if trimmed.is_empty() {
+        "unknown"
     } else {
-        lowered
+        "other"
     }
 }
 
-pub(super) fn is_eligible_turn(stop_reason: &str, usage_observed: bool) -> bool {
-    usage_observed || !matches!(stop_reason, "cancelled" | "error")
-}
-
-/// Extract the best available model identifier from persisted session metadata.
+/// Extract the best unambiguous live turn-time model identifier from session
+/// metadata.
 ///
-/// Prefers the latest adapter-reported model in `last_usage.raw._cowboy.modelUsage[0]`,
-/// then `config_preferences.model`, then the `"model"` option in `config_options`.
+/// `last_usage.raw._cowboy.modelUsage` is sorted by cumulative session token
+/// volume, so after a mid-session model switch `modelUsage[0]` can remain the
+/// old model. We therefore use `modelUsage` only when it contains a single
+/// unambiguous model; otherwise we prefer `config_preferences.model` and then
+/// the `"model"` entry in `config_options`.
 #[must_use]
 pub fn extract_session_model(
     last_usage: Option<&Value>,
     config_preferences: Option<&Value>,
     config_options: Option<&Value>,
 ) -> Option<String> {
-    if let Some(model) = last_usage
-        .and_then(|value| value.pointer("/raw/_cowboy/modelUsage/0/model"))
-        .and_then(Value::as_str)
-        .map(|value| truncate_utf8(value, MAX_MODEL_BYTES))
-        .filter(|value| !value.is_empty())
+    if let Some(rows) = last_usage
+        .and_then(|value| value.pointer("/raw/_cowboy/modelUsage"))
+        .and_then(Value::as_array)
+        && rows.len() == 1
+        && let Some(model) = rows[0]
+            .get("model")
+            .and_then(Value::as_str)
+            .map(|value| sanitize_text(value, MAX_MODEL_BYTES))
+            .filter(|value| !value.is_empty())
     {
         return Some(model);
     }
@@ -202,14 +215,14 @@ pub fn extract_session_model(
 }
 
 fn normalize_model_value(raw: &str) -> String {
-    let trimmed = raw.trim();
-    if trimmed.starts_with('[')
-        && let Ok(Value::Array(items)) = serde_json::from_str::<Value>(trimmed)
+    let cleaned = sanitize_text(raw, MAX_MODEL_BYTES * 2);
+    if cleaned.starts_with('[')
+        && let Ok(Value::Array(items)) = serde_json::from_str::<Value>(&cleaned)
         && let Some(last) = items.last().and_then(Value::as_str)
     {
-        return truncate_utf8(last, MAX_MODEL_BYTES);
+        return sanitize_text(last, MAX_MODEL_BYTES);
     }
-    truncate_utf8(trimmed, MAX_MODEL_BYTES)
+    sanitize_text(&cleaned, MAX_MODEL_BYTES)
 }
 
 pub(super) fn classify_prompt_origin(payload: &Value) -> String {
@@ -219,7 +232,7 @@ pub(super) fn classify_prompt_origin(payload: &Value) -> String {
     if let Some(actor) = update
         .pointer("/promptOrigin/actor")
         .and_then(Value::as_str)
-        .map(|value| truncate_utf8(&value.to_ascii_lowercase(), MAX_PROMPT_ORIGIN_BYTES))
+        .map(|value| sanitize_text(&value.to_ascii_lowercase(), MAX_PROMPT_ORIGIN_BYTES))
         .filter(|value| !value.is_empty())
     {
         return actor;
@@ -238,6 +251,12 @@ pub(super) fn classify_prompt_origin(payload: &Value) -> String {
 }
 
 /// Aggregated turn-level cache efficiency totals over a window or session.
+///
+/// Token sums stay `None` when no contributing turn reported valid usage/cache
+/// counters, preserving `Some(0)` strictly for genuinely observed zero-token
+/// turns. `cache_write_tokens` and `observed_cache_write_turns` are counted
+/// over the same observed-cache cohort as `cached_read_tokens` so partial
+/// write counters can never make stacked segments exceed observed input.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct CacheMetricsTotals {
     pub total_turns: u64,
@@ -247,13 +266,13 @@ pub struct CacheMetricsTotals {
     pub observed_cache_write_turns: u64,
     pub renewed_turns: u64,
     pub compacted_turns: u64,
-    pub inclusive_input_tokens: u64,
-    pub observed_cache_input_tokens: u64,
+    pub inclusive_input_tokens: Option<u64>,
+    pub observed_cache_input_tokens: Option<u64>,
     pub cached_read_tokens: Option<u64>,
     pub cache_write_tokens: Option<u64>,
     pub uncached_input_tokens: Option<u64>,
     pub other_uncached_input_tokens: Option<u64>,
-    pub output_tokens: u64,
+    pub output_tokens: Option<u64>,
     pub reasoning_tokens: Option<u64>,
     /// `sum(cached_read_tokens) / sum(observed_cache_input_tokens)` strictly
     /// over turns that reported both inclusive input and cached read counters.
@@ -269,14 +288,18 @@ pub struct ModelCacheMetrics {
     pub totals: CacheMetricsTotals,
 }
 
-/// Coverage and backfill honesty metadata accompanying every cache response.
+/// Scoped coverage metadata accompanying every authorized cache response.
+///
+/// Timestamps are computed strictly from the authorized account or session's
+/// own projected facts; installation-wide backfill counters are never exposed
+/// on scoped endpoints.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CacheMetricsCoverage {
     pub accounting_source: String,
     pub granularity: String,
     pub backfill_complete: bool,
-    pub oldest_backfilled_ms: Option<i64>,
-    pub rows_backfilled: u64,
+    pub oldest_fact_ms: Option<i64>,
+    pub newest_fact_ms: Option<i64>,
     pub usage_coverage_ratio: Option<f64>,
     pub cache_coverage_ratio: Option<f64>,
 }
@@ -329,7 +352,7 @@ pub struct SessionCacheMetrics {
     pub coverage: CacheMetricsCoverage,
 }
 
-/// Result of one bounded background backfill batch.
+/// Result of one bounded background backfill/reconciliation batch.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BackfillProgress {
     pub scanned_events: usize,

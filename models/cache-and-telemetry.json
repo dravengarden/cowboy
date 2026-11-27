@@ -92,7 +92,7 @@
         }
       },
       "prompt_cache_ttl": {
-        "documented_policy": "DeepSeek automatic context caching; gateway adaptive-replay-v1 starts probing at 5h30m (19800000ms) for contexts >= 64k tokens.",
+        "documented_policy": "DeepSeek automatic context caching; gateway adaptive-replay-v1 starts probing at 5h30m (19800000ms) only after >= 64K verified cache-hit tokens (min_hit_tokens: 64000; cold contexts do not qualify).",
         "empirical_notes": "Hawk 30d gateway ledger showed 3/3 keepalive hits had 0 subsequent interactive turns on the same session. Keep deepseek_cache_protection independent from idle rollover.",
         "current_default_strategy": "gateway_adaptive_replay_v1_independent_flag"
       },
@@ -116,12 +116,36 @@
         }
       },
       "prompt_cache_ttl": {
-        "documented_policy": "DeepSeek automatic context caching; gateway adaptive-replay-v1 starts probing at 5h30m (19800000ms) for contexts >= 64k tokens.",
+        "documented_policy": "DeepSeek automatic context caching; gateway adaptive-replay-v1 starts probing at 5h30m (19800000ms) only after >= 64K verified cache-hit tokens (min_hit_tokens: 64000; cold contexts do not qualify).",
         "empirical_notes": "Low volume on Hawk; keep deepseek_cache_protection independent from idle rollover.",
         "current_default_strategy": "gateway_adaptive_replay_v1_independent_flag"
       },
       "policy_boundaries": [
         "Preserve independent deepseek_cache_protection boolean for rollback safety; never silently re-enable paid replay."
+      ]
+    },
+    "deepseek-harness": {
+      "telemetry": {
+        "level1_turn_end": {
+          "input_tokens": true,
+          "cached_read_tokens": null,
+          "cache_write_tokens": null,
+          "reasoning_tokens": null,
+          "notes": "First-party DeepSeek Harness (dsh --profile acp) routed through the DeepSeek Anthropic Messages sidecar gateway; TurnEnd cache field coverage not yet established on Hawk (unknown)."
+        },
+        "level2_per_request": {
+          "status": "shipped_gateway_ledger",
+          "source": "provider_usage_events",
+          "notes": "Gateway sidecar records agent='deepseek-harness' rows in provider_usage_events when requests occur."
+        }
+      },
+      "prompt_cache_ttl": {
+        "documented_policy": "DeepSeek automatic context caching via sidecar gateway; verify adapter & gateway cache reporting on upgrade.",
+        "empirical_notes": "Insufficient Hawk turn volume for empirical TTL curve or cache-counter coverage baseline (unknown).",
+        "current_default_strategy": "none_default"
+      },
+      "policy_boundaries": [
+        "DSH_HOME remains an isolated Provider home; never share Claude/Codex credentials."
       ]
     },
     "grok": {

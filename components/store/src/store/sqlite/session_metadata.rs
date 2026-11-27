@@ -117,6 +117,8 @@ impl SqliteStorage {
         if let Some(calls_before_ms) = transcript {
             crate::store::session_lineage::seal_lineage_on_clear_sqlite(&mut tx, session_id, now)
                 .await?;
+            crate::store::turn_cache_facts::project_missing_for_session_sqlite(&mut tx, session_id)
+                .await?;
             sqlx::query("DELETE FROM events WHERE session_id = ?1")
                 .bind(session_id)
                 .execute(&mut *tx)

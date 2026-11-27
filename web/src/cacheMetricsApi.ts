@@ -11,13 +11,13 @@ export interface CacheMetricsTotals {
   observed_cache_write_turns: number;
   renewed_turns: number;
   compacted_turns: number;
-  inclusive_input_tokens: number;
-  observed_cache_input_tokens: number;
+  inclusive_input_tokens: number | null;
+  observed_cache_input_tokens: number | null;
   cached_read_tokens: number | null;
   cache_write_tokens: number | null;
   uncached_input_tokens: number | null;
   other_uncached_input_tokens: number | null;
-  output_tokens: number;
+  output_tokens: number | null;
   reasoning_tokens: number | null;
   cached_input_share: number | null;
   uncached_input_share: number | null;
@@ -32,8 +32,8 @@ export interface CacheMetricsCoverage {
   accounting_source: string;
   granularity: string;
   backfill_complete: boolean;
-  oldest_backfilled_ms: number | null;
-  rows_backfilled: number;
+  oldest_fact_ms: number | null;
+  newest_fact_ms: number | null;
   usage_coverage_ratio: number | null;
   cache_coverage_ratio: number | null;
 }
@@ -64,23 +64,25 @@ export interface CacheCapabilitiesView {
   observed_cache_read: boolean;
   observed_cache_write: boolean;
   supports_idle_rollover: boolean;
-  supports_gateway_keepalive: boolean;
+  supports_gateway_keepalive: boolean | null;
+  keepalive_capability_status: string;
   rollover_restriction?: string | null;
 }
 
 export interface RolloverStrategyView {
+  availability: string;
   supported: boolean;
-  enabled: boolean;
-  inherited: boolean;
+  enabled: boolean | null;
+  inherited: boolean | null;
   session_override: boolean | null;
   idle_minutes: number | null;
-  min_context_tokens: number;
+  min_context_tokens: number | null;
   due: boolean;
   restriction?: string | null;
 }
 
 export interface KeepaliveStrategyView {
-  supported: boolean;
+  supported: boolean | null;
   enabled: boolean | null;
 }
 
@@ -191,8 +193,14 @@ export function formatIdleGap(ms: number | null | undefined): string {
 
 /**
  * Build strictly disjoint input-token segments for MetricDistribution.
- * Never sums `cache_write_tokens` with `uncached_input_tokens` because
- * `uncached_input_tokens` already includes `cache_write_tokens`.
+ *
+ * Only emits a 3-way (`cached read` + `cache write` + `fresh input`) split
+ * when every observed-cache turn reported cache-write counters from the exact
+ * same cohort (`observed_cache_write_turns === observed_cache_turns` and
+ * `other_uncached_input_tokens !== null`) so segment sums never exceed
+ * `observed_cache_input_tokens`. Partial write coverage falls back to the
+ * exact 2-way (`cached read` + `uncached input`) split while reporting
+ * partial writes separately in MetricFacts.
  */
 export function buildDisjointCacheSegments(
   totals: CacheMetricsTotals,
@@ -206,18 +214,20 @@ export function buildDisjointCacheSegments(
   }
   const cachedRead = Math.max(0, totals.cached_read_tokens);
   const uncachedTotal = Math.max(0, totals.uncached_input_tokens);
-  if (totals.observed_cache_write_turns > 0 && totals.cache_write_tokens !== null) {
-    const cacheWrite = Math.min(uncachedTotal, Math.max(0, totals.cache_write_tokens));
-    const remainingUncached =
-      totals.other_uncached_input_tokens !== null
-        ? Math.max(0, totals.other_uncached_input_tokens)
-        : Math.max(0, uncachedTotal - cacheWrite);
-    const remainingLabel =
-      totals.other_uncached_input_tokens !== null ? "fresh input" : "other uncached";
+  if (
+    totals.observed_cache_write_turns === totals.observed_cache_turns &&
+    totals.cache_write_tokens !== null &&
+    totals.other_uncached_input_tokens !== null &&
+    totals.cache_write_tokens + totals.other_uncached_input_tokens === uncachedTotal
+  ) {
     return [
       { label: "cached read", value: cachedRead, tone: "success" },
-      { label: "cache write", value: cacheWrite, tone: "warning" },
-      { label: remainingLabel, value: remainingUncached, tone: "info" },
+      { label: "cache write", value: Math.max(0, totals.cache_write_tokens), tone: "warning" },
+      {
+        label: "fresh input",
+        value: Math.max(0, totals.other_uncached_input_tokens),
+        tone: "info",
+      },
     ];
   }
   return [
@@ -234,13 +244,15 @@ export function formatCoverageSummary(
     totals.eligible_turns === 0
       ? "No completed turns yet"
       : `${totals.observed_cache_turns}/${totals.eligible_turns} turns with cache counters`;
-  return coverage.backfill_complete ? base : `${base} · backfilling history…`;
+  return coverage.backfill_complete ? base : `${base} · reconciling history…`;
 }
 
 export function formatStrategySummary(strategy: SessionCacheStrategyView): string {
   const parts: string[] = [];
   const { rollover, gateway_keepalive: keepalive } = strategy;
-  if (rollover.enabled && rollover.idle_minutes !== null) {
+  if (rollover.availability === "unavailable") {
+    parts.push("Renewal policy unavailable");
+  } else if (rollover.enabled && rollover.idle_minutes !== null && rollover.min_context_tokens !== null) {
     const idle =
       rollover.idle_minutes % 60 === 0
         ? `${rollover.idle_minutes / 60}h`

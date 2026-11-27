@@ -1,4 +1,5 @@
-//! SQLite and PostgreSQL projection, backfill, retention and query paths for
+//! SQLite and PostgreSQL projection, pre-delete preservation, rollback-safe
+//! reconciliation, retention, and SQL-aggregated query paths for
 //! `turn_cache_facts`.
 
 use anyhow::{Context as _, Result};
@@ -7,21 +8,30 @@ use sqlx::Row as _;
 
 use super::{
     AccountCacheMetrics, BackfillProgress, CacheMetricsCoverage, CacheMetricsTotals,
-    MAX_MODELS_IN_RESPONSE, MAX_RECENT_TURNS, ModelCacheMetrics, SessionCacheMetrics,
-    TurnCacheFact, classify_prompt_origin, extract_session_model, is_eligible_turn,
-    normalize_stop_reason, normalize_turn_usage,
+    DEFAULT_RETENTION_DAYS, MAX_MODELS_IN_RESPONSE, MAX_RECENT_TURNS, MAX_VERSION_BYTES,
+    ModelCacheMetrics, SessionCacheMetrics, TurnCacheFact, classify_prompt_origin,
+    extract_session_model, normalize_stop_reason, normalize_turn_usage, sanitize_text,
 };
 use crate::agent_model::{Event, TurnUsage};
 use crate::model::Envelope;
 use crate::store::{PostgresStorage, SqliteStorage, StorageBackend, Store};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProjectionMode {
+    /// Live `TurnEnd` inside `upsert_event_batch`: captures live session
+    /// version/generation/model and updates on batch retry.
+    Live,
+    /// Historical backfill or pre-Clear/pre-Purge preservation: inserts only
+    /// missing keys (`ON CONFLICT DO NOTHING`) and leaves unverifiable
+    /// historical version/generation/model attribution unknown (`""` / `NULL`).
+    BackfillMissing,
+}
 
 #[derive(Debug, Clone)]
 struct BackfillState {
     cursor_session_id: String,
     cursor_seq: i64,
     completed_at_ms: Option<i64>,
-    oldest_backfilled_ms: Option<i64>,
-    rows_backfilled: i64,
 }
 
 impl Default for BackfillState {
@@ -30,8 +40,6 @@ impl Default for BackfillState {
             cursor_session_id: String::new(),
             cursor_seq: -1,
             completed_at_ms: None,
-            oldest_backfilled_ms: None,
-            rows_backfilled: 0,
         }
     }
 }
@@ -47,142 +55,26 @@ struct SessionSnapshot {
 }
 
 #[derive(Debug)]
-struct FactRow {
-    turn_end_seq: i64,
-    occurred_at_ms: i64,
-    model: Option<String>,
-    stop_reason: String,
-    prompt_origin: String,
-    idle_gap_ms: Option<i64>,
-    renewed: bool,
-    compacted: bool,
-    usage_observed: bool,
-    inclusive_input_tokens: Option<i64>,
-    cached_read_tokens: Option<i64>,
-    cache_write_tokens: Option<i64>,
-    other_uncached_input_tokens: Option<i64>,
-    output_tokens: Option<i64>,
-    reasoning_tokens: Option<i64>,
-    accounting_source: String,
-}
-
-#[derive(Default)]
-struct Accumulator {
-    total_turns: u64,
-    eligible_turns: u64,
-    observed_usage_turns: u64,
-    observed_cache_turns: u64,
-    observed_cache_write_turns: u64,
-    observed_other_uncached_turns: u64,
-    observed_reasoning_turns: u64,
-    renewed_turns: u64,
-    compacted_turns: u64,
-    inclusive_input_tokens: u64,
-    observed_cache_input_tokens: u64,
-    cached_read_tokens: u64,
-    cache_write_tokens: u64,
-    uncached_input_tokens: u64,
-    other_uncached_input_tokens: u64,
-    output_tokens: u64,
-    reasoning_tokens: u64,
-}
-
-impl Accumulator {
-    fn add(&mut self, row: &FactRow) {
-        self.total_turns = self.total_turns.saturating_add(1);
-        if is_eligible_turn(&row.stop_reason, row.usage_observed) {
-            self.eligible_turns = self.eligible_turns.saturating_add(1);
-        }
-        if row.renewed {
-            self.renewed_turns = self.renewed_turns.saturating_add(1);
-        }
-        if row.compacted {
-            self.compacted_turns = self.compacted_turns.saturating_add(1);
-        }
-        if row.usage_observed {
-            self.observed_usage_turns = self.observed_usage_turns.saturating_add(1);
-        }
-        if let Some(output) = row.output_tokens.and_then(|v| u64::try_from(v).ok()) {
-            self.output_tokens = self.output_tokens.saturating_add(output);
-        }
-        if let Some(reasoning) = row.reasoning_tokens.and_then(|v| u64::try_from(v).ok()) {
-            self.observed_reasoning_turns = self.observed_reasoning_turns.saturating_add(1);
-            self.reasoning_tokens = self.reasoning_tokens.saturating_add(reasoning);
-        }
-        let Some(inclusive) = row
-            .inclusive_input_tokens
-            .and_then(|v| u64::try_from(v).ok())
-        else {
-            return;
-        };
-        self.inclusive_input_tokens = self.inclusive_input_tokens.saturating_add(inclusive);
-        if let Some(cached) = row.cached_read_tokens.and_then(|v| u64::try_from(v).ok())
-            && cached <= inclusive
-        {
-            self.observed_cache_turns = self.observed_cache_turns.saturating_add(1);
-            self.observed_cache_input_tokens =
-                self.observed_cache_input_tokens.saturating_add(inclusive);
-            self.cached_read_tokens = self.cached_read_tokens.saturating_add(cached);
-            self.uncached_input_tokens = self
-                .uncached_input_tokens
-                .saturating_add(inclusive - cached);
-        }
-        if let Some(write) = row.cache_write_tokens.and_then(|v| u64::try_from(v).ok()) {
-            self.observed_cache_write_turns = self.observed_cache_write_turns.saturating_add(1);
-            self.cache_write_tokens = self.cache_write_tokens.saturating_add(write);
-        }
-        if let Some(other) = row
-            .other_uncached_input_tokens
-            .and_then(|v| u64::try_from(v).ok())
-        {
-            self.observed_other_uncached_turns =
-                self.observed_other_uncached_turns.saturating_add(1);
-            self.other_uncached_input_tokens =
-                self.other_uncached_input_tokens.saturating_add(other);
-        }
-    }
-
-    #[allow(clippy::cast_precision_loss)]
-    fn finish(self) -> CacheMetricsTotals {
-        let cached_input_share = if self.observed_cache_input_tokens > 0 {
-            Some(self.cached_read_tokens as f64 / self.observed_cache_input_tokens as f64)
-        } else {
-            None
-        };
-        let uncached_input_share = if self.observed_cache_input_tokens > 0 {
-            Some(self.uncached_input_tokens as f64 / self.observed_cache_input_tokens as f64)
-        } else {
-            None
-        };
-        let other_uncached = if self.observed_cache_turns > 0
-            && self.observed_other_uncached_turns == self.observed_cache_turns
-        {
-            Some(self.other_uncached_input_tokens)
-        } else {
-            None
-        };
-        CacheMetricsTotals {
-            total_turns: self.total_turns,
-            eligible_turns: self.eligible_turns,
-            observed_usage_turns: self.observed_usage_turns,
-            observed_cache_turns: self.observed_cache_turns,
-            observed_cache_write_turns: self.observed_cache_write_turns,
-            renewed_turns: self.renewed_turns,
-            compacted_turns: self.compacted_turns,
-            inclusive_input_tokens: self.inclusive_input_tokens,
-            observed_cache_input_tokens: self.observed_cache_input_tokens,
-            cached_read_tokens: (self.observed_cache_turns > 0).then_some(self.cached_read_tokens),
-            cache_write_tokens: (self.observed_cache_write_turns > 0)
-                .then_some(self.cache_write_tokens),
-            uncached_input_tokens: (self.observed_cache_turns > 0)
-                .then_some(self.uncached_input_tokens),
-            other_uncached_input_tokens: other_uncached,
-            output_tokens: self.output_tokens,
-            reasoning_tokens: (self.observed_reasoning_turns > 0).then_some(self.reasoning_tokens),
-            cached_input_share,
-            uncached_input_share,
-        }
-    }
+struct AggRow {
+    total_turns: i64,
+    eligible_turns: i64,
+    observed_usage_turns: i64,
+    observed_cache_turns: i64,
+    observed_cache_write_turns: i64,
+    observed_other_uncached_turns: i64,
+    observed_reasoning_turns: i64,
+    renewed_turns: i64,
+    compacted_turns: i64,
+    inclusive_input_tokens: i64,
+    observed_cache_input_tokens: i64,
+    cached_read_tokens: i64,
+    cache_write_tokens: i64,
+    uncached_input_tokens: i64,
+    other_uncached_input_tokens: i64,
+    output_tokens: i64,
+    reasoning_tokens: i64,
+    oldest_fact_ms: Option<i64>,
+    newest_fact_ms: Option<i64>,
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -190,108 +82,181 @@ fn ratio(numerator: u64, denominator: u64) -> Option<f64> {
     (denominator > 0).then(|| numerator as f64 / denominator as f64)
 }
 
+fn to_u64(value: i64) -> u64 {
+    u64::try_from(value).unwrap_or(0)
+}
+
 #[allow(clippy::cast_precision_loss)]
-fn fact_row_to_public(row: &FactRow) -> TurnCacheFact {
-    let inclusive = row
-        .inclusive_input_tokens
-        .and_then(|v| u64::try_from(v).ok());
-    let cached = row.cached_read_tokens.and_then(|v| u64::try_from(v).ok());
-    let uncached = match (inclusive, cached) {
-        (Some(inc), Some(read)) if read <= inc => Some(inc - read),
-        _ => None,
+fn agg_to_totals(row: &AggRow) -> CacheMetricsTotals {
+    let observed_usage = to_u64(row.observed_usage_turns);
+    let observed_cache = to_u64(row.observed_cache_turns);
+    let observed_write = to_u64(row.observed_cache_write_turns);
+    let observed_other = to_u64(row.observed_other_uncached_turns);
+    let observed_reasoning = to_u64(row.observed_reasoning_turns);
+    let observed_cache_input = to_u64(row.observed_cache_input_tokens);
+    let cached_read = to_u64(row.cached_read_tokens);
+    let uncached = to_u64(row.uncached_input_tokens);
+
+    let cached_input_share = if observed_cache > 0 && observed_cache_input > 0 {
+        Some(cached_read as f64 / observed_cache_input as f64)
+    } else {
+        None
     };
-    let cached_input_share = match (inclusive, cached) {
-        (Some(inc), Some(read)) if inc > 0 && read <= inc => Some(read as f64 / inc as f64),
-        _ => None,
+    let uncached_input_share = if observed_cache > 0 && observed_cache_input > 0 {
+        Some(uncached as f64 / observed_cache_input as f64)
+    } else {
+        None
     };
-    TurnCacheFact {
-        turn_end_seq: u64::try_from(row.turn_end_seq).unwrap_or(0),
-        occurred_at_ms: row.occurred_at_ms,
-        model: row.model.clone(),
-        stop_reason: row.stop_reason.clone(),
-        prompt_origin: row.prompt_origin.clone(),
-        idle_gap_ms: row.idle_gap_ms,
-        renewed: row.renewed,
-        compacted: row.compacted,
-        usage_observed: row.usage_observed,
-        inclusive_input_tokens: inclusive,
-        cached_read_tokens: cached,
-        cache_write_tokens: row.cache_write_tokens.and_then(|v| u64::try_from(v).ok()),
-        uncached_input_tokens: uncached,
-        other_uncached_input_tokens: row
-            .other_uncached_input_tokens
-            .and_then(|v| u64::try_from(v).ok()),
-        output_tokens: row.output_tokens.and_then(|v| u64::try_from(v).ok()),
-        reasoning_tokens: row.reasoning_tokens.and_then(|v| u64::try_from(v).ok()),
+    let other_uncached = if observed_cache > 0
+        && observed_write == observed_cache
+        && observed_other == observed_cache
+    {
+        Some(to_u64(row.other_uncached_input_tokens))
+    } else {
+        None
+    };
+
+    CacheMetricsTotals {
+        total_turns: to_u64(row.total_turns),
+        eligible_turns: to_u64(row.eligible_turns),
+        observed_usage_turns: observed_usage,
+        observed_cache_turns: observed_cache,
+        observed_cache_write_turns: observed_write,
+        renewed_turns: to_u64(row.renewed_turns),
+        compacted_turns: to_u64(row.compacted_turns),
+        inclusive_input_tokens: (observed_usage > 0).then(|| to_u64(row.inclusive_input_tokens)),
+        observed_cache_input_tokens: (observed_cache > 0).then_some(observed_cache_input),
+        cached_read_tokens: (observed_cache > 0).then_some(cached_read),
+        cache_write_tokens: (observed_write > 0).then(|| to_u64(row.cache_write_tokens)),
+        uncached_input_tokens: (observed_cache > 0).then_some(uncached),
+        other_uncached_input_tokens: other_uncached,
+        output_tokens: (observed_usage > 0).then(|| to_u64(row.output_tokens)),
+        reasoning_tokens: (observed_reasoning > 0).then(|| to_u64(row.reasoning_tokens)),
         cached_input_share,
-        accounting_source: row.accounting_source.clone(),
+        uncached_input_share,
     }
 }
 
-fn aggregate_facts(rows: &[FactRow]) -> (CacheMetricsTotals, Vec<ModelCacheMetrics>) {
-    let mut total = Accumulator::default();
-    let mut per_model: std::collections::BTreeMap<String, Accumulator> =
-        std::collections::BTreeMap::new();
-    for row in rows {
-        total.add(row);
-        let model = row
-            .model
-            .as_deref()
-            .filter(|name| !name.is_empty())
-            .unwrap_or("unknown");
-        per_model.entry(model.to_owned()).or_default().add(row);
-    }
-    let mut models: Vec<ModelCacheMetrics> = per_model
-        .into_iter()
-        .map(|(model, acc)| ModelCacheMetrics {
-            model,
-            totals: acc.finish(),
-        })
-        .collect();
-    models.sort_by(|left, right| {
-        right
-            .totals
-            .inclusive_input_tokens
-            .cmp(&left.totals.inclusive_input_tokens)
-            .then_with(|| right.totals.total_turns.cmp(&left.totals.total_turns))
-            .then_with(|| left.model.cmp(&right.model))
-    });
-    models.truncate(MAX_MODELS_IN_RESPONSE);
-    (total.finish(), models)
-}
-
-fn build_coverage(totals: &CacheMetricsTotals, backfill: &BackfillState) -> CacheMetricsCoverage {
+fn build_scoped_coverage(
+    totals: &CacheMetricsTotals,
+    agg: &AggRow,
+    backfill: &BackfillState,
+) -> CacheMetricsCoverage {
     CacheMetricsCoverage {
         accounting_source: "turn_end".to_owned(),
         granularity: "turn_total".to_owned(),
         backfill_complete: backfill.completed_at_ms.is_some(),
-        oldest_backfilled_ms: backfill.oldest_backfilled_ms,
-        rows_backfilled: u64::try_from(backfill.rows_backfilled).unwrap_or(0),
+        oldest_fact_ms: agg.oldest_fact_ms,
+        newest_fact_ms: agg.newest_fact_ms,
         usage_coverage_ratio: ratio(totals.observed_usage_turns, totals.eligible_turns),
         cache_coverage_ratio: ratio(totals.observed_cache_turns, totals.eligible_turns),
     }
 }
 
+async fn begin_write_tx_pg(pool: &sqlx::PgPool) -> Result<sqlx::Transaction<'_, sqlx::Postgres>> {
+    pool.begin().await.context("begin PostgreSQL write tx")
+}
+
+async fn begin_write_tx_sqlite(
+    pool: &sqlx::SqlitePool,
+) -> Result<sqlx::Transaction<'_, sqlx::Sqlite>> {
+    pool.begin_with("BEGIN IMMEDIATE")
+        .await
+        .context("begin SQLite immediate write tx")
+}
+
+macro_rules! agg_select_exprs {
+    ($bool_true:literal) => {
+        concat!(
+            "CAST(COUNT(*) AS BIGINT) AS total_turns, \
+             CAST(COALESCE(SUM(CASE WHEN usage_observed = ", $bool_true, " OR stop_reason NOT IN ('cancelled', 'error') THEN 1 ELSE 0 END), 0) AS BIGINT) AS eligible_turns, \
+             CAST(COALESCE(SUM(CASE WHEN usage_observed = ", $bool_true, " THEN 1 ELSE 0 END), 0) AS BIGINT) AS observed_usage_turns, \
+             CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_read_tokens <= inclusive_input_tokens THEN 1 ELSE 0 END), 0) AS BIGINT) AS observed_cache_turns, \
+             CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_read_tokens <= inclusive_input_tokens AND cache_write_tokens IS NOT NULL THEN 1 ELSE 0 END), 0) AS BIGINT) AS observed_cache_write_turns, \
+             CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_read_tokens <= inclusive_input_tokens AND cache_write_tokens IS NOT NULL AND other_uncached_input_tokens IS NOT NULL THEN 1 ELSE 0 END), 0) AS BIGINT) AS observed_other_uncached_turns, \
+             CAST(COALESCE(SUM(CASE WHEN reasoning_tokens IS NOT NULL THEN 1 ELSE 0 END), 0) AS BIGINT) AS observed_reasoning_turns, \
+             CAST(COALESCE(SUM(CASE WHEN renewed = ", $bool_true, " THEN 1 ELSE 0 END), 0) AS BIGINT) AS renewed_turns, \
+             CAST(COALESCE(SUM(CASE WHEN compacted = ", $bool_true, " THEN 1 ELSE 0 END), 0) AS BIGINT) AS compacted_turns, \
+             CAST(COALESCE(SUM(CASE WHEN usage_observed = ", $bool_true, " THEN COALESCE(inclusive_input_tokens, 0) ELSE 0 END), 0) AS BIGINT) AS inclusive_input_tokens, \
+             CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_read_tokens <= inclusive_input_tokens THEN inclusive_input_tokens ELSE 0 END), 0) AS BIGINT) AS observed_cache_input_tokens, \
+             CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_read_tokens <= inclusive_input_tokens THEN cached_read_tokens ELSE 0 END), 0) AS BIGINT) AS cached_read_tokens, \
+             CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_read_tokens <= inclusive_input_tokens AND cache_write_tokens IS NOT NULL THEN cache_write_tokens ELSE 0 END), 0) AS BIGINT) AS cache_write_tokens, \
+             CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_read_tokens <= inclusive_input_tokens THEN inclusive_input_tokens - cached_read_tokens ELSE 0 END), 0) AS BIGINT) AS uncached_input_tokens, \
+             CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_read_tokens <= inclusive_input_tokens AND cache_write_tokens IS NOT NULL AND other_uncached_input_tokens IS NOT NULL THEN other_uncached_input_tokens ELSE 0 END), 0) AS BIGINT) AS other_uncached_input_tokens, \
+             CAST(COALESCE(SUM(CASE WHEN usage_observed = ", $bool_true, " THEN COALESCE(output_tokens, 0) ELSE 0 END), 0) AS BIGINT) AS output_tokens, \
+             CAST(COALESCE(SUM(COALESCE(reasoning_tokens, 0)), 0) AS BIGINT) AS reasoning_tokens, \
+             MIN(occurred_at_ms) AS oldest_fact_ms, \
+             MAX(occurred_at_ms) AS newest_fact_ms"
+        )
+    };
+}
+
 macro_rules! impl_turn_cache_backend {
     (
         $project_fn:ident,
+        $project_missing_session_fn:ident,
         $project_one_fn:ident,
         $session_snapshot_fn:ident,
         $backfill_state_fn:ident,
-        $decode_row_fn:ident,
+        $decode_agg_fn:ident,
+        $decode_turn_fn:ident,
+        $begin_tx_fn:ident,
         $db:ty,
         $storage:ty,
         $row_ty:ty,
         $ts_expr:literal,
+        $e_ts_expr:literal,
         $kind_expr:literal,
+        $e_kind_expr:literal,
         $update_expr:literal,
         $status_expr:literal,
         $delivery_expr:literal,
+        $bool_true:literal,
+        $owner_eq_expr:literal,
         $min_fn:literal
     ) => {
-        fn $decode_row_fn(row: &$row_ty) -> Result<FactRow> {
-            Ok(FactRow {
-                turn_end_seq: row.try_get("turn_end_seq")?,
+        fn $decode_agg_fn(row: &$row_ty) -> Result<AggRow> {
+            Ok(AggRow {
+                total_turns: row.try_get("total_turns")?,
+                eligible_turns: row.try_get("eligible_turns")?,
+                observed_usage_turns: row.try_get("observed_usage_turns")?,
+                observed_cache_turns: row.try_get("observed_cache_turns")?,
+                observed_cache_write_turns: row.try_get("observed_cache_write_turns")?,
+                observed_other_uncached_turns: row.try_get("observed_other_uncached_turns")?,
+                observed_reasoning_turns: row.try_get("observed_reasoning_turns")?,
+                renewed_turns: row.try_get("renewed_turns")?,
+                compacted_turns: row.try_get("compacted_turns")?,
+                inclusive_input_tokens: row.try_get("inclusive_input_tokens")?,
+                observed_cache_input_tokens: row.try_get("observed_cache_input_tokens")?,
+                cached_read_tokens: row.try_get("cached_read_tokens")?,
+                cache_write_tokens: row.try_get("cache_write_tokens")?,
+                uncached_input_tokens: row.try_get("uncached_input_tokens")?,
+                other_uncached_input_tokens: row.try_get("other_uncached_input_tokens")?,
+                output_tokens: row.try_get("output_tokens")?,
+                reasoning_tokens: row.try_get("reasoning_tokens")?,
+                oldest_fact_ms: row.try_get("oldest_fact_ms")?,
+                newest_fact_ms: row.try_get("newest_fact_ms")?,
+            })
+        }
+
+        #[allow(clippy::cast_precision_loss)]
+        fn $decode_turn_fn(row: &$row_ty) -> Result<TurnCacheFact> {
+            let inclusive_raw: Option<i64> = row.try_get("inclusive_input_tokens")?;
+            let cached_raw: Option<i64> = row.try_get("cached_read_tokens")?;
+            let inclusive = inclusive_raw.and_then(|v| u64::try_from(v).ok());
+            let cached = cached_raw.and_then(|v| u64::try_from(v).ok());
+            let uncached = match (inclusive, cached) {
+                (Some(inc), Some(read)) if read <= inc => Some(inc - read),
+                _ => None,
+            };
+            let cached_input_share = match (inclusive, cached) {
+                (Some(inc), Some(read)) if inc > 0 && read <= inc => {
+                    Some(read as f64 / inc as f64)
+                }
+                _ => None,
+            };
+            Ok(TurnCacheFact {
+                turn_end_seq: to_u64(row.try_get::<i64, _>("turn_end_seq")?),
                 occurred_at_ms: row.try_get("occurred_at_ms")?,
                 model: row.try_get("model")?,
                 stop_reason: row.try_get("stop_reason")?,
@@ -300,12 +265,22 @@ macro_rules! impl_turn_cache_backend {
                 renewed: row.try_get("renewed")?,
                 compacted: row.try_get("compacted")?,
                 usage_observed: row.try_get("usage_observed")?,
-                inclusive_input_tokens: row.try_get("inclusive_input_tokens")?,
-                cached_read_tokens: row.try_get("cached_read_tokens")?,
-                cache_write_tokens: row.try_get("cache_write_tokens")?,
-                other_uncached_input_tokens: row.try_get("other_uncached_input_tokens")?,
-                output_tokens: row.try_get("output_tokens")?,
-                reasoning_tokens: row.try_get("reasoning_tokens")?,
+                inclusive_input_tokens: inclusive,
+                cached_read_tokens: cached,
+                cache_write_tokens: row
+                    .try_get::<Option<i64>, _>("cache_write_tokens")?
+                    .and_then(|v| u64::try_from(v).ok()),
+                uncached_input_tokens: uncached,
+                other_uncached_input_tokens: row
+                    .try_get::<Option<i64>, _>("other_uncached_input_tokens")?
+                    .and_then(|v| u64::try_from(v).ok()),
+                output_tokens: row
+                    .try_get::<Option<i64>, _>("output_tokens")?
+                    .and_then(|v| u64::try_from(v).ok()),
+                reasoning_tokens: row
+                    .try_get::<Option<i64>, _>("reasoning_tokens")?
+                    .and_then(|v| u64::try_from(v).ok()),
+                cached_input_share,
                 accounting_source: row.try_get("accounting_source")?,
             })
         }
@@ -330,12 +305,14 @@ macro_rules! impl_turn_cache_backend {
             let config_preferences: Option<Value> =
                 row.try_get("config_preferences").ok().flatten();
             let config_options: Option<Value> = row.try_get("config_options").ok().flatten();
+            let raw_version: String = row.try_get("provider_version")?;
+            let raw_digest: String = row.try_get("provider_generation_digest")?;
             Ok(Some(SessionSnapshot {
                 owner_user_id: row.try_get("owner_user_id")?,
                 provider: row.try_get("provider")?,
                 provider_account_id: row.try_get("provider_account_id")?,
-                provider_version: row.try_get("provider_version")?,
-                provider_generation_digest: row.try_get("provider_generation_digest")?,
+                provider_version: sanitize_text(&raw_version, MAX_VERSION_BYTES),
+                provider_generation_digest: sanitize_text(&raw_digest, MAX_VERSION_BYTES),
                 model: extract_session_model(
                     last_usage.as_ref(),
                     config_preferences.as_ref(),
@@ -352,34 +329,28 @@ macro_rules! impl_turn_cache_backend {
             occurred_at_ms: i64,
             stop_reason: &str,
             usage: Option<&TurnUsage>,
+            mode: ProjectionMode,
         ) -> Result<bool> {
             let Some(session) = $session_snapshot_fn(tx, session_id).await? else {
                 return Ok(false);
             };
-            let prev: Option<(i64, i64)> = sqlx::query_as(
-                "SELECT turn_end_seq, occurred_at_ms FROM turn_cache_facts \
-                 WHERE session_id = $1 AND turn_end_seq < $2 \
-                 ORDER BY turn_end_seq DESC LIMIT 1",
-            )
-            .bind(session_id)
-            .bind(seq)
-            .fetch_optional(&mut **tx)
-            .await?;
-
-            let mut window_start = prev.map_or(-1_i64, |(prev_seq, _)| prev_seq);
-            let mut prev_turn_end_ms = None;
-            if let Some((prev_seq, prev_ms)) = prev {
-                let prev_present: Option<(i64,)> = sqlx::query_as(
-                    "SELECT seq FROM events WHERE session_id = $1 AND seq = $2",
-                )
+            // Locate the immediate preceding canonical TurnEnd directly in
+            // `events` by indexed `(session_id, seq)` so live projection never
+            // depends on backfill ordering and automatically respects Clear.
+            let prev_sql = concat!(
+                "SELECT seq, ", $ts_expr, " AS ts_ms \
+                 FROM events \
+                 WHERE session_id = $1 AND seq < $2 AND ", $kind_expr, " = 'turn_end' \
+                 ORDER BY seq DESC LIMIT 1"
+            );
+            let prev: Option<(i64, i64)> = sqlx::query_as(prev_sql)
                 .bind(session_id)
-                .bind(prev_seq)
+                .bind(seq)
                 .fetch_optional(&mut **tx)
                 .await?;
-                if prev_present.is_some() {
-                    prev_turn_end_ms = Some(prev_ms);
-                }
-            }
+
+            let mut window_start = prev.map_or(-1_i64, |(prev_seq, _)| prev_seq);
+            let mut prev_turn_end_ms = prev.map(|(_, prev_ms)| prev_ms);
 
             let markers_sql = concat!(
                 "SELECT \
@@ -437,68 +408,95 @@ macro_rules! impl_turn_cache_backend {
             let normalized = normalize_turn_usage(usage);
             let usage_observed = normalized.is_some();
             let stop_reason_norm = normalize_stop_reason(stop_reason);
+            let (provider_version, provider_generation_digest, model) = match mode {
+                ProjectionMode::Live => (
+                    session.provider_version.as_str(),
+                    session.provider_generation_digest.as_str(),
+                    session.model.as_deref(),
+                ),
+                // Backfill cannot prove what generation or model ran on a past
+                // turn after reloads/switches; leave historical attribution unknown.
+                ProjectionMode::BackfillMissing => ("", "", None),
+            };
 
-            sqlx::query(
-                "INSERT INTO turn_cache_facts ( \
-                    session_id, turn_end_seq, occurred_at_ms, owner_user_id, provider, \
-                    provider_account_id, provider_version, provider_generation_digest, \
-                    model, stop_reason, prompt_origin, prev_turn_end_ms, idle_gap_ms, \
-                    renewed, compacted, usage_observed, total_tokens, inclusive_input_tokens, \
-                    cached_read_tokens, cache_write_tokens, other_uncached_input_tokens, \
-                    output_tokens, reasoning_tokens, accounting_source \
-                 ) VALUES ( \
-                    $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, \
-                    $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 'turn_end' \
-                 ) ON CONFLICT (session_id, turn_end_seq) DO UPDATE SET \
-                    occurred_at_ms = EXCLUDED.occurred_at_ms, \
-                    owner_user_id = EXCLUDED.owner_user_id, \
-                    provider = EXCLUDED.provider, \
-                    provider_account_id = EXCLUDED.provider_account_id, \
-                    provider_version = EXCLUDED.provider_version, \
-                    provider_generation_digest = EXCLUDED.provider_generation_digest, \
-                    model = COALESCE(EXCLUDED.model, turn_cache_facts.model), \
-                    stop_reason = EXCLUDED.stop_reason, \
-                    prompt_origin = EXCLUDED.prompt_origin, \
-                    prev_turn_end_ms = EXCLUDED.prev_turn_end_ms, \
-                    idle_gap_ms = EXCLUDED.idle_gap_ms, \
-                    renewed = EXCLUDED.renewed, \
-                    compacted = EXCLUDED.compacted, \
-                    usage_observed = EXCLUDED.usage_observed, \
-                    total_tokens = EXCLUDED.total_tokens, \
-                    inclusive_input_tokens = EXCLUDED.inclusive_input_tokens, \
-                    cached_read_tokens = EXCLUDED.cached_read_tokens, \
-                    cache_write_tokens = EXCLUDED.cache_write_tokens, \
-                    other_uncached_input_tokens = EXCLUDED.other_uncached_input_tokens, \
-                    output_tokens = EXCLUDED.output_tokens, \
-                    reasoning_tokens = EXCLUDED.reasoning_tokens",
-            )
-            .bind(session_id)
-            .bind(seq)
-            .bind(occurred_at_ms)
-            .bind(&session.owner_user_id)
-            .bind(&session.provider)
-            .bind(&session.provider_account_id)
-            .bind(&session.provider_version)
-            .bind(&session.provider_generation_digest)
-            .bind(&session.model)
-            .bind(&stop_reason_norm)
-            .bind(&prompt_origin)
-            .bind(prev_turn_end_ms)
-            .bind(idle_gap_ms)
-            .bind(renewed)
-            .bind(compacted)
-            .bind(usage_observed)
-            .bind(normalized.map(|n| n.total_tokens))
-            .bind(normalized.map(|n| n.inclusive_input_tokens))
-            .bind(normalized.and_then(|n| n.cached_read_tokens))
-            .bind(normalized.and_then(|n| n.cache_write_tokens))
-            .bind(normalized.and_then(|n| n.other_uncached_input_tokens))
-            .bind(normalized.map(|n| n.output_tokens))
-            .bind(normalized.and_then(|n| n.reasoning_tokens))
-            .execute(&mut **tx)
-            .await
-            .with_context(|| format!("UPSERT turn_cache_facts {session_id}/{seq}"))?;
-            Ok(true)
+            let upsert_sql = match mode {
+                ProjectionMode::Live => {
+                    "INSERT INTO turn_cache_facts ( \
+                        session_id, turn_end_seq, occurred_at_ms, owner_user_id, provider, \
+                        provider_account_id, provider_version, provider_generation_digest, \
+                        model, stop_reason, prompt_origin, prev_turn_end_ms, idle_gap_ms, \
+                        renewed, compacted, usage_observed, total_tokens, inclusive_input_tokens, \
+                        cached_read_tokens, cache_write_tokens, other_uncached_input_tokens, \
+                        output_tokens, reasoning_tokens, accounting_source \
+                     ) VALUES ( \
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, \
+                        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 'turn_end' \
+                     ) ON CONFLICT (session_id, turn_end_seq) DO UPDATE SET \
+                        occurred_at_ms = EXCLUDED.occurred_at_ms, \
+                        owner_user_id = EXCLUDED.owner_user_id, \
+                        provider = EXCLUDED.provider, \
+                        provider_account_id = EXCLUDED.provider_account_id, \
+                        provider_version = EXCLUDED.provider_version, \
+                        provider_generation_digest = EXCLUDED.provider_generation_digest, \
+                        model = COALESCE(EXCLUDED.model, turn_cache_facts.model), \
+                        stop_reason = EXCLUDED.stop_reason, \
+                        prompt_origin = EXCLUDED.prompt_origin, \
+                        prev_turn_end_ms = EXCLUDED.prev_turn_end_ms, \
+                        idle_gap_ms = EXCLUDED.idle_gap_ms, \
+                        renewed = EXCLUDED.renewed, \
+                        compacted = EXCLUDED.compacted, \
+                        usage_observed = EXCLUDED.usage_observed, \
+                        total_tokens = EXCLUDED.total_tokens, \
+                        inclusive_input_tokens = EXCLUDED.inclusive_input_tokens, \
+                        cached_read_tokens = EXCLUDED.cached_read_tokens, \
+                        cache_write_tokens = EXCLUDED.cache_write_tokens, \
+                        other_uncached_input_tokens = EXCLUDED.other_uncached_input_tokens, \
+                        output_tokens = EXCLUDED.output_tokens, \
+                        reasoning_tokens = EXCLUDED.reasoning_tokens"
+                }
+                ProjectionMode::BackfillMissing => {
+                    "INSERT INTO turn_cache_facts ( \
+                        session_id, turn_end_seq, occurred_at_ms, owner_user_id, provider, \
+                        provider_account_id, provider_version, provider_generation_digest, \
+                        model, stop_reason, prompt_origin, prev_turn_end_ms, idle_gap_ms, \
+                        renewed, compacted, usage_observed, total_tokens, inclusive_input_tokens, \
+                        cached_read_tokens, cache_write_tokens, other_uncached_input_tokens, \
+                        output_tokens, reasoning_tokens, accounting_source \
+                     ) VALUES ( \
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, \
+                        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 'turn_end' \
+                     ) ON CONFLICT (session_id, turn_end_seq) DO NOTHING"
+                }
+            };
+
+            let done = sqlx::query(upsert_sql)
+                .bind(session_id)
+                .bind(seq)
+                .bind(occurred_at_ms)
+                .bind(&session.owner_user_id)
+                .bind(&session.provider)
+                .bind(&session.provider_account_id)
+                .bind(provider_version)
+                .bind(provider_generation_digest)
+                .bind(model)
+                .bind(stop_reason_norm)
+                .bind(&prompt_origin)
+                .bind(prev_turn_end_ms)
+                .bind(idle_gap_ms)
+                .bind(renewed)
+                .bind(compacted)
+                .bind(usage_observed)
+                .bind(normalized.map(|n| n.total_tokens))
+                .bind(normalized.map(|n| n.inclusive_input_tokens))
+                .bind(normalized.and_then(|n| n.cached_read_tokens))
+                .bind(normalized.and_then(|n| n.cache_write_tokens))
+                .bind(normalized.and_then(|n| n.other_uncached_input_tokens))
+                .bind(normalized.map(|n| n.output_tokens))
+                .bind(normalized.and_then(|n| n.reasoning_tokens))
+                .execute(&mut **tx)
+                .await
+                .with_context(|| format!("UPSERT turn_cache_facts {session_id}/{seq}"))?;
+            Ok(done.rows_affected() > 0)
         }
 
         pub(in crate::store) async fn $project_fn(
@@ -535,16 +533,73 @@ macro_rules! impl_turn_cache_backend {
                     occurred_at_ms,
                     stop_reason,
                     usage.as_ref(),
+                    ProjectionMode::Live,
                 )
                 .await?;
             }
             Ok(())
         }
 
+        /// Preserve any retained unprojected `TurnEnd` rows for `session_id`
+        /// inside the caller's transaction before `Clear` or session purge
+        /// removes `events`.
+        pub(in crate::store) async fn $project_missing_session_fn(
+            tx: &mut sqlx::Transaction<'_, $db>,
+            session_id: &str,
+        ) -> Result<usize> {
+            let cutoff_ms = chrono::Utc::now()
+                .timestamp_millis()
+                .saturating_sub(DEFAULT_RETENTION_DAYS.saturating_mul(86_400_000));
+            let sql = concat!(
+                "SELECT e.seq, ", $e_ts_expr, " AS ts_ms, e.payload \
+                 FROM events e \
+                 LEFT JOIN turn_cache_facts f \
+                   ON f.session_id = e.session_id AND f.turn_end_seq = e.seq \
+                 WHERE e.session_id = $1 \
+                   AND ", $e_kind_expr, " = 'turn_end' \
+                   AND f.session_id IS NULL \
+                   AND ", $e_ts_expr, " >= $2 \
+                 ORDER BY e.seq ASC"
+            );
+            let missing = sqlx::query(sql)
+                .bind(session_id)
+                .bind(cutoff_ms)
+                .fetch_all(&mut **tx)
+                .await
+                .with_context(|| format!("select unprojected TurnEnds before delete for {session_id}"))?;
+            let mut inserted = 0usize;
+            for row in missing {
+                let seq: i64 = row.try_get("seq")?;
+                let ts_ms: i64 = row.try_get("ts_ms")?;
+                let payload: Value = row.try_get("payload")?;
+                let stop_reason = payload
+                    .get("stop_reason")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown");
+                let usage: Option<TurnUsage> = payload
+                    .get("usage")
+                    .filter(|value| !value.is_null())
+                    .and_then(|value| serde_json::from_value(value.clone()).ok());
+                if $project_one_fn(
+                    tx,
+                    session_id,
+                    seq,
+                    ts_ms,
+                    stop_reason,
+                    usage.as_ref(),
+                    ProjectionMode::BackfillMissing,
+                )
+                .await?
+                {
+                    inserted += 1;
+                }
+            }
+            Ok(inserted)
+        }
+
         async fn $backfill_state_fn(pool: &sqlx::Pool<$db>) -> Result<BackfillState> {
             let row = sqlx::query(
-                "SELECT cursor_session_id, cursor_seq, completed_at_ms, \
-                        oldest_backfilled_ms, rows_backfilled \
+                "SELECT cursor_session_id, cursor_seq, completed_at_ms \
                  FROM turn_cache_backfill_state WHERE slot = 1",
             )
             .fetch_optional(pool)
@@ -556,12 +611,36 @@ macro_rules! impl_turn_cache_backend {
                 cursor_session_id: row.try_get("cursor_session_id")?,
                 cursor_seq: row.try_get("cursor_seq")?,
                 completed_at_ms: row.try_get("completed_at_ms")?,
-                oldest_backfilled_ms: row.try_get("oldest_backfilled_ms")?,
-                rows_backfilled: row.try_get("rows_backfilled")?,
             })
         }
 
         impl $storage {
+            /// Reset the reconciliation cursor on Controller startup so any
+            /// retained `TurnEnd` rows written during a temporary Controller
+            /// rollback are discovered and inserted (`ON CONFLICT DO NOTHING`)
+            /// without overwriting live-projected facts.
+            pub(in crate::store) async fn begin_turn_cache_reconcile(&self) -> Result<()> {
+                let now_ms = chrono::Utc::now().timestamp_millis();
+                let mut tx = $begin_tx_fn(&self.pool).await?;
+                sqlx::query(
+                    "INSERT INTO turn_cache_backfill_state ( \
+                        slot, cursor_session_id, cursor_seq, completed_at_ms, \
+                        oldest_backfilled_ms, rows_backfilled, updated_at_ms \
+                     ) VALUES (1, '', -1, NULL, NULL, 0, $1) \
+                     ON CONFLICT (slot) DO UPDATE SET \
+                        cursor_session_id = '', \
+                        cursor_seq = -1, \
+                        completed_at_ms = NULL, \
+                        updated_at_ms = EXCLUDED.updated_at_ms",
+                )
+                .bind(now_ms)
+                .execute(&mut *tx)
+                .await
+                .context("reset turn_cache_backfill_state for startup reconcile")?;
+                tx.commit().await?;
+                Ok(())
+            }
+
             #[allow(clippy::too_many_lines)]
             pub(in crate::store) async fn backfill_turn_cache_facts_batch(
                 &self,
@@ -584,11 +663,14 @@ macro_rules! impl_turn_cache_backend {
                 let cutoff_ms =
                     now_ms.saturating_sub(retention_days.max(1).saturating_mul(86_400_000));
                 let scan_sql = concat!(
-                    "SELECT session_id, seq, ", $ts_expr, " AS ts_ms, \
-                            CASE WHEN ", $kind_expr, " = 'turn_end' THEN payload ELSE NULL END AS turn_payload \
-                     FROM events \
-                     WHERE (session_id, seq) > ($1, $2) \
-                     ORDER BY session_id ASC, seq ASC \
+                    "SELECT e.session_id, e.seq, ", $e_ts_expr, " AS ts_ms, \
+                            CASE WHEN ", $e_kind_expr, " = 'turn_end' AND f.session_id IS NULL \
+                                 THEN e.payload ELSE NULL END AS turn_payload \
+                     FROM events e \
+                     LEFT JOIN turn_cache_facts f \
+                       ON f.session_id = e.session_id AND f.turn_end_seq = e.seq \
+                     WHERE (e.session_id, e.seq) > ($1, $2) \
+                     ORDER BY e.session_id ASC, e.seq ASC \
                      LIMIT $3"
                 );
                 let scanned = sqlx::query(scan_sql)
@@ -618,7 +700,7 @@ macro_rules! impl_turn_cache_backend {
                 }
 
                 let completed = i64::try_from(scanned_count).unwrap_or(i64::MAX) < limit;
-                let mut tx = self.pool.begin().await?;
+                let mut tx = $begin_tx_fn(&self.pool).await?;
                 let mut projected = 0usize;
                 let mut batch_oldest: Option<i64> = None;
                 for (sid, seq, ts_ms, payload) in turn_candidates {
@@ -630,8 +712,16 @@ macro_rules! impl_turn_cache_backend {
                         .get("usage")
                         .filter(|value| !value.is_null())
                         .and_then(|value| serde_json::from_value(value.clone()).ok());
-                    if $project_one_fn(&mut tx, &sid, seq, ts_ms, stop_reason, usage.as_ref())
-                        .await?
+                    if $project_one_fn(
+                        &mut tx,
+                        &sid,
+                        seq,
+                        ts_ms,
+                        stop_reason,
+                        usage.as_ref(),
+                        ProjectionMode::BackfillMissing,
+                    )
+                    .await?
                     {
                         projected += 1;
                         batch_oldest = Some(match batch_oldest {
@@ -704,36 +794,63 @@ macro_rules! impl_turn_cache_backend {
                 to_ms: i64,
                 window: &str,
             ) -> Result<AccountCacheMetrics> {
-                let rows = sqlx::query(
-                    "SELECT turn_end_seq, occurred_at_ms, model, stop_reason, prompt_origin, \
-                            idle_gap_ms, renewed, compacted, usage_observed, \
-                            inclusive_input_tokens, cached_read_tokens, cache_write_tokens, \
-                            other_uncached_input_tokens, output_tokens, reasoning_tokens, \
-                            accounting_source \
+                let totals_sql = concat!(
+                    "SELECT ", agg_select_exprs!($bool_true), " \
                      FROM turn_cache_facts \
                      WHERE owner_user_id = $1 \
                        AND provider = $2 \
                        AND provider_account_id = $3 \
                        AND occurred_at_ms >= $4 \
-                       AND occurred_at_ms <= $5 \
-                     ORDER BY occurred_at_ms DESC",
-                )
-                .bind(owner_user_id)
-                .bind(provider)
-                .bind(provider_account_id)
-                .bind(from_ms)
-                .bind(to_ms)
-                .fetch_all(&self.pool)
-                .await
-                .context("query account turn_cache_facts")?;
+                       AND occurred_at_ms <= $5"
+                );
+                let agg_row = sqlx::query(totals_sql)
+                    .bind(owner_user_id)
+                    .bind(provider)
+                    .bind(provider_account_id)
+                    .bind(from_ms)
+                    .bind(to_ms)
+                    .fetch_one(&self.pool)
+                    .await
+                    .context("aggregate account turn_cache_facts")?;
+                let agg = $decode_agg_fn(&agg_row)?;
 
-                let mut facts = Vec::with_capacity(rows.len());
-                for row in &rows {
-                    facts.push($decode_row_fn(row)?);
+                let models_sql = concat!(
+                    "SELECT COALESCE(NULLIF(model, ''), 'unknown') AS model_key, ",
+                    agg_select_exprs!($bool_true),
+                    " FROM turn_cache_facts \
+                     WHERE owner_user_id = $1 \
+                       AND provider = $2 \
+                       AND provider_account_id = $3 \
+                       AND occurred_at_ms >= $4 \
+                       AND occurred_at_ms <= $5 \
+                     GROUP BY model_key \
+                     ORDER BY inclusive_input_tokens DESC, total_turns DESC, model_key ASC \
+                     LIMIT $6"
+                );
+                let model_rows = sqlx::query(models_sql)
+                    .bind(owner_user_id)
+                    .bind(provider)
+                    .bind(provider_account_id)
+                    .bind(from_ms)
+                    .bind(to_ms)
+                    .bind(MAX_MODELS_IN_RESPONSE)
+                    .fetch_all(&self.pool)
+                    .await
+                    .context("aggregate account turn_cache_facts by model")?;
+
+                let mut by_model = Vec::with_capacity(model_rows.len());
+                for row in &model_rows {
+                    let model: String = row.try_get("model_key")?;
+                    let model_agg = $decode_agg_fn(row)?;
+                    by_model.push(ModelCacheMetrics {
+                        model,
+                        totals: agg_to_totals(&model_agg),
+                    });
                 }
+
                 let backfill = $backfill_state_fn(&self.pool).await?;
-                let (totals, by_model) = aggregate_facts(&facts);
-                let coverage = build_coverage(&totals, &backfill);
+                let totals = agg_to_totals(&agg);
+                let coverage = build_scoped_coverage(&totals, &agg, &backfill);
                 Ok(AccountCacheMetrics {
                     provider: provider.to_owned(),
                     provider_account_id: provider_account_id.to_owned(),
@@ -749,11 +866,62 @@ macro_rules! impl_turn_cache_backend {
             pub(in crate::store) async fn session_cache_metrics(
                 &self,
                 session_id: &str,
+                owner_user_id: Option<&str>,
                 provider: &str,
                 provider_account_id: &str,
                 recent_turn_limit: usize,
             ) -> Result<SessionCacheMetrics> {
-                let rows = sqlx::query(
+                let totals_sql = concat!(
+                    "SELECT ", agg_select_exprs!($bool_true), " \
+                     FROM turn_cache_facts \
+                     WHERE session_id = $1 \
+                       AND provider = $2 \
+                       AND provider_account_id = $3 \
+                       AND ", $owner_eq_expr
+                );
+                let agg_row = sqlx::query(totals_sql)
+                    .bind(session_id)
+                    .bind(provider)
+                    .bind(provider_account_id)
+                    .bind(owner_user_id)
+                    .fetch_one(&self.pool)
+                    .await
+                    .context("aggregate session turn_cache_facts")?;
+                let agg = $decode_agg_fn(&agg_row)?;
+
+                let models_sql = concat!(
+                    "SELECT COALESCE(NULLIF(model, ''), 'unknown') AS model_key, ",
+                    agg_select_exprs!($bool_true),
+                    " FROM turn_cache_facts \
+                     WHERE session_id = $1 \
+                       AND provider = $2 \
+                       AND provider_account_id = $3 \
+                       AND ", $owner_eq_expr, " \
+                     GROUP BY model_key \
+                     ORDER BY inclusive_input_tokens DESC, total_turns DESC, model_key ASC \
+                     LIMIT $5"
+                );
+                let model_rows = sqlx::query(models_sql)
+                    .bind(session_id)
+                    .bind(provider)
+                    .bind(provider_account_id)
+                    .bind(owner_user_id)
+                    .bind(MAX_MODELS_IN_RESPONSE)
+                    .fetch_all(&self.pool)
+                    .await
+                    .context("aggregate session turn_cache_facts by model")?;
+                let mut by_model = Vec::with_capacity(model_rows.len());
+                for row in &model_rows {
+                    let model: String = row.try_get("model_key")?;
+                    let model_agg = $decode_agg_fn(row)?;
+                    by_model.push(ModelCacheMetrics {
+                        model,
+                        totals: agg_to_totals(&model_agg),
+                    });
+                }
+
+                let limit = i64::try_from(recent_turn_limit.min(MAX_RECENT_TURNS)).unwrap_or(30);
+                let recent_sql = concat!(
                     "SELECT turn_end_seq, occurred_at_ms, model, stop_reason, prompt_origin, \
                             idle_gap_ms, renewed, compacted, usage_observed, \
                             inclusive_input_tokens, cached_read_tokens, cache_write_tokens, \
@@ -761,22 +929,29 @@ macro_rules! impl_turn_cache_backend {
                             accounting_source \
                      FROM turn_cache_facts \
                      WHERE session_id = $1 \
-                     ORDER BY turn_end_seq DESC",
-                )
-                .bind(session_id)
-                .fetch_all(&self.pool)
-                .await
-                .context("query session turn_cache_facts")?;
-
-                let mut facts = Vec::with_capacity(rows.len());
-                for row in &rows {
-                    facts.push($decode_row_fn(row)?);
+                       AND provider = $2 \
+                       AND provider_account_id = $3 \
+                       AND ", $owner_eq_expr, " \
+                     ORDER BY turn_end_seq DESC \
+                     LIMIT $5"
+                );
+                let recent_rows = sqlx::query(recent_sql)
+                    .bind(session_id)
+                    .bind(provider)
+                    .bind(provider_account_id)
+                    .bind(owner_user_id)
+                    .bind(limit)
+                    .fetch_all(&self.pool)
+                    .await
+                    .context("query recent session turn_cache_facts")?;
+                let mut recent_turns = Vec::with_capacity(recent_rows.len());
+                for row in &recent_rows {
+                    recent_turns.push($decode_turn_fn(row)?);
                 }
+
                 let backfill = $backfill_state_fn(&self.pool).await?;
-                let (totals, by_model) = aggregate_facts(&facts);
-                let coverage = build_coverage(&totals, &backfill);
-                let limit = recent_turn_limit.min(MAX_RECENT_TURNS);
-                let recent_turns = facts.iter().take(limit).map(fact_row_to_public).collect();
+                let totals = agg_to_totals(&agg);
+                let coverage = build_scoped_coverage(&totals, &agg, &backfill);
                 Ok(SessionCacheMetrics {
                     session_id: session_id.to_owned(),
                     provider: provider.to_owned(),
@@ -793,39 +968,63 @@ macro_rules! impl_turn_cache_backend {
 
 impl_turn_cache_backend!(
     project_events_pg,
+    project_missing_for_session_pg,
     project_turn_end_pg,
     session_snapshot_pg,
     backfill_state_pg,
-    decode_row_pg,
+    decode_agg_pg,
+    decode_turn_pg,
+    begin_write_tx_pg,
     sqlx::Postgres,
     PostgresStorage,
     sqlx::postgres::PgRow,
     "round(extract(epoch FROM ts) * 1000)::bigint",
+    "round(extract(epoch FROM e.ts) * 1000)::bigint",
     "(payload ->> 'kind')",
+    "(e.payload ->> 'kind')",
     "(payload #>> '{update,sessionUpdate}')",
     "(payload #>> '{update,status}')",
     "(payload #>> '{update,_meta,cowboyDelivery}')",
+    "TRUE",
+    "owner_user_id IS NOT DISTINCT FROM $4",
     "LEAST"
 );
 
 impl_turn_cache_backend!(
     project_events_sqlite,
+    project_missing_for_session_sqlite,
     project_turn_end_sqlite,
     session_snapshot_sqlite,
     backfill_state_sqlite,
-    decode_row_sqlite,
+    decode_agg_sqlite,
+    decode_turn_sqlite,
+    begin_write_tx_sqlite,
     sqlx::Sqlite,
     SqliteStorage,
     sqlx::sqlite::SqliteRow,
     "ts_ms",
+    "e.ts_ms",
     "json_extract(payload, '$.kind')",
+    "json_extract(e.payload, '$.kind')",
     "json_extract(payload, '$.update.sessionUpdate')",
     "json_extract(payload, '$.update.status')",
     "json_extract(payload, '$.update._meta.cowboyDelivery')",
+    "1",
+    "owner_user_id IS $4",
     "min"
 );
 
 impl Store {
+    /// Reset the reconciliation cursor on startup so turns written during a
+    /// temporary Controller rollback are repaired on redeploy without
+    /// overwriting live-projected facts.
+    pub async fn begin_turn_cache_reconcile(&self) -> Result<()> {
+        match &self.backend {
+            StorageBackend::Postgres(db) => db.begin_turn_cache_reconcile().await,
+            StorageBackend::Sqlite(db) => db.begin_turn_cache_reconcile().await,
+        }
+    }
+
     /// Run one bounded keyset-paginated backfill batch from `events` into
     /// `turn_cache_facts`. Safe to invoke repeatedly until `progress.completed`.
     pub async fn backfill_turn_cache_facts_batch(
@@ -853,8 +1052,8 @@ impl Store {
         }
     }
 
-    /// Read indexed turn-level cache efficiency metrics strictly scoped to one
-    /// `(owner_user_id, provider, provider_account_id)` tuple.
+    /// Read SQL-aggregated turn-level cache efficiency metrics strictly scoped
+    /// to one `(owner_user_id, provider, provider_account_id)` tuple.
     pub async fn account_cache_metrics(
         &self,
         owner_user_id: &str,
@@ -890,11 +1089,13 @@ impl Store {
         }
     }
 
-    /// Read indexed turn-level cache efficiency metrics and recent turns for one
-    /// session. Survives transcript `Clear`.
+    /// Read SQL-aggregated turn-level cache efficiency metrics and bounded
+    /// recent turns for one session. Scoped by `(session_id, owner_user_id,
+    /// provider, provider_account_id)` so retained facts can never cross owners.
     pub async fn session_cache_metrics(
         &self,
         session_id: &str,
+        owner_user_id: Option<&str>,
         provider: &str,
         provider_account_id: &str,
         recent_turn_limit: usize,
@@ -903,6 +1104,7 @@ impl Store {
             StorageBackend::Postgres(db) => {
                 db.session_cache_metrics(
                     session_id,
+                    owner_user_id,
                     provider,
                     provider_account_id,
                     recent_turn_limit,
@@ -912,6 +1114,7 @@ impl Store {
             StorageBackend::Sqlite(db) => {
                 db.session_cache_metrics(
                     session_id,
+                    owner_user_id,
                     provider,
                     provider_account_id,
                     recent_turn_limit,

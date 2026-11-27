@@ -20,13 +20,13 @@ function baseTotals(overrides: Partial<CacheMetricsTotals> = {}): CacheMetricsTo
     observed_cache_write_turns: 0,
     renewed_turns: 0,
     compacted_turns: 0,
-    inclusive_input_tokens: 0,
-    observed_cache_input_tokens: 0,
+    inclusive_input_tokens: null,
+    observed_cache_input_tokens: null,
     cached_read_tokens: null,
     cache_write_tokens: null,
     uncached_input_tokens: null,
     other_uncached_input_tokens: null,
-    output_tokens: 0,
+    output_tokens: null,
     reasoning_tokens: null,
     cached_input_share: null,
     uncached_input_share: null,
@@ -58,23 +58,25 @@ test("buildDisjointCacheSegments never double-counts Claude cache writes", () =>
   assertEquals(sum, 100_000);
 });
 
-test("buildDisjointCacheSegments emits two disjoint segments when cache writes are unreported", () => {
+test("buildDisjointCacheSegments falls back to 2-way split on partial write coverage so total never exceeds observed input", () => {
   const segments = buildDisjointCacheSegments(
     baseTotals({
-      observed_cache_turns: 3,
-      observed_cache_write_turns: 0,
-      inclusive_input_tokens: 50_000,
-      observed_cache_input_tokens: 50_000,
-      cached_read_tokens: 45_000,
-      cache_write_tokens: null,
-      uncached_input_tokens: 5_000,
+      observed_cache_turns: 2,
+      observed_cache_write_turns: 1,
+      inclusive_input_tokens: 100_000,
+      observed_cache_input_tokens: 100_000,
+      cached_read_tokens: 80_000,
+      cache_write_tokens: 15_000,
+      uncached_input_tokens: 20_000,
       other_uncached_input_tokens: null,
     }),
   );
   assertEquals(segments, [
-    { label: "cached read", value: 45_000, tone: "success" },
-    { label: "uncached input", value: 5_000, tone: "warning" },
+    { label: "cached read", value: 80_000, tone: "success" },
+    { label: "uncached input", value: 20_000, tone: "warning" },
   ]);
+  const sum = segments.reduce((acc, s) => acc + s.value, 0);
+  assertEquals(sum, 100_000);
 });
 
 test("buildDisjointCacheSegments returns empty array when cache breakdown is absent", () => {
@@ -92,7 +94,7 @@ test("buildDisjointCacheSegments returns empty array when cache breakdown is abs
   );
 });
 
-test("formatting helpers preserve nulls and report backfill status honestly", () => {
+test("formatting helpers preserve nulls and report reconciliation status honestly", () => {
   assertEquals(formatCompactTokens(null), "Not reported");
   assertEquals(formatCompactTokens(1_450_000), "1.4M");
   assertEquals(formatCompactTokens(84_200), "84k");
@@ -110,8 +112,8 @@ test("formatting helpers preserve nulls and report backfill status honestly", ()
     accounting_source: "turn_end",
     granularity: "turn_total",
     backfill_complete: false,
-    oldest_backfilled_ms: null,
-    rows_backfilled: 0,
+    oldest_fact_ms: null,
+    newest_fact_ms: null,
     usage_coverage_ratio: 1,
     cache_coverage_ratio: 0.75,
   };
@@ -120,15 +122,16 @@ test("formatting helpers preserve nulls and report backfill status honestly", ()
       baseTotals({ eligible_turns: 4, observed_cache_turns: 3 }),
       coverage,
     ),
-    "3/4 turns with cache counters · backfilling history…",
+    "3/4 turns with cache counters · reconciling history…",
   );
 });
 
-test("formatStrategySummary distinguishes inherited, overridden, restricted, and keepalive states", () => {
+test("formatStrategySummary distinguishes inherited, unavailable, restricted, and keepalive states", () => {
   assertEquals(
     formatStrategySummary({
       effective_mode: "rollover",
       rollover: {
+        availability: "available",
         supported: true,
         enabled: true,
         inherited: true,
@@ -143,8 +146,26 @@ test("formatStrategySummary distinguishes inherited, overridden, restricted, and
   );
   assertEquals(
     formatStrategySummary({
+      effective_mode: "unavailable",
+      rollover: {
+        availability: "unavailable",
+        supported: true,
+        enabled: null,
+        inherited: null,
+        session_override: null,
+        idle_minutes: null,
+        min_context_tokens: null,
+        due: false,
+      },
+      gateway_keepalive: { supported: null, enabled: null },
+    }),
+    "Renewal policy unavailable",
+  );
+  assertEquals(
+    formatStrategySummary({
       effective_mode: "none",
       rollover: {
+        availability: "available",
         supported: false,
         enabled: false,
         inherited: true,
@@ -157,21 +178,5 @@ test("formatStrategySummary distinguishes inherited, overridden, restricted, and
       gateway_keepalive: { supported: false, enabled: null },
     }),
     "Idle renewal disabled by host policy",
-  );
-  assertEquals(
-    formatStrategySummary({
-      effective_mode: "keepalive",
-      rollover: {
-        supported: true,
-        enabled: false,
-        inherited: true,
-        session_override: null,
-        idle_minutes: null,
-        min_context_tokens: 80_000,
-        due: false,
-      },
-      gateway_keepalive: { supported: true, enabled: true },
-    }),
-    "Gateway keepalive (on)",
   );
 });

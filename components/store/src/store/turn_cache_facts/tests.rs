@@ -94,21 +94,6 @@ fn normalize_turn_usage_enforces_disjoint_breakdown_and_preserves_unknowns() {
         norm.inclusive_input_tokens
     );
 
-    let codex = TurnUsage {
-        total_tokens: 52_000,
-        input_tokens: 50_000,
-        output_tokens: 2_000,
-        cached_input_tokens: Some(40_000),
-        uncached_input_tokens: Some(10_000),
-        cache_write_tokens: None,
-        reasoning_tokens: Some(500),
-    };
-    let norm = normalize_turn_usage(Some(&codex)).expect("valid codex usage");
-    assert_eq!(norm.cached_read_tokens, Some(40_000));
-    assert_eq!(norm.cache_write_tokens, None);
-    assert_eq!(norm.other_uncached_input_tokens, None);
-    assert_eq!(norm.reasoning_tokens, Some(500));
-
     let unknown = TurnUsage {
         total_tokens: 1_100,
         input_tokens: 1_000,
@@ -136,23 +121,33 @@ fn normalize_turn_usage_enforces_disjoint_breakdown_and_preserves_unknowns() {
 }
 
 #[test]
-fn extract_session_model_prefers_usage_then_preferences_then_options() {
-    let last_usage = json!({
+fn extract_session_model_rejects_ambiguous_multi_model_cumulative_usage() {
+    let single_usage = json!({
         "raw": { "_cowboy": { "modelUsage": [{ "model": "claude-opus-4-6" }] } }
     });
-    let prefs = json!({ "model": "opus" });
+    let multi_usage = json!({
+        "raw": { "_cowboy": { "modelUsage": [
+            { "model": "claude-opus-4-6", "totalTokens": 500_000 },
+            { "model": "claude-sonnet-4-6", "totalTokens": 50_000 }
+        ] } }
+    });
+    let prefs = json!({ "model": "sonnet" });
     let options = json!([{
         "id": "model",
         "currentValue": "[\"deepseek-official\",\"deepseek-v4-flash\"]"
     }]);
+    // Single unambiguous modelUsage wins.
     assert_eq!(
-        extract_session_model(Some(&last_usage), Some(&prefs), Some(&options)).as_deref(),
+        extract_session_model(Some(&single_usage), Some(&prefs), Some(&options)).as_deref(),
         Some("claude-opus-4-6")
     );
+    // Multi-model cumulative usage falls back to active config_preferences.model, never modelUsage[0].
     assert_eq!(
-        extract_session_model(None, Some(&prefs), Some(&options)).as_deref(),
-        Some("opus")
+        extract_session_model(Some(&multi_usage), Some(&prefs), Some(&options)).as_deref(),
+        Some("sonnet")
     );
+    // Multi-model cumulative usage with no preferences/options stays unknown (None).
+    assert_eq!(extract_session_model(Some(&multi_usage), None, None), None);
     assert_eq!(
         extract_session_model(None, None, Some(&options)).as_deref(),
         Some("deepseek-v4-flash")
@@ -160,50 +155,49 @@ fn extract_session_model_prefers_usage_then_preferences_then_options() {
 }
 
 #[test]
-fn normalize_stop_reason_bounds_verbose_errors() {
+fn normalize_stop_reason_maps_to_closed_nul_free_set() {
     assert_eq!(normalize_stop_reason("EndTurn"), "end_turn");
     assert_eq!(normalize_stop_reason("Cancelled"), "cancelled");
     assert_eq!(
         normalize_stop_reason("error: antigravity_backend_refusal:rate_limited: { ... }"),
         "error"
     );
+    assert_eq!(normalize_stop_reason("weird\0custom\0reason"), "other");
+    assert_eq!(normalize_stop_reason("   \0  "), "unknown");
 }
 
 #[allow(clippy::too_many_lines)]
 async fn assert_projection_contract(store: &Store) {
+    let owner_a = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+    let owner_b = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
     store
-        .insert_user(&sample_user("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "alice"))
+        .insert_user(&sample_user(owner_a, "alice"))
         .await
-        .expect("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        .expect("owner-a");
     store
-        .insert_user(&sample_user("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "bob"))
+        .insert_user(&sample_user(owner_b, "bob"))
         .await
-        .expect("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        .expect("owner-b");
     let acct_a = "11111111-1111-1111-1111-111111111111";
     let acct_b = "22222222-2222-2222-2222-222222222222";
 
-    let s1 = sample_meta(
-        "sess-1",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "claude-code",
-        acct_a,
-    );
-    let s2 = sample_meta(
-        "sess-2",
-        "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-        "claude-code",
-        acct_b,
-    );
+    let s1 = sample_meta("sess-100", owner_a, "claude-code", acct_a);
+    let s2 = sample_meta("sess-200", owner_b, "claude-code", acct_b);
+    let s_unobs = sample_meta("sess-300", owner_b, "codex", acct_b);
     store.insert_session(&s1).await.expect("insert s1");
     store.insert_session(&s2).await.expect("insert s2");
     store
-        .update_config_preferences("sess-1", &json!({"model": "claude-opus-4-6"}))
+        .insert_session(&s_unobs)
+        .await
+        .expect("insert s_unobs");
+    store
+        .update_config_preferences("sess-100", &json!({"model": "claude-opus-4-6"}))
         .await
         .expect("prefs s1");
 
     let batch = vec![
         Envelope {
-            session_id: "sess-1".into(),
+            session_id: "sess-100".into(),
             seq: 1,
             event: Event::Update {
                 update: json!({
@@ -215,10 +209,11 @@ async fn assert_projection_contract(store: &Store) {
             cmid: None,
         },
         Envelope {
-            session_id: "sess-1".into(),
+            session_id: "sess-100".into(),
             seq: 2,
             event: Event::TurnEnd {
-                stop_reason: "EndTurn".into(),
+                // Embedded NUL in stop_reason must never break PG or SQLite writes.
+                stop_reason: "EndTurn\0".into(),
                 usage: Some(TurnUsage {
                     total_tokens: 105_000,
                     input_tokens: 100_000,
@@ -232,7 +227,7 @@ async fn assert_projection_contract(store: &Store) {
             cmid: None,
         },
         Envelope {
-            session_id: "sess-1".into(),
+            session_id: "sess-100".into(),
             seq: 3,
             event: Event::Update {
                 update: json!({ "sessionUpdate": "context_rolled_over" }),
@@ -240,7 +235,7 @@ async fn assert_projection_contract(store: &Store) {
             cmid: None,
         },
         Envelope {
-            session_id: "sess-1".into(),
+            session_id: "sess-100".into(),
             seq: 4,
             event: Event::Update {
                 update: json!({
@@ -252,10 +247,10 @@ async fn assert_projection_contract(store: &Store) {
             cmid: None,
         },
         Envelope {
-            session_id: "sess-1".into(),
+            session_id: "sess-100".into(),
             seq: 5,
             event: Event::TurnEnd {
-                stop_reason: "EndTurn".into(),
+                stop_reason: "custom\0reason".into(),
                 usage: Some(TurnUsage {
                     total_tokens: 11_000,
                     input_tokens: 10_000,
@@ -269,7 +264,7 @@ async fn assert_projection_contract(store: &Store) {
             cmid: None,
         },
         Envelope {
-            session_id: "sess-2".into(),
+            session_id: "sess-200".into(),
             seq: 1,
             event: Event::TurnEnd {
                 stop_reason: "EndTurn".into(),
@@ -285,8 +280,22 @@ async fn assert_projection_contract(store: &Store) {
             },
             cmid: None,
         },
+        // Eligible turn with NO usage reported: totals must stay None, not 0.
+        Envelope {
+            session_id: "sess-300".into(),
+            seq: 1,
+            event: Event::TurnEnd {
+                stop_reason: "EndTurn".into(),
+                usage: None,
+            },
+            cmid: None,
+        },
     ];
-    let highwaters = HashMap::from([("sess-1".into(), 6), ("sess-2".into(), 2)]);
+    let highwaters = HashMap::from([
+        ("sess-100".into(), 6),
+        ("sess-200".into(), 2),
+        ("sess-300".into(), 2),
+    ]);
     store
         .upsert_event_batch(&batch, &highwaters)
         .await
@@ -295,7 +304,7 @@ async fn assert_projection_contract(store: &Store) {
     let now = chrono::Utc::now().timestamp_millis();
     let acct_metrics = store
         .account_cache_metrics(
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            owner_a,
             "claude-code",
             acct_a,
             now - 86_400_000,
@@ -309,18 +318,34 @@ async fn assert_projection_contract(store: &Store) {
     assert_eq!(acct_metrics.totals.observed_usage_turns, 2);
     assert_eq!(acct_metrics.totals.observed_cache_turns, 1);
     assert_eq!(acct_metrics.totals.renewed_turns, 1);
-    assert_eq!(acct_metrics.totals.inclusive_input_tokens, 110_000);
-    assert_eq!(acct_metrics.totals.observed_cache_input_tokens, 100_000);
+    assert_eq!(acct_metrics.totals.inclusive_input_tokens, Some(110_000));
+    assert_eq!(
+        acct_metrics.totals.observed_cache_input_tokens,
+        Some(100_000)
+    );
     assert_eq!(acct_metrics.totals.cached_read_tokens, Some(80_000));
     assert_eq!(acct_metrics.totals.cache_write_tokens, Some(18_000));
     assert_eq!(acct_metrics.totals.uncached_input_tokens, Some(20_000));
     assert_eq!(acct_metrics.totals.other_uncached_input_tokens, Some(2_000));
     assert!((acct_metrics.totals.cached_input_share.unwrap() - 0.8).abs() < 1e-9);
     assert_eq!(acct_metrics.by_model[0].model, "claude-opus-4-6");
+    assert!(acct_metrics.coverage.oldest_fact_ms.is_some());
+    assert!(acct_metrics.coverage.newest_fact_ms.is_some());
 
+    // Unreported usage totals stay None rather than 0.
+    let unobs_metrics = store
+        .session_cache_metrics("sess-300", Some(owner_b), "codex", acct_b, 10)
+        .await
+        .expect("unobserved session");
+    assert_eq!(unobs_metrics.totals.eligible_turns, 1);
+    assert_eq!(unobs_metrics.totals.observed_usage_turns, 0);
+    assert_eq!(unobs_metrics.totals.inclusive_input_tokens, None);
+    assert_eq!(unobs_metrics.totals.output_tokens, None);
+
+    // Owner isolation: owner_a querying acct_b sees zero rows and NO timestamps from owner_b.
     let cross = store
         .account_cache_metrics(
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            owner_a,
             "claude-code",
             acct_b,
             now - 86_400_000,
@@ -330,30 +355,57 @@ async fn assert_projection_contract(store: &Store) {
         .await
         .expect("cross owner");
     assert_eq!(cross.totals.total_turns, 0);
+    assert_eq!(cross.coverage.oldest_fact_ms, None);
+    assert_eq!(cross.coverage.newest_fact_ms, None);
 
-    // Transcript Clear removes events, while turn_cache_facts survives.
-    store
-        .clear_events("sess-1", now + 10)
+    // Owner-scoped session query cannot see another owner's retained facts.
+    let wrong_owner_session = store
+        .session_cache_metrics("sess-100", Some(owner_b), "claude-code", acct_a, 10)
         .await
-        .expect("clear sess-1");
+        .expect("wrong owner session");
+    assert_eq!(wrong_owner_session.totals.total_turns, 0);
+    assert!(wrong_owner_session.recent_turns.is_empty());
+
+    // Backfill must NOT overwrite live-projected attribution (e.g. model on sess-100)
+    // and must count only newly inserted rows.
+    store
+        .begin_turn_cache_reconcile()
+        .await
+        .expect("begin reconcile");
+    let p1 = store
+        .backfill_turn_cache_facts_batch(50, DEFAULT_RETENTION_DAYS)
+        .await
+        .expect("reconcile batch");
+    assert!(p1.completed);
+    assert_eq!(p1.rows_projected, 0, "all live rows already projected");
+
+    // Clear preserves facts AND live model attribution survives.
+    store
+        .clear_events("sess-100", now + 10)
+        .await
+        .expect("clear sess-100");
     let after_clear = store
-        .session_cache_metrics("sess-1", "claude-code", acct_a, 10)
+        .session_cache_metrics("sess-100", Some(owner_a), "claude-code", acct_a, 1)
         .await
         .expect("session metrics after clear");
     assert_eq!(after_clear.totals.total_turns, 2);
-    assert_eq!(after_clear.recent_turns.len(), 2);
+    assert_eq!(after_clear.recent_turns.len(), 1, "honors indexed LIMIT");
     assert!(after_clear.recent_turns[0].renewed);
-    assert_eq!(after_clear.recent_turns[0].prompt_origin, "human");
-    assert_eq!(after_clear.recent_turns[1].cached_read_tokens, Some(80_000));
+    assert_eq!(after_clear.recent_turns[0].stop_reason, "other");
+    assert_eq!(after_clear.by_model[0].model, "claude-opus-4-6");
 
-    let p1 = store
-        .backfill_turn_cache_facts_batch(10, DEFAULT_RETENTION_DAYS)
-        .await
-        .expect("backfill");
-    assert!(p1.completed);
-    let acct_b_metrics = store
+    // Soft-delete + purge sess-200: its retained turn_cache_facts must still
+    // reserve sess-200 in next_session_number() so IDs are never reused across owners.
+    store.delete_session("sess-200").await.expect("delete s2");
+    assert_eq!(store.purge_deleted(0).await.expect("purge s2"), 1);
+    let floor = store.next_session_number().await.expect("floor");
+    assert!(
+        floor > 300,
+        "next_session_number must stay above retained turn_cache_facts IDs (got {floor})"
+    );
+    let after_purge = store
         .account_cache_metrics(
-            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            owner_b,
             "claude-code",
             acct_b,
             now - 86_400_000,
@@ -361,31 +413,19 @@ async fn assert_projection_contract(store: &Store) {
             "24h",
         )
         .await
-        .expect("account b metrics");
-    assert!(acct_b_metrics.coverage.backfill_complete);
-    assert_eq!(acct_b_metrics.totals.total_turns, 1);
+        .expect("account b after purge");
+    assert_eq!(after_purge.totals.total_turns, 1);
 
-    // Default account isolation: same owner with provider_account_id='default' on two
-    // providers must never mix across providers.
-    let s_ds = sample_meta(
-        "sess-ds",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "claude-deepseek",
-        "default",
-    );
-    let s_cx = sample_meta(
-        "sess-cx",
-        "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
-        "codex",
-        "default",
-    );
+    // Default account isolation across providers.
+    let s_ds = sample_meta("sess-400", owner_a, "claude-deepseek", "default");
+    let s_cx = sample_meta("sess-401", owner_a, "codex", "default");
     store.insert_session(&s_ds).await.expect("insert s_ds");
     store.insert_session(&s_cx).await.expect("insert s_cx");
     store
         .upsert_event_batch(
             &[
                 Envelope {
-                    session_id: "sess-ds".into(),
+                    session_id: "sess-400".into(),
                     seq: 1,
                     event: Event::TurnEnd {
                         stop_reason: "EndTurn".into(),
@@ -402,7 +442,7 @@ async fn assert_projection_contract(store: &Store) {
                     cmid: None,
                 },
                 Envelope {
-                    session_id: "sess-cx".into(),
+                    session_id: "sess-401".into(),
                     seq: 1,
                     event: Event::TurnEnd {
                         stop_reason: "EndTurn".into(),
@@ -419,13 +459,13 @@ async fn assert_projection_contract(store: &Store) {
                     cmid: None,
                 },
             ],
-            &HashMap::from([("sess-ds".into(), 2), ("sess-cx".into(), 2)]),
+            &HashMap::from([("sess-400".into(), 2), ("sess-401".into(), 2)]),
         )
         .await
         .expect("upsert default sessions");
     let ds_default = store
         .account_cache_metrics(
-            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            owner_a,
             "claude-deepseek",
             "default",
             now - 86_400_000,
@@ -435,7 +475,7 @@ async fn assert_projection_contract(store: &Store) {
         .await
         .expect("ds default");
     assert_eq!(ds_default.totals.total_turns, 1);
-    assert_eq!(ds_default.totals.inclusive_input_tokens, 1_000);
+    assert_eq!(ds_default.totals.inclusive_input_tokens, Some(1_000));
     assert_eq!(ds_default.totals.cached_read_tokens, Some(600));
 
     assert_eq!(
@@ -464,4 +504,160 @@ async fn postgres_projection_survives_clear_isolates_accounts_and_backfills() {
         .expect("connect postgres");
     store.migrate().await.expect("migrate postgres");
     assert_projection_contract(&store).await;
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn sqlite_pre_delete_and_startup_reconcile_preserve_unprojected_turns() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("reconcile.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+    let store = Store::connect(&url, dir.path().join("artifacts"))
+        .await
+        .expect("connect sqlite");
+    store.migrate().await.expect("migrate sqlite");
+
+    let owner = "cccccccccccccccccccccccccccccccc";
+    let acct = "33333333-3333-3333-3333-333333333333";
+    store
+        .insert_user(&sample_user(owner, "carol"))
+        .await
+        .expect("owner");
+    store
+        .insert_session(&sample_meta("sess-500", owner, "claude-code", acct))
+        .await
+        .expect("s500");
+    store
+        .insert_session(&sample_meta("sess-501", owner, "claude-code", acct))
+        .await
+        .expect("s501");
+    store
+        .insert_session(&sample_meta("sess-502", owner, "claude-code", acct))
+        .await
+        .expect("s502");
+    store
+        .update_config_preferences("sess-502", &json!({"model": "claude-opus-4-6"}))
+        .await
+        .expect("prefs s502");
+
+    // Live-project sess-502 seq=1 so we can verify startup reconcile does NOT
+    // overwrite live attribution when it scans missing keys.
+    store
+        .upsert_event_batch(
+            &[Envelope {
+                session_id: "sess-502".into(),
+                seq: 1,
+                event: Event::TurnEnd {
+                    stop_reason: "EndTurn".into(),
+                    usage: Some(TurnUsage {
+                        total_tokens: 1_100,
+                        input_tokens: 1_000,
+                        output_tokens: 100,
+                        cached_input_tokens: Some(800),
+                        uncached_input_tokens: Some(200),
+                        cache_write_tokens: None,
+                        reasoning_tokens: None,
+                    }),
+                },
+                cmid: None,
+            }],
+            &HashMap::from([("sess-502".into(), 2)]),
+        )
+        .await
+        .expect("live s502");
+
+    // Complete backfill cursor past all current sessions.
+    let done = store
+        .backfill_turn_cache_facts_batch(50, DEFAULT_RETENTION_DAYS)
+        .await
+        .expect("initial backfill");
+    assert!(done.completed);
+
+    // Insert raw TurnEnd events directly (simulating pre-upgrade / rollback
+    // unprojected rows) behind the completed backfill cursor:
+    // - sess-500: will be cleared before backfill runs (H1 clear path)
+    // - sess-501: will be deleted + purged before backfill runs (H1 purge path)
+    // - sess-502 seq=2: sits behind cursor, recovered by begin_turn_cache_reconcile (M1)
+    let raw = sqlx::SqlitePool::connect(&url).await.expect("raw sqlite");
+    let now = chrono::Utc::now().timestamp_millis();
+    let payload = serde_json::to_string(&Event::TurnEnd {
+        stop_reason: "EndTurn".into(),
+        usage: Some(TurnUsage {
+            total_tokens: 2_200,
+            input_tokens: 2_000,
+            output_tokens: 200,
+            cached_input_tokens: Some(1_500),
+            uncached_input_tokens: Some(500),
+            cache_write_tokens: None,
+            reasoning_tokens: None,
+        }),
+    })
+    .expect("serialize");
+    for (sid, seq) in [
+        ("sess-500", 1_i64),
+        ("sess-501", 1_i64),
+        ("sess-502", 2_i64),
+    ] {
+        sqlx::query("INSERT INTO events (session_id, seq, payload, ts_ms) VALUES (?, ?, ?, ?)")
+            .bind(sid)
+            .bind(seq)
+            .bind(&payload)
+            .bind(now)
+            .execute(&raw)
+            .await
+            .expect("raw event insert");
+    }
+    raw.close().await;
+
+    // H1a: Clear sess-500 BEFORE any backfill -> unprojected turn must survive.
+    store
+        .clear_events("sess-500", now + 10)
+        .await
+        .expect("clear s500");
+    let m500 = store
+        .session_cache_metrics("sess-500", Some(owner), "claude-code", acct, 10)
+        .await
+        .expect("m500");
+    assert_eq!(m500.totals.total_turns, 1);
+    assert_eq!(m500.totals.cached_read_tokens, Some(1_500));
+    assert_eq!(
+        m500.by_model[0].model, "unknown",
+        "pre-clear backfill must not fabricate historical model"
+    );
+
+    // H1b: Delete + purge sess-501 BEFORE any backfill -> unprojected turn must survive.
+    store.delete_session("sess-501").await.expect("delete s501");
+    assert_eq!(store.purge_deleted(0).await.expect("purge s501"), 1);
+    let m501 = store
+        .session_cache_metrics("sess-501", Some(owner), "claude-code", acct, 10)
+        .await
+        .expect("m501");
+    assert_eq!(m501.totals.total_turns, 1);
+    assert_eq!(m501.totals.cached_read_tokens, Some(1_500));
+
+    // M1: Startup reconcile resets cursor and projects sess-502 seq=2 without
+    // overwriting live seq=1 attribution (claude-opus-4-6).
+    store
+        .begin_turn_cache_reconcile()
+        .await
+        .expect("begin reconcile");
+    let rec = store
+        .backfill_turn_cache_facts_batch(50, DEFAULT_RETENTION_DAYS)
+        .await
+        .expect("reconcile");
+    assert!(rec.completed);
+    assert_eq!(rec.rows_projected, 1, "only missing seq=2 should insert");
+    let m502 = store
+        .session_cache_metrics("sess-502", Some(owner), "claude-code", acct, 10)
+        .await
+        .expect("m502");
+    assert_eq!(m502.totals.total_turns, 2);
+    assert!(
+        m502.by_model.iter().any(|m| m.model == "claude-opus-4-6"),
+        "live attribution on seq=1 must survive reconcile"
+    );
+    assert!(
+        m502.by_model.iter().any(|m| m.model == "unknown"),
+        "reconciled historical seq=2 must leave model unknown"
+    );
 }

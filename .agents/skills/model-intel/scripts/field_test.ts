@@ -199,22 +199,23 @@ test("pruneOlderSnapshots removes older dated snapshots and keeps latest and non
   }
 });
 
+import { readdirSync, readFileSync } from "node:fs";
 import { readCacheTelemetryAudit, summarizeCacheTelemetryRows } from "./field.ts";
 
-test("summarizeCacheTelemetryRows detects telemetry-coverage-drop and stratifies shadow TTL curves", () => {
+test("summarizeCacheTelemetryRows detects version-cohort cache & cache-write drops even when an older healthy version dominates", () => {
   const nowMs = Date.parse("2026-11-27T00:00:00Z");
   const rows = [];
-  // Previous half (10 days ago, v1.0.0): 12 turns, 100% cache coverage, Claude disjoint write math.
-  for (let i = 0; i < 12; i++) {
+  // Healthy older v1.0.0 dominates the window (40 turns, 100% cache + write coverage).
+  for (let i = 0; i < 40; i++) {
     rows.push({
-      session_key: `sess-prev-${i % 3}`,
-      occurred_at_ms: nowMs - 10 * 86_400_000 + i * 60_000,
+      session_key: `sess-old-${i % 4}`,
+      occurred_at_ms: nowMs - 8 * 86_400_000 + i * 60_000,
       provider: "claude-code",
       provider_version: "1.0.0",
       model: "claude-opus-4-6",
       stop_reason: "end_turn",
       prompt_origin: "human",
-      idle_gap_ms: 12 * 60_000, // 10-20m bucket
+      idle_gap_ms: 12 * 60_000,
       renewed: false,
       usage_observed: true,
       inclusive_input_tokens: 100_000,
@@ -223,51 +224,40 @@ test("summarizeCacheTelemetryRows detects telemetry-coverage-drop and stratifies
       uncached_input_tokens: 20_000,
     });
   }
-  // Current half (2 days ago, v1.1.0): 12 turns, cache counters dropped to 0% -> regression alert!
+  // Newly deployed v1.1.0 has only 12 turns (minority of volume) and loses cache_write_tokens while keeping cached_read.
   for (let i = 0; i < 12; i++) {
     rows.push({
-      session_key: `sess-curr-${i % 2}`,
-      occurred_at_ms: nowMs - 2 * 86_400_000 + i * 60_000,
+      session_key: `sess-new-${i % 2}`,
+      occurred_at_ms: nowMs - 1 * 86_400_000 + i * 60_000,
       provider: "claude-code",
       provider_version: "1.1.0",
       model: "claude-opus-4-6",
       stop_reason: "end_turn",
       prompt_origin: "human",
-      idle_gap_ms: 45 * 60_000, // 30-60m bucket
+      idle_gap_ms: 45 * 60_000,
       renewed: true,
       usage_observed: true,
       inclusive_input_tokens: 50_000,
-      cached_read_tokens: null,
+      cached_read_tokens: 40_000,
       cache_write_tokens: null,
-      uncached_input_tokens: null,
+      uncached_input_tokens: 10_000,
     });
   }
   const audit = summarizeCacheTelemetryRows(rows, nowMs, 14, "turn_cache_facts");
-  assertEquals(audit.providers.length, 1);
-  const claude = audit.providers[0]!;
-  assertEquals(claude.observed_cache_turns, 12);
-  assertEquals(claude.uncached_input_tokens, 240_000);
-  assertEquals(claude.cache_write_tokens, 216_000);
-  assertEquals(claude.cached_input_share, 0.8);
-  assertEquals(claude.cache_coverage, 0.5);
-
   assertEquals(audit.coverage_regressions.length, 1);
-  assertEquals(audit.coverage_regressions[0]?.metric, "cache_coverage");
+  assertEquals(audit.coverage_regressions[0]?.comparison_kind, "version_cohort");
+  assertEquals(audit.coverage_regressions[0]?.metric, "cache_write_coverage");
   assertEquals(audit.coverage_regressions[0]?.previous_version, "1.0.0");
   assertEquals(audit.coverage_regressions[0]?.current_version, "1.1.0");
   assertEquals(audit.coverage_regressions[0]?.drop_ratio, 1);
-
   assertEquals(audit.shadow_ttl_curves.length, 2);
   assertEquals(audit.shadow_ttl_curves[0]?.gap_bucket, "10-20m");
-  assertEquals(audit.shadow_ttl_curves[0]?.renewed, false);
-  assertEquals(audit.shadow_ttl_curves[0]?.distinct_sessions, 3);
-  assertEquals(audit.shadow_ttl_curves[0]?.distinct_days, 1);
+  assertEquals(audit.shadow_ttl_curves[0]?.distinct_sessions, 4);
   assertEquals(audit.shadow_ttl_curves[1]?.gap_bucket, "30-60m");
   assertEquals(audit.shadow_ttl_curves[1]?.renewed, true);
-  assertEquals(audit.shadow_ttl_curves[1]?.mean_uncached_input, null);
 });
 
-test("readCacheTelemetryAudit reads indexed turn_cache_facts when present", () => {
+test("readCacheTelemetryAudit falls back to events when backfill is incomplete and never treats a human steer as opener", () => {
   const dir = mkdtempSync(join(tmpdir(), "cowboy-cache-audit-test-"));
   try {
     const dbPath = join(dir, "cowboy.sqlite3");
@@ -277,18 +267,61 @@ test("readCacheTelemetryAudit reads indexed turn_cache_facts when present", () =
       provider TEXT, provider_version TEXT, model TEXT, stop_reason TEXT,
       prompt_origin TEXT, idle_gap_ms INTEGER, renewed INTEGER, usage_observed INTEGER,
       inclusive_input_tokens INTEGER, cached_read_tokens INTEGER, cache_write_tokens INTEGER
-    )`);
+    );
+    CREATE TABLE turn_cache_backfill_state (
+      slot INTEGER PRIMARY KEY, completed_at_ms INTEGER
+    );
+    INSERT INTO turn_cache_backfill_state VALUES (1, NULL);
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY, provider TEXT, provider_version TEXT,
+      last_usage TEXT, config_preferences TEXT
+    );
+    CREATE TABLE events (
+      session_id TEXT, seq INTEGER, ts_ms INTEGER, payload TEXT
+    );`);
     const now = Date.parse("2026-11-27T00:00:00Z");
-    db.query(
-      "INSERT INTO turn_cache_facts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-    ).run("s1", 2, now - 1_000, "codex", "3.6.32", "gpt-6.2-sol", "end_turn", "human", 8 * 60_000, 0, 1, 100_000, 90_000, null);
+    db.query("INSERT INTO sessions VALUES (?,?,?,?,?)").run(
+      "s1", "codex", "3.6.32", null, JSON.stringify({ model: "gpt-6.2-sol" }),
+    );
+    const ins = db.query("INSERT INTO events VALUES (?,?,?,?)");
+    // Turn 1
+    ins.run("s1", 1, now - 600_000, JSON.stringify({ kind: "turn_end", stop_reason: "EndTurn", usage: { input_tokens: 1000, cached_input_tokens: 800, uncached_input_tokens: 200 } }));
+    // Turn 2: opened by automation (agent), later steered by a human -> must NOT become a human TTL bucket!
+    ins.run("s1", 2, now - 300_000, JSON.stringify({ kind: "update", update: { sessionUpdate: "user_message_chunk", promptOrigin: { actor: "agent" }, content: { text: "notice" } } }));
+    ins.run("s1", 3, now - 100_000, JSON.stringify({ kind: "update", update: { sessionUpdate: "user_message_chunk", promptOrigin: { actor: "human" }, _meta: { cowboyDelivery: "current_turn" }, content: { text: "steer" } } }));
+    ins.run("s1", 4, now - 50_000, JSON.stringify({ kind: "turn_end", stop_reason: "EndTurn", usage: { input_tokens: 2000, cached_input_tokens: 1800, uncached_input_tokens: 200 } }));
     db.close();
+
     const audit = readCacheTelemetryAudit(dbPath, 14, now);
-    assertEquals(audit.source, "turn_cache_facts");
-    assertEquals(audit.providers[0]?.provider, "codex");
-    assertEquals(audit.providers[0]?.cached_input_share, 0.9);
-    assertEquals(audit.shadow_ttl_curves[0]?.gap_bucket, "5-10m");
+    assertEquals(audit.source, "events_fallback");
+    assertEquals(audit.projection_complete, false);
+    assertEquals(audit.providers[0]?.turns, 2);
+    // Automation-opened turn steered by human must not enter human shadow TTL curves.
+    assertEquals(audit.shadow_ttl_curves.length, 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("models/cache-and-telemetry.json covers every first-party agent provider", () => {
+  const repoRoot = join(import.meta.dir, "../../../..");
+  const inventory = JSON.parse(
+    readFileSync(join(repoRoot, "models/cache-and-telemetry.json"), "utf8"),
+  ) as { authority: string; providers: Record<string, unknown> };
+  assertEquals(inventory.authority, "advisory");
+  const pluginsDir = join(repoRoot, "plugins");
+  for (const entry of readdirSync(pluginsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const providerPath = join(pluginsDir, entry.name, "provider.json");
+    try {
+      const manifest = JSON.parse(readFileSync(providerPath, "utf8")) as { id: string };
+      assertEquals(
+        Object.hasOwn(inventory.providers, manifest.id),
+        true,
+        `models/cache-and-telemetry.json missing provider ${manifest.id}`,
+      );
+    } catch {
+      // Non-agent plugin directory without provider.json.
+    }
   }
 });

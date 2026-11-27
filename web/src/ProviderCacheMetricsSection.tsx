@@ -46,6 +46,9 @@ function AccountCacheMetricsBody({
 }): React.JSX.Element {
   const { totals } = data;
   const cachedShareTone = shareTone(totals.cached_input_share);
+  const partialWrites =
+    totals.observed_cache_write_turns > 0 &&
+    totals.observed_cache_write_turns < totals.observed_cache_turns;
   const facts: { label: string; value: string; tone?: MetricTone }[] = [
     {
       label: "Cached input share",
@@ -64,7 +67,14 @@ function AccountCacheMetricsBody({
           : "0 turns",
     },
     ...(totals.cache_write_tokens !== null
-      ? [{ label: "Cache write", value: formatCompactTokens(totals.cache_write_tokens) }]
+      ? [
+          {
+            label: partialWrites
+              ? `Cache write (${totals.observed_cache_write_turns}/${totals.observed_cache_turns})`
+              : "Cache write",
+            value: formatCompactTokens(totals.cache_write_tokens),
+          },
+        ]
       : []),
     ...(totals.renewed_turns > 0
       ? [{ label: "Renewed turns", value: totals.renewed_turns.toLocaleString() }]
@@ -76,7 +86,7 @@ function AccountCacheMetricsBody({
       <>
         <Typography variant="caption" color="text.secondary">
           No completed turns recorded in the last {window}.
-          {!data.coverage.backfill_complete ? " Backfilling history…" : ""}
+          {!data.coverage.backfill_complete ? " Reconciling history…" : ""}
         </Typography>
         {data.capabilities.rollover_restriction && (
           <Typography variant="caption" color="text.secondary">
@@ -121,8 +131,9 @@ function AccountCacheMetricsBody({
 
 /**
  * Lazy account-level prompt-cache metrics inside Account Card Details.
- * Fetches only while `active` is true so top-bar and collapsed cards stay
- * quota-primary with zero extra background traffic.
+ * Fetches only while `active` is true and renders only responses matching the
+ * currently selected `(accountId, window)` so switching windows never relabels
+ * stale figures.
  */
 export function ProviderCacheMetricsSection({
   accountId,
@@ -159,9 +170,11 @@ export function ProviderCacheMetricsSection({
     };
   }, [accountId, active, window, reloadNonce]);
 
+  const currentData =
+    data !== null && data.account_id === accountId && data.window === window ? data : null;
   const segments = useMemo(
-    () => (data ? buildDisjointCacheSegments(data.totals) : []),
-    [data],
+    () => (currentData ? buildDisjointCacheSegments(currentData.totals) : []),
+    [currentData],
   );
 
   if (!active) return null;
@@ -202,7 +215,7 @@ export function ProviderCacheMetricsSection({
         </ToggleButtonGroup>
       </Stack>
 
-      {loading && !data && (
+      {loading && !currentData && (
         <Stack direction="row" alignItems="center" spacing={0.75}>
           <CircularProgress size={13} />
           <Typography variant="caption" color="text.secondary">
@@ -227,9 +240,9 @@ export function ProviderCacheMetricsSection({
         </Stack>
       )}
 
-      {data && (
+      {currentData && !error && (
         <AccountCacheMetricsBody
-          data={data}
+          data={currentData}
           window={window}
           dense={dense}
           segments={segments}

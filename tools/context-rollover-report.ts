@@ -1,6 +1,6 @@
 // Read-only report: does context renewal (docs/context-rollover.md) save what
 // it should? Joins each turn's persisted usage with the idle gap before its
-// human prompt and whether a `context_rolled_over` marker preceded it, so a
+// opening prompt and whether a `context_rolled_over` marker preceded it, so a
 // renewed first turn can be compared with ordinary cold resumes.
 //
 //   bun tools/context-rollover-report.ts /var/lib/cowboy/cowboy.sqlite3 [--days 30] [--json]
@@ -31,28 +31,39 @@ export interface NormalizedTurnCacheUsage {
   other_uncached: number | null;
 }
 
+function parseOptionalSafeNonNegativeInt(
+  value: number | null | undefined,
+): { ok: true; value: number | null } | { ok: false } {
+  if (value === null || value === undefined) {
+    return { ok: true, value: null };
+  }
+  if (!Number.isSafeInteger(value) || value < 0) {
+    return { ok: false };
+  }
+  return { ok: true, value };
+}
+
 export function normalizeTurnCacheUsage(row: {
   input: number;
   cached: number | null;
   written: number | null;
   uncached: number | null;
 }): NormalizedTurnCacheUsage | null {
-  if (!Number.isFinite(row.input) || row.input < 0) return null;
+  if (!Number.isSafeInteger(row.input) || row.input < 0) return null;
   const inclusive_input = row.input;
-  const cached_read =
-    row.cached !== null && Number.isFinite(row.cached) && row.cached >= 0
-      ? row.cached
-      : null;
-  const cache_write =
-    row.written !== null && Number.isFinite(row.written) && row.written >= 0
-      ? row.written
-      : null;
-  const raw_uncached =
-    row.uncached !== null && Number.isFinite(row.uncached) && row.uncached >= 0
-      ? row.uncached
-      : null;
+
+  const parsedCached = parseOptionalSafeNonNegativeInt(row.cached);
+  const parsedWritten = parseOptionalSafeNonNegativeInt(row.written);
+  const parsedUncached = parseOptionalSafeNonNegativeInt(row.uncached);
+  if (!parsedCached.ok || !parsedWritten.ok || !parsedUncached.ok) return null;
+
+  const cached_read = parsedCached.value;
+  const cache_write = parsedWritten.value;
+  const raw_uncached = parsedUncached.value;
 
   if (cached_read !== null && cached_read > inclusive_input) return null;
+  if (cache_write !== null && cache_write > inclusive_input) return null;
+  if (raw_uncached !== null && raw_uncached > inclusive_input) return null;
 
   // `uncached_total` is strictly `inclusive_input - cached_read` when observed.
   const derived_uncached =
@@ -111,6 +122,8 @@ export interface RolloverReportRow {
   mean_uncached_total: number | null;
   cached_share: number | null;
   uncached_share: number | null;
+  /** Compatibility alias for `uncached_share` (docs/context-rollover.md). */
+  fresh_ratio: number | null;
 }
 
 interface Group {
@@ -157,10 +170,10 @@ export function aggregateRolloverReport(
       group.observed_cache_input += normalized.inclusive_input;
       group.cached_read += normalized.cached_read;
       group.uncached_total += normalized.uncached_total;
-    }
-    if (normalized.cache_write !== null) {
-      group.observed_write_turns += 1;
-      group.cache_write += normalized.cache_write;
+      if (normalized.cache_write !== null) {
+        group.observed_write_turns += 1;
+        group.cache_write += normalized.cache_write;
+      }
     }
     groups.set(key, group);
   }
@@ -172,36 +185,40 @@ export function aggregateRolloverReport(
           GAP_BUCKETS.findIndex(([name]) => name === b.gap) ||
         Number(a.renewed) - Number(b.renewed),
     )
-    .map((group) => ({
-      provider: group.provider,
-      gap: group.gap,
-      renewed: group.renewed,
-      turns: group.turns,
-      observed_cache_turns: group.observed_cache_turns,
-      mean_input: Math.round(group.input / group.turns),
-      mean_cached_read:
-        group.observed_cache_turns > 0
-          ? Math.round(group.cached_read / group.observed_cache_turns)
-          : null,
-      mean_cache_write:
-        group.observed_write_turns > 0
-          ? Math.round(group.cache_write / group.observed_write_turns)
-          : null,
-      mean_uncached_total:
-        group.observed_cache_turns > 0
-          ? Math.round(group.uncached_total / group.observed_cache_turns)
-          : null,
-      cached_share:
-        group.observed_cache_input > 0
-          ? Number((group.cached_read / group.observed_cache_input).toFixed(4))
-          : null,
-      uncached_share:
+    .map((group) => {
+      const uncached_share =
         group.observed_cache_input > 0
           ? Number(
               (group.uncached_total / group.observed_cache_input).toFixed(4),
             )
-          : null,
-    }));
+          : null;
+      return {
+        provider: group.provider,
+        gap: group.gap,
+        renewed: group.renewed,
+        turns: group.turns,
+        observed_cache_turns: group.observed_cache_turns,
+        mean_input: Math.round(group.input / group.turns),
+        mean_cached_read:
+          group.observed_cache_turns > 0
+            ? Math.round(group.cached_read / group.observed_cache_turns)
+            : null,
+        mean_cache_write:
+          group.observed_write_turns > 0
+            ? Math.round(group.cache_write / group.observed_write_turns)
+            : null,
+        mean_uncached_total:
+          group.observed_cache_turns > 0
+            ? Math.round(group.uncached_total / group.observed_cache_turns)
+            : null,
+        cached_share:
+          group.observed_cache_input > 0
+            ? Number((group.cached_read / group.observed_cache_input).toFixed(4))
+            : null,
+        uncached_share,
+        fresh_ratio: uncached_share,
+      };
+    });
 }
 
 if (import.meta.main) {
@@ -220,8 +237,8 @@ if (import.meta.main) {
   const db = new Database(path, { readonly: true });
   db.exec("PRAGMA query_only = 1");
 
-  // One row per completed turn after a human prompt. `renewed` marks a turn
-  // whose prompt followed a renewal marker in the same gap.
+  // One row per completed turn whose FIRST non-steering prompt opener is a
+  // human prompt (never matching a later human steer on an automated turn).
   const rows = db
     .query(`
   WITH te AS (
@@ -234,22 +251,31 @@ if (import.meta.main) {
       lag(e.seq) OVER (PARTITION BY e.session_id ORDER BY e.seq) AS prev_seq
     FROM events e JOIN sessions s ON s.id = e.session_id
     WHERE json_extract(e.payload, '$.kind') = 'turn_end' AND e.ts_ms >= ?1
+  ),
+  opener AS (
+    SELECT te.*,
+      (SELECT x.seq FROM events x WHERE x.session_id = te.session_id
+         AND x.seq > te.prev_seq AND x.seq < te.seq
+         AND json_extract(x.payload, '$.kind') = 'update'
+         AND json_extract(x.payload, '$.update.sessionUpdate') = 'user_message_chunk'
+         AND COALESCE(json_extract(x.payload, '$.update._meta.cowboyDelivery'), '') != 'current_turn'
+       ORDER BY x.seq ASC LIMIT 1) AS opener_seq
+    FROM te
+    WHERE te.prev_end IS NOT NULL AND te.input > 0
   )
-  SELECT te.provider, te.input, te.cached, te.written, te.uncached,
-    (SELECT min(x.ts_ms) FROM events x WHERE x.session_id = te.session_id
-       AND x.seq > te.prev_seq AND x.seq < te.seq
-       AND json_extract(x.payload, '$.update.sessionUpdate') = 'user_message_chunk'
-       -- Human prompts only: renewal never applies to scheduler wakeups,
-       -- managed-call notices or runtime prompts.
-       AND coalesce(json_extract(x.payload, '$.update.promptOrigin.actor'), 'human') = 'human'
-       AND coalesce(json_extract(x.payload, '$.update.autoResumed'), 0) = 0
-       AND coalesce(json_extract(x.payload, '$.update.content.text'), '') NOT LIKE '<system-reminder>%')
-      - te.prev_end AS gap_ms,
-    EXISTS (SELECT 1 FROM events x WHERE x.session_id = te.session_id
-       AND x.seq > te.prev_seq AND x.seq < te.seq
+  SELECT o.provider, o.input, o.cached, o.written, o.uncached,
+    CASE
+      WHEN COALESCE(json_extract(p.payload, '$.update.promptOrigin.actor'), 'human') = 'human'
+       AND COALESCE(json_extract(p.payload, '$.update.autoResumed'), 0) = 0
+       AND COALESCE(json_extract(p.payload, '$.update.content.text'), '') NOT LIKE '<system-reminder>%'
+      THEN p.ts_ms - o.prev_end
+      ELSE NULL
+    END AS gap_ms,
+    EXISTS (SELECT 1 FROM events x WHERE x.session_id = o.session_id
+       AND x.seq > o.prev_seq AND x.seq < o.seq
        AND json_extract(x.payload, '$.update.sessionUpdate') = 'context_rolled_over') AS renewed
-  FROM te
-  WHERE te.prev_end IS NOT NULL AND te.input > 0
+  FROM opener o
+  JOIN events p ON p.session_id = o.session_id AND p.seq = o.opener_seq
 `)
     .all(since) as RawTurnRow[];
 

@@ -514,7 +514,7 @@ export function renderMarkdown(report: PeriodicAuditReport): string {
     if (ct.providers.length > 0) {
       const fmtPct = (v: number | null) => (v !== null ? `${(v * 100).toFixed(1)}%` : "-");
       lines.push(
-        `### Prompt-cache telemetry (turn-level · source: ${ct.source})`,
+        `### Prompt-cache telemetry (turn-level · source: ${ct.source}${ct.projection_complete ? "" : ", backfill incomplete"})`,
         "| Provider | Eligible turns | Usage cov | Cache cov | Cached input share | Uncached tokens | Renewed |",
         "| --- | --- | --- | --- | --- | --- | --- |",
         ...ct.providers.map(
@@ -529,7 +529,7 @@ export function renderMarkdown(report: PeriodicAuditReport): string {
         "### Telemetry coverage regressions",
         ...ct.coverage_regressions.map(
           (r) =>
-            `- ${r.provider} ${r.metric}: ${(r.previous_coverage * 100).toFixed(1)}% (${r.previous_version}, n=${r.previous_turns}) -> ${(r.current_coverage * 100).toFixed(1)}% (${r.current_version}, n=${r.current_turns})`,
+            `- ${r.provider} ${r.metric} [${r.comparison_kind}]: ${(r.previous_coverage * 100).toFixed(1)}% (${r.previous_version}, n=${r.previous_turns}) -> ${(r.current_coverage * 100).toFixed(1)}% (${r.current_version}, n=${r.current_turns})`,
         ),
         "",
       );
@@ -600,6 +600,10 @@ export function formatLogfmt(report: PeriodicAuditReport): string {
       ["cost_drifts", report.field_telemetry.cost_drifts.length],
       ["deepseek_requests", dsReqs],
       ["cache_providers", report.field_telemetry.cache_telemetry.providers.length],
+      [
+        "cache_projection_complete",
+        report.field_telemetry.cache_telemetry.projection_complete,
+      ],
       [
         "telemetry_coverage_drops",
         report.field_telemetry.cache_telemetry.coverage_regressions.length,

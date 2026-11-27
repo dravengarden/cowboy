@@ -2240,6 +2240,11 @@ impl SqliteStorage {
                WHERE key LIKE 'session_fork:sess-%' \
                  AND substr(key, 19) <> '' \
                  AND substr(key, 19) NOT GLOB '*[^0-9]*' \
+               UNION ALL \
+               SELECT CAST(substr(session_id, 6) AS INTEGER) AS n FROM turn_cache_facts \
+               WHERE session_id LIKE 'sess-%' \
+                 AND substr(session_id, 6) <> '' \
+                 AND substr(session_id, 6) NOT GLOB '*[^0-9]*' \
              )",
         )
         .fetch_one(&self.pool)

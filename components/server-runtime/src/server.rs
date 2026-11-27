@@ -374,13 +374,34 @@ pub async fn run_purge_sweeper(store: Store) {
     }
 }
 
-/// Checkpointed background backfill from historical `events` into
-/// `turn_cache_facts`. Yields between bounded batches and stops cleanly once
-/// complete or when `shutdown` fires.
+/// Checkpointed background reconciliation from historical `events` into
+/// `turn_cache_facts`. Resets the scan cursor on startup so turns written
+/// during a temporary Controller rollback are repaired (`ON CONFLICT DO NOTHING`),
+/// yields between bounded batches, and retries transient DB errors with capped
+/// exponential backoff until completion or `shutdown`.
 pub async fn run_turn_cache_backfill(store: Store, mut shutdown: watch::Receiver<bool>) {
     const SCAN_BATCH: usize = 1_000;
-    const MAX_CONSECUTIVE_ERRORS: u32 = 8;
-    let mut consecutive_errors = 0_u32;
+    const MAX_BACKOFF_SECS: u64 = 60;
+    let mut backoff_secs = 2_u64;
+    loop {
+        if *shutdown.borrow() {
+            return;
+        }
+        match store.begin_turn_cache_reconcile().await {
+            Ok(()) => {
+                backoff_secs = 2;
+                break;
+            }
+            Err(error) => {
+                tracing::warn!(%error, backoff_secs, "turn_cache_facts reconcile reset failed; retrying");
+                tokio::select! {
+                    _ = shutdown.changed() => return,
+                    () = tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)) => {}
+                }
+                backoff_secs = backoff_secs.saturating_mul(2).min(MAX_BACKOFF_SECS);
+            }
+        }
+    }
     loop {
         if *shutdown.borrow() {
             return;
@@ -396,28 +417,25 @@ pub async fn run_turn_cache_backfill(store: Store, mut shutdown: watch::Receiver
                 if progress.rows_projected > 0 {
                     tracing::info!(
                         rows = progress.rows_projected,
-                        "completed turn_cache_facts historical backfill"
+                        "completed turn_cache_facts historical reconciliation"
                     );
                 }
                 return;
             }
             Ok(_) => {
-                consecutive_errors = 0;
+                backoff_secs = 2;
                 tokio::select! {
                     _ = shutdown.changed() => return,
                     () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
                 }
             }
             Err(error) => {
-                consecutive_errors = consecutive_errors.saturating_add(1);
-                tracing::warn!(%error, attempt = consecutive_errors, "turn_cache_facts backfill batch failed");
-                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
-                    return;
-                }
+                tracing::warn!(%error, backoff_secs, "turn_cache_facts backfill batch failed; retrying");
                 tokio::select! {
                     _ = shutdown.changed() => return,
-                    () = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                    () = tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)) => {}
                 }
+                backoff_secs = backoff_secs.saturating_mul(2).min(MAX_BACKOFF_SECS);
             }
         }
     }

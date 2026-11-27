@@ -3310,6 +3310,9 @@ impl PostgresStorage {
                UNION ALL \
                SELECT (substring(key FROM 19))::bigint AS n FROM settings \
                WHERE key ~ '^session_fork:sess-[0-9]+$' \
+               UNION ALL \
+               SELECT (substring(session_id FROM 6))::bigint AS n FROM turn_cache_facts \
+               WHERE session_id ~ '^sess-[0-9]+$' \
              ) AS ids",
         )
         .fetch_one(&self.pool)

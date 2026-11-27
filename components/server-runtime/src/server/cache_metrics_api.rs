@@ -8,8 +8,12 @@
 //!   combines persisted `turn_cache_facts` (surviving transcript `Clear`) with
 //!   live read-only effective vs inherited cache strategy and runtime-resolved
 //!   capabilities.
+//!
+//! Both endpoints emit `Cache-Control: no-store` so private cookie-authenticated
+//! responses are never reused across sign-out or permission changes.
 
 use super::*;
+use crate::machine_protocol::{PluginInstallationState, PluginInventory};
 use crate::provider_account::ProviderAccountId;
 use crate::store::turn_cache_facts::{
     AccountCacheMetrics, CacheMetricsTotals, DEFAULT_RETENTION_DAYS, SessionCacheMetrics,
@@ -36,29 +40,57 @@ pub struct SessionCacheMetricsQuery {
     pub limit: Option<usize>,
 }
 
+/// Verified keepalive capability resolution across signed installed generations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeepaliveCapability {
+    Verified(bool),
+    Mixed,
+    Unverified,
+}
+
+impl KeepaliveCapability {
+    const fn supports(self) -> Option<bool> {
+        match self {
+            Self::Verified(value) => Some(value),
+            Self::Mixed | Self::Unverified => None,
+        }
+    }
+
+    const fn status(self) -> &'static str {
+        match self {
+            Self::Verified(_) => "verified",
+            Self::Mixed => "mixed",
+            Self::Unverified => "unverified",
+        }
+    }
+}
+
 /// Runtime-resolved prompt-cache telemetry & mitigation capabilities.
 ///
-/// Always derived from live runtime configuration, installed provider behavior,
-/// host policy, and observed counters — never from advisory `models/` files.
+/// Always derived from installed signed plugin manifests, session behavior,
+/// host policy, and observed counters — never from advisory `models/` files or
+/// bundled fallback defaults when installed evidence is absent or mixed.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CacheCapabilitiesView {
     pub telemetry_level: String,
     pub observed_cache_read: bool,
     pub observed_cache_write: bool,
     pub supports_idle_rollover: bool,
-    pub supports_gateway_keepalive: bool,
+    pub supports_gateway_keepalive: Option<bool>,
+    pub keepalive_capability_status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rollover_restriction: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RolloverStrategyView {
+    pub availability: String,
     pub supported: bool,
-    pub enabled: bool,
-    pub inherited: bool,
+    pub enabled: Option<bool>,
+    pub inherited: Option<bool>,
     pub session_override: Option<bool>,
     pub idle_minutes: Option<u64>,
-    pub min_context_tokens: u64,
+    pub min_context_tokens: Option<u64>,
     pub due: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub restriction: Option<String>,
@@ -66,7 +98,7 @@ pub struct RolloverStrategyView {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct KeepaliveStrategyView {
-    pub supported: bool,
+    pub supported: Option<bool>,
     pub enabled: Option<bool>,
 }
 
@@ -92,6 +124,15 @@ pub struct SessionCacheMetricsResponse {
     pub metrics: SessionCacheMetrics,
     pub capabilities: CacheCapabilitiesView,
     pub strategy: SessionCacheStrategyView,
+}
+
+fn no_store_json<T: Serialize>(payload: T) -> Response {
+    (
+        StatusCode::OK,
+        [(header::CACHE_CONTROL, "no-store")],
+        Json(payload),
+    )
+        .into_response()
 }
 
 fn parse_window(
@@ -121,20 +162,91 @@ fn parse_window(
     Ok((label.to_owned(), now_ms.saturating_sub(span_ms), now_ms))
 }
 
-fn provider_supports_gateway_keepalive(
-    provider: &str,
-    behavior: Option<&cowboy_provider_sdk::ProviderBehaviorContract>,
-) -> bool {
-    let configuration = behavior.map_or_else(
-        || crate::provider::legacy_behavior(provider).configuration,
-        |value| value.configuration.clone(),
-    );
-    crate::managed_config::cache_protection(&configuration, &serde_json::json!({})).is_some()
+fn combine_keepalive_observations(observations: &[Option<bool>]) -> KeepaliveCapability {
+    if observations.is_empty() {
+        return KeepaliveCapability::Unverified;
+    }
+    let mut saw_true = false;
+    let mut saw_false = false;
+    let mut saw_unknown = false;
+    for obs in observations {
+        match obs {
+            Some(true) => saw_true = true,
+            Some(false) => saw_false = true,
+            None => saw_unknown = true,
+        }
+    }
+    if (saw_unknown && (saw_true || saw_false)) || (saw_true && saw_false) {
+        KeepaliveCapability::Mixed
+    } else if saw_true {
+        KeepaliveCapability::Verified(true)
+    } else if saw_false {
+        KeepaliveCapability::Verified(false)
+    } else {
+        KeepaliveCapability::Unverified
+    }
+}
+
+async fn resolve_account_keepalive_capability(
+    state: &AppState,
+    store: &Store,
+    provider_id: &str,
+) -> KeepaliveCapability {
+    let Ok(machines) = store.list_machines().await else {
+        return KeepaliveCapability::Unverified;
+    };
+    let mut observations = Vec::new();
+    for machine in machines.iter().filter(|m| !m.revoked) {
+        let Some(raw_plugins) = machine.inventory.get("plugins") else {
+            continue;
+        };
+        let Ok(plugins) = serde_json::from_value::<Vec<PluginInventory>>(raw_plugins.clone())
+        else {
+            continue;
+        };
+        for plugin in plugins
+            .into_iter()
+            .filter(|p| p.plugin_id == provider_id && p.state == PluginInstallationState::Active)
+        {
+            let obs = state
+                .provider_catalog
+                .package(
+                    provider_id,
+                    &plugin.plugin_version,
+                    &plugin.generation_digest,
+                )
+                .map(|pkg| {
+                    crate::managed_config::cache_protection(
+                        &pkg.manifest.runtime.behavior.configuration,
+                        &serde_json::json!({}),
+                    )
+                    .is_some()
+                });
+            observations.push(obs);
+        }
+    }
+    combine_keepalive_observations(&observations)
+}
+
+fn resolve_session_configuration(
+    provider_catalog: &crate::provider_catalog::ProviderCatalog,
+    meta: &crate::core::SessionMeta,
+) -> Option<cowboy_provider_sdk::ConfigurationBehavior> {
+    if let Some(behavior) = meta.provider_behavior.as_ref() {
+        return Some(behavior.configuration.clone());
+    }
+    provider_catalog
+        .package(
+            &meta.provider,
+            &meta.provider_version,
+            &meta.provider_generation_digest,
+        )
+        .map(|pkg| pkg.manifest.runtime.behavior.configuration)
 }
 
 fn resolve_capabilities(
     provider: &str,
-    behavior: Option<&cowboy_provider_sdk::ProviderBehaviorContract>,
+    keepalive: KeepaliveCapability,
     totals: &CacheMetricsTotals,
 ) -> CacheCapabilitiesView {
     let named_only = crate::provider_account::named_only(provider);
@@ -143,17 +255,23 @@ fn resolve_capabilities(
         observed_cache_read: totals.observed_cache_turns > 0,
         observed_cache_write: totals.observed_cache_write_turns > 0,
         supports_idle_rollover: !named_only,
-        supports_gateway_keepalive: provider_supports_gateway_keepalive(provider, behavior),
+        supports_gateway_keepalive: keepalive.supports(),
+        keepalive_capability_status: keepalive.status().to_owned(),
         rollover_restriction: named_only.then(|| ANTIGRAVITY_ROLLOVER_RESTRICTION.to_owned()),
     }
 }
 
-fn effective_strategy_mode(rollover_enabled: bool, keepalive_enabled: bool) -> &'static str {
+fn effective_strategy_mode(
+    rollover_enabled: Option<bool>,
+    keepalive_enabled: Option<bool>,
+) -> &'static str {
     match (rollover_enabled, keepalive_enabled) {
-        (true, true) => "rollover_and_keepalive",
-        (true, false) => "rollover",
-        (false, true) => "keepalive",
-        (false, false) => "none",
+        (Some(true), Some(true)) => "rollover_and_keepalive",
+        (Some(true), _) => "rollover",
+        (Some(false), Some(true)) => "keepalive",
+        (Some(false), _) => "none",
+        (None, Some(true)) => "keepalive_rollover_unknown",
+        (None, _) => "unavailable",
     }
 }
 
@@ -163,6 +281,7 @@ async fn load_authorized_account_cache_metrics(
     account_id: &str,
     query: &AccountCacheMetricsQuery,
     now_ms: i64,
+    keepalive: KeepaliveCapability,
 ) -> Result<AccountCacheMetricsResponse, (StatusCode, &'static str)> {
     let Ok(parsed_id) = account_id.parse::<ProviderAccountId>() else {
         return Err((StatusCode::NOT_FOUND, "unknown provider account"));
@@ -196,7 +315,7 @@ async fn load_authorized_account_cache_metrics(
             tracing::warn!(%error, account = %account.id.as_str(), "account cache metrics query failed");
             (StatusCode::INTERNAL_SERVER_ERROR, "storage error")
         })?;
-    let capabilities = resolve_capabilities(&account.provider_id, None, &metrics.totals);
+    let capabilities = resolve_capabilities(&account.provider_id, keepalive, &metrics.totals);
     Ok(AccountCacheMetricsResponse {
         account_id: account.id.as_str().to_owned(),
         account_label: account.label.clone(),
@@ -205,14 +324,16 @@ async fn load_authorized_account_cache_metrics(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn load_authorized_session_cache_metrics(
     hub: &Hub,
     store: &Store,
     principal: &ProductPrincipal,
     session_id: &str,
     query: &SessionCacheMetricsQuery,
-    rollover_policy: crate::context_rollover::Policy,
+    rollover_policy: Option<crate::context_rollover::Policy>,
     due: bool,
+    configuration: Option<&cowboy_provider_sdk::ConfigurationBehavior>,
 ) -> Result<SessionCacheMetricsResponse, (StatusCode, &'static str)> {
     if !session_is_visible(hub, principal, session_id) {
         return Err((StatusCode::NOT_FOUND, "unknown session"));
@@ -227,6 +348,7 @@ async fn load_authorized_session_cache_metrics(
     let metrics = store
         .session_cache_metrics(
             session_id,
+            meta.owner_user_id.as_deref(),
             &meta.provider,
             meta.provider_account_id.as_str(),
             limit,
@@ -236,39 +358,55 @@ async fn load_authorized_session_cache_metrics(
             tracing::warn!(%error, session = %session_id, "session cache metrics query failed");
             (StatusCode::INTERNAL_SERVER_ERROR, "storage error")
         })?;
-    let capabilities = resolve_capabilities(
-        &meta.provider,
-        meta.provider_behavior.as_ref(),
-        &metrics.totals,
-    );
 
-    let configuration = meta.provider_behavior.as_ref().map_or_else(
-        || crate::provider::legacy_behavior(&meta.provider).configuration,
-        |behavior| behavior.configuration.clone(),
-    );
     let preferences = hub
         .config_preferences(&meta.id)
         .unwrap_or_else(|| serde_json::json!({}));
-    let keepalive_enabled = crate::managed_config::cache_protection(&configuration, &preferences);
+    let (keepalive_cap, keepalive_enabled) = match configuration {
+        Some(cfg) => {
+            let enabled = crate::managed_config::cache_protection(cfg, &preferences);
+            (KeepaliveCapability::Verified(enabled.is_some()), enabled)
+        }
+        None => (KeepaliveCapability::Unverified, None),
+    };
+    let capabilities = resolve_capabilities(&meta.provider, keepalive_cap, &metrics.totals);
+
+    let (rollover_view, rollover_enabled) = match rollover_policy {
+        Some(policy) => (
+            RolloverStrategyView {
+                availability: "available".to_owned(),
+                supported: capabilities.supports_idle_rollover,
+                enabled: Some(policy.enabled),
+                inherited: Some(policy.session_override.is_none()),
+                session_override: policy.session_override,
+                idle_minutes: policy.idle_minutes,
+                min_context_tokens: Some(policy.min_context_tokens),
+                due,
+                restriction: capabilities.rollover_restriction.clone(),
+            },
+            Some(policy.enabled),
+        ),
+        None => (
+            RolloverStrategyView {
+                availability: "unavailable".to_owned(),
+                supported: capabilities.supports_idle_rollover,
+                enabled: None,
+                inherited: None,
+                session_override: None,
+                idle_minutes: None,
+                min_context_tokens: None,
+                due: false,
+                restriction: capabilities.rollover_restriction.clone(),
+            },
+            None,
+        ),
+    };
 
     let strategy = SessionCacheStrategyView {
-        effective_mode: effective_strategy_mode(
-            rollover_policy.enabled,
-            keepalive_enabled == Some(true),
-        )
-        .to_owned(),
-        rollover: RolloverStrategyView {
-            supported: capabilities.supports_idle_rollover,
-            enabled: rollover_policy.enabled,
-            inherited: rollover_policy.session_override.is_none(),
-            session_override: rollover_policy.session_override,
-            idle_minutes: rollover_policy.idle_minutes,
-            min_context_tokens: rollover_policy.min_context_tokens,
-            due,
-            restriction: capabilities.rollover_restriction.clone(),
-        },
+        effective_mode: effective_strategy_mode(rollover_enabled, keepalive_enabled).to_owned(),
+        rollover: rollover_view,
         gateway_keepalive: KeepaliveStrategyView {
-            supported: keepalive_enabled.is_some(),
+            supported: keepalive_cap.supports(),
             enabled: keepalive_enabled,
         },
     };
@@ -290,6 +428,23 @@ pub async fn account_cache_metrics(
     let Some(store) = state.store.as_ref() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "store unavailable").into_response();
     };
+    let Ok(parsed_id) = account_id.parse::<ProviderAccountId>() else {
+        return (StatusCode::NOT_FOUND, "unknown provider account").into_response();
+    };
+    if parsed_id.is_default() {
+        return (StatusCode::NOT_FOUND, "unknown provider account").into_response();
+    }
+    let provider_id = match store.provider_accounts(&auth.principal.user_id).await {
+        Ok(registry) => match registry.accounts.iter().find(|entry| entry.id == parsed_id) {
+            Some(account) => account.provider_id.clone(),
+            None => return (StatusCode::NOT_FOUND, "unknown provider account").into_response(),
+        },
+        Err(error) => {
+            tracing::warn!(%error, "failed reading provider accounts for cache metrics");
+            return (StatusCode::INTERNAL_SERVER_ERROR, "storage error").into_response();
+        }
+    };
+    let keepalive = resolve_account_keepalive_capability(&state, store, &provider_id).await;
     let now_ms = chrono::Utc::now().timestamp_millis();
     match load_authorized_account_cache_metrics(
         store,
@@ -297,10 +452,11 @@ pub async fn account_cache_metrics(
         &account_id,
         &query,
         now_ms,
+        keepalive,
     )
     .await
     {
-        Ok(payload) => Json(payload).into_response(),
+        Ok(payload) => no_store_json(payload),
         Err(error) => error.into_response(),
     }
 }
@@ -321,18 +477,21 @@ pub async fn session_cache_metrics(
     let Some(store) = state.store.as_ref() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "store unavailable").into_response();
     };
-    let rollover_policy = super::session_context::rollover::effective_policy(&state, &meta)
-        .await
-        .unwrap_or_else(|| crate::context_rollover::policy(None, None, &meta.provider));
+    // Preserve `None` on preference read failure instead of fabricating an
+    // enabled/default policy that disagrees with runtime dispatch.
+    let rollover_policy = super::session_context::rollover::effective_policy(&state, &meta).await;
     let idle_ms = state
         .hub
         .session_idle_for(&id)
         .map(|idle| u64::try_from(idle.as_millis()).unwrap_or(u64::MAX));
-    let due = !meta.context_usage_stale()
-        && idle_ms.is_some_and(|idle| {
-            rollover_policy.due(std::time::Duration::from_millis(idle), meta.context_used)
-        })
-        && super::session_context::rollover::is_ordinary_session(&state, &meta);
+    let due = rollover_policy.as_ref().is_some_and(|policy| {
+        !meta.context_usage_stale()
+            && idle_ms.is_some_and(|idle| {
+                policy.due(std::time::Duration::from_millis(idle), meta.context_used)
+            })
+            && super::session_context::rollover::is_ordinary_session(&state, &meta)
+    });
+    let configuration = resolve_session_configuration(&state.provider_catalog, &meta);
 
     match load_authorized_session_cache_metrics(
         &state.hub,
@@ -342,10 +501,11 @@ pub async fn session_cache_metrics(
         &query,
         rollover_policy,
         due,
+        configuration.as_ref(),
     )
     .await
     {
-        Ok(payload) => Json(payload).into_response(),
+        Ok(payload) => no_store_json(payload),
         Err(error) => error.into_response(),
     }
 }
@@ -373,7 +533,7 @@ mod tests {
     }
 
     #[test]
-    fn route_classification_protects_account_and_session_cache_metrics() {
+    fn route_classification_and_no_store_header_protect_private_cache_metrics() {
         assert_eq!(
             classify_route(
                 &Method::GET,
@@ -384,6 +544,14 @@ mod tests {
         assert_eq!(
             classify_route(&Method::GET, "/api/sessions/sess-1/cache-metrics"),
             RouteAuth::ProductSessionSee
+        );
+        let response = no_store_json(serde_json::json!({"ok": true}));
+        assert_eq!(
+            response
+                .headers()
+                .get(header::CACHE_CONTROL)
+                .and_then(|v| v.to_str().ok()),
+            Some("no-store")
         );
     }
 
@@ -440,41 +608,56 @@ mod tests {
     }
 
     #[test]
-    fn resolve_capabilities_enforces_antigravity_boundary_and_runtime_keepalive() {
-        let empty = CacheMetricsTotals::default();
-        let agy = resolve_capabilities("antigravity", None, &empty);
-        assert!(!agy.supports_idle_rollover);
-        assert!(!agy.supports_gateway_keepalive);
-        assert!(agy.rollover_restriction.is_some());
-        assert!(!agy.observed_cache_read);
-
-        let claude = resolve_capabilities(
-            "claude-code",
-            None,
-            &CacheMetricsTotals {
-                observed_cache_turns: 3,
-                observed_cache_write_turns: 3,
-                ..Default::default()
-            },
-        );
-        assert!(claude.supports_idle_rollover);
-        assert!(!claude.supports_gateway_keepalive);
-        assert!(claude.observed_cache_read);
-        assert!(claude.observed_cache_write);
-        assert!(claude.rollover_restriction.is_none());
-
-        assert_eq!(effective_strategy_mode(false, false), "none");
-        assert_eq!(effective_strategy_mode(true, false), "rollover");
-        assert_eq!(effective_strategy_mode(false, true), "keepalive");
+    fn resolve_capabilities_and_keepalive_combination_represent_verified_mixed_and_unverified() {
         assert_eq!(
-            effective_strategy_mode(true, true),
+            combine_keepalive_observations(&[]),
+            KeepaliveCapability::Unverified
+        );
+        assert_eq!(
+            combine_keepalive_observations(&[Some(true), Some(true)]),
+            KeepaliveCapability::Verified(true)
+        );
+        assert_eq!(
+            combine_keepalive_observations(&[Some(true), Some(false)]),
+            KeepaliveCapability::Mixed
+        );
+        assert_eq!(
+            combine_keepalive_observations(&[Some(false), None]),
+            KeepaliveCapability::Mixed
+        );
+
+        let empty = CacheMetricsTotals::default();
+        let agy = resolve_capabilities("antigravity", KeepaliveCapability::Verified(false), &empty);
+        assert!(!agy.supports_idle_rollover);
+        assert_eq!(agy.supports_gateway_keepalive, Some(false));
+        assert_eq!(agy.keepalive_capability_status, "verified");
+        assert!(agy.rollover_restriction.is_some());
+
+        let unverified =
+            resolve_capabilities("claude-deepseek", KeepaliveCapability::Unverified, &empty);
+        assert_eq!(unverified.supports_gateway_keepalive, None);
+        assert_eq!(unverified.keepalive_capability_status, "unverified");
+
+        assert_eq!(effective_strategy_mode(None, None), "unavailable");
+        assert_eq!(
+            effective_strategy_mode(None, Some(true)),
+            "keepalive_rollover_unknown"
+        );
+        assert_eq!(effective_strategy_mode(Some(false), Some(false)), "none");
+        assert_eq!(effective_strategy_mode(Some(true), Some(false)), "rollover");
+        assert_eq!(
+            effective_strategy_mode(Some(false), Some(true)),
+            "keepalive"
+        );
+        assert_eq!(
+            effective_strategy_mode(Some(true), Some(true)),
             "rollover_and_keepalive"
         );
     }
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
-    async fn account_and_session_cache_metrics_enforce_owner_and_visibility_isolation() {
+    async fn account_and_session_cache_metrics_enforce_owner_visibility_and_unavailable_policy() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::connect("sqlite::memory:", dir.path().join("artifacts"))
             .await
@@ -580,31 +763,42 @@ mod tests {
             ..Default::default()
         };
 
-        // Cross-owner account ID must return 404.
-        let cross =
-            load_authorized_account_cache_metrics(&store, owner_a, acct_b.as_str(), &query, now)
-                .await;
+        let cross = load_authorized_account_cache_metrics(
+            &store,
+            owner_a,
+            acct_b.as_str(),
+            &query,
+            now,
+            KeepaliveCapability::Verified(false),
+        )
+        .await;
         assert_eq!(cross.unwrap_err().0, StatusCode::NOT_FOUND);
 
-        // Literal "default" must never resolve on /api/provider-accounts/{account_id}/cache-metrics.
-        let default_err =
-            load_authorized_account_cache_metrics(&store, owner_a, "default", &query, now).await;
+        let default_err = load_authorized_account_cache_metrics(
+            &store,
+            owner_a,
+            "default",
+            &query,
+            now,
+            KeepaliveCapability::Unverified,
+        )
+        .await;
         assert_eq!(default_err.unwrap_err().0, StatusCode::NOT_FOUND);
 
-        // Owned account returns exact isolated metrics and runtime capabilities.
-        let ok =
-            load_authorized_account_cache_metrics(&store, owner_a, acct_a.as_str(), &query, now)
-                .await
-                .expect("owned account metrics");
+        let ok = load_authorized_account_cache_metrics(
+            &store,
+            owner_a,
+            acct_a.as_str(),
+            &query,
+            now,
+            KeepaliveCapability::Verified(false),
+        )
+        .await
+        .expect("owned account metrics");
         assert_eq!(ok.account_id, acct_a.as_str());
-        assert_eq!(ok.metrics.provider, "claude-code");
-        assert_eq!(ok.metrics.totals.total_turns, 1);
         assert_eq!(ok.metrics.totals.cached_read_tokens, Some(90_000));
-        assert_eq!(ok.metrics.totals.cache_write_tokens, Some(9_000));
-        assert_eq!(ok.metrics.totals.other_uncached_input_tokens, Some(1_000));
-        assert!(ok.capabilities.supports_idle_rollover);
+        assert_eq!(ok.capabilities.supports_gateway_keepalive, Some(false));
 
-        // Session visibility isolation: non-owner principal for Bob cannot see Alice's session.
         let principal_a = ProductPrincipal {
             user_id: owner_a.into(),
             username: "alice".into(),
@@ -615,33 +809,40 @@ mod tests {
             username: "bob".into(),
             role: AdminRole::Operator,
         };
-        let rollover_policy = crate::context_rollover::policy(None, None, "claude-code");
+
         let denied = load_authorized_session_cache_metrics(
             &hub,
             &store,
             &principal_b,
             "sess-a",
             &SessionCacheMetricsQuery::default(),
-            rollover_policy.clone(),
+            None,
             false,
+            None,
         )
         .await;
         assert_eq!(denied.unwrap_err().0, StatusCode::NOT_FOUND);
 
-        let allowed = load_authorized_session_cache_metrics(
+        // When preference read fails (None), strategy MUST report unavailable and never enabled/due.
+        let unavailable = load_authorized_session_cache_metrics(
             &hub,
             &store,
             &principal_a,
             "sess-a",
             &SessionCacheMetricsQuery::default(),
-            rollover_policy,
+            None,
             false,
+            None,
         )
         .await
-        .expect("visible session metrics");
-        assert_eq!(allowed.metrics.totals.total_turns, 1);
-        assert_eq!(allowed.strategy.effective_mode, "rollover");
-        assert!(allowed.strategy.rollover.inherited);
-        assert_eq!(allowed.strategy.rollover.idle_minutes, Some(60));
+        .expect("session metrics with unavailable rollover policy");
+        assert_eq!(unavailable.strategy.effective_mode, "unavailable");
+        assert_eq!(unavailable.strategy.rollover.availability, "unavailable");
+        assert_eq!(unavailable.strategy.rollover.enabled, None);
+        assert!(!unavailable.strategy.rollover.due);
+        assert_eq!(
+            unavailable.capabilities.keepalive_capability_status,
+            "unverified"
+        );
     }
 }

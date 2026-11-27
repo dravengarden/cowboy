@@ -35,8 +35,10 @@ export function contextRolloverCaption(view: ContextRolloverView): string {
 /** Session control for renewing the agent context after its cache expired. */
 export function ContextRolloverSettings({
   sessionId,
+  onPolicyChange,
 }: {
   sessionId: string;
+  onPolicyChange?: (() => void) | undefined;
 }): React.JSX.Element | null {
   const [view, setView] = useState<ContextRolloverView | null>(null);
   const [saving, setSaving] = useState(false);
@@ -70,11 +72,12 @@ export function ContextRolloverSettings({
         .then(async (response) => {
           await expectHttpOk(response, "Could not save context renewal");
           setView((await response.json()) as ContextRolloverView);
+          onPolicyChange?.();
         })
         .catch(() => {})
         .finally(() => setSaving(false));
     },
-    [sessionId],
+    [sessionId, onPolicyChange],
   );
   if (!view || view.policy.idle_minutes === null) return null;
   return (

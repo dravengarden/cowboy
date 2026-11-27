@@ -24,6 +24,7 @@ import {
   MetricFacts,
   type MetricTone,
 } from "./InfoMetricVisuals";
+import { useStoreSelector } from "./store";
 
 function shareTone(share: number | null): MetricTone | undefined {
   if (share === null) return undefined;
@@ -129,16 +130,25 @@ function RecentTurnsDisclosure({
 
 /**
  * Session-level prompt-cache efficiency, effective vs inherited cache strategy,
- * and collapsible per-turn diagnostic disclosure.
+ * and collapsible per-turn diagnostic disclosure. Refreshes when strategy
+ * toggles (`refreshKey`) or the session finishes a turn / updates usage.
  */
 export function SessionCacheMetricsSection({
   sessionId,
   compact = false,
+  refreshKey = 0,
 }: {
   sessionId: string;
   compact?: boolean;
+  refreshKey?: number;
 }): React.JSX.Element | null {
   const [data, setData] = useState<SessionCacheMetricsResponse | null>(null);
+  const liveSignal = useStoreSelector((snapshot) => {
+    const session = snapshot.sessionsById.get(sessionId);
+    return session
+      ? `${session.status}:${session.usage?.observed_at_ms ?? 0}:${session.context_used}`
+      : "";
+  });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -150,16 +160,17 @@ export function SessionCacheMetricsSection({
     return (): void => {
       controller.abort();
     };
-  }, [sessionId]);
+  }, [sessionId, refreshKey, liveSignal]);
 
+  const currentData = data !== null && data.session_id === sessionId ? data : null;
   const segments = useMemo(
-    () => (data ? buildDisjointCacheSegments(data.totals) : []),
-    [data],
+    () => (currentData ? buildDisjointCacheSegments(currentData.totals) : []),
+    [currentData],
   );
 
-  if (!data) return null;
+  if (!currentData) return null;
 
-  const { totals, coverage, strategy, recent_turns: recentTurns } = data;
+  const { totals, coverage, strategy, recent_turns: recentTurns } = currentData;
   const strategyLabel = formatStrategySummary(strategy);
   const cachedShareTone = shareTone(totals.cached_input_share);
 
