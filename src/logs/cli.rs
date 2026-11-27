@@ -79,6 +79,14 @@ enum Command {
         /// Date in UTC (YYYY-MM-DD).
         #[arg(long)]
         day: chrono::NaiveDate,
+        /// Private single-writer state file binding the authoritative source
+        /// cohort and accepted UTC day payload hashes.
+        #[arg(long)]
+        writer_state: PathBuf,
+        /// Explicitly allow updating the bound source cohort for future days
+        /// (never permits overwriting an already-exported UTC day).
+        #[arg(long)]
+        update_cohort: bool,
     },
     /// Poll recent records as JSONL; every frame reports gaps and truncation.
     Tail(WatchArgs),
@@ -340,16 +348,50 @@ impl LogsArgs {
                 .await
             }
             #[cfg(any(feature = "full", feature = "machine-host"))]
-            Command::WaitCacheMetrics { day } => {
-                let source = single_local(&sources)?;
-                let day = day
+            Command::WaitCacheMetrics {
+                day: day_date,
+                writer_state,
+                update_cohort,
+            } => {
+                // State-only replay: if this day was already claimed by this writer,
+                // emit the exact verified payload without requiring live sources.
+                if !update_cohort
+                    && let Some(replayed) =
+                        super::storage::try_replay_claimed_writer_state(&writer_state, day_date)?
+                {
+                    std::io::stdout().lock().write_all(&replayed)?;
+                    return Ok(());
+                }
+                let day = day_date
                     .and_hms_opt(0, 0, 0)
                     .expect("midnight")
                     .and_utc()
                     .timestamp_millis();
-                let store = SqliteStore::open(source.directory.clone(), false)?;
-                let bytes = store.wait_cache_otlp(day, now_ms(), false)?;
-                std::io::stdout().lock().write_all(&bytes)?;
+                let now = now_ms();
+                // Single-writer multi-Machine aggregation: collect every
+                // configured source's closed UTC day report and fail closed on
+                // duplicate store_id, absent rollup, truncation, degradation,
+                // unresolved coverage issues, or cohort/day conflicts.
+                let mut reports = Vec::with_capacity(sources.len());
+                for source in &sources {
+                    let value = source
+                        .execute(Operation::WaitCacheDaily {
+                            from_ms: day,
+                            to_ms: day + super::wait_cache::DAY_MS,
+                        })
+                        .await?;
+                    reports.push(value);
+                }
+                let refs: Vec<&serde_json::Value> = reports.iter().collect();
+                let encoded = super::storage::encode_wait_cache_otlp(day, now, &refs, false)?;
+                let payload = super::storage::claim_or_replay_writer_state(
+                    &writer_state,
+                    day_date,
+                    now,
+                    &encoded,
+                    update_cohort,
+                )?;
+                std::io::stdout().lock().write_all(&payload)?;
                 Ok(())
             }
             Command::Status => report(&sources, Operation::Status, self.allow_partial).await,

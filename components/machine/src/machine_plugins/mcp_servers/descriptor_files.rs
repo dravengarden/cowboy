@@ -50,8 +50,7 @@ impl DescriptorFile {
         let directory = private_directory()?;
         let digest = format!("{:x}", identity.finalize());
         let path = directory.join(format!("cowboy-mcp-binding-{}.json", &digest[..32]));
-        let mut files = FILES.lock();
-        if let Some(live) = files.get(&path).and_then(Weak::upgrade) {
+        if let Some(live) = FILES.lock().get(&path).and_then(Weak::upgrade) {
             return Ok(live);
         }
         let mut file = tempfile::Builder::new()
@@ -59,6 +58,12 @@ impl DescriptorFile {
             .tempfile_in(&directory)?;
         file.write_all(&bytes)?;
         file.as_file().sync_all()?;
+        let mut files = FILES.lock();
+        if let Some(live) = files.get(&path).and_then(Weak::upgrade) {
+            drop(files);
+            drop(file);
+            return Ok(live);
+        }
         file.persist(&path).map_err(|error| error.error)?;
         let live = Arc::new(Self { path: path.clone() });
         files.insert(path, Arc::downgrade(&live));

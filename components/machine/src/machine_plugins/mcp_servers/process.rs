@@ -7,6 +7,7 @@ use std::os::unix::{
     process::CommandExt as _,
 };
 use std::process::Stdio;
+use std::sync::Arc;
 
 use anyhow::{Context as _, Result, ensure};
 use serde_json::{Value, json};
@@ -56,22 +57,35 @@ impl MachinePluginStore {
         let lifecycle = tokio::select! {
             biased;
             () = invocation.ended() => anyhow::bail!("MCP authorization ended"),
-            guard = self.lifecycle.lock() => guard,
+            guard = Arc::clone(&self.lifecycle).lock_owned() => guard,
         };
-        let prepared = self.prepare_mcp_binding(&invocation.profile().binding)?;
-        let executable = std::fs::OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(&prepared.server.executable)?;
-        let before = stamp(&executable.metadata()?);
-        // Reverify under the lifecycle fence after opening the executable; the
-        // child executes this descriptor, never a subsequently replaced path.
-        self.prepare_mcp_binding(&invocation.profile().binding)?;
-        ensure!(
-            before == stamp(&executable.metadata()?)
-                && before == stamp(&std::fs::metadata(&prepared.server.executable)?),
-            "MCP executable changed during launch"
-        );
+        let ((prepared, executable), lifecycle) = {
+            let store = self.clone();
+            let binding = invocation.profile().binding.clone();
+            let (result, lifecycle) = tokio::task::spawn_blocking(move || {
+                let result = (|| -> Result<_> {
+                    let prepared = store.prepare_mcp_binding(&binding)?;
+                    let executable = std::fs::OpenOptions::new()
+                        .read(true)
+                        .custom_flags(libc::O_NOFOLLOW)
+                        .open(&prepared.server.executable)?;
+                    let before = stamp(&executable.metadata()?);
+                    // Reverify under the lifecycle fence after opening the executable; the
+                    // child executes this descriptor, never a subsequently replaced path.
+                    store.prepare_mcp_binding(&binding)?;
+                    ensure!(
+                        before == stamp(&executable.metadata()?)
+                            && before == stamp(&std::fs::metadata(&prepared.server.executable)?),
+                        "MCP executable changed during launch"
+                    );
+                    Ok((prepared, executable))
+                })();
+                (result, lifecycle)
+            })
+            .await
+            .context("MCP binding preparation task failed")?;
+            (result?, lifecycle)
+        };
         let mut profile = tempfile::NamedTempFile::new()?;
         profile.write_all(&serde_json::to_vec(invocation.profile())?)?;
         let profile_reader = std::fs::File::open(profile.path())?;

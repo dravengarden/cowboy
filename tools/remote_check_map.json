@@ -504,6 +504,8 @@
         "components/provider-runtime/execution-probe.mjs",
         "components/provider-runtime/mcp-bindings.mjs",
         "plugins/codex/runtime/bindings.mjs",
+        "plugins/codex/runtime/otel-observation.mjs",
+        "plugins/codex/runtime/otel-headers.mjs",
         "tools/third-party.ts",
         "tools/lib/command.ts"
       ],

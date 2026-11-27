@@ -10,8 +10,8 @@ use super::{
     AccountCacheMetrics, BackfillProgress, CacheMetricsCoverage, CacheMetricsTotals,
     DEFAULT_RETENTION_DAYS, MAX_MODELS_IN_RESPONSE, MAX_RECENT_TURNS, MAX_SAFE_TOKENS,
     MAX_VERSION_BYTES, ModelCacheMetrics, SessionCacheMetrics, TurnCacheFact,
-    classify_prompt_origin, extract_session_model, normalize_stop_reason, normalize_turn_usage,
-    sanitize_text,
+    classify_prompt_origin, extract_session_model, normalize_stop_reason,
+    normalize_turn_usage_for_provider, sanitize_text,
 };
 use crate::agent_model::{Event, TurnUsage};
 use crate::model::Envelope;
@@ -527,7 +527,7 @@ macro_rules! impl_turn_cache_backend {
                 None => ("unknown".to_owned(), None),
             };
 
-            let normalized = normalize_turn_usage(usage);
+            let normalized = normalize_turn_usage_for_provider(&session.provider, usage);
             let usage_observed = normalized.is_some();
             let stop_reason_norm = normalize_stop_reason(stop_reason);
             let (provider_version, provider_generation_digest, model) = match mode {
@@ -768,6 +768,14 @@ macro_rules! impl_turn_cache_backend {
                 .execute(&mut *tx)
                 .await
                 .context("reset turn_cache_backfill_state for startup reconcile")?;
+                // Also repair any zero-defaulted unmetered cache_write_tokens rows
+                // inserted by an older Controller during a temporary rollback.
+                sqlx::query(
+                    "UPDATE turn_cache_facts                      SET cache_write_tokens = NULL,                          other_uncached_input_tokens = NULL                      WHERE cache_write_tokens = 0                        AND provider IN (                            'codex', 'antigravity', 'claude-deepseek',                            'codex-deepseek', 'deepseek-harness', 'grok'                        )",
+                )
+                .execute(&mut *tx)
+                .await
+                .context("repair unmetered zero cache_write_tokens on startup reconcile")?;
                 tx.commit().await?;
                 Ok(())
             }

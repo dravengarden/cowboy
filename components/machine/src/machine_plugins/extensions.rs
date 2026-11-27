@@ -11,7 +11,8 @@ use crate::workspace_extensions::{
     Extension, Failure, Identity, Operation, Request, Response, runtime,
 };
 
-static READS: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(4);
+static READS: std::sync::LazyLock<std::sync::Arc<tokio::sync::Semaphore>> =
+    std::sync::LazyLock::new(|| std::sync::Arc::new(tokio::sync::Semaphore::new(4)));
 
 #[derive(Debug, PartialEq, Eq)]
 struct InstalledDependency {
@@ -142,14 +143,14 @@ impl MachinePluginStore {
     }
 
     pub async fn extension_request(&self, request: Request) -> Response {
-        let Ok(_permit) = READS.try_acquire() else {
+        let Ok(permit) = std::sync::Arc::clone(&READS).try_acquire_owned() else {
             return Response::Unavailable {
                 code: Failure::Busy,
             };
         };
         match tokio::time::timeout(
             std::time::Duration::from_secs(30),
-            self.extension_request_inner(request),
+            self.extension_request_inner(request, permit),
         )
         .await
         {
@@ -161,36 +162,79 @@ impl MachinePluginStore {
         }
     }
 
-    async fn extension_request_inner(&self, request: Request) -> Result<Response, Failure> {
+    fn inventory_extensions_blocking(&self) -> Result<Vec<Extension>, Failure> {
+        let inventory = self
+            .inventory_non_agent()
+            .map_err(|_| Failure::ExtensionChanged)?;
+        let mut extensions = Vec::new();
+        for installed in inventory
+            .into_iter()
+            .filter(|i| i.plugin_kind == PluginKind::WorkspaceExtension)
+            .take(128)
+        {
+            let identity = Identity {
+                plugin_id: installed.plugin_id,
+                plugin_version: installed.plugin_version,
+                generation_digest: installed.generation_digest,
+            };
+            let (package, _, _) = self
+                .verified_plugin_generation(&identity.plugin_id, &identity.generation_digest)
+                .map_err(|_| Failure::ExtensionChanged)?;
+            if let PluginPayload::WorkspaceExtension(contract) = package.payload {
+                let available = self.extension_contract(&identity).is_ok();
+                extensions.push(Extension::from_contract(identity, &contract, available));
+            }
+        }
+        Ok(extensions)
+    }
+
+    async fn extension_contract_async(
+        &self,
+        identity: &Identity,
+        permit: tokio::sync::OwnedSemaphorePermit,
+        error: Failure,
+    ) -> Result<
+        (
+            (
+                WorkspaceExtensionContract,
+                BTreeMap<String, InstalledDependency>,
+            ),
+            tokio::sync::OwnedSemaphorePermit,
+        ),
+        Failure,
+    > {
+        let lifecycle = std::sync::Arc::clone(&self.lifecycle).lock_owned().await;
+        let store = self.clone();
+        let id = identity.clone();
+        let (result, permit) = tokio::task::spawn_blocking(move || {
+            let _lifecycle = lifecycle;
+            let result = store.extension_contract(&id).map_err(|_| error);
+            (result, permit)
+        })
+        .await
+        .map_err(|_| error)?;
+        Ok((result?, permit))
+    }
+
+    async fn extension_request_inner(
+        &self,
+        request: Request,
+        permit: tokio::sync::OwnedSemaphorePermit,
+    ) -> Result<Response, Failure> {
         let remotes = runtime::remotes(std::path::Path::new(&request.root))
             .await
             .unwrap_or_default();
         match request.operation {
             Operation::Inventory => {
-                let _guard = self.lifecycle.lock().await;
-                let inventory = self.inventory().map_err(|_| Failure::ExtensionChanged)?;
-                let mut extensions = Vec::new();
-                for installed in inventory
-                    .into_iter()
-                    .filter(|i| i.plugin_kind == PluginKind::WorkspaceExtension)
-                    .take(128)
-                {
-                    let identity = Identity {
-                        plugin_id: installed.plugin_id,
-                        plugin_version: installed.plugin_version,
-                        generation_digest: installed.generation_digest,
-                    };
-                    let (package, _, _) = self
-                        .verified_plugin_generation(
-                            &identity.plugin_id,
-                            &identity.generation_digest,
-                        )
-                        .map_err(|_| Failure::ExtensionChanged)?;
-                    if let PluginPayload::WorkspaceExtension(contract) = package.payload {
-                        let available = self.extension_contract(&identity).is_ok();
-                        extensions.push(Extension::from_contract(identity, &contract, available));
-                    }
-                }
+                let lifecycle = std::sync::Arc::clone(&self.lifecycle).lock_owned().await;
+                let store = self.clone();
+                let extensions = tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    let _lifecycle = lifecycle;
+                    store.inventory_extensions_blocking()
+                })
+                .await
+                .map_err(|_| Failure::ExtensionChanged)??;
                 Ok(Response::Inventory {
                     extensions,
                     remotes,
@@ -210,11 +254,9 @@ impl MachinePluginStore {
                     .into_iter()
                     .find(|r| r.name == remote)
                     .ok_or(Failure::RepositoryUnavailable)?;
-                let (contract, dependencies) = {
-                    let _guard = self.lifecycle.lock().await;
-                    self.extension_contract(&identity)
-                        .map_err(|_| Failure::DependencyUnavailable)?
-                };
+                let ((contract, dependencies), permit) = self
+                    .extension_contract_async(&identity, permit, Failure::DependencyUnavailable)
+                    .await?;
                 let view = contract
                     .views
                     .iter()
@@ -245,10 +287,9 @@ impl MachinePluginStore {
                 };
                 // Do not hold the installation lock across a Git subprocess.
                 let current_remotes = runtime::remotes(std::path::Path::new(&request.root)).await?;
-                let _guard = self.lifecycle.lock().await;
-                let (_, current) = self
-                    .extension_contract(&identity)
-                    .map_err(|_| Failure::ExtensionChanged)?;
+                let ((_, current), _permit) = self
+                    .extension_contract_async(&identity, permit, Failure::ExtensionChanged)
+                    .await?;
                 if current != dependencies {
                     return Err(Failure::ExtensionChanged);
                 }

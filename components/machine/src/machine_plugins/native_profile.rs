@@ -52,6 +52,15 @@ struct Profile {
     account_sandbox: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct NativeProfileCarryEvidence {
+    contract: String,
+    version: String,
+    digest: String,
+    identity: NativeIdentity,
+    account_sandbox: bool,
+}
+
 impl MachinePluginStore {
     /// Retain the exact executable needed to reconcile native login/logout.
     /// Caller holds `auth_candidates` through retirement to fence new profiles.
@@ -589,6 +598,62 @@ impl MachinePluginStore {
             );
         }
         Ok((directory, profile))
+    }
+
+    /// Full profile evidence (including sandbox daemon liveness when
+    /// sandboxed, without retained package hashing) collected on the blocking
+    /// pool when preparing a release-carry proof.
+    pub(super) fn native_profile_carry_evidence(
+        &self,
+        provider: &str,
+        generation: u64,
+    ) -> Result<NativeProfileCarryEvidence> {
+        self.native_profile_carry_evidence_inner(provider, generation, true)
+    }
+
+    /// Local-file profile evidence rechecked under `auth_candidates` right
+    /// before persisting a worker reservation. Skips only the blocking sandbox
+    /// daemon socket query while still checking local revocation, logout
+    /// reservation, profile metadata, identity binding, and non-sandbox home.
+    pub(super) fn native_profile_local_carry_evidence(
+        &self,
+        provider: &str,
+        generation: u64,
+    ) -> Result<NativeProfileCarryEvidence> {
+        self.native_profile_carry_evidence_inner(provider, generation, false)
+    }
+
+    fn native_profile_carry_evidence_inner(
+        &self,
+        provider: &str,
+        generation: u64,
+        verify_sandbox_daemon: bool,
+    ) -> Result<NativeProfileCarryEvidence> {
+        let (directory, profile) = self.read_native_profile_metadata(provider, generation)?;
+        ensure!(
+            profile.leader_exited && profile.process_tree_exited && profile.login_succeeded,
+            "native login success is unconfirmed"
+        );
+        let identity = profile
+            .identity
+            .context("native profile login is incomplete")?;
+        let bound: NativeIdentity = serde_json::from_slice(&native_identity::read_login_file(
+            &self.native_profile_root(provider),
+            "identity.json",
+            4096,
+        )?)?;
+        ensure!(identity == bound, "native profile identity mismatch");
+        if verify_sandbox_daemon || !profile.account_sandbox {
+            let home = directory.join("home");
+            self.native_home_evidence(profile.account_sandbox, generation, &home)?;
+        }
+        Ok(NativeProfileCarryEvidence {
+            contract: profile.contract,
+            version: profile.version,
+            digest: profile.digest,
+            identity,
+            account_sandbox: profile.account_sandbox,
+        })
     }
 
     /// Whether `generation` names a live (not revoked) native profile.
@@ -1947,7 +2012,7 @@ pub(in crate::machine_plugins) mod tests {
         );
         assert!(
             !scoped
-                .credential_directories(&package, Some(&home))
+                .credential_directories(&package, Some(&home), None)
                 .unwrap()
                 .is_empty()
         );

@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "codex",
-  "version": "3.6.42",
+  "version": "3.6.43",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {
@@ -225,6 +225,7 @@
     },
     "environment": {
       "COWBOY_CODEX_PROMPT_SUGGESTIONS": "1",
+      "COWBOY_PRIVATE_CODEX_REQUEST_OBSERVATION": "codex-otlp-http-v1",
       "CODEX_PATH": {
         "source": "component_command",
         "component": {

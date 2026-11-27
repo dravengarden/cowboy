@@ -44,7 +44,7 @@ impl BrowserManager {
         }
         // A latch another path set (a stop that was then abandoned, or a
         // waiter that counted the last denial) is enforced here.
-        let latched = *instance.latch.lock();
+        let latched = instance.latched_reason();
         if let Some(reason) = latched {
             let event = self.stop_instance(instance, reason, false, None).await;
             self.send_state(event);
@@ -103,7 +103,7 @@ impl BrowserManager {
             }
         }
         if claim_scan(instance, now)
-            && let Err(reason) = self.recheck_periodic(instance)
+            && let Err(reason) = self.recheck_periodic_async(instance).await
         {
             let event = self.stop_instance(instance, reason, false, None).await;
             self.send_state(event);
@@ -228,39 +228,127 @@ impl BrowserManager {
         Ok(())
     }
 
-    /// [`Self::recheck`] for the supervisor's periodic scan, also run by a
-    /// graceful stop waiting for a copy (which blocks the supervisor): a
-    /// denial is rescanned about a second later, and the instance stops
-    /// once [`SCAN_DENIED_LIMIT`] consecutive denials were counted.
-    pub(super) fn recheck_periodic(&self, instance: &Arc<Instance>) -> Result<(), Reason> {
-        match self.recheck(instance) {
-            Ok(()) => {
-                instance.live.lock().scan_denied = 0;
-                Ok(())
+    /// Offload the periodic cgroup/socket/runtime-dir walk onto Tokio's
+    /// blocking pool and revalidate the instance before applying the result.
+    pub(super) async fn recheck_periodic_async(
+        &self,
+        instance: &Arc<Instance>,
+    ) -> Result<(), Reason> {
+        {
+            let live = instance.live.lock();
+            if live.phase == Phase::Stopping {
+                return Ok(());
             }
-            Err(Recheck::Stop(reason)) => Err(reason),
-            Err(Recheck::Unverified) => {
-                let attempt = {
-                    let mut live = instance.live.lock();
-                    live.scan_denied = live.scan_denied.saturating_add(1);
-                    if let Some(soon) = Instant::now()
-                        .checked_sub(SOCKET_SCAN_INTERVAL.saturating_sub(SCAN_DENIED_RETRY))
-                    {
-                        live.last_scan = soon;
-                    }
-                    live.scan_denied
-                };
-                if attempt >= SCAN_DENIED_LIMIT {
-                    tracing::warn!(event_name = "browser.scan.unverified",
-                        browser_instance = %instance.instance_id, attempt,
-                        "browser socket scan denied repeatedly");
-                    // Latched for every stop, including one already
-                    // waiting for the lifecycle lock; a running copy is
-                    // cancelled and no later copy is published.
-                    latch_forced(instance, Reason::ConfinementUnverified);
-                    return Err(Reason::ConfinementUnverified);
+            if !live.verified.pins_hold() {
+                instance.record_latch(Reason::ConfinementUnverified);
+                drop(live);
+                instance.cancel_copy();
+                return Err(Reason::ConfinementUnverified);
+            }
+        }
+        let cgroup_dir = instance.cgroup_dir.clone();
+        let runtime_dir = instance.runtime_dir.clone();
+        let instance_id = instance.instance_id.clone();
+        let scan = tokio::task::spawn_blocking(move || {
+            let denied = match verify::scan_sockets_periodic(&cgroup_dir) {
+                Ok(()) => false,
+                Err(verify::ScanFailure::Violation(violation)) => {
+                    tracing::warn!(
+                        event_name = "browser.scan.violation",
+                        browser_instance = %instance_id,
+                        detail = %violation,
+                        "browser socket scan violation"
+                    );
+                    return Err(Recheck::Stop(Reason::ListenerDetected));
                 }
-                Ok(())
+                Err(verify::ScanFailure::Denied(violation)) => {
+                    tracing::info!(
+                        event_name = "browser.scan.denied",
+                        browser_instance = %instance_id,
+                        detail = %violation,
+                        "browser socket scan denied"
+                    );
+                    true
+                }
+            };
+            if let Err(violation) = verify::runtime_directory_clean(&runtime_dir) {
+                tracing::warn!(
+                    event_name = "browser.runtime_dir.violation",
+                    browser_instance = %instance_id,
+                    detail = %violation,
+                    "browser runtime directory violation"
+                );
+                return Err(Recheck::Stop(Reason::ConfinementUnverified));
+            }
+            if denied {
+                return Err(Recheck::Unverified);
+            }
+            Ok(())
+        })
+        .await
+        .unwrap_or(Err(Recheck::Unverified));
+
+        // Apply phase validation, pin checks, and denial-counter updates under
+        // one live-state lock: ignore clean or inconclusive scans superseded by
+        // teardown while preserving definite violations in a populated cgroup.
+        let outcome = {
+            let mut live = instance.live.lock();
+            let stopping = live.phase == Phase::Stopping;
+            let pins_ok = live.verified.pins_hold();
+            match scan {
+                Ok(()) => {
+                    if stopping {
+                        Ok(())
+                    } else if !pins_ok {
+                        instance.record_latch(Reason::ConfinementUnverified);
+                        Err((Reason::ConfinementUnverified, false))
+                    } else {
+                        live.scan_denied = 0;
+                        Ok(())
+                    }
+                }
+                Err(Recheck::Unverified) => {
+                    if stopping {
+                        Ok(())
+                    } else if !pins_ok {
+                        instance.record_latch(Reason::ConfinementUnverified);
+                        Err((Reason::ConfinementUnverified, false))
+                    } else {
+                        live.scan_denied = live.scan_denied.saturating_add(1);
+                        if let Some(soon) = Instant::now()
+                            .checked_sub(SOCKET_SCAN_INTERVAL.saturating_sub(SCAN_DENIED_RETRY))
+                        {
+                            live.last_scan = soon;
+                        }
+                        if live.scan_denied >= SCAN_DENIED_LIMIT {
+                            tracing::warn!(
+                                event_name = "browser.scan.unverified",
+                                browser_instance = %instance.instance_id,
+                                attempt = live.scan_denied,
+                                "browser socket scan denied repeatedly"
+                            );
+                            instance.record_latch(Reason::ConfinementUnverified);
+                            Err((Reason::ConfinementUnverified, false))
+                        } else {
+                            Ok(())
+                        }
+                    }
+                }
+                Err(Recheck::Stop(reason)) => Err((reason, true)),
+            }
+        };
+        match outcome {
+            Ok(()) => Ok(()),
+            Err((reason, false)) => {
+                instance.cancel_copy();
+                Err(reason)
+            }
+            Err((reason, true)) => {
+                if torn_down_by_stop(instance) {
+                    return Ok(());
+                }
+                latch_forced(instance, reason);
+                Err(reason)
             }
         }
     }
@@ -295,7 +383,7 @@ pub(super) fn torn_down_by_stop(instance: &Instance) -> bool {
 /// Latch a stop that must be forced (the first reason wins) and cancel any
 /// running copy.
 pub(super) fn latch_forced(instance: &Instance, reason: Reason) {
-    instance.latch.lock().get_or_insert(reason);
+    instance.record_latch(reason);
     instance.cancel_copy();
 }
 

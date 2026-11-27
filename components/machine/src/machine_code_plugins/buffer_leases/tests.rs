@@ -202,8 +202,9 @@ async fn cancelled_preparation_reaps_only_the_unleased_fixture_process() {
     let host = CodeRuntimeHost::default();
     let plan = fixture_plan(&root.0, "pause-prepare");
     let payload = json!({"type":"prepareBuffer", "worktree":root.0, "path":"file.txt"});
-    let mut preparing = Box::pin(host.request("fixture-code", &payload, || {
-        Ok(CodeRuntimeSelection::Installed(plan.clone()))
+    let selected = plan.clone();
+    let mut preparing = Box::pin(host.request("fixture-code", &payload, move || {
+        Ok(CodeRuntimeSelection::Installed(selected))
     }));
     let observed = async {
         for _ in 0..300 {

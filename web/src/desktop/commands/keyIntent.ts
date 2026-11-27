@@ -105,6 +105,15 @@ export function installNativeCompositionTracker(): void {
   }, true);
 }
 
+/** Clear the post-composition hold after Cowboy deliberately aborts a
+ *  composition (e.g. Vim `jj` Insert escape under CJK IME) so Normal-mode keys
+ *  such as Space work immediately. */
+export function clearNativeCompositionHold(): void {
+  nativeComposing = false;
+  nativeComposingTarget = null;
+  nativeCompositionEndedAt = 0;
+}
+
 export function desktopCompositionActive(now = Date.now()): boolean {
   if (nativeComposing) {
     const active = typeof document !== "undefined" ? document.activeElement : null;

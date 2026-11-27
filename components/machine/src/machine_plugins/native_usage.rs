@@ -56,8 +56,51 @@ impl Invocation {
     }
 }
 
+enum PreparedNativeUsage {
+    Sandboxed {
+        active_digest: String,
+    },
+    Direct {
+        active_digest: String,
+        resolved: Box<ResolvedPluginHostInvocation>,
+        payload: serde_json::Value,
+    },
+}
+
 impl MachinePluginStore {
     #[allow(clippy::too_many_lines)] // One fenced read from admission to the checked report.
+    fn prepare_native_usage_blocking(
+        &self,
+        profile: &NativeProfileReceipt,
+    ) -> Result<PreparedNativeUsage> {
+        self.validate_native_usage(profile)
+            .context("native_usage_profile_changed")?;
+        let mut payload = serde_json::json!({"operation":"collect"});
+        let (active, active_digest) = self
+            .active_package(&profile.provider_id)?
+            .context("native_usage_collector_unavailable")?;
+        if account_sandbox::sandboxed(&active) {
+            return Ok(PreparedNativeUsage::Sandboxed { active_digest });
+        }
+        let resolved = self
+            .resolve_host_invocation(
+                &profile.provider_id,
+                &active.manifest.version,
+                &active_digest,
+                HostAuthentication::Native(profile),
+                PluginHostOperation::CollectUsage,
+                &mut payload,
+            )
+            .context("native_usage_collector_unavailable")?;
+        verify_live_login(&active, profile, &resolved.environment)?;
+        Ok(PreparedNativeUsage::Direct {
+            active_digest,
+            resolved: Box::new(resolved),
+            payload,
+        })
+    }
+
+    #[allow(clippy::too_many_lines)] // One fenced native usage collection flow.
     pub async fn collect_native_usage(&self, invocation: Invocation) -> Result<serde_json::Value> {
         let profile = &invocation.profile;
         let observation = tokio::time::timeout(
@@ -69,53 +112,66 @@ impl MachinePluginStore {
         .await
         .context("native_usage_busy")?;
         let mut lifecycle = Some(
-            tokio::time::timeout(invocation.remaining()?, self.lifecycle.lock())
+            tokio::time::timeout(invocation.remaining()?, self.lock_lifecycle_owned())
                 .await
                 .context("native_usage_busy")?,
         );
         invocation.remaining()?;
-        self.validate_native_usage(profile)
-            .context("native_usage_profile_changed")?;
-        let mut payload = serde_json::json!({"operation":"collect"});
-        // Use the active release; launch preparation checks its authentication
-        // contract against this login before any native process starts.
-        let (active, active_digest) = self
-            .active_package(&profile.provider_id)?
+        let mut observation = Some(observation);
+        let prepared = {
+            let store = self.clone();
+            let profile_owned = profile.clone();
+            let owned_obs = observation.take().context("native_usage_busy")?;
+            let owned_life = lifecycle.take().context("native_usage_busy")?;
+            let (result, owned_obs, owned_life) = tokio::task::spawn_blocking(move || {
+                let result = store.prepare_native_usage_blocking(&profile_owned);
+                (result, owned_obs, owned_life)
+            })
+            .await
             .context("native_usage_collector_unavailable")?;
-        if account_sandbox::sandboxed(&active) {
-            // The credential lives only in the daemon's account home.
-            drop(lifecycle);
-            // The credential is independent of the Provider release: the
-            // query runs on the active generation, and the daemon admits only
-            // the login's current signed-in credential generation.
-            let usage = self
-                .collect_sandbox_usage(&invocation, &active_digest, observation)
-                .await?;
-            let _lifecycle = tokio::time::timeout(invocation.remaining()?, self.lifecycle.lock())
+            observation = Some(owned_obs);
+            lifecycle = Some(owned_life);
+            result?
+        };
+        let (active_digest, resolved, payload) = match prepared {
+            PreparedNativeUsage::Sandboxed { active_digest } => {
+                drop(lifecycle.take());
+                let owned_obs = observation.take().context("native_usage_busy")?;
+                let usage = self
+                    .collect_sandbox_usage(&invocation, &active_digest, owned_obs)
+                    .await?;
+                let owned_life =
+                    tokio::time::timeout(invocation.remaining()?, self.lock_lifecycle_owned())
+                        .await
+                        .context("native_usage_busy")?;
+                invocation.remaining()?;
+                let store = self.clone();
+                let profile_owned = profile.clone();
+                let digest_check = active_digest.clone();
+                tokio::task::spawn_blocking(move || -> Result<()> {
+                    let _lifecycle = owned_life;
+                    store
+                        .validate_native_usage(&profile_owned)
+                        .context("native_usage_profile_changed")?;
+                    ensure!(
+                        store
+                            .active_package(&profile_owned.provider_id)?
+                            .is_some_and(|(_, digest)| digest == digest_check),
+                        "native_usage_installation_changed"
+                    );
+                    Ok(())
+                })
                 .await
-                .context("native_usage_busy")?;
-            self.validate_native_usage(profile)
-                .context("native_usage_profile_changed")?;
-            ensure!(
-                self.active_package(&profile.provider_id)?
-                    .is_some_and(|(_, digest)| digest == active_digest),
-                "native_usage_installation_changed"
-            );
-            return Ok(usage);
-        }
-        let _observation = observation;
-        let resolved = self
-            .resolve_host_invocation(
-                &profile.provider_id,
-                &active.manifest.version,
-                &active_digest,
-                HostAuthentication::Native(profile),
-                PluginHostOperation::CollectUsage,
-                &mut payload,
-            )
-            .context("native_usage_collector_unavailable")?;
+                .context("native_usage_installation_changed")??;
+                return Ok(usage);
+            }
+            PreparedNativeUsage::Direct {
+                active_digest,
+                resolved,
+                payload,
+            } => (active_digest, *resolved, payload),
+        };
         let environment = resolved.environment;
-        verify_live_login(&active, profile, &environment)?;
         invocation.remaining()?;
         let (program, arguments) = resolved
             .command
@@ -127,8 +183,6 @@ impl MachinePluginStore {
             &serde_json::to_vec(&payload)?,
             &environment,
             || {
-                // Tracked installations have an incarnation fence. Keep only
-                // this account's home guard while the native process runs.
                 if resolved.installation_revision.is_some() {
                     drop(lifecycle.take());
                 }
@@ -139,21 +193,37 @@ impl MachinePluginStore {
         .context("native_usage_collector_failed")?;
         if lifecycle.is_none() {
             lifecycle = Some(
-                tokio::time::timeout(invocation.remaining()?, self.lifecycle.lock())
+                tokio::time::timeout(invocation.remaining()?, self.lock_lifecycle_owned())
                     .await
                     .context("native_usage_busy")?,
             );
         }
         invocation.remaining()?;
-        self.validate_native_usage(profile)
-            .context("native_usage_profile_changed")?;
-        self.validate_host_installation(
-            &profile.provider_id,
-            &active_digest,
-            resolved.installation_revision.as_ref(),
-        )
-        .context("native_usage_installation_changed")?;
-        drop(lifecycle);
+        {
+            let store = self.clone();
+            let profile_owned = profile.clone();
+            let digest_check = active_digest.clone();
+            let revision = resolved.installation_revision.clone();
+            let owned_obs = observation.take();
+            let owned_life = lifecycle.take();
+            tokio::task::spawn_blocking(move || -> Result<()> {
+                let _observation = owned_obs;
+                let _lifecycle = owned_life;
+                store
+                    .validate_native_usage(&profile_owned)
+                    .context("native_usage_profile_changed")?;
+                store
+                    .validate_host_installation(
+                        &profile_owned.provider_id,
+                        &digest_check,
+                        revision.as_ref(),
+                    )
+                    .context("native_usage_installation_changed")?;
+                Ok(())
+            })
+            .await
+            .context("native_usage_installation_changed")??;
+        }
         // Only known reason codes leave the Machine. Never return collector
         // stderr, filesystem paths or native credentials in the response.
         // The account the collector read from the credential must be the
@@ -182,6 +252,34 @@ impl MachinePluginStore {
     /// collector starts after the Controller's dispatch expiry. `started` on a
     /// failure means the collector may have reached the Provider; such an
     /// outcome is unknown and never retried. Only the closed reply leaves.
+    fn prepare_native_reset_step_blocking(
+        &self,
+        profile: &NativeProfileReceipt,
+        dispatch: &crate::machine_protocol::NativeResetDispatch,
+        operation: PluginHostOperation,
+        mut payload: serde_json::Value,
+    ) -> Result<(ResolvedPluginHostInvocation, serde_json::Value)> {
+        let (active, active_digest) = self.selected_release(profile, dispatch)?;
+        // An account-sandbox credential never leaves its daemon's custody.
+        ensure!(
+            !account_sandbox::sandboxed(&active),
+            "native_reset_unsupported"
+        );
+        let resolved = self
+            .resolve_host_invocation(
+                &profile.provider_id,
+                &active.manifest.version,
+                &active_digest,
+                HostAuthentication::Native(profile),
+                operation,
+                &mut payload,
+            )
+            .context("native_usage_collector_unavailable")?;
+        verify_live_login(&active, profile, &resolved.environment)?;
+        Ok((resolved, payload))
+    }
+
+    #[allow(clippy::too_many_lines)] // One fenced two-step native reset flow.
     pub async fn consume_native_reset(
         &self,
         invocation: Invocation,
@@ -198,38 +296,43 @@ impl MachinePluginStore {
         let Some(spacing) = dispatch.min_spacing_ms.filter(|spacing| *spacing >= 0) else {
             return refuse("native_reset_unsupported");
         };
-        let _observation = tokio::time::timeout(
-            invocation.remaining()?,
-            self.native_observations
-                .account(&profile.account_id)
-                .lock_owned(),
-        )
-        .await
-        .context("native_usage_busy")?;
+        let mut observation = Some(
+            tokio::time::timeout(
+                invocation.remaining()?,
+                self.native_observations
+                    .account(&profile.account_id)
+                    .lock_owned(),
+            )
+            .await
+            .context("native_usage_busy")?,
+        );
         let mut lifecycle = Some(
-            tokio::time::timeout(invocation.remaining()?, self.lifecycle.lock())
+            tokio::time::timeout(invocation.remaining()?, self.lock_lifecycle_owned())
                 .await
                 .context("native_usage_busy")?,
         );
-        let (active, active_digest) = self.selected_release(profile, dispatch)?;
-        // An account-sandbox credential never leaves its daemon's custody.
-        if account_sandbox::sandboxed(&active) {
-            return refuse("native_reset_unsupported");
-        }
-        let resolve = |operation, payload: &mut serde_json::Value| {
-            self.resolve_host_invocation(
-                &profile.provider_id,
-                &active.manifest.version,
-                &active_digest,
-                HostAuthentication::Native(profile),
-                operation,
-                payload,
-            )
-            .context("native_usage_collector_unavailable")
+        before_expiry(&invocation, dispatch)?;
+        let (checked, check) = {
+            let store = self.clone();
+            let profile_owned = profile.clone();
+            let dispatch_owned = dispatch.clone();
+            let owned_obs = observation.take().context("native_usage_busy")?;
+            let owned_life = lifecycle.take().context("native_usage_busy")?;
+            let (result, owned_obs, owned_life) = tokio::task::spawn_blocking(move || {
+                let result = store.prepare_native_reset_step_blocking(
+                    &profile_owned,
+                    &dispatch_owned,
+                    PluginHostOperation::CollectUsage,
+                    serde_json::json!({"operation": "collect"}),
+                );
+                (result, owned_obs, owned_life)
+            })
+            .await
+            .context("native_usage_collector_unavailable")?;
+            observation = Some(owned_obs);
+            lifecycle = Some(owned_life);
+            result?
         };
-        let mut check = serde_json::json!({"operation": "collect"});
-        let checked = resolve(PluginHostOperation::CollectUsage, &mut check)?;
-        verify_live_login(&active, profile, &checked.environment)?;
         if !checked
             .environment
             .contains_key("CLAUDE_SECURESTORAGE_CONFIG_DIR")
@@ -251,15 +354,38 @@ impl MachinePluginStore {
             let remaining =
                 u64::try_from(dispatch.expires_at_ms.saturating_sub(unix_ms())).unwrap_or(0);
             lifecycle = Some(
-                tokio::time::timeout(Duration::from_millis(remaining), self.lifecycle.lock())
-                    .await
-                    .context("native_usage_busy")?,
+                tokio::time::timeout(
+                    Duration::from_millis(remaining),
+                    self.lock_lifecycle_owned(),
+                )
+                .await
+                .context("native_usage_busy")?,
             );
-            self.selected_release(profile, dispatch)?;
         }
-        let mut payload = serde_json::to_value(request).map_err(anyhow::Error::from)?;
-        let resolved = resolve(PluginHostOperation::ResetUsage, &mut payload)?;
-        verify_live_login(&active, profile, &resolved.environment)?;
+        before_expiry(&invocation, dispatch)?;
+        let initial_payload = serde_json::to_value(request).map_err(anyhow::Error::from)?;
+        let (resolved, payload) = {
+            let store = self.clone();
+            let profile_owned = profile.clone();
+            let dispatch_owned = dispatch.clone();
+            let owned_obs = observation.take().context("native_usage_busy")?;
+            let owned_life = lifecycle.take().context("native_usage_busy")?;
+            let (result, owned_obs, owned_life) = tokio::task::spawn_blocking(move || {
+                let result = store.prepare_native_reset_step_blocking(
+                    &profile_owned,
+                    &dispatch_owned,
+                    PluginHostOperation::ResetUsage,
+                    initial_payload,
+                );
+                (result, owned_obs, owned_life)
+            })
+            .await
+            .context("native_usage_collector_unavailable")?;
+            observation = Some(owned_obs);
+            lifecycle = Some(owned_life);
+            result?
+        };
+        let _observation = observation;
         before_expiry(&invocation, dispatch)?;
         let (program, arguments) = resolved
             .command

@@ -1929,68 +1929,54 @@ impl Broker {
     /// login carries over to. Adoption keeps a live worker's exact binding;
     /// only a `replacing` reload (an adopt-only declaration followed by a reset
     /// that stops that worker first) may move it.
-    fn account_binding_matches(&self, session: &StartSession, replacing: bool) -> bool {
-        let store = &self.args.provider_store;
-        if !matches!(
-            store.account_worker_binding_admits(session, replacing),
-            Ok(true)
-        ) {
-            return false;
-        }
-        let carries = |previous: &StartSession| {
-            account_worker::binding_matches(previous, session)
-                || (!session.provider_account_id.is_default()
-                    && store.account_launch_carries(previous, session))
-        };
-        let declaration_matches = self
-            .sessions
-            .lock()
-            .get(&session.session_id)
-            .is_none_or(&carries);
-        declaration_matches
-            && self
-                .workers
-                .lock()
-                .get(&session.session_id)
-                .is_none_or(|worker| {
-                    worker.snapshot.launch.as_ref().map_or(
-                        session.provider_account_id.is_default(),
-                        |previous| {
-                            account_worker::binding_matches(previous, session)
-                                || (replacing && carries(previous))
-                        },
-                    )
-                })
+    async fn account_binding_matches(&self, session: &StartSession, replacing: bool) -> bool {
+        account_worker::account_binding_matches_async(self, session, replacing).await
     }
 
     async fn ensure_session(self: &Arc<Self>, session: StartSession) {
         let gate = self.session_lifecycle_gate(&session.session_id);
         let guard = gate.lock().await;
-        self.ensure_session_in_lifecycle(session, &guard).await;
+        self.ensure_session_in_lifecycle(session, &guard, true)
+            .await;
     }
 
-    async fn ensure_session_in_lifecycle(
-        self: &Arc<Self>,
-        session: StartSession,
-        _guard: &tokio::sync::MutexGuard<'_, ()>,
-    ) {
+    async fn admit_ensure_account_binding(
+        &self,
+        session: &StartSession,
+        require_active_lease: bool,
+    ) -> bool {
         if self.account_session_stopped(&session.session_id) {
             self.command_rejected(
                 &session.session_id,
                 format!("ensure:{}", session.session_id),
                 "account session is quiesced".into(),
             );
-            return;
+            return false;
         }
-        // An adopt-only declaration precedes a reload's reset and never spawns
-        // (every launch rechecks the journal), so it may name a release the
-        // same login carries over to while the old worker is still running.
-        if !self.account_binding_matches(&session, session.adopt_only) {
+        if !self
+            .account_binding_matches(session, session.adopt_only)
+            .await
+        {
             self.command_rejected(
                 &session.session_id,
                 format!("ensure:{}", session.session_id),
                 "session subscription cannot change through worker adoption".into(),
             );
+            return false;
+        }
+        !require_active_lease || lease_active(self)
+    }
+
+    async fn ensure_session_in_lifecycle(
+        self: &Arc<Self>,
+        session: StartSession,
+        _guard: &tokio::sync::MutexGuard<'_, ()>,
+        require_active_lease: bool,
+    ) {
+        if !self
+            .admit_ensure_account_binding(&session, require_active_lease)
+            .await
+        {
             return;
         }
         if let Err(error) = self.check_deletion_journal() {
@@ -2172,12 +2158,15 @@ impl Broker {
         if !lease_active(self) {
             return;
         }
-        if !self.account_binding_matches(&session, true) {
+        if !self.account_binding_matches(&session, true).await {
             self.command_rejected(
                 &session_id,
                 command_id,
                 "session subscription cannot change through reset".into(),
             );
+            return;
+        }
+        if !lease_active(self) {
             return;
         }
         if self.account_session_stopped(&session_id) {
@@ -2273,7 +2262,7 @@ impl Broker {
         self.pending_commands.lock().remove(&session_id);
         self.cancelled_sessions.lock().remove(&session_id);
         self.resetting_sessions.lock().remove(&session_id);
-        self.ensure_session_in_lifecycle(session, &_cleanup_guard)
+        self.ensure_session_in_lifecycle(session, &_cleanup_guard, false)
             .await;
         self.send_controller(Frame::CommandAck {
             session_id,
@@ -3373,17 +3362,7 @@ impl Broker {
         session: &StartSession,
     ) -> Result<oneshot::Receiver<std::result::Result<std::process::ExitStatus, String>>> {
         let provider = self.resolve_launch_provider(session).await?;
-        let behavior = provider.as_ref().map_or_else(
-            || {
-                session
-                    .provider_behavior
-                    .clone()
-                    .unwrap_or_else(|| crate::provider_behavior::legacy_behavior(&session.provider))
-            },
-            |provider| provider.behavior.clone(),
-        );
-        worker_launch::validate_launch_placement(session, &provider, &behavior)?;
-        let session_environment = self.launch_session_environment(session, &provider, &behavior)?;
+        let session_environment = self.prepare_launch_environment(session, &provider).await?;
         let worker_command = self.launch_worker_command(session).await?;
         let network = provider.as_ref().and_then(|provider| provider.network);
         // A signed network policy needs a unit sandbox; refuse to launch the
@@ -3558,7 +3537,9 @@ impl Broker {
         // Close the final race between the async owner check above and spawn:
         // two concurrent launch tasks must never overwrite each other's PID.
         // `Command::spawn` is synchronous, so this lock is not held across an
-        // await point.
+        // await point. Pre-verify any carried release off Tokio before taking locks.
+        let carry_proof =
+            account_worker::prepare_carry_async(&self.args.provider_store, session).await?;
         let mut direct_workers = if self.args.spawn_mode == SpawnMode::Direct {
             let workers = self.direct_worker_pids.lock();
             ensure!(
@@ -3596,6 +3577,7 @@ impl Broker {
             containment
                 .as_ref()
                 .map(crate::cgroup::Containment::identity),
+            carry_proof.as_ref(),
         )
         .with_context(|| match self.args.spawn_mode {
             SpawnMode::Direct => "spawning worker process",
@@ -6520,7 +6502,7 @@ mod tests {
             assert!(matches!(rx.recv().await,
                 Some(Frame::CommandAck { accepted: false, reason: Some(reason), .. })
                     if reason.contains("subscription cannot change")));
-            assert!(broker.account_binding_matches(&launch, false));
+            assert!(broker.account_binding_matches(&launch, false).await);
             assert!(broker.workers.lock().contains_key("sess-1"));
             assert!(!broker.cancelled_sessions.lock().contains("sess-1"));
             assert!(worker_rx.try_recv().is_err());

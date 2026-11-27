@@ -4,6 +4,7 @@ use super::{capture, data::text};
 use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
 
 pub const REQUEST: &str = "cowboy.provider.request_usage";
+pub const TURN_DIAGNOSTICS: &str = "cowboy.provider.turn_diagnostics";
 pub const DISPATCH: &str = "cowboy.wait.dispatch";
 pub const SETTLED: &str = "cowboy.wait.settled";
 pub const DECISION: &str = "cowboy.cache_opt.decision";
@@ -43,6 +44,11 @@ impl Fields {
             self.0.push(scalar(key, any_value::Value::BoolValue(value)));
         }
         self
+    }
+
+    #[cfg(all(test, feature = "full"))]
+    pub(crate) fn as_slice(&self) -> &[KeyValue] {
+        &self.0
     }
 }
 
@@ -121,9 +127,23 @@ pub fn provider(value: &str) -> &'static str {
     match value {
         "claude-code" => "claude-code",
         "codex" => "codex",
+        "antigravity" => "antigravity",
         "claude-deepseek" => "claude-deepseek",
         "codex-deepseek" => "codex-deepseek",
+        "deepseek-harness" => "deepseek-harness",
+        "grok" => "grok",
         _ => "other",
+    }
+}
+
+/// Resolve the logical Cowboy Provider for a gateway usage event. The shared
+/// DeepSeek Anthropic gateway reports `producer_id = "claude-deepseek"` with
+/// `agent = "deepseek-harness"` for DeepSeek Harness sessions.
+pub fn gateway_provider(producer_id: &str, agent: &str) -> &'static str {
+    if producer_id == "claude-deepseek" && agent == "deepseek-harness" {
+        "deepseek-harness"
+    } else {
+        provider(producer_id)
     }
 }
 
@@ -222,10 +242,21 @@ pub fn record_notice_receipt(session: &str, turn_id: &str, stop_reason: &str) {
 
 /// The gateway commits one accounting envelope before projecting it here.
 /// Its input field is already normalized to total input across wire dialects.
+#[cfg(any(test, feature = "machine-host"))]
+fn legacy_gateway_replay_producer(producer_id: &str) -> &'static str {
+    match producer_id {
+        "codex" => "codex",
+        "claude-code" => "claude-code",
+        "codex-deepseek" => "codex-deepseek",
+        "claude-deepseek" => "claude-deepseek",
+        _ => "other",
+    }
+}
+
 #[cfg(feature = "machine-host")]
 pub fn gateway_usage(id: &str, event: &crate::machine_protocol::ProviderUsageEvent) {
     capture::provider_usage(event);
-    let provider = provider(&event.producer_id);
+    let provider = gateway_provider(&event.producer_id, &event.agent);
     let keepalive = event.request_purpose == "cache_keepalive";
     // Cache-protection decisions that did not make a provider request are
     // diagnostics about coverage, not billable attempts.
@@ -268,9 +299,13 @@ pub fn gateway_usage(id: &str, event: &crate::machine_protocol::ProviderUsageEve
     let started = event
         .duration_ms
         .and_then(|ms| u64::try_from(event.occurred_at_ms).ok()?.checked_sub(ms));
+    // Preserve the exact pre-upgrade gateway replay producer bucket so
+    // replayed spooled events (including deepseek-harness and former "other"
+    // producers) keep identical rollup deduplication hashes.
+    let replay_producer = legacy_gateway_replay_producer(&event.producer_id);
     record(
         REQUEST,
-        &[provider, id],
+        &[replay_producer, id],
         Some(event.occurred_at_ms),
         Tokens {
             input: event.input_tokens,
@@ -372,5 +407,51 @@ mod tests {
             )["cache_write_unknown_ttl_input_tokens"]
                 .is_null()
         );
+    }
+
+    #[test]
+    fn provider_and_gateway_provider_preserve_all_seven_first_party_providers() {
+        for name in [
+            "claude-code",
+            "codex",
+            "antigravity",
+            "claude-deepseek",
+            "codex-deepseek",
+            "deepseek-harness",
+            "grok",
+        ] {
+            assert_eq!(provider(name), name);
+        }
+        assert_eq!(provider("unknown-plugin"), "other");
+        assert_eq!(
+            gateway_provider("claude-deepseek", "deepseek-harness"),
+            "deepseek-harness"
+        );
+        assert_eq!(
+            gateway_provider("claude-deepseek", "claude"),
+            "claude-deepseek"
+        );
+        assert_eq!(
+            gateway_provider("codex-deepseek", "codex"),
+            "codex-deepseek"
+        );
+    }
+
+    #[test]
+    fn gateway_provider_maps_deepseek_harness_and_keeps_other_producers() {
+        assert_eq!(
+            gateway_provider("claude-deepseek", "deepseek-harness"),
+            "deepseek-harness"
+        );
+        assert_eq!(
+            gateway_provider("claude-deepseek", "claude-deepseek"),
+            "claude-deepseek"
+        );
+        assert_eq!(
+            legacy_gateway_replay_producer("claude-deepseek"),
+            "claude-deepseek"
+        );
+        assert_eq!(legacy_gateway_replay_producer("antigravity"), "other");
+        assert_eq!(legacy_gateway_replay_producer("custom-gw"), "other");
     }
 }

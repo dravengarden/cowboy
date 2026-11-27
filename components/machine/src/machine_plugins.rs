@@ -291,6 +291,14 @@ impl MachineEncryptionIdentity {
 
 use platform_match::{matching_payload, matching_runtime_artifacts};
 
+pub(super) type LifecycleGuard = tokio::sync::OwnedMutexGuard<()>;
+
+pub(super) struct VerifiedInstallPackage {
+    pub(super) package: PluginPackage,
+    pub(super) host_bundle: Option<PluginHostBundle>,
+    pub(super) host_bundle_bytes: Option<Vec<u8>>,
+}
+
 #[derive(Clone)]
 pub struct MachinePluginStore {
     root: PathBuf,
@@ -301,6 +309,7 @@ pub struct MachinePluginStore {
     architecture: String,
     encryption: MachineEncryptionIdentity,
     lifecycle: std::sync::Arc<tokio::sync::Mutex<()>>,
+    last_inventory: std::sync::Arc<parking_lot::Mutex<Option<Vec<PluginInventory>>>>,
     native_observations: std::sync::Arc<native_usage::Observations>,
     auth_candidates: std::sync::Arc<parking_lot::Mutex<()>>,
     /// Exact refresh candidates whose native auth probe failed, with their
@@ -342,6 +351,7 @@ struct ProviderActivationSnapshot {
 
 mod account_stop;
 pub use account_stop::SystemdWorker;
+pub use account_stop::VerifiedReleaseCarry;
 mod auth_candidate;
 #[cfg(test)]
 mod startup_tests;
@@ -381,6 +391,7 @@ impl MachinePluginStore {
             architecture,
             encryption,
             lifecycle: std::sync::Arc::new(tokio::sync::Mutex::new(())),
+            last_inventory: std::sync::Arc::new(parking_lot::Mutex::new(None)),
             native_observations: std::sync::Arc::default(),
             auth_candidates: std::sync::Arc::default(),
             refresh_probe_failures: std::sync::Arc::default(),
@@ -448,39 +459,72 @@ impl MachinePluginStore {
 
     /// Explicit Machine writer cutover, not an inventory-read side effect.
     /// It never reconstructs a slot that already has installation authority.
+    pub(super) fn lock_lifecycle_owned(
+        &self,
+    ) -> impl std::future::Future<Output = LifecycleGuard> + 'static {
+        std::sync::Arc::clone(&self.lifecycle).lock_owned()
+    }
+
+    pub(super) async fn run_with_lifecycle<T: Send + 'static>(
+        lifecycle: &mut Option<LifecycleGuard>,
+        context: &'static str,
+        work: impl FnOnce() -> Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let guard = lifecycle
+            .take()
+            .context("Plugin store lifecycle lock lost")?;
+        let (result, guard) = tokio::task::spawn_blocking(move || {
+            let result = work();
+            (result, guard)
+        })
+        .await
+        .context(context)?;
+        *lifecycle = Some(guard);
+        result
+    }
+
     pub async fn enable_installation_tracking(&self) -> Result<()> {
-        let _lifecycle = self.lifecycle.lock().await;
-        let mut existing = Vec::new();
-        for entry in fs::read_dir(&self.root)? {
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() {
-                continue;
-            }
-            let plugin = entry.file_name().to_string_lossy().into_owned();
-            if self.operations.installations.tracked(&plugin)
-                || self.operations.install_attempts.tracked(&plugin)
-            {
-                continue;
-            }
-            if let Some(active) = self.inventory_one_untracked(&plugin)? {
-                // Agent inventory already verifies its signed generation,
-                // including the retained legacy Provider reader.
-                if active.plugin_kind != cowboy_plugin_sdk::PluginKind::AgentProvider {
-                    self.verified_plugin_generation(&plugin, &active.generation_digest)?;
+        let lifecycle = self.lock_lifecycle_owned().await;
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let _lifecycle = lifecycle;
+            let mut existing = Vec::new();
+            for entry in fs::read_dir(&store.root)? {
+                let entry = entry?;
+                if !entry.file_type()?.is_dir() {
+                    continue;
                 }
-                existing.push((plugin, active.generation_digest));
+                let plugin = entry.file_name().to_string_lossy().into_owned();
+                if store.operations.installations.tracked(&plugin)
+                    || store.operations.install_attempts.tracked(&plugin)
+                {
+                    continue;
+                }
+                if let Some(active) = store.inventory_one_untracked(&plugin)? {
+                    // Agent inventory already verifies its signed generation,
+                    // including the retained legacy Provider reader.
+                    if active.plugin_kind != cowboy_plugin_sdk::PluginKind::AgentProvider {
+                        store.verified_plugin_generation(&plugin, &active.generation_digest)?;
+                    }
+                    existing.push((plugin, active.generation_digest));
+                }
             }
-        }
-        self.operations.installations.enable(&existing)?;
-        self.operations.install_attempts.finish_abandoned_staging()
+            store.operations.installations.enable(&existing)?;
+            store.operations.install_attempts.finish_abandoned_staging()
+        })
+        .await
+        .context("installation tracking setup task failed")?
     }
 
     fn begin_installation(
         &self,
         plugin: &str,
         digest: &str,
+        lease_check: &installation::LeaseCheck,
     ) -> Result<Option<operations::installations::PendingInstallation>> {
+        lease_check.check()?;
         let current = self.inventory_one_untracked(plugin)?;
+        lease_check.check()?;
         self.operations.installations.begin(
             plugin,
             current.as_ref().map(|p| p.generation_digest.as_str()),
@@ -518,6 +562,54 @@ impl MachinePluginStore {
         self.operations.installations.finish(pending)
     }
 
+    async fn begin_installation_async(
+        &self,
+        plugin: &str,
+        digest: &str,
+        guard: &InstallGuard<'_>,
+        lifecycle: &mut Option<LifecycleGuard>,
+    ) -> Result<Option<operations::installations::PendingInstallation>> {
+        let store = self.clone();
+        let plugin = plugin.to_owned();
+        let digest = digest.to_owned();
+        let lease_check = guard.lease_check();
+        Self::run_with_lifecycle(
+            lifecycle,
+            "Plugin installation begin task failed",
+            move || store.begin_installation(&plugin, &digest, &lease_check),
+        )
+        .await
+    }
+
+    async fn finish_installation_async(
+        &self,
+        plugin: &str,
+        pending: Option<operations::installations::PendingInstallation>,
+        lifecycle: &mut Option<LifecycleGuard>,
+    ) -> Result<()> {
+        let store = self.clone();
+        let plugin = plugin.to_owned();
+        Self::run_with_lifecycle(
+            lifecycle,
+            "Plugin installation finish task failed",
+            move || store.finish_installation(&plugin, pending),
+        )
+        .await
+    }
+
+    async fn inventory_one_async(
+        &self,
+        plugin: &str,
+        lifecycle: &mut Option<LifecycleGuard>,
+    ) -> Result<Option<PluginInventory>> {
+        let store = self.clone();
+        let plugin = plugin.to_owned();
+        Self::run_with_lifecycle(lifecycle, "Plugin inventory task failed", move || {
+            store.inventory_one(&plugin)
+        })
+        .await
+    }
+
     fn checked_install_package(&self, desired: &DesiredPlugin) -> Result<PluginPackage> {
         let bytes = base64::engine::general_purpose::STANDARD
             .decode(&desired.package_base64)
@@ -538,12 +630,24 @@ impl MachinePluginStore {
     }
 
     pub async fn install(&self, desired: &DesiredPlugin) -> Result<PluginInventory> {
-        let _lifecycle = self.lifecycle.lock().await;
-        self.install_inner(desired, &mut InstallGuard::Legacy).await
+        let mut lifecycle = Some(self.lock_lifecycle_owned().await);
+        let store = self.clone();
+        let desired_owned = desired.clone();
+        let verified = Self::run_with_lifecycle(
+            &mut lifecycle,
+            "Plugin install verification task failed",
+            move || {
+                InstallGuard::Legacy.validate_for(&store, &desired_owned)?;
+                store.verified_install_package(&desired_owned)
+            },
+        )
+        .await?;
+        self.install_inner(desired, verified, &mut InstallGuard::Legacy, &mut lifecycle)
+            .await
     }
 
-    fn verified_install_package(&self, desired: &DesiredPlugin) -> Result<PluginPackage> {
-        let plugin_package = self.checked_install_package(desired)?;
+    fn verified_install_package(&self, desired: &DesiredPlugin) -> Result<VerifiedInstallPackage> {
+        let package = self.checked_install_package(desired)?;
         let signature_valid = crate::machine_auth::verify_namespaced(
             &desired.publisher_public_key,
             PLUGIN_RELEASE_SIGNATURE_NAMESPACE,
@@ -551,24 +655,39 @@ impl MachinePluginStore {
             &desired.release.signature,
         )?;
         ensure!(signature_valid, "Plugin publisher signature is invalid");
-        desired_plugin_host_bundle(desired, &plugin_package)?;
-        Ok(plugin_package)
+        let (host_bundle, host_bundle_bytes) = desired_plugin_host_bundle(desired, &package)?;
+        Ok(VerifiedInstallPackage {
+            package,
+            host_bundle,
+            host_bundle_bytes,
+        })
     }
 
     async fn install_inner(
         &self,
         desired: &DesiredPlugin,
+        verified: VerifiedInstallPackage,
         guard: &mut InstallGuard<'_>,
+        lifecycle: &mut Option<LifecycleGuard>,
     ) -> Result<PluginInventory> {
         guard.validate_for(self, desired)?;
-        let plugin_package = self.verified_install_package(desired)?;
-        let (host_bundle, host_bundle_bytes) =
-            desired_plugin_host_bundle(desired, &plugin_package)?;
-        guard.phase(InstallPhase::Staging)?;
-        self.pin_publisher(
-            &plugin_package.manifest.publisher,
-            &desired.publisher_public_key,
-        )?;
+        let VerifiedInstallPackage {
+            package: plugin_package,
+            host_bundle,
+            host_bundle_bytes,
+        } = verified;
+        guard.phase(self, InstallPhase::Staging, lifecycle).await?;
+        {
+            let store = self.clone();
+            let publisher = plugin_package.manifest.publisher.clone();
+            let key = desired.publisher_public_key.clone();
+            let lease_check = guard.lease_check();
+            Self::run_with_lifecycle(lifecycle, "publisher pin task failed", move || {
+                lease_check.check()?;
+                store.pin_publisher(&publisher, &key)
+            })
+            .await?;
+        }
         if matches!(
             plugin_package.payload,
             PluginPayload::CodeIntelligence(_)
@@ -586,6 +705,7 @@ impl MachinePluginStore {
                     host_bundle.as_ref(),
                     host_bundle_bytes.as_deref(),
                     guard,
+                    lifecycle,
                 )
                 .await;
         }
@@ -595,232 +715,38 @@ impl MachinePluginStore {
             host_bundle.as_ref(),
             host_bundle_bytes.as_deref(),
             guard,
+            lifecycle,
         )
         .await
-    }
-
-    async fn install_agent_plugin(
-        &self,
-        plugin_package: &PluginPackage,
-        desired: &DesiredPlugin,
-        host_bundle: Option<&PluginHostBundle>,
-        host_bundle_bytes: Option<&[u8]>,
-        guard: &mut InstallGuard<'_>,
-    ) -> Result<PluginInventory> {
-        let package = plugin_package
-            .agent_provider()
-            .context("Machine Agent installer received a non-Agent Plugin")?
-            .clone();
-        let provider_release = desired.release.agent_provider_binding(plugin_package)?;
-        let payload = matching_payload(&package, &self.platform, &self.architecture)?;
-        let runtime_artifacts =
-            matching_runtime_artifacts(&provider_release, &self.platform, &self.architecture)?;
-        let auth_envelope = self.latest_auth_envelope(&package.manifest.id)?;
-        let prepared_auth = auth_envelope
-            .as_ref()
-            .map(|envelope| self.prepare_auth_inner(envelope, Some(&package)))
-            .transpose()?;
-
-        let plugin_root = self.plugin_root(&package.manifest.id);
-        let generation_name = digest_generation_name(&desired.release.artifact_digest)?;
-        let generation = plugin_root.join("generations").join(&generation_name);
-        let content = generation.join("content");
-        fs::create_dir_all(&content)
-            .with_context(|| format!("creating Provider generation {}", generation.display()))?;
-        fs::set_permissions(&generation, fs::Permissions::from_mode(0o700))?;
-        write_provider_generation_files(
-            &content,
-            &package,
-            plugin_package,
-            desired,
-            host_bundle,
-            host_bundle_bytes,
-        )?;
-
-        let started = Instant::now();
-        let mut prepared = guard
-            .bounded(runtime_staging::prepare_provider_runtime(
-                &content,
-                runtime_artifacts,
-                guard,
-                self.root.parent(),
-                account_sandbox::sandboxed(&package),
-            ))
-            .await?;
-        let runtime_ms = started.elapsed().as_millis();
-        let probe_started = Instant::now();
-        if !prepared.is_already_installed() {
-            let launch_command = prepared.command_path(&payload.launch_command)?;
-            prepared.verify_before_outer_probe()?;
-            let exit_confirmed = guard
-                .bounded(probe_provider_runtime(
-                    &package.manifest.runtime,
-                    &launch_command,
-                ))
-                .await?;
-            prepared.record_outer_probe_exit_confirmed(exit_confirmed);
-        }
-        let probe_ms = probe_started.elapsed().as_millis();
-        let _runtime = prepared.finalize(guard)?;
-        let flush_started = Instant::now();
-        guard.flush_staging(&content)?;
-        tracing::info!(
-            plugin_id = %package.manifest.id,
-            runtime_ms,
-            probe_ms,
-            flush_ms = flush_started.elapsed().as_millis(),
-            staging_ms = started.elapsed().as_millis(),
-            "Provider generation staged"
-        );
-        // Last, so a worker selected while staging is the one that is checked.
-        guard
-            .bounded(self.ensure_worker_reads_package(
-                &content.join("package.cowboy-provider"),
-                &package.manifest.runtime.required_capabilities,
-            ))
-            .await?;
-        guard.before_activation(self)?;
-        let pending =
-            self.begin_installation(&package.manifest.id, &desired.release.artifact_digest)?;
-        guard.check()?;
-        let activation = Self::activate(&plugin_root, &generation_name)?;
-        // A sealed Service replica may predate installation. Materialize it as
-        // part of activation so installation never asks for another login.
-        if let (Some(envelope), Some(prepared)) = (auth_envelope.as_ref(), prepared_auth) {
-            guard.phase(InstallPhase::ProjectingAuthentication)?;
-            if let Err(error) = self.commit_prepared_auth(envelope, Some(&package), prepared) {
-                guard.check()?;
-                if let Err(rollback_error) = Self::restore_activation(&plugin_root, &activation) {
-                    bail!(
-                        "Provider authentication activation failed: {error:#}; restoring the previous Provider generation also failed: {rollback_error:#}"
-                    );
-                }
-                return Err(error.context(
-                    "Provider authentication activation failed; previous generation restored",
-                ));
-            }
-        }
-        self.finish_installation(&package.manifest.id, pending)?;
-        self.inventory_one(&package.manifest.id)?
-            .context("activated Provider is missing from inventory")
-    }
-
-    async fn install_non_agent_plugin(
-        &self,
-        package: &PluginPackage,
-        desired: &DesiredPlugin,
-        host_bundle: Option<&PluginHostBundle>,
-        host_bundle_bytes: Option<&[u8]>,
-        guard: &mut InstallGuard<'_>,
-    ) -> Result<PluginInventory> {
-        let artifacts = matching_plugin_runtime_artifacts(
-            &desired.release.runtime_artifacts,
-            &self.platform,
-            &self.architecture,
-        )?;
-        if matches!(package.payload, PluginPayload::CodeIntelligence(_)) {
-            ensure!(
-                artifacts.components.iter().any(|component| {
-                    component.kind == PluginComponentKind::CodeIntelligenceAdapter
-                }),
-                "code-intelligence Plugin has no adapter component"
-            );
-        }
-        self.validate_extension_dependencies(package)?;
-        let runtime_artifacts = provider_staging_projection(artifacts);
-        let plugin_root = self.plugin_root(&package.manifest.id);
-        let generation_name = digest_generation_name(&desired.release.artifact_digest)?;
-        let generation = plugin_root.join("generations").join(&generation_name);
-        let content = generation.join("content");
-        fs::create_dir_all(&content)
-            .with_context(|| format!("creating Plugin generation {}", generation.display()))?;
-        fs::set_permissions(&generation, fs::Permissions::from_mode(0o700))?;
-        atomic_write(
-            &content.join("package.cowboy-plugin"),
-            &package.canonical_bytes()?,
-            0o600,
-        )?;
-        atomic_write(
-            &content.join("plugin-release.json"),
-            &serde_json::to_vec(&desired.release)?,
-            0o600,
-        )?;
-        atomic_write(
-            &content.join("publisher.pub"),
-            desired.publisher_public_key.as_bytes(),
-            0o600,
-        )?;
-        stage_plugin_host_bundle(&content, host_bundle, host_bundle_bytes)?;
-        let mut prepared = guard
-            .bounded(runtime_staging::prepare_provider_runtime(
-                &content,
-                &runtime_artifacts,
-                guard,
-                self.root.parent(),
-                false,
-            ))
-            .await?;
-        if !prepared.is_already_installed() {
-            let exit_confirmed = self
-                .probe_staged_code_runtime(
-                    package,
-                    &desired.release.artifact_digest,
-                    &prepared,
-                    guard,
-                )
-                .await?;
-            prepared.record_outer_probe_exit_confirmed(exit_confirmed);
-        }
-        prepared.finalize(guard)?;
-        let inventory = PluginInventory {
-            plugin_id: package.manifest.id.clone(),
-            plugin_version: package.manifest.version.clone(),
-            plugin_kind: package.manifest.kind,
-            generation_digest: desired.release.artifact_digest.clone(),
-            installation_revision: None,
-            contract_fingerprint: package.contract_fingerprint.clone(),
-            state: PluginInstallationState::Active,
-            rollback_generation_digest: None,
-            active_session_leases: 0,
-            auth_generation: None,
-            replica_state: ProviderReplicaState::Absent,
-            materialization_state: ProviderMaterializationState::NotInstalled,
-            detail: None,
-        };
-        atomic_write(
-            &content.join("plugin-inventory.json"),
-            &serde_json::to_vec(&inventory)?,
-            0o600,
-        )?;
-        guard.flush_staging(&content)?;
-        guard.before_activation(self)?;
-        let pending =
-            self.begin_installation(&package.manifest.id, &desired.release.artifact_digest)?;
-        guard.check()?;
-        if matches!(package.payload, PluginPayload::CodeIntelligence(_)) {
-            self.activate_code_generation(package, &generation_name)?;
-        } else {
-            Self::activate(&plugin_root, &generation_name)?;
-        }
-        self.finish_installation(&package.manifest.id, pending)?;
-        self.inventory_one(&package.manifest.id)?
-            .context("activated Plugin is missing from inventory")
     }
 
     /// Re-activate one already verified, retained generation. The Controller
     /// uses this only as uninstall-saga compensation when its durable session
     /// transaction fails after the Machine has removed the active link.
+    #[allow(clippy::too_many_lines)] // One fenced reactivation flow across Plugin kinds.
     pub async fn reactivate(
         &self,
         provider_id: &str,
         generation_digest: &str,
     ) -> Result<PluginInventory> {
-        let _lifecycle = self.lifecycle.lock().await;
+        let mut lifecycle = Some(self.lock_lifecycle_owned().await);
         validate_plugin_id(provider_id)?;
-        self.operations.ensure_legacy_allowed(provider_id)?;
         let generation_name = digest_generation_name(generation_digest)?;
-        let (plugin_package, _, content) =
-            self.verified_plugin_generation(provider_id, generation_digest)?;
+        let (plugin_package, content) = {
+            let store = self.clone();
+            let pid = provider_id.to_owned();
+            let digest = generation_digest.to_owned();
+            Self::run_with_lifecycle(
+                &mut lifecycle,
+                "reactivate verification task failed",
+                move || {
+                    store.operations.ensure_legacy_allowed(&pid)?;
+                    let (pkg, _, content) = store.verified_plugin_generation(&pid, &digest)?;
+                    Ok((pkg, content))
+                },
+            )
+            .await?
+        };
         if matches!(
             plugin_package.manifest.kind,
             cowboy_plugin_sdk::PluginKind::TelemetryBackend
@@ -830,33 +756,97 @@ impl MachinePluginStore {
                 | cowboy_plugin_sdk::PluginKind::McpServer
                 | cowboy_plugin_sdk::PluginKind::MachineBrowser
         ) {
-            self.validate_extension_dependencies(&plugin_package)?;
-            Self::activate(&self.plugin_root(provider_id), &generation_name)?;
-            return self
-                .inventory_one(provider_id)?
-                .context("reactivated Plugin is missing from inventory");
+            let store = self.clone();
+            let pid = provider_id.to_owned();
+            let owned_lifecycle = lifecycle.take().context("Plugin lifecycle guard missing")?;
+            return tokio::task::spawn_blocking(move || {
+                let _lifecycle = owned_lifecycle;
+                store.validate_extension_dependencies(&plugin_package)?;
+                Self::activate(&store.plugin_root(&pid), &generation_name)?;
+                store
+                    .inventory_one(&pid)?
+                    .context("reactivated Plugin is missing from inventory")
+            })
+            .await
+            .context("reactivate non-agent task failed")?;
         }
         if plugin_package.manifest.kind == cowboy_plugin_sdk::PluginKind::CodeIntelligence {
-            if let Some(plan) =
-                self.code_launch_plan(&plugin_package, generation_digest, &content)?
-            {
+            let plan = {
+                let store = self.clone();
+                let pkg = plugin_package.clone();
+                let digest = generation_digest.to_owned();
+                let content_for_plan = content.clone();
+                Self::run_with_lifecycle(
+                    &mut lifecycle,
+                    "reactivate code launch plan task failed",
+                    move || store.code_launch_plan(&pkg, &digest, &content_for_plan),
+                )
+                .await?
+            };
+            if let Some(plan) = plan {
                 probe_code_runtime(&plan).await?;
             }
-            self.activate_code_generation(&plugin_package, &generation_name)?;
-            return self
-                .inventory_one(provider_id)?
-                .context("reactivated Plugin is missing from inventory");
+            let store = self.clone();
+            let pid = provider_id.to_owned();
+            let owned_lifecycle = lifecycle.take().context("Plugin lifecycle guard missing")?;
+            return tokio::task::spawn_blocking(move || {
+                let _lifecycle = owned_lifecycle;
+                store.activate_code_generation(&plugin_package, &generation_name)?;
+                store
+                    .inventory_one(&pid)?
+                    .context("reactivated Plugin is missing from inventory")
+            })
+            .await
+            .context("reactivate code plugin task failed")?;
         }
-        let (package, release, package_path, _) =
-            self.verified_generation(provider_id, generation_digest)?;
+        let (package, release, package_path) = {
+            let store = self.clone();
+            let pid = provider_id.to_owned();
+            let digest = generation_digest.to_owned();
+            Self::run_with_lifecycle(
+                &mut lifecycle,
+                "reactivate provider verification task failed",
+                move || {
+                    let (package, release, package_path, _) =
+                        store.verified_generation(&pid, &digest)?;
+                    Ok((package, release, package_path))
+                },
+            )
+            .await?
+        };
         self.ensure_worker_reads_package(
             &package_path,
             &package.manifest.runtime.required_capabilities,
         )
         .await?;
-        let payload = matching_payload(&package, &self.platform, &self.architecture)?;
+        let store = self.clone();
+        let pid = provider_id.to_owned();
+        let owned_lifecycle = lifecycle.take().context("Plugin lifecycle guard missing")?;
+        tokio::task::spawn_blocking(move || {
+            let _lifecycle = owned_lifecycle;
+            store.reactivate_provider_blocking(
+                &pid,
+                &generation_name,
+                &package,
+                &release,
+                &package_path,
+            )
+        })
+        .await
+        .context("reactivate provider activation task failed")?
+    }
+
+    fn reactivate_provider_blocking(
+        &self,
+        provider_id: &str,
+        generation_name: &str,
+        package: &ProviderPackage,
+        release: &AgentRuntimeBinding,
+        package_path: &Path,
+    ) -> Result<PluginInventory> {
+        let payload = matching_payload(package, &self.platform, &self.architecture)?;
         let runtime_artifacts =
-            matching_runtime_artifacts(&release, &self.platform, &self.architecture)?;
+            matching_runtime_artifacts(release, &self.platform, &self.architecture)?;
         let content = package_path
             .parent()
             .context("Provider package has no generation content directory")?;
@@ -865,16 +855,16 @@ impl MachinePluginStore {
             installed_runtime_matches(content, runtime_artifacts, &runtime_metadata)?,
             "retained Provider runtime failed integrity verification"
         );
-        let _launch_command = runtime_command(&package_path, &payload.launch_command)?;
+        let _launch_command = runtime_command(package_path, &payload.launch_command)?;
         let auth_envelope = self.latest_auth_envelope(provider_id)?;
         let prepared_auth = auth_envelope
             .as_ref()
-            .map(|envelope| self.prepare_auth_inner(envelope, Some(&package)))
+            .map(|envelope| self.prepare_auth_inner(envelope, Some(package)))
             .transpose()?;
         let plugin_root = self.plugin_root(provider_id);
-        let activation = Self::activate(&plugin_root, &generation_name)?;
+        let activation = Self::activate(&plugin_root, generation_name)?;
         if let (Some(envelope), Some(prepared)) = (auth_envelope.as_ref(), prepared_auth)
-            && let Err(error) = self.commit_prepared_auth(envelope, Some(&package), prepared)
+            && let Err(error) = self.commit_prepared_auth(envelope, Some(package), prepared)
         {
             if let Err(rollback_error) = Self::restore_activation(&plugin_root, &activation) {
                 bail!(
@@ -888,10 +878,31 @@ impl MachinePluginStore {
     }
 
     pub async fn uninstall(&self, provider_id: &str, expected_digest: &str) -> Result<()> {
-        let _lifecycle = self.lifecycle.lock().await;
-        self.operations.ensure_legacy_allowed(provider_id)?;
-        let _drained = self.drain_local(provider_id, expected_digest).await?;
-        self.uninstall_inner(provider_id, expected_digest, || Ok(()))
+        let mut lifecycle = Some(self.lock_lifecycle_owned().await);
+        {
+            let store = self.clone();
+            let pid = provider_id.to_owned();
+            Self::run_with_lifecycle(
+                &mut lifecycle,
+                "uninstall legacy gate task failed",
+                move || store.operations.ensure_legacy_allowed(&pid),
+            )
+            .await?;
+        }
+        let drained = self
+            .drain_local(provider_id, expected_digest, &mut lifecycle)
+            .await?;
+        let store = self.clone();
+        let pid = provider_id.to_owned();
+        let digest = expected_digest.to_owned();
+        let owned_lifecycle = lifecycle.take().context("Plugin lifecycle guard missing")?;
+        tokio::task::spawn_blocking(move || {
+            let _lifecycle = owned_lifecycle;
+            let _drained = drained;
+            store.uninstall_inner(&pid, &digest, || Ok(()))
+        })
+        .await
+        .context("uninstall task failed")?
     }
 
     /// Retire Agent Provider generations that nothing can launch any more.
@@ -906,60 +917,85 @@ impl MachinePluginStore {
         plugin_id: &str,
         referenced: &BTreeSet<String>,
     ) -> Result<crate::generation_retention::Outcome> {
-        let _lifecycle = self.lifecycle.lock().await;
+        let mut lifecycle = Some(self.lock_lifecycle_owned().await);
         validate_plugin_id(plugin_id)?;
-        // A pending installation or uninstall owns these links until reconciled.
-        self.operations.ensure_unfenced(plugin_id)?;
-        let installed = self
-            .inventory_one(plugin_id)?
-            .context("Plugin is not installed")?;
+        let installed = {
+            let store = self.clone();
+            let pid = plugin_id.to_owned();
+            Self::run_with_lifecycle(
+                &mut lifecycle,
+                "generation retention inventory task failed",
+                move || {
+                    // A pending installation or uninstall owns these links until reconciled.
+                    store.operations.ensure_unfenced(&pid)?;
+                    store.inventory_one(&pid)
+                },
+            )
+            .await?
+            .context("Plugin is not installed")?
+        };
         if installed.plugin_kind == cowboy_plugin_sdk::PluginKind::MachineBrowser {
             // Browser instances, not sessions, pin these generations.
-            return self
-                .retire_browser_generations_locked(Some(plugin_id), &BTreeSet::new())?
-                .pop()
-                .context("no Machine browser manager reports its generation pins");
+            let store = self.clone();
+            let pid = plugin_id.to_owned();
+            let owned_lifecycle = lifecycle.take().context("Plugin lifecycle guard missing")?;
+            return tokio::task::spawn_blocking(move || {
+                let _lifecycle = owned_lifecycle;
+                store
+                    .retire_browser_generations_locked(Some(&pid), &BTreeSet::new())?
+                    .pop()
+                    .context("no Machine browser manager reports its generation pins")
+            })
+            .await
+            .context("browser generation retention task failed")?;
         }
         ensure!(
             retirement::is_retainable_non_browser_kind(installed.plugin_kind),
             "generation retirement is not supported for this Plugin kind"
         );
         let root = self.plugin_root(plugin_id);
-        let mut keep: BTreeSet<String> = referenced
+        let keep: BTreeSet<String> = referenced
             .iter()
             .map(|digest| digest.trim_start_matches("sha256:").to_owned())
             .collect();
-        keep.extend(read_link_name(&root.join("active")));
-        keep.extend(read_link_name(&root.join("rollback")));
         let generations = root.join("generations");
-        let mut retention = crate::generation_retention::Outcome {
+        let retention = crate::generation_retention::Outcome {
             plugin_id: plugin_id.to_owned(),
             ..crate::generation_retention::Outcome::default()
         };
-        let tombstones = self
+        let guard = lifecycle.take().context("Plugin lifecycle guard missing")?;
+        let store = self.clone();
+        let pid = plugin_id.to_owned();
+        let (tombstone_res, guard) = self
             .code_runtimes
-            .with_generation_pins(plugin_id, |pinned| {
-                let _profiles = self.auth_candidates.lock();
-                keep.extend(self.retained_native_generations(plugin_id)?);
-                keep.extend(
-                    pinned
-                        .iter()
-                        .map(|digest| digest.trim_start_matches("sha256:").to_owned()),
-                );
-                self.tombstone_unkept_matching(
-                    plugin_id,
-                    &generations,
-                    &keep,
-                    retirement::is_retainable_non_browser_kind,
-                    &mut retention,
-                )
+            .with_generation_pins(plugin_id, move |pinned| {
+                let result = {
+                    let mut keep = keep;
+                    keep.extend(read_link_name(&root.join("active")));
+                    keep.extend(read_link_name(&root.join("rollback")));
+                    store.tombstone_non_browser_under_pins(
+                        &pid,
+                        &generations,
+                        keep,
+                        pinned,
+                        retention,
+                    )
+                };
+                Ok((result, guard))
             })
             .await?;
-        Self::remove_tombstones(&tombstones, &mut retention)?;
-        self.retire_artifact_cache_locked();
-        retention.retained.sort();
-        retention.retired.sort();
-        Ok(retention)
+        let (tombstones, mut retention) = tombstone_res?;
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || -> Result<crate::generation_retention::Outcome> {
+            let _lifecycle = guard;
+            Self::remove_tombstones(&tombstones, &mut retention)?;
+            store.retire_artifact_cache_locked();
+            retention.retained.sort();
+            retention.retired.sort();
+            Ok(retention)
+        })
+        .await
+        .context("generation retention removal task failed")?
     }
 
     /// Retire the default account's credential generations of one Provider
@@ -989,109 +1025,17 @@ impl MachinePluginStore {
         referenced: &BTreeSet<u64>,
         grace: Duration,
     ) -> Result<AuthRetention> {
-        ensure!(
-            self.account_id.is_default(),
-            "credential generation retention is limited to the default account"
-        );
-        let _lifecycle = self.lifecycle.lock().await;
+        let lifecycle = self.lock_lifecycle_owned().await;
         validate_plugin_id(provider_id)?;
-        self.operations.ensure_unfenced(provider_id)?;
-        let root = self.auth_provider_root(provider_id);
-        let mut outcome = AuthRetention {
-            provider_id: provider_id.to_owned(),
-            ..AuthRetention::default()
-        };
-        let runtime = root.join("runtime/generations");
-        let materialized = root.join("materialized/generations");
-        // Without a valid current link the canonical credential source falls
-        // back to the oldest runtime generation; never guess which one.
-        let Some(runtime_current) = read_link_name(&root.join("runtime/current"))
-            .and_then(|name| name.parse::<u64>().ok())
-            .filter(|generation| runtime.join(generation.to_string()).is_dir())
-        else {
-            return Ok(outcome);
-        };
-        let mut keep = referenced.clone();
-        keep.insert(runtime_current);
-        keep.extend(
-            read_link_name(&root.join("materialized/current"))
-                .and_then(|name| name.parse::<u64>().ok()),
-        );
-        if let Some(envelope) = self.latest_auth_envelope(provider_id)? {
-            keep.insert(envelope.auth_generation);
-        }
-        let now = SystemTime::now();
-        let mut candidates = BTreeSet::new();
-        for directory in [&runtime, &materialized] {
-            if !directory.is_dir() {
-                continue;
-            }
-            for entry in fs::read_dir(directory)? {
-                let entry = entry?;
-                let name = entry.file_name().to_string_lossy().into_owned();
-                if let Some(interrupted) = name.strip_prefix(RETIRED_GENERATION_PREFIX) {
-                    ensure!(
-                        interrupted.parse::<u64>().is_ok(),
-                        "invalid retired credential generation"
-                    );
-                    remove_projection::remove(&entry.path())?;
-                    continue;
-                }
-                let Ok(generation) = name.parse::<u64>() else {
-                    continue;
-                };
-                if generation == 0 || generation.to_string() != name || !entry.file_type()?.is_dir()
-                {
-                    continue;
-                }
-                let metadata = entry.metadata()?;
-                let changed_at = SystemTime::UNIX_EPOCH
-                    + Duration::from_secs(
-                        u64::try_from(std::os::unix::fs::MetadataExt::ctime(&metadata))
-                            .unwrap_or_default(),
-                    );
-                let changed = metadata.modified().unwrap_or(now).max(changed_at);
-                if now.duration_since(changed).unwrap_or_default() < grace {
-                    keep.insert(generation);
-                }
-                candidates.insert(generation);
-            }
-        }
-        // The two newest generations cover a launch admitted on the previous
-        // current generation while a refresh advanced the Machine after the
-        // Controller's snapshot.
-        keep.extend(candidates.iter().rev().take(2).copied());
-        keep.extend(live_auth_homes(&runtime));
-        for generation in candidates {
-            if keep.contains(&generation) {
-                outcome.retained.push(generation);
-                continue;
-            }
-            // Runtime first: a materialization without its runtime copy is
-            // still a valid immutable source, never the reverse.
-            for directory in [&runtime, &materialized] {
-                let path = directory.join(generation.to_string());
-                if !path.exists() {
-                    continue;
-                }
-                let tombstone = directory.join(format!("{RETIRED_GENERATION_PREFIX}{generation}"));
-                fs::rename(&path, &tombstone).with_context(|| {
-                    format!("retiring credential generation {}", path.display())
-                })?;
-                outcome.freed_bytes = outcome
-                    .freed_bytes
-                    .saturating_add(retirement::tree_bytes(&tombstone));
-                remove_projection::remove(&tombstone)
-                    .with_context(|| format!("removing {}", tombstone.display()))?;
-            }
-            outcome.retired.push(generation);
-        }
-        for directory in [&runtime, &materialized] {
-            if !outcome.retired.is_empty() && directory.is_dir() {
-                fs::File::open(directory)?.sync_all()?;
-            }
-        }
-        Ok(outcome)
+        let store = self.clone();
+        let pid = provider_id.to_owned();
+        let referenced = referenced.clone();
+        tokio::task::spawn_blocking(move || {
+            let _lifecycle = lifecycle;
+            store.retire_auth_generations_blocking(&pid, referenced, grace)
+        })
+        .await
+        .context("credential generation retention task failed")?
     }
 
     pub fn inventory(&self) -> Result<Vec<PluginInventory>> {
@@ -1114,6 +1058,20 @@ impl MachinePluginStore {
     }
 
     fn activate_code_generation(&self, package: &PluginPackage, generation: &str) -> Result<()> {
+        self.activate_code_generation_checked(
+            package,
+            generation,
+            &installation::LeaseCheck::none(),
+        )
+    }
+
+    fn activate_code_generation_checked(
+        &self,
+        package: &PluginPackage,
+        generation: &str,
+        lease_check: &installation::LeaseCheck,
+    ) -> Result<()> {
+        lease_check.check()?;
         let root = self.plugin_root(&package.manifest.id);
         let marker = root.join(".code-runtime-owned-v2");
         let owned = matches!(&package.payload, PluginPayload::CodeIntelligence(contract) if contract.runtime.is_some());
@@ -1124,10 +1082,11 @@ impl MachinePluginStore {
         let had_marker = marker.exists();
         if owned && !had_marker {
             atomic_write(&marker, b"2\n", 0o600)?;
+            lease_check.check()?;
         }
-        if let Err(error) = Self::activate(&root, generation) {
-            if owned && !had_marker {
-                fs::remove_file(&marker)?;
+        if let Err(error) = Self::activate_checked(&root, generation, lease_check) {
+            if owned && !had_marker && lease_check.check().is_ok() {
+                let _ = fs::remove_file(&marker);
             }
             return Err(error);
         }
@@ -1138,14 +1097,15 @@ impl MachinePluginStore {
         &self,
         package: &PluginPackage,
         digest: &str,
-        prepared: &runtime_staging::PreparedRuntime,
+        prepared: runtime_staging::PreparedRuntime,
         guard: &mut InstallGuard<'_>,
-    ) -> Result<bool> {
+        lifecycle: &mut Option<LifecycleGuard>,
+    ) -> Result<(runtime_staging::PreparedRuntime, bool)> {
         let PluginPayload::CodeIntelligence(contract) = &package.payload else {
-            return Ok(true);
+            return Ok((prepared, true));
         };
         let Some(runtime) = &contract.runtime else {
-            return Ok(true);
+            return Ok((prepared, true));
         };
         let commands = runtime
             .components
@@ -1168,9 +1128,16 @@ impl MachinePluginStore {
                 .join(digest_generation_name(digest)?)
                 .join("home"),
         };
-        prepared.verify_before_outer_probe()?;
-        guard.bounded(probe_code_runtime(&plan)).await?;
-        Ok(false)
+        let prepared = prepared.verify_before_outer_probe(lifecycle).await?;
+        if let Err(error) = guard.check() {
+            prepared.discard(lifecycle).await;
+            return Err(error);
+        }
+        if let Err(error) = guard.bounded(probe_code_runtime(&plan)).await {
+            prepared.discard(lifecycle).await;
+            return Err(error);
+        }
+        Ok((prepared, false))
     }
 
     fn code_launch_plan(
@@ -1254,11 +1221,37 @@ impl MachinePluginStore {
     /// `admission` bounds the wait for the lifecycle lock by its deadline and
     /// rechecks it (and its connection) immediately before the command starts,
     /// so a request its Controller abandoned never starts late.
-    #[allow(clippy::too_many_lines)] // One fenced path from admission to the decoded reply.
     async fn invoke_executable_host_admitted(
         &self,
         request: PluginHostRequest,
         admission: Option<&native_usage::HostAdmission>,
+    ) -> std::result::Result<serde_json::Value, PluginHostInvocationFailure> {
+        self.invoke_executable_host_with_admission(request, admission, None)
+            .await
+            .0
+    }
+
+    async fn invoke_executable_host_with_admission(
+        &self,
+        request: PluginHostRequest,
+        admission: Option<&native_usage::HostAdmission>,
+        mut account_guard: Option<tokio::sync::OwnedMutexGuard<()>>,
+    ) -> (
+        std::result::Result<serde_json::Value, PluginHostInvocationFailure>,
+        Option<tokio::sync::OwnedMutexGuard<()>>,
+    ) {
+        let result = self
+            .invoke_executable_host_with_guard_ref(request, admission, &mut account_guard)
+            .await;
+        (result, account_guard)
+    }
+
+    #[allow(clippy::too_many_lines)] // One fenced path from admission to the decoded reply.
+    async fn invoke_executable_host_with_guard_ref(
+        &self,
+        request: PluginHostRequest,
+        admission: Option<&native_usage::HostAdmission>,
+        account_guard: &mut Option<tokio::sync::OwnedMutexGuard<()>>,
     ) -> std::result::Result<serde_json::Value, PluginHostInvocationFailure> {
         let PluginHostRequest {
             plugin_id,
@@ -1266,35 +1259,67 @@ impl MachinePluginStore {
             generation_digest,
             auth_generation,
             operation,
-            mut payload,
+            payload,
         } = request;
         let admitted_at = Instant::now();
         let mut lifecycle = Some(match admission {
-            Some(admission) => tokio::time::timeout(admission.remaining()?, self.lifecycle.lock())
-                .await
-                .map_err(|_| anyhow::anyhow!("portable_usage_busy"))?,
-            None => self.lifecycle.lock().await,
+            Some(admission) => {
+                tokio::time::timeout(admission.remaining()?, self.lock_lifecycle_owned())
+                    .await
+                    .map_err(|_| anyhow::anyhow!("portable_usage_busy"))?
+            }
+            None => self.lock_lifecycle_owned().await,
         });
         let queue_ms = admitted_at.elapsed().as_millis();
-        let resolved = self
-            .resolve_host_invocation(
-                &plugin_id,
-                &plugin_version,
-                &generation_digest,
-                HostAuthentication::Service(auth_generation),
-                operation,
-                &mut payload,
+        let (resolved, payload, private) = {
+            let store = self.clone();
+            let pid = plugin_id.clone();
+            let pver = plugin_version.clone();
+            let digest = generation_digest.clone();
+            let mut payload_for_resolve = payload;
+            let admission_for_stage = admission.cloned();
+            let owned_account_guard = account_guard.take();
+            let (resolve_res, returned_account_guard) = Self::run_with_lifecycle(
+                &mut lifecycle,
+                "Plugin host resolution task failed",
+                move || {
+                    let result = (|| -> Result<_> {
+                        if let Some(admission) = admission_for_stage.as_ref() {
+                            admission.remaining()?;
+                        }
+                        let resolved = store.resolve_host_invocation_admitted(
+                            &pid,
+                            &pver,
+                            &digest,
+                            HostAuthentication::Service(auth_generation),
+                            operation,
+                            &mut payload_for_resolve,
+                            admission_for_stage.as_ref(),
+                        )?;
+                        // A private credential copy is staged only now, under both
+                        // owned account and lifecycle locks, after rechecking admission.
+                        let private = match admission_for_stage.as_ref() {
+                            Some(admission) => {
+                                admission.remaining()?;
+                                admission
+                                    .stage_private_home(&store, &pid)
+                                    .map_err(|failure| failure.error)?
+                            }
+                            None => None,
+                        };
+                        Ok((resolved, payload_for_resolve, private))
+                    })();
+                    Ok((result, owned_account_guard))
+                },
             )
+            .await
             .map_err(PluginHostInvocationFailure::from)?;
-        let mut environment = resolved.environment;
-        // A private credential copy is staged only now, under the lifecycle
-        // lock and after the exact release resolved (see `uninstall`).
-        let private = match admission {
-            Some(admission) => admission.stage_private_home(self, &plugin_id)?,
-            None => None,
+            *account_guard = returned_account_guard;
+            resolve_res.map_err(PluginHostInvocationFailure::from)?
         };
+        let mut environment = resolved.environment;
         let mut prepared_sidecars = if operation == PluginHostOperation::CollectUsage {
-            self.prepare_usage_sidecars(&resolved.collector_sidecars, admission)
+            self.prepare_usage_sidecars(&resolved.collector_sidecars, admission, &mut lifecycle)
                 .await
                 .map_err(PluginHostInvocationFailure::from)?
         } else {
@@ -1360,24 +1385,19 @@ impl MachinePluginStore {
         })?;
         if lifecycle.is_none() {
             let fence_started = Instant::now();
-            let _lifecycle = self.lifecycle.lock().await;
-            self.validate_host_observation(
+            self.validate_host_observation_async(
                 &plugin_id,
                 &generation_digest,
                 auth_generation,
-                resolved.installation_revision.as_ref(),
+                resolved.installation_revision.clone(),
             )
-            .map_err(|error| PluginHostInvocationFailure {
-                started: true,
-                error,
-            })?;
+            .await?;
             tracing::info!(%plugin_id, ?operation, fence_ms = fence_started.elapsed().as_millis(),
                 total_ms = admitted_at.elapsed().as_millis(), "Plugin host observation accepted");
         }
         decode_host_response(&output)
     }
 
-    #[allow(clippy::too_many_lines)] // Keep signed host resolution and account scope in one auditable path.
     fn resolve_host_invocation(
         &self,
         plugin_id: &str,
@@ -1386,6 +1406,28 @@ impl MachinePluginStore {
         authentication: HostAuthentication<'_>,
         operation: PluginHostOperation,
         payload: &mut serde_json::Value,
+    ) -> Result<ResolvedPluginHostInvocation> {
+        self.resolve_host_invocation_admitted(
+            plugin_id,
+            plugin_version,
+            generation_digest,
+            authentication,
+            operation,
+            payload,
+            None,
+        )
+    }
+
+    #[allow(clippy::too_many_lines, clippy::too_many_arguments)] // Keep signed host resolution and account scope in one auditable path.
+    fn resolve_host_invocation_admitted(
+        &self,
+        plugin_id: &str,
+        plugin_version: &str,
+        generation_digest: &str,
+        authentication: HostAuthentication<'_>,
+        operation: PluginHostOperation,
+        payload: &mut serde_json::Value,
+        admission: Option<&native_usage::HostAdmission>,
     ) -> Result<ResolvedPluginHostInvocation> {
         let (auth_generation, native) = match authentication {
             HostAuthentication::Service(generation) => (generation, None),
@@ -1481,11 +1523,17 @@ impl MachinePluginStore {
         } else {
             (self, auth_generation)
         };
+        // Recheck admission after signed verification and immediately before
+        // launch preparation, which may repair or materialize credentials.
+        if let Some(admission) = admission {
+            admission.remaining()?;
+        }
         let launch = store.launch_context_from_package(
             package,
             package_path,
             generation,
             &release.artifact_digest,
+            admission,
         )?;
         tracing::info!(%plugin_id, ?operation, verification_ms, inventory_ms,
             launch_ms = launch_started.elapsed().as_millis(), "Plugin host resolution completed");
@@ -1524,6 +1572,33 @@ impl MachinePluginStore {
             "active Plugin or authentication generation changed before host invocation"
         );
         Ok(active)
+    }
+
+    async fn validate_host_observation_async(
+        &self,
+        plugin_id: &str,
+        generation_digest: &str,
+        auth_generation: Option<u64>,
+        revision: Option<crate::machine_protocol::installation_revision::InstallationRevision>,
+    ) -> std::result::Result<(), PluginHostInvocationFailure> {
+        let owned_lifecycle = self.lock_lifecycle_owned().await;
+        let store = self.clone();
+        let pid = plugin_id.to_owned();
+        let digest = generation_digest.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let _lifecycle = owned_lifecycle;
+            store.validate_host_observation(&pid, &digest, auth_generation, revision.as_ref())
+        })
+        .await
+        .context("Plugin host observation validation task failed")
+        .map_err(|error| PluginHostInvocationFailure {
+            started: true,
+            error,
+        })?
+        .map_err(|error| PluginHostInvocationFailure {
+            started: true,
+            error,
+        })
     }
 
     fn validate_host_observation(
@@ -1573,6 +1648,7 @@ impl MachinePluginStore {
         &self,
         targets: &[PluginUsageSidecar],
         admission: Option<&native_usage::HostAdmission>,
+        lifecycle: &mut Option<LifecycleGuard>,
     ) -> Result<PreparedUsageSidecars> {
         let allowed = admission.and_then(native_usage::HostAdmission::sidecars);
         let mut prepared = PreparedUsageSidecars {
@@ -1585,69 +1661,88 @@ impl MachinePluginStore {
         if targets.is_empty() {
             return Ok(prepared);
         }
-        let inventory = self.inventory()?;
-        for target in targets {
-            let mut candidates = Vec::new();
-            for installed in &inventory {
-                if allowed.is_some_and(|allowed| {
-                    allowed.get(&installed.plugin_id) != Some(&installed.generation_digest)
-                }) {
-                    continue;
-                }
-                let Ok((plugin, release, content)) = self
-                    .verified_plugin_generation(&installed.plugin_id, &installed.generation_digest)
-                else {
-                    continue;
-                };
-                let Ok(Some(host)) = verified_plugin_host_bundle(&plugin, &release, &content)
-                else {
-                    continue;
-                };
-                let Ok(spec) = PluginHostSpec::from_json(host.files["host.json"].as_bytes()) else {
-                    continue;
-                };
-                if spec.adapter_slot.as_deref() != Some(target.adapter_slot.as_str()) {
-                    continue;
-                }
-                let Some(package) = plugin.agent_provider() else {
-                    continue;
-                };
-                let Some(sidecar) = package
-                    .manifest
-                    .runtime
-                    .sidecars
-                    .iter()
-                    .find(|sidecar| sidecar.id == target.sidecar)
-                    .cloned()
-                else {
-                    continue;
-                };
-                candidates.push((installed, package.clone(), sidecar));
-            }
-            ensure!(
-                candidates.len() <= 1,
-                "multiple active Plugin generations satisfy usage sidecar {:?}",
-                target.id
-            );
-            let Some((installed, package, sidecar)) = candidates.pop() else {
-                continue;
-            };
-            let launch = match self.launch_context(
-                &installed.plugin_id,
-                &installed.generation_digest,
-                installed.auth_generation,
-            ) {
-                Ok(launch) => launch,
-                Err(error) => {
-                    tracing::warn!(
-                        %error,
-                        plugin_id = installed.plugin_id,
-                        lane = target.id,
-                        "usage sidecar launch context is unavailable"
+        let store = self.clone();
+        let targets_owned = targets.to_vec();
+        let allowed_owned = allowed.cloned();
+        let resolved_targets = Self::run_with_lifecycle(
+            lifecycle,
+            "usage sidecar discovery task failed",
+            move || -> Result<Vec<_>> {
+                let inventory = store.inventory()?;
+                let mut launches = Vec::new();
+                for target in targets_owned {
+                    let mut candidates = Vec::new();
+                    for installed in &inventory {
+                        if allowed_owned.as_ref().is_some_and(|allowed| {
+                            allowed.get(&installed.plugin_id) != Some(&installed.generation_digest)
+                        }) {
+                            continue;
+                        }
+                        let Ok((plugin, release, content)) = store.verified_plugin_generation(
+                            &installed.plugin_id,
+                            &installed.generation_digest,
+                        ) else {
+                            continue;
+                        };
+                        let Ok(Some(host)) =
+                            verified_plugin_host_bundle(&plugin, &release, &content)
+                        else {
+                            continue;
+                        };
+                        let Ok(spec) =
+                            PluginHostSpec::from_json(host.files["host.json"].as_bytes())
+                        else {
+                            continue;
+                        };
+                        if spec.adapter_slot.as_deref() != Some(target.adapter_slot.as_str()) {
+                            continue;
+                        }
+                        let Some(package) = plugin.agent_provider() else {
+                            continue;
+                        };
+                        let Some(sidecar) = package
+                            .manifest
+                            .runtime
+                            .sidecars
+                            .iter()
+                            .find(|sidecar| sidecar.id == target.sidecar)
+                            .cloned()
+                        else {
+                            continue;
+                        };
+                        candidates.push((installed.clone(), package.clone(), sidecar));
+                    }
+                    ensure!(
+                        candidates.len() <= 1,
+                        "multiple active Plugin generations satisfy usage sidecar {:?}",
+                        target.id
                     );
-                    continue;
+                    let Some((installed, package, sidecar)) = candidates.pop() else {
+                        continue;
+                    };
+                    match store.launch_context(
+                        &installed.plugin_id,
+                        &installed.generation_digest,
+                        installed.auth_generation,
+                    ) {
+                        Ok(launch) => {
+                            launches.push((target, installed.plugin_id, package, sidecar, launch));
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                %error,
+                                plugin_id = installed.plugin_id,
+                                lane = target.id,
+                                "usage sidecar launch context is unavailable"
+                            );
+                        }
+                    }
                 }
-            };
+                Ok(launches)
+            },
+        )
+        .await?;
+        for (target, plugin_id, package, sidecar, launch) in resolved_targets {
             match start_usage_sidecar(
                 &package,
                 &sidecar,
@@ -1667,7 +1762,7 @@ impl MachinePluginStore {
                 Err(error) => {
                     tracing::warn!(
                         %error,
-                        plugin_id = installed.plugin_id,
+                        plugin_id,
                         lane = target.id,
                         "usage sidecar is unavailable"
                     );
@@ -1692,7 +1787,13 @@ impl MachinePluginStore {
         self.operations.ensure_unfenced(provider_id)?;
         let (package, package_path) =
             self.package_for_generation(provider_id, generation_digest)?;
-        self.launch_context_from_package(&package, package_path, auth_generation, generation_digest)
+        self.launch_context_from_package(
+            &package,
+            package_path,
+            auth_generation,
+            generation_digest,
+            None,
+        )
     }
 
     fn launch_context_from_package(
@@ -1701,10 +1802,11 @@ impl MachinePluginStore {
         package_path: PathBuf,
         auth_generation: Option<u64>,
         generation_digest: &str,
+        admission: Option<&native_usage::HostAdmission>,
     ) -> Result<ProviderLaunchContext> {
         let payload = matching_payload(package, &self.platform, &self.architecture)?;
         let (account_sandbox, home) =
-            self.launch_account(package, auth_generation, generation_digest)?;
+            self.launch_account(package, auth_generation, generation_digest, admission)?;
         let mut environment = BTreeMap::new();
         if let Some(current) = home.as_ref().and_then(|home| home.parent()) {
             let env_path = current.join("environment.json");
@@ -1733,8 +1835,11 @@ impl MachinePluginStore {
         // rotations there instead of inside its private generation home.
         let native =
             auth_generation.is_some_and(|generation| self.native_session(package, generation));
-        let credential_directories =
-            self.credential_directories(package, native.then_some(home.as_deref()).flatten())?;
+        let credential_directories = self.credential_directories(
+            package,
+            native.then_some(home.as_deref()).flatten(),
+            admission,
+        )?;
         if !credential_directories.is_empty() {
             environment.insert(
                 crate::provider_behavior::CREDENTIAL_DIRECTORIES_ENV.to_owned(),
@@ -1812,12 +1917,13 @@ impl MachinePluginStore {
                 || self.native_profile_bound(&package.manifest.id, generation))
     }
 
-    fn prepare_launch_auth_home(
+    pub(super) fn prepare_launch_auth_home_admitted(
         &self,
         provider_id: &str,
         package: &ProviderPackage,
         generation: u64,
         generation_digest: &str,
+        admission: Option<&native_usage::HostAdmission>,
     ) -> Result<PathBuf> {
         if self.native_session(package, generation) {
             self.ensure_native_release(package, generation, generation_digest)?;
@@ -1846,29 +1952,29 @@ impl MachinePluginStore {
         let bundle: PortableCredentialBundle = serde_json::from_slice(&plaintext)
             .context("decoding Provider runtime credential bundle")?;
         validate_portable_bundle(&portable_contract::contract(package), &bundle)?;
+        if let Some(admission) = admission {
+            admission.remaining()?;
+        }
         let materialized = self
             .auth_provider_root(provider_id)
             .join("materialized/generations")
             .join(generation.to_string());
         if envelope.auth_generation == generation {
-            // A Machine upgrade or interrupted projection may leave the
-            // durable sealed replica ahead of its local projections. Repair
-            // the current immutable materialization before admitting the
-            // session so recovery does not depend on a later Controller retry
-            // or filesystem event.
+            // Repair the current immutable materialization before admitting the
+            // session when the durable sealed replica is ahead of projections.
             self.materialize_bundle(package, generation, &bundle)?;
             ensure!(
                 self.materialization_is_current(package, &envelope)?,
                 "session Provider auth generation is missing projected credentials"
             );
         } else {
-            // Established sessions retain their recorded projection identity,
-            // while successful Service refreshes reconcile the writable
-            // runtime copy to the newest credential bundle. Rebuild only that
-            // historical runtime directory: activating its immutable
-            // materialization would move `current` backwards for new sessions.
+            // Rebuild only this historical runtime directory so `current` never
+            // moves backwards for new sessions.
             validate_materialization_metadata(&materialized, package, generation)
                 .context("validating historical Provider auth materialization")?;
+            if let Some(admission) = admission {
+                admission.remaining()?;
+            }
             self.ensure_runtime_projection(package, generation, &bundle)?;
         }
         let runtime = self
@@ -1965,12 +2071,27 @@ impl MachinePluginStore {
         // Native observations can release the installation fence after spawn,
         // but a wipe must wait until this account's process has stopped. Acquire
         // in the same account -> lifecycle order as the observation path.
-        let _native_observation = if self.account_id.is_default() {
+        let native_observation = if self.account_id.is_default() {
             None
         } else {
             Some(self.native_observation_guard().await)
         };
-        let _lifecycle = self.lifecycle.lock().await;
+        let lifecycle = self.lock_lifecycle_owned().await;
+        let store = self.clone();
+        let envelope = envelope.clone();
+        tokio::task::spawn_blocking(move || {
+            let _native_observation = native_observation;
+            let _lifecycle = lifecycle;
+            store.apply_scoped_auth_blocking(&envelope)
+        })
+        .await
+        .context("Provider authentication apply task failed")?
+    }
+
+    fn apply_scoped_auth_blocking(
+        &self,
+        envelope: &SealedProviderAuth,
+    ) -> Result<PluginInventoryReceipt> {
         validate_plugin_id(&envelope.provider_id)?;
         ensure!(
             (envelope.envelope_schema == 1 && envelope.account_id.is_default())
@@ -2543,25 +2664,30 @@ impl MachinePluginStore {
         provider_id: &str,
         verified: Option<(&ProviderPackage, &str, &str)>,
     ) -> Result<Option<PluginInventory>> {
-        let active = self.plugin_root(provider_id).join("active");
-        if let Some(generation) = read_link_name(&active) {
-            let path = self
-                .plugin_root(provider_id)
-                .join("generations")
-                .join(&generation)
-                .join("content/plugin-inventory.json");
-            if path.is_file() {
-                let mut inventory: PluginInventory = serde_json::from_slice(&fs::read(&path)?)?;
-                inventory.rollback_generation_digest =
-                    read_link_name(&self.plugin_root(provider_id).join("rollback"))
-                        .map(|name| format!("sha256:{name}"));
-                return Ok(Some(inventory));
-            }
-        }
-        let Some(generation) = read_link_name(&active) else {
+        let plugin_root = self.plugin_root(provider_id);
+        let Some(generation) = operations::active_generation_strict(&plugin_root)? else {
             return Ok(None);
         };
         let digest = format!("sha256:{generation}");
+        let path = plugin_root
+            .join("generations")
+            .join(&generation)
+            .join("content/plugin-inventory.json");
+        if path.is_file() {
+            let (plugin, _, _) = self.verified_plugin_descriptor(provider_id, &digest)?;
+            let mut inventory: PluginInventory = serde_json::from_slice(&fs::read(&path)?)?;
+            ensure!(
+                inventory.plugin_id == plugin.manifest.id
+                    && inventory.plugin_kind == plugin.manifest.kind
+                    && inventory.plugin_version == plugin.manifest.version
+                    && inventory.generation_digest == digest
+                    && inventory.contract_fingerprint == plugin.contract_fingerprint,
+                "cached plugin-inventory.json does not match signed Plugin descriptor"
+            );
+            inventory.rollback_generation_digest =
+                read_link_name(&plugin_root.join("rollback")).map(|name| format!("sha256:{name}"));
+            return Ok(Some(inventory));
+        }
         let (package, contract_fingerprint) = if let Some((package, verified_digest, fingerprint)) =
             verified
         {
@@ -2980,6 +3106,19 @@ impl MachinePluginStore {
     }
 
     fn activate(plugin_root: &Path, generation_name: &str) -> Result<ProviderActivationSnapshot> {
+        Self::activate_checked(
+            plugin_root,
+            generation_name,
+            &installation::LeaseCheck::none(),
+        )
+    }
+
+    fn activate_checked(
+        plugin_root: &Path,
+        generation_name: &str,
+        lease_check: &installation::LeaseCheck,
+    ) -> Result<ProviderActivationSnapshot> {
+        lease_check.check()?;
         fs::create_dir_all(plugin_root.join("generations"))?;
         let active = plugin_root.join("active");
         let snapshot = ProviderActivationSnapshot {
@@ -2990,15 +3129,23 @@ impl MachinePluginStore {
             if let Some(previous) = snapshot.active.as_deref()
                 && previous != generation_name
             {
-                replace_link(
+                replace_link_checked(
                     &plugin_root.join("rollback"),
                     &format!("generations/{previous}"),
+                    lease_check,
                 )?;
             }
-            replace_link(&active, &format!("generations/{generation_name}"))
+            replace_link_checked(
+                &active,
+                &format!("generations/{generation_name}"),
+                lease_check,
+            )
         })();
         if let Err(error) = result {
-            if let Err(rollback_error) = Self::restore_activation(plugin_root, &snapshot) {
+            if lease_check.check().is_ok()
+                && let Err(rollback_error) =
+                    Self::restore_activation_checked(plugin_root, &snapshot, lease_check)
+            {
                 bail!(
                     "Provider generation activation failed: {error:#}; restoring activation links also failed: {rollback_error:#}"
                 );
@@ -3009,8 +3156,24 @@ impl MachinePluginStore {
     }
 
     fn restore_activation(plugin_root: &Path, snapshot: &ProviderActivationSnapshot) -> Result<()> {
-        restore_generation_link(&plugin_root.join("active"), snapshot.active.as_deref())?;
-        restore_generation_link(&plugin_root.join("rollback"), snapshot.rollback.as_deref())
+        Self::restore_activation_checked(plugin_root, snapshot, &installation::LeaseCheck::none())
+    }
+
+    fn restore_activation_checked(
+        plugin_root: &Path,
+        snapshot: &ProviderActivationSnapshot,
+        lease_check: &installation::LeaseCheck,
+    ) -> Result<()> {
+        restore_generation_link_checked(
+            &plugin_root.join("active"),
+            snapshot.active.as_deref(),
+            lease_check,
+        )?;
+        restore_generation_link_checked(
+            &plugin_root.join("rollback"),
+            snapshot.rollback.as_deref(),
+            lease_check,
+        )
     }
 
     fn pin_publisher(&self, publisher: &str, public_key: &str) -> Result<()> {
@@ -3065,8 +3228,21 @@ impl MachinePluginStore {
     /// previous bytes and resubmit the superseded token. Each such stale
     /// candidate wins CAS and is redistributed the same way, ping-ponging two
     /// tokens forever; holding the lifecycle lock observes only whole applies.
-    pub fn auth_refresh_observations(&self) -> ProviderAuthRefreshObservations {
-        let _lifecycle = self.lifecycle.blocking_lock();
+    /// Collect credential refresh observations asynchronously by acquiring the
+    /// owned lifecycle lock before entering the blocking pool, avoiding any
+    /// `blocking_lock()` deadlock across Tokio blocking workers.
+    pub async fn auth_refresh_observations_async(&self) -> Result<ProviderAuthRefreshObservations> {
+        let lifecycle = self.lock_lifecycle_owned().await;
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || {
+            let _lifecycle = lifecycle;
+            store.auth_refresh_observations_locked()
+        })
+        .await
+        .context("Provider auth refresh observation task failed")
+    }
+
+    pub(super) fn auth_refresh_observations_locked(&self) -> ProviderAuthRefreshObservations {
         let mut observations = ProviderAuthRefreshObservations::default();
         let scopes = self.existing_auth_scopes().unwrap_or_else(|error| {
             tracing::warn!(%error, "cannot enumerate account credential scopes");
@@ -3083,6 +3259,12 @@ impl MachinePluginStore {
                 .then(left.bundle.values.cmp(&right.bundle.values))
         });
         observations
+    }
+
+    #[cfg(test)]
+    pub fn auth_refresh_observations(&self) -> ProviderAuthRefreshObservations {
+        let _lifecycle = self.lifecycle.blocking_lock();
+        self.auth_refresh_observations_locked()
     }
 
     /// Enumerate only Cowboy-owned account roots; never discover identities by
@@ -4857,6 +5039,15 @@ fn atomic_write(path: &Path, bytes: &[u8], mode: u32) -> Result<()> {
 }
 
 fn replace_link(path: &Path, target: &str) -> Result<()> {
+    replace_link_checked(path, target, &installation::LeaseCheck::none())
+}
+
+fn replace_link_checked(
+    path: &Path,
+    target: &str,
+    lease_check: &installation::LeaseCheck,
+) -> Result<()> {
+    lease_check.check()?;
     let parent = path.parent().context("link has no parent")?;
     fs::create_dir_all(parent)?;
     let temporary = parent.join(format!(
@@ -4870,14 +5061,28 @@ fn replace_link(path: &Path, target: &str) -> Result<()> {
         fs::remove_file(&temporary)?;
     }
     symlink(target, &temporary)?;
+    if let Err(error) = lease_check.check() {
+        let _ = fs::remove_file(&temporary);
+        return Err(error);
+    }
     fs::rename(&temporary, path)?;
     Ok(())
 }
 
+#[cfg(test)]
 fn restore_generation_link(path: &Path, generation: Option<&str>) -> Result<()> {
+    restore_generation_link_checked(path, generation, &installation::LeaseCheck::none())
+}
+
+fn restore_generation_link_checked(
+    path: &Path,
+    generation: Option<&str>,
+    lease_check: &installation::LeaseCheck,
+) -> Result<()> {
     if let Some(generation) = generation {
-        return replace_link(path, &format!("generations/{generation}"));
+        return replace_link_checked(path, &format!("generations/{generation}"), lease_check);
     }
+    lease_check.check()?;
     match fs::remove_file(path) {
         Ok(()) => Ok(()),
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
@@ -5099,7 +5304,11 @@ mod tests {
         )
         .unwrap();
         assert!(store.inventory().is_err());
-        let sidecars = store.prepare_usage_sidecars(&[], None).await.unwrap();
+        let mut lifecycle = Some(store.lock_lifecycle_owned().await);
+        let sidecars = store
+            .prepare_usage_sidecars(&[], None, &mut lifecycle)
+            .await
+            .unwrap();
         assert!(sidecars.children.is_empty());
         assert!(sidecars.targets.is_empty());
     }
@@ -8336,16 +8545,72 @@ exit 0\n";
 
     fn retention_fixture(
         kind: cowboy_plugin_sdk::PluginKind,
-    ) -> (tempfile::TempDir, MachinePluginStore) {
+    ) -> (tempfile::TempDir, MachinePluginStore, String, String) {
         let root = tempfile::tempdir().unwrap();
-        let store =
-            MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".to_owned()).unwrap();
-        let generations = store.plugin_root("claude-code").join("generations");
-        for name in ["a", "b", "c", "d"] {
+        let publisher =
+            crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("publisher"))
+                .unwrap();
+        let store = MachinePluginStore::new(
+            &root.path().join("store"),
+            Platform::Linux,
+            "x86_64".to_owned(),
+        )
+        .unwrap();
+        let desired = match kind {
+            cowboy_plugin_sdk::PluginKind::AgentProvider => grok_provider_release(
+                &publisher,
+                "https://plugins.example.test/runtime",
+                &format!("sha256:{}", "1".repeat(64)),
+            ),
+            cowboy_plugin_sdk::PluginKind::TelemetryBackend => {
+                telemetry_release(&publisher, "2.0.0")
+            }
+            other => panic!("unexpected retention fixture kind: {other:?}"),
+        };
+        let plugin_id = desired.release.plugin_id.clone();
+        let active_gen = digest_generation_name(&desired.release.artifact_digest).unwrap();
+        let generations = store.plugin_root(&plugin_id).join("generations");
+        let active_content = generations.join(&active_gen).join("content");
+        fs::create_dir_all(&active_content).unwrap();
+        let pkg_bytes = base64::engine::general_purpose::STANDARD
+            .decode(&desired.package_base64)
+            .unwrap();
+        fs::write(active_content.join("package.cowboy-plugin"), &pkg_bytes).unwrap();
+        fs::write(
+            active_content.join("plugin-release.json"),
+            serde_json::to_vec(&desired.release).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            active_content.join("publisher.pub"),
+            desired.publisher_public_key.as_bytes(),
+        )
+        .unwrap();
+        let active_inv = PluginInventory {
+            plugin_id: plugin_id.clone(),
+            plugin_version: desired.release.plugin_version.clone(),
+            plugin_kind: kind,
+            generation_digest: desired.release.artifact_digest.clone(),
+            installation_revision: None,
+            contract_fingerprint: desired.release.contract_fingerprint.clone(),
+            state: PluginInstallationState::Active,
+            rollback_generation_digest: None,
+            active_session_leases: 0,
+            auth_generation: None,
+            replica_state: ProviderReplicaState::Absent,
+            materialization_state: ProviderMaterializationState::NotInstalled,
+            detail: None,
+        };
+        fs::write(
+            active_content.join("plugin-inventory.json"),
+            serde_json::to_vec(&active_inv).unwrap(),
+        )
+        .unwrap();
+        for name in ["b", "c", "d"] {
             let content = generations.join(name.repeat(64)).join("content");
             fs::create_dir_all(&content).unwrap();
             let inventory = serde_json::json!({
-                "plugin_id": "claude-code",
+                "plugin_id": plugin_id,
                 "plugin_version": "3.4.7",
                 "plugin_kind": kind,
                 "generation_digest": format!("sha256:{}", name.repeat(64)),
@@ -8358,29 +8623,30 @@ exit 0\n";
             )
             .unwrap();
         }
-        let plugin = store.plugin_root("claude-code");
-        restore_generation_link(&plugin.join("active"), Some(&"a".repeat(64))).unwrap();
+        let plugin = store.plugin_root(&plugin_id);
+        restore_generation_link(&plugin.join("active"), Some(&active_gen)).unwrap();
         restore_generation_link(&plugin.join("rollback"), Some(&"b".repeat(64))).unwrap();
-        (root, store)
+        (root, store, plugin_id, active_gen)
     }
 
     #[test]
     fn a_launch_on_a_retired_generation_reports_it_as_not_installed() {
-        let (_root, store) = retention_fixture(cowboy_plugin_sdk::PluginKind::AgentProvider);
+        let (_root, store, plugin_id, _active_gen) =
+            retention_fixture(cowboy_plugin_sdk::PluginKind::AgentProvider);
         let digest = |name: &str| format!("sha256:{}", name.repeat(64));
         // No directory at all: retired, or never installed here.
         let error = store
-            .launch_context("claude-code", &digest("e"), None)
+            .launch_context(&plugin_id, &digest("e"), None)
             .unwrap_err()
             .to_string();
         assert_eq!(
             error,
-            crate::generation_retention::not_installed_detail("claude-code", &digest("e"))
+            crate::generation_retention::not_installed_detail(&plugin_id, &digest("e"))
         );
         assert!(crate::generation_retention::is_not_installed_detail(&error));
         // A present but unreadable generation still names what failed to read.
         let error = store
-            .launch_context("claude-code", &digest("c"), None)
+            .launch_context(&plugin_id, &digest("c"), None)
             .unwrap_err()
             .to_string();
         assert!(
@@ -8392,57 +8658,44 @@ exit 0\n";
 
     #[tokio::test]
     async fn retention_preserves_native_logout_executable_until_cleanup_finishes() {
-        let (_root, store) = retention_fixture(cowboy_plugin_sdk::PluginKind::AgentProvider);
+        let (_root, store, plugin_id, _active_gen) =
+            retention_fixture(cowboy_plugin_sdk::PluginKind::AgentProvider);
         let account: crate::provider_account::ProviderAccountId =
             uuid::Uuid::new_v4().to_string().try_into().unwrap();
         let scoped = store.for_account(&account).unwrap();
         let profile_dir = scoped
-            .auth_provider_root("claude-code")
+            .auth_provider_root(&plugin_id)
             .join("native/generations/1");
         fs::create_dir_all(profile_dir.join("home")).unwrap();
         let file = profile_dir.join("profile.json");
         let mut profile = serde_json::json!({
-            "schema":1,"account":account,"provider":"claude-code","generation":1,
+            "schema":1,"account":account,"provider":plugin_id,"generation":1,
             "request":"login","contract":"fixture","version":"fixture","method":"native",
             "digest":format!("sha256:{}", "d".repeat(64)),"identity":null,"revoked":false
         });
         fs::write(&file, serde_json::to_vec(&profile).unwrap()).unwrap();
         let executable = store
-            .plugin_root("claude-code")
+            .plugin_root(&plugin_id)
             .join("generations")
             .join("d".repeat(64));
         let pins = BTreeSet::new();
-        store
-            .retire_generations("claude-code", &pins)
-            .await
-            .unwrap();
+        store.retire_generations(&plugin_id, &pins).await.unwrap();
         assert!(
             executable.exists(),
             "unfinished login must retain its exact package"
         );
         fs::write(&file, b"corrupt").unwrap();
-        assert!(
-            store
-                .retire_generations("claude-code", &pins)
-                .await
-                .is_err()
-        );
+        assert!(store.retire_generations(&plugin_id, &pins).await.is_err());
         assert!(executable.exists(), "unreadable metadata must fail closed");
         profile["revoked"] = serde_json::json!(true);
         fs::write(&file, serde_json::to_vec(&profile).unwrap()).unwrap();
-        store
-            .retire_generations("claude-code", &pins)
-            .await
-            .unwrap();
+        store.retire_generations(&plugin_id, &pins).await.unwrap();
         assert!(
             executable.exists(),
             "revocation intent is not completed cleanup"
         );
         fs::remove_dir(profile_dir.join("home")).unwrap();
-        store
-            .retire_generations("claude-code", &pins)
-            .await
-            .unwrap();
+        store.retire_generations(&plugin_id, &pins).await.unwrap();
         assert!(!executable.exists());
         assert!(
             file.exists(),
@@ -8452,8 +8705,9 @@ exit 0\n";
 
     #[tokio::test]
     async fn retention_keeps_active_rollback_and_pinned_generations_only() {
-        let (_root, store) = retention_fixture(cowboy_plugin_sdk::PluginKind::AgentProvider);
-        let generations = store.plugin_root("claude-code").join("generations");
+        let (_root, store, plugin_id, active_gen) =
+            retention_fixture(cowboy_plugin_sdk::PluginKind::AgentProvider);
+        let generations = store.plugin_root(&plugin_id).join("generations");
         // An unreferenced generation with read-only content is still removed.
         let unreferenced = generations.join("d".repeat(64));
         fs::write(unreferenced.join("content/cli"), b"binary").unwrap();
@@ -8467,18 +8721,16 @@ exit 0\n";
         fs::create_dir_all(generations.join("notes")).unwrap();
 
         let pinned = BTreeSet::from([format!("sha256:{}", "c".repeat(64))]);
-        let outcome = store
-            .retire_generations("claude-code", &pinned)
-            .await
-            .unwrap();
+        let outcome = store.retire_generations(&plugin_id, &pinned).await.unwrap();
 
         assert_eq!(outcome.retired, vec![format!("sha256:{}", "d".repeat(64))]);
-        assert_eq!(
-            outcome.retained,
-            ["a", "b", "c"]
-                .map(|name| format!("sha256:{}", name.repeat(64)))
-                .to_vec()
-        );
+        let mut expected_retained = vec![
+            format!("sha256:{active_gen}"),
+            format!("sha256:{}", "b".repeat(64)),
+            format!("sha256:{}", "c".repeat(64)),
+        ];
+        expected_retained.sort();
+        assert_eq!(outcome.retained, expected_retained);
         assert!(outcome.freed_bytes >= 6);
         assert!(!unreferenced.exists());
         assert!(
@@ -8487,15 +8739,16 @@ exit 0\n";
                 .exists()
         );
         assert!(generations.join("notes").exists());
-        for kept in ["a", "b", "c"] {
-            assert!(generations.join(kept.repeat(64)).is_dir());
+        for kept in [active_gen, "b".repeat(64), "c".repeat(64)] {
+            assert!(generations.join(kept).is_dir());
         }
     }
 
     #[tokio::test]
     async fn uninstalled_retention_keeps_pinned_and_compensable_generations_only() {
-        let (_root, store) = retention_fixture(cowboy_plugin_sdk::PluginKind::AgentProvider);
-        let plugin = store.plugin_root("claude-code");
+        let (_root, store, plugin_id, active_gen) =
+            retention_fixture(cowboy_plugin_sdk::PluginKind::AgentProvider);
+        let plugin = store.plugin_root(&plugin_id);
         let generations = plugin.join("generations");
         // Still installed: the uninstalled sweep leaves it alone.
         let none = BTreeMap::new();
@@ -8508,7 +8761,7 @@ exit 0\n";
 
         // Uninstalled while its saga may still compensate: skipped.
         fs::remove_file(plugin.join("active")).unwrap();
-        let skip = BTreeSet::from(["claude-code".to_owned()]);
+        let skip = BTreeSet::from([plugin_id.clone()]);
         assert!(
             store
                 .retire_uninstalled_generations(&none, &skip)
@@ -8520,7 +8773,7 @@ exit 0\n";
 
         // Saga finished: only the generation a soft-deleted session pins stays.
         let referenced = BTreeMap::from([(
-            "claude-code".to_owned(),
+            plugin_id.clone(),
             BTreeSet::from([format!("sha256:{}", "c".repeat(64))]),
         )]);
         let outcomes = store
@@ -8528,12 +8781,13 @@ exit 0\n";
             .await
             .unwrap();
         assert_eq!(outcomes.len(), 1);
-        assert_eq!(
-            outcomes[0].retired,
-            ["a", "b", "d"]
-                .map(|name| format!("sha256:{}", name.repeat(64)))
-                .to_vec()
-        );
+        let mut expected_retired = vec![
+            format!("sha256:{active_gen}"),
+            format!("sha256:{}", "b".repeat(64)),
+            format!("sha256:{}", "d".repeat(64)),
+        ];
+        expected_retired.sort();
+        assert_eq!(outcomes[0].retired, expected_retired);
         assert_eq!(
             outcomes[0].retained,
             vec![format!("sha256:{}", "c".repeat(64))]
@@ -8546,8 +8800,9 @@ exit 0\n";
 
     #[tokio::test]
     async fn uninstalled_retention_never_infers_unsupported_or_unrecorded_kinds() {
-        let (_root, store) = retention_fixture(cowboy_plugin_sdk::PluginKind::TelemetryBackend);
-        let plugin = store.plugin_root("claude-code");
+        let (_root, store, plugin_id, _active_gen) =
+            retention_fixture(cowboy_plugin_sdk::PluginKind::TelemetryBackend);
+        let plugin = store.plugin_root(&plugin_id);
         fs::remove_file(plugin.join("active")).unwrap();
         assert!(
             store
@@ -8561,9 +8816,10 @@ exit 0\n";
 
     #[tokio::test]
     async fn retention_refuses_unsupported_plugin_kinds() {
-        let (_root, store) = retention_fixture(cowboy_plugin_sdk::PluginKind::TelemetryBackend);
+        let (_root, store, plugin_id, _active_gen) =
+            retention_fixture(cowboy_plugin_sdk::PluginKind::TelemetryBackend);
         let error = store
-            .retire_generations("claude-code", &BTreeSet::new())
+            .retire_generations(&plugin_id, &BTreeSet::new())
             .await
             .unwrap_err();
         assert!(
@@ -8573,10 +8829,321 @@ exit 0\n";
         );
         assert!(
             store
-                .plugin_root("claude-code")
+                .plugin_root(&plugin_id)
                 .join("generations")
                 .join("d".repeat(64))
                 .is_dir()
+        );
+    }
+    fn grok_provider_release(
+        publisher: &crate::machine_auth::MachineIdentity,
+        runtime_url: &str,
+        script_digest: &str,
+    ) -> DesiredPlugin {
+        use cowboy_plugin_sdk::{
+            PluginArtifactFormat, PluginArtifactProbe, PluginComponentKind, PluginManifest,
+            PluginPackage, PluginPayload, PluginRelease, PluginRuntimeArtifacts,
+            ReleasedPluginComponent,
+        };
+        use cowboy_provider_sdk::{
+            PlatformTarget, PrivateComponentKind, StandardProviderSource, build_package,
+        };
+
+        let source: StandardProviderSource =
+            serde_json::from_str(include_str!("../../../plugins/grok/provider.json")).unwrap();
+        let package = build_package(source.compile().unwrap()).unwrap();
+        let manifest: PluginManifest =
+            serde_json::from_str(include_str!("../../../plugins/grok/plugin.json")).unwrap();
+        let component_release = manifest.component_release.clone();
+        let plugin_package = PluginPackage::new(
+            manifest,
+            component_release.clone(),
+            PluginPayload::AgentProvider(Box::new(package.clone())),
+        )
+        .unwrap();
+        let bytes = plugin_package.canonical_bytes().unwrap();
+        let dep_version = &package.manifest.runtime.dependencies[0].version;
+        let runtime_artifacts = package
+            .manifest
+            .runtime
+            .platforms
+            .iter()
+            .map(|payload| PluginRuntimeArtifacts {
+                os: payload.os.clone(),
+                architecture: payload.architecture.clone(),
+                components: payload
+                    .private_components
+                    .iter()
+                    .map(|req| ReleasedPluginComponent {
+                        kind: match req.kind {
+                            PrivateComponentKind::ProviderCli => PluginComponentKind::AgentCli,
+                            PrivateComponentKind::ProviderAdapter => {
+                                PluginComponentKind::AgentAdapter
+                            }
+                            PrivateComponentKind::ProviderGateway => {
+                                PluginComponentKind::AgentGateway
+                            }
+                            PrivateComponentKind::AcpRuntime => PluginComponentKind::AcpRuntime,
+                        },
+                        slot: req.slot.clone(),
+                        dependency: req.dependency.clone(),
+                        version: dep_version.clone(),
+                        command: req.command.clone(),
+                        artifact_url: runtime_url.to_owned(),
+                        artifact_digest: script_digest.to_owned(),
+                        artifact_format: PluginArtifactFormat::Raw,
+                        entrypoint: None,
+                        probe: PluginArtifactProbe {
+                            args: vec!["--version".to_owned()],
+                            timeout_ms: 1_000,
+                        },
+                    })
+                    .collect(),
+            })
+            .collect();
+        let mut release = PluginRelease {
+            release_schema: 1,
+            plugin_id: package.manifest.id.clone(),
+            plugin_version: package.manifest.version.clone(),
+            plugin_kind: cowboy_plugin_sdk::PluginKind::AgentProvider,
+            package_digest: PluginPackage::artifact_digest(&bytes),
+            artifact_digest: String::new(),
+            artifact_url: "https://example.invalid/grok.cowboy-plugin".to_owned(),
+            publisher: package.manifest.publisher.clone(),
+            contract_fingerprint: plugin_package.contract_fingerprint.clone(),
+            component_release,
+            host_bundle_digest: None,
+            signature: String::new(),
+            supported_platforms: package
+                .manifest
+                .runtime
+                .platforms
+                .iter()
+                .map(|p| PlatformTarget {
+                    os: p.os.clone(),
+                    architecture: p.architecture.clone(),
+                })
+                .collect(),
+            runtime_artifacts,
+        };
+        release.artifact_digest = release.computed_artifact_digest().unwrap();
+        release.signature = publisher
+            .sign_namespaced(PLUGIN_RELEASE_SIGNATURE_NAMESPACE, &release.proof())
+            .unwrap();
+        DesiredPlugin {
+            release,
+            package_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            publisher_public_key: publisher.public_key().to_owned(),
+            host_bundle_base64: None,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn non_agent_inventory_skips_agent_provider_runtime_verification() {
+        use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
+
+        let root = tempfile::tempdir().unwrap();
+        let store =
+            MachinePluginStore::new(root.path(), Platform::Linux, "x86_64".to_owned()).unwrap();
+        let publisher =
+            crate::machine_auth::MachineIdentity::load_or_create(&root.path().join("publisher"))
+                .unwrap();
+
+        let runtime_script = b"#!/bin/sh\necho ok\n".to_vec();
+        let script_digest = format!("sha256:{:x}", Sha256::digest(&runtime_script));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let served_script = runtime_script.clone();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0u8; 1024];
+            let _ = stream.read(&mut request).await.unwrap();
+            stream
+                .write_all(
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                        served_script.len()
+                    )
+                    .as_bytes(),
+                )
+                .await
+                .unwrap();
+            stream.write_all(&served_script).await.unwrap();
+        });
+
+        let grok = grok_provider_release(
+            &publisher,
+            &format!("http://{address}/runtime"),
+            &script_digest,
+        );
+        store.install(&grok).await.unwrap();
+        server.await.unwrap();
+
+        let matrix = session_extension_release(
+            &publisher,
+            include_str!("../../../plugins/matrix/plugin.json"),
+            include_str!("../../../plugins/matrix/contract.json"),
+        );
+        store.install(&matrix).await.unwrap();
+
+        let before = store.runtime_verifications.load(Ordering::Relaxed);
+        let non_agent = store.inventory_non_agent().unwrap();
+        assert_eq!(non_agent.len(), 1);
+        assert_eq!(non_agent[0].plugin_id, "matrix");
+        assert!(store.machine_browser_runtime().unwrap().is_none());
+        assert_eq!(
+            store.runtime_verifications.load(Ordering::Relaxed),
+            before,
+            "non-Agent inventory and browser capability queries must never verify Agent Provider runtimes"
+        );
+
+        let extensions = store
+            .session_extensions(crate::runtime_wire::SessionExtensions {
+                schema: crate::runtime_wire::SESSION_EXTENSIONS_SCHEMA,
+                memory_tools: true,
+                memory_recall: false,
+            })
+            .unwrap();
+        assert!(!extensions["memory"].is_null());
+        assert_eq!(
+            store.runtime_verifications.load(Ordering::Relaxed),
+            before + 1,
+            "session_extensions may verify only its matched non-Agent Plugin, never Agent Providers"
+        );
+
+        let all = store.inventory_async().await.unwrap();
+        assert_eq!(all.len(), 2);
+        assert_eq!(
+            store.runtime_verifications.load(Ordering::Relaxed),
+            before + 2,
+            "full inventory_async must still verify installed Agent Providers"
+        );
+
+        // H7: deleting a non-Agent Plugin's plugin-inventory.json must fail
+        // closed rather than silently hiding the broken slot.
+        let matrix_active = read_link_name(&store.plugin_root("matrix").join("active")).unwrap();
+        fs::remove_file(
+            store
+                .plugin_root("matrix")
+                .join("generations")
+                .join(&matrix_active)
+                .join("content/plugin-inventory.json"),
+        )
+        .unwrap();
+        assert!(
+            store.inventory_non_agent().is_err(),
+            "non-Agent Plugin missing plugin-inventory.json must fail closed"
+        );
+
+        // M1: corrupt active slot must fail closed in is_browser_plugin_checked.
+        let corrupt = store.plugin_root("corrupt-slot");
+        fs::create_dir_all(&corrupt).unwrap();
+        std::os::unix::fs::symlink(
+            format!("generations/{}", "cd".repeat(32)),
+            corrupt.join("active"),
+        )
+        .unwrap();
+        assert!(
+            store.is_browser_plugin_checked("corrupt-slot").is_err(),
+            "unclassifiable active slot must fail closed in browser preflight"
+        );
+
+        // H8: async auth_refresh_observations never calls blocking_lock and
+        // completes cleanly on a 1-worker runtime while lifecycle is exercised.
+        let obs = store.auth_refresh_observations_async().await.unwrap();
+        assert!(obs.candidates.is_empty());
+    }
+
+    #[tokio::test]
+    async fn malformed_active_slots_fail_closed_and_auth_retention_rejects_scoped_stores() {
+        let root = tempfile::tempdir().unwrap();
+        let store = MachinePluginStore::new(
+            root.path(),
+            crate::machine_protocol::Platform::Linux,
+            "x86_64".to_owned(),
+        )
+        .unwrap();
+
+        // R2-M2: a regular file at active must fail closed in both full and non-Agent inventory.
+        let reg_file_slot = store.plugin_root("regular-active");
+        fs::create_dir_all(&reg_file_slot).unwrap();
+        fs::write(reg_file_slot.join("active"), b"not-a-symlink").unwrap();
+        assert!(
+            store.inventory().is_err(),
+            "regular-file active slot must fail closed in full inventory"
+        );
+        assert!(
+            store.inventory_non_agent().is_err(),
+            "regular-file active slot must fail closed in non-Agent inventory"
+        );
+        fs::remove_dir_all(&reg_file_slot).unwrap();
+
+        // R2-M2: malformed symlink target ending in a digest must fail closed.
+        let escaped = store.plugin_root("escaped-active");
+        fs::create_dir_all(&escaped).unwrap();
+        std::os::unix::fs::symlink(
+            format!("../other/generations/{}", "ef".repeat(32)),
+            escaped.join("active"),
+        )
+        .unwrap();
+        assert!(
+            store.is_browser_plugin_checked("escaped-active").is_err(),
+            "escaped active link must fail closed in browser classification"
+        );
+        fs::remove_dir_all(&escaped).unwrap();
+
+        // R3-M2: unsigned cached plugin-inventory.json without a signed
+        // descriptor must fail closed in full inventory too.
+        let unsigned_gen = "de".repeat(32);
+        let unsigned_content = store
+            .plugin_root("unsigned-cache")
+            .join("generations")
+            .join(&unsigned_gen)
+            .join("content");
+        fs::create_dir_all(&unsigned_content).unwrap();
+        let fake_inv = PluginInventory {
+            plugin_id: "unsigned-cache".to_owned(),
+            plugin_version: "1.0.0".to_owned(),
+            plugin_kind: cowboy_plugin_sdk::PluginKind::MemoryBackend,
+            generation_digest: format!("sha256:{unsigned_gen}"),
+            installation_revision: None,
+            contract_fingerprint: "sha256:00".to_owned(),
+            state: PluginInstallationState::Active,
+            rollback_generation_digest: None,
+            active_session_leases: 0,
+            auth_generation: None,
+            replica_state: ProviderReplicaState::Absent,
+            materialization_state: ProviderMaterializationState::NotInstalled,
+            detail: None,
+        };
+        fs::write(
+            unsigned_content.join("plugin-inventory.json"),
+            serde_json::to_vec(&fake_inv).unwrap(),
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(
+            format!("generations/{unsigned_gen}"),
+            store.plugin_root("unsigned-cache").join("active"),
+        )
+        .unwrap();
+        assert!(
+            store.inventory().is_err(),
+            "unsigned cached plugin-inventory.json must fail closed in full inventory"
+        );
+        fs::remove_dir_all(store.plugin_root("unsigned-cache")).unwrap();
+
+        // R2-H2: credential retention rejects non-default scoped stores.
+        let acct = crate::provider_account::ProviderAccountId::try_from(
+            "11111111-1111-1111-1111-111111111111".to_owned(),
+        )
+        .unwrap();
+        let scoped = store.for_account(&acct).unwrap();
+        assert!(
+            scoped
+                .retire_auth_generations("grok", &BTreeSet::new())
+                .await
+                .is_err(),
+            "credential retention must remain limited to the default account"
         );
     }
 }

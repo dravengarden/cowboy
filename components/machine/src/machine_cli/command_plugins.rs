@@ -65,50 +65,35 @@ pub(super) fn handle(
                             .map_or(UninstallAccess::Observe, UninstallAccess::Execute),
                     )
                     .await;
-                if !query_only {
-                    // An inventory read failure must not advertise an empty
-                    // installation as proof of a completed uninstall.
-                    if let Ok(plugins) = providers.inventory() {
-                        let _ = events.send(MachineEvent::PluginInventory {
-                            plugins,
-                            observed_at_ms: unix_ms(),
-                        });
-                    }
-                }
                 let _ = events.send(MachineEvent::PluginUninstallStep {
                     request_id,
                     observation: Box::new(observation),
                 });
+                if !query_only {
+                    // An inventory read failure must not advertise an empty
+                    // installation as proof of a completed uninstall.
+                    tokio::spawn(async move {
+                        let _ = providers
+                            .publish_inventory_with(|plugins| {
+                                let _ = events.send(MachineEvent::PluginInventory {
+                                    plugins,
+                                    observed_at_ms: unix_ms(),
+                                });
+                            })
+                            .await;
+                    });
+                }
             });
         }
         MachineCommand::RefreshInventory { request_id } => {
-            tokio::spawn(async move {
-                let components =
-                    collect_inventory(&components, zed_adapter_socket.as_deref()).await;
-                let workspace_result = workspaces.reload();
-                if workspace_result.is_ok() {
-                    let (snapshot, workspace_identities) = workspaces.advertisement();
-                    let _ = events.send(MachineEvent::Inventory {
-                        components,
-                        workspace_identities: Some(workspace_identities),
-                        workspaces: Some(snapshot.workspaces.clone()),
-                        workspace_revision: snapshot.revision.clone(),
-                        workspace_owner: Some(snapshot.owner),
-                        observed_at_ms: unix_ms(),
-                    });
-                    let _ = events.send(MachineEvent::PluginInventory {
-                        plugins: providers.inventory().unwrap_or_default(),
-                        observed_at_ms: unix_ms(),
-                    });
-                }
-                let _ = events.send(MachineEvent::CommandResult {
-                    request_id,
-                    accepted: workspace_result.is_ok(),
-                    detail: workspace_result
-                        .err()
-                        .map(|error| format!("workspace configuration reload failed: {error:#}")),
-                });
-            });
+            tokio::spawn(refresh_inventory_task(
+                request_id,
+                components,
+                zed_adapter_socket,
+                workspaces,
+                providers,
+                events,
+            ));
         }
         MachineCommand::ObservePluginInstallation { request_id, query } => {
             tokio::spawn(async move {
@@ -162,12 +147,14 @@ pub(super) fn handle(
                 let result = providers.install(&plugin).await;
                 let accepted = result.is_ok();
                 let detail = result.as_ref().err().map(|error| format!("{error:#}"));
-                if let Ok(plugins) = providers.inventory() {
-                    let _ = events.send(MachineEvent::PluginInventory {
-                        plugins,
-                        observed_at_ms: unix_ms(),
-                    });
-                }
+                let _ = providers
+                    .publish_inventory_with(|plugins| {
+                        let _ = events.send(MachineEvent::PluginInventory {
+                            plugins,
+                            observed_at_ms: unix_ms(),
+                        });
+                    })
+                    .await;
                 let _ = events.send(MachineEvent::CommandResult {
                     request_id,
                     accepted,
@@ -184,10 +171,7 @@ pub(super) fn handle(
                 let result = providers.uninstall(&plugin_id, &generation_digest).await;
                 let accepted = result.is_ok();
                 let detail = result.err().map(|error| format!("{error:#}"));
-                let _ = events.send(MachineEvent::PluginInventory {
-                    plugins: providers.inventory().unwrap_or_default(),
-                    observed_at_ms: unix_ms(),
-                });
+                publish_plugin_inventory_if_ok(&providers, &events, "after uninstall").await;
                 let _ = events.send(MachineEvent::CommandResult {
                     request_id,
                     accepted,
@@ -204,10 +188,7 @@ pub(super) fn handle(
                 let result = providers.reactivate(&plugin_id, &generation_digest).await;
                 let accepted = result.is_ok();
                 let detail = result.err().map(|error| format!("{error:#}"));
-                let _ = events.send(MachineEvent::PluginInventory {
-                    plugins: providers.inventory().unwrap_or_default(),
-                    observed_at_ms: unix_ms(),
-                });
+                publish_plugin_inventory_if_ok(&providers, &events, "after reactivation").await;
                 let _ = events.send(MachineEvent::CommandResult {
                     request_id,
                     accepted,
@@ -267,4 +248,99 @@ pub(super) fn handle(
             "machine command routed to the wrong family (command_plugins)"
         ),
     }
+}
+
+async fn refresh_inventory_task(
+    request_id: String,
+    components: Arc<ComponentStore>,
+    zed_adapter_socket: Option<PathBuf>,
+    workspaces: Arc<WorkspaceConfig>,
+    providers: Arc<MachinePluginStore>,
+    events: tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+) {
+    let components = collect_inventory(&components, zed_adapter_socket.as_deref()).await;
+    let workspace_result = workspaces.reload();
+    let mut inventory_error = None;
+    if workspace_result.is_ok() {
+        let (snapshot, workspace_identities) = workspaces.advertisement();
+        let _ = events.send(MachineEvent::Inventory {
+            components,
+            workspace_identities: Some(workspace_identities),
+            workspaces: Some(snapshot.workspaces.clone()),
+            workspace_revision: snapshot.revision.clone(),
+            workspace_owner: Some(snapshot.owner),
+            observed_at_ms: unix_ms(),
+        });
+        if let Err(error) = providers
+            .publish_inventory_with(|plugins| {
+                let _ = events.send(MachineEvent::PluginInventory {
+                    plugins,
+                    observed_at_ms: unix_ms(),
+                });
+            })
+            .await
+        {
+            tracing::warn!(
+                error = %format!("{error:#}"),
+                "Plugin inventory refresh failed; preserving previous observed Plugins"
+            );
+            inventory_error = Some(error);
+        }
+    }
+    let (accepted, detail) = match (workspace_result, inventory_error) {
+        (Err(error), _) => (
+            false,
+            Some(format!("workspace configuration reload failed: {error:#}")),
+        ),
+        (Ok(_), Some(error)) => (
+            false,
+            Some(format!("Plugin inventory refresh failed: {error:#}")),
+        ),
+        (Ok(_), None) => (true, None),
+    };
+    let _ = events.send(MachineEvent::CommandResult {
+        request_id,
+        accepted,
+        detail,
+    });
+}
+
+async fn publish_plugin_inventory_if_ok(
+    providers: &MachinePluginStore,
+    events: &tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+    context: &str,
+) {
+    if let Err(error) = providers
+        .publish_inventory_with(|plugins| {
+            let _ = events.send(MachineEvent::PluginInventory {
+                plugins,
+                observed_at_ms: unix_ms(),
+            });
+        })
+        .await
+    {
+        tracing::warn!(
+            error = %format!("{error:#}"),
+            context,
+            "Plugin inventory refresh failed; preserving previous observed Plugins"
+        );
+    }
+}
+
+pub(super) fn spawn_post_welcome_inventory_publish(
+    providers: &Arc<MachinePluginStore>,
+    events: &tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+) {
+    let providers = Arc::clone(providers);
+    let events = events.clone();
+    tokio::spawn(async move {
+        let _ = providers
+            .publish_inventory_with(|plugins| {
+                let _ = events.send(MachineEvent::PluginInventory {
+                    plugins,
+                    observed_at_ms: unix_ms(),
+                });
+            })
+            .await;
+    });
 }

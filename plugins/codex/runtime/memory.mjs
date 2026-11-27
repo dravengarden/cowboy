@@ -60,12 +60,35 @@ export function agentApiServerName(servers = []) {
 
 /** The names of the servers natively configured for this launch, by asking
  * native itself; credentials and config files stay where they belong. */
+function stripOtelConfigArgs(configuration) {
+  const cleaned = [];
+  for (let i = 0; i < configuration.length; i += 1) {
+    if (
+      configuration[i] === "-c" &&
+      typeof configuration[i + 1] === "string" &&
+      /^(?:otel|["']otel["'])(?:\.|=|\s*=)/.test(configuration[i + 1].trim())
+    ) {
+      i += 1;
+      continue;
+    }
+    cleaned.push(configuration[i]);
+  }
+  return cleaned;
+}
+
 export function nativeMcpServerNames(executable, configuration) {
-  const listing = spawnSync(executable, [...configuration, "mcp", "list", "--json"], {
-    encoding: "utf8",
-    timeout: 10_000,
-    maxBuffer: 1024 * 1024,
-  });
+  const env = { ...process.env };
+  delete env.COWBOY_PRIVATE_CODEX_REQUEST_OBSERVATION;
+  const listing = spawnSync(
+    executable,
+    [...stripOtelConfigArgs(configuration), "mcp", "list", "--json"],
+    {
+      env,
+      encoding: "utf8",
+      timeout: 10_000,
+      maxBuffer: 1024 * 1024,
+    },
+  );
   if (listing.status !== 0) {
     throw new Error("Cowboy MCP could not enumerate native server names");
   }

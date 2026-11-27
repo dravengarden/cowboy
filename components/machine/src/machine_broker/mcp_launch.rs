@@ -1,6 +1,7 @@
 //! Mandatory MCP metadata cannot be dropped during launch or adoption.
 use super::{Broker, StartSession, account_worker};
 use anyhow::{Context as _, Result, ensure};
+use std::sync::Arc;
 
 impl Broker {
     pub(super) fn mcp_launch_adoption_changed(&self, session: &StartSession) -> bool {
@@ -126,32 +127,41 @@ impl Broker {
     /// Session extensions are resolved from this Machine's own active Plugins.
     /// Without a required MCP plan a failure disables them explicitly: the
     /// session starts without memory and never falls back to a host enrollment.
-    pub(super) fn launch_extensions_environment(
+    pub(super) async fn launch_extensions_environment(
         &self,
         session: &StartSession,
     ) -> Result<Option<String>> {
         let Some(switches) = session.extensions else {
             return Ok(None);
         };
-        let written = self
-            .args
-            .call_context_root
-            .as_deref()
-            .context("Machine has no state root for session extensions")
-            .and_then(|root| {
-                self.args.provider_store.write_session_extensions(
-                    root,
-                    &session.session_id,
-                    switches,
-                    // A managed child never receives memory.
-                    self.args
-                        .memory_relay
-                        .as_ref()
-                        .filter(|_| !session.system)
-                        .map(|relay| relay.session_access(&session.session_id)),
-                    session.mcp_plan.as_deref(),
-                )
-            });
+        let written = match self.args.call_context_root.clone() {
+            None => Err(anyhow::anyhow!(
+                "Machine has no state root for session extensions"
+            )),
+            Some(root) => {
+                let store = Arc::clone(&self.args.provider_store);
+                let session_id = session.session_id.clone();
+                let memory_access = self
+                    .args
+                    .memory_relay
+                    .as_ref()
+                    .filter(|_| !session.system)
+                    .map(|relay| relay.session_access(&session.session_id));
+                let mcp_plan = session.mcp_plan.clone();
+                tokio::task::spawn_blocking(move || {
+                    store.write_session_extensions(
+                        &root,
+                        &session_id,
+                        switches,
+                        memory_access,
+                        mcp_plan.as_deref(),
+                    )
+                })
+                .await
+                .context("session extensions write task failed")
+                .and_then(|result| result)
+            }
+        };
         let value = match written {
             Ok(path) => path.display().to_string(),
             Err(error) => {

@@ -2487,3 +2487,94 @@ test("an empty delayed chunk cannot adopt a correction's id-less nonce line", as
     client.every((message) => message.params?.update?.sessionUpdate !== "agent_message_chunk"),
   );
 });
+
+test("settled turns attach barrier-bounded antigravity_cache_diagnostics and keep stale replays read-only", async () => {
+  const { proxy, client } = harness({
+    backend: { class: "ok", successes: 9, transient: 4, barrier: true, refusals: [] },
+  });
+  // Without barrier-bounded stepTimings, counts stay null rather than using unbounded buffer counts.
+  await proxy.fromClient(request(101, "session/prompt", { sessionId: "s-diag", prompt: [] }));
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-diag",
+      update: { sessionUpdate: "usage_update", used: 42000, size: 1048576 },
+    },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-diag",
+      update: { sessionUpdate: "usage_update", used: 58000, size: 1048576 },
+    },
+  });
+  // Calling annotateUsage directly (as staleReplay does) must stay read-only.
+  proxy.annotateUsage({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-diag",
+      update: { sessionUpdate: "usage_update", used: 999999, size: 2097152 },
+    },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 101,
+    result: {
+      stopReason: "end_turn",
+      usage: { totalTokens: 60000, inputTokens: 58000, outputTokens: 2000 },
+    },
+  });
+  const reply = client.at(-1);
+  assert.deepEqual(reply.result._meta.cowboy.antigravity_cache_diagnostics, {
+    schema: 1,
+    backend_steps: null,
+    transient_retries: null,
+    first_step_offset_ms: null,
+    step_span_ms: null,
+    max_inter_step_ms: null,
+    usage_updates: 2,
+    start_context_used: 42000,
+    end_context_used: 58000,
+    context_size: 1048576,
+    had_subagents: false,
+    subagent_steps: 0,
+  });
+
+  // When subagents ran, subagent_steps is reported as null (unknown) rather than 0.
+  await proxy.fromClient(request(102, "session/prompt", { sessionId: "s-diag", prompt: [] }));
+  proxy.turns.get("s-diag").subagents = true;
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 102,
+    result: { stopReason: "end_turn" },
+  });
+  assert.equal(client.at(-1).result._meta.cowboy.antigravity_cache_diagnostics.had_subagents, true);
+  assert.equal(
+    client.at(-1).result._meta.cowboy.antigravity_cache_diagnostics.subagent_steps,
+    null,
+  );
+});
+
+test("refusal error replies still attach barrier-bounded antigravity_cache_diagnostics", async () => {
+  const { proxy, client } = harness({
+    backend: { class: "rate_limited", successes: 0, transient: 2, barrier: true, refusals: [] },
+  });
+  await proxy.fromClient(request(103, "session/prompt", { sessionId: "s-refuse", prompt: [] }));
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-refuse",
+      update: { sessionUpdate: "usage_update", used: 12000, size: 1048576 },
+    },
+  });
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 103, result: { stopReason: "end_turn" } });
+  const err = client.at(-1).error;
+  assert.equal(err.data.cowboy.antigravity_backend.class, "rate_limited");
+  assert.equal(err.data.cowboy.antigravity_cache_diagnostics.schema, 1);
+  assert.equal(err.data.cowboy.antigravity_cache_diagnostics.usage_updates, 1);
+  assert.equal(err.data.cowboy.antigravity_cache_diagnostics.start_context_used, 12000);
+});

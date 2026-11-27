@@ -1324,7 +1324,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         encryption_public_key: Some(config.providers.encryption_public_key().to_owned()),
         components: collect_inventory(&config.components, config.zed_adapter_socket.as_deref())
             .await,
-        plugins: config.providers.inventory()?,
+        plugins: config.providers.inventory_for_hello().await?,
         provider_contracts: Some(cowboy_provider_sdk::ProviderContractInventory::current_machine()),
         plugin_contracts: Some(cowboy_plugin_sdk::PluginContractInventory::current_machine(
             crate::plugin_host::PLUGIN_HOST_SCHEMA_VERSION,
@@ -1334,7 +1334,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         workspace_revision: workspace_snapshot.revision,
         workspace_owner: Some(workspace_snapshot.owner),
         capacity: config.capacity.clone(),
-        browser: config.browsers.hello_capability(),
+        browser: config.browsers.hello_capability_async().await,
     };
     let proof = if proof_version >= 3 {
         crate::machine_protocol::challenge_proof_v3(&challenge_id, &nonce, expires_at_ms, &hello)
@@ -1392,13 +1392,13 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
     let mut heartbeat =
         tokio::time::interval(Duration::from_millis(heartbeat_interval_ms.max(1_000)));
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    command_plugins::spawn_post_welcome_inventory_publish(&config.providers, &event_tx);
     let plugin_execution = Arc::new(PluginExecutionScope::new(
         config.service_id.as_deref(),
         &config.machine_id,
     ));
     let mcp_link = connection_extensions::McpLink::new(&plugin_execution);
-    // Gateway actions travel only over a connection that negotiated them; a
-    // replaced or dropped connection fails the actions still waiting on it.
+    // Gateway actions travel only over a negotiated connection.
     let _call_uplink = (protocol >= crate::machine_protocol::MANAGED_CALL_PROTOCOL_VERSION)
         .then(|| config.execution.calls())
         .flatten()
@@ -1857,10 +1857,7 @@ async fn publish_provider_auth_observations(
     force_inventory: bool,
     protocol: u16,
 ) {
-    let store = Arc::clone(providers);
-    let Ok(mut observations) =
-        tokio::task::spawn_blocking(move || store.auth_refresh_observations()).await
-    else {
+    let Ok(mut observations) = providers.auth_refresh_observations_async().await else {
         return;
     };
     if !force_inventory
@@ -1929,42 +1926,42 @@ async fn publish_provider_auth_observations(
     if !changed {
         return;
     }
-    let store = Arc::clone(providers);
-    let mut plugins = match tokio::task::spawn_blocking(move || store.inventory()).await {
-        Ok(Ok(plugins)) => plugins,
-        error => {
-            tracing::warn!(
-                ?error,
-                "could not publish credential reconciliation inventory"
-            );
-            return;
-        }
-    };
-    for plugin in &mut plugins {
-        // PluginInventory's legacy auth fields describe only the default account.
-        let scope = (
-            crate::provider_account::ProviderAccountId::default(),
-            plugin.plugin_id.clone(),
+    if let Err(error) = providers
+        .publish_inventory_with(|mut plugins| {
+            for plugin in &mut plugins {
+                // PluginInventory's legacy auth fields describe only the default account.
+                let scope = (
+                    crate::provider_account::ProviderAccountId::default(),
+                    plugin.plugin_id.clone(),
+                );
+                if observations.failed_provider_ids.contains(&scope) && !pending.contains_key(&scope)
+                {
+                    plugin.materialization_state = ProviderMaterializationState::Failed;
+                    plugin.detail = Some(
+                        "Provider runtime credentials are incomplete; restoring the authoritative Service generation."
+                            .to_owned(),
+                    );
+                } else if pending
+                    .get(&scope)
+                    .copied()
+                    .is_some_and(|generation| plugin.auth_generation == Some(generation))
+                {
+                    plugin.materialization_state = ProviderMaterializationState::Applying;
+                    plugin.detail = Some(
+                        "Provider credential refresh is awaiting Service compare-and-swap reconciliation."
+                            .to_owned(),
+                    );
+                }
+            }
+            publish_auth_refresh_events(events, plugins, refresh_events, protocol);
+        })
+        .await
+    {
+        tracing::warn!(
+            %error,
+            "could not publish credential reconciliation inventory"
         );
-        if observations.failed_provider_ids.contains(&scope) && !pending.contains_key(&scope) {
-            plugin.materialization_state = ProviderMaterializationState::Failed;
-            plugin.detail = Some(
-                "Provider runtime credentials are incomplete; restoring the authoritative Service generation."
-                    .to_owned(),
-            );
-        } else if pending
-            .get(&scope)
-            .copied()
-            .is_some_and(|generation| plugin.auth_generation == Some(generation))
-        {
-            plugin.materialization_state = ProviderMaterializationState::Applying;
-            plugin.detail = Some(
-                "Provider credential refresh is awaiting Service compare-and-swap reconciliation."
-                    .to_owned(),
-            );
-        }
     }
-    publish_auth_refresh_events(events, plugins, refresh_events, protocol);
 }
 
 fn publish_auth_refresh_events(

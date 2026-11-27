@@ -8,6 +8,7 @@ import {
   BARRIER_METHOD,
   classify,
   parseRecords,
+  parseStepTimings,
   refusalClass,
   requestBarrierPattern,
 } from "./evidence.mjs";
@@ -294,4 +295,39 @@ test("prompt receipts and dispatches count only through the barrier", () => {
   const later = parseRecords([receipt, barrier, receipt, send].join("\n"), undefined, "n-9");
   assert.equal(classify(later).prompts, 1);
   assert.equal(classify(later).dispatches, 0);
+});
+
+test("parseStepTimings extracts content-free numeric step timings and handles midnight wrap", () => {
+  const timings = parseStepTimings(ok, OK_SESSION);
+  assert.deepEqual(timings, {
+    schema: 1,
+    barrier_matched: true,
+    backend_steps: 5,
+    transient_retries: 0,
+    first_step_offset_ms: 780,
+    step_span_ms: 19119,
+    max_inter_step_ms: 8460,
+  });
+  const retry = readFileSync(new URL("./testdata/turn-retry.txt", import.meta.url), "utf8");
+  const retryTimings = parseStepTimings(retry, "54f1aff0-8f8e-4c96-acf4-abc76bd68e92");
+  assert.equal(retryTimings.backend_steps, 4);
+  assert.equal(retryTimings.transient_retries, 1);
+  assert.ok(retryTimings.step_span_ms > 0);
+  // Midnight UTC rollover produces non-negative deltas.
+  const midnight = [
+    "I1127 23:59:59.500000 1 server.go:213] ACP Request received: session/prompt",
+    "I1128 00:00:00.250000 1 http_helpers.go:709] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x1 ResponseID: R1",
+    "I1128 00:00:01.750000 1 http_helpers.go:709] URL: https://daily-cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse Trace: 0x2 ResponseID: R2",
+    `I1128 00:00:02.000000 1 server.go:213] ACP Request received: ${BARRIER_METHOD}/mid`,
+  ].join("\n");
+  assert.deepEqual(parseStepTimings(midnight, undefined, "mid"), {
+    schema: 1,
+    barrier_matched: true,
+    backend_steps: 2,
+    transient_retries: 0,
+    first_step_offset_ms: 750,
+    step_span_ms: 1500,
+    max_inter_step_ms: 1500,
+  });
+  assert.equal(parseStepTimings("", undefined, "missing"), undefined);
 });

@@ -116,9 +116,10 @@ async fn passive_observation_cannot_start_a_backend_before_acquisition_admission
         "bufferSymbols",
     ] {
         let request = json!({"type":kind, "worktree":root.0, "path":"file.rs"});
+        let selected = plan.clone();
         let error = host
-            .request("fixture-code", &request, || {
-                Ok(CodeRuntimeSelection::Installed(plan.clone()))
+            .request("fixture-code", &request, move || {
+                Ok(CodeRuntimeSelection::Installed(selected))
             })
             .await
             .unwrap_err();

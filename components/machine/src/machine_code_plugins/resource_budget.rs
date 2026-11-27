@@ -169,7 +169,7 @@ impl CodeRuntimeHost {
         payload: &Value,
         active: Option<String>,
         policy: Policy,
-        select: impl FnOnce() -> Result<CodeRuntimeSelection>,
+        select: impl FnOnce() -> Result<CodeRuntimeSelection> + Send + 'static,
     ) -> Result<Value> {
         ensure!(
             payload["type"] == "acquireAgentBuffer",
@@ -498,13 +498,14 @@ mod tests {
         let host = CodeRuntimeHost::default();
         let plan = super::super::tests::fixture_plan(&root.0, "resources");
         let payload = serde_json::json!({"type":"acquireAgentBuffer", "worktree":root.0, "path":"file.rs", "leaseId":"cowboy-agent-fixture"});
+        let selected = plan.clone();
         let opened = host
             .acquire_agent(
                 "fixture-code",
                 &payload,
                 Some("resources".into()),
                 Policy::from_config(None),
-                || Ok(CodeRuntimeSelection::Installed(plan.clone())),
+                move || Ok(CodeRuntimeSelection::Installed(selected)),
             )
             .await
             .unwrap();
@@ -570,7 +571,7 @@ mod tests {
             "fixture-code",
             &interactive,
             Some("resources".into()),
-            || Ok(CodeRuntimeSelection::Installed(plan)),
+            move || Ok(CodeRuntimeSelection::Installed(plan)),
         )
         .await
         .unwrap();

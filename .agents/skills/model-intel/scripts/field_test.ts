@@ -504,3 +504,65 @@ test("readCacheTelemetryAudit detects unprojected rollback turns despite stale c
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("summarizeCacheTelemetryRows normalizes pre-0070 synthetic zero cache_write_tokens while preserving claude-code and third-party zeros", () => {
+  const now = 1_795_000_000_000;
+  const rows = [
+    {
+      session_key: "s1",
+      occurred_at_ms: now - 10_000,
+      provider: "codex",
+      provider_version: "3.6.42",
+      model: "gpt-6.2-sol",
+      stop_reason: "EndTurn",
+      prompt_origin: "human" as const,
+      idle_gap_ms: null,
+      renewed: false,
+      usage_observed: true,
+      inclusive_input_tokens: 1000,
+      cached_read_tokens: 800,
+      cache_write_tokens: 0,
+      uncached_input_tokens: 200,
+    },
+    {
+      session_key: "s2",
+      occurred_at_ms: now - 10_000,
+      provider: "claude-code",
+      provider_version: "3.20.84",
+      model: "opus",
+      stop_reason: "EndTurn",
+      prompt_origin: "human" as const,
+      idle_gap_ms: null,
+      renewed: false,
+      usage_observed: true,
+      inclusive_input_tokens: 1000,
+      cached_read_tokens: 900,
+      cache_write_tokens: 0,
+      uncached_input_tokens: 100,
+    },
+    {
+      session_key: "s3",
+      occurred_at_ms: now - 10_000,
+      provider: "third-party-acp",
+      provider_version: "1.0.0",
+      model: "custom",
+      stop_reason: "EndTurn",
+      prompt_origin: "human" as const,
+      idle_gap_ms: null,
+      renewed: false,
+      usage_observed: true,
+      inclusive_input_tokens: 1000,
+      cached_read_tokens: 900,
+      cache_write_tokens: 0,
+      uncached_input_tokens: 100,
+    },
+  ];
+  const audit = summarizeCacheTelemetryRows(rows, now, 14, "turn_cache_facts");
+  const byProv = new Map(audit.providers.map((p) => [p.provider, p]));
+  assertEquals(byProv.get("codex")?.observed_cache_write_turns, 0);
+  assertEquals(byProv.get("codex")?.cache_write_tokens, null);
+  assertEquals(byProv.get("claude-code")?.observed_cache_write_turns, 1);
+  assertEquals(byProv.get("claude-code")?.cache_write_tokens, 0);
+  assertEquals(byProv.get("third-party-acp")?.observed_cache_write_turns, 1);
+  assertEquals(byProv.get("third-party-acp")?.cache_write_tokens, 0);
+});

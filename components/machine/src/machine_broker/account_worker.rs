@@ -2,7 +2,10 @@
 use anyhow::{Context as _, Result};
 use tokio::process::{Child, Command};
 
-use crate::{machine_plugins::MachinePluginStore, provider_account::ProviderAccountId};
+use crate::{
+    machine_plugins::MachinePluginStore, provider_account::ProviderAccountId,
+    runtime_wire::StartSession,
+};
 
 impl super::Broker {
     /// Stop scope for a session this Machine holds no declaration for: an
@@ -89,9 +92,10 @@ pub(super) fn spawn_bound(
     store: &MachinePluginStore,
     session: &crate::runtime_wire::StartSession,
     containment: Option<&crate::cgroup::ContainmentIdentity>,
+    carry: Option<&crate::machine_plugins::VerifiedReleaseCarry>,
 ) -> Result<(Child, Option<uuid::Uuid>)> {
     let launch = (!session.provider_account_id.is_default())
-        .then(|| store.begin_contained_account_worker(session, containment))
+        .then(|| store.begin_contained_account_worker_with_carry(session, containment, carry))
         .transpose()?;
     spawn_reserved(
         command,
@@ -100,6 +104,79 @@ pub(super) fn spawn_bound(
         &session.provider_account_id,
         launch,
     )
+}
+
+/// Offload retained-Provider binding verification off the broker's `sessions`
+/// and `workers` mutexes so cold verification never delays worker heartbeats.
+/// Copies declaration and worker identity under the locks, verifies on Tokio's
+/// blocking pool, then revalidates identity under the locks before accepting.
+pub(super) async fn account_binding_matches_async(
+    broker: &super::Broker,
+    session: &StartSession,
+    replacing: bool,
+) -> bool {
+    for _ in 0..4 {
+        let prev_session = broker.sessions.lock().get(&session.session_id).cloned();
+        let prev_worker = broker
+            .workers
+            .lock()
+            .get(&session.session_id)
+            .map(|worker| {
+                (
+                    worker.connection_id,
+                    worker.epoch.clone(),
+                    worker.snapshot.launch.clone(),
+                )
+            });
+
+        let store = std::sync::Arc::clone(&broker.args.provider_store);
+        let session_owned = session.clone();
+        let prev_session_for_check = prev_session.clone();
+        let prev_worker_launch = prev_worker.as_ref().map(|(_, _, launch)| launch.clone());
+        let verified = tokio::task::spawn_blocking(move || {
+            if !matches!(
+                store.account_worker_binding_admits(&session_owned, replacing),
+                Ok(true)
+            ) {
+                return false;
+            }
+            let carries = |previous: &StartSession| {
+                binding_matches(previous, &session_owned)
+                    || (!session_owned.provider_account_id.is_default()
+                        && store.account_launch_carries(previous, &session_owned))
+            };
+            let declaration_matches = prev_session_for_check.as_ref().is_none_or(&carries);
+            let worker_matches = prev_worker_launch.as_ref().is_none_or(|launch| {
+                launch
+                    .as_ref()
+                    .map_or(session_owned.provider_account_id.is_default(), |previous| {
+                        binding_matches(previous, &session_owned)
+                            || (replacing && carries(previous))
+                    })
+            });
+            declaration_matches && worker_matches
+        })
+        .await
+        .unwrap_or(false);
+
+        if !verified {
+            return false;
+        }
+        let session_unchanged =
+            broker.sessions.lock().get(&session.session_id) == prev_session.as_ref();
+        let worker_unchanged = broker
+            .workers
+            .lock()
+            .get(&session.session_id)
+            .map(|worker| (worker.connection_id, &worker.epoch, &worker.snapshot.launch))
+            == prev_worker
+                .as_ref()
+                .map(|(cid, epoch, launch)| (*cid, epoch, launch));
+        if session_unchanged && worker_unchanged {
+            return true;
+        }
+    }
+    false
 }
 
 #[cfg(test)]
@@ -142,6 +219,22 @@ fn spawn_reserved(
             Err(error).context("spawning account worker")
         }
     }
+}
+
+pub(super) async fn prepare_carry_async(
+    store: &std::sync::Arc<MachinePluginStore>,
+    session: &StartSession,
+) -> Result<Option<crate::machine_plugins::VerifiedReleaseCarry>> {
+    if session.provider_account_id.is_default() {
+        return Ok(None);
+    }
+    let store = std::sync::Arc::clone(store);
+    let session_owned = session.clone();
+    tokio::task::spawn_blocking(move || {
+        store.prepare_contained_account_worker_carry(&session_owned)
+    })
+    .await
+    .context("worker release carry verification task failed")?
 }
 
 #[cfg(test)]

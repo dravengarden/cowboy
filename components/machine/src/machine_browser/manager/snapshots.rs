@@ -206,22 +206,32 @@ impl BrowserManager {
                 return Err(error);
             }
             Err(CopyFailure::Settled(error)) => {
-                self.retire_staging(&account_dir, generation, reservation);
+                self.retire_staging_async(account_dir, generation, reservation)
+                    .await;
                 return Err(error);
             }
         }
         let lifecycle = tokio::select! {
             biased;
             _ = cancel.wait_for(|cancelled| *cancelled) => None,
-            guard = slot.lifecycle.lock() => Some(guard),
+            guard = Arc::clone(&slot.lifecycle).lock_owned() => Some(guard),
         };
         // The copier finished: nothing writes the staging any more.
         let published = match lifecycle {
-            Some(_lifecycle) => {
-                self.publish_snapshot(instance, &account_dir, generation, reservation)
+            Some(lifecycle) => {
+                self.publish_snapshot_async(
+                    instance,
+                    account_dir,
+                    generation,
+                    reservation,
+                    lifecycle,
+                )
+                .await
+                .0
             }
             None => {
-                self.retire_staging(&account_dir, generation, reservation);
+                self.retire_staging_async(account_dir, generation, reservation)
+                    .await;
                 Err(anyhow!("snapshot cancelled before publication"))
             }
         };
@@ -353,9 +363,9 @@ impl BrowserManager {
             // Counts denials on the supervisor's shared schedule: it may be
             // the one waiting here, so the limit is enforced during the wait.
             if claim_scan(instance, Instant::now()) {
-                self.recheck_periodic(instance)?;
+                self.recheck_periodic_async(instance).await?;
             }
-            if let Some(reason) = *instance.latch.lock() {
+            if let Some(reason) = instance.latched_reason() {
                 return Err(reason);
             }
             let _ = tokio::time::timeout(SUPERVISOR_TICK, done.wait_for(|done| *done)).await;
@@ -368,6 +378,56 @@ impl BrowserManager {
     /// against the durable control record first (it may be published after
     /// all, or be an orphan to remove), and keeps its budget reserved while
     /// that cannot be done. The caller holds the account lifecycle lock.
+    /// Run [`Self::publish_snapshot`] on Tokio's blocking pool while retaining
+    /// the owned account lifecycle guard and staging reservation through commit,
+    /// returning the guard on completion so cancelled callers cannot release
+    /// the account fence before publication finishes.
+    pub(super) async fn publish_snapshot_async(
+        &self,
+        instance: &Arc<Instance>,
+        account_dir: PathBuf,
+        generation: u64,
+        reservation: StagingReservation,
+        lifecycle: tokio::sync::OwnedMutexGuard<()>,
+    ) -> (Result<()>, Option<tokio::sync::OwnedMutexGuard<()>>) {
+        let Some(manager) = self.this.upgrade() else {
+            self.retire_staging(&account_dir, generation, reservation);
+            return (
+                Err(anyhow!("browser manager shutting down")),
+                Some(lifecycle),
+            );
+        };
+        let instance = Arc::clone(instance);
+        match tokio::task::spawn_blocking(move || {
+            let result = manager.publish_snapshot(&instance, &account_dir, generation, reservation);
+            (result, lifecycle)
+        })
+        .await
+        {
+            Ok((result, lifecycle)) => (result, Some(lifecycle)),
+            Err(error) => (
+                Err(anyhow::Error::from(error).context("browser snapshot publication task failed")),
+                None,
+            ),
+        }
+    }
+
+    pub(super) async fn retire_staging_async(
+        &self,
+        account_dir: PathBuf,
+        generation: u64,
+        reservation: StagingReservation,
+    ) {
+        if let Some(manager) = self.this.upgrade() {
+            let _ = tokio::task::spawn_blocking(move || {
+                manager.retire_staging(&account_dir, generation, reservation);
+            })
+            .await;
+        } else {
+            self.retire_staging(&account_dir, generation, reservation);
+        }
+    }
+
     pub(super) fn publish_snapshot(
         &self,
         instance: &Arc<Instance>,
@@ -375,7 +435,7 @@ impl BrowserManager {
         generation: u64,
         reservation: StagingReservation,
     ) -> Result<()> {
-        if instance.latch.lock().is_some() {
+        if instance.latched_reason().is_some() {
             self.retire_staging(account_dir, generation, reservation);
             bail!("browser confinement unverified; staging discarded");
         }
@@ -401,12 +461,10 @@ impl BrowserManager {
             &mut record,
             snapshot::Bounds::for_profile(instance.settings.profile_max_bytes),
             unix_ms(),
-            // Held across the commit: a latch set before it refuses the
-            // publication, and one set during it waits for the commit.
-            || {
-                let latch = instance.latch.lock();
-                latch.is_none().then_some(latch)
-            },
+            // Nonblocking commit arbitration: refuses if already latched,
+            // defers latches arriving during commit until after control write
+            // (and before pruning), and never blocks Tokio on a sync mutex.
+            || instance.begin_publish_commit(),
         ) {
             Ok(stats) => {
                 drop(reservation);

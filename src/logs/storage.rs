@@ -13,6 +13,10 @@ use std::time::{Duration, Instant};
 mod aggregate;
 mod append;
 mod wait_cache_daily;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+pub use wait_cache_daily::{
+    claim_or_replay_writer_state, encode_wait_cache_otlp, try_replay_claimed_writer_state,
+};
 
 const APPLICATION_ID: i64 = 0x43424c47;
 const MAX_SEGMENTS: usize = 64;
@@ -135,7 +139,11 @@ pub fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
         file.write_all(&serde_json::to_vec(value)?)?;
         file.sync_all()?;
         fs::rename(&temporary, path)?;
-        File::open(path.parent().context("log file needs parent")?)?.sync_all()?;
+        let parent = path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .unwrap_or_else(|| Path::new("."));
+        File::open(parent)?.sync_all()?;
         Ok(())
     })();
     if result.is_err() {

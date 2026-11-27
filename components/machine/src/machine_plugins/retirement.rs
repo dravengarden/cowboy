@@ -68,10 +68,27 @@ fn explicit_inventory_kind(
 /// bound to `(plugin_id, gen_name)`, never letting an unsigned or defaulted
 /// `plugin-inventory.json` override the signed package or send a generation to
 /// the wrong sweeper. Returns `None` if records conflict or cannot be verified.
+pub(super) fn classify_signed_generation_kind(
+    plugin_id: &str,
+    gen_name: &str,
+    generation_dir: &Path,
+) -> Option<cowboy_plugin_sdk::PluginKind> {
+    classify_generation_kind_inner(plugin_id, gen_name, generation_dir, true)
+}
+
 pub(super) fn classify_generation_kind(
     plugin_id: &str,
     gen_name: &str,
     generation_dir: &Path,
+) -> Option<cowboy_plugin_sdk::PluginKind> {
+    classify_generation_kind_inner(plugin_id, gen_name, generation_dir, false)
+}
+
+fn classify_generation_kind_inner(
+    plugin_id: &str,
+    gen_name: &str,
+    generation_dir: &Path,
+    require_signed: bool,
 ) -> Option<cowboy_plugin_sdk::PluginKind> {
     let content = generation_dir.join("content");
     let expected_digest = format!("sha256:{gen_name}");
@@ -153,7 +170,7 @@ pub(super) fn classify_generation_kind(
         return Some(cowboy_plugin_sdk::PluginKind::AgentProvider);
     }
 
-    if has_inventory {
+    if !require_signed && has_inventory {
         return explicit_inventory_kind(&inventory_path, plugin_id, &expected_digest);
     }
     None
@@ -317,18 +334,19 @@ impl MachinePluginStore {
         referenced: &BTreeMap<String, BTreeSet<String>>,
         skip: &BTreeSet<String>,
     ) -> Result<Vec<crate::generation_retention::Outcome>> {
-        let _lifecycle = self.lifecycle.lock().await;
+        let mut lifecycle = Some(self.lock_lifecycle_owned().await);
         let mut outcomes = Vec::new();
         if !self.root.exists() {
             return Ok(outcomes);
         }
-        for entry in fs::read_dir(&self.root).context("reading Provider store")? {
-            let entry = entry?;
-            if !entry.file_type()?.is_dir() {
-                continue;
-            }
-            let plugin_id = entry.file_name().to_string_lossy().into_owned();
-            let root = entry.path();
+        let root = self.root.clone();
+        let entries = Self::run_with_lifecycle(
+            &mut lifecycle,
+            "uninstalled retention scan task failed",
+            move || read_store_plugin_dirs(&root),
+        )
+        .await?;
+        for (plugin_id, root) in entries {
             let generations = root.join("generations");
             if skip.contains(&plugin_id)
                 || validate_plugin_id(&plugin_id).is_err()
@@ -338,65 +356,248 @@ impl MachinePluginStore {
                 continue;
             }
             if root.join("active").symlink_metadata().is_ok() {
-                // Slot is active (possibly an excluded kind like Telemetry);
-                // finish any stranded tombstones without touching live gens.
-                Self::sweep_existing_tombstones(&generations)?;
+                let gens = generations.clone();
+                Self::run_with_lifecycle(
+                    &mut lifecycle,
+                    "tombstone sweep task failed",
+                    move || Self::sweep_existing_tombstones(&gens),
+                )
+                .await?;
                 continue;
             }
-            let mut keep: BTreeSet<String> = referenced
+            let keep: BTreeSet<String> = referenced
                 .get(&plugin_id)
                 .into_iter()
                 .flatten()
                 .map(|digest| digest.trim_start_matches("sha256:").to_owned())
                 .collect();
-            let mut retention = crate::generation_retention::Outcome {
+            let retention = crate::generation_retention::Outcome {
                 plugin_id: plugin_id.clone(),
                 ..crate::generation_retention::Outcome::default()
             };
-            let tombstones = self
+            let store = self.clone();
+            let pid = plugin_id.clone();
+            let gens_for_tombstone = generations.clone();
+            let guard = lifecycle
+                .take()
+                .context("Plugin store lifecycle lock lost")?;
+            let (tombstone_res, guard) = self
                 .code_runtimes
-                .with_generation_pins(&plugin_id, |code_pins| {
-                    let _profiles = self.auth_candidates.lock();
-                    keep.extend(self.retained_native_generations(&plugin_id)?);
-                    keep.extend(
-                        code_pins
-                            .iter()
-                            .map(|digest| digest.trim_start_matches("sha256:").to_owned()),
+                .with_generation_pins(&plugin_id, move |code_pins| {
+                    let result = store.tombstone_non_browser_under_pins(
+                        &pid,
+                        &gens_for_tombstone,
+                        keep,
+                        code_pins,
+                        retention,
                     );
-                    self.tombstone_unkept_matching(
-                        &plugin_id,
-                        &generations,
-                        &keep,
-                        is_retainable_non_browser_kind,
-                        &mut retention,
-                    )
+                    Ok((result, guard))
                 })
                 .await?;
-            Self::remove_tombstones(&tombstones, &mut retention)?;
-            if read_link_name(&root.join("rollback"))
-                .is_some_and(|name| !generations.join(&name).exists())
-            {
-                fs::remove_file(root.join("rollback"))?;
-            }
+            lifecycle = Some(guard);
+            let (tombstones, mut retention) = tombstone_res?;
+            let root_for_remove = root.clone();
+            let gens_for_remove = generations.clone();
+            let mut retention = Self::run_with_lifecycle(
+                &mut lifecycle,
+                "uninstalled retention removal task failed",
+                move || {
+                    Self::remove_tombstones(&tombstones, &mut retention)?;
+                    if read_link_name(&root_for_remove.join("rollback"))
+                        .is_some_and(|name| !gens_for_remove.join(&name).exists())
+                    {
+                        fs::remove_file(root_for_remove.join("rollback"))?;
+                    }
+                    Ok(retention)
+                },
+            )
+            .await?;
             if !retention.retired.is_empty() {
                 retention.retained.sort();
                 retention.retired.sort();
                 outcomes.push(retention);
             }
         }
-        match self.retire_browser_generations_locked(None, skip) {
-            Ok(browsers) => outcomes.extend(
-                browsers
-                    .into_iter()
-                    .filter(|retention| !retention.retired.is_empty()),
-            ),
-            Err(error) => {
-                tracing::warn!(%error, "Machine browser generation retention skipped");
-            }
-        }
-        self.retire_artifact_cache_locked();
+        let store = self.clone();
+        let skip_owned = skip.clone();
+        let owned_lifecycle = lifecycle
+            .take()
+            .context("Plugin store lifecycle lock lost")?;
+        let browser_outcomes = tokio::task::spawn_blocking(move || {
+            let _lifecycle = owned_lifecycle;
+            store.retire_browser_and_cache_blocking(&skip_owned)
+        })
+        .await
+        .context("browser and cache retention task failed")?;
+        outcomes.extend(browser_outcomes);
         Ok(outcomes)
     }
+
+    pub(super) fn tombstone_non_browser_under_pins(
+        &self,
+        plugin_id: &str,
+        generations: &Path,
+        mut keep: BTreeSet<String>,
+        code_pins: &BTreeSet<String>,
+        mut retention: crate::generation_retention::Outcome,
+    ) -> Result<(Vec<PathBuf>, crate::generation_retention::Outcome)> {
+        {
+            let _profiles = self.auth_candidates.lock();
+            keep.extend(self.retained_native_generations(plugin_id)?);
+        }
+        keep.extend(
+            code_pins
+                .iter()
+                .map(|digest| digest.trim_start_matches("sha256:").to_owned()),
+        );
+        let tombstones = self.tombstone_unkept_matching(
+            plugin_id,
+            generations,
+            &keep,
+            is_retainable_non_browser_kind,
+            &mut retention,
+        )?;
+        Ok((tombstones, retention))
+    }
+
+    fn retire_browser_and_cache_blocking(
+        &self,
+        skip: &BTreeSet<String>,
+    ) -> Vec<crate::generation_retention::Outcome> {
+        let browsers = match self.retire_browser_generations_locked(None, skip) {
+            Ok(browsers) => browsers
+                .into_iter()
+                .filter(|retention| !retention.retired.is_empty())
+                .collect(),
+            Err(error) => {
+                tracing::warn!(%error, "Machine browser generation retention skipped");
+                Vec::new()
+            }
+        };
+        self.retire_artifact_cache_locked();
+        browsers
+    }
+
+    pub(super) fn retire_auth_generations_blocking(
+        &self,
+        provider_id: &str,
+        referenced: BTreeSet<u64>,
+        grace: Duration,
+    ) -> Result<AuthRetention> {
+        ensure!(
+            self.account_id.is_default(),
+            "credential generation retention is limited to the default account"
+        );
+        validate_plugin_id(provider_id)?;
+        self.operations.ensure_unfenced(provider_id)?;
+        let mut outcome = AuthRetention {
+            provider_id: provider_id.to_owned(),
+            ..AuthRetention::default()
+        };
+        let root = self.auth_provider_root(provider_id);
+        let runtime = root.join("runtime/generations");
+        let materialized = root.join("materialized/generations");
+        let Some(runtime_current) = read_link_name(&root.join("runtime/current"))
+            .and_then(|name| name.parse::<u64>().ok())
+            .filter(|generation| runtime.join(generation.to_string()).is_dir())
+        else {
+            return Ok(outcome);
+        };
+        let mut keep = referenced;
+        keep.insert(runtime_current);
+        keep.extend(
+            read_link_name(&root.join("materialized/current"))
+                .and_then(|name| name.parse::<u64>().ok()),
+        );
+        if let Some(envelope) = self.latest_auth_envelope(provider_id)? {
+            keep.insert(envelope.auth_generation);
+        }
+        let now = SystemTime::now();
+        let mut candidates = BTreeSet::new();
+        for directory in [&runtime, &materialized] {
+            if !directory.is_dir() {
+                continue;
+            }
+            for entry in fs::read_dir(directory)? {
+                let entry = entry?;
+                let name = entry.file_name().to_string_lossy().into_owned();
+                if let Some(interrupted) = name.strip_prefix(RETIRED_GENERATION_PREFIX) {
+                    ensure!(
+                        interrupted.parse::<u64>().is_ok(),
+                        "invalid retired credential generation"
+                    );
+                    remove_projection::remove(&entry.path())?;
+                    continue;
+                }
+                let Ok(generation) = name.parse::<u64>() else {
+                    continue;
+                };
+                if generation == 0 || generation.to_string() != name || !entry.file_type()?.is_dir()
+                {
+                    continue;
+                }
+                let metadata = entry.metadata()?;
+                let changed_at = SystemTime::UNIX_EPOCH
+                    + Duration::from_secs(
+                        u64::try_from(std::os::unix::fs::MetadataExt::ctime(&metadata))
+                            .unwrap_or_default(),
+                    );
+                let changed = metadata.modified().unwrap_or(now).max(changed_at);
+                if now.duration_since(changed).unwrap_or_default() < grace {
+                    keep.insert(generation);
+                }
+                candidates.insert(generation);
+            }
+        }
+        // The two newest generations cover a launch admitted on the previous
+        // current generation while a refresh advanced the Machine after the
+        // Controller's snapshot.
+        keep.extend(candidates.iter().rev().take(2).copied());
+        keep.extend(live_auth_homes(&runtime));
+        for generation in candidates {
+            if keep.contains(&generation) {
+                outcome.retained.push(generation);
+                continue;
+            }
+            // Runtime first: a materialization without its runtime copy is
+            // still a valid immutable source, never the reverse.
+            for directory in [&runtime, &materialized] {
+                let path = directory.join(generation.to_string());
+                if !path.exists() {
+                    continue;
+                }
+                let tombstone = directory.join(format!("{RETIRED_GENERATION_PREFIX}{generation}"));
+                fs::rename(&path, &tombstone).with_context(|| {
+                    format!("retiring credential generation {}", path.display())
+                })?;
+                outcome.freed_bytes = outcome.freed_bytes.saturating_add(tree_bytes(&tombstone));
+                remove_projection::remove(&tombstone)
+                    .with_context(|| format!("removing {}", tombstone.display()))?;
+            }
+            outcome.retired.push(generation);
+        }
+        for directory in [&runtime, &materialized] {
+            if !outcome.retired.is_empty() && directory.is_dir() {
+                fs::File::open(directory)?.sync_all()?;
+            }
+        }
+        Ok(outcome)
+    }
+}
+
+fn read_store_plugin_dirs(root: &Path) -> Result<Vec<(String, PathBuf)>> {
+    let mut found = Vec::new();
+    for entry in fs::read_dir(root).context("reading Provider store")? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        found.push((
+            entry.file_name().to_string_lossy().into_owned(),
+            entry.path(),
+        ));
+    }
+    Ok(found)
 }
 
 /// Reclaimable allocated disk bytes under `path` (POSIX `st_blocks * 512`),

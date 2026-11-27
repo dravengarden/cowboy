@@ -139,8 +139,11 @@ fn labels(family: Family, attrs: &[KeyValue]) -> Vec<KeyValue> {
                 &[
                     "codex",
                     "claude-code",
+                    "antigravity",
                     "codex-deepseek",
                     "claude-deepseek",
+                    "deepseek-harness",
+                    "grok",
                     "other",
                 ],
             ),
@@ -374,6 +377,30 @@ mod tests {
                 .unwrap()
                 .contains("private-fixture-value")
         );
+
+        for provider in ["antigravity", "deepseek-harness", "grok"] {
+            let mut req = sample(1_700_000_000_000_000_000);
+            let Some(metric::Data::Sum(sum)) =
+                &mut req.resource_metrics[0].scope_metrics[0].metrics[0].data
+            else {
+                panic!("missing sum");
+            };
+            sum.data_points[0].attributes = vec![string("provider", provider)];
+            let (clean, c) = sanitize(&req.encode_to_vec()).unwrap();
+            assert_eq!(c, 1);
+            #[cfg(feature = "machine-host")]
+            assert!(admitted(&clean), "{provider}");
+            let decoded = ExportMetricsServiceRequest::decode(clean.as_slice()).unwrap();
+            let Some(metric::Data::Sum(clean_sum)) =
+                &decoded.resource_metrics[0].scope_metrics[0].metrics[0].data
+            else {
+                panic!("missing decoded sum");
+            };
+            assert_eq!(
+                clean_sum.data_points[0].attributes,
+                [string("provider", provider)]
+            );
+        }
     }
 
     #[cfg(feature = "machine-host")]

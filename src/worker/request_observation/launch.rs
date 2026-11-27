@@ -61,12 +61,12 @@ pub(super) async fn open_listener(
 }
 
 fn codex_allowed(spec: &LaunchSpec, args: &WorkerArgs, signed_opt_in: bool) -> bool {
+    let node_debug_active = ["NODE_DEBUG", "NODE_DEBUG_NATIVE"]
+        .iter()
+        .any(|name| effective_env(spec, name).is_some_and(|v| !v.trim().is_empty()));
     signed_opt_in
-        && args
-            .execution_binding
-            .as_ref()
-            .and_then(crate::execution_environment::ExecutionBinding::managed)
-            .is_none()
+        && !node_debug_active
+        && args.execution_binding.is_none()
         && spec
             .env
             .get("CODEX_PATH")

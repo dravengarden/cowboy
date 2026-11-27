@@ -183,7 +183,7 @@ impl MachinePluginStore {
     /// ambient binary.
     pub fn machine_browser_runtime(&self) -> Result<Option<MachineBrowserRuntimePlan>> {
         let mut found: Option<MachineBrowserRuntimePlan> = None;
-        for installed in self.inventory()? {
+        for installed in self.inventory_non_agent()? {
             if installed.plugin_kind != cowboy_plugin_sdk::PluginKind::MachineBrowser
                 || installed.state != PluginInstallationState::Active
             {

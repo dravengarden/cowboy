@@ -1,7 +1,17 @@
 // Codex-owned source patching. The shared component still builds the exact
 // upstream runtime graph; only unpublished candidate archives are replaced.
 import { readdirSync } from "node:fs";
-import { copyFile, cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import {
+  chmod,
+  copyFile,
+  cp,
+  mkdir,
+  mkdtemp,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -133,6 +143,8 @@ try {
       `${targetRoot}/app/node_modules/@agentclientprotocol/codex-acp/dist/index.js`,
     );
     await copyFile(`${root}/launch.mjs`, `${targetRoot}/app/cowboy-launch.mjs`);
+    await copyFile(`${root}/otel-observation.mjs`, `${targetRoot}/app/otel-observation.mjs`);
+    await copyFile(`${root}/otel-headers.mjs`, `${targetRoot}/app/otel-headers.mjs`);
     await copyFile(`${root}/execution-mcp.mjs`, `${targetRoot}/app/execution-mcp.mjs`);
     await writeFile(
       `${targetRoot}/app/bindings.mjs`,
@@ -166,6 +178,22 @@ try {
       `${targetRoot}/app/matrix-client.mjs`,
     );
     await rm(`${targetRoot}/bin/cowboy-configured-cli`);
+    await writeFile(
+      `${targetRoot}/bin/codex-otel-headers`,
+      '#!/bin/sh\nset -eu\ncase "$0" in */*) cowboy_dir=${0%/*} ;; *) cowboy_dir=. ;; esac\n' +
+        'cowboy_root=$(CDPATH= cd -- "$cowboy_dir/.." && pwd)\n' +
+        'if [ -x "$cowboy_root/runtime/node" ]; then\n' +
+        '  cowboy_node="$cowboy_root/runtime/node"\n' +
+        'elif [ -x "$cowboy_root/../../acp_runtime-node/bin" ]; then\n' +
+        '  cowboy_node="$cowboy_root/../../acp_runtime-node/bin"\n' +
+        "else\n" +
+        '  echo "Cowboy Node.js runtime missing" >&2\n' +
+        "  exit 127\n" +
+        "fi\n" +
+        'exec "$cowboy_node" "$cowboy_root/app/otel-headers.mjs"\n',
+      { mode: 0o755 },
+    );
+    await chmod(`${targetRoot}/bin/codex-otel-headers`, 0o755);
     const provenance = {
       schema: "cowboy.codex-source-patch/v2",
       upstream: {
@@ -177,6 +205,8 @@ try {
       deltas: series.map((delta) => ({ id: delta.id, file: delta.file, sha256: delta.sha256 })),
       patch_sha256: await sha256(deltas),
       launcher_sha256: await sha256(`${root}/launch.mjs`),
+      otel_observation_sha256: await sha256(`${root}/otel-observation.mjs`),
+      otel_headers_sha256: await sha256(`${root}/otel-headers.mjs`),
       memory_bridge_sha256: await sha256(`${targetRoot}/app/memory.mjs`),
       binding_launcher_sha256: await sha256(`${targetRoot}/app/bindings.mjs`),
       binding_plan_sha256: await sha256(`${targetRoot}/app/mcp-bindings.mjs`),

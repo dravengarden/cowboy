@@ -46,13 +46,21 @@ impl McpLink {
             return;
         }
         if let TransportRequest::ConfirmNative { handle } = &request {
-            let confirmed = self.sessions.confirm_native(handle);
-            reply(serde_json::json!({"confirmed":confirmed}));
+            let sessions = Arc::clone(&self.sessions);
+            let handle = handle.clone();
+            tokio::spawn(async move {
+                let confirmed = sessions.confirm_native_async(&handle).await;
+                reply(serde_json::json!({"confirmed": confirmed}));
+            });
             return;
         }
         if let TransportRequest::ReleaseNative { handle } = &request {
-            let released = self.sessions.release_native(handle);
-            reply(serde_json::json!({"released":released}));
+            let sessions = Arc::clone(&self.sessions);
+            let handle = handle.clone();
+            tokio::spawn(async move {
+                let released = sessions.release_native_async(&handle).await;
+                reply(serde_json::json!({"released": released}));
+            });
             return;
         }
         if let TransportRequest::Close { handle } = &request {

@@ -101,11 +101,14 @@ impl Broker {
             // no live installer still fails at once for reconciliation.
             let install_deadline = Instant::now() + PROVIDER_INSTALL_LAUNCH_WAIT;
             loop {
-                let launch = {
+                let (launch, install_in_progress) = {
                     let (store, provider_id, digest) =
                         (Arc::clone(&store), provider_id.clone(), digest.clone());
                     tokio::task::spawn_blocking(move || {
-                        store.launch_context(&provider_id, &digest, auth_generation)
+                        let launch = store.launch_context(&provider_id, &digest, auth_generation);
+                        let in_progress =
+                            launch.is_err() && store.install_in_progress(&provider_id);
+                        (launch, in_progress)
                     })
                     .await
                     .context("Provider launch verification task failed")?
@@ -113,7 +116,7 @@ impl Broker {
                 match launch {
                     Ok(launch) => break Some(launch),
                     Err(error)
-                        if store.install_in_progress(&provider_id)
+                        if install_in_progress
                             && Instant::now() < install_deadline
                             && !self.cancelled_sessions.lock().contains(&session.session_id) =>
                     {
@@ -138,8 +141,29 @@ impl Broker {
         Ok(provider)
     }
 
+    /// Resolve Provider behavior, validate launch placement, and build the
+    /// session environment every launch mode passes to the worker.
+    pub(super) async fn prepare_launch_environment(
+        &self,
+        session: &StartSession,
+        provider: &Option<ProviderLaunchContext>,
+    ) -> Result<Vec<(&'static str, String)>> {
+        let behavior = provider.as_ref().map_or_else(
+            || {
+                session
+                    .provider_behavior
+                    .clone()
+                    .unwrap_or_else(|| crate::provider_behavior::legacy_behavior(&session.provider))
+            },
+            |provider| provider.behavior.clone(),
+        );
+        validate_launch_placement(session, provider, &behavior)?;
+        self.launch_session_environment(session, provider, &behavior)
+            .await
+    }
+
     /// The session environment every launch mode passes to the worker.
-    pub(super) fn launch_session_environment(
+    pub(super) async fn launch_session_environment(
         &self,
         session: &StartSession,
         provider: &Option<ProviderLaunchContext>,
@@ -161,7 +185,7 @@ impl Broker {
                 path.display().to_string(),
             ));
         }
-        if let Some(value) = self.launch_extensions_environment(session)? {
+        if let Some(value) = self.launch_extensions_environment(session).await? {
             session_environment.push((crate::machine_plugins::SESSION_EXTENSIONS_ENV, value));
         }
         if let Some(provider) = &provider {

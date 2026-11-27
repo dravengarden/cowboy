@@ -1200,3 +1200,9 @@ examples/authentication/
 Machine Plugin state lives under `plugins/`. Startup atomically adopts the old
 `providers/` root only when the new root does not yet exist. Provider-named auth
 replica paths remain capability-specific state, not an extension lifecycle.
+
+### `3.158.0`
+
+- `cowboy.provider-runtime` `1.3.37` (`cowboy-antigravity-acp` `1.0.31`): add content-free per-step backend timing and usage-update diagnostics in `evidence.mjs` and `proxy.mjs` for worker `wait_cache` projection.
+- `codex` `3.6.43`: opt into `COWBOY_PRIVATE_CODEX_REQUEST_OBSERVATION=codex-otlp-http-v1`, fail-closed effective OTel policy inspection across layers, and dynamic `otel.headers_helper`.
+- Companion agent providers pinning `cowboy.provider-runtime` advanced by one patch version.

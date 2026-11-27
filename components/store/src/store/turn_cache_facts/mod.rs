@@ -49,6 +49,26 @@ pub struct NormalizedTurnCacheUsage {
     pub reasoning_tokens: Option<i64>,
 }
 
+/// Provider-aware wrapper around [`normalize_turn_usage`] that normalizes
+/// zero-defaulted `cache_write_tokens` to `None` on providers without separate
+/// cache-write metering while preserving genuine `Some(0)` for `claude-code`
+/// and any future positive write count on any provider.
+#[must_use]
+pub fn normalize_turn_usage_for_provider(
+    provider: &str,
+    usage: Option<&TurnUsage>,
+) -> Option<NormalizedTurnCacheUsage> {
+    let usage = usage?;
+    if usage.cache_write_tokens == Some(0)
+        && !crate::runtime_wire::provider_reports_zero_cache_write_meaningfully(provider)
+    {
+        let mut adjusted = *usage;
+        adjusted.cache_write_tokens = None;
+        return normalize_turn_usage(Some(&adjusted));
+    }
+    normalize_turn_usage(Some(usage))
+}
+
 /// Normalize one `TurnUsage` into disjoint, self-consistent token counters.
 ///
 /// Returns `None` if input is absent or fails accounting invariants (e.g.

@@ -25,6 +25,7 @@ const DEADLINE: Duration = Duration::from_secs(30);
 
 /// The Controller connection, receipt deadline and checked sidecar set one
 /// invocation was admitted under; nothing starts after either has passed.
+#[derive(Clone)]
 pub struct HostAdmission {
     connected: Arc<AtomicBool>,
     deadline: Instant,
@@ -86,11 +87,14 @@ impl HostAdmission {
         let Some((generation, required)) = self.private_home else {
             return Ok(None);
         };
-        match store.private_credential_home(plugin_id, generation) {
+        match store.private_credential_home_admitted(plugin_id, generation, Some(self)) {
             Ok(Some(home)) => Ok(Some(home)),
             Ok(None) if !required => Ok(None),
             Ok(None) => Err(anyhow::anyhow!("native_reset_unsupported").into()),
-            Err(_) => Err(anyhow::anyhow!("portable_usage_replica_pending").into()),
+            Err(_) => match self.remaining() {
+                Err(admission_error) => Err(admission_error.into()),
+                Ok(_) => Err(anyhow::anyhow!("portable_usage_replica_pending").into()),
+            },
         }
     }
 
@@ -225,7 +229,7 @@ impl MachinePluginStore {
         &self,
         request: &PortableUsageRequest,
         admission: &HostAdmission,
-    ) -> Result<(Self, tokio::sync::OwnedMutexGuard<()>)> {
+    ) -> Result<(Self, tokio::sync::OwnedMutexGuard<()>, RefreshFree)> {
         portable_account(
             &request.account_id,
             &request.plugin_id,
@@ -237,24 +241,46 @@ impl MachinePluginStore {
         let guard = tokio::time::timeout(admission.remaining()?, scoped.native_observation_guard())
             .await
             .map_err(|_| anyhow::anyhow!("portable_usage_busy"))?;
+        let lifecycle = tokio::time::timeout(admission.remaining()?, self.lock_lifecycle_owned())
+            .await
+            .map_err(|_| anyhow::anyhow!("portable_usage_busy"))?;
         admission.remaining()?;
-        let participants = std::iter::once(request.plugin_id.as_str()).chain(
-            request
-                .sidecars
-                .iter()
-                .map(|sidecar| sidecar.plugin_id.as_str()),
-        );
-        for plugin in participants {
-            ensure!(
-                scoped.latest_auth_envelope(plugin)?.is_some_and(|replica| {
-                    replica.auth_generation == request.auth_generation
-                        && replica.action == ProviderAuthAction::Apply
-                }),
-                "portable_usage_replica_pending"
-            );
-        }
-        self.require_refresh_free(&request.plugin_id, &request.generation_digest)?;
-        Ok((scoped, guard))
+        let participants: Vec<String> = std::iter::once(request.plugin_id.clone())
+            .chain(
+                request
+                    .sidecars
+                    .iter()
+                    .map(|sidecar| sidecar.plugin_id.clone()),
+            )
+            .collect();
+        let store = self.clone();
+        let scoped_check = scoped.clone();
+        let plugin_id = request.plugin_id.clone();
+        let digest = request.generation_digest.clone();
+        let auth_generation = request.auth_generation;
+        let (guard, refresh_free) = tokio::task::spawn_blocking(
+            move || -> Result<(tokio::sync::OwnedMutexGuard<()>, RefreshFree)> {
+                let _lifecycle = lifecycle;
+                for plugin in &participants {
+                    ensure!(
+                        scoped_check
+                            .latest_auth_envelope(plugin)?
+                            .is_some_and(|replica| {
+                                replica.auth_generation == auth_generation
+                                    && replica.action == ProviderAuthAction::Apply
+                            }),
+                        "portable_usage_replica_pending"
+                    );
+                }
+                store.require_refresh_free(&plugin_id, &digest)?;
+                let refresh_free = store.refresh_free(&plugin_id, &digest);
+                Ok((guard, refresh_free))
+            },
+        )
+        .await
+        .context("portable_usage_collector_unavailable")??;
+        admission.remaining()?;
+        Ok((scoped, guard, refresh_free))
     }
 
     /// A Provider whose CLI rotates credentials (`compare_and_swap`) needs a
@@ -290,10 +316,20 @@ impl MachinePluginStore {
     /// sign-in) without advancing the sealed generation, so neither a read
     /// nor a reset ever runs from it. `None` keeps the session environment
     /// (a non-rotating key, such as a `DeepSeek` API key).
+    #[cfg(test)]
     pub(in crate::machine_plugins) fn private_credential_home(
         &self,
         plugin_id: &str,
         generation: u64,
+    ) -> Result<Option<(PrivateHome, BTreeMap<String, String>)>> {
+        self.private_credential_home_admitted(plugin_id, generation, None)
+    }
+
+    pub(in crate::machine_plugins) fn private_credential_home_admitted(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        admission: Option<&HostAdmission>,
     ) -> Result<Option<(PrivateHome, BTreeMap<String, String>)>> {
         let (package, _) = self
             .active_package(plugin_id)?
@@ -315,6 +351,9 @@ impl MachinePluginStore {
         else {
             anyhow::bail!("portable_usage_replica_pending");
         };
+        if let Some(admission) = admission {
+            admission.remaining()?;
+        }
         // Account-owned (removed with the account's credentials and at
         // Machine start), never the shared system temporary directory. Each
         // level is created parent-first and a symlink is refused.
@@ -441,19 +480,17 @@ impl MachinePluginStore {
             payload: serde_json::Value::Null,
             sidecars: Vec::new(),
         };
-        let (scoped, _guard) = self
-            .admit_portable(&usage, &admission)
-            .await
-            .map_err(|error| PluginHostInvocationFailure {
-                started: false,
-                error: anyhow::anyhow!(pre_spend_code(&format!("{error:#}"))),
-            })?;
-        if !self
-            .refresh_free(&request.plugin_id, &request.generation_digest)
-            .reset
-        {
+        let (scoped, guard, refresh_free) =
+            self.admit_portable(&usage, &admission)
+                .await
+                .map_err(|error| PluginHostInvocationFailure {
+                    started: false,
+                    error: anyhow::anyhow!(pre_spend_code(&format!("{error:#}"))),
+                })?;
+        if !refresh_free.reset {
             return Err(refuse("native_reset_unsupported"));
         }
+        admission.remaining()?;
         admission.sidecars = Some(BTreeMap::new());
         admission.private_home = Some((request.auth_generation, true));
         let mut payload = serde_json::to_value(&request.reset).map_err(anyhow::Error::from)?;
@@ -461,9 +498,9 @@ impl MachinePluginStore {
             object.insert("token_refresh".into(), serde_json::Value::Bool(false));
         }
         // The Service host path resolves exactly the selected release under
-        // the lifecycle lock and keeps it through the reset.
+        // the owned account and lifecycle locks and keeps them through the reset.
         scoped
-            .invoke_executable_host_admitted(
+            .invoke_executable_host_with_admission(
                 PluginHostRequest {
                     plugin_id: request.plugin_id,
                     plugin_version: request.plugin_version,
@@ -473,8 +510,10 @@ impl MachinePluginStore {
                     payload,
                 },
                 Some(&admission),
+                Some(guard),
             )
             .await
+            .0
             .map(|reply| crate::machine_protocol::project_native_reset_reply(&reply))
             .map_err(|failure| PluginHostInvocationFailure {
                 started: failure.started,
@@ -525,14 +564,11 @@ impl MachinePluginStore {
             payload: serde_json::Value::Null,
             sidecars: Vec::new(),
         };
-        let (scoped, _guard) = self
+        let (scoped, guard, refresh_free) = self
             .admit_portable(&usage, &admission)
             .await
             .map_err(|error| refuse(portable_usage_error_code(&format!("{error:#}"))))?;
-        if !self
-            .refresh_free(&request.plugin_id, &request.generation_digest)
-            .renewal
-        {
+        if !refresh_free.renewal {
             return Err(refuse("portable_renewal_unsupported"));
         }
         // The session homes must hold exactly the admitted sealed credential:
@@ -547,10 +583,11 @@ impl MachinePluginStore {
         {
             return Err(refuse("portable_usage_replica_pending"));
         }
+        admission.remaining()?;
         // No sidecar and no private home: the session environment.
         admission.sidecars = Some(BTreeMap::new());
-        let ran = scoped
-            .invoke_executable_host_admitted(
+        let (ran, _account_guard) = scoped
+            .invoke_executable_host_with_admission(
                 PluginHostRequest {
                     plugin_id: request.plugin_id.clone(),
                     plugin_version: request.plugin_version,
@@ -560,12 +597,13 @@ impl MachinePluginStore {
                     payload: serde_json::json!({"token_refresh": "renew"}),
                 },
                 Some(&admission),
+                Some(guard),
             )
-            .await
-            .map_err(|failure| PluginHostInvocationFailure {
-                started: failure.started,
-                error: anyhow::anyhow!(portable_usage_error_code(&format!("{:#}", failure.error))),
-            });
+            .await;
+        let ran = ran.map_err(|failure| PluginHostInvocationFailure {
+            started: failure.started,
+            error: anyhow::anyhow!(portable_usage_error_code(&format!("{:#}", failure.error))),
+        });
         if let Err(failure) = &ran
             && !failure.started
         {
@@ -614,16 +652,15 @@ impl MachinePluginStore {
         account: ProviderAccountId,
         plugin: String,
     ) -> Result<(bool, bool)> {
+        let lifecycle = self.lock_lifecycle_owned().await;
         let observer = self.clone();
         tokio::task::spawn_blocking(move || {
-            // The observer is best effort (an unreadable directory reads as
-            // empty); this check is strict: the account's credential root and
-            // the Provider's session homes must enumerate, and one must exist.
+            let _lifecycle = lifecycle;
             let enumerable = fs::read_dir(observer.auth_watch_root()).is_ok()
                 && observer
                     .runtime_projection_generations(&plugin)
                     .is_ok_and(|homes| !homes.is_empty());
-            let observations = observer.auth_refresh_observations();
+            let observations = observer.auth_refresh_observations_locked();
             (
                 observations.candidates.iter().any(|candidate| {
                     candidate.account_id == account && candidate.provider_id == plugin
@@ -649,7 +686,7 @@ impl MachinePluginStore {
             mut request,
             mut admission,
         } = invocation;
-        let (scoped, _guard) = self
+        let (scoped, guard, _refresh_free) = self
             .admit_portable(&request, &admission)
             .await
             .map_err(|error| anyhow::anyhow!(portable_usage_error_code(&format!("{error:#}"))))?;
@@ -670,7 +707,7 @@ impl MachinePluginStore {
         // (only the checked sidecars) and refuses an observation whose
         // generation changed while it ran.
         scoped
-            .invoke_executable_host_admitted(
+            .invoke_executable_host_with_admission(
                 PluginHostRequest {
                     plugin_id: request.plugin_id,
                     plugin_version: request.plugin_version,
@@ -680,8 +717,10 @@ impl MachinePluginStore {
                     payload: request.payload,
                 },
                 Some(&admission),
+                Some(guard),
             )
             .await
+            .0
             .map_err(|failure| {
                 anyhow::anyhow!(portable_usage_error_code(&format!("{:#}", failure.error)))
             })

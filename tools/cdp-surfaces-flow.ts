@@ -49,6 +49,7 @@ async function checkFoldGroupFlow(
 }
 
 export async function checkDefaultVimJj(
+  page: AcceptanceDriver["page"],
   key: AcceptanceDriver["key"],
   until: AcceptanceDriver["until"],
   check: AcceptanceDriver["check"],
@@ -63,6 +64,28 @@ export async function checkDefaultVimJj(
   );
   const after = await editorText();
   check(after === before, `jj removes first j (got ${JSON.stringify(after)})`);
+  // Under CJK IME composition (`j` → `j'j`), jj cancels marked text, enters
+  // Normal cleanly, and immediately allows the next Space leader key.
+  await key("A", 8);
+  await until("document.activeElement?.matches('.cm-content') === true", "A re-enters Insert");
+  await page.send("Input.imeSetComposition", { text: "j", selectionStart: 1, selectionEnd: 1 });
+  await page.send("Input.imeSetComposition", { text: "j'j", selectionStart: 3, selectionEnd: 3 });
+  await until(
+    "document.activeElement?.matches('[data-vim-command-sink]') === true",
+    "IME j'j aborts composition and enters Vim Normal",
+  );
+  const afterIme = await editorText();
+  check(afterIme === before, `IME j'j leaves no marked text (got ${JSON.stringify(afterIme)})`);
+  await key(" ");
+  await until(
+    "document.querySelector('[data-desktop-leader-menu]')",
+    "Space immediately arms leader after IME j'j",
+  );
+  await key("Escape");
+  await until(
+    "!document.querySelector('[data-desktop-leader-menu]')",
+    "Escape dismisses leader after IME j'j",
+  );
 }
 
 export async function surfacesFlow(
