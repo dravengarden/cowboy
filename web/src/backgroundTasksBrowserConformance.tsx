@@ -6,7 +6,6 @@ import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { Box, CssBaseline, Stack } from "@mui/material";
 import { MobileSheetContextDock } from "@cowboy/app-shell";
-import { COARSE_POINTER_ROOT_CLASS } from "./platform";
 import {
   buildTaskSummaries,
   CALLS_DOCK_LEGACY_KEY,
@@ -22,7 +21,12 @@ import { type ObservedPage, setSubagentTranscriptTransport } from "./observedTra
 import { closeBackgroundTasks, inspectorState, openBackgroundTask } from "./backgroundTaskInspectorState";
 import { BrowserProductTheme } from "./browserProductTheme";
 import { DesktopCommandProvider } from "./desktop/commands/DesktopCommandProvider";
+import { DesktopCommandHost } from "./desktop/commands/DesktopCommandHost";
+import { DesktopWorkspace } from "./desktop/DesktopWorkspace";
 import { DesktopWorkspaceProvider } from "./desktop/DesktopWorkspaceController";
+import { desktopWorkView, requestDesktopWorkView } from "./desktop/review/desktopWorkView";
+import { getDraft, setDraft } from "./draftStore";
+import { DesktopTasksView } from "./tasks/DesktopTasksView";
 import { type CallApproval, currentCallApproval, receiveCallApproval } from "./callApproval";
 import { derive } from "./derive";
 import { ProviderQuotaStatusRow } from "./ProviderQuotaStatus";
@@ -448,11 +452,15 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
       document.querySelector("[data-background-tasks-bar='s']")?.textContent?.includes("needs you"),
       "a live prompt is a needs-you item",
     );
+    scene(backgroundOf([], [], { approval: currentCallApproval("s") }), false);
+    openBackgroundTask("s", null, "bar");
+    await waitFor(() => document.querySelector("[data-task-review-request]"), "T10 actionable mobile triage card offers explicit Review request button");
+    closeBackgroundTasks();
     receiveCallApproval("s", null);
     passed.push("T10 expired approvals are not actionable");
 
-    // 7. T16 Mobile: bar -> list -> conversation -> detail, one history entry
-    // per level; Back walks up and returns to the transcript at its scroll.
+    // 7. T16 Mobile: 1-tap Triage Peek -> same-host Reader -> 1-tap sibling switcher (replaceState)
+    //    -> Info with Diagnostics -> Quote to Prompt -> Back unwinds cleanly preserving scroll.
     scene(background, false);
     await settle();
     const scroller = document.querySelector<HTMLElement>("[data-fixture-transcript]")!;
@@ -460,126 +468,61 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
     const scrollBefore = scroller.scrollTop;
     const historyBefore = history.length;
     document.querySelector<HTMLElement>("[data-background-tasks-open]")!.click();
-    // The bar opens at its lead task; return to the list level first.
-    await waitFor(inspector, "the Mobile inspector opens");
-    history.back();
-    await waitFor(
-      () => document.querySelector("[data-mobile-task-level='list']"),
-      "Back from the lead's details shows the list",
-    );
-    check(!document.querySelector("[data-sheet-context-summary]"), "Task list footer omits the redundant title");
-    const listDock = document.querySelector<HTMLElement>("[data-sheet-context-dock]")!;
-    check(listDock.getBoundingClientRect().left >= 16, "Task navigation retains comfortable screen-edge clearance");
-    document.querySelector<HTMLElement>("[data-task-option='call:call-1']")!.click();
-    await waitFor(() => document.querySelector("[data-mobile-task-level='conversation']"), "a call opens its transcript first");
-    check(location.hash === taskHash("call:call-1"), "the detail level is deep-linkable");
-    check(document.querySelector("[data-call-transcript]"), "the full live transcript is mounted");
-    check(!document.querySelector("[data-task-diagnostics]"), "execution metadata does not displace the transcript");
+    await waitFor(() => document.querySelector("[data-mobile-task-level='peek']"), "T16 1 tap opens Triage Peek directly");
     {
-      // The state row keeps the sheet gutter and stays on screen; the
-      // transcript runs to the inspector's bottom edge, under the island.
-      const level = document.querySelector<HTMLElement>("[data-mobile-task-level='conversation']")!.getBoundingClientRect();
-      const chip = document.querySelector<HTMLElement>("[data-sheet-context-dock]")!
-        .getBoundingClientRect();
-      const details = document.querySelector<HTMLElement>("[data-sheet-context-dock] [aria-label='Details']")!.getBoundingClientRect();
-      const transcript = document.querySelector<HTMLElement>("[data-call-transcript]")!.getBoundingClientRect();
-      const scroller = document.querySelector<HTMLElement>("[data-call-transcript] [data-transcript-session]")!;
-      const fade = getComputedStyle(scroller.parentElement!, "::after");
-      check(fade.backgroundImage.includes("linear-gradient") && fade.pointerEvents === "none", "Transcript top gradient paints without intercepting gestures");
-      const dialog = scroller.closest<HTMLElement>('[role="dialog"]')!;
-      dialog.style.setProperty("--cowboy-system-top-clearance", "47px");
-      check(Math.abs(scroller.getBoundingClientRect().top - dialog.getBoundingClientRect().top) < 1, "Cover transcript reaches the top behind the system status area");
-      check(parseFloat(getComputedStyle(scroller).paddingTop) === 67 && parseFloat(getComputedStyle(scroller.parentElement!, "::after").height) === 67, "Safe inset and fade adapt together without hiding the first message");
-      dialog.style.removeProperty("--cowboy-system-top-clearance");
-      check(chip.left - level.left >= 8, `T16 the context dock keeps its compact gutter (${String(chip.left - level.left)}px)`);
-      check(details.right <= level.right, "T16 Details stays inside the sheet");
-      const island = document.querySelector<HTMLElement>("[data-sheet-context-summary]")!.getBoundingClientRect();
-      check(details.width >= 44 && details.height >= 44, "The floating details button retains its touch target");
-      const buttons = document.querySelector<HTMLElement>("[data-sheet-context-dock] > div:first-child")!.getBoundingClientRect();
-      check(buttons.right <= island.left && island.top < buttons.bottom && buttons.top < island.bottom, "Round navigation is on the left beside the information surface");
-      check(island.height >= 56 && getComputedStyle(document.querySelector("[data-sheet-context-summary]")!).boxShadow !== "none", "Summary shares the controls' minimum height and floating surface depth");
-      check(chip.height <= 112, "The dock does not stack information over a second navigation row");
-      const dock = document.querySelector<HTMLElement>("[data-sheet-context-dock]")!;
+      const sheetPaper = document.querySelector<HTMLElement>("[data-detent-sheet='true']")!;
+      check(sheetPaper.getBoundingClientRect().height <= innerHeight * 0.62, "T16 Triage Peek caps height so main chat remains visible above");
+      check(Boolean(document.querySelector("[data-mobile-tasks-peek-footer]")), "T16 Triage Peek anchors controls to its visible bottom");
+      check(Boolean(document.querySelector("[data-task-tree-row='subagent:c'][data-task-depth='1']")), "T16 real parentKey tree indents nested child under parent");
+    }
+    document.querySelector<HTMLElement>("[data-task-option='call:call-1']")!.click();
+    await waitFor(() => document.querySelector("[data-mobile-task-level='reader']"), "T16 tapping a card expands same sheet into Reader");
+    check(location.hash === taskHash("call:call-1"), "T16 reader level is deep-linkable");
+    check(document.querySelector("[data-call-transcript]"), "T16 active call opens live transcript first");
+    check(!document.querySelector("[data-task-diagnostics]"), "T16 static diagnostics stay folded behind Info");
+    {
+      const dock = document.querySelector<HTMLElement>("[data-mobile-tasks-dock]")!;
       const footer = dock.closest<HTMLElement>("[data-detent-sheet-footer]")!;
-      const measured = Number.parseFloat(getComputedStyle(dock.closest('[role="dialog"]')!).getPropertyValue("--cowboy-sheet-dock-clearance"));
-      check(Math.abs(measured - footer.getBoundingClientRect().height) < 1, "Transcript clearance follows the actual compact footer");
-      check(Boolean(document.querySelector("[data-context-facts]")), "Execution facts stay visible beside navigation");
-      check(document.querySelector("[data-context-facts]")?.textContent?.includes("gpt-6.1-sol"), "The model is visible without opening Details");
-      check(Math.abs(transcript.bottom - level.bottom) < 1, "T16 the transcript reaches the island");
+      const dialog = dock.closest<HTMLElement>('[role="dialog"]')!;
+      const measured = Number.parseFloat(getComputedStyle(dialog).getPropertyValue("--cowboy-sheet-dock-clearance"));
+      check(Math.abs(measured - footer.getBoundingClientRect().height) < 2, "T16 dock clearance matches measured footer height");
+      check(Boolean(document.querySelector("[data-mobile-worker-strip]")), "T16 bottom worker switcher strip renders for sibling tasks");
     }
     await observe?.();
-    const conversationNode = document.querySelector("[data-call-transcript]");
-    document.querySelector<HTMLElement>("[data-sheet-context-dock] [aria-label='Details']")!.click();
-    await waitFor(() => document.querySelector("[data-mobile-task-level='detail']"), "call details open separately");
-    {
-      // The details reader owns its scroller: it bleeds under the status area,
-      // blurs what scrolls there, and keeps the state pill whole at any text scale.
-      const reader = document.querySelector<HTMLElement>("[data-task-reader-scroll]")!;
-      const dialog = reader.closest<HTMLElement>('[role="dialog"]')!;
-      const frame = document.querySelector<HTMLElement>("[data-task-reader]")!;
-      dialog.style.setProperty("--cowboy-system-top-clearance", "47px");
-      check(Math.abs(reader.getBoundingClientRect().top - dialog.getBoundingClientRect().top) < 1, "T16 call details reach the top behind the system status area");
-      check(parseFloat(getComputedStyle(reader).paddingTop) === 63, "T16 the first detail row clears the status area and its frost at rest");
-      const frost = getComputedStyle(frame, "::after");
-      check(
-        /blur\(/.test(frost.backdropFilter || frost.getPropertyValue("-webkit-backdrop-filter")) && frost.pointerEvents === "none" &&
-          parseFloat(frost.height) === 63,
-        "T16 the status area frosts scrolled details without intercepting gestures",
-      );
-      const spacer = document.createElement("div");
-      spacer.style.height = "3000px";
-      reader.append(spacer);
-      reader.scrollTop = 200;
-      await settle(3);
-      check(!reader.dataset["scrollEdges"]?.includes("top"), "T16 the frost replaces the reader's top fade");
-      spacer.remove();
-      reader.scrollTop = 0;
-      dialog.style.removeProperty("--cowboy-system-top-clearance");
-      const rootSize = document.documentElement.style.fontSize;
-      for (const scale of ["70%", "100%", "200%"]) {
-        document.documentElement.style.fontSize = scale;
-        await settle(2);
-        const pills = [...document.querySelectorAll<HTMLElement>("[data-task-detail] .MuiChip-root")];
-        const [working, running] = pills.map((pill) => pill.getBoundingClientRect());
-        const readerBox = reader.getBoundingClientRect();
-        check(working !== undefined && running !== undefined && pills.length === 2, `T16 details show the task and call state pills at ${scale}`);
-        check(working!.top >= readerBox.top && working!.height >= 24, `T16 the task pill is not clipped at the scroll boundary at ${scale}`);
-        check(Math.abs(working!.height - running!.height) < 1, `T16 the task and call state pills share one height at ${scale}`);
-      }
-      document.documentElement.style.fontSize = rootSize;
-      await settle(2);
-    }
-    {
-      const coarse = document.documentElement.classList.contains(COARSE_POINTER_ROOT_CLASS);
-      document.documentElement.classList.add(COARSE_POINTER_ROOT_CLASS);
-      const summary = document.querySelector<HTMLElement>("[data-sheet-context-summary]")!;
-      const action = summary.querySelector<HTMLElement>("button")!;
-      action.focus({ preventScroll: true });
-      action.classList.add("Mui-focusVisible");
-      check(getComputedStyle(action).backgroundColor === "rgba(0, 0, 0, 0)", "Touch theme still clears the inner button background");
-      check(/^rgb\(/.test(getComputedStyle(summary).backgroundColor), "Focused summary keeps an opaque surface over the detail body");
-      action.classList.remove("Mui-focusVisible");
-      action.blur();
-      if (!coarse) document.documentElement.classList.remove(COARSE_POINTER_ROOT_CLASS);
-    }
-    check(history.length > historyBefore, "each level is a history entry");
+    const historyAtReader = history.length;
+    document.querySelector<HTMLElement>(`[data-mobile-worker-pill="${subagentKey("b")}"]`)!.click();
+    await waitFor(() => document.querySelector(`[data-task-reader="${subagentKey("b")}"]`), "T16 1-tap sibling pill switches worker directly");
+    check(history.length === historyAtReader, "T16 sibling switch uses replaceState without piling Back history");
+    check(document.querySelector(`[data-task-reader-mode="result"]`), "T16 ended worker leads with Result summary");
+    document.querySelector<HTMLElement>("[data-mobile-tasks-info]")!.click();
+    await waitFor(() => document.querySelector("[data-mobile-task-level='info']"), "T16 Info opens execution details & diagnostics");
+    check(Boolean(document.querySelector("[data-task-diagnostics]")), "T16 Info carries Diagnostics");
+    check(history.length > historyBefore, "T16 distinct levels use browser history");
     history.back();
-    await waitFor(() => document.querySelector("[data-mobile-task-level='conversation']"), "Back returns to transcript");
-    check(document.querySelector("[data-call-transcript]") === conversationNode, "Details preserves the transcript mount");
+    await waitFor(() => document.querySelector("[data-mobile-task-level='reader']"), "T16 Back returns from Info to Reader");
     history.back();
-    await waitFor(() => document.querySelector("[data-mobile-task-level='list']"), "Back returns to the list");
+    await waitFor(() => document.querySelector("[data-mobile-task-level='peek']"), "T16 Back returns from Reader to Triage Peek");
     history.back();
-    await waitFor(() => inspector() === null, "Back returns to the transcript");
-    check(scroller.scrollTop === scrollBefore, "T16 the transcript keeps its scroll position");
-    passed.push("T16 mobile list, detail and conversation walk back level by level");
+    await waitFor(() => inspector() === null, "T16 Back returns from Triage Peek to main transcript");
+    check(scroller.scrollTop === scrollBefore, "T16 transcript keeps its scroll position");
+    setDraft("s", { text: "", attachments: [] });
+    openBackgroundTask("s", subagentKey("b"), "row");
+    await waitFor(() => document.querySelector("[data-mobile-tasks-quote]"), "T16 Quote action is reachable in bottom dock");
+    document.querySelector<HTMLElement>("[data-mobile-tasks-quote]")!.click();
+    await waitFor(() => inspector() === null, "T16 Quote closes task sheet back to chat");
+    await settle(3);
+    check(getDraft("s").text.includes("Index docs"), `T16 Quote appends worker reference to parent draft (got: ${JSON.stringify(getDraft("s").text)})`);
+    setDraft("s", { text: "", attachments: [] });
+    passed.push("T16 mobile triage peek, 1-tap sibling switcher, info, quote and Back navigation");
 
     // 8. T16 deep link: `#task=` opens that task's details.
     history.replaceState(history.state, "", taskHash(subagentKey("b")));
     root.unmount();
     root = createRoot(container);
     scene(background, false);
-    await waitFor(() => document.querySelector(`[data-task-detail="${subagentKey("b")}"]`), "T16 #task= opens details");
-    check(document.querySelector("[data-task-diagnostics]"), "details carry Diagnostics");
+    await waitFor(() => document.querySelector(`[data-task-detail="${subagentKey("b")}"]`), "T16 #task= opens result-first reader");
+    document.querySelector<HTMLElement>("[data-mobile-tasks-info]")!.click();
+    await waitFor(() => document.querySelector("[data-task-diagnostics]"), "Info carries Diagnostics");
     check(
       document.querySelector("[data-diagnostic='reconciled_by']")?.textContent === "bootstrap",
       "Diagnostics name how the row was reconciled",
@@ -689,9 +632,14 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
         }}
       />,
     );
+    const infoBtn = await waitFor(
+      () => document.querySelector<HTMLButtonElement>("[data-task-info-toggle]"),
+      "Info toggle opens call execution details on demand",
+    );
+    infoBtn.click();
     const origin = await waitFor(
       () => document.querySelector<HTMLButtonElement>("[data-task-open-origin]"),
-      "an MCP-started call links to its tool card",
+      "an MCP-started call links to its tool card inside Info",
     );
     origin.click();
     await waitFor(() => inspector() === null, "following the link closes the inspector");
@@ -699,26 +647,9 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
     openBackgroundTask("s", "call:call-1", "row");
     render(<BackgroundTasksInspector sessionId="s" desktop background={backgroundOf([], [call({ request_id: "cli-7" })])} onOpenTool={() => undefined} />);
     await waitFor(inspector, "the inspector opens");
+    document.querySelector<HTMLButtonElement>("[data-task-info-toggle]")!.click();
+    await waitFor(() => document.querySelector("[data-task-info-panel]"), "Info panel opens for shell call");
     check(!document.querySelector("[data-task-open-origin]"), "a shell-started call has no structured link");
-    const callConv = document.querySelector<HTMLElement>("[data-call-conversation='call-1']")!;
-    const callConvHeader = callConv.querySelector<HTMLElement>("[data-call-conversation-header]")!;
-    const callHeaderStyle = getComputedStyle(callConvHeader);
-    const detailsPane = document.querySelector<HTMLElement>("[data-task-detail='call:call-1']")!.parentElement!;
-    check(
-      parseFloat(callHeaderStyle.paddingTop) >= 6 &&
-        Math.abs(parseFloat(callHeaderStyle.paddingTop) - parseFloat(callHeaderStyle.paddingBottom)) <= 1 &&
-        parseFloat(callHeaderStyle.paddingLeft) >= 12 &&
-        Math.abs(parseFloat(callHeaderStyle.paddingLeft) - parseFloat(callHeaderStyle.paddingRight)) <= 1,
-      "desktop call conversation header keeps balanced inset padding",
-    );
-    check(
-      !callConvHeader.querySelector("button"),
-      "desktop inspector omits the dead Details toggle when details stay visible beside the transcript",
-    );
-    check(
-      Math.abs(detailsPane.getBoundingClientRect().left - callConv.getBoundingClientRect().right) <= 1,
-      "desktop call conversation meets the adjacent details pane divider without a dead gap",
-    );
     closeBackgroundTasks();
     passed.push("T11 only structured MCP identity links a call to its tool card");
 
@@ -742,22 +673,26 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
       surface = desktop ? DESKTOP : MOBILE;
       openBackgroundTask("s", subagentKey("b"), "row");
       render(<BackgroundTasksInspector sessionId="s" desktop={desktop} background={backgroundOf(TIMELINE)} />);
+      const openTranscript = await waitFor(
+        () => document.querySelector<HTMLButtonElement>("[data-task-open-transcript]"),
+        `${desktop ? "Desktop" : "Mobile"} enables Full transcript without hijacking Result summary`,
+      );
+      check(
+        document.querySelector('[data-task-reader-mode="result"]'),
+        `${desktop ? "Desktop" : "Mobile"} keeps ended subagent on Result summary until opened`,
+      );
+      openTranscript.click();
       const transcript = await waitFor(
         () => document.querySelector<HTMLElement>("[data-subagent-transcript='b']"),
-        `${desktop ? "Desktop" : "Mobile"} shows the observed transcript`,
+        `${desktop ? "Desktop" : "Mobile"} shows the observed transcript on demand`,
       );
       await waitFor(
         () => transcript.textContent?.includes("The flaky test races the parser cache.") ? true : null,
         "the child's own message renders",
       );
       check(transcript.textContent?.includes("Find why the parser test is flaky."), "the delegation prompt opens it");
-      if (desktop) {
-        check(document.querySelector("[data-subagent-activity]"), "details stay beside the transcript");
-        check(!document.querySelector("[data-subagent-activity-entry]"), "details omit the bounded activity");
-      } else {
-        await waitFor(() => inspector()?.dataset.mobileTaskLevel === "conversation" ? true : null, "a phone opens the transcript first");
-      }
       closeBackgroundTasks();
+      await settle();
     }
     surface = DESKTOP;
     openBackgroundTask("s", subagentKey("c"), "row");
@@ -789,6 +724,63 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
     setAcknowledgementTransport(null);
     closeBackgroundTasks();
     passed.push("A notification link leaves a failure unseen until Mark as seen");
+
+    // 14. Desktop Work Pane Tasks tab: non-modal alongside Prompt, width-responsive
+    //     compact (<900px) vs split (>=900px), Quote to Prompt, Esc stays in Tasks.
+    surface = DESKTOP;
+    setDraft("s", { text: "", attachments: [] });
+    render(
+      <Box sx={{ width: 1280, height: 760, display: "flex" }}>
+        <DesktopWorkspaceProvider>
+          <DesktopCommandProvider>
+            <DesktopCommandHost onNewSession={() => undefined} onOpenSettings={() => undefined} />
+            <DesktopWorkspace
+              promptWidth={440}
+              resizing={false}
+              onResizeStart={() => undefined}
+              sessionId="s"
+              projection="history"
+              onProjectionChange={() => undefined}
+              prompt={<Box data-fixture-prompt-visible sx={{ p: 2 }}>Parent Prompt stays visible</Box>}
+              conversation={<Box data-fixture-conversation>Main Conversation</Box>}
+            />
+          </DesktopCommandProvider>
+        </DesktopWorkspaceProvider>
+      </Box>,
+    );
+    const endedBg = backgroundOf([snapshot(2, "b", { state: "idle", stopReason: "end_turn", result: "Found stale cache." })]);
+    render(
+      <Box sx={{ width: 560, height: 600, display: "flex", flexDirection: "column" }}>
+        <DesktopWorkspaceProvider>
+          <DesktopTasksView sessionId="s" active providedBackground={background} />
+        </DesktopWorkspaceProvider>
+      </Box>,
+    );
+    await waitFor(
+      () => document.querySelector("[data-desktop-tasks-layout='compact'] [data-desktop-tasks-strip]"),
+      "Desktop Tasks uses compact full-width reader + switcher strip under 900px",
+    );
+    document.querySelector<HTMLButtonElement>("[data-task-quote-prompt]")!.click();
+    check(getDraft("s").text.includes("Regarding background task"), "Desktop Quote to Prompt appends reference to parent draft");
+    render(
+      <Box sx={{ width: 960, height: 600, display: "flex", flexDirection: "column" }}>
+        <DesktopWorkspaceProvider>
+          <DesktopTasksView sessionId="s" active providedBackground={endedBg} />
+        </DesktopWorkspaceProvider>
+      </Box>,
+    );
+    await waitFor(
+      () => document.querySelector("[data-desktop-tasks-layout='split'] [data-desktop-region='tasks.roster']"),
+      "Desktop Tasks splits 236px roster beside reader at >= 900px Work Pane width",
+    );
+    check(
+      document.querySelector("[data-task-reader-mode='result']") !== null,
+      "Ended task opens Result-First inside Desktop Tasks view",
+    );
+    requestDesktopWorkView("conversation");
+    check(desktopWorkView() === "conversation", "Work view switches cleanly back to Conversation");
+    setDraft("s", { text: "", attachments: [] });
+    passed.push("Desktop Work Pane Tasks tab adapts to pane width and quotes to Prompt");
     const activated: string[] = [];
     render(<Box sx={{ width: 320 }}><MobileSheetContextDock
       context={{ title: "Reader", facts: [{ label: "Model", value: "A very long recorded model name that remains available by horizontal scrolling" }] }}
@@ -833,21 +825,71 @@ export function renderBackgroundTasksPreview(desktop: boolean, open: string | nu
   document.body.append(container);
   const background = backgroundOf(TIMELINE, [call(), call({
     call_id: "call-2",
-    labels: { title: "design review" },
+    labels: { title: "Store review" },
     state: "completed",
+    verdict: "needs-attention",
+    finding_count: 2,
+    has_result: true,
     finished_at_ms: Date.now() - 5_000,
   })]);
+  if (desktop) {
+    requestDesktopWorkView("tasks");
+    createRoot(container).render(
+      <SurfaceContext.Provider value={DESKTOP}>
+        <BrowserProductTheme>
+          <CssBaseline />
+          <Box sx={{ width: "100vw", height: "100vh", display: "flex" }}>
+            <DesktopWorkspaceProvider>
+              <DesktopCommandProvider>
+                <DesktopWorkspace
+                  promptWidth={440}
+                  resizing={false}
+                  onResizeStart={() => undefined}
+                  sessionId="s"
+                  projection="history"
+                  onProjectionChange={() => undefined}
+                  prompt={
+                    <Stack spacing={1.5} sx={{ p: 2, height: "100%" }}>
+                      <Box sx={{ typography: "body2", color: "text.secondary" }}>
+                        Draft to parent agent stays live beside the Tasks tab:
+                      </Box>
+                      <Box sx={{ flex: 1, p: 1.5, borderRadius: 1.5, border: 1, borderColor: "divider", typography: "body2" }}>
+                        Does the retry case in Store review also affect restore paths?
+                      </Box>
+                    </Stack>
+                  }
+                  conversation={
+                    <Stack spacing={1} sx={{ p: 2 }}>
+                      {background.tasks.map((task) => <TaskRow key={task.key} task={task} sessionId="s" desktop />)}
+                    </Stack>
+                  }
+                />
+                <Box sx={{ position: "fixed", inset: 0, pointerEvents: "none", display: "none" }}>
+                  <DesktopTasksView sessionId="s" active={false} providedBackground={background} />
+                </Box>
+              </DesktopCommandProvider>
+            </DesktopWorkspaceProvider>
+          </Box>
+        </BrowserProductTheme>
+      </SurfaceContext.Provider>,
+    );
+    return;
+  }
   createRoot(container).render(
-    <SurfaceContext.Provider value={desktop ? DESKTOP : MOBILE}>
+    <SurfaceContext.Provider value={MOBILE}>
       <BrowserProductTheme>
         <CssBaseline />
-        <Stack spacing={1} sx={{ width: desktop ? 760 : 390, p: 2 }}>
-          {background.tasks.filter((task) => task.source !== "approval").map((task) => (
-            <TaskRow key={task.key} task={task} sessionId="s" desktop={desktop} />
+        <Stack spacing={1} sx={{ width: 390, p: 2 }}>
+          {Array.from({ length: 6 }, (_, i) => (
+            <Box key={i} sx={{ typography: "body2", color: "text.secondary" }}>
+              Main conversation message {i + 1}: verifying retry idempotency and restore safety across workers.
+            </Box>
           ))}
-          <BackgroundTasksBarView sessionId="s" desktop={desktop} tasks={background.tasks} />
+          {background.tasks.filter((task) => task.source !== "approval").map((task) => (
+            <TaskRow key={task.key} task={task} sessionId="s" desktop={false} />
+          ))}
         </Stack>
-        <BackgroundTasksInspector sessionId="s" desktop={desktop} background={background} />
+        <BackgroundTasksInspector sessionId="s" desktop={false} background={background} />
       </BrowserProductTheme>
     </SurfaceContext.Provider>,
   );

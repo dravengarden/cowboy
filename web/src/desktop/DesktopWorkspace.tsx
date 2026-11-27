@@ -36,7 +36,10 @@ import { useStoreSelector } from "../store";
 import { useDesktopWorkView } from "./review/useDesktopWorkView";
 import { DesktopWorkViewTabs } from "./review/DesktopWorkViewTabs";
 import { TRANSCRIPT_HIDDEN_REASON } from "./review/conversationViewCommands";
+import { useCallsDockLegacy } from "../backgroundTasks";
 import { focusedSubagentStop, SUBAGENT_STOP_KEY } from "../subagents";
+import { DesktopTasksView } from "../tasks/DesktopTasksView";
+import { useSessionTasksAvailability } from "../tasks/taskEvents";
 
 const DesktopReviewView = lazy(async () => {
   const module = await import("./review/DesktopReviewView");
@@ -207,9 +210,12 @@ export const DesktopWorkspace = memo(function DesktopWorkspace({
   const promptCollapsed = workspace.collapsedPanes.prompt;
   const conversationCollapsed = workspace.collapsedPanes.conversation;
   const { view, reviewMounted, showView } = useDesktopWorkView(sessionId);
+  const callsDockLegacy = useCallsDockLegacy();
+  const tasksAvailability = useSessionTasksAvailability(callsDockLegacy ? null : sessionId);
   const reviewShown = view === "review";
-  const conversationShortcutsActive = workspace.focusedPane === "conversation" &&
-    !reviewShown;
+  const tasksShown = !callsDockLegacy && view === "tasks";
+  const conversationShown = !reviewShown && !tasksShown;
+  const conversationShortcutsActive = workspace.focusedPane === "conversation" && conversationShown;
   const toggleProjectionCommand = useMemo<DesktopCommand>(() => ({
     id: "conversation.toggleProjection",
     title: `Switch to ${projection === "history" ? "Explore" : "History"}`,
@@ -217,12 +223,10 @@ export const DesktopWorkspace = memo(function DesktopWorkspace({
     group: "Conversation",
     shortcut: "V",
     contexts: ["conversation"],
-    when: () => !reviewShown,
+    when: () => conversationShown,
     disabledReason: TRANSCRIPT_HIDDEN_REASON,
-    run: () => onProjectionChange(
-      projection === "history" ? "explore" : "history",
-    ),
-  }), [onProjectionChange, projection, reviewShown]);
+    run: () => onProjectionChange(projection === "history" ? "explore" : "history"),
+  }), [conversationShown, onProjectionChange, projection]);
   useDesktopCommand(toggleProjectionCommand);
   // A subagent row's Stop, from the keyboard: Tab selects the row's widget,
   // the key opens the row's own Stop confirmation.
@@ -387,34 +391,21 @@ export const DesktopWorkspace = memo(function DesktopWorkspace({
         <PaneHeader
           pane="conversation"
           collapsible
-          actions={reviewShown ? undefined : (
+          actions={!conversationShown ? undefined : (
             <>
-              <DesktopProjectionToggle
-                projection={projection}
-                onChange={onProjectionChange}
-                shortcutActive={conversationShortcutsActive}
-              />
-              <DesktopConversationControls
-                sessionId={sessionId}
-                projection={projection}
-                shortcutActive={conversationShortcutsActive}
-              />
+              <DesktopProjectionToggle projection={projection} onChange={onProjectionChange} shortcutActive={conversationShortcutsActive} />
+              <DesktopConversationControls sessionId={sessionId} projection={projection} shortcutActive={conversationShortcutsActive} />
             </>
           )}
         >
-          <DesktopWorkViewTabs view={view} onChange={showView} />
+          <DesktopWorkViewTabs view={view} onChange={showView} tasks={callsDockLegacy ? undefined : tasksAvailability} />
         </PaneHeader>
         <Box
           data-desktop-region="conversation.transcript"
           data-desktop-navigation="scroll"
           data-desktop-focus-default
           tabIndex={-1}
-          sx={{
-            flex: 1,
-            minHeight: 0,
-            display: reviewShown ? "none" : "flex",
-            flexDirection: "column",
-          }}
+          sx={{ flex: 1, minHeight: 0, display: conversationShown ? "flex" : "none", flexDirection: "column" }}
         >
           {conversation}
         </Box>
@@ -423,17 +414,19 @@ export const DesktopWorkspace = memo(function DesktopWorkspace({
             data-desktop-review
             hidden={!reviewShown}
             tabIndex={-1}
-            sx={{
-              flex: 1,
-              minHeight: 0,
-              display: reviewShown ? "flex" : "none",
-              flexDirection: "column",
-              "&:focus": { outline: "none" },
-            }}
+            sx={{ flex: 1, minHeight: 0, display: reviewShown ? "flex" : "none", flexDirection: "column", "&:focus": { outline: "none" } }}
           >
-            <Suspense fallback={null}>
-              <DesktopReviewView active={reviewShown} />
-            </Suspense>
+            <Suspense fallback={null}><DesktopReviewView active={reviewShown} /></Suspense>
+          </Box>
+        )}
+        {!callsDockLegacy && (
+          <Box
+            data-desktop-tasks
+            hidden={!tasksShown}
+            tabIndex={-1}
+            sx={{ flex: 1, minHeight: 0, display: tasksShown ? "flex" : "none", flexDirection: "column", "&:focus": { outline: "none" } }}
+          >
+            <DesktopTasksView sessionId={sessionId} active={tasksShown} />
           </Box>
         )}
         {

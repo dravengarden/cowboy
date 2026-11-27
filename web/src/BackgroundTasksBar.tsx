@@ -89,7 +89,7 @@ export function BackgroundTasksBarView({
         aria-label={`Background tasks: ${parts.map((part) => part.text.replace(/^[^ ]+ /, "")).join(", ") || "agent background activity"}. Open the list`}
         aria-haspopup="dialog"
         onClick={(event): void =>
-          openBackgroundTask(sessionId, lead?.key ?? null, "bar", event.currentTarget)}
+          openBackgroundTask(sessionId, desktop ? (lead?.key ?? null) : null, "bar", event.currentTarget)}
         sx={{
           width: "100%",
           minWidth: 0,

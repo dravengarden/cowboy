@@ -237,6 +237,12 @@ export interface BottomSheetProps {
   /** Mobile cover body that does not scroll: the content fills it edge to edge
    *  and owns its scroller (an embedded transcript). */
   readonly fill?: boolean;
+  /** Optional non-cover maxHeight override (e.g. half-screen triage peek). */
+  readonly maxHeight?: string | undefined;
+  /** Disable DetentSheet's mid-peek stop for short triage sheets. */
+  readonly peekDetent?: boolean | undefined;
+  /** Custom mobile footer dock (replaces the default dismiss island). */
+  readonly footerDock?: ReactNode | undefined;
 }
 
 export function FloatingActionIsland(
@@ -632,6 +638,23 @@ export function MobileSheetDismiss(
   );
 }
 
+function resolveBottomSheetFooter(
+  props: Pick<BottomSheetProps, "footerDock" | "actions" | "islandContext" | "onBack" | "onClose" | "islandActions"> & { mobileDismiss: "header" | "footer" | "none" },
+): ReactNode {
+  if (props.footerDock != null) return props.footerDock;
+  if (props.actions == null && props.mobileDismiss !== "footer") return undefined;
+  return (
+    <Box sx={{ width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
+      {props.actions != null && <Box sx={{ width: "100%", display: "flex", justifyContent: "flex-end", gap: 1 }}>{props.actions}</Box>}
+      {props.mobileDismiss === "footer" && (props.islandContext
+        ? <MobileSheetContextDock context={props.islandContext} onBack={props.onBack} onClose={props.onClose} actions={props.islandActions} />
+        : props.onBack
+        ? <MobileSheetBackDismiss onBack={props.onBack} onClose={props.onClose} actions={props.islandActions} />
+        : <MobileSheetDismiss onClose={props.onClose} />)}
+    </Box>
+  );
+}
+
 export function BottomSheet(
   {
     open,
@@ -653,6 +676,9 @@ export function BottomSheet(
     readerTopBleed = hideMobileTitle,
     denseHeader,
     fill = false,
+    maxHeight,
+    peekDetent = true,
+    footerDock,
   }: BottomSheetProps,
 ): ReactNode {
   const theme = useTheme();
@@ -691,6 +717,8 @@ export function BottomSheet(
       onClose={onClose}
       frosted={frosted}
       cover={cover}
+      maxHeight={maxHeight}
+      peekDetent={peekDetent}
       animateOnOpen={animateOnOpen}
       footerOverlay={floatingActions}
       fillBody={fill && cover}
@@ -744,25 +772,7 @@ export function BottomSheet(
           )}
         </Box>
       )}
-      footer={actions == null && mobileDismiss !== "footer"
-        ? undefined
-        : (
-          <Box sx={{ width: "100%", display: "flex", flexDirection: "column", alignItems: "center", gap: 1 }}>
-            {actions == null ? null : (
-              <Box sx={{ width: "100%", display: "flex", justifyContent: "flex-end", gap: 1 }}>
-                {actions}
-              </Box>
-            )}
-            {mobileDismiss === "footer"
-              ? islandContext
-                ? <MobileSheetContextDock context={islandContext} onBack={onBack} onClose={onClose} actions={islandActions} />
-                : onBack
-                ? <MobileSheetBackDismiss onBack={onBack} onClose={onClose} actions={islandActions} />
-                : <MobileSheetDismiss onClose={onClose} />
-              : null}
-
-          </Box>
-        )}
+      footer={resolveBottomSheetFooter({ footerDock, actions, mobileDismiss, islandContext, onBack, onClose, islandActions })}
     >
       {
         /* The sheet body is edge-to-edge; a modal sheet's text/controls want a

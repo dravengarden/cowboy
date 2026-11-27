@@ -339,7 +339,7 @@ function DetailRow(
   );
 }
 
-function ResultSection(
+export function ResultSection(
   { detail, touch }: { detail: ManagedCallDetail; touch: boolean },
 ): React.JSX.Element {
   const result = detail.result;

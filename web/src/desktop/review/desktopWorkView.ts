@@ -1,11 +1,11 @@
-// Desktop's work pane shows one of two views of the open Session: its
-// Conversation or its code Review (docs/desktop-code-review.md). Both stay
-// mounted; this module owns which one is shown. The choice is per Session and
-// per device, never synced: the phone's Review page has its own navigation.
+// Desktop's work pane shows one of three views of the open Session: its
+// Conversation, its code Review (docs/desktop-code-review.md), or its
+// Background Tasks. All mounted views stay alive behind the tabs; this module
+// owns which one is shown. Review preference is per Session and per device.
 
 import { useSyncExternalStore } from "react";
 
-export type DesktopWorkView = "conversation" | "review";
+export type DesktopWorkView = "conversation" | "review" | "tasks";
 
 const STORAGE_KEY = "cowboy.desktop.workView.v1";
 /** Sessions remembered; the least recently changed are forgotten first. */
@@ -26,7 +26,11 @@ function readViews(): string[] {
 
 /** Sessions whose stored view is Review, oldest change first. Conversation is
  *  the default and is stored as absence. */
-export function storedReviewSessions(stored: readonly string[], sessionId: string, view: DesktopWorkView): string[] {
+export function storedReviewSessions(
+  stored: readonly string[],
+  sessionId: string,
+  view: DesktopWorkView,
+): string[] {
   const kept = stored.filter((id) => id !== sessionId);
   if (view === "review") kept.push(sessionId);
   return kept.slice(-DESKTOP_WORK_VIEW_LIMIT);
@@ -59,23 +63,43 @@ export function publishDesktopWorkView(view: DesktopWorkView): void {
   for (const listener of listeners) listener();
 }
 
+export function desktopWorkView(): DesktopWorkView {
+  return shown;
+}
+
+export function desktopConversationShown(): boolean {
+  return shown === "conversation";
+}
+
 export function desktopReviewShown(): boolean {
   return shown === "review";
 }
 
-export function useDesktopReviewShown(): boolean {
+export function desktopTasksShown(): boolean {
+  return shown === "tasks";
+}
+
+export function useDesktopWorkViewState(): DesktopWorkView {
   return useSyncExternalStore(
     (listener) => {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    desktopReviewShown,
-    () => false,
+    desktopWorkView,
+    () => "conversation",
   );
 }
 
-/** Ask the mounted workspace to show a view (`␣C` returns to the
- *  Conversation). */
+export function useDesktopReviewShown(): boolean {
+  return useDesktopWorkViewState() === "review";
+}
+
+export function useDesktopTasksShown(): boolean {
+  return useDesktopWorkViewState() === "tasks";
+}
+
+/** Ask the mounted workspace to show a view (`␣C` returns to Conversation,
+ *  `␣V` shows Review, `␣G` shows Tasks). */
 export const DESKTOP_WORK_VIEW_EVENT = "cowboy:desktop-work-view";
 
 export function requestDesktopWorkView(view: DesktopWorkView): void {
@@ -86,7 +110,7 @@ export function requestDesktopWorkView(view: DesktopWorkView): void {
 
 export function desktopWorkViewFromEvent(event: Event): DesktopWorkView | null {
   const detail = (event as CustomEvent<unknown>).detail;
-  return detail === "conversation" || detail === "review" ? detail : null;
+  return detail === "conversation" || detail === "review" || detail === "tasks" ? detail : null;
 }
 
 // An agent's or a link's reveal can arrive before the workbench has mounted:

@@ -51,7 +51,7 @@ import { ENTER_LABEL, MOD_LABEL } from "./platform";
 
 import { PlanDock } from "./PlanDock";
 import { ManagedCallsDock } from "./ManagedCallsDock";
-import { BackgroundTasksBar } from "./BackgroundTasksBar";
+import { MobileTasksButton } from "./tasks/MobileTasksButton";
 import { useCallsDockLegacy } from "./backgroundTasks";
 
 import { mobileComposerFocusMotion, mobileComposerIdleEditorMinHeight, mobileComposerKeyboardGap, mobileComposerPanelFrameSx, mobileComposerStackGap } from "./mobileComposerPrimitives";
@@ -1310,41 +1310,23 @@ export function ComposerWorkspace({
           : {})}
         sx={{ "&:empty": { display: "none" } }}
       >
-        {callsDockLegacy
-          ? (
-            <ManagedCallsDock
-              sessionId={sessionId}
-              desktop={desktop}
-              shortcut={desktop
-                ? (
-                  <Suspense fallback={null}>
-                    <DesktopRegionShortcut
-                      shortcut={DESKTOP_FOCUS_CALLS_SHORTCUT}
-                      title="Focus Calls"
-                      singleKeycap={DESKTOP_FOCUS_CALLS_SHORTCUT}
-                    />
-                  </Suspense>
-                )
-                : undefined}
-            />
-          )
-          : (
-            <BackgroundTasksBar
-              sessionId={sessionId}
-              desktop={desktop}
-              shortcut={desktop
-                ? (
-                  <Suspense fallback={null}>
-                    <DesktopRegionShortcut
-                      shortcut={DESKTOP_FOCUS_CALLS_SHORTCUT}
-                      title="Background tasks"
-                      singleKeycap={DESKTOP_FOCUS_CALLS_SHORTCUT}
-                    />
-                  </Suspense>
-                )
-                : undefined}
-            />
-          )}
+        {callsDockLegacy && (
+          <ManagedCallsDock
+            sessionId={sessionId}
+            desktop={desktop}
+            shortcut={desktop
+              ? (
+                <Suspense fallback={null}>
+                  <DesktopRegionShortcut
+                    shortcut={DESKTOP_FOCUS_CALLS_SHORTCUT}
+                    title="Focus Calls"
+                    singleKeycap={DESKTOP_FOCUS_CALLS_SHORTCUT}
+                  />
+                </Suspense>
+              )
+              : undefined}
+          />
+        )}
       </Box>
       {showPlan && plan && (
         <Box
@@ -2378,6 +2360,18 @@ export function ComposerWorkspace({
                     </span>
                   </Tooltip>
                 </Stack>
+                {touchInput && !desktop && !callsDockLegacy && (
+                  <MobileTasksButton
+                    sessionId={sessionId}
+                    onBeforeOpen={(): void => {
+                      if (!keyboardOpen) return;
+                      noteMobileKeyboardDismissed();
+                      setMobileKeyboardDismissed(true);
+                      dismissMobileSoftwareKeyboard();
+                      releaseMobileComposerFocus();
+                    }}
+                  />
+                )}
               </Box>
               {touchInput && (
                 <ComposerToolbarSettings

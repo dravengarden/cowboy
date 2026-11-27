@@ -1,6 +1,9 @@
 import { useDesktopInsertCommand } from "../editorInsert";
 import { DESKTOP_TOGGLE_EMPTY_DRAFTS_EVENT } from "../promptBuffer";
+import { CALLS_DOCK_LEGACY_KEY } from "../../backgroundTasks";
 import { OPEN_BACKGROUND_TASKS_EVENT } from "../../backgroundTaskInspectorState";
+import { activeTasksSessionId, sessionTasksAvailability } from "../../tasks/taskEvents";
+import { desktopTasksShown } from "../review/desktopWorkView";
 import { useMemo, useRef, useState } from "react";
 import { useDesktopWorkspace } from "../DesktopWorkspaceController";
 import {
@@ -459,36 +462,28 @@ export function DesktopCommandHost({
     {
       id: "prompt.focusCalls",
       title: "Open Background Tasks",
-      description: "Open the background-tasks inspector: the subagents and calls this session started, grouped Needs you, Active and Ended. With the previous Calls panel restored, open or close Calls instead",
+      description: "Show and focus the session's Background Tasks view in the work pane. With the previous Calls panel restored, open or close Calls instead",
       group: "Prompt",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusCalls),
-      when: () => document.querySelector("[data-desktop-region='prompt.calls'] > *") !== null,
+      when: () => (globalThis.localStorage?.getItem(CALLS_DOCK_LEGACY_KEY) === "1")
+        ? document.querySelector("[data-desktop-region='prompt.calls'] > *") !== null
+        : sessionTasksAvailability().hasTasks || desktopTasksShown() ||
+          document.querySelector("[data-desktop-region='prompt.calls'] [data-background-tasks-available='true']") !== null,
       disabledReason: "This session has no background tasks",
       consumeWhenDisabled: true,
       run: () => {
-        const tasks = document.querySelector<HTMLElement>(
-          "[data-desktop-region='prompt.calls'] [data-background-tasks-available='true']",
-        );
-        if (tasks) {
-          // Return focus to the composer on close, as from the bar.
-          globalThis.dispatchEvent(new CustomEvent(OPEN_BACKGROUND_TASKS_EVENT, {
-            detail: { sessionId: tasks.dataset["backgroundTasksSession"] },
-          }));
+        if (!(globalThis.localStorage?.getItem(CALLS_DOCK_LEGACY_KEY) === "1")) {
+          const domSession = document.querySelector<HTMLElement>("[data-desktop-region='prompt.calls'] [data-background-tasks-available='true']")?.dataset["backgroundTasksSession"];
+          globalThis.dispatchEvent(new CustomEvent(OPEN_BACKGROUND_TASKS_EVENT, { detail: { sessionId: activeTasksSessionId() ?? domSession } }));
           return;
         }
-        const toggle = document.querySelector<HTMLElement>(
-          "[data-desktop-region='prompt.calls'] button[aria-label='Expand calls'], [data-desktop-region='prompt.calls'] button[aria-label='Collapse calls']",
-        );
+        const toggle = document.querySelector<HTMLElement>("[data-desktop-region='prompt.calls'] button[aria-label='Expand calls'], [data-desktop-region='prompt.calls'] button[aria-label='Collapse calls']");
         if (workspace.focusedRegion === "prompt.calls") {
           if (toggle?.getAttribute("aria-label") === "Collapse calls") toggle.click();
           workspace.focusRegion("prompt.composer");
           return;
         }
-        // From collapsed Calls a running call is what the user came for: open
-        // its live transcript. An expanded list keeps ordinary focus.
-        const running = document.querySelector<HTMLElement>(
-          "[data-desktop-region='prompt.calls'] [data-call-chip]",
-        );
+        const running = document.querySelector<HTMLElement>("[data-desktop-region='prompt.calls'] [data-call-chip]");
         if (running && toggle?.getAttribute("aria-label") === "Expand calls") {
           running.click();
           return;

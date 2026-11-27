@@ -90,7 +90,7 @@ export function handleBackgroundTasksKeyDown(
         event.preventDefault();
         event.stopPropagation();
         const detail = document.querySelector<HTMLElement>(
-          `[data-task-detail="${CSS.escape(ctx.selected.key)}"]`,
+          `[data-task-reader="${CSS.escape(ctx.selected.key)}"], [data-task-detail="${CSS.escape(ctx.selected.key)}"]`,
         );
         (detail?.querySelector<HTMLButtonElement>("[data-task-detail-stop]") ??
           [...(detail?.querySelectorAll<HTMLButtonElement>("button") ?? [])]

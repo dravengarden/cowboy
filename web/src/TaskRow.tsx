@@ -16,6 +16,7 @@ import { Kbd } from "./Kbd";
 import { SubagentStopConfirm, taskChipColor, taskToneColor } from "./SubagentCard";
 import { glyphSize } from "./surface/desktopSize";
 import { SUBAGENT_STOP_KEY, type DisplayGroup, type SubagentTone } from "./subagents";
+import { taskHeadline } from "./tasks/taskTree";
 import { requestTaskStop, STOP_MESSAGE, type StopState } from "./useBackgroundTasks";
 
 export function taskTone(group: DisplayGroup): SubagentTone {
@@ -92,7 +93,7 @@ export const TaskRow = memo(function TaskRow({
   const [confirming, setConfirming] = useState(false);
   const [focused, setFocused] = useState(false);
   const tone = taskTone(task.group);
-  const subtitle = stopLine(stop) ?? task.subtitle;
+  const subtitle = stopLine(stop) ?? taskHeadline(task);
   const nested = task.source === "subagent" && task.parentKey !== null;
   const Icon = task.source === "call" ? CallSplitOutlined : AccountTreeOutlined;
   const confirmStop = (): void => {

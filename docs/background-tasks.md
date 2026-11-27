@@ -297,29 +297,50 @@ the bar, rows, inspector and legacy dock) and pending requests. Details:
 subagent → its former card body (`SubagentDetail`); call → `CallConversation`
 + `CallDetailView`; approval → the approval surface.
 
-### 6.2 Transcript row and inspector
+### 6.2 Transcript row, Desktop Work Pane tab, and Mobile sheet
 
-- `web/src/TaskRow.tsx`: icon, title, subtitle, optional Stop, chip last;
-  minimum (not fixed) height; nested `(+N)`; warning dot when descendants need
-  attention. Opening never expands the transcript (T14).
-- `web/src/BackgroundTasksInspector.tsx`: the Tool inspector's frame (Desktop
-  Dialog with a rail; Mobile cover Sheet), grouped list, stable selection by
-  key, a read-only view always, Stop only with a current grant, Diagnostics.
+- `web/src/TaskRow.tsx`: icon, title, live action or verdict/outcome subtitle
+  (`web/src/tasks/taskTree.ts`), optional Stop, chip last; minimum (not fixed)
+  height; nested `(+N)`; warning dot when descendants need attention. Opening
+  never expands the transcript (T14).
+- **Desktop (`web/src/tasks/DesktopTasksView.tsx`)**: non-modal third Work Pane
+  tab (`Conversation ␣C | Review ␣V | Tasks ␣G`) beside the live parent Prompt,
+  adapting to the Work Pane's measured width (compact full-width reader +
+  top worker switcher strip below 900 px; side-by-side 236 px tree roster +
+  reader from 900 px). `Esc` unwinds Info or filters without leaving Tasks;
+  `␣P` focuses Prompt while keeping Tasks visible; `␣C` returns to Conversation.
+- **Mobile (`web/src/tasks/MobileTasksSheet.tsx`)**: 1-tap content-height
+  Triage Peek (capped near half viewport height so the main chat stays visible
+  above) that expands in the same `DetentSheet` host into a Result-First reader
+  with a bottom thumb-zone horizontal worker switcher strip (sibling switches
+  use `history.replaceState`) and liquid-glass `[Chat] [All] [Log/Result]
+  [Info] [Quote]` dock. Delayed observed subagent transcript loads never hijack
+  the active view or browser history.
+- **Shared Result-First reader & real tree (`web/src/tasks/TaskResultReader.tsx`,
+  `web/src/tasks/TaskRoster.tsx`)**: ended tasks lead with execution outcome,
+  review verdict/findings count and result above **Full transcript**; active
+  tasks lead with live stream/activity; static execution metadata and
+  `Diagnostics` fold behind an explicit **Info** toggle. Nested `parentKey`
+  trees fold with descendant attention roll-up, `Hide ended` filter,
+  `Clear ended calls…` (with Undo), and **Quote to Prompt** (appends to the
+  parent draft without auto-sending).
 - Stop outcomes: Accepted → Stopping → the source confirms; otherwise
   "Stop was rejected" (the Controller's refusal), "Timed out, still running"
   (30 s, state kept) or "Disconnected: Stop was not sent". Session Stop is
   unchanged; there is no "stop all background tasks".
 
-### 6.3 Bar
+### 6.3 Persistent zero-waste entry (entry lifetime vs. status lifetime)
 
-`web/src/BackgroundTasksBar.tsx` replaces the Calls panel in the Composer
-stack: `◐ 2 working · ⚠ 1 needs you · ✕ 1 failed — Review: auth fallback 1m40s ›`.
-It counts only TaskSummary items. The legacy `SessionMeta.background_tasks`
-(`max(native, working subagents)`) is never added; a neutral "+ background
-activity" mark appears only when it exceeds the working subagent rows. It
-hides when nothing is active or needs attention; `␣G` still opens the
-inspector. "Failed unseen" uses a device-local acknowledgement (opening the
-details); per-account acknowledgement is Phase 2.
+Task history keeps the entry reachable; live work and attention decorate it
+with counts/badges, and zero tasks removes the entry and its slot entirely.
+- **Desktop**: `Tasks ␣G` tab in `DesktopWorkViewTabs` replaces the Composer
+  stack bar (saving ~28 px per active session). Plain tab for quiet completed
+  history; compact badge for active, needs-you or unseen failure.
+- **Mobile**: `web/src/tasks/MobileTasksButton.tsx` sits at the fixed trailing
+  edge of the Composer's existing action row (outside the horizontal scroll
+  track, zero additional rows, visible even while the soft keyboard is open)
+  and opens Triage Peek in one tap. `web/src/BackgroundTasksBar.tsx` remains
+  for standalone fixtures and legacy reference.
 
 #### Rollback switch
 

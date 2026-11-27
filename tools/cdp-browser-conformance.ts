@@ -41,7 +41,7 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   widgets: ["runWidgetsBrowserConformance", 15],
   "widget-apps": ["runWidgetAppsBrowserConformance", 14],
   subagents: ["runSubagentsBrowserConformance", 7],
-  "background-tasks": ["runBackgroundTasksBrowserConformance", 13],
+  "background-tasks": ["runBackgroundTasksBrowserConformance", 14],
 };
 const selected = ENTRIES[suite];
 if (!selected) throw new Error("unknown suite");

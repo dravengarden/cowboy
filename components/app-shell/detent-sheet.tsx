@@ -312,7 +312,7 @@ export interface DetentSheetProps {
   /** Reserve the drag strip's breathing room above the header. The strip has
    * no visible pill (the whole bar drags); without it a dense, draggable title
    * row sits flush at the edge. Default true. */
-  readonly grabber?: boolean | undefined;
+  readonly grabber?: boolean | undefined; readonly maxHeight?: string | undefined;
 }
 
 // Haptic tap on open is delegated to the shared `haptic()` primitive (./haptics) —
@@ -384,7 +384,7 @@ export function DetentSheet(
     animateOnOpen = true,
     fillBody = false,
     readerTopBleed = false,
-    grabber = true,
+    grabber = true, maxHeight,
   }: DetentSheetProps,
 ): ReactNode {
   // +1 hides downward (bottom sheet), −1 hides upward (top sheet). All geometry
@@ -592,7 +592,7 @@ export function DetentSheet(
         rafRef.current = 0;
       }
     };
-  }, [open, paint, sign, isCover, peekDetent, haptic, animateOnOpen]);
+  }, [open, paint, sign, isCover, peekDetent, haptic, animateOnOpen, maxHeight]);
 
   // Light tap on dismiss — the single choke point for every close path (flick
   // down, tap-outside, programmatic), mirroring the tap on open. The helper
@@ -956,7 +956,7 @@ export function DetentSheet(
                 pt: readerTopBleed ? 0 : SAFE_TOP,
                 "--cowboy-reader-top-inset": readerTopBleed ? SAFE_TOP : "0px",
               }
-              : { maxHeight: `${String(MAX_FRACTION * 100)}vh` }),
+              : { maxHeight: maxHeight ?? `${String(MAX_FRACTION * 100)}vh` }),
             zIndex: z + 1,
             // `will-change: transform` and `contain: layout paint` also establish
             // containing blocks for fixed descendants.  Release both while a

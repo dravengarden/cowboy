@@ -173,10 +173,10 @@ export function useTaskConversation(
     task?.source === "subagent" ? (task.subagent ?? null) : null,
   );
   const conversation = task?.source === "call" || (task?.source === "subagent" && child.observed);
-  useEffect(() => {
-    if (!desktop && conversation && level === "detail" && depth.current === 2)
-      setLevel("conversation");
-  }, [desktop, conversation, level, setLevel, depth]);
+  void desktop;
+  void level;
+  void setLevel;
+  void depth;
   return { child, conversation };
 }
 

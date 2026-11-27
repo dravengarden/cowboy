@@ -31,7 +31,7 @@ import { topBarRegionHints } from "./topBarRegionHints";
 import type { ShortcutAvailability } from "./commands/shortcutAvailability";
 import { useImeStatus } from "./vim/imeStatusStore";
 import { useVimMacroRecording } from "./vim/macroStatusStore";
-import { useDesktopReviewShown } from "./review/desktopWorkView";
+import { type DesktopWorkView, useDesktopWorkViewState } from "./review/desktopWorkView";
 import {
   DESKTOP_FOCUS_PLAN_SHORTCUT,
   DESKTOP_FOCUS_PROMPT_SHORTCUT,
@@ -190,6 +190,29 @@ const REVIEW_NAVIGATOR_HINTS: RegionHint[] = [
   { keys: DESKTOP_SHORTCUTS.focusConversation, label: "Conversation" },
 ];
 
+const TASKS_ROSTER_HINTS: RegionHint[] = [
+  { keys: "J/K", label: "Task" },
+  { keys: "Enter", label: "Open" },
+  { keys: "[/]", label: "Worker" },
+  { keys: "I", label: "Info" },
+  { keys: "Q", label: "Quote" },
+  { keys: DESKTOP_FOCUS_PROMPT_SHORTCUT, label: "Prompt" },
+  { keys: DESKTOP_SHORTCUTS.focusConversation, label: "Conversation" },
+];
+
+const TASKS_READER_HINTS: RegionHint[] = [
+  { keys: "J/K", label: "Scroll" },
+  { keys: "[/]", label: "Worker" },
+  { keys: "T", label: "Transcript" },
+  { keys: "I", label: "Info" },
+  { keys: "Q", label: "Quote" },
+  { keys: "O", label: "Session" },
+  { keys: "Shift+L", label: "Locate" },
+  { keys: "X", label: "Stop" },
+  { keys: DESKTOP_FOCUS_PROMPT_SHORTCUT, label: "Prompt" },
+  { keys: DESKTOP_SHORTCUTS.focusConversation, label: "Conversation" },
+];
+
 const REVIEW_DOCUMENT_HINTS: RegionHint[] = [
   { keys: "]c/[c", label: "Hunk" },
   { keys: "]f/[f", label: "File" },
@@ -302,6 +325,10 @@ function regionHints(
       return REVIEW_NAVIGATOR_HINTS;
     case "review.document":
       return REVIEW_DOCUMENT_HINTS;
+    case "tasks.roster":
+      return TASKS_ROSTER_HINTS;
+    case "tasks.reader":
+      return TASKS_READER_HINTS;
     case "prompt.composer": {
       if (documentMode) {
         return [
@@ -366,14 +393,14 @@ function statusPaneLabel(
   resizing: boolean,
   region: string | null,
   pane: string,
-  reviewShown: boolean,
+  workView: DesktopWorkView,
   documentMode: boolean,
 ): string {
   if (resizing) return "layout";
   if (region === "topbar.controls") return "topbar";
   if (documentMode && pane === "prompt") return "draft";
   // The work pane names the view it shows.
-  return pane === "conversation" && reviewShown ? "review" : pane;
+  return pane === "conversation" && workView !== "conversation" ? workView : pane;
 }
 
 const EMPTY_TOP_BAR_HINTS: readonly RegionHint[] = [];
@@ -479,7 +506,7 @@ export const DesktopStatusLine = memo(function DesktopStatusLine({
   const vimMode = useVimMode();
   const ime = useImeStatus();
   const macro = useVimMacroRecording();
-  const reviewShown = useDesktopReviewShown();
+  const workView = useDesktopWorkViewState();
   const projection = useExploreSessionState(sessionId ?? "").projection;
   const rawSync = useSyncStatus();
   const held = useHeldDeliveries();
@@ -583,7 +610,7 @@ export const DesktopStatusLine = memo(function DesktopStatusLine({
       { keys: "Esc", label: "Cancel", availability: "available" },
     ]
     : ordinaryHints;
-  const paneLabel = statusPaneLabel(resizingLayout, focusedRegion, focusedPane, reviewShown, documentMode);
+  const paneLabel = statusPaneLabel(resizingLayout, focusedRegion, focusedPane, workView, documentMode);
   const regionLabel = workspace.selectedSplitter ?? focusedRegion;
 
   return (

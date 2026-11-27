@@ -142,6 +142,8 @@ export function Sheet(
      * full-screen mode). */
     desktopFullScreen?: boolean;
     portal?: boolean;
+    /** Keep DetentSheet mounted even while cover is false (peek <-> cover). */
+    detent?: boolean;
   },
 ): ReactNode {
   const theme = useTheme();
@@ -159,6 +161,7 @@ export function Sheet(
     desktopFill = false,
     desktopFullScreen = false,
     portal = false,
+    detent = false,
     ...bottomSheetProps
   } = props;
   const handleDesktopClose = (event: object, reason: string): void => {
@@ -220,7 +223,7 @@ export function Sheet(
       </DesktopTitledSheet>
     );
   }
-  const useCompactCard = (effectiveForceSheet || effectiveMobile) && !props.cover;
+  const useCompactCard = (effectiveForceSheet || effectiveMobile) && !props.cover && !detent;
   if (useCompactCard) {
     return maybePortal(
       <ObsidianSheet

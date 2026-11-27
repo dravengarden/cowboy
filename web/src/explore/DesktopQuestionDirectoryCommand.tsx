@@ -3,10 +3,10 @@ import {
   type DesktopCommand,
   useDesktopCommand,
 } from "../desktop/commands/DesktopCommandProvider";
-import { desktopReviewShown } from "../desktop/review/desktopWorkView";
+import { desktopConversationShown } from "../desktop/review/desktopWorkView";
 
 /** Explore's `P`: the Page Index of the transcript, so it answers only while
- *  the work pane shows the Conversation, not Review. */
+ *  the work pane shows the Conversation, not Review or Tasks. */
 export function DesktopQuestionDirectoryCommand({
   available,
   toggle,
@@ -21,8 +21,8 @@ export function DesktopQuestionDirectoryCommand({
     group: "Conversation",
     shortcut: "P",
     contexts: ["conversation"],
-    when: () => available && !desktopReviewShown(),
-    disabledReason: () => desktopReviewShown()
+    when: () => available && desktopConversationShown(),
+    disabledReason: () => !desktopConversationShown()
       ? "Return to the Conversation first"
       : "No pages are available",
     run: toggle,
