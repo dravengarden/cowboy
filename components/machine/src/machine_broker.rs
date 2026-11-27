@@ -1193,7 +1193,7 @@ impl Broker {
         &self,
         registration: WorkerRegistration,
         welcomed: bool,
-        resumed_drain: Option<crashed_drain::RetiredLaunch>,
+        resumed_drain: Option<(String, crashed_drain::RetiredLaunch)>,
     ) -> Result<()> {
         self.check_deletion_journal()?;
         if let Some(exit) = self
@@ -1448,14 +1448,14 @@ impl Broker {
         tokio::task::spawn_blocking(move || {
             if let Some(journal) = broker.deletion_journal.lock().as_mut() {
                 journal.check()?;
+                // Acquire both tombstone locks BEFORE committing `mark_deleted`
+                // so no concurrent abort handler can observe a committed journal
+                // or publish a live snapshot after durable deletion (R15-M1).
+                let mut cancelled = broker.cancelled_sessions.lock();
+                let mut deleted = broker.permanently_deleted_sessions.lock();
                 if journal.writer_enabled() {
                     journal.mark_deleted(&session_id)?;
                 }
-                // Hold both sets together before releasing `deletion_journal` so
-                // concurrent abort publication cannot observe a committed journal
-                // without both in-memory tombstones (R13-M1, R14-M1).
-                let mut cancelled = broker.cancelled_sessions.lock();
-                let mut deleted = broker.permanently_deleted_sessions.lock();
                 cancelled.insert(session_id.clone());
                 deleted.insert(session_id.clone());
             }
@@ -3080,14 +3080,13 @@ impl Broker {
         event: &RuntimeEvent,
     ) -> Vec<String> {
         let mut workers = self.workers.lock();
-        let Some(worker) = workers.get_mut(session_id) else {
+        let Some(worker) = workers
+            .get_mut(session_id)
+            .filter(|w| w.connection_id == connection_id)
+        else {
             return Vec::new();
         };
-        if worker.connection_id != connection_id {
-            return Vec::new();
-        }
-        if runtime_seq > 0 && runtime_seq < worker.snapshot.last_runtime_seq {
-            self.record_historical_replay_outcome(session_id, worker, event);
+        if self.handle_historical_replay_if_stale(session_id, worker, runtime_seq, event) {
             return Vec::new();
         }
         worker.snapshot.last_runtime_seq = worker.snapshot.last_runtime_seq.max(runtime_seq);
@@ -3095,26 +3094,15 @@ impl Broker {
         match event {
             RuntimeEvent::Ready { .. } => {
                 worker.snapshot.state = WorkerState::Running;
+                worker.snapshot.exit_detail = None;
                 self.startup_failures.lock().remove(session_id);
             }
             RuntimeEvent::Status { state, detail } => {
-                worker.snapshot.state = *state;
-                if *state == WorkerState::Exited {
-                    worker.snapshot.native_cycle_active = false;
-                }
-                if matches!(state, WorkerState::Exited | WorkerState::Crashed) {
-                    worker.snapshot.native_cycle_id = None;
-                    if let Some(detail) = detail {
-                        self.startup_failures
-                            .lock()
-                            .insert(session_id.to_owned(), detail.clone());
-                    }
-                } else {
-                    self.startup_failures.lock().remove(session_id);
-                }
+                self.apply_broker_status_event(session_id, worker, *state, detail.as_deref());
             }
             RuntimeEvent::TurnStarted { turn_id, .. } => {
                 worker.snapshot.state = WorkerState::Busy;
+                worker.snapshot.exit_detail = None;
                 worker.snapshot.current_turn_id = Some(turn_id.clone());
                 worker.snapshot.native_cycle_id = None;
             }
@@ -4244,10 +4232,13 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
                 let _ = writer_task.await;
                 return Ok(());
             }
-            let resumed_drain = if hello.accepted_crashed_drain.is_some()
+            let resumed_drain = if let Some(drain_cmd_id) = hello.accepted_crashed_drain.clone()
                 && protocol >= crate::runtime_wire::CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
             {
-                Some(broker.resolve_durable_launch_for_drain(&session_id).await)
+                Some((
+                    drain_cmd_id,
+                    broker.resolve_durable_launch_for_drain(&session_id).await,
+                ))
             } else {
                 None
             };

@@ -114,35 +114,22 @@ pub(super) fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     }
     let busy = worker.current_turn_id.is_some()
         && matches!(worker.state, WorkerState::Running | WorkerState::Draining);
-    let snapshot_recoverable = (!busy)
-        .then(|| worker.exit_detail.clone())
+    let recoverable_detail = (!busy)
+        .then(|| shared.hub.latest_crash_detail(&worker.session_id))
         .flatten()
         .filter(|detail| {
-            recoverable_live_worker_error(
-                &shared.hub,
-                &worker.session_id,
-                worker.state,
-                Some(detail.as_str()),
-            )
+            // TurnEnded clears current_turn_id before the trailing idle edge.
+            // A Busy snapshot in that gap must not release a refusal hold.
+            (detail == crate::core::MODEL_REFUSAL_DETAIL
+                && worker.state == WorkerState::Busy
+                && worker.current_turn_id.is_none())
+                || recoverable_live_worker_error(
+                    &shared.hub,
+                    &worker.session_id,
+                    worker.state,
+                    Some(detail.as_str()),
+                )
         });
-    let recoverable_detail = snapshot_recoverable.or_else(|| {
-        (!busy)
-            .then(|| shared.hub.latest_crash_detail(&worker.session_id))
-            .flatten()
-            .filter(|detail| {
-                // TurnEnded clears current_turn_id before the trailing idle edge.
-                // A Busy snapshot in that gap must not release a refusal hold.
-                (detail == crate::core::MODEL_REFUSAL_DETAIL
-                    && worker.state == WorkerState::Busy
-                    && worker.current_turn_id.is_none())
-                    || recoverable_live_worker_error(
-                        &shared.hub,
-                        &worker.session_id,
-                        worker.state,
-                        Some(detail.as_str()),
-                    )
-            })
-    });
     let preserves_refusal =
         recoverable_detail.as_deref() == Some(crate::core::MODEL_REFUSAL_DETAIL);
     let status = if busy {
@@ -795,19 +782,33 @@ pub(super) fn project_admitted_worker_event(
         .lock()
         .get(&(session_id.to_owned(), worker_epoch.to_owned()))
         .cloned();
-    // Non-owning epoch replay (e.g. authorized via `draining_replay_snapshots`
-    // while `shared.workers` is empty, ownerless, or on a newer epoch) is
-    // limited strictly to historical outcomes; owning-epoch replay gates
-    // lifecycle mutations against the authoritative snapshot watermark (R14-M4).
+    // Scope historical-only gating strictly to non-owning draining epochs OR
+    // below-watermark replay of an already-Crashed/draining epoch (using the
+    // max same-epoch watermark across `shared.workers` and
+    // `draining_replay_snapshots`), leaving live Running/Busy replay untouched
+    // (R15-H1, R15-H2, R15-M2).
     let non_owning_epoch = owning_worker.is_none() && drain_replay_snap.is_some();
-    let authoritative_snap = owning_worker.as_ref().or(drain_replay_snap.as_ref());
-    let stale_lifecycle_replay = non_owning_epoch
-        || (runtime_seq > 0
-            && authoritative_snap.is_some_and(|w| runtime_seq < w.last_runtime_seq));
-    let owning_epoch_state = owning_worker.as_ref().map(|w| w.state);
+    let max_watermark = owning_worker
+        .as_ref()
+        .map_or(0, |w| w.last_runtime_seq)
+        .max(drain_replay_snap.as_ref().map_or(0, |w| w.last_runtime_seq));
+    let crashed_or_draining = non_owning_epoch
+        || is_draining_crashed_epoch(shared, session_id, worker_epoch)
+        || owning_worker
+            .as_ref()
+            .is_some_and(|w| w.state == WorkerState::Crashed);
+    let historical_only =
+        non_owning_epoch || (crashed_or_draining && runtime_seq > 0 && runtime_seq < max_watermark);
     super::resolve_steering_update(shared, session_id, event);
-    super::update_snapshot_from_event(shared, session_id, worker_epoch, runtime_seq, event);
-    if !stale_lifecycle_replay
+    super::update_snapshot_from_event(
+        shared,
+        session_id,
+        worker_epoch,
+        runtime_seq,
+        event,
+        historical_only,
+    );
+    if !historical_only
         && let RuntimeEvent::Status {
             state: WorkerState::Crashed | WorkerState::Exited,
             detail,
@@ -821,24 +822,12 @@ pub(super) fn project_admitted_worker_event(
                 .unwrap_or("worker exited before configuration completed"),
         );
     }
-    let draining_replay_only = non_owning_epoch;
-    let worker = if draining_replay_only || stale_lifecycle_replay {
+    let worker = if historical_only {
         None
     } else {
         shared.workers.lock().get(session_id).cloned()
     };
-    // Keep Codex Full Access auto-approval for live pending permissions even
-    // when their original PermissionRequest predates the reconnect snapshot
-    // watermark (R14-M6).
-    let live_pending_permission = !non_owning_epoch
-        && matches!(
-            event,
-            RuntimeEvent::PermissionRequest { request_id, .. }
-                if authoritative_snap
-                    .is_some_and(|w| w.pending_permissions.contains(request_id))
-        );
-    let auto_permission = (!draining_replay_only
-        && (!stale_lifecycle_replay || live_pending_permission))
+    let auto_permission = (!historical_only)
         .then(|| codex_full_access_permission(shared, session_id, event))
         .flatten();
     let idle_guard = worker
@@ -857,8 +846,7 @@ pub(super) fn project_admitted_worker_event(
         event.clone(),
         idle_guard,
         auto_permission,
-        !stale_lifecycle_replay,
-        owning_epoch_state,
+        !historical_only,
     );
 }
 
@@ -926,7 +914,11 @@ pub(super) fn observe_crashed_event(
     let Some(entry) = sightings.get_mut(session_id) else {
         return;
     };
-    if runtime_seq > 0 && runtime_seq < entry.last_runtime_seq {
+    if (entry.state == WorkerState::Crashed
+        || is_draining_crashed_epoch(shared, session_id, worker_epoch))
+        && runtime_seq > 0
+        && runtime_seq < entry.last_runtime_seq
+    {
         // Never roll back sighting lifecycle state on historical replay below
         // the already-projected snapshot sequence; keep monotonic uncertainty (R13-M2).
         if let RuntimeEvent::Update { update, .. } = event

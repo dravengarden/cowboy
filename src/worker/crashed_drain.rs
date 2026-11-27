@@ -46,6 +46,10 @@ pub(super) struct State {
     /// original decision.
     decisions: Mutex<VecDeque<(String, bool, Option<String>)>>,
     aborted_commands: Mutex<std::collections::HashSet<String>>,
+    /// Every drain command ID ever evaluated (accepted, refused, or aborted) in
+    /// this worker epoch so cache rotation of `decisions` never re-evaluates an
+    /// old refusal as a fresh command (R15-L2).
+    seen_drain_commands: Mutex<std::collections::HashSet<String>>,
     accepted_command_id: Mutex<Option<String>>,
     accepted_ack_seq: std::sync::atomic::AtomicU64,
     /// Pending explicit `CrashedDrainAborted` notice retained across reconnects
@@ -126,6 +130,7 @@ impl State {
     }
 
     fn remember_decision(&self, command_id: String, accepted: bool, reason: Option<String>) {
+        self.seen_drain_commands.lock().insert(command_id.clone());
         let mut decisions = self.decisions.lock();
         if decisions.iter().any(|(id, _, _)| id == &command_id) {
             return;
@@ -221,6 +226,36 @@ pub(super) fn should_suppress_event_locked(shared: &Shared, event: &RuntimeEvent
         )
 }
 
+pub(super) fn apply_status_to_snapshot(
+    shared: &Shared,
+    snapshot: &mut WorkerSnapshot,
+    state: WorkerState,
+    detail: &Option<String>,
+) {
+    snapshot.state = if state == WorkerState::Running && snapshot.drain_requested {
+        WorkerState::Draining
+    } else {
+        state
+    };
+    snapshot.exit_detail = if matches!(state, WorkerState::Crashed | WorkerState::Exited) {
+        detail.clone()
+    } else {
+        None
+    };
+    shared.readiness_window(state == WorkerState::Starting);
+    if matches!(state, WorkerState::Exited | WorkerState::Crashed) {
+        snapshot.current_turn_id = None;
+        snapshot.native_cycle_id = None;
+    }
+    if state == WorkerState::Exited {
+        shared
+            .crashed_drain
+            .native_cycle_active
+            .store(false, Ordering::Release);
+        snapshot.native_cycle_active = false;
+    }
+}
+
 pub(super) fn handle_drain(shared: &Shared) -> Frame {
     let idle = {
         let mut snapshot = shared.snapshot.lock();
@@ -257,7 +292,13 @@ pub(super) fn handle_drain_crashed(
     if let Some((accepted, reason)) = shared.crashed_drain.remembered_decision(&command_id) {
         return command_ack(shared, command_id, accepted, reason);
     }
-    if shared.seen_commands.lock().contains(&command_id) {
+    if shared
+        .crashed_drain
+        .seen_drain_commands
+        .lock()
+        .contains(&command_id)
+        || shared.seen_commands.lock().contains(&command_id)
+    {
         // Evicted drain command decisions must fail closed rather than
         // synthesizing a false acceptance after cache rotation (R14-L1).
         return command_ack(
@@ -636,5 +677,8 @@ mod r13_tests {
         }
         assert!(state.remembered_decision("dc-r13").is_none());
         assert!(state.was_aborted("dc-r13"));
+        // Refused command IDs evicted from the 8-entry cache remain in seen_drain_commands (R15-L2).
+        assert!(state.remembered_decision("dc-fill-0").is_none());
+        assert!(state.seen_drain_commands.lock().contains("dc-fill-0"));
     }
 }

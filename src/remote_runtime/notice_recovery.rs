@@ -427,7 +427,6 @@ pub(super) fn project_worker_outcome(
     idle_guard: Option<u64>,
     auto_permission: Option<(String, String)>,
     apply_lifecycle: bool,
-    owning_epoch_state: Option<crate::runtime_wire::WorkerState>,
 ) -> Option<PendingUndeliveredNotice> {
     if let Some((request_id, option_id)) = auto_permission {
         tracing::info!(
@@ -439,7 +438,9 @@ pub(super) fn project_worker_outcome(
         super::queue_permission(shared, session_id, request_id, option_id);
         return None;
     }
-    super::mark_projected_provider_auth_expired(shared, session_id, &event);
+    if apply_lifecycle {
+        super::mark_projected_provider_auth_expired(shared, session_id, &key.1, &event);
+    }
     super::prompt_tracking::observe_worker_event(shared, session_id, &event);
     let deferred =
         super::divert(&shared.hub, key, runtime_seq, event).and_then(|event| match event {
@@ -485,12 +486,7 @@ pub(super) fn project_worker_outcome(
             }
             other => {
                 if !apply_lifecycle {
-                    project_historical_replay_event(
-                        &shared.hub,
-                        session_id,
-                        other,
-                        owning_epoch_state,
-                    );
+                    project_historical_replay_event(&shared.hub, session_id, other);
                     return None;
                 }
                 super::apply_event(&shared.hub, session_id, other);
@@ -501,49 +497,56 @@ pub(super) fn project_worker_outcome(
     deferred
 }
 
-fn project_historical_replay_event(
-    hub: &crate::core::Hub,
-    session_id: &str,
-    event: RuntimeEvent,
-    owning_epoch_state: Option<crate::runtime_wire::WorkerState>,
-) {
+/// Strict allowlist for historical replay outcomes (non-owning draining epochs
+/// or below-watermark replay of an already-Crashed/draining epoch): appends
+/// historical transcript rows without running live Hub lifecycle, capability,
+/// config, wakeup, permission, or credential-expiry hooks (R15-M3, R15-M6).
+fn project_historical_replay_event(hub: &crate::core::Hub, session_id: &str, event: RuntimeEvent) {
+    if !hub.accepts_runtime_projection(session_id) {
+        return;
+    }
     match event {
-        RuntimeEvent::Ready {
-            agent_session_id: Some(agent_session_id),
-        } => {
-            if hub.accepts_runtime_projection(session_id) {
-                hub.set_agent_session_id(session_id, agent_session_id);
-            }
-        }
-        RuntimeEvent::Status {
-            state,
-            detail: Some(detail),
-        } if owning_epoch_state == Some(state) => {
-            // Recover crash/recoverable-hold detail matching the current
-            // authoritative state without rolling back state (R14-M5).
-            if hub.accepts_runtime_projection(session_id) {
-                super::apply_worker_status(hub, session_id, state, Some(detail));
-            }
+        RuntimeEvent::Update { update, cmid }
+            if crate::runtime_wire::current_turn_support(&update).is_none()
+                && crate::runtime_wire::background_tasks_count(&update).is_none()
+                && crate::runtime_wire::native_cycle(&update).is_none()
+                && crate::runtime_wire::uncertain_effect(&update).is_none()
+                && update
+                    .get("sessionUpdate")
+                    .and_then(serde_json::Value::as_str)
+                    != Some(crate::runtime_wire::STEERING_RESULT_UPDATE) =>
+        {
+            super::apply_event(hub, session_id, RuntimeEvent::Update { update, cmid });
         }
         RuntimeEvent::TurnEnded {
             stop_reason, usage, ..
         } => {
-            // Preserve historical transcript completion without mutating live
-            // Hub status or releasing a live turn's dispatch guard (R14-M3).
-            if hub.accepts_runtime_projection(session_id) {
-                hub.push(
-                    session_id,
-                    crate::agent_model::Event::TurnEnd { stop_reason, usage },
-                );
-            }
+            hub.push(
+                session_id,
+                crate::agent_model::Event::TurnEnd { stop_reason, usage },
+            );
         }
-        RuntimeEvent::Ready { .. }
-        | RuntimeEvent::Status { .. }
-        | RuntimeEvent::TurnStarted { .. } => {}
-        RuntimeEvent::Update { ref update, .. }
-            if crate::runtime_wire::current_turn_support(update).is_some()
-                || crate::runtime_wire::background_tasks_count(update).is_some() => {}
-        other => super::apply_event(hub, session_id, other),
+        RuntimeEvent::PermissionResolved {
+            request_id,
+            option_id,
+        } => {
+            hub.push(
+                session_id,
+                crate::agent_model::Event::PermissionResolved {
+                    request_id,
+                    option_id,
+                },
+            );
+        }
+        RuntimeEvent::AgentSessionId {
+            agent_session_id, ..
+        } => {
+            hub.set_agent_session_id(session_id, agent_session_id);
+        }
+        RuntimeEvent::CommandRejected { message, .. } | RuntimeEvent::Error { message } => {
+            hub.broadcast_error(Some(session_id.to_owned()), message);
+        }
+        _ => {}
     }
 }
 

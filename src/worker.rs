@@ -195,27 +195,7 @@ impl Shared {
                 self.readiness_window(false);
             }
             RuntimeEvent::Status { state, detail } => {
-                snapshot.state = if *state == WorkerState::Running && snapshot.drain_requested {
-                    WorkerState::Draining
-                } else {
-                    *state
-                };
-                snapshot.exit_detail.clone_from(detail);
-                // Only a starting session may run the readiness probe.
-                self.readiness_window(*state == WorkerState::Starting);
-                // A late startup/idle Running edge can arrive after a prompt
-                // was accepted. Only TurnEnded owns clean turn completion;
-                // process death may clear it without that edge.
-                if matches!(state, WorkerState::Exited | WorkerState::Crashed) {
-                    snapshot.current_turn_id = None;
-                    snapshot.native_cycle_id = None;
-                }
-                if *state == WorkerState::Exited {
-                    self.crashed_drain
-                        .native_cycle_active
-                        .store(false, Ordering::Release);
-                    snapshot.native_cycle_active = false;
-                }
+                crashed_drain::apply_status_to_snapshot(self, &mut snapshot, *state, detail);
             }
             RuntimeEvent::PermissionRequest { request_id, .. } => {
                 if !snapshot.pending_permissions.contains(request_id) {

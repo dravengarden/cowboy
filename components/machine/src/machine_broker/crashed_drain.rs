@@ -527,7 +527,7 @@ impl Broker {
         epoch: &str,
         connection_id: u64,
         replaced_same_epoch_pid: Option<u32>,
-        resumed_drain: Option<RetiredLaunch>,
+        resumed_drain: Option<(String, RetiredLaunch)>,
         worker: &mut WorkerPeer,
     ) -> Vec<(String, String)> {
         let mut state = self.crashed_drains.inner.lock();
@@ -566,10 +566,13 @@ impl Broker {
             if preserved_pid.is_some() {
                 active.peer_pid = preserved_pid;
             }
-            if active.retired_launch == RetiredLaunch::Unresolved
-                && let Some(launch) = resumed_drain
-            {
-                active.retired_launch = launch;
+            if let Some((ref cmd_id, launch)) = resumed_drain {
+                if active.command_id.is_none() {
+                    active.command_id = Some(cmd_id.clone());
+                }
+                if active.retired_launch == RetiredLaunch::Unresolved {
+                    active.retired_launch = launch;
+                }
             }
             same_epoch = true;
         }
@@ -598,7 +601,7 @@ impl Broker {
         // drain carried in `Frame::Hello`: install fence + `ActiveDrain`
         // atomically during registration before `Welcome` and `flush_pending`
         // (R7-H4).
-        if let Some(retired_launch) = resumed_drain {
+        if let Some((cmd_id, retired_launch)) = resumed_drain {
             state.unconfirmed_teardown.remove(session_id);
             let orphaned = drain_pending_for_session(&mut state.pending, session_id);
             state.active.insert(
@@ -606,7 +609,7 @@ impl Broker {
                 ActiveDrain {
                     epoch: epoch.to_owned(),
                     connection_id,
-                    command_id: None,
+                    command_id: Some(cmd_id),
                     confirmed: false,
                     peer_pid: preserved_pid,
                     retired_launch,
@@ -2535,6 +2538,37 @@ mod tests {
             w_rx.try_recv().is_err(),
             "historical Running replay on Crashed worker must never trigger rollout Stop"
         );
+        // Historical UndeliveredPrompt below watermark must still retire dispatched handoff (R15-L1).
+        broker
+            .dispatched_prompts
+            .lock()
+            .record("s-r14-h1", "cmd-undeliv", "80-1");
+        assert!(
+            broker
+                .dispatched_prompts
+                .lock()
+                .has_unacked_for_epoch_or_ingress("s-r14-h1", "80-1")
+        );
+        broker.handle_worker_event(
+            "s-r14-h1",
+            1,
+            "s-r14-h1".into(),
+            "80-1".into(),
+            5,
+            RuntimeEvent::UndeliveredPrompt {
+                command_id: "cmd-undeliv".into(),
+                cmid: None,
+                content: Vec::new(),
+                error: "crashed".into(),
+            },
+            Vec::new(),
+        );
+        assert!(
+            !broker
+                .dispatched_prompts
+                .lock()
+                .has_unacked_for_epoch_or_ingress("s-r14-h1", "80-1")
+        );
     }
 
     #[tokio::test]
@@ -2588,6 +2622,27 @@ mod tests {
         assert!(
             state.active.contains_key("s-a"),
             "mismatched command_id must not clear session A's active drain"
+        );
+        drop(state);
+        // Absent command_id (None) must ALSO fail to clear an active drain with a known ID (R15-M4).
+        broker.handle_crashed_drain_aborted("s-a", "81-1", 1, None, None);
+        assert!(
+            broker
+                .crashed_drains
+                .inner
+                .lock()
+                .active
+                .contains_key("s-a")
+        );
+        // Exact matching command_id clears session A's active drain cleanly.
+        broker.handle_crashed_drain_aborted("s-a", "81-1", 1, Some("dc-a"), None);
+        assert!(
+            !broker
+                .crashed_drains
+                .inner
+                .lock()
+                .active
+                .contains_key("s-a")
         );
     }
 }

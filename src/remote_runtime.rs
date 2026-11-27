@@ -2603,30 +2603,15 @@ fn update_snapshot_from_event(
     worker_epoch: &str,
     runtime_seq: u64,
     event: &RuntimeEvent,
+    historical_only: bool,
 ) {
-    let draining_replay_only = shared
-        .workers
-        .lock()
-        .get(session_id)
-        .is_some_and(|w| w.worker_epoch != worker_epoch)
-        && shared
-            .draining_replay_snapshots
-            .lock()
-            .contains_key(&(session_id.to_owned(), worker_epoch.to_owned()));
-    if draining_replay_only {
-        return;
-    }
     let mut workers = shared.workers.lock();
     let Some(worker) = workers.get_mut(session_id) else {
         return;
     };
-    if worker.worker_epoch == worker_epoch
-        && runtime_seq > 0
-        && runtime_seq < worker.last_runtime_seq
-    {
-        // Historical replay event already reflected in the current snapshot's
-        // lifecycle state: never roll back cached state or capabilities (R13-M2).
-        if let RuntimeEvent::Update { update, .. } = event
+    if historical_only {
+        if worker.worker_epoch == worker_epoch
+            && let RuntimeEvent::Update { update, .. } = event
             && let Some(effect) = crate::runtime_wire::uncertain_effect(update)
         {
             crate::runtime_wire::merge_uncertain_effect(&mut worker.uncertain_effect, effect);
@@ -2637,21 +2622,26 @@ fn update_snapshot_from_event(
     match event {
         RuntimeEvent::Ready { agent_session_id } => {
             worker.state = WorkerState::Running;
+            worker.exit_detail = None;
             if agent_session_id.is_some() {
                 worker.agent_session_id.clone_from(agent_session_id);
             }
         }
-        RuntimeEvent::Status { state, .. } => {
+        RuntimeEvent::Status { state, detail } => {
             worker.state = *state;
             if *state == WorkerState::Exited {
                 worker.native_cycle_active = false;
             }
             if matches!(state, WorkerState::Exited | WorkerState::Crashed) {
                 worker.native_cycle_id = None;
+                worker.exit_detail.clone_from(detail);
+            } else {
+                worker.exit_detail = None;
             }
         }
         RuntimeEvent::TurnStarted { turn_id, .. } => {
             worker.state = WorkerState::Busy;
+            worker.exit_detail = None;
             worker.current_turn_id = Some(turn_id.clone());
             worker.native_cycle_id = None;
         }
@@ -2905,15 +2895,32 @@ fn projected_provider_auth_failure(
     ))
 }
 
-fn mark_projected_provider_auth_expired(shared: &Shared, session_id: &str, event: &RuntimeEvent) {
+fn mark_projected_provider_auth_expired(
+    shared: &Shared,
+    session_id: &str,
+    worker_epoch: &str,
+    event: &RuntimeEvent,
+) {
     let Some(provider_auth) = shared.provider_auth.as_ref() else {
         return;
     };
-    let Some((provider_id, account_id, generation)) =
+    let Some((mut provider_id, mut account_id, mut generation)) =
         projected_provider_auth_failure(&shared.hub, session_id, event)
     else {
         return;
     };
+    if let Some(launch) = shared
+        .workers
+        .lock()
+        .get(session_id)
+        .filter(|w| w.worker_epoch == worker_epoch)
+        .and_then(|w| w.launch.clone())
+        && let Some(launch_gen) = launch.provider_auth_generation
+    {
+        provider_id = launch.provider;
+        account_id = launch.provider_account_id;
+        generation = launch_gen;
+    }
     let scope =
         native_admission::credential_scope(shared, provider_auth, &account_id, &provider_id);
     match scope.and_then(|scope| scope.mark_expired(&provider_id, generation)) {
@@ -3362,7 +3369,14 @@ mod tests {
             cmid: None,
         };
         let before = hub.snapshot("cycle").unwrap().0.len();
-        update_snapshot_from_event(&runtime.shared, "cycle", &worker.worker_epoch, 5, &named);
+        update_snapshot_from_event(
+            &runtime.shared,
+            "cycle",
+            &worker.worker_epoch,
+            5,
+            &named,
+            false,
+        );
         apply_event(&hub, "cycle", named);
         assert_eq!(
             hub.snapshot("cycle").unwrap().0.len(),
@@ -3396,6 +3410,7 @@ mod tests {
                 turn_id: "turn-1".into(),
                 command_id: "command-1".into(),
             },
+            false,
         );
         assert_eq!(runtime.delivery_target("cycle").unwrap().turn_id, "turn-1");
         update_snapshot_from_event(
@@ -3408,6 +3423,7 @@ mod tests {
                 stop_reason: "end_turn".into(),
                 usage: None,
             },
+            false,
         );
         assert_eq!(runtime.delivery_target("cycle"), None);
         for cycle in [Some("native-b"), None] {
@@ -3420,6 +3436,7 @@ mod tests {
                     update: crate::runtime_wire::native_cycle_update(cycle),
                     cmid: None,
                 },
+                false,
             );
         }
         assert_eq!(runtime.delivery_target("cycle"), None);
@@ -3891,7 +3908,7 @@ mod tests {
                 true,
             )),
         };
-        mark_projected_provider_auth_expired(&runtime.shared, "named", &rejected);
+        mark_projected_provider_auth_expired(&runtime.shared, "named", "epoch-1", &rejected);
         assert_eq!(
             first
                 .status("portable-fixture")
@@ -3902,7 +3919,7 @@ mod tests {
         Arc::get_mut(&mut Arc::get_mut(&mut runtime).unwrap().shared)
             .unwrap()
             .auth_recipient_key = Some(recipient);
-        mark_projected_provider_auth_expired(&runtime.shared, "named", &rejected);
+        mark_projected_provider_auth_expired(&runtime.shared, "named", "epoch-1", &rejected);
         assert_eq!(
             first
                 .status("portable-fixture")

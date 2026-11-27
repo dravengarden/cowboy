@@ -77,17 +77,14 @@ impl Broker {
             // controller -> sessions -> workers -> pending_commands -> crashed_drains`
             // through exact-peer validation, state mutation, and snapshot enqueue so
             // permanent deletion cannot race snapshot publication (R12-M2, R13-M1).
-            // Serialize against `record_deletion` via `deletion_journal ->
-            // cancelled_sessions -> permanently_deleted_sessions` so a committed
-            // durable deletion is immediately visible before abort publication (R14-M1).
-            let journal = self.deletion_journal.lock();
-            let journal_deleted = journal
-                .as_ref()
-                .is_some_and(|j| j.deleted().contains(session_id));
+            // `record_deletion` acquires `cancelled_sessions` and
+            // `permanently_deleted_sessions` BEFORE `mark_deleted` and retains
+            // them through tombstone installation, so holding both guards here
+            // through snapshot enqueue completely serializes durable deletion
+            // against abort publication (R15-M1).
             let _cancelled = self.cancelled_sessions.lock();
             let deleted = self.permanently_deleted_sessions.lock();
-            drop(journal);
-            if journal_deleted || deleted.contains(session_id) {
+            if deleted.contains(session_id) {
                 return;
             }
             let ctrl_guard = self.controller.lock();
@@ -105,9 +102,8 @@ impl Broker {
                 !a.confirmed
                     && a.epoch == epoch
                     && a.connection_id == connection_id
-                    && (command_id.is_none()
-                        || a.command_id.is_none()
-                        || a.command_id.as_deref() == command_id)
+                    && a.command_id.is_some()
+                    && a.command_id.as_deref() == command_id
             });
             let matched_pending = command_id.is_some_and(|cid| {
                 state.pending.get(cid).is_some_and(|p| {
@@ -565,19 +561,55 @@ impl Broker {
         self.record_session_uncertain_effect(session_id, effect);
     }
 
-    /// Record turn-completion and monotonic uncertainty outcomes for a
-    /// historical replay event below the current epoch's snapshot watermark
-    /// without rolling back lifecycle state or lowering `last_runtime_seq` (R14-H1).
-    pub(in crate::machine_broker) fn record_historical_replay_outcome(
+    pub(in crate::machine_broker) fn apply_broker_status_event(
         &self,
         session_id: &str,
         worker: &mut WorkerPeer,
-        event: &RuntimeEvent,
+        state: WorkerState,
+        detail: Option<&str>,
     ) {
+        worker.snapshot.state = state;
+        if state == WorkerState::Exited {
+            worker.snapshot.native_cycle_active = false;
+        }
+        if matches!(state, WorkerState::Exited | WorkerState::Crashed) {
+            worker.snapshot.native_cycle_id = None;
+            worker.snapshot.exit_detail = detail.map(str::to_owned);
+            if let Some(detail) = detail {
+                self.startup_failures
+                    .lock()
+                    .insert(session_id.to_owned(), detail.to_owned());
+            }
+        } else {
+            worker.snapshot.exit_detail = None;
+            self.startup_failures.lock().remove(session_id);
+        }
+    }
+
+    /// Record turn-completion and monotonic uncertainty outcomes for a
+    /// historical replay event below the current epoch's snapshot watermark
+    /// without rolling back lifecycle state or lowering `last_runtime_seq` (R14-H1).
+    pub(in crate::machine_broker) fn handle_historical_replay_if_stale(
+        &self,
+        session_id: &str,
+        worker: &mut WorkerPeer,
+        runtime_seq: u64,
+        event: &RuntimeEvent,
+    ) -> bool {
+        if !((worker.snapshot.state == WorkerState::Crashed || worker.crashed_drain_fenced)
+            && runtime_seq > 0
+            && runtime_seq < worker.snapshot.last_runtime_seq)
+        {
+            return false;
+        }
         if let RuntimeEvent::TurnEnded { turn_id, .. } = event {
             self.dispatched_prompts
                 .lock()
                 .mark_acked_by_turn(session_id, &worker.epoch, turn_id);
+        } else if let RuntimeEvent::UndeliveredPrompt { command_id, .. } = event {
+            self.dispatched_prompts
+                .lock()
+                .mark_acked(session_id, command_id);
         } else if let RuntimeEvent::Update { update, .. } = event
             && let Some(effect) = crate::runtime_wire::uncertain_effect(update)
         {
@@ -586,6 +618,7 @@ impl Broker {
                 effect,
             );
         }
+        true
     }
 
     /// Flush queued rollout prompts immediately when a rollout-draining worker
