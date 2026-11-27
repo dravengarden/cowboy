@@ -2220,22 +2220,15 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                     // projected (a reset).
                     // A turn ending retires its own pending prompt by turn id,
                     // also when Clear fences the epoch that ran it.
-                    let historical_only = snapshot::is_historical_replay_event(
+                    turn_end::ended(shared, &session_id, &event);
+                    snapshot::record_uncertain_effect(shared, &session_id, &worker_epoch, &event);
+                    snapshot::signal_admitted_turn_end(
                         shared,
                         &session_id,
                         &worker_epoch,
                         runtime_seq,
+                        &event,
                     );
-                    if snapshot::should_signal_turn_end(
-                        shared,
-                        &session_id,
-                        &worker_epoch,
-                        historical_only,
-                    ) {
-                        turn_end::signal(shared, &session_id, &event);
-                    }
-                    turn_end::ended(shared, &session_id, &event);
-                    snapshot::record_uncertain_effect(shared, &session_id, &worker_epoch, &event);
                     let _projection = shared.hub.runtime_projection_guard();
                     snapshot::project_admitted_worker_event(
                         shared,
@@ -2886,6 +2879,7 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
     }
 }
 
+#[cfg(test)]
 fn projected_provider_auth_failure(
     hub: &Hub,
     session_id: &str,
@@ -3835,6 +3829,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn credential_rejection_expires_only_the_sessions_account_and_machine_grant() {
         use crate::provider_service::{ProviderAuthService, ServiceAuthenticationState};
         use base64::Engine as _;
@@ -3884,7 +3879,7 @@ mod tests {
             provider: "portable-fixture".into(),
             provider_version: "fixture".into(),
             provider_generation_digest: "sha256:fixture".into(),
-            provider_account_id: id,
+            provider_account_id: id.clone(),
             provider_auth_generation: Some(1),
             provider_behavior: None,
             machine_id: "hawk".into(),
@@ -3899,7 +3894,16 @@ mod tests {
             owner_user_id: None,
             owner_username: None,
         });
-        let mut runtime = RemoteRuntime::for_test(hub, Vec::new());
+        let mut worker = snapshot("named");
+        worker.state = WorkerState::Running;
+        worker.current_turn_id = None;
+        let launch = worker.launch.as_mut().unwrap();
+        launch.provider = "portable-fixture".into();
+        launch.provider_version = "fixture".into();
+        launch.provider_generation_digest = "sha256:fixture".into();
+        launch.provider_account_id = id;
+        launch.provider_auth_generation = Some(1);
+        let mut runtime = RemoteRuntime::for_test(hub, vec![worker]);
         Arc::get_mut(&mut Arc::get_mut(&mut runtime).unwrap().shared)
             .unwrap()
             .provider_auth = Some(Arc::clone(&auth));

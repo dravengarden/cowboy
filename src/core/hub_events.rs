@@ -250,7 +250,11 @@ impl Hub {
         // A subagent snapshot is fenced by its producer identity (I4) before
         // it receives a seq: an exact duplicate or an older revision of the
         // same worker incarnation never becomes a newer observation.
-        let subagent_child = live_subagent_child(&event).map(str::to_owned);
+        // Historical replay must never update live child snapshot ledgers or
+        // replace a live child's canonical anchor (R17-M3).
+        let subagent_child = (!historical)
+            .then(|| live_subagent_child(&event).map(str::to_owned))
+            .flatten();
         let mut subagent_anchor = None;
         let (envelope, attention_changed, native_wait_started) = {
             let mut sessions = self.inner.sessions.lock();
@@ -340,7 +344,10 @@ impl Hub {
             let durable_agent_session_id = (!historical && is_user_message_chunk(&envelope))
                 .then(|| s.meta.agent_session_id.clone())
                 .flatten();
-            let turn_completion = if matches!(envelope.event, Event::TurnEnd { .. }) {
+            // Historical replay must never index a newer partial answer as a
+            // completed turn boundary (R17-M2).
+            let turn_completion = if !historical && matches!(envelope.event, Event::TurnEnd { .. })
+            {
                 Self::extract_turn_completion_in_session(session_id, s, envelope.seq)
             } else {
                 None

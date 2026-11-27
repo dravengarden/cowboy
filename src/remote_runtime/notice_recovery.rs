@@ -493,7 +493,7 @@ pub(super) fn project_worker_outcome(
         }
         other => {
             if !apply_lifecycle {
-                project_historical_replay_event(&shared.hub, session_id, &key.1, other);
+                project_historical_replay_event(&shared.hub, session_id, other);
                 return None;
             }
             super::apply_event(&shared.hub, session_id, other);
@@ -510,51 +510,35 @@ pub(super) fn project_worker_outcome(
 /// producer epoch on subagent snapshots while skipping live worker incarnation,
 /// native thread ID, attention, compaction, permission, capability, config,
 /// wakeup, and credential-expiry hooks (R15-M3, R15-M6, R16-H2, R16-M1).
-fn project_historical_replay_event(
-    hub: &crate::core::Hub,
-    session_id: &str,
-    worker_epoch: &str,
-    event: RuntimeEvent,
-) {
+fn project_historical_replay_event(hub: &crate::core::Hub, session_id: &str, event: RuntimeEvent) {
     if !hub.accepts_runtime_projection(session_id) {
         return;
     }
     match event {
-        RuntimeEvent::Update { mut update, cmid }
+        // Content-only historical transcript updates. Excludes `SUBAGENT_UPDATE`
+        // (so historical snapshots never replace a live child observation,
+        // R17-M3) and `TurnEnded` (so historical turn endings never act as live
+        // completion/UI boundaries downstream, R17-M2; exact prompt retirement
+        // already ran via `turn_end::ended`).
+        RuntimeEvent::Update { update, cmid }
             if crate::runtime_wire::current_turn_support(&update).is_none()
                 && crate::runtime_wire::background_tasks_count(&update).is_none()
                 && crate::runtime_wire::native_cycle(&update).is_none()
                 && crate::runtime_wire::uncertain_effect(&update).is_none()
-                && update
-                    .get("sessionUpdate")
-                    .and_then(serde_json::Value::as_str)
-                    != Some(crate::runtime_wire::STEERING_RESULT_UPDATE) =>
+                && !matches!(
+                    update
+                        .get("sessionUpdate")
+                        .and_then(serde_json::Value::as_str),
+                    Some(
+                        crate::runtime_wire::STEERING_RESULT_UPDATE
+                            | crate::runtime_wire::SUBAGENT_UPDATE
+                    )
+                ) =>
         {
-            if !worker_epoch.is_empty()
-                && update
-                    .get("sessionUpdate")
-                    .and_then(serde_json::Value::as_str)
-                    == Some(crate::runtime_wire::SUBAGENT_UPDATE)
-                && let Some(object) = update.as_object_mut()
-            {
-                object.insert(
-                    "incarnation".to_owned(),
-                    serde_json::Value::String(worker_epoch.to_owned()),
-                );
-            }
             hub.push_historical_from_worker(
                 session_id,
                 crate::agent_model::Event::Update { update },
                 cmid,
-            );
-        }
-        RuntimeEvent::TurnEnded {
-            stop_reason, usage, ..
-        } => {
-            hub.push_historical_from_worker(
-                session_id,
-                crate::agent_model::Event::TurnEnd { stop_reason, usage },
-                None,
             );
         }
         RuntimeEvent::CommandRejected { message, .. } | RuntimeEvent::Error { message } => {
