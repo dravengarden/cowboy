@@ -157,7 +157,11 @@ impl Env for AppEnv {
     }
 
     fn set_setting(&self, key: String, value: Value) {
-        self.0.hub.load_settings(vec![(key, value)]);
+        if key.starts_with(crate::core::settings_keys::SESSION_UNCERTAIN_EFFECT_ACK_PREFIX) {
+            self.0.hub.merge_cached_uncertain_effect_setting(key, value);
+        } else {
+            self.0.hub.load_settings(vec![(key, value)]);
+        }
     }
 
     fn fence(

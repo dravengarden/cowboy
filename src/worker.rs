@@ -1000,12 +1000,13 @@ async fn connected(
                 }
             }
             notified = notify_rx.recv() => {
-                if notified.is_none()
+                send_outbox(&shared, &mut writer, &mut last_sent).await?;
+                if (notified.is_none()
+                    || shared.crashed_drain.draining.load(Ordering::Acquire))
                     && crashed_drain::finish_if_drained(&shared, &mut writer).await?
                 {
                     return Ok(ConnectedExit::WorkerDrained);
                 }
-                send_outbox(&shared, &mut writer, &mut last_sent).await?;
             }
             settled = done_rx.recv(), if shared.crashed_drain.agent_settled().is_none() => {
                 shared.crashed_drain.record_agent_settled(settled.is_some());
@@ -3136,5 +3137,114 @@ mod tests {
             Frame::CommandAck { accepted: true, .. }
         ));
         assert!(rx.try_recv().is_ok());
+    }
+
+    #[tokio::test]
+    async fn publisher_guard_drop_after_last_ack_wakes_and_completes_crashed_drain() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (shared, mut notify_rx) = shared();
+        let epoch = shared.worker_epoch.clone();
+        shared.snapshot.lock().state = WorkerState::Crashed;
+        let publisher_guard = shared.crashed_drain.enter_event_publisher(&shared);
+        let (tx, mut cmd_rx) = mpsc::unbounded_channel();
+        let mut cmd_tx = Some(tx);
+        let (done_tx, mut done_rx) = mpsc::channel(1);
+
+        let shared_run = Arc::clone(&shared);
+        let run_task = tokio::spawn(async move {
+            let stream = UnixStream::connect(&socket).await.unwrap();
+            let mut sigterm = None;
+            let mut deadline = None;
+            connected(
+                stream,
+                shared_run,
+                &mut cmd_tx,
+                &mut notify_rx,
+                &mut done_rx,
+                &mut sigterm,
+                &mut deadline,
+            )
+            .await
+        });
+
+        let (server, _) = listener.accept().await.unwrap();
+        let (mut reader, mut writer) = server.into_split();
+        assert!(matches!(
+            read_frame(&mut reader).await.unwrap(),
+            Some(Frame::Hello { .. })
+        ));
+        write_frame(
+            &mut writer,
+            &Frame::Welcome {
+                protocol: PROTOCOL_VERSION,
+                controller_epoch: 1,
+                workers: Vec::new(),
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            read_frame(&mut reader).await.unwrap(),
+            Some(Frame::Snapshot { .. })
+        ));
+
+        write_frame(
+            &mut writer,
+            &Frame::WorkerCommand {
+                session_id: shared.session_id.clone(),
+                command: WorkerCommand::DrainCrashed {
+                    command_id: "dc-pub-wake".into(),
+                    worker_epoch: epoch.clone(),
+                    acknowledged_uncertain_sequence: 0,
+                },
+            },
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            read_frame(&mut reader).await.unwrap(),
+            Some(Frame::CommandAck {
+                accepted: true,
+                ref command_id,
+                ..
+            }) if command_id == "dc-pub-wake"
+        ));
+        assert!(matches!(cmd_rx.recv().await, Some(AgentCommand::Cancel)));
+
+        // ACP settles cleanly while publisher_guard is still held and outbox is empty.
+        done_tx.send(()).await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        // Dropping publisher_guard sends Some(()) on notify_rx with no further Ack.
+        drop(publisher_guard);
+
+        let completed = tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                match read_frame(&mut reader).await.unwrap() {
+                    Some(frame @ Frame::CrashedDrainCompleted { .. }) => break frame,
+                    Some(Frame::Snapshot { .. } | Frame::Heartbeat) => continue,
+                    other => {
+                        panic!(
+                            "unexpected frame while waiting for CrashedDrainCompleted: {other:?}"
+                        )
+                    }
+                }
+            }
+        })
+        .await
+        .expect("worker must wake on publisher guard drop and emit CrashedDrainCompleted");
+        assert!(matches!(
+            completed,
+            Frame::CrashedDrainCompleted {
+                ref worker_epoch,
+                command_id: Some(ref cid),
+                ..
+            } if worker_epoch == &epoch && cid == "dc-pub-wake"
+        ));
+        assert!(matches!(
+            run_task.await.unwrap().unwrap(),
+            ConnectedExit::WorkerDrained
+        ));
     }
 }

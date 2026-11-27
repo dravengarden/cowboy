@@ -3,7 +3,7 @@
 //! both runtime legs >= 8), and stateless hint forwarding outside
 //! `pending_commands` / `CommandAck`.
 
-use super::crashed_drain::evicted_command_digest;
+use super::account_unit::evicted_command_digest;
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
@@ -345,7 +345,7 @@ impl Drop for PendingCoreCommandGuard {
     }
 }
 
-pub(super) use super::crashed_drain::sanitize_snapshot_for_controller;
+pub(super) use super::account_unit::sanitize_snapshot_for_controller;
 
 /// Sanitize a live `CURRENT_TURN_CAPABILITIES_UPDATE` event before forwarding
 /// to the currently attached Controller.
@@ -674,6 +674,7 @@ pub(super) fn departing_cleanup_allows(
 #[derive(Clone)]
 struct DispatchedPromptRecord {
     epoch: Option<String>,
+    turn_id: Option<String>,
     acked: bool,
     seq: u64,
 }
@@ -805,6 +806,7 @@ impl DispatchedPrompts {
                 key.clone(),
                 DispatchedPromptRecord {
                     epoch: None,
+                    turn_id: None,
                     acked: false,
                     seq,
                 },
@@ -853,6 +855,7 @@ impl DispatchedPrompts {
             key.clone(),
             DispatchedPromptRecord {
                 epoch: Some(epoch.to_owned()),
+                turn_id: None,
                 acked: false,
                 seq,
             },
@@ -867,6 +870,34 @@ impl DispatchedPrompts {
             .get_mut(&(session_id.to_owned(), command_id.to_owned()))
         {
             rec.acked = true;
+        }
+        self.evict_acked_if_needed();
+    }
+
+    pub(super) fn record_with_turn(
+        &mut self,
+        session_id: &str,
+        command_id: &str,
+        epoch: &str,
+        turn_id: Option<&str>,
+    ) {
+        self.record(session_id, command_id, epoch);
+        if let Some(tid) = turn_id
+            && let Some(rec) = self
+                .entries
+                .get_mut(&(session_id.to_owned(), command_id.to_owned()))
+        {
+            rec.turn_id = Some(tid.to_owned());
+        }
+    }
+    pub(super) fn mark_acked_by_turn(&mut self, session_id: &str, epoch: &str, turn_id: &str) {
+        for ((sid, _), rec) in &mut self.entries {
+            if sid == session_id
+                && rec.epoch.as_deref() == Some(epoch)
+                && rec.turn_id.as_deref() == Some(turn_id)
+            {
+                rec.acked = true;
+            }
         }
         self.evict_acked_if_needed();
     }
@@ -1084,22 +1115,11 @@ impl super::Broker {
         session_id: &str,
         command: WorkerCommand,
     ) {
-        let (command_id, expected_epoch) = match &command {
-            WorkerCommand::Prompt {
-                command_id,
-                trace,
-                expected_worker_epoch,
-                ..
-            } => {
-                if let Some(trace) = trace {
-                    self.trace_spans.lock().start(session_id, command_id, trace);
-                }
-                (command_id.clone(), expected_worker_epoch.clone())
-            }
-            _ => {
-                self.route_worker(session_id, command);
-                return;
-            }
+        let Some((command_id, expected_epoch, prompt_turn_id)) =
+            self.extract_prompt_header(session_id, &command)
+        else {
+            self.route_worker(session_id, command);
+            return;
         };
         let reject: Option<(Option<mpsc::UnboundedSender<Frame>>, String, String)> = {
             // Single consistent lock order (`controller` -> `workers` -> `pending_commands` -> `dispatched_prompts`)
@@ -1176,7 +1196,12 @@ impl super::Broker {
                                 })
                                 .is_ok()
                             {
-                                dispatched.record(session_id, &command_id, &worker.epoch);
+                                dispatched.record_with_turn(
+                                    session_id,
+                                    &command_id,
+                                    &worker.epoch,
+                                    prompt_turn_id.as_deref(),
+                                );
                                 None
                             } else {
                                 dispatched.mark_acked(session_id, &command_id);
@@ -1204,7 +1229,7 @@ impl super::Broker {
                             ),
                         ))
                     }
-                    _ => super::crashed_drain::enqueue_pending_prompt(
+                    _ => super::account_unit::enqueue_pending_prompt(
                         &mut pending,
                         session_id,
                         &command_id,
@@ -1416,6 +1441,10 @@ impl super::Broker {
                     } => expected_worker_epoch.as_deref(),
                     _ => None,
                 };
+                let flush_turn_id = match &command {
+                    WorkerCommand::Prompt { turn_id, .. } => Some(turn_id.clone()),
+                    _ => None,
+                };
                 if let WorkerCommand::Prompt { ref command_id, .. } = command {
                     let command_evicted = dispatched.was_command_evicted(session_id, command_id);
                     let refusal_reason = |reason: String| -> String {
@@ -1454,7 +1483,12 @@ impl super::Broker {
                     .is_ok()
                 {
                     if let Some(cid) = prompt_cid {
-                        dispatched.record(session_id, &cid, &worker.epoch);
+                        dispatched.record_with_turn(
+                            session_id,
+                            &cid,
+                            &worker.epoch,
+                            flush_turn_id.as_deref(),
+                        );
                     }
                 } else if let Some(cid) = prompt_cid {
                     let reason = if dispatched.was_command_evicted(session_id, &cid) {
@@ -2410,6 +2444,7 @@ mod tests {
             "cmd-unbound",
             DispatchedPromptRecord {
                 epoch: Some("epoch-old".into()),
+                turn_id: None,
                 acked: true,
                 seq: 0,
             },
@@ -2602,6 +2637,7 @@ mod tests {
                 &cid,
                 DispatchedPromptRecord {
                     epoch: Some("epoch-old".into()),
+                    turn_id: None,
                     acked: true,
                     seq: 0,
                 },
@@ -2617,6 +2653,7 @@ mod tests {
             "evicted-overflow",
             DispatchedPromptRecord {
                 epoch: Some("epoch-old".into()),
+                turn_id: None,
                 acked: true,
                 seq: 0,
             },
@@ -2637,6 +2674,7 @@ mod tests {
                 ("s-cap".into(), cid),
                 DispatchedPromptRecord {
                     epoch: Some("epoch-new".into()),
+                    turn_id: None,
                     acked: true,
                     seq: i as u64,
                 },

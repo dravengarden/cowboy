@@ -38,29 +38,6 @@ impl Broker {
         }
     }
 
-    /// Confirm every durable account sandbox unit recorded for `session_id` is
-    /// gone without trusting any worker-reported unit name.
-    pub(super) async fn confirm_durable_session_account_units_gone(
-        &self,
-        session_id: &str,
-    ) -> bool {
-        let store = Arc::clone(&self.args.provider_store);
-        let session = session_id.to_owned();
-        let confirmed =
-            tokio::task::spawn_blocking(move || store.confirm_session_account_units_gone(&session))
-                .await;
-        match confirmed {
-            Ok(Ok(())) => true,
-            outcome => {
-                tracing::error!(
-                    session = session_id,
-                    ?outcome,
-                    "durable account sandbox unit teardown unconfirmed"
-                );
-                false
-            }
-        }
-    }
     pub(super) async fn handle_readmit_account_session(
         self: &Arc<Self>,
         session: StartSession,
@@ -138,4 +115,122 @@ pub(super) fn cutover_concurrency() -> usize {
         .map_or(4, std::num::NonZeroUsize::get)
         .div_ceil(2)
         .clamp(2, 8)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn new_registered_peer(
+    session_id: &str,
+    epoch: &str,
+    generation: &str,
+    executable: Option<String>,
+    connection_id: u64,
+    tx: mpsc::UnboundedSender<Frame>,
+    welcomed: bool,
+    drain_requested: bool,
+) -> WorkerPeer {
+    WorkerPeer {
+        connection_id,
+        epoch: epoch.to_owned(),
+        tx,
+        snapshot: WorkerSnapshot {
+            session_id: session_id.to_owned(),
+            worker_epoch: epoch.to_owned(),
+            generation: generation.to_owned(),
+            executable,
+            launch: None,
+            state: crate::runtime_wire::WorkerState::Starting,
+            agent_session_id: None,
+            native_thread_materialized: None,
+            current_turn_id: None,
+            supports_current_turn: false,
+            delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+            wrap_up_steering: false,
+            supports_subagent_cancel: false,
+            last_runtime_seq: 0,
+            pending_permissions: Vec::new(),
+            config_options: None,
+            context_used: None,
+            context_size: None,
+            pending_prompt_count: 0,
+            drain_requested,
+            exit_detail: None,
+            background_tasks: None,
+            native_cycle_id: None,
+            native_cycle_active: false,
+            incarnation: None,
+            account_unit: None,
+            uncertain_effect: None,
+        },
+        acked_runtime_seq: 0,
+        earliest_unacked_seq: None,
+        highest_runtime_seq: 0,
+        replay_gate: None,
+        welcomed,
+        replay_deferred: false,
+        last_seen: Instant::now(),
+        receive_probe: None,
+        liveness: None,
+        negotiated_protocol: 0,
+        raw_wrap_up_steering: false,
+        hint_tx: None,
+        diag_reply_tx: None,
+        last_hinted_target: None,
+        crashed_drain_fenced: false,
+        peer_pid: None,
+    }
+}
+
+pub(super) fn enqueue_pending_prompt(
+    pending: &mut HashMap<String, VecDeque<WorkerCommand>>,
+    session_id: &str,
+    command_id: &str,
+    command: WorkerCommand,
+) -> Option<(String, String)> {
+    let queue = pending.entry(session_id.to_owned()).or_default();
+    if !queue
+        .iter()
+        .any(|queued| super::worker_command_id(queued) == Some(command_id))
+    {
+        queue.push_back(command);
+    }
+    None
+}
+
+pub(super) fn evicted_command_digest(command_id: &str) -> [u8; 16] {
+    use sha2::Digest as _;
+    let hash = sha2::Sha256::digest(command_id.as_bytes());
+    let mut out = [0_u8; 16];
+    out.copy_from_slice(&hash[..16]);
+    out
+}
+
+/// Sanitize a worker snapshot for the currently attached Controller using exact
+/// `(controller_outer_protocol, controller_runtime_protocol, worker_protocol)`
+/// and broker-verified provider identity (fails closed if provider is missing).
+pub(super) fn sanitize_snapshot_for_controller(
+    snapshot: &mut WorkerSnapshot,
+    raw_wrap_up: bool,
+    worker_protocol: u16,
+    controller_outer_protocol: Option<u16>,
+    controller_runtime_protocol: u16,
+    declared_provider: Option<&str>,
+) {
+    let provider = snapshot
+        .launch
+        .as_ref()
+        .map(|launch| launch.provider.as_str())
+        .or(declared_provider);
+    crate::wrap_up::clamp_delivery_capabilities_for_provider(
+        provider,
+        &mut snapshot.supports_current_turn,
+        &mut snapshot.delivery_controls.next_checkpoint,
+    );
+    let min_runtime_protocol = worker_protocol.min(controller_runtime_protocol);
+    snapshot.wrap_up_steering = crate::wrap_up::effective_wrap_up_steering(
+        provider,
+        raw_wrap_up,
+        controller_outer_protocol,
+        min_runtime_protocol,
+        true,
+    );
 }

@@ -3,6 +3,46 @@
 use super::*;
 
 impl Hub {
+    /// Update a `session_uncertain_effect_ack:<session>` entry in Hub's memory
+    /// cache ONLY (never enqueuing an unconditional `StoreWrite::PutSetting`),
+    /// merging `observed` and `acknowledged` sequences monotonically so a
+    /// stale reader or concurrent CAS writer can never regress a newer record.
+    pub fn merge_cached_uncertain_effect_setting(&self, key: String, value: serde_json::Value) {
+        self.with_settings_mut(|settings| {
+            let merged = match settings.get(&key) {
+                Some(existing) if existing.is_object() && value.is_object() => {
+                    let mut out = existing.clone();
+                    let ex_obs = existing["observed"].as_u64().unwrap_or(0);
+                    let new_obs = value["observed"].as_u64().unwrap_or(0);
+                    if new_obs > ex_obs {
+                        out["observed"] = serde_json::json!(new_obs);
+                        if let Some(method) = value.get("method") {
+                            out["method"] = method.clone();
+                        }
+                        if let Some(ts) = value.get("observed_at_ms") {
+                            out["observed_at_ms"] = ts.clone();
+                        }
+                    } else if out.get("method").is_none()
+                        && let Some(method) = value.get("method")
+                    {
+                        out["method"] = method.clone();
+                    }
+                    let ex_ack = existing["acknowledged"].as_u64().unwrap_or(0);
+                    let new_ack = value["acknowledged"].as_u64().unwrap_or(0);
+                    if new_ack > ex_ack {
+                        out["acknowledged"] = serde_json::json!(new_ack);
+                        if let Some(ts) = value.get("acknowledged_at_ms") {
+                            out["acknowledged_at_ms"] = ts.clone();
+                        }
+                    }
+                    out
+                }
+                _ => value,
+            };
+            settings.insert(key, merged);
+        });
+    }
+
     /// Automatic supervision must wait for native preset acknowledgement.
     pub fn config_changes_pending(&self, session_id: &str) -> bool {
         self.inner.config_in_flight.lock().contains_key(session_id)

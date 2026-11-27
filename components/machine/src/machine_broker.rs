@@ -1243,7 +1243,7 @@ impl Broker {
         let drain_requested = !desired.is_empty() && generation != desired && !pinned;
         let replaced = workers.insert(
             session_id.clone(),
-            crashed_drain::new_registered_peer(
+            account_unit::new_registered_peer(
                 &session_id,
                 &epoch,
                 &generation,
@@ -3076,6 +3076,11 @@ impl Broker {
                 if worker.snapshot.current_turn_id.as_deref() == Some(turn_id) {
                     worker.snapshot.current_turn_id = None;
                 }
+                self.dispatched_prompts.lock().mark_acked_by_turn(
+                    session_id,
+                    &worker.epoch,
+                    turn_id,
+                );
             }
             RuntimeEvent::PermissionRequest { request_id, .. } => {
                 if !worker.snapshot.pending_permissions.contains(request_id) {
@@ -3127,10 +3132,14 @@ impl Broker {
                     worker.raw_wrap_up_steering = raw;
                 }
             }
+            RuntimeEvent::UndeliveredPrompt { command_id, .. } => {
+                self.dispatched_prompts
+                    .lock()
+                    .mark_acked(session_id, command_id);
+            }
             RuntimeEvent::AgentSessionId { .. }
             | RuntimeEvent::Update { .. }
             | RuntimeEvent::ScheduleWakeup { .. }
-            | RuntimeEvent::UndeliveredPrompt { .. }
             | RuntimeEvent::CommandRejected { .. }
             | RuntimeEvent::Error { .. } => {}
         }
@@ -4932,26 +4941,8 @@ async fn handle_worker(
                     command_id.as_deref(),
                 );
             }
-            Frame::CommandAck {
-                ref session_id,
-                ref command_id,
-                accepted,
-                ..
-            } => {
-                if !broker.record_crashed_drain_ack(
-                    session_id,
-                    epoch,
-                    connection_id,
-                    command_id,
-                    accepted,
-                ) {
-                    continue;
-                }
-                broker
-                    .dispatched_prompts
-                    .lock()
-                    .mark_acked(session_id, command_id);
-                broker.send_controller(frame);
+            Frame::CommandAck { .. } => {
+                broker.handle_worker_command_ack(epoch, connection_id, frame);
             }
             Frame::Heartbeat => observed.heartbeat(),
             other => tracing::debug!(?other, "ignoring non-worker runtime frame"),

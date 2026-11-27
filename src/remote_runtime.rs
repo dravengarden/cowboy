@@ -2215,9 +2215,13 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                             runtime_seq,
                             "ignoring stale idle status while a newer turn is active"
                         );
-                    } else if !resetting
-                        && snapshot::admits_event(shared, &session_id, &worker_epoch, &event)
-                    {
+                    } else if snapshot::should_project_worker_event(
+                        shared,
+                        resetting,
+                        &session_id,
+                        &worker_epoch,
+                        &event,
+                    ) {
                         if let Some((machine, telemetry)) = shared.telemetry.lock().as_ref() {
                             telemetry.record_runtime_spans(machine, &session_id, &diagnostics);
                         }
@@ -2268,9 +2272,16 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                     undelivered_ack,
                 )
                 .await?;
+                snapshot::persist_event_uncertain_effect(
+                    shared,
+                    &session_id,
+                    &worker_epoch,
+                    admitted,
+                    &event,
+                )
+                .await?;
                 shared.highwaters.lock().insert(key, runtime_seq);
             }
-            snapshot::persist_event_uncertain_effect(shared, &session_id, &event).await;
             write_broker_frame(
                 writer,
                 &Frame::Ack {
