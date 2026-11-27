@@ -16,6 +16,8 @@ import { managementEntryFixture } from "./providerManagement.fixture";
 import { loadProviderCatalog, resetProviderCatalog } from "./providerCatalogRegistry";
 import { isMac } from "./platform";
 import type { SessionMeta } from "./protocol";
+import { composePendingPrompt } from "./contextPendingPrompt";
+import { draftFromMessage } from "./refusedMessage";
 
 const SESSION = "surface-session";
 /** The newest in-page socket, so a test can deliver a live transcript event. */
@@ -658,6 +660,32 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
   check(running.cardBottom <= running.activityTop, `the card ends above the activity row (${running.cardBottom} > ${running.activityTop})`);
   tail.teardown();
   passed.push("A running tool card breathes off the compositor and stays above the activity row");
+
+  // Back to Prompt (refusedMessage.ts): a refused message returns to the real
+  // Composer with its image as an inline thumbnail where it was sent.
+  const putBack = mount("desktop", "1200px");
+  await until(() => editorIn(putBack.container), "the Desktop composer");
+  const { draft } = await draftFromMessage([
+    { type: "text", text: "put back " },
+    {
+      type: "image",
+      src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+    },
+    { type: "text", text: " with its image" },
+  ]);
+  composePendingPrompt(SESSION, draft);
+  await until(
+    () => putBack.container.querySelector(".cm-content img.cm-inline-image"),
+    "the put-back image thumbnail",
+  );
+  check(
+    draftText(putBack.container).startsWith("put back ") &&
+      draftText(putBack.container).includes(" with its image"),
+    `the put-back text is in the Composer (${draftText(putBack.container)})`,
+  );
+  putBack.root.unmount();
+  putBack.container.remove();
+  passed.push("Back to Prompt returns a refused message to the real Composer with its image inline");
 
   // "New session here" from a folder's menu: the menu must be gone before the
   // opener claims the keyboard, or its focus restore blurs the claim inside

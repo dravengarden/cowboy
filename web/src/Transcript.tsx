@@ -45,6 +45,7 @@ import { toolRuns } from "./tools/runs";
 
 import { derive, isCompactingTail, isCompactionCompletionTail, isCompactionRequestTail, isHumanPrompt, type RenderItem } from "./derive";
 import { hideLiveCrashDuplicate, prettifyCrashDetail } from "./crashDetail";
+import { PutBackButton } from "./PutBackButton";
 import { isRefusedInput, REFUSED_INPUT_HINT } from "./turnRecovery";
 
 import { optimisticQuestionKey } from "./explore/optimisticPages";
@@ -303,9 +304,11 @@ function latestCrashDetail(items: RenderItem[]): string | null {
 }
 
 function SessionStatusBar({
+  sessionId,
   status,
   crashDetail,
 }: {
+  sessionId: string;
   status: Status;
   crashDetail: string | null;
 }): React.JSX.Element | null {
@@ -359,9 +362,12 @@ function SessionStatusBar({
           {text}
         </Typography>
         {status === "crashed" && isRefusedInput(crashDetail) && (
-          <Typography variant="caption" component="div" sx={{ lineHeight: 1.3 }}>
-            {REFUSED_INPUT_HINT}
-          </Typography>
+          <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: "wrap" }}>
+            <Typography variant="caption" component="div" sx={{ lineHeight: 1.3 }}>
+              {REFUSED_INPUT_HINT}
+            </Typography>
+            <PutBackButton sessionId={sessionId} primary />
+          </Stack>
         )}
         {status === "crashed" && crashDetail && crashDetail !== text && (
           <ErrorDetails detail={crashDetail} />
@@ -3048,7 +3054,7 @@ export function Transcript({
           composer — never covering the last message. */
       }
       {statusBar && emptyPresentation?.kind !== "blocked" && (status !== "exited" || (optimisticMsgs.length === 0 && emptyPresentation === null)) && (
-        <SessionStatusBar status={status} crashDetail={crashDetail} />
+        <SessionStatusBar sessionId={sessionId} status={status} crashDetail={crashDetail} />
       )}
       {
         /* The scroll-to-latest affordance is the persistent sticky/auto-scroll

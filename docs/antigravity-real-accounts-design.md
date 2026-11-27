@@ -871,10 +871,14 @@ query and force release of "Controller account controls (step 5a)" and the
   The Web, in the failed turn's row and in the status bar that replaces it
   while the session shows `crashed`, recognises the same complete result,
   asks for a text answer and withholds the transport continuation, whose
-  text the agent would take as its answer. Returning the refused prompt to
-  Drafts was reviewed and withdrawn: restored attachments could push a
-  session's pending snapshot past its persistence limit, among other edge
-  cases; it needs its own design. With `agy` 1.5.14 the pending question need not reach the
+  text the agent would take as its answer. Its Back to Prompt action (also
+  offered on every failed turn) rebuilds the newest message a person sent
+  before the failure from the transcript, reading externalized images back
+  from the artifact store, into the session's empty Composer; nothing is
+  resent automatically and a file or unreadable image is reported, not
+  dropped (`web/src/refusedMessage.ts`). A Controller-side Draft restore was
+  reviewed and withdrawn: restored attachments could push a session's pending
+  snapshot past its persistence limit, among other edge cases. With `agy` 1.5.14 the pending question need not reach the
   owner as a permission request: in sess-1795343291454 the `ask_question`
   `tool_call` stayed `pending`, the turn ended `EndTurn`, and the next
   prompt was taken as its answer. The raise is one transaction compared with

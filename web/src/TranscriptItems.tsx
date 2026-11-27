@@ -23,6 +23,7 @@ import { formatShellForDisplay } from "./shellFormatter";
 import { COMPACTING_NOTICE, type ContentChunk, isCompactionCommandText, isCompactionCompletionText, isHumanPrompt, type PromptOrigin, type RenderItem } from "./derive";
 import { prettifyCrashDetail, rpcErrorKind } from "./crashDetail";
 import { reportClientLog } from "./observability";
+import { PutBackButton } from "./PutBackButton";
 import {
   canContinueFailedTurn,
   isRefusedInput,
@@ -945,6 +946,7 @@ export function TurnFailureRecovery({
           Continue
         </Button>
       )}
+      <PutBackButton sessionId={sessionId} beforeKey={itemKey} primary={refusedInput} />
     </Stack>
   );
 }

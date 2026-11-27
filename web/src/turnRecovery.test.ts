@@ -111,6 +111,7 @@ test("refused input asks for a text answer, never offers the continuation", () =
     assertEquals(isRefusedInput(unproven), false, String(unproven));
   }
   assert(REFUSED_INPUT_HINT.includes("in text"));
+  assert(REFUSED_INPUT_HINT.includes("Back to Prompt"));
   // The card hides Continue for refused input: its text would answer the
   // agent's pending question.
   assert(transcript.includes("const refusedInput = isRefusedInput(detail);"));

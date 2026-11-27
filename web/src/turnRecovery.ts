@@ -58,10 +58,11 @@ export function turnFailureTelemetry(
 const REFUSED_INPUT_PREFIX = "antigravity_prompt_rejected:";
 
 /** What the reader does next after refused input: only a text reply unblocks
- *  the agent, which takes the next message as its answer. */
+ *  the agent, which takes the next message as its answer; then Back to Prompt
+ *  returns the refused message, images included (refusedMessage.ts). */
 export const REFUSED_INPUT_HINT =
-  "Answer the agent's question in text first; it takes your next message as " +
-  "the answer, so Cowboy offers no Continue here.";
+  "Answer the agent's question in text first, then use Back to Prompt to " +
+  "send this message again.";
 
 function plainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);

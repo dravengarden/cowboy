@@ -16,9 +16,15 @@ import {
   resetProviderCatalog,
 } from "./providerCatalogRegistry";
 import { openSession, useStore } from "./store";
+import { getDraft } from "./draftStore";
+import { imageTokensInText } from "./attachments";
 import { openSessionSettings } from "./sessionSettingsOpen";
 import { type SessionToolsOverride, withMemoryKey } from "./agentTools";
 import type { ConfigOption, Envelope, SessionMeta } from "./protocol";
+
+/** A 1×1 PNG: the refused message's image, as the artifact store serves it. */
+const REFUSED_IMAGE_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";
 
 export async function runDormantSessionBrowserConformance(
   keepFixture = false,
@@ -149,6 +155,12 @@ export async function runDormantSessionBrowserConformance(
     const path = String(input);
     if (!path.startsWith("/api/")) return originalFetch(input, init);
     requests.push(`${init?.method ?? "GET"} ${path}`);
+    if (path.startsWith("/api/artifacts/")) {
+      return new Response(
+        Uint8Array.from(atob(REFUSED_IMAGE_BASE64), (c) => c.charCodeAt(0)),
+        { headers: { "content-type": "image/png" } },
+      );
+    }
     if (path === "/api/sync/dataset") {
       return Response.json({
         schema: "dravengarden.cowboy.product-sync-dataset/v1",
@@ -688,6 +700,75 @@ export async function runDormantSessionBrowserConformance(
       );
       recovered.querySelector("summary")!.click();
     }
+    // sess-1795343291454: Antigravity refused an image while its question was
+    // pending. Back to Prompt returns the message with its image in place.
+    desktop = true;
+    session.status = "crashed";
+    const refused = `antigravity_prompt_rejected:image_answer: ${
+      JSON.stringify({
+        message: "Antigravity is waiting for your answer to its question.",
+        cowboy: {
+          prompt_rejected: "image_answer",
+          antigravity_backend: {
+            class: "not_dispatched",
+            successes: 0,
+            barrier: true,
+            prompts: 1,
+            dispatches: 0,
+            transient: 0,
+            refusals: [],
+          },
+        },
+      })
+    }`;
+    // The Controller externalizes a prompt's image to its artifact store;
+    // the transcript keeps only this URL.
+    const artifact = `/api/artifacts/${"b".repeat(64)}.png`;
+    timeline = [...timeline, ...[
+      { type: "image", mimeType: "image/png", url: artifact },
+      { type: "text", text: "\nUse the whole screen for dialogs" },
+    ].map((content, index) => ({
+      session_id: session.id,
+      seq: 40 + index,
+      kind: "update" as const,
+      update: { sessionUpdate: "user_message_chunk", content },
+    })), {
+      session_id: session.id,
+      seq: 42,
+      kind: "lifecycle" as const,
+      status: "crashed" as const,
+      detail: refused,
+    }];
+    socket!.publish({
+      type: "snapshot",
+      session_id: session.id,
+      events: timeline,
+      reached_start: true,
+    });
+    flushSync(() => root.render(<Fixture key="refused-input" />));
+    await until(
+      () => container.querySelector("[data-turn-failure-put-back]") !== null,
+      "refused input offers no Back to Prompt",
+    );
+    check(
+      container.querySelector("[data-turn-failure-continue]") === null,
+      "refused input never offers the continuation",
+    );
+    container.querySelector<HTMLButtonElement>("[data-turn-failure-put-back]")!
+      .click();
+    await until(
+      () => getDraft(session.id).attachments.length === 1,
+      "the refused message is not back in the Prompt",
+    );
+    const restored = getDraft(session.id);
+    check(
+      restored.text.endsWith("\nUse the whole screen for dialogs") &&
+        imageTokensInText(restored.text)[0]?.id === restored.attachments[0]?.id &&
+        restored.attachments[0]?.block.data === REFUSED_IMAGE_BASE64 &&
+        restored.attachments[0]?.mimeType === "image/png",
+      "Back to Prompt returns the text with the artifact image read back in place",
+    );
+    await capture?.("desktop-refused-put-back");
     if (keepFixture) {
       desktop = false;
       flushSync(() => root.render(<Fixture key="mobile-preview" />));
