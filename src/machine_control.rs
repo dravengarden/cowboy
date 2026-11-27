@@ -204,7 +204,7 @@ impl Drop for PendingRequestGuard<'_> {
 fn adapter_timeout(adapter: &str) -> std::time::Duration {
     match adapter {
         "workspace" => WORKSPACE_ADAPTER_TIMEOUT,
-        "provider-cache-status" => PROVIDER_STATUS_ADAPTER_TIMEOUT,
+        "provider-cache-status" | "provider-cache-revoke" => PROVIDER_STATUS_ADAPTER_TIMEOUT,
         _ => DEFAULT_ADAPTER_TIMEOUT,
     }
 }

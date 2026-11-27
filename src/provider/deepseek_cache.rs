@@ -115,6 +115,37 @@ pub async fn revoke_local_snapshot(
 /// the Machine that owns the session. The response is bounded and validated
 /// before it crosses the Machine/controller adapter boundary.
 #[cfg(feature = "machine-host")]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CacheAdapterRequest {
+    configuration: ConfigurationBehavior,
+    session_id: String,
+}
+
+#[cfg(feature = "machine-host")]
+pub async fn handle_adapter_request(
+    adapter: &str,
+    payload: serde_json::Value,
+) -> anyhow::Result<serde_json::Value> {
+    let request: CacheAdapterRequest = serde_json::from_value(payload)?;
+    if !supported_behavior(&request.configuration)
+        || request.session_id.is_empty()
+        || request.session_id.len() > 256
+        || !request
+            .session_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
+    {
+        anyhow::bail!("invalid Provider cache request");
+    }
+    if adapter == "provider-cache-revoke" {
+        revoke_local_snapshot(&request.configuration, &request.session_id).await?;
+        return Ok(serde_json::json!({ "revoked": true }));
+    }
+    local_snapshot_status(&request.configuration, &request.session_id).await
+}
+
+#[cfg(feature = "machine-host")]
 pub async fn local_snapshot_status(
     behavior: &ConfigurationBehavior,
     session_id: &str,

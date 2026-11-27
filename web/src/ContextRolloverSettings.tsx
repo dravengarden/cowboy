@@ -4,6 +4,7 @@ import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import type { DeepseekCacheProtectionStatus } from "./ComposerSheet";
 import { formatIdleMinutesLabel } from "./contextRolloverPreferences";
 import { expectHttpOk } from "./httpResponse";
+import { setSessionConfigOptions } from "./store";
 
 /** `GET /api/sessions/{id}/context-rollover` (src/context_rollover.rs). */
 export interface ContextRolloverView {
@@ -192,4 +193,46 @@ export function useCacheProtectionStatus(
     };
   }, [visible, sessionId]);
   return { cacheProtection, cacheProtectionUnavailable };
+}
+
+
+/** Explicit disable/revoke action when a gateway snapshot is still protected
+ *  while the session's configured policy is already Off (e.g. adopted legacy
+ *  Auto worker or retained gateway snapshot). */
+export function CacheProtectionDisableButton({
+  sessionId,
+  status,
+  onDisabled,
+}: {
+  sessionId: string;
+  status: DeepseekCacheProtectionStatus | null;
+  onDisabled?: () => void;
+}): React.JSX.Element | null {
+  const [disabling, setDisabling] = useState(false);
+  const optionId = status?.optionId;
+  if (status?.state !== "protected" || status.configuredEnabled !== false || !optionId) {
+    return null;
+  }
+  return (
+    <Button
+      size="small"
+      variant="outlined"
+      color="warning"
+      disabled={disabling}
+      onClick={(): void => {
+        setDisabling(true);
+        void setSessionConfigOptions(sessionId, [
+          { configId: optionId, value: false },
+        ])
+          .then(() => {
+            onDisabled?.();
+          })
+          .finally(() => {
+            setDisabling(false);
+          });
+      }}
+    >
+      {disabling ? "Turning off…" : "Disable & revoke keepalive"}
+    </Button>
+  );
 }

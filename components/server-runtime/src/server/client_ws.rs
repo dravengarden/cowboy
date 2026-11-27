@@ -869,7 +869,7 @@ pub async fn handle_command(
             session_id,
             config_id,
             value,
-        } => config_revert::apply(state, &session_id, config_id, value, true),
+        } => config_revert::apply_for_caller(state, &session_id, config_id, value, true, caller),
         // Opening is inspection; stopped sessions remain stopped until work is
         // submitted. Live ownership is reconciled without a throwaway prompt.
         // Opening a trashed session is inspection only; it never wakes.

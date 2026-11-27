@@ -70,7 +70,7 @@ pub fn is_internal_preference_key(config_id: &str) -> bool {
 
 #[must_use]
 pub fn is_managed(configuration: &ConfigurationBehavior, config_id: &str) -> bool {
-    effect_for_id(configuration, config_id).is_some() || is_internal_preference_key(config_id)
+    effect_for_id(configuration, config_id).is_some()
 }
 
 /// Strip opt-in paid-keepalive keys copied from older Provider manifests so new
@@ -82,7 +82,24 @@ pub fn strip_opt_in_defaults(preferences: &mut serde_json::Value) {
     }
 }
 
-/// Record owner provenance when the owner explicitly sets `deepseek_cache_protection`.
+/// Return the owner-verified `deepseek_cache_protection` selection when present,
+/// or `None` for legacy/unverified values.
+#[must_use]
+pub fn effective_cache_protection_consent(preferences: &serde_json::Value) -> Option<bool> {
+    let owner_verified = preferences
+        .get(CACHE_PROTECTION_OWNER_ID)
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
+    owner_verified
+        .then(|| {
+            preferences
+                .get(CACHE_PROTECTION_ID)
+                .and_then(serde_json::Value::as_bool)
+        })
+        .flatten()
+}
+
+/// Record owner provenance when a verified interactive owner sets `deepseek_cache_protection`.
 pub fn record_owner_preference(
     preferences: &mut serde_json::Map<String, serde_json::Value>,
     config_id: &str,

@@ -412,6 +412,7 @@ async fn resume_native_fork(
         &request.config,
         &actor,
         current.before_seq.unwrap_or(0),
+        matches!(auth.caller, crate::prompt_origin::RequestCaller::Person),
     )
     .await?;
     Ok((destination.to_owned(), false))
@@ -621,6 +622,7 @@ async fn create_and_finish_native_fork(
         overrides,
         actor,
         before_seq,
+        matches!(auth.caller, crate::prompt_origin::RequestCaller::Person),
     )
     .await?;
     Ok((destination, true))
@@ -638,6 +640,7 @@ async fn finish_native_fork(
     overrides: &serde_json::Map<String, serde_json::Value>,
     actor: &crate::session_folders::FolderActor,
     before_seq: u64,
+    owner_authorized: bool,
 ) -> Result<(), String> {
     ensure_lineage_edge(state, destination, source, "native_fork", before_seq)
         .await
@@ -648,7 +651,7 @@ async fn finish_native_fork(
         })?;
     state.hub.open_fork(destination, record, &source.title);
     inheritance::apply(state, source, created, selection)?;
-    apply_overrides(state, destination, overrides)?;
+    apply_overrides(state, destination, overrides, owner_authorized)?;
     state.hub.place_fork(id, destination, actor)?;
     lineage::flush_store_barrier(state).await.map_err(|error| {
         format!(
@@ -1293,7 +1296,12 @@ fn finish_duplicate_session(
     if selection.inherit_settings {
         inheritance::apply(state, &source, &created, selection)?;
     }
-    apply_overrides(state, destination, overrides)?;
+    apply_overrides(
+        state,
+        destination,
+        overrides,
+        matches!(auth.caller, crate::prompt_origin::RequestCaller::Person),
+    )?;
     state.hub.place_copy(id, destination, actor)
 }
 

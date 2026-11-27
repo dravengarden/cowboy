@@ -174,11 +174,21 @@ fn new_codex_deepseek_sessions_start_with_flash_default_collaboration_max_prefer
         )
         .is_err()
     );
+    // Generic/non-owner config setter refuses enabling paid keepalive.
+    assert!(
+        hub.set_config_preference(
+            "legacy-manifest-deepseek",
+            "deepseek_cache_protection".to_owned(),
+            serde_json::json!(true),
+        )
+        .is_err()
+    );
     // Explicit owner selection records provenance and enables paid keepalive.
-    hub.set_config_preference(
+    hub.set_owner_config_preference(
         "legacy-manifest-deepseek",
         "deepseek_cache_protection".to_owned(),
         serde_json::json!(true),
+        true,
     )
     .unwrap();
     let updated = hub.config_preferences("legacy-manifest-deepseek").unwrap();

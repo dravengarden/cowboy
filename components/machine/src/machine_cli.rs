@@ -2660,13 +2660,6 @@ struct AdapterRequestContext {
     durable_state: crate::machine_broker::DurableStateView,
 }
 
-#[derive(Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ProviderCacheStatusRequest {
-    configuration: cowboy_provider_sdk::ConfigurationBehavior,
-    session_id: String,
-}
-
 async fn run_adapter_request(
     request_id: String,
     adapter: String,
@@ -2823,24 +2816,11 @@ async fn run_adapter_request(
             }
             return serde_json::to_value(outcome).context("encoding generation retention");
         }
-        if adapter == "provider-cache-status" {
-            let request: ProviderCacheStatusRequest = serde_json::from_value(payload)
-                .context("decoding Provider cache status request")?;
-            if !crate::deepseek_cache::supported_behavior(&request.configuration)
-                || request.session_id.is_empty()
-                || request.session_id.len() > 256
-                || !request
-                    .session_id
-                    .bytes()
-                    .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-            {
-                bail!("invalid Provider cache status request");
-            }
-            return crate::deepseek_cache::local_snapshot_status(
-                &request.configuration,
-                &request.session_id,
-            )
-            .await;
+        if matches!(
+            adapter.as_str(),
+            "provider-cache-status" | "provider-cache-revoke"
+        ) {
+            return crate::deepseek_cache::handle_adapter_request(&adapter, payload).await;
         }
         if adapter == "durable-state" {
             return durable_state_reply(&payload, &durable_state);

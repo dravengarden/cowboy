@@ -506,13 +506,11 @@ async fn load_authorized_session_cache_metrics(
         },
     };
 
-    // A restored resumable session with no usage record must report `null`,
-    // not a fabricated zero, while preserving verified zeros and stale flags.
-    let context_used = if meta.context_used == 0 && meta.agent_session_id.is_some() {
-        hub.verified_context_usage(&meta)
-    } else {
-        Some(meta.context_used)
-    };
+    // Report `null` when no usage reading has ever been recorded or verified;
+    // preserve measured zeros (including persisted `meta.usage` across restarts).
+    let context_used = hub
+        .verified_context_usage(&meta)
+        .or_else(|| (meta.usage.is_some() || meta.context_used > 0).then_some(meta.context_used));
     let active_turn = matches!(meta.status, Status::Busy | Status::Starting)
         || hub.session_has_in_flight_prompt(&meta.id);
     let pending_work =

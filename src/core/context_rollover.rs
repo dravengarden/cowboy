@@ -410,6 +410,15 @@ impl Hub {
     }
 }
 
+/// Whether a restored exited session's latest lifecycle event confirms hibernation.
+pub(super) fn restored_hibernated(status: super::Status, log: &[Envelope]) -> bool {
+    status == super::Status::Exited
+        && log.iter().rev().find_map(|env| match &env.event {
+            Event::Lifecycle { status, detail } => Some((*status, detail.as_deref())),
+            _ => None,
+        }) == Some((super::Status::Exited, Some("hibernated")))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

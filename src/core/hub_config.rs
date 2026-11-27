@@ -215,11 +215,51 @@ impl Hub {
     /// Record one user-selected config value and immediately fan out the
     /// optimistic selection. The agent's later authoritative option snapshot
     /// will correct it if the provider normalizes or rejects the value.
+    /// Copy verified owner `deepseek_cache_protection` consent from `source_id`
+    /// onto `target_id` when both support `CacheProtectionV1`. Legacy/unverified
+    /// values are never promoted into owner consent.
+    pub fn inherit_cache_protection_consent(&self, source_id: &str, target_id: &str) {
+        let consent = self
+            .config_preferences(source_id)
+            .and_then(|prefs| crate::managed_config::effective_cache_protection_consent(&prefs));
+        let Some(enabled) = consent else {
+            return;
+        };
+        let target_supports = self.session_info(target_id).is_some_and(|info| {
+            let configuration =
+                configuration_behavior(&info.meta.provider, info.meta.provider_behavior.as_ref());
+            crate::deepseek_cache::supported_behavior(&configuration)
+        });
+        if target_supports {
+            let _ = self.set_owner_config_preference(
+                target_id,
+                crate::managed_config::CACHE_PROTECTION_ID.to_owned(),
+                serde_json::Value::Bool(enabled),
+                true,
+            );
+        }
+    }
+
+    /// Write a session config preference without granting paid keepalive
+    /// owner consent. Enabling `deepseek_cache_protection` requires
+    /// [`Self::set_owner_config_preference`] with `owner_authorized = true`.
     pub fn set_config_preference(
         &self,
         session_id: &str,
         config_id: String,
         value: serde_json::Value,
+    ) -> Result<(), String> {
+        self.set_owner_config_preference(session_id, config_id, value, false)
+    }
+
+    /// Write a session config preference with explicit caller authorization for
+    /// billable opt-in controls (`deepseek_cache_protection`).
+    pub fn set_owner_config_preference(
+        &self,
+        session_id: &str,
+        config_id: String,
+        value: serde_json::Value,
+        owner_authorized: bool,
     ) -> Result<(), String> {
         if config_id.is_empty()
             || config_id.len() > 128
@@ -232,6 +272,15 @@ impl Hub {
             serde_json::Value::String(_) | serde_json::Value::Bool(_)
         ) {
             return Err("configuration values must be a string id or boolean".to_owned());
+        }
+        if config_id == crate::managed_config::CACHE_PROTECTION_ID
+            && value == serde_json::Value::Bool(true)
+            && !owner_authorized
+        {
+            return Err(
+                "enabling paid cache protection requires interactive owner authorization"
+                    .to_owned(),
+            );
         }
         {
             let mut sessions = self.inner.sessions.lock();
@@ -246,7 +295,9 @@ impl Hub {
                 .as_object_mut()
                 .expect("config preferences are an object");
             prefs.insert(config_id.clone(), value.clone());
-            crate::managed_config::record_owner_preference(prefs, &config_id);
+            if owner_authorized {
+                crate::managed_config::record_owner_preference(prefs, &config_id);
+            }
             self.inner
                 .config_in_flight
                 .lock()

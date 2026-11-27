@@ -143,7 +143,7 @@ const WRITE_BEHIND_RETRY_DELAYS_MS = [300, 600, 1_200, 2_000] as const;
 function useSessionCacheMetricsData(
   sessionId: string,
   refreshKey: number,
-): { currentData: SessionCacheMetricsResponse | null; syncPending: boolean } {
+): { currentData: SessionCacheMetricsResponse | null; syncPending: boolean; liveActiveTurn: boolean; livePendingWork: boolean } {
   const [data, setData] = useState<SessionCacheMetricsResponse | null>(null);
   const [syncPending, setSyncPending] = useState(false);
   const [policyRefreshTick, setPolicyRefreshTick] = useState(0);
@@ -170,16 +170,24 @@ function useSessionCacheMetricsData(
     return 0;
   });
   const latestTurnEndSeq = Math.max(liveWatermark, timelineWatermark);
-  const liveSignal = useStoreSelector((snapshot) => {
+  const liveWork = useStoreSelector((snapshot) => {
     const session = snapshot.sessionsById.get(sessionId);
+    const queueCount = snapshot.queues.get(sessionId)?.length ?? 0;
+    const backgroundTasks = session?.background_tasks ?? 0;
+    const att = session?.attention;
+    const attentionCount = (att?.approvals ?? 0) + (att?.questions ?? 0) + (att?.other ?? 0);
+    const activeTurn = session?.status === "busy" || session?.status === "starting";
+    const pendingWork = queueCount > 0 || backgroundTasks > 0 || attentionCount > 0;
     const options = snapshot.configOptions.get(sessionId);
     const optionSig = options
       ? options.map((opt) => `${opt.id}=${String(opt.currentValue)}`).join(";")
       : "";
-    return session
-      ? `${session.status}:${session.usage?.observed_at_ms ?? 0}:${session.context_used}|${optionSig}`
-      : optionSig;
+    const signal = session
+      ? `${session.status}:${session.usage?.observed_at_ms ?? 0}:${session.context_used}:${queueCount}:${backgroundTasks}:${attentionCount}|${optionSig}`
+      : `${queueCount}|${optionSig}`;
+    return { signal, activeTurn, pendingWork };
   });
+  const liveSignal = liveWork.signal;
 
   useEffect(() => {
     const controller = new AbortController();
@@ -236,7 +244,12 @@ function useSessionCacheMetricsData(
     };
   }, [currentData]);
 
-  return { currentData, syncPending };
+  return {
+    currentData,
+    syncPending,
+    liveActiveTurn: liveWork.activeTurn,
+    livePendingWork: liveWork.pendingWork,
+  };
 }
 
 export function SessionCacheMetricsSection({
@@ -248,7 +261,8 @@ export function SessionCacheMetricsSection({
   compact?: boolean;
   refreshKey?: number;
 }): React.JSX.Element | null {
-  const { currentData, syncPending } = useSessionCacheMetricsData(sessionId, refreshKey);
+  const { currentData, syncPending, liveActiveTurn, livePendingWork } =
+    useSessionCacheMetricsData(sessionId, refreshKey);
   const segments = useMemo(
     () => (currentData ? buildDisjointCacheSegments(currentData.totals) : []),
     [currentData],
@@ -258,7 +272,11 @@ export function SessionCacheMetricsSection({
 
   const { totals, coverage, strategy, recent_turns: recentTurns } = currentData;
   const strategyLabel = formatStrategySummary(strategy);
-  const coldResumeAdvisory = formatColdResumeAdvisory(currentData);
+  const coldResumeAdvisory = formatColdResumeAdvisory({
+    ...currentData,
+    active_turn: currentData.active_turn === true || liveActiveTurn,
+    pending_work: currentData.pending_work === true || livePendingWork,
+  });
   const cachedShareTone = shareTone(totals.cached_input_share);
 
   return (

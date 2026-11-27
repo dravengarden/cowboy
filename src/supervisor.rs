@@ -1125,35 +1125,12 @@ impl Supervisor {
         min_context_tokens: u64,
     ) -> Result<(), String> {
         let _lifecycle = self.lifecycle.lock();
-        let info = self
-            .hub
-            .session_info(session_id)
-            .ok_or_else(|| format!("unknown session {session_id:?}"))?;
         let runtime = self.runtime_for_session(session_id)?;
         if !runtime.has_worker(session_id) || runtime.hibernation_pending(session_id) {
             return Err("session is already hibernated or hibernating".to_owned());
         }
-        if info.meta.status != Status::Running
-            || self.hub.session_has_in_flight_prompt(session_id)
-            || info.queue_count > 0
-            || info.meta.background_tasks > 0
-        {
-            return Err("session is active or has queued work".to_owned());
-        }
-        if info.meta.context_usage_stale() || info.meta.context_used < min_context_tokens {
-            return Err("session context does not qualify for renewal".to_owned());
-        }
-        if self
-            .hub
-            .session_idle_for(session_id)
-            .is_none_or(|idle| idle < min_idle)
-        {
-            return Err("session became active before hibernation".to_owned());
-        }
-        let configuration = session_configuration(&info.meta);
-        if self.managed_cache_protection(session_id, &configuration) == Some(true) {
-            return Err("session has explicit paid cache keepalive enabled".to_owned());
-        }
+        self.hub
+            .admit_idle_hibernation(session_id, min_idle, min_context_tokens)?;
         runtime.hibernate(session_id);
         Ok(())
     }
@@ -1378,6 +1355,16 @@ impl Supervisor {
         config_id: &str,
         value: serde_json::Value,
     ) -> Result<bool, String> {
+        self.set_managed_config_option_for_caller(session_id, config_id, value, true)
+    }
+
+    pub fn set_managed_config_option_for_caller(
+        &self,
+        session_id: &str,
+        config_id: &str,
+        value: serde_json::Value,
+        owner_authorized: bool,
+    ) -> Result<bool, String> {
         let _lifecycle = self.lifecycle.lock();
         let meta = self
             .hub
@@ -1419,8 +1406,12 @@ impl Supervisor {
         {
             unchanged = false;
         }
-        self.hub
-            .set_config_preference(session_id, config_id.to_owned(), value)?;
+        self.hub.set_owner_config_preference(
+            session_id,
+            config_id.to_owned(),
+            value,
+            owner_authorized,
+        )?;
         // A dormant session's next launch reads the new preference.
         if unchanged || deferred {
             return Ok(true);

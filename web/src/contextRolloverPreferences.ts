@@ -354,6 +354,23 @@ function applySnapshotForDataset(
   return { ...old, preferences: snapshot };
 }
 
+async function fetchRolloverPreferences(): Promise<ContextRolloverPreferencesPayload> {
+  const response = await fetch("/api/preferences/context_rollover", {
+    cache: "no-store",
+    signal: productSessionSignal(),
+  });
+  if (!response.ok) throw new Error("Could not load prompt-cache renewal preferences.");
+  const next = (await response.json()) as ContextRolloverPreferencesPayload;
+  if (next.dataset.user_id !== productSyncPrincipal()) {
+    throw new Error("Account changed. Reload before editing prompt-cache preferences.");
+  }
+  return {
+    ...next,
+    preferences: withContextRolloverDefaults(next.preferences),
+    providers: Array.isArray(next.providers) ? next.providers : [],
+  };
+}
+
 export function useContextRolloverPreferences(connected: boolean) {
   const [data, setData] = useState<ContextRolloverPreferencesPayload>();
   const [error, setError] = useState<string>();
@@ -366,31 +383,22 @@ export function useContextRolloverPreferences(connected: boolean) {
   const pendingRef = useRef(pending);
   pendingRef.current = pending;
   const loading = useRef(0);
+  const datasetGenRef = useRef(0);
   const writing = useRef(false);
 
   const load = useCallback(async () => {
     const sequence = ++loading.current;
     try {
-      const response = await fetch("/api/preferences/context_rollover", {
-        cache: "no-store",
-        signal: productSessionSignal(),
-      });
-      if (!response.ok) throw new Error("Could not load prompt-cache renewal preferences.");
-      const next = (await response.json()) as ContextRolloverPreferencesPayload;
+      const normalized = await fetchRolloverPreferences();
       if (!alive.current || sequence !== loading.current || productSessionSignal().aborted) return;
-      if (next.dataset.user_id !== productSyncPrincipal()) {
-        throw new Error("Account changed. Reload before editing prompt-cache preferences.");
-      }
-      const normalized: ContextRolloverPreferencesPayload = {
-        ...next,
-        preferences: withContextRolloverDefaults(next.preferences),
-        providers: Array.isArray(next.providers) ? next.providers : [],
-      };
       const reconciled = reconcileLoadedRolloverPayload(dataRef.current, normalized);
       setData(reconciled.payload);
-      if (reconciled.datasetChanged && pendingRef.current) {
-        setPending(undefined);
-        setError("Service dataset changed. Reloaded settings and cleared the unsaved edit.");
+      if (reconciled.datasetChanged) {
+        datasetGenRef.current += 1;
+        if (pendingRef.current) {
+          setPending(undefined);
+          setError("Service dataset changed. Reloaded settings and cleared the unsaved edit.");
+        }
       }
       setLoadError(undefined);
     } catch (cause) {
@@ -423,6 +431,12 @@ export function useContextRolloverPreferences(connected: boolean) {
     };
   }, [load, connected]);
 
+  const isCurrentDataset = (datasetId: string, generation: number): boolean =>
+    alive.current &&
+    !productSessionSignal().aborted &&
+    datasetGenRef.current === generation &&
+    dataRef.current?.dataset.dataset_id === datasetId;
+
   const commit = async (input: PendingRolloverWrite): Promise<void> => {
     const current = dataRef.current;
     if (!current || writing.current || productSessionSignal().aborted) return;
@@ -432,14 +446,16 @@ export function useContextRolloverPreferences(connected: boolean) {
       void load();
       return;
     }
+    const generation = datasetGenRef.current;
     writing.current = true;
     setSaving(true);
     setPending(input);
     setError(undefined);
     try {
       const result = await putRolloverPreferences(input);
-      if (!alive.current || productSessionSignal().aborted) return;
+      if (!isCurrentDataset(input.datasetId, generation)) return;
       if (result.status === 409 && result.error?.code === "dataset_changed") {
+        datasetGenRef.current += 1;
         setPending(undefined);
         setError("Service dataset changed. Reloaded settings; apply your edit again.");
         void load();
@@ -455,11 +471,10 @@ export function useContextRolloverPreferences(connected: boolean) {
       if (!result.ok || !result.preferences) {
         throw new Error(result.error?.code ?? "Could not save prompt-cache settings");
       }
-      const saved = withContextRolloverDefaults(result.preferences);
-      setData((old) => applySnapshotForDataset(old, input.datasetId, saved));
+      setData((old) => applySnapshotForDataset(old, input.datasetId, withContextRolloverDefaults(result.preferences!)));
       setPending(undefined);
     } catch (cause) {
-      if (alive.current) {
+      if (isCurrentDataset(input.datasetId, generation)) {
         const message = cause instanceof Error ? cause.message : String(cause);
         setError(`${message}. Retry uses the same operation.`);
       }

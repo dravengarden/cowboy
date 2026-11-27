@@ -233,15 +233,8 @@ pub async fn api_session_cache_protection(
             .into_response();
     };
     let applied = state.supervisor.applied_cache_protection(&session.id);
-    if !enabled && (applied.is_none() || applied == Some(Some(false))) {
-        return Json(serde_json::json!({
-            "state": "disabled",
-            "algorithm": "adaptive-replay-v1",
-            "minimumHitTokens": crate::deepseek_cache::minimum_hit_tokens(),
-            "contextUsed": session.context_used,
-        }))
-        .into_response();
-    }
+    // Always verify live gateway snapshot state before reporting `disabled`,
+    // because a retained snapshot can outlive an exited or replaced worker.
     match state
         .machine_control
         .adapter_request(
@@ -255,9 +248,6 @@ pub async fn api_session_cache_protection(
         .await
     {
         Ok(mut status) => {
-            // When configured Off but a live adopted worker was queried, report
-            // "disabled" if the gateway confirms no active snapshot, and keep
-            // "protected" honestly if a live snapshot is still charging.
             if !enabled
                 && status.get("state").and_then(serde_json::Value::as_str) == Some("inactive")
                 && let Some(object) = status.as_object_mut()
@@ -265,6 +255,14 @@ pub async fn api_session_cache_protection(
                 object.insert("state".to_owned(), serde_json::json!("disabled"));
             }
             if let Some(object) = status.as_object_mut() {
+                object.insert("configuredEnabled".to_owned(), enabled.into());
+                object.insert(
+                    "optionId".to_owned(),
+                    crate::managed_config::CACHE_PROTECTION_ID.into(),
+                );
+                if let Some(Some(worker_enabled)) = applied {
+                    object.insert("appliedEnabled".to_owned(), worker_enabled.into());
+                }
                 object.insert(
                     "minimumHitTokens".to_owned(),
                     crate::deepseek_cache::minimum_hit_tokens().into(),

@@ -56,7 +56,9 @@ pub(super) fn queue_persisted_config(
     );
     let Some(options) = options else {
         for (config_id, value) in preferences {
-            if crate::managed_config::is_managed(&configuration, config_id) {
+            if crate::managed_config::is_managed(&configuration, config_id)
+                || crate::managed_config::is_internal_preference_key(config_id)
+            {
                 continue;
             }
             queue_config_value(shared, session_id, config_id, value.clone());
@@ -67,7 +69,9 @@ pub(super) fn queue_persisted_config(
         return;
     };
     for (config_id, value) in preferences {
-        if crate::managed_config::is_managed(&configuration, config_id) {
+        if crate::managed_config::is_managed(&configuration, config_id)
+            || crate::managed_config::is_internal_preference_key(config_id)
+        {
             continue;
         }
         let Some(option) = options

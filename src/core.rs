@@ -2318,6 +2318,7 @@ impl Hub {
                     &mut reached_start,
                 );
                 let owner_turn_seq = restored_owner_turn(&log, reached_start);
+                let hibernated = context_rollover::restored_hibernated(meta.status, &log);
                 for envelope in &log {
                     let _ = history_reducer.reduce(envelope.clone());
                 }
@@ -2335,7 +2336,7 @@ impl Hub {
                         machine_lineage: None,
                         runtime_epochs: Default::default(),
                         clear_pending: false,
-                        hibernated: false,
+                        hibernated,
                         lineage_pins: 0,
                         unpersisted_min_seq: None,
                         cancel_handoff_pending: false,

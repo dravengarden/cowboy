@@ -143,9 +143,11 @@ pub(super) fn apply_snapshot(shared: &Shared, worker: &WorkerSnapshot) -> bool {
         worker_status(worker.state)
     };
     let detail = recoverable_detail.or_else(|| {
-        (worker.state == WorkerState::Crashed)
-            .then(|| worker.exit_detail.clone())
-            .flatten()
+        (worker.state == WorkerState::Crashed
+            || (worker.state == WorkerState::Exited
+                && worker.exit_detail.as_deref() == Some("hibernated")))
+        .then(|| worker.exit_detail.clone())
+        .flatten()
     });
     // The hold is already projected. Re-emitting a terminal status would clear
     // the dispatch guard of an explicit prompt sent before this idle snapshot.

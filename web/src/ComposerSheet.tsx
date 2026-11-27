@@ -41,7 +41,11 @@ import { ConfirmSheet, Sheet } from "./Sheet";
 import { MobileSheetDismiss } from "@cowboy/app-shell";
 import { type SessionSettingsFocus } from "./sessionSettingsOpen";
 import { ConfigRevertBack } from "./ConfigRevertBack";
-import { ContextRolloverSettings, useCacheProtectionStatus } from "./ContextRolloverSettings";
+import {
+  CacheProtectionDisableButton,
+  ContextRolloverSettings,
+  useCacheProtectionStatus,
+} from "./ContextRolloverSettings";
 import { SessionCacheMetricsSection } from "./SessionCacheMetricsSection";
 
 export function SessionActionConfirmDialog({
@@ -690,6 +694,9 @@ export interface DeepseekCacheProtectionStatus {
   jitter_ms?: number;
   expires_at_ms?: number;
   attempts?: number;
+  configuredEnabled?: boolean;
+  optionId?: string;
+  appliedEnabled?: boolean;
   minimumHitTokens?: number;
   contextUsed?: number;
 }
@@ -962,6 +969,11 @@ export function SessionInfoSection({
                 {cacheIntervalDetail} · adaptive learning
               </Typography>
             )}
+            <CacheProtectionDisableButton
+              sessionId={session.id}
+              status={cacheProtection}
+              onDisabled={(): void => setCacheMetricsNonce((n) => n + 1)}
+            />
           </Stack>
         )}
         <ContextRolloverSettings

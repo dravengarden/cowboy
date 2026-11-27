@@ -92,10 +92,28 @@ pub async fn target_options(
     target.provider_version = generation.version;
     target.provider_generation_digest = generation.digest;
     target.provider_auth_generation = generation.auth_generation;
-    let mut preferences = match serde_json::to_value(&generation.behavior.default_preferences) {
-        Ok(serde_json::Value::Object(map)) => map,
+    let mut default_val = serde_json::to_value(&generation.behavior.default_preferences)
+        .unwrap_or_else(|_| serde_json::json!({}));
+    crate::managed_config::strip_opt_in_defaults(&mut default_val);
+    let mut preferences = match default_val {
+        serde_json::Value::Object(map) => map,
         _ => serde_json::Map::new(),
     };
+    if selection.inherit_settings
+        && crate::deepseek_cache::supported_behavior(&generation.behavior.configuration)
+        && let Some(source_prefs) = state.hub.config_preferences(&source.id)
+        && let Some(consent) =
+            crate::managed_config::effective_cache_protection_consent(&source_prefs)
+    {
+        preferences.insert(
+            crate::managed_config::CACHE_PROTECTION_ID.to_owned(),
+            serde_json::Value::Bool(consent),
+        );
+        preferences.insert(
+            crate::managed_config::CACHE_PROTECTION_OWNER_ID.to_owned(),
+            serde_json::Value::Bool(true),
+        );
+    }
     target.provider_behavior = Some(generation.behavior);
     let chosen = if selection.inherit_settings {
         configuration(state, source, &target, selection)?
@@ -195,6 +213,9 @@ pub fn apply(
     for (key, value) in values {
         state.hub.set_config_preference(&target.id, key, value)?;
     }
+    state
+        .hub
+        .inherit_cache_protection_consent(&source.id, &target.id);
     let tools = super::super::agent_tools::inherited_settings(state, source, &target.provider);
     super::super::agent_tools::store_session(
         &state.hub,
@@ -268,6 +289,10 @@ fn compatible_configuration(
                 .map(|(id, value)| (id.clone(), value.clone())),
         );
     }
+    // Paid keepalive consent is inherited separately via verified provenance so
+    // legacy defaults never enroll continuations and internal keys never leak.
+    candidates.remove(crate::managed_config::CACHE_PROTECTION_ID);
+    candidates.remove(crate::managed_config::CACHE_PROTECTION_OWNER_ID);
     let permission = permission_control(source);
     let same_permission_contract = permission.is_some() && permission == permission_control(target);
     // Never silently replace a restrictive mode with the destination's permissive

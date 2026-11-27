@@ -5511,6 +5511,41 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn hibernated_worker_snapshot_preserves_reason_and_revives_unpaused_queue() {
+        let hub = hub_with_stale_spark_preferences();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+        hub.set_dispatch_tx(tx);
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        hub.set_status("s", Status::Running, None);
+        hub.set_paused("s", true);
+        hub.submit(
+            "s",
+            "resume after hibernation".into(),
+            vec![],
+            Some("cmid-hib-proj".into()),
+            &crate::prompt_origin::RequestCaller::Person,
+        );
+        let mut worker = snapshot("s");
+        worker.state = WorkerState::Exited;
+        worker.current_turn_id = None;
+        worker.exit_detail = Some("hibernated".to_owned());
+
+        apply_snapshot(&runtime.shared, &worker);
+
+        assert_eq!(hub.status("s"), Some(Status::Exited));
+        assert!(
+            rx.try_recv().is_err(),
+            "paused queue stays held across hibernation"
+        );
+        hub.set_paused("s", false);
+        let dispatched = rx
+            .try_recv()
+            .expect("unpausing after projected hibernation revives queued work");
+        assert_eq!(dispatched.session_id, "s");
+        assert_eq!(dispatched.text, "resume after hibernation");
+    }
+
+    #[tokio::test]
     async fn cancel_before_configuration_never_sends_the_held_prompt() {
         let hub = hub_with_stale_spark_preferences();
         let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());

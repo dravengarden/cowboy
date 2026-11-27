@@ -99,12 +99,31 @@ pub fn clear(hub: &crate::core::Hub, id: &str) {
 pub const MANAGED_CHILD_REFUSAL: &str = "managed child configuration is owned by its call";
 
 /// Apply one live option change: the Web, Desktop and Agent API path.
+pub fn apply_for_caller(
+    state: &AppState,
+    session_id: &str,
+    config_id: String,
+    value: serde_json::Value,
+    remember: bool,
+    caller: &crate::prompt_origin::RequestCaller,
+) -> Result<(), String> {
+    apply(
+        state,
+        session_id,
+        config_id,
+        value,
+        remember,
+        matches!(caller, crate::prompt_origin::RequestCaller::Person),
+    )
+}
+
 pub fn apply(
     state: &AppState,
     session_id: &str,
     config_id: String,
     value: serde_json::Value,
     remember: bool,
+    owner_authorized: bool,
 ) -> Result<(), String> {
     // The call runner alone configures a managed child: its receipt records
     // the preset that passed admission, so another writer would falsify it.
@@ -118,25 +137,63 @@ pub fn apply(
         .then(|| state.hub.current_config_value(session_id, &config_id))
         .flatten();
     let recorded = (config_id.clone(), value.clone());
-    let applied =
-        match state
-            .supervisor
-            .set_managed_config_option(session_id, &config_id, value.clone())
+    let revoking_cache_protection = config_id == crate::managed_config::CACHE_PROTECTION_ID
+        && value == serde_json::Value::Bool(false);
+    let applied = match state.supervisor.set_managed_config_option_for_caller(
+        session_id,
+        &config_id,
+        value.clone(),
+        owner_authorized,
+    ) {
+        Ok(true) => Ok(()),
+        Ok(false) => state
+            .hub
+            .set_config_preference(session_id, config_id.clone(), value.clone())
+            .and_then(|()| {
+                state.supervisor.send(
+                    session_id,
+                    AgentCommand::SetConfigOption { config_id, value },
+                )
+            }),
+        Err(error) => Err(error),
+    };
+    if applied.is_ok() {
+        if revoking_cache_protection
+            && let Some(meta) = state.hub.session_info(session_id).map(|info| info.meta)
         {
-            Ok(true) => Ok(()),
-            Ok(false) => state
-                .hub
-                .set_config_preference(session_id, config_id.clone(), value.clone())
-                .and_then(|()| {
-                    state.supervisor.send(
-                        session_id,
-                        AgentCommand::SetConfigOption { config_id, value },
-                    )
-                }),
-            Err(error) => Err(error),
-        };
-    if applied.is_ok() && remember {
-        record(&state.hub, session_id, &recorded.0, previous, &recorded.1);
+            let configuration = meta.provider_behavior.as_ref().map_or_else(
+                || crate::provider::legacy_behavior(&meta.provider).configuration,
+                |behavior| behavior.configuration.clone(),
+            );
+            if crate::deepseek_cache::supported_behavior(&configuration) {
+                let machine_control = Arc::clone(&state.machine_control);
+                let machine_id = meta.machine_id;
+                let sid = meta.id;
+                tokio::spawn(async move {
+                    if let Err(error) = machine_control
+                        .adapter_request(
+                            &machine_id,
+                            "provider-cache-revoke",
+                            serde_json::json!({
+                                "configuration": configuration,
+                                "sessionId": sid,
+                            }),
+                        )
+                        .await
+                    {
+                        tracing::debug!(
+                            session = %sid,
+                            machine = %machine_id,
+                            %error,
+                            "best-effort gateway cache-protection revoke did not complete"
+                        );
+                    }
+                });
+            }
+        }
+        if remember {
+            record(&state.hub, session_id, &recorded.0, previous, &recorded.1);
+        }
     }
     applied
 }
@@ -148,7 +205,11 @@ pub async fn get(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> 
     Json(read(&state.hub, &id)).into_response()
 }
 
-pub async fn restore(State(state): State<Arc<AppState>>, Path(id): Path<String>) -> Response {
+pub async fn restore(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthenticatedProductRequest>,
+    Path(id): Path<String>,
+) -> Response {
     if state.hub.session_info(&id).is_none() {
         return StatusCode::NOT_FOUND.into_response();
     }
@@ -208,7 +269,15 @@ pub async fn restore(State(state): State<Arc<AppState>>, Path(id): Path<String>)
     });
     let mut remaining = pending.into_iter();
     while let Some((config_id, value)) = remaining.next() {
-        if let Err(error) = apply(&state, &id, config_id.clone(), value.clone(), false) {
+        let owner_authorized = matches!(auth.caller, crate::prompt_origin::RequestCaller::Person);
+        if let Err(error) = apply(
+            &state,
+            &id,
+            config_id.clone(),
+            value.clone(),
+            false,
+            owner_authorized,
+        ) {
             // Keep Back for what was not applied.
             let _guard = REVERT_LOCK.lock();
             let mut revert = read(&state.hub, &id);

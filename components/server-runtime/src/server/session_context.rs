@@ -441,11 +441,15 @@ pub fn apply_overrides(
     state: &AppState,
     destination: &str,
     config: &serde_json::Map<String, serde_json::Value>,
+    owner_authorized: bool,
 ) -> Result<(), String> {
     for (config_id, value) in config {
-        state
-            .hub
-            .set_config_preference(destination, config_id.clone(), value.clone())?;
+        state.hub.set_owner_config_preference(
+            destination,
+            config_id.clone(),
+            value.clone(),
+            owner_authorized,
+        )?;
     }
     Ok(())
 }
@@ -457,6 +461,7 @@ pub fn valid_overrides(config: &serde_json::Map<String, serde_json::Value>) -> R
     for (config_id, value) in config {
         if config_id.is_empty()
             || config_id.len() > 128
+            || crate::managed_config::is_internal_preference_key(config_id)
             || !matches!(
                 value,
                 serde_json::Value::String(_) | serde_json::Value::Bool(_)
@@ -743,7 +748,12 @@ async fn prepare_target(
         if target.inherit_settings {
             inheritance::apply(state, &source, &destination, target)?;
         }
-        apply_overrides(state, target_id, &target.config)?;
+        apply_overrides(
+            state,
+            target_id,
+            &target.config,
+            matches!(auth.caller, crate::prompt_origin::RequestCaller::Person),
+        )?;
         state
             .hub
             .place_continuation(id, target_id, target.inherit_settings, &actor)?;
