@@ -65,6 +65,7 @@ export interface CacheCapabilitiesView {
   observed_cache_read: boolean;
   observed_cache_write: boolean;
   supports_idle_rollover: boolean;
+  policy_restricted?: boolean;
   supports_gateway_keepalive: boolean | null;
   keepalive_capability_status: string;
   rollover_restriction?: string | null;
@@ -73,6 +74,7 @@ export interface CacheCapabilitiesView {
 export interface RolloverStrategyView {
   availability: string;
   supported: boolean;
+  policy_restricted?: boolean;
   enabled: boolean | null;
   inherited: boolean | null;
   session_override: boolean | null;
@@ -119,8 +121,10 @@ export interface SessionCacheMetricsResponse {
   capabilities: CacheCapabilitiesView;
   strategy: SessionCacheStrategyView;
   idle_ms?: number | null;
-  context_used?: number;
+  context_used?: number | null;
   context_stale?: boolean;
+  active_turn?: boolean;
+  pending_work?: boolean;
 }
 
 export function accountCacheMetricsUrl(
@@ -290,31 +294,41 @@ export function formatStrategySummary(strategy: SessionCacheStrategyView): strin
   return parts.join(" · ");
 }
 
-const COLD_RESUME_ADVISORY_MIN_IDLE_MS = 30 * 60_000;
-const COLD_RESUME_ADVISORY_MIN_CONTEXT_TOKENS = 80_000;
+export const COLD_RESUME_ADVISORY_MIN_IDLE_MS = 30 * 60_000;
+export const COLD_RESUME_ADVISORY_MIN_CONTEXT_TOKENS = 80_000;
 
 /**
  * Strictly read-only cold-resume guidance for host-policy-restricted sessions
  * (e.g. Antigravity) where automatic context rollover is prohibited.
- * Never returns an advisory for rollover-capable Providers or stale readings.
+ * Gates on explicit `policy_restricted`, verified non-stale usage, and an idle
+ * session with no active turn or pending work.
  */
 export function formatColdResumeAdvisory(
   data: Pick<
     SessionCacheMetricsResponse,
-    "capabilities" | "strategy" | "idle_ms" | "context_used" | "context_stale"
+    | "capabilities"
+    | "strategy"
+    | "idle_ms"
+    | "context_used"
+    | "context_stale"
+    | "active_turn"
+    | "pending_work"
   >,
 ): string | null {
   if (
+    data.capabilities.policy_restricted !== true ||
     data.strategy.rollover.supported ||
-    !data.capabilities.rollover_restriction ||
-    data.context_stale !== false
+    data.context_stale !== false ||
+    data.active_turn !== false ||
+    data.pending_work !== false
   ) {
     return null;
   }
   const idleMs = data.idle_ms ?? null;
-  const contextUsed = data.context_used ?? 0;
+  const contextUsed = data.context_used ?? null;
   if (
     idleMs === null ||
+    contextUsed === null ||
     idleMs < COLD_RESUME_ADVISORY_MIN_IDLE_MS ||
     contextUsed < COLD_RESUME_ADVISORY_MIN_CONTEXT_TOKENS
   ) {

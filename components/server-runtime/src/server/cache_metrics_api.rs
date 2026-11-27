@@ -77,6 +77,7 @@ pub struct CacheCapabilitiesView {
     pub observed_cache_read: bool,
     pub observed_cache_write: bool,
     pub supports_idle_rollover: bool,
+    pub policy_restricted: bool,
     pub supports_gateway_keepalive: Option<bool>,
     pub keepalive_capability_status: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -87,6 +88,7 @@ pub struct CacheCapabilitiesView {
 pub struct RolloverStrategyView {
     pub availability: String,
     pub supported: bool,
+    pub policy_restricted: bool,
     pub enabled: Option<bool>,
     pub inherited: Option<bool>,
     pub session_override: Option<bool>,
@@ -127,8 +129,10 @@ pub struct SessionCacheMetricsResponse {
     pub capabilities: CacheCapabilitiesView,
     pub strategy: SessionCacheStrategyView,
     pub idle_ms: Option<u64>,
-    pub context_used: u64,
+    pub context_used: Option<u64>,
     pub context_stale: bool,
+    pub active_turn: bool,
+    pub pending_work: bool,
 }
 
 fn no_store_json<T: Serialize>(payload: T) -> Response {
@@ -307,6 +311,7 @@ fn resolve_capabilities(
         observed_cache_read: totals.observed_cache_turns > 0,
         observed_cache_write: totals.observed_cache_write_turns > 0,
         supports_idle_rollover: !named_only,
+        policy_restricted: named_only,
         supports_gateway_keepalive: keepalive.supports(),
         keepalive_capability_status: keepalive.status().to_owned(),
         rollover_restriction: named_only.then(|| ANTIGRAVITY_ROLLOVER_RESTRICTION.to_owned()),
@@ -406,9 +411,10 @@ async fn load_authorized_session_cache_metrics(
     if !session_is_visible(hub, principal, session_id) {
         return Err((StatusCode::NOT_FOUND, "unknown session"));
     }
-    let Some(meta) = hub.session_info(session_id).map(|info| info.meta) else {
+    let Some(info) = hub.session_info(session_id) else {
         return Err((StatusCode::NOT_FOUND, "unknown session"));
     };
+    let meta = info.meta;
     let limit = query
         .limit
         .unwrap_or(DEFAULT_RECENT_TURN_LIMIT)
@@ -456,6 +462,7 @@ async fn load_authorized_session_cache_metrics(
             RolloverStrategyView {
                 availability: "available".to_owned(),
                 supported: session_rollover_supported,
+                policy_restricted: capabilities.policy_restricted,
                 enabled: Some(policy.enabled),
                 inherited: Some(policy.session_override.is_none()),
                 session_override: policy.session_override,
@@ -471,6 +478,7 @@ async fn load_authorized_session_cache_metrics(
             RolloverStrategyView {
                 availability: "unavailable".to_owned(),
                 supported: session_rollover_supported,
+                policy_restricted: capabilities.policy_restricted,
                 enabled: None,
                 inherited: None,
                 session_override: None,
@@ -498,13 +506,27 @@ async fn load_authorized_session_cache_metrics(
         },
     };
 
+    // A restored resumable session with no usage record must report `null`,
+    // not a fabricated zero, while preserving verified zeros and stale flags.
+    let context_used = if meta.context_used == 0 && meta.agent_session_id.is_some() {
+        hub.verified_context_usage(&meta)
+    } else {
+        Some(meta.context_used)
+    };
+    let active_turn = matches!(meta.status, Status::Busy | Status::Starting)
+        || hub.session_has_in_flight_prompt(&meta.id);
+    let pending_work =
+        info.queue_count > 0 || meta.background_tasks > 0 || !meta.attention.is_empty();
+
     Ok(SessionCacheMetricsResponse {
         metrics,
         capabilities,
         strategy,
         idle_ms,
-        context_used: meta.context_used,
+        context_used,
         context_stale: meta.context_usage_stale(),
+        active_turn,
+        pending_work,
     })
 }
 
@@ -581,7 +603,7 @@ pub async fn session_cache_metrics(
             })
             && super::session_context::rollover::is_ordinary_session(&state, &meta)
     });
-    let native_fork = state.hub.session_fork(&meta.id).is_some() || meta.forked_from.is_some();
+    let native_fork = state.hub.session_fork(&meta.id).is_some();
     let keepalive_evidence = resolve_session_keepalive_evidence(&state.provider_catalog, &meta);
 
     match load_authorized_session_cache_metrics(
@@ -1063,5 +1085,72 @@ mod tests {
             dsh_res.strategy.effective_mode,
             "rollover_keepalive_unknown"
         );
+    }
+
+    #[tokio::test]
+    async fn session_cache_metrics_reports_policy_flag_null_missing_usage_and_active_work() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.path().join("cache-metrics-stage3.sqlite").display()
+        );
+        let store = Store::connect(&url, dir.path().join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let hub = Hub::new();
+        hub.create_session(SessionRegistration {
+            id: "ag-resumed".to_owned(),
+            provider: "antigravity".to_owned(),
+            provider_account_id: ProviderAccountId::default(),
+            provider_version: "0.2.41".to_owned(),
+            provider_generation_digest: "gen-ag".to_owned(),
+            provider_auth_generation: None,
+            provider_behavior: None,
+            machine_id: "hawk".to_owned(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: None,
+            cwd: "/tmp".to_owned(),
+            title: "AG".to_owned(),
+            origin: SessionOrigin::Web,
+            system: false,
+            owner_user_id: Some("u1".to_owned()),
+            owner_username: Some("draven".to_owned()),
+        });
+        hub.set_agent_session_id("ag-resumed", "native-ag-1".to_owned());
+        hub.set_status("ag-resumed", Status::Busy, None);
+
+        let principal = ProductPrincipal {
+            user_id: "u1".to_owned(),
+            username: "draven".to_owned(),
+            role: AdminRole::Operator,
+        };
+        let resp = load_authorized_session_cache_metrics(
+            &hub,
+            &store,
+            &principal,
+            "ag-resumed",
+            &SessionCacheMetricsQuery { limit: Some(10) },
+            SessionCacheStrategyInput {
+                rollover_policy: None,
+                idle_ms: Some(45 * 60_000),
+                due: false,
+                native_fork: false,
+                keepalive_evidence: None,
+            },
+        )
+        .await
+        .expect("session cache metrics");
+
+        assert!(resp.capabilities.policy_restricted);
+        assert!(resp.strategy.rollover.policy_restricted);
+        assert_eq!(
+            resp.context_used, None,
+            "restored resumable session with no usage is null"
+        );
+        assert!(resp.active_turn, "Busy session reports active_turn=true");
+        assert!(!resp.pending_work);
     }
 }

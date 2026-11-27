@@ -221,7 +221,10 @@ impl Hub {
         config_id: String,
         value: serde_json::Value,
     ) -> Result<(), String> {
-        if config_id.is_empty() || config_id.len() > 128 {
+        if config_id.is_empty()
+            || config_id.len() > 128
+            || crate::managed_config::is_internal_preference_key(&config_id)
+        {
             return Err("configuration id is invalid".to_owned());
         }
         if !matches!(
@@ -238,11 +241,12 @@ impl Hub {
             if !session.config_preferences.is_object() {
                 session.config_preferences = serde_json::json!({});
             }
-            session
+            let prefs = session
                 .config_preferences
                 .as_object_mut()
-                .expect("config preferences are an object")
-                .insert(config_id.clone(), value.clone());
+                .expect("config preferences are an object");
+            prefs.insert(config_id.clone(), value.clone());
+            crate::managed_config::record_owner_preference(prefs, &config_id);
             self.inner
                 .config_in_flight
                 .lock()

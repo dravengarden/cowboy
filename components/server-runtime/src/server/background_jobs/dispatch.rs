@@ -92,12 +92,11 @@ enum PreflightOutcome {
 
 async fn prepare_dispatch_preflight(
     state: &Arc<AppState>,
-    session_id: &str,
-    text: &str,
+    req: &DispatchReq,
     content: &[serde_json::Value],
-    cmid: Option<&str>,
-    dispatch_origin: &crate::prompt_origin::DeliveryOrigin,
 ) -> PreflightOutcome {
+    let session_id = req.session_id.as_str();
+    let cmid = req.cmid.as_deref();
     let mut shutdown = state.shutdown.clone();
     let recovery = match dispatch_preflight(
         &mut shutdown,
@@ -128,10 +127,12 @@ async fn prepare_dispatch_preflight(
     session_context::rollover::before_dispatch(
         state,
         session_id,
-        text,
+        &req.text,
         content,
         cmid,
-        dispatch_origin,
+        req.origin.as_ref(),
+        &req.trigger,
+        &req.dispatch_origin,
     )
     .await;
     // Links wait for a real message: a preamble would break a slash command or compaction.
@@ -145,6 +146,21 @@ async fn prepare_dispatch_preflight(
 
 async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
     let hub = &state.hub;
+    // A user send retries a preparation that failed permanently; the
+    // preflight below then holds the prompt until the target is ready.
+    if req.explicit {
+        execution::sessions::retry_blocked(&state, &req.session_id);
+    }
+    let Some(blocks) = build_prompt_blocks(&req.text, &req.content) else {
+        tracing::warn!(session = %req.session_id, "queued prompt had no content; dropping");
+        hub.clear_in_flight(&req.session_id);
+        return;
+    };
+    let canonical_content: Vec<serde_json::Value> = blocks
+        .iter()
+        .map(|block| serde_json::to_value(block).expect("ACP content serializes"))
+        .collect();
+    let preflight = prepare_dispatch_preflight(&state, &req, &canonical_content).await;
     let DispatchReq {
         ownership: _ownership,
         session_id,
@@ -163,30 +179,7 @@ async fn dispatch_admitted(state: Arc<AppState>, req: DispatchReq) {
                 hub, sid, text, content, cmid, origin, initiator, error, explicit,
             );
         };
-    // A user send retries a preparation that failed permanently; the
-    // preflight below then holds the prompt until the target is ready.
-    if explicit {
-        execution::sessions::retry_blocked(&state, &session_id);
-    }
-    let Some(blocks) = build_prompt_blocks(&text, &content) else {
-        tracing::warn!(session = %session_id, "queued prompt had no content; dropping");
-        hub.clear_in_flight(&session_id);
-        return;
-    };
-    let canonical_content: Vec<serde_json::Value> = blocks
-        .iter()
-        .map(|block| serde_json::to_value(block).expect("ACP content serializes"))
-        .collect();
-    let recovery = match prepare_dispatch_preflight(
-        &state,
-        &session_id,
-        &text,
-        &canonical_content,
-        cmid.as_deref(),
-        &dispatch_origin,
-    )
-    .await
-    {
+    let recovery = match preflight {
         PreflightOutcome::Ready(recovery) => recovery.map(|r| *r),
         PreflightOutcome::Retain(error) => {
             retain(session_id, text, content, cmid, origin, initiator, &error);

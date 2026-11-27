@@ -32,8 +32,9 @@ DeepSeek misses are cheap and already covered by its cache protection.
 
 ## Behavior
 
-When an owner-authored message or owner-authored scheduled continuation
-(`DeliveryOrigin::Cowboy { source: "schedule" }`; never a slash command,
+When an owner-authored message or a scheduled draft with verified Owner
+authorship (`origin == Some(Owner)` and `trigger == Cowboy("schedule")`; never
+an agent `ScheduleWakeup`, legacy unknown-authorship draft, slash command,
 compaction command, `call-notice:`, managed call, peer, or superagent prompt)
 reaches the dispatcher and all of these hold, Cowboy renews the context first:
 
@@ -52,9 +53,11 @@ reaches the dispatcher and all of these hold, Cowboy renews the context first:
   id and no background work, and its context has no staged links, pending
   send or undelivered linked-context prompt. Anything else resumes normally.
 
-A live worker idle past its policy is hibernated by a one-minute pass
-(`hibernate_session`, which its Machine refuses atomically if work started),
-so its next prompt takes the dormant path. Renewal never resets a running
+A live worker idle past its policy (without explicit paid DeepSeek keepalive
+enabled) is hibernated by a one-minute pass (`hibernate_idle_session`, which
+revalidates activity, queue state, and keepalive under the Supervisor lifecycle
+lock and is refused atomically by the Machine if work started), so its next
+prompt takes the dormant path. Renewal never resets a running
 worker: the native id is forgotten under the Supervisor lifecycle lock that
 every wake path holds, after re-checking that the session is still dormant
 with the same native id; if it woke meanwhile the recorded renewal is

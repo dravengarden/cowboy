@@ -1041,6 +1041,25 @@ impl Supervisor {
         crate::managed_config::cache_protection(configuration, &preferences)
     }
 
+    /// The live worker's self-reported `cache_protection` launch policy, if a
+    /// live worker currently owns `session_id`:
+    /// - `None`: no live worker
+    /// - `Some(Some(true | false))`: live worker reported explicit launch env
+    /// - `Some(None)`: live worker predates self-reported cache policy (unknown)
+    #[must_use]
+    pub fn applied_cache_protection(&self, session_id: &str) -> Option<Option<bool>> {
+        let runtime = self.runtime_for_session(session_id).ok()?;
+        if !runtime.has_worker(session_id) {
+            return None;
+        }
+        Some(
+            runtime
+                .worker_snapshot(session_id)
+                .and_then(|snapshot| snapshot.launch)
+                .and_then(|launch| launch.cache_protection),
+        )
+    }
+
     /// Tear down a session's detached worker. Hub state is the caller's
     /// responsibility — pair with [`Hub::delete_session`].
     ///
@@ -1091,6 +1110,49 @@ impl Supervisor {
         }
         if meta.background_tasks > 0 {
             return Err("session has background work in progress".to_owned());
+        }
+        runtime.hibernate(session_id);
+        Ok(())
+    }
+
+    /// Revalidate idle-rollover hibernation admission atomically under the
+    /// lifecycle lock: activity, queue state, background work, context size,
+    /// and explicit `DeepSeek` keepalive are checked before issuing hibernation.
+    pub fn hibernate_idle_session(
+        &self,
+        session_id: &str,
+        min_idle: std::time::Duration,
+        min_context_tokens: u64,
+    ) -> Result<(), String> {
+        let _lifecycle = self.lifecycle.lock();
+        let info = self
+            .hub
+            .session_info(session_id)
+            .ok_or_else(|| format!("unknown session {session_id:?}"))?;
+        let runtime = self.runtime_for_session(session_id)?;
+        if !runtime.has_worker(session_id) || runtime.hibernation_pending(session_id) {
+            return Err("session is already hibernated or hibernating".to_owned());
+        }
+        if info.meta.status != Status::Running
+            || self.hub.session_has_in_flight_prompt(session_id)
+            || info.queue_count > 0
+            || info.meta.background_tasks > 0
+        {
+            return Err("session is active or has queued work".to_owned());
+        }
+        if info.meta.context_usage_stale() || info.meta.context_used < min_context_tokens {
+            return Err("session context does not qualify for renewal".to_owned());
+        }
+        if self
+            .hub
+            .session_idle_for(session_id)
+            .is_none_or(|idle| idle < min_idle)
+        {
+            return Err("session became active before hibernation".to_owned());
+        }
+        let configuration = session_configuration(&info.meta);
+        if self.managed_cache_protection(session_id, &configuration) == Some(true) {
+            return Err("session has explicit paid cache keepalive enabled".to_owned());
         }
         runtime.hibernate(session_id);
         Ok(())
@@ -1341,12 +1403,22 @@ impl Supervisor {
             .hub
             .config_preferences(session_id)
             .unwrap_or_else(|| serde_json::json!({}));
-        let unchanged = crate::managed_config::change_is_unchanged(
+        let mut unchanged = crate::managed_config::change_is_unchanged(
             effect,
             &configuration,
             &preferences,
             &value,
         )?;
+        // An adopted live worker launched under an older default can still run
+        // with `auto` (or unknown) while the Controller fallback reports Off.
+        // Force a recycle whenever the live worker does not match the target.
+        if !deferred
+            && effect == crate::managed_config::ManagedConfigEffect::CacheProtectionV1
+            && let Some(applied) = self.applied_cache_protection(session_id)
+            && applied != value.as_bool()
+        {
+            unchanged = false;
+        }
         self.hub
             .set_config_preference(session_id, config_id.to_owned(), value)?;
         // A dormant session's next launch reads the new preference.

@@ -31,6 +31,14 @@ export interface ContextRolloverPreferencesPayload {
   dataset: { dataset_id: string; user_id: string };
 }
 
+export type ProviderIdleSelection = "default" | "off" | number;
+
+export type RolloverIntent =
+  | { kind: "enabled"; enabled: boolean }
+  | { kind: "min_context_tokens"; min_context_tokens: number }
+  | { kind: "provider_idle"; providerId: string; selection: ProviderIdleSelection }
+  | { kind: "reset_defaults" };
+
 export const DEFAULT_MIN_CONTEXT_TOKENS = 80_000;
 export const DEFAULT_CONTEXT_ROLLOVER_VALUES: ContextRolloverValues = {
   enabled: true,
@@ -70,8 +78,7 @@ export function withContextRolloverDefaults(
 
 export function formatIdleMinutesLabel(minutes: number): string {
   if (minutes % 60 === 0) {
-    const hours = minutes / 60;
-    return `${hours} h`;
+    return `${minutes / 60} h`;
   }
   return `${minutes} min`;
 }
@@ -89,25 +96,106 @@ export function effectiveProviderIdleMinutes(
   return provider.builtin_idle_minutes;
 }
 
-/** Return the updated `idle_minutes` map after changing one Provider's threshold.
- *  Elides entries that match the built-in default so preferences stay minimal,
- *  and never writes a non-null threshold for a host-policy-restricted Provider. */
-export function withProviderIdleMinutes(
+/** Return the Select control value distinguishing `default` (key absent) from
+ *  explicit `off` (`null`) and numeric thresholds. */
+export function providerIdleSelectionValue(
   values: ContextRolloverValues,
   provider: ContextRolloverProviderChoice,
-  nextMinutes: number | null,
+): string {
+  if (provider.policy_restricted) return "off";
+  if (!Object.prototype.hasOwnProperty.call(values.idle_minutes, provider.id)) {
+    return "default";
+  }
+  const configured = values.idle_minutes[provider.id];
+  if (typeof configured === "number" && configured >= 1) {
+    return String(configured);
+  }
+  return "off";
+}
+
+/** Drop obsolete non-null thresholds for host-policy-restricted Providers so
+ *  legacy pre-policy rows never block edits to other Providers. */
+export function sanitizeIdleMinutesMap(
+  idleMinutes: Record<string, number | null>,
+  providers: readonly ContextRolloverProviderChoice[],
 ): Record<string, number | null> {
-  const next: Record<string, number | null> = { ...values.idle_minutes };
+  const restrictedIds = new Set(
+    providers.filter((provider) => provider.policy_restricted).map((provider) => provider.id),
+  );
+  restrictedIds.add("antigravity");
+  const next: Record<string, number | null> = {};
+  for (const [providerId, minutes] of Object.entries(idleMinutes)) {
+    if (restrictedIds.has(providerId) && minutes !== null) {
+      continue;
+    }
+    next[providerId] = minutes;
+  }
+  return next;
+}
+
+/** Apply one Provider idle selection while preserving explicit `null` opt-outs
+ *  (never erasing them to unconfigured defaults) and normalizing legacy
+ *  restricted entries. */
+export function withProviderIdleSelection(
+  values: ContextRolloverValues,
+  providers: readonly ContextRolloverProviderChoice[],
+  provider: ContextRolloverProviderChoice,
+  selection: ProviderIdleSelection,
+): Record<string, number | null> {
+  const next = sanitizeIdleMinutesMap(values.idle_minutes, providers);
   if (provider.policy_restricted) {
     delete next[provider.id];
     return next;
   }
-  if (nextMinutes === provider.builtin_idle_minutes) {
+  if (selection === "default") {
     delete next[provider.id];
+  } else if (selection === "off") {
+    next[provider.id] = null;
   } else {
-    next[provider.id] = nextMinutes;
+    next[provider.id] = selection;
   }
   return next;
+}
+
+/** Materialize a semantic edit intent against the latest server values. Used
+ *  both for initial saves and for rebuilding a conflicted write on 409 so a
+ *  retry never overwrites another device's edits to unrelated Providers. */
+export function buildRolloverChanges(
+  baseValues: ContextRolloverValues,
+  providers: readonly ContextRolloverProviderChoice[],
+  intent: RolloverIntent,
+): Partial<ContextRolloverValues> {
+  switch (intent.kind) {
+    case "enabled":
+      return { enabled: intent.enabled };
+    case "min_context_tokens":
+      return { min_context_tokens: intent.min_context_tokens };
+    case "reset_defaults":
+      return {
+        enabled: true,
+        min_context_tokens: DEFAULT_MIN_CONTEXT_TOKENS,
+        idle_minutes: {},
+      };
+    case "provider_idle": {
+      const provider = providers.find((entry) => entry.id === intent.providerId) ?? {
+        id: intent.providerId,
+        name: intent.providerId,
+        builtin_idle_minutes: null,
+        recommended_idle_minutes: null,
+        policy_restricted: intent.providerId === "antigravity",
+        restriction: null,
+        keepalive_independent: false,
+      };
+      return {
+        idle_minutes: withProviderIdleSelection(
+          baseValues,
+          providers,
+          provider,
+          intent.selection,
+        ),
+      };
+    }
+  }
 }
 
 export interface IdleChoiceOption {
@@ -125,13 +213,19 @@ export function providerIdleChoices(
   if (currentMinutes !== null && currentMinutes >= 1) minutesSet.add(currentMinutes);
   const sorted = [...minutesSet].sort((a, b) => a - b);
 
-  const offLabel = provider.builtin_idle_minutes === null ? "Off · default" : "Off";
-  const options: IdleChoiceOption[] = [{ value: "off", label: offLabel }];
+  const defaultLabel =
+    provider.builtin_idle_minutes !== null
+      ? `Use default (${formatIdleMinutesLabel(provider.builtin_idle_minutes)})`
+      : "Use default (off)";
+  const options: IdleChoiceOption[] = [
+    { value: "default", label: defaultLabel },
+    { value: "off", label: "Off (never renew)" },
+  ];
   for (const minutes of sorted) {
     const base = formatIdleMinutesLabel(minutes);
     let suffix = "";
     if (minutes === provider.builtin_idle_minutes) {
-      suffix = " · default";
+      suffix = " · built-in";
     } else if (minutes === provider.recommended_idle_minutes) {
       suffix = provider.id === "codex" ? " · canary" : " · recommended";
     }
@@ -144,7 +238,10 @@ export function providerRolloverDescription(
   provider: ContextRolloverProviderChoice,
 ): string {
   if (provider.policy_restricted) {
-    return provider.restriction ?? "Automatic context renewal is disabled by host policy.";
+    return (
+      provider.restriction ??
+      "Automatic context renewal is disabled for this Provider by host policy."
+    );
   }
   const parts: string[] = [];
   if (provider.builtin_idle_minutes !== null) {
@@ -155,22 +252,109 @@ export function providerRolloverDescription(
       `Off by default · ${formatIdleMinutesLabel(provider.recommended_idle_minutes)} ${tag}`,
     );
   } else {
-    parts.push("Off by default · opt-in");
+    parts.push("Off by default");
   }
   if (provider.keepalive_independent) {
-    parts.push("Independent from DeepSeek cache protection");
+    parts.push("Independent of paid DeepSeek keepalive (off by default)");
   }
   return parts.join(" · ");
 }
 
-interface PendingRolloverWrite {
+export function hasCustomRolloverPreferences(values: ContextRolloverValues): boolean {
+  return (
+    values.enabled !== true ||
+    values.min_context_tokens !== DEFAULT_MIN_CONTEXT_TOKENS ||
+    Object.keys(values.idle_minutes).length > 0
+  );
+}
+
+export interface PendingRolloverWrite {
+  datasetId: string;
   operation: string;
   scope: "context_rollover";
   expected_revision: number;
+  intent: RolloverIntent;
   changes: Partial<ContextRolloverValues>;
 }
 
-export function useContextRolloverPreferences() {
+/** Reconcile a freshly loaded snapshot against the previous state without ever
+ *  comparing revision numbers across different Service datasets. */
+export function reconcileLoadedRolloverPayload(
+  old: ContextRolloverPreferencesPayload | undefined,
+  next: ContextRolloverPreferencesPayload,
+): { payload: ContextRolloverPreferencesPayload; datasetChanged: boolean } {
+  if (!old) return { payload: next, datasetChanged: false };
+  if (old.dataset.dataset_id !== next.dataset.dataset_id) {
+    return { payload: next, datasetChanged: true };
+  }
+  return {
+    payload: next.preferences.revision >= old.preferences.revision ? next : old,
+    datasetChanged: false,
+  };
+}
+
+/** Rebuild a conflicted pending write from the server's latest snapshot while
+ *  staying bound to the original dataset and semantic intent. */
+export function rebuildConflictedRolloverWrite(
+  input: PendingRolloverWrite,
+  currentSnapshot: ContextRolloverSnapshot,
+  providers: readonly ContextRolloverProviderChoice[],
+  nextOperation: string,
+): PendingRolloverWrite {
+  const normalized = withContextRolloverDefaults(currentSnapshot);
+  return {
+    datasetId: input.datasetId,
+    operation: nextOperation,
+    scope: "context_rollover",
+    expected_revision: normalized.revision,
+    intent: input.intent,
+    changes: buildRolloverChanges(normalized.values, providers, input.intent),
+  };
+}
+
+interface RolloverPutResult {
+  status: number;
+  ok: boolean;
+  preferences?: ContextRolloverSnapshot;
+  current?: ContextRolloverSnapshot;
+  error?: { code: string };
+}
+
+async function putRolloverPreferences(input: PendingRolloverWrite): Promise<RolloverPutResult> {
+  const response = await fetch("/api/preferences", {
+    method: "PUT",
+    signal: productSessionSignal(),
+    headers: {
+      "Content-Type": "application/json",
+      "x-cowboy-dataset": input.datasetId,
+    },
+    body: JSON.stringify({
+      operation: input.operation,
+      scope: input.scope,
+      expected_revision: input.expected_revision,
+      changes: input.changes,
+    }),
+  });
+  const body = (await response.json()) as {
+    preferences?: ContextRolloverSnapshot;
+    current?: ContextRolloverSnapshot;
+    error?: { code: string };
+  };
+  return { status: response.status, ok: response.ok, ...body };
+}
+
+function applySnapshotForDataset(
+  old: ContextRolloverPreferencesPayload | undefined,
+  datasetId: string,
+  snapshot: ContextRolloverSnapshot,
+): ContextRolloverPreferencesPayload | undefined {
+  if (!old || old.dataset.dataset_id !== datasetId || snapshot.revision < old.preferences.revision) {
+    return old;
+  }
+  return { ...old, preferences: snapshot };
+}
+
+export function useContextRolloverPreferences(connected: boolean) {
   const [data, setData] = useState<ContextRolloverPreferencesPayload>();
   const [error, setError] = useState<string>();
   const [loadError, setLoadError] = useState<string>();
@@ -179,6 +363,8 @@ export function useContextRolloverPreferences() {
   const alive = useRef(false);
   const dataRef = useRef(data);
   dataRef.current = data;
+  const pendingRef = useRef(pending);
+  pendingRef.current = pending;
   const loading = useRef(0);
   const writing = useRef(false);
 
@@ -189,9 +375,7 @@ export function useContextRolloverPreferences() {
         cache: "no-store",
         signal: productSessionSignal(),
       });
-      if (!response.ok) {
-        throw new Error("Could not load prompt-cache renewal preferences.");
-      }
+      if (!response.ok) throw new Error("Could not load prompt-cache renewal preferences.");
       const next = (await response.json()) as ContextRolloverPreferencesPayload;
       if (!alive.current || sequence !== loading.current || productSessionSignal().aborted) return;
       if (next.dataset.user_id !== productSyncPrincipal()) {
@@ -202,9 +386,12 @@ export function useContextRolloverPreferences() {
         preferences: withContextRolloverDefaults(next.preferences),
         providers: Array.isArray(next.providers) ? next.providers : [],
       };
-      setData((old) =>
-        !old || next.preferences.revision >= old.preferences.revision ? normalized : old,
-      );
+      const reconciled = reconcileLoadedRolloverPayload(dataRef.current, normalized);
+      setData(reconciled.payload);
+      if (reconciled.datasetChanged && pendingRef.current) {
+        setPending(undefined);
+        setError("Service dataset changed. Reloaded settings and cleared the unsaved edit.");
+      }
       setLoadError(undefined);
     } catch (cause) {
       if (alive.current) setLoadError(cause instanceof Error ? cause.message : String(cause));
@@ -225,59 +412,51 @@ export function useContextRolloverPreferences() {
       }
       void load();
     };
+    const onOnline = () => void load();
     window.addEventListener(PREFERENCES_CHANGED, refresh);
+    window.addEventListener("online", onOnline);
     return () => {
       alive.current = false;
       ++loading.current;
       window.removeEventListener(PREFERENCES_CHANGED, refresh);
+      window.removeEventListener("online", onOnline);
     };
-  }, [load]);
+  }, [load, connected]);
 
   const commit = async (input: PendingRolloverWrite): Promise<void> => {
     const current = dataRef.current;
     if (!current || writing.current || productSessionSignal().aborted) return;
+    if (current.dataset.dataset_id !== input.datasetId) {
+      setPending(undefined);
+      setError("Service dataset changed. Reloaded settings and cleared the unsaved edit.");
+      void load();
+      return;
+    }
     writing.current = true;
     setSaving(true);
     setPending(input);
     setError(undefined);
     try {
-      const response = await fetch("/api/preferences", {
-        method: "PUT",
-        signal: productSessionSignal(),
-        headers: {
-          "Content-Type": "application/json",
-          "x-cowboy-dataset": current.dataset.dataset_id,
-        },
-        body: JSON.stringify(input),
-      });
-      const result = (await response.json()) as {
-        preferences?: ContextRolloverSnapshot;
-        current?: ContextRolloverSnapshot;
-        error?: { code: string };
-      };
+      const result = await putRolloverPreferences(input);
       if (!alive.current || productSessionSignal().aborted) return;
-      if (response.status === 409 && result.current) {
-        setData((old) =>
-          old && result.current!.revision >= old.preferences.revision
-            ? { ...old, preferences: withContextRolloverDefaults(result.current!) }
-            : old,
-        );
-        setError("Prompt-cache settings changed elsewhere. Retry to apply your change or discard it.");
-        setPending({
-          ...input,
-          operation: crypto.randomUUID(),
-          expected_revision: result.current.revision,
-        });
+      if (result.status === 409 && result.error?.code === "dataset_changed") {
+        setPending(undefined);
+        setError("Service dataset changed. Reloaded settings; apply your edit again.");
+        void load();
         return;
       }
-      if (!response.ok || !result.preferences) {
+      if (result.status === 409 && result.current) {
+        const latest = withContextRolloverDefaults(result.current);
+        setData((old) => applySnapshotForDataset(old, input.datasetId, latest));
+        setError("Prompt-cache settings changed elsewhere. Retry to apply your change or discard it.");
+        setPending(rebuildConflictedRolloverWrite(input, latest, current.providers, crypto.randomUUID()));
+        return;
+      }
+      if (!result.ok || !result.preferences) {
         throw new Error(result.error?.code ?? "Could not save prompt-cache settings");
       }
-      setData((old) =>
-        old && result.preferences!.revision >= old.preferences.revision
-          ? { ...old, preferences: withContextRolloverDefaults(result.preferences!) }
-          : old,
-      );
+      const saved = withContextRolloverDefaults(result.preferences);
+      setData((old) => applySnapshotForDataset(old, input.datasetId, saved));
       setPending(undefined);
     } catch (cause) {
       if (alive.current) {
@@ -295,13 +474,15 @@ export function useContextRolloverPreferences() {
     error: error ?? loadError,
     saving,
     pending,
-    save: (changes: Partial<ContextRolloverValues>) =>
+    apply: (intent: RolloverIntent) =>
       data && !pending
         ? commit({
+            datasetId: data.dataset.dataset_id,
             operation: crypto.randomUUID(),
             scope: "context_rollover",
             expected_revision: data.preferences.revision,
-            changes,
+            intent,
+            changes: buildRolloverChanges(data.preferences.values, data.providers, intent),
           })
         : Promise.resolve(),
     retry: () => (pending ? commit(pending) : load()),

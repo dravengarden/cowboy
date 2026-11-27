@@ -16,7 +16,10 @@
 use cowboy_provider_sdk::ConfigurationBehavior;
 
 const CONTEXT_BUDGET_ID: &str = "deepseek_context";
-const CACHE_PROTECTION_ID: &str = "deepseek_cache_protection";
+pub const CACHE_PROTECTION_ID: &str = "deepseek_cache_protection";
+/// Internal provenance flag proving the owner explicitly wrote `deepseek_cache_protection`.
+/// Legacy manifest defaults and SQL backfills lack this flag and default safely to Off.
+pub const CACHE_PROTECTION_OWNER_ID: &str = "deepseek_cache_protection_owner";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ManagedConfigEffect {
@@ -61,8 +64,35 @@ pub fn effect_for_id(
 }
 
 #[must_use]
+pub fn is_internal_preference_key(config_id: &str) -> bool {
+    config_id == CACHE_PROTECTION_OWNER_ID
+}
+
+#[must_use]
 pub fn is_managed(configuration: &ConfigurationBehavior, config_id: &str) -> bool {
-    effect_for_id(configuration, config_id).is_some()
+    effect_for_id(configuration, config_id).is_some() || is_internal_preference_key(config_id)
+}
+
+/// Strip opt-in paid-keepalive keys copied from older Provider manifests so new
+/// sessions never inherit paid replay without an explicit owner selection.
+pub fn strip_opt_in_defaults(preferences: &mut serde_json::Value) {
+    if let Some(object) = preferences.as_object_mut() {
+        object.remove(CACHE_PROTECTION_ID);
+        object.remove(CACHE_PROTECTION_OWNER_ID);
+    }
+}
+
+/// Record owner provenance when the owner explicitly sets `deepseek_cache_protection`.
+pub fn record_owner_preference(
+    preferences: &mut serde_json::Map<String, serde_json::Value>,
+    config_id: &str,
+) {
+    if config_id == CACHE_PROTECTION_ID {
+        preferences.insert(
+            CACHE_PROTECTION_OWNER_ID.to_owned(),
+            serde_json::Value::Bool(true),
+        );
+    }
 }
 
 #[must_use]

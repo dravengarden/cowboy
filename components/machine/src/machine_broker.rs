@@ -2313,14 +2313,7 @@ impl Broker {
         // Fence any launch while the worker stops, as a reset does, then
         // forget the declaration so nothing replaces it.
         self.cancelled_sessions.lock().insert(session_id.clone());
-        // A sleeping session must not keep paying for its prompt cache: the
-        // provider gateway replays an unrevoked snapshot with real model
-        // requests (`cache_keepalive`). Delete, reset and provider roll already
-        // revoke it; hibernation releases the same resource.
         let released = self.sessions.lock().remove(&session_id);
-        if let Some(session) = &released {
-            self.revoke_cache_protection(session, &session_id, "session_hibernated");
-        }
         self.awaiting_reconnect.lock().remove(&session_id);
         self.startup_failures.lock().remove(&session_id);
         self.unpin_fallback(&session_id);
@@ -2335,6 +2328,11 @@ impl Broker {
                 "worker stop is unconfirmed; retry hibernation after reconciliation".into(),
             );
             return;
+        }
+        // Only revoke the gateway replay snapshot after the worker stop is confirmed,
+        // so a failed hibernation never drops protection for a still-running worker.
+        if let Some(session) = &released {
+            self.revoke_cache_protection(session, &session_id, "session_hibernated");
         }
         self.pending_commands.lock().remove(&session_id);
         self.cancelled_sessions.lock().remove(&session_id);

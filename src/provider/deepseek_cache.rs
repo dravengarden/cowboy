@@ -60,10 +60,15 @@ pub fn selected(
     option_id: &str,
 ) -> Option<bool> {
     supported_behavior(behavior).then(|| {
-        preferences
+        let enabled = preferences
             .get(option_id)
             .and_then(serde_json::Value::as_bool)
-            .unwrap_or(false)
+            .unwrap_or(false);
+        let owner_verified = preferences
+            .get(crate::managed_config::CACHE_PROTECTION_OWNER_ID)
+            .and_then(serde_json::Value::as_bool)
+            .unwrap_or(false);
+        enabled && owner_verified
     })
 }
 
@@ -177,9 +182,22 @@ mod tests {
             selected(&serde_json::json!({}), &CODEX, "cache"),
             Some(false)
         );
+        // Legacy unverified `true` (old manifest default or SQL backfill) defaults safely to Off.
         assert_eq!(
             selected(
                 &serde_json::json!({"deepseek_cache_protection": true}),
+                &CLAUDE,
+                "deepseek_cache_protection"
+            ),
+            Some(false)
+        );
+        // Verified explicit owner opt-in enables paid keepalive.
+        assert_eq!(
+            selected(
+                &serde_json::json!({
+                    "deepseek_cache_protection": true,
+                    "deepseek_cache_protection_owner": true,
+                }),
                 &CLAUDE,
                 "deepseek_cache_protection"
             ),
@@ -187,7 +205,10 @@ mod tests {
         );
         assert_eq!(
             selected(
-                &serde_json::json!({"deepseek_cache_protection": false}),
+                &serde_json::json!({
+                    "deepseek_cache_protection": false,
+                    "deepseek_cache_protection_owner": true,
+                }),
                 &CLAUDE,
                 "deepseek_cache_protection"
             ),

@@ -232,7 +232,8 @@ pub async fn api_session_cache_protection(
         )
             .into_response();
     };
-    if !enabled {
+    let applied = state.supervisor.applied_cache_protection(&session.id);
+    if !enabled && (applied.is_none() || applied == Some(Some(false))) {
         return Json(serde_json::json!({
             "state": "disabled",
             "algorithm": "adaptive-replay-v1",
@@ -254,6 +255,15 @@ pub async fn api_session_cache_protection(
         .await
     {
         Ok(mut status) => {
+            // When configured Off but a live adopted worker was queried, report
+            // "disabled" if the gateway confirms no active snapshot, and keep
+            // "protected" honestly if a live snapshot is still charging.
+            if !enabled
+                && status.get("state").and_then(serde_json::Value::as_str) == Some("inactive")
+                && let Some(object) = status.as_object_mut()
+            {
+                object.insert("state".to_owned(), serde_json::json!("disabled"));
+            }
             if let Some(object) = status.as_object_mut() {
                 object.insert(
                     "minimumHitTokens".to_owned(),

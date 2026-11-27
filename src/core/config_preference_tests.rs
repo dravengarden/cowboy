@@ -102,7 +102,6 @@ fn new_claude_deepseek_sessions_start_with_flash_max_default_agent_preferences()
         Some(serde_json::json!({
             "model": "deepseek-flash[1m]",
             "deepseek_context": "830k",
-            "deepseek_cache_protection": false,
             "effort": "max",
             "agent": "default",
         }))
@@ -126,10 +125,69 @@ fn new_codex_deepseek_sessions_start_with_flash_default_collaboration_max_prefer
         Some(serde_json::json!({
             "model": "deepseek-flash",
             "deepseek_context": "680k",
-            "deepseek_cache_protection": false,
             "collaboration_mode": "default",
             "reasoning_effort": "max",
         }))
+    );
+    // Even if an older Provider manifest still ships `deepseek_cache_protection: true`,
+    // session creation strips the opt-in paid flag and requires explicit owner consent.
+    let mut legacy_behavior = crate::provider::legacy_behavior("claude-deepseek");
+    legacy_behavior.default_preferences.insert(
+        "deepseek_cache_protection".to_owned(),
+        cowboy_provider_sdk::LiteralValue::Bool(true),
+    );
+    hub.create_session(SessionRegistration {
+        id: "legacy-manifest-deepseek".to_owned(),
+        provider: "claude-deepseek".to_owned(),
+        provider_account_id: crate::provider_account::ProviderAccountId::default(),
+        provider_version: "3.1.101".to_owned(),
+        provider_generation_digest: "gen-legacy".to_owned(),
+        provider_auth_generation: None,
+        provider_behavior: Some(legacy_behavior),
+        machine_id: "local".to_owned(),
+        workspace_id: None,
+        workspace_name: None,
+        workspace_source_path: None,
+        execution_binding: None,
+        cwd: "/tmp".to_owned(),
+        title: "legacy".to_owned(),
+        origin: SessionOrigin::Web,
+        system: false,
+        owner_user_id: None,
+        owner_username: None,
+    });
+    let prefs = hub.config_preferences("legacy-manifest-deepseek").unwrap();
+    assert!(prefs.get("deepseek_cache_protection").is_none());
+    assert_eq!(
+        crate::managed_config::cache_protection(
+            &cowboy_provider_sdk::ConfigurationBehavior::AnthropicGatewayV1,
+            &prefs
+        ),
+        Some(false)
+    );
+    // Reject forging the internal provenance flag directly.
+    assert!(
+        hub.set_config_preference(
+            "legacy-manifest-deepseek",
+            crate::managed_config::CACHE_PROTECTION_OWNER_ID.to_owned(),
+            serde_json::json!(true),
+        )
+        .is_err()
+    );
+    // Explicit owner selection records provenance and enables paid keepalive.
+    hub.set_config_preference(
+        "legacy-manifest-deepseek",
+        "deepseek_cache_protection".to_owned(),
+        serde_json::json!(true),
+    )
+    .unwrap();
+    let updated = hub.config_preferences("legacy-manifest-deepseek").unwrap();
+    assert_eq!(
+        crate::managed_config::cache_protection(
+            &cowboy_provider_sdk::ConfigurationBehavior::AnthropicGatewayV1,
+            &updated
+        ),
+        Some(true)
     );
 }
 

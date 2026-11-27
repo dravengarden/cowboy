@@ -36,13 +36,33 @@ fn session_override(hub: &Hub, id: &str) -> Option<bool> {
         .and_then(|value| value.as_bool())
 }
 
-/// A continuation keeps the source's explicit choice.
+fn session_restricted(state: &AppState, meta: &crate::core::SessionMeta) -> bool {
+    crate::provider_account::named_only(&meta.provider)
+        || state.hub.session_fork(&meta.id).is_some()
+}
+
+/// A continuation keeps the source's explicit choice, except an enabling
+/// override on a restricted source or target is never inherited.
 pub fn inherit(state: &AppState, source: &str, target: &str) {
-    if let Some(enabled) = session_override(&state.hub, source) {
-        state
+    let Some(enabled) = session_override(&state.hub, source) else {
+        return;
+    };
+    if enabled {
+        let source_restricted = state
             .hub
-            .set_setting(override_key(target), serde_json::Value::Bool(enabled));
+            .session_info(source)
+            .is_some_and(|info| session_restricted(state, &info.meta));
+        let target_restricted = state
+            .hub
+            .session_info(target)
+            .is_some_and(|info| session_restricted(state, &info.meta));
+        if source_restricted || target_restricted {
+            return;
+        }
     }
+    state
+        .hub
+        .set_setting(override_key(target), serde_json::Value::Bool(enabled));
 }
 
 /// The effective policy, or `None` when the owner's preferences cannot be
@@ -218,26 +238,36 @@ async fn hibernate_expired(state: &AppState) {
         let Some(policy) = policy(state, &meta).await else {
             continue;
         };
+        let Some(idle_minutes) = policy.idle_minutes.filter(|_| policy.enabled) else {
+            continue;
+        };
+        let min_idle = std::time::Duration::from_mins(idle_minutes);
+        let Some(fresh_info) = state.hub.session_info(&meta.id) else {
+            continue;
+        };
+        let Some(fresh_idle) = state.hub.session_idle_for(&meta.id) else {
+            continue;
+        };
         // A reading a compaction made history measures nothing current; the
         // renewal it would lead to skips it too.
-        if meta.context_usage_stale()
-            || !policy.due(idle, meta.context_used)
-            || state
-                .hub
-                .session_info(&meta.id)
-                .is_none_or(|info| info.queue_count > 0)
+        if fresh_info.meta.context_usage_stale()
+            || !policy.due(fresh_idle, fresh_info.meta.context_used)
+            || fresh_info.queue_count > 0
         {
             continue;
         }
-        let result = state.supervisor.hibernate_session(&meta.id);
+        let result =
+            state
+                .supervisor
+                .hibernate_idle_session(&meta.id, min_idle, policy.min_context_tokens);
         tracing::info!(
             target: "cowboy::evidence",
             event_name = "cowboy.context_rollover.hibernate",
             session = %meta.id,
             provider = %meta.provider,
             outcome = if result.is_ok() { "requested" } else { "refused" },
-            idle_ms = u64::try_from(idle.as_millis()).unwrap_or(u64::MAX),
-            context_used = meta.context_used,
+            idle_ms = u64::try_from(fresh_idle.as_millis()).unwrap_or(u64::MAX),
+            context_used = fresh_info.meta.context_used,
             "hibernating a worker whose prompt cache expired"
         );
     }
@@ -296,24 +326,41 @@ fn is_command_or_compaction(_text: &str, content: &[serde_json::Value]) -> bool 
 }
 
 /// Prompts eligible for idle context renewal: direct owner prompts and
-/// owner-authored scheduled continuations (`DeliveryOrigin::Cowboy { source: "schedule" }`).
-/// Call notices (`call-notice:`), managed calls, superagent prompts, peer
+/// scheduled drafts with verified Owner authorship (`origin == Some(Owner)` and
+/// `trigger == Cowboy("schedule")`). Agent `ScheduleWakeup`s (`__wake__` /
+/// non-owner origin), legacy drafts with unknown authorship (`origin == None`),
+/// call notices (`call-notice:`), managed calls, superagent prompts, peer
 /// prompts, legacy queue rows, and automation API callers stay excluded.
-fn allows_rollover(origin: &crate::prompt_origin::DeliveryOrigin, cmid: &str) -> bool {
-    !cmid.starts_with(crate::agent_model::CALL_NOTICE_PREFIX)
-        && (origin.is_owner()
-            || matches!(
-                origin,
-                crate::prompt_origin::DeliveryOrigin::Cowboy { source } if source == "schedule"
-            ))
+fn allows_rollover(
+    origin: Option<&crate::prompt_origin::DeliveryOrigin>,
+    trigger: &crate::prompt_origin::DeliveryOrigin,
+    dispatch_origin: &crate::prompt_origin::DeliveryOrigin,
+    cmid: &str,
+) -> bool {
+    if cmid.starts_with(crate::agent_model::CALL_NOTICE_PREFIX)
+        || cmid.starts_with(crate::agent_model::WAKEUP_PREFIX)
+    {
+        return false;
+    }
+    if dispatch_origin.is_owner() {
+        return true;
+    }
+    origin.is_some_and(crate::prompt_origin::DeliveryOrigin::is_owner)
+        && matches!(
+            trigger,
+            crate::prompt_origin::DeliveryOrigin::Cowboy { source } if source == "schedule"
+        )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn before_dispatch(
     state: &AppState,
     id: &str,
     text: &str,
     content: &[serde_json::Value],
     cmid: Option<&str>,
+    origin: Option<&crate::prompt_origin::DeliveryOrigin>,
+    trigger: &crate::prompt_origin::DeliveryOrigin,
     dispatch_origin: &crate::prompt_origin::DeliveryOrigin,
 ) {
     if let Some(cmid) = cmid
@@ -336,7 +383,7 @@ pub async fn before_dispatch(
     let Some(cmid) = cmid else {
         return;
     };
-    if !allows_rollover(dispatch_origin, cmid) {
+    if !allows_rollover(origin, trigger, dispatch_origin, cmid) {
         return;
     }
     if is_command_or_compaction(text, content) {
@@ -718,7 +765,7 @@ async fn view(state: &AppState, id: &str) -> Response {
         .session_idle_for(id)
         .map(|idle| u64::try_from(idle.as_millis()).unwrap_or(u64::MAX));
     let policy_restricted = crate::provider_account::named_only(&meta.provider);
-    let native_fork = state.hub.session_fork(&meta.id).is_some() || meta.forked_from.is_some();
+    let native_fork = state.hub.session_fork(&meta.id).is_some();
     let restriction = if policy_restricted {
         Some("Automatic context renewal is disabled for Antigravity accounts by host policy.")
     } else if native_fork {
@@ -752,8 +799,16 @@ pub async fn set(
     Path(id): Path<String>,
     Json(request): Json<OverrideRequest>,
 ) -> Response {
-    if state.hub.session_info(&id).is_none() {
+    let Some(meta) = state.hub.session_info(&id).map(|info| info.meta) else {
         return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    if request.enabled == Some(true) && session_restricted(&state, &meta) {
+        let message = if crate::provider_account::named_only(&meta.provider) {
+            "Automatic context renewal is disabled for Antigravity accounts by host policy."
+        } else {
+            "Automatic context renewal is excluded for native fork sessions."
+        };
+        return (StatusCode::UNPROCESSABLE_ENTITY, message).into_response();
     }
     state.hub.set_setting(
         override_key(&id),
@@ -778,21 +833,56 @@ mod tests {
     }
 
     #[test]
-    fn rollover_allows_owner_and_scheduled_continuations_but_excludes_call_notices_and_non_owners()
-    {
-        assert!(allows_rollover(&DeliveryOrigin::Owner, "user-1"));
+    fn rollover_allows_owner_and_verified_owner_scheduled_drafts_only() {
+        let schedule = DeliveryOrigin::cowboy("schedule");
+        // Direct owner prompt: allowed.
         assert!(allows_rollover(
-            &DeliveryOrigin::cowboy("schedule"),
+            Some(&DeliveryOrigin::Owner),
+            &DeliveryOrigin::Owner,
+            &DeliveryOrigin::Owner,
+            "user-1"
+        ));
+        // Verified owner-authored scheduled draft: allowed.
+        assert!(allows_rollover(
+            Some(&DeliveryOrigin::Owner),
+            &schedule,
+            &schedule,
             "sched-sess-1-draft-1"
         ));
+        // Agent ScheduleWakeup (`__wake__` and non-owner origin): denied.
         assert!(!allows_rollover(
+            Some(&schedule),
+            &schedule,
+            &schedule,
+            "__wake__sess-1-123"
+        ));
+        assert!(!allows_rollover(
+            Some(&DeliveryOrigin::Owner),
+            &schedule,
+            &schedule,
+            "__wake__sess-1-123"
+        ));
+        // Legacy scheduled draft with unknown authorship (`origin == None`): denied.
+        assert!(!allows_rollover(
+            None,
+            &schedule,
+            &schedule,
+            "sched-sess-1-legacy"
+        ));
+        // Call notices: always denied.
+        assert!(!allows_rollover(
+            Some(&DeliveryOrigin::Owner),
+            &DeliveryOrigin::Owner,
             &DeliveryOrigin::Owner,
             "call-notice:call-123"
         ));
         assert!(!allows_rollover(
-            &DeliveryOrigin::cowboy("schedule"),
+            Some(&DeliveryOrigin::Owner),
+            &schedule,
+            &schedule,
             "call-notice:call-123"
         ));
+        // Non-owner origins (direct or scheduled): denied.
         for origin in [
             DeliveryOrigin::Automation,
             DeliveryOrigin::peer("peer-sess"),
@@ -801,8 +891,12 @@ mod tests {
             DeliveryOrigin::cowboy("legacy_queue"),
         ] {
             assert!(
-                !allows_rollover(&origin, "msg-1"),
-                "unexpected allow: {origin:?}"
+                !allows_rollover(Some(&origin), &origin, &origin, "msg-1"),
+                "unexpected direct allow: {origin:?}"
+            );
+            assert!(
+                !allows_rollover(Some(&origin), &schedule, &origin, "sched-1"),
+                "unexpected scheduled allow: {origin:?}"
             );
         }
     }

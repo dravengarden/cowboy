@@ -396,7 +396,9 @@ fn default_config_preferences(
         || crate::provider::legacy_behavior(provider).default_preferences,
         |behavior| behavior.default_preferences.clone(),
     );
-    serde_json::to_value(defaults).unwrap_or_else(|_| serde_json::json!({}))
+    let mut value = serde_json::to_value(defaults).unwrap_or_else(|_| serde_json::json!({}));
+    crate::managed_config::strip_opt_in_defaults(&mut value);
+    value
 }
 
 fn projected_config_options(
@@ -612,6 +614,7 @@ struct Session {
     runtime_epochs: runtime_epoch_fence::EpochFence,
     /// A user Clear is committing: queued prompts wait and Steer is refused.
     clear_pending: bool,
+    hibernated: bool,
     /// Active fork/handoff captures pinning this session against concurrent Clear.
     lineage_pins: usize,
     /// Lowest event seq whose `AppendEvent` was rejected by the store queue
@@ -2332,6 +2335,7 @@ impl Hub {
                         machine_lineage: None,
                         runtime_epochs: Default::default(),
                         clear_pending: false,
+                        hibernated: false,
                         lineage_pins: 0,
                         unpersisted_min_seq: None,
                         cancel_handoff_pending: false,
@@ -3084,6 +3088,7 @@ impl Hub {
                     machine_lineage: None,
                     runtime_epochs: Default::default(),
                     clear_pending: false,
+                    hibernated: false,
                     lineage_pins: 0,
                     unpersisted_min_seq: None,
                     cancel_handoff_pending: false,
@@ -3399,27 +3404,24 @@ impl Hub {
     /// in-flight turn to end, then advances). Persisted and broadcast so every
     /// terminal and a restarted Controller retain the user's decision.
     pub fn set_paused(&self, session_id: &str, paused: bool) {
-        let changed = {
+        let (changed, revive_hibernated) = {
             let mut sessions = self.inner.sessions.lock();
             match sessions.get_mut(session_id) {
                 Some(s) if s.meta.paused != paused => {
                     s.meta.paused = paused;
-                    // Keep persistence ordered with concurrent pause/resume.
                     self.set_setting(
                         format!("{}{session_id}", settings_keys::SESSION_QUEUE_PAUSED_PREFIX),
                         serde_json::Value::Bool(paused),
                     );
-                    true
+                    (true, s.hibernated && s.meta.status == Status::Exited)
                 }
-                _ => false,
+                _ => (false, false),
             }
         };
         if changed {
             self.broadcast_session(session_id);
-            // Resuming → try to advance now (an idle session with a queue drains
-            // immediately; a busy one drains on the next turn-end as usual).
             if !paused {
-                self.try_drain(session_id);
+                self.drain_head(session_id, revive_hibernated, false, None);
             }
         }
     }
@@ -3843,6 +3845,7 @@ impl Hub {
                         s.meta.provider_generation_digest.clone(),
                     )
                 });
+            s.hibernated = status == Status::Exited && detail.as_deref() == Some("hibernated");
             s.meta.status = status;
             settled_update
         };
@@ -3876,11 +3879,10 @@ impl Hub {
                 status,
             });
         }
+        let hibernated_exit = status == Status::Exited && detail.as_deref() == Some("hibernated");
         self.push(session_id, Event::Lifecycle { status, detail });
         self.broadcast_session(session_id);
-        // A turn-end / death may make the session drainable — try the next
-        // queued prompt now (no-op if still busy, held, or nothing queued).
-        self.try_drain(session_id);
+        self.drain_head(session_id, hibernated_exit, false, None);
         true
     }
 

@@ -14,12 +14,15 @@ import {
   type ContextRolloverValues,
   DEFAULT_MIN_CONTEXT_TOKENS,
   effectiveProviderIdleMinutes,
+  hasCustomRolloverPreferences,
   MIN_CONTEXT_TOKEN_PRESETS,
   providerIdleChoices,
+  providerIdleSelectionValue,
   providerRolloverDescription,
+  type ProviderIdleSelection,
   useContextRolloverPreferences,
-  withProviderIdleMinutes,
 } from "./contextRolloverPreferences";
+import { useStoreSelector } from "./store";
 
 function formatContextTokens(tokens: number): string {
   if (tokens >= 1_000_000 && tokens % 1_000_000 === 0) {
@@ -32,14 +35,15 @@ function ProviderRolloverRow({
   provider,
   values,
   disabled,
-  onSelectIdle,
+  onSelect,
 }: {
   provider: ContextRolloverProviderChoice;
   values: ContextRolloverValues;
   disabled: boolean;
-  onSelectIdle: (nextIdle: Record<string, number | null>) => void;
+  onSelect: (selection: ProviderIdleSelection) => void;
 }): React.JSX.Element {
   const effective = effectiveProviderIdleMinutes(values, provider);
+  const selectedValue = providerIdleSelectionValue(values, provider);
   const choices = providerIdleChoices(provider, effective);
   return (
     <Stack
@@ -57,70 +61,77 @@ function ProviderRolloverRow({
           {providerRolloverDescription(provider)}
         </Typography>
       </Stack>
-      <Box sx={{ flexShrink: 0 }}>
-        {provider.policy_restricted ? (
-          <Chip
-            size="small"
-            variant="outlined"
-            label="Disabled by policy"
-            sx={{ fontSize: "0.72rem" }}
-          />
-        ) : (
-          <Select
-            size="small"
-            value={effective === null ? "off" : String(effective)}
-            disabled={disabled}
-            inputProps={{ "aria-label": `${provider.name} cache renewal threshold` }}
-            onChange={(event): void => {
-              const raw = String(event.target.value);
-              const nextMinutes = raw === "off" ? null : Number(raw);
-              if (nextMinutes !== null && !Number.isFinite(nextMinutes)) return;
-              onSelectIdle(withProviderIdleMinutes(values, provider, nextMinutes));
-            }}
-            sx={{ minWidth: 164 }}
-          >
-            {choices.map((option) => (
-              <MenuItem key={option.value} value={option.value}>
-                {option.label}
-              </MenuItem>
-            ))}
-          </Select>
-        )}
-      </Box>
+      {provider.policy_restricted ? (
+        <Chip
+          size="small"
+          label="Disabled by policy"
+          variant="outlined"
+          sx={{ flexShrink: 0 }}
+        />
+      ) : (
+        <Select
+          size="small"
+          value={selectedValue}
+          disabled={disabled}
+          inputProps={{ "aria-label": `${provider.name} idle renewal threshold` }}
+          onChange={(event): void => {
+            const raw = String(event.target.value);
+            if (raw === "default" || raw === "off") {
+              onSelect(raw);
+              return;
+            }
+            const parsed = Number(raw);
+            if (Number.isFinite(parsed) && parsed >= 1) {
+              onSelect(parsed);
+            }
+          }}
+          sx={{ minWidth: 184, flexShrink: 0 }}
+        >
+          {choices.map((option) => (
+            <MenuItem key={option.value} value={option.value}>
+              {option.label}
+            </MenuItem>
+          ))}
+        </Select>
+      )}
     </Stack>
   );
 }
 
-/** Global and per-Provider idle prompt-cache renewal preferences (Settings → Agent). */
+/** Per-Provider prompt-cache renewal policy editor inside Settings -> Agent. */
 export function ContextRolloverPreferencesSection(): React.JSX.Element {
-  const { data, error, saving, pending, save, retry, discard } =
-    useContextRolloverPreferences();
+  const connected = useStoreSelector((state) => state.connected);
+  const { data, error, saving, pending, apply, retry, discard } =
+    useContextRolloverPreferences(connected);
   const values = data?.preferences.values;
   const providers = data?.providers ?? [];
-
-  const tokenChoices = React.useMemo(() => {
-    const set = new Set<number>(MIN_CONTEXT_TOKEN_PRESETS);
-    if (values?.min_context_tokens) set.add(values.min_context_tokens);
-    return [...set].sort((a, b) => a - b);
-  }, [values?.min_context_tokens]);
-
-  const customized =
-    values !== undefined &&
-    (!values.enabled ||
-      values.min_context_tokens !== DEFAULT_MIN_CONTEXT_TOKENS ||
-      Object.keys(values.idle_minutes).length > 0);
   const busy = saving || Boolean(pending);
+
+  const tokenChoices = Array.from(
+    new Set(
+      values
+        ? [...MIN_CONTEXT_TOKEN_PRESETS, values.min_context_tokens]
+        : MIN_CONTEXT_TOKEN_PRESETS,
+    ),
+  ).sort((a, b) => a - b);
+
+  const customized = values ? hasCustomRolloverPreferences(values) : false;
 
   return (
     <Box
       data-context-rollover-preferences
-      sx={{ pt: 1.5, mt: 1, borderTop: 1, borderColor: "divider" }}
+      sx={{ pt: 2.5, mt: 2, borderTop: 1, borderColor: "divider" }}
     >
-      <Stack direction="row" alignItems="center" justifyContent="space-between" spacing={1}>
+      <Stack
+        direction="row"
+        alignItems="center"
+        justifyContent="space-between"
+        spacing={1}
+        sx={{ pb: 0.75 }}
+      >
         <Typography
           variant="overline"
-          color="text.secondary"
-          sx={{ letterSpacing: 0.8, lineHeight: 1.6 }}
+          sx={{ letterSpacing: "0.08em", color: "text.secondary", fontWeight: 700 }}
         >
           Prompt cache renewal
         </Typography>
@@ -129,11 +140,7 @@ export function ContextRolloverPreferencesSection(): React.JSX.Element {
             size="small"
             disabled={busy}
             onClick={(): void => {
-              void save({
-                enabled: true,
-                min_context_tokens: DEFAULT_MIN_CONTEXT_TOKENS,
-                idle_minutes: {},
-              });
+              void apply({ kind: "reset_defaults" });
             }}
           >
             Reset defaults
@@ -185,7 +192,7 @@ export function ContextRolloverPreferencesSection(): React.JSX.Element {
               disabled={busy}
               inputProps={{ "aria-label": "Enable prompt-cache context renewal" }}
               onChange={(_, checked): void => {
-                void save({ enabled: checked });
+                void apply({ kind: "enabled", enabled: checked });
               }}
             />
           </Stack>
@@ -212,7 +219,7 @@ export function ContextRolloverPreferencesSection(): React.JSX.Element {
               onChange={(event): void => {
                 const parsed = Number(event.target.value);
                 if (Number.isFinite(parsed) && parsed > 0) {
-                  void save({ min_context_tokens: parsed });
+                  void apply({ kind: "min_context_tokens", min_context_tokens: parsed });
                 }
               }}
               sx={{ minWidth: 148 }}
@@ -232,8 +239,8 @@ export function ContextRolloverPreferencesSection(): React.JSX.Element {
               provider={provider}
               values={values}
               disabled={busy || !values.enabled}
-              onSelectIdle={(idle_minutes): void => {
-                void save({ idle_minutes });
+              onSelect={(selection): void => {
+                void apply({ kind: "provider_idle", providerId: provider.id, selection });
               }}
             />
           ))}

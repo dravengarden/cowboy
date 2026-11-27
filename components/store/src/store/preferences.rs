@@ -203,7 +203,7 @@ impl Store {
         operation: &str,
         change: &PreferenceChange,
     ) -> Result<PreferenceResult> {
-        if !valid(change) || !crate::managed_calls::valid_id(operation) {
+        if !crate::managed_calls::valid_id(operation) {
             return Ok(PreferenceResult::Invalid("invalid_preferences"));
         }
         let hash = crate::digest::hex_sha256(&serde_json::to_vec(change)?);
@@ -217,6 +217,9 @@ impl Store {
             if let Some((old_hash, result)) = receipt {
                 return Ok(if hash == old_hash { PreferenceResult::Applied(serde_json::from_str(&result)?) }
                     else { PreferenceResult::Invalid("operation_reused") });
+            }
+            if !valid(change) {
+                return Ok(PreferenceResult::Invalid("invalid_preferences"));
             }
             let value: Option<String> = sqlx::query_scalar("SELECT value FROM user_preferences WHERE owner_user_id=$1 AND scope=$2")
                 .bind(owner).bind(&change.scope).fetch_optional(&mut *tx).await?;
@@ -469,6 +472,73 @@ mod tests {
             .unwrap();
         store.migrate().await.unwrap();
         contract(&store).await;
+    }
+
+    #[tokio::test]
+    async fn replaying_a_committed_legacy_operation_succeeds_under_stricter_validation() {
+        let dir = tempfile::tempdir().unwrap();
+        let url = format!(
+            "sqlite://{}?mode=rwc",
+            dir.path().join("legacy-replay.sqlite").display()
+        );
+        let store = Store::connect(&url, dir.path().join("artifacts"))
+            .await
+            .unwrap();
+        store.migrate().await.unwrap();
+        let legacy_change = PreferenceChange {
+            scope: crate::context_rollover::PREFERENCE_SCOPE.into(),
+            expected_revision: 0,
+            changes: json!({"idle_minutes": {"antigravity": 60}}),
+        };
+        let hash = crate::digest::hex_sha256(&serde_json::to_vec(&legacy_change).unwrap());
+        let stored_result = Preferences {
+            scope: crate::context_rollover::PREFERENCE_SCOPE.into(),
+            revision: 1,
+            values: json!({"enabled": true, "min_context_tokens": 80_000, "idle_minutes": {"antigravity": 60}}),
+        };
+        let StorageBackend::Sqlite(db) = &store.backend else {
+            panic!("sqlite")
+        };
+        sqlx::query(
+            "INSERT INTO user_preference_operations (owner_user_id, operation_id, request_hash, result) VALUES ($1, $2, $3, $4)",
+        )
+        .bind("owner")
+        .bind("legacy-op-1")
+        .bind(&hash)
+        .bind(serde_json::to_string(&stored_result).unwrap())
+        .execute(&db.pool)
+        .await
+        .unwrap();
+
+        // Exact replay of an already committed legacy operation returns its durable receipt.
+        assert_eq!(
+            store
+                .update_preferences("owner", "legacy-op-1", &legacy_change)
+                .await
+                .unwrap(),
+            PreferenceResult::Applied(stored_result)
+        );
+        // Reusing that operation ID with different payload still fails with operation_reused.
+        let altered = PreferenceChange {
+            scope: crate::context_rollover::PREFERENCE_SCOPE.into(),
+            expected_revision: 0,
+            changes: json!({"idle_minutes": {"antigravity": 30}}),
+        };
+        assert_eq!(
+            store
+                .update_preferences("owner", "legacy-op-1", &altered)
+                .await
+                .unwrap(),
+            PreferenceResult::Invalid("operation_reused")
+        );
+        // A fresh operation with the now-rejected Antigravity threshold fails validation.
+        assert_eq!(
+            store
+                .update_preferences("owner", "new-op-2", &legacy_change)
+                .await
+                .unwrap(),
+            PreferenceResult::Invalid("invalid_preferences")
+        );
     }
 
     #[test]

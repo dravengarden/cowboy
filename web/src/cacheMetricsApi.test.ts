@@ -256,6 +256,7 @@ test("formatColdResumeAdvisory renders strictly for policy-restricted long-idle 
       observed_cache_read: true,
       observed_cache_write: false,
       supports_idle_rollover: false,
+      policy_restricted: true,
       supports_gateway_keepalive: false,
       keepalive_capability_status: "verified",
       rollover_restriction:
@@ -266,6 +267,7 @@ test("formatColdResumeAdvisory renders strictly for policy-restricted long-idle 
       rollover: {
         availability: "available",
         supported: false,
+        policy_restricted: true,
         enabled: false,
         inherited: true,
         session_override: null,
@@ -278,14 +280,25 @@ test("formatColdResumeAdvisory renders strictly for policy-restricted long-idle 
       },
       gateway_keepalive: { supported: false, enabled: null },
     },
+    active_turn: false,
+    pending_work: false,
   };
 
-  // Warm, small, or stale readings stay quiet.
+  // Warm, small, missing-usage, stale, active-turn, or pending-work readings stay quiet.
   assertEquals(
     formatColdResumeAdvisory({
       ...baseRestricted,
       idle_ms: 15 * 60_000,
       context_used: 240_000,
+      context_stale: false,
+    }),
+    null,
+  );
+  assertEquals(
+    formatColdResumeAdvisory({
+      ...baseRestricted,
+      idle_ms: 45 * 60_000,
+      context_used: null,
       context_stale: false,
     }),
     null,
@@ -308,8 +321,28 @@ test("formatColdResumeAdvisory renders strictly for policy-restricted long-idle 
     }),
     null,
   );
+  assertEquals(
+    formatColdResumeAdvisory({
+      ...baseRestricted,
+      idle_ms: 45 * 60_000,
+      context_used: 240_000,
+      context_stale: false,
+      active_turn: true,
+    }),
+    null,
+  );
+  assertEquals(
+    formatColdResumeAdvisory({
+      ...baseRestricted,
+      idle_ms: 45 * 60_000,
+      context_used: 240_000,
+      context_stale: false,
+      pending_work: true,
+    }),
+    null,
+  );
 
-  // Eligible Antigravity session shows calm read-only advisory.
+  // Eligible idle Antigravity session shows calm read-only advisory.
   const advisory = formatColdResumeAdvisory({
     ...baseRestricted,
     idle_ms: 45 * 60_000,
@@ -320,14 +353,13 @@ test("formatColdResumeAdvisory renders strictly for policy-restricted long-idle 
   assertEquals(advisory?.includes("240k"), true);
   assertEquals(advisory?.includes("host policy"), true);
 
-  // Rollover-capable sessions (including native forks without host rollover_restriction) never show this advisory.
+  // Presentation text alone without `policy_restricted: true` never shows this advisory (M8).
   assertEquals(
     formatColdResumeAdvisory({
       ...baseRestricted,
       capabilities: {
         ...baseRestricted.capabilities,
-        supports_idle_rollover: true,
-        rollover_restriction: null,
+        policy_restricted: false,
       },
       idle_ms: 90 * 60_000,
       context_used: 240_000,

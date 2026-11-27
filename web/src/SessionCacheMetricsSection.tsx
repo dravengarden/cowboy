@@ -8,8 +8,11 @@ import {
   Typography,
 } from "@mui/material";
 import { ExpandLess, ExpandMore } from "@mui/icons-material";
+import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import {
   buildDisjointCacheSegments,
+  COLD_RESUME_ADVISORY_MIN_CONTEXT_TOKENS,
+  COLD_RESUME_ADVISORY_MIN_IDLE_MS,
   fetchSessionCacheMetrics,
   formatColdResumeAdvisory,
   formatCompactTokens,
@@ -137,17 +140,25 @@ function RecentTurnsDisclosure({
  */
 const WRITE_BEHIND_RETRY_DELAYS_MS = [300, 600, 1_200, 2_000] as const;
 
-export function SessionCacheMetricsSection({
-  sessionId,
-  compact = false,
-  refreshKey = 0,
-}: {
-  sessionId: string;
-  compact?: boolean;
-  refreshKey?: number;
-}): React.JSX.Element | null {
+function useSessionCacheMetricsData(
+  sessionId: string,
+  refreshKey: number,
+): { currentData: SessionCacheMetricsResponse | null; syncPending: boolean } {
   const [data, setData] = useState<SessionCacheMetricsResponse | null>(null);
   const [syncPending, setSyncPending] = useState(false);
+  const [policyRefreshTick, setPolicyRefreshTick] = useState(0);
+
+  useEffect(() => {
+    const onPreferencesChanged = (event: Event): void => {
+      const scopes = (event as CustomEvent<Record<string, number> | undefined>).detail;
+      if (scopes && !scopes.context_rollover) return;
+      setPolicyRefreshTick((tick) => tick + 1);
+    };
+    window.addEventListener(PREFERENCES_CHANGED, onPreferencesChanged);
+    return (): void => {
+      window.removeEventListener(PREFERENCES_CHANGED, onPreferencesChanged);
+    };
+  }, []);
   const liveWatermark = useLatestTurnEndSeq(sessionId);
   const timelineWatermark = useStoreSelector((snapshot) => {
     const timeline = snapshot.timelines.get(sessionId);
@@ -198,9 +209,46 @@ export function SessionCacheMetricsSection({
       controller.abort();
       if (timerId !== null) globalThis.clearTimeout(timerId);
     };
-  }, [sessionId, refreshKey, latestTurnEndSeq, liveSignal]);
+  }, [sessionId, refreshKey, latestTurnEndSeq, liveSignal, policyRefreshTick]);
 
   const currentData = data !== null && data.session_id === sessionId ? data : null;
+
+  useEffect(() => {
+    if (
+      !currentData ||
+      currentData.capabilities.policy_restricted !== true ||
+      currentData.context_stale !== false ||
+      currentData.active_turn !== false ||
+      currentData.pending_work !== false ||
+      typeof currentData.context_used !== "number" ||
+      currentData.context_used < COLD_RESUME_ADVISORY_MIN_CONTEXT_TOKENS ||
+      typeof currentData.idle_ms !== "number" ||
+      currentData.idle_ms >= COLD_RESUME_ADVISORY_MIN_IDLE_MS
+    ) {
+      return;
+    }
+    const remainingMs = COLD_RESUME_ADVISORY_MIN_IDLE_MS - currentData.idle_ms + 1_000;
+    const timer = globalThis.setTimeout(() => {
+      setPolicyRefreshTick((tick) => tick + 1);
+    }, remainingMs);
+    return (): void => {
+      globalThis.clearTimeout(timer);
+    };
+  }, [currentData]);
+
+  return { currentData, syncPending };
+}
+
+export function SessionCacheMetricsSection({
+  sessionId,
+  compact = false,
+  refreshKey = 0,
+}: {
+  sessionId: string;
+  compact?: boolean;
+  refreshKey?: number;
+}): React.JSX.Element | null {
+  const { currentData, syncPending } = useSessionCacheMetricsData(sessionId, refreshKey);
   const segments = useMemo(
     () => (currentData ? buildDisjointCacheSegments(currentData.totals) : []),
     [currentData],

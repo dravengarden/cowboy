@@ -554,3 +554,68 @@ fn editing_token_is_emitted_in_queue_resync_and_cleared_on_release() {
     assert!(value["editing"].is_null());
     assert!(value["editing_token"].is_null());
 }
+
+#[tokio::test]
+async fn hibernation_exit_and_unpausing_hibernated_session_revive_queued_work() {
+    let hub = Hub::new();
+    let (tx, mut rx) = tokio::sync::mpsc::channel(8);
+    hub.set_dispatch_tx(tx);
+    hub.create_local_session(
+        "hib-unpaused".to_owned(),
+        "claude-code".to_owned(),
+        "/tmp".to_owned(),
+        "t".to_owned(),
+        SessionOrigin::Web,
+        false,
+    );
+    // Busy turn holds queued prompt; hibernation completes -> revives queued prompt.
+    hub.set_status("hib-unpaused", Status::Busy, None);
+    hub.submit(
+        "hib-unpaused",
+        "queued during hibernate".into(),
+        vec![],
+        Some("cmid-hib-1".into()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
+    assert!(rx.try_recv().is_err());
+    hub.set_status(
+        "hib-unpaused",
+        Status::Exited,
+        Some("hibernated".to_owned()),
+    );
+    let dispatched = rx
+        .try_recv()
+        .expect("hibernation exit revives unpaused queue");
+    assert_eq!(dispatched.session_id, "hib-unpaused");
+    assert_eq!(dispatched.text, "queued during hibernate");
+
+    // Paused queue held across hibernation -> unpausing revives the hibernated session.
+    hub.create_local_session(
+        "hib-paused".to_owned(),
+        "claude-code".to_owned(),
+        "/tmp".to_owned(),
+        "t".to_owned(),
+        SessionOrigin::Web,
+        false,
+    );
+    hub.set_status("hib-paused", Status::Running, None);
+    hub.set_paused("hib-paused", true);
+    hub.submit(
+        "hib-paused",
+        "paused during hibernate".into(),
+        vec![],
+        Some("cmid-hib-2".into()),
+        &crate::prompt_origin::RequestCaller::Person,
+    );
+    hub.set_status("hib-paused", Status::Exited, Some("hibernated".to_owned()));
+    assert!(
+        rx.try_recv().is_err(),
+        "paused queue stays held across hibernation"
+    );
+    hub.set_paused("hib-paused", false);
+    let revived = rx
+        .try_recv()
+        .expect("unpausing hibernated session revives queue");
+    assert_eq!(revived.session_id, "hib-paused");
+    assert_eq!(revived.text, "paused during hibernate");
+}
