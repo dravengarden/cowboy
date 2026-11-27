@@ -152,6 +152,12 @@ pub struct Shared {
     workers: Mutex<HashMap<String, WorkerSnapshot>>,
     crashed_worker_sightings: Mutex<HashMap<String, snapshot::SightingActivity>>,
     retained_uncertain_effects: Mutex<HashMap<String, crate::runtime_wire::UncertainEffect>>,
+    /// Exact crashed epochs currently draining (preserved across replayed events during reload, R3-H2).
+    draining_crashed_epochs: Mutex<HashMap<String, String>>,
+    /// Recently retired `(session_id -> (worker_epoch, Instant))` to reject late snapshots (R3-M7).
+    retired_crashed_epochs: Mutex<HashMap<String, (String, std::time::Instant)>>,
+    /// Pending retirements retrying durable uncertain-effect persistence (R3-M2).
+    pending_retirements: Mutex<HashMap<String, (String, crate::runtime_wire::UncertainEffect)>>,
     /// Worker epochs whose initial config snapshot has already triggered
     /// preference reconciliation. This prevents an agent that rejects a value
     /// from causing a config-option event/retry loop.
@@ -309,6 +315,9 @@ impl RemoteRuntime {
                 workers: Mutex::new(HashMap::new()),
                 crashed_worker_sightings: Mutex::new(HashMap::new()),
                 retained_uncertain_effects: Mutex::new(HashMap::new()),
+                draining_crashed_epochs: Mutex::new(HashMap::new()),
+                retired_crashed_epochs: Mutex::new(HashMap::new()),
+                pending_retirements: Mutex::new(HashMap::new()),
                 config_sync_epochs: Mutex::new(HashMap::new()),
                 config_startups: Mutex::new(HashSet::new()),
                 resetting: Mutex::new(HashSet::new()),
@@ -389,6 +398,9 @@ impl RemoteRuntime {
                     &bootstrap.workers,
                 )),
                 retained_uncertain_effects: Mutex::new(HashMap::new()),
+                draining_crashed_epochs: Mutex::new(HashMap::new()),
+                retired_crashed_epochs: Mutex::new(HashMap::new()),
+                pending_retirements: Mutex::new(HashMap::new()),
                 config_sync_epochs: Mutex::new(HashMap::new()),
                 config_startups: Mutex::new(
                     bootstrap
@@ -2195,7 +2207,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                     // also when Clear fences the epoch that ran it.
                     turn_end::signal(shared, &session_id, &event);
                     turn_end::ended(shared, &session_id, &event);
-                    record_uncertain_effect(shared, &session_id, &event);
+                    snapshot::record_uncertain_effect(shared, &session_id, &worker_epoch, &event);
                     let _projection = shared.hub.runtime_projection_guard();
                     let resetting = shared.resetting.lock().contains(&session_id);
                     let stale_idle = matches!(
@@ -2611,20 +2623,6 @@ fn idle_snapshot_guard(shared: &Shared, worker: &WorkerSnapshot) -> Option<u64> 
 fn reconcile_idle_guard(shared: &Shared, session_id: &str, guard_epoch: Option<u64>) {
     if let Some(guard_epoch) = guard_epoch {
         shared.hub.reconcile_runtime_idle(session_id, guard_epoch);
-    }
-}
-
-/// Merge a worker's published uncertain effect into its snapshot, by
-/// sequence: an older observation never replaces a newer one.
-fn record_uncertain_effect(shared: &Shared, session_id: &str, event: &RuntimeEvent) {
-    let RuntimeEvent::Update { update, .. } = event else {
-        return;
-    };
-    let Some(effect) = crate::runtime_wire::uncertain_effect(update) else {
-        return;
-    };
-    if let Some(worker) = shared.workers.lock().get_mut(session_id) {
-        crate::runtime_wire::merge_uncertain_effect(&mut worker.uncertain_effect, effect);
     }
 }
 

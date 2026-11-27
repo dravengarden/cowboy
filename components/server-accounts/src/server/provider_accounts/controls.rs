@@ -106,10 +106,12 @@ impl Env for AppEnv {
 
     fn worker(&self, session: &str) -> Option<crate::runtime_wire::WorkerSnapshot> {
         let machine = self.0.hub.session_info(session)?.meta.machine_id;
-        self.0
-            .runtime_router
-            .runtime(&machine)?
-            .worker_snapshot(session)
+        let runtime = self.0.runtime_router.runtime(&machine)?;
+        let mut worker = runtime.worker_snapshot(session)?;
+        if !runtime.worker_snapshot_binding_verified(&worker) {
+            worker.uncertain_effect = None;
+        }
+        Some(worker)
     }
 
     fn machine_connected(&self, machine: &str) -> bool {

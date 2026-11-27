@@ -522,15 +522,6 @@ impl super::Broker {
         }
     }
 
-    pub(super) fn has_pending_core_command(&self, session_id: &str) -> bool {
-        self.pending_core_commands
-            .lock()
-            .get(session_id)
-            .copied()
-            .unwrap_or(0)
-            > 0
-    }
-
     pub(super) fn handle_wrap_up_hint(
         &self,
         lease: u64,
@@ -702,10 +693,16 @@ impl DispatchedPrompts {
     const MAX_ENTRIES: usize = 16_384;
     const MAX_EVICTED_COMMANDS: usize = 262_144;
 
-    pub(super) fn has_unacked_for_session(&self, session_id: &str) -> bool {
-        self.entries
-            .iter()
-            .any(|((sid, _), rec)| sid == session_id && !rec.acked)
+    pub(super) fn has_unacked_for_epoch_or_ingress(
+        &self,
+        session_id: &str,
+        worker_epoch: &str,
+    ) -> bool {
+        self.entries.iter().any(|((sid, _), rec)| {
+            sid == session_id
+                && !rec.acked
+                && (rec.epoch.is_none() || rec.epoch.as_deref() == Some(worker_epoch))
+        })
     }
 
     pub(super) fn get(&self, session_id: &str, command_id: &str) -> Option<&str> {
@@ -2686,5 +2683,18 @@ mod tests {
             DispatchedPrompts::MAX_EVICTED_COMMANDS
         );
         assert!(tracker.evicted_blocks_replay("s-cap", "evicted-0", "epoch-new"));
+    }
+    #[test]
+    fn dead_epoch_unacked_prompt_does_not_block_newer_epoch_drain_check() {
+        let mut dispatched = DispatchedPrompts::default();
+        dispatched.record("s-m5", "cmd-old", "1-1");
+        assert!(dispatched.has_unacked_for_epoch_or_ingress("s-m5", "1-1"));
+        assert!(
+            !dispatched.has_unacked_for_epoch_or_ingress("s-m5", "2-1"),
+            "dead-epoch unacked prompt must not veto a newer replacement epoch"
+        );
+        // An ingress-stage prompt (epoch=None) still blocks any epoch.
+        assert!(dispatched.mark_ingressed("s-m5", "cmd-ingress"));
+        assert!(dispatched.has_unacked_for_epoch_or_ingress("s-m5", "2-1"));
     }
 }

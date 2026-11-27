@@ -7,6 +7,15 @@
 use super::*;
 
 impl Broker {
+    pub(super) fn has_pending_core_command(&self, session_id: &str) -> bool {
+        self.pending_core_commands
+            .lock()
+            .get(session_id)
+            .copied()
+            .unwrap_or(0)
+            > 0
+    }
+
     /// `true` when the daemon confirmed every account unit of the session
     /// gone (stopping any a lost worker left behind), or it has none.
     pub(super) async fn confirm_account_unit_gone(&self, session_id: &str) -> bool {

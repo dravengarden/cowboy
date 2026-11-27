@@ -1001,8 +1001,7 @@ async fn connected(
             }
             notified = notify_rx.recv() => {
                 send_outbox(&shared, &mut writer, &mut last_sent).await?;
-                if (notified.is_none()
-                    || shared.crashed_drain.draining.load(Ordering::Acquire))
+                if (notified.is_none() || shared.crashed_drain.agent_settled().is_some())
                     && crashed_drain::finish_if_drained(&shared, &mut writer).await?
                 {
                     return Ok(ConnectedExit::WorkerDrained);

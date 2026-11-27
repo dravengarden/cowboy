@@ -650,6 +650,7 @@ impl Broker {
         );
         post_edit::notify_orphaned(orphaned);
         self.replay_recently_drained_after_welcome(&welcome, lease);
+        self.replay_pending_crashed_drains_for_new_controller(lease);
         for current in self.snapshots() {
             if !welcome.contains(&current) {
                 self.send_controller(Frame::Snapshot {
@@ -3180,20 +3181,22 @@ impl Broker {
         if desired.is_empty() {
             return;
         }
-        let old_generation = {
+        let (old_generation, epoch) = {
             let workers = self.workers.lock();
             let Some(worker) = workers.get(session_id) else {
                 return;
             };
             let snapshot = &worker.snapshot;
-            if !snapshot.drain_requested
+            if worker.crashed_drain_fenced
+                || self.has_crashed_drain_for_epoch(session_id, &worker.epoch)
+                || !snapshot.drain_requested
                 || snapshot.current_turn_id.is_some()
                 || !snapshot.pending_permissions.is_empty()
                 || !matches!(snapshot.state, WorkerState::Running | WorkerState::Draining)
             {
                 return;
             }
-            snapshot.generation.clone()
+            (snapshot.generation.clone(), worker.epoch.clone())
         };
         if self
             .sessions
@@ -3209,6 +3212,10 @@ impl Broker {
             .insert(session_id.to_owned(), old_generation)
             .is_some()
         {
+            return;
+        }
+        if self.crashed_drain_fenced_for_epoch(session_id, &epoch) {
+            self.replacing.lock().remove(session_id);
             return;
         }
         self.route_worker(

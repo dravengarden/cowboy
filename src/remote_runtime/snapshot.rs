@@ -273,11 +273,76 @@ impl SightingActivity {
     }
 }
 
+const RETIRED_EPOCH_TTL: std::time::Duration = std::time::Duration::from_secs(600);
+const MAX_RETIRED_EPOCHS: usize = 512;
+
 fn binding_verified_for_uncertain_effect(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     worker.has_connected_owner()
         && current_context(shared, worker)
         && shared.hub.matches_runtime_snapshot_binding(worker)
         && !shared.hub.is_reconciling_runtime_placeholder(worker)
+}
+
+/// Live verification for an epoch-only event: re-checks `classify_runtime_epoch`
+/// NOW (so Clear fences take effect immediately) AND requires a verified
+/// snapshot binding for that exact epoch (R3-H1).
+pub(super) fn epoch_binding_verified_now(
+    shared: &Shared,
+    session_id: &str,
+    worker_epoch: &str,
+) -> bool {
+    if shared
+        .hub
+        .classify_runtime_epoch(session_id, worker_epoch, None)
+        != crate::core::RuntimeEpoch::Current
+    {
+        return false;
+    }
+    if let Some(worker) = shared.workers.lock().get(session_id)
+        && worker.worker_epoch == worker_epoch
+    {
+        return binding_verified_for_uncertain_effect(shared, worker);
+    }
+    shared
+        .crashed_worker_sightings
+        .lock()
+        .get(session_id)
+        .is_some_and(|entry| entry.worker_epoch == worker_epoch && entry.binding_verified)
+}
+
+fn is_retired_crashed_epoch(shared: &Shared, session_id: &str, worker_epoch: &str) -> bool {
+    let mut retired = shared.retired_crashed_epochs.lock();
+    let now = std::time::Instant::now();
+    retired.retain(|_, (_, at)| now.saturating_duration_since(*at) < RETIRED_EPOCH_TTL);
+    retired
+        .get(session_id)
+        .is_some_and(|(epoch, _)| epoch == worker_epoch)
+}
+
+fn record_retired_crashed_epoch(shared: &Shared, session_id: &str, worker_epoch: &str) {
+    let mut retired = shared.retired_crashed_epochs.lock();
+    let now = std::time::Instant::now();
+    retired.retain(|_, (_, at)| now.saturating_duration_since(*at) < RETIRED_EPOCH_TTL);
+    if retired.len() >= MAX_RETIRED_EPOCHS
+        && let Some(oldest) = retired
+            .iter()
+            .min_by_key(|(_, (_, at))| *at)
+            .map(|(k, _)| k.clone())
+    {
+        retired.remove(&oldest);
+    }
+    retired.insert(session_id.to_owned(), (worker_epoch.to_owned(), now));
+}
+
+pub(super) fn clear_draining_crashed_epoch_if_matches(
+    shared: &Shared,
+    session_id: &str,
+    worker_epoch: &str,
+) {
+    let mut draining = shared.draining_crashed_epochs.lock();
+    if draining.get(session_id).is_some_and(|e| e == worker_epoch) {
+        draining.remove(session_id);
+    }
 }
 
 pub(super) fn seed_crashed_sightings(
@@ -295,12 +360,15 @@ pub(super) fn seed_crashed_sightings(
         .collect()
 }
 
-/// Observe raw connected-worker state. During a reset, ignore snapshots from
-/// the *replaced* epoch, while still recording a replacement epoch so an
-/// unprojected named replacement never vanishes from maintenance (R2-M6).
+/// Observe raw connected-worker state. Rejects late snapshots for already-retired
+/// crashed epochs (R3-M7), records replacement epochs during reset (R2-M6), and
+/// clears stale draining markers when a newer epoch connects.
 pub(super) fn observe_crashed_sighting(shared: &Shared, worker: &WorkerSnapshot) {
     let fence = shared.projection_fence.lock();
     if *fence {
+        return;
+    }
+    if is_retired_crashed_epoch(shared, &worker.session_id, &worker.worker_epoch) {
         return;
     }
     if shared.resetting.lock().contains(&worker.session_id) {
@@ -316,6 +384,28 @@ pub(super) fn observe_crashed_sighting(shared: &Shared, worker: &WorkerSnapshot)
     let verified = binding_verified_for_uncertain_effect(shared, worker);
     let mut sightings = shared.crashed_worker_sightings.lock();
     if worker.has_connected_owner() {
+        // A newer epoch clears any older retired/draining epoch markers.
+        {
+            let mut retired = shared.retired_crashed_epochs.lock();
+            if retired
+                .get(&worker.session_id)
+                .is_some_and(|(e, _)| e != &worker.worker_epoch)
+            {
+                retired.remove(&worker.session_id);
+            }
+        }
+        {
+            let mut draining = shared.draining_crashed_epochs.lock();
+            if draining
+                .get(&worker.session_id)
+                .is_some_and(|e| e != &worker.worker_epoch)
+            {
+                draining.remove(&worker.session_id);
+            }
+            if worker.state == WorkerState::Crashed && worker.drain_requested {
+                draining.insert(worker.session_id.clone(), worker.worker_epoch.clone());
+            }
+        }
         sightings.insert(
             worker.session_id.clone(),
             SightingActivity::from_snapshot_verified(worker, verified),
@@ -325,15 +415,22 @@ pub(super) fn observe_crashed_sighting(shared: &Shared, worker: &WorkerSnapshot)
     }
 }
 
-/// True when `worker_epoch` is the currently tracked `Crashed` epoch of
-/// `session_id`, so a reload/reset waiting on the Broker's crashed-worker drain
-/// still projects its final transcript/terminal events instead of discarding
-/// them while acknowledging (R2-H7).
+/// True when `worker_epoch` is the explicitly draining crashed epoch (preserved
+/// across replayed Running/TurnStarted events during reload, R3-H2) or is
+/// currently observed in `Crashed` state.
 pub(super) fn is_draining_crashed_epoch(
     shared: &Shared,
     session_id: &str,
     worker_epoch: &str,
 ) -> bool {
+    if shared
+        .draining_crashed_epochs
+        .lock()
+        .get(session_id)
+        .is_some_and(|epoch| epoch == worker_epoch)
+    {
+        return true;
+    }
     shared
         .crashed_worker_sightings
         .lock()
@@ -350,6 +447,9 @@ pub(super) fn should_project_worker_event(
     worker_epoch: &str,
     event: &RuntimeEvent,
 ) -> bool {
+    if is_retired_crashed_epoch(shared, session_id, worker_epoch) {
+        return false;
+    }
     let allowed = !resetting
         || (is_draining_crashed_epoch(shared, session_id, worker_epoch)
             && !matches!(
@@ -370,7 +470,7 @@ pub(super) fn observe_crashed_event(
     event: &RuntimeEvent,
 ) {
     let fence = shared.projection_fence.lock();
-    if *fence {
+    if *fence || is_retired_crashed_epoch(shared, session_id, worker_epoch) {
         return;
     }
     if shared.resetting.lock().contains(session_id) {
@@ -441,9 +541,7 @@ pub(super) fn observe_crashed_event(
 /// Durably record an observed uncertain effect in
 /// `session_uncertain_effect_ack:<session>` (CAS against concurrent owner
 /// acknowledgements or reconciler writes) and update Hub's in-memory cache
-/// monotonically WITHOUT enqueuing an unconditional `StoreWrite::PutSetting`
-/// (R2-H1, R2-H2). Propagates errors so callers never ACK or retire an
-/// unpersisted uncertain effect.
+/// monotonically WITHOUT enqueuing an unconditional `StoreWrite::PutSetting`.
 pub(super) async fn persist_observed_uncertain_effect(
     shared: &Shared,
     session_id: &str,
@@ -488,7 +586,6 @@ pub(super) async fn persist_observed_uncertain_effect(
             u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
         });
     let Some(store) = store else {
-        // Test runtime without durable SQLite store: update cache monotonically.
         shared.hub.merge_cached_uncertain_effect_setting(
             key,
             serde_json::json!({
@@ -535,11 +632,14 @@ pub(super) async fn persist_observed_uncertain_effect(
     )
 }
 
+/// Persist an uncertain effect from a streamed event ONLY when live context +
+/// launch-binding verification passes (never trusting `admitted` alone on
+/// default sessions after Clear, R3-H1).
 pub(super) async fn persist_event_uncertain_effect(
     shared: &Shared,
     session_id: &str,
     worker_epoch: &str,
-    admitted: bool,
+    _admitted: bool,
     event: &RuntimeEvent,
 ) -> anyhow::Result<()> {
     let RuntimeEvent::Update { update, .. } = event else {
@@ -548,13 +648,7 @@ pub(super) async fn persist_event_uncertain_effect(
     let Some(effect) = crate::runtime_wire::uncertain_effect(update) else {
         return Ok(());
     };
-    let authorized = admitted
-        || shared
-            .crashed_worker_sightings
-            .lock()
-            .get(session_id)
-            .is_some_and(|entry| entry.worker_epoch == worker_epoch && entry.binding_verified);
-    if !authorized {
+    if !epoch_binding_verified_now(shared, session_id, worker_epoch) {
         return Ok(());
     }
     persist_observed_uncertain_effect(shared, session_id, effect).await
@@ -587,7 +681,7 @@ pub(super) fn retain_crashed_sightings_after_welcome(
 }
 
 pub(super) async fn handle_crashed_worker_drained_frame(
-    shared: &Shared,
+    shared: &std::sync::Arc<Shared>,
     session_id: &str,
     worker_epoch: &str,
 ) {
@@ -599,48 +693,152 @@ pub(super) async fn handle_crashed_worker_drained_frame(
 }
 
 pub(super) async fn retire_crashed_worker_drained(
-    shared: &Shared,
+    shared: &std::sync::Arc<Shared>,
     session_id: &str,
     worker_epoch: &str,
 ) {
-    // Capture any verified uncertain effect from both raw sighting (covers
-    // unprojected named workers) and cached worker snapshot BEFORE retiring.
     let effect_to_persist = {
         let fence = shared.projection_fence.lock();
         if *fence {
             return;
         }
         let mut merged: Option<crate::runtime_wire::UncertainEffect> = None;
-        if let Some(entry) = shared.crashed_worker_sightings.lock().get(session_id)
-            && entry.worker_epoch == worker_epoch
-            && entry.binding_verified
-            && let Some(effect) = entry.uncertain_effect.clone()
-        {
-            crate::runtime_wire::merge_uncertain_effect(&mut merged, effect);
-        }
-        if let Some(worker) = shared.workers.lock().get(session_id)
-            && worker.worker_epoch == worker_epoch
-            && binding_verified_for_uncertain_effect(shared, worker)
-            && let Some(effect) = worker.uncertain_effect.clone()
-        {
-            crate::runtime_wire::merge_uncertain_effect(&mut merged, effect);
+        if epoch_binding_verified_now(shared, session_id, worker_epoch) {
+            if let Some(entry) = shared.crashed_worker_sightings.lock().get(session_id)
+                && entry.worker_epoch == worker_epoch
+                && entry.binding_verified
+                && let Some(effect) = entry.uncertain_effect.clone()
+            {
+                crate::runtime_wire::merge_uncertain_effect(&mut merged, effect);
+            }
+            if let Some(worker) = shared.workers.lock().get(session_id)
+                && worker.worker_epoch == worker_epoch
+                && binding_verified_for_uncertain_effect(shared, worker)
+                && let Some(effect) = worker.uncertain_effect.clone()
+            {
+                crate::runtime_wire::merge_uncertain_effect(&mut merged, effect);
+            }
         }
         merged
     };
     if let Some(effect) = effect_to_persist
-        && let Err(error) = persist_observed_uncertain_effect(shared, session_id, effect).await
+        && let Err(error) =
+            persist_observed_uncertain_effect(shared, session_id, effect.clone()).await
     {
         tracing::error!(
             session = session_id,
             %worker_epoch,
             %error,
-            "refusing to retire crashed worker before uncertain effect is durably persisted"
+            "deferring crashed worker retirement and scheduling durable persistence retry"
         );
+        schedule_pending_retirement_retry(shared, session_id, worker_epoch, effect);
         return;
     }
+    finalize_crashed_worker_retirement(shared, session_id, worker_epoch);
+}
+
+fn schedule_pending_retirement_retry(
+    shared: &std::sync::Arc<Shared>,
+    session_id: &str,
+    worker_epoch: &str,
+    effect: crate::runtime_wire::UncertainEffect,
+) {
+    let should_spawn = {
+        let mut pending = shared.pending_retirements.lock();
+        let already = pending
+            .get(session_id)
+            .is_some_and(|(epoch, _)| epoch == worker_epoch);
+        let mut merged = pending
+            .get(session_id)
+            .filter(|(epoch, _)| epoch == worker_epoch)
+            .map(|(_, existing)| existing.clone());
+        crate::runtime_wire::merge_uncertain_effect(&mut merged, effect);
+        if let Some(merged) = merged {
+            pending.insert(session_id.to_owned(), (worker_epoch.to_owned(), merged));
+        }
+        !already
+    };
+    if !should_spawn {
+        return;
+    }
+    let shared = std::sync::Arc::clone(shared);
+    let session_id = session_id.to_owned();
+    let worker_epoch = worker_epoch.to_owned();
+    tokio::spawn(async move {
+        let mut attempt: u32 = 0;
+        loop {
+            let delay = std::time::Duration::from_secs((2_u64 << attempt.min(4)).min(30));
+            attempt = attempt.saturating_add(1);
+            tokio::time::sleep(delay).await;
+            let current = {
+                let pending = shared.pending_retirements.lock();
+                pending
+                    .get(&session_id)
+                    .filter(|(epoch, _)| epoch == &worker_epoch)
+                    .map(|(_, eff)| eff.clone())
+            };
+            let Some(eff) = current else {
+                return;
+            };
+            if !epoch_binding_verified_now(&shared, &session_id, &worker_epoch) {
+                let mut pending = shared.pending_retirements.lock();
+                if pending
+                    .get(&session_id)
+                    .is_some_and(|(ep, _)| ep == &worker_epoch)
+                {
+                    pending.remove(&session_id);
+                    drop(pending);
+                    finalize_crashed_worker_retirement(&shared, &session_id, &worker_epoch);
+                }
+                return;
+            }
+            let persisted_seq = eff.sequence;
+            if persist_observed_uncertain_effect(&shared, &session_id, eff)
+                .await
+                .is_ok()
+            {
+                let should_finalize = {
+                    let mut pending = shared.pending_retirements.lock();
+                    match pending.get(&session_id) {
+                        Some((ep, latest)) if ep == &worker_epoch => {
+                            if latest.sequence > persisted_seq {
+                                None
+                            } else {
+                                pending.remove(&session_id);
+                                Some(true)
+                            }
+                        }
+                        _ => Some(false),
+                    }
+                };
+                match should_finalize {
+                    Some(true) => {
+                        finalize_crashed_worker_retirement(&shared, &session_id, &worker_epoch);
+                        return;
+                    }
+                    Some(false) => return,
+                    None => {}
+                }
+            }
+        }
+    });
+}
+
+fn finalize_crashed_worker_retirement(shared: &Shared, session_id: &str, worker_epoch: &str) {
     let fence = shared.projection_fence.lock();
     if *fence {
         return;
+    }
+    record_retired_crashed_epoch(shared, session_id, worker_epoch);
+    clear_draining_crashed_epoch_if_matches(shared, session_id, worker_epoch);
+    {
+        let mut pending = shared.pending_retirements.lock();
+        if pending
+            .get(session_id)
+            .is_some_and(|(epoch, _)| epoch == worker_epoch)
+        {
+            pending.remove(session_id);
+        }
     }
     {
         let mut sightings = shared.crashed_worker_sightings.lock();
@@ -684,6 +882,9 @@ pub(super) fn discard_pending_crashed_drain(
     if forget_session {
         shared.crashed_worker_sightings.lock().remove(session_id);
         shared.retained_uncertain_effects.lock().remove(session_id);
+        shared.draining_crashed_epochs.lock().remove(session_id);
+        shared.retired_crashed_epochs.lock().remove(session_id);
+        shared.pending_retirements.lock().remove(session_id);
     }
     let mut pending = shared.pending.lock();
     let sent = shared.sent.lock();
@@ -728,6 +929,13 @@ pub(super) fn worker_snapshot_with_retained_uncertain(
 }
 
 impl super::RemoteRuntime {
+    /// Whether `worker`'s epoch and launch binding are currently verified for
+    /// persisting or displaying uncertain effects (R3-H1).
+    #[must_use]
+    pub fn worker_snapshot_binding_verified(&self, worker: &WorkerSnapshot) -> bool {
+        binding_verified_for_uncertain_effect(&self.shared, worker)
+    }
+
     /// Whether this Machine and runtime protocol pair supports cooperative
     /// epoch-bound crashed-worker drain (`CoreCommand::DrainCrashedWorker`).
     #[must_use]
@@ -787,6 +995,10 @@ impl super::RemoteRuntime {
         }
         let acknowledged_uncertain_sequence =
             super::config_sync::acknowledged_uncertain_sequence_for(&self.shared.hub, session_id);
+        self.shared
+            .draining_crashed_epochs
+            .lock()
+            .insert(session_id.to_owned(), worker_epoch.to_owned());
         let command_id = self.next_id("drain-crashed");
         self.queue(
             command_id.clone(),
@@ -801,10 +1013,7 @@ impl super::RemoteRuntime {
     }
 
     /// Authoritative crashed-worker observation for `session_id` on the
-    /// current connection. Uses the raw connected-worker sighting table so an
-    /// unprojected named worker that transitions `Running` -> `Crashed` enters
-    /// the sweep while a non-crashed replacement never falls back to a stale
-    /// projected crash.
+    /// current connection.
     pub fn last_crashed_worker(&self, session_id: &str) -> CrashedWorkerObservation {
         let sightings = self.shared.crashed_worker_sightings.lock();
         if !self.connected() {
@@ -816,6 +1025,30 @@ impl super::RemoteRuntime {
             .map_or(CrashedWorkerObservation::Absent, |entry| {
                 CrashedWorkerObservation::Seen(entry.to_sighting(&self.shared.hub, session_id))
             })
+    }
+}
+
+/// Merge a worker's published uncertain effect into its snapshot, by
+/// sequence: an older observation never replaces a newer one.
+pub(super) fn record_uncertain_effect(
+    shared: &Shared,
+    session_id: &str,
+    worker_epoch: &str,
+    event: &RuntimeEvent,
+) {
+    let RuntimeEvent::Update { update, .. } = event else {
+        return;
+    };
+    let Some(effect) = crate::runtime_wire::uncertain_effect(update) else {
+        return;
+    };
+    if !epoch_binding_verified_now(shared, session_id, worker_epoch) {
+        return;
+    }
+    if let Some(worker) = shared.workers.lock().get_mut(session_id)
+        && worker.worker_epoch == worker_epoch
+    {
+        crate::runtime_wire::merge_uncertain_effect(&mut worker.uncertain_effect, effect);
     }
 }
 
@@ -838,6 +1071,9 @@ pub(super) fn project_snapshot_with_protocol(
         runtime_protocol,
         &shared.hub,
     );
+    if is_retired_crashed_epoch(shared, &worker.session_id, &worker.worker_epoch) {
+        return false;
+    }
     if !current_context(shared, &worker) {
         return false;
     }
@@ -1208,5 +1444,52 @@ mod crashed_drain_tests {
             super::super::config_sync::unacknowledged_uncertain_effect(&hub, &successor).is_some(),
             "persisted uncertain_effect must survive retirement and gate successor"
         );
+    }
+
+    #[tokio::test]
+    async fn retired_crashed_epoch_rejects_late_handover_snapshots_and_preserves_draining_epoch_across_replay()
+     {
+        let hub = crate::core::Hub::new();
+        let snap = crashed_snapshot("s-r3", "101-1");
+        let rt = super::super::RemoteRuntime::for_test(hub, vec![snap.clone()]);
+        rt.connect_for_test();
+
+        assert!(rt.drain_crashed_worker("s-r3", "101-1"));
+        assert!(is_draining_crashed_epoch(&rt.shared, "s-r3", "101-1"));
+
+        // Replayed Running/TurnStarted events during reload must NOT clear draining_crashed_epochs (R3-H2).
+        observe_crashed_event(
+            &rt.shared,
+            "s-r3",
+            "101-1",
+            &RuntimeEvent::Ready {
+                agent_session_id: Some("ag-1".into()),
+            },
+        );
+        assert!(is_draining_crashed_epoch(&rt.shared, "s-r3", "101-1"));
+
+        // After retirement, late snapshots for the retired epoch must be rejected (R3-M7).
+        retire_crashed_worker_drained(&rt.shared, "s-r3", "101-1").await;
+        assert!(!is_draining_crashed_epoch(&rt.shared, "s-r3", "101-1"));
+        assert_eq!(
+            rt.last_crashed_worker("s-r3"),
+            CrashedWorkerObservation::Absent
+        );
+
+        observe_crashed_sighting(&rt.shared, &snap);
+        assert!(!project_snapshot(&rt.shared, &snap));
+        assert_eq!(
+            rt.last_crashed_worker("s-r3"),
+            CrashedWorkerObservation::Absent
+        );
+        assert!(rt.shared.workers.lock().get("s-r3").is_none());
+
+        // A genuinely newer epoch for the same session is admitted normally.
+        let newer = crashed_snapshot("s-r3", "101-2");
+        observe_crashed_sighting(&rt.shared, &newer);
+        assert!(matches!(
+            rt.last_crashed_worker("s-r3"),
+            CrashedWorkerObservation::Seen(s) if s.worker_epoch == "101-2"
+        ));
     }
 }

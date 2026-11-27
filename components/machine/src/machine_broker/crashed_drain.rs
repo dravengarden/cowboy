@@ -6,6 +6,8 @@
 //! `crashed_drains`) and never held across `.await` or `send_controller`.
 //! Lifecycle mutations serialize on the broker's `session_lifecycle_gate`.
 
+mod teardown;
+
 use super::*;
 use crate::machine_protocol::CRASHED_WORKER_DRAIN_PROTOCOL_VERSION;
 use crate::runtime_wire::CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION;
@@ -106,6 +108,7 @@ impl Broker {
         };
         if self.launching.lock().contains(&session_id)
             || self.resetting_sessions.lock().contains_key(&session_id)
+            || self.replacing.lock().contains_key(&session_id)
         {
             self.command_rejected(
                 &session_id,
@@ -114,7 +117,17 @@ impl Broker {
             );
             return;
         }
-        let current_launch = self.current_durable_launch_id(&session_id).await;
+        let current_launch = match self.current_durable_launch_id(&session_id).await {
+            Ok(launch) => launch,
+            Err(error) => {
+                self.command_rejected(
+                    &session_id,
+                    command_id,
+                    format!("unable to verify durable launch identity: {error}"),
+                );
+                return;
+            }
+        };
         match self.admit_crashed_drain(
             &session_id,
             &command_id,
@@ -206,7 +219,7 @@ impl Broker {
                 if pending_cmds
                     .get(session_id)
                     .is_some_and(|queue| !queue.is_empty())
-                    || dispatched.has_unacked_for_session(session_id)
+                    || dispatched.has_unacked_for_epoch_or_ingress(session_id, worker_epoch)
                     || pending_core.get(session_id).copied().unwrap_or(0) > 1 =>
             {
                 DrainAdmission::Rejected("session has queued or in-flight prompt handoffs".into())
@@ -243,179 +256,6 @@ impl Broker {
         }
     }
 
-    fn spawn_unconfirmed_sandbox_drain_retry(
-        self: &Arc<Self>,
-        lifecycle_guard: tokio::sync::OwnedMutexGuard<()>,
-        session_id: String,
-        command_id: String,
-        entry: UnconfirmedTeardown,
-    ) {
-        let broker = Arc::clone(self);
-        tokio::spawn(async move {
-            let _guard = lifecycle_guard;
-            if !broker.teardown_retry_still_valid(&session_id, &entry.epoch) {
-                broker.command_rejected(
-                    &session_id,
-                    command_id,
-                    "session state changed during teardown retry".into(),
-                );
-                return;
-            }
-            if !broker
-                .confirm_retired_teardown_complete(
-                    &session_id,
-                    entry.peer_pid,
-                    entry.retired_launch,
-                )
-                .await
-            {
-                broker.command_rejected(
-                    &session_id,
-                    command_id,
-                    "crashed worker teardown is still unconfirmed".into(),
-                );
-                return;
-            }
-            let (cleared, rejections) = {
-                let workers = broker.workers.lock();
-                let mut pending_cmds = broker.pending_commands.lock();
-                let mut dispatched = broker.dispatched_prompts.lock();
-                let mut state = broker.crashed_drains.inner.lock();
-                if workers.contains_key(&session_id) {
-                    (false, Vec::new())
-                } else if state
-                    .unconfirmed_teardown
-                    .get(&session_id)
-                    .is_some_and(|recorded| recorded.epoch == entry.epoch)
-                {
-                    state.unconfirmed_teardown.remove(&session_id);
-                    let rejections = classify_and_drain_queued_commands(
-                        &mut pending_cmds,
-                        &mut dispatched,
-                        &session_id,
-                    );
-                    (true, rejections)
-                } else {
-                    (false, Vec::new())
-                }
-            };
-            for (cid, reason) in rejections {
-                broker.command_rejected(&session_id, cid, reason);
-            }
-            if cleared {
-                broker.send_controller(Frame::CommandAck {
-                    session_id: session_id.clone(),
-                    command_id,
-                    accepted: true,
-                    reason: None,
-                });
-                broker.send_crashed_worker_drained(&session_id, &entry.epoch);
-                broker.crashed_drains.settled.notify_waiters();
-            } else {
-                broker.command_rejected(
-                    &session_id,
-                    command_id,
-                    "crashed worker teardown retry was superseded".into(),
-                );
-            }
-        });
-    }
-
-    fn teardown_retry_still_valid(&self, session_id: &str, worker_epoch: &str) -> bool {
-        !self
-            .permanently_deleted_sessions
-            .lock()
-            .contains(session_id)
-            && !self.cancelled_sessions.lock().contains(session_id)
-            && !self.launching.lock().contains(session_id)
-            && !self.resetting_sessions.lock().contains_key(session_id)
-            && !self.workers.lock().contains_key(session_id)
-            && self
-                .crashed_drains
-                .inner
-                .lock()
-                .unconfirmed_teardown
-                .get(session_id)
-                .is_some_and(|recorded| recorded.epoch == worker_epoch)
-    }
-
-    /// Epoch-bound cleanup continuation with capped backoff; always revalidates
-    /// ownership under `session_lifecycle_gate` before calling the daemon (R2-H4, R2-M5).
-    fn spawn_background_teardown_retry(
-        self: &Arc<Self>,
-        session_id: String,
-        entry: UnconfirmedTeardown,
-    ) {
-        let broker = Arc::clone(self);
-        tokio::spawn(async move {
-            let mut attempt: u32 = 0;
-            loop {
-                let delay = Duration::from_secs((2_u64 << attempt.min(5)).min(60));
-                attempt = attempt.saturating_add(1);
-                tokio::time::sleep(delay).await;
-                if !broker.teardown_retry_still_valid(&session_id, &entry.epoch) {
-                    return;
-                }
-                let gate = broker.session_lifecycle_gate(&session_id);
-                let _guard = gate.lock().await;
-                if !broker.teardown_retry_still_valid(&session_id, &entry.epoch) {
-                    return;
-                }
-                if !broker
-                    .confirm_retired_teardown_complete(
-                        &session_id,
-                        entry.peer_pid,
-                        entry.retired_launch,
-                    )
-                    .await
-                {
-                    continue;
-                }
-                let (cleared, session_for_cache, rejections) = {
-                    let sessions = broker.sessions.lock();
-                    let workers = broker.workers.lock();
-                    let mut pending_cmds = broker.pending_commands.lock();
-                    let mut dispatched = broker.dispatched_prompts.lock();
-                    let mut state = broker.crashed_drains.inner.lock();
-                    if !workers.contains_key(&session_id)
-                        && state
-                            .unconfirmed_teardown
-                            .get(&session_id)
-                            .is_some_and(|recorded| recorded.epoch == entry.epoch)
-                    {
-                        state.unconfirmed_teardown.remove(&session_id);
-                        let rejections = classify_and_drain_queued_commands(
-                            &mut pending_cmds,
-                            &mut dispatched,
-                            &session_id,
-                        );
-                        (true, sessions.get(&session_id).cloned(), rejections)
-                    } else {
-                        (false, None, Vec::new())
-                    }
-                };
-                for (cid, reason) in rejections {
-                    broker.command_rejected(&session_id, cid, reason);
-                }
-                if cleared {
-                    if let Some(session) = session_for_cache {
-                        broker.revoke_cache_protection(
-                            &session,
-                            &session_id,
-                            "crashed_worker_drained",
-                        );
-                    }
-                    broker.send_crashed_worker_drained(&session_id, &entry.epoch);
-                    broker.crashed_drains.settled.notify_waiters();
-                }
-                return;
-            }
-        });
-    }
-
-    /// Process a worker `CommandAck`. Returns `false` when the ACK came from a
-    /// superseded connection for a tracked crashed-drain command (caller must
-    /// NOT forward it to Controller).
     pub(super) fn extract_prompt_header(
         &self,
         session_id: &str,
@@ -623,17 +463,42 @@ impl Broker {
         drain_pending_for_session(&mut state.pending, session_id)
     }
 
+    pub(super) fn has_crashed_drain_for_epoch(&self, session_id: &str, epoch: &str) -> bool {
+        let state = self.crashed_drains.inner.lock();
+        state
+            .active
+            .get(session_id)
+            .is_some_and(|a| a.epoch == epoch)
+            || state
+                .pending
+                .values()
+                .any(|p| p.session_id == session_id && p.epoch == epoch)
+    }
+
+    pub(super) fn crashed_drain_fenced_for_epoch(&self, session_id: &str, epoch: &str) -> bool {
+        let workers = self.workers.lock();
+        workers
+            .get(session_id)
+            .is_some_and(|w| w.epoch == epoch && w.crashed_drain_fenced)
+            || self.has_crashed_drain_for_epoch(session_id, epoch)
+    }
+
     /// After sending `Welcome` to a reconnected worker, replay any ambiguous
-    /// pending `DrainCrashed` command ONLY when both the worker and the active
-    /// Controller lease still support Machine 55 / Runtime 10 (R2-M1).
+    /// pending `DrainCrashed` command under canonical `controller -> workers ->
+    /// crashed_drains` lock order. When no Controller lease is currently
+    /// attached (handover gap), preserve pending state and fence intact until a
+    /// lease attaches (R3-M1).
     pub(super) fn replay_pending_crashed_drain(&self, session_id: &str, connection_id: u64) {
-        let controller_capable = self.controller.lock().as_ref().is_some_and(|ctrl| {
-            ctrl.protocol >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
+        let (incompatible_rejects, cleared_fence) = {
+            let controller = self.controller.lock();
+            let Some(ctrl) = controller.as_ref() else {
+                // Handover gap: keep ambiguous ownership fenced until next lease installs.
+                return;
+            };
+            let controller_capable = ctrl.protocol >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
                 && ctrl
                     .outer_machine_protocol
-                    .is_some_and(|proto| proto >= CRASHED_WORKER_DRAIN_PROTOCOL_VERSION)
-        });
-        let (tx, commands, incompatible_rejects) = {
+                    .is_some_and(|proto| proto >= CRASHED_WORKER_DRAIN_PROTOCOL_VERSION);
             let mut workers = self.workers.lock();
             let Some(worker) = workers
                 .get_mut(session_id)
@@ -664,26 +529,27 @@ impl Broker {
                         rejects.push((entry.session_id, cid));
                     }
                 }
+                let mut cleared = false;
                 if !state.active.contains_key(session_id) {
                     worker.crashed_drain_fenced = false;
+                    cleared = true;
                 }
-                (None, Vec::new(), rejects)
+                (rejects, cleared)
             } else {
-                let commands = matching_ids
-                    .iter()
-                    .filter_map(|cid| {
-                        state
-                            .pending
-                            .get(cid)
-                            .map(|entry| WorkerCommand::DrainCrashed {
-                                command_id: cid.clone(),
+                for cid in matching_ids {
+                    if let Some(entry) = state.pending.get(&cid) {
+                        let _ = worker.tx.send(Frame::WorkerCommand {
+                            session_id: session_id.to_owned(),
+                            command: WorkerCommand::DrainCrashed {
+                                command_id: cid,
                                 worker_epoch: entry.epoch.clone(),
                                 acknowledged_uncertain_sequence: entry
                                     .acknowledged_uncertain_sequence,
-                            })
-                    })
-                    .collect();
-                (Some(worker.tx.clone()), commands, Vec::new())
+                            },
+                        });
+                    }
+                }
+                (Vec::new(), false)
             }
         };
         for (sid, cid) in incompatible_rejects {
@@ -693,12 +559,40 @@ impl Broker {
                 "protocol downgraded before crashed drain replay".into(),
             );
         }
-        if let Some(tx) = tx {
-            for command in commands {
-                let _ = tx.send(Frame::WorkerCommand {
-                    session_id: session_id.to_owned(),
-                    command,
-                });
+        if cleared_fence {
+            self.flush_pending(session_id);
+        }
+    }
+
+    /// Resume or cleanly reject any pending crashed-drain commands whose worker
+    /// reconnected while no Controller lease was installed (R3-M1).
+    pub(super) fn replay_pending_crashed_drains_for_new_controller(&self, lease: u64) {
+        let targets: Vec<(String, u64)> = {
+            let controller = self.controller.lock();
+            if !controller.as_ref().is_some_and(|c| c.lease == lease) {
+                return;
+            }
+            let workers = self.workers.lock();
+            let state = self.crashed_drains.inner.lock();
+            state
+                .pending
+                .values()
+                .filter_map(|entry| {
+                    workers
+                        .get(&entry.session_id)
+                        .filter(|w| {
+                            w.welcomed
+                                && w.epoch == entry.epoch
+                                && w.connection_id == entry.connection_id
+                        })
+                        .map(|w| (entry.session_id.clone(), w.connection_id))
+                })
+                .collect()
+        };
+        let mut seen = HashSet::new();
+        for (sid, conn_id) in targets {
+            if seen.insert((sid.clone(), conn_id)) {
+                self.replay_pending_crashed_drain(&sid, conn_id);
             }
         }
     }
@@ -763,6 +657,28 @@ impl Broker {
             }
         };
         if !confirmed {
+            let receiptless = {
+                let state = self.crashed_drains.inner.lock();
+                let active = state
+                    .active
+                    .get(session_id)
+                    .filter(|a| a.epoch == peer.epoch && a.connection_id == peer.connection_id)
+                    .map(|a| (a.peer_pid.or(peer.peer_pid), a.retired_launch));
+                let pending = state
+                    .pending
+                    .values()
+                    .find(|p| p.session_id == session_id && p.epoch == peer.epoch)
+                    .map(|p| (p.peer_pid.or(peer.peer_pid), p.retired_launch));
+                active.or(pending)
+            };
+            if let Some((pid, launch)) = receiptless {
+                self.spawn_receiptless_drain_reconciler(
+                    session_id.to_owned(),
+                    peer.epoch.clone(),
+                    pid,
+                    launch,
+                );
+            }
             self.crashed_drains.settled.notify_waiters();
             return false;
         }
@@ -821,27 +737,6 @@ impl Broker {
         );
         self.crashed_drains.settled.notify_waiters();
         true
-    }
-
-    async fn wait_for_direct_exit_then_confirm_sandbox(
-        &self,
-        session_id: &str,
-        recorded_pid: Option<u32>,
-        retired_launch: Option<uuid::Uuid>,
-    ) -> bool {
-        if self.args.spawn_mode == SpawnMode::Direct
-            && let Some(pid) = recorded_pid
-        {
-            let deadline = tokio::time::Instant::now() + DIRECT_EXIT_GRACE;
-            while !direct_process_tree_gone(pid) {
-                if tokio::time::Instant::now() >= deadline {
-                    return false;
-                }
-                tokio::time::sleep(Duration::from_millis(25)).await;
-            }
-        }
-        self.confirm_retired_sandbox_units_gone(session_id, retired_launch)
-            .await
     }
 
     fn commit_crashed_drain_disconnect(
@@ -1111,107 +1006,6 @@ impl Broker {
         Ok(())
     }
 
-    async fn current_durable_launch_id(&self, session_id: &str) -> Option<uuid::Uuid> {
-        let store = Arc::clone(&self.args.provider_store);
-        let session = session_id.to_owned();
-        tokio::task::spawn_blocking(move || {
-            store
-                .account_worker_exit(&session)
-                .ok()
-                .flatten()
-                .map(|receipt| receipt.launch)
-        })
-        .await
-        .ok()
-        .flatten()
-    }
-
-    async fn confirm_retired_teardown_complete(
-        &self,
-        session_id: &str,
-        recorded_pid: Option<u32>,
-        retired_launch: Option<uuid::Uuid>,
-    ) -> bool {
-        if self.args.spawn_mode == SpawnMode::Direct
-            && let Some(pid) = recorded_pid
-            && !direct_process_tree_gone(pid)
-        {
-            return false;
-        }
-        self.confirm_retired_sandbox_units_gone(session_id, retired_launch)
-            .await
-    }
-
-    async fn confirm_retired_sandbox_units_gone(
-        &self,
-        session_id: &str,
-        expected_launch: Option<uuid::Uuid>,
-    ) -> bool {
-        let store = Arc::clone(&self.args.provider_store);
-        let session = session_id.to_owned();
-        let confirmed = tokio::task::spawn_blocking(move || {
-            if let Some(expected) = expected_launch {
-                match store.account_worker_exit(&session)? {
-                    Some(receipt) if receipt.launch != expected => return Ok(()),
-                    _ => {}
-                }
-            }
-            store.confirm_session_account_units_gone(&session)
-        })
-        .await;
-        match confirmed {
-            Ok(Ok(())) => true,
-            outcome => {
-                tracing::error!(
-                    session = session_id,
-                    ?outcome,
-                    "retired account sandbox unit teardown unconfirmed"
-                );
-                false
-            }
-        }
-    }
-
-    async fn confirm_mid_drain_worker_exited(
-        &self,
-        session_id: &str,
-        recorded_pid: Option<u32>,
-    ) -> bool {
-        match self.args.spawn_mode {
-            SpawnMode::SystemdUser => {
-                if systemd_exit::confirm_replaced(&self.args.provider_store, session_id)
-                    .await
-                    .is_err()
-                {
-                    return false;
-                }
-                let unit = worker_unit_name(&self.args.socket, session_id);
-                systemd_exit::unit_inactive(&unit).await.unwrap_or(false)
-            }
-            SpawnMode::Direct => {
-                if self.direct_worker_pids.lock().contains_key(session_id) {
-                    return false;
-                }
-                let store = Arc::clone(&self.args.provider_store);
-                let session = session_id.to_owned();
-                let account_exited = tokio::task::spawn_blocking(move || {
-                    let _ = store.reconcile_account_worker_boot(&session);
-                    match store.account_worker_exit(&session) {
-                        Ok(Some(receipt)) => receipt.tree_exited,
-                        Ok(None) => true,
-                        Err(_) => false,
-                    }
-                })
-                .await
-                .unwrap_or(false);
-                if !account_exited {
-                    return false;
-                }
-                recorded_pid.is_some_and(direct_process_tree_gone)
-            }
-        }
-    }
-
     pub(super) fn clear_crashed_drain(&self, session_id: &str, reason: &str) {
         let orphaned = {
             let mut state = self.crashed_drains.inner.lock();
@@ -1235,6 +1029,13 @@ impl Broker {
                 state
                     .active
                     .get(session_id)
+                    .map(|entry| entry.epoch.clone())
+            })
+            .or_else(|| {
+                state
+                    .pending
+                    .values()
+                    .find(|entry| entry.session_id == session_id)
                     .map(|entry| entry.epoch.clone())
             })
     }
@@ -1326,21 +1127,7 @@ impl Broker {
     }
 }
 
-fn direct_process_tree_gone(pid: u32) -> bool {
-    let Some(pid_ref) = i32::try_from(pid)
-        .ok()
-        .and_then(rustix::process::Pid::from_raw)
-    else {
-        return false;
-    };
-    let process_gone = matches!(
-        rustix::process::test_kill_process(pid_ref),
-        Err(rustix::io::Errno::SRCH)
-    );
-    process_gone && !direct_worker_group_exists(pid)
-}
-
-fn classify_and_drain_queued_commands(
+pub(super) fn classify_and_drain_queued_commands(
     pending_cmds: &mut HashMap<String, VecDeque<WorkerCommand>>,
     dispatched: &mut wrap_up::DispatchedPrompts,
     session_id: &str,
@@ -1414,6 +1201,21 @@ fn drain_pending_for_connection(
                 && entry.epoch == epoch
                 && entry.connection_id == connection_id
         })
+        .map(|(id, _)| id.clone())
+        .collect();
+    ids.into_iter()
+        .filter_map(|id| pending.remove(&id).map(|entry| (entry.session_id, id)))
+        .collect()
+}
+
+fn drain_pending_for_epoch(
+    pending: &mut HashMap<String, PendingDrain>,
+    session_id: &str,
+    epoch: &str,
+) -> Vec<(String, String)> {
+    let ids: Vec<String> = pending
+        .iter()
+        .filter(|(_, entry)| entry.session_id == session_id && entry.epoch == epoch)
         .map(|(id, _)| id.clone())
         .collect();
     ids.into_iter()
