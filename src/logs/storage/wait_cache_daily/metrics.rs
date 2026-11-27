@@ -115,17 +115,18 @@ pub fn encode_wait_cache_otlp(
         );
         // On real wall-clock runs (not 1970 synthetic test epochs), require each
         // source's own clock to confirm the day is both finalized and retained.
-        if !controller && now >= 1_000_000_000_000 {
-            if let Some(source_now) = report["store_now_ms"].as_i64() {
-                ensure!(
-                    source_now >= required_close,
-                    "wait/cache source clock has not passed the day finalization boundary"
-                );
-                ensure!(
-                    day >= utc_day(source_now).saturating_sub(RETENTION_MS),
-                    "wait/cache day is outside source's 45-day retention horizon"
-                );
-            }
+        if !controller
+            && now >= 1_000_000_000_000
+            && let Some(source_now) = report["store_now_ms"].as_i64()
+        {
+            ensure!(
+                source_now >= required_close,
+                "wait/cache source clock has not passed the day finalization boundary"
+            );
+            ensure!(
+                day >= utc_day(source_now).saturating_sub(RETENTION_MS),
+                "wait/cache day is outside source's 45-day retention horizon"
+            );
         }
         if let Some(floor) = report["capacity_floor_ms"].as_i64() {
             ensure!(
