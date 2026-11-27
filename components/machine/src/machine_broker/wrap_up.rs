@@ -1177,6 +1177,15 @@ impl super::Broker {
                 )
             } else {
                 match workers.get(session_id) {
+                    Some(worker) if worker.crashed_drain_fenced => {
+                        dispatched.mark_acked(session_id, &command_id);
+                        Some((
+                            command_id,
+                            refusal_reason(
+                                "unhanded: crashed worker is draining; retry on replacement".into(),
+                            ),
+                        ))
+                    }
                     Some(worker) if worker.welcomed && !worker.snapshot.drain_requested => {
                         if let Some((cid, reason)) = fresh_prompt_refusal(
                             &dispatched,
@@ -1228,15 +1237,12 @@ impl super::Broker {
                             ),
                         ))
                     }
-                    _ => {
-                        let queue = pending.entry(session_id.to_owned()).or_default();
-                        if !queue.iter().any(|queued| {
-                            super::worker_command_id(queued) == Some(command_id.as_str())
-                        }) {
-                            queue.push_back(command);
-                        }
-                        None
-                    }
+                    _ => super::crashed_drain::enqueue_pending_prompt(
+                        &mut pending,
+                        session_id,
+                        &command_id,
+                        command,
+                    ),
                 }
             }
             .map(|(cid, reason)| (bound_tx, cid, reason))
@@ -1563,6 +1569,7 @@ mod tests {
             exit_detail: None,
             background_tasks: None,
             native_cycle_id: None,
+            native_cycle_active: false,
             incarnation: None,
             account_unit: None,
             uncertain_effect: None,
@@ -1942,6 +1949,7 @@ mod tests {
                 hint_tx: Some(hint_tx),
                 diag_reply_tx: None,
                 last_hinted_target: None,
+                crashed_drain_fenced: false,
             },
         );
         let target = DeliveryTarget {
@@ -2124,6 +2132,7 @@ mod tests {
                 hint_tx: None,
                 diag_reply_tx: None,
                 last_hinted_target: None,
+                crashed_drain_fenced: false,
             },
         );
 
@@ -2207,6 +2216,7 @@ mod tests {
                 hint_tx: None,
                 diag_reply_tx: None,
                 last_hinted_target: None,
+                crashed_drain_fenced: false,
             },
         );
         broker.route_prompt_guarded("s1", first);
@@ -2267,6 +2277,7 @@ mod tests {
                 hint_tx: None,
                 diag_reply_tx: None,
                 last_hinted_target: None,
+                crashed_drain_fenced: false,
             },
         );
         assert!(
@@ -2416,6 +2427,7 @@ mod tests {
                 hint_tx: None,
                 diag_reply_tx: None,
                 last_hinted_target: None,
+                crashed_drain_fenced: false,
             },
         );
 
@@ -2568,6 +2580,7 @@ mod tests {
                 hint_tx: None,
                 diag_reply_tx: None,
                 last_hinted_target: None,
+                crashed_drain_fenced: false,
             },
         );
         broker.flush_pending_guarded("s-evict");

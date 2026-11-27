@@ -450,6 +450,7 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin + Send>(
             | CoreCommand::Cancel { .. }
             | CoreCommand::CancelSubagent { .. }
             | CoreCommand::QuiesceAccountSession { .. }
+            | CoreCommand::DrainCrashedWorker { .. }
     ) {
         if !reserve_for_write(shared, expected, &command) {
             return Ok(SendOutcome::Skipped);

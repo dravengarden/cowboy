@@ -32,6 +32,7 @@ mod account_unit;
 mod account_worker;
 mod cleanups;
 mod core_overflow;
+mod crashed_drain;
 pub mod deletions;
 mod incarnations;
 pub mod liveness;
@@ -323,6 +324,7 @@ struct WorkerPeer {
     hint_tx: Option<mpsc::Sender<Frame>>,
     diag_reply_tx: Option<mpsc::Sender<Frame>>,
     last_hinted_target: Option<crate::runtime_wire::DeliveryTarget>,
+    crashed_drain_fenced: bool,
 }
 
 /// Outcome of one heartbeat sweep.
@@ -390,13 +392,6 @@ impl DurableStateView {
 const CUTOVER_PRIORITY_POLL: Duration = Duration::from_millis(100);
 
 /// Half the CPUs, between 2 and 8: native Provider startup is CPU-bound.
-fn cutover_concurrency() -> usize {
-    std::thread::available_parallelism()
-        .map_or(4, std::num::NonZeroUsize::get)
-        .div_ceil(2)
-        .clamp(2, 8)
-}
-
 struct Broker {
     args: MachineBrokerArgs,
     /// Rollout replacements (generation cutovers and Provider rolls) start at
@@ -452,6 +447,7 @@ struct Broker {
     resetting_sessions: Mutex<HashMap<String, String>>,
     departing_cleanup: Arc<Mutex<HashMap<String, wrap_up::DepartingCleanup>>>,
     post_edit: Arc<post_edit::PostEditState>,
+    crashed_drains: crashed_drain::State,
     replacing: Mutex<HashMap<String, String>>,
     /// Session-local rollback pins. A healthy fallback must remain available
     /// even though the global desired generation is still marked unhealthy.
@@ -478,63 +474,7 @@ struct Broker {
     next_lease: AtomicU64,
 }
 
-/// Why a live worker cannot hibernate now, if anything would be lost.
-fn hibernation_refusal(worker: &WorkerSnapshot) -> Option<&'static str> {
-    if worker.state != WorkerState::Running || worker.current_turn_id.is_some() {
-        Some("session is busy")
-    } else if !worker.pending_permissions.is_empty() {
-        Some("session is waiting for a permission decision")
-    } else if worker.background_tasks.unwrap_or(0) > 0 {
-        Some("session has background work in progress")
-    } else if worker.pending_prompt_count > 0 {
-        Some("session has a queued prompt")
-    } else {
-        None
-    }
-}
-
 impl Broker {
-    fn revoke_cache_protection(
-        &self,
-        session: &StartSession,
-        session_id: &str,
-        reason: &'static str,
-    ) {
-        let configuration = session.provider_behavior.as_ref().map_or_else(
-            || crate::provider_behavior::legacy_behavior(&session.provider).configuration,
-            |behavior| behavior.configuration.clone(),
-        );
-        if !crate::deepseek_cache::supported_behavior(&configuration) {
-            return;
-        }
-        #[cfg(test)]
-        self.revoked_cache_protection
-            .lock()
-            .push((session_id.to_owned(), reason));
-        let provider = session.provider.clone();
-        let session_id = session_id.to_owned();
-        tokio::spawn(async move {
-            if let Err(error) =
-                crate::deepseek_cache::revoke_local_snapshot(&configuration, &session_id).await
-            {
-                tracing::warn!(
-                    provider,
-                    session = %session_id,
-                    reason,
-                    %error,
-                    "failed to revoke DeepSeek cache-protection snapshot"
-                );
-            } else {
-                tracing::debug!(
-                    provider,
-                    session = %session_id,
-                    reason,
-                    "revoked DeepSeek cache-protection snapshot"
-                );
-            }
-        });
-    }
-
     fn new(args: MachineBrokerArgs) -> Self {
         let mut generation_commands = HashMap::new();
         if !args.desired_generation.is_empty() {
@@ -543,7 +483,9 @@ impl Broker {
         }
         Self {
             desired_generation: Mutex::new(args.desired_generation.clone()),
-            cutover_launches: Arc::new(tokio::sync::Semaphore::new(cutover_concurrency())),
+            cutover_launches: Arc::new(tokio::sync::Semaphore::new(
+                account_unit::cutover_concurrency(),
+            )),
             args,
             controller: Mutex::new(None),
             workers: Mutex::new(HashMap::new()),
@@ -570,6 +512,7 @@ impl Broker {
             resetting_sessions: Mutex::new(HashMap::new()),
             departing_cleanup: Arc::new(Mutex::new(HashMap::new())),
             post_edit: Arc::new(post_edit::PostEditState::default()),
+            crashed_drains: crashed_drain::State::default(),
             replacing: Mutex::new(HashMap::new()),
             fallback_pins: Mutex::new(HashMap::new()),
             fallback_targets: Mutex::new(HashMap::new()),
@@ -664,6 +607,7 @@ impl Broker {
                 exit_detail,
                 background_tasks: None,
                 native_cycle_id: None,
+                native_cycle_active: false,
                 incarnation: None,
                 account_unit: None,
                 uncertain_effect: None,
@@ -1292,60 +1236,37 @@ impl Broker {
                 existing.epoch
             );
         }
+        let drain_requested = !desired.is_empty() && generation != desired && !pinned;
         let replaced = workers.insert(
             session_id.clone(),
-            WorkerPeer {
+            crashed_drain::new_registered_peer(
+                &session_id,
+                &epoch,
+                &generation,
+                executable,
                 connection_id,
-                epoch: epoch.clone(),
                 tx,
-                snapshot: WorkerSnapshot {
-                    session_id: session_id.clone(),
-                    worker_epoch: epoch,
-                    generation: generation.clone(),
-                    executable,
-                    launch: None,
-                    state: crate::runtime_wire::WorkerState::Starting,
-                    agent_session_id: None,
-                    native_thread_materialized: None,
-                    current_turn_id: None,
-                    supports_current_turn: false,
-                    delivery_controls: crate::runtime_wire::DeliveryControls::default(),
-                    wrap_up_steering: false,
-                    supports_subagent_cancel: false,
-                    last_runtime_seq: 0,
-                    pending_permissions: Vec::new(),
-                    config_options: None,
-                    context_used: None,
-                    context_size: None,
-                    pending_prompt_count: 0,
-                    drain_requested: !desired.is_empty() && generation != desired && !pinned,
-                    exit_detail: None,
-                    background_tasks: None,
-                    native_cycle_id: None,
-                    incarnation: None,
-                    account_unit: None,
-                    uncertain_effect: None,
-                },
-                acked_runtime_seq: 0,
-                earliest_unacked_seq: None,
-                highest_runtime_seq: 0,
-                replay_gate: None,
                 welcomed,
-                replay_deferred: false,
-                last_seen: Instant::now(),
-                receive_probe: None,
-                liveness: None,
-                negotiated_protocol: 0,
-                raw_wrap_up_steering: false,
-                hint_tx: None,
-                diag_reply_tx: None,
-                last_hinted_target: None,
-            },
+                drain_requested,
+            ),
+        );
+        let orphaned_crashed_drains = self.rebind_crashed_drain_on_reconnect(
+            &session_id,
+            &epoch,
+            connection_id,
+            workers.get_mut(&session_id).expect("just inserted"),
         );
         if let Some(old) = replaced {
             self.post_edit.remove_worker(&session_id, old.connection_id);
         }
         drop(workers);
+        for (sid, cid) in orphaned_crashed_drains {
+            self.command_rejected(
+                &sid,
+                cid,
+                "crashed worker replaced before drain completed".into(),
+            );
+        }
         if !self.cancelled_sessions.lock().contains(&session_id) {
             self.session_states
                 .lock()
@@ -2026,6 +1947,18 @@ impl Broker {
         // replacement worker should be launched or report its own snapshot.
         session.adopt_only = false;
         mcp_launch::declare(&mut self.sessions.lock(), &mut session, adopt_only);
+        if !adopt_only
+            && let Err(reason) = self
+                .gate_ensure_against_crashed_drain(&session.session_id)
+                .await
+        {
+            self.command_rejected(
+                &session.session_id,
+                format!("ensure:{}", session.session_id),
+                reason,
+            );
+            return;
+        }
         let desired_generation = self.desired_generation.lock().clone();
         let existing = {
             let mut workers = self.workers.lock();
@@ -2259,6 +2192,7 @@ impl Broker {
 
         // `force_recycle_failed_start` queues Stop when no worker was attached;
         // do not let that stale command reach the fresh replacement.
+        self.clear_crashed_drain(&session_id, "session reset superseded crashed worker drain");
         self.pending_commands.lock().remove(&session_id);
         self.cancelled_sessions.lock().remove(&session_id);
         self.resetting_sessions.lock().remove(&session_id);
@@ -2311,7 +2245,7 @@ impl Broker {
             .is_some_and(|expected| snapshot.worker_epoch != expected)
             .then_some("worker epoch changed before hibernation");
         if let Some(reason) = epoch_mismatch
-            .or_else(|| hibernation_refusal(&snapshot))
+            .or_else(|| account_unit::hibernation_refusal(&snapshot))
             .or_else(|| {
                 self.launching
                     .lock()
@@ -3102,6 +3036,9 @@ impl Broker {
             }
             RuntimeEvent::Status { state, detail } => {
                 worker.snapshot.state = *state;
+                if *state == WorkerState::Exited {
+                    worker.snapshot.native_cycle_active = false;
+                }
                 if matches!(state, WorkerState::Exited | WorkerState::Crashed) {
                     worker.snapshot.native_cycle_id = None;
                     if let Some(detail) = detail {
@@ -3150,8 +3087,9 @@ impl Broker {
             RuntimeEvent::Update { update, .. }
                 if crate::runtime_wire::native_cycle(update).is_some() =>
             {
-                worker.snapshot.native_cycle_id =
-                    crate::runtime_wire::native_cycle(update).flatten();
+                let cycle = crate::runtime_wire::native_cycle(update).flatten();
+                worker.snapshot.native_cycle_active = cycle.is_some();
+                worker.snapshot.native_cycle_id = cycle;
             }
             RuntimeEvent::Update { update, .. }
                 if crate::runtime_wire::uncertain_effect(update).is_some() =>
@@ -3262,10 +3200,17 @@ impl Broker {
         exit_detail: Option<String>,
     ) {
         if !self.sessions.lock().contains_key(&session_id) {
+            self.clear_crashed_drain(&session_id, "session was deleted");
             self.session_states.lock().remove(&session_id);
             self.pending_commands.lock().remove(&session_id);
             self.startup_failures.lock().remove(&session_id);
             self.unpin_fallback(&session_id);
+            return;
+        }
+        if self
+            .try_finish_crashed_drain_disconnect(&session_id, &peer)
+            .await
+        {
             return;
         }
         let Some(old_generation) = self.replacing.lock().remove(&session_id) else {
@@ -3863,6 +3808,7 @@ fn worker_command_id(command: &WorkerCommand) -> Option<&str> {
         | WorkerCommand::Permission { command_id, .. }
         | WorkerCommand::SetConfigOption { command_id, .. }
         | WorkerCommand::Stop { command_id } => Some(command_id),
+        WorkerCommand::DrainCrashed { command_id, .. } => Some(command_id.as_str()),
         WorkerCommand::Drain | WorkerCommand::WrapUpHint { .. } => None,
     }
 }
@@ -4810,8 +4756,18 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                 // Deletion must still arm the process-group watchdog.
                 broker.arm_direct_worker_stop(&session_id);
             }
+            broker.clear_crashed_drain(&session_id, "session was deleted");
             broker.arm_deleted_worker_unit_stop(&session_id);
             broker.cleanup_deleted_session(&session_id, &cleanup_command_id);
+        }
+        CoreCommand::DrainCrashedWorker {
+            session_id,
+            command_id,
+            worker_epoch,
+        } => {
+            broker
+                .drain_crashed_worker(session_id, command_id, worker_epoch)
+                .await;
         }
         CoreCommand::QuiesceAccountSession {
             session_id,
@@ -4827,14 +4783,9 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             binding,
             command_id,
         } => {
-            let session_id = session.session_id.clone();
-            let result = broker.readmit_account_session(*session, &binding).await;
-            broker.send_controller(Frame::CommandAck {
-                session_id,
-                command_id,
-                accepted: result.is_ok(),
-                reason: result.err().map(|error| error.to_string()),
-            });
+            broker
+                .handle_readmit_account_session(*session, *binding, command_id)
+                .await
         }
         CoreCommand::SetDesiredGeneration {
             generation,
@@ -4958,11 +4909,31 @@ async fn handle_worker(
                     diagnostics,
                 );
             }
+            Frame::CrashedDrainCompleted {
+                session_id: drained_session,
+                worker_epoch,
+                command_id,
+            } if drained_session == session_id && worker_epoch == epoch => {
+                broker.confirm_crashed_drain(
+                    session_id,
+                    epoch,
+                    connection_id,
+                    command_id.as_deref(),
+                );
+            }
             Frame::CommandAck {
                 ref session_id,
                 ref command_id,
+                accepted,
                 ..
             } => {
+                broker.record_crashed_drain_ack(
+                    session_id,
+                    epoch,
+                    connection_id,
+                    command_id,
+                    accepted,
+                );
                 broker
                     .dispatched_prompts
                     .lock()
@@ -5072,7 +5043,7 @@ mod tests {
         command
     }
 
-    fn test_provider_store() -> Arc<crate::machine_plugins::MachinePluginStore> {
+    pub(super) fn test_provider_store() -> Arc<crate::machine_plugins::MachinePluginStore> {
         static STORE: std::sync::OnceLock<Arc<crate::machine_plugins::MachinePluginStore>> =
             std::sync::OnceLock::new();
         Arc::clone(STORE.get_or_init(|| {
@@ -6152,6 +6123,7 @@ mod tests {
                 exit_detail: None,
                 background_tasks: None,
                 native_cycle_id: None,
+                native_cycle_active: false,
                 incarnation: None,
                 account_unit: None,
                 uncertain_effect: None,
@@ -7400,15 +7372,15 @@ mod tests {
         let mut worker = broker.snapshots().into_iter().next().expect("worker");
         worker.state = WorkerState::Running;
         worker.current_turn_id = None;
-        assert_eq!(hibernation_refusal(&worker), None);
+        assert_eq!(account_unit::hibernation_refusal(&worker), None);
         worker.pending_permissions = vec!["permission-1".to_owned()];
-        assert!(hibernation_refusal(&worker).is_some());
+        assert!(account_unit::hibernation_refusal(&worker).is_some());
         worker.pending_permissions.clear();
         worker.background_tasks = Some(1);
-        assert!(hibernation_refusal(&worker).is_some());
+        assert!(account_unit::hibernation_refusal(&worker).is_some());
         worker.background_tasks = Some(0);
         worker.pending_prompt_count = 1;
-        assert!(hibernation_refusal(&worker).is_some());
+        assert!(account_unit::hibernation_refusal(&worker).is_some());
     }
 
     #[tokio::test]
@@ -10730,6 +10702,7 @@ mod tests {
                     exit_detail: None,
                     background_tasks: None,
                     native_cycle_id: None,
+                    native_cycle_active: false,
                     incarnation: None,
                     account_unit: None,
                     uncertain_effect: None,

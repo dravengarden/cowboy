@@ -232,7 +232,8 @@ impl Controls {
                 continue;
             };
             let key = uncertain_key(&meta.id);
-            let mut record = self.env.setting(&key).unwrap_or_else(|| json!({}));
+            let prev = self.env.setting(&key);
+            let mut record = prev.clone().unwrap_or_else(|| json!({}));
             let sequence = effect.sequence.max(1);
             if record["observed"].as_u64().unwrap_or(0) >= sequence {
                 continue;
@@ -240,13 +241,20 @@ impl Controls {
             record["observed"] = json!(sequence);
             record["method"] = json!(effect.method);
             record["observed_at_ms"] = json!(now_ms());
-            // Durable, then published, both under the writer lock the
-            // acknowledgement holds: the record only ever moves forward.
-            if let Err(error) = self.store.put_setting(&key, &record).await {
-                tracing::warn!(session = %meta.id, %error, "recording an uncertain effect failed");
-                continue;
+            // Durable, then published, both under the writer lock and CAS so
+            // concurrent runtime persistence or owner acknowledgement cannot be clobbered.
+            match self
+                .store
+                .compare_and_put_setting(&key, prev.as_ref(), &record)
+                .await
+            {
+                Ok(true) => self.env.set_setting(key, record),
+                Ok(false) => continue,
+                Err(error) => {
+                    tracing::warn!(session = %meta.id, %error, "recording an uncertain effect failed");
+                    continue;
+                }
             }
-            self.env.set_setting(key, record);
         }
     }
 

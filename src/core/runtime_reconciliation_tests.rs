@@ -240,6 +240,7 @@ pub(super) fn worker_snapshot(session_id: &str, worker_epoch: &str) -> WorkerSna
         exit_detail: None,
         background_tasks: None,
         native_cycle_id: None,
+        native_cycle_active: false,
         incarnation: None,
         account_unit: None,
         uncertain_effect: None,

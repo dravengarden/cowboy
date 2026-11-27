@@ -361,6 +361,8 @@ fn inspect(
             crate::runtime_wire::Frame::Hello {
                 session_id: None, ..
             }
+            | crate::runtime_wire::Frame::CrashedDrainCompleted { .. }
+            | crate::runtime_wire::Frame::CrashedWorkerDrained { .. }
             | crate::runtime_wire::Frame::Heartbeat => {}
             crate::runtime_wire::Frame::Welcome { workers, .. } if workers.is_empty() => {}
             _ => return Err(Failure::WrongObservation),

@@ -66,6 +66,11 @@ pub(super) fn overflow_refusal(command: &CoreCommand) -> Option<(String, String)
             session_id,
             command_id,
             ..
+        }
+        | CoreCommand::DrainCrashedWorker {
+            session_id,
+            command_id,
+            ..
         } => Some((session_id.clone(), command_id.clone())),
         CoreCommand::WrapUpHint { .. }
         | CoreCommand::StopSession { .. }

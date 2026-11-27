@@ -188,6 +188,7 @@ pub(super) fn delivered_without_projection(command: &CoreCommand) -> bool {
         CoreCommand::StopSession { .. }
             | CoreCommand::Cancel { .. }
             | CoreCommand::QuiesceAccountSession { .. }
+            | CoreCommand::DrainCrashedWorker { .. }
     )
 }
 

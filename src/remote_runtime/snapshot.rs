@@ -193,35 +193,378 @@ pub enum CrashedWorkerObservation {
 pub struct CrashedWorkerSighting {
     pub worker_epoch: String,
     pub generation: String,
+    /// Whether a Machine rollout or credential roll has asked for drain.
+    pub drain_requested: bool,
+    /// True when the latest snapshot/event evidence shows no turn, native
+    /// cycle, permission request, background task, queued prompt, or
+    /// unacknowledged uncertain effect.
+    pub idle: bool,
+}
+
+/// Per-session activity evidence tracked for a live `Crashed` worker, even
+/// when named-account admission refuses full Hub projection (for example,
+/// expired credentials).
+#[derive(Debug, Clone)]
+#[allow(clippy::struct_excessive_bools)]
+pub(super) struct SightingActivity {
+    worker_epoch: String,
+    generation: String,
+    drain_requested: bool,
+    busy_turn: bool,
+    pending_permissions: bool,
+    background_tasks: bool,
+    pending_prompt_count: u64,
+    native_cycle_active: bool,
+    uncertain_sequence: u64,
+}
+
+impl SightingActivity {
+    pub(super) fn from_snapshot(worker: &WorkerSnapshot) -> Self {
+        Self {
+            worker_epoch: worker.worker_epoch.clone(),
+            generation: worker.generation.clone(),
+            drain_requested: worker.drain_requested,
+            busy_turn: worker.current_turn_id.is_some(),
+            pending_permissions: !worker.pending_permissions.is_empty(),
+            background_tasks: worker.background_tasks.unwrap_or(0) > 0,
+            pending_prompt_count: worker.pending_prompt_count,
+            native_cycle_active: worker.native_cycle_active || worker.native_cycle_id.is_some(),
+            uncertain_sequence: worker
+                .uncertain_effect
+                .as_ref()
+                .map_or(0, |effect| effect.sequence.max(1)),
+        }
+    }
+
+    fn to_sighting(&self, hub: &crate::core::Hub, session_id: &str) -> CrashedWorkerSighting {
+        let unacked_uncertain = self.uncertain_sequence > 0
+            && super::config_sync::acknowledged_uncertain_sequence_for(hub, session_id)
+                < self.uncertain_sequence;
+        let idle = !self.busy_turn
+            && !self.pending_permissions
+            && !self.background_tasks
+            && self.pending_prompt_count == 0
+            && !self.native_cycle_active
+            && !unacked_uncertain;
+        CrashedWorkerSighting {
+            worker_epoch: self.worker_epoch.clone(),
+            generation: self.generation.clone(),
+            drain_requested: self.drain_requested,
+            idle,
+        }
+    }
+}
+
+pub(super) fn seed_crashed_sightings(
+    workers: &[WorkerSnapshot],
+) -> std::collections::HashMap<String, SightingActivity> {
+    workers
+        .iter()
+        .filter(|worker| worker.has_connected_owner() && worker.state == WorkerState::Crashed)
+        .map(|worker| {
+            (
+                worker.session_id.clone(),
+                SightingActivity::from_snapshot(worker),
+            )
+        })
+        .collect()
+}
+
+pub(super) fn observe_crashed_sighting(shared: &Shared, worker: &WorkerSnapshot) {
+    let fence = shared.projection_fence.lock();
+    if *fence || shared.resetting.lock().contains(&worker.session_id) {
+        return;
+    }
+    let mut sightings = shared.crashed_worker_sightings.lock();
+    if worker.has_connected_owner() && worker.state == WorkerState::Crashed {
+        sightings.insert(
+            worker.session_id.clone(),
+            SightingActivity::from_snapshot(worker),
+        );
+    } else {
+        sightings.remove(&worker.session_id);
+    }
+}
+
+pub(super) fn observe_crashed_event(
+    shared: &Shared,
+    session_id: &str,
+    worker_epoch: &str,
+    event: &RuntimeEvent,
+) {
+    let fence = shared.projection_fence.lock();
+    if *fence || shared.resetting.lock().contains(session_id) {
+        return;
+    }
+    if let RuntimeEvent::Status {
+        state: WorkerState::Crashed,
+        ..
+    } = event
+    {
+        let existing_worker = shared.workers.lock().get(session_id).cloned();
+        let mut sightings = shared.crashed_worker_sightings.lock();
+        if sightings
+            .get(session_id)
+            .is_none_or(|entry| entry.worker_epoch != worker_epoch)
+            && let Some(mut worker) = existing_worker
+            && worker.worker_epoch == worker_epoch
+            && worker.has_connected_owner()
+        {
+            worker.state = WorkerState::Crashed;
+            sightings.insert(
+                session_id.to_owned(),
+                SightingActivity::from_snapshot(&worker),
+            );
+        }
+        return;
+    }
+    let mut sightings = shared.crashed_worker_sightings.lock();
+    let Some(entry) = sightings.get_mut(session_id) else {
+        return;
+    };
+    if entry.worker_epoch != worker_epoch {
+        return;
+    }
+    match event {
+        RuntimeEvent::TurnStarted { .. } => entry.busy_turn = true,
+        RuntimeEvent::TurnEnded { .. } => entry.busy_turn = false,
+        RuntimeEvent::PermissionRequest { .. } => entry.pending_permissions = true,
+        RuntimeEvent::Status { state, .. } if *state != WorkerState::Crashed => {
+            sightings.remove(session_id);
+        }
+        RuntimeEvent::Update { update, .. } => {
+            if let Some(count) = crate::runtime_wire::background_tasks_count(update) {
+                entry.background_tasks = count > 0;
+            }
+            if let Some(cycle) = crate::runtime_wire::native_cycle(update) {
+                entry.native_cycle_active = cycle.is_some();
+            }
+            if let Some(effect) = crate::runtime_wire::uncertain_effect(update) {
+                entry.uncertain_sequence = entry.uncertain_sequence.max(effect.sequence.max(1));
+            }
+        }
+        _ => {}
+    }
+}
+
+pub(super) fn retain_crashed_sightings_after_welcome(
+    shared: &Shared,
+    ids: &std::collections::HashSet<String>,
+) {
+    shared
+        .crashed_worker_sightings
+        .lock()
+        .retain(|id, _| ids.contains(id));
+}
+
+pub(super) fn handle_crashed_worker_drained_frame(
+    shared: &Shared,
+    session_id: &str,
+    worker_epoch: &str,
+) {
+    if super::foreign_session(shared, session_id) {
+        super::reject_foreign_frame(shared, session_id, "CrashedWorkerDrained");
+        return;
+    }
+    retire_crashed_worker_drained(shared, session_id, worker_epoch);
+}
+
+pub(super) fn retire_crashed_worker_drained(shared: &Shared, session_id: &str, worker_epoch: &str) {
+    let fence = shared.projection_fence.lock();
+    if *fence {
+        return;
+    }
+    {
+        let mut sightings = shared.crashed_worker_sightings.lock();
+        if sightings
+            .get(session_id)
+            .is_some_and(|entry| entry.worker_epoch == worker_epoch)
+        {
+            sightings.remove(session_id);
+        }
+    }
+    let removed_uncertain = {
+        let mut workers = shared.workers.lock();
+        if workers
+            .get(session_id)
+            .is_some_and(|worker| worker.worker_epoch == worker_epoch)
+        {
+            workers
+                .remove(session_id)
+                .and_then(|worker| worker.uncertain_effect)
+        } else {
+            None
+        }
+    };
+    if let Some(effect) = removed_uncertain {
+        let mut retained = shared.retained_uncertain_effects.lock();
+        let slot = retained.get_mut(session_id);
+        if let Some(existing) = slot {
+            let mut merged = Some(existing.clone());
+            crate::runtime_wire::merge_uncertain_effect(&mut merged, effect);
+            if let Some(updated) = merged {
+                *existing = updated;
+            }
+        } else {
+            retained.insert(session_id.to_owned(), effect);
+        }
+    }
+    let mut pending = shared.pending.lock();
+    let sent = shared.sent.lock();
+    let attempted = shared.attempted_sends.lock();
+    pending.retain(|id, command| {
+        !(matches!(
+            command,
+            super::CoreCommand::DrainCrashedWorker {
+                session_id: owner,
+                worker_epoch: target,
+                ..
+            } if owner == session_id && target == worker_epoch
+        ) && !sent.contains(id)
+            && !attempted.contains(id))
+    });
+}
+
+pub(super) fn discard_pending_crashed_drain(
+    shared: &Shared,
+    session_id: &str,
+    forget_session: bool,
+) {
+    if forget_session {
+        shared.crashed_worker_sightings.lock().remove(session_id);
+        shared.retained_uncertain_effects.lock().remove(session_id);
+    }
+    let mut pending = shared.pending.lock();
+    let sent = shared.sent.lock();
+    let attempted = shared.attempted_sends.lock();
+    pending.retain(|id, command| {
+        !(matches!(
+            command,
+            super::CoreCommand::DrainCrashedWorker {
+                session_id: owner,
+                ..
+            } if owner == session_id
+        ) && !sent.contains(id)
+            && !attempted.contains(id))
+    });
+}
+
+pub(super) fn worker_snapshot_with_retained_uncertain(
+    shared: &Shared,
+    session_id: &str,
+) -> Option<WorkerSnapshot> {
+    let mut worker = shared.workers.lock().get(session_id).cloned()?;
+    let retained = shared
+        .retained_uncertain_effects
+        .lock()
+        .get(session_id)
+        .cloned();
+    if let Some(effect) = retained {
+        if super::config_sync::acknowledged_uncertain_sequence_for(&shared.hub, session_id)
+            >= effect.sequence.max(1)
+        {
+            shared.retained_uncertain_effects.lock().remove(session_id);
+        } else {
+            crate::runtime_wire::merge_uncertain_effect(&mut worker.uncertain_effect, effect);
+        }
+    }
+    Some(worker)
 }
 
 impl super::RemoteRuntime {
+    /// Whether this Machine and runtime protocol pair supports cooperative
+    /// epoch-bound crashed-worker drain (`CoreCommand::DrainCrashedWorker`).
+    #[must_use]
+    pub fn supports_crashed_worker_drain(&self) -> bool {
+        self.connected()
+            && self.shared.machine_protocol
+                >= crate::machine_protocol::CRASHED_WORKER_DRAIN_PROTOCOL_VERSION
+            && self.shared.protocol.load(Ordering::Acquire)
+                >= crate::runtime_wire::CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
+    }
+
+    /// Whether a prompt command is currently queued for `session_id`.
+    #[must_use]
+    pub fn has_pending_prompt(&self, session_id: &str) -> bool {
+        self.shared.pending.lock().values().any(|command| {
+            matches!(
+                command,
+                super::CoreCommand::Prompt {
+                    session_id: pending,
+                    ..
+                } if pending == session_id
+            )
+        })
+    }
+
+    /// Whether a crashed-worker drain command is already queued for `session_id`.
+    #[must_use]
+    pub fn crashed_drain_pending(&self, session_id: &str) -> bool {
+        self.shared.pending.lock().values().any(|command| {
+            matches!(
+                command,
+                super::CoreCommand::DrainCrashedWorker {
+                    session_id: owner,
+                    ..
+                } if owner == session_id
+            )
+        })
+    }
+
+    /// Queue an epoch-bound cooperative drain for an idle crashed worker when
+    /// the Machine supports protocol 55+ / Runtime 10+. Returns `true` only
+    /// when a new command was queued.
+    pub fn drain_crashed_worker(&self, session_id: &str, worker_epoch: &str) -> bool {
+        if !self.supports_crashed_worker_drain()
+            || worker_epoch.is_empty()
+            || worker_epoch.starts_with("broker-")
+            || self.shared.resetting.lock().contains(session_id)
+            || self.crashed_drain_pending(session_id)
+        {
+            return false;
+        }
+        let CrashedWorkerObservation::Seen(sighting) = self.last_crashed_worker(session_id) else {
+            return false;
+        };
+        if sighting.worker_epoch != worker_epoch || !sighting.idle {
+            return false;
+        }
+        let command_id = self.next_id("drain-crashed");
+        self.queue(
+            command_id.clone(),
+            super::CoreCommand::DrainCrashedWorker {
+                session_id: session_id.to_owned(),
+                command_id,
+                worker_epoch: worker_epoch.to_owned(),
+            },
+        );
+        true
+    }
+
     /// The worker this Controller last saw for `session_id` in the Crashed
     /// state, as the Machine reported it on the current connection. The
     /// Controller treats it as absent ([`Self::has_worker`]) and never reuses
-    /// it, yet nothing stops a live one: the next prompt recycles the
-    /// session, a rollout or roll drains only running workers.
-    ///
-    /// This is no proof that the process is still alive. The runtime wire
-    /// has no attach or detach signal: a worker that disconnects restates
-    /// itself as Crashed with the same epoch (or, for an undeclared session,
-    /// says nothing), and only the inventory of the next connection drops it.
-    /// Read-only evidence for an operator, who verifies the process first.
+    /// it, yet nothing stops a live one until cooperative drain retires it or
+    /// the next prompt recycles the session.
     pub fn last_crashed_worker(&self, session_id: &str) -> CrashedWorkerObservation {
-        // One read: the worker map is held while the connection state is
-        // checked, so "absent" always comes from a connected runtime.
+        // Hold the worker map while checking connection state so "absent"
+        // always comes from a connected runtime.
         let workers = self.shared.workers.lock();
+        let sightings = self.shared.crashed_worker_sightings.lock();
         if !self.connected() {
             return CrashedWorkerObservation::Unavailable;
+        }
+        if let Some(entry) = sightings.get(session_id) {
+            return CrashedWorkerObservation::Seen(entry.to_sighting(&self.shared.hub, session_id));
         }
         workers
             .get(session_id)
             .filter(|worker| worker.has_connected_owner() && worker.state == WorkerState::Crashed)
             .map_or(CrashedWorkerObservation::Absent, |worker| {
-                CrashedWorkerObservation::Seen(CrashedWorkerSighting {
-                    worker_epoch: worker.worker_epoch.clone(),
-                    generation: worker.generation.clone(),
-                })
+                CrashedWorkerObservation::Seen(
+                    SightingActivity::from_snapshot(worker)
+                        .to_sighting(&self.shared.hub, session_id),
+                )
             })
     }
 }
@@ -288,4 +631,229 @@ pub(super) fn project_snapshot_with_protocol(
         resend_declaration(shared, session, &worker.worker_epoch);
     }
     applied
+}
+
+pub(super) fn codex_full_access_permission(
+    shared: &Shared,
+    session_id: &str,
+    event: &RuntimeEvent,
+) -> Option<(String, String)> {
+    let RuntimeEvent::PermissionRequest {
+        request_id,
+        options,
+        ..
+    } = event
+    else {
+        return None;
+    };
+    let workers = shared.workers.lock();
+    let worker = workers.get(session_id)?;
+    let launch = worker.launch.as_ref()?;
+    let permission = launch.provider_behavior.as_ref().map_or_else(
+        || crate::provider::legacy_behavior(&launch.provider).permission,
+        |behavior| behavior.permission.clone(),
+    );
+    if permission != cowboy_provider_sdk::PermissionBehavior::AcpConfigFullAccessV1
+        || !worker
+            .config_options
+            .as_ref()
+            .is_some_and(codex_config_is_full_access)
+    {
+        return None;
+    }
+    let option_id = options.as_array()?.iter().find_map(|option| {
+        (option.get("kind").and_then(serde_json::Value::as_str) == Some("allow_always"))
+            .then(|| option.get("optionId").and_then(serde_json::Value::as_str))
+            .flatten()
+            .map(str::to_owned)
+    })?;
+    Some((request_id.clone(), option_id))
+}
+
+pub(super) fn codex_config_is_full_access(options: &serde_json::Value) -> bool {
+    options.as_array().is_some_and(|options| {
+        options.iter().any(|option| {
+            option.get("id").and_then(serde_json::Value::as_str) == Some("mode")
+                && option
+                    .get("currentValue")
+                    .or_else(|| option.get("current_value"))
+                    .and_then(serde_json::Value::as_str)
+                    == Some("agent-full-access")
+        })
+    })
+}
+
+#[cfg(test)]
+mod crashed_drain_tests {
+    use super::*;
+    use crate::runtime_wire::{CoreCommand, Frame, UncertainEffect};
+
+    fn crashed_snapshot(session_id: &str, epoch: &str) -> WorkerSnapshot {
+        let mut snap = super::super::tests::snapshot(session_id);
+        snap.worker_epoch = epoch.to_owned();
+        snap.state = WorkerState::Crashed;
+        snap.current_turn_id = None;
+        snap.pending_permissions.clear();
+        snap.background_tasks = Some(0);
+        snap.pending_prompt_count = 0;
+        snap.native_cycle_id = None;
+        snap.native_cycle_active = false;
+        snap.uncertain_effect = None;
+        snap
+    }
+
+    #[tokio::test]
+    async fn crashed_sighting_gates_on_activity_native_cycle_and_unacknowledged_uncertain_effect() {
+        let hub = crate::core::Hub::new();
+        hub.create_local_session(
+            "s-1".into(),
+            "codex".into(),
+            "/tmp".into(),
+            "Crashed".into(),
+            crate::core::SessionOrigin::Api,
+            false,
+        );
+        hub.set_status("s-1", Status::Crashed, Some("boom".into()));
+        let mut snap = crashed_snapshot("s-1", "42-1");
+        snap.native_cycle_active = true;
+        let rt = super::super::RemoteRuntime::for_test(hub.clone(), vec![snap.clone()]);
+        rt.connect_for_test();
+
+        let CrashedWorkerObservation::Seen(sighting) = rt.last_crashed_worker("s-1") else {
+            panic!("expected crashed sighting");
+        };
+        assert!(!sighting.idle, "active native cycle must block drain");
+        assert!(!rt.drain_crashed_worker("s-1", "42-1"));
+
+        // Ending native cycle while adding an unacknowledged uncertain_effect still blocks drain.
+        snap.native_cycle_active = false;
+        snap.uncertain_effect = Some(UncertainEffect {
+            sequence: 3,
+            method: "write".into(),
+        });
+        observe_crashed_sighting(&rt.shared, &snap);
+        let CrashedWorkerObservation::Seen(sighting) = rt.last_crashed_worker("s-1") else {
+            panic!("expected crashed sighting");
+        };
+        assert!(
+            !sighting.idle,
+            "unacknowledged uncertain_effect must block automatic crashed drain"
+        );
+        assert!(!rt.drain_crashed_worker("s-1", "42-1"));
+
+        // Owner acknowledges sequence 3 -> sighting becomes idle and drain queues once.
+        hub.set_setting(
+            format!(
+                "{}s-1",
+                crate::core::settings_keys::SESSION_UNCERTAIN_EFFECT_ACK_PREFIX
+            ),
+            serde_json::json!({"acknowledged": 3}),
+        );
+        let CrashedWorkerObservation::Seen(sighting) = rt.last_crashed_worker("s-1") else {
+            panic!("expected crashed sighting");
+        };
+        assert!(sighting.idle);
+        assert!(rt.drain_crashed_worker("s-1", "42-1"));
+        assert!(rt.crashed_drain_pending("s-1"));
+        assert!(
+            !rt.drain_crashed_worker("s-1", "42-1"),
+            "duplicate drain while pending must be refused"
+        );
+    }
+
+    #[tokio::test]
+    async fn crashed_worker_drained_retires_matching_epoch_and_keeps_crashed_status_and_uncertain_effect()
+     {
+        let hub = crate::core::Hub::new();
+        hub.create_local_session(
+            "s-2".into(),
+            "codex".into(),
+            "/tmp".into(),
+            "Crashed".into(),
+            crate::core::SessionOrigin::Api,
+            false,
+        );
+        hub.set_status("s-2", Status::Crashed, Some("vendor refusal".into()));
+        let mut snap = crashed_snapshot("s-2", "55-1");
+        snap.uncertain_effect = Some(UncertainEffect {
+            sequence: 2,
+            method: "patch".into(),
+        });
+        let rt = super::super::RemoteRuntime::for_test(hub.clone(), vec![snap]);
+        rt.connect_for_test();
+
+        // Stale epoch retirement does nothing.
+        let mut sink = Vec::new();
+        super::super::handle_frame(
+            &rt.shared,
+            Frame::CrashedWorkerDrained {
+                session_id: "s-2".into(),
+                worker_epoch: "55-0".into(),
+            },
+            &mut sink,
+        )
+        .await
+        .unwrap();
+        assert!(matches!(
+            rt.last_crashed_worker("s-2"),
+            CrashedWorkerObservation::Seen(_)
+        ));
+
+        // Exact epoch retires sighting & worker cache without clearing Crashed status.
+        super::super::handle_frame(
+            &rt.shared,
+            Frame::CrashedWorkerDrained {
+                session_id: "s-2".into(),
+                worker_epoch: "55-1".into(),
+            },
+            &mut sink,
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            rt.last_crashed_worker("s-2"),
+            CrashedWorkerObservation::Absent
+        );
+        assert_eq!(hub.status("s-2"), Some(Status::Crashed));
+        assert_eq!(
+            hub.latest_crash_detail("s-2").as_deref(),
+            Some("vendor refusal")
+        );
+
+        // Replacement snapshot merges retained uncertain_effect until acknowledged.
+        let mut replacement = super::super::tests::snapshot("s-2");
+        replacement.worker_epoch = "55-2".into();
+        replacement.state = WorkerState::Running;
+        rt.shared.workers.lock().insert("s-2".into(), replacement);
+        let merged = rt.worker_snapshot("s-2").unwrap();
+        assert_eq!(
+            merged.uncertain_effect.as_ref().map(|e| e.sequence),
+            Some(2)
+        );
+    }
+
+    #[tokio::test]
+    async fn discard_pending_crashed_drain_drops_unsent_commands_and_respects_protocol_floor() {
+        let hub = crate::core::Hub::new();
+        let snap = crashed_snapshot("s-3", "77-1");
+        let rt = super::super::RemoteRuntime::for_test(hub, vec![snap]);
+        rt.connect_for_test();
+        assert!(rt.supports_crashed_worker_drain());
+        assert!(rt.drain_crashed_worker("s-3", "77-1"));
+        assert!(rt.crashed_drain_pending("s-3"));
+        discard_pending_crashed_drain(&rt.shared, "s-3", false);
+        assert!(!rt.crashed_drain_pending("s-3"));
+
+        // Older runtime protocol refuses drain.
+        rt.shared.protocol.store(9, Ordering::Release);
+        assert!(!rt.supports_crashed_worker_drain());
+        assert!(!rt.drain_crashed_worker("s-3", "77-1"));
+        assert!(
+            !rt.shared
+                .pending
+                .lock()
+                .values()
+                .any(|c| matches!(c, CoreCommand::DrainCrashedWorker { .. }))
+        );
+    }
 }

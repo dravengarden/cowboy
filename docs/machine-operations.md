@@ -404,17 +404,38 @@ credential roll or wipe, so it keeps holding memory, a slot and the
 credentials it started with (on 2026-11-22 five such workers had run on OVH
 for up to eleven days).
 
-The Controller reports them; it never stops them. A crashed session whose
-last reported worker is still in the Crashed state ten minutes later logs one
-warning per session and worker epoch (`crashed session may still hold a live
-worker`, with session, Machine, Provider, `default` or `named` account,
-generation and age), and is listed per connected Machine under
+On capable Machines (Machine protocol 55+, worker runtime protocol 10+), the
+Controller's crashed-worker sweep releases idle crashed workers automatically
+via epoch-bound cooperative drain (`CoreCommand::DrainCrashedWorker` ->
+`WorkerCommand::DrainCrashed`) after a 60-second grace period (or immediately
+when a generation rollout or credential roll has already marked
+`drain_requested`), retrying every 10 minutes if refused and expediting once if
+a rollout arrives during retry backoff. The broker validates exact worker epoch,
+runtime protocol capability, idle `Crashed` state, and absence of queued or
+in-flight prompts without force-stopping or touching `cancelled_sessions`. The
+worker ends its ACP command loop, suppresses the trailing `Status::Exited`
+event, waits until every remaining outbox event is ACKed by the Controller,
+sends a `CrashedDrainCompleted` receipt, and exits cleanly on both systemd-user
+(Linux) and Direct (macOS) hosts. Only after receiving that receipt and (for
+sandboxed Providers) confirming with the account-sandbox daemon that the
+session's unit is gone does the broker retain the dormant session declaration
+for reset/deletion cleanup, reject any post-admission queued prompts for
+requeue, and emit a broker-only `CrashedWorkerDrained` notice to capable
+Controllers—retiring the worker slot while preserving `Status::Crashed`, the
+crash detail, any held queued prompts, any unpersisted `uncertain_effect`, and
+any newer replacement epoch.
+
+Older Machines or workers that do not support cooperative drain, or any crashed
+worker that refuses or fails to exit, keep the operator fallback: a crashed
+session whose last reported worker is still in the Crashed state ten minutes
+later logs one warning per session and worker epoch (`crashed session may still
+hold a live worker`, with session, Machine, Provider, `default` or `named`
+account, generation and age), and is listed per connected Machine under
 `crashed_workers` in `GET /api/session-maintenance` (Settings → Resources &
 automatic maintenance). Each row carries the worker's `worker_epoch`, its
 `worker_pid` (a generated epoch is `<pid>-<nanoseconds>`) and `generation`.
-Rows are marked `may_be_stale`: the runtime wire has no detach signal, so a
-worker that already exited keeps its Crashed row until the Machine's next
-connection reports its inventory. Always verify the process first.
+Rows are marked `may_be_stale`: verify the process first before stopping it by
+hand.
 
 Choose one of:
 

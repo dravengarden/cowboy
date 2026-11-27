@@ -407,6 +407,8 @@ fn handshake(
             Frame::Hello {
                 session_id: None, ..
             }
+            | Frame::CrashedDrainCompleted { .. }
+            | Frame::CrashedWorkerDrained { .. }
             | Frame::Heartbeat => {}
             Frame::Welcome { workers, .. } if workers.is_empty() => {}
             _ => return Err(Failure::WrongObservation),

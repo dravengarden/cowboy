@@ -227,6 +227,15 @@ pub(super) fn handle_rejected_ack(
     reset_stop: bool,
     reason: Option<String>,
 ) {
+    if matches!(command, Some(CoreCommand::DrainCrashedWorker { .. })) {
+        tracing::debug!(
+            session = session_id,
+            %command_id,
+            reason = reason.as_deref().unwrap_or("rejected"),
+            "crashed-worker drain command was refused"
+        );
+        return;
+    }
     let rejected_recovery = reset_stop
         && fail_rejected_recovery_command(
             shared,

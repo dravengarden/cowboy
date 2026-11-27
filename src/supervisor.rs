@@ -13,6 +13,7 @@
     clippy::must_use_candidate
 )]
 
+mod crashed_drain;
 mod delivery;
 mod hibernation;
 pub use hibernation::KeepaliveRuntimeProof;
@@ -1529,6 +1530,7 @@ mod tests {
             exit_detail: None,
             background_tasks: None,
             native_cycle_id: None,
+            native_cycle_active: false,
             incarnation: None,
             account_unit: None,
             uncertain_effect: None,

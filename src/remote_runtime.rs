@@ -150,6 +150,8 @@ pub struct Shared {
     /// the switches, so a repair goes once per worker.
     declaration_repairs: Mutex<HashMap<String, String>>,
     workers: Mutex<HashMap<String, WorkerSnapshot>>,
+    crashed_worker_sightings: Mutex<HashMap<String, snapshot::SightingActivity>>,
+    retained_uncertain_effects: Mutex<HashMap<String, crate::runtime_wire::UncertainEffect>>,
     /// Worker epochs whose initial config snapshot has already triggered
     /// preference reconciliation. This prevents an agent that rejects a value
     /// from causing a config-option event/retry loop.
@@ -305,6 +307,8 @@ impl RemoteRuntime {
                 declarations: Mutex::new(HashMap::new()),
                 declaration_repairs: Mutex::new(HashMap::new()),
                 workers: Mutex::new(HashMap::new()),
+                crashed_worker_sightings: Mutex::new(HashMap::new()),
+                retained_uncertain_effects: Mutex::new(HashMap::new()),
                 config_sync_epochs: Mutex::new(HashMap::new()),
                 config_startups: Mutex::new(HashSet::new()),
                 resetting: Mutex::new(HashSet::new()),
@@ -381,6 +385,10 @@ impl RemoteRuntime {
                         .map(|worker| (worker.session_id.clone(), worker))
                         .collect(),
                 ),
+                crashed_worker_sightings: Mutex::new(snapshot::seed_crashed_sightings(
+                    &bootstrap.workers,
+                )),
+                retained_uncertain_effects: Mutex::new(HashMap::new()),
                 config_sync_epochs: Mutex::new(HashMap::new()),
                 config_startups: Mutex::new(
                     bootstrap
@@ -628,7 +636,7 @@ impl RemoteRuntime {
     /// or retained. Read-only evidence, never permission to act.
     #[must_use]
     pub fn worker_snapshot(&self, session_id: &str) -> Option<WorkerSnapshot> {
-        self.shared.workers.lock().get(session_id).cloned()
+        snapshot::worker_snapshot_with_retained_uncertain(&self.shared, session_id)
     }
 
     #[must_use]
@@ -838,6 +846,7 @@ impl RemoteRuntime {
             .pending
             .lock()
             .cancel_pending_hibernation(&session_id);
+        snapshot::discard_pending_crashed_drain(&self.shared, &session_id, false);
         let key = format!("ensure:{session_id}");
         if !self.has_worker(&session_id) {
             self.shared
@@ -1348,6 +1357,7 @@ impl RemoteRuntime {
             session_id,
             "session stopped before configuration completed",
         );
+        snapshot::discard_pending_crashed_drain(&self.shared, session_id, true);
         self.shared.declarations.lock().remove(session_id);
         self.shared.config_sync_epochs.lock().remove(session_id);
         let command_id = self.next_id("stop");
@@ -1388,6 +1398,7 @@ impl RemoteRuntime {
                             && previous.provider_version == session.provider_version
                     })
                 });
+        snapshot::discard_pending_crashed_drain(&self.shared, &session_id, false);
         begin_reset(&self.shared, &session_id);
         self.shared
             .config_startups
@@ -2165,6 +2176,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
             }
             if previous.is_none_or(|previous| runtime_seq > previous) {
                 let mut undelivered_ack = None;
+                snapshot::observe_crashed_event(shared, &session_id, &worker_epoch, &event);
                 let admitted = native_admission::event(shared, &session_id, &worker_epoch, || {
                     undelivered_ack =
                         notice_recovery::suppressed_undelivered(&key, runtime_seq, &event, true);
@@ -2202,7 +2214,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                             telemetry.record_runtime_spans(machine, &session_id, &diagnostics);
                         }
                         let auto_permission =
-                            codex_full_access_permission(shared, &session_id, &event);
+                            snapshot::codex_full_access_permission(shared, &session_id, &event);
                         let is_config_options =
                             matches!(&event, RuntimeEvent::ConfigOptions { .. });
                         resolve_steering_update(shared, &session_id, &event);
@@ -2367,6 +2379,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                 reject_foreign_frame(shared, &worker.session_id, "worker snapshot");
                 return Ok(());
             }
+            snapshot::observe_crashed_sighting(shared, &worker);
             let mut projected = false;
             native_admission::snapshot(shared, &worker, || {
                 let session_id = worker.session_id.clone();
@@ -2388,6 +2401,10 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                 notice_recovery::retire_superseded_prompts_for_snapshot(shared, &worker);
             }
         }
+        Frame::CrashedWorkerDrained {
+            session_id,
+            worker_epoch,
+        } => snapshot::handle_crashed_worker_drained_frame(shared, &session_id, &worker_epoch),
         Frame::Welcome {
             workers, protocol, ..
         } => {
@@ -2399,56 +2416,6 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
         other => tracing::debug!(?other, "ignoring unrelated Machine broker frame"),
     }
     Ok(())
-}
-
-fn codex_full_access_permission(
-    shared: &Shared,
-    session_id: &str,
-    event: &RuntimeEvent,
-) -> Option<(String, String)> {
-    let RuntimeEvent::PermissionRequest {
-        request_id,
-        options,
-        ..
-    } = event
-    else {
-        return None;
-    };
-    let workers = shared.workers.lock();
-    let worker = workers.get(session_id)?;
-    let launch = worker.launch.as_ref()?;
-    let permission = launch.provider_behavior.as_ref().map_or_else(
-        || crate::provider::legacy_behavior(&launch.provider).permission,
-        |behavior| behavior.permission.clone(),
-    );
-    if permission != cowboy_provider_sdk::PermissionBehavior::AcpConfigFullAccessV1
-        || !worker
-            .config_options
-            .as_ref()
-            .is_some_and(codex_config_is_full_access)
-    {
-        return None;
-    }
-    let option_id = options.as_array()?.iter().find_map(|option| {
-        (option.get("kind").and_then(serde_json::Value::as_str) == Some("allow_always"))
-            .then(|| option.get("optionId").and_then(serde_json::Value::as_str))
-            .flatten()
-            .map(str::to_owned)
-    })?;
-    Some((request_id.clone(), option_id))
-}
-
-fn codex_config_is_full_access(options: &serde_json::Value) -> bool {
-    options.as_array().is_some_and(|options| {
-        options.iter().any(|option| {
-            option.get("id").and_then(serde_json::Value::as_str) == Some("mode")
-                && option
-                    .get("currentValue")
-                    .or_else(|| option.get("current_value"))
-                    .and_then(serde_json::Value::as_str)
-                    == Some("agent-full-access")
-        })
-    })
 }
 
 fn queue_permission(shared: &Shared, session_id: &str, request_id: String, option_id: String) {
@@ -2514,6 +2481,7 @@ async fn update_worker_snapshots(
         .collect();
     merge_worker_snapshots_with_protocol(shared, workers, runtime_protocol).await;
     shared.workers.lock().retain(|id, _| ids.contains(id));
+    snapshot::retain_crashed_sightings_after_welcome(shared, &ids);
 }
 
 async fn merge_worker_snapshots_with_protocol(
@@ -2532,6 +2500,7 @@ async fn merge_worker_snapshots_with_protocol(
         if shared.resetting.lock().contains(&worker.session_id) {
             continue;
         }
+        snapshot::observe_crashed_sighting(shared, &worker);
         let mut projected = false;
         native_admission::snapshot(shared, &worker, || {
             projected = project_snapshot_with_protocol(shared, &worker, runtime_protocol);
@@ -2657,6 +2626,9 @@ fn update_snapshot_from_event(
         }
         RuntimeEvent::Status { state, .. } => {
             worker.state = *state;
+            if *state == WorkerState::Exited {
+                worker.native_cycle_active = false;
+            }
             if matches!(state, WorkerState::Exited | WorkerState::Crashed) {
                 worker.native_cycle_id = None;
             }
@@ -2710,7 +2682,9 @@ fn update_snapshot_from_event(
         RuntimeEvent::Update { update, .. }
             if crate::runtime_wire::native_cycle(update).is_some() =>
         {
-            worker.native_cycle_id = crate::runtime_wire::native_cycle(update).flatten();
+            let cycle = crate::runtime_wire::native_cycle(update).flatten();
+            worker.native_cycle_active = cycle.is_some();
+            worker.native_cycle_id = cycle;
         }
         RuntimeEvent::Update { .. }
         | RuntimeEvent::ScheduleWakeup { .. }
@@ -4092,6 +4066,7 @@ mod tests {
             exit_detail: None,
             background_tasks: None,
             native_cycle_id: None,
+            native_cycle_active: false,
             incarnation: None,
             account_unit: None,
             uncertain_effect: None,
@@ -4392,15 +4367,19 @@ mod tests {
 
     #[test]
     fn codex_full_access_config_is_detected_without_weakening_other_modes() {
-        assert!(codex_config_is_full_access(&serde_json::json!([{
+        assert!(snapshot::codex_config_is_full_access(&serde_json::json!([{
             "id": "mode",
             "currentValue": "agent-full-access"
         }])));
-        assert!(!codex_config_is_full_access(&serde_json::json!([{
-            "id": "mode",
-            "currentValue": "agent"
-        }])));
-        assert!(!codex_config_is_full_access(&serde_json::json!([])));
+        assert!(!snapshot::codex_config_is_full_access(
+            &serde_json::json!([{
+                "id": "mode",
+                "currentValue": "agent"
+            }])
+        ));
+        assert!(!snapshot::codex_config_is_full_access(&serde_json::json!(
+            []
+        )));
     }
 
     #[tokio::test]

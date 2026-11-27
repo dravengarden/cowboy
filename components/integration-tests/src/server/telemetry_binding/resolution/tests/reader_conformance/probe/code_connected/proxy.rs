@@ -551,6 +551,8 @@ fn handshake(frame: MachineFrame, from_machine: bool, record: &mut Record) -> Re
             Frame::Hello {
                 session_id: None, ..
             }
+            | Frame::CrashedDrainCompleted { .. }
+            | Frame::CrashedWorkerDrained { .. }
             | Frame::Heartbeat => {}
             Frame::Welcome { workers, .. } if workers.is_empty() => {}
             _ => return Err(Failure::WrongObservation),

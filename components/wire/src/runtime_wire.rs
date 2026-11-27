@@ -27,7 +27,11 @@ pub struct DeliveryTarget {
 
 /// Current runtime protocol. Version 1 is additive-only: new optional fields
 /// must use serde defaults and existing meanings must not change in place.
-pub const PROTOCOL_VERSION: u16 = 9;
+/// Runtime protocol version that introduces `WorkerCommand::DrainCrashed`,
+/// worker completion receipt `Frame::CrashedDrainCompleted`, and broker-only
+/// retirement notice `Frame::CrashedWorkerDrained`.
+pub const CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION: u16 = 10;
+pub const PROTOCOL_VERSION: u16 = 10;
 pub use crate::post_edit_inspect::{
     POST_EDIT_INSPECT_RUNTIME_PROTOCOL_VERSION, PostEditInspectOutcome, PostEditInspectReply,
     PostEditInspectRequest,
@@ -140,6 +144,11 @@ pub struct WorkerSnapshot {
     /// [`native_cycle_update`]). Restores the level after a reconnect.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub native_cycle_id: Option<String>,
+    /// True while an adapter-reported native cycle is still active, even after
+    /// a failed Cowboy turn clears steerable `native_cycle_id`. Cleared only on
+    /// explicit adapter cycle end or confirmed worker exit.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub native_cycle_active: bool,
     /// The Machine-minted durable Session lineage (see `incarnations`). Only a
     /// Machine whose incarnation writer was admitted stamps it, on every
     /// snapshot it sends; a worker never sets it and an older Machine omits it.
@@ -767,6 +776,16 @@ pub enum CoreCommand {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         expected_worker_epoch: Option<String>,
     },
+    /// Ask an idle worker in the `Crashed` state to flush its outbox and exit
+    /// cleanly without disturbing the session's `Crashed` status or held queue.
+    /// Bound to `worker_epoch` so a replacement worker is never affected.
+    /// Sent only to Machines at
+    /// [`crate::machine_protocol::CRASHED_WORKER_DRAIN_PROTOCOL_VERSION`].
+    DrainCrashedWorker {
+        session_id: String,
+        command_id: String,
+        worker_epoch: String,
+    },
     /// Stop a named account's worker without deleting its session. This is
     /// process-stop evidence only, not account-wide logout or credential cleanup.
     QuiesceAccountSession {
@@ -814,7 +833,8 @@ impl CoreCommand {
             | Self::DrainSession { session_id, .. }
             | Self::StopSession { session_id, .. }
             | Self::QuiesceAccountSession { session_id, .. }
-            | Self::HibernateSession { session_id, .. } => Some(session_id),
+            | Self::HibernateSession { session_id, .. }
+            | Self::DrainCrashedWorker { session_id, .. } => Some(session_id),
             Self::SetDesiredGeneration { .. } | Self::RollProvider { .. } => None,
         }
     }
@@ -895,6 +915,12 @@ pub enum WorkerCommand {
         value: serde_json::Value,
     },
     Drain,
+    /// See [`CoreCommand::DrainCrashedWorker`]. Routed only to workers speaking
+    /// [`CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION`] or newer.
+    DrainCrashed {
+        command_id: String,
+        worker_epoch: String,
+    },
     Stop {
         command_id: String,
     },
@@ -1155,6 +1181,21 @@ pub enum Frame {
         // Keep the frequently queued wire envelope small. Serde still emits
         // the same object shape, so this is not a protocol change.
         worker: Box<WorkerSnapshot>,
+    },
+    /// Worker-issued receipt sent on Runtime 10+ only after `DrainCrashed`
+    /// ended the ACP loop and the Controller acknowledged every outbox event.
+    CrashedDrainCompleted {
+        session_id: String,
+        worker_epoch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command_id: Option<String>,
+    },
+    /// Broker-only maintenance retirement notice sent on Machine 55+ / Runtime
+    /// 10+ after a crashed worker confirmed completion, disconnected, and (for
+    /// sandboxed Providers) had its account unit confirmed gone.
+    CrashedWorkerDrained {
+        session_id: String,
+        worker_epoch: String,
     },
     Heartbeat,
 }
@@ -1420,6 +1461,7 @@ mod tests {
             exit_detail: None,
             background_tasks: None,
             native_cycle_id: None,
+            native_cycle_active: false,
             incarnation: None,
             account_unit: None,
             uncertain_effect: None,
@@ -1995,5 +2037,57 @@ mod tests {
                 "{provider}"
             );
         }
+    }
+
+    #[test]
+    fn drain_crashed_worker_wire_round_trip() {
+        let core = CoreCommand::DrainCrashedWorker {
+            session_id: "sess-1".into(),
+            command_id: "drain-crashed-1".into(),
+            worker_epoch: "42-99".into(),
+        };
+        assert_eq!(core.session_id(), Some("sess-1"));
+        let core_json = serde_json::to_value(&core).unwrap();
+        assert_eq!(core_json["command"], "drain_crashed_worker");
+        assert_eq!(core_json["worker_epoch"], "42-99");
+        assert_eq!(
+            serde_json::from_value::<CoreCommand>(core_json).unwrap(),
+            core
+        );
+
+        let worker = WorkerCommand::DrainCrashed {
+            command_id: "drain-crashed-1".into(),
+            worker_epoch: "42-99".into(),
+        };
+        let worker_json = serde_json::to_value(&worker).unwrap();
+        assert_eq!(worker_json["command"], "drain_crashed");
+        assert_eq!(worker_json["worker_epoch"], "42-99");
+        assert_eq!(
+            serde_json::from_value::<WorkerCommand>(worker_json).unwrap(),
+            worker
+        );
+
+        let completed = Frame::CrashedDrainCompleted {
+            session_id: "sess-1".into(),
+            worker_epoch: "42-99".into(),
+            command_id: Some("dc-1".into()),
+        };
+        let completed_json = serde_json::to_value(&completed).unwrap();
+        assert_eq!(completed_json["type"], "crashed_drain_completed");
+        assert_eq!(
+            serde_json::from_value::<Frame>(completed_json).unwrap(),
+            completed
+        );
+
+        let drained = Frame::CrashedWorkerDrained {
+            session_id: "sess-1".into(),
+            worker_epoch: "42-99".into(),
+        };
+        let drained_json = serde_json::to_value(&drained).unwrap();
+        assert_eq!(drained_json["type"], "crashed_worker_drained");
+        assert_eq!(
+            serde_json::from_value::<Frame>(drained_json).unwrap(),
+            drained
+        );
     }
 }

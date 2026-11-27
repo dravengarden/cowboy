@@ -38,7 +38,12 @@ pub use challenge_proof::{challenge_proof_v1, challenge_proof_v2, challenge_proo
 /// signed collector inside its verified native home.
 pub const NATIVE_RESET_PROTOCOL_VERSION: u16 = 49;
 pub const FORK_WORKSPACE_MODE_PROTOCOL_VERSION: u16 = 54;
-pub const MACHINE_PROTOCOL_VERSION: u16 = 54;
+/// Machines speaking Machine 55+ with negotiated Runtime 10+ accept epoch-bound
+/// `CoreCommand::DrainCrashedWorker`, route `WorkerCommand::DrainCrashed` to
+/// Runtime 10+ workers, require worker `Frame::CrashedDrainCompleted` plus
+/// sandbox unit confirmation, and emit broker-only `Frame::CrashedWorkerDrained`.
+pub const CRASHED_WORKER_DRAIN_PROTOCOL_VERSION: u16 = 55;
+pub const MACHINE_PROTOCOL_VERSION: u16 = 55;
 pub use crate::wrap_up::WRAP_UP_STEERING_PROTOCOL_VERSION;
 /// The conservative reading of a `PluginHostResponse` that omits `started`.
 const fn started_unless_proven() -> bool {

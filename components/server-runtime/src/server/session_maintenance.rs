@@ -494,7 +494,19 @@ pub async fn inventory(
             "starting": rows.iter().filter(|s| s.status == Status::Starting).count(),
             "updating": rows.iter().filter(|s| s.provider_update.is_some()).count(),
             "waiting": waiting,
-            "crashed_workers": state.session_maintenance.crashed_workers.report(&rows, machine.connected),
+            "crashed_workers": state.session_maintenance.crashed_workers.report(
+                &rows,
+                machine.connected,
+                |session| {
+                    state
+                        .runtime_router
+                        .runtime(&session.machine_id)
+                        .map_or(
+                            crate::remote_runtime::CrashedWorkerObservation::Unavailable,
+                            |runtime| runtime.last_crashed_worker(&session.id),
+                        )
+                },
+            ),
             // The resource panel does not need Plugin or workspace inventories.
             "machine": {
                 "id": machine.id, "display_name": machine.display_name,

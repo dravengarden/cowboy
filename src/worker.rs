@@ -27,6 +27,7 @@ use crate::runtime_wire::{
 };
 
 const BROKER_RECONNECT_INITIAL_DELAY: Duration = Duration::from_millis(100);
+mod crashed_drain;
 mod execution_launch;
 mod mcp_launch;
 mod remote_sink;
@@ -96,6 +97,8 @@ pub struct Shared {
     raw_wrap_up_steering: AtomicBool,
     /// Single-slot O(1) coalesced wrap-up hint handoff to `src/acp.rs`.
     wrap_up_hint: Arc<crate::acp_wrap_up::WrapUpHintSlot>,
+    /// Cooperative crashed-worker drain and native-cycle tracking state.
+    crashed_drain: crashed_drain::State,
 }
 
 /// Passive observation of subagents' own updates (docs/subagents.md).
@@ -146,9 +149,12 @@ impl Shared {
     }
 
     fn emit(&self, event: RuntimeEvent) -> u64 {
-        // Keep sequence assignment and event/metadata admission ordered even
-        // when the ACP thread and broker command loop emit concurrently.
+        // Keep sequence assignment, drain suppression, and event/metadata
+        // admission totally ordered under `outbox` -> `snapshot`.
         let mut outbox = self.outbox.lock();
+        if crashed_drain::should_suppress_event_locked(self, &event) {
+            return self.snapshot.lock().last_runtime_seq;
+        }
         self.emit_locked(&mut outbox, event)
     }
 
@@ -201,6 +207,12 @@ impl Shared {
                 if matches!(state, WorkerState::Exited | WorkerState::Crashed) {
                     snapshot.current_turn_id = None;
                     snapshot.native_cycle_id = None;
+                }
+                if *state == WorkerState::Exited {
+                    self.crashed_drain
+                        .native_cycle_active
+                        .store(false, Ordering::Release);
+                    snapshot.native_cycle_active = false;
                 }
             }
             RuntimeEvent::PermissionRequest { request_id, .. } => {
@@ -268,7 +280,13 @@ impl Shared {
             RuntimeEvent::Update { update, .. }
                 if crate::runtime_wire::native_cycle(update).is_some() =>
             {
-                snapshot.native_cycle_id = crate::runtime_wire::native_cycle(update).flatten();
+                let cycle = crate::runtime_wire::native_cycle(update).flatten();
+                let active = cycle.is_some();
+                self.crashed_drain
+                    .native_cycle_active
+                    .store(active, Ordering::Release);
+                snapshot.native_cycle_active = active;
+                snapshot.native_cycle_id = cycle;
             }
             RuntimeEvent::AgentSessionId { .. }
             | RuntimeEvent::Update { .. }
@@ -626,41 +644,13 @@ async fn run_with_shutdown(
         fallback_for: args.fallback_for,
         system: args.system,
         next_seq: AtomicU64::new(1),
-        snapshot: Mutex::new(WorkerSnapshot {
-            session_id: args.session_id.clone(),
-            worker_epoch: epoch,
-            generation: args.generation,
+        snapshot: Mutex::new(crashed_drain::initial_snapshot(
+            args.session_id.clone(),
+            epoch,
+            args.generation,
             executable,
-            launch: Some(launch),
-            state: WorkerState::Starting,
-            agent_session_id: args.resume.clone(),
-            // A resumed thread already exists on disk; a fresh one does not
-            // until its first prompt.
-            native_thread_materialized: Some(args.resume.is_some()),
-            current_turn_id: None,
-            supports_current_turn: false,
-            delivery_controls: crate::runtime_wire::DeliveryControls {
-                version: 1,
-                next_checkpoint: false,
-            },
-            wrap_up_steering: false,
-            // This worker decodes and executes the command itself; whether a
-            // given subagent may be stopped is decided per child in ACP.
-            supports_subagent_cancel: true,
-            last_runtime_seq: 0,
-            pending_permissions: Vec::new(),
-            config_options: None,
-            context_used: Some(0),
-            context_size: Some(0),
-            pending_prompt_count: 0,
-            drain_requested: false,
-            exit_detail: None,
-            background_tasks: Some(0),
-            native_cycle_id: None,
-            incarnation: None,
-            account_unit: None,
-            uncertain_effect: None,
-        }),
+            launch,
+        )),
         outbox: Mutex::new(BTreeMap::new()),
         trace_outbox: Mutex::default(),
         telemetry: Mutex::default(),
@@ -681,6 +671,7 @@ async fn run_with_shutdown(
         observation: Observation::default(),
         raw_wrap_up_steering: AtomicBool::new(false),
         wrap_up_hint: Arc::new(crate::acp_wrap_up::WrapUpHintSlot::new()),
+        crashed_drain: crashed_drain::State::default(),
     });
     execution_launch::observe_with_slot(&shared, ledger_slot);
     let (cmd_tx, cmd_rx) = mpsc::unbounded_channel();
@@ -943,16 +934,17 @@ async fn connected(
     let mut reader = FrameReader::new(reader);
     let mut last_sent = 0;
     // `done_rx.recv()` becomes immediately ready forever after its sender is
-    // dropped. Poll it exactly once; otherwise a completed ACP thread with an
-    // unacknowledged final event turns this select loop into a CPU spin and can
-    // starve the broker ACK that would let the worker drain.
-    let mut agent_done = false;
+    // dropped. Settlement is recorded on `shared.crashed_drain` so reconnects
+    // and receipt-write failures never lose clean ACP settlement or spin.
     if let Some(execution) = &shared.execution {
         for frame in execution.frames(true) {
             write_frame(&mut writer, execution.sending(&frame)).await?;
         }
     }
     send_outbox(&shared, &mut writer, &mut last_sent).await?;
+    if crashed_drain::finish_if_drained(&shared, &mut writer).await? {
+        return Ok(ConnectedExit::WorkerDrained);
+    }
     let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
     loop {
         tokio::select! {
@@ -982,7 +974,7 @@ async fn connected(
                     Frame::Ack { session_id, worker_epoch, runtime_seq }
                         if session_id == shared.session_id && worker_epoch == shared.worker_epoch => {
                         shared.ack(runtime_seq);
-                        if agent_done && shared.outbox.lock().is_empty() {
+                        if crashed_drain::finish_if_drained(&shared, &mut writer).await? {
                             return Ok(ConnectedExit::WorkerDrained);
                         }
                     }
@@ -1009,19 +1001,15 @@ async fn connected(
             }
             notified = notify_rx.recv() => {
                 if notified.is_none()
-                    && agent_done
-                    && shared.outbox.lock().is_empty()
+                    && crashed_drain::finish_if_drained(&shared, &mut writer).await?
                 {
                     return Ok(ConnectedExit::WorkerDrained);
                 }
                 send_outbox(&shared, &mut writer, &mut last_sent).await?;
             }
-            _ = done_rx.recv(), if !agent_done => {
-                // `None` is completion too: it means the ACP thread dropped
-                // its final sender (including a panic path). Disable this
-                // branch before looping so a closed receiver cannot stay hot.
-                agent_done = true;
-                if shared.outbox.lock().is_empty() {
+            settled = done_rx.recv(), if shared.crashed_drain.agent_settled().is_none() => {
+                shared.crashed_drain.record_agent_settled(settled.is_some());
+                if crashed_drain::finish_if_drained(&shared, &mut writer).await? {
                     return Ok(ConnectedExit::WorkerDrained);
                 }
                 send_outbox(&shared, &mut writer, &mut last_sent).await?;
@@ -1322,22 +1310,20 @@ pub fn handle_command(
                     None,
                 )
             }
-            WorkerCommand::Drain => {
-                let idle = {
-                    let mut snapshot = shared.snapshot.lock();
-                    snapshot.drain_requested = true;
-                    snapshot.state == WorkerState::Running
-                };
-                if idle {
-                    shared.emit(RuntimeEvent::Status {
-                        state: WorkerState::Draining,
-                        detail: Some("waiting for generation handoff".to_owned()),
-                    });
-                }
-                return command_ack(shared, "drain".to_owned(), true, None);
-            }
+            WorkerCommand::Drain => return crashed_drain::handle_drain(shared),
             WorkerCommand::WrapUpHint { .. } => {
                 return command_ack(shared, String::new(), true, None);
+            }
+            WorkerCommand::DrainCrashed {
+                command_id,
+                worker_epoch,
+            } => {
+                return crashed_drain::handle_drain_crashed(
+                    shared,
+                    cmd_tx,
+                    command_id,
+                    worker_epoch,
+                );
             }
             WorkerCommand::Stop { command_id } => {
                 if !shared.mark_command(&command_id) {
@@ -1453,6 +1439,7 @@ pub fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
                 exit_detail: None,
                 background_tasks: None,
                 native_cycle_id: None,
+                native_cycle_active: false,
                 incarnation: None,
                 account_unit: None,
                 uncertain_effect: None,
@@ -1473,6 +1460,7 @@ pub fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
             observation: Observation::default(),
             raw_wrap_up_steering: AtomicBool::new(false),
             wrap_up_hint: Arc::new(crate::acp_wrap_up::WrapUpHintSlot::new()),
+            crashed_drain: crashed_drain::State::default(),
         }),
         rx,
     )
@@ -1482,6 +1470,607 @@ pub fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
 mod tests {
     use super::*;
     use tokio::net::UnixListener;
+
+    #[test]
+    fn initial_snapshot_preserves_resumed_thread_and_delivery_capabilities() {
+        let mut launch: crate::runtime_wire::StartSession =
+            serde_json::from_value(serde_json::json!({
+                "session_id": "s-resume",
+                "provider": "codex",
+                "provider_version": "",
+                "provider_generation_digest": "",
+                "cwd": "/tmp",
+                "generation": "gen-1",
+                "agent_session_id": "native-thread-42",
+            }))
+            .unwrap();
+        launch.agent_session_id = Some("native-thread-42".into());
+        let resumed = crashed_drain::initial_snapshot(
+            "s-resume".into(),
+            "epoch-1".into(),
+            "gen-1".into(),
+            None,
+            launch.clone(),
+        );
+        assert_eq!(
+            resumed.agent_session_id.as_deref(),
+            Some("native-thread-42")
+        );
+        assert_eq!(resumed.native_thread_materialized, Some(true));
+        assert_eq!(
+            resumed.resumable_agent_session_id().as_deref(),
+            Some("native-thread-42")
+        );
+        assert_eq!(resumed.delivery_controls.version, 1);
+        assert!(resumed.supports_subagent_cancel);
+
+        launch.agent_session_id = None;
+        let fresh = crashed_drain::initial_snapshot(
+            "s-fresh".into(),
+            "epoch-2".into(),
+            "gen-1".into(),
+            None,
+            launch,
+        );
+        assert_eq!(fresh.agent_session_id, None);
+        assert_eq!(fresh.native_thread_materialized, Some(false));
+        assert_eq!(fresh.delivery_controls.version, 1);
+        assert!(fresh.supports_subagent_cancel);
+    }
+
+    #[test]
+    fn drain_crashed_validates_epoch_state_and_idle_before_stopping_acp() {
+        let (shared, _rx) = shared();
+        let (tx, mut cmd_rx) = mpsc::unbounded_channel();
+        let mut cmd_tx = Some(tx);
+        let epoch = shared.worker_epoch.clone();
+
+        shared.snapshot.lock().state = WorkerState::Running;
+        let Frame::CommandAck {
+            accepted, reason, ..
+        } = handle_command(
+            &shared,
+            &mut cmd_tx,
+            WorkerCommand::DrainCrashed {
+                command_id: "dc-1".into(),
+                worker_epoch: epoch.clone(),
+            },
+        )
+        else {
+            panic!("ack");
+        };
+        assert!(!accepted);
+        assert_eq!(reason.as_deref(), Some("worker is not crashed"));
+        assert!(cmd_tx.is_some());
+
+        shared.snapshot.lock().state = WorkerState::Crashed;
+        let Frame::CommandAck {
+            accepted, reason, ..
+        } = handle_command(
+            &shared,
+            &mut cmd_tx,
+            WorkerCommand::DrainCrashed {
+                command_id: "dc-2".into(),
+                worker_epoch: "other-epoch".into(),
+            },
+        )
+        else {
+            panic!("ack");
+        };
+        assert!(!accepted);
+        assert_eq!(reason.as_deref(), Some("crashed worker epoch changed"));
+
+        let sink = RemoteSink {
+            shared: Arc::clone(&shared),
+        };
+        sink.set_native_cycle("sess-1", Some("cycle-1"));
+        shared.emit(RuntimeEvent::TurnStarted {
+            turn_id: "t-fail".into(),
+            command_id: "c-fail".into(),
+        });
+        shared.emit(RuntimeEvent::Status {
+            state: WorkerState::Crashed,
+            detail: Some("turn failed while native cycle running".into()),
+        });
+        assert_eq!(shared.snapshot().native_cycle_id, None);
+        assert!(shared.snapshot().native_cycle_active);
+        let Frame::CommandAck {
+            accepted, reason, ..
+        } = handle_command(
+            &shared,
+            &mut cmd_tx,
+            WorkerCommand::DrainCrashed {
+                command_id: "dc-3".into(),
+                worker_epoch: epoch.clone(),
+            },
+        )
+        else {
+            panic!("ack");
+        };
+        assert!(!accepted);
+        assert_eq!(reason.as_deref(), Some("session has active native work"));
+        sink.set_native_cycle("sess-1", None);
+
+        shared
+            .snapshot
+            .lock()
+            .pending_permissions
+            .push("perm-1".into());
+        let Frame::CommandAck {
+            accepted, reason, ..
+        } = handle_command(
+            &shared,
+            &mut cmd_tx,
+            WorkerCommand::DrainCrashed {
+                command_id: "dc-4".into(),
+                worker_epoch: epoch.clone(),
+            },
+        )
+        else {
+            panic!("ack");
+        };
+        assert!(!accepted);
+        assert_eq!(
+            reason.as_deref(),
+            Some("session is waiting for a permission decision")
+        );
+        shared.snapshot.lock().pending_permissions.clear();
+
+        let Frame::CommandAck { accepted, .. } = handle_command(
+            &shared,
+            &mut cmd_tx,
+            WorkerCommand::DrainCrashed {
+                command_id: "dc-5".into(),
+                worker_epoch: epoch.clone(),
+            },
+        ) else {
+            panic!("ack");
+        };
+        assert!(accepted);
+        assert!(cmd_tx.is_none());
+        assert!(shared.snapshot().drain_requested);
+        assert!(matches!(cmd_rx.try_recv(), Ok(AgentCommand::Cancel)));
+        assert!(cmd_rx.try_recv().is_err());
+
+        let before_outbox = shared.outbox.lock().len();
+        shared.emit(RuntimeEvent::Status {
+            state: WorkerState::Exited,
+            detail: None,
+        });
+        assert_eq!(shared.outbox.lock().len(), before_outbox);
+        assert_eq!(shared.snapshot().state, WorkerState::Crashed);
+
+        shared.emit(RuntimeEvent::Error {
+            message: "final diagnostic".into(),
+        });
+        assert_eq!(shared.outbox.lock().len(), before_outbox + 1);
+
+        let Frame::CommandAck {
+            accepted, reason, ..
+        } = handle_command(
+            &shared,
+            &mut cmd_tx,
+            WorkerCommand::Prompt {
+                command_id: "p-after-drain".into(),
+                turn_id: "t-1".into(),
+                content: vec![serde_json::json!({"type": "text", "text": "hello"})],
+                cmid: None,
+                trace: None,
+                echo_artifacts: false,
+                observe_subagents: false,
+                expected_worker_epoch: None,
+                acknowledged_uncertain_sequence: None,
+            },
+        )
+        else {
+            panic!("ack");
+        };
+        assert!(!accepted);
+        assert_eq!(reason.as_deref(), Some("worker is shutting down"));
+    }
+
+    #[tokio::test]
+    async fn drain_crashed_waits_for_unacknowledged_outbox_events_before_exiting() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (shared, mut notify_rx) = shared();
+        shared.snapshot.lock().state = WorkerState::Crashed;
+        let unacked_seq = shared.emit(RuntimeEvent::Error {
+            message: "crash detail before drain".into(),
+        });
+        let epoch = shared.worker_epoch.clone();
+        let (tx, mut cmd_rx) = mpsc::unbounded_channel();
+        let mut cmd_tx = Some(tx);
+        let (done_tx, mut done_rx) = mpsc::channel(1);
+
+        let worker_shared = Arc::clone(&shared);
+        let worker_task = tokio::spawn(async move {
+            let stream = UnixStream::connect(&socket).await.unwrap();
+            let mut sigterm = None;
+            let mut deadline = None;
+            connected(
+                stream,
+                worker_shared,
+                &mut cmd_tx,
+                &mut notify_rx,
+                &mut done_rx,
+                &mut sigterm,
+                &mut deadline,
+            )
+            .await
+        });
+
+        let (stream, _) = listener.accept().await.unwrap();
+        let (mut reader, mut writer) = stream.into_split();
+        let Some(Frame::Hello { max_protocol, .. }) = read_frame(&mut reader).await.unwrap() else {
+            panic!("hello");
+        };
+        assert_eq!(max_protocol, PROTOCOL_VERSION);
+        write_frame(
+            &mut writer,
+            &Frame::Welcome {
+                protocol: PROTOCOL_VERSION,
+                workers: Vec::new(),
+                controller_epoch: 0,
+            },
+        )
+        .await
+        .unwrap();
+        let Some(Frame::Snapshot { .. }) = read_non_heartbeat(&mut reader).await else {
+            panic!("initial snapshot");
+        };
+        let Some(Frame::WorkerEvent { runtime_seq, .. }) = read_non_heartbeat(&mut reader).await
+        else {
+            panic!("buffered outbox event");
+        };
+        assert_eq!(runtime_seq, unacked_seq);
+
+        write_frame(
+            &mut writer,
+            &Frame::WorkerCommand {
+                session_id: shared.session_id.clone(),
+                command: WorkerCommand::DrainCrashed {
+                    command_id: "dc-outbox".into(),
+                    worker_epoch: epoch.clone(),
+                },
+            },
+        )
+        .await
+        .unwrap();
+        let Some(Frame::CommandAck {
+            command_id,
+            accepted,
+            ..
+        }) = read_non_heartbeat(&mut reader).await
+        else {
+            panic!("drain ack");
+        };
+        assert_eq!(command_id, "dc-outbox");
+        assert!(accepted);
+        assert!(matches!(cmd_rx.recv().await, Some(AgentCommand::Cancel)));
+        shared.emit(RuntimeEvent::Status {
+            state: WorkerState::Exited,
+            detail: None,
+        });
+        done_tx.send(()).await.unwrap();
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!worker_task.is_finished());
+
+        write_frame(
+            &mut writer,
+            &Frame::Ack {
+                session_id: shared.session_id.clone(),
+                worker_epoch: epoch.clone(),
+                runtime_seq: unacked_seq,
+            },
+        )
+        .await
+        .unwrap();
+        let frame = read_non_heartbeat(&mut reader).await;
+        let Some(Frame::CrashedDrainCompleted {
+            session_id: done_session,
+            worker_epoch: done_epoch,
+            command_id: done_cmd,
+        }) = frame
+        else {
+            panic!("expected CrashedDrainCompleted completion receipt, got {frame:?}");
+        };
+        assert_eq!(done_session, shared.session_id);
+        assert_eq!(done_epoch, epoch);
+        assert_eq!(done_cmd.as_deref(), Some("dc-outbox"));
+        let outcome = tokio::time::timeout(Duration::from_secs(5), worker_task)
+            .await
+            .expect("worker drained")
+            .unwrap()
+            .unwrap();
+        assert!(matches!(outcome, ConnectedExit::WorkerDrained));
+    }
+
+    async fn read_non_heartbeat<R: tokio::io::AsyncRead + Unpin>(reader: &mut R) -> Option<Frame> {
+        tokio::time::timeout(Duration::from_secs(2), async {
+            loop {
+                match read_frame(reader).await.unwrap() {
+                    Some(Frame::Heartbeat) => continue,
+                    other => return other,
+                }
+            }
+        })
+        .await
+        .expect("read_non_heartbeat timed out")
+    }
+
+    #[tokio::test]
+    async fn acp_panic_never_emits_crashed_drain_completed_receipt() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (shared, mut notify_rx) = shared();
+        shared.snapshot.lock().state = WorkerState::Crashed;
+        let epoch = shared.worker_epoch.clone();
+        let (tx, _cmd_rx) = mpsc::unbounded_channel();
+        let mut cmd_tx = Some(tx);
+        let (done_tx, mut done_rx) = mpsc::channel(1);
+
+        let worker_shared = Arc::clone(&shared);
+        let worker_task = tokio::spawn(async move {
+            let stream = UnixStream::connect(&socket).await.unwrap();
+            let mut sigterm = None;
+            let mut deadline = None;
+            connected(
+                stream,
+                worker_shared,
+                &mut cmd_tx,
+                &mut notify_rx,
+                &mut done_rx,
+                &mut sigterm,
+                &mut deadline,
+            )
+            .await
+        });
+
+        let (stream, _) = listener.accept().await.unwrap();
+        let (mut reader, mut writer) = stream.into_split();
+        let Some(Frame::Hello { .. }) = read_non_heartbeat(&mut reader).await else {
+            panic!("hello");
+        };
+        write_frame(
+            &mut writer,
+            &Frame::Welcome {
+                protocol: PROTOCOL_VERSION,
+                workers: Vec::new(),
+                controller_epoch: 0,
+            },
+        )
+        .await
+        .unwrap();
+        let Some(Frame::Snapshot { .. }) = read_non_heartbeat(&mut reader).await else {
+            panic!("initial snapshot");
+        };
+        write_frame(
+            &mut writer,
+            &Frame::WorkerCommand {
+                session_id: shared.session_id.clone(),
+                command: WorkerCommand::DrainCrashed {
+                    command_id: "dc-panic".into(),
+                    worker_epoch: epoch,
+                },
+            },
+        )
+        .await
+        .unwrap();
+        let Some(Frame::CommandAck { accepted: true, .. }) = read_non_heartbeat(&mut reader).await
+        else {
+            panic!("drain ack");
+        };
+        drop(done_tx);
+
+        let frame = read_non_heartbeat(&mut reader).await;
+        assert!(
+            frame.is_none(),
+            "ACP panic must close without emitting CrashedDrainCompleted, got {frame:?}"
+        );
+        let outcome = tokio::time::timeout(Duration::from_secs(5), worker_task)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap();
+        assert!(matches!(outcome, ConnectedExit::WorkerDrained));
+    }
+
+    #[tokio::test]
+    async fn reconnect_preserves_clean_acp_settlement_and_replays_drain_decision() {
+        let dir = tempfile::tempdir().unwrap();
+        let socket = dir.path().join("broker.sock");
+        let listener = UnixListener::bind(&socket).unwrap();
+        let (shared, mut notify_rx) = shared();
+        shared.snapshot.lock().state = WorkerState::Crashed;
+        let unacked_seq = shared.emit(RuntimeEvent::Error {
+            message: "final event before socket drop".into(),
+        });
+        let epoch = shared.worker_epoch.clone();
+        let (tx, mut cmd_rx) = mpsc::unbounded_channel();
+        let mut cmd_tx = Some(tx);
+        let (done_tx, mut done_rx) = mpsc::channel(1);
+
+        let worker_shared = Arc::clone(&shared);
+        let socket_clone = socket.clone();
+        let worker_task = tokio::spawn(async move {
+            let mut sigterm = None;
+            let mut deadline = None;
+            let s1 = UnixStream::connect(&socket_clone).await.unwrap();
+            let first = connected(
+                s1,
+                Arc::clone(&worker_shared),
+                &mut cmd_tx,
+                &mut notify_rx,
+                &mut done_rx,
+                &mut sigterm,
+                &mut deadline,
+            )
+            .await;
+            assert!(
+                matches!(first, Ok(ConnectedExit::Disconnected) | Err(_)),
+                "expected disconnect on first socket drop"
+            );
+            let s2 = UnixStream::connect(&socket_clone).await.unwrap();
+            connected(
+                s2,
+                worker_shared,
+                &mut cmd_tx,
+                &mut notify_rx,
+                &mut done_rx,
+                &mut sigterm,
+                &mut deadline,
+            )
+            .await
+        });
+
+        // Connection 1: send DrainCrashed, worker accepts and ACP settles cleanly,
+        // then socket drops BEFORE unacked_seq is ACKed.
+        {
+            let (stream, _) = listener.accept().await.unwrap();
+            let (mut reader, mut writer) = stream.into_split();
+            let Some(Frame::Hello { .. }) = read_non_heartbeat(&mut reader).await else {
+                panic!("hello 1");
+            };
+            write_frame(
+                &mut writer,
+                &Frame::Welcome {
+                    protocol: PROTOCOL_VERSION,
+                    workers: Vec::new(),
+                    controller_epoch: 0,
+                },
+            )
+            .await
+            .unwrap();
+            let Some(Frame::Snapshot { .. }) = read_non_heartbeat(&mut reader).await else {
+                panic!("snapshot 1");
+            };
+            let Some(Frame::WorkerEvent { .. }) = read_non_heartbeat(&mut reader).await else {
+                panic!("event 1");
+            };
+            write_frame(
+                &mut writer,
+                &Frame::WorkerCommand {
+                    session_id: shared.session_id.clone(),
+                    command: WorkerCommand::DrainCrashed {
+                        command_id: "dc-reconnect".into(),
+                        worker_epoch: epoch.clone(),
+                    },
+                },
+            )
+            .await
+            .unwrap();
+            let Some(Frame::CommandAck { accepted: true, .. }) =
+                read_non_heartbeat(&mut reader).await
+            else {
+                panic!("ack 1");
+            };
+            assert!(matches!(cmd_rx.recv().await, Some(AgentCommand::Cancel)));
+            done_tx.send(()).await.unwrap();
+            drop(done_tx);
+            // Wait until connected() observes clean settlement before dropping socket.
+            for _ in 0..50 {
+                if shared.crashed_drain.agent_settled() == Some(true) {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            assert_eq!(shared.crashed_drain.agent_settled(), Some(true));
+        }
+
+        // Connection 2: broker replays DrainCrashed (simulating lost ACK), worker
+        // replays accepted=true, broker ACKs outbox, and worker MUST still emit
+        // CrashedDrainCompleted instead of misreading closed done_rx as a panic!
+        {
+            let (stream, _) = tokio::time::timeout(Duration::from_secs(5), listener.accept())
+                .await
+                .expect("worker reconnected")
+                .unwrap();
+            let (mut reader, mut writer) = stream.into_split();
+            let Some(Frame::Hello { .. }) = read_non_heartbeat(&mut reader).await else {
+                panic!("hello 2");
+            };
+            write_frame(
+                &mut writer,
+                &Frame::Welcome {
+                    protocol: PROTOCOL_VERSION,
+                    workers: Vec::new(),
+                    controller_epoch: 0,
+                },
+            )
+            .await
+            .unwrap();
+            let Some(Frame::Snapshot { .. }) = read_non_heartbeat(&mut reader).await else {
+                panic!("snapshot 2");
+            };
+            let Some(Frame::WorkerEvent { runtime_seq, .. }) =
+                read_non_heartbeat(&mut reader).await
+            else {
+                panic!("replayed event 2");
+            };
+            assert_eq!(runtime_seq, unacked_seq);
+
+            write_frame(
+                &mut writer,
+                &Frame::WorkerCommand {
+                    session_id: shared.session_id.clone(),
+                    command: WorkerCommand::DrainCrashed {
+                        command_id: "dc-reconnect".into(),
+                        worker_epoch: epoch.clone(),
+                    },
+                },
+            )
+            .await
+            .unwrap();
+            let Some(Frame::CommandAck {
+                command_id,
+                accepted,
+                reason,
+                ..
+            }) = read_non_heartbeat(&mut reader).await
+            else {
+                panic!("replayed drain ack");
+            };
+            assert_eq!(command_id, "dc-reconnect");
+            assert!(accepted);
+            assert_eq!(reason, None);
+
+            write_frame(
+                &mut writer,
+                &Frame::Ack {
+                    session_id: shared.session_id.clone(),
+                    worker_epoch: epoch.clone(),
+                    runtime_seq: unacked_seq,
+                },
+            )
+            .await
+            .unwrap();
+            let frame = read_non_heartbeat(&mut reader).await;
+            assert!(
+                matches!(
+                    frame,
+                    Some(Frame::CrashedDrainCompleted {
+                        ref session_id,
+                        ref worker_epoch,
+                        ref command_id,
+                    }) if session_id == &shared.session_id
+                        && worker_epoch == &epoch
+                        && command_id.as_deref() == Some("dc-reconnect")
+                ),
+                "reconnected worker must emit CrashedDrainCompleted after clean settlement, got {frame:?}"
+            );
+        }
+
+        let outcome = tokio::time::timeout(Duration::from_secs(5), worker_task)
+            .await
+            .expect("worker drained after reconnect")
+            .unwrap()
+            .unwrap();
+        assert!(matches!(outcome, ConnectedExit::WorkerDrained));
+    }
 
     #[tokio::test]
     async fn sigterm_ends_a_running_worker_cleanly() {
