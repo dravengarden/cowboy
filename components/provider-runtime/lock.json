@@ -226,7 +226,7 @@
       "probe": [
         "--cowboy-probe"
       ],
-      "integrity": "sha256:ba39f87392ad3c05f7868811b372777b4c48e5e90263a2c91c6db2c93d82adc6"
+      "integrity": "sha256:a75ff4e25573403dca96bd95a38171a8674dfb3ee313d2e28ddc11e8abf68aae"
     }
   }
 }

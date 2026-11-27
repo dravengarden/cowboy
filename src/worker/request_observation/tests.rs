@@ -285,6 +285,39 @@ fn launch_prefix_fingerprint_detects_session_extensions_memory_and_call_context(
     s3.env
         .insert("COWBOY_CALL_CONTEXT".into(), "/tmp/call-ctx.json".into());
     assert_ne!(fp2, metadata::compute_launch_prefix_fingerprint(&args, &s3));
+
+    // When COWBOY_SESSION_EXTENSIONS explicitly disables memory, legacy COWBOY_MATRIX_CONFIG does not override it.
+    let mut s1_legacy = s1.clone();
+    s1_legacy.env.insert(
+        "COWBOY_MATRIX_CONFIG".into(),
+        "/tmp/legacy-matrix.json".into(),
+    );
+    assert_eq!(
+        fp1,
+        metadata::compute_launch_prefix_fingerprint(&args, &s1_legacy)
+    );
+    assert_ne!(
+        fp2,
+        metadata::compute_launch_prefix_fingerprint(&args, &s1_legacy)
+    );
+}
+
+#[test]
+fn codex_earliest_pending_start_subtracts_queued_start_duration() {
+    let mut pending = codex::Pending::default();
+    let rec = serde_json::json!({
+        "timeUnixNano": "200000000000",
+        "body": { "stringValue": "codex.api_request" },
+        "attributes": [
+            { "key": "event.name", "value": { "stringValue": "codex.api_request" } },
+            { "key": "conversation.id", "value": { "stringValue": "t1" } },
+            { "key": "duration_ms", "value": { "intValue": "150000" } },
+            { "key": "http.response.status_code", "value": { "intValue": "200" } }
+        ]
+    });
+    assert_eq!(pending.ingest(&rec, 200_000), 0);
+    // 200_000ms - 150_000ms duration = 50_000ms actual start
+    assert_eq!(pending.earliest_pending_start_ms(), Some(50_000));
 }
 
 #[test]

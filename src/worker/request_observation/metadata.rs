@@ -50,13 +50,19 @@ pub(super) fn compute_launch_prefix_fingerprint(args: &WorkerArgs, spec: &Launch
             .filter(|v| !v.is_empty())
     };
     let extensions_path = effective("COWBOY_SESSION_EXTENSIONS");
-    let (ext_has_memory, ext_has_mcp) = extensions_path
+    let (has_memory, ext_has_mcp) = match extensions_path
         .as_deref()
         .and_then(inspect_session_extensions_flags)
-        .unwrap_or((false, false));
-    let has_memory = ext_has_memory
-        || effective("COWBOY_MATRIX_CONFIG").is_some()
-        || spec.env.keys().any(|k| k.starts_with("COWBOY_MEMORY_"));
+    {
+        // When the session extensions descriptor is present, it is authoritative
+        // and supersedes legacy COWBOY_MATRIX_CONFIG (matching launcher precedence).
+        Some((ext_memory, ext_mcp)) => (ext_memory, ext_mcp),
+        None => (
+            effective("COWBOY_MATRIX_CONFIG").is_some()
+                || spec.env.keys().any(|k| k.starts_with("COWBOY_MEMORY_")),
+            false,
+        ),
+    };
     let has_call_ctx = effective("COWBOY_CALL_CONTEXT").is_some();
     let has_exec_desc = effective("COWBOY_EXECUTION_DESCRIPTOR").is_some();
     hasher.update([

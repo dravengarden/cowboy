@@ -353,6 +353,15 @@ impl LogsArgs {
                 writer_state,
                 update_cohort,
             } => {
+                // State-only replay: if this day was already claimed by this writer,
+                // emit the exact verified payload without requiring live sources.
+                if !update_cohort
+                    && let Some(replayed) =
+                        super::storage::try_replay_claimed_writer_state(&writer_state, day_date)?
+                {
+                    std::io::stdout().lock().write_all(&replayed)?;
+                    return Ok(());
+                }
                 let day = day_date
                     .and_hms_opt(0, 0, 0)
                     .expect("midnight")

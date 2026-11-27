@@ -647,13 +647,16 @@ test("codex OTLP round-2 hardening: strict TOML scalars/duplicates, ordered prob
     const bigHome = join(dir, "big-home");
     mkdirSync(bigHome, { recursive: true });
     writeFileSync(join(bigHome, "config.toml"), "# " + "z".repeat(300 * 1024) + "\n");
-    assert.equal(userCodexConfig({ CODEX_HOME: bigHome }), "");
+    assert.deepEqual(userCodexConfig({ CODEX_HOME: bigHome }), { status: "unreadable", text: "" });
 
     const fifoHome = join(dir, "fifo-home");
     mkdirSync(fifoHome, { recursive: true });
     const fifoPath = join(fifoHome, "config.toml");
     if (spawnSync("mkfifo", [fifoPath]).status === 0) {
-      assert.equal(userCodexConfig({ CODEX_HOME: fifoHome }), "");
+      assert.deepEqual(userCodexConfig({ CODEX_HOME: fifoHome }), {
+        status: "unreadable",
+        text: "",
+      });
     }
 
     // nativeMcpServerNames strips COWBOY_PRIVATE_CODEX_REQUEST_OBSERVATION and -c otel.* overrides
@@ -723,6 +726,48 @@ rl.on("line", (line) => {
       );
       assert.equal(res, null, `expected fail-closed null for ${mode}`);
     }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("codex OTLP round-3 hardening: scalar-then-table conflict, impossible dates, empty layer objects, and O(input) long table headers", async () => {
+  assert.equal(tomlHasOtelPolicy("a = 1\n[a]\nb = 2\n"), true);
+  assert.equal(tomlHasOtelPolicy("d = 2026-02-30\n"), true);
+  assert.equal(tomlHasOtelPolicy("d = 2026-02-28\n"), false);
+  // Long table header with many keys must stay fast and bounded
+  const longHeader =
+    `[${"a".repeat(500)}]\n` + Array.from({ length: 200 }, (_, i) => `k${i} = ${i}\n`).join("");
+  assert.equal(tomlHasOtelPolicy(longHeader), false);
+
+  // Empty/incomplete layer object in config/read must fail closed
+  const dir = mkdtempSync(join(tmpdir(), "codex-otel-r3-"));
+  try {
+    const home = join(dir, "home");
+    mkdirSync(home, { recursive: true });
+    assert.equal(
+      await hasExplicitCodexOtelPolicy({
+        codexPath: "/usr/bin/codex",
+        cwd: dir,
+        env: { CODEX_HOME: home },
+        probeConfig: async () => ({ config: {}, origins: {}, layers: [{}], requirements: null }),
+      }),
+      true,
+    );
+    assert.equal(
+      await hasExplicitCodexOtelPolicy({
+        codexPath: "/usr/bin/codex",
+        cwd: dir,
+        env: { CODEX_HOME: home },
+        probeConfig: async () => ({
+          config: {},
+          origins: {},
+          layers: [{ name: { type: "user", file: "relative/config.toml" }, config: {} }],
+          requirements: null,
+        }),
+      }),
+      true,
+    );
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

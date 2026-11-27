@@ -70,7 +70,9 @@ export { agentApiConfiguration } from "./memory.mjs";
 export function userCodexConfig(env = process.env) {
   const home = env.CODEX_HOME ?? join(env.HOME ?? "", ".codex");
   const read = readBoundedRegularFile(join(home, "config.toml"));
-  return read.status === "ok" ? read.text : "";
+  if (read.status === "ok") return { status: "ok", text: read.text };
+  if (read.status === "missing") return { status: "missing", text: "" };
+  return { status: "unreadable", text: "" };
 }
 
 // codex-acp logs in with DEFAULT_AUTH_REQUEST whenever the native app-server
@@ -238,9 +240,14 @@ export async function main(args) {
   // The client passes these to the exact native CLI it launches.
   const extensions = inspection ? null : await sessionExtensions();
   if (!inspection && isAbsolute(process.env.CODEX_PATH ?? "")) {
-    configuration.push(
-      ...agentCallsConfiguration(configuration, userCodexConfig(), agentCallsPrompt(extensions)),
-    );
+    const userCfg = userCodexConfig();
+    // Only inject default developer_instructions when user config was proven
+    // absent or cleanly read; never override an unreadable (>256 KiB) config.
+    if (userCfg.status !== "unreadable") {
+      configuration.push(
+        ...agentCallsConfiguration(configuration, userCfg.text, agentCallsPrompt(extensions)),
+      );
+    }
   }
   applyDefaultAuthRequest();
   const cowboyMcp = Boolean(

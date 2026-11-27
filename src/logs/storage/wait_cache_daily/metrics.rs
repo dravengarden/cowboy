@@ -27,7 +27,9 @@ type Series = BTreeMap<(&'static str, &'static str, &'static str, &'static str),
 
 /// Settle margin after UTC midnight before multi-Machine CLI exports freeze a
 /// closed day's single-writer claim (exceeds worker OTLP coalescing + flush lag).
-const FINALIZE_GRACE_MS: i64 = 15 * 60 * 1000;
+const FINALIZE_GRACE_MS: i64 = 60 * 60 * 1000;
+const MAX_WRITER_STATE_BYTES: usize = 4 * 1024 * 1024;
+const MAX_WRITER_STATE_DAYS: usize = 46;
 
 /// Verified store identities collected across one closed UTC day's reports.
 pub struct EncodedWaitCacheOtlp {
@@ -111,6 +113,20 @@ pub fn encode_wait_cache_otlp(
             report["rollup_present"].as_bool() == Some(true),
             "wait/cache cohort source lacks an initialized rollup database"
         );
+        // On real wall-clock runs (not 1970 synthetic test epochs), require each
+        // source's own clock to confirm the day is both finalized and retained.
+        if !controller && now >= 1_000_000_000_000 {
+            if let Some(source_now) = report["store_now_ms"].as_i64() {
+                ensure!(
+                    source_now >= required_close,
+                    "wait/cache source clock has not passed the day finalization boundary"
+                );
+                ensure!(
+                    day >= utc_day(source_now).saturating_sub(RETENTION_MS),
+                    "wait/cache day is outside source's 45-day retention horizon"
+                );
+            }
+        }
         if let Some(floor) = report["capacity_floor_ms"].as_i64() {
             ensure!(
                 day >= floor,
@@ -144,15 +160,17 @@ pub fn encode_wait_cache_otlp(
                 group.from_ms == day && group.to_ms == expected_to,
                 "wait/cache cohort contains cross-day group"
             );
+            validate_group_dimensions(&group.dimensions)?;
             let canonical_dim = serde_json::to_string(&group.dimensions)?;
             ensure!(
                 seen_dimensions.insert(canonical_dim),
                 "wait/cache cohort contains duplicate dimension group within one source"
             );
             for &[sum, count] in group.totals.values.values() {
+                let _ = sum;
                 ensure!(
-                    count <= group.totals.records && (count > 0 || sum == 0),
-                    "wait/cache cohort contains inconsistent value tuple"
+                    count >= 1 && count <= group.totals.records,
+                    "wait/cache cohort contains zero-sample or out-of-range value tuple"
                 );
             }
             add_group(&mut series, &group);
@@ -265,6 +283,74 @@ fn decode_hex(hex: &str) -> Result<Vec<u8>> {
 /// exact persisted payload bytes so a failed stdout delivery never strands a
 /// day behind an unrecoverable hash. Cohort changes (`--update-cohort`) apply
 /// only going forward from a strictly newer UTC day, never retroactively.
+fn validate_group_dimensions(dim: &serde_json::Map<String, Value>) -> Result<()> {
+    let event = dim
+        .get("event")
+        .and_then(Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("wait/cache group missing string event dimension"))?;
+    match event {
+        events::REQUEST => {
+            for required in ["provider", "role", "outcome"] {
+                ensure!(
+                    dim.get(required)
+                        .and_then(Value::as_str)
+                        .is_some_and(|v| !v.is_empty()),
+                    "wait/cache request group missing required dimension {required}"
+                );
+            }
+        }
+        events::SETTLED | events::DISPATCH | events::DECISION => {
+            ensure!(
+                dim.get("outcome")
+                    .and_then(Value::as_str)
+                    .is_some_and(|v| !v.is_empty()),
+                "wait/cache {event} group missing required outcome dimension"
+            );
+        }
+        events::TURN_DIAGNOSTICS
+        | events::RECEIPT
+        | events::NOTICE
+        | events::LOSS
+        | events::COVERAGE
+        | "cowboy.context_rollover.history_read" => {}
+        other => anyhow::bail!("unsupported wait/cache group event dimension {other}"),
+    }
+    Ok(())
+}
+
+/// Fast state-only replay path under exclusive writer lock: if `day` is already
+/// claimed in `path` and its payload checksum verifies, returns the exact
+/// persisted bytes without issuing any live source RPCs.
+pub fn try_replay_claimed_writer_state(
+    path: &Path,
+    day: chrono::NaiveDate,
+) -> Result<Option<Vec<u8>>> {
+    let _lock = acquire_writer_lock(path)?;
+    match std::fs::symlink_metadata(path) {
+        Ok(_) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error).context("reading wait-cache writer state"),
+    }
+    let raw = private_read(path, 8 * 1024 * 1024)?;
+    let parsed: WriterState =
+        serde_json::from_slice(&raw).context("invalid wait-cache writer state file")?;
+    ensure!(
+        parsed.schema == 1 && !parsed.cohort_history.is_empty(),
+        "unsupported wait-cache writer state schema"
+    );
+    let day_key = day.format("%Y-%m-%d").to_string();
+    let Some(existing) = parsed.exported_days.get(&day_key) else {
+        return Ok(None);
+    };
+    let bytes = decode_hex(&existing.payload_hex)?;
+    let actual_sha = format!("{:x}", Sha256::digest(&bytes));
+    ensure!(
+        actual_sha == existing.payload_sha256,
+        "wait-cache writer state payload checksum mismatch for {day_key}"
+    );
+    Ok(Some(bytes))
+}
+
 pub fn claim_or_replay_writer_state(
     path: &Path,
     day: chrono::NaiveDate,
@@ -330,9 +416,16 @@ pub fn claim_or_replay_writer_state(
             .last()
             .map(|e| e.effective_day.as_str())
             .unwrap_or("");
+        let latest_claimed = state
+            .exported_days
+            .keys()
+            .next_back()
+            .map(String::as_str)
+            .unwrap_or("");
+        let high_water = latest_effective.max(latest_claimed);
         ensure!(
-            day_key.as_str() > latest_effective,
-            "--update-cohort cannot apply retroactively on or before {latest_effective}"
+            day_key.as_str() > high_water,
+            "--update-cohort cannot apply retroactively on or before {high_water}"
         );
         state.cohort_history.push(CohortEffective {
             effective_day: day_key.clone(),
@@ -349,8 +442,18 @@ pub fn claim_or_replay_writer_state(
             exported_at_ms: now_ms,
         },
     );
-    // Keep up to 180 most recent exported days so state stays bounded.
-    while state.exported_days.len() > 180 {
+    // Prune claims to the 46-day rollup horizon and enforce the read budget
+    // before replacing the state file so it can never outgrow private_read.
+    while state.exported_days.len() > MAX_WRITER_STATE_DAYS {
+        if let Some(oldest) = state.exported_days.keys().next().cloned() {
+            state.exported_days.remove(&oldest);
+        }
+    }
+    while serde_json::to_vec(&state)?.len() > MAX_WRITER_STATE_BYTES {
+        ensure!(
+            state.exported_days.len() > 1,
+            "single wait-cache day claim exceeds writer state size bound"
+        );
         if let Some(oldest) = state.exported_days.keys().next().cloned() {
             state.exported_days.remove(&oldest);
         }
@@ -699,6 +802,47 @@ mod tests {
         assert!(claim_or_replay_writer_state(&state_path, day20, now, &hawk_only, true).is_err());
         // Original cohort is still valid for backfilling unexported day20
         claim_or_replay_writer_state(&state_path, day20, now, &encoded, false).unwrap();
+        // Empty dimensions and [0, 0] zero-sample tuples both fail closed
+        let empty_dim = valid_report(
+            day,
+            ovh_id,
+            serde_json::json!([{"from_ms": day, "to_ms": day + DAY_MS, "dimensions": {}, "totals": {"records": 1}}]),
+        );
+        assert!(encode_wait_cache_otlp(day, now, &[&empty_dim], false).is_err());
+        let zero_tuple = valid_report(
+            day,
+            ovh_id,
+            serde_json::json!([{
+                "from_ms": day,
+                "to_ms": day + DAY_MS,
+                "dimensions": {"event": events::REQUEST, "provider": "codex", "role": "parent", "outcome": "usage"},
+                "totals": {"records": 1, "values": {"input_tokens": [0, 0]}}
+            }]),
+        );
+        assert!(encode_wait_cache_otlp(day, now, &[&zero_tuple], false).is_err());
+
+        // State-only replay returns exact committed bytes without live source RPCs
+        assert_eq!(
+            try_replay_claimed_writer_state(&state_path, day19).unwrap(),
+            Some(committed.clone())
+        );
+        assert_eq!(
+            try_replay_claimed_writer_state(
+                &state_path,
+                chrono::NaiveDate::from_ymd_opt(2026, 11, 25).unwrap()
+            )
+            .unwrap(),
+            None
+        );
+
+        // Backdating --update-cohort between already-claimed day19 and day21 fails closed
+        let state_path_bd = dir.path().join("writer-state-backdate.json");
+        claim_or_replay_writer_state(&state_path_bd, day19, now, &encoded, false).unwrap();
+        claim_or_replay_writer_state(&state_path_bd, day21, now, &encoded, false).unwrap();
+        assert!(
+            claim_or_replay_writer_state(&state_path_bd, day20, now, &hawk_only, true).is_err()
+        );
+
         // Bare filename resolves parent "." for lock path
         assert_eq!(
             lock_path_for(Path::new("state.json")).unwrap(),

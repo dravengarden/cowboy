@@ -306,6 +306,33 @@ function createTomlCursor(text) {
     if (pos === start) throw new Error("empty scalar");
     const raw = text.slice(start, pos);
     // Allow only legal TOML bare scalars: booleans, integers, floats, inf/nan, or RFC3339 date/time.
+    const isValidTime = (hh, mm, ss) =>
+      hh >= 0 && hh <= 23 && mm >= 0 && mm <= 59 && ss >= 0 && ss <= 60;
+    const isValidDate = (y, m, d) => {
+      if (m < 1 || m > 12 || d < 1) return false;
+      const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+      const maxDays = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][m - 1];
+      return d <= maxDays;
+    };
+    let validTemporal = false;
+    const dtMatch =
+      /^(\d{4})-(\d{2})-(\d{2})(?:[Tt](\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:[Zz]|([+-])(\d{2}):(\d{2}))?)?$/.exec(
+        raw,
+      );
+    if (dtMatch) {
+      validTemporal = isValidDate(Number(dtMatch[1]), Number(dtMatch[2]), Number(dtMatch[3]));
+      if (validTemporal && dtMatch[4] !== undefined) {
+        validTemporal = isValidTime(Number(dtMatch[4]), Number(dtMatch[5]), Number(dtMatch[6]));
+        if (validTemporal && dtMatch[8] !== undefined) {
+          validTemporal = Number(dtMatch[8]) <= 23 && Number(dtMatch[9]) <= 59;
+        }
+      }
+    } else {
+      const tMatch = /^(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?$/.exec(raw);
+      if (tMatch) {
+        validTemporal = isValidTime(Number(tMatch[1]), Number(tMatch[2]), Number(tMatch[3]));
+      }
+    }
     const validScalar =
       raw === "true" ||
       raw === "false" ||
@@ -316,10 +343,7 @@ function createTomlCursor(text) {
       /^[+-]?(?:0|[1-9](?:_?[0-9])*)(?:\.[0-9](?:_?[0-9])*)?(?:[eE][+-]?[0-9](?:_?[0-9])*)?$/.test(
         raw,
       ) ||
-      /^\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})?)?$/.test(
-        raw,
-      ) ||
-      /^\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(raw);
+      validTemporal;
     if (!validScalar) throw new Error(`invalid TOML scalar: ${raw}`);
   };
 
@@ -347,16 +371,81 @@ export function tomlHasOtelPolicy(text) {
   if (typeof text !== "string" || !text) return false;
   if (Buffer.byteLength(text, "utf8") > MAX_CONFIG_BYTES) return true;
   let found = false;
-  const definedTables = new Set();
-  const definedKeys = new Set();
-  const pathKey = (segments) => JSON.stringify(segments);
+  // Tree-local table/key registry: O(input size) memory even for long table headers.
+  const makeTable = (explicit = false) => ({ kind: "table", explicit, children: new Map() });
+  const root = makeTable(true);
+
+  const navigateTable = (base, segments, forArrayItem = false) => {
+    let node = base;
+    for (let i = 0; i < segments.length; i += 1) {
+      const seg = segments[i];
+      const isLast = i === segments.length - 1;
+      const existing = node.children.get(seg);
+      if (isLast && forArrayItem) {
+        if (!existing) {
+          const arr = { kind: "array", items: [makeTable(true)] };
+          node.children.set(seg, arr);
+          return arr.items[0];
+        }
+        if (existing.kind !== "array") throw new Error("redefining non-array as array table");
+        const nextItem = makeTable(true);
+        existing.items.push(nextItem);
+        return nextItem;
+      }
+      if (!existing) {
+        const next = makeTable(isLast);
+        node.children.set(seg, next);
+        node = next;
+      } else if (existing.kind === "table") {
+        if (isLast) {
+          if (existing.explicit) throw new Error("duplicate table header");
+          existing.explicit = true;
+        }
+        node = existing;
+      } else if (existing.kind === "array") {
+        if (isLast) throw new Error("redefining array table as standard table");
+        node = existing.items.at(-1);
+      } else {
+        throw new Error("redefining value as table");
+      }
+    }
+    return node;
+  };
+
+  const defineValuePath = (base, segments, isInlineTable = false) => {
+    let node = base;
+    for (let i = 0; i < segments.length; i += 1) {
+      const seg = segments[i];
+      const isLast = i === segments.length - 1;
+      const existing = node.children.get(seg);
+      if (isLast) {
+        if (existing) throw new Error("duplicate key or table conflict");
+        const leaf = isInlineTable
+          ? { kind: "inline_table", children: new Map() }
+          : { kind: "value" };
+        node.children.set(seg, leaf);
+        return leaf;
+      }
+      if (!existing) {
+        const next = makeTable(false);
+        node.children.set(seg, next);
+        node = next;
+      } else if (existing.kind === "table" || existing.kind === "inline_table") {
+        node = existing;
+      } else {
+        throw new Error("cannot descend into scalar value");
+      }
+    }
+    return node;
+  };
+
   const checkPath = (segments) => {
     if (isOtelPolicyPath(segments)) found = true;
   };
   try {
     const cursor = createTomlCursor(text);
-    let currentTable = [];
-    let currentArrayIndex = -1;
+    let currentTablePath = [];
+    let currentTableNode = root;
     while (!cursor.eof()) {
       cursor.skipWsAndComments();
       if (cursor.eof()) break;
@@ -370,18 +459,14 @@ export function tomlHasOtelPolicy(text) {
             throw new Error("unclosed array table header");
           }
           cursor.advance(2);
-          currentArrayIndex += 1;
+          currentTableNode = navigateTable(root, header, true);
         } else {
           if (cursor.peek() !== "]") throw new Error("unclosed table header");
           cursor.advance(1);
-          const tk = pathKey(header);
-          if (definedTables.has(tk) || definedKeys.has(tk)) {
-            throw new Error(`duplicate table definition: ${tk}`);
-          }
-          definedTables.add(tk);
+          currentTableNode = navigateTable(root, header, false);
         }
-        currentTable = header;
-        checkPath(currentTable);
+        currentTablePath = header;
+        checkPath(currentTablePath);
         if (found) return true;
         cursor.skipSpaces();
         if (cursor.peek() === "#") cursor.skipCommentToEol();
@@ -394,22 +479,19 @@ export function tomlHasOtelPolicy(text) {
       cursor.skipSpaces();
       if (cursor.peek() !== "=") throw new Error("expected '=' after key");
       cursor.advance(1);
-      const fullPath = [...currentTable, ...key];
-      const scopedKey = `${currentArrayIndex}:${pathKey(fullPath)}`;
-      if (
-        definedKeys.has(scopedKey) ||
-        (currentArrayIndex === -1 && definedTables.has(pathKey(fullPath)))
-      ) {
-        throw new Error(`duplicate key definition: ${scopedKey}`);
-      }
-      definedKeys.add(scopedKey);
+      cursor.skipSpaces();
+      const startsInline = cursor.peek() === "{";
+      const leafNode = defineValuePath(currentTableNode, key, startsInline);
+      const fullPath = [...currentTablePath, ...key];
       checkPath(fullPath);
       cursor.scanValue(
         fullPath,
         (subPath) => {
-          const sk = `${currentArrayIndex}:${pathKey(subPath)}`;
-          if (definedKeys.has(sk)) throw new Error(`duplicate inline key: ${sk}`);
-          definedKeys.add(sk);
+          const rel = subPath.slice(fullPath.length);
+          if (rel.length > 0 && leafNode.kind === "inline_table") {
+            // Check duplicate keys within the inline table without retaining full table path strings.
+            defineValuePath(leafNode, rel, false);
+          }
           checkPath(subPath);
         },
         0,
@@ -660,12 +742,7 @@ export function probeCodexOtelConfig(
             !isPlainObject(res.config) ||
             !isPlainObject(res.origins) ||
             !Array.isArray(res.layers) ||
-            res.layers.some(
-              (layer) =>
-                !isPlainObject(layer) ||
-                (layer.name !== undefined && !isPlainObject(layer.name)) ||
-                (layer.config !== undefined && !isPlainObject(layer.config)),
-            )
+            res.layers.some((layer) => !isValidConfigLayer(layer))
           ) {
             finish(null);
             return;
@@ -714,6 +791,25 @@ export function probeCodexOtelConfig(
       finish(null);
     }
   });
+}
+
+function isValidConfigLayer(layer) {
+  if (!isPlainObject(layer)) return false;
+  if (!isPlainObject(layer.name)) return false;
+  if (typeof layer.name.type !== "string" || layer.name.type.length === 0) return false;
+  if (
+    layer.name.file !== undefined &&
+    (typeof layer.name.file !== "string" || !isAbsolute(layer.name.file))
+  ) {
+    return false;
+  }
+  if (
+    layer.name.dotCodexFolder !== undefined &&
+    (typeof layer.name.dotCodexFolder !== "string" || !isAbsolute(layer.name.dotCodexFolder))
+  ) {
+    return false;
+  }
+  return isPlainObject(layer.config);
 }
 
 function hasOtelFields(otel) {
@@ -780,12 +876,7 @@ export async function hasExplicitCodexOtelPolicy({
     !isPlainObject(probed.config) ||
     !isPlainObject(probed.origins) ||
     !Array.isArray(probed.layers) ||
-    probed.layers.some(
-      (layer) =>
-        !isPlainObject(layer) ||
-        (layer.name !== undefined && !isPlainObject(layer.name)) ||
-        (layer.config !== undefined && !isPlainObject(layer.config)),
-    ) ||
+    probed.layers.some((layer) => !isValidConfigLayer(layer)) ||
     !Object.hasOwn(probed, "requirements") ||
     (probed.requirements !== null && !isPlainObject(probed.requirements))
   ) {

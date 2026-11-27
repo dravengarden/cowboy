@@ -71,7 +71,15 @@ impl Pending {
         self.open
             .values()
             .map(|open| open.attempt.start_ms)
-            .chain(self.records.values().map(Record::time))
+            .chain(self.records.values().map(|record| {
+                match record.event {
+                    Event::Start { duration, .. } => record
+                        .time()
+                        .saturating_sub(i64::try_from(duration).unwrap_or(i64::MAX))
+                        .max(0),
+                    Event::Turn | Event::StreamEnd { .. } => record.time(),
+                }
+            }))
             .min()
     }
 

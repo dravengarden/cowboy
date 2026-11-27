@@ -125,12 +125,12 @@ with `logs export --signal logs`.
 
 The Controller offers one compact previous-day OTLP counter snapshot to its
 existing configured exporter. Machine counters are extracted on the designated
-single writer for a closed, finalized UTC day (at least 15 minutes past UTC
+single writer for a closed, finalized UTC day (at least 1 hour past UTC
 midnight and within the 45-day retention horizon) across the authoritative
 Machine set while reusing the same `--writer-state` file:
 
 ```sh
-cowboy logs --sources "$SOURCES" wait-cache-metrics --day YYYY-MM-DD --writer-state "$WRITER_STATE" > wait-cache.otlp.pb
+cowboy logs --sources "$SOURCES" wait-cache-metrics --day 2026-11-19 --writer-state "$WRITER_STATE" > wait-cache.otlp.pb
 ```
 
 The CLI aggregates all sources in memory, rejects duplicate `store_id` aliases,

@@ -14,7 +14,9 @@ use std::time::Instant;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod metrics;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub use metrics::{claim_or_replay_writer_state, encode_wait_cache_otlp};
+pub use metrics::{
+    claim_or_replay_writer_state, encode_wait_cache_otlp, try_replay_claimed_writer_state,
+};
 
 mod files;
 mod parent_clock;
@@ -599,6 +601,7 @@ impl SqliteStore {
         Ok(json!({
             "schema": "cowboy.wait_cache.daily/v1",
             "store_id": store_id,
+            "store_now_ms": crate::logs::data::now_ms(),
             "rollup_present": report.rollup_present,
             "from_ms": from, "to_ms": to, "retention_days": RETENTION_MS / DAY_MS,
             "truncated": report.truncated, "groups": report.groups,

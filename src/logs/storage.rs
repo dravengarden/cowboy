@@ -14,7 +14,9 @@ mod aggregate;
 mod append;
 mod wait_cache_daily;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub use wait_cache_daily::{claim_or_replay_writer_state, encode_wait_cache_otlp};
+pub use wait_cache_daily::{
+    claim_or_replay_writer_state, encode_wait_cache_otlp, try_replay_claimed_writer_state,
+};
 
 const APPLICATION_ID: i64 = 0x43424c47;
 const MAX_SEGMENTS: usize = 64;

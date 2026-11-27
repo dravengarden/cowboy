@@ -2722,29 +2722,29 @@ export class AcpProxy {
     const attemptTimings = turn?.structured
       ? [...turn.structured.stepTimings, stepTimings]
       : [stepTimings];
-    const matchedTimings = attemptTimings.filter(
-      (entry) =>
-        entry != null &&
-        entry.barrier_matched === true &&
-        Number.isSafeInteger(entry.backend_steps) &&
-        Number.isSafeInteger(entry.transient_retries),
-    );
+    const allAttemptsMatched =
+      attemptTimings.length > 0 &&
+      attemptTimings.every(
+        (entry) =>
+          entry != null &&
+          entry.barrier_matched === true &&
+          Number.isSafeInteger(entry.backend_steps) &&
+          Number.isSafeInteger(entry.transient_retries),
+      );
     const singleMatched =
-      attemptTimings.length === 1 && matchedTimings.length === 1 ? matchedTimings[0] : null;
+      attemptTimings.length === 1 && allAttemptsMatched ? attemptTimings[0] : null;
     const diag = turn?.cacheDiag;
     // agy's shared log lines carry no session ID, so child step counts are only
     // provably zero when no subagents ran during this turn.
     const hadSubagents = turn?.subagents === true || Boolean(turn?.childBackends?.length);
     cowboy.antigravity_cache_diagnostics = {
       schema: 1,
-      backend_steps:
-        matchedTimings.length > 0
-          ? matchedTimings.reduce((sum, entry) => sum + entry.backend_steps, 0)
-          : null,
-      transient_retries:
-        matchedTimings.length > 0
-          ? matchedTimings.reduce((sum, entry) => sum + entry.transient_retries, 0)
-          : null,
+      backend_steps: allAttemptsMatched
+        ? attemptTimings.reduce((sum, entry) => sum + entry.backend_steps, 0)
+        : null,
+      transient_retries: allAttemptsMatched
+        ? attemptTimings.reduce((sum, entry) => sum + entry.transient_retries, 0)
+        : null,
       first_step_offset_ms: singleMatched?.first_step_offset_ms ?? null,
       step_span_ms: singleMatched?.step_span_ms ?? null,
       max_inter_step_ms: singleMatched?.max_inter_step_ms ?? null,
