@@ -46,11 +46,19 @@ See also [context renewal](context-rollover.md) and
   descriptor with `schema`, `logs_endpoint`, `header_name` and `header_value`.
   The adapter may consume it only when its native startup can respect the
   effective exporter policy across user, project and managed config
-  layers. The receiver checks the header before accepting a body. The
-  current signed Codex generations lack that contract and report unavailable
-  coverage. Explicit telemetry environments, ambient proxies and
-  sandbox-owned launches keep their own policy. Coverage and source fields
-  record native loss, including at process death.
+  layers. The receiver checks the header before accepting a body. The signed
+  Codex runtime (`plugins/codex/runtime/otel-observation.mjs` and
+  `otel-headers.mjs`) inspects effective config across user, project, system
+  and managed layers fail-closed and supplies the auth header exclusively via
+  `otel.headers_helper` (never in `-c` argv or on disk). Antigravity workers
+  project content-free turn and step-timing diagnostics
+  (`producer = "antigravity_proxy"`) from `cowboy-antigravity-acp`'s
+  `PromptResponse._meta.cowboy` without opening additional sockets or altering
+  upstream `agy` requests. Worker request records also carry a 16-hex-char
+  structural `prefix_fingerprint` and `is_first_in_worker_epoch` locally
+  (never exported as metric series labels). Explicit telemetry environments,
+  ambient proxies and sandbox-owned OTLP launches keep their own policy.
+  Coverage and source fields record native loss, including at process death.
 - `request_index_in_turn` uses the native interaction or prompt boundary
   when available. The three first-after flags are independent. The local
   parent clock uses observed request starts on the same host and Provider,
@@ -117,8 +125,10 @@ with `logs export --signal logs`.
 
 The Controller offers one compact previous-day OTLP counter snapshot to its
 existing configured exporter. Machine counters can be extracted from a
-closed UTC day with the CLI. Keep each time series single-owner when
-combining multiple Machines. The existing binding governs delivery.
+closed UTC day with `cowboy logs wait-cache-metrics --day YYYY-MM-DD`,
+including across multiple `--source` Machines in one invocation so the CLI
+aggregates them fail-closed into one single-writer `cowboy.source="machine"`
+OTLP snapshot without colliding host series. The existing binding governs delivery.
 Every signed metrics lane validates its encoding and admits only finite
 instruments, labels and resource attributes independently of its route.
 Request series retain

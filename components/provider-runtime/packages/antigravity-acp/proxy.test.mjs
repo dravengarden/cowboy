@@ -2487,3 +2487,48 @@ test("an empty delayed chunk cannot adopt a correction's id-less nonce line", as
     client.every((message) => message.params?.update?.sessionUpdate !== "agent_message_chunk"),
   );
 });
+
+test("settled turns attach content-free antigravity_cache_diagnostics from usage updates and backend counts", async () => {
+  const { proxy, client } = harness({
+    backend: { class: "ok", successes: 3, transient: 1, barrier: true, refusals: [] },
+  });
+  await proxy.fromClient(request(101, "session/prompt", { sessionId: "s-diag", prompt: [] }));
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-diag",
+      update: { sessionUpdate: "usage_update", used: 42000, size: 1048576 },
+    },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-diag",
+      update: { sessionUpdate: "usage_update", used: 58000, size: 1048576 },
+    },
+  });
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 101,
+    result: {
+      stopReason: "end_turn",
+      usage: { totalTokens: 60000, inputTokens: 58000, outputTokens: 2000 },
+    },
+  });
+  const reply = client.at(-1);
+  assert.deepEqual(reply.result._meta.cowboy.antigravity_cache_diagnostics, {
+    schema: 1,
+    backend_steps: 3,
+    transient_retries: 1,
+    first_step_offset_ms: null,
+    step_span_ms: null,
+    max_inter_step_ms: null,
+    usage_updates: 2,
+    start_context_used: 42000,
+    end_context_used: 58000,
+    context_size: 1048576,
+    subagent_steps: 0,
+  });
+});

@@ -44,6 +44,11 @@ impl Fields {
         }
         self
     }
+
+    #[cfg(all(test, feature = "full"))]
+    pub(crate) fn as_slice(&self) -> &[KeyValue] {
+        &self.0
+    }
 }
 
 fn scalar(key: &str, value: any_value::Value) -> KeyValue {
@@ -121,9 +126,23 @@ pub fn provider(value: &str) -> &'static str {
     match value {
         "claude-code" => "claude-code",
         "codex" => "codex",
+        "antigravity" => "antigravity",
         "claude-deepseek" => "claude-deepseek",
         "codex-deepseek" => "codex-deepseek",
+        "deepseek-harness" => "deepseek-harness",
+        "grok" => "grok",
         _ => "other",
+    }
+}
+
+/// Resolve the logical Cowboy Provider for a gateway usage event. The shared
+/// DeepSeek Anthropic gateway reports `producer_id = "claude-deepseek"` with
+/// `agent = "deepseek-harness"` for DeepSeek Harness sessions.
+pub fn gateway_provider(producer_id: &str, agent: &str) -> &'static str {
+    if producer_id == "claude-deepseek" && agent == "deepseek-harness" {
+        "deepseek-harness"
+    } else {
+        provider(producer_id)
     }
 }
 
@@ -225,7 +244,7 @@ pub fn record_notice_receipt(session: &str, turn_id: &str, stop_reason: &str) {
 #[cfg(feature = "machine-host")]
 pub fn gateway_usage(id: &str, event: &crate::machine_protocol::ProviderUsageEvent) {
     capture::provider_usage(event);
-    let provider = provider(&event.producer_id);
+    let provider = gateway_provider(&event.producer_id, &event.agent);
     let keepalive = event.request_purpose == "cache_keepalive";
     // Cache-protection decisions that did not make a provider request are
     // diagnostics about coverage, not billable attempts.
@@ -371,6 +390,34 @@ mod tests {
                 "messages"
             )["cache_write_unknown_ttl_input_tokens"]
                 .is_null()
+        );
+    }
+
+    #[test]
+    fn provider_and_gateway_provider_preserve_all_seven_first_party_providers() {
+        for name in [
+            "claude-code",
+            "codex",
+            "antigravity",
+            "claude-deepseek",
+            "codex-deepseek",
+            "deepseek-harness",
+            "grok",
+        ] {
+            assert_eq!(provider(name), name);
+        }
+        assert_eq!(provider("unknown-plugin"), "other");
+        assert_eq!(
+            gateway_provider("claude-deepseek", "deepseek-harness"),
+            "deepseek-harness"
+        );
+        assert_eq!(
+            gateway_provider("claude-deepseek", "claude"),
+            "claude-deepseek"
+        );
+        assert_eq!(
+            gateway_provider("codex-deepseek", "codex"),
+            "codex-deepseek"
         );
     }
 }

@@ -28,6 +28,92 @@ const MAX_WINDOW = 4 * 1024 * 1024;
 const MAX_JSON_BLOCK = 64 * 1024;
 
 const PREFIX = String.raw`^[IWEF]\d{4} \d{2}:\d{2}:\d{2}\.\d+\s+\d+ `;
+const GLOG_TIME = /^[IWEF](\d{2})(\d{2}) (\d{2}):(\d{2}):(\d{2})\.(\d{1,6})\s+\d+ /;
+
+function parseGlogDayMs(line) {
+  const match = GLOG_TIME.exec(line);
+  if (!match) return undefined;
+  const hours = Number(match[3]);
+  const minutes = Number(match[4]);
+  const seconds = Number(match[5]);
+  const micros = Number(match[6].padEnd(6, "0").slice(0, 6));
+  if (hours > 23 || minutes > 59 || seconds > 59) return undefined;
+  return ((hours * 60 + minutes) * 60 + seconds) * 1000 + Math.floor(micros / 1000);
+}
+
+function monotonicDeltaMs(fromDayMs, toDayMs) {
+  if (fromDayMs === undefined || toDayMs === undefined) return undefined;
+  const DAY_MS = 86_400_000;
+  let delta = toDayMs - fromDayMs;
+  if (delta < -DAY_MS / 2) delta += DAY_MS;
+  return delta >= 0 && delta <= DAY_MS ? delta : undefined;
+}
+
+/**
+ * Extract strictly numeric, content-free backend step timing diagnostics from
+ * one turn's log window through its barrier. Never reads URLs, Trace IDs,
+ * Response IDs, or text content.
+ */
+export function parseStepTimings(text, sessionId, nonce) {
+  const lines = text.split("\n");
+  const barrier =
+    nonce !== undefined
+      ? requestBarrierPattern(nonce)
+      : sessionId === undefined
+        ? undefined
+        : barrierPattern(sessionId);
+  let anchorMs;
+  let sawBarrier = false;
+  const stepTimes = [];
+  let transientRetries = 0;
+  for (const line of lines) {
+    if (barrier?.test(line)) {
+      sawBarrier = true;
+      break;
+    }
+    if (SUCCESS.test(line)) {
+      const ts = parseGlogDayMs(line);
+      if (ts !== undefined) stepTimes.push(ts);
+      continue;
+    }
+    if (anchorMs === undefined && (PROMPT_RECEIPT.test(line) || DISPATCH.test(line))) {
+      anchorMs = parseGlogDayMs(line);
+      continue;
+    }
+    const retry = RETRY.exec(line);
+    if (retry && TRANSIENT_CODES.has(Number(retry[2]))) {
+      transientRetries += 1;
+    }
+  }
+  if (!sawBarrier && stepTimes.length === 0 && transientRetries === 0) {
+    return undefined;
+  }
+  let firstStepOffsetMs = null;
+  let stepSpanMs = null;
+  let maxInterStepMs = null;
+  if (stepTimes.length > 0) {
+    const offset = monotonicDeltaMs(anchorMs, stepTimes[0]);
+    if (offset !== undefined) firstStepOffsetMs = offset;
+    const span = monotonicDeltaMs(stepTimes[0], stepTimes[stepTimes.length - 1]);
+    if (span !== undefined) stepSpanMs = span;
+    if (stepTimes.length > 1) {
+      let maxGap = 0;
+      for (let i = 1; i < stepTimes.length; i++) {
+        const gap = monotonicDeltaMs(stepTimes[i - 1], stepTimes[i]);
+        if (gap !== undefined && gap > maxGap) maxGap = gap;
+      }
+      maxInterStepMs = maxGap;
+    }
+  }
+  return {
+    schema: 1,
+    backend_steps: stepTimes.length,
+    transient_retries: transientRetries,
+    first_step_offset_ms: firstStepOffsetMs,
+    step_span_ms: stepSpanMs,
+    max_inter_step_ms: maxInterStepMs,
+  };
+}
 // One successful model request (a backend step) of the turn.
 const SUCCESS = new RegExp(
   `${PREFIX}http_helpers\\.go:\\d+\\] URL: https://[a-z0-9.-]+\\.googleapis\\.com/v1internal:streamGenerateContent\\?alt=sse Trace: 0x[0-9a-f]+ ResponseID: \\S+$`,
@@ -247,6 +333,13 @@ export function classify(records, { prior = [], stopReason } = {}) {
  * barrier request (see `BARRIER_METHOD`); without it, on the 1.5.9 stream
  * barrier.
  */
+const STEP_TIMINGS = new WeakMap();
+
+/** Retrieve content-free step timings associated with a `settle()` result. */
+export function stepTimingsFor(classified) {
+  return classified && typeof classified === "object" ? STEP_TIMINGS.get(classified) : undefined;
+}
+
 export class AgyLog {
   constructor(directory, pid, { pollMs = 100, barrierTimeoutMs = 10000, request } = {}) {
     this.directory = directory;
@@ -326,22 +419,29 @@ export class AgyLog {
           // Never classify a truncated tail that omits an earlier prefix of the turn.
           return classify([], {});
         }
-        const records = parseRecords(await this.read(cursor, size), sessionId, nonce);
+        const windowText = await this.read(cursor, size);
+        const records = parseRecords(windowText, sessionId, nonce);
         if (records.some((record) => record.kind === "barrier")) {
+          const timings = parseStepTimings(windowText, sessionId, nonce);
           const prior = parseRecords(
             await this.read(Math.max(0, cursor - MAX_WINDOW), cursor),
             undefined,
           );
-          return classify(records, { prior, stopReason });
+          const result = classify(records, { prior, stopReason });
+          if (timings) STEP_TIMINGS.set(result, timings);
+          return result;
         }
         if (!exitedBeforeStat && this.childExited) continue;
         if (exitedBeforeStat || Date.now() >= deadline) {
+          const timings = parseStepTimings(windowText, sessionId, nonce);
           const prior = parseRecords(
             await this.read(Math.max(0, cursor - MAX_WINDOW), cursor),
             undefined,
           );
           if (!exitedBeforeStat && this.childExited) continue;
-          return classify(records, { prior, stopReason });
+          const result = classify(records, { prior, stopReason });
+          if (timings) STEP_TIMINGS.set(result, timings);
+          return result;
         }
         await new Promise((resolve) => setTimeout(resolve, this.pollMs));
       }

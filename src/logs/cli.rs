@@ -341,14 +341,27 @@ impl LogsArgs {
             }
             #[cfg(any(feature = "full", feature = "machine-host"))]
             Command::WaitCacheMetrics { day } => {
-                let source = single_local(&sources)?;
                 let day = day
                     .and_hms_opt(0, 0, 0)
                     .expect("midnight")
                     .and_utc()
                     .timestamp_millis();
-                let store = SqliteStore::open(source.directory.clone(), false)?;
-                let bytes = store.wait_cache_otlp(day, now_ms(), false)?;
+                let now = now_ms();
+                // Single-writer multi-Machine aggregation: collect every
+                // configured source's closed UTC day report and fail closed on
+                // any unavailable, truncated, or degraded source.
+                let mut reports = Vec::with_capacity(sources.len());
+                for source in &sources {
+                    let value = source
+                        .execute(Operation::WaitCacheDaily {
+                            from_ms: day,
+                            to_ms: day + super::wait_cache::DAY_MS,
+                        })
+                        .await?;
+                    reports.push(value);
+                }
+                let refs: Vec<&serde_json::Value> = reports.iter().collect();
+                let bytes = super::storage::encode_wait_cache_otlp(day, now, &refs, false)?;
                 std::io::stdout().lock().write_all(&bytes)?;
                 Ok(())
             }

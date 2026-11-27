@@ -13,6 +13,8 @@ use std::time::Instant;
 
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod metrics;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+pub use metrics::encode_wait_cache_otlp;
 
 mod files;
 mod parent_clock;
@@ -221,6 +223,7 @@ fn dimensions(entry: &Entry) -> Value {
             "gateway",
             "claude_otel",
             "codex_otel",
+            "antigravity_proxy",
             "native_wait",
             "call_reconciliation",
         ],
@@ -300,6 +303,9 @@ impl Totals {
             "producer_unmatched",
             "is_first_after_rollover",
             "is_first_after_compact",
+            "is_first_in_worker_epoch",
+            "backend_step_count",
+            "transient_retry_count",
             "parent_ended_turn",
             "wake_needed",
             "cowboy.bytes",

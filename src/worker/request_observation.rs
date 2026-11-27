@@ -22,6 +22,7 @@ use std::{
 };
 use tokio::sync::Semaphore;
 
+mod antigravity;
 mod claude;
 mod codex;
 mod launch;
@@ -42,16 +43,26 @@ struct Ingress {
 
 pub(super) struct Collector {
     pub(super) observer: Observer,
-    observations: Arc<Mutex<Observations>>,
-    receive: tokio::task::JoinHandle<()>,
-    flush: tokio::task::JoinHandle<()>,
+    observations: Option<Arc<Mutex<Observations>>>,
+    antigravity: Option<Arc<antigravity::Recorder>>,
+    receive: Option<tokio::task::JoinHandle<()>>,
+    flush: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl Drop for Collector {
     fn drop(&mut self) {
-        self.receive.abort();
-        self.flush.abort();
-        self.observations.lock().flush(now_ms(), true);
+        if let Some(receive) = &self.receive {
+            receive.abort();
+        }
+        if let Some(flush) = &self.flush {
+            flush.abort();
+        }
+        if let Some(observations) = &self.observations {
+            observations.lock().flush(now_ms(), true);
+        }
+        if let Some(antigravity) = &self.antigravity {
+            antigravity.emit_coverage("closed");
+        }
     }
 }
 
@@ -62,6 +73,27 @@ impl Collector {
         prepared: &PreparedLaunch,
         epoch: &str,
     ) -> Option<Self> {
+        let prefix_fingerprint = metadata::compute_prefix_fingerprint(args);
+        if args.provider == "antigravity" {
+            if args.provider_generation_digest.is_empty() {
+                return None;
+            }
+            let (observer, facts) = Observer::new(args.resume.clone());
+            let recorder = Arc::new(antigravity::Recorder::new(
+                args,
+                epoch,
+                prefix_fingerprint,
+                facts,
+            ));
+            recorder.emit_coverage("attached");
+            return Some(Self {
+                observer: observer.with_antigravity(Arc::clone(&recorder)),
+                observations: None,
+                antigravity: Some(recorder),
+                receive: None,
+                flush: None,
+            });
+        }
         let producer = match args.provider.as_str() {
             "claude-code" => Producer::Claude,
             "codex" => Producer::Codex,
@@ -71,7 +103,7 @@ impl Collector {
             spec.remove_env.push(CODEX_REQUEST_OBSERVATION_ENV);
         }
         let (observer, facts) = Observer::new(args.resume.clone());
-        let state = Observations::new(producer, args, epoch, facts);
+        let state = Observations::new(producer, args, epoch, prefix_fingerprint, facts);
         let Some(listener) =
             launch::open_listener(spec, args, producer, prepared.codex_request_observation).await
         else {
@@ -113,9 +145,10 @@ impl Collector {
         });
         Some(Self {
             observer,
-            observations,
-            receive,
-            flush,
+            observations: Some(observations),
+            antigravity: None,
+            receive: Some(receive),
+            flush: Some(flush),
         })
     }
 }
@@ -222,9 +255,11 @@ struct Observations {
     session: String,
     epoch: String,
     release: String,
+    prefix_fingerprint: String,
     facts: metadata::Facts,
     managed: bool,
     fresh: bool,
+    first_in_epoch: bool,
     renewed_at: Option<i64>,
     compacted: VecDeque<i64>,
     compact_coverage: bool,
@@ -237,13 +272,20 @@ struct Observations {
 }
 
 impl Observations {
-    fn new(producer: Producer, args: &WorkerArgs, epoch: &str, facts: metadata::Facts) -> Self {
+    fn new(
+        producer: Producer,
+        args: &WorkerArgs,
+        epoch: &str,
+        prefix_fingerprint: String,
+        facts: metadata::Facts,
+    ) -> Self {
         Self {
             producer,
             attached: producer == Producer::Claude,
             session: args.session_id.clone(),
             epoch: epoch.into(),
             release: args.provider_version.clone(),
+            prefix_fingerprint,
             facts,
             managed: args
                 .execution_binding
@@ -251,6 +293,7 @@ impl Observations {
                 .and_then(crate::execution_environment::ExecutionBinding::managed)
                 .is_some(),
             fresh: args.resume.is_none() && args.native_fork.is_none(),
+            first_in_epoch: true,
             renewed_at: None,
             compacted: VecDeque::new(),
             compact_coverage: true,
@@ -356,7 +399,7 @@ impl Observations {
             *index
         });
         let parent = attempt.role == "parent";
-        let (first_rollover, first_compact) = if parent {
+        let (first_rollover, first_compact, first_in_epoch) = if parent {
             let rollover = self
                 .renewed_at
                 .is_some_and(|start| start <= attempt.start_ms);
@@ -375,12 +418,15 @@ impl Observations {
                 self.compacted.pop_front();
                 compact = true;
             }
+            let first_epoch = self.first_in_epoch;
+            self.first_in_epoch = false;
             (
                 Some(rollover),
                 (compact || self.compact_coverage).then_some(compact),
+                Some(first_epoch),
             )
         } else {
-            (None, None)
+            (None, None, None)
         };
         let role = if parent && self.managed {
             "managed_child"
@@ -406,6 +452,7 @@ impl Observations {
             .integer("request_index_in_turn", index)
             .boolean("is_first_after_rollover", first_rollover)
             .boolean("is_first_after_compact", first_compact)
+            .boolean("is_first_in_worker_epoch", first_in_epoch)
             .boolean("is_using_overage", attempt.overage)
             .integer("http.response.status_code", attempt.status)
             .integer("estimated_api_equiv_microusd", attempt.cost);
@@ -438,6 +485,7 @@ impl Observations {
             )
             .string("producer", self.producer.name())
             .string("producer_release", &self.release)
+            .string("prefix_fingerprint", &self.prefix_fingerprint)
             .integer("producer_schema_version", 1_u64)
     }
 

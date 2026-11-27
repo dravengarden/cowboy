@@ -35,12 +35,12 @@
           "cached_read_tokens": true,
           "cache_write_tokens": false,
           "reasoning_tokens": true,
-          "notes": "Reports cached_input_tokens without separate cache_write_tokens."
+          "notes": "Reports cached_input_tokens without separate cache_write_tokens; zero-defaulted cache_write_tokens are normalized to null while positive writes remain preserved."
         },
         "level2_per_request": {
-          "status": "planned_stage2",
+          "status": "shipped_loopback_otlp",
           "source": "codex-otlp-http-v1",
-          "notes": "Requires both signed manifest declaration COWBOY_PRIVATE_CODEX_REQUEST_OBSERVATION=codex-otlp-http-v1 and runtime launch.mjs consumer."
+          "notes": "Signed manifest opts in via COWBOY_PRIVATE_CODEX_REQUEST_OBSERVATION=codex-otlp-http-v1; runtime launch.mjs checks effective OTel policy fail-closed across all Codex layers and passes the loopback header exclusively via otel.headers_helper (no argv secrets)."
         }
       },
       "prompt_cache_ttl": {
@@ -57,12 +57,12 @@
           "cached_read_tokens": true,
           "cache_write_tokens": false,
           "reasoning_tokens": true,
-          "notes": "Reports cached_input_tokens on TurnEnd without separate cache_write_tokens."
+          "notes": "Reports cached_input_tokens on TurnEnd without separate cache_write_tokens; zero-defaulted cache_write_tokens are normalized to null while positive writes remain preserved."
         },
         "level2_per_request": {
-          "status": "planned_stage2",
+          "status": "shipped_proxy_diagnostics",
           "source": "antigravity_proxy_evidence_mjs",
-          "notes": "Diagnostic per-step cache evidence to be emitted from cowboy-antigravity-acp without modifying upstream protocol behavior."
+          "notes": "Content-free per-step backend timing and usage-update diagnostics emitted from cowboy-antigravity-acp (evidence.mjs + proxy.mjs) and projected by the worker into wait_cache local logs without modifying upstream protocol behavior or consumer-account custody."
         }
       },
       "prompt_cache_ttl": {
@@ -83,7 +83,7 @@
           "cached_read_tokens": true,
           "cache_write_tokens": false,
           "reasoning_tokens": true,
-          "notes": "TurnEnd usage reflects gateway responses."
+          "notes": "TurnEnd usage reflects gateway responses; zero-defaulted cache_write_tokens are normalized to null while positive writes remain preserved."
         },
         "level2_per_request": {
           "status": "shipped_gateway_ledger",
@@ -107,7 +107,7 @@
           "cached_read_tokens": true,
           "cache_write_tokens": false,
           "reasoning_tokens": true,
-          "notes": "TurnEnd usage reflects gateway responses."
+          "notes": "TurnEnd usage reflects gateway responses; zero-defaulted cache_write_tokens are normalized to null while positive writes remain preserved."
         },
         "level2_per_request": {
           "status": "shipped_gateway_ledger",
@@ -127,16 +127,16 @@
     "deepseek-harness": {
       "telemetry": {
         "level1_turn_end": {
-          "input_tokens": true,
-          "cached_read_tokens": null,
-          "cache_write_tokens": null,
-          "reasoning_tokens": null,
-          "notes": "First-party DeepSeek Harness (dsh --profile acp) routed through the DeepSeek Anthropic Messages sidecar gateway; TurnEnd cache field coverage not yet established on Hawk (unknown)."
+          "input_tokens": false,
+          "cached_read_tokens": false,
+          "cache_write_tokens": false,
+          "reasoning_tokens": false,
+          "notes": "Verified in @deepseek-ai/dsh@0.2.2-rc.1 (@deepseek-ai/dsh-acp): session/prompt returns stopReason without a TurnEnd usage block; per-request cache telemetry comes from the Level 2 gateway ledger."
         },
         "level2_per_request": {
           "status": "shipped_gateway_ledger",
           "source": "provider_usage_events",
-          "notes": "Gateway sidecar records agent='deepseek-harness' rows in provider_usage_events when requests occur."
+          "notes": "Gateway sidecar records agent='deepseek-harness' rows in provider_usage_events (100% cache hit/miss coverage on Hawk) and projects them into wait_cache under provider='deepseek-harness'."
         }
       },
       "prompt_cache_ttl": {

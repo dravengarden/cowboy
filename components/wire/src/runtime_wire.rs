@@ -912,6 +912,14 @@ pub struct TurnUsage {
     pub reasoning_tokens: Option<u64>,
 }
 
+/// Whether `provider` genuinely reports `cache_write_tokens == 0` as a measured
+/// zero (as Anthropic Messages does on pure cache-hit turns) rather than
+/// defaulting an unsupported/absent write counter to zero.
+#[must_use]
+pub fn provider_reports_zero_cache_write_meaningfully(provider: &str) -> bool {
+    provider == "claude-code"
+}
+
 impl TurnUsage {
     /// ACP adapters report either disjoint fresh/read/write input counts or
     /// inclusive input. Require the reported totals to reconcile before
@@ -944,6 +952,24 @@ impl TurnUsage {
             cache_write_tokens: write,
             reasoning_tokens: usage.thought_tokens,
         })
+    }
+
+    /// Provider-aware ACP usage projection: preserves positive `cache_write_tokens`
+    /// for all providers, keeps `Some(0)` for providers with genuine write metering
+    /// (`claude-code`), and normalizes unsupported zero-defaulted `cache_write_tokens`
+    /// to `None` so downstream coverage metrics stay honest.
+    #[must_use]
+    pub fn from_acp_for_provider(
+        provider: &str,
+        usage: &agent_client_protocol::schema::v1::Usage,
+    ) -> Option<Self> {
+        let mut projected = Self::from_acp(usage)?;
+        if projected.cache_write_tokens == Some(0)
+            && !provider_reports_zero_cache_write_meaningfully(provider)
+        {
+            projected.cache_write_tokens = None;
+        }
+        Some(projected)
     }
 }
 
@@ -1910,5 +1936,44 @@ mod tests {
             " ".repeat(crate::post_edit_inspect::MAX_POST_EDIT_REQUEST_BYTES + 32)
         );
         assert!(decode_runtime_frame(escaped_oversized.as_bytes()).is_err());
+    }
+
+    #[test]
+    fn turn_usage_for_provider_nulls_unmetered_zero_cache_write_and_keeps_positive_and_claude_zero()
+    {
+        let zero_write = agent_client_protocol::schema::v1::Usage::new(100, 90, 10)
+            .cached_read_tokens(50)
+            .cached_write_tokens(0);
+        assert_eq!(
+            TurnUsage::from_acp_for_provider("claude-code", &zero_write)
+                .unwrap()
+                .cache_write_tokens,
+            Some(0)
+        );
+        for provider in [
+            "codex",
+            "antigravity",
+            "claude-deepseek",
+            "codex-deepseek",
+            "deepseek-harness",
+            "grok",
+        ] {
+            let projected = TurnUsage::from_acp_for_provider(provider, &zero_write).unwrap();
+            assert_eq!(projected.cached_input_tokens, Some(50), "{provider}");
+            assert_eq!(projected.uncached_input_tokens, Some(40), "{provider}");
+            assert_eq!(projected.cache_write_tokens, None, "{provider}");
+        }
+        let positive_write = agent_client_protocol::schema::v1::Usage::new(100, 90, 10)
+            .cached_read_tokens(50)
+            .cached_write_tokens(20);
+        for provider in ["claude-code", "codex", "antigravity", "grok"] {
+            assert_eq!(
+                TurnUsage::from_acp_for_provider(provider, &positive_write)
+                    .unwrap()
+                    .cache_write_tokens,
+                Some(20),
+                "{provider}"
+            );
+        }
     }
 }

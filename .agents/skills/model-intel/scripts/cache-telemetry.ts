@@ -318,9 +318,7 @@ export function summarizeCacheTelemetryRows(
         : null;
     const usageValid = normalized !== null;
     const cacheValid =
-      normalized !== null &&
-      normalized.cached_read !== null &&
-      normalized.uncached_total !== null;
+      normalized !== null && normalized.cached_read !== null && normalized.uncached_total !== null;
     const writeValid = normalized !== null && normalized.cache_write !== null;
     const eligible = isEligibleStopReason(row.stop_reason, usageValid);
 
@@ -500,7 +498,11 @@ export function summarizeCacheTelemetryRows(
     }
     // 2. Separate time-window trend check (explicitly labelled `time_window`,
     // never misattributing a mixed window to a single version string).
-    if (!detectedForProvider && acc.prevHalf.eligible >= minTurns && acc.currHalf.eligible >= minTurns) {
+    if (
+      !detectedForProvider &&
+      acc.prevHalf.eligible >= minTurns &&
+      acc.currHalf.eligible >= minTurns
+    ) {
       compareCohorts(
         provider,
         "time_window",
@@ -706,7 +708,6 @@ export function readCacheTelemetryAudit(
       });
     }
 
-
     if (!hasEvents || !hasSessions) {
       return summarizeCacheTelemetryRows([], nowMs, days, "events_fallback", {
         projectionComplete: false,
@@ -810,7 +811,8 @@ export function readCacheTelemetryAudit(
       usage_observed: r.inclusive_input_tokens !== null,
       inclusive_input_tokens: r.inclusive_input_tokens,
       cached_read_tokens: r.cached_read_tokens,
-      cache_write_tokens: r.cache_write_tokens,
+      cache_write_tokens:
+        r.cache_write_tokens === 0 && r.provider !== "claude-code" ? null : r.cache_write_tokens,
       uncached_input_tokens: r.uncached_input_tokens,
     }));
     return summarizeCacheTelemetryRows(rows, nowMs, days, "events_fallback", {

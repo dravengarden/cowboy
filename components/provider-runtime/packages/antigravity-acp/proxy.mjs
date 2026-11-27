@@ -12,7 +12,7 @@ import {
   managedConfigAllowed,
   managedPrompt,
 } from "./managed.mjs";
-import { PRECEDENCE } from "./evidence.mjs";
+import { PRECEDENCE, stepTimingsFor } from "./evidence.mjs";
 import { EVIDENCE_LIMITS, promptText, recall, updateObservation } from "./memory.mjs";
 import {
   agyNotice,
@@ -1815,6 +1815,12 @@ export class AcpProxy {
           evidence: [],
           bytes: 0,
           recorded: new Set(),
+          cacheDiag: {
+            usageUpdates: 0,
+            startContextUsed: null,
+            endContextUsed: null,
+            contextSize: null,
+          },
           structured: promptRecord.schema
             ? {
                 schema: promptRecord.schema,
@@ -2022,6 +2028,19 @@ export class AcpProxy {
   annotateUsage(message) {
     const update = message.params?.update;
     if (update?.sessionUpdate !== "usage_update") return message;
+    const turn = this.turns.get(message.params?.sessionId);
+    if (turn && !turn.child && !this.compacting.has(message.params?.sessionId) && turn.cacheDiag) {
+      turn.cacheDiag.usageUpdates += 1;
+      if (Number.isSafeInteger(update.used) && update.used >= 0) {
+        if (turn.cacheDiag.startContextUsed === null) {
+          turn.cacheDiag.startContextUsed = update.used;
+        }
+        turn.cacheDiag.endContextUsed = update.used;
+      }
+      if (Number.isSafeInteger(update.size) && update.size >= 0) {
+        turn.cacheDiag.contextSize = update.size;
+      }
+    }
     const meta = update._meta;
     const hasOwn = isObject(meta);
     if (this.plan === undefined && !(hasOwn && Object.hasOwn(meta, "cowboy"))) return message;
@@ -2713,6 +2732,25 @@ export class AcpProxy {
         },
       });
     }
+    const stepTimings = stepTimingsFor(settled) ?? runtime.evidence?.lastStepTimings;
+    const diag = turn?.cacheDiag;
+    const subagentSteps = (turn?.childBackends ?? []).reduce(
+      (sum, child) => sum + (Number.isSafeInteger(child?.successes) ? child.successes : 0),
+      0,
+    );
+    cowboy.antigravity_cache_diagnostics = {
+      schema: 1,
+      backend_steps: backend.successes ?? stepTimings?.backend_steps ?? 0,
+      transient_retries: backend.transient ?? stepTimings?.transient_retries ?? 0,
+      first_step_offset_ms: stepTimings?.first_step_offset_ms ?? null,
+      step_span_ms: stepTimings?.step_span_ms ?? null,
+      max_inter_step_ms: stepTimings?.max_inter_step_ms ?? null,
+      usage_updates: diag?.usageUpdates ?? 0,
+      start_context_used: diag?.startContextUsed ?? null,
+      end_context_used: diag?.endContextUsed ?? null,
+      context_size: diag?.contextSize ?? null,
+      subagent_steps: subagentSteps,
+    };
     const result = structuredClone(message.result);
     result._meta = { ...(result._meta ?? {}), cowboy };
     const structured = turn?.structured;

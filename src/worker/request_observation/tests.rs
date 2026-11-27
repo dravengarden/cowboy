@@ -126,7 +126,7 @@ async fn codex_uses_a_signed_adapter_binding_without_exporter_overrides_or_argv_
     ] {
         assert_eq!(request.send().await.unwrap().status(), expected);
         assert_eq!(
-            collector.observations.lock().attached,
+            collector.observations.as_ref().unwrap().lock().attached,
             expected == StatusCode::OK
         );
     }
@@ -149,4 +149,81 @@ fn fork_callback_updates_attribution_and_keeps_its_existing_wire_event() {
             materialized: true,
         }) if agent_session_id == "fork"
     ));
+}
+
+#[tokio::test]
+async fn antigravity_collector_attaches_without_opening_listener_or_mutating_env() {
+    let (args, prepared) = input("antigravity");
+    let mut spec = prepared.spec.clone();
+    let original_env = spec.env.clone();
+    let collector = Collector::start(&mut spec, &args, &prepared, "epoch-1")
+        .await
+        .expect("signed antigravity worker attaches proxy diagnostic recorder");
+    assert_eq!(spec.env, original_env);
+    assert!(collector.observations.is_none());
+    assert!(collector.antigravity.is_some());
+    collector.observer.prompt_started(1_700_000_000_000);
+    collector.observer.observe_config_options(
+        &serde_json::json!([{"id": "model", "currentValue": "gemini-4-neon"}]),
+    );
+    let meta = serde_json::json!({
+        "cowboy": {
+            "antigravity_backend": { "class": "ok", "successes": 3, "transient": 0 }
+        }
+    });
+    collector.observer.record_prompt_observation(
+        "EndTurn",
+        Some(crate::agent_model::TurnUsage {
+            total_tokens: 1000,
+            input_tokens: 900,
+            output_tokens: 100,
+            cached_input_tokens: Some(700),
+            uncached_input_tokens: Some(200),
+            cache_write_tokens: None,
+            reasoning_tokens: Some(40),
+        }),
+        meta.as_object(),
+    );
+}
+
+#[test]
+fn prefix_fingerprint_is_deterministic_order_independent_and_sensitive_to_structural_changes() {
+    let (mut a, _) = input("codex");
+    let mut b = a.clone();
+    a.mcp_plan = Some(Box::new(crate::mcp_binding::NativeLaunchPlan {
+        schema: 1,
+        command: "/bin/cowboy".into(),
+        bindings: vec![
+            crate::mcp_binding::NativeLaunchBinding {
+                name: "zeta".into(),
+                descriptor: "/tmp/z".into(),
+            },
+            crate::mcp_binding::NativeLaunchBinding {
+                name: "alpha".into(),
+                descriptor: "/tmp/a".into(),
+            },
+        ],
+    }));
+    b.mcp_plan = Some(Box::new(crate::mcp_binding::NativeLaunchPlan {
+        schema: 1,
+        command: "/bin/cowboy".into(),
+        bindings: vec![
+            crate::mcp_binding::NativeLaunchBinding {
+                name: "alpha".into(),
+                descriptor: "/tmp/other-descriptor-path".into(),
+            },
+            crate::mcp_binding::NativeLaunchBinding {
+                name: "zeta".into(),
+                descriptor: "/tmp/other-path-2".into(),
+            },
+        ],
+    }));
+    let fp_a = metadata::compute_prefix_fingerprint(&a);
+    let fp_b = metadata::compute_prefix_fingerprint(&b);
+    assert_eq!(fp_a.len(), 16);
+    assert!(fp_a.bytes().all(|ch| ch.is_ascii_hexdigit()));
+    assert_eq!(fp_a, fp_b);
+
+    b.provider_version = "3.6.99".into();
+    assert_ne!(fp_a, metadata::compute_prefix_fingerprint(&b));
 }

@@ -46,6 +46,15 @@ pub trait AgentSink: Send + Sync + 'static {
     /// content or a Provider credential/environment binding.
     fn prompt_started(&self, _session_id: &str, _cmid: Option<&str>) {}
     fn prompt_completed(&self, _session_id: &str, _cmid: Option<&str>, _outcome: &str) {}
+    /// Content-free diagnostic turn observation (e.g. Antigravity proxy metadata).
+    fn record_prompt_observation(
+        &self,
+        _session_id: &str,
+        _stop_reason: &str,
+        _usage: Option<crate::agent_model::TurnUsage>,
+        _meta: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) {
+    }
     fn set_status(&self, session_id: &str, status: Status, detail: Option<String>);
     fn push(&self, session_id: &str, event: Event);
     fn push_tagged(&self, session_id: &str, event: Event, cmid: Option<String>);

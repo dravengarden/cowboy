@@ -13,6 +13,8 @@ use std::time::{Duration, Instant};
 mod aggregate;
 mod append;
 mod wait_cache_daily;
+#[cfg(any(feature = "full", feature = "machine-host"))]
+pub use wait_cache_daily::encode_wait_cache_otlp;
 
 const APPLICATION_ID: i64 = 0x43424c47;
 const MAX_SEGMENTS: usize = 64;

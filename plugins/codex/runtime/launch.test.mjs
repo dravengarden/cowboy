@@ -17,7 +17,20 @@ import {
   managedRuleViolations,
   splitConfigurationArguments,
 } from "./launch.mjs";
+import { spawnSync } from "node:child_process";
+import { chmodSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { agentApiServerName, injectedMcpServerNames } from "./memory.mjs";
+import { formatObservationHeaders } from "./otel-headers.mjs";
+import {
+  CODEX_OBSERVATION_ENV,
+  CODEX_OBSERVATION_HEADER,
+  codexObservationConfiguration,
+  hasExplicitCodexOtelPolicy,
+  parseObservationBinding,
+  resolveCodexObservation,
+  tomlHasOtelPolicy,
+} from "./otel-observation.mjs";
 
 test("Cowboy MCP follows native execution placement without copying credentials", () => {
   assert.deepEqual(agentApiConfiguration(), []);
@@ -245,4 +258,210 @@ test("Cowboy core MCP uses the verified CLI alongside binding servers", () => {
     command: "/nix/store/cli/bin/cowboy",
   });
   assert.match(args[1], /command="\/nix\/store\/cli\/bin\/cowboy"/);
+});
+
+test("codex manifest opts into signed request observation binding", () => {
+  const manifest = JSON.parse(readFileSync(new URL("../provider.json", import.meta.url), "utf8"));
+  assert.equal(manifest.runtime.environment[CODEX_OBSERVATION_ENV], "codex-otlp-http-v1");
+});
+
+test("parseObservationBinding accepts only valid loopback v1 bindings", () => {
+  const valid = JSON.stringify({
+    schema: 1,
+    logs_endpoint: "http://127.0.0.1:4318/v1/logs",
+    header_name: CODEX_OBSERVATION_HEADER,
+    header_value: "secret-token-123",
+  });
+  const parsed = parseObservationBinding(valid);
+  assert.deepEqual(parsed, {
+    schema: 1,
+    logs_endpoint: "http://127.0.0.1:4318/v1/logs",
+    header_name: CODEX_OBSERVATION_HEADER,
+    header_value: "secret-token-123",
+  });
+  for (const bad of [
+    "",
+    "{",
+    JSON.stringify({
+      schema: 2,
+      logs_endpoint: "http://127.0.0.1:4318/v1/logs",
+      header_name: CODEX_OBSERVATION_HEADER,
+      header_value: "x",
+    }),
+    JSON.stringify({
+      schema: 1,
+      logs_endpoint: "https://example.com/v1/logs",
+      header_name: CODEX_OBSERVATION_HEADER,
+      header_value: "x",
+    }),
+    JSON.stringify({
+      schema: 1,
+      logs_endpoint: "http://127.0.0.1:4318/v1/traces",
+      header_name: CODEX_OBSERVATION_HEADER,
+      header_value: "x",
+    }),
+    JSON.stringify({
+      schema: 1,
+      logs_endpoint: "http://127.0.0.1:4318/v1/logs?q=1",
+      header_name: CODEX_OBSERVATION_HEADER,
+      header_value: "x",
+    }),
+    JSON.stringify({
+      schema: 1,
+      logs_endpoint: "http://127.0.0.1:4318/v1/logs",
+      header_name: "authorization",
+      header_value: "x",
+    }),
+    JSON.stringify({
+      schema: 1,
+      logs_endpoint: "http://127.0.0.1:4318/v1/logs",
+      header_name: CODEX_OBSERVATION_HEADER,
+      header_value: "bad\nvalue",
+    }),
+  ]) {
+    assert.equal(parseObservationBinding(bad), null, bad);
+  }
+});
+
+test("codex observation respects explicit user/project/managed OTel policies and fails closed", async () => {
+  const root = mkdtempSync(join(tmpdir(), "codex-otel-test-"));
+  const home = join(root, "home");
+  const cleanProject = join(root, "clean-proj");
+  const policyProject = join(root, "policy-proj");
+  mkdirSync(home, { recursive: true });
+  mkdirSync(join(cleanProject, ".git"), { recursive: true });
+  mkdirSync(join(policyProject, ".git"), { recursive: true });
+  mkdirSync(join(policyProject, ".codex"), { recursive: true });
+  writeFileSync(join(policyProject, ".codex", "config.toml"), '[otel]\nexporter = "none"\n');
+  const helper = join(root, "codex-otel-headers");
+  writeFileSync(helper, "#!/bin/sh\nexit 0\n");
+  chmodSync(helper, 0o755);
+
+  const bindingRaw = JSON.stringify({
+    schema: 1,
+    logs_endpoint: "http://127.0.0.1:51234/v1/logs",
+    header_name: CODEX_OBSERVATION_HEADER,
+    header_value: "super-secret-value",
+  });
+  const baseEnv = {
+    HOME: root,
+    CODEX_HOME: home,
+    [CODEX_OBSERVATION_ENV]: bindingRaw,
+  };
+  const emptyProbe = async () => ({ config: {}, origins: {}, layers: [], requirements: {} });
+
+  // Clean environment attaches exporter via headers_helper with zero secrets in argv.
+  const attached = await resolveCodexObservation({
+    codexPath: "/exact/codex",
+    configuration: ["-c", "approval_policy=never"],
+    cwd: cleanProject,
+    env: baseEnv,
+    helperPath: helper,
+    probeConfig: emptyProbe,
+  });
+  assert.equal(attached.keepEnv, true);
+  assert.ok(attached.args.length >= 6);
+  assert.doesNotMatch(attached.args.join(" "), /super-secret-value/);
+  assert.ok(attached.args.includes("otel.log_user_prompt=false"));
+  assert.ok(attached.args.includes("otel.log_agent_responses=false"));
+  assert.ok(attached.args.includes("otel.log_sse_deltas=false"));
+  // Every -c pair matches codex-acp's strict configuration regex.
+  const validated = splitConfigurationArguments(attached.args);
+  assert.deepEqual(validated.arguments, []);
+
+  // Project `.codex/config.toml` declaring `[otel] exporter = "none"` declines.
+  const declinedProject = await resolveCodexObservation({
+    codexPath: "/exact/codex",
+    configuration: [],
+    cwd: policyProject,
+    env: baseEnv,
+    helperPath: helper,
+    probeConfig: emptyProbe,
+  });
+  assert.deepEqual(declinedProject, { args: [], keepEnv: false });
+
+  // Effective managed requirements or user config exporter declines.
+  assert.equal(
+    await hasExplicitCodexOtelPolicy({
+      codexPath: "/exact/codex",
+      cwd: cleanProject,
+      env: baseEnv,
+      probeConfig: async () => ({
+        config: { otel: { exporter: "none" } },
+        origins: {},
+        layers: [],
+        requirements: {},
+      }),
+    }),
+    true,
+  );
+  assert.equal(
+    await hasExplicitCodexOtelPolicy({
+      codexPath: "/exact/codex",
+      cwd: cleanProject,
+      env: baseEnv,
+      probeConfig: async () => ({
+        config: {},
+        origins: {},
+        layers: [],
+        requirements: { otel: { headers_helper: "/opt/corp/helper" } },
+      }),
+    }),
+    true,
+  );
+  // Probe failure fails closed.
+  assert.equal(
+    await hasExplicitCodexOtelPolicy({
+      codexPath: "/exact/codex",
+      cwd: cleanProject,
+      env: baseEnv,
+      probeConfig: async () => null,
+    }),
+    true,
+  );
+  // Explicit `-c otel.*` or `OTEL_*` env declines.
+  assert.equal(
+    await hasExplicitCodexOtelPolicy({
+      codexPath: "/exact/codex",
+      configuration: ["-c", 'otel.exporter="none"'],
+      cwd: cleanProject,
+      env: baseEnv,
+      probeConfig: emptyProbe,
+    }),
+    true,
+  );
+  assert.equal(
+    await hasExplicitCodexOtelPolicy({
+      codexPath: "/exact/codex",
+      cwd: cleanProject,
+      env: { ...baseEnv, OTEL_EXPORTER_OTLP_ENDPOINT: "http://127.0.0.1:4318" },
+      probeConfig: emptyProbe,
+    }),
+    true,
+  );
+  // Commented-out TOML does not count as an OTel policy.
+  assert.equal(tomlHasOtelPolicy('# [otel]\n# exporter = "none"\nmodel = "gpt-6.2-sol"\n'), false);
+  assert.equal(tomlHasOtelPolicy('[otel]\nexporter = "none"\n'), true);
+
+  // Dynamic headers helper emits exact JSON header map from env without disk/argv secrets.
+  assert.deepEqual(JSON.parse(formatObservationHeaders(baseEnv)), {
+    [CODEX_OBSERVATION_HEADER]: "super-secret-value",
+  });
+  const helperScript = fileURLToPath(new URL("./otel-headers.mjs", import.meta.url));
+  const res = spawnSync(process.execPath, [helperScript], {
+    env: { PATH: process.env.PATH, [CODEX_OBSERVATION_ENV]: bindingRaw },
+    encoding: "utf8",
+  });
+  assert.equal(res.status, 0);
+  assert.deepEqual(JSON.parse(res.stdout), {
+    [CODEX_OBSERVATION_HEADER]: "super-secret-value",
+  });
+  assert.throws(
+    () =>
+      codexObservationConfiguration({
+        binding: parseObservationBinding(bindingRaw),
+        helperPath: "relative",
+      }),
+    /absolute/,
+  );
 });

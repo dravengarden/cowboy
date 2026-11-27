@@ -31,7 +31,10 @@ impl RequestStart {
                 || string(entry, "session_attribution") != "explicit"
                 || fingerprint.len() != 32
                 || !fingerprint.bytes().all(|byte| byte.is_ascii_hexdigit())
-                || !matches!(provider, "claude-deepseek" | "codex-deepseek")
+                || !matches!(
+                    provider,
+                    "claude-deepseek" | "codex-deepseek" | "deepseek-harness"
+                )
             {
                 return None;
             }

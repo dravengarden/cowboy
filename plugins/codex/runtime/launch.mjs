@@ -13,6 +13,7 @@ import {
   nativeMcpServerNames,
   sessionExtensions,
 } from "./memory.mjs";
+import { CODEX_OBSERVATION_ENV, resolveCodexObservation } from "./otel-observation.mjs";
 
 export function splitConfigurationArguments(args) {
   const configuration = [];
@@ -164,6 +165,7 @@ export function managedMcpOverrides(listing) {
 }
 
 async function managedMain(args, profile) {
+  delete process.env[CODEX_OBSERVATION_ENV];
   const { configuration, arguments: forwarded } = splitConfigurationArguments(args);
   const codex = process.env.CODEX_PATH ?? "";
   if (!isAbsolute(codex)) {
@@ -227,6 +229,9 @@ export async function main(args) {
   }
   const inspection =
     forwarded.length === 1 && ["--version", "-V", "--help", "-h"].includes(forwarded[0]);
+  if (inspection) {
+    delete process.env[CODEX_OBSERVATION_ENV];
+  }
   // The client passes these to the exact native CLI it launches.
   const extensions = inspection ? null : await sessionExtensions();
   if (!inspection && isAbsolute(process.env.CODEX_PATH ?? "")) {
@@ -251,6 +256,20 @@ export async function main(args) {
     bindings = await codexMcpBindings(extensions, descriptor, nativeNames);
     configuration.push(...bindingConfiguration(bindings, descriptor));
     nativeNames.push(...bindings.map((entry) => entry.name));
+  }
+  if (!inspection) {
+    const observation = await resolveCodexObservation({
+      codexPath: process.env.CODEX_PATH,
+      configuration,
+      cwd: process.cwd(),
+      env: process.env,
+      helperPath: fileURLToPath(new URL("../bin/codex-otel-headers", import.meta.url)),
+    });
+    if (observation.keepEnv) {
+      configuration.push(...observation.args);
+    } else {
+      delete process.env[CODEX_OBSERVATION_ENV];
+    }
   }
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
   if (!inspection && (cowboyMcp || memory)) {

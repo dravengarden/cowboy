@@ -4747,15 +4747,11 @@ async fn run_session(
                             // Turn completed — including a `Cancelled` from the user's manual
                             // Stop or a force-push (an Ok we WANT to drain). Going Running lets
                             // the auto-drain send the next queued prompt.
-                            sink.prompt_completed(&sid, cmid.as_deref(), &format!("{:?}", r.stop_reason));
-
-                            sink.push(
-                                &sid,
-                                Event::TurnEnd {
-                                    usage: r.usage.as_ref().and_then(crate::agent_model::TurnUsage::from_acp),
-                                    stop_reason: format!("{:?}", r.stop_reason),
-                                },
-                            );
+                            let stop_reason = format!("{:?}", r.stop_reason);
+                            let usage = r.usage.as_ref().and_then(|u| crate::agent_model::TurnUsage::from_acp_for_provider(&provider, u));
+                            sink.prompt_completed(&sid, cmid.as_deref(), &stop_reason);
+                            sink.record_prompt_observation(&sid, &stop_reason, usage, r.meta.as_ref());
+                            sink.push(&sid, Event::TurnEnd { usage, stop_reason });
                             state.set_status(Status::Running, None);
                             if usage_refresh
                                 .as_ref()

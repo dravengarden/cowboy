@@ -118,6 +118,35 @@ fn normalize_turn_usage_enforces_disjoint_breakdown_and_preserves_unknowns() {
         reasoning_tokens: None,
     };
     assert_eq!(normalize_turn_usage(Some(&bad)), None);
+
+    let zero_write = TurnUsage {
+        total_tokens: 1_100,
+        input_tokens: 1_000,
+        output_tokens: 100,
+        cached_input_tokens: Some(800),
+        uncached_input_tokens: Some(200),
+        cache_write_tokens: Some(0),
+        reasoning_tokens: None,
+    };
+    let claude_zero =
+        normalize_turn_usage_for_provider("claude-code", Some(&zero_write)).expect("claude zero");
+    assert_eq!(claude_zero.cache_write_tokens, Some(0));
+    assert_eq!(claude_zero.other_uncached_input_tokens, Some(200));
+
+    for provider in [
+        "codex",
+        "antigravity",
+        "claude-deepseek",
+        "codex-deepseek",
+        "deepseek-harness",
+        "grok",
+    ] {
+        let norm = normalize_turn_usage_for_provider(provider, Some(&zero_write))
+            .expect("valid provider usage");
+        assert_eq!(norm.cached_read_tokens, Some(800), "{provider}");
+        assert_eq!(norm.cache_write_tokens, None, "{provider}");
+        assert_eq!(norm.other_uncached_input_tokens, None, "{provider}");
+    }
 }
 
 #[test]

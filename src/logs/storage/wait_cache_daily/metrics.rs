@@ -19,16 +19,26 @@ use std::collections::BTreeMap;
 
 type Series = BTreeMap<(&'static str, &'static str, &'static str, &'static str), u64>;
 
-impl SqliteStore {
-    /// Counters only, one complete UTC day per request. The directory is one
-    /// source of truth. Callers collecting multiple Machines aggregate by
-    /// provider first rather than treating host identities as metric labels.
-    pub fn wait_cache_otlp(&self, day: i64, now: i64, controller: bool) -> Result<Vec<u8>> {
-        ensure!(
-            day >= 0 && day == utc_day(day) && day <= now.saturating_sub(DAY_MS),
-            "wait/cache metric export requires a closed UTC day"
-        );
-        let report = self.wait_cache_daily(day, day + DAY_MS)?;
+/// Aggregate one or more closed-UTC-day `wait-cache-daily` reports into a single
+/// single-writer OTLP cumulative counter payload. Fails closed if any report is
+/// truncated or has degraded coverage so multi-Machine exports never silently
+/// emit partial sums or colliding host series.
+pub fn encode_wait_cache_otlp(
+    day: i64,
+    now: i64,
+    reports: &[&Value],
+    controller: bool,
+) -> Result<Vec<u8>> {
+    ensure!(
+        day >= 0 && day == utc_day(day) && day <= now.saturating_sub(DAY_MS),
+        "wait/cache metric export requires a closed UTC day"
+    );
+    ensure!(
+        !reports.is_empty(),
+        "wait/cache metric export requires at least one source report"
+    );
+    let mut series = Series::new();
+    for report in reports {
         ensure!(
             report["truncated"] == false,
             "wait/cache cohort exceeded the rollup bound"
@@ -39,30 +49,43 @@ impl SqliteStore {
                 .is_some_and(Vec::is_empty),
             "wait/cache cohort has incomplete rollup coverage"
         );
-        let mut series = Series::new();
         if let Some(groups) = report["groups"].as_array() {
             for group in groups {
                 add_group(&mut series, group);
             }
         }
-        let request = ExportMetricsServiceRequest {
-            resource_metrics: vec![ResourceMetrics {
-                resource: Some(Resource {
-                    attributes: vec![string(
-                        "cowboy.source",
-                        if controller { "controller" } else { "machine" },
-                    )],
-                    ..Default::default()
-                }),
-                scope_metrics: vec![ScopeMetrics {
-                    metrics: counters(series, day),
-                    ..Default::default()
-                }],
+    }
+    let request = ExportMetricsServiceRequest {
+        resource_metrics: vec![ResourceMetrics {
+            resource: Some(Resource {
+                attributes: vec![string(
+                    "cowboy.source",
+                    if controller { "controller" } else { "machine" },
+                )],
+                ..Default::default()
+            }),
+            scope_metrics: vec![ScopeMetrics {
+                metrics: counters(series, day),
                 ..Default::default()
             }],
-        };
-        let (protobuf, _) = metrics_egress::sanitize(&request.encode_to_vec())?;
-        Ok(protobuf)
+            ..Default::default()
+        }],
+    };
+    let (protobuf, _) = metrics_egress::sanitize(&request.encode_to_vec())?;
+    Ok(protobuf)
+}
+
+impl SqliteStore {
+    /// Counters only, one complete UTC day per request. The directory is one
+    /// source of truth. Callers collecting multiple Machines aggregate by
+    /// provider first rather than treating host identities as metric labels.
+    pub fn wait_cache_otlp(&self, day: i64, now: i64, controller: bool) -> Result<Vec<u8>> {
+        ensure!(
+            day >= 0 && day == utc_day(day) && day <= now.saturating_sub(DAY_MS),
+            "wait/cache metric export requires a closed UTC day"
+        );
+        let report = self.wait_cache_daily(day, day + DAY_MS)?;
+        encode_wait_cache_otlp(day, now, &[&report], controller)
     }
 }
 
@@ -217,5 +240,68 @@ mod tests {
         {
             assert!(point.attributes.contains(&string("role", role)));
         }
+    }
+
+    #[test]
+    fn multi_machine_encode_sums_complete_reports_and_fails_closed_on_degraded_or_truncated() {
+        let day = 10 * DAY_MS;
+        let now = day + 2 * DAY_MS;
+        let hawk = serde_json::json!({
+            "truncated": false,
+            "degraded_days_ms": [],
+            "groups": [{
+                "dimensions": {"event": events::REQUEST, "provider": "codex", "role": "parent", "outcome": "usage"},
+                "totals": {"records": 10, "values": {"input_tokens": [1000, 10], "cache_read_input_tokens": [800, 10]}}
+            }]
+        });
+        let ovh = serde_json::json!({
+            "truncated": false,
+            "degraded_days_ms": [],
+            "groups": [
+                {
+                    "dimensions": {"event": events::REQUEST, "provider": "codex", "role": "parent", "outcome": "usage"},
+                    "totals": {"records": 5, "values": {"input_tokens": [500, 5], "cache_read_input_tokens": [300, 5]}}
+                },
+                {
+                    "dimensions": {"event": events::REQUEST, "provider": "antigravity", "role": "parent", "outcome": "usage"},
+                    "totals": {"records": 7, "values": {"input_tokens": [7000, 7], "cache_read_input_tokens": [6000, 7]}}
+                }
+            ]
+        });
+        let bytes = encode_wait_cache_otlp(day, now, &[&hawk, &ovh], false).unwrap();
+        #[cfg(feature = "machine-host")]
+        assert!(metrics_egress::admitted(&bytes));
+        let decoded = ExportMetricsServiceRequest::decode(bytes.as_slice()).unwrap();
+        let metrics = &decoded.resource_metrics[0].scope_metrics[0].metrics;
+        let reqs = metrics.iter().find(|m| m.name == REQUESTS).unwrap();
+        let Some(metric::Data::Sum(sum)) = &reqs.data else {
+            panic!("missing request sum");
+        };
+        let codex = sum
+            .data_points
+            .iter()
+            .find(|p| p.attributes.contains(&string("provider", "codex")))
+            .unwrap();
+        assert_eq!(codex.value, Some(number_data_point::Value::AsInt(15)));
+        let agy = sum
+            .data_points
+            .iter()
+            .find(|p| p.attributes.contains(&string("provider", "antigravity")))
+            .unwrap();
+        assert_eq!(agy.value, Some(number_data_point::Value::AsInt(7)));
+
+        let degraded = serde_json::json!({
+            "truncated": false,
+            "degraded_days_ms": [day],
+            "groups": []
+        });
+        assert!(encode_wait_cache_otlp(day, now, &[&hawk, &degraded], false).is_err());
+
+        let truncated = serde_json::json!({
+            "truncated": true,
+            "degraded_days_ms": [],
+            "groups": []
+        });
+        assert!(encode_wait_cache_otlp(day, now, &[&hawk, &truncated], false).is_err());
     }
 }

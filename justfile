@@ -785,7 +785,7 @@ provider-runtime-scripts: claude-source-deps
     bun x --no-install biome format tools/generate-plan-name-table.ts
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/launch.test.mjs
     node --import ./tools/register-memory-client.mjs --test plugins/codex/runtime/execution-mcp.test.mjs
-    bun x --no-install biome format plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/launch.test.mjs plugins/codex/runtime/memory.mjs plugins/codex/runtime/execution-mcp.mjs plugins/codex/runtime/execution-mcp.test.mjs plugins/codex/runtime/package.json plugins/codex/runtime/package-lock.json
+    bun x --no-install biome format plugins/codex/runtime/build.ts plugins/codex/runtime/launch.mjs plugins/codex/runtime/launch.test.mjs plugins/codex/runtime/memory.mjs plugins/codex/runtime/otel-observation.mjs plugins/codex/runtime/otel-headers.mjs plugins/codex/runtime/execution-mcp.mjs plugins/codex/runtime/execution-mcp.test.mjs plugins/codex/runtime/package.json plugins/codex/runtime/package-lock.json
     if [ "${COWBOY_CHECK_DEDUPE:-0}" != "1" ]; then bun run typecheck; fi
     bun test ./tools/check-provider-release-coverage_test.ts
     bun test ./tools/provider-runtime-platforms_test.ts

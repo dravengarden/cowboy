@@ -210,6 +210,9 @@ impl AgentSink for RemoteSink {
             .flatten()
     }
     fn prompt_started(&self, _session_id: &str, cmid: Option<&str>) {
+        if let Some(observer) = &self.shared.request_observer {
+            observer.prompt_started(crate::logs::now_ms());
+        }
         self.shared.telemetry.lock().started(cmid);
     }
 
@@ -218,6 +221,18 @@ impl AgentSink for RemoteSink {
             crate::logs::wait_cache::record_notice_receipt(&self.shared.session_id, cmid, outcome);
         }
         self.shared.telemetry.lock().completed(cmid, outcome);
+    }
+
+    fn record_prompt_observation(
+        &self,
+        _session_id: &str,
+        stop_reason: &str,
+        usage: Option<crate::agent_model::TurnUsage>,
+        meta: Option<&serde_json::Map<String, serde_json::Value>>,
+    ) {
+        if let Some(observer) = &self.shared.request_observer {
+            observer.record_prompt_observation(stop_reason, usage, meta);
+        }
     }
 
     fn set_status(&self, _session_id: &str, status: Status, detail: Option<String>) {
@@ -247,6 +262,9 @@ impl AgentSink for RemoteSink {
             } else {
                 options = serde_json::json!([]);
             }
+        }
+        if let Some(observer) = &self.shared.request_observer {
+            observer.observe_config_options(&options);
         }
         self.shared.emit(RuntimeEvent::ConfigOptions { options });
     }
