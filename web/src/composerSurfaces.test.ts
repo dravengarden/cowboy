@@ -9,13 +9,12 @@ const schedule: OpenModal = { kind: "schedule", target: { id: undefined, initial
 const move: OpenModal = { kind: "move", sourceId: "draft-1" };
 const context: OpenModal = { kind: "context", action: { kind: "reset" } as SessionAction };
 const delivery: OpenModal = { kind: "delivery", anchor };
-const clear: OpenModal = { kind: "clear", anchor };
 const stop: OpenModal = { kind: "stop" };
 const at = (modal: ComposerModal, fullscreen = false): ComposerSurfaces => ({ fullscreen, modal });
 
 test("opening a surface replaces whatever was open and keeps full-screen", () => {
-  for (const before of [none, schedule, move, context, delivery, clear]) {
-    for (const next of [schedule, move, context, delivery, clear, stop]) {
+  for (const before of [none, schedule, move, context, delivery]) {
+    for (const next of [schedule, move, context, delivery, stop]) {
       expect(composerSurfacesReducer(at(before, true), { type: "open", modal: next })).toEqual(at(next, true));
     }
   }
@@ -40,7 +39,9 @@ test("full-screen is independent of the slot", () => {
   expect(composerSurfacesReducer(expanded, { type: "fullscreen", open: false })).toEqual(at(none));
 });
 
-test("a context reset closes full-screen and the clear popper only", () => {
-  expect(composerSurfacesReducer(at(clear, true), { type: "contextReset" })).toEqual(at(none));
+test("a context reset closes full-screen while keeping active modal surfaces", () => {
+  expect(composerSurfacesReducer(at(none, true), { type: "contextReset" })).toEqual(at(none));
   expect(composerSurfacesReducer(at(schedule, true), { type: "contextReset" })).toEqual(at(schedule));
+  const settled = at(schedule);
+  expect(composerSurfacesReducer(settled, { type: "contextReset" })).toBe(settled);
 });

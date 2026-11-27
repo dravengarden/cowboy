@@ -927,12 +927,12 @@ test("cleared touch prompts fit the native textarea exactly on blur", () => {
 
 test("mobile keyboard focus presents one floating composer surface", () => {
   assertEquals(
-    composerSource.includes("<span data-mobile-composer-clear>"),
-    true,
+    composerSource.includes("data-mobile-composer-clear"),
+    false,
   );
   assertEquals(
     composerSource.indexOf("data-mobile-composer-utility-rail") <
-      composerSource.indexOf("<span data-mobile-composer-clear>"),
+      composerSource.indexOf("<MobileBranchSwitcherButton"),
     true,
   );
   assertEquals(
@@ -1098,8 +1098,7 @@ test("mobile keyboard dismissal belongs to the fixed lower editing rail", () => 
     true,
   );
   assertEquals(actionRow.includes('title="Hide keyboard"'), false);
-  assertEquals(actionRow.includes("data-mobile-composer-clear"), true);
-  assertEquals(actionRow.includes("disabled={!clearable}"), true);
+  assertEquals(actionRow.includes("data-mobile-composer-clear"), false);
   assertEquals(actionRow.includes("data-mobile-scrollable-actions"), true);
   assertEquals(actionRow.includes('justifyContent: "flex-start"'), true);
   assertEquals(actionRow.includes("WebkitMaskImage:"), true);
@@ -1108,7 +1107,7 @@ test("mobile keyboard dismissal belongs to the fixed lower editing rail", () => 
   assertEquals(actionRow.includes('<Tooltip title="Force push">'), false);
   assertEquals(
     actionRow.indexOf('<Tooltip title="Schedule send">') <
-      actionRow.indexOf("data-mobile-composer-clear"),
+      actionRow.indexOf("<MobileBranchSwitcherButton"),
     true,
   );
 });

@@ -12,8 +12,7 @@ import {
   Typography,
 } from "@mui/material";
 import { alpha } from "@mui/material/styles";
-import AccountTreeOutlined from "@mui/icons-material/AccountTreeOutlined";
-import CallSplitOutlined from "@mui/icons-material/CallSplitOutlined";
+import { GitForkIcon } from "./GitForkIcon";
 import ChevronRightRounded from "@mui/icons-material/ChevronRightRounded";
 import CloseRounded from "@mui/icons-material/CloseRounded";
 import SwapHorizRounded from "@mui/icons-material/SwapHorizRounded";
@@ -156,7 +155,7 @@ function LineageNodeRail({
   hasBelow: boolean;
 }): React.JSX.Element {
   const isCurrent = entry.section === "current";
-  const Icon = entry.kind === "replace" ? SwapHorizRounded : CallSplitOutlined;
+  const Icon = entry.kind === "replace" ? SwapHorizRounded : GitForkIcon;
   return (
     <Box
       aria-hidden
@@ -387,7 +386,7 @@ function BranchListBody({
         <Button
           fullWidth
           variant="text"
-          startIcon={<CallSplitOutlined />}
+          startIcon={<GitForkIcon />}
           onClick={onNewFork}
           sx={(theme) => ({
             minHeight: 44,
@@ -556,7 +555,7 @@ function BranchSwitcherModal({
         >
           <DialogTitle sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", py: 1.5 }}>
             <Stack direction="row" spacing={1} alignItems="center">
-              <AccountTreeOutlined fontSize="small" color="primary" />
+              <GitForkIcon fontSize="small" color="primary" />
               <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
                 Branches & lineage
               </Typography>
@@ -637,7 +636,7 @@ export function DesktopBranchSwitcherTrigger({
             size="small"
             color="inherit"
             variant="outlined"
-            startIcon={<AccountTreeOutlined sx={{ ...desktopEmbeddedControlIconSx(), color: "primary.main" }} />}
+            startIcon={<GitForkIcon sx={{ ...desktopEmbeddedControlIconSx(), color: "primary.main" }} />}
             onClick={(): void => setOpen(true)}
             sx={desktopSessionActionSx({ open, minWidth: 96 })}
           >
@@ -687,7 +686,7 @@ export function MobileBranchSwitcherButton({
           }}
           sx={{ flexShrink: 0, minWidth: 44, minHeight: 44, color: "primary.main" }}
         >
-          <AccountTreeOutlined fontSize="small" />
+          <GitForkIcon fontSize="small" />
         </IconButton>
       </Tooltip>
       <BranchSwitcherModal

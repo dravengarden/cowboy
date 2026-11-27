@@ -1,5 +1,5 @@
 /** Composer surfaces in the real App: the schedule dialog, the delivery
- * picker's Stop confirmation, the clear-draft popper and the context
+ * picker's Stop confirmation, the mobile branch switcher and the context
  * confirmation open and close through the shared slot
  * (composerSurfaces.ts). No account, server or agent: fetch and the WebSocket
  * are in-page fakes, as in desktopPerfBrowserFixture.tsx. */
@@ -38,8 +38,6 @@ async function gone(read: () => unknown, what: string): Promise<void> {
 function check(value: unknown, message: string): asserts value {
   if (!value) throw new Error(message);
 }
-const escape = (target: EventTarget = document.activeElement ?? document.body) =>
-  target.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
 const byText = (selector: string, text: string) =>
   [...document.querySelectorAll<HTMLElement>(selector)].find((node) => node.textContent?.trim() === text);
 const dialogTitled = (text: string) =>
@@ -66,8 +64,8 @@ function installFakes(sent: { type: string; session_id?: string }[]): void {
     context_used: 40_000,
     context_size: 200_000,
   } as SessionMeta;
-  // A second session gives the move-draft picker a destination.
-  const other = { ...session, id: OTHER, title: "Destination session", status: "exited", updated_at_ms: now - 30_000 } as SessionMeta;
+  // A second session gives the move-draft picker a destination and provides a child fork for the branch switcher.
+  const other = { ...session, id: OTHER, title: "Destination session", status: "exited", forked_from: SESSION, updated_at_ms: now - 30_000 } as SessionMeta;
   fixtureSessions = [session, other];
   let queueVersion = 0;
   class FixtureSocket {
@@ -138,6 +136,22 @@ function installFakes(sent: { type: string; session_id?: string }[]): void {
     if (/^\/api\/sessions\/[^/]+\/bootstrap$/.test(url.pathname)) {
       return Response.json({
         messages: [{ type: "snapshot", session_id: SESSION, events: [], reached_start: true }],
+      });
+    }
+    if (/^\/api\/sessions\/[^/]+\/lineage$/.test(url.pathname)) {
+      return Response.json({
+        session_id: SESSION,
+        hops: [],
+        branches: [
+          {
+            session_id: OTHER,
+            title: "Destination session",
+            provider: "example",
+            kind: "native_fork",
+            relation: "child",
+            trashed: false,
+          },
+        ],
       });
     }
     if (url.pathname === "/api/usage") return Response.json({ providers: [], observed_at_ms: Date.now() });
@@ -540,25 +554,37 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
   passed.push(await compactionMeter("desktop"));
   passed.push(await compactionMeter("touch"));
 
-  // Mobile: the clear-draft popper and the clear-conversation confirmation.
+  // Mobile: clear-composer button is gone, and the fork branch switcher sits at the end with GitForkIcon.
   const mobile = mount("touch", "390px");
-  await typeDraft(mobile.container, "draft to clear");
-  const clearButton = () => mobile.container.querySelector<HTMLElement>("[aria-label='clear composer']:not([disabled])");
-  const popper = () => document.querySelector<HTMLElement>("[aria-label='Clear composer confirmation']");
-  (await until(clearButton, "clear composer button")).click();
-  await until(popper, "clear composer popper");
-  escape();
-  await gone(popper, "clear composer popper");
-  check(draftText(mobile.container).includes("draft to clear"), "Escape keeps the draft");
-  (await until(clearButton, "clear composer button")).click();
-  const confirmClear = await until(
-    () => [...(popper()?.querySelectorAll<HTMLButtonElement>("button") ?? [])].find((button) => /clear/i.test(button.textContent ?? "")),
-    "clear composer confirm",
+  const actionTrack = await until(
+    () => mobile.container.querySelector<HTMLElement>("[data-mobile-scrollable-actions='true']"),
+    "mobile composer action track",
   );
-  confirmClear.click();
-  await gone(popper, "clear composer popper");
-  await until(() => draftText(mobile.container).trim() === "", "the draft to clear");
-  passed.push("Mobile clear-draft popper: Escape keeps the draft, confirming clears it");
+  check(!mobile.container.querySelector("[aria-label='clear composer']"), "Clear composer button is removed");
+  const branchButton = await until(
+    () => actionTrack.querySelector<HTMLElement>("[data-mobile-branch-switcher]"),
+    "mobile branch switcher button",
+  );
+  const scheduleButton = await until(
+    () => actionTrack.querySelector<HTMLElement>("[aria-label='schedule send']"),
+    "mobile schedule button",
+  );
+  const actionButtons = [...actionTrack.querySelectorAll<HTMLElement>("button")];
+  check(actionButtons.at(-1) === branchButton, "Branch switcher is the last button in the mobile composer action row");
+  check(
+    branchButton.getBoundingClientRect().left >= scheduleButton.getBoundingClientRect().right - 1,
+    "Branch switcher renders to the right of Schedule send",
+  );
+  check(branchButton.querySelector("[data-icon='git-fork']") !== null, "Branch switcher renders the GitFork icon");
+  branchButton.click();
+  const branchSheet = await until(() => dialogTitled("Branches & lineage"), "branches and lineage sheet");
+  const closeBranches = await until(
+    () => [...branchSheet.querySelectorAll<HTMLButtonElement>("button")].find((button) => button.getAttribute("aria-label") === "Close" || button.textContent?.trim() === "Close"),
+    "branches sheet close button",
+  );
+  closeBranches.click();
+  await gone(() => dialogTitled("Branches & lineage"), "branches and lineage sheet");
+  passed.push("Mobile composer omits Clear composer and places the GitFork branch switcher last");
 
   (await until(() => mobile.container.querySelector<HTMLElement>("[aria-label='clear conversation']:not([disabled])"), "clear conversation button")).click();
   const context = await until(() => document.querySelector<HTMLElement>("[role=dialog]"), "context confirmation");
