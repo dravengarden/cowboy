@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "codex",
-  "version": "3.6.43",
+  "version": "3.6.44",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {

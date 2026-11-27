@@ -88,6 +88,18 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
+Component release 3.161.0 records provider-runtime 1.3.38, whose
+`cowboy-antigravity-acp` 1.0.32 advertises form-only ACP elicitation
+(`clientCapabilities.elicitation = { form: {} }`) in ordinary sessions when
+the worker declares form elicitation and relays `elicitation/create`
+(`mode: "form"` only) under a proxy worker ID so `agy` 1.5.14 presents
+`ask_question` as a live in-turn form instead of falling back to chat mode
+(which left a pending question after `EndTurn` and rejected follow-up prompts
+carrying images). Non-form modes (including `url`), managed calls, inactive
+turns, and malformed payloads cancel cleanly (`{ action: "cancel" }`).
+Antigravity 0.2.42 pins it; the other six Providers pinning provider-runtime
+advance one patch version.
+
 Component release 3.160.0 records `app-shell` 1.1.46: unifies all Mobile
 floating control islands (`FloatingActionIsland`, `SheetContextSummary`) onto
 a calm Cowboy frosted-matte surface (`floatingIslandSurfaceSx`, removing the
