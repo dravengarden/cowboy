@@ -52,26 +52,37 @@ function useReviewChangesRevalidation(input: {
   readonly activity: unknown;
   readonly ownerKey: string;
   readonly current: string | null | undefined;
+  readonly preferredComparison: string | null | undefined;
+  readonly hasResult: boolean;
   readonly sessionId: string | undefined;
   readonly manifestRevision: { current: string | undefined };
   readonly lastSignature: { current: string | undefined };
+  readonly setLocalComparison: (value: { ownerKey: string; value: string | null | undefined }) => void;
   readonly setBufferMode: (value: { sessionId: string; mode: DesktopReviewChanges["bufferMode"] }) => void;
   readonly setResult: (value: { ownerKey: string; sessionId: string; comparison: string | null; value: CodeChanges }) => void;
+  readonly setError: (value: boolean) => void;
   readonly setDataRevision: React.Dispatch<React.SetStateAction<number>>;
 }): void {
-  const { active, activity, ownerKey, current, sessionId, manifestRevision, lastSignature, setBufferMode, setResult, setDataRevision } = input;
+  const { active, activity, ownerKey, current, preferredComparison, hasResult, sessionId, manifestRevision, lastSignature, setLocalComparison, setBufferMode, setResult, setError, setDataRevision } = input;
   useEffect(() => {
-    if (!active || !sessionId || current === undefined) return undefined;
+    if (!active || !sessionId) return undefined;
     let controller: AbortController | undefined;
     const check = (): void => {
       controller?.abort();
       controller = new AbortController();
       const observer = controller;
       void (async () => {
-        // Settle independently so a failed `/manifest` never discards a fresh `/changes` response.
         const [manifestRes, changesRes] = await Promise.allSettled([
           fetchCodeManifest(sessionId, observer.signal),
-          fetchCodeChanges(sessionId, observer.signal, current ?? undefined),
+          (async () => {
+            let resolvedComparison = current;
+            let fresh = await fetchCodeChanges(sessionId, observer.signal, current ?? undefined);
+            if (current === undefined) {
+              resolvedComparison = resolveReviewComparison(preferredComparison, fresh.comparisons, fresh.defaultComparison);
+              if (resolvedComparison !== null) fresh = await fetchCodeChanges(sessionId, observer.signal, resolvedComparison);
+            }
+            return { resolvedComparison: resolvedComparison ?? null, fresh };
+          })(),
         ]);
         if (observer.signal.aborted) return;
         let invalidated = false;
@@ -79,21 +90,21 @@ function useReviewChangesRevalidation(input: {
           setBufferMode({ sessionId, mode: manifestRes.value.bufferMode });
           const prevManifest = manifestRevision.current;
           manifestRevision.current = manifestRes.value.revision;
-          if (prevManifest && prevManifest !== manifestRes.value.revision) {
-            invalidated = true;
-          }
+          if (prevManifest && prevManifest !== manifestRes.value.revision) invalidated = true;
         }
         if (changesRes.status === "fulfilled") {
-          const fresh = changesRes.value;
+          const { resolvedComparison, fresh } = changesRes.value;
           const nextSig = changesSignature(fresh);
           const prevSig = lastSignature.current;
-          if (prevSig && prevSig !== nextSig) {
-            invalidated = true;
-          }
+          const changed = Boolean(prevSig && prevSig !== nextSig);
           lastSignature.current = nextSig;
-          if (invalidated) {
+          if (current === undefined) setLocalComparison({ ownerKey, value: resolvedComparison });
+          if (!hasResult || changed || invalidated) {
+            setResult({ ownerKey, sessionId, comparison: resolvedComparison, value: fresh });
+            setError(false);
+          }
+          if (changed || invalidated) {
             invalidateDiffCache(sessionId);
-            setResult({ ownerKey, sessionId, comparison: current, value: fresh });
             setDataRevision((value) => value + 1);
           }
         } else if (invalidated) {
@@ -109,7 +120,7 @@ function useReviewChangesRevalidation(input: {
       globalThis.clearInterval(timer);
       controller?.abort();
     };
-  }, [active, activity, current, lastSignature, manifestRevision, ownerKey, sessionId, setBufferMode, setDataRevision, setResult]);
+  }, [active, activity, current, hasResult, lastSignature, manifestRevision, ownerKey, preferredComparison, sessionId, setBufferMode, setDataRevision, setError, setLocalComparison, setResult]);
 }
 
 /**
@@ -205,17 +216,17 @@ export function useDesktopReviewChanges(
     // arrives through `current`.
   }, [active, current, dataRevision, ownerKey, refreshRequest, sessionId]);
 
+  const comparisonMatched =
+    result !== undefined &&
+    result.ownerKey === ownerKey &&
+    result.sessionId === sessionId &&
+    current !== undefined &&
+    result.comparison === current;
+
   useReviewChangesRevalidation({
-    active,
-    activity,
-    ownerKey,
-    current,
-    sessionId,
-    manifestRevision,
-    lastSignature,
-    setBufferMode,
-    setResult,
-    setDataRevision,
+    active, activity, ownerKey, current, preferredComparison,
+    hasResult: comparisonMatched, sessionId, manifestRevision, lastSignature,
+    setLocalComparison, setBufferMode, setResult, setError, setDataRevision,
   });
 
   const setComparison = useCallback((next: string | null): void => {
@@ -229,12 +240,7 @@ export function useDesktopReviewChanges(
     setRefreshRequest((value) => value + 1);
   }, [sessionId]);
 
-  const comparisonMatched =
-    result !== undefined &&
-    result.ownerKey === ownerKey &&
-    result.sessionId === sessionId &&
-    current !== undefined &&
-    result.comparison === current;
+
   const value = comparisonMatched ? result.value : undefined;
   const sections = useMemo(
     () => value ? groupGitChanges(value.changes, current ?? undefined) : [],

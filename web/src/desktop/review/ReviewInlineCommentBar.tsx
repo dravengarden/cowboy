@@ -32,6 +32,9 @@ export interface ReviewCommentTarget {
   readonly codeSnippet: string;
   readonly kind: "diff" | "source" | "commit" | "pr";
   readonly root?: string | undefined;
+  readonly machineId?: string | undefined;
+  readonly contextLabel?: string | undefined;
+  readonly reviewContextId?: string | undefined;
   readonly comparison?: string | undefined;
   readonly scope?: CodeDiffScope | undefined;
   readonly side?: ReviewCommentSide | undefined;
@@ -96,6 +99,9 @@ export function ReviewInlineCommentBar({
       kind: target.kind,
       body: text,
       root: target.root,
+      machineId: target.machineId,
+      contextLabel: target.contextLabel,
+      reviewContextId: target.reviewContextId,
       comparison: target.comparison,
       scope: target.scope,
       side: target.side,

@@ -281,6 +281,7 @@ async fn workspace_file_and_diff_cursors_cannot_be_adopted_by_a_recreated_root()
         show_whitespace: true,
         scope: DiffScope::Unstaged,
         comparison: None,
+        change_fingerprint: None,
     };
     let diff = diffs
         .first_page(key, || async {

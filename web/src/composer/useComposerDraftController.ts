@@ -119,6 +119,7 @@ function applyDraftAppend(
   setText: (next: string) => void,
   options?: import("../draftStore").DraftAppendOptions,
 ): import("../draftStore").DraftAppendStatus {
+  if (editor?.isComposing?.()) return "composing";
   const current = editor?.getValue() ?? fallbackText;
   const next = current ? `${current.trimEnd()}\n\n${added}` : added;
   if (options?.checkDurable && !options.checkDurable(next)) return "storage-failed";

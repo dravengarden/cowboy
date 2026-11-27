@@ -12,6 +12,7 @@ import {
   isDiffSnapshotTruncated,
   isStreamDiffStale,
   pruneStreamCacheBounded,
+  selectActiveStreamRows,
   streamEntryCacheKey,
   type StreamDiffData,
 } from "./reviewStreamFetch.ts";
@@ -31,26 +32,12 @@ const SAMPLE_DIFF = [
 ].join("\n");
 
 test("resolveDiffCommentLocation maps unified patch rows to real file lines and sides", () => {
-  assertEquals(resolveDiffCommentLocation(SAMPLE_DIFF, { from: 9, to: 10 }), {
-    startLine: 211,
-    endLine: 212,
-    side: "new",
-  });
-  assertEquals(resolveDiffCommentLocation(SAMPLE_DIFF, { from: 6, to: 7 }), {
-    startLine: 201,
-    endLine: 202,
-    side: "old",
-  });
-  assertEquals(resolveDiffCommentLocation(SAMPLE_DIFF, { from: 4, to: 4 }), {
-    startLine: 4,
-    endLine: 4,
-    side: "patch",
-  });
+  assertEquals(resolveDiffCommentLocation(SAMPLE_DIFF, { from: 9, to: 10 }), { startLine: 211, endLine: 212, side: "new" });
+  assertEquals(resolveDiffCommentLocation(SAMPLE_DIFF, { from: 6, to: 7 }), { startLine: 201, endLine: 202, side: "old" });
+  assertEquals(resolveDiffCommentLocation(SAMPLE_DIFF, { from: 4, to: 4 }), { startLine: 4, endLine: 4, side: "patch" });
 });
 
-test("resolveSelectedUnifiedRows resolves non-monotonic split rows without pulling in skipped additions", () => {
-  // In a 3-delete + 2-add hunk, split rows 2..3 map to unified rows [10 (add2), 8 (del3)].
-  // Row 9 (add1) was NOT selected and must NOT appear in the snippet or line anchor!
+test("resolveSelectedUnifiedRows resolves non-monotonic split rows in a single pass without skipped lines", () => {
   const res = resolveSelectedUnifiedRows(SAMPLE_DIFF, [10, 8]);
   assertEquals(res.startLine, 212);
   assertEquals(res.endLine, 212);
@@ -62,54 +49,28 @@ test("resolveSelectedUnifiedRows resolves non-monotonic split rows without pulli
 
 test("commentTargetIdentity distinguishes scope, comparison, kind, and revision on identical lines", () => {
   const base = {
-    ownerSessionId: "a",
-    reviewSessionId: "r",
-    kind: "diff" as const,
-    path: "src/app.ts",
-    startLine: 10,
-    endLine: 10,
-    side: "new" as const,
-    scope: "staged" as const,
-    comparison: "origin/main",
-    revision: "rev1",
+    ownerSessionId: "a", reviewSessionId: "r", kind: "diff" as const, path: "src/app.ts",
+    startLine: 10, endLine: 10, side: "new" as const, scope: "staged" as const, comparison: "origin/main", revision: "rev1",
   };
   assertEquals(commentTargetIdentity(base) === commentTargetIdentity({ ...base, scope: "unstaged" }), false);
   assertEquals(commentTargetIdentity(base) === commentTargetIdentity({ ...base, comparison: "HEAD" }), false);
   assertEquals(commentTargetIdentity(base) === commentTargetIdentity({ ...base, revision: "rev2" }), false);
 });
 
-test("reviewNoteKeyAction distinguishes IME-owned Escape from plain Escape and honors platform Mod+Enter", () => {
+test("reviewNoteKeyAction handles IME Escape and platform Mod+Enter", () => {
   const base = {
-    key: "Enter",
-    code: "Enter",
-    keyCode: 13,
-    isComposing: false,
-    metaKey: isMac,
-    ctrlKey: !isMac,
-    altKey: false,
-    shiftKey: false,
-    target: null,
+    key: "Enter", code: "Enter", keyCode: 13, isComposing: false,
+    metaKey: isMac, ctrlKey: !isMac, altKey: false, shiftKey: false, target: null,
   };
   assertEquals(reviewNoteKeyAction(base, { composing: false }), "save");
   assertEquals(reviewNoteKeyAction(base, { composing: true }), "ignore");
-  assertEquals(reviewNoteKeyAction({ ...base, isComposing: true }, { composing: false }), "ignore");
-  assertEquals(
-    reviewNoteKeyAction({ ...base, key: "Escape", code: "Escape", metaKey: false, ctrlKey: false }, { composing: false }),
-    "cancel",
-  );
-  // IME-owned Escape returns "ime-escape" so Popover/ancestors stopPropagation without preventDefault!
-  assertEquals(
-    reviewNoteKeyAction({ ...base, key: "Escape", code: "Escape", metaKey: false, ctrlKey: false }, { composing: true }),
-    "ime-escape",
-  );
+  assertEquals(reviewNoteKeyAction({ ...base, key: "Escape", code: "Escape", metaKey: false, ctrlKey: false }, { composing: false }), "cancel");
+  assertEquals(reviewNoteKeyAction({ ...base, key: "Escape", code: "Escape", metaKey: false, ctrlKey: false }, { composing: true }), "ime-escape");
 });
 
-test("multi-page truncation, stale snapshot detection, and bounded stream cache enforce invariants", () => {
-  // Multi-page diff whose last page cleared nextCursor and limited=false is NOT truncated.
+test("fingerprint-bound stale check, multi-page truncation, promoted Reload diff, and bounded cache", () => {
   assertEquals(isDiffSnapshotTruncated(undefined, { truncated: false, limited: false, nextCursor: undefined }), false);
-  // Stopped at page budget with remaining cursor IS truncated.
   assertEquals(isDiffSnapshotTruncated("cursor-5", { truncated: true, limited: false, nextCursor: "cursor-5" }), true);
-  // Server-limited 16 MiB cap IS truncated even without nextCursor.
   assertEquals(isDiffSnapshotTruncated(undefined, { truncated: true, limited: true, nextCursor: undefined }), true);
 
   const entry: GitReviewEntry = {
@@ -117,18 +78,22 @@ test("multi-page truncation, stale snapshot detection, and bounded stream cache 
     scope: "combined",
     comparison: "origin/main",
   };
-  // New fingerprint with old patch revision -> stale!
-  assertEquals(isStreamDiffStale(entry, { revision: "rev-old", added: 5, removed: 1 }, { fingerprint: "fp-1", revision: "rev-old" }), true);
-  // Combined untruncated patch whose additions disagree with entry -> stale!
-  assertEquals(isStreamDiffStale(entry, { revision: "rev-new", added: 2, removed: 1, truncated: false }, undefined), true);
-  assertEquals(isStreamDiffStale(entry, { revision: "rev-new", added: 5, removed: 1, truncated: false }, { fingerprint: "fp-1", revision: "rev-old" }), false);
+  // First open with missing or mismatched changeFingerprint MUST be flagged stale!
+  assertEquals(isStreamDiffStale(entry, { revision: "rev-old", added: 5, removed: 1 }, undefined), true);
+  assertEquals(isStreamDiffStale(entry, { revision: "rev-old", changeFingerprint: "fp-1", added: 5, removed: 1 }, undefined), true);
+  // Matching changeFingerprint + matching line counts -> verified fresh!
+  assertEquals(isStreamDiffStale(entry, { revision: "rev-new", changeFingerprint: "fp-2", added: 5, removed: 1, truncated: false }, undefined), false);
 
-  // Cache key isolation
   const a = streamEntryCacheKey("sess-a", entry, 3, false, 1);
   const b = streamEntryCacheKey("sess-b", entry, 3, false, 1);
   assertEquals(a === b, false);
 
-  // Strict bounded eviction even when preferKeep exceeds maxEntries
+  // Promoting an evicted old row via Reload diff puts it inside the 30-row active fetch set!
+  const rows = Array.from({ length: 40 }, (_, i) => ({ key: `f-${String(i)}` }));
+  const promoted = selectActiveStreamRows(rows, ["f-0"], 30);
+  assertEquals(promoted.length, 30);
+  assertEquals(promoted.some((r) => r.key === "f-0"), true);
+
   const big = new Map<string, StreamDiffData>();
   const keep = new Set<string>();
   for (let i = 0; i < 45; i++) {
@@ -136,6 +101,5 @@ test("multi-page truncation, stale snapshot detection, and bounded stream cache 
     big.set(k, { state: "ready", text: "x" });
     keep.add(k);
   }
-  const pruned = pruneStreamCacheBounded(big, "sess-a\0", keep, 30);
-  assertEquals(pruned.size, 30);
+  assertEquals(pruneStreamCacheBounded(big, "sess-a\0", keep, 30).size, 30);
 });

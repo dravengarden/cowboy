@@ -16,7 +16,7 @@ import {
   SendOutlined,
   ViewSidebarOutlined,
 } from "@mui/icons-material";
-import { alpha, Box, Button, ButtonBase, IconButton, Stack, Tooltip, Typography } from "@mui/material";
+import { alpha, Box, Button, ButtonBase, Chip, IconButton, Stack, Tooltip, Typography } from "@mui/material";
 import { type ReactNode, type RefObject, useLayoutEffect, useState } from "react";
 import { OPEN_BACKGROUND_TASKS_EVENT } from "../backgroundTaskInspectorState";
 import { desktopSize } from "../surface/desktopSize";
@@ -28,6 +28,7 @@ import {
   type StagedReviewComment,
   submitReviewCommentsToPrompt,
   useReviewComments,
+  useReviewCommentsUnsaved,
 } from "./review/reviewCommentsStore";
 
 export const PROMPT_COMPANION_SPLIT_MIN_PX = 580;
@@ -76,11 +77,13 @@ export function usePromptCompanionMode(width: number, hasContent: boolean): {
 function ReviewCommentsTray({
   sessionId,
   comments,
+  unsaved,
   compact,
   onFocusPrompt,
 }: {
   sessionId: string;
   comments: readonly StagedReviewComment[];
+  unsaved: boolean;
   compact: boolean;
   onFocusPrompt: () => "focused" | "deferred" | void;
 }): React.JSX.Element | null {
@@ -108,6 +111,7 @@ function ReviewCommentsTray({
         <Typography variant="caption" noWrap sx={{ flex: 1, fontWeight: 600 }}>
           {comments.length === 1 ? "1 staged review note" : `${String(comments.length)} staged review notes`}
         </Typography>
+        {unsaved && <Chip size="small" label="Memory only" color="warning" variant="outlined" sx={{ height: 18, fontSize: "0.64rem", flexShrink: 0 }} />}
         <Button
           size="small"
           variant="text"
@@ -136,6 +140,7 @@ function ReviewCommentsTray({
         <Typography variant="caption" sx={{ fontWeight: 700, flex: 1 }}>
           Review notes ({String(comments.length)})
         </Typography>
+        {unsaved && <Chip size="small" label="Memory only" color="warning" variant="outlined" sx={{ height: 18, fontSize: "0.64rem", flexShrink: 0 }} />}
         <Button
           size="small"
           variant="contained"
@@ -264,6 +269,7 @@ export function DesktopPromptCompanionLayout({
   children: ReactNode;
 }): React.JSX.Element {
   const comments = useReviewComments(sessionId);
+  const commentsUnsaved = useReviewCommentsUnsaved(sessionId);
   const tasks = useSessionTasksAvailability(sessionId);
   const hasCompanionContent = Boolean(planSlot) || hasPending || comments.length > 0 || tasks.hasTasks;
   const width = usePromptCompanionWidth(containerRef);
@@ -359,7 +365,7 @@ export function DesktopPromptCompanionLayout({
           </Tooltip>
         </Stack>
         {planSlot}
-        <ReviewCommentsTray sessionId={sessionId} comments={comments} compact={!split} onFocusPrompt={onFocusPrompt} />
+        <ReviewCommentsTray sessionId={sessionId} comments={comments} unsaved={commentsUnsaved} compact={!split} onFocusPrompt={onFocusPrompt} />
         {pendingSlot}
         <Box sx={{ display: split ? "block" : "none" }}>
           <TasksPulseCard sessionId={sessionId} />

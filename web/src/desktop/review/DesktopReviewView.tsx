@@ -368,15 +368,19 @@ function ReviewDocumentRegion({
             agentSessionId={agentSessionId}
             comparisonMatched={review.changes.comparisonMatched}
             entries={streamEntries}
-            reviewed={review.reviewed}
+            progress={review.context.synced.progress}
             root={review.root}
+            machineId={review.target.own ? undefined : review.target.machineId}
+            contextLabel={review.target.own ? undefined : review.target.label}
+            reviewContextId={review.target.own ? undefined : review.target.sessionId}
             contextLines={review.settings.contextLines}
             showWhitespace={review.settings.showWhitespaceChanges}
             dataRevision={review.changes.dataRevision}
             scrollerRef={streamScrollerRef}
             captureFocusedCommentRef={streamCommentGetterRef}
             markFocusedStreamRef={markFocusedStreamRef}
-            onMarkEntry={review.markEntry}
+            onSetMark={review.setMark}
+            onClearMark={review.clearMark}
             onOpenEntry={review.open}
             onCommentLine={(target): void => onOpenComment(target)}
             onFocusPrompt={focusPrompt}
@@ -405,7 +409,9 @@ function ReviewDocumentRegion({
           }}
           onMark={() => review.markOpen()}
           onSend={() => review.send(false)}
+          canComment={isDocumentBufferReady(review)}
           onComment={() => onOpenComment()}
+          onRetry={review.retryDocument}
           onDelegate={onDelegate}
           agentSessionId={agentSessionId}
           onFocusPrompt={focusPrompt}

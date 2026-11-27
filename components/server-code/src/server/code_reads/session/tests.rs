@@ -270,6 +270,7 @@ async fn session_read_file_and_diff_cursors_cannot_cross_route_replacement() {
         show_whitespace: true,
         scope: DiffScope::Unstaged,
         comparison: None,
+        change_fingerprint: None,
     };
     let diff = diffs
         .first_page(key, || async {

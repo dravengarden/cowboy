@@ -4,10 +4,10 @@
 // and submit the entire batch to the Agent in one structured turn.
 //
 // Security boundary (docs/remote-pr-review.md): Remote PR code bodies and patch
-// excerpts MUST NEVER enter browser persistence (`sessionStorage`). For `kind:
-// "pr"` notes, only the reviewer's own note body, line range, repository/PR
-// label, and revision are persisted; live PR patch excerpts stay strictly in
-// volatile in-memory state and are stripped on serialization and hydration.
+// excerpts MUST NEVER enter browser persistence (`sessionStorage`, `localStorage`,
+// or IndexedDB). For `kind: "pr"` notes, only the reviewer's own note body and
+// PR location metadata (path, line range, repository/PR label, revision) are
+// stored or transferred.
 
 import { useSyncExternalStore } from "react";
 import { appendDraftTextDurable } from "../../draftStore";
@@ -26,6 +26,12 @@ export interface StagedReviewComment {
   readonly kind: "diff" | "source" | "commit" | "pr";
   readonly body: string;
   readonly root?: string | undefined;
+  /** Browsed Machine identity when reviewing another Machine's checkout. */
+  readonly machineId?: string | undefined;
+  /** Browsed context label (worktree/workspace) when not the Agent's own checkout. */
+  readonly contextLabel?: string | undefined;
+  /** Code API target context ID for unambiguous worktree provenance. */
+  readonly reviewContextId?: string | undefined;
   readonly comparison?: string | undefined;
   readonly scope?: CodeDiffScope | undefined;
   readonly side?: ReviewCommentSide | undefined;
@@ -42,18 +48,24 @@ const VALID_SIDES = new Set(["new", "old", "patch"]);
 const MAX_CACHED_SESSIONS = 32;
 const EMPTY: readonly StagedReviewComment[] = [];
 const commentsBySession = new Map<string, readonly StagedReviewComment[]>();
-/** Volatile in-memory PR patch snippets; never written to sessionStorage. */
-const prVolatileSnippets = new Map<string, string>();
 /** Sessions whose latest write could not be persisted to sessionStorage.
  *  Never evicted from `commentsBySession` so the only live copy is preserved. */
 const unsavedSessions = new Set<string>();
 const listeners = new Set<() => void>();
 
-function storage(): Storage | null {
+type StorageHandle =
+  | { readonly state: "ok"; readonly store: Storage }
+  | { readonly state: "unavailable" }
+  | { readonly state: "absent" };
+
+function resolveStorage(): StorageHandle {
   try {
-    return globalThis.sessionStorage ?? null;
+    const store = globalThis.sessionStorage;
+    if (store) return { state: "ok", store };
+    // In a browser document, a missing/null sessionStorage means persistence is unavailable.
+    return typeof globalThis.window !== "undefined" ? { state: "unavailable" } : { state: "absent" };
   } catch {
-    return null;
+    return { state: "unavailable" };
   }
 }
 
@@ -89,6 +101,9 @@ function parseComment(item: unknown): StagedReviewComment | null {
     kind,
     body: raw.body,
     ...(typeof raw.root === "string" && raw.root ? { root: raw.root } : {}),
+    ...(typeof raw.machineId === "string" && raw.machineId ? { machineId: raw.machineId } : {}),
+    ...(typeof raw.contextLabel === "string" && raw.contextLabel ? { contextLabel: raw.contextLabel } : {}),
+    ...(typeof raw.reviewContextId === "string" && raw.reviewContextId ? { reviewContextId: raw.reviewContextId } : {}),
     ...(typeof raw.comparison === "string" && raw.comparison ? { comparison: raw.comparison } : {}),
     ...(typeof raw.scope === "string" && VALID_SCOPES.has(raw.scope) ? { scope: raw.scope as CodeDiffScope } : {}),
     ...(typeof raw.side === "string" && VALID_SIDES.has(raw.side) ? { side: raw.side as ReviewCommentSide } : {}),
@@ -97,10 +112,6 @@ function parseComment(item: unknown): StagedReviewComment | null {
     ...(typeof raw.revision === "string" && raw.revision ? { revision: raw.revision } : {}),
     createdAtMs: typeof raw.createdAtMs === "number" && Number.isFinite(raw.createdAtMs) ? raw.createdAtMs : 0,
   };
-}
-
-function purgeVolatileSnippets(items: readonly StagedReviewComment[]): void {
-  for (const item of items) prVolatileSnippets.delete(item.id);
 }
 
 function setCached(sessionId: string, items: readonly StagedReviewComment[]): void {
@@ -130,14 +141,15 @@ function setCached(sessionId: string, items: readonly StagedReviewComment[]): vo
 }
 
 function purgeRemovedSession(sessionId: string): boolean {
-  const existing = commentsBySession.get(sessionId);
-  if (existing) purgeVolatileSnippets(existing);
   const removedMem = commentsBySession.delete(sessionId);
   const removedUnsaved = unsavedSessions.delete(sessionId);
-  try {
-    storage()?.removeItem(`${STORAGE_PREFIX}${sessionId}`);
-  } catch {
-    /* tolerant */
+  const handle = resolveStorage();
+  if (handle.state === "ok") {
+    try {
+      handle.store.removeItem(`${STORAGE_PREFIX}${sessionId}`);
+    } catch {
+      /* tolerant */
+    }
   }
   return removedMem || removedUnsaved;
 }
@@ -149,8 +161,10 @@ function loadSession(sessionId: string): readonly StagedReviewComment[] {
   }
   const cached = commentsBySession.get(sessionId);
   if (cached !== undefined) return cached;
+  const handle = resolveStorage();
+  if (handle.state !== "ok") return EMPTY;
   try {
-    const raw = storage()?.getItem(`${STORAGE_PREFIX}${sessionId}`);
+    const raw = handle.store.getItem(`${STORAGE_PREFIX}${sessionId}`);
     if (!raw) return EMPTY;
     const parsed = JSON.parse(raw) as unknown;
     if (!Array.isArray(parsed)) return EMPTY;
@@ -176,18 +190,19 @@ function saveSession(sessionId: string, next: readonly StagedReviewComment[]): b
     return false;
   }
   const normalized = next.length === 0 ? EMPTY : next;
-  let persisted = true;
-  try {
-    const store = storage();
-    if (store) {
-      if (normalized.length === 0) store.removeItem(`${STORAGE_PREFIX}${sessionId}`);
-      else store.setItem(`${STORAGE_PREFIX}${sessionId}`, serializeForStorage(normalized));
+  const handle = resolveStorage();
+  let persisted = handle.state === "absent";
+  if (handle.state === "ok") {
+    try {
+      if (normalized.length === 0) handle.store.removeItem(`${STORAGE_PREFIX}${sessionId}`);
+      else handle.store.setItem(`${STORAGE_PREFIX}${sessionId}`, serializeForStorage(normalized));
+      persisted = true;
+    } catch {
+      persisted = false;
     }
-    unsavedSessions.delete(sessionId);
-  } catch {
-    persisted = false;
-    if (normalized.length > 0) unsavedSessions.add(sessionId);
   }
+  if (persisted || normalized.length === 0) unsavedSessions.delete(sessionId);
+  else unsavedSessions.add(sessionId);
   setCached(sessionId, normalized);
   emit();
   return persisted;
@@ -245,9 +260,9 @@ export function addReviewComment(
   if (!body) return null;
   const id = `rc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
   const isPr = input.kind === "pr";
-  if (isPr && input.codeSnippet) prVolatileSnippets.set(id, input.codeSnippet);
   const created: StagedReviewComment = {
     ...input,
+    // Never retain or transfer remote PR patch excerpts (docs/remote-pr-review.md).
     codeSnippet: isPr ? "" : input.codeSnippet,
     body,
     id,
@@ -255,7 +270,7 @@ export function addReviewComment(
   };
   const persisted = saveSession(sessionId, [...loadSession(sessionId), created]);
   if (!persisted) {
-    notify("Review note kept in memory only (browser storage full — send before reloading).", "warning");
+    notify("Review note kept in memory only (browser storage unavailable — send before reloading).", "warning");
   }
   return created;
 }
@@ -263,7 +278,6 @@ export function addReviewComment(
 export function updateReviewComment(sessionId: string, id: string, body: string): boolean {
   if (isSessionRemoved(sessionId)) return false;
   const trimmed = body.trim();
-  // Blank edits are rejected rather than silently deleting the note (use Delete).
   if (!trimmed) return false;
   const prev = loadSession(sessionId);
   if (!prev.some((item) => item.id === id)) return false;
@@ -275,14 +289,11 @@ export function updateReviewComment(sessionId: string, id: string, body: string)
 export function removeReviewComment(sessionId: string, id: string): void {
   const prev = loadSession(sessionId);
   const next = prev.filter((item) => item.id !== id);
-  prVolatileSnippets.delete(id);
   if (next.length !== prev.length) saveSession(sessionId, next);
 }
 
 export function clearReviewComments(sessionId: string): void {
-  const prev = loadSession(sessionId);
-  purgeVolatileSnippets(prev);
-  if (prev.length > 0) saveSession(sessionId, EMPTY);
+  if (loadSession(sessionId).length > 0) saveSession(sessionId, EMPTY);
 }
 
 function longestBacktickRun(text: string): number {
@@ -329,17 +340,17 @@ export function formatReviewCommentsBatch(comments: readonly StagedReviewComment
   const blocks = comments.map((comment, idx) => {
     const location = formatInlineCode(formatCommentLocation(comment));
     const meta: string[] = [];
+    if (comment.machineId) meta.push(`machine ${formatInlineCode(comment.machineId)}`);
     if (comment.root) meta.push(`in ${formatInlineCode(comment.root)}`);
+    if (comment.reviewContextId) meta.push(`context ${formatInlineCode(comment.reviewContextId)}`);
     if (comment.kind === "commit" && comment.commitOid) meta.push(`commit ${comment.commitOid.slice(0, 10)}`);
     if (comment.kind === "pr" && comment.pullLabel) meta.push(`pull request ${comment.pullLabel}`);
     if (comment.scope && comment.scope !== "combined") meta.push(comment.scope);
     if (comment.comparison) meta.push(`compared with ${formatComparisonLabel(comment.comparison)}`);
     if (comment.revision) meta.push(`rev ${comment.revision.slice(0, 10)}`);
     const suffix = meta.length > 0 ? ` (${meta.join(" · ")})` : "";
-    const rawSnippet = comment.kind === "pr"
-      ? (prVolatileSnippets.get(comment.id) ?? "")
-      : comment.codeSnippet;
-    const snippet = rawSnippet.trim();
+    // Never quote PR patch text through the durable Composer draft path.
+    const snippet = comment.kind === "pr" ? "" : comment.codeSnippet.trim();
     const lang = comment.kind === "source" ? "" : "diff";
     const fence = snippet ? formatCodeFence(snippet, lang) : "";
     return `${String(idx + 1)}. ${location}${suffix}${fence}\n${comment.body}`;
@@ -368,7 +379,6 @@ export function submitReviewCommentsToPrompt(
     );
     return 0;
   }
-  for (const id of transferredIds) prVolatileSnippets.delete(id);
   const remaining = loadSession(sessionId).filter((item) => !transferredIds.has(item.id));
   saveSession(sessionId, remaining);
   const outcome = onSubmitted?.();

@@ -21,6 +21,7 @@ pub struct DiffSnapshotKey {
     pub show_whitespace: bool,
     pub scope: DiffScope,
     pub comparison: Option<String>,
+    pub change_fingerprint: Option<String>,
 }
 
 #[derive(Debug)]
@@ -29,6 +30,7 @@ pub struct DiffSnapshot {
     cursor_id: String,
     pub path: String,
     pub revision: String,
+    pub change_fingerprint: Option<String>,
     pub text: String,
     pub added: usize,
     pub removed: usize,
@@ -39,6 +41,7 @@ pub struct DiffSnapshot {
 pub struct DiffPage {
     pub path: String,
     pub revision: String,
+    pub change_fingerprint: Option<String>,
     pub text: String,
     pub added: usize,
     pub removed: usize,
@@ -99,6 +102,7 @@ impl DiffSnapshotCache {
         F: FnOnce() -> Fut,
         Fut: Future<Output = Result<DiffDocument, String>>,
     {
+        let change_fingerprint = key.change_fingerprint.clone();
         let cell = {
             let mut inner = self.inner.lock().await;
             self.prune(&mut inner, Instant::now());
@@ -123,6 +127,7 @@ impl DiffSnapshotCache {
                         cursor_id: format!("{:x}", Sha256::digest(rand::random::<[u8; 32]>())),
                         path: document.path,
                         revision,
+                        change_fingerprint,
                         text: document.text,
                         added: document.added,
                         removed: document.removed,
@@ -202,6 +207,7 @@ impl DiffSnapshotCache {
         DiffPage {
             path: snapshot.path.clone(),
             revision: snapshot.revision.clone(),
+            change_fingerprint: snapshot.change_fingerprint.clone(),
             text: snapshot.text[offset..end].to_owned(),
             added: snapshot.added,
             removed: snapshot.removed,
@@ -267,6 +273,7 @@ mod tests {
             show_whitespace: true,
             scope: DiffScope::Unstaged,
             comparison: None,
+            change_fingerprint: None,
         }
     }
 
@@ -575,5 +582,34 @@ mod tests {
                 .await
                 .is_err()
         );
+    }
+
+    #[tokio::test]
+    async fn distinct_change_fingerprints_bypass_stale_cached_snapshot() {
+        let cache = DiffSnapshotCache::new(64, 1024, 4, Duration::from_secs(60));
+        let mut first_key = key("a.rs");
+        first_key.change_fingerprint = Some("fp-1".to_owned());
+        let first = cache
+            .first_page(first_key, || async { Ok(document("a.rs", 2)) })
+            .await
+            .unwrap();
+        assert_eq!(first.change_fingerprint.as_deref(), Some("fp-1"));
+
+        let mut second_key = key("a.rs");
+        second_key.change_fingerprint = Some("fp-2".to_owned());
+        let second = cache
+            .first_page(second_key, || async {
+                Ok(DiffDocument {
+                    path: "a.rs".to_owned(),
+                    text: "edited line 1\nedited line 2\n".to_owned(),
+                    added: 2,
+                    removed: 0,
+                    truncated: false,
+                })
+            })
+            .await
+            .unwrap();
+        assert_eq!(second.change_fingerprint.as_deref(), Some("fp-2"));
+        assert_ne!(first.revision, second.revision);
     }
 }

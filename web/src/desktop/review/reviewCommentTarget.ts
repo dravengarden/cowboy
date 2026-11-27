@@ -13,7 +13,8 @@ export interface ResolvedDiffLocation {
   readonly side: ReviewCommentSide;
 }
 
-/** Map a contiguous unified-diff row selection to real file lines and side. */
+const HUNK_HEADER = /^@@ -(\d+)(?:,\d+)? \+(\d+)(?:,\d+)? @@/;
+
 export function resolveDiffCommentLocation(
   unifiedText: string,
   selection: ReviewLineSelection,
@@ -21,92 +22,117 @@ export function resolveDiffCommentLocation(
   const from = Math.max(1, Math.min(selection.from, selection.to));
   const to = Math.max(from, Math.max(selection.from, selection.to));
   const covered = diffSelectionLines(unifiedText, { from, to });
-  if (covered.new.length > 0) {
-    return { startLine: covered.new[0]!, endLine: covered.new.at(-1)!, side: "new" };
-  }
-  if (covered.old.length > 0) {
-    return { startLine: covered.old[0]!, endLine: covered.old.at(-1)!, side: "old" };
-  }
+  if (covered.new.length > 0) return { startLine: covered.new[0]!, endLine: covered.new.at(-1)!, side: "new" };
+  if (covered.old.length > 0) return { startLine: covered.old[0]!, endLine: covered.old.at(-1)!, side: "old" };
   return { startLine: from, endLine: to, side: "patch" };
 }
 
-/** Map an arbitrary set of selected unified patch rows (such as non-monotonic
- *  rows mapped from a side-by-side split diff) to exact file lines and snippet
- *  without absorbing unselected intermediate lines. */
+/** Single linear pass resolving arbitrary selected unified patch rows. */
 export function resolveSelectedUnifiedRows(
   unifiedText: string,
   selectedRows: readonly number[],
 ): ResolvedDiffLocation & { readonly snippet: string } {
-  const uniqueSorted = [...new Set(selectedRows.filter((r) => Number.isInteger(r) && r > 0))].sort((a, b) => a - b);
+  const selectedSet = new Set(selectedRows.filter((r) => Number.isInteger(r) && r > 0));
+  if (selectedSet.size === 0) return { startLine: 1, endLine: 1, side: "patch", snippet: "" };
   const lines = unifiedText.split("\n");
-  if (uniqueSorted.length === 0) {
-    return { startLine: 1, endLine: 1, side: "patch", snippet: "" };
+  let oldLine: number | undefined;
+  let newLine: number | undefined;
+  let minNew = Infinity;
+  let maxNew = -Infinity;
+  let minOld = Infinity;
+  let maxOld = -Infinity;
+  let minPatch = Infinity;
+  let maxPatch = -Infinity;
+  const pickedLines: string[] = [];
+
+  for (let index = 0; index < lines.length; index++) {
+    const row = index + 1;
+    const line = lines[index]!;
+    const picked = selectedSet.has(row);
+    if (picked) {
+      pickedLines.push(line);
+      if (row < minPatch) minPatch = row;
+      if (row > maxPatch) maxPatch = row;
+    }
+    const hunk = HUNK_HEADER.exec(line);
+    if (hunk) {
+      oldLine = Number(hunk[1]);
+      newLine = Number(hunk[2]);
+      continue;
+    }
+    if (oldLine === undefined || newLine === undefined || line.startsWith("\\")) continue;
+    if (line.startsWith("+")) {
+      if (picked) {
+        if (newLine < minNew) minNew = newLine;
+        if (newLine > maxNew) maxNew = newLine;
+      }
+      newLine += 1;
+    } else if (line.startsWith("-")) {
+      if (picked) {
+        if (oldLine < minOld) minOld = oldLine;
+        if (oldLine > maxOld) maxOld = oldLine;
+      }
+      oldLine += 1;
+    } else {
+      if (picked) {
+        if (newLine < minNew) minNew = newLine;
+        if (newLine > maxNew) maxNew = newLine;
+      }
+      oldLine += 1;
+      newLine += 1;
+    }
   }
-  const newLines: number[] = [];
-  const oldLines: number[] = [];
-  for (const row of uniqueSorted) {
-    const covered = diffSelectionLines(unifiedText, { from: row, to: row });
-    for (const n of covered.new) newLines.push(n);
-    for (const o of covered.old) oldLines.push(o);
-  }
-  const snippet = uniqueSorted
-    .map((row) => lines[row - 1])
-    .filter((line): line is string => line !== undefined)
-    .join("\n");
-  if (newLines.length > 0) {
-    return { startLine: Math.min(...newLines), endLine: Math.max(...newLines), side: "new", snippet };
-  }
-  if (oldLines.length > 0) {
-    return { startLine: Math.min(...oldLines), endLine: Math.max(...oldLines), side: "old", snippet };
-  }
-  return { startLine: uniqueSorted[0]!, endLine: uniqueSorted.at(-1)!, side: "patch", snippet };
+
+  const snippet = pickedLines.join("\n");
+  if (Number.isFinite(minNew)) return { startLine: minNew, endLine: maxNew, side: "new", snippet };
+  if (Number.isFinite(minOld)) return { startLine: minOld, endLine: maxOld, side: "old", snippet };
+  return {
+    startLine: Number.isFinite(minPatch) ? minPatch : 1,
+    endLine: Number.isFinite(maxPatch) ? maxPatch : 1,
+    side: "patch",
+    snippet,
+  };
 }
 
-/** Canonical provenance identity used for draft lookup, composer reset, and
- *  context-change dismissal across diffs, commits, PRs, and comparisons. */
 export function commentTargetIdentity(
   target: Pick<
     ReviewCommentTarget,
-    | "ownerSessionId"
-    | "reviewSessionId"
-    | "kind"
-    | "path"
-    | "scope"
-    | "comparison"
-    | "commitOid"
-    | "pullLabel"
-    | "revision"
-    | "startLine"
-    | "endLine"
-    | "side"
+    | "ownerSessionId" | "reviewSessionId" | "kind" | "path" | "scope" | "comparison"
+    | "commitOid" | "pullLabel" | "revision" | "startLine" | "endLine" | "side"
   >,
 ): string {
   return [
-    target.ownerSessionId,
-    target.reviewSessionId,
-    target.kind,
-    target.path,
-    target.scope ?? "",
-    target.comparison ?? "",
-    target.commitOid ?? "",
-    target.pullLabel ?? "",
-    target.revision ?? "",
+    target.ownerSessionId, target.reviewSessionId, target.kind, target.path,
+    target.scope ?? "", target.comparison ?? "", target.commitOid ?? "",
+    target.pullLabel ?? "", target.revision ?? "",
     `${String(target.startLine)}:${String(target.endLine)}:${target.side ?? "new"}`,
   ].join("\0");
 }
 
-/** True only when the open document, loaded snapshot, and mounted editor all
- *  represent the exact same document key. */
+/** True only when the open document, loaded snapshot, and mounted editor
+ *  (unified or `:split`) all represent the exact same document key. */
 export function isDocumentBufferReady(review: ReviewWorkbench): boolean {
   const doc = review.document;
   if (!doc || !review.target || !review.context.agentSessionId) return false;
   if (review.load?.state !== "ready") return false;
   const expectedKey = reviewDocumentKey(doc);
   if (review.load.value.key !== expectedKey) return false;
+  const expectedMountedKey = review.split ? `${expectedKey}:split` : expectedKey;
   const editorDom = review.editor.current?.dom;
   const host = editorDom?.closest<HTMLElement>("[data-review-document-key]");
-  if (host && host.dataset.reviewDocumentKey !== expectedKey) return false;
+  if (host && host.dataset.reviewDocumentKey !== expectedMountedKey) return false;
   return true;
+}
+
+function externalContextMeta(review: ReviewWorkbench) {
+  const target = review.target;
+  if (!target || target.own) return {};
+  return {
+    root: review.root,
+    machineId: target.machineId,
+    contextLabel: target.label,
+    reviewContextId: target.sessionId,
+  };
 }
 
 export function buildEditorCommentTarget(review: ReviewWorkbench): ReviewCommentTarget | null {
@@ -118,22 +144,16 @@ export function buildEditorCommentTarget(review: ReviewWorkbench): ReviewComment
   if (!ready) return null;
   const view = review.editor.current;
   const sel = view ? editorSelection(view) : { from: review.cursorLine, to: review.cursorLine };
+  const ext = externalContextMeta(review);
 
   if (doc.kind === "source") {
     const lines = (view ? view.state.doc.toString() : ready.text).split("\n");
     const from = Math.max(1, Math.min(sel.from, sel.to));
     const to = Math.max(from, Math.max(sel.from, sel.to));
     return {
-      ownerSessionId,
-      reviewSessionId,
-      path: doc.path,
-      startLine: from,
-      endLine: to,
-      side: "new",
+      ownerSessionId, reviewSessionId, path: doc.path, startLine: from, endLine: to, side: "new",
       codeSnippet: lines.slice(from - 1, Math.min(lines.length, to)).join("\n"),
-      kind: "source",
-      root: review.root,
-      revision: ready.revision,
+      kind: "source", ...ext, revision: ready.revision,
     };
   }
 
@@ -175,20 +195,13 @@ export function buildEditorCommentTarget(review: ReviewWorkbench): ReviewComment
     : undefined;
 
   return {
-    ownerSessionId,
-    reviewSessionId,
-    path: doc.path,
-    startLine,
-    endLine,
-    side,
-    codeSnippet: snippet,
-    kind: doc.kind,
-    root: review.root,
+    ownerSessionId, reviewSessionId, path: doc.path, startLine, endLine, side,
+    codeSnippet: doc.kind === "pr" ? "" : snippet,
+    kind: doc.kind, ...ext,
     comparison: doc.kind === "diff" ? doc.comparison : undefined,
     scope: doc.kind === "diff" ? doc.scope : undefined,
     commitOid: doc.kind === "commit" ? doc.oid : undefined,
-    pullLabel,
-    revision: ready.revision,
+    pullLabel, revision: ready.revision,
   };
 }
 
@@ -200,6 +213,9 @@ export function buildStreamCommentTarget(input: {
   readonly revision: string | undefined;
   readonly lineIndex: number;
   readonly root: string | undefined;
+  readonly machineId?: string | undefined;
+  readonly contextLabel?: string | undefined;
+  readonly reviewContextId?: string | undefined;
 }): ReviewCommentTarget {
   const row = input.lineIndex + 1;
   const loc = resolveDiffCommentLocation(input.diffText, { from: row, to: row });
@@ -215,6 +231,9 @@ export function buildStreamCommentTarget(input: {
     codeSnippet: snippet,
     kind: "diff",
     root: input.root,
+    machineId: input.machineId,
+    contextLabel: input.contextLabel,
+    reviewContextId: input.reviewContextId,
     comparison: input.entry.comparison,
     scope: input.entry.scope,
     revision: input.revision,

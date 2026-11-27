@@ -279,6 +279,7 @@ function ReviewDocumentFooter({
   status,
   agentSessionId,
   onMark,
+  canComment,
   onComment,
   onSend,
   onDelegate,
@@ -289,6 +290,7 @@ function ReviewDocumentFooter({
   status: ReviewDocumentStatus;
   agentSessionId?: string | undefined;
   onMark: () => void;
+  canComment?: boolean | undefined;
   onComment?: (() => void) | undefined;
   onSend: () => void;
   onDelegate: (kind: "explain" | "review") => void;
@@ -328,7 +330,7 @@ function ReviewDocumentFooter({
       )}
       <DelegateButtons onDelegate={onDelegate} />
       {onComment && (
-        <Button size="small" color="inherit" disabled={!ready} onClick={onComment} data-review-add-note startIcon={<RateReviewOutlined />} sx={{ textTransform: "none", fontSize: "0.72rem", flexShrink: 0, gap: 0.5 }}>
+        <Button size="small" color="inherit" disabled={canComment === false || !ready} onClick={onComment} data-review-add-note startIcon={<RateReviewOutlined />} sx={{ textTransform: "none", fontSize: "0.72rem", flexShrink: 0, gap: 0.5 }}>
           Note
           <DesktopKeycap keyLabel="c" quiet />
         </Button>
@@ -358,7 +360,9 @@ export function DesktopReviewDocument({
   onView,
   onMark,
   onSend,
+  canComment,
   onComment,
+  onRetry,
   onDelegate,
   agentSessionId,
   onFocusPrompt,
@@ -382,7 +386,9 @@ export function DesktopReviewDocument({
   onView: (view: EditorView | null) => void;
   onMark: () => void;
   onSend: () => void;
+  canComment?: boolean | undefined;
   onComment?: (() => void) | undefined;
+  onRetry?: (() => void) | undefined;
   /** Ask a fork of the source Session to explain or review the open file. */
   onDelegate: (kind: "explain" | "review") => void;
   agentSessionId?: string | undefined;
@@ -399,7 +405,7 @@ export function DesktopReviewDocument({
       <ReviewFileTabs tabs={tabs} onSelect={onSelectTab} onClose={onCloseTab} onKeep={onKeepTab} />
       {!document && <Box sx={{ flex: 1, minHeight: 0, overflow: "auto" }}>{empty}</Box>}
       {document && load?.state === "error" && (
-        <Alert severity="warning" sx={{ m: 1, py: 0 }}>{load.message}</Alert>
+        <Alert severity="warning" action={onRetry ? <Button color="inherit" size="small" onClick={onRetry} data-review-document-retry sx={{ textTransform: "none" }}>Retry</Button> : undefined} sx={{ m: 1, py: 0 }}>{load.message}</Alert>
       )}
       {document && ready?.truncated && (
         <Alert severity="info" sx={{ mx: 1, mt: 0.5, py: 0 }}>
@@ -433,7 +439,7 @@ export function DesktopReviewDocument({
         </Box>
       )}
       {commentComposer}
-      {document && <ReviewDocumentFooter document={document} ready={ready} status={status} agentSessionId={agentSessionId} onMark={onMark} onComment={onComment} onSend={onSend} onDelegate={onDelegate} onFocusPrompt={onFocusPrompt} />}
+      {document && <ReviewDocumentFooter document={document} ready={ready} status={status} agentSessionId={agentSessionId} onMark={onMark} canComment={canComment} onComment={onComment} onSend={onSend} onDelegate={onDelegate} onFocusPrompt={onFocusPrompt} />}
     </Box>
   );
 }

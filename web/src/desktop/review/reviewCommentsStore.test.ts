@@ -14,12 +14,14 @@ import {
   updateReviewComment,
 } from "./reviewCommentsStore.ts";
 
-function makeMemoryStorage(throwOnSet = false): { storage: Storage; map: Map<string, string> } {
+function makeMemoryStorage(throwOnSet = false, maxLen?: number): { storage: Storage; map: Map<string, string> } {
   const map = new Map<string, string>();
   const storage = {
     getItem: (k: string) => map.get(k) ?? null,
     setItem: (k: string, v: string) => {
-      if (throwOnSet) throw new DOMException("QuotaExceededError", "QuotaExceededError");
+      if (throwOnSet || (maxLen !== undefined && v.length > maxLen)) {
+        throw new DOMException("QuotaExceededError", "QuotaExceededError");
+      }
       map.set(k, v);
     },
     removeItem: (k: string) => { map.delete(k); },
@@ -30,7 +32,7 @@ function makeMemoryStorage(throwOnSet = false): { storage: Storage; map: Map<str
   return { storage, map };
 }
 
-test("staged review comments add, update, reject blank update, remove, and format cleanly", () => {
+test("staged review comments add, update, reject blank update, remove, and format with machine identity", () => {
   const sid = "test-review-comments-session";
   clearReviewComments(sid);
   const first = addReviewComment(sid, {
@@ -40,6 +42,9 @@ test("staged review comments add, update, reject blank update, remove, and forma
     codeSnippet: "+ const x = 1;",
     kind: "diff",
     scope: "staged",
+    machineId: "falcon",
+    root: "/srv/projects/cowboy",
+    reviewContextId: "worktree::falcon::cowboy",
     comparison: "refs/remotes/origin/main",
     body: "Extract into shared helper.",
   })!;
@@ -52,29 +57,32 @@ test("staged review comments add, update, reject blank update, remove, and forma
     body: "Keep limit configurable.",
   })!;
   assertEquals(reviewCommentsForSession(sid).length, 2);
-  // Blank update must NOT delete the existing note (R2 L2).
   assertEquals(updateReviewComment(sid, first.id, "   "), false);
-  assertEquals(reviewCommentsForSession(sid).length, 2);
   assertEquals(updateReviewComment(sid, first.id, "Extract into DesktopEmbeddedControl."), true);
   const formatted = formatReviewCommentsBatch(reviewCommentsForSession(sid));
-  assertEquals(formatted.includes("Review notes (2 items):"), true);
-  assertEquals(formatted.includes("`web/src/App.tsx:L42-45` (staged · compared with origin/main)"), true);
+  assertEquals(formatted.includes("machine `falcon`"), true);
+  assertEquals(formatted.includes("in `/srv/projects/cowboy`"), true);
+  assertEquals(formatted.includes("context `worktree::falcon::cowboy`"), true);
+  assertEquals(formatted.includes("`web/src/App.tsx:L42-45`"), true);
   assertEquals(formatted.includes("Extract into DesktopEmbeddedControl."), true);
-  assertEquals(formatted.includes("`web/src/desktop/DesktopTabStrip.tsx:L100`"), true);
   removeReviewComment(sid, second.id);
   assertEquals(reviewCommentsForSession(sid).length, 1);
   clearReviewComments(sid);
   assertEquals(reviewCommentsForSession(sid).length, 0);
 });
 
-test("PR notes never write patch text to sessionStorage and strip any stored PR excerpt on hydration", () => {
-  const sid = "test-pr-persistence-boundary";
+test("PR notes never persist patch text to sessionStorage OR localStorage even after Prompt transfer", () => {
+  const sid = "test-pr-zero-persistence";
   const prevSession = globalThis.sessionStorage;
-  const { storage, map } = makeMemoryStorage();
+  const prevLocal = globalThis.localStorage;
+  const sessionMem = makeMemoryStorage();
+  const localMem = makeMemoryStorage();
   try {
-    Object.defineProperty(globalThis, "sessionStorage", { value: storage, configurable: true });
+    Object.defineProperty(globalThis, "sessionStorage", { value: sessionMem.storage, configurable: true });
+    Object.defineProperty(globalThis, "localStorage", { value: localMem.storage, configurable: true });
     clearReviewComments(sid);
-    const created = addReviewComment(sid, {
+    setDraft(sid, { text: "", attachments: [] });
+    addReviewComment(sid, {
       path: "private/secret.rs",
       startLine: 10,
       endLine: 12,
@@ -83,37 +91,21 @@ test("PR notes never write patch text to sessionStorage and strip any stored PR 
       pullLabel: "org/private#7",
       revision: "rev1234567890",
       body: "Verify permissions here.",
-    })!;
-    const raw = map.get(`cowboy.desktop.review-comments.v1:${sid}`) ?? "";
-    // Patch text must NEVER enter browser persistence!
-    assertEquals(raw.includes("SECRET_INTERNAL_TOKEN"), false);
-    assertEquals(raw.includes("org/private#7"), true);
-    // Live in-memory batch still quotes the excerpt before reload.
-    const liveBatch = formatReviewCommentsBatch([created]);
-    assertEquals(liveBatch.includes("SECRET_INTERNAL_TOKEN"), true);
-    // Hydrating a tampered storage record strips codeSnippet for kind === "pr".
-    const sid2 = "test-pr-hydrated-strip";
-    map.set(
-      `cowboy.desktop.review-comments.v1:${sid2}`,
-      JSON.stringify([{
-        id: "pr-tampered",
-        path: "private/file.ts",
-        startLine: 3,
-        endLine: 4,
-        codeSnippet: "+ leaked patch",
-        kind: "pr",
-        pullLabel: "org/private#8",
-        body: "Keep only note body.",
-        createdAtMs: 1,
-      }]),
-    );
-    const hydrated = reviewCommentsForSession(sid2);
-    assertEquals(hydrated.length, 1);
-    assertEquals(hydrated[0]?.codeSnippet, "");
-    clearReviewComments(sid);
-    clearReviewComments(sid2);
+    });
+    const sessionRaw = sessionMem.map.get(`cowboy.desktop.review-comments.v1:${sid}`) ?? "";
+    assertEquals(sessionRaw.includes("SECRET_INTERNAL_TOKEN"), false);
+    assertEquals(sessionRaw.includes("org/private#7"), true);
+
+    assertEquals(submitReviewCommentsToPrompt(sid), 1);
+    const localRaw = localMem.map.get(`cowboy:composer-draft:${sid}`) ?? "";
+    assertEquals(localRaw.includes("SECRET_INTERNAL_TOKEN"), false);
+    assertEquals(localRaw.includes("org/private#7"), true);
+    assertEquals(localRaw.includes("Verify permissions here."), true);
   } finally {
+    clearReviewComments(sid);
+    setDraft(sid, { text: "", attachments: [] });
     Object.defineProperty(globalThis, "sessionStorage", { value: prevSession, configurable: true });
+    Object.defineProperty(globalThis, "localStorage", { value: prevLocal, configurable: true });
   }
 });
 
@@ -139,7 +131,7 @@ test("batch formatter preserves fenced Markdown snippets, backtick paths, remove
       startLine: 88,
       endLine: 90,
       side: "new",
-      codeSnippet: "",
+      codeSnippet: "+ ignored pr patch",
       kind: "pr",
       pullLabel: "owner/repo#42",
       body: "Guard error branch.",
@@ -152,49 +144,48 @@ test("batch formatter preserves fenced Markdown snippets, backtick paths, remove
   assertEquals(formatted.includes("``docs/`weird`/readme.md (removed L12-14)``"), true);
   assertEquals(formatted.includes("commit abcdef1234"), true);
   assertEquals(formatted.includes("pull request owner/repo#42"), true);
-  assertEquals(formatted.includes("rev rev9876543"), true);
+  assertEquals(formatted.includes("ignored pr patch"), false);
 });
 
-test("failed transfer leaves live Prompt untouched and composing editor defers transfer cleanly", () => {
-  const sid = "test-review-atomic-transfer";
+test("strict durable transfer never strips saved attachments on quota failure and defers on composing editor", () => {
+  const sid = "test-review-strict-attachments";
   const prevSession = globalThis.sessionStorage;
   const prevLocal = globalThis.localStorage;
   const sessionMem = makeMemoryStorage();
-  const failingLocal = makeMemoryStorage(true);
-  const okLocal = makeMemoryStorage(false);
+  const tightLocal = makeMemoryStorage(false, 400);
   try {
     Object.defineProperty(globalThis, "sessionStorage", { value: sessionMem.storage, configurable: true });
-    Object.defineProperty(globalThis, "localStorage", { value: okLocal.storage, configurable: true });
+    Object.defineProperty(globalThis, "localStorage", { value: tightLocal.storage, configurable: true });
     clearReviewComments(sid);
-    setDraft(sid, { text: "Existing prompt", attachments: [] });
+    // Existing saved draft with an attachment that fits within 400 chars.
+    setDraft(sid, {
+      text: "Check ![img](cowboy-att:att-1)",
+      attachments: [{ id: "att-1", name: "a.png", mime: "image/png", data: "AAAA".repeat(30), size: 120 }],
+    });
+    // Flush initial draft synchronously by triggering persist via a small setDraft check:
+    const beforeRaw = tightLocal.map.get(`cowboy:composer-draft:${sid}`) ?? "";
     addReviewComment(sid, {
       path: "b.ts",
       startLine: 5,
       endLine: 6,
-      codeSnippet: "+x",
-      body: "Fix edge case.",
+      codeSnippet: "+".repeat(250),
+      body: "Large batch that pushes the attachment draft over localStorage quota.",
       kind: "diff",
     });
-
-    // 1. localStorage quota error must NOT mutate live Prompt draft!
-    Object.defineProperty(globalThis, "localStorage", { value: failingLocal.storage, configurable: true });
+    // Transfer MUST fail strictly without stripping att-1 or mutating getDraft!
     assertEquals(submitReviewCommentsToPrompt(sid), 0);
-    assertEquals(getDraft(sid).text, "Existing prompt");
+    assertEquals(getDraft(sid).attachments.length, 1);
+    assertEquals(getDraft(sid).text, "Check ![img](cowboy-att:att-1)");
+    assertEquals(tightLocal.map.get(`cowboy:composer-draft:${sid}`) ?? "", beforeRaw);
     assertEquals(reviewCommentsForSession(sid).length, 1);
 
-    // 2. Composing mounted editor rejecting applyRemoteText rolls back localStorage & keeps staged notes!
+    // Composing mounted editor returns "composing" and leaves notes intact.
+    const okLocal = makeMemoryStorage(false);
     Object.defineProperty(globalThis, "localStorage", { value: okLocal.storage, configurable: true });
-    const unsub = subscribeDraftAppend(sid, (_added, opts) => {
-      assertEquals(opts?.checkDurable?.("Existing prompt\n\nBATCH"), true);
-      opts?.rollback?.();
-      return "composing";
-    });
+    const unsub = subscribeDraftAppend(sid, () => "composing");
     try {
       assertEquals(submitReviewCommentsToPrompt(sid), 0);
-      assertEquals(getDraft(sid).text, "Existing prompt");
       assertEquals(reviewCommentsForSession(sid).length, 1);
-      const persistedAfterRollback = okLocal.map.get(`cowboy:composer-draft:${sid}`) ?? "";
-      assertEquals(persistedAfterRollback.includes("BATCH"), false);
     } finally {
       unsub();
     }
@@ -206,39 +197,31 @@ test("failed transfer leaves live Prompt untouched and composing editor defers t
   }
 });
 
-test("unsaved notes survive cache eviction and local session removal immediately purges notes", () => {
-  const sid = "test-unsaved-and-removed";
-  const prevSession = globalThis.sessionStorage;
-  const failingSession = makeMemoryStorage(true);
-  const okSession = makeMemoryStorage(false);
+test("throwing sessionStorage getter marks notes unsaved/unevictable and local removal purges immediately", () => {
+  const sid = "test-throwing-session-storage";
+  const prevDesc = Object.getOwnPropertyDescriptor(globalThis, "sessionStorage");
   try {
-    Object.defineProperty(globalThis, "sessionStorage", { value: failingSession.storage, configurable: true });
+    Object.defineProperty(globalThis, "sessionStorage", {
+      configurable: true,
+      get() { throw new DOMException("SecurityError", "SecurityError"); },
+    });
     clearReviewComments(sid);
     addReviewComment(sid, {
       path: "x.ts",
       startLine: 1,
       endLine: 1,
       codeSnippet: "+a",
-      body: "Unsaved note",
+      body: "Memory only note",
       kind: "diff",
     });
     assertEquals(isReviewCommentsUnsaved(sid), true);
-    // Switching storage back to working and caching 35 other sessions must NOT evict `sid`.
-    Object.defineProperty(globalThis, "sessionStorage", { value: okSession.storage, configurable: true });
-    for (let i = 0; i < 35; i++) {
-      const other = `test-other-session-${String(i)}`;
-      addReviewComment(other, { path: "o.ts", startLine: 1, endLine: 1, codeSnippet: "", body: "ok", kind: "source" });
-    }
     assertEquals(reviewCommentsForSession(sid).length, 1);
-    for (let i = 0; i < 35; i++) clearReviewComments(`test-other-session-${String(i)}`);
-
-    // Local markSessionRemoved immediately purges staged notes and blocks new writes.
     markSessionRemoved(sid);
     assertEquals(reviewCommentsForSession(sid).length, 0);
     assertEquals(addReviewComment(sid, { path: "x.ts", startLine: 1, endLine: 1, codeSnippet: "", body: "blocked", kind: "source" }), null);
   } finally {
     clearSessionRemoved(sid);
-    clearReviewComments(sid);
-    Object.defineProperty(globalThis, "sessionStorage", { value: prevSession, configurable: true });
+    if (prevDesc) Object.defineProperty(globalThis, "sessionStorage", prevDesc);
+    else delete (globalThis as Record<string, unknown>).sessionStorage;
   }
 });

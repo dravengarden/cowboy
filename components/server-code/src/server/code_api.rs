@@ -484,6 +484,7 @@ pub async fn api_code_commit_diff(
             api_version: 1,
             path: result.path,
             revision: oid,
+            change_fingerprint: None,
             text: result.text,
             added: result.added,
             removed: result.removed,
@@ -512,6 +513,7 @@ pub async fn api_code_diff(
                     api_version: 1,
                     path: page.path,
                     revision: page.revision,
+                    change_fingerprint: page.change_fingerprint,
                     text: page.text,
                     added: page.added,
                     removed: page.removed,
@@ -542,6 +544,7 @@ pub async fn api_code_diff(
             show_whitespace: query.show_whitespace,
             scope,
             comparison: query.comparison.clone(),
+            change_fingerprint: query.change_fingerprint.clone(),
         };
         let remote_document = match remote_code_request(
             &state,
@@ -588,6 +591,7 @@ pub async fn api_code_diff(
             api_version: 1,
             path: page.path,
             revision: page.revision,
+            change_fingerprint: page.change_fingerprint,
             text: page.text,
             added: page.added,
             removed: page.removed,

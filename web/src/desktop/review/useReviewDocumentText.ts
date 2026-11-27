@@ -2,12 +2,13 @@ import { useEffect, useState } from "react";
 import {
   CodeApiError,
   fetchCodeBlob,
+  fetchCodeDiff,
   fetchCodeDiffPage,
   fetchCodeFile,
   fetchCodeFilePage,
   fetchGitCommitDiff,
 } from "../../review/codeApi";
-import { loadCodeDiff } from "../../review/diffCache";
+import { invalidateDiffCache, loadCodeDiff } from "../../review/diffCache";
 import type { ReviewSettings } from "../../review/reviewSettingsModel";
 import { type DesktopReviewDocument, reviewDocumentKey } from "./desktopReviewTabs";
 import { pullFile } from "./pullPatches";
@@ -71,26 +72,20 @@ function failure(reason: unknown): string {
   return "The file could not be read.";
 }
 
-async function readDiff(
+async function readDiffOnce(
   sessionId: string,
   document: Extract<DesktopReviewDocument, { kind: "diff" }>,
   settings: ReviewSettings,
+  changeFingerprint: string | undefined,
+  bypassCache: boolean,
   signal: AbortSignal,
 ): Promise<ReviewDocumentText> {
-  const first = await loadCodeDiff(
-    sessionId,
-    document.path,
-    settings.contextLines,
-    settings.showWhitespaceChanges,
-    document.scope,
-    document.comparison,
-    signal,
-  );
+  const first = bypassCache
+    ? await fetchCodeDiff(sessionId, document.path, settings.contextLines, settings.showWhitespaceChanges, document.scope, document.comparison, signal, changeFingerprint)
+    : await loadCodeDiff(sessionId, document.path, settings.contextLines, settings.showWhitespaceChanges, document.scope, document.comparison, signal, changeFingerprint);
   let text = first.text;
   let cursor = first.nextCursor;
   let lastPage = first;
-  // Pages of one snapshot only: a page of another revision would splice two
-  // different diffs together (13-code-review).
   for (let page = 1; cursor && page < DIFF_PAGES; page++) {
     const next = await fetchCodeDiffPage(sessionId, cursor, signal);
     if (next.revision !== first.revision) throw new CodeApiError(409);
@@ -106,6 +101,25 @@ async function readDiff(
     removed: first.removed,
     truncated: Boolean(cursor) || lastPage.limited === true || (lastPage.truncated && !lastPage.nextCursor),
   };
+}
+
+async function readDiff(
+  sessionId: string,
+  document: Extract<DesktopReviewDocument, { kind: "diff" }>,
+  settings: ReviewSettings,
+  changeFingerprint: string | undefined,
+  bypassCache: boolean,
+  signal: AbortSignal,
+): Promise<ReviewDocumentText> {
+  try {
+    return await readDiffOnce(sessionId, document, settings, changeFingerprint, bypassCache, signal);
+  } catch (reason) {
+    if (reason instanceof CodeApiError && reason.status === 410) {
+      invalidateDiffCache(sessionId);
+      return await readDiffOnce(sessionId, document, settings, changeFingerprint, true, signal);
+    }
+    throw reason;
+  }
 }
 
 async function readSource(
@@ -173,6 +187,8 @@ export function useReviewDocumentText(
   settings: ReviewSettings,
   dataRevision: number,
   diffContext: ReviewDiffContext = "patch",
+  changeFingerprint?: string | undefined,
+  retryCount = 0,
 ): ReviewDocumentLoad | undefined {
   const [load, setLoad] = useState<{ key: string; value: ReviewDocumentLoad }>();
   const key = document && sessionId ? `${sessionId}\0${reviewDocumentKey(document)}` : undefined;
@@ -182,7 +198,7 @@ export function useReviewDocumentText(
     // Keep showing the previous text of the same document while it refreshes.
     setLoad((previous) => previous?.key === key ? previous : { key, value: { state: "loading" } });
     const patch = document.kind === "diff"
-      ? readDiff(sessionId, document, settings, controller.signal)
+      ? readDiff(sessionId, document, settings, changeFingerprint, retryCount > 0, controller.signal)
       : document.kind === "pr"
       ? readPull(document)
       : document.kind === "commit"
@@ -207,6 +223,6 @@ export function useReviewDocumentText(
     return () => controller.abort();
     // `document` is identified by `key`; settings that change the diff refetch.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [key, dataRevision, settings.contextLines, settings.showWhitespaceChanges, diffContext]);
+  }, [key, dataRevision, settings.contextLines, settings.showWhitespaceChanges, diffContext, changeFingerprint, retryCount]);
   return load?.key === key ? load?.value : undefined;
 }

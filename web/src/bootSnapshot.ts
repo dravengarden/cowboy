@@ -13,8 +13,8 @@
 // snapshot and must never open the product socket.
 
 export const BOOT_SNAPSHOT_CACHE = "cowboy-boot-snapshot-v1";
-/** Version 2 excludes editable content; version 1 can replay already-sent text. */
-export const BOOT_SNAPSHOT_VERSION = 2;
+/** Version 3 excludes Desktop Review stream patches; version 2 excluded editable content. */
+export const BOOT_SNAPSHOT_VERSION = 3;
 export const BOOT_SNAPSHOT_URL = "/__boot/snapshot.json";
 /** What the document can learn about the saved screen SYNCHRONOUSLY, before
  *  Cache Storage answers: enough to decide whether one is coming, so the
@@ -162,7 +162,7 @@ function restingScreen(root: HTMLElement): boolean {
       "#app-splash, [data-boot-loading], [data-machine-setup-gate], " +
         "[data-mobile-drawer-open='true'], [data-mobile-drawer-moving='true'], " +
         "[data-mobile-product-moving='true'], [data-mobile-keyboard-open='true'], " +
-        "[data-mobile-product='review']",
+        "[data-mobile-product='review'], [data-review-all-stream]",
     )
   ) return false;
   const focused = document.activeElement;
@@ -184,7 +184,7 @@ function freeze(original: Element, copy: Element, width: number, height: number)
   const box = original.getBoundingClientRect();
   if (
     BOXED_NODES.has(original.tagName) || original.isContentEditable ||
-    original.classList.contains("cm-editor")
+    original.classList.contains("cm-editor") || original.hasAttribute("data-review-all-stream")
   ) {
     const placeholder = document.createElement("div");
     placeholder.className = copy.className;

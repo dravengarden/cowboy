@@ -23,6 +23,7 @@ function cacheKey(
   showWhitespace: boolean,
   scope: CodeDiffScope,
   comparison?: string,
+  changeFingerprint?: string,
 ): string {
   return JSON.stringify([
     sessionId,
@@ -31,6 +32,7 @@ function cacheKey(
     showWhitespace,
     scope,
     comparison,
+    changeFingerprint,
   ]);
 }
 
@@ -68,6 +70,7 @@ export function loadCodeDiff(
   scope: CodeDiffScope,
   comparison?: string,
   signal?: AbortSignal,
+  changeFingerprint?: string,
 ): Promise<DiffResult> {
   const now = Date.now();
   prune(now);
@@ -78,6 +81,7 @@ export function loadCodeDiff(
     showWhitespace,
     scope,
     comparison,
+    changeFingerprint,
   );
   let entry = cache.get(key);
   if (!entry) {
@@ -88,6 +92,8 @@ export function loadCodeDiff(
       showWhitespace,
       scope,
       comparison,
+      undefined,
+      changeFingerprint,
     ).catch((error) => {
       cache.delete(key);
       throw error;

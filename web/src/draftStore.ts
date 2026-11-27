@@ -474,6 +474,49 @@ export function appendDraftText(sessionId: string, text: string): void {
  *    (which rejects edits while IME composition is active); on refusal, rolls
  *    back the pre-persisted mirror and returns `"composing"`.
  */
+/** Strict localStorage-first persistence for durable transfers:
+ *  - NEVER falls back to stripping previously saved attachments on quota.
+ *  - NEVER queues an IndexedDB write unless the synchronous mirror succeeded. */
+function persistStrictMirror(sessionId: string, draft: Draft): { ok: boolean; queueDb: boolean } {
+  if (isSessionRemoved(sessionId)) return { ok: false, queueDb: false };
+  const ls = globalThis.localStorage;
+  if (!ls) return { ok: true, queueDb: false };
+  const key = KEY_PREFIX + sessionId;
+  const attachments = storableAttachments(draft.attachments);
+  if (awaitingDatabase.has(sessionId) || (attachments.length > 0 && draftCache(sessionId) !== undefined)) {
+    const mirror: DraftMirror = { text: draft.text, attachments: [], attachmentsInDatabase: true };
+    try {
+      ls.setItem(key, JSON.stringify(mirror));
+      return { ok: true, queueDb: !awaitingDatabase.has(sessionId) && attachments.length > 0 };
+    } catch {
+      return { ok: false, queueDb: false };
+    }
+  }
+  // No database available (or no attachments): write the FULL draft strictly so
+  // previously saved attachments and inline image tokens are never silently dropped.
+  try {
+    ls.setItem(key, JSON.stringify(draft));
+    return { ok: true, queueDb: false };
+  } catch {
+    return { ok: false, queueDb: false };
+  }
+}
+
+function commitStrictDatabaseIfNeeded(sessionId: string, draft: Draft, queueDb: boolean): void {
+  const attachments = storableAttachments(draft.attachments);
+  if (!queueDb || attachments.length === 0) return;
+  const cache = draftCache(sessionId);
+  if (cache === undefined) return;
+  const stored: StoredDraft = { text: draft.text, attachments, savedAt: Date.now() };
+  databaseDrafts.add(sessionId);
+  pendingDiscards.delete(sessionId);
+  void writeDatabase(sessionId, () =>
+    cache.update(() => (isSessionRemoved(sessionId) ? null : stored)),
+  ).catch((): void => {
+    databaseDrafts.delete(sessionId);
+  });
+}
+
 export function appendDraftTextDurable(
   sessionId: string,
   text: string,
@@ -483,30 +526,43 @@ export function appendDraftTextDurable(
   const composer = appendListeners.get(sessionId);
   if (composer) {
     let persistedCandidate = false;
+    let queuedDb = false;
+    let candidateDraft: Draft | null = null;
     const status = composer(text, {
       checkDurable: (candidateText: string): boolean => {
         const base = drafts.get(sessionId) ?? EMPTY;
-        const ok = persist(sessionId, { ...base, text: candidateText });
-        persistedCandidate = ok;
-        return ok;
+        const candidate: Draft = { ...base, text: candidateText };
+        const res = persistStrictMirror(sessionId, candidate);
+        persistedCandidate = res.ok;
+        queuedDb = res.queueDb;
+        candidateDraft = res.ok ? candidate : null;
+        return res.ok;
       },
       rollback: (): void => {
         if (persistedCandidate) {
-          persist(sessionId, previous);
+          if (previous) persistStrictMirror(sessionId, previous);
+          else persist(sessionId, null);
           persistedCandidate = false;
+          queuedDb = false;
+          candidateDraft = null;
         }
       },
     });
     if (status === "storage-failed" || status === "composing") return status;
-    // Compatibility for simple test listeners that return void without calling checkDurable.
     if (!persistedCandidate) {
-      const latest = drafts.get(sessionId) ?? null;
-      if (!persist(sessionId, latest)) {
-        if (previous) drafts.set(sessionId, previous);
-        else drafts.delete(sessionId);
-        dirty.delete(sessionId);
-        return "storage-failed";
+      const latest = drafts.get(sessionId);
+      if (latest) {
+        const res = persistStrictMirror(sessionId, latest);
+        if (!res.ok) {
+          if (previous) drafts.set(sessionId, previous);
+          else drafts.delete(sessionId);
+          dirty.delete(sessionId);
+          return "storage-failed";
+        }
+        commitStrictDatabaseIfNeeded(sessionId, latest, res.queueDb);
       }
+    } else if (candidateDraft) {
+      commitStrictDatabaseIfNeeded(sessionId, candidateDraft, queuedDb);
     }
     dirty.delete(sessionId);
     return "ok";
@@ -516,10 +572,12 @@ export function appendDraftTextDurable(
     ...draft,
     text: draft.text ? `${draft.text.trimEnd()}\n\n${text}` : text,
   };
-  if (!persist(sessionId, nextDraft)) return "storage-failed";
+  const res = persistStrictMirror(sessionId, nextDraft);
+  if (!res.ok) return "storage-failed";
   drafts.set(sessionId, nextDraft);
   cleared.delete(sessionId);
   dirty.delete(sessionId);
+  commitStrictDatabaseIfNeeded(sessionId, nextDraft, res.queueDb);
   return "ok";
 }
 

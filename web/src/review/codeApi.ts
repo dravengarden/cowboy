@@ -156,6 +156,7 @@ export interface CodeDocument {
   apiVersion: 1;
   path: string;
   revision?: string;
+  changeFingerprint?: string;
   text: string;
   truncated: boolean;
   nextCursor?: string;
@@ -590,6 +591,7 @@ export function fetchCodeDiff(
   scope: CodeDiffScope,
   comparison?: string,
   signal?: AbortSignal,
+  changeFingerprint?: string,
 ): Promise<CodeDocument & { added: number; removed: number }> {
   const query = new URLSearchParams({
     path,
@@ -598,6 +600,7 @@ export function fetchCodeDiff(
     scope,
   });
   if (comparison) query.set("comparison", comparison);
+  if (changeFingerprint) query.set("changeFingerprint", changeFingerprint);
   return codeFetch(
     `/api/code/sessions/${encodeURIComponent(sessionId)}/diff?${query}`,
     signal,
