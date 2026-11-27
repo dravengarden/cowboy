@@ -88,6 +88,12 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
+Component release 3.159.0 records `state-sync-idb` 1.8.6: adds atomic
+`retireOutboxIf` conditional outbox deletion for Trash purge recovery so a
+stale cleanup can never discard newer cross-tab pending mutations. It is a
+Web-only component; no Plugin pins it, so every Plugin and the closure are
+unchanged.
+
 Component release 3.157.0 records app-shell 1.1.45: the Desktop and Mobile
 background-task changes (`detent-sheet.tsx` in the R1–R3 review fixes)
 changed its source after 3.156.0. It is a Web-only component; no Plugin pins
