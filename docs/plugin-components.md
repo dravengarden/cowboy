@@ -1212,3 +1212,7 @@ replica paths remain capability-specific state, not an extension lifecycle.
 - `cowboy.provider-runtime` `1.3.37` (`cowboy-antigravity-acp` `1.0.31`): add content-free per-step backend timing and usage-update diagnostics in `evidence.mjs` and `proxy.mjs` for worker `wait_cache` projection.
 - `codex` `3.6.43`: opt into `COWBOY_PRIVATE_CODEX_REQUEST_OBSERVATION=codex-otlp-http-v1`, fail-closed effective OTel policy inspection across layers, and dynamic `otel.headers_helper`.
 - Companion agent providers pinning `cowboy.provider-runtime` advanced by one patch version.
+
+### `3.160.0`
+
+- `claude-deepseek` `3.1.102` and `codex-deepseek` `3.1.101`: set `deepseek_cache_protection` default preference to `false` (opt-in paid keepalive, strictly independent from idle context renewal) and update cache-protection option copy accordingly.

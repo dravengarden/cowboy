@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "codex-deepseek",
-  "version": "3.1.100",
+  "version": "3.1.101",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {
@@ -119,7 +119,7 @@
       "default_preferences": {
         "model": "deepseek-flash",
         "deepseek_context": "680k",
-        "deepseek_cache_protection": true,
+        "deepseek_cache_protection": false,
         "collaboration_mode": "default",
         "reasoning_effort": "max"
       },

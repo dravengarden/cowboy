@@ -77,6 +77,7 @@ export interface RolloverStrategyView {
   inherited: boolean | null;
   session_override: boolean | null;
   idle_minutes: number | null;
+  recommended_idle_minutes?: number | null;
   min_context_tokens: number | null;
   due: boolean;
   restriction?: string | null;
@@ -117,6 +118,9 @@ export interface SessionCacheMetricsResponse {
   coverage: CacheMetricsCoverage;
   capabilities: CacheCapabilitiesView;
   strategy: SessionCacheStrategyView;
+  idle_ms?: number | null;
+  context_used?: number;
+  context_stale?: boolean;
 }
 
 export function accountCacheMetricsUrl(
@@ -284,4 +288,37 @@ export function formatStrategySummary(strategy: SessionCacheStrategyView): strin
     return `Off (${source})`;
   }
   return parts.join(" · ");
+}
+
+const COLD_RESUME_ADVISORY_MIN_IDLE_MS = 30 * 60_000;
+const COLD_RESUME_ADVISORY_MIN_CONTEXT_TOKENS = 80_000;
+
+/**
+ * Strictly read-only cold-resume guidance for host-policy-restricted sessions
+ * (e.g. Antigravity) where automatic context rollover is prohibited.
+ * Never returns an advisory for rollover-capable Providers or stale readings.
+ */
+export function formatColdResumeAdvisory(
+  data: Pick<
+    SessionCacheMetricsResponse,
+    "capabilities" | "strategy" | "idle_ms" | "context_used" | "context_stale"
+  >,
+): string | null {
+  if (
+    data.strategy.rollover.supported ||
+    !data.capabilities.rollover_restriction ||
+    data.context_stale !== false
+  ) {
+    return null;
+  }
+  const idleMs = data.idle_ms ?? null;
+  const contextUsed = data.context_used ?? 0;
+  if (
+    idleMs === null ||
+    idleMs < COLD_RESUME_ADVISORY_MIN_IDLE_MS ||
+    contextUsed < COLD_RESUME_ADVISORY_MIN_CONTEXT_TOKENS
+  ) {
+    return null;
+  }
+  return `Idle ${formatIdleGap(idleMs)} with ~${formatCompactTokens(contextUsed)} context · automatic renewal is disabled by host policy; consider Clear or a fresh session before starting a new task.`;
 }

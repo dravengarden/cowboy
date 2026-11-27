@@ -78,9 +78,9 @@
       "interval_ms": 19800000,
       "interval_label": "5h30m",
       "option_name": "Cache protection",
-      "option_description": "Automatically protects DeepSeek prompt caches after at least 64K verified hit tokens. Keepalives run only while idle, are preempted by real requests, and changing this setting restarts only this idle session.",
-      "option_on": "Auto · recommended",
-      "option_off": "Off"
+      "option_description": "Optional paid keepalive for DeepSeek prompt caches after at least 64K verified hit tokens. Off by default; runs only while idle, is preempted by real requests, is independent from idle context renewal, and changing this setting restarts only this idle session.",
+      "option_on": "Auto (paid keepalive)",
+      "option_off": "Off · default"
     },
     "available_status": "API",
     "omit_empty_limits": true

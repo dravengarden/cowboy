@@ -91,6 +91,7 @@ pub struct RolloverStrategyView {
     pub inherited: Option<bool>,
     pub session_override: Option<bool>,
     pub idle_minutes: Option<u64>,
+    pub recommended_idle_minutes: Option<u64>,
     pub min_context_tokens: Option<u64>,
     pub due: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -125,6 +126,9 @@ pub struct SessionCacheMetricsResponse {
     pub metrics: SessionCacheMetrics,
     pub capabilities: CacheCapabilitiesView,
     pub strategy: SessionCacheStrategyView,
+    pub idle_ms: Option<u64>,
+    pub context_used: u64,
+    pub context_stale: bool,
 }
 
 fn no_store_json<T: Serialize>(payload: T) -> Response {
@@ -375,18 +379,30 @@ async fn load_authorized_account_cache_metrics(
     })
 }
 
-#[allow(clippy::too_many_arguments)]
+#[derive(Default)]
+struct SessionCacheStrategyInput<'a> {
+    rollover_policy: Option<crate::context_rollover::Policy>,
+    idle_ms: Option<u64>,
+    due: bool,
+    native_fork: bool,
+    keepalive_evidence: Option<&'a SessionKeepaliveEvidence>,
+}
+
 async fn load_authorized_session_cache_metrics(
     hub: &Hub,
     store: &Store,
     principal: &ProductPrincipal,
     session_id: &str,
     query: &SessionCacheMetricsQuery,
-    rollover_policy: Option<crate::context_rollover::Policy>,
-    due: bool,
-    native_fork: bool,
-    keepalive_evidence: Option<&SessionKeepaliveEvidence>,
+    input: SessionCacheStrategyInput<'_>,
 ) -> Result<SessionCacheMetricsResponse, (StatusCode, &'static str)> {
+    let SessionCacheStrategyInput {
+        rollover_policy,
+        idle_ms,
+        due,
+        native_fork,
+        keepalive_evidence,
+    } = input;
     if !session_is_visible(hub, principal, session_id) {
         return Err((StatusCode::NOT_FOUND, "unknown session"));
     }
@@ -433,6 +449,8 @@ async fn load_authorized_session_cache_metrics(
         .clone()
         .or_else(|| native_fork.then(|| NATIVE_FORK_ROLLOVER_RESTRICTION.to_owned()));
 
+    let recommended_idle_minutes =
+        crate::context_rollover::recommended_idle_minutes(&meta.provider);
     let (rollover_view, rollover_enabled) = match rollover_policy {
         Some(policy) => (
             RolloverStrategyView {
@@ -442,6 +460,7 @@ async fn load_authorized_session_cache_metrics(
                 inherited: Some(policy.session_override.is_none()),
                 session_override: policy.session_override,
                 idle_minutes: policy.idle_minutes,
+                recommended_idle_minutes,
                 min_context_tokens: Some(policy.min_context_tokens),
                 due: due && session_rollover_supported,
                 restriction: session_rollover_restriction,
@@ -456,6 +475,7 @@ async fn load_authorized_session_cache_metrics(
                 inherited: None,
                 session_override: None,
                 idle_minutes: None,
+                recommended_idle_minutes,
                 min_context_tokens: None,
                 due: false,
                 restriction: session_rollover_restriction,
@@ -482,6 +502,9 @@ async fn load_authorized_session_cache_metrics(
         metrics,
         capabilities,
         strategy,
+        idle_ms,
+        context_used: meta.context_used,
+        context_stale: meta.context_usage_stale(),
     })
 }
 
@@ -567,10 +590,13 @@ pub async fn session_cache_metrics(
         &auth.principal,
         &id,
         &query,
-        rollover_policy,
-        due,
-        native_fork,
-        keepalive_evidence.as_ref(),
+        SessionCacheStrategyInput {
+            rollover_policy,
+            idle_ms,
+            due,
+            native_fork,
+            keepalive_evidence: keepalive_evidence.as_ref(),
+        },
     )
     .await
     {
@@ -946,10 +972,7 @@ mod tests {
             &principal_b,
             "sess-a",
             &SessionCacheMetricsQuery::default(),
-            None,
-            false,
-            false,
-            None,
+            SessionCacheStrategyInput::default(),
         )
         .await;
         assert_eq!(denied.unwrap_err().0, StatusCode::NOT_FOUND);
@@ -961,10 +984,7 @@ mod tests {
             &principal_a,
             "sess-a",
             &SessionCacheMetricsQuery::default(),
-            None,
-            false,
-            false,
-            None,
+            SessionCacheStrategyInput::default(),
         )
         .await
         .expect("session metrics with unavailable rollover policy");
@@ -994,10 +1014,13 @@ mod tests {
             &principal_a,
             "sess-a",
             &SessionCacheMetricsQuery::default(),
-            Some(fork_policy.clone()),
-            true,
-            true,
-            Some(&verified_portable),
+            SessionCacheStrategyInput {
+                rollover_policy: Some(fork_policy.clone()),
+                idle_ms: Some(3_600_000),
+                due: true,
+                native_fork: true,
+                keepalive_evidence: Some(&verified_portable),
+            },
         )
         .await
         .expect("native fork metrics");
@@ -1019,10 +1042,13 @@ mod tests {
             &principal_a,
             "sess-a",
             &SessionCacheMetricsQuery::default(),
-            Some(fork_policy),
-            false,
-            false,
-            Some(&unverified_dsh),
+            SessionCacheStrategyInput {
+                rollover_policy: Some(fork_policy),
+                idle_ms: Some(60_000),
+                due: false,
+                native_fork: false,
+                keepalive_evidence: Some(&unverified_dsh),
+            },
         )
         .await
         .expect("unverified gateway metrics");

@@ -3711,10 +3711,10 @@ fn session_context_environment(
     };
     let cache_provider = crate::deepseek_cache::supported_behavior(configuration);
     if cache_provider {
-        // Legacy launch snapshots predate the additive policy field. Preserve
-        // the product default during a rolling Machine cutover instead of
-        // silently enrolling only sessions created after the upgrade.
-        let enabled = session.cache_protection.unwrap_or(true);
+        // Legacy launch snapshots predate the additive policy field. Match
+        // the opt-in product default (`false`) so unconfigured sessions never
+        // silently trigger paid keepalive replays.
+        let enabled = session.cache_protection.unwrap_or(false);
         environment.push((
             crate::deepseek_cache::SESSION_POLICY_ENV,
             if enabled { "auto" } else { "off" }.to_owned(),
@@ -5175,7 +5175,7 @@ mod tests {
         session.cache_protection = None;
         assert_eq!(
             session_context_environment(&session, &configuration).expect("legacy cache policy"),
-            vec![(crate::deepseek_cache::SESSION_POLICY_ENV, "auto".to_owned(),)]
+            vec![(crate::deepseek_cache::SESSION_POLICY_ENV, "off".to_owned(),)]
         );
 
         session.provider = "codex".to_owned();

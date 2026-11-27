@@ -59,6 +59,50 @@ pub fn default_idle_minutes(provider: &str) -> Option<u64> {
     }
 }
 
+/// Empirically grounded recommended idle threshold for UI opt-in presets and
+/// shadow observation. Never enables automatic renewal by itself; runtime
+/// activation comes exclusively from [`default_idle_minutes`] or explicit owner
+/// preferences. Host-policy-restricted Providers (e.g. Antigravity) always
+/// return `None`.
+#[must_use]
+pub fn recommended_idle_minutes(provider: &str) -> Option<u64> {
+    if crate::provider_account::named_only(provider) {
+        return None;
+    }
+    match provider {
+        "claude-code" => Some(60),
+        // Hawk production telemetry shows Codex interactive follow-ups remain
+        // 98.8%-99.6% warm through 4 hours and collapse past 4 hours.
+        "codex" => Some(240),
+        // DeepSeek automatic context caching expires around 5.5 hours;
+        // opt-in idle renewal stays strictly independent of paid keepalive.
+        "claude-deepseek" | "codex-deepseek" | "deepseek-harness" => Some(360),
+        _ => None,
+    }
+}
+
+/// Shadow-only candidate threshold for Providers whose automatic rollover is
+/// off by default, used strictly for observational telemetry before any
+/// default promotion. Never triggers renewal and always returns `None` for
+/// host-policy-restricted Providers.
+#[must_use]
+pub fn shadow_candidate_idle_minutes(provider: &str) -> Option<u64> {
+    if default_idle_minutes(provider).is_some() {
+        return None;
+    }
+    recommended_idle_minutes(provider)
+}
+
+/// Whether the owner explicitly set `idle_minutes.<provider> = null` to keep
+/// that Provider disabled.
+#[must_use]
+pub fn explicit_provider_disabled(preferences: Option<&Value>, provider: &str) -> bool {
+    preferences
+        .and_then(|values| values.get("idle_minutes"))
+        .and_then(|minutes| minutes.get(provider))
+        .is_some_and(Value::is_null)
+}
+
 /// The renewal policy for one session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Policy {
@@ -143,9 +187,10 @@ pub fn valid_preference(key: &str, value: &Value, provider_valid: impl Fn(&str) 
                 && providers.iter().all(|(provider, minutes)| {
                     provider_valid(provider)
                         && (minutes.is_null()
-                            || minutes
-                                .as_u64()
-                                .is_some_and(|minutes| IDLE_MINUTES_RANGE.contains(&minutes)))
+                            || (!crate::provider_account::named_only(provider)
+                                && minutes
+                                    .as_u64()
+                                    .is_some_and(|minutes| IDLE_MINUTES_RANGE.contains(&minutes))))
                 })
         }),
         _ => false,

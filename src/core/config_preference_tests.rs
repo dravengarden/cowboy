@@ -102,7 +102,7 @@ fn new_claude_deepseek_sessions_start_with_flash_max_default_agent_preferences()
         Some(serde_json::json!({
             "model": "deepseek-flash[1m]",
             "deepseek_context": "830k",
-            "deepseek_cache_protection": true,
+            "deepseek_cache_protection": false,
             "effort": "max",
             "agent": "default",
         }))
@@ -126,7 +126,7 @@ fn new_codex_deepseek_sessions_start_with_flash_default_collaboration_max_prefer
         Some(serde_json::json!({
             "model": "deepseek-flash",
             "deepseek_context": "680k",
-            "deepseek_cache_protection": true,
+            "deepseek_cache_protection": false,
             "collaboration_mode": "default",
             "reasoning_effort": "max",
         }))
@@ -394,7 +394,7 @@ fn deepseek_context_option_is_projected_after_the_model() {
     assert_eq!(options[1]["id"], "deepseek_context");
     assert_eq!(options[1]["currentValue"], "680k");
     assert_eq!(options[2]["id"], "deepseek_cache_protection");
-    assert_eq!(options[2]["currentValue"], true);
+    assert_eq!(options[2]["currentValue"], false);
     assert_eq!(options[3]["id"], "reasoning_effort");
 }
 

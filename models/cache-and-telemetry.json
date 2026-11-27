@@ -21,8 +21,8 @@
       },
       "prompt_cache_ttl": {
         "documented_policy": "Included subscription main thread observed ~1h cache TTL; other/ephemeral usage ~5m.",
-        "empirical_notes": "Hawk 14d baseline (1,711 turns): 98.9% cached input share overall; cold cache write jumps sharply past 60m idle.",
-        "current_default_strategy": "idle_context_rollover_60m_80k"
+        "empirical_notes": "Hawk baseline (1,885 turns): 98.9% cached input share overall; 117 renewed turns averaged 79k cache write vs 300k-640k on expired resumes. Stage 3 tightened hibernation sweep to 1m and enabled rollover for owner-authored scheduled continuations while keeping call-notice excluded.",
+        "current_default_strategy": "idle_context_rollover_60m_80k_1m_hibernate"
       },
       "policy_boundaries": [
         "Native-only account custody per Machine."
@@ -45,8 +45,8 @@
       },
       "prompt_cache_ttl": {
         "documented_policy": "Prompt cache retention varies by model family and routing; verify against OpenAI docs on every model/CLI upgrade.",
-        "empirical_notes": "Hawk 14d baseline (515 turns): 95.9% cached input share; newer models (gpt-6.2-sol, gpt-6.2-astra) show higher uncached growth in 5-30m gaps than earlier assumptions. Re-evaluate after Level 2 per-request telemetry lands.",
-        "current_default_strategy": "none_default_opt_in_rollover"
+        "empirical_notes": "Hawk baseline (623 turns): interactive human follow-ups stay 98.8%-99.6% warm through 4h and drop to 4.1% at 4-12h; 85% of Codex uncached volume comes from single-turn managed calls. Stage 3 keeps default off while exposing a 240m (4h) canary preset in Settings and running 240m shadow candidate telemetry alongside Level 2 OTLP.",
+        "current_default_strategy": "opt_in_canary_rollover_240m_shadow"
       },
       "policy_boundaries": []
     },
@@ -67,8 +67,8 @@
       },
       "prompt_cache_ttl": {
         "documented_policy": "Implicit prompt cache retention is dynamic and not guaranteed across idle intervals.",
-        "empirical_notes": "Hawk 14d baseline (821 turns): 96.6% cached input share, 142.65M uncached (largest uncached volume); gemini-4-neon uncached climbs steeply across 5-15m / 15-30m / 30-60m gaps.",
-        "current_default_strategy": "observability_only_restricted"
+        "empirical_notes": "Hawk baseline (946 turns): 96.6% cached input share, 162.9M uncached (largest uncached volume); uncached climbs steeply across 5-15m / 30-60m / 2h+ gaps. Stage 3 keeps zero automatic mutation and adds a strictly read-only cold-resume advisory in Session Cache Metrics past 30m idle and 80k+ context.",
+        "current_default_strategy": "observability_only_restricted_readonly_advisory"
       },
       "policy_boundaries": [
         "docs/requirements.md consumer-account boundary and named_only custody apply.",
@@ -93,8 +93,8 @@
       },
       "prompt_cache_ttl": {
         "documented_policy": "DeepSeek automatic context caching; gateway adaptive-replay-v1 starts probing at 5h30m (19800000ms) only after >= 64K verified cache-hit tokens (min_hit_tokens: 64000; cold contexts do not qualify).",
-        "empirical_notes": "Hawk 30d gateway ledger showed 3/3 keepalive hits had 0 subsequent interactive turns on the same session. Keep deepseek_cache_protection independent from idle rollover.",
-        "current_default_strategy": "gateway_adaptive_replay_v1_independent_flag"
+        "empirical_notes": "Hawk 30d gateway ledger showed 3/3 paid keepalive hits (668k hit tokens) had 0 subsequent interactive turns on the same session. Stage 3 sets deepseek_cache_protection default to false (opt-in, preserving explicit preferences) while keeping it strictly independent from opt-in 360m idle rollover and shadow telemetry.",
+        "current_default_strategy": "opt_in_keepalive_default_off_independent_rollover_360m_shadow"
       },
       "policy_boundaries": [
         "Preserve independent deepseek_cache_protection boolean for rollback safety; never silently re-enable paid replay."
@@ -117,8 +117,8 @@
       },
       "prompt_cache_ttl": {
         "documented_policy": "DeepSeek automatic context caching; gateway adaptive-replay-v1 starts probing at 5h30m (19800000ms) only after >= 64K verified cache-hit tokens (min_hit_tokens: 64000; cold contexts do not qualify).",
-        "empirical_notes": "Low volume on Hawk; keep deepseek_cache_protection independent from idle rollover.",
-        "current_default_strategy": "gateway_adaptive_replay_v1_independent_flag"
+        "empirical_notes": "Low volume on Hawk; Stage 3 aligns deepseek_cache_protection default to false (opt-in, preserving explicit preferences) while keeping it strictly independent from opt-in 360m idle rollover and shadow telemetry.",
+        "current_default_strategy": "opt_in_keepalive_default_off_independent_rollover_360m_shadow"
       },
       "policy_boundaries": [
         "Preserve independent deepseek_cache_protection boolean for rollback safety; never silently re-enable paid replay."

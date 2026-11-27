@@ -647,6 +647,7 @@ export interface Cowboy {
     get(scope: "code"): Promise<unknown>; // Review directory defaults: help("preferences")
     get(scope: "about"): Promise<{preferences:{scope:string;revision:number;values:Record<string,string[]>};choices:Record<string,{id:string;name:string}[]>}>;
     get(scope: "superagent"): Promise<unknown>; // project/session settings + source_catalog metadata, omits source bodies; help("superagent")
+    get(scope: "context_rollover"): Promise<unknown>; // idle prompt-cache renewal defaults + per-Provider capabilities/recommendations
   };
 }
 "#;

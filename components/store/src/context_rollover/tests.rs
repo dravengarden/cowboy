@@ -101,7 +101,12 @@ fn preference_fields_are_validated() {
     assert!(!valid_preference("min_context_tokens", &json!(10), ok));
     assert!(valid_preference(
         "idle_minutes",
-        &json!({"claude-code":30,"codex":null}),
+        &json!({"claude-code":30,"codex":null,"antigravity":null}),
+        ok
+    ));
+    assert!(!valid_preference(
+        "idle_minutes",
+        &json!({"antigravity":60}),
         ok
     ));
     assert!(!valid_preference(
@@ -111,6 +116,34 @@ fn preference_fields_are_validated() {
     ));
     assert!(!valid_preference("idle_minutes", &json!({"Bad Id":5}), ok));
     assert!(!valid_preference("other", &json!(true), ok));
+}
+
+#[test]
+fn recommended_and_shadow_candidates_preserve_antigravity_and_default_boundaries() {
+    assert_eq!(recommended_idle_minutes("claude-code"), Some(60));
+    assert_eq!(shadow_candidate_idle_minutes("claude-code"), None);
+    assert_eq!(recommended_idle_minutes("codex"), Some(240));
+    assert_eq!(shadow_candidate_idle_minutes("codex"), Some(240));
+    for provider in ["claude-deepseek", "codex-deepseek", "deepseek-harness"] {
+        assert_eq!(recommended_idle_minutes(provider), Some(360), "{provider}");
+        assert_eq!(
+            shadow_candidate_idle_minutes(provider),
+            Some(360),
+            "{provider}"
+        );
+    }
+    assert_eq!(recommended_idle_minutes("antigravity"), None);
+    assert_eq!(shadow_candidate_idle_minutes("antigravity"), None);
+    assert_eq!(recommended_idle_minutes("grok"), None);
+    assert_eq!(shadow_candidate_idle_minutes("grok"), None);
+
+    let explicit_off = json!({"idle_minutes":{"codex":null}});
+    assert!(explicit_provider_disabled(Some(&explicit_off), "codex"));
+    assert!(!explicit_provider_disabled(
+        Some(&explicit_off),
+        "claude-deepseek"
+    ));
+    assert!(!explicit_provider_disabled(None, "codex"));
 }
 
 #[test]

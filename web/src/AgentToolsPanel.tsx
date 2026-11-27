@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { ContextRolloverPreferencesSection } from "./ContextRolloverPreferencesSection";
 import { SessionSuperagentSettings, SuperagentSettings } from "./SuperagentSettings";
 import { desktopSize, glyphSize } from "./surface/desktopSize";
 import Check from "@mui/icons-material/Check";
@@ -763,6 +764,7 @@ export function AgentToolsSettings(): React.JSX.Element {
           />
         </>
       )}
+      <ContextRolloverPreferencesSection />
       <SuperagentSettings />
     </Box>
   );

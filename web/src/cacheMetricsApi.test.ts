@@ -5,6 +5,7 @@ import {
   buildDisjointCacheSegments,
   type CacheMetricsCoverage,
   type CacheMetricsTotals,
+  formatColdResumeAdvisory,
   formatCompactTokens,
   formatCoverageSummary,
   formatIdleGap,
@@ -246,4 +247,92 @@ test("recordTurnEndSeq retains monotonic turn_end watermarks independently of tr
   assertEquals(latestTurnEndSeq("sess-unfocused-test"), 12);
   recordTurnEndSeq("sess-unfocused-test", 19);
   assertEquals(latestTurnEndSeq("sess-unfocused-test"), 19);
+});
+
+test("formatColdResumeAdvisory renders strictly for policy-restricted long-idle large contexts", () => {
+  const baseRestricted = {
+    capabilities: {
+      telemetry_level: "turn_end",
+      observed_cache_read: true,
+      observed_cache_write: false,
+      supports_idle_rollover: false,
+      supports_gateway_keepalive: false,
+      keepalive_capability_status: "verified",
+      rollover_restriction:
+        "Automatic context renewal is disabled for Antigravity accounts by host policy.",
+    },
+    strategy: {
+      effective_mode: "none",
+      rollover: {
+        availability: "available",
+        supported: false,
+        enabled: false,
+        inherited: true,
+        session_override: null,
+        idle_minutes: null,
+        recommended_idle_minutes: null,
+        min_context_tokens: 80_000,
+        due: false,
+        restriction:
+          "Automatic context renewal is disabled for Antigravity accounts by host policy.",
+      },
+      gateway_keepalive: { supported: false, enabled: null },
+    },
+  };
+
+  // Warm, small, or stale readings stay quiet.
+  assertEquals(
+    formatColdResumeAdvisory({
+      ...baseRestricted,
+      idle_ms: 15 * 60_000,
+      context_used: 240_000,
+      context_stale: false,
+    }),
+    null,
+  );
+  assertEquals(
+    formatColdResumeAdvisory({
+      ...baseRestricted,
+      idle_ms: 45 * 60_000,
+      context_used: 50_000,
+      context_stale: false,
+    }),
+    null,
+  );
+  assertEquals(
+    formatColdResumeAdvisory({
+      ...baseRestricted,
+      idle_ms: 45 * 60_000,
+      context_used: 240_000,
+      context_stale: true,
+    }),
+    null,
+  );
+
+  // Eligible Antigravity session shows calm read-only advisory.
+  const advisory = formatColdResumeAdvisory({
+    ...baseRestricted,
+    idle_ms: 45 * 60_000,
+    context_used: 240_000,
+    context_stale: false,
+  });
+  assertEquals(advisory?.includes("45m"), true);
+  assertEquals(advisory?.includes("240k"), true);
+  assertEquals(advisory?.includes("host policy"), true);
+
+  // Rollover-capable sessions (including native forks without host rollover_restriction) never show this advisory.
+  assertEquals(
+    formatColdResumeAdvisory({
+      ...baseRestricted,
+      capabilities: {
+        ...baseRestricted.capabilities,
+        supports_idle_rollover: true,
+        rollover_restriction: null,
+      },
+      idle_ms: 90 * 60_000,
+      context_used: 240_000,
+      context_stale: false,
+    }),
+    null,
+  );
 });

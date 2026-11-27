@@ -3,6 +3,52 @@ use super::*;
 use crate::store::preferences::{PreferenceChange, PreferenceResult};
 use serde_json::{Value, json};
 
+fn build_rollover_provider_choices(
+    entries: impl IntoIterator<Item = (String, String, bool)>,
+) -> Vec<Value> {
+    let mut by_id = std::collections::BTreeMap::<String, (String, bool)>::new();
+    for (provider_id, display_name, keepalive_independent) in entries {
+        if provider_id.trim().is_empty() {
+            continue;
+        }
+        by_id.insert(provider_id, (display_name, keepalive_independent));
+    }
+    by_id
+        .into_iter()
+        .map(|(id, (name, keepalive_independent))| {
+            let policy_restricted = crate::provider_account::named_only(&id);
+            let restriction = policy_restricted.then_some(
+                "Automatic context renewal is disabled for Antigravity accounts by host policy.",
+            );
+            json!({
+                "id": id,
+                "name": name,
+                "builtin_idle_minutes": crate::context_rollover::default_idle_minutes(&id),
+                "recommended_idle_minutes": crate::context_rollover::recommended_idle_minutes(&id),
+                "policy_restricted": policy_restricted,
+                "restriction": restriction,
+                "keepalive_independent": keepalive_independent,
+            })
+        })
+        .collect()
+}
+
+fn rollover_provider_choices(state: &AppState) -> Vec<Value> {
+    build_rollover_provider_choices(state.provider_catalog.entries().into_iter().map(|entry| {
+        let keepalive_independent = entry
+            .manifest
+            .host
+            .features
+            .iter()
+            .any(|feature| *feature == cowboy_provider_sdk::HostFeature::CacheProtectionV1);
+        (
+            entry.provider_id,
+            entry.manifest.display.name,
+            keepalive_independent,
+        )
+    }))
+}
+
 pub async fn read_value(state: &AppState, owner: &str, scope: &str) -> Result<Value, &'static str> {
     let prefs = state
         .store
@@ -12,6 +58,12 @@ pub async fn read_value(state: &AppState, owner: &str, scope: &str) -> Result<Va
         .await
         .map_err(|_| "unavailable")?
         .ok_or("unknown_scope")?;
+    if scope == crate::context_rollover::PREFERENCE_SCOPE {
+        return Ok(json!({
+            "preferences": prefs,
+            "providers": rollover_provider_choices(state),
+        }));
+    }
     if scope != "about" {
         return Ok(json!({"preferences":prefs}));
     }
@@ -214,5 +266,47 @@ mod tests {
         assert!(serde_json::from_value::<Update>(input.clone()).is_ok());
         input["owner"] = json!("victim");
         assert!(serde_json::from_value::<Update>(input).is_err());
+    }
+
+    #[test]
+    fn rollover_provider_choices_emit_honest_defaults_recommendations_and_antigravity_restriction()
+    {
+        let choices = build_rollover_provider_choices([
+            ("claude-code".into(), "Claude Code".into(), false),
+            ("codex".into(), "Codex".into(), false),
+            ("antigravity".into(), "Antigravity".into(), false),
+            (
+                "claude-deepseek".into(),
+                "Claude Code · DeepSeek".into(),
+                true,
+            ),
+            ("deepseek-harness".into(), "DeepSeek Harness".into(), false),
+            ("grok".into(), "Grok".into(), false),
+            ("".into(), "Blank".into(), false),
+        ]);
+        let by_id: std::collections::HashMap<&str, &Value> = choices
+            .iter()
+            .map(|row| (row["id"].as_str().unwrap(), row))
+            .collect();
+        assert_eq!(
+            by_id.len(),
+            6,
+            "all active catalog providers kept, blank skipped"
+        );
+        assert_eq!(by_id["claude-code"]["builtin_idle_minutes"], 60);
+        assert_eq!(by_id["claude-code"]["recommended_idle_minutes"], 60);
+        assert_eq!(by_id["codex"]["builtin_idle_minutes"], Value::Null);
+        assert_eq!(by_id["codex"]["recommended_idle_minutes"], 240);
+        assert_eq!(by_id["claude-deepseek"]["recommended_idle_minutes"], 360);
+        assert_eq!(by_id["claude-deepseek"]["keepalive_independent"], true);
+        assert_eq!(by_id["deepseek-harness"]["recommended_idle_minutes"], 360);
+        assert_eq!(by_id["deepseek-harness"]["keepalive_independent"], false);
+        assert_eq!(by_id["antigravity"]["policy_restricted"], true);
+        assert_eq!(
+            by_id["antigravity"]["recommended_idle_minutes"],
+            Value::Null
+        );
+        assert!(by_id["antigravity"]["restriction"].is_string());
+        assert_eq!(by_id["grok"]["recommended_idle_minutes"], Value::Null);
     }
 }

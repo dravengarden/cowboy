@@ -63,7 +63,7 @@ pub fn selected(
         preferences
             .get(option_id)
             .and_then(serde_json::Value::as_bool)
-            .unwrap_or(true)
+            .unwrap_or(false)
     })
 }
 
@@ -172,9 +172,17 @@ mod tests {
 
     #[cfg(feature = "full")]
     #[test]
-    fn deepseek_defaults_to_auto_and_preserves_explicit_off() {
+    fn deepseek_defaults_to_off_and_preserves_explicit_preferences() {
         assert_eq!(
             selected(&serde_json::json!({}), &CODEX, "cache"),
+            Some(false)
+        );
+        assert_eq!(
+            selected(
+                &serde_json::json!({"deepseek_cache_protection": true}),
+                &CLAUDE,
+                "deepseek_cache_protection"
+            ),
             Some(true)
         );
         assert_eq!(
@@ -187,11 +195,12 @@ mod tests {
         );
         assert_eq!(selected(&serde_json::json!({}), &PORTABLE, "cache"), None);
         let option =
-            config_option(&CODEX, true, "cache").expect("DeepSeek cache-protection option");
+            config_option(&CODEX, false, "cache").expect("DeepSeek cache-protection option");
         assert_eq!(minimum_hit_tokens(), 64_000);
         assert_eq!(option["name"], "Cache protection");
-        assert_eq!(option["options"][0]["name"], "Auto · recommended");
-        assert_eq!(option["options"][1]["name"], "Off");
+        assert_eq!(option["currentValue"], false);
+        assert_eq!(option["options"][0]["name"], "Auto (paid keepalive)");
+        assert_eq!(option["options"][1]["name"], "Off · default");
         assert!(
             option["description"]
                 .as_str()

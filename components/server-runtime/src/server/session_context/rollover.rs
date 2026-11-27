@@ -19,8 +19,10 @@ use crate::logs::wait_cache::{self, Fields};
 const MEASURED_IDLE: std::time::Duration = std::time::Duration::from_mins(5);
 /// Bound on prompts awaiting their first-turn measurement.
 const MAX_PENDING: usize = 1_024;
-/// How often live workers idle past their cache are hibernated.
-const HIBERNATE_PASS: std::time::Duration = std::time::Duration::from_mins(5);
+/// How often live workers idle past their cache are hibernated. A 1-minute
+/// cadence keeps the post-expiry `live_worker` skip window bounded without
+/// hibernating warm sessions prematurely.
+const HIBERNATE_PASS: std::time::Duration = std::time::Duration::from_mins(1);
 
 fn override_key(id: &str) -> String {
     format!(
@@ -52,7 +54,10 @@ pub(crate) async fn effective_policy(
     policy(state, meta).await
 }
 
-async fn policy(state: &AppState, meta: &crate::core::SessionMeta) -> Option<Policy> {
+async fn policy_with_raw(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+) -> Option<(Policy, Option<serde_json::Value>)> {
     let preferences = match (meta.owner_user_id.as_deref(), state.store.as_ref()) {
         (Some(owner), Some(store)) => store
             .preferences(owner, crate::context_rollover::PREFERENCE_SCOPE)
@@ -61,11 +66,16 @@ async fn policy(state: &AppState, meta: &crate::core::SessionMeta) -> Option<Pol
             .map(|preferences| preferences.values),
         _ => None,
     };
-    Some(crate::context_rollover::policy(
+    let resolved = crate::context_rollover::policy(
         preferences.as_ref(),
         session_override(&state.hub, &meta.id),
         &meta.provider,
-    ))
+    );
+    Some((resolved, preferences))
+}
+
+async fn policy(state: &AppState, meta: &crate::core::SessionMeta) -> Option<Policy> {
+    policy_with_raw(state, meta).await.map(|(policy, _)| policy)
 }
 
 /// Shared gate for renewal and hibernation: an ordinary, resumable session
@@ -194,9 +204,17 @@ async fn hibernate_expired(state: &AppState) {
         {
             continue;
         }
+        if crate::provider_account::named_only(&meta.provider) {
+            continue;
+        }
         let Some(idle) = state.hub.session_idle_for(&meta.id) else {
             continue;
         };
+        // Minimum configurable idle_minutes is 1; skip active sessions before
+        // touching the preference store on the 1-minute sweep.
+        if idle < std::time::Duration::from_mins(1) {
+            continue;
+        }
         let Some(policy) = policy(state, &meta).await else {
             continue;
         };
@@ -277,6 +295,19 @@ fn is_command_or_compaction(_text: &str, content: &[serde_json::Value]) -> bool 
         || crate::wrap_up::is_compaction_prompt_blocks(content)
 }
 
+/// Prompts eligible for idle context renewal: direct owner prompts and
+/// owner-authored scheduled continuations (`DeliveryOrigin::Cowboy { source: "schedule" }`).
+/// Call notices (`call-notice:`), managed calls, superagent prompts, peer
+/// prompts, legacy queue rows, and automation API callers stay excluded.
+fn allows_rollover(origin: &crate::prompt_origin::DeliveryOrigin, cmid: &str) -> bool {
+    !cmid.starts_with(crate::agent_model::CALL_NOTICE_PREFIX)
+        && (origin.is_owner()
+            || matches!(
+                origin,
+                crate::prompt_origin::DeliveryOrigin::Cowboy { source } if source == "schedule"
+            ))
+}
+
 pub async fn before_dispatch(
     state: &AppState,
     id: &str,
@@ -296,16 +327,18 @@ pub async fn before_dispatch(
             "notify_held",
             "notify_held",
             None,
+            None,
             used,
             None,
         );
-    }
-    if !dispatch_origin.is_owner() {
         return;
     }
     let Some(cmid) = cmid else {
         return;
     };
+    if !allows_rollover(dispatch_origin, cmid) {
+        return;
+    }
     if is_command_or_compaction(text, content) {
         return;
     }
@@ -324,26 +357,34 @@ pub async fn before_dispatch(
             None,
             None,
             None,
+            None,
         );
         return;
     };
     let idle = state.hub.session_idle_for(id).unwrap_or_default();
     let idle_ms = u64::try_from(idle.as_millis()).unwrap_or(u64::MAX);
     let measured = idle >= MEASURED_IDLE;
-    let policy = policy(state, &meta).await;
+    let resolved = policy_with_raw(state, &meta).await;
+    let policy = resolved.as_ref().map(|(p, _)| p.clone());
+    let raw_preferences = resolved.and_then(|(_, raw)| raw);
     let verified = state.hub.verified_context_usage(&meta);
     let observe = |outcome: &'static str| {
-        let shadow = if outcome == "usage_unknown" {
-            shadow_preflight(state, &meta, policy.as_ref(), verified)
-        } else {
-            outcome
-        };
+        let (shadow, shadow_threshold_ms) = evaluate_shadow_decision(
+            state,
+            &meta,
+            outcome,
+            policy.as_ref(),
+            raw_preferences.as_ref(),
+            idle,
+            verified,
+        );
         observe_decision(
             &meta,
             cmid,
             outcome,
             shadow,
             policy.as_ref(),
+            shadow_threshold_ms,
             verified,
             Some(idle_ms),
         );
@@ -389,29 +430,57 @@ pub async fn before_dispatch(
     else {
         return skip("no_history");
     };
-    let before = last.saturating_add(1);
+    match commit_rollover(
+        state,
+        &meta,
+        context,
+        &agent_session_id,
+        last.saturating_add(1),
+        idle_ms,
+    )
+    .await
+    {
+        Ok((rollover, opening)) => {
+            // Every renewal is evidence, whatever its idle time.
+            measure(&meta, cmid, Some(policy), idle_ms, "renewed");
+            observe("renewed");
+            measure_digest(id, &rollover, opening);
+        }
+        Err(reason) => skip(reason),
+    }
+}
+
+async fn commit_rollover(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+    mut context: crate::session_context::Context,
+    agent_session_id: &str,
+    before: u64,
+    idle_ms: u64,
+) -> Result<(Rollover, &'static str), &'static str> {
+    let id = &meta.id;
     let (digest, opening) = digest(state, id).await;
-    let mut renewed = context;
-    renewed.rollover = Some(Rollover {
+    let rollover = Rollover {
         before,
         idle_ms,
         context_used: meta.context_used,
         digest,
-    });
+    };
+    context.rollover = Some(rollover.clone());
     // Inert until the marker below names the same boundary.
-    if let Err(error) = save(state, id, &renewed).await {
+    if let Err(error) = save(state, id, &context).await {
         tracing::warn!(session = id, %error, "context renewal not recorded; resuming the old context");
-        return skip("record_failed");
+        return Err("record_failed");
     }
     // The marker and the forgotten native id are published together under
     // the lifecycle lock, so no wake can launch between them.
     if !state.supervisor.forget_dormant_context(
         id,
-        &agent_session_id,
+        agent_session_id,
         (before, idle_ms, meta.context_used),
     ) {
         // A worker started meanwhile and keeps its context.
-        return skip("raced");
+        return Err("raced");
     }
     tracing::info!(
         session = id,
@@ -419,12 +488,7 @@ pub async fn before_dispatch(
         context_used = meta.context_used,
         "renewing agent context after the Provider prompt cache expired"
     );
-    // Every renewal is evidence, whatever its idle time.
-    measure(&meta, cmid, Some(policy), idle_ms, "renewed");
-    observe("renewed");
-    if let Some(rollover) = &renewed.rollover {
-        measure_digest(id, rollover, opening);
-    }
+    Ok((rollover, opening))
 }
 
 /// Compare only the token gate. Passing it says nothing about dormancy,
@@ -437,12 +501,92 @@ fn shadow_gate(used: Option<u64>, min: Option<u64>) -> &'static str {
     }
 }
 
+/// Evaluate observational shadow outcome without mutating dispatch behavior.
+/// When a Provider has no active preset (`no_preset`) and has not been
+/// explicitly disabled by owner/session settings, evaluates its empirical
+/// shadow candidate threshold (e.g. Codex 240m, DeepSeek 360m). Host-policy-
+/// restricted Providers (`antigravity`) always remain `no_preset`.
+/// Pure candidate-threshold decision before checking runtime dormancy/history.
+/// Returns `Ok((candidate_policy, candidate_ms))` when a shadow candidate is due
+/// and ready for `shadow_preflight`, or `Err((outcome, threshold_ms))` otherwise.
+fn shadow_candidate_stage(
+    provider: &str,
+    policy: Option<&Policy>,
+    raw_preferences: Option<&serde_json::Value>,
+    idle: std::time::Duration,
+) -> Result<(Policy, u64), (&'static str, Option<u64>)> {
+    let Some(candidate_minutes) = crate::context_rollover::shadow_candidate_idle_minutes(provider)
+    else {
+        return Err(("no_preset", None));
+    };
+    let candidate_ms = candidate_minutes.saturating_mul(60_000);
+    let enabled_default = raw_preferences
+        .and_then(|values| values.get("enabled"))
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(true);
+    let session_opt_out = policy.is_some_and(|p| p.session_override == Some(false));
+    let provider_opt_out =
+        crate::context_rollover::explicit_provider_disabled(raw_preferences, provider);
+    if !enabled_default || session_opt_out || provider_opt_out {
+        return Err(("disabled", Some(candidate_ms)));
+    }
+    let candidate_policy = Policy {
+        enabled: true,
+        session_override: policy.and_then(|p| p.session_override),
+        idle_minutes: Some(candidate_minutes),
+        min_context_tokens: policy
+            .map_or(crate::context_rollover::DEFAULT_MIN_CONTEXT_TOKENS, |p| {
+                p.min_context_tokens
+            }),
+    };
+    if !candidate_policy.due(idle, u64::MAX) {
+        return Err(("cache_warm", Some(candidate_ms)));
+    }
+    Ok((candidate_policy, candidate_ms))
+}
+
+fn evaluate_shadow_decision(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+    outcome: &'static str,
+    policy: Option<&Policy>,
+    raw_preferences: Option<&serde_json::Value>,
+    idle: std::time::Duration,
+    verified: Option<u64>,
+) -> (&'static str, Option<u64>) {
+    if outcome == "usage_unknown" {
+        return (
+            shadow_preflight(state, meta, policy, verified),
+            policy
+                .and_then(|p| p.idle_minutes)
+                .map(|minutes| minutes.saturating_mul(60_000)),
+        );
+    }
+    if outcome != "no_preset" {
+        return (outcome, None);
+    }
+    let (candidate_policy, candidate_ms) =
+        match shadow_candidate_stage(&meta.provider, policy, raw_preferences, idle) {
+            Ok(ready) => ready,
+            Err(early) => return early,
+        };
+    let current = ((meta.context_used != 0 || meta.agent_session_id.is_none())
+        && !meta.context_usage_stale())
+    .then_some(meta.context_used);
+    (
+        shadow_preflight(state, meta, Some(&candidate_policy), current.or(verified)),
+        Some(candidate_ms),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
 fn observe_decision(
     meta: &crate::core::SessionMeta,
     cmid: &str,
     outcome: &str,
     shadow_outcome: &str,
     policy: Option<&Policy>,
+    shadow_threshold_ms: Option<u64>,
     verified: Option<u64>,
     idle_ms: Option<u64>,
 ) {
@@ -470,6 +614,7 @@ fn observe_decision(
                     .and_then(|p| p.idle_minutes)
                     .map(|minutes| minutes.saturating_mul(60_000)),
             )
+            .integer("shadow_threshold_ms", shadow_threshold_ms)
             .integer("min_context_tokens", min)
             .string("current_context_gate", shadow_gate(current, min))
             .string("shadow_context_gate", shadow_gate(shadow, min)),
@@ -572,6 +717,17 @@ async fn view(state: &AppState, id: &str) -> Response {
         .hub
         .session_idle_for(id)
         .map(|idle| u64::try_from(idle.as_millis()).unwrap_or(u64::MAX));
+    let policy_restricted = crate::provider_account::named_only(&meta.provider);
+    let native_fork = state.hub.session_fork(&meta.id).is_some() || meta.forked_from.is_some();
+    let restriction = if policy_restricted {
+        Some("Automatic context renewal is disabled for Antigravity accounts by host policy.")
+    } else if native_fork {
+        Some(
+            "Automatic context renewal is excluded for native fork sessions because inherited history lives only in the native thread.",
+        )
+    } else {
+        None
+    };
     Json(serde_json::json!({
         "policy": policy,
         "context_used": meta.context_used,
@@ -580,6 +736,9 @@ async fn view(state: &AppState, id: &str) -> Response {
         "idle_ms": idle_ms,
         "due": !meta.context_usage_stale() && idle_ms.is_some_and(|idle| policy.due(std::time::Duration::from_millis(idle), meta.context_used))
             && ordinary(state, &meta),
+        "recommended_idle_minutes": crate::context_rollover::recommended_idle_minutes(&meta.provider),
+        "policy_restricted": policy_restricted || native_fork,
+        "restriction": restriction,
     }))
     .into_response()
 }
@@ -607,12 +766,129 @@ pub async fn set(
 
 #[cfg(test)]
 mod tests {
-    use super::shadow_gate;
+    use super::{Policy, allows_rollover, shadow_candidate_stage, shadow_gate};
+    use crate::prompt_origin::DeliveryOrigin;
+    use std::time::Duration;
 
     #[test]
     fn a_verified_zero_is_small_in_shadow_and_missing_stays_unknown() {
         assert_eq!(shadow_gate(None, Some(80_000)), "usage_unknown");
         assert_eq!(shadow_gate(Some(0), Some(80_000)), "small_context");
         assert_eq!(shadow_gate(Some(80_000), Some(80_000)), "passes");
+    }
+
+    #[test]
+    fn rollover_allows_owner_and_scheduled_continuations_but_excludes_call_notices_and_non_owners()
+    {
+        assert!(allows_rollover(&DeliveryOrigin::Owner, "user-1"));
+        assert!(allows_rollover(
+            &DeliveryOrigin::cowboy("schedule"),
+            "sched-sess-1-draft-1"
+        ));
+        assert!(!allows_rollover(
+            &DeliveryOrigin::Owner,
+            "call-notice:call-123"
+        ));
+        assert!(!allows_rollover(
+            &DeliveryOrigin::cowboy("schedule"),
+            "call-notice:call-123"
+        ));
+        for origin in [
+            DeliveryOrigin::Automation,
+            DeliveryOrigin::peer("peer-sess"),
+            DeliveryOrigin::cowboy("managed_call"),
+            DeliveryOrigin::cowboy("superagent"),
+            DeliveryOrigin::cowboy("legacy_queue"),
+        ] {
+            assert!(
+                !allows_rollover(&origin, "msg-1"),
+                "unexpected allow: {origin:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn shadow_candidate_stage_evaluates_codex_and_deepseek_and_respects_opt_outs_and_antigravity() {
+        let base_policy = Policy {
+            enabled: false,
+            session_override: None,
+            idle_minutes: None,
+            min_context_tokens: 80_000,
+        };
+        // Codex: warm below 240m, due at 240m.
+        assert_eq!(
+            shadow_candidate_stage("codex", Some(&base_policy), None, Duration::from_mins(120)),
+            Err(("cache_warm", Some(240 * 60_000)))
+        );
+        let (codex_due, codex_ms) =
+            shadow_candidate_stage("codex", Some(&base_policy), None, Duration::from_mins(240))
+                .expect("codex shadow due at 240m");
+        assert_eq!(codex_ms, 240 * 60_000);
+        assert_eq!(codex_due.idle_minutes, Some(240));
+        assert_eq!(codex_due.min_context_tokens, 80_000);
+
+        // DeepSeek: warm at 300m, due at 360m.
+        assert_eq!(
+            shadow_candidate_stage(
+                "claude-deepseek",
+                Some(&base_policy),
+                None,
+                Duration::from_mins(300)
+            ),
+            Err(("cache_warm", Some(360 * 60_000)))
+        );
+        assert!(
+            shadow_candidate_stage(
+                "claude-deepseek",
+                Some(&base_policy),
+                None,
+                Duration::from_mins(360)
+            )
+            .is_ok()
+        );
+
+        // Explicit opt-outs (global, per-provider null, or session override false) disable shadow.
+        let global_off = serde_json::json!({"enabled": false});
+        assert_eq!(
+            shadow_candidate_stage(
+                "codex",
+                Some(&base_policy),
+                Some(&global_off),
+                Duration::from_mins(300)
+            ),
+            Err(("disabled", Some(240 * 60_000)))
+        );
+        let provider_null = serde_json::json!({"idle_minutes": {"codex": null}});
+        assert_eq!(
+            shadow_candidate_stage(
+                "codex",
+                Some(&base_policy),
+                Some(&provider_null),
+                Duration::from_mins(300)
+            ),
+            Err(("disabled", Some(240 * 60_000)))
+        );
+        let session_off = Policy {
+            session_override: Some(false),
+            ..base_policy.clone()
+        };
+        assert_eq!(
+            shadow_candidate_stage("codex", Some(&session_off), None, Duration::from_mins(300)),
+            Err(("disabled", Some(240 * 60_000)))
+        );
+
+        // Antigravity and Grok stay no_preset in shadow.
+        for provider in ["antigravity", "grok"] {
+            assert_eq!(
+                shadow_candidate_stage(
+                    provider,
+                    Some(&base_policy),
+                    None,
+                    Duration::from_mins(600)
+                ),
+                Err(("no_preset", None)),
+                "{provider}"
+            );
+        }
     }
 }

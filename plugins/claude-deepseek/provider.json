@@ -1,7 +1,7 @@
 {
   "authoring_schema": 2,
   "id": "claude-deepseek",
-  "version": "3.1.101",
+  "version": "3.1.102",
   "publisher": "cowboy-first-party",
   "sdk_version": "3.7.0",
   "display": {
@@ -136,7 +136,7 @@
       "default_preferences": {
         "model": "deepseek-flash[1m]",
         "deepseek_context": "830k",
-        "deepseek_cache_protection": true,
+        "deepseek_cache_protection": false,
         "effort": "max",
         "agent": "default"
       },

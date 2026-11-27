@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 import { Button, Stack, Switch, Typography } from "@mui/material";
+import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import type { DeepseekCacheProtectionStatus } from "./ComposerSheet";
+import { formatIdleMinutesLabel } from "./contextRolloverPreferences";
 import { expectHttpOk } from "./httpResponse";
 
 /** `GET /api/sessions/{id}/context-rollover` (src/context_rollover.rs). */
@@ -14,6 +16,9 @@ export interface ContextRolloverView {
   context_used: number;
   idle_ms: number | null;
   due: boolean;
+  recommended_idle_minutes?: number | null;
+  policy_restricted?: boolean;
+  restriction?: string | null;
 }
 
 function contextRolloverUrl(sessionId: string): string {
@@ -21,11 +26,22 @@ function contextRolloverUrl(sessionId: string): string {
 }
 
 export function contextRolloverCaption(view: ContextRolloverView): string {
+  if (view.policy_restricted) {
+    return (
+      view.restriction ??
+      "Automatic context renewal is disabled for this session."
+    );
+  }
+  if (view.policy.idle_minutes === null) {
+    if (typeof view.recommended_idle_minutes === "number" && view.recommended_idle_minutes > 0) {
+      return `Off for this Provider (${formatIdleMinutesLabel(view.recommended_idle_minutes)} preset available in Settings → Agent).`;
+    }
+    return "Off for this Provider (configure in Settings → Agent).";
+  }
   if (view.due) {
     return "The prompt cache has expired: your next message starts a fresh context and reads earlier history on demand.";
   }
-  const minutes = view.policy.idle_minutes ?? 0;
-  const idle = minutes % 60 === 0 ? `${minutes / 60} h` : `${minutes} min`;
+  const idle = formatIdleMinutesLabel(view.policy.idle_minutes);
   const tokens = `${Math.round(view.policy.min_context_tokens / 1_000)}k`;
   return view.policy.enabled
     ? `After ${idle} idle, when the context holds ${tokens}+ tokens, the next message starts a fresh context instead of re-sending it uncached.`
@@ -55,9 +71,16 @@ export function ContextRolloverSettings({
         });
     };
     refresh();
+    const onPrefsChanged = (event: Event): void => {
+      const scopes = (event as CustomEvent<Record<string, number> | undefined>).detail;
+      if (scopes && !scopes.context_rollover) return;
+      refresh();
+    };
+    window.addEventListener(PREFERENCES_CHANGED, onPrefsChanged);
     const interval = globalThis.setInterval(refresh, 60_000);
     return (): void => {
       controller.abort();
+      window.removeEventListener(PREFERENCES_CHANGED, onPrefsChanged);
       globalThis.clearInterval(interval);
     };
   }, [sessionId]);
@@ -79,7 +102,19 @@ export function ContextRolloverSettings({
     },
     [sessionId, onPolicyChange],
   );
-  if (!view || view.policy.idle_minutes === null) return null;
+  if (!view) return null;
+  if (view.policy_restricted || view.policy.idle_minutes === null) {
+    return (
+      <Stack spacing={0.25} sx={{ pt: 0.5 }}>
+        <Typography variant="body2" color="text.secondary">
+          Fresh context after cache expiry
+        </Typography>
+        <Typography variant="caption" color="text.secondary">
+          {contextRolloverCaption(view)}
+        </Typography>
+      </Stack>
+    );
+  }
   return (
     <Stack spacing={0.25} sx={{ pt: 0.5 }}>
       <Stack direction="row" alignItems="center" justifyContent="space-between">

@@ -11,6 +11,7 @@ import { ExpandLess, ExpandMore } from "@mui/icons-material";
 import {
   buildDisjointCacheSegments,
   fetchSessionCacheMetrics,
+  formatColdResumeAdvisory,
   formatCompactTokens,
   formatCoverageSummary,
   formatIdleGap,
@@ -209,6 +210,7 @@ export function SessionCacheMetricsSection({
 
   const { totals, coverage, strategy, recent_turns: recentTurns } = currentData;
   const strategyLabel = formatStrategySummary(strategy);
+  const coldResumeAdvisory = formatColdResumeAdvisory(currentData);
   const cachedShareTone = shareTone(totals.cached_input_share);
 
   return (
@@ -265,6 +267,17 @@ export function SessionCacheMetricsSection({
             {syncPending ? " · latest turn syncing…" : ""}
           </Typography>
         </>
+      )}
+
+      {coldResumeAdvisory && (
+        <Typography
+          variant="caption"
+          color="warning.main"
+          data-cold-resume-advisory
+          sx={{ lineHeight: 1.45 }}
+        >
+          {coldResumeAdvisory}
+        </Typography>
       )}
 
       <RecentTurnsDisclosure turns={recentTurns} />
