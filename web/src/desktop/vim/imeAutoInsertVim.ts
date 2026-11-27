@@ -294,8 +294,19 @@ export function createImeAutoInsertVim(): {
       clearVimMacroRecording();
       if (!this.cm?.state?.vim) return;
       const state = this.cm.state.vim;
-      const partialCommand = state.inputState?.operator ||
-        (state.inputState?.keyBuffer?.length ?? 0) > 0;
+      const inputState = state.inputState as
+        | { operator?: unknown; keyBuffer?: string[]; changeQueue?: unknown }
+        | undefined;
+      if (preserveMode && state.insertMode) {
+        // Keep Insert mode across Desktop region focus moves, but drop any
+        // pending insert-escape prefix (`j` of `jj`) so returning later cannot
+        // accidentally pair with the next typed `j`.
+        if (inputState?.keyBuffer) inputState.keyBuffer.length = 0;
+        if (inputState && "changeQueue" in inputState) inputState.changeQueue = undefined;
+        return;
+      }
+      const partialCommand = Boolean(inputState?.operator) ||
+        (inputState?.keyBuffer?.length ?? 0) > 0;
       if (partialCommand || (!preserveMode && (state.insertMode || state.visualMode))) {
         Vim.handleKey(this.cm, "<Esc>", "user");
       }

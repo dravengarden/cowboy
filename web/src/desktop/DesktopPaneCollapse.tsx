@@ -66,7 +66,7 @@ function CollapseGlyph(
 }
 
 /**
- * The pane's leader slot (`␣[` `␣]` `␣\`). Arming the leader lights all three
+ * The pane's leader slot (`␣ZS` `␣ZP` `␣ZC`). Arming the leader lights all three
  * across the screen, left to right.
  */
 function PaneKeycap({ pane }: { pane: DesktopPane }): React.JSX.Element {

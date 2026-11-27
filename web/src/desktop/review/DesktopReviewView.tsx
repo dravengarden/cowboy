@@ -51,7 +51,7 @@ import { focusOutline, REVIEW_INSPECTOR_REGION, REVIEW_RUN_CHECK_EVENT, ReviewIn
 import { ReviewSettingsContent } from "../../mobile/review/ReviewSettings";
 
 /** The Inspector's placement: beside the Document from 1320 px of Review
- *  width (foldable with ␣V]), else inset on the right when asked for. */
+ *  width (foldable with ␣VI), else inset on the right when asked for. */
 function useInspectorPanel(width: number, closeNavigatorInset: () => void) {
   const beside = width >= INSPECTOR_WIDTH_FLOOR;
   const [folded, setFolded] = useState(false);

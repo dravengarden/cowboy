@@ -118,11 +118,11 @@ mounted owner at every width, so a resize across a tier keeps its cursor,
 folds and filter.
 
 A laptop at 1440 px with Sessions and Prompt open gives Review about 750 px,
-so Compact is the common first sight. Folding the Prompt (`␣W]`) is the
+so Compact is the common first sight. Folding the Prompt (`␣ZP`, or zooming Review with `␣ZZ`) is the
 intended reading layout; Review never folds another pane on its own.
 
 Inner splitters join Resize mode (`␣WR`, `Tab` cycles bars). Side-panel folds
-are `␣V[` (Navigator) and `␣V]` (Inspector), mirroring `␣W[`/`␣W\`.
+are `␣VL` (Navigator) and `␣VI` (Inspector), avoiding awkward brackets just like the `␣Z` Fold group.
 
 ## Entering and leaving Review
 
@@ -175,7 +175,7 @@ today; with Review shown, `␣V` opens the group.
 | `␣VO` | Outline: focus the Inspector's Outline section (`gO` from the Document) |
 | `␣VX` | Context: project checkout, linked sessions, bind a worktree, Remote PR |
 | `␣VB` + `D/O/R/L/A/P/K/U/</>` | File tabs group, the `␣B` grammar one level down: close this, others, right, left, all; pin, keep, reopen; move |
-| `␣V[` `␣V]` | Fold Navigator / Inspector |
+| `␣VL` `␣VI` | Fold Navigator / Inspector |
 | `␣V,` | Review settings: code font size, wrap, whitespace, context lines, hover on dwell |
 
 Every control in the Review pane header, Navigator header and Document footer
@@ -226,7 +226,7 @@ status line.
 | `gO` | Outline in the Inspector (Vim's `gO`) |
 | `Ctrl-O` / `Ctrl-I` | Jump list back / forward, across files |
 | `V` `v` | Visual selection; a click on a line number selects the line and a Shift-click extends it, as on Mobile |
-| `Enter` | Send the selection (or cursor line) to the Prompt: appends the location plus the text to the Composer and focuses it in Insert at the end. A folded Prompt is unfolded first (FOCUS.md: an explicit jump restores), even when that moves Review to a narrower width tier; Review keeps its cursor and file, and `␣W]` folds the Prompt again after sending. Nothing is sent to the agent until `Mod+Enter`. `␣VS` never unfolds |
+| `Enter` | Send the selection (or cursor line) to the Prompt: appends the location plus the text to the Composer and focuses it in Insert at the end. A folded Prompt is unfolded first (FOCUS.md: an explicit jump restores), even when that moves Review to a narrower width tier; Review keeps its cursor and file, and `␣ZP` folds the Prompt again after sending. Nothing is sent to the agent until `Mod+Enter`. `␣VS` never unfolds |
 | `Esc` | Leave Visual / cancel a pending key / close the hover; otherwise nothing |
 
 In a diff, a location names file lines, new side first, not diff rows
@@ -542,7 +542,7 @@ together" reads "Prompt and the work pane".
 | D1 workbench (core implemented) | Width tiers, Navigator with list grammar and tabs, Document as read-only Vim buffer (unified diff, source, file tabs, `]c ]f ]u gt`, `Enter`/`␣VS`), editor-scoped Vim additions, device-local state and reveal adapter, comparison/unread/mark | Keyboard-only scripted review of a 50-file change at 1100, 1440 and 1728 px; no synced tab writes from Desktop; Composer and Review mounted together with a vimrc mapping of `]c` still owned by the user; `H` across width tiers without remount |
 | D1b (implemented) | History (commit drill-in, commit tabs) and Worktrees tabs, the context control `␣VX` (this Session, project checkout, linked, bound and same-project sessions; a per-device choice), Review settings `␣V,`, a resizable Navigator in Resize mode | `tools/cdp-review-acceptance.ts` (15 trusted-input steps, both themes) |
 | D1c (implemented) | Remote PR in the workbench: the Pull request tab (`␣VG`) binds a PR through the synced `remote_review`, lists its files and opens them as in-memory `pr` tabs with viewed marks in the synced progress; Desktop ignores the phone's `remote_selected` | the acceptance's Pull request step against an opt-in GitHub fixture |
-| D2a (implemented) | Inspector (Outline, Hunks, Problems, Details) beside or inset, `]d`/`[d`, `gO`, `␣VO`, `␣V]`, `␣VK`; Problems are check findings, placed only on source lines or through the verified diff projection; language diagnostics wait for D2c's buffer leases | acceptance Inspector steps (check, `]d`, `gO`, inset at narrow width) |
+| D2a (implemented) | Inspector (Outline, Hunks, Problems, Details) beside or inset, `]d`/`[d`, `gO`, `␣VO`, `␣VI`, `␣VK`; Problems are check findings, placed only on source lines or through the verified diff projection; language diagnostics wait for D2c's buffer leases | acceptance Inspector steps (check, `]d`, `gO`, inset at narrow width) |
 | D2b (implemented) | Split diff (`␣VD`, per device): an incremental decoder (`unifiedPatchDecoder.ts`) and an aligned two-sided layout (`splitDiffModel.ts`); the new side is the Vim buffer, the old side a passive mirror that follows its scroll; selections, `]c`, the Inspector and remarks map split rows to patch rows | decoder tests at every cut offset; acceptance split step |
 | D2c (implemented) | Language intelligence on source files in the manifest's buffer mode: owned buffers through `useOwnedReviewBuffer` (every answer checked against the shown text), legacy through a buffer lease and the language routes; `K` hover, `gd` `gD` `gy` `gI` `gr` (legacy only, as on the phone; owned reports navigation unavailable), diagnostics underlined and merged into Problems; a jump keeps its source tab. Diffs point to the file | acceptance language step (diagnostic, `K`, `gd`, `gT`) |
 | D2 tools | Streaming patch decoder and `@codemirror/merge` split view (patch-only), Inspector (Outline, Hunks, Problems, Details), `K` `gd` `gr` `gO` `]d`, checks `␣VK` with context gating, Review settings | Decoder fixtures pass; split and unified agree on every hunk of the fixture; hover/definition round trips under the measured `review_read_completed` budget |

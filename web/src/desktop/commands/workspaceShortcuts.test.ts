@@ -131,6 +131,7 @@ test("every prefix continuation has one stable command meaning", () => {
     n: "session.new",
     m: "composer.more",
     w: "group:w",
+    z: "group:z",
     u: "group:u",
     b: "group:b",
     "[": "tabs.previous",
@@ -151,7 +152,19 @@ test("every prefix continuation has one stable command meaning", () => {
   });
 });
 
-test("pane collapse continuations use physical bracket keys", () => {
+test("Fold group uses mnemonic pane letters, Zoom and Expand All", () => {
+  assertEquals(DESKTOP_LEADER_GROUPS.z, "Fold");
+  assertEquals(DESKTOP_WORKSPACE_KEYS.toggleSessions, "ZS");
+  assertEquals(DESKTOP_WORKSPACE_KEYS.togglePrompt, "ZP");
+  assertEquals(DESKTOP_WORKSPACE_KEYS.toggleConversation, "ZC");
+  assertEquals(DESKTOP_WORKSPACE_KEYS.toggleZoom, "ZZ");
+  assertEquals(DESKTOP_WORKSPACE_KEYS.expandAllPanes, "ZA");
+  assertEquals(desktopLeaderLabel(DESKTOP_WORKSPACE_KEYS.toggleSessions), "␣ZS");
+  assertEquals(desktopLeaderLabel(DESKTOP_WORKSPACE_KEYS.togglePrompt), "␣ZP");
+  assertEquals(desktopLeaderLabel(DESKTOP_WORKSPACE_KEYS.toggleConversation), "␣ZC");
+  assertEquals(desktopLeaderLabel(DESKTOP_WORKSPACE_KEYS.toggleZoom), "␣ZZ");
+  assertEquals(desktopLeaderLabel(DESKTOP_WORKSPACE_KEYS.expandAllPanes), "␣ZA");
+  // Physical bracket keys remain positional for tab stepping (`␣[` / `␣]`).
   assertEquals(
     desktopWorkspaceContinuationKey(
       keyEvent({ key: "ü", code: "BracketLeft", metaKey: true }),
@@ -165,13 +178,6 @@ test("pane collapse continuations use physical bracket keys", () => {
       true,
     ),
     "]",
-  );
-  assertEquals(
-    desktopWorkspaceContinuationKey(
-      keyEvent({ key: "#", code: "Backslash", altKey: true }),
-      false,
-    ),
-    "\\",
   );
 });
 

@@ -1,4 +1,5 @@
 import { persisted, useStore } from "@cowboy/state-store";
+import { DEFAULT_VIM_CONFIG_SOURCE } from "./desktop/vim/vimConfig";
 
 // Vim-mode preference, persisted + reactive across the app (the composer reads
 // it; the Settings toggle writes it) without prop-drilling. Vim itself is
@@ -25,7 +26,7 @@ export function setVimSetting(on: boolean): void {
 
 // The user's Vim configuration (a vimrc subset, see desktop/vim/vimConfig.ts),
 // kept beside the on/off intent on this device.
-const vimConfig = persisted("cowboy:vim-config", "", {
+const vimConfig = persisted("cowboy:vim-config", DEFAULT_VIM_CONFIG_SOURCE, {
   serialize: (text) => text,
   deserialize: (text) => text,
 });

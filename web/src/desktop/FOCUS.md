@@ -116,7 +116,8 @@ and in a queued-message editor), and the focused one runs.
 | `␣L` `␣Q` `␣D` | Toggle/focus Plan, Queue, Drafts (`␣L`, `␣Q`, and `␣D` toggle their panel open/closed symmetrically; `␣D` starts a new draft when empty) |
 | `␣V` | Show the code Review in the work pane and focus it; while Review is shown, `␣V` is the Review group (`␣VV` focuses Review) |
 | `␣G` | Open Background tasks: the subagents and calls this session started (with the previous Calls panel restored: open or close Calls) |
-| `␣W` + `W/R/[/]/\` | Window group: cycle regions, Resize mode, fold Sessions / Prompt / Conversation |
+| `␣W` + `W/R` | Window group: cycle regions, Resize mode |
+| `␣Z` + `S/P/C/Z/A` | Fold group: fold Sessions / Prompt / Conversation, Zoom/restore focused pane, expand all panes |
 | `␣,` | Settings |
 | `␣X` | Extensions: the installed Plugins' resources for the open session (VS Code's Ctrl+Shift+X) |
 | `␣.` | Reconnect now (only while a Retry control is shown; `.` repeats) |
@@ -130,7 +131,7 @@ and in a queued-message editor), and the focused one runs.
 
 The root keeps what is pressed most (switching, creating, focusing, the
 editor's insert actions); families live one layer down in groups, LazyVim
-style: Sessions `␣S`, Top bar `␣T`, Window `␣W`, Interface `␣U`, Tabs `␣B`.
+style: Sessions `␣S`, Top bar `␣T`, Window `␣W`, Fold `␣Z`, Interface `␣U`, Tabs `␣B`.
 A surface group doubles its key to focus the surface (`␣SS`, `␣TT`) and
 holds the surface's own buttons, so a header control is reachable without
 first moving focus there.
@@ -161,8 +162,8 @@ the body. Yanks also go to the system clipboard. A field opts out with
 Settings → Workflow → Vim config holds a vimrc subset per device
 (`vim/vimConfig.ts`, `cowboy:vim-config`): `map`/`noremap` and their
 `n`/`v`/`x`/`i`/`o` variants, plus `set timeoutlen=<ms>` (default 1000,
-like Vim). "Leave Insert" writes the common `inoremap jj <Esc>` (or `jk`,
-`kj`) line. CodeMirror editors apply every mapping through codemirror-vim;
+like Vim). Default config is `inoremap jj <Esc>` so `jj` leaves Insert out of
+the box; "Leave Insert" switches between `Esc`, `jj`, `jk` and `kj`. CodeMirror editors apply every mapping through codemirror-vim;
 native text fields honour typed Insert escape sequences only, removing the
 already-typed prefix as Vim does. Unsupported lines are listed with their
 line numbers and skipped.
@@ -239,7 +240,7 @@ review (both take the focused Navigator row, else the open file), `Q` close
 the file tab, `P` keep it, `[` fold the Navigator. Desktop has no other Review layout.
 From 1320 px of Review width the Inspector (`review.inspector`) sits on the
 right with the open file's Outline, Hunks, Problems and Details; narrower, it
-folds and `␣VO`/`␣V]`/`gO` open it inset. Its rows are a Cowboy list and
+folds and `␣VO`/`␣VI`/`gO` open it inset. Its rows are a Cowboy list and
 `Enter` moves the Document's cursor to the row. Problems are the latest
 project-check findings: a source file places them on its lines, a
 working-tree diff only through the verified projection (owned buffers, the
@@ -649,7 +650,7 @@ Prompt, and in Conversation only while Prompt is folded; from Sessions `L`
 passes the thin top bar for Prompt. So `H/L` cross Sessions, Prompt and
 Conversation, and `J/K` move inside a column (Composer, Queue, Drafts,
 Plan) and up to the top bar. At the edge nothing moves; collapsed panes are
-skipped (`␣W[` `␣W]` `␣W\\` restore them). Focus moves without any
+skipped (`␣ZS` `␣ZP` `␣ZC` restore them). Focus moves without any
 transition: the focused pane's header and status line already show where it
 is, so an extra flash would only add noise. Entering Prompt keeps its Vim
 mode and caret.
@@ -691,9 +692,9 @@ it); macOS Chrome binds none of them.
   common editor action — so the toggle lives in the Interface group and keeps
   the `E` mnemonic. It works from Vim Insert, Normal, and Visual
   because the preference is global rather than an edit on the document.
-- `␣W[` / `␣W]` / `␣W\`: collapse or expand Sessions, Prompt, or
-  Conversation. The three adjacent keys sit in the same left-to-right
-  order as the panes. See [Pane collapse](#pane-collapse).
+- `␣ZS` / `␣ZP` / `␣ZC`: collapse or expand Sessions, Prompt, or
+  Conversation; `␣ZZ` zooms the focused work pane (press again to restore
+  the prior layout); `␣ZA` expands all panes. See [Pane collapse](#pane-collapse).
 - `␣␣` then a label switches session; `␣⇥` returns to the previous one and `␣O` lists Recent.
 - `Mod+Enter` runs the active canvas primary action (send/queue New Prompt or
   Session Draft, open delivery picker on Scheduled Draft, finish Queue edit
@@ -829,14 +830,15 @@ product mode. The state is one global, persisted layout preference
 (`cowboy:desktop-collapsed-panes`), never per Session, and Mobile never reads
 it.
 
-- **Commands.** `␣W[` / `␣W]` / `␣W\` toggles Sessions /
-  Prompt / Conversation. The Command Palette also lists each toggle and
-  Expand All Panes. Every pane header has a collapse control (chevron plus
-  its continuation keycap) at its trailing edge.
-- **Keycaps.** The `[` `]` `\` keycaps on headers and rails are sequence
-  continuations, so they follow the sequential-chord law: inactive at rest,
-  available while the prefix is armed. Pressing the prefix lights all three
-  across the screen, left to right. The status line lists them as Fold panes.
+- **Commands.** The Fold group (`␣Z`, Vim's fold/zoom prefix) holds
+  `␣ZS` / `␣ZP` / `␣ZC` to toggle Sessions / Prompt / Conversation, `␣ZZ`
+  to zoom/restore the focused work pane, and `␣ZA` to expand all panes. The
+  Command Palette lists each command as well. Every pane header has a
+  collapse control (chevron plus its `␣ZS`/`␣ZP`/`␣ZC` slot) at its trailing
+  edge.
+- **Keycaps.** Each header and collapsed rail carries its `␣ZS`/`␣ZP`/`␣ZC`
+  leader slot, lighting when either the root leader or the `␣Z` Fold group is
+  armed.
 - **Work-pane invariant.** Prompt and Conversation never collapse together.
   Collapsing the last visible one swaps them instead, so the chord always
   does something visible. Stored layouts are normalized the same way.
@@ -871,7 +873,7 @@ it.
   `P/C`, Plan/Queue/Drafts, region focus) restore a collapsed Prompt or
   Conversation first. Collapsed Sessions is different because its rail is
   still a navigable pane: prefix `S` focuses the rail (`sessions.rail`) on
-  the folder holding the open Session and keeps the layout; only `[`
+  the folder holding the open Session and keeps the layout; only `␣ZS`
   unfolds the list. Region cycling and Resize mode skip collapsed panes and
   their splitters. `␣␣` never unfolds Sessions; it lands in Prompt (or
   Conversation when Prompt is collapsed).
@@ -882,13 +884,13 @@ it.
   focuses Prompt (Conversation when Prompt is collapsed), `H`/`Esc` returns
   to the same folder in the rail, and its footer lists those keys. MUI's
   first-letter type-ahead is suppressed for `J/K/H/L`. The status line shows
-  the rail map, Switch (`␣␣`) and Expand list (`␣[`).
+  the rail map, Switch (`␣␣`) and Expand list (`␣ZS`).
 - **Pointer.** Dragging a splitter more than 96 px past a pane's minimum
   previews the collapse by dimming that pane and collapses it on release; the
   stored width is kept for the restore. Panes switch instantly: animating the
   width would reflow the Transcript and CodeMirror on every frame.
 - **Compact Desktop.** Below 1100 px Sessions already lives in its drawer, so
-  `[` opens or closes that drawer and the wide-layout preference is left
+  `␣ZS` opens or closes that drawer and the wide-layout preference is left
   untouched.
 
 ## Commands and help
@@ -1016,11 +1018,13 @@ and installed PWAs. Every registered command must pass both checked-in audits:
 - Space is not a browser or system chord; Cowboy takes it only where no
   text, toggle or IME owns it (see Leader), giving up page scrolling by Space
   in the reader in favour of `Ctrl-D/F`.
-- Pane-collapse continuations `[` `]` `\` are free under the prefix. When the
-  prefix modifier is still held, Windows/Linux `Alt+[ ] \` are not Chrome
-  chords; macOS `Cmd+[` / `Cmd+]` are Chrome Back/Forward, which Chromium does
-  not reserve, so the claimed continuation's `preventDefault()` keeps them in
-  Cowboy. Releasing Command before the continuation avoids the question.
+- Tab-stepping continuations `[` `]` are free under the prefix (pane folding
+  lives under `␣Z` with letters `S`/`P`/`C`/`Z`/`A`, avoiding brackets
+  entirely). When the prefix modifier is still held, Windows/Linux `Alt+[ ]`
+  are not Chrome chords; macOS `Cmd+[` / `Cmd+]` are Chrome Back/Forward,
+  which Chromium does not reserve, so the claimed continuation's
+  `preventDefault()` keeps them in Cowboy. Releasing Command before the
+  continuation avoids the question.
 
 For every new shortcut, update the central shortcut constants, both collision
 audits where relevant, policy tests, visible hints, and this guide. Acceptance
@@ -1081,8 +1085,9 @@ state and J/K focus. When Conversation or Prompt owns focus, session rows stay
 unmarked so the tab or editor is the only highlighted selection; the live
 session remains identifiable from its status mark and the open transcript.
 
-Desktop has no separate full-screen Reading mode. Folding Sessions (`␣W[`) and
-Prompt (`␣W]`) gives the Conversation the whole window while keeping the same
+Desktop has no separate full-screen Reading mode. Zooming Conversation (`␣ZZ`
+from Conversation, or folding Sessions `␣ZS` and Prompt `␣ZP`) gives the
+Conversation the whole window while keeping the same
 regions, keys and session context; Explore's `P` opens the Page Index.
 
 Workspace prefix then `P` always enters `prompt.composer`, even when Sessions,

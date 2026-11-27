@@ -116,15 +116,19 @@ const NAVIGATION: ShortcutRow[] = [
   { keys: [DESKTOP_SHORTCUTS.cycleRegion], title: "Cycle visible workspace regions" },
   {
     keys: [
-      desktopWorkspaceSequence([
-        DESKTOP_WORKSPACE_KEYS.toggleSessions,
-        DESKTOP_WORKSPACE_KEYS.togglePrompt,
-        DESKTOP_WORKSPACE_KEYS.toggleConversation,
-      ].join(" ")),
+      DESKTOP_SHORTCUTS.toggleSessions,
+      DESKTOP_SHORTCUTS.togglePrompt,
+      DESKTOP_SHORTCUTS.toggleConversation,
     ],
     title: "Collapse / expand Sessions, Prompt, Conversation",
     description:
-      "The three keys sit left to right like the panes. Prompt and Conversation never both collapse: hiding the last one swaps them. Jumping to a collapsed pane expands it; dragging a splitter past a pane's minimum collapses it",
+      "Each pane takes its initial inside the Fold group (␣Z). Prompt and Conversation never both collapse: hiding the last one swaps them. Jumping to a collapsed pane expands it; dragging a splitter past a pane's minimum collapses it",
+  },
+  {
+    keys: [DESKTOP_SHORTCUTS.toggleZoom, DESKTOP_SHORTCUTS.expandAllPanes],
+    title: "Zoom focused pane / Expand all panes",
+    description:
+      "␣ZZ fills the window with the focused work pane and restores the previous layout on the next press; ␣ZA expands every pane",
   },
   {
     keys: [DESKTOP_RESIZE_SELECT_SHORTCUT],
@@ -310,8 +314,8 @@ const CODE_REVIEW: ShortcutRow[] = [
   },
   {
     keys: [
-      desktopLeaderGroupSequence("V", "["),
-      desktopLeaderGroupSequence("V", "]"),
+      desktopLeaderGroupSequence("V", "L"),
+      desktopLeaderGroupSequence("V", "I"),
       desktopLeaderGroupSequence("V", "O"),
       desktopLeaderGroupSequence("V", "K"),
     ],

@@ -728,12 +728,15 @@ try {
       }): Space during composition stays with the editor; commit lands`,
     );
 
-    // 4. ⌘K from Insert arms the same leader.
+    // 4. ⌘K from Insert arms the leader; default `jj` leaves Insert cleanly.
     await prefix();
     check((await mode()) === "command", "Mod+K arms the leader from Insert");
     await key("Escape");
-    await key("Escape");
-    results.push(`${mac ? "⌘K" : "Alt+K"} arms the leader from Insert`);
+    const beforeJj = await editorText();
+    await key("j"); await key("j");
+    await until("document.activeElement?.matches('[data-vim-command-sink]') === true", "jj enters Vim Normal");
+    check((await editorText()) === beforeJj, `jj removes first j (got ${JSON.stringify(await editorText())})`);
+    results.push(`${mac ? "⌘K" : "Alt+K"} arms the leader from Insert; default jj leaves Insert cleanly`);
 
     // 5. ' labels the focused list; a label moves the cursor.
     await click("[data-desktop-item='beta']");

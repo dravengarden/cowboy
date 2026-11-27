@@ -183,7 +183,23 @@ export async function checkInputVim(): Promise<string> {
         at(first) === first.value.length,
       "A appends",
     );
-    press("Escape");
+    // Default Vim config enables `jj` to leave Insert without reaching for Esc.
+    const beforeJj = text(first);
+    check(
+      !press("j", { isComposing: true }) && mode(first) === "insert",
+      "j during IME composition stays in Insert",
+    );
+    check(!press("j"), "first j types into the field");
+    const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!;
+    setter.call(first, `${beforeJj}j`);
+    first.dispatchEvent(new Event("input", { bubbles: true }));
+    first.setSelectionRange(first.value.length, first.value.length);
+    check(press("j"), "second j completes default jj escape");
+    await tick();
+    check(
+      mode(first) === "normal" && text(first) === beforeJj,
+      "jj removes the typed j and enters Normal",
+    );
     // Textarea: j/k move lines.
     const notes = field("notes");
     notes.focus();

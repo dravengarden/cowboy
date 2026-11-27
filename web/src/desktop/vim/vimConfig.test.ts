@@ -1,6 +1,7 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../../../tools/test-assert.ts";
 import {
+  DEFAULT_VIM_CONFIG_SOURCE,
   DEFAULT_VIM_TIMEOUT_MS,
   escapeMappingLine,
   InsertEscapeMatcher,
@@ -9,6 +10,14 @@ import {
   selectedEscapePreset,
   withEscapePreset,
 } from "./vimConfig";
+
+test("default Vim config enables jj to leave Insert mode", () => {
+  assertEquals(DEFAULT_VIM_CONFIG_SOURCE, "inoremap jj <Esc>");
+  assertEquals(selectedEscapePreset(DEFAULT_VIM_CONFIG_SOURCE), "jj");
+  const config = parseVimConfig(DEFAULT_VIM_CONFIG_SOURCE);
+  assertEquals(config.errors, []);
+  assertEquals(insertEscapeSequences(config), ["jj"]);
+});
 
 test("escape presets replace one line and leave the rest of the config", () => {
   const source = "nnoremap H ^\ninoremap jk <Esc>";

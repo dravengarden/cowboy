@@ -5,6 +5,49 @@ import type { AcceptanceDriver } from "./cdp-run-config-flow.ts";
 
 // Composer surfaces in the real Desktop App: a trusted Escape reaches each
 // surface through the Desktop key dispatcher, as a physical key does.
+async function checkFoldGroupFlow(
+  driver: Pick<AcceptanceDriver, "key" | "until" | "results">,
+  focusIn: (region: string) => string,
+): Promise<void> {
+  const { key, until, results } = driver;
+  await key(" ");
+  await key("z");
+  await until(`document.querySelector('[data-desktop-leader-menu="group:z"]')`, "␣Z opens the Fold group");
+  await key("s");
+  await until(`document.querySelector("[data-desktop-collapsed-rail='sessions']")`, "␣ZS collapses Sessions");
+  await key(" ");
+  await key("z");
+  await key("s");
+  await until(`!document.querySelector("[data-desktop-collapsed-rail='sessions']")`, "␣ZS expands Sessions");
+  // Restoring Sessions focuses it; jump back to Conversation before zooming it.
+  await key(" ");
+  await key("c");
+  await until(focusIn("conversation.transcript"), "␣C focuses Conversation before zoom");
+  await key(" ");
+  await key("z");
+  await key("z");
+  await until(
+    `document.querySelector("[data-desktop-collapsed-rail='sessions']") && document.querySelector("[data-desktop-collapsed-rail='prompt']")`,
+    "␣ZZ zooms the focused Conversation pane",
+  );
+  await key(" ");
+  await key("z");
+  await key("z");
+  await until(
+    `!document.querySelector("[data-desktop-collapsed-rail='sessions']") && !document.querySelector("[data-desktop-collapsed-rail='prompt']")`,
+    "␣ZZ restores the previous pane layout",
+  );
+  await key(" ");
+  await key("z");
+  await key("p");
+  await until(`document.querySelector("[data-desktop-collapsed-rail='prompt']")`, "␣ZP collapses Prompt");
+  await key(" ");
+  await key("z");
+  await key("a");
+  await until(`!document.querySelector("[data-desktop-collapsed-rail]")`, "␣ZA expands all panes");
+  results.push("Fold group (␣Z): ␣ZS/␣ZP toggle panes, ␣ZZ zooms and restores, ␣ZA expands all");
+}
+
 export async function surfacesFlow(
   driver: AcceptanceDriver,
   click: (selector: string) => Promise<void>,
@@ -120,5 +163,7 @@ export async function surfacesFlow(
     "Review stays mounted behind the Conversation",
   );
   results.push("␣C returns to the same transcript and keeps Review mounted behind it");
+
+  await checkFoldGroupFlow(driver, focusIn);
 }
 
