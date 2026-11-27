@@ -407,7 +407,7 @@ impl Hub {
         let folders = self.inner.folders.lock();
         let mut claimed = Vec::with_capacity(expected.len());
         for (folder_id, expected_ts) in expected {
-            let Some(folder) = folders.folders().iter().find(|f| f.id == *folder_id) else {
+            let Some(folder) = folders.trashed().into_iter().find(|f| f.id == *folder_id) else {
                 return Err("Folder is no longer in Trash; refresh and try again".into());
             };
             if folder
