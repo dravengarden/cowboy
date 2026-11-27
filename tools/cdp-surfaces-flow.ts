@@ -48,6 +48,23 @@ async function checkFoldGroupFlow(
   results.push("Fold group (␣Z): ␣ZS/␣ZP toggle panes, ␣ZZ zooms and restores, ␣ZA expands all");
 }
 
+export async function checkDefaultVimJj(
+  key: AcceptanceDriver["key"],
+  until: AcceptanceDriver["until"],
+  check: AcceptanceDriver["check"],
+  editorText: () => Promise<string>,
+): Promise<void> {
+  const before = await editorText();
+  await key("j");
+  await key("j");
+  await until(
+    "document.activeElement?.matches('[data-vim-command-sink]') === true",
+    "jj enters Vim Normal",
+  );
+  const after = await editorText();
+  check(after === before, `jj removes first j (got ${JSON.stringify(after)})`);
+}
+
 export async function surfacesFlow(
   driver: AcceptanceDriver,
   click: (selector: string) => Promise<void>,

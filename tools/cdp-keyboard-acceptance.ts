@@ -12,7 +12,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { type CdpParams, openFixturePage } from "./cdp-fixture.ts";
 import { runConfigFlow } from "./cdp-run-config-flow.ts";
-import { surfacesFlow } from "./cdp-surfaces-flow.ts";
+import { checkDefaultVimJj, surfacesFlow } from "./cdp-surfaces-flow.ts";
 
 const endpoint = process.argv.slice(2)[0] ?? "";
 const output = process.argv.slice(2)[1];
@@ -732,11 +732,8 @@ try {
     await prefix();
     check((await mode()) === "command", "Mod+K arms the leader from Insert");
     await key("Escape");
-    const beforeJj = await editorText();
-    await key("j"); await key("j");
-    await until("document.activeElement?.matches('[data-vim-command-sink]') === true", "jj enters Vim Normal");
-    check((await editorText()) === beforeJj, `jj removes first j (got ${JSON.stringify(await editorText())})`);
-    results.push(`${mac ? "⌘K" : "Alt+K"} arms the leader from Insert; default jj leaves Insert cleanly`);
+    await checkDefaultVimJj(key, until, check, editorText);
+    results.push(`${mac ? "⌘K" : "Alt+K"} arms leader; default jj exits Insert`);
 
     // 5. ' labels the focused list; a label moves the cursor.
     await click("[data-desktop-item='beta']");
