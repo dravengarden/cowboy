@@ -41,11 +41,7 @@ import { ConfirmSheet, Sheet } from "./Sheet";
 import { MobileSheetDismiss } from "@cowboy/app-shell";
 import { type SessionSettingsFocus } from "./sessionSettingsOpen";
 import { ConfigRevertBack } from "./ConfigRevertBack";
-import {
-  CacheProtectionDisableButton,
-  ContextRolloverSettings,
-  useCacheProtectionStatus,
-} from "./ContextRolloverSettings";
+import { CacheProtectionDisableButton, ContextRolloverSettings, useCacheProtectionStatus } from "./ContextRolloverSettings";
 import { SessionCacheMetricsSection } from "./SessionCacheMetricsSection";
 
 export function SessionActionConfirmDialog({
@@ -782,17 +778,11 @@ export function SessionInfoSection({
   const usageAccount = providerEntry?.manifest.host.account_usage?.provider ??
     session.provider;
   const cacheOptionName = usageCacheOptionName(usageAccount);
-  const cacheProtectionVisible =
-    providerEntry?.manifest.host.features.includes("cache_protection_v1") ===
-      true &&
-    contextUsed >= usageCacheMinHitTokens(usageAccount);
-  const sessionProviderName = providerName(
-    session.provider,
-    session.provider_version,
-    session.provider_generation_digest,
-  );
-  const { cacheProtection, cacheProtectionUnavailable } =
-    useCacheProtectionStatus(cacheProtectionVisible, session.id);
+  const cacheProtectionSupported = providerEntry?.manifest.host.features.includes("cache_protection_v1") === true;
+  const cacheProtectionAboveThreshold = contextUsed >= usageCacheMinHitTokens(usageAccount);
+  const sessionProviderName = providerName(session.provider, session.provider_version, session.provider_generation_digest);
+  const { cacheProtection, cacheProtectionUnavailable, refreshCacheProtection } = useCacheProtectionStatus(cacheProtectionSupported, session.id);
+  const cacheProtectionVisible = cacheProtectionSupported && (cacheProtectionAboveThreshold || cacheProtection?.state === "protected");
   const [cacheMetricsNonce, setCacheMetricsNonce] = useState(0);
   const rows: { label: string; value: string; mono?: boolean }[] = [
     { label: "Project", value: project },
@@ -969,11 +959,7 @@ export function SessionInfoSection({
                 {cacheIntervalDetail} · adaptive learning
               </Typography>
             )}
-            <CacheProtectionDisableButton
-              sessionId={session.id}
-              status={cacheProtection}
-              onDisabled={(): void => setCacheMetricsNonce((n) => n + 1)}
-            />
+            <CacheProtectionDisableButton sessionId={session.id} status={cacheProtection} onDisabled={(): void => { refreshCacheProtection(); setCacheMetricsNonce((n) => n + 1); }} />
           </Stack>
         )}
         <ContextRolloverSettings

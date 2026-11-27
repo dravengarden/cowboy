@@ -2318,7 +2318,8 @@ impl Hub {
                     &mut reached_start,
                 );
                 let owner_turn_seq = restored_owner_turn(&log, reached_start);
-                let hibernated = context_rollover::restored_hibernated(meta.status, &log);
+                let hibernated =
+                    context_rollover::restored_hibernated(self, &id, meta.status, &log);
                 for envelope in &log {
                     let _ = history_reducer.reduce(envelope.clone());
                 }
@@ -3846,7 +3847,19 @@ impl Hub {
                         s.meta.provider_generation_digest.clone(),
                     )
                 });
-            s.hibernated = status == Status::Exited && detail.as_deref() == Some("hibernated");
+            let next_hibernated =
+                status == Status::Exited && detail.as_deref() == Some("hibernated");
+            if s.hibernated != next_hibernated {
+                s.hibernated = next_hibernated;
+                self.set_setting(
+                    format!("{}{session_id}", settings_keys::SESSION_HIBERNATED_PREFIX),
+                    if next_hibernated {
+                        serde_json::Value::Bool(true)
+                    } else {
+                        serde_json::Value::Null
+                    },
+                );
+            }
             s.meta.status = status;
             settled_update
         };

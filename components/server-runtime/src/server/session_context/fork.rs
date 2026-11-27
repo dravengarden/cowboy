@@ -431,7 +431,10 @@ async fn fork_session(
     if !crate::managed_calls::valid_id(&request.operation) {
         return Err("A stable operation id is required".into());
     }
-    valid_overrides(&request.config)?;
+    valid_overrides(
+        &request.config,
+        matches!(auth.caller, crate::prompt_origin::RequestCaller::Person),
+    )?;
     if let Some((destination, record)) = state.hub.fork_by_operation(&id, &request.operation) {
         return resume_native_fork(&state, &auth, &id, &info, &request, &destination, &record)
             .await;
@@ -979,7 +982,10 @@ async fn duplicate_session(
     let _guard = lock.lock().await;
     current_authority(&state, &auth)?;
     let info = owned(&state, &auth.principal, &id)?;
-    valid_overrides(&request.config)?;
+    valid_overrides(
+        &request.config,
+        matches!(auth.caller, crate::prompt_origin::RequestCaller::Person),
+    )?;
     let fingerprint = duplicate_fingerprint(&request);
     let existing =
         lookup_existing_duplicate(&state, &auth, &id, &request.operation, &fingerprint).await?;
@@ -1450,14 +1456,20 @@ mod tests {
             serde_json::from_value::<serde_json::Map<String, serde_json::Value>>(value).unwrap()
         };
         assert!(
-            valid_overrides(&config(serde_json::json!({"model": "opus", "fast": true}))).is_ok()
+            valid_overrides(
+                &config(serde_json::json!({"model": "opus", "fast": true})),
+                true
+            )
+            .is_ok()
         );
-        assert!(valid_overrides(&config(serde_json::json!({"model": {"nested": 1}}))).is_err());
-        assert!(valid_overrides(&config(serde_json::json!({"": "opus"}))).is_err());
+        assert!(
+            valid_overrides(&config(serde_json::json!({"model": {"nested": 1}})), true).is_err()
+        );
+        assert!(valid_overrides(&config(serde_json::json!({"": "opus"})), true).is_err());
         let many = (0..33)
             .map(|index| (format!("o{index}"), serde_json::json!("x")))
             .collect();
-        assert!(valid_overrides(&many).is_err());
+        assert!(valid_overrides(&many, true).is_err());
     }
 
     #[test]

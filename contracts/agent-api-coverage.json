@@ -74,6 +74,7 @@
     "api_search_files": "exception:native \u2014 filesystem/Git/language operations use native agent tools; the Code UI retains its browser protocol.",
     "api_session_bootstrap": "configuration.read",
     "api_session_cache_protection": "sessions.cache_protection",
+    "api_session_cache_protection_disable": "exception:human \u2014 explicitly turns off and awaits confirmed gateway keepalive revocation from the settings UI; agents observe status via sessions.cache_protection and turn off options via sessions.configure.",
     "api_session_hibernate": "sessions.hibernate",
     "api_session_info": "sessions.info",
     "api_session_prompt": "queue.submit",

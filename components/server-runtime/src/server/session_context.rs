@@ -454,7 +454,10 @@ pub fn apply_overrides(
     Ok(())
 }
 
-pub fn valid_overrides(config: &serde_json::Map<String, serde_json::Value>) -> Result<(), String> {
+pub fn valid_overrides(
+    config: &serde_json::Map<String, serde_json::Value>,
+    owner_authorized: bool,
+) -> Result<(), String> {
     if config.len() > 32 {
         return Err("Too many configuration choices".into());
     }
@@ -471,12 +474,27 @@ pub fn valid_overrides(config: &serde_json::Map<String, serde_json::Value>) -> R
                 "Configuration choices must be option ids with a string or boolean value".into(),
             );
         }
+        if config_id == crate::managed_config::CACHE_PROTECTION_ID
+            && value == &serde_json::Value::Bool(true)
+            && !owner_authorized
+        {
+            return Err(
+                "enabling paid cache protection requires interactive owner authorization".into(),
+            );
+        }
     }
     Ok(())
 }
 
-fn validate_target(target: &NextAgent) -> Result<(), String> {
-    valid_overrides(&target.config)?;
+fn paid_consent_key(id: &str) -> String {
+    format!(
+        "{}{id}",
+        crate::core::settings_keys::SESSION_CONTEXT_PAID_CONSENT_PREFIX
+    )
+}
+
+fn validate_target(target: &NextAgent, owner_authorized: bool) -> Result<(), String> {
+    valid_overrides(&target.config, owner_authorized)?;
     for value in [&target.provider, &target.machine_id, &target.cwd] {
         if value.is_empty() || value.len() > 256 || value.contains('\0') {
             return Err("Choose a Provider and registered project".into());
@@ -535,8 +553,9 @@ pub async fn set(
         }
         editable(&info, &check, !links_only)?;
         validate_sources(&state, &auth.principal, &edit.sources)?;
+        let owner_authorized = matches!(auth.caller, crate::prompt_origin::RequestCaller::Person);
         if let Some(target) = &edit.next_agent {
-            validate_target(target)?;
+            validate_target(target, owner_authorized)?;
             provider_accounts::resolve_for_create(
                 &state.accounts,
                 &auth.principal.user_id,
@@ -605,6 +624,12 @@ pub async fn set(
         current_authority(&state, &auth)?;
         owned(&state, &auth.principal, &id)?;
         let _queue_guard = state.hub.begin_context_edit(&id, links_only)?;
+        let consent_value = if saved.next_agent.is_some() && owner_authorized {
+            serde_json::json!(saved.revision)
+        } else {
+            serde_json::Value::Null
+        };
+        state.hub.set_setting(paid_consent_key(&id), consent_value);
         save(&state, &id, &saved).await?;
         view(&state, &auth.principal, &id)
     })
@@ -705,7 +730,12 @@ async fn prepare_target(
 ) -> Result<(), String> {
     let target_id = &delivery.session_id;
     if let Some(target) = &context.next_agent {
-        validate_target(target)?;
+        let staged_owner_consent = state
+            .hub
+            .setting(&paid_consent_key(id))
+            .and_then(|value| value.as_u64())
+            == Some(context.revision);
+        validate_target(target, staged_owner_consent)?;
         let source = owned(state, &auth.principal, id)?.meta;
         inheritance::preflight(state, auth, &source, target).await?;
         let actor = folder_actor(state, &auth.principal);
@@ -748,12 +778,12 @@ async fn prepare_target(
         if target.inherit_settings {
             inheritance::apply(state, &source, &destination, target)?;
         }
-        apply_overrides(
-            state,
-            target_id,
-            &target.config,
-            matches!(auth.caller, crate::prompt_origin::RequestCaller::Person),
-        )?;
+        let staged_owner_consent = state
+            .hub
+            .setting(&paid_consent_key(id))
+            .and_then(|value| value.as_u64())
+            == Some(context.revision);
+        apply_overrides(state, target_id, &target.config, staged_owner_consent)?;
         state
             .hub
             .place_continuation(id, target_id, target.inherit_settings, &actor)?;
@@ -1238,7 +1268,7 @@ mod tests {
     fn new_target_is_a_closed_noncredential_contract() {
         let base = serde_json::json!({"provider":"claude-code","provider_account_id":"default","machine_id":"ovh","cwd":"project"});
         let target: NextAgent = serde_json::from_value(base.clone()).unwrap();
-        assert!(validate_target(&target).is_ok());
+        assert!(validate_target(&target, true).is_ok());
         assert!(target.inherit_settings);
         let mut with_credentials = base;
         with_credentials["credentials"] = serde_json::json!("secret");
@@ -1258,7 +1288,7 @@ mod tests {
         let mut chosen = base.clone();
         chosen["config"] = serde_json::json!({"model": "gpt-5.5", "fast": true});
         let target: NextAgent = serde_json::from_value(chosen).unwrap();
-        assert!(validate_target(&target).is_ok());
+        assert!(validate_target(&target, true).is_ok());
         assert_eq!(
             serde_json::to_value(&target).unwrap()["config"]["fast"],
             true
@@ -1266,6 +1296,6 @@ mod tests {
         let mut nested = base;
         nested["config"] = serde_json::json!({"model": {"id": "x"}});
         let target: NextAgent = serde_json::from_value(nested).unwrap();
-        assert!(validate_target(&target).is_err());
+        assert!(validate_target(&target, true).is_err());
     }
 }

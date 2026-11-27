@@ -4,7 +4,6 @@ import { PREFERENCES_CHANGED } from "./aboutPreferences";
 import type { DeepseekCacheProtectionStatus } from "./ComposerSheet";
 import { formatIdleMinutesLabel } from "./contextRolloverPreferences";
 import { expectHttpOk } from "./httpResponse";
-import { setSessionConfigOptions } from "./store";
 
 /** `GET /api/sessions/{id}/context-rollover` (src/context_rollover.rs). */
 export interface ContextRolloverView {
@@ -146,27 +145,34 @@ export function ContextRolloverSettings({
   );
 }
 
-/** Poll the DeepSeek cache keepalive status while it applies to the session. */
+/** Poll the DeepSeek cache keepalive status while it applies to the session.
+ *  Keyed by `sessionId` so switching sessions never exposes the prior session's status. */
 export function useCacheProtectionStatus(
   visible: boolean,
   sessionId: string,
 ): {
   cacheProtection: DeepseekCacheProtectionStatus | null;
   cacheProtectionUnavailable: boolean;
+  refreshCacheProtection: () => void;
 } {
-  const [cacheProtection, setCacheProtection] = useState<DeepseekCacheProtectionStatus | null>(
-    null,
-  );
-  const [cacheProtectionUnavailable, setCacheProtectionUnavailable] = useState(false);
+  const [entry, setEntry] = useState<{
+    sessionId: string;
+    data: DeepseekCacheProtectionStatus | null;
+    unavailable: boolean;
+  } | null>(null);
+  const [nonce, setNonce] = useState(0);
+  const refreshCacheProtection = useCallback(() => {
+    setNonce((n) => n + 1);
+  }, []);
   useEffect(() => {
     if (!visible) {
-      setCacheProtection(null);
-      setCacheProtectionUnavailable(false);
+      setEntry(null);
       return;
     }
     const controller = new AbortController();
     const refresh = (): void => {
       void fetch(`/api/sessions/${encodeURIComponent(sessionId)}/cache-protection`, {
+        cache: "no-store",
         signal: controller.signal,
       })
         .then(async (response) => {
@@ -175,13 +181,13 @@ export function useCacheProtectionStatus(
           if (!["protected", "inactive", "disabled"].includes(value.state)) {
             throw new Error("invalid cache status");
           }
-          setCacheProtection(value);
-          setCacheProtectionUnavailable(false);
+          if (!controller.signal.aborted) {
+            setEntry({ sessionId, data: value, unavailable: false });
+          }
         })
         .catch(() => {
           if (!controller.signal.aborted) {
-            setCacheProtection(null);
-            setCacheProtectionUnavailable(true);
+            setEntry({ sessionId, data: null, unavailable: true });
           }
         });
     };
@@ -191,14 +197,19 @@ export function useCacheProtectionStatus(
       controller.abort();
       globalThis.clearInterval(interval);
     };
-  }, [visible, sessionId]);
-  return { cacheProtection, cacheProtectionUnavailable };
+  }, [visible, sessionId, nonce]);
+  const current = entry && entry.sessionId === sessionId ? entry : null;
+  return {
+    cacheProtection: current?.data ?? null,
+    cacheProtectionUnavailable: current?.unavailable ?? false,
+    refreshCacheProtection,
+  };
 }
-
 
 /** Explicit disable/revoke action when a gateway snapshot is still protected
  *  while the session's configured policy is already Off (e.g. adopted legacy
- *  Auto worker or retained gateway snapshot). */
+ *  Auto worker or retained gateway snapshot). Awaits confirmed Machine gateway
+ *  revocation and refreshes status before clearing. */
 export function CacheProtectionDisableButton({
   sessionId,
   status,
@@ -208,31 +219,52 @@ export function CacheProtectionDisableButton({
   status: DeepseekCacheProtectionStatus | null;
   onDisabled?: () => void;
 }): React.JSX.Element | null {
-  const [disabling, setDisabling] = useState(false);
-  const optionId = status?.optionId;
-  if (status?.state !== "protected" || status.configuredEnabled !== false || !optionId) {
+  const [busyFor, setBusyFor] = useState<string | null>(null);
+  const [errFor, setErrFor] = useState<{ sessionId: string; message: string } | null>(null);
+  if (status?.state !== "protected" || status.configuredEnabled !== false) {
     return null;
   }
+  const disabling = busyFor === sessionId;
+  const error = errFor?.sessionId === sessionId ? errFor.message : null;
   return (
-    <Button
-      size="small"
-      variant="outlined"
-      color="warning"
-      disabled={disabling}
-      onClick={(): void => {
-        setDisabling(true);
-        void setSessionConfigOptions(sessionId, [
-          { configId: optionId, value: false },
-        ])
-          .then(() => {
-            onDisabled?.();
+    <Stack spacing={0.5} alignItems="flex-start">
+      <Button
+        size="small"
+        variant="outlined"
+        color="warning"
+        disabled={disabling}
+        onClick={(): void => {
+          const targetId = sessionId;
+          setBusyFor(targetId);
+          setErrFor(null);
+          void fetch(`/api/sessions/${encodeURIComponent(targetId)}/cache-protection`, {
+            method: "POST",
           })
-          .finally(() => {
-            setDisabling(false);
-          });
-      }}
-    >
-      {disabling ? "Turning off…" : "Disable & revoke keepalive"}
-    </Button>
+            .then(async (response) => {
+              await expectHttpOk(response, "Could not revoke gateway keepalive");
+              onDisabled?.();
+            })
+            .catch((cause) => {
+              setErrFor({
+                sessionId: targetId,
+                message:
+                  cause instanceof Error
+                    ? cause.message
+                    : "Gateway keepalive revocation failed; retry.",
+              });
+            })
+            .finally(() => {
+              setBusyFor((cur) => (cur === targetId ? null : cur));
+            });
+        }}
+      >
+        {disabling ? "Revoking…" : "Disable & revoke keepalive"}
+      </Button>
+      {error && (
+        <Typography variant="caption" color="error">
+          {error}
+        </Typography>
+      )}
+    </Stack>
   );
 }

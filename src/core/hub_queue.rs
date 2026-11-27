@@ -344,7 +344,9 @@ impl Hub {
             {
                 return;
             }
-            let decision = Self::drain_decision(s, allow_revive, manual, |cmid| {
+            let effective_revive =
+                allow_revive || (s.hibernated && s.meta.status == Status::Exited);
+            let decision = Self::drain_decision(s, effective_revive, manual, |cmid| {
                 self.context_allows_dispatch(session_id, cmid)
             });
             if decision != DrainDecision::Dispatch {

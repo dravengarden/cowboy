@@ -410,13 +410,21 @@ impl Hub {
     }
 }
 
-/// Whether a restored exited session's latest lifecycle event confirms hibernation.
-pub(super) fn restored_hibernated(status: super::Status, log: &[Envelope]) -> bool {
+/// Whether a restored exited session was durably marked hibernated (surviving Clear)
+/// or ended with a hibernated lifecycle event.
+pub(super) fn restored_hibernated(
+    hub: &Hub,
+    id: &str,
+    status: super::Status,
+    log: &[Envelope],
+) -> bool {
+    let key = format!("{}{id}", super::settings_keys::SESSION_HIBERNATED_PREFIX);
     status == super::Status::Exited
-        && log.iter().rev().find_map(|env| match &env.event {
-            Event::Lifecycle { status, detail } => Some((*status, detail.as_deref())),
-            _ => None,
-        }) == Some((super::Status::Exited, Some("hibernated")))
+        && (hub.setting(&key).and_then(|v| v.as_bool()) == Some(true)
+            || log.iter().rev().find_map(|env| match &env.event {
+                Event::Lifecycle { status, detail } => Some((*status, detail.as_deref())),
+                _ => None,
+            }) == Some((super::Status::Exited, Some("hibernated"))))
 }
 
 #[cfg(test)]

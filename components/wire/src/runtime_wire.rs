@@ -764,6 +764,8 @@ pub enum CoreCommand {
     HibernateSession {
         session_id: String,
         command_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expected_worker_epoch: Option<String>,
     },
     /// Stop a named account's worker without deleting its session. This is
     /// process-stop evidence only, not account-wide logout or credential cleanup.

@@ -2277,7 +2277,12 @@ impl Broker {
     /// and the Controller's next `EnsureSession` resumes the retained native
     /// thread, exactly as after a Machine restart. A turn, a permission prompt
     /// or native background work refuses, because stopping would lose it.
-    async fn hibernate_session(self: &Arc<Self>, session_id: String, command_id: String) {
+    async fn hibernate_session(
+        self: &Arc<Self>,
+        session_id: String,
+        command_id: String,
+        expected_worker_epoch: Option<String>,
+    ) {
         let cleanup_gate = self.session_lifecycle_gate(&session_id);
         let _cleanup_guard = cleanup_gate.lock().await;
         if self.account_session_stopped(&session_id) {
@@ -2301,12 +2306,19 @@ impl Broker {
             );
             return;
         };
-        if let Some(reason) = hibernation_refusal(&snapshot).or_else(|| {
-            self.launching
-                .lock()
-                .contains(&session_id)
-                .then_some("session is starting")
-        }) {
+        let epoch_mismatch = expected_worker_epoch
+            .as_deref()
+            .is_some_and(|expected| snapshot.worker_epoch != expected)
+            .then_some("worker epoch changed before hibernation");
+        if let Some(reason) = epoch_mismatch
+            .or_else(|| hibernation_refusal(&snapshot))
+            .or_else(|| {
+                self.launching
+                    .lock()
+                    .contains(&session_id)
+                    .then_some("session is starting")
+            })
+        {
             self.command_rejected(&session_id, command_id, reason.to_owned());
             return;
         }
@@ -4695,7 +4707,12 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
         CoreCommand::HibernateSession {
             session_id,
             command_id,
-        } => broker.hibernate_session(session_id, command_id).await,
+            expected_worker_epoch,
+        } => {
+            broker
+                .hibernate_session(session_id, command_id, expected_worker_epoch)
+                .await
+        }
         CoreCommand::StopSession {
             session_id,
             command_id,
@@ -6331,7 +6348,7 @@ mod tests {
             .snapshot
             .current_turn_id = None;
         broker
-            .hibernate_session("sess-1".into(), "hibernate".into())
+            .hibernate_session("sess-1".into(), "hibernate".into(), None)
             .await;
         assert!(matches!(rx.recv().await,
             Some(Frame::CommandAck { accepted: false, reason: Some(reason), .. })
@@ -6758,7 +6775,7 @@ mod tests {
             .lock()
             .insert("sess-1".into(), u32::MAX);
         broker
-            .hibernate_session("sess-1".into(), "unconfirmed".into())
+            .hibernate_session("sess-1".into(), "unconfirmed".into(), None)
             .await;
         let Some(Frame::CommandAck {
             accepted, reason, ..
@@ -6775,7 +6792,7 @@ mod tests {
         // Once ownership reconciliation observes exit, retry can finish.
         broker.direct_worker_pids.lock().remove("sess-1");
         broker
-            .hibernate_session("sess-1".into(), "retry".into())
+            .hibernate_session("sess-1".into(), "retry".into(), None)
             .await;
         assert!(
             matches!(controller_rx.recv().await, Some(Frame::Snapshot { worker }) if worker.state == WorkerState::Exited)
@@ -6795,7 +6812,7 @@ mod tests {
         broker.install_controller(controller_tx);
 
         broker
-            .hibernate_session("sess-1".to_owned(), "hibernate-1".to_owned())
+            .hibernate_session("sess-1".to_owned(), "hibernate-1".to_owned(), None)
             .await;
         let Some(Frame::CommandAck {
             accepted, reason, ..
@@ -6816,7 +6833,7 @@ mod tests {
         while worker_rx.try_recv().is_ok() {}
 
         broker
-            .hibernate_session("sess-1".to_owned(), "hibernate-2".to_owned())
+            .hibernate_session("sess-1".to_owned(), "hibernate-2".to_owned(), None)
             .await;
         let Some(Frame::Snapshot { worker }) = controller_rx.recv().await else {
             panic!("hibernated worker snapshot");
@@ -6865,7 +6882,7 @@ mod tests {
             }
             broker.sessions.lock().insert("sess-1".to_owned(), session);
             broker
-                .hibernate_session("sess-1".to_owned(), "hibernate-cache".to_owned())
+                .hibernate_session("sess-1".to_owned(), "hibernate-cache".to_owned(), None)
                 .await;
             assert!(!broker.workers.lock().contains_key("sess-1"));
             let revoked = broker.revoked_cache_protection.lock().clone();
@@ -7257,7 +7274,7 @@ mod tests {
         idle.current_turn_id = None;
         broker.update_snapshot(idle, 1);
         broker
-            .hibernate_session("sess-1".to_owned(), "hibernate-lineage".to_owned())
+            .hibernate_session("sess-1".to_owned(), "hibernate-lineage".to_owned(), None)
             .await;
         assert!(!broker.workers.lock().contains_key("sess-1"));
         assert_eq!(lineage(&broker).unwrap().0, rotated);

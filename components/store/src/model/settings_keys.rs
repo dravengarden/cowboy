@@ -41,6 +41,10 @@ pub const SESSION_RESOURCE_WAIT_PREFIX: &str = "session_resource_wait:";
 pub const SESSION_HELD_SENDS_PREFIX: &str = "session_held_sends:";
 /// Explicit queue pause must survive a Controller restart.
 pub const SESSION_QUEUE_PAUSED_PREFIX: &str = "session_queue_paused:";
+/// Durable hibernation marker surviving Clear and Controller restarts; the session id follows.
+pub const SESSION_HIBERNATED_PREFIX: &str = "session_hibernated:";
+/// Revision of a staged `NextAgent` authored by an interactive Person (paid keepalive consent).
+pub const SESSION_CONTEXT_PAID_CONSENT_PREFIX: &str = "session_context_paid_consent:";
 pub const SESSION_DELIVERY_POLICY_PREFIX: &str = "session_delivery_policy:";
 pub const SESSION_DELIVERY_HOLD_PREFIX: &str = "session_delivery_hold:";
 /// Active/uncertain steer reservations protecting source queue/draft rows across restarts.
@@ -112,6 +116,8 @@ pub const SESSION_STATE_PREFIXES: &[&str] = &[
     SESSION_RESOURCE_WAIT_PREFIX,
     SESSION_HELD_SENDS_PREFIX,
     SESSION_QUEUE_PAUSED_PREFIX,
+    SESSION_HIBERNATED_PREFIX,
+    SESSION_CONTEXT_PAID_CONSENT_PREFIX,
     SESSION_DELIVERY_POLICY_PREFIX,
     SESSION_DELIVERY_HOLD_PREFIX,
     SESSION_STEER_RESERVATIONS_PREFIX,
@@ -145,6 +151,8 @@ pub fn is_persisted_setting_key(key: &str) -> bool {
             SESSION_RESOURCE_WAIT_PREFIX,
             SESSION_HELD_SENDS_PREFIX,
             SESSION_QUEUE_PAUSED_PREFIX,
+            SESSION_HIBERNATED_PREFIX,
+            SESSION_CONTEXT_PAID_CONSENT_PREFIX,
             SESSION_DELIVERY_POLICY_PREFIX,
             SESSION_DELIVERY_HOLD_PREFIX,
             SESSION_STEER_RESERVATIONS_PREFIX,

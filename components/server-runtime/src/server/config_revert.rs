@@ -16,6 +16,10 @@ pub struct Revert {
     revision: u64,
     /// Option id -> the value it had before the first change since the last send.
     values: serde_json::Map<String, serde_json::Value>,
+    /// True only when a recorded `deepseek_cache_protection = true` came from
+    /// verified interactive owner consent (never a legacy unverified default).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    paid_keepalive_owner_verified: bool,
 }
 
 fn key(id: &str) -> String {
@@ -52,15 +56,24 @@ fn fold(
     config_id: &str,
     previous: Option<serde_json::Value>,
     next: &serde_json::Value,
+    paid_keepalive_owner_verified: bool,
 ) -> bool {
+    let is_cache_protection = config_id == crate::managed_config::CACHE_PROTECTION_ID;
     match revert.values.get(config_id) {
         Some(original) if original == next => {
             revert.values.remove(config_id);
+            if is_cache_protection {
+                revert.paid_keepalive_owner_verified = false;
+            }
             true
         }
         Some(_) => false,
         None => match previous {
             Some(previous) if &previous != next => {
+                if is_cache_protection {
+                    revert.paid_keepalive_owner_verified =
+                        previous == serde_json::Value::Bool(true) && paid_keepalive_owner_verified;
+                }
                 revert.values.insert(config_id.to_owned(), previous);
                 true
             }
@@ -75,10 +88,17 @@ fn record(
     config_id: &str,
     previous: Option<serde_json::Value>,
     next: &serde_json::Value,
+    paid_keepalive_owner_verified: bool,
 ) {
     let _guard = REVERT_LOCK.lock();
     let mut revert = read(hub, id);
-    if fold(&mut revert, config_id, previous, next) {
+    if fold(
+        &mut revert,
+        config_id,
+        previous,
+        next,
+        paid_keepalive_owner_verified,
+    ) {
         revert.revision += 1;
         write(hub, id, &revert);
     }
@@ -88,10 +108,11 @@ fn record(
 pub fn clear(hub: &crate::core::Hub, id: &str) {
     let _guard = REVERT_LOCK.lock();
     let mut revert = read(hub, id);
-    if revert.values.is_empty() {
+    if revert.values.is_empty() && !revert.paid_keepalive_owner_verified {
         return;
     }
     revert.values.clear();
+    revert.paid_keepalive_owner_verified = false;
     revert.revision += 1;
     write(hub, id, &revert);
 }
@@ -133,9 +154,24 @@ pub fn apply(
     session_configuration::prepare(state, session_id);
     // Read what the change replaces before applying it; record it only once
     // the change is accepted, so a refused value leaves nothing to go back to.
-    let previous = remember
-        .then(|| state.hub.current_config_value(session_id, &config_id))
-        .flatten();
+    // For paid keepalive, record only the effective verified consent (never a
+    // raw legacy `true` default) so Back cannot promote unverified billing.
+    let (previous, previous_paid_verified) = if !remember {
+        (None, false)
+    } else if config_id == crate::managed_config::CACHE_PROTECTION_ID {
+        let prefs = state
+            .hub
+            .config_preferences(session_id)
+            .unwrap_or(serde_json::Value::Null);
+        let effective_on =
+            crate::managed_config::effective_cache_protection_consent(&prefs) == Some(true);
+        (Some(serde_json::Value::Bool(effective_on)), effective_on)
+    } else {
+        (
+            state.hub.current_config_value(session_id, &config_id),
+            false,
+        )
+    };
     let recorded = (config_id.clone(), value.clone());
     let revoking_cache_protection = config_id == crate::managed_config::CACHE_PROTECTION_ID
         && value == serde_json::Value::Bool(false);
@@ -192,7 +228,14 @@ pub fn apply(
             }
         }
         if remember {
-            record(&state.hub, session_id, &recorded.0, previous, &recorded.1);
+            record(
+                &state.hub,
+                session_id,
+                &recorded.0,
+                previous,
+                &recorded.1,
+                previous_paid_verified,
+            );
         }
     }
     applied
@@ -230,7 +273,7 @@ pub async fn restore(
     {
         return (StatusCode::CONFLICT, refusal).into_response();
     }
-    let values = {
+    let (values, paid_keepalive_owner_verified) = {
         let _guard = REVERT_LOCK.lock();
         let mut revert = read(&state.hub, &id);
         if revert.values.is_empty() {
@@ -241,9 +284,10 @@ pub async fn restore(
                 .into_response();
         }
         let values = std::mem::take(&mut revert.values);
+        let verified = std::mem::take(&mut revert.paid_keepalive_owner_verified);
         revert.revision += 1;
         write(&state.hub, &id, &revert);
-        values
+        (values, verified)
     };
     // The agent's own option order (model before reasoning), so a value that
     // depends on the earlier one is applied after it.
@@ -269,7 +313,10 @@ pub async fn restore(
     });
     let mut remaining = pending.into_iter();
     while let Some((config_id, value)) = remaining.next() {
-        let owner_authorized = matches!(auth.caller, crate::prompt_origin::RequestCaller::Person);
+        let is_paid_enable = config_id == crate::managed_config::CACHE_PROTECTION_ID
+            && value == serde_json::Value::Bool(true);
+        let owner_authorized = matches!(auth.caller, crate::prompt_origin::RequestCaller::Person)
+            && (!is_paid_enable || paid_keepalive_owner_verified);
         if let Err(error) = apply(
             &state,
             &id,
@@ -282,6 +329,12 @@ pub async fn restore(
             let _guard = REVERT_LOCK.lock();
             let mut revert = read(&state.hub, &id);
             for (config_id, value) in std::iter::once((config_id, value)).chain(remaining) {
+                if config_id == crate::managed_config::CACHE_PROTECTION_ID
+                    && value == serde_json::Value::Bool(true)
+                    && paid_keepalive_owner_verified
+                {
+                    revert.paid_keepalive_owner_verified = true;
+                }
                 revert.values.entry(config_id).or_insert(value);
             }
             revert.revision += 1;
@@ -306,14 +359,16 @@ mod tests {
             &mut revert,
             "model",
             Some(json!("opus")),
-            &json!("sonnet")
+            &json!("sonnet"),
+            false,
         ));
         // Sonnet -> Haiku keeps the original Opus.
         assert!(!fold(
             &mut revert,
             "model",
             Some(json!("sonnet")),
-            &json!("haiku")
+            &json!("haiku"),
+            false,
         ));
         assert_eq!(revert.values.get("model"), Some(&json!("opus")));
         // Choosing Opus again leaves nothing to go back to.
@@ -321,7 +376,8 @@ mod tests {
             &mut revert,
             "model",
             Some(json!("haiku")),
-            &json!("opus")
+            &json!("opus"),
+            false,
         ));
         assert!(revert.values.is_empty());
         // Re-selecting the current value, or an unknown previous one, records nothing.
@@ -329,9 +385,54 @@ mod tests {
             &mut revert,
             "effort",
             Some(json!("high")),
-            &json!("high")
+            &json!("high"),
+            false,
         ));
-        assert!(!fold(&mut revert, "effort", None, &json!("high")));
+        assert!(!fold(&mut revert, "effort", None, &json!("high"), false));
         assert!(revert.values.is_empty());
+    }
+
+    #[test]
+    fn back_requires_verified_owner_provenance_for_paid_keepalive() {
+        let mut revert = Revert::default();
+        let id = crate::managed_config::CACHE_PROTECTION_ID;
+        // Effective value for a legacy unverified default is false, so explicit Off records nothing.
+        assert!(!fold(
+            &mut revert,
+            id,
+            Some(json!(false)),
+            &json!(false),
+            false
+        ));
+        assert!(revert.values.is_empty());
+        assert!(!revert.paid_keepalive_owner_verified);
+
+        // Verified owner On -> Off records true WITH provenance, and toggling back clears it.
+        assert!(fold(
+            &mut revert,
+            id,
+            Some(json!(true)),
+            &json!(false),
+            true
+        ));
+        assert_eq!(revert.values.get(id), Some(&json!(true)));
+        assert!(revert.paid_keepalive_owner_verified);
+        assert!(fold(
+            &mut revert,
+            id,
+            Some(json!(false)),
+            &json!(true),
+            false
+        ));
+        assert!(revert.values.is_empty());
+        assert!(!revert.paid_keepalive_owner_verified);
+
+        // Legacy persisted Back records without provenance deserialize unverified.
+        let legacy: Revert = serde_json::from_value(json!({
+            "revision": 2,
+            "values": { id: true }
+        }))
+        .unwrap();
+        assert!(!legacy.paid_keepalive_owner_verified);
     }
 }

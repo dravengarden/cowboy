@@ -110,6 +110,18 @@ impl PendingCommands {
         self.entries.retain(|key, (_, command)| f(key, command));
     }
 
+    pub(in crate::remote_runtime) fn has_pending_hibernation(&self, session_id: &str) -> bool {
+        self.values().any(|command| {
+            matches!(command, CoreCommand::HibernateSession { session_id: pending, .. } if pending == session_id)
+        })
+    }
+
+    pub(in crate::remote_runtime) fn cancel_pending_hibernation(&mut self, session_id: &str) {
+        self.retain(|_, command| {
+            !matches!(command, CoreCommand::HibernateSession { session_id: pending, .. } if pending == session_id)
+        });
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     pub(in crate::remote_runtime) fn drain_commands(&mut self) -> HashMap<String, CoreCommand> {
         self.entries
@@ -130,4 +142,15 @@ impl Index<&String> for PendingCommands {
     fn index(&self, key: &String) -> &Self::Output {
         &self.entries[key].1
     }
+}
+
+pub(in crate::remote_runtime) fn is_benign_hibernation_refusal(
+    command: Option<&CoreCommand>,
+    reason: &str,
+) -> bool {
+    matches!(command, Some(CoreCommand::HibernateSession { .. }))
+        && matches!(
+            reason,
+            "session has no live worker" | "worker epoch changed before hibernation"
+        )
 }

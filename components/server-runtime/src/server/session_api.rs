@@ -282,6 +282,66 @@ pub async fn api_session_cache_protection(
     }
 }
 
+/// Explicitly disable `DeepSeek` paid keepalive and await confirmed gateway snapshot
+/// revocation on the owning Machine before reporting success.
+pub async fn api_session_cache_protection_disable(
+    State(state): State<Arc<AppState>>,
+    Extension(auth): Extension<AuthenticatedProductRequest>,
+    Path(session_id): Path<String>,
+) -> Response {
+    let Some(session) = state.hub.session_info(&session_id).map(|info| info.meta) else {
+        return (StatusCode::NOT_FOUND, "unknown session").into_response();
+    };
+    if state.hub.is_managed_child(&session_id) {
+        return (StatusCode::CONFLICT, config_revert::MANAGED_CHILD_REFUSAL).into_response();
+    }
+    let configuration = session.provider_behavior.as_ref().map_or_else(
+        || crate::provider::legacy_behavior(&session.provider).configuration,
+        |behavior| behavior.configuration.clone(),
+    );
+    if !crate::deepseek_cache::supported_behavior(&configuration) {
+        return (
+            StatusCode::BAD_REQUEST,
+            crate::deepseek_cache::unavailable_message(),
+        )
+            .into_response();
+    }
+    let owner_authorized = matches!(auth.caller, crate::prompt_origin::RequestCaller::Person);
+    if let Err(error) = state.supervisor.set_managed_config_option_for_caller(
+        &session_id,
+        crate::managed_config::CACHE_PROTECTION_ID,
+        serde_json::Value::Bool(false),
+        owner_authorized,
+    ) {
+        return (StatusCode::CONFLICT, error).into_response();
+    }
+    if let Err(error) = state
+        .machine_control
+        .adapter_request(
+            &session.machine_id,
+            "provider-cache-revoke",
+            serde_json::json!({
+                "configuration": configuration,
+                "sessionId": session.id,
+            }),
+        )
+        .await
+    {
+        tracing::warn!(
+            session = %session.id,
+            machine = %session.machine_id,
+            %error,
+            "Provider cache-protection revocation failed"
+        );
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Gateway keepalive revocation did not complete; retry to confirm paid replay stopped.",
+        )
+            .into_response();
+    }
+    api_session_cache_protection(State(state), Path(session_id)).await
+}
+
 /// Inject a prompt into a session FROM THE BACKEND (machine-driven). The
 /// This bypasses the WS user-input gate precisely because it is the backend,
 /// not an interactive client. Works on any session, including `system` ones.

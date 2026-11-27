@@ -170,24 +170,32 @@ function useSessionCacheMetricsData(
     return 0;
   });
   const latestTurnEndSeq = Math.max(liveWatermark, timelineWatermark);
-  const liveWork = useStoreSelector((snapshot) => {
+  const liveSignal = useStoreSelector((snapshot) => {
     const session = snapshot.sessionsById.get(sessionId);
     const queueCount = snapshot.queues.get(sessionId)?.length ?? 0;
     const backgroundTasks = session?.background_tasks ?? 0;
     const att = session?.attention;
     const attentionCount = (att?.approvals ?? 0) + (att?.questions ?? 0) + (att?.other ?? 0);
-    const activeTurn = session?.status === "busy" || session?.status === "starting";
-    const pendingWork = queueCount > 0 || backgroundTasks > 0 || attentionCount > 0;
     const options = snapshot.configOptions.get(sessionId);
     const optionSig = options
       ? options.map((opt) => `${opt.id}=${String(opt.currentValue)}`).join(";")
       : "";
-    const signal = session
+    return session
       ? `${session.status}:${session.usage?.observed_at_ms ?? 0}:${session.context_used}:${queueCount}:${backgroundTasks}:${attentionCount}|${optionSig}`
       : `${queueCount}|${optionSig}`;
-    return { signal, activeTurn, pendingWork };
   });
-  const liveSignal = liveWork.signal;
+  const liveActiveTurn = useStoreSelector((snapshot) => {
+    const status = snapshot.sessionsById.get(sessionId)?.status;
+    return status === "busy" || status === "starting";
+  });
+  const livePendingWork = useStoreSelector((snapshot) => {
+    const session = snapshot.sessionsById.get(sessionId);
+    const queueCount = snapshot.queues.get(sessionId)?.length ?? 0;
+    const backgroundTasks = session?.background_tasks ?? 0;
+    const att = session?.attention;
+    const attentionCount = (att?.approvals ?? 0) + (att?.questions ?? 0) + (att?.other ?? 0);
+    return queueCount > 0 || backgroundTasks > 0 || attentionCount > 0;
+  });
 
   useEffect(() => {
     const controller = new AbortController();
@@ -247,8 +255,8 @@ function useSessionCacheMetricsData(
   return {
     currentData,
     syncPending,
-    liveActiveTurn: liveWork.activeTurn,
-    livePendingWork: liveWork.pendingWork,
+    liveActiveTurn,
+    livePendingWork,
   };
 }
 

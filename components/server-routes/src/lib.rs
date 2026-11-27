@@ -370,7 +370,7 @@ pub fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         )
         .route(
             "/api/sessions/{id}/cache-protection",
-            get(api_session_cache_protection),
+            get(api_session_cache_protection).post(api_session_cache_protection_disable),
         )
         .route(
             "/api/sessions/{id}/cache-metrics",

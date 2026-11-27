@@ -402,7 +402,9 @@ export function useContextRolloverPreferences(connected: boolean) {
       }
       setLoadError(undefined);
     } catch (cause) {
-      if (alive.current) setLoadError(cause instanceof Error ? cause.message : String(cause));
+      if (alive.current && sequence === loading.current && !productSessionSignal().aborted) {
+        setLoadError(cause instanceof Error ? cause.message : String(cause));
+      }
     }
   }, []);
 

@@ -1129,9 +1129,12 @@ impl Supervisor {
         if !runtime.has_worker(session_id) || runtime.hibernation_pending(session_id) {
             return Err("session is already hibernated or hibernating".to_owned());
         }
+        let expected_epoch = runtime
+            .worker_snapshot(session_id)
+            .map(|snapshot| snapshot.worker_epoch);
         self.hub
             .admit_idle_hibernation(session_id, min_idle, min_context_tokens)?;
-        runtime.hibernate(session_id);
+        runtime.hibernate_epoch(session_id, expected_epoch);
         Ok(())
     }
 

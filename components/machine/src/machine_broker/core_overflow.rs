@@ -60,6 +60,7 @@ pub(super) fn overflow_refusal(command: &CoreCommand) -> Option<(String, String)
         | CoreCommand::HibernateSession {
             session_id,
             command_id,
+            ..
         }
         | CoreCommand::QuiesceAccountSession {
             session_id,

@@ -827,6 +827,10 @@ impl RemoteRuntime {
                 .clone_from(&self.shared.desired_generation);
         }
         let session_id = session.session_id.clone();
+        self.shared
+            .pending
+            .lock()
+            .cancel_pending_hibernation(&session_id);
         let key = format!("ensure:{session_id}");
         if !self.has_worker(&session_id) {
             self.shared
@@ -1331,35 +1335,34 @@ impl RemoteRuntime {
         queue_config_value(&self.shared, session_id, config_id, value);
     }
 
-    /// Release an idle session's worker on its Machine without deleting the
-    /// session. The declaration stays: reconnect replays it adopt-only, which
-    /// never launches, and the next ensure resumes the retained native thread.
-    /// A refusal therefore leaves both sides unchanged.
+    /// Release an idle session's worker on its Machine without deleting the session.
     pub fn hibernate(&self, session_id: &str) {
-        // Two opens can each rebalance the same Device before the first
-        // hibernation lands; the Machine would refuse the second one because
-        // the worker is already gone. One request per session is enough.
-        let already_pending = self.shared.pending.lock().values().any(|command| {
-            matches!(command, CoreCommand::HibernateSession { session_id: pending, .. }
-                if pending == session_id)
-        });
-        if already_pending {
+        self.hibernate_epoch(session_id, None);
+    }
+
+    pub fn hibernate_epoch(&self, session_id: &str, expected_worker_epoch: Option<String>) {
+        if self
+            .shared
+            .pending
+            .lock()
+            .has_pending_hibernation(session_id)
+        {
             return;
         }
         let command_id = self.next_id("hibernate");
-        self.queue(
-            command_id.clone(),
-            CoreCommand::HibernateSession {
-                session_id: session_id.to_owned(),
-                command_id,
-            },
-        );
+        let cmd = CoreCommand::HibernateSession {
+            session_id: session_id.to_owned(),
+            command_id: command_id.clone(),
+            expected_worker_epoch,
+        };
+        self.queue(command_id, cmd);
     }
 
     pub fn hibernation_pending(&self, session_id: &str) -> bool {
-        self.shared.pending.lock().values().any(|command| {
-            matches!(command, CoreCommand::HibernateSession { session_id: pending, .. } if pending == session_id)
-        })
+        self.shared
+            .pending
+            .lock()
+            .has_pending_hibernation(session_id)
     }
 
     pub fn stop(&self, session_id: &str) {
@@ -1393,6 +1396,10 @@ impl RemoteRuntime {
                 .clone_from(&self.shared.desired_generation);
         }
         let session_id = session.session_id.clone();
+        self.shared
+            .pending
+            .lock()
+            .cancel_pending_hibernation(&session_id);
         let same_provider_release =
             self.shared
                 .workers
@@ -3059,9 +3066,7 @@ fn handle_rejected_command_with_provenance(
     let reason = reason.unwrap_or_else(|| "runtime rejected command".to_owned());
     // Hibernating a session whose worker is already gone has reached its goal;
     // reporting it would only toast an error at whoever opened a session.
-    if matches!(command, Some(CoreCommand::HibernateSession { .. }))
-        && reason == "session has no live worker"
-    {
+    if pending_commands::is_benign_hibernation_refusal(command.as_ref(), &reason) {
         tracing::debug!(session = %session_id, "hibernation found no live worker");
         return;
     }
