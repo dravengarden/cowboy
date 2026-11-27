@@ -41565,13 +41565,12 @@
           "sources": [
             "components/provider-runtime"
           ],
-          "digest": "sha256:19be40a6e00d1dff99fafd7943acf3817202913df9f5dbf5caa1306f02ede955",
+          "digest": "sha256:de59580bc2ede196c8b40ed509e85ac5f58390abcb91989247a3e69d30b26bf0",
           "package": {
             "kind": "npm",
             "name": "@cowboy/provider-runtime",
             "manifest": "components/provider-runtime/package.json"
-          },
-          "sha256": "sha256:de59580bc2ede196c8b40ed509e85ac5f58390abcb91989247a3e69d30b26bf0"
+          }
         },
         {
           "id": "cowboy.code-intelligence",
