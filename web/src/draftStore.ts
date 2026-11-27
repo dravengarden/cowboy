@@ -434,7 +434,21 @@ export function announceDraft(sessionId: string): void {
   }
 }
 
-const appendListeners = new Map<string, (text: string) => void>();
+export type DraftAppendStatus = "ok" | "composing" | "storage-failed";
+
+export interface DraftAppendOptions {
+  /** Persist candidate text before mutating the live editor. */
+  readonly checkDurable?: (candidateText: string) => boolean;
+  /** Roll back any pre-persisted candidate when the editor refuses the edit. */
+  readonly rollback?: () => void;
+}
+
+export type DraftAppendListener = (
+  text: string,
+  options?: DraftAppendOptions,
+) => DraftAppendStatus | void;
+
+const appendListeners = new Map<string, DraftAppendListener>();
 
 /** Add text to a session's draft from outside its Composer. A mounted Composer
  * takes it, so it never overwrites keystrokes the store has not seen yet. */
@@ -451,17 +465,62 @@ export function appendDraftText(sessionId: string, text: string): void {
   });
 }
 
-/** Append text and flush synchronously to localStorage, returning whether the
- *  text write is durable on disk. Callers that clear another store (such as
- *  staged Review comments) must only drop their source copy when this returns
- *  `true`. */
-export function appendDraftTextDurable(sessionId: string, text: string): boolean {
-  if (isSessionRemoved(sessionId)) return false;
-  appendDraftText(sessionId, text);
-  const current = drafts.get(sessionId) ?? null;
-  const saved = persist(sessionId, current);
-  if (saved) dirty.delete(sessionId);
-  return saved;
+/**
+ * Append text with durability and editor-acceptance checks:
+ * 1. Persists the candidate draft to localStorage BEFORE mutating the live
+ *    editor or in-memory draft map, so a quota failure leaves the live Prompt
+ *    and retry state clean.
+ * 2. Requires a mounted Composer's editor to acknowledge `applyRemoteText`
+ *    (which rejects edits while IME composition is active); on refusal, rolls
+ *    back the pre-persisted mirror and returns `"composing"`.
+ */
+export function appendDraftTextDurable(
+  sessionId: string,
+  text: string,
+): DraftAppendStatus {
+  if (isSessionRemoved(sessionId)) return "storage-failed";
+  const previous = drafts.get(sessionId) ?? null;
+  const composer = appendListeners.get(sessionId);
+  if (composer) {
+    let persistedCandidate = false;
+    const status = composer(text, {
+      checkDurable: (candidateText: string): boolean => {
+        const base = drafts.get(sessionId) ?? EMPTY;
+        const ok = persist(sessionId, { ...base, text: candidateText });
+        persistedCandidate = ok;
+        return ok;
+      },
+      rollback: (): void => {
+        if (persistedCandidate) {
+          persist(sessionId, previous);
+          persistedCandidate = false;
+        }
+      },
+    });
+    if (status === "storage-failed" || status === "composing") return status;
+    // Compatibility for simple test listeners that return void without calling checkDurable.
+    if (!persistedCandidate) {
+      const latest = drafts.get(sessionId) ?? null;
+      if (!persist(sessionId, latest)) {
+        if (previous) drafts.set(sessionId, previous);
+        else drafts.delete(sessionId);
+        dirty.delete(sessionId);
+        return "storage-failed";
+      }
+    }
+    dirty.delete(sessionId);
+    return "ok";
+  }
+  const draft = getDraft(sessionId);
+  const nextDraft: Draft = {
+    ...draft,
+    text: draft.text ? `${draft.text.trimEnd()}\n\n${text}` : text,
+  };
+  if (!persist(sessionId, nextDraft)) return "storage-failed";
+  drafts.set(sessionId, nextDraft);
+  cleared.delete(sessionId);
+  dirty.delete(sessionId);
+  return "ok";
 }
 
 export function appendComposerDraft(
@@ -478,7 +537,7 @@ export function appendComposerDraft(
 
 export function subscribeDraftAppend(
   sessionId: string,
-  listener: (text: string) => void,
+  listener: DraftAppendListener,
 ): () => void {
   appendListeners.set(sessionId, listener);
   return () => {

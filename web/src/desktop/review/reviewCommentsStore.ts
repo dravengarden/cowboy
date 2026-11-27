@@ -2,10 +2,16 @@
 // Desktop style): reviewers annotate lines across multiple files without
 // leaving Review, review/edit them in the Review tray or Prompt Companion Rail,
 // and submit the entire batch to the Agent in one structured turn.
+//
+// Security boundary (docs/remote-pr-review.md): Remote PR code bodies and patch
+// excerpts MUST NEVER enter browser persistence (`sessionStorage`). For `kind:
+// "pr"` notes, only the reviewer's own note body, line range, repository/PR
+// label, and revision are persisted; live PR patch excerpts stay strictly in
+// volatile in-memory state and are stripped on serialization and hydration.
 
 import { useSyncExternalStore } from "react";
 import { appendDraftTextDurable } from "../../draftStore";
-import { onSessionRemoved } from "../../removedSessionFence";
+import { isSessionRemoved, onSessionRemoved } from "../../removedSessionFence";
 import type { CodeDiffScope } from "../../review/codeApi";
 import { notify } from "../../store";
 
@@ -36,6 +42,11 @@ const VALID_SIDES = new Set(["new", "old", "patch"]);
 const MAX_CACHED_SESSIONS = 32;
 const EMPTY: readonly StagedReviewComment[] = [];
 const commentsBySession = new Map<string, readonly StagedReviewComment[]>();
+/** Volatile in-memory PR patch snippets; never written to sessionStorage. */
+const prVolatileSnippets = new Map<string, string>();
+/** Sessions whose latest write could not be persisted to sessionStorage.
+ *  Never evicted from `commentsBySession` so the only live copy is preserved. */
+const unsavedSessions = new Set<string>();
 const listeners = new Set<() => void>();
 
 function storage(): Storage | null {
@@ -67,13 +78,15 @@ function parseComment(item: unknown): StagedReviewComment | null {
   ) return null;
   const startLine = Math.min(raw.startLine, raw.endLine);
   const endLine = Math.max(raw.startLine, raw.endLine);
+  const kind = raw.kind as StagedReviewComment["kind"];
   return {
     id: raw.id,
     path: raw.path,
     startLine,
     endLine,
-    codeSnippet: raw.codeSnippet,
-    kind: raw.kind as StagedReviewComment["kind"],
+    // Strip any PR patch text on hydration (docs/remote-pr-review.md).
+    codeSnippet: kind === "pr" ? "" : raw.codeSnippet,
+    kind,
     body: raw.body,
     ...(typeof raw.root === "string" && raw.root ? { root: raw.root } : {}),
     ...(typeof raw.comparison === "string" && raw.comparison ? { comparison: raw.comparison } : {}),
@@ -86,21 +99,54 @@ function parseComment(item: unknown): StagedReviewComment | null {
   };
 }
 
+function purgeVolatileSnippets(items: readonly StagedReviewComment[]): void {
+  for (const item of items) prVolatileSnippets.delete(item.id);
+}
+
 function setCached(sessionId: string, items: readonly StagedReviewComment[]): void {
   if (items.length === 0) {
     commentsBySession.delete(sessionId);
+    unsavedSessions.delete(sessionId);
     return;
   }
   commentsBySession.delete(sessionId);
   commentsBySession.set(sessionId, items);
-  while (commentsBySession.size > MAX_CACHED_SESSIONS) {
-    const oldest = commentsBySession.keys().next().value;
-    if (oldest === undefined || oldest === sessionId) break;
-    commentsBySession.delete(oldest);
+  let persistedCount = 0;
+  for (const key of commentsBySession.keys()) {
+    if (!unsavedSessions.has(key)) persistedCount += 1;
+  }
+  while (persistedCount > MAX_CACHED_SESSIONS) {
+    let evicted = false;
+    for (const key of commentsBySession.keys()) {
+      if (key !== sessionId && !unsavedSessions.has(key)) {
+        commentsBySession.delete(key);
+        persistedCount -= 1;
+        evicted = true;
+        break;
+      }
+    }
+    if (!evicted) break;
   }
 }
 
+function purgeRemovedSession(sessionId: string): boolean {
+  const existing = commentsBySession.get(sessionId);
+  if (existing) purgeVolatileSnippets(existing);
+  const removedMem = commentsBySession.delete(sessionId);
+  const removedUnsaved = unsavedSessions.delete(sessionId);
+  try {
+    storage()?.removeItem(`${STORAGE_PREFIX}${sessionId}`);
+  } catch {
+    /* tolerant */
+  }
+  return removedMem || removedUnsaved;
+}
+
 function loadSession(sessionId: string): readonly StagedReviewComment[] {
+  if (isSessionRemoved(sessionId)) {
+    purgeRemovedSession(sessionId);
+    return EMPTY;
+  }
   const cached = commentsBySession.get(sessionId);
   if (cached !== undefined) return cached;
   try {
@@ -117,30 +163,40 @@ function loadSession(sessionId: string): readonly StagedReviewComment[] {
   }
 }
 
-function saveSession(sessionId: string, next: readonly StagedReviewComment[]): void {
+function serializeForStorage(items: readonly StagedReviewComment[]): string {
+  const safe = items.map((item) =>
+    item.kind === "pr" ? { ...item, codeSnippet: "" } : item
+  );
+  return JSON.stringify(safe);
+}
+
+function saveSession(sessionId: string, next: readonly StagedReviewComment[]): boolean {
+  if (isSessionRemoved(sessionId)) {
+    purgeRemovedSession(sessionId);
+    return false;
+  }
   const normalized = next.length === 0 ? EMPTY : next;
-  setCached(sessionId, normalized);
+  let persisted = true;
   try {
     const store = storage();
     if (store) {
       if (normalized.length === 0) store.removeItem(`${STORAGE_PREFIX}${sessionId}`);
-      else store.setItem(`${STORAGE_PREFIX}${sessionId}`, JSON.stringify(normalized));
+      else store.setItem(`${STORAGE_PREFIX}${sessionId}`, serializeForStorage(normalized));
     }
+    unsavedSessions.delete(sessionId);
   } catch {
-    // Non-fatal: in-memory staged comments stay intact for the tab session.
+    persisted = false;
+    if (normalized.length > 0) unsavedSessions.add(sessionId);
   }
+  setCached(sessionId, normalized);
   emit();
+  return persisted;
 }
 
 onSessionRemoved((removed) => {
   let changed = false;
   for (const id of removed) {
-    if (commentsBySession.delete(id)) changed = true;
-    try {
-      storage()?.removeItem(`${STORAGE_PREFIX}${id}`);
-    } catch {
-      /* tolerant */
-    }
+    if (purgeRemovedSession(id)) changed = true;
   }
   if (changed) emit();
 });
@@ -148,6 +204,10 @@ onSessionRemoved((removed) => {
 export function reviewCommentsForSession(sessionId: string | undefined): readonly StagedReviewComment[] {
   if (!sessionId) return EMPTY;
   return loadSession(sessionId);
+}
+
+export function isReviewCommentsUnsaved(sessionId: string | undefined): boolean {
+  return Boolean(sessionId && unsavedSessions.has(sessionId));
 }
 
 export function useReviewComments(sessionId: string | undefined): readonly StagedReviewComment[] {
@@ -163,40 +223,66 @@ export function useReviewComments(sessionId: string | undefined): readonly Stage
   );
 }
 
+export function useReviewCommentsUnsaved(sessionId: string | undefined): boolean {
+  return useSyncExternalStore(
+    (listener) => {
+      listeners.add(listener);
+      return (): void => {
+        listeners.delete(listener);
+      };
+    },
+    () => isReviewCommentsUnsaved(sessionId),
+    () => false,
+  );
+}
+
 export function addReviewComment(
   sessionId: string,
   input: Omit<StagedReviewComment, "id" | "createdAtMs">,
-): StagedReviewComment {
+): StagedReviewComment | null {
+  if (isSessionRemoved(sessionId)) return null;
   const body = input.body.trim();
+  if (!body) return null;
+  const id = `rc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+  const isPr = input.kind === "pr";
+  if (isPr && input.codeSnippet) prVolatileSnippets.set(id, input.codeSnippet);
   const created: StagedReviewComment = {
     ...input,
+    codeSnippet: isPr ? "" : input.codeSnippet,
     body,
-    id: `rc-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`,
+    id,
     createdAtMs: Date.now(),
   };
-  saveSession(sessionId, [...loadSession(sessionId), created]);
+  const persisted = saveSession(sessionId, [...loadSession(sessionId), created]);
+  if (!persisted) {
+    notify("Review note kept in memory only (browser storage full — send before reloading).", "warning");
+  }
   return created;
 }
 
-export function updateReviewComment(sessionId: string, id: string, body: string): void {
+export function updateReviewComment(sessionId: string, id: string, body: string): boolean {
+  if (isSessionRemoved(sessionId)) return false;
   const trimmed = body.trim();
+  // Blank edits are rejected rather than silently deleting the note (use Delete).
+  if (!trimmed) return false;
   const prev = loadSession(sessionId);
-  if (!trimmed) {
-    removeReviewComment(sessionId, id);
-    return;
-  }
+  if (!prev.some((item) => item.id === id)) return false;
   const next = prev.map((item) => item.id === id ? { ...item, body: trimmed } : item);
   saveSession(sessionId, next);
+  return true;
 }
 
 export function removeReviewComment(sessionId: string, id: string): void {
   const prev = loadSession(sessionId);
   const next = prev.filter((item) => item.id !== id);
+  prVolatileSnippets.delete(id);
   if (next.length !== prev.length) saveSession(sessionId, next);
 }
 
 export function clearReviewComments(sessionId: string): void {
-  if (loadSession(sessionId).length > 0) saveSession(sessionId, EMPTY);
+  const prev = loadSession(sessionId);
+  purgeVolatileSnippets(prev);
+  if (prev.length > 0) saveSession(sessionId, EMPTY);
 }
 
 function longestBacktickRun(text: string): number {
@@ -250,7 +336,10 @@ export function formatReviewCommentsBatch(comments: readonly StagedReviewComment
     if (comment.comparison) meta.push(`compared with ${formatComparisonLabel(comment.comparison)}`);
     if (comment.revision) meta.push(`rev ${comment.revision.slice(0, 10)}`);
     const suffix = meta.length > 0 ? ` (${meta.join(" · ")})` : "";
-    const snippet = comment.codeSnippet.trim();
+    const rawSnippet = comment.kind === "pr"
+      ? (prVolatileSnippets.get(comment.id) ?? "")
+      : comment.codeSnippet;
+    const snippet = rawSnippet.trim();
     const lang = comment.kind === "source" ? "" : "diff";
     const fence = snippet ? formatCodeFence(snippet, lang) : "";
     return `${String(idx + 1)}. ${location}${suffix}${fence}\n${comment.body}`;
@@ -262,19 +351,24 @@ export function submitReviewCommentsToPrompt(
   sessionId: string,
   onSubmitted?: () => "focused" | "deferred" | void,
 ): number {
+  if (isSessionRemoved(sessionId)) return 0;
   const items = loadSession(sessionId);
   if (items.length === 0) return 0;
   const transferredIds = new Set(items.map((item) => item.id));
   const formatted = formatReviewCommentsBatch(items);
-  const durable = appendDraftTextDurable(sessionId, formatted);
-  if (!durable) {
+  const status = appendDraftTextDurable(sessionId, formatted);
+  if (status === "composing") {
+    notify("Finish IME composition in Prompt before sending review notes.", "info");
+    return 0;
+  }
+  if (status === "storage-failed") {
     notify(
       "Could not save review notes to Prompt (browser storage full); notes kept in Review.",
       "error",
     );
     return 0;
   }
-  // Remove only the exact transferred IDs so concurrent additions survive.
+  for (const id of transferredIds) prVolatileSnippets.delete(id);
   const remaining = loadSession(sessionId).filter((item) => !transferredIds.has(item.id));
   saveSession(sessionId, remaining);
   const outcome = onSubmitted?.();

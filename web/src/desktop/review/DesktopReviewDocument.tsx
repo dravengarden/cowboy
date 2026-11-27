@@ -328,7 +328,7 @@ function ReviewDocumentFooter({
       )}
       <DelegateButtons onDelegate={onDelegate} />
       {onComment && (
-        <Button size="small" color="inherit" onClick={onComment} data-review-add-note startIcon={<RateReviewOutlined />} sx={{ textTransform: "none", fontSize: "0.72rem", flexShrink: 0, gap: 0.5 }}>
+        <Button size="small" color="inherit" disabled={!ready} onClick={onComment} data-review-add-note startIcon={<RateReviewOutlined />} sx={{ textTransform: "none", fontSize: "0.72rem", flexShrink: 0, gap: 0.5 }}>
           Note
           <DesktopKeycap keyLabel="c" quiet />
         </Button>

@@ -88,6 +88,7 @@ async function readDiff(
   );
   let text = first.text;
   let cursor = first.nextCursor;
+  let lastPage = first;
   // Pages of one snapshot only: a page of another revision would splice two
   // different diffs together (13-code-review).
   for (let page = 1; cursor && page < DIFF_PAGES; page++) {
@@ -95,6 +96,7 @@ async function readDiff(
     if (next.revision !== first.revision) throw new CodeApiError(409);
     text += next.text;
     cursor = next.nextCursor;
+    lastPage = next;
   }
   return {
     key: reviewDocumentKey(document),
@@ -102,7 +104,7 @@ async function readDiff(
     revision: first.revision,
     added: first.added,
     removed: first.removed,
-    truncated: Boolean(cursor) || first.truncated,
+    truncated: Boolean(cursor) || lastPage.limited === true || (lastPage.truncated && !lastPage.nextCursor),
   };
 }
 

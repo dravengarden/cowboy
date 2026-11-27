@@ -5,7 +5,8 @@ import { ENTER_LABEL, hasSendMod, MOD_LABEL } from "../../platform";
 import type { CodeDiffScope } from "../../review/codeApi";
 import { desktopSize } from "../../surface/desktopSize";
 import { DesktopKeycap, LeaderKeycap } from "../commands/DesktopKeycap";
-import { desktopKeyIntent } from "../commands/keyIntent";
+import { desktopCompositionActive, desktopKeyIntent } from "../commands/keyIntent";
+import { commentTargetIdentity } from "./reviewCommentTarget";
 import {
   addReviewComment,
   clearReviewComments,
@@ -16,6 +17,7 @@ import {
   submitReviewCommentsToPrompt,
   updateReviewComment,
   useReviewComments,
+  useReviewCommentsUnsaved,
 } from "./reviewCommentsStore";
 
 export interface ReviewCommentTarget {
@@ -45,9 +47,11 @@ export function reviewNoteKeyAction(
     "key" | "code" | "keyCode" | "isComposing" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "target"
   >,
   opts?: { composing?: boolean },
-): "save" | "cancel" | "ignore" {
+): "save" | "cancel" | "ime-escape" | "ignore" {
   const intent = desktopKeyIntent(event, opts);
-  if (intent.owner === "ime") return "ignore";
+  if (intent.owner === "ime") {
+    return event.key === "Escape" ? "ime-escape" : "ignore";
+  }
   if (intent.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey) return "cancel";
   if (intent.key === "Enter" && hasSendMod(event)) return "save";
   return "ignore";
@@ -68,7 +72,7 @@ export function ReviewInlineCommentBar({
 }): React.JSX.Element {
   const [body, setBody] = useState(initialBody);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  const targetKey = `${target.ownerSessionId}\0${target.reviewSessionId}\0${target.path}\0${String(target.startLine)}:${String(target.endLine)}:${target.side ?? "new"}`;
+  const targetKey = commentTargetIdentity(target);
 
   useEffect(() => {
     setBody(initialBody);
@@ -84,7 +88,7 @@ export function ReviewInlineCommentBar({
   const save = (overrideText?: string): void => {
     const text = (overrideText ?? body).trim();
     if (!text) return;
-    addReviewComment(target.ownerSessionId, {
+    const created = addReviewComment(target.ownerSessionId, {
       path: target.path,
       startLine: target.startLine,
       endLine: target.endLine,
@@ -99,6 +103,7 @@ export function ReviewInlineCommentBar({
       pullLabel: target.pullLabel,
       revision: target.revision,
     });
+    if (!created) return;
     updateBody("");
     onSaved();
   };
@@ -146,6 +151,11 @@ export function ReviewInlineCommentBar({
         inputProps={{ "aria-label": "Review note", "data-desktop-vim": "off", "data-review-comment-input": "true" }}
         onKeyDown={(e): void => {
           const action = reviewNoteKeyAction(e.nativeEvent);
+          if (action === "ime-escape") {
+            // Let the IME cancel its candidate popup without letting ancestors dismiss the composer.
+            e.stopPropagation();
+            return;
+          }
           if (action === "cancel") {
             e.preventDefault();
             e.stopPropagation();
@@ -199,9 +209,10 @@ function ReviewNotePopoverRow({
 }): React.JSX.Element {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(item.body);
+  const canSave = draft.trim().length > 0;
   const saveEdit = (): void => {
-    updateReviewComment(sessionId, item.id, draft);
-    setEditing(false);
+    if (!canSave) return;
+    if (updateReviewComment(sessionId, item.id, draft)) setEditing(false);
   };
   return (
     <Box
@@ -232,6 +243,11 @@ function ReviewNotePopoverRow({
               inputProps={{ "aria-label": "Edit review note", "data-desktop-vim": "off" }}
               onKeyDown={(e): void => {
                 const action = reviewNoteKeyAction(e.nativeEvent);
+                if (action === "ime-escape") {
+                  // Never let MUI Popover dismiss the edit tray while the IME cancels a candidate.
+                  e.stopPropagation();
+                  return;
+                }
                 if (action === "cancel") {
                   e.preventDefault();
                   e.stopPropagation();
@@ -249,7 +265,7 @@ function ReviewNotePopoverRow({
               <Button size="small" color="inherit" onClick={(): void => { setDraft(item.body); setEditing(false); }} sx={{ textTransform: "none", fontSize: "0.68rem", minWidth: 0, px: 0.75 }}>
                 Cancel
               </Button>
-              <Button size="small" variant="contained" disableElevation onClick={saveEdit} sx={{ textTransform: "none", fontSize: "0.68rem", minWidth: 0, px: 0.75, borderRadius: "5px" }}>
+              <Button size="small" variant="contained" disableElevation disabled={!canSave} onClick={saveEdit} sx={{ textTransform: "none", fontSize: "0.68rem", minWidth: 0, px: 0.75, borderRadius: "5px" }}>
                 Save
               </Button>
             </Stack>
@@ -291,6 +307,7 @@ export function ReviewNotesTrayButton({
   onFocusPrompt: () => "focused" | "deferred" | void;
 }): React.JSX.Element | null {
   const comments = useReviewComments(sessionId);
+  const unsaved = useReviewCommentsUnsaved(sessionId);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
   if (!sessionId || comments.length === 0) return null;
 
@@ -325,15 +342,30 @@ export function ReviewNotesTrayButton({
       <Popover
         open={anchor !== null}
         anchorEl={anchor}
-        onClose={(): void => setAnchor(null)}
+        onClose={(_event, reason): void => {
+          if (reason === "escapeKeyDown" && desktopCompositionActive()) return;
+          setAnchor(null);
+        }}
         anchorOrigin={{ vertical: "top", horizontal: "right" }}
         transformOrigin={{ vertical: "bottom", horizontal: "right" }}
-        slotProps={{ paper: { sx: { width: 356, maxWidth: "90vw", p: 1.25, borderRadius: "10px" } } }}
+        slotProps={{
+          paper: {
+            onKeyDownCapture: (e: React.KeyboardEvent): void => {
+              if (e.key === "Escape" && desktopKeyIntent(e.nativeEvent).owner === "ime") {
+                e.stopPropagation();
+              }
+            },
+            sx: { width: 356, maxWidth: "90vw", p: 1.25, borderRadius: "10px" },
+          },
+        }}
       >
-        <Stack direction="row" alignItems="center" sx={{ mb: 0.75 }}>
+        <Stack direction="row" alignItems="center" spacing={0.5} sx={{ mb: 0.75 }}>
           <Typography variant="subtitle2" sx={{ fontWeight: 700, flex: 1 }}>
             Staged review notes ({String(comments.length)})
           </Typography>
+          {unsaved && (
+            <Chip size="small" label="Memory only" color="warning" variant="outlined" sx={{ height: 20, fontSize: "0.66rem" }} />
+          )}
           <Button
             size="small"
             color="inherit"

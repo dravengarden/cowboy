@@ -206,12 +206,14 @@ export function markSessionRemoved(sessionId: string): void {
     const own = fallbackList(key);
     const next = applyOpsBounded(own, new Map([[sessionId, "add"]]));
     own.splice(0, own.length, ...next);
+    notifyListeners(new Set([sessionId]));
     return;
   }
   const ops = pendingOps(ls, key);
   ops.delete(sessionId);
   ops.set(sessionId, "add");
   flushOps(ls, key);
+  notifyListeners(new Set([sessionId]));
 }
 
 /** Clear any stale removal fence entry for a session confirmed live by the Hub. */

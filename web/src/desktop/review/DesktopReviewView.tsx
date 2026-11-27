@@ -14,7 +14,7 @@ import {
 } from "./DesktopReviewNavigator";
 import { revealedFile } from "../../mobileReviewState";
 import { handoffToNewPrompt } from "../editorInsert";
-import { buildEditorCommentTarget, commentDraftKey } from "./reviewCommentTarget";
+import { buildEditorCommentTarget, commentTargetIdentity, isDocumentBufferReady } from "./reviewCommentTarget";
 import { revealEditorLine } from "./reviewEditorSelection";
 import { ReviewAllChangesStream } from "./ReviewAllChangesStream";
 import { type ReviewCommentTarget, ReviewInlineCommentBar } from "./ReviewInlineCommentBar";
@@ -218,6 +218,8 @@ interface ViewControls {
   readonly addComment: () => void;
   readonly submitComments: () => void;
   readonly toggleStream: () => void;
+  readonly streamMode: boolean;
+  readonly markStream: () => void;
   readonly hasComments: boolean;
   readonly canComment: boolean;
 }
@@ -239,6 +241,7 @@ function useReviewViewCommands(review: ReviewWorkbench, controls: ViewControls):
       const key = focusedRow()?.dataset.desktopItem;
       const entry = review.changes.queue.find((item) => entryKey(item) === key);
       if (entry && key) review.markEntry(key, entry.change.fingerprint);
+      else if (controls.streamMode) controls.markStream();
       else review.markOpen();
     },
     sendAndStay: () => {
@@ -308,6 +311,7 @@ function ReviewDocumentRegion({
   onToggleStream,
   streamScrollerRef,
   streamCommentGetterRef,
+  markFocusedStreamRef,
 }: {
   active: boolean;
   review: ReviewWorkbench;
@@ -323,6 +327,7 @@ function ReviewDocumentRegion({
   onToggleStream: () => void;
   streamScrollerRef: { current: HTMLDivElement | null };
   streamCommentGetterRef: { current: (() => ReviewCommentTarget | null) | null };
+  markFocusedStreamRef: { current: (() => void) | null };
 }): React.JSX.Element {
   const agentSessionId = review.context.agentSessionId;
   const focusPrompt = (): "focused" | "deferred" => handoffToNewPrompt(review.workspace.focusRegion);
@@ -370,6 +375,7 @@ function ReviewDocumentRegion({
             dataRevision={review.changes.dataRevision}
             scrollerRef={streamScrollerRef}
             captureFocusedCommentRef={streamCommentGetterRef}
+            markFocusedStreamRef={markFocusedStreamRef}
             onMarkEntry={review.markEntry}
             onOpenEntry={review.open}
             onCommentLine={(target): void => onOpenComment(target)}
@@ -477,13 +483,15 @@ function useReviewCommentComposer(
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const activeAgentSession = review.context.agentSessionId;
   const activeReviewSession = review.target?.sessionId;
+  const activeComparison = review.changes.comparison;
   useEffect(() => {
-    setTarget((current) =>
-      current && (current.ownerSessionId !== activeAgentSession || current.reviewSessionId !== activeReviewSession)
-        ? null
-        : current
-    );
-  }, [activeAgentSession, activeReviewSession]);
+    setTarget((current) => {
+      if (!current) return null;
+      if (current.ownerSessionId !== activeAgentSession || current.reviewSessionId !== activeReviewSession) return null;
+      if (streamMode && activeComparison !== undefined && (current.comparison ?? null) !== activeComparison) return null;
+      return current;
+    });
+  }, [activeAgentSession, activeComparison, activeReviewSession, streamMode]);
   const open = (explicit?: ReviewCommentTarget | null): void => {
     const next = explicit ?? (streamMode ? streamCommentGetterRef.current?.() ?? null : buildEditorCommentTarget(review));
     if (!next) return;
@@ -501,10 +509,10 @@ function useReviewCommentComposer(
       else review.editor.current?.focus();
     });
   };
-  const draft = target ? (draftsRef.current.get(commentDraftKey(target)) ?? "") : "";
+  const draft = target ? (draftsRef.current.get(commentTargetIdentity(target)) ?? "") : "";
   const setDraft = (text: string): void => {
     if (!target) return;
-    const key = commentDraftKey(target);
+    const key = commentTargetIdentity(target);
     if (text) draftsRef.current.set(key, text);
     else draftsRef.current.delete(key);
   };
@@ -525,8 +533,10 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [streamMode, setStreamMode] = useState(false);
+  const toggleStream = (): void => setStreamMode((prev) => { if (prev) requestAnimationFrame(() => review.workspace.focusRegion(REVIEW_DOCUMENT_REGION)); return !prev; });
   const streamScrollerRef = useRef<HTMLDivElement | null>(null);
   const streamCommentGetterRef = useRef<(() => ReviewCommentTarget | null) | null>(null);
+  const markFocusedStreamRef = useRef<(() => void) | null>(null);
   const comment = useReviewCommentComposer(review, streamMode, streamScrollerRef, streamCommentGetterRef);
   const [compareRequest, setCompareRequest] = useState(0);
   const stagedComments = useReviewComments(review.context.agentSessionId);
@@ -581,9 +591,13 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
       const sid = review.context.agentSessionId;
       if (sid) submitReviewCommentsToPrompt(sid, () => handoffToNewPrompt(workspace.focusRegion));
     },
-    toggleStream: () => setStreamMode((v) => !v),
+    toggleStream,
+    streamMode,
+    markStream: () => markFocusedStreamRef.current?.(),
     hasComments: stagedComments.length > 0,
-    canComment: streamMode ? review.changes.comparisonMatched && review.changes.queue.length > 0 : review.document !== undefined,
+    canComment: streamMode
+      ? review.changes.comparisonMatched && review.changes.queue.length > 0
+      : isDocumentBufferReady(review),
   });
   const navigator = review.target && (
     <DesktopReviewNavigator
@@ -622,7 +636,7 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
       unreadOnly={unreadOnly}
       onUnreadOnly={setUnreadOnly}
       streamMode={streamMode}
-      onToggleStream={() => setStreamMode((v) => !v)}
+      onToggleStream={toggleStream}
       compareRequest={compareRequest}
       onOpenEntry={(entry) => {
         leaveOverlay();
@@ -646,7 +660,7 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
       sx={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden", display: "flex", position: "relative" }}
     >
       <ReviewNavigatorShell navigator={navigator} navigatorShown={navigatorShown} compact={compact} overlay={overlay} navigatorWidth={navigatorWidth} width={width} onWidth={setNavigatorWidth} onShow={() => showNavigator(tab)} />
-      <ReviewDocumentRegion active={active} review={review} diagnostics={language.diagnostics} onDelegate={(kind) => delegate(kind)} streamMode={streamMode} unreadOnly={unreadOnly} commentTarget={comment.target} commentDraft={comment.draft} onCommentDraftChange={comment.setDraft} onOpenComment={comment.open} onCloseComment={comment.close} onToggleStream={() => setStreamMode((v) => !v)} streamScrollerRef={streamScrollerRef} streamCommentGetterRef={streamCommentGetterRef} />
+      <ReviewDocumentRegion active={active} review={review} diagnostics={language.diagnostics} onDelegate={(kind) => delegate(kind)} streamMode={streamMode} unreadOnly={unreadOnly} commentTarget={comment.target} commentDraft={comment.draft} onCommentDraftChange={comment.setDraft} onOpenComment={comment.open} onCloseComment={comment.close} onToggleStream={toggleStream} streamScrollerRef={streamScrollerRef} streamCommentGetterRef={streamCommentGetterRef} markFocusedStreamRef={markFocusedStreamRef} />
       {review.target && <InspectorRegion review={review} panel={inspector} language={language} findings={findings} />}
       <ReviewLanguageLayer review={review} language={language} />
       <DesktopModal open={settingsOpen} onClose={() => setSettingsOpen(false)} title="Review settings" width={640}>

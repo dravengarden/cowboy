@@ -1,5 +1,6 @@
 import { diffSelectionLines, type ReviewLineSelection } from "../../review/reviewLineSelection";
 import type { GitReviewEntry } from "../../review/gitReviewModel";
+import { reviewDocumentKey } from "./desktopReviewTabs";
 import { pullFile } from "./pullPatches";
 import type { ReviewCommentSide } from "./reviewCommentsStore";
 import { editorSelection } from "./reviewEditorSelection";
@@ -12,8 +13,7 @@ export interface ResolvedDiffLocation {
   readonly side: ReviewCommentSide;
 }
 
-/** Map a unified-diff row selection to real file lines and side, matching
- *  Cowboy's `reviewSelectionMessage` semantics. */
+/** Map a contiguous unified-diff row selection to real file lines and side. */
 export function resolveDiffCommentLocation(
   unifiedText: string,
   selection: ReviewLineSelection,
@@ -30,23 +30,97 @@ export function resolveDiffCommentLocation(
   return { startLine: from, endLine: to, side: "patch" };
 }
 
-export function commentDraftKey(
-  target: Pick<ReviewCommentTarget, "ownerSessionId" | "reviewSessionId" | "path" | "startLine" | "endLine" | "side">,
+/** Map an arbitrary set of selected unified patch rows (such as non-monotonic
+ *  rows mapped from a side-by-side split diff) to exact file lines and snippet
+ *  without absorbing unselected intermediate lines. */
+export function resolveSelectedUnifiedRows(
+  unifiedText: string,
+  selectedRows: readonly number[],
+): ResolvedDiffLocation & { readonly snippet: string } {
+  const uniqueSorted = [...new Set(selectedRows.filter((r) => Number.isInteger(r) && r > 0))].sort((a, b) => a - b);
+  const lines = unifiedText.split("\n");
+  if (uniqueSorted.length === 0) {
+    return { startLine: 1, endLine: 1, side: "patch", snippet: "" };
+  }
+  const newLines: number[] = [];
+  const oldLines: number[] = [];
+  for (const row of uniqueSorted) {
+    const covered = diffSelectionLines(unifiedText, { from: row, to: row });
+    for (const n of covered.new) newLines.push(n);
+    for (const o of covered.old) oldLines.push(o);
+  }
+  const snippet = uniqueSorted
+    .map((row) => lines[row - 1])
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+  if (newLines.length > 0) {
+    return { startLine: Math.min(...newLines), endLine: Math.max(...newLines), side: "new", snippet };
+  }
+  if (oldLines.length > 0) {
+    return { startLine: Math.min(...oldLines), endLine: Math.max(...oldLines), side: "old", snippet };
+  }
+  return { startLine: uniqueSorted[0]!, endLine: uniqueSorted.at(-1)!, side: "patch", snippet };
+}
+
+/** Canonical provenance identity used for draft lookup, composer reset, and
+ *  context-change dismissal across diffs, commits, PRs, and comparisons. */
+export function commentTargetIdentity(
+  target: Pick<
+    ReviewCommentTarget,
+    | "ownerSessionId"
+    | "reviewSessionId"
+    | "kind"
+    | "path"
+    | "scope"
+    | "comparison"
+    | "commitOid"
+    | "pullLabel"
+    | "revision"
+    | "startLine"
+    | "endLine"
+    | "side"
+  >,
 ): string {
-  return `${target.ownerSessionId}\0${target.reviewSessionId}\0${target.path}\0${String(target.startLine)}:${String(target.endLine)}:${target.side ?? "new"}`;
+  return [
+    target.ownerSessionId,
+    target.reviewSessionId,
+    target.kind,
+    target.path,
+    target.scope ?? "",
+    target.comparison ?? "",
+    target.commitOid ?? "",
+    target.pullLabel ?? "",
+    target.revision ?? "",
+    `${String(target.startLine)}:${String(target.endLine)}:${target.side ?? "new"}`,
+  ].join("\0");
+}
+
+/** True only when the open document, loaded snapshot, and mounted editor all
+ *  represent the exact same document key. */
+export function isDocumentBufferReady(review: ReviewWorkbench): boolean {
+  const doc = review.document;
+  if (!doc || !review.target || !review.context.agentSessionId) return false;
+  if (review.load?.state !== "ready") return false;
+  const expectedKey = reviewDocumentKey(doc);
+  if (review.load.value.key !== expectedKey) return false;
+  const editorDom = review.editor.current?.dom;
+  const host = editorDom?.closest<HTMLElement>("[data-review-document-key]");
+  if (host && host.dataset.reviewDocumentKey !== expectedKey) return false;
+  return true;
 }
 
 export function buildEditorCommentTarget(review: ReviewWorkbench): ReviewCommentTarget | null {
-  const doc = review.document;
-  const ownerSessionId = review.context.agentSessionId;
-  const reviewSessionId = review.target?.sessionId;
-  if (!doc || !ownerSessionId || !reviewSessionId) return null;
+  if (!isDocumentBufferReady(review)) return null;
+  const doc = review.document!;
+  const ownerSessionId = review.context.agentSessionId!;
+  const reviewSessionId = review.target!.sessionId;
+  const ready = review.load!.state === "ready" ? review.load!.value : undefined;
+  if (!ready) return null;
   const view = review.editor.current;
-  const ready = review.load?.state === "ready" ? review.load.value : undefined;
   const sel = view ? editorSelection(view) : { from: review.cursorLine, to: review.cursorLine };
 
   if (doc.kind === "source") {
-    const lines = (view ? view.state.doc.toString() : (ready?.text ?? "")).split("\n");
+    const lines = (view ? view.state.doc.toString() : ready.text).split("\n");
     const from = Math.max(1, Math.min(sel.from, sel.to));
     const to = Math.max(from, Math.max(sel.from, sel.to));
     return {
@@ -59,23 +133,40 @@ export function buildEditorCommentTarget(review: ReviewWorkbench): ReviewComment
       codeSnippet: lines.slice(from - 1, Math.min(lines.length, to)).join("\n"),
       kind: "source",
       root: review.root,
-      revision: ready?.revision,
+      revision: ready.revision,
     };
   }
 
-  const unifiedText = ready?.text ?? (view ? view.state.doc.toString() : "");
+  const unifiedText = ready.text;
   const unifiedRows = review.split?.unifiedRows;
-  const unifiedSel: ReviewLineSelection = unifiedRows && ready
-    ? {
-      from: Math.min(unifiedRows[sel.from - 1] ?? 1, unifiedRows[sel.to - 1] ?? 1),
-      to: Math.max(unifiedRows[sel.from - 1] ?? 1, unifiedRows[sel.to - 1] ?? 1),
+  let startLine: number;
+  let endLine: number;
+  let side: ReviewCommentSide;
+  let snippet: string;
+  if (unifiedRows) {
+    const fromSplit = Math.max(1, Math.min(sel.from, sel.to));
+    const toSplit = Math.max(fromSplit, Math.max(sel.from, sel.to));
+    const picked: number[] = [];
+    for (let row = fromSplit; row <= toSplit; row++) {
+      const mapped = unifiedRows[row - 1];
+      if (mapped !== undefined && mapped > 0) picked.push(mapped);
     }
-    : sel;
-  const loc = resolveDiffCommentLocation(unifiedText, unifiedSel);
-  const lines = unifiedText.split("\n");
-  const sliceFrom = Math.max(1, Math.min(unifiedSel.from, unifiedSel.to));
-  const sliceTo = Math.max(sliceFrom, Math.max(unifiedSel.from, unifiedSel.to));
-  const snippet = lines.slice(sliceFrom - 1, Math.min(lines.length, sliceTo)).join("\n");
+    const resolved = resolveSelectedUnifiedRows(unifiedText, picked);
+    startLine = resolved.startLine;
+    endLine = resolved.endLine;
+    side = resolved.side;
+    snippet = resolved.snippet;
+  } else {
+    const loc = resolveDiffCommentLocation(unifiedText, sel);
+    startLine = loc.startLine;
+    endLine = loc.endLine;
+    side = loc.side;
+    const lines = unifiedText.split("\n");
+    const sliceFrom = Math.max(1, Math.min(sel.from, sel.to));
+    const sliceTo = Math.max(sliceFrom, Math.max(sel.from, sel.to));
+    snippet = lines.slice(sliceFrom - 1, Math.min(lines.length, sliceTo)).join("\n");
+  }
+
   const pullRef = doc.kind === "pr"
     ? pullFile(doc.repositoryId, doc.number, doc.revision, doc.path)
     : undefined;
@@ -87,9 +178,9 @@ export function buildEditorCommentTarget(review: ReviewWorkbench): ReviewComment
     ownerSessionId,
     reviewSessionId,
     path: doc.path,
-    startLine: loc.startLine,
-    endLine: loc.endLine,
-    side: loc.side,
+    startLine,
+    endLine,
+    side,
     codeSnippet: snippet,
     kind: doc.kind,
     root: review.root,
@@ -97,7 +188,7 @@ export function buildEditorCommentTarget(review: ReviewWorkbench): ReviewComment
     scope: doc.kind === "diff" ? doc.scope : undefined,
     commitOid: doc.kind === "commit" ? doc.oid : undefined,
     pullLabel,
-    revision: ready?.revision,
+    revision: ready.revision,
   };
 }
 
