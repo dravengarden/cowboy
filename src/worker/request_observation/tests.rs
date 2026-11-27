@@ -310,6 +310,7 @@ fn codex_earliest_pending_start_subtracts_queued_start_duration() {
         "body": { "stringValue": "codex.api_request" },
         "attributes": [
             { "key": "event.name", "value": { "stringValue": "codex.api_request" } },
+            { "key": "endpoint", "value": { "stringValue": "/responses" } },
             { "key": "conversation.id", "value": { "stringValue": "t1" } },
             { "key": "duration_ms", "value": { "intValue": "150000" } },
             { "key": "http.response.status_code", "value": { "intValue": "200" } }
