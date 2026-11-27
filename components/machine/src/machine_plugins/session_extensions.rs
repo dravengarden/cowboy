@@ -54,7 +54,7 @@ impl MachinePluginStore {
         );
         let mut memory = Vec::new();
         let mut profiles = Vec::new();
-        for installed in self.inventory()? {
+        for installed in self.inventory_non_agent()? {
             if installed.state != PluginInstallationState::Active
                 || !matches!(
                     installed.plugin_kind,

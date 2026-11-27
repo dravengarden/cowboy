@@ -11,6 +11,19 @@ use crate::machine_protocol::plugin_install::{
 use operations::install_attempts::{Attempts, PendingAttempt};
 use operations::lease::InstallationLease;
 
+pub(super) struct LeaseCheck(Option<InstallationLease>);
+
+impl LeaseCheck {
+    pub(super) fn check(&self) -> Result<()> {
+        if let Some(lease) = &self.0 {
+            lease
+                .check()
+                .map_err(|_| anyhow::anyhow!("installation execution lease ended"))?;
+        }
+        Ok(())
+    }
+}
+
 pub(super) enum InstallGuard<'a> {
     Legacy,
     Durable(InstallAdmission<'a>),
@@ -48,45 +61,63 @@ impl InstallGuard<'_> {
         }
         Ok(())
     }
+    pub(super) fn lease_check(&self) -> LeaseCheck {
+        match self {
+            Self::Legacy => LeaseCheck(None),
+            Self::Durable(InstallAdmission { lease, .. }) => LeaseCheck(Some(lease.clone_lease())),
+        }
+    }
+
     /// Flush regular files and directory entries of the staged, signed runtime
     /// before publishing activation. Archive extraction alone does not fsync
     /// payload bytes. Never follow archive symlinks out of this generation.
-    pub(super) fn flush_staging(&self, content: &Path) -> Result<()> {
+    pub(super) async fn flush_staging(&self, content: &Path) -> Result<()> {
         if matches!(self, Self::Legacy) {
             return Ok(());
         }
-        let mut pending = vec![content.to_owned()];
-        let mut entries = 0_u64;
-        while let Some(path) = pending.pop() {
-            self.check()?;
-            entries += 1;
-            ensure!(
-                entries <= 1_000_000,
-                "staged installation exceeds flush limit"
-            );
-            let metadata = path.symlink_metadata()?;
-            if metadata.file_type().is_symlink() {
-                continue;
-            }
-            ensure!(
-                metadata.is_file() || metadata.is_dir(),
-                "invalid staged installation entry"
-            );
-            let file = OpenOptions::new()
-                .read(true)
-                .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-                .open(&path)?;
-            if metadata.is_dir() {
-                for entry in fs::read_dir(&path)? {
-                    ensure!(
-                        pending.len() < 1_000_000,
-                        "staged installation exceeds flush limit"
-                    );
-                    pending.push(entry?.path());
+        self.check()?;
+        let content = content.to_owned();
+        let lease_check = self.lease_check();
+        // Await the blocking task directly (never cancel via timeout) so no
+        // detached filesystem walk outlives the store's lifecycle lock; lease
+        // expiry still aborts promptly at each entry via `lease_check`.
+        tokio::task::spawn_blocking(move || {
+            let mut pending = vec![content];
+            let mut entries = 0_u64;
+            while let Some(path) = pending.pop() {
+                lease_check.check()?;
+                entries += 1;
+                ensure!(
+                    entries <= 1_000_000,
+                    "staged installation exceeds flush limit"
+                );
+                let metadata = path.symlink_metadata()?;
+                if metadata.file_type().is_symlink() {
+                    continue;
                 }
+                ensure!(
+                    metadata.is_file() || metadata.is_dir(),
+                    "invalid staged installation entry"
+                );
+                let file = OpenOptions::new()
+                    .read(true)
+                    .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
+                    .open(&path)?;
+                if metadata.is_dir() {
+                    for entry in fs::read_dir(&path)? {
+                        ensure!(
+                            pending.len() < 1_000_000,
+                            "staged installation exceeds flush limit"
+                        );
+                        pending.push(entry?.path());
+                    }
+                }
+                file.sync_all()?;
             }
-            file.sync_all()?;
-        }
+            lease_check.check()
+        })
+        .await
+        .context("staged installation flush task failed")??;
         self.check()
     }
 
@@ -134,12 +165,17 @@ impl InstallGuard<'_> {
         self.check()
     }
 
-    pub(super) fn before_activation(&mut self, store: &MachinePluginStore) -> Result<()> {
+    pub(super) async fn before_activation(&mut self, store: &MachinePluginStore) -> Result<()> {
         self.check()?;
         if let Self::Durable(InstallAdmission { pending, .. }) = self {
-            let step = &pending.receipt().step;
+            let step = pending.receipt().step.clone();
+            let store = store.clone();
+            let target = tokio::task::spawn_blocking(move || store.install_target(&step.plugin_id))
+                .await
+                .context("installation target check task failed")??;
+            self.check()?;
             ensure!(
-                store.install_target(&step.plugin_id)? == step.expected,
+                target == step.expected,
                 "installation target changed during staging"
             );
         }
@@ -240,26 +276,39 @@ impl MachinePluginStore {
         admitted: bool,
     ) -> InstallTargetObservation {
         let _lifecycle = self.lifecycle.lock().await;
-        let result = (|| {
-            let query_digest = query
-                .digest()
-                .map_err(|_| InstallUnavailable::InvalidRequest)?;
-            if service != Some(query.service_id.as_str()) || machine != query.machine_id {
-                return Err(InstallUnavailable::WrongOwner);
-            }
-            self.operations
-                .ensure_unfenced(&query.plugin_id)
-                .map_err(|_| InstallUnavailable::SlotFenced)?;
-            let target = self
-                .install_target(&query.plugin_id)
-                .map_err(|_| InstallUnavailable::Untracked)?;
-            Ok(InstallTargetObservation::Observed {
-                query_digest,
-                admission_enabled: self.install_admission(admitted),
-                target,
-            })
-        })();
-        result.unwrap_or_else(|reason| InstallTargetObservation::Unavailable { reason })
+        let store = self.clone();
+        let query = query.clone();
+        let service = service.map(str::to_owned);
+        let machine = machine.to_owned();
+        tokio::task::spawn_blocking(move || {
+            let result = (|| {
+                let query_digest = query
+                    .digest()
+                    .map_err(|_| InstallUnavailable::InvalidRequest)?;
+                if service.as_deref() != Some(query.service_id.as_str())
+                    || machine != query.machine_id
+                {
+                    return Err(InstallUnavailable::WrongOwner);
+                }
+                store
+                    .operations
+                    .ensure_unfenced(&query.plugin_id)
+                    .map_err(|_| InstallUnavailable::SlotFenced)?;
+                let target = store
+                    .install_target(&query.plugin_id)
+                    .map_err(|_| InstallUnavailable::Untracked)?;
+                Ok(InstallTargetObservation::Observed {
+                    query_digest,
+                    admission_enabled: store.install_admission(admitted),
+                    target,
+                })
+            })();
+            result.unwrap_or_else(|reason| InstallTargetObservation::Unavailable { reason })
+        })
+        .await
+        .unwrap_or(InstallTargetObservation::Unavailable {
+            reason: InstallUnavailable::Untracked,
+        })
     }
 
     pub async fn query_installation_step(
@@ -270,15 +319,26 @@ impl MachinePluginStore {
         admitted: bool,
     ) -> InstallObservation {
         let _lifecycle = self.lifecycle.lock().await;
-        let result = if step.validate().is_err() {
-            unavailable(InstallUnavailable::InvalidRequest)
-        } else if service != Some(step.service_id.as_str()) || machine != step.machine_id {
-            unavailable(InstallUnavailable::WrongOwner)
-        } else {
-            self.installation_preflight(step)
-        };
+        let store = self.clone();
+        let step = step.clone();
+        let service = service.map(str::to_owned);
+        let machine = machine.to_owned();
+        let admission_enabled = service.is_some() && store.install_admission(admitted);
+        let result = tokio::task::spawn_blocking(move || {
+            if step.validate().is_err() {
+                unavailable(InstallUnavailable::InvalidRequest)
+            } else if service.as_deref() != Some(step.service_id.as_str())
+                || machine != step.machine_id
+            {
+                unavailable(InstallUnavailable::WrongOwner)
+            } else {
+                store.installation_preflight(&step)
+            }
+        })
+        .await
+        .unwrap_or_else(|_| unavailable(InstallUnavailable::Storage));
         InstallObservation {
-            admission_enabled: service.is_some() && self.install_admission(admitted),
+            admission_enabled,
             result,
         }
     }
@@ -313,7 +373,13 @@ impl MachinePluginStore {
         let result = if !step.matches_envelope(desired) || !lease.matches(step) {
             unavailable(InstallUnavailable::InvalidRequest)
         } else {
-            match self.installation_preflight(step) {
+            let store = self.clone();
+            let preflight_step = step.clone();
+            let preflight =
+                tokio::task::spawn_blocking(move || store.installation_preflight(&preflight_step))
+                    .await
+                    .unwrap_or_else(|_| unavailable(InstallUnavailable::Storage));
+            match preflight {
                 InstallLookup::NotFound {} if !admission_enabled => {
                     unavailable(InstallUnavailable::ReaderOnly)
                 }
@@ -337,7 +403,12 @@ impl MachinePluginStore {
         if lease.check().is_err() {
             return unavailable(InstallUnavailable::WrongOwner);
         }
-        if self.verified_install_package(desired).is_err() {
+        let store = self.clone();
+        let desired_check = desired.clone();
+        let verified =
+            tokio::task::spawn_blocking(move || store.verified_install_package(&desired_check))
+                .await;
+        if !matches!(verified, Ok(Ok(_))) {
             return unavailable(InstallUnavailable::InvalidRequest);
         }
         let journal = &self.operations.install_attempts;

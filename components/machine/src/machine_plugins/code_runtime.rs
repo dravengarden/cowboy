@@ -61,11 +61,15 @@ impl MachinePluginStore {
         let root = self.plugin_root(plugin_id);
         let active = read_link_name(&root.join("active")).map(|g| format!("sha256:{g}"));
         let selected_active = active.clone();
-        let select = || {
-            self.operations.ensure_unfenced(plugin_id)?;
+        let store = self.clone();
+        let plugin_id_owned = plugin_id.to_owned();
+        let legacy_socket_owned = legacy_socket.map(Path::to_path_buf);
+        let select = move || {
+            store.operations.ensure_unfenced(&plugin_id_owned)?;
             if let Some(digest) = selected_active {
-                let (package, _, content) = self.verified_plugin_generation(plugin_id, &digest)?;
-                if let Some(plan) = self.code_launch_plan(&package, &digest, &content)? {
+                let (package, _, content) =
+                    store.verified_plugin_generation(&plugin_id_owned, &digest)?;
+                if let Some(plan) = store.code_launch_plan(&package, &digest, &content)? {
                     return Ok(CodeRuntimeSelection::Installed(plan));
                 }
             }
@@ -74,9 +78,7 @@ impl MachinePluginStore {
                 "code-intelligence Plugin is not installed; legacy fallback is disabled"
             );
             Ok(CodeRuntimeSelection::Legacy(
-                legacy_socket
-                    .context("code-intelligence Plugin is not installed")?
-                    .to_path_buf(),
+                legacy_socket_owned.context("code-intelligence Plugin is not installed")?,
             ))
         };
         if payload["type"] == "acquireAgentBuffer" {

@@ -68,7 +68,7 @@ pub(super) fn handle(
                 if !query_only {
                     // An inventory read failure must not advertise an empty
                     // installation as proof of a completed uninstall.
-                    if let Ok(plugins) = providers.inventory() {
+                    if let Ok(plugins) = providers.inventory_async().await {
                         let _ = events.send(MachineEvent::PluginInventory {
                             plugins,
                             observed_at_ms: unix_ms(),
@@ -97,7 +97,7 @@ pub(super) fn handle(
                         observed_at_ms: unix_ms(),
                     });
                     let _ = events.send(MachineEvent::PluginInventory {
-                        plugins: providers.inventory().unwrap_or_default(),
+                        plugins: providers.inventory_async().await.unwrap_or_default(),
                         observed_at_ms: unix_ms(),
                     });
                 }
@@ -162,7 +162,7 @@ pub(super) fn handle(
                 let result = providers.install(&plugin).await;
                 let accepted = result.is_ok();
                 let detail = result.as_ref().err().map(|error| format!("{error:#}"));
-                if let Ok(plugins) = providers.inventory() {
+                if let Ok(plugins) = providers.inventory_async().await {
                     let _ = events.send(MachineEvent::PluginInventory {
                         plugins,
                         observed_at_ms: unix_ms(),
@@ -185,7 +185,7 @@ pub(super) fn handle(
                 let accepted = result.is_ok();
                 let detail = result.err().map(|error| format!("{error:#}"));
                 let _ = events.send(MachineEvent::PluginInventory {
-                    plugins: providers.inventory().unwrap_or_default(),
+                    plugins: providers.inventory_async().await.unwrap_or_default(),
                     observed_at_ms: unix_ms(),
                 });
                 let _ = events.send(MachineEvent::CommandResult {
@@ -205,7 +205,7 @@ pub(super) fn handle(
                 let accepted = result.is_ok();
                 let detail = result.err().map(|error| format!("{error:#}"));
                 let _ = events.send(MachineEvent::PluginInventory {
-                    plugins: providers.inventory().unwrap_or_default(),
+                    plugins: providers.inventory_async().await.unwrap_or_default(),
                     observed_at_ms: unix_ms(),
                 });
                 let _ = events.send(MachineEvent::CommandResult {

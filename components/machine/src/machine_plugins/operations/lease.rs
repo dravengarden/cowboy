@@ -150,7 +150,11 @@ impl PluginExecutionScope {
         Ok(UninstallExecutionLease {
             connected: Arc::clone(&self.connected),
             request_digest,
-            budget: OperationBudget::new(step.expires_at_ms, MAX_EXECUTION_TIME, received),
+            budget: Arc::new(OperationBudget::new(
+                step.expires_at_ms,
+                MAX_EXECUTION_TIME,
+                received,
+            )),
         })
     }
 }
@@ -206,10 +210,17 @@ impl Drop for PluginExecutionScope {
 pub struct UninstallExecutionLease {
     connected: Arc<AtomicBool>,
     request_digest: String,
-    budget: OperationBudget,
+    budget: Arc<OperationBudget>,
 }
 
 impl UninstallExecutionLease {
+    pub(super) fn clone_lease(&self) -> Self {
+        Self {
+            connected: Arc::clone(&self.connected),
+            request_digest: self.request_digest.clone(),
+            budget: Arc::clone(&self.budget),
+        }
+    }
     pub(super) fn matches(&self, step: &UninstallStep) -> bool {
         step.request_digest()
             .is_ok_and(|digest| digest == self.request_digest)

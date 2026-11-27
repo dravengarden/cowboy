@@ -62,14 +62,20 @@ impl BrowserManager {
         let Some(_start) = self.starts.enter() else {
             return hibernated(Reason::NotAvailable);
         };
-        let plan = match self.providers.machine_browser_runtime() {
-            Ok(Some(plan)) => Arc::new(plan),
-            Ok(None) => return hibernated(Reason::NotAvailable),
-            Err(error) => {
-                tracing::warn!(%error, "Machine browser runtime is not usable");
-                return hibernated(Reason::NotAvailable);
-            }
-        };
+        let providers = Arc::clone(&self.providers);
+        let plan =
+            match tokio::task::spawn_blocking(move || providers.machine_browser_runtime()).await {
+                Ok(Ok(Some(plan))) => Arc::new(plan),
+                Ok(Ok(None)) => return hibernated(Reason::NotAvailable),
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "Machine browser runtime is not usable");
+                    return hibernated(Reason::NotAvailable);
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "Machine browser runtime lookup task failed");
+                    return hibernated(Reason::NotAvailable);
+                }
+            };
         // Held until this open returns: the generation stays pinned until
         // the started instance (or its retained unit) pins it itself.
         let Some(_generation) = self.pins.pin(&plan) else {

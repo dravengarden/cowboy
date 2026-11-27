@@ -1324,7 +1324,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         encryption_public_key: Some(config.providers.encryption_public_key().to_owned()),
         components: collect_inventory(&config.components, config.zed_adapter_socket.as_deref())
             .await,
-        plugins: config.providers.inventory()?,
+        plugins: config.providers.inventory_async().await?,
         provider_contracts: Some(cowboy_provider_sdk::ProviderContractInventory::current_machine()),
         plugin_contracts: Some(cowboy_plugin_sdk::PluginContractInventory::current_machine(
             crate::plugin_host::PLUGIN_HOST_SCHEMA_VERSION,
@@ -1334,7 +1334,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         workspace_revision: workspace_snapshot.revision,
         workspace_owner: Some(workspace_snapshot.owner),
         capacity: config.capacity.clone(),
-        browser: config.browsers.hello_capability(),
+        browser: config.browsers.hello_capability_async().await,
     };
     let proof = if proof_version >= 3 {
         crate::machine_protocol::challenge_proof_v3(&challenge_id, &nonce, expires_at_ms, &hello)

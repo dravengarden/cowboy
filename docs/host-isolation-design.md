@@ -108,6 +108,16 @@ It could be any of these, and each calls for a different remedy:
 So L0 measures the mechanism before committing to the expensive, review-heavy
 remedies.
 
+#### L0 empirical finding (OVH, 2026-11-27)
+
+Fourteen days of production L0 telemetry on OVH recorded 122 `cowboy.machine.heartbeat_gap` events across 13 episodes (Hawk recorded 0):
+
+- 2 episodes were normal worker-generation rollovers (stale worker fenced during session revive).
+- 11 of 11 real stall episodes (120 events) showed zero worker cgroup starvation (`cpu` 4-31 ms, `memory` 0 ms, `io` 0-6 ms, `memory_high=0`, `memory_max=0`, `oom=0`), while every connected session simultaneously reported `gap_broker_lag_ms` of 11.4-20.2 s.
+- Each stall matched synchronous CPU/filesystem operations inside `MachinePluginStore` running on Tokio's async worker threads (staging/hashing/flushing Provider archives, post-install full `inventory()`, and periodic browser capability checks calling `inventory()` across every installed Agent Provider tarball), starving Tokio's epoll driver and timer wheel.
+
+This confirmed the **A broker-side stall** row above: neither L-split nor L-lane would have helped. Offloading blocking `MachinePluginStore` operations to `spawn_blocking` and scoping non-Agent inventory queries (`inventory_non_agent`) away from Agent Provider runtime archives eliminates every observed OVH stall as a host-only Machine release; L-split and L-lane remain deferred until future L0 telemetry shows actual worker-cgroup pressure.
+
 ### L0 requirements
 
 Revision 3.1 amends this section with the round-3 findings

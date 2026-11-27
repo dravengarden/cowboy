@@ -18,7 +18,12 @@ impl MachinePluginStore {
         plugin_id: &str,
         authority: &machine_browser::DrainAuthority<'_>,
     ) -> Result<Option<Box<dyn std::any::Any + Send>>> {
-        if !self.is_browser_plugin(plugin_id) {
+        let store = self.clone();
+        let pid = plugin_id.to_owned();
+        let is_browser = tokio::task::spawn_blocking(move || store.is_browser_plugin(&pid))
+            .await
+            .context("browser plugin check task failed")?;
+        if !is_browser {
             return Ok(None);
         }
         let Some(drain) = self
@@ -47,7 +52,12 @@ impl MachinePluginStore {
         plugin_id: &str,
         expected_digest: &str,
     ) -> Result<Option<Box<dyn std::any::Any + Send>>> {
-        if let Some(active) = self.inventory_one(plugin_id)? {
+        let store = self.clone();
+        let pid = plugin_id.to_owned();
+        if let Some(active) = tokio::task::spawn_blocking(move || store.inventory_one(&pid))
+            .await
+            .context("uninstall inventory check task failed")??
+        {
             ensure!(
                 active.generation_digest == expected_digest,
                 "active Plugin generation changed; refresh the uninstall plan"

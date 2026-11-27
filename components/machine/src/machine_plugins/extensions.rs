@@ -161,6 +161,32 @@ impl MachinePluginStore {
         }
     }
 
+    fn inventory_extensions_blocking(&self) -> Result<Vec<Extension>, Failure> {
+        let inventory = self
+            .inventory_non_agent()
+            .map_err(|_| Failure::ExtensionChanged)?;
+        let mut extensions = Vec::new();
+        for installed in inventory
+            .into_iter()
+            .filter(|i| i.plugin_kind == PluginKind::WorkspaceExtension)
+            .take(128)
+        {
+            let identity = Identity {
+                plugin_id: installed.plugin_id,
+                plugin_version: installed.plugin_version,
+                generation_digest: installed.generation_digest,
+            };
+            let (package, _, _) = self
+                .verified_plugin_generation(&identity.plugin_id, &identity.generation_digest)
+                .map_err(|_| Failure::ExtensionChanged)?;
+            if let PluginPayload::WorkspaceExtension(contract) = package.payload {
+                let available = self.extension_contract(&identity).is_ok();
+                extensions.push(Extension::from_contract(identity, &contract, available));
+            }
+        }
+        Ok(extensions)
+    }
+
     async fn extension_request_inner(&self, request: Request) -> Result<Response, Failure> {
         let remotes = runtime::remotes(std::path::Path::new(&request.root))
             .await
@@ -168,29 +194,11 @@ impl MachinePluginStore {
         match request.operation {
             Operation::Inventory => {
                 let _guard = self.lifecycle.lock().await;
-                let inventory = self.inventory().map_err(|_| Failure::ExtensionChanged)?;
-                let mut extensions = Vec::new();
-                for installed in inventory
-                    .into_iter()
-                    .filter(|i| i.plugin_kind == PluginKind::WorkspaceExtension)
-                    .take(128)
-                {
-                    let identity = Identity {
-                        plugin_id: installed.plugin_id,
-                        plugin_version: installed.plugin_version,
-                        generation_digest: installed.generation_digest,
-                    };
-                    let (package, _, _) = self
-                        .verified_plugin_generation(
-                            &identity.plugin_id,
-                            &identity.generation_digest,
-                        )
-                        .map_err(|_| Failure::ExtensionChanged)?;
-                    if let PluginPayload::WorkspaceExtension(contract) = package.payload {
-                        let available = self.extension_contract(&identity).is_ok();
-                        extensions.push(Extension::from_contract(identity, &contract, available));
-                    }
-                }
+                let store = self.clone();
+                let extensions =
+                    tokio::task::spawn_blocking(move || store.inventory_extensions_blocking())
+                        .await
+                        .map_err(|_| Failure::ExtensionChanged)??;
                 Ok(Response::Inventory {
                     extensions,
                     remotes,

@@ -138,8 +138,29 @@ impl Broker {
         Ok(provider)
     }
 
+    /// Resolve Provider behavior, validate launch placement, and build the
+    /// session environment every launch mode passes to the worker.
+    pub(super) async fn prepare_launch_environment(
+        &self,
+        session: &StartSession,
+        provider: &Option<ProviderLaunchContext>,
+    ) -> Result<Vec<(&'static str, String)>> {
+        let behavior = provider.as_ref().map_or_else(
+            || {
+                session
+                    .provider_behavior
+                    .clone()
+                    .unwrap_or_else(|| crate::provider_behavior::legacy_behavior(&session.provider))
+            },
+            |provider| provider.behavior.clone(),
+        );
+        validate_launch_placement(session, provider, &behavior)?;
+        self.launch_session_environment(session, provider, &behavior)
+            .await
+    }
+
     /// The session environment every launch mode passes to the worker.
-    pub(super) fn launch_session_environment(
+    pub(super) async fn launch_session_environment(
         &self,
         session: &StartSession,
         provider: &Option<ProviderLaunchContext>,
@@ -161,7 +182,7 @@ impl Broker {
                 path.display().to_string(),
             ));
         }
-        if let Some(value) = self.launch_extensions_environment(session)? {
+        if let Some(value) = self.launch_extensions_environment(session).await? {
             session_environment.push((crate::machine_plugins::SESSION_EXTENSIONS_ENV, value));
         }
         if let Some(provider) = &provider {

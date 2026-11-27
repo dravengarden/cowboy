@@ -433,10 +433,12 @@ impl CodeRuntimeHost {
     pub(super) async fn select_pinned(
         &self,
         plugin_id: &str,
-        select: impl FnOnce() -> Result<CodeRuntimeSelection>,
+        select: impl FnOnce() -> Result<CodeRuntimeSelection> + Send + 'static,
     ) -> Result<(CodeRuntimeSelection, Option<SelectionPin>)> {
         let _gate = self.selection_gate.read().await;
-        let selection = select()?;
+        let selection = tokio::task::spawn_blocking(select)
+            .await
+            .context("code runtime selection task failed")??;
         let pin = match &selection {
             CodeRuntimeSelection::Installed(plan) => {
                 let key = (plugin_id.to_owned(), plan.generation_digest.clone());
@@ -484,7 +486,7 @@ impl CodeRuntimeHost {
         &self,
         plugin_id: &str,
         payload: &Value,
-        select: impl FnOnce() -> Result<CodeRuntimeSelection>,
+        select: impl FnOnce() -> Result<CodeRuntimeSelection> + Send + 'static,
     ) -> Result<Value> {
         self.request_active(plugin_id, payload, None, select).await
     }
@@ -496,7 +498,7 @@ impl CodeRuntimeHost {
         plugin_id: &str,
         payload: &Value,
         active: Option<String>,
-        select: impl FnOnce() -> Result<CodeRuntimeSelection>,
+        select: impl FnOnce() -> Result<CodeRuntimeSelection> + Send + 'static,
     ) -> Result<Value> {
         self.request_with_admission(plugin_id, payload, active, select, None)
             .await
@@ -507,7 +509,7 @@ impl CodeRuntimeHost {
         plugin_id: &str,
         payload: &Value,
         active: Option<String>,
-        select: impl FnOnce() -> Result<CodeRuntimeSelection>,
+        select: impl FnOnce() -> Result<CodeRuntimeSelection> + Send + 'static,
         admission: Option<resource_budget::Admission>,
     ) -> Result<Value> {
         ensure!(
@@ -1285,9 +1287,10 @@ mod tests {
         fs::create_dir_all(root.0.join("worktree-a")).unwrap();
         fs::create_dir_all(root.0.join("worktree-b")).unwrap();
         let open = |name: &str| json!({"type": "openBuffer", "worktree": root.0.join(name), "path": "a.rs", "leaseId": "tab"});
+        let selected_old = old.clone();
         let first = host
-            .request("fixture-code", &open("worktree-a"), || {
-                Ok(CodeRuntimeSelection::Installed(old.clone()))
+            .request("fixture-code", &open("worktree-a"), move || {
+                Ok(CodeRuntimeSelection::Installed(selected_old))
             })
             .await
             .unwrap();
@@ -1301,9 +1304,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(retry["generation"], first["generation"]);
+        let selected_new = new.clone();
         let second = host
-            .request("fixture-code", &open("worktree-b"), || {
-                Ok(CodeRuntimeSelection::Installed(new.clone()))
+            .request("fixture-code", &open("worktree-b"), move || {
+                Ok(CodeRuntimeSelection::Installed(selected_new))
             })
             .await
             .unwrap();
@@ -1317,7 +1321,7 @@ mod tests {
         .unwrap();
         assert_process_stopped(u32::try_from(first["descendant"].as_u64().unwrap()).unwrap()).await;
         let reopened = host
-            .request("fixture-code", &open("worktree-a"), || {
+            .request("fixture-code", &open("worktree-a"), move || {
                 Ok(CodeRuntimeSelection::Installed(new))
             })
             .await
@@ -1433,8 +1437,9 @@ mod tests {
             .unwrap();
         let host = CodeRuntimeHost::default();
         let open = json!({"type": "openWorktree", "path": root.0, "trusted": true});
-        host.request("fixture-code", &open, || {
-            Ok(CodeRuntimeSelection::Legacy(legacy.socket.clone()))
+        let legacy_socket = legacy.socket.clone();
+        host.request("fixture-code", &open, move || {
+            Ok(CodeRuntimeSelection::Legacy(legacy_socket))
         })
         .await
         .unwrap();
@@ -1502,9 +1507,10 @@ mod tests {
         let root = PrivateRuntimeDirectory::create().unwrap();
         let host = CodeRuntimeHost::default();
         let plan = fixture_plan(&root.0, "selected-gen");
+        let selected = plan.clone();
         let (selection, pin) = host
-            .select_pinned("fixture-code", || {
-                Ok(CodeRuntimeSelection::Installed(plan.clone()))
+            .select_pinned("fixture-code", move || {
+                Ok(CodeRuntimeSelection::Installed(selected))
             })
             .await
             .unwrap();
@@ -1696,5 +1702,34 @@ mod tests {
             "ordinary oversized reply waited {:?} instead of failing immediately",
             started.elapsed()
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 1)]
+    async fn select_pinned_runs_blocking_selection_off_tokio_worker_threads() {
+        let root = PrivateRuntimeDirectory::create().unwrap();
+        let host = CodeRuntimeHost::default();
+        let plan = fixture_plan(&root.0, "non-blocking");
+        let (started_tx, started_rx) = tokio::sync::oneshot::channel();
+        let (unblock_tx, unblock_rx) = std::sync::mpsc::sync_channel::<()>(0);
+        // On a 1-worker Tokio runtime, this task can only execute and unblock
+        // `select_pinned` if the selection closure runs on Tokio's blocking pool.
+        let unblocker = tokio::spawn(async move {
+            started_rx.await.unwrap();
+            unblock_tx.send(()).unwrap();
+        });
+        let (selection, pin) = tokio::time::timeout(
+            Duration::from_secs(5),
+            host.select_pinned("fixture-code", move || {
+                started_tx.send(()).unwrap();
+                unblock_rx.recv().unwrap();
+                Ok(CodeRuntimeSelection::Installed(plan))
+            }),
+        )
+        .await
+        .expect("select_pinned starved the sole Tokio worker thread")
+        .unwrap();
+        unblocker.await.unwrap();
+        assert!(matches!(selection, CodeRuntimeSelection::Installed(_)));
+        assert!(pin.is_some());
     }
 }

@@ -7,7 +7,7 @@ use crate::machine_protocol::plugin_install::{InstallRejection, InstallStep, Ins
 pub struct InstallationLease {
     connected: Arc<AtomicBool>,
     digest: String,
-    budget: OperationBudget,
+    budget: Arc<OperationBudget>,
 }
 
 impl PluginExecutionScope {
@@ -29,12 +29,24 @@ impl PluginExecutionScope {
         Ok(InstallationLease {
             connected: Arc::clone(&self.connected),
             digest,
-            budget: OperationBudget::new(step.expires_at_ms, Duration::from_mins(5), received),
+            budget: Arc::new(OperationBudget::new(
+                step.expires_at_ms,
+                Duration::from_mins(5),
+                received,
+            )),
         })
     }
 }
 
 impl InstallationLease {
+    pub(in crate::machine_plugins) fn clone_lease(&self) -> Self {
+        Self {
+            connected: Arc::clone(&self.connected),
+            digest: self.digest.clone(),
+            budget: Arc::clone(&self.budget),
+        }
+    }
+
     pub(in crate::machine_plugins) fn matches(&self, step: &InstallStep) -> bool {
         step.request_digest()
             .is_ok_and(|digest| digest == self.digest)

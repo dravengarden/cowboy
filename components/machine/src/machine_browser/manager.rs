@@ -609,7 +609,7 @@ impl BrowserManager {
                 {
                     return;
                 }
-                let current = manager.capability();
+                let current = manager.capability_async().await;
                 // Without a recorded hello the first sample is the baseline.
                 let changed = announced
                     .as_ref()
@@ -642,6 +642,25 @@ impl BrowserManager {
         let capability = self.capability();
         *self.hello_capability.lock() = Some(capability.clone());
         capability
+    }
+
+    /// Offload [`Self::hello_capability`] to Tokio's blocking pool.
+    #[must_use]
+    pub async fn hello_capability_async(self: &Arc<Self>) -> Option<Capability> {
+        let manager = Arc::clone(self);
+        tokio::task::spawn_blocking(move || manager.hello_capability())
+            .await
+            .unwrap_or(None)
+    }
+
+    /// Offload [`Self::capability`] to Tokio's blocking pool so the periodic
+    /// capability watcher never stalls Tokio async worker threads.
+    #[must_use]
+    pub async fn capability_async(self: &Arc<Self>) -> Option<Capability> {
+        let manager = Arc::clone(self);
+        tokio::task::spawn_blocking(move || manager.capability())
+            .await
+            .unwrap_or(None)
     }
 
     /// Whether this Machine can run browsers, and with which Plugin

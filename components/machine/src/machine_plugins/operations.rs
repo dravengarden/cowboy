@@ -430,24 +430,38 @@ impl MachinePluginStore {
                 reason: StepUnavailable::WrongOwner,
             };
         }
-        let receipt = match self.operations.query(step) {
-            StepLookup::Found { receipt } => Some(receipt),
-            StepLookup::NotFound {} => None,
-            StepLookup::Unavailable { reason } => {
-                return RecoveryObservation::Unavailable { reason };
+        let store = self.clone();
+        let step_owned = step.clone();
+        match tokio::task::spawn_blocking(move || {
+            let receipt = match store.operations.query(&step_owned) {
+                StepLookup::Found { receipt } => Some(receipt),
+                StepLookup::NotFound {} => None,
+                StepLookup::Unavailable { reason } => {
+                    return RecoveryObservation::Unavailable { reason };
+                }
+            };
+            let active = store.recovery_active_digest(&step_owned.plugin_id);
+            RecoveryObservation::Observed {
+                snapshot: Box::new(RecoverySnapshot {
+                    request_digest,
+                    receipt,
+                    installation: store
+                        .operations
+                        .installations
+                        .observe(&step_owned.plugin_id, active),
+                    slot_fenced: store
+                        .operations
+                        .ensure_unfenced(&step_owned.plugin_id)
+                        .is_err(),
+                }),
             }
-        };
-        let active = self.recovery_active_digest(&step.plugin_id);
-        RecoveryObservation::Observed {
-            snapshot: Box::new(RecoverySnapshot {
-                request_digest,
-                receipt,
-                installation: self
-                    .operations
-                    .installations
-                    .observe(&step.plugin_id, active),
-                slot_fenced: self.operations.ensure_unfenced(&step.plugin_id).is_err(),
-            }),
+        })
+        .await
+        {
+            Ok(observation) => observation,
+            Err(_) => RecoveryObservation::Unavailable {
+                reason: StepUnavailable::Storage,
+            },
         }
     }
 
@@ -472,13 +486,28 @@ impl MachinePluginStore {
         // re-checked before every individual stop. The drain is idempotent
         // (it stops only what still runs) and needs no journal entry of its
         // own: it changes no Plugin state, and a hibernated browser reopens.
-        let _drained = match access {
+        let should_drain = match access {
             UninstallAccess::Execute(lease)
-                if service == Some(step.service_id.as_str())
-                    && machine == step.machine_id
-                    && self.is_browser_plugin(&step.plugin_id)
-                    && self.uninstall_drain_authorized(step, admission_enabled, lease) =>
+                if service == Some(step.service_id.as_str()) && machine == step.machine_id =>
             {
+                let store = self.clone();
+                let step_owned = step.clone();
+                let lease_owned = lease.clone_lease();
+                tokio::task::spawn_blocking(move || {
+                    store.is_browser_plugin(&step_owned.plugin_id)
+                        && store.uninstall_drain_authorized(
+                            &step_owned,
+                            admission_enabled,
+                            &lease_owned,
+                        )
+                })
+                .await
+                .unwrap_or(false)
+            }
+            _ => false,
+        };
+        let _drained = match access {
+            UninstallAccess::Execute(lease) if should_drain => {
                 let authority = || lease.before_effect();
                 match self.drain_browsers(&step.plugin_id, &authority).await {
                     Ok(hold) => hold,
@@ -505,12 +534,18 @@ impl MachinePluginStore {
         } else if service != Some(step.service_id.as_str()) || machine != step.machine_id {
             unavailable(StepUnavailable::WrongOwner)
         } else {
-            match access {
-                UninstallAccess::Observe => self.uninstall_step_preflight(step),
-                UninstallAccess::Execute(lease) => {
-                    self.execute_uninstall_step(step, admission_enabled, lease)
-                }
-            }
+            let store = self.clone();
+            let step_owned = step.clone();
+            let cloned_lease = match access {
+                UninstallAccess::Observe => None,
+                UninstallAccess::Execute(lease) => Some(lease.clone_lease()),
+            };
+            tokio::task::spawn_blocking(move || match cloned_lease {
+                None => store.uninstall_step_preflight(&step_owned),
+                Some(lease) => store.execute_uninstall_step(&step_owned, admission_enabled, &lease),
+            })
+            .await
+            .unwrap_or_else(|_| unavailable(StepUnavailable::Storage))
         };
         StepObservation {
             admission_enabled: admission_enabled

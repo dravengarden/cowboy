@@ -380,9 +380,10 @@ impl BrowserManager {
         record: &InstanceRecord,
         status: &unit::UnitStatus,
     ) -> Result<Arc<Instance>> {
-        let plan = self
-            .providers
-            .machine_browser_runtime()?
+        let providers = Arc::clone(&self.providers);
+        let plan = tokio::task::spawn_blocking(move || providers.machine_browser_runtime())
+            .await
+            .context("Machine browser runtime lookup task failed")??
             .context("no Machine browser runtime installed")?;
         ensure!(
             plan.generation_digest == record.generation_digest,

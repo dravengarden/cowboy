@@ -160,19 +160,27 @@ impl PreparedRuntime {
     }
 
     /// Re-verify staging root and every staged component right before an outer
-    /// readiness probe.
-    pub(super) fn verify_before_outer_probe(&self) -> Result<()> {
-        if let Self::Pending(pending) = self {
-            verify_child_dir(
-                pending.content_dir_fd.as_fd(),
-                &pending.temp_name,
-                pending.temp_identity,
-            )?;
-            for (artifact, staged, _) in &pending.components {
-                staged.verify_staged_bytes(Some(pending.temp_dir_fd.as_fd()), artifact)?;
+    /// readiness probe, off the Tokio async worker threads.
+    pub(super) async fn verify_before_outer_probe(self) -> Result<Self> {
+        match self {
+            Self::AlreadyInstalled { metadata } => Ok(Self::AlreadyInstalled { metadata }),
+            Self::Pending(pending) => {
+                let pending = tokio::task::spawn_blocking(move || -> Result<PendingRuntime> {
+                    verify_child_dir(
+                        pending.content_dir_fd.as_fd(),
+                        &pending.temp_name,
+                        pending.temp_identity,
+                    )?;
+                    for (artifact, staged, _) in &pending.components {
+                        staged.verify_staged_bytes(Some(pending.temp_dir_fd.as_fd()), artifact)?;
+                    }
+                    Ok(pending)
+                })
+                .await
+                .context("outer probe pre-verification task failed")??;
+                Ok(Self::Pending(pending))
             }
         }
-        Ok(())
     }
 
     /// Record whether an outer readiness probe confirmed every descendant exited.
@@ -187,75 +195,90 @@ impl PreparedRuntime {
     /// copies if descendant exit could not be confirmed) via pinned directory
     /// FDs, re-verify every component, write `metadata.json`, and atomically
     /// publish `runtime/` relative to `content_dir_fd`.
-    pub(super) fn finalize(self, guard: &InstallGuard<'_>) -> Result<InstalledRuntimeMetadata> {
+    pub(super) async fn finalize(
+        self,
+        guard: &InstallGuard<'_>,
+    ) -> Result<InstalledRuntimeMetadata> {
         match self {
             Self::AlreadyInstalled { metadata } => Ok(metadata),
             Self::Pending(mut pending) => {
-                verify_child_dir(
-                    pending.content_dir_fd.as_fd(),
-                    &pending.temp_name,
-                    pending.temp_identity,
-                )?;
-                let temporary = pending.staging.path().to_path_buf();
-                let mut commands = BTreeMap::new();
-                for (artifact, staged, probe_ms) in &pending.components {
-                    guard.check()?;
-                    attach_and_verify_staged_component(
-                        Some(pending.temp_dir_fd.as_fd()),
-                        staged,
-                        artifact,
-                        *probe_ms,
-                        pending.all_probes_exit_confirmed,
-                    )?;
-                    let executable = staged
-                        .executable
-                        .strip_prefix(&temporary)
-                        .context("staged Provider runtime escaped its staging directory")?;
-                    let stored_artifact = staged
-                        .artifact
-                        .strip_prefix(&temporary)
-                        .context("staged Provider artifact escaped its staging directory")?;
-                    let installed = InstalledRuntimeCommand {
-                        executable: Path::new("runtime")
-                            .join(executable)
-                            .to_string_lossy()
-                            .into_owned(),
-                        artifact: Path::new("runtime")
-                            .join(stored_artifact)
-                            .to_string_lossy()
-                            .into_owned(),
-                        artifact_digest: artifact.artifact_digest.to_ascii_lowercase(),
-                    };
-                    ensure!(
-                        commands
-                            .insert(artifact.command.clone(), installed)
-                            .is_none(),
-                        "duplicate staged Provider command"
-                    );
-                }
-                let metadata = InstalledRuntimeMetadata {
-                    schema_version: 2,
-                    commands,
-                };
                 guard.check()?;
-                verify_child_dir(
-                    pending.content_dir_fd.as_fd(),
-                    &pending.temp_name,
-                    pending.temp_identity,
-                )?;
-                artifact_cache::write_bytes_at(
-                    pending.temp_dir_fd.as_fd(),
-                    "metadata.json",
-                    &serde_json::to_vec(&metadata)?,
-                )?;
-                rustix::fs::renameat(
-                    pending.content_dir_fd.as_fd(),
-                    pending.temp_name.as_str(),
-                    pending.content_dir_fd.as_fd(),
-                    "runtime",
-                )?;
-                rustix::fs::fsync(pending.content_dir_fd.as_fd())?;
-                pending.staging.commit();
+                let lease_check = guard.lease_check();
+                // Await the blocking task directly so a lease expiry cannot
+                // drop `_lifecycle` while `renameat` or staging cleanup runs;
+                // `lease_check.check()?` still aborts before every component
+                // and before atomic publication.
+                let metadata = tokio::task::spawn_blocking(move || {
+                    verify_child_dir(
+                        pending.content_dir_fd.as_fd(),
+                        &pending.temp_name,
+                        pending.temp_identity,
+                    )?;
+                    let temporary = pending.staging.path().to_path_buf();
+                    let mut commands = BTreeMap::new();
+                    for (artifact, staged, probe_ms) in &pending.components {
+                        lease_check.check()?;
+                        attach_and_verify_staged_component(
+                            Some(pending.temp_dir_fd.as_fd()),
+                            staged,
+                            artifact,
+                            *probe_ms,
+                            pending.all_probes_exit_confirmed,
+                        )?;
+                        let executable = staged
+                            .executable
+                            .strip_prefix(&temporary)
+                            .context("staged Provider runtime escaped its staging directory")?;
+                        let stored_artifact = staged
+                            .artifact
+                            .strip_prefix(&temporary)
+                            .context("staged Provider artifact escaped its staging directory")?;
+                        let installed = InstalledRuntimeCommand {
+                            executable: Path::new("runtime")
+                                .join(executable)
+                                .to_string_lossy()
+                                .into_owned(),
+                            artifact: Path::new("runtime")
+                                .join(stored_artifact)
+                                .to_string_lossy()
+                                .into_owned(),
+                            artifact_digest: artifact.artifact_digest.to_ascii_lowercase(),
+                        };
+                        ensure!(
+                            commands
+                                .insert(artifact.command.clone(), installed)
+                                .is_none(),
+                            "duplicate staged Provider command"
+                        );
+                    }
+                    let metadata = InstalledRuntimeMetadata {
+                        schema_version: 2,
+                        commands,
+                    };
+                    lease_check.check()?;
+                    verify_child_dir(
+                        pending.content_dir_fd.as_fd(),
+                        &pending.temp_name,
+                        pending.temp_identity,
+                    )?;
+                    artifact_cache::write_bytes_at(
+                        pending.temp_dir_fd.as_fd(),
+                        "metadata.json",
+                        &serde_json::to_vec(&metadata)?,
+                    )?;
+                    rustix::fs::renameat(
+                        pending.content_dir_fd.as_fd(),
+                        pending.temp_name.as_str(),
+                        pending.content_dir_fd.as_fd(),
+                        "runtime",
+                    )?;
+                    rustix::fs::fsync(pending.content_dir_fd.as_fd())?;
+                    pending.staging.commit();
+                    Ok(metadata)
+                })
+                .await
+                .context("Provider runtime finalization task failed")??;
+                guard.check()?;
                 Ok(metadata)
             }
         }
@@ -293,12 +316,19 @@ pub(super) async fn prepare_provider_runtime(
     guard.check()?;
     let active = content.join("runtime");
     if active.symlink_metadata().is_ok() {
-        let metadata = read_installed_runtime(content)
-            .context("existing Provider runtime metadata is invalid")?;
-        ensure!(
-            installed_runtime_matches(content, artifacts, &metadata)?,
-            "existing content-addressed Provider runtime failed integrity verification"
-        );
+        let content_owned = content.to_owned();
+        let artifacts_owned = artifacts.clone();
+        let metadata = tokio::task::spawn_blocking(move || -> Result<InstalledRuntimeMetadata> {
+            let metadata = read_installed_runtime(&content_owned)
+                .context("existing Provider runtime metadata is invalid")?;
+            ensure!(
+                installed_runtime_matches(&content_owned, &artifacts_owned, &metadata)?,
+                "existing content-addressed Provider runtime failed integrity verification"
+            );
+            Ok(metadata)
+        })
+        .await
+        .context("existing Provider runtime verification task failed")??;
         return Ok(PreparedRuntime::AlreadyInstalled { metadata });
     }
     let (content_dir_fd, _) = open_pinned_dir(content)?;
@@ -330,7 +360,9 @@ pub(super) async fn prepare_provider_runtime(
     }
     let mut probed = Vec::with_capacity(staged_components.len());
     let mut all_probes_exit_confirmed = true;
-    for (idx, (artifact, staged)) in staged_components.iter().enumerate() {
+    let mut content_dir_fd = content_dir_fd;
+    let mut temp_dir_fd = temp_dir_fd;
+    for idx in 0..staged_components.len() {
         guard.check()?;
         let probe_started = Instant::now();
         if !sealed_probe {
@@ -338,12 +370,25 @@ pub(super) async fn prepare_provider_runtime(
             // executing each subsequent probe so no earlier probe can alter
             // what this probe executes or loads from any sibling.
             if idx > 0 {
-                verify_child_dir(content_dir_fd.as_fd(), &temp_name, temp_identity)?;
-                for (a, s) in &staged_components {
-                    s.verify_staged_bytes(Some(temp_dir_fd.as_fd()), a)?;
-                }
+                let verify_name = temp_name.clone();
+                let (returned_content_fd, returned_temp_fd, returned_components) =
+                    tokio::task::spawn_blocking(move || -> Result<_> {
+                        verify_child_dir(content_dir_fd.as_fd(), &verify_name, temp_identity)?;
+                        for (a, s) in &staged_components {
+                            s.verify_staged_bytes(Some(temp_dir_fd.as_fd()), a)?;
+                        }
+                        Ok((content_dir_fd, temp_dir_fd, staged_components))
+                    })
+                    .await
+                    .context("pre-probe staged component verification task failed")??;
+                content_dir_fd = returned_content_fd;
+                temp_dir_fd = returned_temp_fd;
+                staged_components = returned_components;
             }
-            let confirmed = probe_released_component(&staged.executable, artifact).await?;
+            let (artifact, staged) = &staged_components[idx];
+            let confirmed = guard
+                .bounded(probe_released_component(&staged.executable, artifact))
+                .await?;
             all_probes_exit_confirmed &= confirmed;
         }
         probed.push(probe_started.elapsed().as_millis());
@@ -374,7 +419,7 @@ pub(super) async fn stage_provider_runtime(
 ) -> Result<InstalledRuntimeMetadata> {
     let prepared =
         prepare_provider_runtime(content, artifacts, guard, cache_state, sealed_probe).await?;
-    prepared.finalize(guard)
+    prepared.finalize(guard).await
 }
 
 #[cfg(test)]
@@ -428,29 +473,76 @@ async fn materialize_runtime_component(
         "Provider runtime artifact must use HTTPS"
     );
     let started = Instant::now();
-    let cached = cache_state
-        .map(|state| artifact_cache::read(state, &artifact.artifact_digest))
-        .transpose()?
-        .flatten();
-    let (bytes, source) = if let Some(bytes) = cached {
-        (bytes, "cache")
-    } else if let Some(bytes) = generation_content
-        .and_then(|content| artifact_cache::read_retained(content, &artifact.artifact_digest))
-    {
-        (bytes, "retained_generation")
-    } else {
-        (
-            download_runtime_artifact(client, url, guard).await?,
+    let lookup_cache_state = cache_state.map(Path::to_owned);
+    let lookup_generation = generation_content.map(Path::to_owned);
+    let lookup_digest = artifact.artifact_digest.clone();
+    let local_bytes =
+        tokio::task::spawn_blocking(move || -> Result<Option<(Vec<u8>, &'static str)>> {
+            if let Some(bytes) = lookup_cache_state
+                .as_deref()
+                .map(|state| artifact_cache::read(state, &lookup_digest))
+                .transpose()?
+                .flatten()
+            {
+                return Ok(Some((bytes, "cache")));
+            }
+            if let Some(bytes) = lookup_generation
+                .as_deref()
+                .and_then(|content| artifact_cache::read_retained(content, &lookup_digest))
+            {
+                return Ok(Some((bytes, "retained_generation")));
+            }
+            Ok(None)
+        })
+        .await
+        .context("Provider runtime cache read task failed")??;
+    let (bytes, source) = match local_bytes {
+        Some(found) => found,
+        None => (
+            guard
+                .bounded(download_runtime_artifact(client, url, guard))
+                .await?,
             "download",
-        )
+        ),
     };
     let fetch_ms = started.elapsed().as_millis();
+    guard.check()?;
+    let lease_check = guard.lease_check();
+    let runtime_root = runtime_root.to_owned();
+    let artifact = artifact.clone();
+    let cache_state = cache_state.map(Path::to_owned);
+    let staged = tokio::task::spawn_blocking(move || {
+        unpack_runtime_component_blocking(
+            &runtime_root,
+            &artifact,
+            &lease_check,
+            cache_state.as_deref(),
+            bytes,
+            source,
+            fetch_ms,
+        )
+    })
+    .await
+    .context("Provider runtime materialization task failed")??;
+    guard.check()?;
+    Ok(staged)
+}
+
+fn unpack_runtime_component_blocking(
+    runtime_root: &Path,
+    artifact: &ReleasedPrivateComponent,
+    lease_check: &super::installation::LeaseCheck,
+    cache_state: Option<&Path>,
+    bytes: Vec<u8>,
+    source: &'static str,
+    fetch_ms: u128,
+) -> Result<StagedRuntimeComponent> {
     let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
     ensure!(
         digest == artifact.artifact_digest.to_ascii_lowercase(),
         "Provider runtime artifact digest mismatch"
     );
-    guard.check()?;
+    lease_check.check()?;
     let unpack_started = Instant::now();
     let component_name = format!("{}-{}", artifact.kind.as_str(), artifact.slot);
     let component_root = runtime_root.join(&component_name);
@@ -706,7 +798,7 @@ mod tests {
         let probed_ino = probed_bin.symlink_metadata().unwrap().ino();
         let mut leaked_fd = OpenOptions::new().write(true).open(&probed_bin).unwrap();
         prepared.record_outer_probe_exit_confirmed(false);
-        prepared.finalize(&guard).unwrap();
+        prepared.finalize(&guard).await.unwrap();
 
         leaked_fd.write_all(b"post-finalize-tamper").unwrap();
         leaked_fd.sync_all().unwrap();
@@ -747,7 +839,7 @@ mod tests {
         let staged_bin = prepared.command_path("node").unwrap();
         // Simulate an outer probe tampering with the private staged binary.
         fs::write(&staged_bin, b"#!/bin/sh\necho tampered\n").unwrap();
-        let err = prepared.finalize(&guard).unwrap_err();
+        let err = prepared.finalize(&guard).await.unwrap_err();
         assert!(
             err.to_string().contains("changed signed artifact bytes"),
             "unexpected error: {err:#}"

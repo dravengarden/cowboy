@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Weak};
 
-use anyhow::{Result, ensure};
+use anyhow::{Context as _, Result, ensure};
 use parking_lot::Mutex;
 use serde_json::{Value, json};
 
@@ -41,9 +41,18 @@ impl Descriptors {
             guard = store.lifecycle.lock() => guard,
         };
         let profile = invocation.profile();
-        let descriptor = store
-            .prepare_mcp_binding(&profile.binding)?
-            .native_descriptor(&profile.epoch)?;
+        let descriptor = {
+            let store = store.clone();
+            let binding = profile.binding.clone();
+            let epoch = profile.epoch.clone();
+            tokio::task::spawn_blocking(move || {
+                store
+                    .prepare_mcp_binding(&binding)?
+                    .native_descriptor(&epoch)
+            })
+            .await
+            .context("MCP native descriptor preparation task failed")??
+        };
         let key = (profile.session_id.clone(), profile.binding.name.clone());
         let mut state = self.0.lock();
         invocation.check()?;
