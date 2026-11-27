@@ -27,7 +27,11 @@ struct Inner {
     pending: HashMap<String, PendingDrain>,
     active: HashMap<String, ActiveDrain>,
     unconfirmed_teardown: HashMap<String, UnconfirmedTeardown>,
-    recently_drained: HashMap<String, (String, Instant)>,
+    /// `(worker_epoch, confirmed_receipt, retired_at)` for exact epoch-bound
+    /// handover replay (`confirmed_receipt == true` -> `CrashedWorkerDrained` on
+    /// capable Controller, or ownerless correction on downgraded Controller;
+    /// `confirmed_receipt == false` -> ownerless correction only, R8-M5).
+    recently_drained: HashMap<String, (String, bool, Instant)>,
     /// Last trusted Direct PID observed for `(session_id -> (epoch, pid))`,
     /// preserved across same-epoch reconnects and cleared on epoch change or
     /// confirmed process exit (R5-M5).
@@ -1070,13 +1074,18 @@ impl Broker {
                             .and_then(|a| a.peer_pid)
                             .or_else(|| pending.and_then(|p| p.peer_pid))
                             .or_else(|| unconfirmed.and_then(|u| u.peer_pid));
+                        let epoch_for_launch = active
+                            .map(|a| a.epoch.clone())
+                            .or_else(|| pending.map(|p| p.epoch.clone()))
+                            .or_else(|| unconfirmed.map(|u| u.epoch.clone()))
+                            .unwrap_or_default();
                         let launch =
                             active
                                 .map_or(RetiredLaunch::Unresolved, |a| a.retired_launch)
                                 .or(pending.map_or(RetiredLaunch::Unresolved, |p| p.retired_launch))
                                 .or(unconfirmed
                                     .map_or(RetiredLaunch::Unresolved, |u| u.retired_launch));
-                        Some((pid, launch))
+                        Some((pid, epoch_for_launch, launch))
                     } else {
                         None
                     }
@@ -1088,14 +1097,18 @@ impl Broker {
             if !live_draining && disconnected_unsettled.is_none() {
                 return Ok(guard);
             }
-            if !live_draining
-                && let Some((pid, launch)) = disconnected_unsettled
-                && self.confirm_mid_drain_worker_exited(session_id, pid).await
-                && self
-                    .confirm_retired_sandbox_units_gone(session_id, launch)
-                    .await
+            if !live_draining && let Some((pid, epoch_for_launch, launch)) = disconnected_unsettled
             {
-                return Ok(guard);
+                let launch = self
+                    .resolve_or_refresh_retired_launch(session_id, &epoch_for_launch, launch)
+                    .await;
+                if self.confirm_mid_drain_worker_exited(session_id, pid).await
+                    && self
+                        .confirm_retired_sandbox_units_gone(session_id, launch)
+                        .await
+                {
+                    return Ok(guard);
+                }
             }
             if !lease_active(self) {
                 return Err("controller lease changed while awaiting crashed drain".into());
@@ -1133,6 +1146,10 @@ impl Broker {
                         .and_then(|e| e.peer_pid)
                         .or_else(|| pending_entry.and_then(|e| e.peer_pid)),
                     active_entry
+                        .map(|e| e.epoch.clone())
+                        .or_else(|| pending_entry.map(|e| e.epoch.clone()))
+                        .unwrap_or_default(),
+                    active_entry
                         .map_or(RetiredLaunch::Unresolved, |e| e.retired_launch)
                         .or(pending_entry.map_or(RetiredLaunch::Unresolved, |e| e.retired_launch)),
                 )
@@ -1150,7 +1167,10 @@ impl Broker {
         if has_live || (unsettled.is_none() && unconfirmed.is_none()) {
             return Ok(());
         }
-        if let Some((pid, launch)) = unsettled {
+        if let Some((pid, epoch_for_launch, launch)) = unsettled {
+            let launch = self
+                .resolve_or_refresh_retired_launch(session_id, &epoch_for_launch, launch)
+                .await;
             if !self.confirm_mid_drain_worker_exited(session_id, pid).await {
                 return Err("crashed worker drain is still settling; retry".into());
             }
@@ -1163,12 +1183,16 @@ impl Broker {
                 );
             }
         }
-        if let Some(entry) = &unconfirmed
-            && !self
-                .confirm_retired_teardown_complete(session_id, entry.peer_pid, entry.retired_launch)
+        if let Some(entry) = &unconfirmed {
+            let launch = self
+                .resolve_or_refresh_retired_launch(session_id, &entry.epoch, entry.retired_launch)
+                .await;
+            if !self
+                .confirm_retired_teardown_complete(session_id, entry.peer_pid, launch)
                 .await
-        {
-            return Err("previous crashed worker teardown is still unconfirmed; retry".into());
+            {
+                return Err("previous crashed worker teardown is still unconfirmed; retry".into());
+            }
         }
         let (orphaned, emit_epoch, queued_rejections) = {
             let workers = self.workers.lock();
@@ -1223,175 +1247,6 @@ impl Broker {
             self.command_rejected(&sid, cid, reason.to_owned());
         }
         self.crashed_drains.settled.notify_waiters();
-    }
-
-    /// Publish an ownerless snapshot after receiptless exit + sandbox teardown
-    /// are confirmed so the Controller drops the dead worker epoch instead of
-    /// treating it as a live connected worker (R4-M3).
-    pub(super) fn publish_ownerless_crashed_snapshot(&self, session_id: &str) {
-        let snapshot = {
-            let sessions = self.sessions.lock();
-            let Some(session) = sessions.get(session_id).cloned() else {
-                return;
-            };
-            let workers = self.workers.lock();
-            if workers.contains_key(session_id) {
-                return;
-            }
-            let state = self
-                .session_states
-                .lock()
-                .get(session_id)
-                .copied()
-                .unwrap_or(WorkerState::Crashed);
-            let exit_detail = (state == WorkerState::Crashed)
-                .then(|| self.startup_failures.lock().get(session_id).cloned())
-                .flatten();
-            let executable = self
-                .generation_commands
-                .lock()
-                .get(&session.generation)
-                .map(|path| path.display().to_string());
-            let pending_prompt_count =
-                self.pending_commands
-                    .lock()
-                    .get(session_id)
-                    .map_or(0, |commands| {
-                        u64::try_from(
-                            commands
-                                .iter()
-                                .filter(|cmd| matches!(cmd, WorkerCommand::Prompt { .. }))
-                                .count(),
-                        )
-                        .unwrap_or(u64::MAX)
-                    });
-            WorkerSnapshot {
-                session_id: session_id.to_owned(),
-                worker_epoch: format!("broker-{session_id}"),
-                generation: session.generation.clone(),
-                executable,
-                launch: Some(session.clone()),
-                state,
-                agent_session_id: session.agent_session_id,
-                native_thread_materialized: None,
-                current_turn_id: None,
-                supports_current_turn: false,
-                delivery_controls: crate::runtime_wire::DeliveryControls::default(),
-                wrap_up_steering: false,
-                supports_subagent_cancel: false,
-                last_runtime_seq: 0,
-                pending_permissions: Vec::new(),
-                config_options: None,
-                context_used: None,
-                context_size: None,
-                pending_prompt_count,
-                drain_requested: false,
-                exit_detail,
-                background_tasks: None,
-                native_cycle_id: None,
-                native_cycle_active: false,
-                incarnation: self.reported_lineage(session_id),
-                account_unit: None,
-                uncertain_effect: self.retained_receiptless_uncertain(session_id),
-            }
-        };
-        self.send_controller(Frame::Snapshot {
-            worker: Box::new(snapshot),
-        });
-    }
-
-    pub(super) fn send_crashed_worker_drained(&self, session_id: &str, worker_epoch: &str) {
-        {
-            let mut state = self.crashed_drains.inner.lock();
-            let now = Instant::now();
-            state
-                .recently_drained
-                .retain(|_, (_, at)| now.saturating_duration_since(*at) < RECENTLY_DRAINED_TTL);
-            if state.recently_drained.len() >= MAX_RECENTLY_DRAINED
-                && let Some(oldest) = state
-                    .recently_drained
-                    .iter()
-                    .min_by_key(|(_, (_, at))| *at)
-                    .map(|(k, _)| k.clone())
-            {
-                state.recently_drained.remove(&oldest);
-            }
-            state
-                .recently_drained
-                .insert(session_id.to_owned(), (worker_epoch.to_owned(), now));
-        }
-        let controller_outcome = {
-            let guard = self.controller.lock();
-            guard.as_ref().map(|controller| {
-                let capable = controller.protocol >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
-                    && controller
-                        .outer_machine_protocol
-                        .is_some_and(|proto| proto >= CRASHED_WORKER_DRAIN_PROTOCOL_VERSION);
-                (capable, controller.tx.clone())
-            })
-        };
-        match controller_outcome {
-            Some((true, tx)) => {
-                let _ = tx.send(Frame::CrashedWorkerDrained {
-                    session_id: session_id.to_owned(),
-                    worker_epoch: worker_epoch.to_owned(),
-                });
-            }
-            Some((false, _)) => {
-                // Downgraded Controller cannot read CrashedWorkerDrained: publish
-                // compatible ownerless snapshot so it drops the exited worker (R5-M4).
-                self.publish_ownerless_crashed_snapshot(session_id);
-            }
-            None => {}
-        }
-    }
-
-    /// Close the Controller handover gap: if a worker appeared in `welcome`
-    /// and completed crashed-drain retirement before the new Controller lease
-    /// was installed, replay `CrashedWorkerDrained` to the new lease.
-    pub(super) fn replay_recently_drained_after_welcome(
-        &self,
-        welcome: &[WorkerSnapshot],
-        lease: u64,
-    ) {
-        let replays: Vec<(String, String)> = {
-            let workers = self.workers.lock();
-            let state = self.crashed_drains.inner.lock();
-            welcome
-                .iter()
-                .filter(|snap| snap.has_connected_owner())
-                .filter(|snap| !workers.contains_key(&snap.session_id))
-                .filter_map(|snap| {
-                    state
-                        .recently_drained
-                        .get(&snap.session_id)
-                        .filter(|(epoch, _)| epoch == &snap.worker_epoch)
-                        .map(|(epoch, _)| (snap.session_id.clone(), epoch.clone()))
-                })
-                .collect()
-        };
-        if replays.is_empty() {
-            return;
-        }
-        let tx = {
-            let guard = self.controller.lock();
-            guard.as_ref().and_then(|controller| {
-                let capable = controller.lease == lease
-                    && controller.protocol >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
-                    && controller
-                        .outer_machine_protocol
-                        .is_some_and(|proto| proto >= CRASHED_WORKER_DRAIN_PROTOCOL_VERSION);
-                capable.then(|| controller.tx.clone())
-            })
-        };
-        if let Some(tx) = tx {
-            for (session_id, worker_epoch) in replays {
-                let _ = tx.send(Frame::CrashedWorkerDrained {
-                    session_id,
-                    worker_epoch,
-                });
-            }
-        }
     }
 }
 
@@ -2004,6 +1859,26 @@ mod tests {
                 .lock()
                 .receiptless_uncertain_effects
                 .contains_key("s-r7-h5")
+        );
+        // R8-M4: A subsequent same-epoch Snapshot with no uncertain_effect must
+        // preserve the broker's retained sequence via merge.
+        let mut weaker_snap = broker
+            .workers
+            .lock()
+            .get("s-r7-h5")
+            .unwrap()
+            .snapshot
+            .clone();
+        weaker_snap.uncertain_effect = None;
+        assert!(broker.update_snapshot(weaker_snap, 1));
+        assert_eq!(
+            broker
+                .workers
+                .lock()
+                .get("s-r7-h5")
+                .and_then(|w| w.snapshot.uncertain_effect.as_ref())
+                .map(|e| e.sequence),
+            Some(9)
         );
 
         // Actual epoch replacement clears the old epoch's receiptless entry.

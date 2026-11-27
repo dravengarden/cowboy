@@ -561,9 +561,8 @@ impl Broker {
                 if snapshot.launch.is_none() {
                     snapshot.launch = sessions.get(&snapshot.session_id).cloned();
                 }
-                if self.has_crashed_drain_for_epoch(&snapshot.session_id, &worker.epoch) {
-                    snapshot.drain_requested = true;
-                }
+                snapshot.crashed_drain_active =
+                    self.has_crashed_drain_for_epoch(&snapshot.session_id, &worker.epoch);
                 snapshot
             })
             .collect();
@@ -615,6 +614,7 @@ impl Broker {
                 incarnation: None,
                 account_unit: None,
                 uncertain_effect: self.retained_receiptless_uncertain(&session_id),
+                crashed_drain_active: false,
             });
         }
         for snapshot in &mut snapshots {
@@ -1072,6 +1072,13 @@ impl Broker {
             && worker.epoch == snapshot.worker_epoch
         {
             snapshot.drain_requested |= worker.snapshot.drain_requested;
+            snapshot.crashed_drain_active = false;
+            if let Some(retained) = worker.snapshot.uncertain_effect.clone() {
+                crate::runtime_wire::merge_uncertain_effect(
+                    &mut snapshot.uncertain_effect,
+                    retained,
+                );
+            }
             worker.raw_wrap_up_steering = snapshot.wrap_up_steering;
             worker.snapshot = snapshot;
             worker.last_seen = Instant::now();
@@ -1235,6 +1242,9 @@ impl Broker {
                 .get_or_insert_with(|| generation.clone());
         }
         let mut workers = self.workers.lock();
+        if resumed_drain.is_some() && self.launching.lock().contains(&session_id) {
+            anyhow::bail!("session {session_id} launch is already in progress");
+        }
         if let Some(existing) = workers.get(&session_id)
             && existing.epoch != epoch
         {
@@ -1960,34 +1970,21 @@ impl Broker {
         // replacement worker should be launched or report its own snapshot.
         session.adopt_only = false;
         mcp_launch::declare(&mut self.sessions.lock(), &mut session, adopt_only);
-        if !adopt_only
-            && let Err(reason) = self
-                .gate_ensure_against_crashed_drain(&session.session_id)
-                .await
-        {
-            self.command_rejected(
-                &session.session_id,
-                format!("ensure:{}", session.session_id),
-                reason,
-            );
-            return;
-        }
         let desired_generation = self.desired_generation.lock().clone();
-        let existing = {
-            let mut workers = self.workers.lock();
-            match workers.get(&session.session_id) {
-                Some(worker)
-                    if !adopt_only
-                        && worker_launch::should_recycle_for_explicit_revive(
-                            &worker.snapshot,
-                            &desired_generation,
-                        ) =>
-                {
-                    workers.remove(&session.session_id).map(Ok)
-                }
-                Some(worker) => Some(Err(worker.snapshot.clone())),
-                None => None,
+        let (existing, launch_reserved) = match self
+            .claim_ensure_slot(&session.session_id, adopt_only, &desired_generation)
+            .await
+        {
+            Ok(pair) => pair,
+            Err(Some(reason)) => {
+                self.command_rejected(
+                    &session.session_id,
+                    format!("ensure:{}", session.session_id),
+                    reason,
+                );
+                return;
             }
+            Err(None) => return,
         };
         match existing {
             Some(Err(worker)) => {
@@ -2051,7 +2048,7 @@ impl Broker {
         self.session_states
             .lock()
             .insert(session.session_id.clone(), WorkerState::Starting);
-        if !self.launching.lock().insert(session.session_id.clone()) {
+        if !launch_reserved && !self.launching.lock().insert(session.session_id.clone()) {
             return;
         }
         let broker = Arc::clone(self);
@@ -4887,11 +4884,13 @@ async fn handle_worker(
                 } else {
                     Vec::new()
                 };
-                let worker = broker
+                let mut worker = broker
                     .workers
                     .lock()
                     .get(session_id)
                     .map_or_else(|| *worker, |peer| peer.snapshot.clone());
+                worker.crashed_drain_active =
+                    broker.has_crashed_drain_for_epoch(session_id, &worker.worker_epoch);
                 broker.send_controller(Frame::Snapshot {
                     worker: Box::new(worker),
                 });
@@ -6116,6 +6115,7 @@ mod tests {
                 incarnation: None,
                 account_unit: None,
                 uncertain_effect: None,
+                crashed_drain_active: false,
             },
             1,
         );
@@ -10697,6 +10697,7 @@ mod tests {
                     incarnation: None,
                     account_unit: None,
                     uncertain_effect: None,
+                    crashed_drain_active: false,
                 }),
             },
         )

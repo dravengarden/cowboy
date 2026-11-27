@@ -300,6 +300,79 @@ pub(super) fn clear_draining_crashed_epoch_if_matches(
         .remove(&(session_id.to_owned(), worker_epoch.to_owned()));
 }
 
+/// Handle broker confirmation/refusal of `CoreCommand::DrainCrashedWorker`
+/// so replay bypass is granted ONLY after broker confirmation and revoked on
+/// refusal (R8-M6).
+pub(super) fn handle_crashed_drain_command_ack(
+    shared: &Shared,
+    session_id: &str,
+    command: Option<&super::CoreCommand>,
+    accepted: bool,
+) {
+    let Some(super::CoreCommand::DrainCrashedWorker { worker_epoch, .. }) = command else {
+        return;
+    };
+    if !accepted {
+        clear_draining_crashed_epoch_if_matches(shared, session_id, worker_epoch);
+        return;
+    }
+    let fence = shared.projection_fence.lock();
+    if *fence {
+        return;
+    }
+    if let Some(mut worker) = shared
+        .workers
+        .lock()
+        .get(session_id)
+        .filter(|w| w.worker_epoch == *worker_epoch)
+        .cloned()
+    {
+        worker.crashed_drain_active = true;
+        let _ = authorize_draining_crashed_epoch_locked(shared, &worker);
+    }
+}
+
+pub(super) fn is_event_epoch_blocked(
+    shared: &Shared,
+    session_id: &str,
+    worker_epoch: &str,
+) -> bool {
+    shared
+        .blocked_draining_epochs
+        .lock()
+        .contains(&(session_id.to_owned(), worker_epoch.to_owned()))
+}
+
+pub(super) fn settle_draining_event_admission(
+    shared: &Shared,
+    session_id: &str,
+    worker_epoch: &str,
+    outcome: super::native_admission::EventAdmission,
+) -> anyhow::Result<bool> {
+    use super::native_admission::EventAdmission;
+    if outcome == EventAdmission::Admitted
+        || !is_draining_crashed_epoch(shared, session_id, worker_epoch)
+    {
+        return Ok(true);
+    }
+    shared
+        .blocked_draining_epochs
+        .lock()
+        .insert((session_id.to_owned(), worker_epoch.to_owned()));
+    match outcome {
+        EventAdmission::TransientlyDeferred => {
+            anyhow::bail!(
+                "draining crashed worker event admission transiently deferred; restarting ordered replay"
+            )
+        }
+        EventAdmission::PermanentlyDenied => {
+            clear_draining_crashed_epoch_if_matches(shared, session_id, worker_epoch);
+            Ok(false)
+        }
+        EventAdmission::Admitted => Ok(true),
+    }
+}
+
 pub(super) fn seed_crashed_sightings(
     workers: &[WorkerSnapshot],
 ) -> std::collections::HashMap<String, SightingActivity> {
@@ -323,7 +396,7 @@ pub(super) fn seed_draining_crashed_epochs(
         .filter(|worker| {
             worker.has_connected_owner()
                 && worker.state == WorkerState::Crashed
-                && worker.drain_requested
+                && worker.crashed_drain_active
         })
         .map(|worker| (worker.session_id.clone(), worker.worker_epoch.clone()))
         .collect()
@@ -337,7 +410,7 @@ pub(super) fn seed_draining_replay_snapshots(
         .filter(|worker| {
             worker.has_connected_owner()
                 && worker.state == WorkerState::Crashed
-                && worker.drain_requested
+                && worker.crashed_drain_active
         })
         .map(|worker| {
             (
@@ -350,11 +423,12 @@ pub(super) fn seed_draining_replay_snapshots(
 
 /// Validate Clear fence (including native ID) and launch binding under Hub's
 /// projection guard before authorizing a crashed worker epoch for draining
-/// replay bypass (R7-H2, R7-H3).
+/// replay bypass (R7-H2, R7-H3, R8-M6: bound strictly to broker-confirmed
+/// `crashed_drain_active`, never rollout `drain_requested`).
 fn authorize_draining_crashed_epoch_locked(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     if !worker.has_connected_owner()
         || worker.state != WorkerState::Crashed
-        || !worker.drain_requested
+        || !worker.crashed_drain_active
         || is_retired_crashed_epoch(shared, &worker.session_id, &worker.worker_epoch)
     {
         return false;
@@ -439,8 +513,14 @@ pub(super) fn observe_crashed_sighting(shared: &Shared, worker: &WorkerSnapshot)
                     .retain(|(sid, _), _| sid != &worker.session_id);
             }
         }
-        if worker.state == WorkerState::Crashed && worker.drain_requested {
+        if worker.state == WorkerState::Crashed && worker.crashed_drain_active {
             let _ = authorize_draining_crashed_epoch_locked(shared, worker);
+        } else {
+            clear_draining_crashed_epoch_if_matches(
+                shared,
+                &worker.session_id,
+                &worker.worker_epoch,
+            );
         }
         shared.crashed_worker_sightings.lock().insert(
             worker.session_id.clone(),
@@ -475,6 +555,94 @@ pub(super) fn is_draining_crashed_epoch(
         .lock()
         .get(session_id)
         .is_some_and(|epoch| epoch == worker_epoch)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn project_admitted_worker_event(
+    shared: &Shared,
+    key: &(String, String),
+    session_id: &str,
+    worker_epoch: &str,
+    runtime_seq: u64,
+    event: &RuntimeEvent,
+    diagnostics: &[crate::runtime_trace::SpanRecord],
+    undelivered_ack: &mut Option<super::notice_recovery::PendingUndeliveredNotice>,
+) {
+    let resetting = shared.resetting.lock().contains(session_id);
+    let stale_idle = matches!(
+        event,
+        RuntimeEvent::Status {
+            state: WorkerState::Running | WorkerState::Draining,
+            ..
+        }
+    ) && shared
+        .workers
+        .lock()
+        .get(session_id)
+        .is_some_and(|worker| worker.current_turn_id.is_some());
+    if stale_idle {
+        tracing::warn!(
+            session = %session_id,
+            runtime_seq,
+            "ignoring stale idle status while a newer turn is active"
+        );
+        return;
+    }
+    if !should_project_worker_event(shared, resetting, session_id, worker_epoch, event) {
+        return;
+    }
+    if let Some((machine, telemetry)) = shared.telemetry.lock().as_ref() {
+        telemetry.record_runtime_spans(machine, session_id, diagnostics);
+    }
+    super::resolve_steering_update(shared, session_id, event);
+    super::update_snapshot_from_event(shared, session_id, worker_epoch, runtime_seq, event);
+    if let RuntimeEvent::Status {
+        state: WorkerState::Crashed | WorkerState::Exited,
+        detail,
+    } = event
+    {
+        super::fail_config_startup(
+            shared,
+            session_id,
+            detail
+                .as_deref()
+                .unwrap_or("worker exited before configuration completed"),
+        );
+    }
+    let draining_replay_only = shared
+        .workers
+        .lock()
+        .get(session_id)
+        .is_some_and(|w| w.worker_epoch != worker_epoch)
+        && shared
+            .draining_replay_snapshots
+            .lock()
+            .contains_key(&(session_id.to_owned(), worker_epoch.to_owned()));
+    let worker = if draining_replay_only {
+        None
+    } else {
+        shared.workers.lock().get(session_id).cloned()
+    };
+    let auto_permission = (!draining_replay_only)
+        .then(|| codex_full_access_permission(shared, session_id, event))
+        .flatten();
+    let idle_guard = worker
+        .as_ref()
+        .and_then(|worker| super::idle_snapshot_guard(shared, worker));
+    if matches!(event, RuntimeEvent::ConfigOptions { .. })
+        && let Some(worker) = worker.as_ref()
+    {
+        super::sync_config_for_worker(shared, worker);
+    }
+    *undelivered_ack = super::notice_recovery::project_worker_outcome(
+        shared,
+        key,
+        session_id,
+        runtime_seq,
+        event.clone(),
+        idle_guard,
+        auto_permission,
+    );
 }
 
 pub(super) fn should_project_worker_event(
@@ -578,6 +746,7 @@ pub(super) fn retain_crashed_sightings_after_welcome(
     shared: &Shared,
     ids: &std::collections::HashSet<String>,
 ) {
+    shared.blocked_draining_epochs.lock().clear();
     shared
         .crashed_worker_sightings
         .lock()
@@ -615,6 +784,10 @@ pub(super) fn retire_crashed_worker_drained(shared: &Shared, session_id: &str, w
     }
     record_retired_crashed_epoch(shared, session_id, worker_epoch);
     clear_draining_crashed_epoch_if_matches(shared, session_id, worker_epoch);
+    shared
+        .blocked_draining_epochs
+        .lock()
+        .remove(&(session_id.to_owned(), worker_epoch.to_owned()));
     {
         let mut sightings = shared.crashed_worker_sightings.lock();
         if sightings
@@ -661,6 +834,10 @@ pub(super) fn discard_pending_crashed_drain(
             .draining_replay_snapshots
             .lock()
             .retain(|(sid, _), _| sid != session_id);
+        shared
+            .blocked_draining_epochs
+            .lock()
+            .retain(|(sid, _)| sid != session_id);
         shared
             .retired_crashed_epochs
             .lock()
@@ -741,32 +918,6 @@ impl super::RemoteRuntime {
         }
         let acknowledged_uncertain_sequence =
             super::config_sync::acknowledged_uncertain_sequence_for(&self.shared.hub, session_id);
-        if let Some(worker) = self
-            .shared
-            .workers
-            .lock()
-            .get(session_id)
-            .filter(|w| w.worker_epoch == worker_epoch)
-            .cloned()
-        {
-            let _proj = self.shared.hub.runtime_projection_guard();
-            if self.shared.hub.classify_runtime_epoch(
-                session_id,
-                worker_epoch,
-                worker.agent_session_id.as_deref(),
-            ) == crate::core::RuntimeEpoch::Current
-                && self.shared.hub.matches_runtime_snapshot_binding(&worker)
-            {
-                self.shared
-                    .draining_crashed_epochs
-                    .lock()
-                    .insert(session_id.to_owned(), worker_epoch.to_owned());
-                self.shared
-                    .draining_replay_snapshots
-                    .lock()
-                    .insert((session_id.to_owned(), worker_epoch.to_owned()), worker);
-            }
-        }
         let command_id = self.next_id("drain-crashed");
         self.queue(
             command_id.clone(),
@@ -1087,7 +1238,7 @@ mod crashed_drain_tests {
 
         // Verify welcome draining crashed epoch survives active resetting during bootstrap reload (R5-H5).
         let mut reload_snap = crashed_snapshot("s-reload", "66-1");
-        reload_snap.drain_requested = true;
+        reload_snap.crashed_drain_active = true;
         rt.shared.resetting.lock().insert("s-reload".into());
         record_welcome_draining_crashed_epoch(&rt.shared, &reload_snap);
         assert!(is_draining_crashed_epoch(&rt.shared, "s-reload", "66-1"));
@@ -1199,6 +1350,14 @@ mod crashed_drain_tests {
         rt.connect_for_test();
 
         assert!(rt.drain_crashed_worker("s-r3", "101-1"));
+        assert!(!is_draining_crashed_epoch(&rt.shared, "s-r3", "101-1"));
+        let ack_cmd = super::super::CoreCommand::DrainCrashedWorker {
+            session_id: "s-r3".into(),
+            command_id: "dc-r3".into(),
+            worker_epoch: "101-1".into(),
+            acknowledged_uncertain_sequence: 0,
+        };
+        handle_crashed_drain_command_ack(&rt.shared, "s-r3", Some(&ack_cmd), true);
         assert!(is_draining_crashed_epoch(&rt.shared, "s-r3", "101-1"));
 
         // Replayed Running/TurnStarted events during reload must NOT clear draining_crashed_epochs (R3-H2).
@@ -1263,8 +1422,13 @@ mod crashed_drain_tests {
         placeholder.state = WorkerState::Crashed;
         rt.shared.workers.lock().insert("s-r7".into(), placeholder);
 
+        let mut rollout_snap = crashed_snapshot("s-r7", "700-1");
+        rollout_snap.drain_requested = true;
+        record_welcome_draining_crashed_epoch(&rt.shared, &rollout_snap);
+        assert!(!is_draining_crashed_epoch(&rt.shared, "s-r7", "700-1"));
+
         let mut draining_snap = crashed_snapshot("s-r7", "700-1");
-        draining_snap.drain_requested = true;
+        draining_snap.crashed_drain_active = true;
         record_welcome_draining_crashed_epoch(&rt.shared, &draining_snap);
         assert!(is_draining_crashed_epoch(&rt.shared, "s-r7", "700-1"));
         assert!(
@@ -1278,7 +1442,8 @@ mod crashed_drain_tests {
         let admitted = super::super::native_admission::event(&rt.shared, "s-r7", "700-1", || {
             projected = true;
         })
-        .await;
+        .await
+        .is_admitted();
         assert!(admitted);
         assert!(projected);
     }

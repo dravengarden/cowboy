@@ -383,6 +383,7 @@ mod tests {
             incarnation: None,
             account_unit: None,
             uncertain_effect: None,
+            crashed_drain_active: false,
         }
     }
 

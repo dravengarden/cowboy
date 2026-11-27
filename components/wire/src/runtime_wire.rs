@@ -166,6 +166,11 @@ pub struct WorkerSnapshot {
     /// ledger records it durably). Absent when false and from older workers.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub uncertain_effect: Option<UncertainEffect>,
+    /// Broker-confirmed cooperative crashed-worker drain is active for this
+    /// worker epoch. Distinct from `drain_requested` (rollout/generation drain)
+    /// so rollout intent can never authorize cooperative replay bypass (R8-H3, R8-M6).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub crashed_drain_active: bool,
 }
 
 /// The latest target request of a session whose reply was lost after it may
@@ -1207,7 +1212,8 @@ pub enum Frame {
         worker_epoch: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         command_id: Option<String>,
-        uncertain_effect: UncertainEffect,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        uncertain_effect: Option<UncertainEffect>,
     },
     /// Broker-only maintenance retirement notice sent on Machine 55+ / Runtime
     /// 10+ after a crashed worker confirmed completion, disconnected, and (for
@@ -1484,6 +1490,7 @@ mod tests {
             incarnation: None,
             account_unit: None,
             uncertain_effect: None,
+            crashed_drain_active: false,
         }
     }
 

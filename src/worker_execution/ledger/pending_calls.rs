@@ -205,6 +205,13 @@ impl Drop for UncertainObserverGuard<'_> {
 }
 
 impl Ledger {
+    /// Watch channel notified whenever ledger state (including in-flight
+    /// uncertainty report guards) changes, so the worker IPC loop wakes
+    /// promptly when the last report drops (R8-M7).
+    pub fn subscribe_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changed.subscribe()
+    }
+
     pub(super) fn uncertain_observer_guard(&self) -> UncertainObserverGuard<'_> {
         UncertainObserverGuard(self)
     }

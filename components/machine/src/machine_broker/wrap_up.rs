@@ -1149,7 +1149,12 @@ impl super::Broker {
                             ),
                         ))
                     }
-                    Some(worker) if worker.welcomed && !worker.snapshot.drain_requested => {
+                    Some(worker)
+                        if worker.welcomed
+                            && (!worker.snapshot.drain_requested
+                                || worker.snapshot.state
+                                    == crate::runtime_wire::WorkerState::Crashed) =>
+                    {
                         if let Some((cid, reason)) = fresh_prompt_refusal(
                             &dispatched,
                             session_id,
@@ -1552,6 +1557,7 @@ mod tests {
             incarnation: None,
             account_unit: None,
             uncertain_effect: None,
+            crashed_drain_active: false,
         }
     }
 

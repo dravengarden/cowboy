@@ -154,7 +154,7 @@ pub struct Shared {
     /// Exact crashed epochs currently draining (preserved across replayed events and handover, R3-H2/R4-H6).
     draining_crashed_epochs: Mutex<HashMap<String, String>>,
     draining_replay_snapshots: Mutex<HashMap<(String, String), WorkerSnapshot>>,
-    /// Bounded `(session_id, worker_epoch)` tombstones rejecting late handover snapshots (R4-M5).
+    blocked_draining_epochs: Mutex<HashSet<(String, String)>>,
     retired_crashed_epochs: Mutex<HashMap<(String, String), std::time::Instant>>,
     /// Worker epochs whose initial config snapshot has already triggered
     /// preference reconciliation. This prevents an agent that rejects a value
@@ -314,6 +314,7 @@ impl RemoteRuntime {
                 crashed_worker_sightings: Mutex::new(HashMap::new()),
                 draining_crashed_epochs: Mutex::new(HashMap::new()),
                 draining_replay_snapshots: Mutex::new(HashMap::new()),
+                blocked_draining_epochs: Mutex::new(HashSet::new()),
                 retired_crashed_epochs: Mutex::new(HashMap::new()),
                 config_sync_epochs: Mutex::new(HashMap::new()),
                 config_startups: Mutex::new(HashSet::new()),
@@ -400,6 +401,7 @@ impl RemoteRuntime {
                 draining_replay_snapshots: Mutex::new(snapshot::seed_draining_replay_snapshots(
                     &bootstrap.workers,
                 )),
+                blocked_draining_epochs: Mutex::new(HashSet::new()),
                 retired_crashed_epochs: Mutex::new(HashMap::new()),
                 config_sync_epochs: Mutex::new(HashMap::new()),
                 config_startups: Mutex::new(
@@ -979,7 +981,8 @@ impl RemoteRuntime {
         let admitted = native_admission::event(&self.shared, &worker.session_id, epoch, || {
             projected.store(true, Ordering::Release);
         })
-        .await;
+        .await
+        .is_admitted();
         assert_eq!(admitted, projected.load(Ordering::Acquire));
         admitted
     }
@@ -2196,10 +2199,13 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                     "runtime event gap for {session_id}/{worker_epoch}: have {previous}, got {runtime_seq}"
                 );
             }
+            if snapshot::is_event_epoch_blocked(shared, &session_id, &worker_epoch) {
+                return Ok(());
+            }
             if previous.is_none_or(|previous| runtime_seq > previous) {
                 let mut undelivered_ack = None;
                 snapshot::observe_crashed_event(shared, &session_id, &worker_epoch, &event);
-                let admitted = native_admission::event(shared, &session_id, &worker_epoch, || {
+                let admission = native_admission::event(shared, &session_id, &worker_epoch, || {
                     undelivered_ack =
                         notice_recovery::suppressed_undelivered(&key, runtime_seq, &event, true);
                     // Account signals and uncertain effects of an admitted
@@ -2211,75 +2217,24 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                     turn_end::ended(shared, &session_id, &event);
                     snapshot::record_uncertain_effect(shared, &session_id, &worker_epoch, &event);
                     let _projection = shared.hub.runtime_projection_guard();
-                    let resetting = shared.resetting.lock().contains(&session_id);
-                    let stale_idle = matches!(
-                        event,
-                        RuntimeEvent::Status {
-                            state: WorkerState::Running | WorkerState::Draining,
-                            ..
-                        }
-                    ) && shared
-                        .workers
-                        .lock()
-                        .get(&session_id)
-                        .is_some_and(|worker| worker.current_turn_id.is_some());
-                    if stale_idle {
-                        tracing::warn!(
-                            session = %session_id,
-                            runtime_seq,
-                            "ignoring stale idle status while a newer turn is active"
-                        );
-                    } else if snapshot::should_project_worker_event(
+                    snapshot::project_admitted_worker_event(
                         shared,
-                        resetting,
+                        &key,
                         &session_id,
                         &worker_epoch,
+                        runtime_seq,
                         &event,
-                    ) {
-                        if let Some((machine, telemetry)) = shared.telemetry.lock().as_ref() {
-                            telemetry.record_runtime_spans(machine, &session_id, &diagnostics);
-                        }
-                        let auto_permission =
-                            snapshot::codex_full_access_permission(shared, &session_id, &event);
-                        let is_config_options =
-                            matches!(&event, RuntimeEvent::ConfigOptions { .. });
-                        resolve_steering_update(shared, &session_id, &event);
-                        update_snapshot_from_event(shared, &session_id, runtime_seq, &event);
-                        if let RuntimeEvent::Status {
-                            state: WorkerState::Crashed | WorkerState::Exited,
-                            detail,
-                        } = &event
-                        {
-                            fail_config_startup(
-                                shared,
-                                &session_id,
-                                detail
-                                    .as_deref()
-                                    .unwrap_or("worker exited before configuration completed"),
-                            );
-                        }
-                        let worker = shared.workers.lock().get(&session_id).cloned();
-                        let idle_guard = worker
-                            .as_ref()
-                            .and_then(|worker| idle_snapshot_guard(shared, worker));
-                        if is_config_options && let Some(worker) = worker.as_ref() {
-                            sync_config_for_worker(shared, worker);
-                        }
-                        undelivered_ack = notice_recovery::project_worker_outcome(
-                            shared,
-                            &key,
-                            &session_id,
-                            runtime_seq,
-                            event.clone(),
-                            idle_guard,
-                            auto_permission,
-                        );
-                    }
+                        &diagnostics,
+                        &mut undelivered_ack,
+                    );
                 })
                 .await;
-                if !admitted
-                    && snapshot::is_draining_crashed_epoch(shared, &session_id, &worker_epoch)
-                {
+                if !snapshot::settle_draining_event_admission(
+                    shared,
+                    &session_id,
+                    &worker_epoch,
+                    admission,
+                )? {
                     return Ok(());
                 }
                 notice_recovery::settle_event_undelivered(
@@ -2287,7 +2242,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                     &key,
                     runtime_seq,
                     &event,
-                    admitted,
+                    admission.is_admitted(),
                     undelivered_ack,
                 )
                 .await?;
@@ -2322,6 +2277,12 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
             ) else {
                 return Ok(());
             };
+            snapshot::handle_crashed_drain_command_ack(
+                shared,
+                &session_id,
+                command.as_ref(),
+                accepted,
+            );
             if !accepted && matches!(&command, Some(CoreCommand::CancelSubagent { .. })) {
                 shared.hub.broadcast_error(
                     Some(session_id.clone()),
@@ -2409,6 +2370,9 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
             if foreign_session(shared, &worker.session_id) {
                 reject_foreign_frame(shared, &worker.session_id, "worker snapshot");
                 return Ok(());
+            }
+            if worker.crashed_drain_active && shared.resetting.lock().contains(&worker.session_id) {
+                snapshot::record_welcome_draining_crashed_epoch(shared, &worker);
             }
             snapshot::observe_crashed_sighting(shared, &worker);
             let mut projected = false;
@@ -2630,9 +2594,22 @@ fn reconcile_idle_guard(shared: &Shared, session_id: &str, guard_epoch: Option<u
 fn update_snapshot_from_event(
     shared: &Shared,
     session_id: &str,
+    worker_epoch: &str,
     runtime_seq: u64,
     event: &RuntimeEvent,
 ) {
+    let draining_replay_only = shared
+        .workers
+        .lock()
+        .get(session_id)
+        .is_some_and(|w| w.worker_epoch != worker_epoch)
+        && shared
+            .draining_replay_snapshots
+            .lock()
+            .contains_key(&(session_id.to_owned(), worker_epoch.to_owned()));
+    if draining_replay_only {
+        return;
+    }
     let mut workers = shared.workers.lock();
     let Some(worker) = workers.get_mut(session_id) else {
         return;
@@ -3366,7 +3343,7 @@ mod tests {
             cmid: None,
         };
         let before = hub.snapshot("cycle").unwrap().0.len();
-        update_snapshot_from_event(&runtime.shared, "cycle", 5, &named);
+        update_snapshot_from_event(&runtime.shared, "cycle", &worker.worker_epoch, 5, &named);
         apply_event(&hub, "cycle", named);
         assert_eq!(
             hub.snapshot("cycle").unwrap().0.len(),
@@ -3394,6 +3371,7 @@ mod tests {
         update_snapshot_from_event(
             &runtime.shared,
             "cycle",
+            &worker.worker_epoch,
             6,
             &RuntimeEvent::TurnStarted {
                 turn_id: "turn-1".into(),
@@ -3404,6 +3382,7 @@ mod tests {
         update_snapshot_from_event(
             &runtime.shared,
             "cycle",
+            &worker.worker_epoch,
             7,
             &RuntimeEvent::TurnEnded {
                 turn_id: "turn-1".into(),
@@ -3416,6 +3395,7 @@ mod tests {
             update_snapshot_from_event(
                 &runtime.shared,
                 "cycle",
+                &worker.worker_epoch,
                 8,
                 &RuntimeEvent::Update {
                     update: crate::runtime_wire::native_cycle_update(cycle),
@@ -4091,6 +4071,7 @@ mod tests {
             incarnation: None,
             account_unit: None,
             uncertain_effect: None,
+            crashed_drain_active: false,
         }
     }
 

@@ -17,6 +17,7 @@ use crate::runtime_wire::{
 use super::{Shared, command_ack};
 
 const MAX_REMEMBERED_DECISIONS: usize = 8;
+const DRAIN_OUTBOX_FLUSH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
 
 #[derive(Default)]
 pub(super) struct State {
@@ -37,6 +38,9 @@ pub(super) struct State {
     /// Persistent ACP settlement result across broker reconnects and
     /// receipt-write failures: `Some(true)` = clean exit, `Some(false)` = panic.
     agent_settled: Mutex<Option<bool>>,
+    /// When the worker began waiting on final outbox flush after ACP settled,
+    /// bounding cooperative drain fencing if ACKs are permanently withheld (R8-M2).
+    drain_wait_started: Mutex<Option<std::time::Instant>>,
     /// Bounded recent `(command_id, accepted, reason)` decisions so a replayed
     /// `DrainCrashed` after a lost acceptance/refusal ACK returns the exact
     /// original decision.
@@ -44,8 +48,8 @@ pub(super) struct State {
     accepted_command_id: Mutex<Option<String>>,
     accepted_ack_seq: std::sync::atomic::AtomicU64,
     /// Pending explicit `CrashedDrainAborted` notice retained across reconnects
-    /// until flushed to the broker (R6-M1).
-    pending_abort: Mutex<Option<(Option<String>, crate::runtime_wire::UncertainEffect)>>,
+    /// until flushed to the broker (R7-M1, R8-M2).
+    pending_abort: Mutex<Option<(Option<String>, Option<crate::runtime_wire::UncertainEffect>)>>,
 }
 
 pub(super) struct EventPublisherGuard {
@@ -83,6 +87,7 @@ impl State {
         self.holding_uncertain_effect
             .store(false, Ordering::Release);
         self.pending_abort.lock().take();
+        self.drain_wait_started.lock().take();
     }
 
     /// Active accepted `DrainCrashed` command id carried on `Frame::Hello` so a
@@ -103,6 +108,11 @@ impl State {
         let mut slot = self.agent_settled.lock();
         if slot.is_none() {
             *slot = Some(clean);
+            if self.draining.load(Ordering::Acquire) {
+                self.drain_wait_started
+                    .lock()
+                    .get_or_insert_with(std::time::Instant::now);
+            }
         }
     }
 
@@ -166,6 +176,7 @@ pub(super) fn initial_snapshot(
         incarnation: None,
         account_unit: None,
         uncertain_effect: None,
+        crashed_drain_active: false,
     }
 }
 
@@ -256,6 +267,11 @@ pub(super) fn handle_drain_crashed(
                 .holding_uncertain_effect
                 .store(false, Ordering::Release);
             shared.crashed_drain.pending_abort.lock().take();
+            if shared.crashed_drain.agent_settled().is_some() {
+                *shared.crashed_drain.drain_wait_started.lock() = Some(std::time::Instant::now());
+            } else {
+                shared.crashed_drain.drain_wait_started.lock().take();
+            }
             shared.crashed_drain.draining.store(true, Ordering::Release);
             None
         }
@@ -343,11 +359,145 @@ pub(super) async fn send_post_handshake_state<W: tokio::io::AsyncWrite + Unpin>(
     Ok(())
 }
 
+pub(super) fn subscribe_ledger_changes(
+    shared: &Shared,
+) -> Option<tokio::sync::watch::Receiver<u64>> {
+    shared
+        .execution
+        .as_ref()
+        .and_then(|execution| execution.ledger())
+        .map(|ledger| ledger.subscribe_changes())
+}
+
+pub(super) async fn wait_ledger_change(rx: &mut Option<tokio::sync::watch::Receiver<u64>>) -> bool {
+    match rx.as_mut() {
+        Some(rx) => rx.changed().await.is_ok(),
+        None => std::future::pending::<bool>().await,
+    }
+}
+
+enum CommitDecision {
+    NotReady,
+    Aborted(
+        Option<String>,
+        Option<crate::runtime_wire::UncertainEffect>,
+        Box<WorkerSnapshot>,
+    ),
+    CompleteWithReceipt(Option<String>),
+    ExitWithoutReceipt,
+}
+
+fn decide_drain_commit(shared: &Shared, settled_cleanly: bool) -> CommitDecision {
+    let _commit = shared.crashed_drain.drain_commit_lock.lock();
+    let outbox_empty = shared.outbox.lock().is_empty();
+    if shared.crashed_drain.terminal_stop.load(Ordering::Acquire) {
+        return if shared
+            .crashed_drain
+            .pending_event_publishers
+            .load(Ordering::Acquire)
+            > 0
+            || !outbox_empty
+        {
+            CommitDecision::NotReady
+        } else {
+            CommitDecision::ExitWithoutReceipt
+        };
+    }
+    if !outbox_empty {
+        let timed_out = shared.crashed_drain.draining.load(Ordering::Acquire)
+            && shared
+                .crashed_drain
+                .drain_wait_started
+                .lock()
+                .get_or_insert_with(std::time::Instant::now)
+                .elapsed()
+                >= DRAIN_OUTBOX_FLUSH_TIMEOUT;
+        if timed_out {
+            let command_id = shared.crashed_drain.accepted_command_id.lock().clone();
+            shared
+                .crashed_drain
+                .holding_uncertain_effect
+                .store(true, Ordering::Release);
+            shared
+                .crashed_drain
+                .draining
+                .store(false, Ordering::Release);
+            shared.crashed_drain.drain_wait_started.lock().take();
+            let snapshot = shared.snapshot.lock().clone();
+            let effect = snapshot.uncertain_effect.clone();
+            *shared.crashed_drain.pending_abort.lock() = Some((command_id.clone(), effect.clone()));
+            return CommitDecision::Aborted(command_id, effect, Box::new(snapshot));
+        }
+        return CommitDecision::NotReady;
+    }
+    if shared
+        .crashed_drain
+        .pending_event_publishers
+        .load(Ordering::Acquire)
+        > 0
+    {
+        return CommitDecision::NotReady;
+    }
+    if !shared.crashed_drain.draining.load(Ordering::Acquire) {
+        return CommitDecision::ExitWithoutReceipt;
+    }
+    let ledger = shared.execution.as_ref().and_then(|client| client.ledger());
+    let ledger_effect = match ledger.as_ref() {
+        Some(ledger) => match ledger.close_uncertain_reports_and_read() {
+            Ok(effect) => effect,
+            Err(()) => return CommitDecision::NotReady,
+        },
+        None => None,
+    };
+    let ack_seq = shared
+        .crashed_drain
+        .accepted_ack_seq
+        .load(Ordering::Acquire);
+    let mut snapshot = shared.snapshot.lock();
+    if let Some((method, sequence)) = ledger_effect {
+        crate::runtime_wire::merge_uncertain_effect(
+            &mut snapshot.uncertain_effect,
+            crate::runtime_wire::UncertainEffect { method, sequence },
+        );
+    }
+    if let Some(effect) = snapshot.uncertain_effect.clone()
+        && effect.sequence.max(1) > ack_seq
+    {
+        if let Some(ledger) = ledger.as_ref() {
+            ledger.reopen_uncertain_reports();
+        }
+        let command_id = shared.crashed_drain.accepted_command_id.lock().clone();
+        shared
+            .crashed_drain
+            .holding_uncertain_effect
+            .store(true, Ordering::Release);
+        shared
+            .crashed_drain
+            .draining
+            .store(false, Ordering::Release);
+        shared.crashed_drain.drain_wait_started.lock().take();
+        *shared.crashed_drain.pending_abort.lock() =
+            Some((command_id.clone(), Some(effect.clone())));
+        CommitDecision::Aborted(command_id, Some(effect), Box::new(snapshot.clone()))
+    } else if settled_cleanly
+        && shared.observation.peer_protocol.load(Ordering::Relaxed)
+            >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
+    {
+        shared
+            .crashed_drain
+            .drain_committed
+            .store(true, Ordering::Release);
+        CommitDecision::CompleteWithReceipt(shared.crashed_drain.accepted_command_id.lock().clone())
+    } else {
+        CommitDecision::ExitWithoutReceipt
+    }
+}
+
 /// If the ACP thread has ended and every outbox event has been acknowledged by
 /// the Controller, atomically fence execution uncertainty reports under
 /// `drain_commit_lock`, read the ledger's uncertain effect, and either abort
 /// (retaining `pending_abort` while holding) or emit `Frame::CrashedDrainCompleted`
-/// ONLY when ACP settled cleanly (R7-H1, R7-M1, R7-M5).
+/// ONLY when ACP settled cleanly (R7-H1, R7-M1, R7-M5, R8-M2).
 pub(super) async fn finish_if_drained<W: tokio::io::AsyncWrite + Unpin>(
     shared: &Shared,
     writer: &mut W,
@@ -364,92 +514,12 @@ pub(super) async fn finish_if_drained<W: tokio::io::AsyncWrite + Unpin>(
     {
         return Ok(false);
     }
-    enum CommitDecision {
-        NotReady,
-        Aborted(
-            Option<String>,
-            crate::runtime_wire::UncertainEffect,
-            Box<WorkerSnapshot>,
-        ),
-        CompleteWithReceipt(Option<String>),
-        ExitWithoutReceipt,
-    }
-    let decision = {
-        let _commit = shared.crashed_drain.drain_commit_lock.lock();
-        if shared
-            .crashed_drain
-            .pending_event_publishers
-            .load(Ordering::Acquire)
-            > 0
-            || !shared.outbox.lock().is_empty()
-        {
-            CommitDecision::NotReady
-        } else if shared.crashed_drain.terminal_stop.load(Ordering::Acquire) {
-            // Explicit terminal Stop always wins over cooperative abort/receipt (R7-M5).
-            CommitDecision::ExitWithoutReceipt
-        } else if shared.crashed_drain.draining.load(Ordering::Acquire) {
-            let ledger = shared.execution.as_ref().and_then(|client| client.ledger());
-            let ledger_effect = match ledger.as_ref() {
-                Some(ledger) => match ledger.close_uncertain_reports_and_read() {
-                    Ok(effect) => effect,
-                    Err(()) => return Ok(false),
-                },
-                None => None,
-            };
-            let ack_seq = shared
-                .crashed_drain
-                .accepted_ack_seq
-                .load(Ordering::Acquire);
-            let mut snapshot = shared.snapshot.lock();
-            if let Some((method, sequence)) = ledger_effect {
-                crate::runtime_wire::merge_uncertain_effect(
-                    &mut snapshot.uncertain_effect,
-                    crate::runtime_wire::UncertainEffect { method, sequence },
-                );
-            }
-            if let Some(effect) = snapshot.uncertain_effect.clone()
-                && effect.sequence.max(1) > ack_seq
-            {
-                if let Some(ledger) = ledger.as_ref() {
-                    ledger.reopen_uncertain_reports();
-                }
-                let command_id = shared.crashed_drain.accepted_command_id.lock().clone();
-                shared
-                    .crashed_drain
-                    .holding_uncertain_effect
-                    .store(true, Ordering::Release);
-                shared
-                    .crashed_drain
-                    .draining
-                    .store(false, Ordering::Release);
-                *shared.crashed_drain.pending_abort.lock() =
-                    Some((command_id.clone(), effect.clone()));
-                CommitDecision::Aborted(command_id, effect, Box::new(snapshot.clone()))
-            } else if settled_cleanly
-                && shared.observation.peer_protocol.load(Ordering::Relaxed)
-                    >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
-            {
-                shared
-                    .crashed_drain
-                    .drain_committed
-                    .store(true, Ordering::Release);
-                let command_id = shared.crashed_drain.accepted_command_id.lock().clone();
-                CommitDecision::CompleteWithReceipt(command_id)
-            } else {
-                CommitDecision::ExitWithoutReceipt
-            }
-        } else {
-            CommitDecision::ExitWithoutReceipt
-        }
-    };
-    match decision {
+    match decide_drain_commit(shared, settled_cleanly) {
         CommitDecision::NotReady => Ok(false),
         CommitDecision::Aborted(command_id, uncertain_effect, snapshot) => {
             if shared.observation.peer_protocol.load(Ordering::Relaxed)
                 >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
             {
-                // Keep `pending_abort` retained while `holding_uncertain_effect`
-                // stays true so reconnects after a drop/broker-restart restate it (R7-M1).
                 write_frame(
                     writer,
                     &Frame::CrashedDrainAborted {

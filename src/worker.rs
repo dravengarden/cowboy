@@ -952,6 +952,7 @@ async fn connected(
         return Ok(ConnectedExit::WorkerDrained);
     }
     let mut heartbeat = tokio::time::interval(Duration::from_secs(10));
+    let mut ledger_changed = crashed_drain::subscribe_ledger_changes(&shared);
     loop {
         tokio::select! {
             biased;
@@ -1025,9 +1026,17 @@ async fn connected(
                 }
                 send_outbox(&shared, &mut writer, &mut last_sent).await?;
             }
+            changed = crashed_drain::wait_ledger_change(&mut ledger_changed) => {
+                if changed && crashed_drain::finish_if_drained(&shared, &mut writer).await? {
+                    return Ok(ConnectedExit::WorkerDrained);
+                }
+            }
             _ = heartbeat.tick() => {
                 write_frame(&mut writer, &Frame::Heartbeat).await?;
                 send_outbox(&shared, &mut writer, &mut last_sent).await?;
+                if crashed_drain::finish_if_drained(&shared, &mut writer).await? {
+                    return Ok(ConnectedExit::WorkerDrained);
+                }
             }
             _ = async {
                 if let Some(rx) = sigterm_rx.as_mut() {
@@ -1457,6 +1466,7 @@ pub fn shared() -> (Arc<Shared>, mpsc::UnboundedReceiver<()>) {
                 incarnation: None,
                 account_unit: None,
                 uncertain_effect: None,
+                crashed_drain_active: false,
             }),
             outbox: Mutex::new(BTreeMap::new()),
             trace_outbox: Mutex::default(),

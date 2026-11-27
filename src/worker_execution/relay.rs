@@ -41,6 +41,10 @@ pub(super) struct Done {
     /// Keeps the ledger admission/result-relay count held until delivery or
     /// undelivered classification completes (dropped after `delivered`/`undelivered`).
     _ledger_guard: Option<super::ledger::SettlementGuard>,
+    /// Reserved synchronously at execution socket ingress before `tokio::spawn`
+    /// so cooperative crashed-worker drain cannot seal and emit a clean receipt
+    /// ahead of queued `cowboy/uncertainEffect` or result-bearing cleanup relays (R8-H2).
+    _ingress_guard: Option<super::ledger::UncertainReportGuard>,
 }
 
 impl Done {
@@ -104,6 +108,32 @@ impl Relays {
         params: Value,
         in_flight: crate::account_sandbox::RelayGuard,
     ) {
+        let ingress_guard = if method == crate::account_sandbox::DRAINED
+            || method == crate::account_sandbox::EXTENSION_CALL_ACK
+        {
+            None
+        } else if let Some(ledger) = self.client.ledger() {
+            match ledger.enter_uncertain_report() {
+                Ok(guard) => Some(guard),
+                Err(reason) => {
+                    self.pending += 1;
+                    let done = Done {
+                        id,
+                        method,
+                        carries_result: false,
+                        reply: json!({"error": {"code": -32000, "message": reason}}),
+                        ack: AckState::None,
+                        _in_flight: in_flight,
+                        _ledger_guard: None,
+                        _ingress_guard: None,
+                    };
+                    let _ = self.sender.send(done);
+                    return;
+                }
+            }
+        } else {
+            None
+        };
         let (client, sender, connection_id) = (
             Arc::clone(&self.client),
             self.sender.clone(),
@@ -123,6 +153,7 @@ impl Relays {
                 ack,
                 _in_flight: in_flight,
                 _ledger_guard: ledger_guard,
+                _ingress_guard: ingress_guard,
             };
             if let Err(mpsc::error::SendError(done)) = sender.send(done) {
                 handle_undelivered(&client, &done);

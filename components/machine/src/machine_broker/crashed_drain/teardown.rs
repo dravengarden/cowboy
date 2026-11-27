@@ -70,9 +70,9 @@ impl Broker {
         epoch: &str,
         connection_id: u64,
         command_id: Option<&str>,
-        uncertain_effect: crate::runtime_wire::UncertainEffect,
+        uncertain_effect: Option<crate::runtime_wire::UncertainEffect>,
     ) {
-        let (updated_snapshot, cleared_fence) = {
+        let (mut updated_snapshot, cleared_fence) = {
             let mut workers = self.workers.lock();
             let Some(worker) = workers
                 .get_mut(session_id)
@@ -91,15 +91,13 @@ impl Broker {
                         && p.connection_id == connection_id
                 })
             });
-            // Idempotent for restated aborts after reconnect/broker-restart
-            // (R7-M1): still merge a newer uncertain_effect onto the matching
-            // live worker snapshot even when active/pending drain was already
-            // cleared on an earlier abort.
             let prev_effect = worker.snapshot.uncertain_effect.clone();
-            crate::runtime_wire::merge_uncertain_effect(
-                &mut worker.snapshot.uncertain_effect,
-                uncertain_effect,
-            );
+            if let Some(effect) = uncertain_effect {
+                crate::runtime_wire::merge_uncertain_effect(
+                    &mut worker.snapshot.uncertain_effect,
+                    effect,
+                );
+            }
             if !matched_active && !matched_pending {
                 if worker.snapshot.uncertain_effect == prev_effect {
                     return;
@@ -125,6 +123,7 @@ impl Broker {
                 (worker.snapshot.clone(), cleared)
             }
         };
+        updated_snapshot.crashed_drain_active = self.has_crashed_drain_for_epoch(session_id, epoch);
         self.send_controller(Frame::Snapshot {
             worker: Box::new(updated_snapshot),
         });
@@ -132,6 +131,66 @@ impl Broker {
             self.flush_pending(session_id);
         }
         self.crashed_drains.settled.notify_waiters();
+    }
+
+    /// Called inside `ensure_session_in_lifecycle` (already holding
+    /// `session_lifecycle_gate`): verify no crashed-worker drain is fencing
+    /// `session_id`, then atomically inspect/remove any recyclable worker or
+    /// reserve `launching` under `workers -> crashed_drains` so a late
+    /// reconnecting draining worker can never race with explicit Ensure (R8-H4).
+    pub(in crate::machine_broker) async fn claim_ensure_slot(
+        &self,
+        session_id: &str,
+        adopt_only: bool,
+        desired_generation: &str,
+    ) -> Result<(Option<Result<WorkerPeer, WorkerSnapshot>>, bool), Option<String>> {
+        if !adopt_only {
+            self.gate_ensure_against_crashed_drain(session_id)
+                .await
+                .map_err(Some)?;
+        }
+        let mut workers = self.workers.lock();
+        if !adopt_only && self.has_any_crashed_drain_fence_locked(&workers, session_id) {
+            return Err(Some("crashed worker drain is in progress; retry".into()));
+        }
+        match workers.get(session_id) {
+            Some(worker)
+                if !adopt_only
+                    && worker_launch::should_recycle_for_explicit_revive(
+                        &worker.snapshot,
+                        desired_generation,
+                    ) =>
+            {
+                Ok((workers.remove(session_id).map(Ok), false))
+            }
+            Some(worker) => Ok((Some(Err(worker.snapshot.clone())), false)),
+            None => {
+                if !adopt_only && !self.launching.lock().insert(session_id.to_owned()) {
+                    return Err(None);
+                }
+                Ok((None, !adopt_only))
+            }
+        }
+    }
+
+    pub(in crate::machine_broker) fn has_any_crashed_drain_fence_locked(
+        &self,
+        workers: &HashMap<String, WorkerPeer>,
+        session_id: &str,
+    ) -> bool {
+        if workers
+            .get(session_id)
+            .is_some_and(|worker| worker.crashed_drain_fenced)
+        {
+            return true;
+        }
+        let state = self.crashed_drains.inner.lock();
+        state.active.contains_key(session_id)
+            || state
+                .pending
+                .values()
+                .any(|pending| pending.session_id == session_id)
+            || state.unconfirmed_teardown.contains_key(session_id)
     }
 
     pub(in crate::machine_broker) async fn resolve_durable_launch_for_drain(
@@ -142,6 +201,53 @@ impl Broker {
             Ok(Some(launch)) => RetiredLaunch::Verified(launch),
             Ok(None) => RetiredLaunch::VerifiedNone,
             Err(_) => RetiredLaunch::Unresolved,
+        }
+    }
+
+    pub(super) async fn resolve_or_refresh_retired_launch(
+        &self,
+        session_id: &str,
+        worker_epoch: &str,
+        current: RetiredLaunch,
+    ) -> RetiredLaunch {
+        if current != RetiredLaunch::Unresolved {
+            return current;
+        }
+        let resolved = self.resolve_durable_launch_for_drain(session_id).await;
+        if resolved == RetiredLaunch::Unresolved {
+            return RetiredLaunch::Unresolved;
+        }
+        let workers = self.workers.lock();
+        if workers.contains_key(session_id)
+            || self.launching.lock().contains(session_id)
+            || self.resetting_sessions.lock().contains_key(session_id)
+        {
+            return RetiredLaunch::Unresolved;
+        }
+        let mut state = self.crashed_drains.inner.lock();
+        let mut matched = false;
+        if let Some(entry) = state.unconfirmed_teardown.get_mut(session_id)
+            && entry.epoch == worker_epoch
+        {
+            entry.retired_launch = resolved;
+            matched = true;
+        }
+        if let Some(active) = state.active.get_mut(session_id)
+            && active.epoch == worker_epoch
+        {
+            active.retired_launch = resolved;
+            matched = true;
+        }
+        for pending in state.pending.values_mut() {
+            if pending.session_id == session_id && pending.epoch == worker_epoch {
+                pending.retired_launch = resolved;
+                matched = true;
+            }
+        }
+        if matched {
+            resolved
+        } else {
+            RetiredLaunch::Unresolved
         }
     }
 
@@ -202,9 +308,7 @@ impl Broker {
                     .pending
                     .values()
                     .any(|p| p.session_id == snap.session_id && p.epoch == worker.epoch);
-            if has_drain {
-                snap.drain_requested = true;
-            }
+            snap.crashed_drain_active = has_drain;
             snap.incarnation = self.reported_lineage(&snap.session_id);
             let declared_provider = sessions.get(&snap.session_id).map(|s| s.provider.as_str());
             wrap_up::sanitize_snapshot_for_controller(
@@ -221,37 +325,39 @@ impl Broker {
                 });
             }
         }
-        // Emit ownerless `broker-<session_id>` corrections for live Welcome
-        // workers that retired before this Controller lease installed, when
-        // the Controller will NOT receive a matching `CrashedWorkerDrained`
-        // replay (for example a downgraded Controller or receiptless exit,
-        // R7-M3).
         let controller_capable = protocol >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
             && outer.is_some_and(|p| p >= CRASHED_WORKER_DRAIN_PROTOCOL_VERSION);
+        let now = Instant::now();
         for welcomed in welcome {
             if !welcomed.has_connected_owner() || workers.contains_key(&welcomed.session_id) {
                 continue;
             }
-            let replayed_drained = controller_capable
-                && state
-                    .recently_drained
-                    .get(&welcomed.session_id)
-                    .is_some_and(|(ep, _)| ep == &welcomed.worker_epoch);
-            if replayed_drained {
+            let Some(session) = sessions.get(&welcomed.session_id) else {
+                continue;
+            };
+            let Some((ep, confirmed_receipt, at)) =
+                state.recently_drained.get(&welcomed.session_id)
+            else {
+                continue;
+            };
+            if now.saturating_duration_since(*at) >= RECENTLY_DRAINED_TTL
+                || ep != &welcomed.worker_epoch
+            {
                 continue;
             }
-            let session = sessions.get(&welcomed.session_id);
+            if *confirmed_receipt && controller_capable {
+                continue;
+            }
             let mut ownerless = WorkerSnapshot {
                 session_id: welcomed.session_id.clone(),
                 worker_epoch: format!("broker-{}", welcomed.session_id),
-                generation: session
-                    .map(|s| s.generation.clone())
-                    .unwrap_or_else(|| welcomed.generation.clone()),
+                generation: session.generation.clone(),
                 executable: welcomed.executable.clone(),
-                launch: session.cloned().or_else(|| welcomed.launch.clone()),
+                launch: Some(session.clone()),
                 state: WorkerState::Crashed,
                 agent_session_id: session
-                    .and_then(|s| s.agent_session_id.clone())
+                    .agent_session_id
+                    .clone()
                     .or_else(|| welcomed.agent_session_id.clone()),
                 native_thread_materialized: None,
                 current_turn_id: None,
@@ -280,8 +386,9 @@ impl Broker {
                     .get(&welcomed.session_id)
                     .map(|(_, eff)| eff.clone())
                     .or_else(|| welcomed.uncertain_effect.clone()),
+                crashed_drain_active: false,
             };
-            let declared_provider = session.map(|s| s.provider.as_str());
+            let declared_provider = Some(session.provider.as_str());
             wrap_up::sanitize_snapshot_for_controller(
                 &mut ownerless,
                 false,
@@ -314,12 +421,11 @@ impl Broker {
                 );
                 return;
             }
+            let launch = broker
+                .resolve_or_refresh_retired_launch(&session_id, &entry.epoch, entry.retired_launch)
+                .await;
             if !broker
-                .confirm_retired_teardown_complete(
-                    &session_id,
-                    entry.peer_pid,
-                    entry.retired_launch,
-                )
+                .confirm_retired_teardown_complete(&session_id, entry.peer_pid, launch)
                 .await
             {
                 broker.command_rejected(
@@ -403,6 +509,7 @@ impl Broker {
         let broker = Arc::clone(self);
         tokio::spawn(async move {
             let mut attempt: u32 = 0;
+            let mut retired_launch = entry.retired_launch;
             loop {
                 let delay = Duration::from_secs((2_u64 << attempt.min(5)).min(60));
                 attempt = attempt.saturating_add(1);
@@ -415,12 +522,11 @@ impl Broker {
                 if !broker.teardown_retry_still_valid(&session_id, &entry.epoch) {
                     return;
                 }
+                retired_launch = broker
+                    .resolve_or_refresh_retired_launch(&session_id, &entry.epoch, retired_launch)
+                    .await;
                 if !broker
-                    .confirm_retired_teardown_complete(
-                        &session_id,
-                        entry.peer_pid,
-                        entry.retired_launch,
-                    )
+                    .confirm_retired_teardown_complete(&session_id, entry.peer_pid, retired_launch)
                     .await
                 {
                     continue;
@@ -498,7 +604,7 @@ impl Broker {
         session_id: String,
         worker_epoch: String,
         recorded_pid: Option<u32>,
-        retired_launch: RetiredLaunch,
+        mut retired_launch: RetiredLaunch,
     ) {
         let broker = Arc::clone(self);
         tokio::spawn(async move {
@@ -534,6 +640,9 @@ impl Broker {
                 if !still_tracked {
                     return;
                 }
+                retired_launch = broker
+                    .resolve_or_refresh_retired_launch(&session_id, &worker_epoch, retired_launch)
+                    .await;
                 if !broker
                     .confirm_mid_drain_worker_exited(&session_id, recorded_pid)
                     .await
@@ -566,6 +675,7 @@ impl Broker {
                         "worker exited during crashed drain without completion receipt".into(),
                     );
                 }
+                broker.record_recently_drained(&session_id, &worker_epoch, false);
                 broker.publish_ownerless_crashed_snapshot(&session_id);
                 broker.crashed_drains.settled.notify_waiters();
                 return;
@@ -695,6 +805,180 @@ impl Broker {
             SpawnMode::Direct => {
                 self.confirm_direct_owner_gone(session_id, recorded_pid)
                     .await
+            }
+        }
+    }
+    pub(super) fn record_recently_drained(
+        &self,
+        session_id: &str,
+        worker_epoch: &str,
+        confirmed_receipt: bool,
+    ) {
+        let mut state = self.crashed_drains.inner.lock();
+        let now = Instant::now();
+        state
+            .recently_drained
+            .retain(|_, (_, _, at)| now.saturating_duration_since(*at) < RECENTLY_DRAINED_TTL);
+        if state.recently_drained.len() >= MAX_RECENTLY_DRAINED
+            && let Some(oldest) = state
+                .recently_drained
+                .iter()
+                .min_by_key(|(_, (_, _, at))| *at)
+                .map(|(k, _)| k.clone())
+        {
+            state.recently_drained.remove(&oldest);
+        }
+        state.recently_drained.insert(
+            session_id.to_owned(),
+            (worker_epoch.to_owned(), confirmed_receipt, now),
+        );
+    }
+
+    pub(super) fn publish_ownerless_crashed_snapshot(&self, session_id: &str) {
+        let snapshot = {
+            let sessions = self.sessions.lock();
+            let Some(session) = sessions.get(session_id).cloned() else {
+                return;
+            };
+            let workers = self.workers.lock();
+            if workers.contains_key(session_id) {
+                return;
+            }
+            let state = self
+                .session_states
+                .lock()
+                .get(session_id)
+                .copied()
+                .unwrap_or(WorkerState::Crashed);
+            let exit_detail = (state == WorkerState::Crashed)
+                .then(|| self.startup_failures.lock().get(session_id).cloned())
+                .flatten();
+            let executable = self
+                .generation_commands
+                .lock()
+                .get(&session.generation)
+                .map(|path| path.display().to_string());
+            let pending_prompt_count =
+                self.pending_commands
+                    .lock()
+                    .get(session_id)
+                    .map_or(0, |commands| {
+                        u64::try_from(
+                            commands
+                                .iter()
+                                .filter(|cmd| matches!(cmd, WorkerCommand::Prompt { .. }))
+                                .count(),
+                        )
+                        .unwrap_or(u64::MAX)
+                    });
+            WorkerSnapshot {
+                session_id: session_id.to_owned(),
+                worker_epoch: format!("broker-{session_id}"),
+                generation: session.generation.clone(),
+                executable,
+                launch: Some(session.clone()),
+                state,
+                agent_session_id: session.agent_session_id,
+                native_thread_materialized: None,
+                current_turn_id: None,
+                supports_current_turn: false,
+                delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+                wrap_up_steering: false,
+                supports_subagent_cancel: false,
+                last_runtime_seq: 0,
+                pending_permissions: Vec::new(),
+                config_options: None,
+                context_used: None,
+                context_size: None,
+                pending_prompt_count,
+                drain_requested: false,
+                exit_detail,
+                background_tasks: None,
+                native_cycle_id: None,
+                native_cycle_active: false,
+                incarnation: self.reported_lineage(session_id),
+                account_unit: None,
+                uncertain_effect: self.retained_receiptless_uncertain(session_id),
+                crashed_drain_active: false,
+            }
+        };
+        self.send_controller(Frame::Snapshot {
+            worker: Box::new(snapshot),
+        });
+    }
+
+    pub(super) fn send_crashed_worker_drained(&self, session_id: &str, worker_epoch: &str) {
+        self.record_recently_drained(session_id, worker_epoch, true);
+        let controller_outcome = {
+            let guard = self.controller.lock();
+            guard.as_ref().map(|controller| {
+                let capable = controller.protocol >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
+                    && controller
+                        .outer_machine_protocol
+                        .is_some_and(|proto| proto >= CRASHED_WORKER_DRAIN_PROTOCOL_VERSION);
+                (capable, controller.tx.clone())
+            })
+        };
+        match controller_outcome {
+            Some((true, tx)) => {
+                let _ = tx.send(Frame::CrashedWorkerDrained {
+                    session_id: session_id.to_owned(),
+                    worker_epoch: worker_epoch.to_owned(),
+                });
+            }
+            Some((false, _)) => {
+                // Downgraded Controller cannot read CrashedWorkerDrained: publish
+                // compatible ownerless snapshot so it drops the exited worker (R5-M4).
+                self.publish_ownerless_crashed_snapshot(session_id);
+            }
+            None => {}
+        }
+    }
+
+    /// Close the Controller handover gap: if a worker appeared in `welcome`
+    /// and completed crashed-drain retirement before the new Controller lease
+    /// was installed, replay `CrashedWorkerDrained` to the new lease.
+    pub(in crate::machine_broker) fn replay_recently_drained_after_welcome(
+        &self,
+        welcome: &[WorkerSnapshot],
+        lease: u64,
+    ) {
+        let replays: Vec<(String, String)> = {
+            let workers = self.workers.lock();
+            let state = self.crashed_drains.inner.lock();
+            welcome
+                .iter()
+                .filter(|snap| snap.has_connected_owner())
+                .filter(|snap| !workers.contains_key(&snap.session_id))
+                .filter_map(|snap| {
+                    state
+                        .recently_drained
+                        .get(&snap.session_id)
+                        .filter(|(epoch, confirmed, _)| *confirmed && epoch == &snap.worker_epoch)
+                        .map(|(epoch, _, _)| (snap.session_id.clone(), epoch.clone()))
+                })
+                .collect()
+        };
+        if replays.is_empty() {
+            return;
+        }
+        let tx = {
+            let guard = self.controller.lock();
+            guard.as_ref().and_then(|controller| {
+                let capable = controller.lease == lease
+                    && controller.protocol >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
+                    && controller
+                        .outer_machine_protocol
+                        .is_some_and(|proto| proto >= CRASHED_WORKER_DRAIN_PROTOCOL_VERSION);
+                capable.then(|| controller.tx.clone())
+            })
+        };
+        if let Some(tx) = tx {
+            for (session_id, worker_epoch) in replays {
+                let _ = tx.send(Frame::CrashedWorkerDrained {
+                    session_id,
+                    worker_epoch,
+                });
             }
         }
     }

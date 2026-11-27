@@ -214,6 +214,7 @@ pub(super) fn new_registered_peer(
             incarnation: None,
             account_unit: None,
             uncertain_effect: None,
+            crashed_drain_active: false,
         },
         acked_runtime_seq: 0,
         earliest_unacked_seq: None,

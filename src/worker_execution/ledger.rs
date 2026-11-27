@@ -17,6 +17,7 @@
 //! acknowledges that exact sequence.
 
 mod pending_calls;
+pub(crate) use pending_calls::UncertainReportGuard;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::io::Write as _;

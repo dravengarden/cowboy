@@ -120,6 +120,22 @@ pub(super) fn credential_scope(
         .and_then(|key| provider_auth.existing_machine_grant(account, key))
 }
 
+/// Outcome of fresh admission for a streamed worker event (R8-H1, R8-M2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum EventAdmission {
+    Admitted,
+    /// Retryable failure (projection fence, shutdown, or transient store read).
+    TransientlyDeferred,
+    /// Authoritative refusal (revoked/disabled account, mismatched launch/binding).
+    PermanentlyDenied,
+}
+
+impl EventAdmission {
+    pub(super) fn is_admitted(self) -> bool {
+        self == Self::Admitted
+    }
+}
+
 /// Events carry no launch identity. Only the currently admitted worker's
 /// snapshot can supply it; an epoch from a replaced worker cannot borrow it.
 pub(super) async fn event(
@@ -127,7 +143,7 @@ pub(super) async fn event(
     session_id: &str,
     worker_epoch: &str,
     project: impl FnOnce() + Send,
-) -> bool {
+) -> EventAdmission {
     let cached = shared.workers.lock().get(session_id).cloned();
     let replay_snapshot = cached
         .as_ref()
@@ -156,13 +172,9 @@ pub(super) async fn event(
     if !named {
         let fenced = shared.projection_fence.lock();
         if *fenced || shared.shutdown.load(Ordering::Acquire) {
-            return false;
+            return EventAdmission::TransientlyDeferred;
         }
         if execution_bound {
-            // Finding 5 + R7-H3: an execution-bound default-account session must
-            // only project events from the exact binding-matched cached or
-            // verified draining-replay worker epoch so a rejected mismatched
-            // worker cannot persist native IDs or turn state onto the session.
             let Some(current) = shared
                 .workers
                 .lock()
@@ -177,27 +189,25 @@ pub(super) async fn event(
                         .cloned()
                 })
             else {
-                return false;
+                return EventAdmission::PermanentlyDenied;
             };
             if current.worker_epoch != worker_epoch
                 || !shared.hub.matches_runtime_snapshot_binding(&current)
             {
-                return false;
+                return EventAdmission::PermanentlyDenied;
             }
         }
         project();
-        return true;
+        return EventAdmission::Admitted;
     }
     let Some(worker) = replay_snapshot else {
-        return false;
+        return EventAdmission::PermanentlyDenied;
     };
     if worker.worker_epoch != worker_epoch {
-        return false;
+        return EventAdmission::PermanentlyDenied;
     }
     let projected = AtomicBool::new(false);
-    snapshot(shared, &worker, || {
-        // Recheck after the asynchronous DB admission. Do not hold the cache
-        // mutex across projection: projection itself updates that cache.
+    let outcome = snapshot_outcome(shared, &worker, || {
         let matches_cached = shared
             .workers
             .lock()
@@ -219,7 +229,13 @@ pub(super) async fn event(
         }
     })
     .await;
-    projected.load(Ordering::Acquire)
+    if projected.load(Ordering::Acquire) {
+        EventAdmission::Admitted
+    } else if outcome == EventAdmission::Admitted {
+        EventAdmission::PermanentlyDenied
+    } else {
+        outcome
+    }
 }
 
 /// Project a snapshot only while its current native binding is admitted.
@@ -229,6 +245,17 @@ pub(super) async fn snapshot(
     worker: &WorkerSnapshot,
     project: impl FnOnce() + Send,
 ) -> bool {
+    snapshot_outcome(shared, worker, project)
+        .await
+        .is_admitted()
+}
+
+#[allow(clippy::too_many_lines)]
+async fn snapshot_outcome(
+    shared: &Shared,
+    worker: &WorkerSnapshot,
+    project: impl FnOnce() + Send,
+) -> EventAdmission {
     let meta = shared
         .hub
         .session_info(&worker.session_id)
@@ -243,61 +270,67 @@ pub(super) async fn snapshot(
     if !named {
         let fenced = shared.projection_fence.lock();
         if *fenced || shared.shutdown.load(Ordering::Acquire) {
-            return false;
+            return EventAdmission::TransientlyDeferred;
         }
         project();
-        return true;
+        return EventAdmission::Admitted;
     }
     let (Some(meta), Some(launch)) = (meta, worker.launch.as_ref()) else {
-        return false;
+        return EventAdmission::PermanentlyDenied;
     };
     if !matches(&meta, launch) || meta.provider_account_id.is_default() {
         warn_declined_launch(&meta, worker);
-        return false;
+        return EventAdmission::PermanentlyDenied;
     }
     let Some(owner) = meta.owner_user_id.as_deref() else {
-        return false;
+        return EventAdmission::PermanentlyDenied;
     };
     let Some((machine, store)) = shared.native_store.lock().clone() else {
-        return false;
+        return EventAdmission::TransientlyDeferred;
     };
     if meta.machine_id != machine {
-        return false;
+        return EventAdmission::PermanentlyDenied;
     }
     let Some(selection) = binding(&store, owner, &meta).await else {
-        return false;
+        return EventAdmission::TransientlyDeferred;
     };
     let Binding::Native(operation, completion) = selection else {
-        return with_portable(shared, &store, owner, &meta, || async {
+        return match with_portable(shared, &store, owner, &meta, || async {
             let fenced = shared.projection_fence.lock();
             anyhow::ensure!(
-                !*fenced
-                    && !shared.shutdown.load(Ordering::Acquire)
-                    && shared.hub.session_info(&meta.id).is_some_and(|info| {
-                        !info.meta.closing
-                            && info.meta.owner_user_id == meta.owner_user_id
-                            && info.meta.machine_id == machine
-                            && matches(&info.meta, launch)
-                    }),
+                !*fenced && !shared.shutdown.load(Ordering::Acquire),
+                "runtime_disconnected"
+            );
+            anyhow::ensure!(
+                shared.hub.session_info(&meta.id).is_some_and(|info| {
+                    !info.meta.closing
+                        && info.meta.owner_user_id == meta.owner_user_id
+                        && info.meta.machine_id == machine
+                        && matches(&info.meta, launch)
+                }),
                 "portable_session_binding_changed"
             );
             project();
             Ok(())
         })
         .await
-        .is_ok();
+        {
+            Ok(()) => EventAdmission::Admitted,
+            Err(error) if error.to_string().contains("runtime_disconnected") => {
+                EventAdmission::TransientlyDeferred
+            }
+            Err(_) => EventAdmission::PermanentlyDenied,
+        };
     };
     let profile = &completion.profile;
     if !shared.auth_recipient_key.as_ref().is_some_and(|key| {
         crate::digest::hex_sha256(key.as_bytes()) == completion.recipient_fingerprint
     }) || meta.provider != profile.provider_id
-        // A compatible later release keeps the login (see native_generation);
-        // the Machine re-verifies the authentication contract at launch.
         || meta.provider_auth_generation != Some(profile.generation)
     {
-        return false;
+        return EventAdmission::PermanentlyDenied;
     }
-    store
+    match store
         .with_native_session_release_binding(owner, &operation, &completion, &meta, || async {
             let fenced = shared.projection_fence.lock();
             anyhow::ensure!(
@@ -320,7 +353,13 @@ pub(super) async fn snapshot(
             Ok(())
         })
         .await
-        .is_ok()
+    {
+        Ok(()) => EventAdmission::Admitted,
+        Err(error) if error.to_string().contains("runtime_disconnected") => {
+            EventAdmission::TransientlyDeferred
+        }
+        Err(_) => EventAdmission::PermanentlyDenied,
+    }
 }
 
 /// The last worker epoch whose mismatched launch was reported, per session.

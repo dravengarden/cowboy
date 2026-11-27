@@ -244,6 +244,7 @@ pub(super) fn worker_snapshot(session_id: &str, worker_epoch: &str) -> WorkerSna
         incarnation: None,
         account_unit: None,
         uncertain_effect: None,
+        crashed_drain_active: false,
     }
 }
 
