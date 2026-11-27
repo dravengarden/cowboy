@@ -1080,6 +1080,11 @@ export const ItemView = memo(function ItemView({
                 Earlier error: {item.detail ?? "The session stopped unexpectedly."}
               <ScrollEdges /></Box>
             </Box>
+            {/* A proven refusal recorded only as a crash folds once the text
+                answer revives the session; it keeps the refused message's action. */}
+            {isRefusedInput(item.detail) && (
+              <PutBackButton sessionId={sessionId} failureKey={item.key} primary />
+            )}
           </Box>
         );
       }

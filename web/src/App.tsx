@@ -1,3 +1,4 @@
+import { ComposerRecovery } from "./PutBackButton";
 import { desktopSize } from "./surface/desktopSize";
 import { DeleteSessionShell } from "./DeleteSessionShell";
 
@@ -295,7 +296,9 @@ const StoreTranscript = memo(function StoreTranscript({
     };
     const { projection, transitionAnchorKey } = useExploreSessionState(sessionId);
 
-    return projection === "explore" ? (
+    // Only the session's own transcript, whose Composer is reachable, offers
+    // Back to Prompt; a view-only system session has none.
+    return <ComposerRecovery.Provider value={!session?.system}>{projection === "explore" ? (
         <ExploreTranscript
             desktop={desktopNavigation}
             sessionId={sessionId}
@@ -336,7 +339,7 @@ const StoreTranscript = memo(function StoreTranscript({
             restoreAnchorKey={transitionAnchorKey}
             onAnchorRestored={(): void => resolveProjectionAnchor(sessionId)}
         />
-    );
+    )}</ComposerRecovery.Provider>;
 });
 
 type SettingsControllerHandle = {

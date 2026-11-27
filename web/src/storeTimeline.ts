@@ -80,7 +80,12 @@ export function applyEnvelope(timelines: Map<string, Envelope[]>, env: Envelope)
         last.update.sessionUpdate === updateKind &&
         last.update.messageId === env.update.messageId &&
         last.update.content?.type === "text" &&
-        env.update.content?.type === "text"
+        env.update.content?.type === "text" &&
+        // A tagged chunk opens another delivery, and a prompt of another
+        // origin is not the person's text: neither joins the previous one.
+        (updateKind !== "user_message_chunk" ||
+          (env.cmid === undefined &&
+            JSON.stringify(last.update.promptOrigin) === JSON.stringify(env.update.promptOrigin)))
       ) {
         const replacement: Envelope = {
           ...last,

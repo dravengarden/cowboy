@@ -17,6 +17,7 @@ import {
 } from "./providerCatalogRegistry";
 import { openSession, useStore } from "./store";
 import { getDraft, setDraft } from "./draftStore";
+import { ComposerRecovery } from "./PutBackButton";
 import { imageTokensInText } from "./attachments";
 import { openSessionSettings } from "./sessionSettingsOpen";
 import { type SessionToolsOverride, withMemoryKey } from "./agentTools";
@@ -252,6 +253,7 @@ export async function runDormantSessionBrowserConformance(
                   flexDirection: "column",
                 }}
               >
+                <ComposerRecovery.Provider value>
                 <Transcript
                   sessionId={session.id}
                   provider={session.provider}
@@ -262,6 +264,7 @@ export async function runDormantSessionBrowserConformance(
                   connected={state.connected}
                   desktopNavigation={desktop}
                 />
+                </ComposerRecovery.Provider>
                 {desktop
                   ? (
                     <DesktopTopBarControls
@@ -730,6 +733,8 @@ export async function runDormantSessionBrowserConformance(
     ].map((content, index) => ({
       session_id: session.id,
       seq: 40 + index,
+      // A live echo tags the delivery's opening chunk with its cmid.
+      ...(index === 0 ? { cmid: "refused-delivery" } : {}),
       kind: "update" as const,
       update: { sessionUpdate: "user_message_chunk", content },
     })), {
@@ -794,6 +799,7 @@ export async function runDormantSessionBrowserConformance(
     timeline = [...timeline, {
       session_id: session.id,
       seq: 44,
+      cmid: "text-answer",
       kind: "update" as const,
       update: {
         sessionUpdate: "user_message_chunk",

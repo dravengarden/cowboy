@@ -9,6 +9,7 @@ import {
   sentPromptBefore,
 } from "./refusedMessage.ts";
 import { readTranscriptSource } from "./appSource.test.ts";
+import { applyEnvelope } from "./storeTimeline.ts";
 
 const transcript = await readTranscriptSource();
 const ARTIFACT = `/api/artifacts/${"b".repeat(64)}.png`;
@@ -49,13 +50,18 @@ const failure = (seq: number): Envelope => ({
   detail: "antigravity_prompt_rejected:image_answer: {}",
 });
 
-test("the prompt put back is the newest one a person sent before the failure", () => {
+test("the prompt put back is the identified delivery a person sent before the failure", () => {
   const image: ContentBlock = { type: "image", mimeType: "image/png", url: ARTIFACT };
+  const refused: ContentBlock[] = [
+    { type: "text", text: "  indented\n    code" },
+    image,
+    { type: "text", text: "tail" },
+  ];
   const timeline: Envelope[] = [
     chunk(1, { type: "text", text: "first" }, { cmid: "a" }),
     agent(2, "a question?"),
-    // The refused prompt: indentation and the tagged opening chunk survive.
-    chunk(3, { type: "text", text: "  indented\n    code" }, { cmid: "b" }),
+    // The refused delivery: tagged opening chunk, exact text and whitespace.
+    chunk(3, refused[0]!, { cmid: "b" }),
     chunk(4, image),
     chunk(5, { type: "text", text: "tail" }),
     // A notice injected later is never the owner's.
@@ -63,16 +69,50 @@ test("the prompt put back is the newest one a person sent before the failure", (
     failure(7),
     chunk(8, { type: "text", text: "the text answer" }, { cmid: "c" }),
   ];
-  assertEquals(sentPromptBefore(timeline, 7), {
-    blocks: [{ type: "text", text: "  indented\n    code" }, image, { type: "text", text: "tail" }],
-  });
-  // Without a boundary the newest prompt counts; a missing boundary fails
-  // closed rather than picking a newer message.
-  assertEquals(sentPromptBefore(timeline), { blocks: [{ type: "text", text: "the text answer" }] });
+  assertEquals(sentPromptBefore(timeline, 7), { blocks: refused });
+  // A missing boundary fails closed rather than picking a newer message.
   assertEquals(sentPromptBefore(timeline, 99), { unavailable: "boundary" });
-  // A prompt whose opening may precede the loaded window is not guessed at.
-  assertEquals(sentPromptBefore(timeline.slice(3), 7), { unavailable: "history" });
+  // History holds only markers before `coveredFrom`: a delivery opening
+  // before it is not guessed at.
+  assertEquals(sentPromptBefore(timeline, 7, 4), { unavailable: "history" });
+  assertEquals(sentPromptBefore(timeline, 7, 3), { blocks: refused });
+  // Chunks whose delivery identity is gone are never rebuilt or substituted.
+  assertEquals(sentPromptBefore(timeline.slice(3), 7), { unavailable: "unidentified" });
   assertEquals(sentPromptBefore([agent(1, "x"), failure(2)], 2), { unavailable: "no_prompt" });
+});
+
+test("a legacy accept echo of the delivery restores the delivery once", () => {
+  const prompt: ContentBlock[] = [
+    { type: "text", text: "describe" },
+    { type: "image", mimeType: "image/png", data: "aW1n" },
+  ];
+  const delivery = [chunk(1, prompt[0]!, { cmid: "d" }), chunk(2, prompt[1]!)];
+  // Adjacent replay: the same blocks again, untagged.
+  assertEquals(
+    sentPromptBefore([...delivery, chunk(3, prompt[0]!), chunk(4, prompt[1]!), failure(5)], 5),
+    { blocks: prompt },
+  );
+  // Separated replay: it must repeat the delivery before it.
+  assertEquals(
+    sentPromptBefore([...delivery, agent(3, "…"), chunk(4, prompt[0]!), failure(5)], 5),
+    { blocks: prompt },
+  );
+  // An untagged prompt that repeats nothing is not replaced by an older one.
+  assertEquals(
+    sentPromptBefore([...delivery, agent(3, "…"), chunk(4, { type: "text", text: "new" }), failure(5)], 5),
+    { unavailable: "unidentified" },
+  );
+});
+
+test("the live timeline never joins another delivery or origin to a prompt", () => {
+  const owner = chunk(1, { type: "text", text: "mine" }, { cmid: "m" });
+  let timelines = applyEnvelope(new Map(), owner);
+  timelines = applyEnvelope(timelines, chunk(2, { type: "text", text: " more" }));
+  timelines = applyEnvelope(timelines, chunk(3, { type: "text", text: "next" }, { cmid: "n" }));
+  timelines = applyEnvelope(timelines, chunk(4, { type: "text", text: "injected" }, { actor: "agent" }));
+  const events = timelines.get("s") ?? [];
+  assertEquals(events.map((event) => event.seq), [1, 3, 4]);
+  assertEquals(sentPromptBefore(events, 4), { blocks: [{ type: "text", text: "next" }] });
 });
 
 test("the generated linked-session wrapper leaves the tagged first block", () => {
@@ -115,8 +155,10 @@ test("a sent prompt becomes a Composer draft with each image in place", async ()
     [{ type: "text", text: "see ![unfinished" }, { type: "image", mimeType: "image/png", data: "aW1n" }],
     () => Promise.resolve({ data: "aW1n", mimeType: "image/png" }),
   );
+  // Text with its own image syntax returns as text; its images are reported.
   assertEquals(quoted.draft.text, "see ![unfinished");
-  assertEquals(quoted.draft.attachments.length, 1);
+  assertEquals(quoted.draft.attachments.length, 0);
+  assertEquals(quoted.missing, 1);
 });
 
 test("only validated inline images and exact artifact names are read back", async () => {
@@ -129,6 +171,8 @@ test("only validated inline images and exact artifact names are read back", asyn
     const block of [
       { type: "image", mimeType: "text/html", data: "R0lG" },
       { type: "image", mimeType: "image/png", data: "not base64!" },
+      { type: "image", mimeType: "image/png", data: "a" },
+      { type: "image", mimeType: "image/png", data: "aW1=n" },
       { type: "image", mimeType: "image/png", url: "https://example.com/a.png" },
       { type: "image", mimeType: "image/png", url: "/api/artifacts/../sessions" },
       { type: "image", mimeType: "image/png", url: `/api/artifacts/${"b".repeat(64)}.svg` },
@@ -180,4 +224,6 @@ test("every failed turn offers Back to Prompt, keyed to its own failure", () => 
   // A remote refusal shows `crashed`, which hides the failed turn's row behind
   // the status bar; the bar carries the action, keyed to that crash.
   assert(transcript.includes("<PutBackButton sessionId={sessionId} failureKey={crashKey} primary />"));
+  // A refusal recorded only as a crash folds after the answer and keeps it.
+  assert(transcript.includes("<PutBackButton sessionId={sessionId} failureKey={item.key} primary />"));
 });

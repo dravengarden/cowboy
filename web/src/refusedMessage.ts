@@ -28,12 +28,13 @@ export interface LoadedImage {
  *  of its image extensions. Nothing else on this origin is read. */
 const ARTIFACT_URL = /^\/api\/artifacts\/[0-9a-f]{64}\.(?:png|jpg|webp|gif|avif)$/;
 const IMAGE_MIME = /^image\/[a-z0-9.+-]+$/;
-const BASE64 = /^[A-Za-z0-9+/]+={0,2}$/;
+const BASE64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
 /** Bounds for one restore: decoded bytes per image and in total. */
 export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_RESTORE_BYTES = 40 * 1024 * 1024;
 
-const decodedBytes = (base64: string): number => Math.floor((base64.length * 3) / 4);
+const decodedBytes = (base64: string): number =>
+  (base64.length / 4) * 3 - (base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0);
 
 type UserChunk = Extract<Envelope, { kind: "update" }>;
 
@@ -60,52 +61,102 @@ function chunkOrigin(envelope: UserChunk): ReturnType<typeof resolvePromptOrigin
 /** The prompt a person sent: its echoed blocks, or why it cannot be rebuilt. */
 export type SentPrompt =
   | { blocks: ContentBlock[] }
-  | { unavailable: "no_prompt" | "boundary" | "history" };
+  | { unavailable: "no_prompt" | "boundary" | "history" | "unidentified" };
+
+interface Run {
+  first: number;
+  tagged: boolean;
+  human: boolean;
+  blocks: ContentBlock[];
+}
+
+/** The run of echoed user chunks ending at `last`: back to its tagged
+ *  opening chunk (the delivery the Controller dispatched), or over the
+ *  untagged contiguous chunks of one origin. */
+function runEndingAt(timeline: readonly Envelope[], last: number): Run {
+  const actor = (index: number): string => chunkOrigin(userChunk(timeline[index])!).actor;
+  let first = last;
+  while (
+    first > 0 && timeline[first]?.cmid === undefined && userChunk(timeline[first - 1]) &&
+    actor(first - 1) === actor(last)
+  ) {
+    first -= 1;
+  }
+  const run = timeline.slice(first, last + 1) as UserChunk[];
+  const blocks = run.map((envelope, index) => {
+    const block = envelope.update.content as ContentBlock;
+    return index === 0 && block.type === "text" && typeof block.text === "string"
+      ? { ...block, text: stripLinkedSessionContext(block.text, envelope.cmid) }
+      : block;
+  }).filter((block) => !(block.type === "text" && block.text === ""));
+  return {
+    first,
+    tagged: run[0]!.cmid !== undefined,
+    human: isHumanPrompt(chunkOrigin(run[0]!)),
+    blocks,
+  };
+}
+
+const same = (left: readonly ContentBlock[], right: readonly ContentBlock[]): boolean =>
+  JSON.stringify(left) === JSON.stringify(right);
+
+/** A delivery followed by an adjacent accept echo of itself (legacy replay):
+ *  keep the delivery once. */
+function withoutTrailingReplay(blocks: ContentBlock[]): ContentBlock[] {
+  for (let split = Math.ceil(blocks.length / 2); split < blocks.length; split += 1) {
+    if (same(blocks.slice(split), blocks.slice(0, blocks.length - split))) {
+      return blocks.slice(0, split);
+    }
+  }
+  return blocks;
+}
 
 /** The newest prompt a person sent before the envelope `failureSeq` (the
  *  failed turn's row), read from the canonical timeline rather than display
- *  rows. A prompt is one delivery: the run of echoed user chunks that starts
- *  at its tagged first chunk (or, untagged, the whole contiguous run), from
- *  one origin. Agent, notice and managed-call prompts are skipped. A missing
- *  failure row, or a prompt whose start may lie before the loaded history,
- *  fails closed. */
-export function sentPromptBefore(timeline: readonly Envelope[], failureSeq?: number): SentPrompt {
-  let end = timeline.length;
+ *  rows. Only a delivery identified by its tagged opening chunk is rebuilt;
+ *  an untagged run counts only as a replay of the tagged delivery before it
+ *  (anything else is `unidentified`). Agent, notice and managed-call prompts
+ *  are skipped. `coveredFrom` is the first sequence the loaded history holds
+ *  densely (older events are retained markers only), or null when it reaches
+ *  the session's start: a delivery starting before it is `history`. A
+ *  missing failure row fails closed. */
+export function sentPromptBefore(
+  timeline: readonly Envelope[],
+  failureSeq?: number,
+  coveredFrom: number | null = null,
+): SentPrompt {
+  let last = timeline.length - 1;
   if (failureSeq !== undefined) {
-    end = timeline.findIndex((envelope) => envelope.seq === failureSeq);
-    if (end < 0) return { unavailable: "boundary" };
+    last = timeline.findIndex((envelope) => envelope.seq === failureSeq) - 1;
+    if (last < -1) return { unavailable: "boundary" };
   }
-  let last = end - 1;
+  let replay: ContentBlock[] | null = null;
   while (last >= 0) {
-    while (last >= 0 && !userChunk(timeline[last])) last -= 1;
-    if (last < 0) break;
-    let first = last;
-    const actor = (index: number): string => chunkOrigin(userChunk(timeline[index])!).actor;
-    const runActor = actor(last);
-    while (
-      first > 0 && timeline[first]?.cmid === undefined && userChunk(timeline[first - 1]) &&
-      actor(first - 1) === runActor
-    ) {
-      first -= 1;
+    if (!userChunk(timeline[last])) {
+      last -= 1;
+      continue;
     }
-    const run = timeline.slice(first, last + 1) as UserChunk[];
-    if (isHumanPrompt(chunkOrigin(run[0]!))) {
-      // The opening chunk may precede the loaded window: only a tagged first
-      // chunk or the session's very first event proves the prompt is whole.
-      if (first === 0 && run[0]!.cmid === undefined && run[0]!.seq > 1) {
-        return { unavailable: "history" };
-      }
-      const blocks = run.map((envelope, index) => {
-        const block = envelope.update.content as ContentBlock;
-        return index === 0 && block.type === "text" && typeof block.text === "string"
-          ? { ...block, text: stripLinkedSessionContext(block.text, envelope.cmid) }
-          : block;
-      }).filter((block) => !(block.type === "text" && block.text === ""));
-      return { blocks };
+    const run = runEndingAt(timeline, last);
+    last = run.first - 1;
+    if (!run.human) continue;
+    if (!run.tagged) {
+      // Untagged after a replay already seen: no identified delivery left.
+      if (replay !== null) return { unavailable: "unidentified" };
+      replay = run.blocks;
+      continue;
     }
-    last = first - 1;
+    if (coveredFrom !== null && timeline[run.first]!.seq < coveredFrom) {
+      return { unavailable: "history" };
+    }
+    const blocks = withoutTrailingReplay(run.blocks);
+    // A separated untagged run must repeat this delivery, or it was a prompt
+    // whose identity was not kept: never substitute an older delivery.
+    if (replay !== null && !same(replay, blocks.slice(0, replay.length))) {
+      return { unavailable: "unidentified" };
+    }
+    return { blocks };
   }
-  return { unavailable: "no_prompt" };
+  return { unavailable: replay === null ? "no_prompt" : "unidentified" };
 }
 
 async function readAsBase64(blob: Blob): Promise<string> {
@@ -141,7 +192,7 @@ export async function loadPromptImage(
     ? block.mimeType
     : undefined;
   if (typeof block.data === "string" && block.data !== "") {
-    if (!declared || !BASE64.test(block.data)) return null;
+    if (!declared || !BASE64.test(block.data) || decodedBytes(block.data) === 0) return null;
     return decodedBytes(block.data) <= Math.min(budget, MAX_IMAGE_BYTES)
       ? { data: block.data, mimeType: declared }
       : null;
@@ -155,17 +206,30 @@ export async function loadPromptImage(
   });
   const served = response.headers.get("content-type")?.split(";")[0]?.trim() ?? "";
   if (!response.ok || !IMAGE_MIME.test(served)) return null;
-  const length = Number(response.headers.get("content-length") ?? "0");
-  if (length > Math.min(budget, MAX_IMAGE_BYTES)) return null;
-  const blob = await response.blob();
-  if (blob.size > Math.min(budget, MAX_IMAGE_BYTES)) return null;
-  return { data: await readAsBase64(blob), mimeType: declared ?? served };
+  const limit = Math.min(budget, MAX_IMAGE_BYTES);
+  if (Number(response.headers.get("content-length") ?? "0") > limit) return null;
+  // Read under the cap: a response without a usable length never buffers
+  // more than the budget allows.
+  const parts: Uint8Array<ArrayBuffer>[] = [];
+  let size = 0;
+  const reader = response.body?.getReader();
+  if (!reader) return null;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    size += value.byteLength;
+    if (size > limit) {
+      await reader.cancel();
+      return null;
+    }
+    parts.push(new Uint8Array(value));
+  }
+  if (size === 0) return null;
+  return { data: await readAsBase64(new Blob(parts)), mimeType: declared ?? served };
 }
 
 /** A Composer draft for a sent prompt's blocks: its text exactly, and each
- *  image staged where it was as the Composer's inline token. Text that could
- *  pair with a generated token (`![` or `cowboy-att:`) keeps the images
- *  untokened, after the text, so the text itself is never consumed. Files
+ *  image staged where it was as the Composer's inline token. Files
  *  (never kept in the timeline as bytes), unreadable images and images over
  *  the restore budget are counted as `missing`. */
 export async function draftFromBlocks(
@@ -173,7 +237,11 @@ export async function draftFromBlocks(
   load: (block: ContentBlock, budget: number) => Promise<LoadedImage | null> = loadPromptImage,
 ): Promise<{ draft: Draft; missing: number }> {
   const texts = blocks.filter((block) => block.type === "text").map((block) => String(block.text ?? ""));
-  const inline = !texts.some((text) => text.includes("![") || text.includes("cowboy-att:"));
+  // The Composer pairs inline tokens by Markdown image syntax: text that holds
+  // its own (`![`, `cowboy-att:`) could absorb a generated token and drop
+  // text on send, so such a prompt returns as text and its images are
+  // reported for attaching again.
+  const ambiguous = texts.some((text) => text.includes("![") || text.includes("cowboy-att:"));
   let text = "";
   const attachments: Attachment[] = [];
   let missing = 0;
@@ -183,7 +251,9 @@ export async function draftFromBlocks(
       text += String(block.text ?? "");
       continue;
     }
-    const image = block.type === "image" ? await load(block, budget).catch(() => null) : null;
+    const image = block.type === "image" && !ambiguous
+      ? await load(block, budget).catch(() => null)
+      : null;
     if (!image) {
       missing += 1;
       continue;
@@ -198,7 +268,7 @@ export async function draftFromBlocks(
       previewUrl: `data:${image.mimeType};base64,${image.data}`,
       block: { type: "image", data: image.data, mimeType: image.mimeType },
     });
-    if (inline) text += `![image](cowboy-att:${id})`;
+    text += `![image](cowboy-att:${id})`;
   }
   return { draft: { text, attachments }, missing };
 }
@@ -207,16 +277,20 @@ const UNAVAILABLE = {
   no_prompt: "There is no message you sent to put back.",
   boundary: "That failed turn is no longer loaded; scroll to it and try again.",
   history: "Load earlier history first: the start of that message is not loaded.",
+  unidentified: "That message cannot be rebuilt exactly; compose it again.",
 } as const;
 
 /** Put the newest prompt a person sent before the failed turn's row
  *  (`failureKey`, its timeline sequence) back in the session's empty Composer
- *  and focus it. */
-export async function putSentMessageBack(sessionId: string, failureKey?: string): Promise<void> {
-  const sent = sentPromptBefore(
-    canonicalTimeline(sessionId) ?? [],
-    failureKey === undefined ? undefined : Number(failureKey),
-  );
+ *  and focus it. `coveredFrom` is the loaded history's dense start. */
+export async function putSentMessageBack(
+  sessionId: string,
+  failureKey: string,
+  coveredFrom: number | null,
+): Promise<void> {
+  const select = (): SentPrompt =>
+    sentPromptBefore(canonicalTimeline(sessionId) ?? [], Number(failureKey), coveredFrom);
+  const sent = select();
   if ("unavailable" in sent) {
     notify(UNAVAILABLE[sent.unavailable]);
     return;
@@ -224,6 +298,13 @@ export async function putSentMessageBack(sessionId: string, failureKey?: string)
   try {
     checkComposerAvailable(sessionId);
     const { draft, missing } = await draftFromBlocks(sent.blocks);
+    // Images load asynchronously: a Clear or a reset meanwhile removes the
+    // failure, and its prompt must not reach the new conversation.
+    const now = select();
+    if ("unavailable" in now || !same(now.blocks, sent.blocks)) {
+      notify("The conversation changed; nothing was put back.");
+      return;
+    }
     if (draft.text.trim() === "" && draft.attachments.length === 0) {
       notify("Nothing in that message could be restored; attach it again.");
       return;
