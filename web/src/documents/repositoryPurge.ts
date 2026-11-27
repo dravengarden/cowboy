@@ -1,3 +1,9 @@
+import type { Mutation } from "@cowboy/state-sync";
+import type { DraftMutationArgs } from "./model";
+
+export const PURGED_COPY_NOTICE =
+  "This draft was permanently deleted elsewhere. Your unsynced version was kept as a copy.";
+
 export interface PurgeDraftTarget {
   readonly id: string;
   readonly expected_revision: number;
@@ -72,18 +78,22 @@ export function clearDocumentSnapshots(snapshots: Map<string, unknown>, id: stri
   }
 }
 
-export function collectOfflinePurged(
+export function hasPendingAuthored(pending: readonly Mutation[]): boolean {
+  return pending.some((m) => {
+    const type = (m.args as DraftMutationArgs).change.type;
+    return type === "write" || type === "create";
+  });
+}
+
+export function collectAbsentCleanIds(
   owners: ReadonlyMap<string, { isCleanServerDoc(): boolean }>,
   serverIds: ReadonlySet<string>,
-  served: ReadonlyMap<string, number>,
-): PurgedDraftReceipt[] {
-  const gone: PurgedDraftReceipt[] = [];
+): string[] {
+  const absent: string[] = [];
   for (const [docId, owner] of owners.entries()) {
-    if (!serverIds.has(docId) && owner.isCleanServerDoc()) {
-      gone.push({ id: docId, revision: (served.get(docId) ?? 0) + 1 });
-    }
+    if (!serverIds.has(docId) && owner.isCleanServerDoc()) absent.push(docId);
   }
-  return gone;
+  return absent;
 }
 
 export function sanitizeDraftTitle(raw: string): string {

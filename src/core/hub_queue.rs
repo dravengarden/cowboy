@@ -2,6 +2,10 @@
 
 use super::*;
 
+mod draft_transfers;
+pub use draft_transfers::{
+    DraftRestoreStage, DraftTransferReservation, PendingDraftTransferCommit,
+};
 mod drafts;
 pub use drafts::{
     InFlightDispatchCmidGuard, PendingRecoveryActivationCommit, RecoveryActivationCommitStep,

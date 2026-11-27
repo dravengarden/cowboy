@@ -92,6 +92,9 @@ export interface IdbPersistenceOwner {
    * happen. An outbox borrowed in this owner is refused, since its holder owns
    * a delta baseline that a silent deletion would desync. */
   discard(key: string): Promise<void>;
+  /** Permanently delete a previously borrowed outbox record and release its
+   *  record-mode reservation after its owner has been disposed. */
+  retireOutbox(key: string): Promise<void>;
   readonly lifecycle: IdbSnapshot;
   /** Seal new calls, drain admitted transactions, then close all generations.
    * A native open cannot be cancelled: late handles are closed, and a stuck
@@ -207,6 +210,22 @@ async function readScopedKeys(
     if (strict) throw error;
     return [];
   }
+}
+
+async function deleteIdbRecord(
+  run: <R>(
+    mode: IDBTransactionMode,
+    make: (store: IDBObjectStore) => TransactionRequest<R>,
+  ) => Promise<R>,
+  recordModes: Map<string, "value" | "outbox">,
+  key: string,
+  forbidden: "value" | "outbox",
+): Promise<void> {
+  if (recordModes.get(key) === forbidden) {
+    throw new IdbPersistenceError("record_mode_conflict");
+  }
+  await run("readwrite", (store) => store.delete(key));
+  recordModes.delete(key);
 }
 
 async function discardRecordIf<S>(
@@ -619,13 +638,9 @@ export function createIdbPersistenceOwner(opts: IdbOwnerOpts = {}): IdbPersisten
     listKeys: (opts: IdbListKeysOpts = {}): Promise<string[]> =>
       scope.run(() => readScopedKeys(run, opts)),
     discard: (key: string): Promise<void> =>
-      scope.run(async () => {
-        if (recordModes.get(key) === "outbox") {
-          throw new IdbPersistenceError("record_mode_conflict");
-        }
-        await run("readwrite", (store) => store.delete(key));
-        recordModes.delete(key);
-      }),
+      scope.run(() => deleteIdbRecord(run, recordModes, key, "outbox")),
+    retireOutbox: (key: string): Promise<void> =>
+      scope.run(() => deleteIdbRecord(run, recordModes, key, "value")),
     get lifecycle(): IdbSnapshot {
       const retained = [...generations];
       return Object.freeze({

@@ -251,6 +251,7 @@ export interface QueuedMessage extends WrapUpOutboxFields {
   /** Staged image / file attachments (reconstructed from the message's ACP
    *  content blocks). Empty for a plain text prompt. */
   attachments: Attachment[];
+  rawContent?: readonly unknown[];
   /** Client message id. On a server row it's echoed back so the originating
    *  client can match its optimistic copy by id (never text). On a LOCAL
    *  optimistic row it's the id we minted. */
@@ -5655,7 +5656,7 @@ export function reorderDrafts(sessionId: string, order: string[]): void {
   send({ type: "reorder_drafts", session_id: sessionId, order });
 }
 
-function subscribe(listener: () => void): () => void {
+export function subscribe(listener: () => void): () => void {
   if (
     listeners.size === 0 && !socket && !productSessionAbandoned &&
     !productSessionPausedForAuth
@@ -5687,7 +5688,7 @@ if (typeof globalThis.addEventListener === "function") {
   });
 }
 
-export function readLiveFolders(): SessionFoldersValue { return foldersSync.view(); }
+export function readPresentedDrafts(sessionId: string): readonly QueuedMessage[] { return presentedState.drafts.get(sessionId) ?? []; }
 export function useStore(): State {
   return useSyncExternalStore(subscribe, () => presentedState);
 }

@@ -56,6 +56,23 @@ impl Drop for FolderDraftPurgeGuard {
     }
 }
 
+/// Fence blocking concurrent folder or draft filings into `folder_id` while
+/// folder-only Trash reparents its DB drafts before moving the folder to Trash.
+pub struct FolderTrashOnlyGuard {
+    hub: std::sync::Weak<super::HubInner>,
+    pub folder_id: String,
+    pub owner: FolderOwner,
+    pub destination: Option<String>,
+}
+
+impl Drop for FolderTrashOnlyGuard {
+    fn drop(&mut self) {
+        if let Some(inner) = self.hub.upgrade() {
+            inner.trashing_only_folders.lock().remove(&self.folder_id);
+        }
+    }
+}
+
 /// Why a session cannot move to Trash now, or `None` when it can.
 fn trash_refusal(meta: &super::SessionMeta, in_flight: bool) -> Option<&'static str> {
     if meta.closing {
@@ -104,6 +121,12 @@ impl Hub {
             let mut folders = self.inner.folders.lock();
             let mut candidate = folders.clone();
             let (trashed_folders, owners) = candidate.trash(actor, folder_ids, now_ms)?;
+            {
+                let busy = self.inner.trashing_only_folders.lock();
+                if trashed_folders.iter().any(|id| busy.contains(id)) {
+                    return Err("Folder is already moving to Trash; try again".into());
+                }
+            }
             let inside: HashSet<&str> = trashed_folders.iter().map(String::as_str).collect();
             let mut targets: Vec<(String, Option<String>)> = Vec::new();
             for id in session_ids {
@@ -410,8 +433,71 @@ impl Hub {
         })
     }
 
+    /// Per-key async serialization lock for session-draft transfers and restores.
+    #[must_use]
+    pub fn draft_transfer_lock(&self, key: &str) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.inner.draft_transfer_locks.lock();
+        locks
+            .entry(key.to_owned())
+            .or_insert_with(|| std::sync::Arc::new(tokio::sync::Mutex::new(())))
+            .clone()
+    }
+
+    #[must_use]
+    pub fn folder_is_trashing_only(&self, folder_id: &str) -> bool {
+        self.inner.trashing_only_folders.lock().contains(folder_id)
+    }
+
+    /// Validate folder & session ownership under lock and install the
+    /// `trashing_only_folders` fence BEFORE reparenting drafts in the database.
+    pub fn begin_folder_trash_only(
+        &self,
+        actor: &FolderActor,
+        folder_id: &str,
+    ) -> Result<FolderTrashOnlyGuard, String> {
+        let _guard = self.inner.sync_apply_gate.lock();
+        let sessions = self.inner.sessions.lock();
+        let folders = self.inner.folders.lock();
+        let Some(folder) = folders.folders().iter().find(|f| f.id == folder_id) else {
+            return Err("Folder no longer exists".into());
+        };
+        if !actor.sees_all && folder.owner_user_id != actor.user_id {
+            return Err("Not allowed to change this folder".into());
+        }
+        if folder.trashed_at_ms.is_some() {
+            return Err("Folder is already in Trash".into());
+        }
+        if self
+            .inner
+            .purging_draft_folders
+            .lock()
+            .contains_key(folder_id)
+        {
+            return Err("Folder is being deleted permanently; try again".into());
+        }
+        for (sid, session) in sessions.iter() {
+            if folders.placement_of(sid) == Some(folder_id)
+                && !actor.sees_all
+                && session.meta.owner_user_id != actor.user_id
+            {
+                return Err("Not allowed to move another user's session in this folder".into());
+            }
+        }
+        let mut busy = self.inner.trashing_only_folders.lock();
+        if !busy.insert(folder_id.to_owned()) {
+            return Err("Folder is already moving to Trash; try again".into());
+        }
+        Ok(FolderTrashOnlyGuard {
+            hub: std::sync::Arc::downgrade(&self.inner),
+            folder_id: folder_id.to_owned(),
+            owner: folder.owner_user_id.clone(),
+            destination: folder.parent.clone(),
+        })
+    }
+
     /// Atomically move a folder's direct child subfolders and explicit sessions
-    /// to its parent and move ONLY the now-empty folder to Trash.
+    /// to its parent (after checking session ownership under lock) and move
+    /// ONLY the now-empty folder to Trash.
     pub fn trash_folder_only(
         &self,
         actor: &FolderActor,
@@ -420,10 +506,18 @@ impl Hub {
     ) -> Result<crate::session_folders::TrashFolderOnlyDelta, String> {
         let _guard = self.inner.sync_apply_gate.lock();
         let (delta, folders_by_owner) = {
-            let _sessions = self.inner.sessions.lock();
+            let sessions = self.inner.sessions.lock();
             let mut folders = self.inner.folders.lock();
             let mut candidate = folders.clone();
-            let delta = candidate.trash_folder_only(actor, folder_id, now_ms)?;
+            let delta = candidate.trash_folder_only(actor, folder_id, now_ms, |sid| {
+                let Some(session) = sessions.get(sid) else {
+                    return Ok(());
+                };
+                if !actor.sees_all && session.meta.owner_user_id != actor.user_id {
+                    return Err("Not allowed to move another user's session in this folder".into());
+                }
+                Ok(())
+            })?;
             *folders = candidate;
             let folders_by_owner = vec![(
                 delta.owner.clone(),
@@ -435,24 +529,71 @@ impl Hub {
         Ok(delta)
     }
 
-    /// Ensure a restored legacy Draft folder exists and is live in the shared
-    /// sidebar folder tree and broadcast the update.
-    pub fn ensure_restored_draft_folder(
+    /// Undo one specific folder-only Trash deletion identified by exact
+    /// `expected_trashed_at_ms`, untrash ONLY `folder_id`, and move back only
+    /// still-matching moved child folders and owned sessions.
+    #[allow(clippy::too_many_arguments)]
+    pub fn undo_trash_folder_only(
         &self,
-        owner: FolderOwner,
+        actor: &FolderActor,
         folder_id: &str,
-        name: &str,
-        parent: Option<&str>,
-    ) {
+        expected_trashed_at_ms: i64,
+        destination: Option<&str>,
+        previous_project: Option<&str>,
+        moved_folders: &[String],
+        moved_sessions: &[String],
+    ) -> Result<FolderOwner, String> {
         let _guard = self.inner.sync_apply_gate.lock();
-        let folders_by_owner = {
+        let (owner, pins, folders_by_owner) = {
+            let sessions = self.inner.sessions.lock();
             let mut folders = self.inner.folders.lock();
-            if !folders.ensure_imported_live(owner.clone(), folder_id, name, parent) {
-                return;
+            if self
+                .inner
+                .purging_draft_folders
+                .lock()
+                .contains_key(folder_id)
+            {
+                return Err("Folder is being deleted permanently; try again".into());
             }
-            vec![(owner.clone(), folders.folders_of(owner.as_deref()))]
+            let mut candidate = folders.clone();
+            let (owner, pins) = candidate.undo_trash_folder_only(
+                actor,
+                folder_id,
+                expected_trashed_at_ms,
+                destination,
+                previous_project,
+                moved_folders,
+                moved_sessions,
+                |sid| {
+                    let Some(session) = sessions.get(sid) else {
+                        return Err("Session no longer exists".into());
+                    };
+                    if session.meta.closing || session.meta.trashed_at_ms.is_some() {
+                        return Err("Session is unavailable".into());
+                    }
+                    if !actor.sees_all && session.meta.owner_user_id != actor.user_id {
+                        return Err("Not allowed to move this session".into());
+                    }
+                    Ok(())
+                },
+            )?;
+            *folders = candidate;
+            let folders_by_owner = vec![(owner.clone(), folders.folders_of(owner.as_deref()))];
+            (owner, pins, folders_by_owner)
         };
-        self.persist_trash(&[], None, Vec::new(), folders_by_owner, false);
+        self.persist_trash(&[], None, pins, folders_by_owner, false);
+        Ok(owner)
+    }
+
+    /// Adopt a newly DB-inserted imported legacy Draft folder into Hub memory
+    /// and broadcast `"folders"` (called only on fresh deleted->live commits).
+    pub fn adopt_imported_draft_folder(&self, folder: crate::session_folders::SessionFolder) {
+        let _guard = self.inner.sync_apply_gate.lock();
+        let changed = self.inner.folders.lock().adopt_imported_live(folder);
+        if changed {
+            let value = self.inner.folders.lock().value();
+            self.sync_emit("folders", value, Vec::new());
+        }
     }
 
     pub fn announce_draft_purged(&self, owner: &str, purged: &[(String, i64)]) {
@@ -821,5 +962,66 @@ mod tests {
         drop(guard);
         let restored = hub.restore_items(&actor, &ids(&["f-parent"]), &[]).unwrap();
         assert_eq!(restored.folders, ids(&["f-parent"]));
+    }
+
+    #[test]
+    fn folder_only_trash_fence_and_exact_undo_preserve_unrelated_items() {
+        let hub = hub(&["s1", "s2"]);
+        folders(
+            &hub,
+            "create",
+            "c1",
+            json!({"id": "f-parent", "name": "Parent", "parent": null}),
+        );
+        folders(
+            &hub,
+            "create",
+            "c2",
+            json!({"id": "f-child", "name": "Child", "parent": "f-parent"}),
+        );
+        folders(
+            &hub,
+            "place",
+            "p1",
+            json!({"session_ids": ["s1"], "folder": "f-parent"}),
+        );
+        let actor = FolderActor::local();
+        let guard = hub.begin_folder_trash_only(&actor, "f-parent").unwrap();
+        assert!(hub.folder_is_trashing_only("f-parent"));
+        // Concurrent trash_items targeting the fenced folder is rejected (R2-3).
+        assert!(
+            hub.trash_items(&actor, &ids(&["f-parent"]), &[], 100)
+                .is_err()
+        );
+        let delta = hub.trash_folder_only(&actor, "f-parent", 100).unwrap();
+        drop(guard);
+        assert_eq!(delta.trashed_at_ms, 100);
+        assert_eq!(delta.moved_folders, ids(&["f-child"]));
+        assert_eq!(delta.moved_sessions, ids(&["s1"]));
+
+        // Wrong trashed_at_ms refuses undo (R2-18).
+        assert!(
+            hub.undo_trash_folder_only(
+                &actor,
+                "f-parent",
+                99,
+                delta.destination.as_deref(),
+                delta.previous_project.as_deref(),
+                &delta.moved_folders,
+                &delta.moved_sessions,
+            )
+            .is_err()
+        );
+        hub.undo_trash_folder_only(
+            &actor,
+            "f-parent",
+            100,
+            delta.destination.as_deref(),
+            delta.previous_project.as_deref(),
+            &delta.moved_folders,
+            &delta.moved_sessions,
+        )
+        .unwrap();
+        assert_eq!(placement(&hub, "s1"), "f-parent");
     }
 }

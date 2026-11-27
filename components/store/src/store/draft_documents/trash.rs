@@ -1,7 +1,8 @@
-//! Rollback-safe Draft Trash metadata, atomic optimistic purge, retention
-//! sweeps, tombstones, and folder-only draft reparenting.
+//! Rollback-safe revision-bound Draft Trash metadata, atomic optimistic purge,
+//! retention sweeps, tombstones, purged-op receipts, and folder-only reparenting.
 
-use super::{DraftDocument, DraftKind, StorageBackend, Store, legacy_stored};
+use super::{DraftDocument, DraftKind, DraftResult, StorageBackend, Store, legacy_stored};
+use crate::session_folders::SessionFolder;
 use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -21,75 +22,355 @@ pub enum PurgeDraftError {
     Invalid(String),
 }
 
-/// Persist a discovery-time timestamp for a legacy deleted draft that had no
-/// `draft_document_trash_meta` row, guaranteeing one full retention window
-/// instead of using a stale `updated_at_ms`.
-pub(super) async fn ensure_legacy_trash_timestamps(
+/// Optional server-only archive metadata passed when archiving a session queue
+/// draft to Trash.
+#[derive(Clone, Debug, Default)]
+pub struct DraftArchiveOptions<'a> {
+    pub raw_content_json: Option<&'a str>,
+    pub source_origin_json: Option<&'a str>,
+    pub source_is_recovery: bool,
+    pub request_hash_override: Option<&'a str>,
+    pub allow_session_provenance: bool,
+}
+
+/// Outcome of a draft mutation including any newly imported shared folder
+/// created atomically on a deleted->live Restore of a legacy `DraftKind::Folder`.
+#[derive(Debug)]
+pub struct DraftMutationOutcome {
+    pub result: DraftResult,
+    pub imported_folder: Option<SessionFolder>,
+}
+
+/// Full Trash archive record loaded for `restore-to-session`.
+#[derive(Clone, Debug)]
+pub struct DraftTrashRestoreRecord {
+    pub document: DraftDocument,
+    pub raw_content_json: Option<String>,
+    pub source_origin_json: Option<String>,
+    pub source_is_recovery: bool,
+}
+
+/// Recorded permanent-deletion tombstone (optionally carrying a winning
+/// session-restore receipt for idempotent replay after a lost response).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DraftTombstone {
+    pub revision: i64,
+    pub purged_at_ms: i64,
+    pub restore_op_id: Option<String>,
+    pub restored_row_id: Option<String>,
+}
+
+/// True when `raw_content_json` contains non-text ACP blocks (such as
+/// `resource_link`) that are not represented in the standalone document's
+/// `attachments`, so converting to a standalone draft via Restore would drop them.
+pub(super) fn has_unrepresented_acp_blocks(
+    raw_content_json: Option<&str>,
+    attachments: &[serde_json::Value],
+) -> bool {
+    let Some(raw) = raw_content_json else {
+        return false;
+    };
+    let Ok(blocks) = serde_json::from_str::<Vec<serde_json::Value>>(raw) else {
+        return false;
+    };
+    let non_text: Vec<&serde_json::Value> = blocks
+        .iter()
+        .filter(|b| b.get("type").and_then(serde_json::Value::as_str) != Some("text"))
+        .collect();
+    if non_text.is_empty() {
+        return false;
+    }
+    // Any resource_link or unprojected block cannot be represented in standalone
+    // DraftDocument attachments (which only project image & embedded resource).
+    if non_text.iter().any(|b| {
+        !matches!(
+            b.get("type").and_then(serde_json::Value::as_str),
+            Some("image" | "resource")
+        )
+    }) {
+        return true;
+    }
+    non_text.len() > attachments.len()
+}
+
+/// Reconcile deleted drafts whose `draft_document_trash_meta` is missing or
+/// bound to an older `revision` (e.g. after a rolled-back Controller restored,
+/// edited, and re-trashed the document). Runs under the owner's writer lock so
+/// discovery time is persisted once and stale raw blocks are cleared.
+pub(super) async fn sync_revision_bound_trash_meta(
     store: &Store,
     owner: &str,
-    docs: &mut [DraftDocument],
+    rows: &mut [(DraftDocument, Option<i64>)],
 ) -> Result<()> {
-    let missing: Vec<String> = docs
+    let mismatched: Vec<(String, i64)> = rows
         .iter()
-        .filter(|doc| doc.deleted && doc.trashed_at_ms.is_none())
-        .map(|doc| doc.id.clone())
+        .filter(|(doc, meta_rev)| doc.deleted && *meta_rev != Some(doc.revision))
+        .map(|(doc, _)| (doc.id.clone(), doc.revision))
         .collect();
-    if missing.is_empty() {
+    if mismatched.is_empty() {
         return Ok(());
     }
     let now = chrono::Utc::now().timestamp_millis();
-    macro_rules! backfill {
+    macro_rules! heal {
         ($db:expr) => {{
-            let mut resolved = HashMap::with_capacity(missing.len());
-            for id in &missing {
-                sqlx::query(
-                    "INSERT INTO draft_document_trash_meta (owner_user_id, document_id, trashed_at_ms) \
-                     VALUES ($1, $2, $3) ON CONFLICT (owner_user_id, document_id) DO NOTHING",
-                )
-                .bind(owner)
-                .bind(id)
-                .bind(now)
-                .execute(&$db.pool)
-                .await?;
-                if let Some(ts) = sqlx::query_scalar::<_, i64>(
-                    "SELECT trashed_at_ms FROM draft_document_trash_meta \
+            let mut tx = $db.pool.begin().await?;
+            sqlx::query(
+                "INSERT INTO draft_document_owners (owner_user_id, revision) VALUES ($1, 1) \
+                 ON CONFLICT (owner_user_id) DO UPDATE SET revision = draft_document_owners.revision + 1",
+            )
+            .bind(owner)
+            .execute(&mut *tx)
+            .await?;
+            let mut resolved = HashMap::with_capacity(mismatched.len());
+            for (id, rev) in &mismatched {
+                let current_meta: Option<(i64, i64)> = sqlx::query_as(
+                    "SELECT revision, trashed_at_ms FROM draft_document_trash_meta \
                      WHERE owner_user_id = $1 AND document_id = $2",
                 )
                 .bind(owner)
                 .bind(id)
-                .fetch_optional(&$db.pool)
-                .await?
+                .fetch_optional(&mut *tx)
+                .await?;
+                let ts = if let Some((existing_rev, existing_ts)) = current_meta
+                    && existing_rev == *rev
                 {
-                    resolved.insert(id.clone(), ts);
-                }
+                    existing_ts
+                } else {
+                    sqlx::query(
+                        "INSERT INTO draft_document_trash_meta \
+                         (owner_user_id, document_id, revision, trashed_at_ms, source_session_id, \
+                          raw_content_json, source_origin_json, source_is_recovery) \
+                         VALUES ($1, $2, $3, $4, NULL, NULL, NULL, 0) \
+                         ON CONFLICT (owner_user_id, document_id) DO UPDATE SET \
+                           revision = excluded.revision, \
+                           trashed_at_ms = excluded.trashed_at_ms, \
+                           source_session_id = NULL, \
+                           raw_content_json = NULL, \
+                           source_origin_json = NULL, \
+                           source_is_recovery = 0",
+                    )
+                    .bind(owner)
+                    .bind(id)
+                    .bind(*rev)
+                    .bind(now)
+                    .execute(&mut *tx)
+                    .await?;
+                    now
+                };
+                resolved.insert(id.clone(), ts);
             }
+            tx.commit().await?;
             resolved
         }};
     }
     let resolved = match &store.backend {
-        StorageBackend::Postgres(db) => backfill!(db),
-        StorageBackend::Sqlite(db) => backfill!(db),
+        StorageBackend::Postgres(db) => heal!(db),
+        StorageBackend::Sqlite(db) => heal!(db),
     };
-    for doc in docs.iter_mut() {
-        if doc.deleted && doc.trashed_at_ms.is_none() {
+    for (doc, meta_rev) in rows.iter_mut() {
+        if doc.deleted && *meta_rev != Some(doc.revision) {
             doc.trashed_at_ms = resolved.get(&doc.id).copied();
+            doc.source_session_id = None;
+            *meta_rev = Some(doc.revision);
         }
     }
     Ok(())
 }
 
+/// If a rolled-back Controller created a fresh document reusing a tombstoned ID
+/// with `doc.revision <= tomb.revision`, advance its revision past the tombstone
+/// and clear the stale tombstone under the writer lock so monotonic revisions
+/// hold while `draft_document_purged_ops` still rejects pre-purge op replays.
+pub(super) async fn reconcile_tombstone_collisions(
+    store: &Store,
+    owner: &str,
+    docs: &mut [DraftDocument],
+) -> Result<()> {
+    if docs.is_empty() {
+        return Ok(());
+    }
+    macro_rules! check_and_fix {
+        ($db:expr) => {{
+            let tombs: Vec<(String, i64)> = sqlx::query_as(
+                "SELECT document_id, revision FROM draft_document_tombstones WHERE owner_user_id = $1",
+            )
+            .bind(owner)
+            .fetch_all(&$db.pool)
+            .await?;
+            if tombs.is_empty() {
+                return Ok(());
+            }
+            let tomb_map: HashMap<String, i64> = tombs.into_iter().collect();
+            let collisions: Vec<(String, i64)> = docs
+                .iter()
+                .filter_map(|doc| tomb_map.get(&doc.id).map(|&t_rev| (doc.id.clone(), t_rev)))
+                .collect();
+            if collisions.is_empty() {
+                return Ok(());
+            }
+            let mut tx = $db.pool.begin().await?;
+            sqlx::query(
+                "INSERT INTO draft_document_owners (owner_user_id, revision) VALUES ($1, 1) \
+                 ON CONFLICT (owner_user_id) DO UPDATE SET revision = draft_document_owners.revision + 1",
+            )
+            .bind(owner)
+            .execute(&mut *tx)
+            .await?;
+            let mut bumped = HashMap::new();
+            for (id, t_rev) in collisions {
+                if let Some(raw) = sqlx::query_scalar::<_, String>(
+                    "SELECT value FROM draft_documents WHERE owner_user_id = $1 AND id = $2",
+                )
+                .bind(owner)
+                .bind(&id)
+                .fetch_optional(&mut *tx)
+                .await?
+                {
+                    let mut doc: DraftDocument = serde_json::from_str(&raw)?;
+                    if doc.revision <= t_rev {
+                        doc.revision = t_rev + 1;
+                        doc.body_revision = doc.body_revision.max(doc.revision);
+                        doc.metadata_revision = doc.metadata_revision.max(doc.revision);
+                        let stored = legacy_stored(&doc);
+                        let mut stored_meta = stored.clone();
+                        stored_meta.body.clear();
+                        stored_meta.attachments.clear();
+                        sqlx::query(
+                            "UPDATE draft_documents SET value = $3, metadata = $4 \
+                             WHERE owner_user_id = $1 AND id = $2",
+                        )
+                        .bind(owner)
+                        .bind(&id)
+                        .bind(serde_json::to_string(&stored)?)
+                        .bind(serde_json::to_string(&stored_meta)?)
+                        .execute(&mut *tx)
+                        .await?;
+                    }
+                    bumped.insert(id.clone(), doc.revision);
+                }
+                sqlx::query(
+                    "DELETE FROM draft_document_tombstones WHERE owner_user_id = $1 AND document_id = $2",
+                )
+                .bind(owner)
+                .bind(&id)
+                .execute(&mut *tx)
+                .await?;
+            }
+            tx.commit().await?;
+            bumped
+        }};
+    }
+    let bumped = match &store.backend {
+        StorageBackend::Postgres(db) => check_and_fix!(db),
+        StorageBackend::Sqlite(db) => check_and_fix!(db),
+    };
+    for doc in docs.iter_mut() {
+        if let Some(&rev) = bumped.get(&doc.id) {
+            doc.revision = rev;
+            doc.body_revision = doc.body_revision.max(rev);
+            doc.metadata_revision = doc.metadata_revision.max(rev);
+        }
+    }
+    Ok(())
+}
+
+macro_rules! purge_doomed_draft_tx {
+    ($tx:expr, $owner:expr, $id:expr, $purged_rev:expr, $now:expr, $restore_op:expr, $restored_row:expr) => {{
+        sqlx::query(
+            "INSERT INTO draft_document_purged_ops \
+             (owner_user_id, operation_id, request_hash, document_id, purged_revision) \
+             SELECT owner_user_id, operation_id, request_hash, document_id, $3 \
+             FROM draft_document_operations \
+             WHERE owner_user_id = $1 AND document_id = $2 \
+             ON CONFLICT (owner_user_id, operation_id) DO NOTHING",
+        )
+        .bind($owner)
+        .bind($id)
+        .bind($purged_rev)
+        .execute(&mut *$tx)
+        .await?;
+        sqlx::query(
+            "INSERT INTO draft_document_tombstones \
+             (owner_user_id, document_id, revision, purged_at_ms, restore_op_id, restored_row_id) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (owner_user_id, document_id) DO UPDATE SET \
+               revision = CASE WHEN draft_document_tombstones.revision > excluded.revision \
+                 THEN draft_document_tombstones.revision ELSE excluded.revision END, \
+               purged_at_ms = excluded.purged_at_ms, \
+               restore_op_id = COALESCE(excluded.restore_op_id, draft_document_tombstones.restore_op_id), \
+               restored_row_id = COALESCE(excluded.restored_row_id, draft_document_tombstones.restored_row_id)",
+        )
+        .bind($owner)
+        .bind($id)
+        .bind($purged_rev)
+        .bind($now)
+        .bind($restore_op)
+        .bind($restored_row)
+        .execute(&mut *$tx)
+        .await?;
+        sqlx::query(
+            "DELETE FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2",
+        )
+        .bind($owner)
+        .bind($id)
+        .execute(&mut *$tx)
+        .await?;
+        sqlx::query(
+            "DELETE FROM draft_document_trash_meta WHERE owner_user_id = $1 AND document_id = $2",
+        )
+        .bind($owner)
+        .bind($id)
+        .execute(&mut *$tx)
+        .await?;
+        sqlx::query("DELETE FROM draft_documents WHERE owner_user_id = $1 AND id = $2")
+            .bind($owner)
+            .bind($id)
+            .execute(&mut *$tx)
+            .await?;
+    }};
+}
+
 impl Store {
-    /// Load a trashed draft's full document (with Trash metadata) plus any
-    /// preserved raw ACP `content` blocks JSON for verbatim session restore.
+    /// Look up a permanent-deletion tombstone for `(owner, id)`.
+    pub async fn draft_tombstone(&self, owner: &str, id: &str) -> Result<Option<DraftTombstone>> {
+        macro_rules! read {
+            ($db:expr) => {
+                sqlx::query_as::<_, (i64, i64, Option<String>, Option<String>)>(
+                    "SELECT revision, purged_at_ms, restore_op_id, restored_row_id \
+                     FROM draft_document_tombstones WHERE owner_user_id = $1 AND document_id = $2",
+                )
+                .bind(owner)
+                .bind(id)
+                .fetch_optional(&$db.pool)
+                .await?
+            };
+        }
+        let row = match &self.backend {
+            StorageBackend::Postgres(db) => read!(db),
+            StorageBackend::Sqlite(db) => read!(db),
+        };
+        Ok(row.map(
+            |(revision, purged_at_ms, restore_op_id, restored_row_id)| DraftTombstone {
+                revision,
+                purged_at_ms,
+                restore_op_id,
+                restored_row_id,
+            },
+        ))
+    }
+
+    /// Load a trashed draft's full document (with revision-bound Trash metadata)
+    /// plus preserved raw ACP blocks, `DeliveryOrigin`, and recovery flag.
     pub async fn draft_trash_for_restore(
         &self,
         owner: &str,
         id: &str,
-    ) -> Result<Option<(DraftDocument, Option<String>)>> {
+    ) -> Result<Option<DraftTrashRestoreRecord>> {
         macro_rules! read {
             ($db:expr) => {
-                sqlx::query_as::<_, (String, Option<i64>, Option<String>, Option<String>)>(
-                    "SELECT d.value, m.trashed_at_ms, m.source_session_id, m.raw_content_json \
+                sqlx::query_as::<_, (String, Option<i64>, Option<i64>, Option<String>, Option<String>, Option<String>, Option<i32>)>(
+                    "SELECT d.value, m.revision, m.trashed_at_ms, m.source_session_id, \
+                            m.raw_content_json, m.source_origin_json, m.source_is_recovery \
                      FROM draft_documents d \
                      LEFT JOIN draft_document_trash_meta m \
                        ON m.owner_user_id = d.owner_user_id AND m.document_id = d.id \
@@ -105,25 +386,45 @@ impl Store {
             StorageBackend::Postgres(db) => read!(db),
             StorageBackend::Sqlite(db) => read!(db),
         };
-        let Some((value, trashed_at_ms, source_session_id, raw_content_json)) = row else {
+        let Some((value, meta_rev, trashed_at, source_session, raw_content, source_origin, is_rec)) =
+            row
+        else {
             return Ok(None);
         };
         let mut doc: DraftDocument = serde_json::from_str(&value)?;
-        doc.trashed_at_ms = trashed_at_ms;
-        doc.source_session_id = source_session_id;
-        ensure_legacy_trash_timestamps(self, owner, std::slice::from_mut(&mut doc)).await?;
-        Ok(Some((doc, raw_content_json)))
+        let rev_matches = doc.deleted && meta_rev == Some(doc.revision);
+        if rev_matches {
+            doc.trashed_at_ms = trashed_at;
+            doc.source_session_id = source_session;
+        }
+        let mut pair = [(doc, if rev_matches { meta_rev } else { None })];
+        sync_revision_bound_trash_meta(self, owner, &mut pair).await?;
+        let (doc, _) = pair.into_iter().next().unwrap();
+        Ok(Some(DraftTrashRestoreRecord {
+            document: doc,
+            raw_content_json: if rev_matches { raw_content } else { None },
+            source_origin_json: if rev_matches { source_origin } else { None },
+            source_is_recovery: rev_matches && is_rec.unwrap_or(0) != 0,
+        }))
     }
 
-    /// Permanently delete trashed drafts whose observed `revision` and
-    /// `trashed_at_ms` still match inside one serialized transaction.
-    /// Keeps `draft_document_operations` receipts and records tombstones so a
-    /// retried `Create` can never resurrect purged content.
-    #[allow(clippy::too_many_lines)] // dual-backend atomic transaction macro
     pub async fn purge_trashed_drafts(
         &self,
         owner: &str,
         targets: &[PurgeDraftTarget],
+    ) -> Result<std::result::Result<Vec<(String, i64)>, PurgeDraftError>> {
+        self.purge_trashed_drafts_with_restore_receipt(owner, targets, None)
+            .await
+    }
+
+    /// Permanently delete trashed drafts whose observed `revision` and
+    /// revision-bound `trashed_at_ms` still match inside one serialized tx.
+    #[allow(clippy::too_many_lines)] // dual-backend atomic transaction macro
+    pub async fn purge_trashed_drafts_with_restore_receipt(
+        &self,
+        owner: &str,
+        targets: &[PurgeDraftTarget],
+        restore_receipt: Option<(&str, &str)>,
     ) -> Result<std::result::Result<Vec<(String, i64)>, PurgeDraftError>> {
         if targets.is_empty() || targets.len() > 500 {
             return Ok(Err(PurgeDraftError::Invalid(
@@ -131,6 +432,10 @@ impl Store {
             )));
         }
         let now = chrono::Utc::now().timestamp_millis();
+        let (restore_op, restored_row) = match restore_receipt {
+            Some((op, row)) => (Some(op), Some(row)),
+            None => (None, None),
+        };
         macro_rules! purge_tx {
             ($db:expr, $folder_query:literal) => {{
                 let mut tx = $db.pool.begin().await?;
@@ -158,8 +463,8 @@ impl Store {
                     if !seen.insert(target.id.as_str()) {
                         continue;
                     }
-                    let row: Option<(String, Option<i64>)> = sqlx::query_as(
-                        "SELECT d.metadata, m.trashed_at_ms \
+                    let row: Option<(String, Option<i64>, Option<i64>)> = sqlx::query_as(
+                        "SELECT d.metadata, m.revision, m.trashed_at_ms \
                          FROM draft_documents d \
                          LEFT JOIN draft_document_trash_meta m \
                            ON m.owner_user_id = d.owner_user_id AND m.document_id = d.id \
@@ -169,15 +474,16 @@ impl Store {
                     .bind(&target.id)
                     .fetch_optional(&mut *tx)
                     .await?;
-                    let Some((meta, meta_trashed_at)) = row else {
-                        if let Some(tomb_rev) = sqlx::query_scalar::<_, i64>(
-                            "SELECT revision FROM draft_document_tombstones \
-                             WHERE owner_user_id = $1 AND document_id = $2",
-                        )
-                        .bind(owner)
-                        .bind(&target.id)
-                        .fetch_optional(&mut *tx)
-                        .await?
+                    let Some((meta, meta_rev, meta_trashed_at)) = row else {
+                        if restore_op.is_none()
+                            && let Some(tomb_rev) = sqlx::query_scalar::<_, i64>(
+                                "SELECT revision FROM draft_document_tombstones \
+                                 WHERE owner_user_id = $1 AND document_id = $2",
+                            )
+                            .bind(owner)
+                            .bind(&target.id)
+                            .fetch_optional(&mut *tx)
+                            .await?
                         {
                             already_purged.push((target.id.clone(), tomb_rev));
                             continue;
@@ -195,7 +501,8 @@ impl Store {
                         )));
                     }
                     let eligible = if doc.deleted {
-                        meta_trashed_at == Some(target.expected_trashed_at_ms)
+                        meta_rev == Some(doc.revision)
+                            && meta_trashed_at == Some(target.expected_trashed_at_ms)
                     } else {
                         doc.parent_id
                             .as_deref()
@@ -211,42 +518,7 @@ impl Store {
                     doomed.push((doc.id, doc.revision + 1));
                 }
                 for (id, purged_rev) in &doomed {
-                    sqlx::query(
-                        "INSERT INTO draft_document_tombstones \
-                         (owner_user_id, document_id, revision, purged_at_ms) \
-                         VALUES ($1, $2, $3, $4) \
-                         ON CONFLICT (owner_user_id, document_id) DO UPDATE SET \
-                           revision = CASE WHEN draft_document_tombstones.revision > excluded.revision \
-                             THEN draft_document_tombstones.revision ELSE excluded.revision END, \
-                           purged_at_ms = excluded.purged_at_ms",
-                    )
-                    .bind(owner)
-                    .bind(id)
-                    .bind(*purged_rev)
-                    .bind(now)
-                    .execute(&mut *tx)
-                    .await?;
-                    sqlx::query(
-                        "DELETE FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2",
-                    )
-                    .bind(owner)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await?;
-                    sqlx::query(
-                        "DELETE FROM draft_document_trash_meta WHERE owner_user_id = $1 AND document_id = $2",
-                    )
-                    .bind(owner)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await?;
-                    sqlx::query(
-                        "DELETE FROM draft_documents WHERE owner_user_id = $1 AND id = $2",
-                    )
-                    .bind(owner)
-                    .bind(id)
-                    .execute(&mut *tx)
-                    .await?;
+                    purge_doomed_draft_tx!(tx, owner, id, *purged_rev, now, restore_op, restored_row);
                 }
                 tx.commit().await?;
                 already_purged.extend(doomed);
@@ -269,14 +541,14 @@ impl Store {
     }
 
     /// Every deleted draft across all owners for the Trash retention sweep:
-    /// `(owner_user_id, id, trashed_at_ms)`. Any legacy deleted draft lacking
-    /// `draft_document_trash_meta` persists `now_ms` first, granting one full
-    /// retention window instead of judging by stale `updated_at_ms`.
+    /// `(owner_user_id, id, trashed_at_ms)`. Any legacy deleted draft or
+    /// rollback-mismatched draft has its revision-bound timestamp healed first
+    /// under the owner's writer lock.
     pub async fn list_trashed_drafts_for_retention(&self) -> Result<Vec<(String, String, i64)>> {
         macro_rules! scan {
             ($db:expr, $cond:literal) => {{
-                sqlx::query_as::<_, (String, String, Option<i64>)>(concat!(
-                    "SELECT d.owner_user_id, d.id, m.trashed_at_ms \
+                sqlx::query_as::<_, (String, String, Option<i64>, Option<i64>)>(concat!(
+                    "SELECT d.owner_user_id, d.metadata, m.revision, m.trashed_at_ms \
                      FROM draft_documents d \
                      LEFT JOIN draft_document_trash_meta m \
                        ON m.owner_user_id = d.owner_user_id AND m.document_id = d.id \
@@ -293,48 +565,31 @@ impl Store {
             }
             StorageBackend::Sqlite(db) => scan!(db, "json_extract(d.metadata, '$.deleted') = 1"),
         };
-        let now = chrono::Utc::now().timestamp_millis();
-        let mut out = Vec::with_capacity(rows.len());
-        for (owner, id, trashed_at) in rows {
-            if let Some(at) = trashed_at {
-                out.push((owner, id, at));
+        let mut by_owner: HashMap<String, Vec<(DraftDocument, Option<i64>)>> = HashMap::new();
+        for (owner, raw, meta_rev, trashed_at) in rows {
+            let mut doc: DraftDocument = serde_json::from_str(&raw)?;
+            if !doc.deleted {
                 continue;
             }
-            macro_rules! seed_one {
-                ($db:expr) => {{
-                    sqlx::query(
-                        "INSERT INTO draft_document_trash_meta (owner_user_id, document_id, trashed_at_ms) \
-                         VALUES ($1, $2, $3) ON CONFLICT (owner_user_id, document_id) DO NOTHING",
-                    )
-                    .bind(&owner)
-                    .bind(&id)
-                    .bind(now)
-                    .execute(&$db.pool)
-                    .await?;
-                    sqlx::query_scalar::<_, i64>(
-                        "SELECT trashed_at_ms FROM draft_document_trash_meta \
-                         WHERE owner_user_id = $1 AND document_id = $2",
-                    )
-                    .bind(&owner)
-                    .bind(&id)
-                    .fetch_optional(&$db.pool)
-                    .await?
-                }};
+            if meta_rev == Some(doc.revision) {
+                doc.trashed_at_ms = trashed_at;
             }
-            let persisted = match &self.backend {
-                StorageBackend::Postgres(db) => seed_one!(db),
-                StorageBackend::Sqlite(db) => seed_one!(db),
-            };
-            if let Some(at) = persisted {
-                out.push((owner, id, at));
+            by_owner.entry(owner).or_default().push((doc, meta_rev));
+        }
+        let mut out = Vec::new();
+        for (owner, mut items) in by_owner {
+            sync_revision_bound_trash_meta(self, &owner, &mut items).await?;
+            for (doc, _) in items {
+                if let Some(at) = doc.trashed_at_ms {
+                    out.push((owner.clone(), doc.id, at));
+                }
             }
         }
         Ok(out)
     }
 
     /// Permanently purge one expired trashed draft only if it is still deleted
-    /// at the exact persisted `expected_trashed_at_ms` judged by retention.
-    /// Returns `Some(purged_revision)` when deleted.
+    /// at the exact revision-bound `expected_trashed_at_ms`.
     pub async fn purge_expired_draft(
         &self,
         owner: &str,
@@ -352,8 +607,8 @@ impl Store {
                 .bind(owner)
                 .execute(&mut *tx)
                 .await?;
-                let row: Option<(String, Option<i64>)> = sqlx::query_as(
-                    "SELECT d.metadata, m.trashed_at_ms \
+                let row: Option<(String, Option<i64>, Option<i64>)> = sqlx::query_as(
+                    "SELECT d.metadata, m.revision, m.trashed_at_ms \
                      FROM draft_documents d \
                      LEFT JOIN draft_document_trash_meta m \
                        ON m.owner_user_id = d.owner_user_id AND m.document_id = d.id \
@@ -363,14 +618,30 @@ impl Store {
                 .bind(id)
                 .fetch_optional(&mut *tx)
                 .await?;
-                let Some((meta, trashed_at)) = row else {
+                let Some((meta, meta_rev, trashed_at)) = row else {
                     return Ok(None);
                 };
                 let doc: DraftDocument = serde_json::from_str(&meta)?;
-                if !doc.deleted || trashed_at != Some(expected_trashed_at_ms) {
+                if !doc.deleted
+                    || meta_rev != Some(doc.revision)
+                    || trashed_at != Some(expected_trashed_at_ms)
+                {
                     return Ok(None);
                 }
                 let purged_rev = doc.revision + 1;
+                sqlx::query(
+                    "INSERT INTO draft_document_purged_ops \
+                     (owner_user_id, operation_id, request_hash, document_id, purged_revision) \
+                     SELECT owner_user_id, operation_id, request_hash, document_id, $3 \
+                     FROM draft_document_operations \
+                     WHERE owner_user_id = $1 AND document_id = $2 \
+                     ON CONFLICT (owner_user_id, operation_id) DO NOTHING",
+                )
+                .bind(owner)
+                .bind(id)
+                .bind(purged_rev)
+                .execute(&mut *tx)
+                .await?;
                 sqlx::query(
                     "INSERT INTO draft_document_tombstones \
                      (owner_user_id, document_id, revision, purged_at_ms) \
@@ -416,67 +687,78 @@ impl Store {
     }
 
     /// Atomically move every live draft directly inside `folder_id` up to
-    /// `destination` under the owner's writer lock. Used by folder-only Trash
-    /// so no concurrent or locally unloaded draft can ever be swept into Trash.
+    /// `destination`. When `owner_scope` is `None` (an unowned shared folder),
+    /// reparents across every owner in `draft_document_owners`.
     pub async fn reparent_drafts_out_of_folder(
         &self,
-        owner: &str,
+        owner_scope: Option<&str>,
         folder_id: &str,
         destination: Option<&str>,
-    ) -> Result<Vec<DraftDocument>> {
+    ) -> Result<Vec<(String, DraftDocument)>> {
         let now = chrono::Utc::now().timestamp_millis();
         macro_rules! reparent {
             ($db:expr) => {{
                 let mut tx = $db.pool.begin().await?;
-                sqlx::query(
-                    "INSERT INTO draft_document_owners (owner_user_id, revision) VALUES ($1, 1) \
-                     ON CONFLICT (owner_user_id) DO UPDATE SET revision = draft_document_owners.revision + 1",
-                )
-                .bind(owner)
-                .execute(&mut *tx)
-                .await?;
-                let rows: Vec<String> = sqlx::query_scalar(
-                    "SELECT metadata FROM draft_documents WHERE owner_user_id = $1 ORDER BY id",
-                )
-                .bind(owner)
-                .fetch_all(&mut *tx)
-                .await?;
+                let owners: Vec<String> = if let Some(owner) = owner_scope {
+                    vec![owner.to_owned()]
+                } else {
+                    sqlx::query_scalar(
+                        "SELECT owner_user_id FROM draft_document_owners ORDER BY owner_user_id",
+                    )
+                    .fetch_all(&mut *tx)
+                    .await?
+                };
                 let mut moved = Vec::new();
-                for raw in rows {
-                    let meta: DraftDocument = serde_json::from_str(&raw)?;
-                    if meta.deleted
-                        || meta.kind != DraftKind::Document
-                        || meta.parent_id.as_deref() != Some(folder_id)
-                    {
-                        continue;
-                    }
-                    let full: String = sqlx::query_scalar(
-                        "SELECT value FROM draft_documents WHERE owner_user_id = $1 AND id = $2",
-                    )
-                    .bind(owner)
-                    .bind(&meta.id)
-                    .fetch_one(&mut *tx)
-                    .await?;
-                    let mut doc: DraftDocument = serde_json::from_str(&full)?;
-                    doc.parent_id = destination.map(str::to_owned);
-                    doc.revision += 1;
-                    doc.metadata_revision += 1;
-                    doc.updated_at_ms = now;
-                    let stored = legacy_stored(&doc);
-                    let mut stored_meta = stored.clone();
-                    stored_meta.body.clear();
-                    stored_meta.attachments.clear();
+                for owner in owners {
                     sqlx::query(
-                        "UPDATE draft_documents SET value = $3, metadata = $4 \
-                         WHERE owner_user_id = $1 AND id = $2",
+                        "INSERT INTO draft_document_owners (owner_user_id, revision) VALUES ($1, 1) \
+                         ON CONFLICT (owner_user_id) DO UPDATE SET revision = draft_document_owners.revision + 1",
                     )
-                    .bind(owner)
-                    .bind(&doc.id)
-                    .bind(serde_json::to_string(&stored)?)
-                    .bind(serde_json::to_string(&stored_meta)?)
+                    .bind(&owner)
                     .execute(&mut *tx)
                     .await?;
-                    moved.push(doc);
+                    let rows: Vec<String> = sqlx::query_scalar(
+                        "SELECT metadata FROM draft_documents WHERE owner_user_id = $1 ORDER BY id",
+                    )
+                    .bind(&owner)
+                    .fetch_all(&mut *tx)
+                    .await?;
+                    for raw in rows {
+                        let meta: DraftDocument = serde_json::from_str(&raw)?;
+                        if meta.deleted
+                            || meta.kind != DraftKind::Document
+                            || meta.parent_id.as_deref() != Some(folder_id)
+                        {
+                            continue;
+                        }
+                        let full: String = sqlx::query_scalar(
+                            "SELECT value FROM draft_documents WHERE owner_user_id = $1 AND id = $2",
+                        )
+                        .bind(&owner)
+                        .bind(&meta.id)
+                        .fetch_one(&mut *tx)
+                        .await?;
+                        let mut doc: DraftDocument = serde_json::from_str(&full)?;
+                        doc.parent_id = destination.map(str::to_owned);
+                        doc.revision += 1;
+                        doc.metadata_revision += 1;
+                        doc.updated_at_ms = now;
+                        let stored = legacy_stored(&doc);
+                        let mut stored_meta = stored.clone();
+                        stored_meta.body.clear();
+                        stored_meta.attachments.clear();
+                        sqlx::query(
+                            "UPDATE draft_documents SET value = $3, metadata = $4 \
+                             WHERE owner_user_id = $1 AND id = $2",
+                        )
+                        .bind(&owner)
+                        .bind(&doc.id)
+                        .bind(serde_json::to_string(&stored)?)
+                        .bind(serde_json::to_string(&stored_meta)?)
+                        .execute(&mut *tx)
+                        .await?;
+                        moved.push((owner.clone(), doc));
+                    }
                 }
                 tx.commit().await?;
                 moved
@@ -488,58 +770,167 @@ impl Store {
         })
     }
 
-    /// Look up the imported shared `session_folders.id` for a legacy draft folder.
-    pub async fn draft_folder_import_id(
+    /// Move back only those drafts from a folder-only Undo whose `parent_id`
+    /// and `metadata_revision` still match the original reparent.
+    pub async fn undo_reparent_drafts_to_folder(
         &self,
-        owner: &str,
-        document_id: &str,
-    ) -> Result<Option<String>> {
-        macro_rules! read {
-            ($db:expr) => {
-                sqlx::query_scalar::<_, String>(
-                    "SELECT folder_id FROM draft_workspace_folder_imports \
-                     WHERE owner_user_id = $1 AND document_id = $2",
-                )
-                .bind(owner)
-                .bind(document_id)
-                .fetch_optional(&$db.pool)
-                .await?
-            };
+        folder_id: &str,
+        expected_parent: Option<&str>,
+        targets: &[(String, String, i64)],
+    ) -> Result<Vec<(String, DraftDocument)>> {
+        if targets.is_empty() {
+            return Ok(Vec::new());
+        }
+        let now = chrono::Utc::now().timestamp_millis();
+        let mut by_owner: std::collections::BTreeMap<&str, Vec<(&str, i64)>> =
+            std::collections::BTreeMap::new();
+        for (owner, doc_id, meta_rev) in targets {
+            by_owner
+                .entry(owner.as_str())
+                .or_default()
+                .push((doc_id.as_str(), *meta_rev));
+        }
+        macro_rules! undo_reparent {
+            ($db:expr) => {{
+                let mut tx = $db.pool.begin().await?;
+                let mut moved = Vec::new();
+                for (owner, items) in &by_owner {
+                    sqlx::query(
+                        "INSERT INTO draft_document_owners (owner_user_id, revision) VALUES ($1, 1) \
+                         ON CONFLICT (owner_user_id) DO UPDATE SET revision = draft_document_owners.revision + 1",
+                    )
+                    .bind(*owner)
+                    .execute(&mut *tx)
+                    .await?;
+                    for &(doc_id, expected_meta_rev) in items {
+                        let Some(full) = sqlx::query_scalar::<_, String>(
+                            "SELECT value FROM draft_documents WHERE owner_user_id = $1 AND id = $2",
+                        )
+                        .bind(*owner)
+                        .bind(doc_id)
+                        .fetch_optional(&mut *tx)
+                        .await?
+                        else {
+                            continue;
+                        };
+                        let mut doc: DraftDocument = serde_json::from_str(&full)?;
+                        if doc.deleted
+                            || doc.parent_id.as_deref() != expected_parent
+                            || doc.metadata_revision != expected_meta_rev
+                        {
+                            continue;
+                        }
+                        doc.parent_id = Some(folder_id.to_owned());
+                        doc.revision += 1;
+                        doc.metadata_revision += 1;
+                        doc.updated_at_ms = now;
+                        let stored = legacy_stored(&doc);
+                        let mut stored_meta = stored.clone();
+                        stored_meta.body.clear();
+                        stored_meta.attachments.clear();
+                        sqlx::query(
+                            "UPDATE draft_documents SET value = $3, metadata = $4 \
+                             WHERE owner_user_id = $1 AND id = $2",
+                        )
+                        .bind(*owner)
+                        .bind(&doc.id)
+                        .bind(serde_json::to_string(&stored)?)
+                        .bind(serde_json::to_string(&stored_meta)?)
+                        .execute(&mut *tx)
+                        .await?;
+                        moved.push(((*owner).to_owned(), doc));
+                    }
+                }
+                tx.commit().await?;
+                moved
+            }};
         }
         Ok(match &self.backend {
-            StorageBackend::Postgres(db) => read!(db),
-            StorageBackend::Sqlite(db) => read!(db),
+            StorageBackend::Postgres(db) => undo_reparent!(db),
+            StorageBackend::Sqlite(db) => undo_reparent!(db),
         })
     }
 }
 
 macro_rules! sync_trash_meta_tx {
-    ($tx:expr, $owner:expr, $next:expr, $change:expr, $now:expr, $raw_content_json:expr) => {
+    ($tx:expr, $owner:expr, $next:expr, $change:expr, $now:expr, $opts:expr, $insert_folder_sql:literal) => {{
+        let mut imported_folder: Option<$crate::session_folders::SessionFolder> = None;
         if $next.deleted {
             sqlx::query(
                 "INSERT INTO draft_document_trash_meta \
-                 (owner_user_id, document_id, trashed_at_ms, source_session_id, raw_content_json) \
-                 VALUES ($1, $2, $3, $4, $5) \
+                 (owner_user_id, document_id, revision, trashed_at_ms, source_session_id, \
+                  raw_content_json, source_origin_json, source_is_recovery) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8) \
                  ON CONFLICT (owner_user_id, document_id) DO UPDATE SET \
+                   revision = excluded.revision, \
                    trashed_at_ms = excluded.trashed_at_ms, \
                    source_session_id = excluded.source_session_id, \
-                   raw_content_json = COALESCE(excluded.raw_content_json, draft_document_trash_meta.raw_content_json)",
+                   raw_content_json = excluded.raw_content_json, \
+                   source_origin_json = excluded.source_origin_json, \
+                   source_is_recovery = excluded.source_is_recovery",
             )
             .bind($owner)
             .bind(&$next.id)
+            .bind($next.revision)
             .bind($next.trashed_at_ms.unwrap_or($now))
             .bind($next.source_session_id.as_deref())
-            .bind($raw_content_json)
+            .bind($opts.raw_content_json)
+            .bind($opts.source_origin_json)
+            .bind(i32::from($opts.source_is_recovery))
             .execute(&mut *$tx)
             .await?;
         } else {
-            sqlx::query("DELETE FROM draft_document_trash_meta WHERE owner_user_id = $1 AND document_id = $2")
-                .bind($owner).bind(&$next.id).execute(&mut *$tx).await?;
-            if matches!($change, $crate::store::draft_documents::DraftChange::Restore) && $next.kind == $crate::store::draft_documents::DraftKind::Folder {
+            sqlx::query(
+                "DELETE FROM draft_document_trash_meta WHERE owner_user_id = $1 AND document_id = $2",
+            )
+            .bind($owner)
+            .bind(&$next.id)
+            .execute(&mut *$tx)
+            .await?;
+            if matches!($change, $crate::store::draft_documents::DraftChange::Restore)
+                && $next.kind == $crate::store::draft_documents::DraftKind::Folder
+            {
                 let folder_id = format!(
                     "f-draft-{}",
-                    crate::digest::hex_sha256(&serde_json::to_vec(&($owner, &$next.id))?)
+                    $crate::digest::hex_sha256(&serde_json::to_vec(&($owner, &$next.id))?)
                 );
+                let mut resolved_parent: Option<String> = None;
+                if let Some(raw_parent) = $next.parent_id.as_deref() {
+                    let mapped_parent: Option<String> = sqlx::query_scalar(
+                        "SELECT folder_id FROM draft_workspace_folder_imports \
+                         WHERE owner_user_id = $1 AND document_id = $2",
+                    )
+                    .bind($owner)
+                    .bind(raw_parent)
+                    .fetch_optional(&mut *$tx)
+                    .await?;
+                    let candidate = mapped_parent.as_deref().unwrap_or(raw_parent);
+                    let live: Option<Option<i64>> = sqlx::query_scalar(
+                        "SELECT trashed_at_ms FROM session_folders \
+                         WHERE id = $1 AND (owner_user_id IS NULL OR owner_user_id = $2)",
+                    )
+                    .bind(candidate)
+                    .bind($owner)
+                    .fetch_optional(&mut *$tx)
+                    .await?;
+                    if live == Some(None) {
+                        resolved_parent = Some(candidate.to_owned());
+                    }
+                }
+                let position: i64 = sqlx::query_scalar(
+                    "SELECT COALESCE(MAX(position), -1) + 1 FROM session_folders",
+                )
+                .fetch_one(&mut *$tx)
+                .await?;
+                let res = sqlx::query($insert_folder_sql)
+                    .bind(&folder_id)
+                    .bind($owner)
+                    .bind(&$next.title)
+                    .bind(resolved_parent.as_deref())
+                    .bind(position)
+                    .bind($now)
+                    .execute(&mut *$tx)
+                    .await?;
                 sqlx::query(
                     "INSERT INTO draft_workspace_folder_imports (owner_user_id, document_id, folder_id) \
                      VALUES ($1, $2, $3) ON CONFLICT (owner_user_id, document_id) DO NOTHING",
@@ -549,8 +940,21 @@ macro_rules! sync_trash_meta_tx {
                 .bind(&folder_id)
                 .execute(&mut *$tx)
                 .await?;
+                if res.rows_affected() > 0 {
+                    imported_folder = Some($crate::session_folders::SessionFolder {
+                        id: folder_id,
+                        owner_user_id: Some($owner.to_owned()),
+                        name: $next.title.clone(),
+                        parent: resolved_parent,
+                        project: None,
+                        position,
+                        defaults: Default::default(),
+                        trashed_at_ms: None,
+                    });
+                }
             }
         }
-    };
+        imported_folder
+    }};
 }
 pub(super) use sync_trash_meta_tx;

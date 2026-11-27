@@ -463,8 +463,15 @@ export function resolveMobileActivityState(
     if (summary.needsYouCount > 0) parts.push(`${String(summary.needsYouCount)} needs you`);
     if (summary.failedUnseenCount > 0) parts.push(`${String(summary.failedUnseenCount)} failed`);
     if (summary.activeCount > 0) parts.push(`${String(summary.activeCount)} active`);
-    if (parts.length === 0 && summary.endedCount > 0) parts.push(`${String(summary.endedCount)} ended`);
-    else if (parts.length === 0 && summary.totalCount > 0) parts.push(`${String(summary.totalCount)} unconfirmed`);
+    if (summary.notReportingCount > 0) parts.push(`${String(summary.notReportingCount)} unconfirmed`);
+    if (
+      summary.needsYouCount === 0 &&
+      summary.failedUnseenCount === 0 &&
+      summary.activeCount === 0 &&
+      summary.endedCount > 0
+    ) {
+      parts.push(`${String(summary.endedCount)} ended`);
+    }
   }
   if (hasBranches) {
     parts.push(`${String(relationCount)} ${relationCount === 1 ? "branch" : "branches"}`);

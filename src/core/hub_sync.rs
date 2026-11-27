@@ -530,6 +530,20 @@ impl Hub {
         self.sync_apply_as_locked(actor, state, id, name, args)
     }
 
+    fn ensure_folder_not_trashing_only(&self, args: &serde_json::Value) -> Result<(), String> {
+        let busy = self.inner.trashing_only_folders.lock();
+        if !busy.is_empty()
+            && ["id", "parent", "folder"].iter().any(|k| {
+                args.get(*k)
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|v| busy.contains(v))
+            })
+        {
+            return Err("Folder is moving to Trash; try again".into());
+        }
+        Ok(())
+    }
+
     pub(super) fn sync_apply_as_locked(
         &self,
         actor: &crate::session_folders::FolderActor,
@@ -617,6 +631,7 @@ impl Hub {
                 Op::Reorder { order }
             }
             ("folders", name) => {
+                self.ensure_folder_not_trashing_only(args)?;
                 // A retried delivery must not be re-validated against the state
                 // it already changed ("folder id already exists"). Confirm it
                 // again: the resending client may have missed the first patch.

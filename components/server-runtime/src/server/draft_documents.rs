@@ -1,11 +1,11 @@
 //! Product writing routes deliberately have no session/Machine extractor.
 use super::*;
-use crate::store::draft_documents::{DraftChange, DraftKind, DraftMutation, DraftResult};
+use crate::store::draft_documents::{DraftArchiveOptions, DraftChange, DraftMutation, DraftResult};
 
+mod folder_trash_routes;
 mod trash_routes;
-pub use trash_routes::{
-    purge, read_literal_purge, restore_to_session, trash_folder_only, trash_session_draft,
-};
+pub use folder_trash_routes::{trash_folder_only, undo_trash_folder_only};
+pub use trash_routes::{purge, read_literal_purge, restore_to_session, trash_session_draft};
 
 fn error(status: StatusCode, message: &str) -> Response {
     (status, Json(serde_json::json!({"error": message}))).into_response()
@@ -184,30 +184,46 @@ pub async fn mutate(
             "Durable storage is unavailable",
         );
     };
+    if let DraftChange::Create {
+        parent_id: Some(pid),
+        ..
+    }
+    | DraftChange::Move {
+        parent_id: Some(pid),
+    } = &mutation.change
+        && state.hub.folder_is_trashing_only(pid)
+    {
+        return error(
+            StatusCode::CONFLICT,
+            "Destination folder is moving to Trash; try again",
+        );
+    }
     let folders = owner_folders(&state, &auth.principal.user_id);
-    match store.mutate_draft_document_in_workspace(&auth.principal.user_id, &mutation, &folders).await {
-        Ok(DraftResult::Applied(document)) => {
-            if matches!(mutation.change, DraftChange::Restore) && document.kind == DraftKind::Folder
-                && let Ok(Some(folder_id)) = store.draft_folder_import_id(&auth.principal.user_id, &document.id).await
-            {
-                let actor = folder_actor(&state, &auth.principal);
-                state.hub.ensure_restored_draft_folder(
-                    actor.user_id,
-                    &folder_id,
-                    &document.title,
-                    document.parent_id.as_deref(),
-                );
-            }
-            state.hub.announce_draft(&auth.principal.user_id, metadata(&document));
-            Json(document).into_response()
-        }
-        Ok(DraftResult::Conflict(document)) => (StatusCode::CONFLICT, Json(serde_json::json!({"error": "This draft changed elsewhere. Your local version has been kept.", "current": document}))).into_response(),
-        Ok(DraftResult::Invalid(message)) => error(StatusCode::UNPROCESSABLE_ENTITY, &message),
-        Ok(DraftResult::Purged { id, revision }) => (
-            StatusCode::GONE,
-            Json(serde_json::json!({"error": "This draft was permanently deleted", "id": id, "purged": true, "revision": revision})),
+    match store
+        .mutate_draft_document_with_options(
+            &auth.principal.user_id,
+            &mutation,
+            &folders,
+            &DraftArchiveOptions::default(),
         )
-            .into_response(),
+        .await
+    {
+        Ok(outcome) => match outcome.result {
+            DraftResult::Applied(document) => {
+                if let Some(folder) = outcome.imported_folder {
+                    state.hub.adopt_imported_draft_folder(folder);
+                }
+                state.hub.announce_draft(&auth.principal.user_id, metadata(&document));
+                Json(document).into_response()
+            }
+            DraftResult::Conflict(document) => (StatusCode::CONFLICT, Json(serde_json::json!({"error": "This draft changed elsewhere. Your local version has been kept.", "current": document}))).into_response(),
+            DraftResult::Invalid(message) => error(StatusCode::UNPROCESSABLE_ENTITY, &message),
+            DraftResult::Purged { id, revision } => (
+                StatusCode::GONE,
+                Json(serde_json::json!({"error": "This draft was permanently deleted", "id": id, "purged": true, "revision": revision})),
+            )
+                .into_response(),
+        },
         Err(e) => { tracing::error!(error = %e, "persist draft"); error(StatusCode::INTERNAL_SERVER_ERROR, "Could not save draft; retry with the same operation") }
     }
 }

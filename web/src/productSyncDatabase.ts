@@ -446,7 +446,9 @@ export function createProductSyncDatabase(
     async discardDocument(id: string): Promise<void> {
       const identity = dataset ?? (await ready());
       assertCurrent();
-      await owner.discard(`${prefix(identity)}document:${id}:entry`);
+      const localKey = `document:${id}:entry`;
+      borrowed.delete(localKey);
+      await owner.retireOutbox(`${prefix(identity)}${localKey}`);
     },
     queueSessions: (): Promise<string[]> =>
       listScopedIds(owner, async () => prefix(await ready()), assertAdmission, "session", ":queue", 4096),

@@ -508,4 +508,19 @@ test("resolveMobileActivityState unifies branches and background tasks without n
   );
   const unconfirmedState = resolveMobileActivityState(unreported, 0, true);
   assertEquals(unconfirmedState.label, "Background tasks: 1 unconfirmed");
+
+  // Mixed unreported + ended tasks report both independently (R2-24).
+  const mixed = taskTabSummary(
+    buildTaskSummaries({
+      subagents: [
+        { subagent: subagent({ id: "u1", state: "running", reporting: false }), anchorSeq: 1, reconciledBy: "not_found", reconciledAt: 100 },
+        { subagent: subagent({ id: "e1", state: "idle", stopReason: "end_turn" }), anchorSeq: 2, reconciledBy: "live", reconciledAt: 100 },
+      ],
+      calls: [],
+      approval: null,
+      pending: [],
+    }),
+    0,
+  );
+  assertEquals(resolveMobileActivityState(mixed, 0, true).label, "Background tasks: 1 unconfirmed, 1 ended");
 });

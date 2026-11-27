@@ -3,8 +3,8 @@
 import { CALLS_PAGE, dismissCalls, refreshCalls } from "./managedCalls";
 import { invalidateAnchoredCalls } from "./useBackgroundTasks";
 import { draftRepository } from "./documents/store";
-import { bindSessionFolderProject, copyDocumentToSession, moveSessionFolder, placeSessions, readLiveFolders, removeCopiedDraft, restoreItems } from "./store";
-import { restoreSessionDraftFromTrash } from "./documents/sessionDraftTrash";
+import { copyDocumentToSession, removeCopiedDraft, restoreItems } from "./store";
+import { restoreSessionDraftFromTrash, undoTrashFolderOnlyOnController } from "./documents/sessionDraftTrash";
 import { showNotice } from "./documents/DocumentNotifications";
 import {
   addUndoEntry,
@@ -56,40 +56,9 @@ async function runStep(step: UndoStep): Promise<void> {
         step.expectedTrashedAtMs,
       );
       return;
-    case "restore_folder_only": {
-      await restoreItems({ folders: [step.folderId] });
-      const live = readLiveFolders();
-      for (const childId of step.movedFolders) {
-        const child = live.folders.find((f) => f.id === childId);
-        if (child && child.parent === step.destination) {
-          moveSessionFolder(childId, step.folderId);
-        }
-      }
-      const expectedPlacement = step.destination ?? "";
-      const matchingSessions = step.movedSessions.filter(
-        (sid) => live.placement[sid] === expectedPlacement,
-      );
-      if (matchingSessions.length > 0) placeSessions(matchingSessions, step.folderId);
-      if (
-        step.previousProject &&
-        !live.folders.some((f) => f.id !== step.folderId && f.project === step.previousProject)
-      ) {
-        bindSessionFolderProject(step.folderId, step.previousProject);
-      }
-      for (const moved of step.movedDrafts) {
-        const owner = draftRepository().document(moved.id);
-        await owner.refresh();
-        const doc = owner.get().document;
-        if (
-          doc && !doc.deleted &&
-          doc.parent_id === step.destination &&
-          doc.metadata_revision === moved.metadataRevision
-        ) {
-          await owner.change({ type: "move", parent_id: step.folderId });
-        }
-      }
+    case "restore_folder_only":
+      await undoTrashFolderOnlyOnController(step);
       return;
-    }
     case "restore_calls": {
       const restored: string[] = [];
       for (let i = 0; i < step.ids.length; i += CALLS_PAGE) {

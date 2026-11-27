@@ -1756,7 +1756,7 @@ export function ExploreTranscript(
         </DesktopModal>
       )}
       <Stack sx={{ flex: 1, minWidth: 0, minHeight: 0, position: "relative" }}>
-        {!props.desktop && ((!current && !props.loading) || unresolvedQuestionRoot || restorePageBlocksPresentation) && <MobileExploreTasksFallback sessionId={props.sessionId} />}
+        {!props.desktop && <MobileExploreTasksFallback sessionId={props.sessionId} />}
         {!current && !props.loading
           ? (
             <Stack alignItems="center" justifyContent="center" spacing={1} sx={{ flex: 1, color: "text.secondary" }}>
@@ -1798,6 +1798,7 @@ export function ExploreTranscript(
             <Transcript
               key={`${props.sessionId}:${current?.id ?? ""}`}
               desktopNavigation={props.desktop}
+              suppressTasksInspector={!props.desktop}
               historyPaging="page"
               sessionId={props.sessionId}
               timeline={props.timeline}

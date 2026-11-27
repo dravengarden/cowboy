@@ -2,7 +2,7 @@
 //! Each domain retains its own durable identity and recovery contract.
 use super::*;
 use crate::managed_calls::Request;
-use crate::store::draft_documents::{DraftChange, DraftMutation, DraftResult};
+use crate::store::draft_documents::{DraftArchiveOptions, DraftChange, DraftMutation, DraftResult};
 use serde::Deserialize;
 
 // Serialize this small, infrequent configuration surface across its two
@@ -752,6 +752,19 @@ async fn execute(
                 expected_revision: input.expected_revision,
                 change: input.change,
             };
+            if let DraftChange::Create {
+                parent_id: Some(pid),
+                ..
+            }
+            | DraftChange::Move {
+                parent_id: Some(pid),
+            } = &mutation.change
+                && state.hub.folder_is_trashing_only(pid)
+            {
+                return Ok(
+                    json!({"state":"error","error":{"code":"revision_conflict","message":"Destination folder is moving to Trash; try again"}}),
+                );
+            }
             let folders = state.hub.sync_value("folders")["folders"]
                 .as_array()
                 .cloned()
@@ -762,15 +775,23 @@ async fn execute(
                 })
                 .filter(|f| f.owner_user_id.as_deref().is_none_or(|id| id == owner))
                 .collect::<Vec<_>>();
-            match state
+            let outcome = state
                 .store
                 .as_ref()
                 .ok_or("unavailable")?
-                .mutate_draft_document_in_workspace(&owner, &mutation, &folders)
+                .mutate_draft_document_with_options(
+                    &owner,
+                    &mutation,
+                    &folders,
+                    &DraftArchiveOptions::default(),
+                )
                 .await
-                .map_err(|_| "outcome_unknown")?
-            {
+                .map_err(|_| "outcome_unknown")?;
+            match outcome.result {
                 DraftResult::Applied(document) => {
+                    if let Some(folder) = outcome.imported_folder {
+                        state.hub.adopt_imported_draft_folder(folder);
+                    }
                     let view = document_view(&document, false);
                     // Use the existing product notification projection, including tombstones.
                     let mut notification = view.clone();

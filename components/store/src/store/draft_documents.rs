@@ -7,7 +7,10 @@ use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
 pub mod trash;
-pub use trash::{PurgeDraftError, PurgeDraftTarget};
+pub use trash::{
+    DraftArchiveOptions, DraftMutationOutcome, DraftTombstone, DraftTrashRestoreRecord,
+    PurgeDraftError, PurgeDraftTarget,
+};
 
 const MAX_BODY: usize = 2 * 1024 * 1024;
 const MAX_ENTRIES: usize = 10_000;
@@ -420,8 +423,8 @@ impl Store {
         anyhow::ensure!((1..=200).contains(&limit), "invalid document page limit");
         macro_rules! read {
             ($db:expr, $deleted:literal) => {
-                sqlx::query_as::<_, (String, Option<i64>, Option<String>)>(concat!(
-                    "SELECT d.metadata, m.trashed_at_ms, m.source_session_id \
+                sqlx::query_as::<_, (String, Option<i64>, Option<i64>, Option<String>)>(concat!(
+                    "SELECT d.metadata, m.revision, m.trashed_at_ms, m.source_session_id \
                      FROM draft_documents d \
                      LEFT JOIN draft_document_trash_meta m \
                        ON m.owner_user_id = d.owner_user_id AND m.document_id = d.id \
@@ -441,24 +444,29 @@ impl Store {
             StorageBackend::Postgres(db) => read!(db, "(d.metadata::jsonb->>'deleted') = 'false'"),
             StorageBackend::Sqlite(db) => read!(db, "json_extract(d.metadata, '$.deleted') = 0"),
         };
-        let mut docs: Vec<DraftDocument> = rows
-            .into_iter()
-            .map(|(raw, trashed_at, source_session)| {
-                let mut doc: DraftDocument = serde_json::from_str(&raw)?;
+        let mut docs: Vec<DraftDocument> = Vec::with_capacity(rows.len());
+        let mut meta_revs: Vec<Option<i64>> = Vec::with_capacity(rows.len());
+        for (raw, meta_rev, trashed_at, source_session) in rows {
+            let mut doc: DraftDocument = serde_json::from_str(&raw)?;
+            if doc.deleted && meta_rev == Some(doc.revision) {
                 doc.trashed_at_ms = trashed_at;
                 doc.source_session_id = source_session;
-                Ok(doc)
-            })
-            .collect::<Result<_>>()?;
-        trash::ensure_legacy_trash_timestamps(self, owner, &mut docs).await?;
-        Ok(docs)
+            }
+            docs.push(doc);
+            meta_revs.push(meta_rev);
+        }
+        trash::reconcile_tombstone_collisions(self, owner, &mut docs).await?;
+        let mut paired: Vec<(DraftDocument, Option<i64>)> =
+            docs.into_iter().zip(meta_revs).collect();
+        trash::sync_revision_bound_trash_meta(self, owner, &mut paired).await?;
+        Ok(paired.into_iter().map(|(doc, _)| doc).collect())
     }
 
     pub async fn draft_documents(&self, owner: &str) -> Result<Vec<DraftDocument>> {
         macro_rules! read {
             ($db:expr) => {
-                sqlx::query_as::<_, (String, Option<i64>, Option<String>)>(
-                    "SELECT d.metadata, m.trashed_at_ms, m.source_session_id \
+                sqlx::query_as::<_, (String, Option<i64>, Option<i64>, Option<String>)>(
+                    "SELECT d.metadata, m.revision, m.trashed_at_ms, m.source_session_id \
                      FROM draft_documents d \
                      LEFT JOIN draft_document_trash_meta m \
                        ON m.owner_user_id = d.owner_user_id AND m.document_id = d.id \
@@ -473,24 +481,29 @@ impl Store {
             StorageBackend::Postgres(db) => read!(db),
             StorageBackend::Sqlite(db) => read!(db),
         };
-        let mut docs: Vec<DraftDocument> = rows
-            .into_iter()
-            .map(|(raw, trashed_at, source_session)| {
-                let mut doc: DraftDocument = serde_json::from_str(&raw)?;
+        let mut docs: Vec<DraftDocument> = Vec::with_capacity(rows.len());
+        let mut meta_revs: Vec<Option<i64>> = Vec::with_capacity(rows.len());
+        for (raw, meta_rev, trashed_at, source_session) in rows {
+            let mut doc: DraftDocument = serde_json::from_str(&raw)?;
+            if doc.deleted && meta_rev == Some(doc.revision) {
                 doc.trashed_at_ms = trashed_at;
                 doc.source_session_id = source_session;
-                Ok(doc)
-            })
-            .collect::<Result<_>>()?;
-        trash::ensure_legacy_trash_timestamps(self, owner, &mut docs).await?;
-        Ok(docs)
+            }
+            docs.push(doc);
+            meta_revs.push(meta_rev);
+        }
+        trash::reconcile_tombstone_collisions(self, owner, &mut docs).await?;
+        let mut paired: Vec<(DraftDocument, Option<i64>)> =
+            docs.into_iter().zip(meta_revs).collect();
+        trash::sync_revision_bound_trash_meta(self, owner, &mut paired).await?;
+        Ok(paired.into_iter().map(|(doc, _)| doc).collect())
     }
 
     pub async fn draft_document(&self, owner: &str, id: &str) -> Result<Option<DraftDocument>> {
         macro_rules! read {
             ($db:expr) => {
-                sqlx::query_as::<_, (String, Option<i64>, Option<String>)>(
-                    "SELECT d.value, m.trashed_at_ms, m.source_session_id \
+                sqlx::query_as::<_, (String, Option<i64>, Option<i64>, Option<String>)>(
+                    "SELECT d.value, m.revision, m.trashed_at_ms, m.source_session_id \
                      FROM draft_documents d \
                      LEFT JOIN draft_document_trash_meta m \
                        ON m.owner_user_id = d.owner_user_id AND m.document_id = d.id \
@@ -506,14 +519,18 @@ impl Store {
             StorageBackend::Postgres(db) => read!(db),
             StorageBackend::Sqlite(db) => read!(db),
         };
-        let Some((raw, trashed_at, source_session)) = row else {
+        let Some((raw, meta_rev, trashed_at, source_session)) = row else {
             return Ok(None);
         };
         let mut doc: DraftDocument = serde_json::from_str(&raw)?;
-        doc.trashed_at_ms = trashed_at;
-        doc.source_session_id = source_session;
-        trash::ensure_legacy_trash_timestamps(self, owner, std::slice::from_mut(&mut doc)).await?;
-        Ok(Some(doc))
+        if doc.deleted && meta_rev == Some(doc.revision) {
+            doc.trashed_at_ms = trashed_at;
+            doc.source_session_id = source_session;
+        }
+        trash::reconcile_tombstone_collisions(self, owner, std::slice::from_mut(&mut doc)).await?;
+        let mut paired = [(doc, meta_rev)];
+        trash::sync_revision_bound_trash_meta(self, owner, &mut paired).await?;
+        Ok(Some(paired.into_iter().next().unwrap().0))
     }
 
     /// The History list: every kept snapshot, newest first, without content.
@@ -577,8 +594,17 @@ impl Store {
             .into_iter()
             .filter(|folder| folder.owner_user_id.as_deref().is_none_or(|id| id == owner))
             .collect::<Vec<_>>();
-        self.mutate_draft_document_in_workspace(owner, mutation, &shared)
-            .await
+        self.mutate_draft_document_with_options(
+            owner,
+            mutation,
+            &shared,
+            &DraftArchiveOptions {
+                allow_session_provenance: true,
+                ..Default::default()
+            },
+        )
+        .await
+        .map(|o| o.result)
     }
 
     /// Receipts survive a lost response and do not depend on the code sandbox.
@@ -604,90 +630,109 @@ impl Store {
         mutation: &DraftMutation,
         shared: &[crate::session_folders::SessionFolder],
     ) -> Result<DraftResult> {
-        self.mutate_draft_document_with_raw_content(owner, mutation, shared, None)
-            .await
+        Ok(self
+            .mutate_draft_document_with_options(
+                owner,
+                mutation,
+                shared,
+                &DraftArchiveOptions::default(),
+            )
+            .await?
+            .result)
     }
 
     #[allow(clippy::too_many_lines)]
-    pub async fn mutate_draft_document_with_raw_content(
+    pub async fn mutate_draft_document_with_options(
         &self,
         owner: &str,
         mutation: &DraftMutation,
         shared: &[crate::session_folders::SessionFolder],
-        raw_content_json: Option<&str>,
-    ) -> Result<DraftResult> {
-        let request_hash = crate::digest::hex_sha256(&serde_json::to_vec(mutation)?);
-        macro_rules! write { ($db:expr, $newest_snapshot_at:expr) => {{
+        opts: &DraftArchiveOptions<'_>,
+    ) -> Result<DraftMutationOutcome> {
+        if !opts.allow_session_provenance
+            && matches!(
+                mutation.change,
+                DraftChange::Create {
+                    source_session_id: Some(_),
+                    ..
+                }
+            )
+        {
+            return Ok(DraftMutationOutcome {
+                result: DraftResult::Invalid(
+                    "source_session_id is reserved for archived session drafts".to_owned(),
+                ),
+                imported_folder: None,
+            });
+        }
+        let request_hash = match opts.request_hash_override {
+            Some(override_hash) => override_hash.to_owned(),
+            None => crate::digest::hex_sha256(&serde_json::to_vec(mutation)?),
+        };
+        macro_rules! write { ($db:expr, $newest_snapshot_at:expr, $insert_folder_sql:literal) => {{
             let mut tx = $db.pool.begin().await?;
             sqlx::query("INSERT INTO draft_document_owners (owner_user_id, revision) VALUES ($1, 1) ON CONFLICT (owner_user_id) DO UPDATE SET revision = draft_document_owners.revision + 1")
                 .bind(owner).execute(&mut *tx).await?;
+            if let Some((purged_hash, purged_id, purged_rev)) = sqlx::query_as::<_, (String, String, i64)>(
+                "SELECT request_hash, document_id, purged_revision FROM draft_document_purged_ops WHERE owner_user_id = $1 AND operation_id = $2",
+            )
+            .bind(owner).bind(&mutation.operation_id).fetch_optional(&mut *tx).await?
+            {
+                if purged_hash != request_hash {
+                    return Ok(DraftMutationOutcome { result: DraftResult::Invalid("Operation id was already used for different content".to_owned()), imported_folder: None });
+                }
+                return Ok(DraftMutationOutcome { result: DraftResult::Purged { id: purged_id, revision: purged_rev }, imported_folder: None });
+            }
             let previous: Option<(String, String)> = sqlx::query_as("SELECT request_hash, document_id FROM draft_document_operations WHERE owner_user_id = $1 AND operation_id = $2")
                 .bind(owner).bind(&mutation.operation_id).fetch_optional(&mut *tx).await?;
-            let rows: Vec<(String, Option<i64>, Option<String>)> = sqlx::query_as(
-                "SELECT d.metadata, m.trashed_at_ms, m.source_session_id \
-                 FROM draft_documents d \
-                 LEFT JOIN draft_document_trash_meta m \
-                   ON m.owner_user_id = d.owner_user_id AND m.document_id = d.id \
-                 WHERE d.owner_user_id = $1",
-            )
-            .bind(owner)
-            .fetch_all(&mut *tx)
-            .await?;
-            let mut entries: Vec<DraftDocument> = rows
-                .into_iter()
-                .map(|(v, trashed_at, source_session)| {
-                    let mut doc: DraftDocument = serde_json::from_str(&v)?;
-                    doc.trashed_at_ms = trashed_at;
-                    doc.source_session_id = source_session;
-                    Ok::<_, anyhow::Error>(doc)
-                })
-                .collect::<Result<_>>()?;
-            let target: Option<(String, Option<i64>, Option<String>)> = sqlx::query_as(
-                "SELECT d.value, m.trashed_at_ms, m.source_session_id \
-                 FROM draft_documents d \
-                 LEFT JOIN draft_document_trash_meta m \
-                   ON m.owner_user_id = d.owner_user_id AND m.document_id = d.id \
-                 WHERE d.owner_user_id = $1 AND d.id = $2",
-            )
-            .bind(owner)
-            .bind(&mutation.document_id)
-            .fetch_optional(&mut *tx)
-            .await?;
-            if let Some((raw, trashed_at, source_session)) = target {
-                let mut target: DraftDocument = serde_json::from_str(&raw)?;
-                target.trashed_at_ms = trashed_at;
-                target.source_session_id = source_session;
-                if let Some(entry) = entries.iter_mut().find(|d| d.id == target.id) { *entry = target; }
+            let rows: Vec<(String, Option<i64>, Option<i64>, Option<String>)> = sqlx::query_as(
+                "SELECT d.metadata, m.revision, m.trashed_at_ms, m.source_session_id FROM draft_documents d LEFT JOIN draft_document_trash_meta m ON m.owner_user_id = d.owner_user_id AND m.document_id = d.id WHERE d.owner_user_id = $1",
+            ).bind(owner).fetch_all(&mut *tx).await?;
+            let mut entries: Vec<DraftDocument> = rows.into_iter().map(|(v, mrev, ts, src)| {
+                let mut doc: DraftDocument = serde_json::from_str(&v)?;
+                if doc.deleted && mrev == Some(doc.revision) { doc.trashed_at_ms = ts; doc.source_session_id = src; }
+                Ok::<_, anyhow::Error>(doc)
+            }).collect::<Result<_>>()?;
+            let target: Option<(String, Option<i64>, Option<i64>, Option<String>, Option<String>)> = sqlx::query_as(
+                "SELECT d.value, m.revision, m.trashed_at_ms, m.source_session_id, m.raw_content_json FROM draft_documents d LEFT JOIN draft_document_trash_meta m ON m.owner_user_id = d.owner_user_id AND m.document_id = d.id WHERE d.owner_user_id = $1 AND d.id = $2",
+            ).bind(owner).bind(&mutation.document_id).fetch_optional(&mut *tx).await?;
+            let mut target_raw_content: Option<String> = None;
+            if let Some((raw, mrev, ts, src, raw_blocks)) = target {
+                let mut doc: DraftDocument = serde_json::from_str(&raw)?;
+                if doc.deleted && mrev == Some(doc.revision) {
+                    doc.trashed_at_ms = ts; doc.source_session_id = src; target_raw_content = raw_blocks;
+                }
+                if let Some(entry) = entries.iter_mut().find(|d| d.id == doc.id) { *entry = doc; }
             }
             if let Some((hash, id)) = previous {
-                if hash != request_hash { return Ok(DraftResult::Invalid("Operation id was already used for different content".to_owned())); }
+                if hash != request_hash { return Ok(DraftMutationOutcome { result: DraftResult::Invalid("Operation id was already used for different content".to_owned()), imported_folder: None }); }
                 if let Some(document) = entries.iter().find(|d| d.id == id) {
-                    return Ok(DraftResult::Applied(document.clone()));
+                    return Ok(DraftMutationOutcome { result: DraftResult::Applied(document.clone()), imported_folder: None });
                 }
-                if let Some(tomb_rev) = sqlx::query_scalar::<_, i64>(
-                    "SELECT revision FROM draft_document_tombstones WHERE owner_user_id = $1 AND document_id = $2",
-                )
-                .bind(owner)
-                .bind(&id)
-                .fetch_optional(&mut *tx)
-                .await?
+                if let Some(tomb_rev) = sqlx::query_scalar::<_, i64>("SELECT revision FROM draft_document_tombstones WHERE owner_user_id = $1 AND document_id = $2")
+                    .bind(owner).bind(&id).fetch_optional(&mut *tx).await?
                 {
-                    return Ok(DraftResult::Purged { id, revision: tomb_rev });
+                    return Ok(DraftMutationOutcome { result: DraftResult::Purged { id, revision: tomb_rev }, imported_folder: None });
                 }
                 bail!("draft operation lost its document");
             }
             if matches!(mutation.change, DraftChange::Create { .. })
-                && let Some(tomb_rev) = sqlx::query_scalar::<_, i64>(
-                    "SELECT revision FROM draft_document_tombstones WHERE owner_user_id = $1 AND document_id = $2",
-                )
-                .bind(owner)
-                .bind(&mutation.document_id)
-                .fetch_optional(&mut *tx)
-                .await?
+                && let Some(tomb_rev) = sqlx::query_scalar::<_, i64>("SELECT revision FROM draft_document_tombstones WHERE owner_user_id = $1 AND document_id = $2")
+                    .bind(owner).bind(&mutation.document_id).fetch_optional(&mut *tx).await?
             {
-                return Ok(DraftResult::Purged {
-                    id: mutation.document_id.clone(),
-                    revision: tomb_rev,
+                return Ok(DraftMutationOutcome { result: DraftResult::Purged { id: mutation.document_id.clone(), revision: tomb_rev }, imported_folder: None });
+            }
+            if matches!(mutation.change, DraftChange::Restore)
+                && let Some(curr) = entries.iter().find(|d| {
+                    d.id == mutation.document_id
+                        && d.deleted
+                        && d.revision == mutation.expected_revision
+                })
+                && trash::has_unrepresented_acp_blocks(target_raw_content.as_deref(), &curr.attachments)
+            {
+                return Ok(DraftMutationOutcome {
+                    result: DraftResult::Invalid("This session draft contains session-only attachments (such as resource links). Use \"Restore to session\" instead.".to_owned()),
+                    imported_folder: None,
                 });
             }
             let mut mapped = mutation.clone();
@@ -698,14 +743,14 @@ impl Store {
             }
             let now = chrono::Utc::now().timestamp_millis();
             let result = apply(&entries, &mapped, now, shared);
+            let mut imported_folder = None;
             if let DraftResult::Applied(ref next) = result {
-                if let Some(previous) = entries.iter().find(|d| d.id == next.id && (d.body != next.body || d.attachments != next.attachments) && d.kind == DraftKind::Document) {
-                    let newest: Option<i64> = sqlx::query_scalar($newest_snapshot_at)
-                        .bind(owner).bind(&next.id).fetch_optional(&mut *tx).await?;
-                    if keeps_snapshot(now, previous.updated_at_ms, newest) {
-                        let stored_prev = legacy_stored(previous);
+                if let Some(prev) = entries.iter().find(|d| d.id == next.id && (d.body != next.body || d.attachments != next.attachments) && d.kind == DraftKind::Document) {
+                    let newest: Option<i64> = sqlx::query_scalar($newest_snapshot_at).bind(owner).bind(&next.id).fetch_optional(&mut *tx).await?;
+                    if keeps_snapshot(now, prev.updated_at_ms, newest) {
+                        let stored_prev = legacy_stored(prev);
                         sqlx::query("INSERT INTO draft_document_history (owner_user_id, document_id, revision, value) VALUES ($1, $2, $3, $4)")
-                            .bind(owner).bind(&next.id).bind(previous.revision).bind(serde_json::to_string(&stored_prev)?).execute(&mut *tx).await?;
+                            .bind(owner).bind(&next.id).bind(prev.revision).bind(serde_json::to_string(&stored_prev)?).execute(&mut *tx).await?;
                         sqlx::query("DELETE FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 AND revision NOT IN (SELECT revision FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 ORDER BY revision DESC LIMIT $3)")
                             .bind(owner).bind(&next.id).bind(HISTORY_LIMIT).execute(&mut *tx).await?;
                     }
@@ -716,21 +761,23 @@ impl Store {
                 metadata.as_object_mut().expect("document object").remove("attachments");
                 sqlx::query("INSERT INTO draft_documents (owner_user_id, id, value, metadata) VALUES ($1, $2, $3, $4) ON CONFLICT (owner_user_id, id) DO UPDATE SET value = excluded.value, metadata = excluded.metadata")
                     .bind(owner).bind(&next.id).bind(serde_json::to_string(&stored_next)?).bind(serde_json::to_string(&metadata)?).execute(&mut *tx).await?;
-                trash::sync_trash_meta_tx!(tx, owner, next, mapped.change, now, raw_content_json);
+                imported_folder = trash::sync_trash_meta_tx!(tx, owner, next, mapped.change, now, opts, $insert_folder_sql);
                 sqlx::query("INSERT INTO draft_document_operations (owner_user_id, operation_id, request_hash, document_id) VALUES ($1, $2, $3, $4)")
                     .bind(owner).bind(&mutation.operation_id).bind(&request_hash).bind(&next.id).execute(&mut *tx).await?;
                 tx.commit().await?;
             }
-            result
+            DraftMutationOutcome { result, imported_folder }
         }}; }
         Ok(match &self.backend {
             StorageBackend::Postgres(db) => write!(
                 db,
-                "SELECT (value::json->>'updated_at_ms')::bigint FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 ORDER BY revision DESC LIMIT 1"
+                "SELECT (value::json->>'updated_at_ms')::bigint FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 ORDER BY revision DESC LIMIT 1",
+                "INSERT INTO session_folders (id, owner_user_id, name, parent_id, position, created_at, updated_at) VALUES ($1, $2, $3, $4, $5, to_timestamp($6::bigint::double precision / 1000), to_timestamp($6::bigint::double precision / 1000)) ON CONFLICT (id) DO NOTHING"
             ),
             StorageBackend::Sqlite(db) => write!(
                 db,
-                "SELECT json_extract(value, '$.updated_at_ms') FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 ORDER BY revision DESC LIMIT 1"
+                "SELECT json_extract(value, '$.updated_at_ms') FROM draft_document_history WHERE owner_user_id = $1 AND document_id = $2 ORDER BY revision DESC LIMIT 1",
+                "INSERT INTO session_folders (id, owner_user_id, name, parent_id, position, created_at_ms, updated_at_ms) VALUES ($1, $2, $3, $4, $5, $6, $6) ON CONFLICT (id) DO NOTHING"
             ),
         })
     }

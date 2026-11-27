@@ -14,7 +14,9 @@ import {
 function fixture() {
   const local = new Map<string, ClientSnapshot<DraftDocument | null>>();
   const server = new Map<string, DraftDocument>();
+  const tombstones = new Map<string, number>();
   const operations = new Map<string, string>();
+  let holdList: (() => Promise<void>) | undefined;
   const history: DraftDocument[] = [];
   const notices: string[] = [];
   const requests: string[] = [];
@@ -61,9 +63,13 @@ function fixture() {
         if (offline()) return Promise.reject(new Error("offline"));
         requests.push(path);
         if (path === "/api/drafts") {
-          return Promise.resolve(
-            Response.json({ entries: [...server.values()] }),
-          );
+          const snapshotEntries = [...server.values()];
+          const gate = holdList;
+          if (gate) {
+            holdList = undefined;
+            return gate().then(() => Response.json({ entries: snapshotEntries }));
+          }
+          return Promise.resolve(Response.json({ entries: snapshotEntries }));
         }
         if (path === "/api/drafts/purge") {
           const body = JSON.parse(String(init?.body)) as {
@@ -79,6 +85,7 @@ function fixture() {
           for (const target of body.targets) {
             const current = server.get(target.id)!;
             server.delete(target.id);
+            tombstones.set(target.id, current.revision + 1);
             entries.push({ id: target.id, revision: current.revision + 1 });
           }
           return Promise.resolve(Response.json({ purged: entries.map((e) => e.id), entries }));
@@ -91,6 +98,12 @@ function fixture() {
           const args = JSON.parse(String(init?.body)) as DraftMutationArgs & {
             operation_id: string;
           };
+          const purgedRev = tombstones.get(args.document_id);
+          if (purgedRev !== undefined) {
+            return Promise.resolve(
+              Response.json({ error: "Purged", id: args.document_id, purged: true, revision: purgedRev }, { status: 410 }),
+            );
+          }
           const current = server.get(args.document_id) ?? null;
           if (
             args.change.type === "write" &&
@@ -163,6 +176,7 @@ function fixture() {
     operations,
     history,
     notices,
+    setHoldList(fn: (() => Promise<void>) | undefined) { holdList = fn; },
     block: () => {
       blocked = true;
     },
@@ -793,4 +807,75 @@ test("sanitizeDraftTitle normalizes tabs and control characters while keeping re
   assertEquals(sanitizeDraftTitle("col1\tcol2\r\n"), "col1 col2");
   assertEquals(sanitizeDraftTitle("\u0000\t\u0007  "), "Draft");
   assertEquals(sanitizeDraftTitle("  hello\t\tworld  "), "hello world");
+});
+
+
+test("pushed purge tombstone and 410 preserve dirty unsynced edits as a conflicted copy", async () => {
+  const f = fixture();
+  const primary = f.create();
+  const peer = f.device();
+  const id = await primary.create("Important", null, "document", "v1");
+  await settle(() => primary.document(id).get().phase === "saved");
+  await peer.repository.refresh();
+  await peer.repository.document(id).refresh();
+
+  // Peer goes offline and edits locally while primary trashes & purges the draft.
+  peer.offline(true);
+  await peer.repository.document(id).change({ type: "write", body: "unsynced local work", attachments: [] });
+  await primary.document(id).change({ type: "trash" });
+  await settle(() => primary.document(id).get().document?.deleted === true);
+  const trashed = f.server.get(id)!;
+  await primary.purge([{ id, expected_revision: trashed.revision, expected_trashed_at_ms: trashed.trashed_at_ms! }]);
+
+  // Pushed purge tombstone arrives on dirty peer -> must preserve conflicted copy BEFORE evicting!
+  peer.repository.announce({ [id]: { id, purged: true, revision: trashed.revision + 1 } });
+  await settle(() => peer.repository.get().entries.some((e) => e.title.includes("(conflicted copy)")));
+  const copyMeta = peer.repository.get().entries.find((e) => e.title.includes("(conflicted copy)"))!;
+  assertEquals(peer.repository.document(copyMeta.id).get().document?.body, "unsynced local work");
+  assertEquals(f.notices.some((n) => n.includes("permanently deleted")), true);
+
+  // Also verify 410 Gone during drain() preserves a dirty unsynced draft!
+  const id2 = await primary.create("Second", null, "document", "v1");
+  await settle(() => primary.document(id2).get().phase === "saved");
+  const peer2 = f.device();
+  await peer2.repository.refresh();
+  await peer2.repository.document(id2).refresh();
+  peer2.offline(true);
+  await peer2.repository.document(id2).change({ type: "write", body: "offline edit before 410", attachments: [] });
+  await primary.document(id2).change({ type: "trash" });
+  await settle(() => primary.document(id2).get().document?.deleted === true);
+  const trashed2 = f.server.get(id2)!;
+  await primary.purge([{ id: id2, expected_revision: trashed2.revision, expected_trashed_at_ms: trashed2.trashed_at_ms! }]);
+  // Peer2 reconnects and drains against 410 Gone -> preserves conflicted copy!
+  peer2.offline(false);
+  await peer2.repository.refresh();
+  await settle(() => peer2.repository.get().entries.some((e) => e.title.includes("Second (conflicted copy)")));
+  const copy2 = peer2.repository.get().entries.find((e) => e.title.includes("Second (conflicted copy)"))!;
+  assertEquals(peer2.repository.document(copy2.id).get().document?.body, "offline edit before 410");
+
+  await primary.dispose();
+  await peer.repository.dispose();
+  await peer2.repository.dispose();
+});
+
+test("in-flight GET /api/drafts never evicts or tombstones a newly created draft", async () => {
+  const f = fixture();
+  let releaseList!: () => void;
+  const listGate = new Promise<void>((r) => { releaseList = r; });
+  f.setHoldList(() => listGate);
+  const repo = f.create();
+
+  const pendingRefresh = repo.refresh();
+  // Create and sync a brand-new draft WHILE the initial GET /api/drafts is still in flight.
+  const newId = await repo.create("Brand new", null, "document", "fresh text");
+  await settle(() => repo.document(newId).get().phase === "saved");
+  // Now release the stale GET /api/drafts response (which does not contain newId).
+  releaseList();
+  await pendingRefresh;
+  // The newly created draft must stay present and NOT be hidden by a fabricated tombstone!
+  assertEquals(repo.get().entries.some((e) => e.id === newId), true);
+  assertEquals(f.local.has(newId), true);
+  await repo.refresh();
+  assertEquals(repo.get().entries.some((e) => e.id === newId), true);
+  await repo.dispose();
 });

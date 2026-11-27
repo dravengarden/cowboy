@@ -9,6 +9,7 @@ export function fromWire(list: WireQueued[]): QueuedMessage[] {
     id: m.id,
     text: m.text,
     attachments: blocksToAttachments(m.content, m.text),
+    ...(Array.isArray(m.content) && { rawContent: m.content }),
     // Carried so an optimistic row can reconcile against its confirmed twin by
     // id. `?? undefined` keeps `exactOptionalPropertyTypes` happy.
     ...(m.cmid !== undefined && { cmid: m.cmid }),

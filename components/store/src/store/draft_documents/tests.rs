@@ -890,3 +890,258 @@ async fn draft_trash_purge_optimistic_checks_reject_stale_or_live_drafts() {
             .is_none()
     );
 }
+
+#[tokio::test]
+async fn draft_trash_refuses_caller_session_provenance_and_lossy_restore() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+
+    // Public/non-archive create cannot forge source_session_id (R2-20).
+    let forged = store
+        .mutate_draft_document_in_workspace(
+            "alice",
+            &mutation(
+                "d-forged",
+                "c-forged",
+                0,
+                create_trashed("Forged", "x", Some("sess-1")),
+            ),
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(matches!(forged, DraftResult::Invalid(msg) if msg.contains("source_session_id")));
+
+    // Server-archived session draft with a resource_link block cannot use lossy Restore as draft (R2-5).
+    let raw_blocks = serde_json::json!([
+        {"type": "text", "text": "check this"},
+        {"type": "resource_link", "uri": "file:///a.rs", "name": "a.rs"}
+    ])
+    .to_string();
+    let outcome = store
+        .mutate_draft_document_with_options(
+            "alice",
+            &mutation(
+                "d-link",
+                "c-link",
+                0,
+                create_trashed("Link", "check this", Some("sess-1")),
+            ),
+            &[],
+            &DraftArchiveOptions {
+                raw_content_json: Some(&raw_blocks),
+                source_origin_json: Some(r#"{"kind":"owner"}"#),
+                source_is_recovery: true,
+                request_hash_override: None,
+                allow_session_provenance: true,
+            },
+        )
+        .await
+        .unwrap();
+    let archived = applied(outcome.result);
+    let loaded = store
+        .draft_trash_for_restore("alice", "d-link")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        loaded.raw_content_json.as_deref(),
+        Some(raw_blocks.as_str())
+    );
+    assert!(loaded.source_is_recovery);
+
+    let refused = store
+        .mutate_draft_document_in_workspace(
+            "alice",
+            &mutation("d-link", "r-link", archived.revision, DraftChange::Restore),
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(matches!(refused, DraftResult::Invalid(msg) if msg.contains("Restore to session")));
+}
+
+#[tokio::test]
+async fn draft_trash_purged_op_replay_restore_receipt_and_rollback_collision() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+
+    let created = applied(
+        store
+            .mutate_draft_document(
+                "alice",
+                &mutation(
+                    "d-1",
+                    "op-create",
+                    0,
+                    create_trashed("Note", "hello", Some("s1")),
+                ),
+            )
+            .await
+            .unwrap(),
+    );
+    let ts = created.trashed_at_ms.unwrap();
+
+    let purged = store
+        .purge_trashed_drafts_with_restore_receipt(
+            "alice",
+            &[PurgeDraftTarget {
+                id: "d-1".into(),
+                expected_revision: created.revision,
+                expected_trashed_at_ms: ts,
+            }],
+            Some(("restore-op-1", "draft-restored-9")),
+        )
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(purged, vec![("d-1".to_owned(), created.revision + 1)]);
+    let tomb = store
+        .draft_tombstone("alice", "d-1")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(tomb.restore_op_id.as_deref(), Some("restore-op-1"));
+    assert_eq!(tomb.restored_row_id.as_deref(), Some("draft-restored-9"));
+
+    // Pre-purge op replay must return Purged (R2-21).
+    let replay = store
+        .mutate_draft_document(
+            "alice",
+            &mutation(
+                "d-1",
+                "op-create",
+                0,
+                create_trashed("Note", "hello", Some("s1")),
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(replay, DraftResult::Purged { id, revision } if id == "d-1" && revision == created.revision + 1)
+    );
+
+    // Simulate rollback-recreated row with revision <= tombstone.revision: reading heals revision > tombstone.
+    let mut legacy = created.clone();
+    legacy.revision = 1;
+    legacy.deleted = false;
+    legacy.trashed_at_ms = None;
+    let raw_val = serde_json::to_string(&legacy).unwrap();
+    match &store.backend {
+        StorageBackend::Sqlite(db) => {
+            sqlx::query(
+                "INSERT INTO draft_documents (owner_user_id, id, value, metadata) \
+                 VALUES ($1, $2, $3, $3)",
+            )
+            .bind("alice")
+            .bind("d-1")
+            .bind(&raw_val)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+        StorageBackend::Postgres(_) => unreachable!(),
+    }
+    let healed = store.draft_document("alice", "d-1").await.unwrap().unwrap();
+    assert!(healed.revision > tomb.revision);
+    assert!(
+        store
+            .draft_tombstone("alice", "d-1")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    // Pre-purge op replay STILL returns Purged via draft_document_purged_ops (R2-21)!
+    let still_purged = store
+        .mutate_draft_document(
+            "alice",
+            &mutation(
+                "d-1",
+                "op-create",
+                0,
+                create_trashed("Note", "hello", Some("s1")),
+            ),
+        )
+        .await
+        .unwrap();
+    assert!(matches!(still_purged, DraftResult::Purged { .. }));
+}
+
+#[tokio::test]
+async fn draft_trash_reparent_and_undo_reparent_across_owners() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+    let shared_folder = crate::session_folders::SessionFolder {
+        id: "f-shared".into(),
+        owner_user_id: None,
+        name: "Shared".into(),
+        parent: None,
+        project: None,
+        position: 0,
+        defaults: std::collections::BTreeMap::default(),
+        trashed_at_ms: None,
+    };
+    let d_a = applied(
+        store
+            .mutate_draft_document_in_workspace(
+                "alice",
+                &mutation(
+                    "da",
+                    "op-a",
+                    0,
+                    create(DraftKind::Document, "A", Some("f-shared"), "body-a"),
+                ),
+                std::slice::from_ref(&shared_folder),
+            )
+            .await
+            .unwrap(),
+    );
+    let d_b = applied(
+        store
+            .mutate_draft_document_in_workspace(
+                "bob",
+                &mutation(
+                    "db",
+                    "op-b",
+                    0,
+                    create(DraftKind::Document, "B", Some("f-shared"), "body-b"),
+                ),
+                std::slice::from_ref(&shared_folder),
+            )
+            .await
+            .unwrap(),
+    );
+    assert_eq!(d_a.parent_id.as_deref(), Some("f-shared"));
+    assert_eq!(d_b.parent_id.as_deref(), Some("f-shared"));
+
+    let moved = store
+        .reparent_drafts_out_of_folder(None, "f-shared", None)
+        .await
+        .unwrap();
+    assert_eq!(moved.len(), 2);
+    assert!(moved.iter().all(|(_, doc)| doc.parent_id.is_none()));
+
+    let targets: Vec<(String, String, i64)> = moved
+        .iter()
+        .map(|(owner, doc)| (owner.clone(), doc.id.clone(), doc.metadata_revision))
+        .collect();
+    let undone = store
+        .undo_reparent_drafts_to_folder("f-shared", None, &targets)
+        .await
+        .unwrap();
+    assert_eq!(undone.len(), 2);
+    assert!(
+        undone
+            .iter()
+            .all(|(_, doc)| doc.parent_id.as_deref() == Some("f-shared"))
+    );
+}

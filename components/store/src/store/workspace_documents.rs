@@ -155,10 +155,23 @@ macro_rules! reparent_workspace_documents {
                         .bind(serde_json::to_string(&metadata)?).execute(&mut *$tx).await?;
                     if let Some(at) = trashed_at {
                         sqlx::query(
-                            "INSERT INTO draft_document_trash_meta (owner_user_id, document_id, trashed_at_ms)                              VALUES ($1, $2, $3) ON CONFLICT (owner_user_id, document_id) DO NOTHING",
+                            "INSERT INTO draft_document_trash_meta (owner_user_id, document_id, revision, trashed_at_ms) \
+                             VALUES ($1, $2, $3, $4) ON CONFLICT (owner_user_id, document_id) DO UPDATE SET \
+                               revision = excluded.revision, \
+                               trashed_at_ms = CASE WHEN draft_document_trash_meta.revision = excluded.revision \
+                                 THEN draft_document_trash_meta.trashed_at_ms ELSE excluded.trashed_at_ms END, \
+                               source_session_id = CASE WHEN draft_document_trash_meta.revision = excluded.revision \
+                                 THEN draft_document_trash_meta.source_session_id ELSE NULL END, \
+                               raw_content_json = CASE WHEN draft_document_trash_meta.revision = excluded.revision \
+                                 THEN draft_document_trash_meta.raw_content_json ELSE NULL END, \
+                               source_origin_json = CASE WHEN draft_document_trash_meta.revision = excluded.revision \
+                                 THEN draft_document_trash_meta.source_origin_json ELSE NULL END, \
+                               source_is_recovery = CASE WHEN draft_document_trash_meta.revision = excluded.revision \
+                                 THEN draft_document_trash_meta.source_is_recovery ELSE 0 END",
                         )
                         .bind(&owner)
                         .bind(&document.id)
+                        .bind(document.revision)
                         .bind(at)
                         .execute(&mut *$tx)
                         .await?;

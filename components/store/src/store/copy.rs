@@ -45,6 +45,7 @@ const TABLES: &[&str] = &[
     "draft_document_history",
     "draft_document_trash_meta",
     "draft_document_tombstones",
+    "draft_document_purged_ops",
     "core_security_authority",
     "cardea_operation_capacity",
     "cardea_operations",

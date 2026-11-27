@@ -244,11 +244,16 @@ export function DeleteFolderToTrashShell(
                     recordUndo(`"${folder.name}" moved to Trash; contents kept in ${destinationName}`, [{
                       kind: "restore_folder_only",
                       folderId: delta.folder_id,
+                      expectedTrashedAtMs: delta.trashed_at_ms,
                       destination: delta.destination,
                       previousProject: delta.previous_project,
                       movedFolders: delta.moved_folders,
                       movedSessions: delta.moved_sessions,
-                      movedDrafts: delta.moved_drafts.map((d) => ({ id: d.id, metadataRevision: d.metadata_revision })),
+                      movedDrafts: delta.moved_drafts.map((d) => ({
+                        owner: d.owner,
+                        id: d.id,
+                        metadataRevision: d.metadata_revision,
+                      })),
                     }]);
                   })
                   .catch((error: unknown) => {

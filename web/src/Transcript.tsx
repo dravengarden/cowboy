@@ -493,6 +493,7 @@ export function Transcript({
   onAnchorRestored,
   statusBar = true,
   magneticHaptics = true,
+  suppressTasksInspector = false,
 }: {
   sessionId: string;
   timeline: Envelope[];
@@ -563,6 +564,8 @@ export function Transcript({
   /** The tick on re-entering the live edge pairs with the composer's Follow
    * toggle. An embedded transcript without that toggle scrolls silently. */
   magneticHaptics?: boolean;
+  /** Suppress mounting BackgroundTasksInspector when a parent surface owns it. */
+  suppressTasksInspector?: boolean;
 }): React.JSX.Element {
   const managesScrollHistory = historyPaging === "scroll";
   // Freeze presentation while native scrolling owns the viewport, then flush
@@ -3031,14 +3034,16 @@ export function Transcript({
           />
         </Box>
       )}
-      <BackgroundTasksInspector
-        sessionId={sessionId}
-        desktop={desktopNavigation}
-        background={background}
-        consumeReveals={visibleItemKeys === undefined}
-        onLocate={locateTask}
-        onOpenTool={openTool}
-      />
+      {!suppressTasksInspector && (
+        <BackgroundTasksInspector
+          sessionId={sessionId}
+          desktop={desktopNavigation}
+          background={background}
+          consumeReveals={visibleItemKeys === undefined}
+          onLocate={locateTask}
+          onOpenTool={openTool}
+        />
+      )}
       <ToolDetailsBrowser
         items={items}
         runs={runs}

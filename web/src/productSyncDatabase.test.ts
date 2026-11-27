@@ -481,3 +481,26 @@ test("cacheSessions and queueSessions paginate beyond 4096 same-dataset session 
   assertEquals(await db.cacheSessions("delivery"), ["sess-keep"]);
   await db.dispose();
 });
+
+test("discardDocument retires a previously borrowed document outbox without record_mode_conflict", async () => {
+  const factory = new FakeIndexedDb();
+  const ds = descriptor();
+  const db = createProductSyncDatabase(
+    () => "user-a",
+    () => Promise.resolve(ds),
+    { factory: factory as unknown as IDBFactory },
+  );
+  const scope = { kind: "document", document: "doc-1", state: "entry" } as const;
+  const outbox = db.outbox<number>(scope);
+  assertEquals(await outbox.load(), null);
+  outbox.acceptLoadedSnapshot!(null);
+  await outbox.save(snapshot("m1"));
+  assertEquals(await db.draftDocumentIds(), ["doc-1"]);
+
+  await db.discardDocument("doc-1");
+  assertEquals(await db.draftDocumentIds(), []);
+  // Key reservation is released so a future outbox borrow does not collide.
+  const reopened = db.outbox<number>(scope);
+  assertEquals(await reopened.load(), null);
+  await db.dispose();
+});

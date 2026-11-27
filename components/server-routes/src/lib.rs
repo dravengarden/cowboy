@@ -281,6 +281,10 @@ fn with_draft_routes(router: Router<Arc<AppState>>) -> Router<Arc<AppState>> {
             "/api/folders/{id}/trash-only",
             post(draft_documents::trash_folder_only),
         )
+        .route(
+            "/api/folders/{id}/undo-trash-only",
+            post(draft_documents::undo_trash_folder_only),
+        )
         .route("/api/drafts/{id}/history", get(draft_documents::history))
         .route(
             "/api/drafts/{id}/history/index",
