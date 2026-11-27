@@ -1262,10 +1262,15 @@ impl Broker {
                 drain_requested,
             ),
         );
+        let replaced_same_epoch_pid = replaced
+            .as_ref()
+            .filter(|old| old.epoch == epoch)
+            .and_then(|old| old.peer_pid);
         let orphaned_crashed_drains = self.rebind_crashed_drain_on_reconnect(
             &session_id,
             &epoch,
             connection_id,
+            replaced_same_epoch_pid,
             workers.get_mut(&session_id).expect("just inserted"),
         );
         if let Some(old) = replaced {

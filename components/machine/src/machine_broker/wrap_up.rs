@@ -207,11 +207,15 @@ pub(super) fn spawn_core_command_loop(
                 continue;
             }
             let broker = Arc::clone(&broker);
-            let _ = tokio::spawn(super::COMMAND_LEASE.scope(lease, async move {
-                guard.mark_entered();
-                let _guard = guard;
-                super::handle_core_command(&broker, command).await
-            }))
+            let owned_ingress = guard.ingressed_prompt.take();
+            let _ = tokio::spawn(super::COMMAND_LEASE.scope(
+                lease,
+                super::account_unit::OWNED_PROMPT_INGRESS.scope(owned_ingress, async move {
+                    guard.mark_entered();
+                    let _guard = guard;
+                    super::handle_core_command(&broker, command).await
+                }),
+            ))
             .await;
         }
     });
@@ -328,10 +332,7 @@ impl Drop for PendingCoreCommandGuard {
         if !self.entered
             && let Some((sid, cid)) = self.ingressed_prompt.take()
         {
-            self.broker
-                .dispatched_prompts
-                .lock()
-                .retire_if_unhanded(&sid, &cid);
+            self.broker.retire_if_not_queued(&sid, &cid);
         }
         if let Some(session_id) = self.session_id.take() {
             let mut pending = self.broker.pending_core_commands.lock();
@@ -1127,9 +1128,7 @@ impl super::Broker {
                     Some(c) => Some(c.tx.clone()),
                     None => {
                         tracing::warn!(lease, session = %session_id, "discarding stale-lease prompt at admission");
-                        self.dispatched_prompts
-                            .lock()
-                            .retire_if_unhanded(session_id, &command_id);
+                        self.retire_owned_unhanded_prompt(session_id, &command_id);
                         return;
                     }
                 },

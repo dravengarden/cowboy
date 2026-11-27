@@ -107,28 +107,6 @@ impl Store {
 /// registered setting key. Written with the native id's removal.
 pub type ClearFence<'a> = (&'a str, &'a serde_json::Value);
 
-/// Advance the durable context epoch for a session's uncertain-effect ack
-/// record inside Clear's atomic transaction so concurrent stale-context CAS
-/// writes fail atomically and the fresh conversation starts without old holds.
-pub(in crate::store) fn advance_uncertain_effect_context_record(
-    existing: Option<serde_json::Value>,
-) -> serde_json::Value {
-    let mut record = match existing {
-        Some(serde_json::Value::Object(map)) => map,
-        _ => serde_json::Map::new(),
-    };
-    let next_epoch = record
-        .get("context_epoch")
-        .and_then(serde_json::Value::as_u64)
-        .unwrap_or(0)
-        .saturating_add(1);
-    record.insert("context_epoch".into(), serde_json::json!(next_epoch));
-    record.remove("observed");
-    record.remove("method");
-    record.remove("observed_at_ms");
-    serde_json::Value::Object(record)
-}
-
 fn checked_fence(fence: Option<ClearFence<'_>>) -> Result<Option<(&str, serde_json::Value)>> {
     fence
         .map(|(key, value)| {
@@ -251,26 +229,6 @@ impl PostgresStorage {
             .execute(&mut *tx)
             .await
             .with_context(|| format!("UPDATE session agent_session_id {session_id}"))?;
-            let ack_key = format!(
-                "{}{session_id}",
-                crate::model::settings_keys::SESSION_UNCERTAIN_EFFECT_ACK_PREFIX
-            );
-            let existing: Option<(serde_json::Value,)> =
-                sqlx::query_as("SELECT value FROM settings WHERE key = $1 FOR UPDATE")
-                    .bind(&ack_key)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .with_context(|| format!("SELECT Hub setting {ack_key}"))?;
-            let bumped = advance_uncertain_effect_context_record(existing.map(|(v,)| v));
-            sqlx::query(
-                "INSERT INTO settings(key, value, updated_at) VALUES ($1, $2, now()) \
-                 ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = now()",
-            )
-            .bind(&ack_key)
-            .bind(&bumped)
-            .execute(&mut *tx)
-            .await
-            .with_context(|| format!("UPSERT Hub setting {ack_key}"))?;
         }
         tx.commit().await?;
         Ok(())

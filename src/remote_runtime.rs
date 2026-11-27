@@ -151,13 +151,10 @@ pub struct Shared {
     declaration_repairs: Mutex<HashMap<String, String>>,
     workers: Mutex<HashMap<String, WorkerSnapshot>>,
     crashed_worker_sightings: Mutex<HashMap<String, snapshot::SightingActivity>>,
-    retained_uncertain_effects: Mutex<HashMap<String, snapshot::RetainedUncertainEffect>>,
     /// Exact crashed epochs currently draining (preserved across replayed events and handover, R3-H2/R4-H6).
     draining_crashed_epochs: Mutex<HashMap<String, String>>,
     /// Bounded `(session_id, worker_epoch)` tombstones rejecting late handover snapshots (R4-M5).
     retired_crashed_epochs: Mutex<HashMap<(String, String), std::time::Instant>>,
-    /// Pending retirements retrying durable uncertain-effect persistence with retained context (R4-H3).
-    pending_retirements: Mutex<HashMap<String, snapshot::PendingRetirement>>,
     /// Worker epochs whose initial config snapshot has already triggered
     /// preference reconciliation. This prevents an agent that rejects a value
     /// from causing a config-option event/retry loop.
@@ -314,10 +311,8 @@ impl RemoteRuntime {
                 declaration_repairs: Mutex::new(HashMap::new()),
                 workers: Mutex::new(HashMap::new()),
                 crashed_worker_sightings: Mutex::new(HashMap::new()),
-                retained_uncertain_effects: Mutex::new(HashMap::new()),
                 draining_crashed_epochs: Mutex::new(HashMap::new()),
                 retired_crashed_epochs: Mutex::new(HashMap::new()),
-                pending_retirements: Mutex::new(HashMap::new()),
                 config_sync_epochs: Mutex::new(HashMap::new()),
                 config_startups: Mutex::new(HashSet::new()),
                 resetting: Mutex::new(HashSet::new()),
@@ -397,12 +392,10 @@ impl RemoteRuntime {
                 crashed_worker_sightings: Mutex::new(snapshot::seed_crashed_sightings(
                     &bootstrap.workers,
                 )),
-                retained_uncertain_effects: Mutex::new(HashMap::new()),
                 draining_crashed_epochs: Mutex::new(snapshot::seed_draining_crashed_epochs(
                     &bootstrap.workers,
                 )),
                 retired_crashed_epochs: Mutex::new(HashMap::new()),
-                pending_retirements: Mutex::new(HashMap::new()),
                 config_sync_epochs: Mutex::new(HashMap::new()),
                 config_startups: Mutex::new(
                     bootstrap
@@ -650,7 +643,7 @@ impl RemoteRuntime {
     /// or retained. Read-only evidence, never permission to act.
     #[must_use]
     pub fn worker_snapshot(&self, session_id: &str) -> Option<WorkerSnapshot> {
-        snapshot::worker_snapshot_with_retained_uncertain(&self.shared, session_id)
+        self.shared.workers.lock().get(session_id).cloned()
     }
 
     #[must_use]
@@ -2286,14 +2279,6 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                     undelivered_ack,
                 )
                 .await?;
-                snapshot::persist_event_uncertain_effect(
-                    shared,
-                    &session_id,
-                    &worker_epoch,
-                    admitted,
-                    &event,
-                )
-                .await?;
                 shared.highwaters.lock().insert(key, runtime_seq);
             }
             write_broker_frame(
@@ -2413,7 +2398,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                 reject_foreign_frame(shared, &worker.session_id, "worker snapshot");
                 return Ok(());
             }
-            snapshot::observe_and_persist_snapshot(shared, &worker).await;
+            snapshot::observe_crashed_sighting(shared, &worker);
             let mut projected = false;
             native_admission::snapshot(shared, &worker, || {
                 let session_id = worker.session_id.clone();
@@ -2439,7 +2424,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
             session_id,
             worker_epoch,
         } => {
-            snapshot::handle_crashed_worker_drained_frame(shared, &session_id, &worker_epoch).await;
+            snapshot::handle_crashed_worker_drained_frame(shared, &session_id, &worker_epoch);
         }
         Frame::Welcome {
             workers, protocol, ..
@@ -2534,9 +2519,11 @@ async fn merge_worker_snapshots_with_protocol(
             continue;
         }
         if shared.resetting.lock().contains(&worker.session_id) {
+            // Preserve epoch-bound draining marker & raw sighting during bootstrap reload (R5-H5).
+            snapshot::record_welcome_draining_crashed_epoch(shared, &worker);
             continue;
         }
-        snapshot::observe_and_persist_snapshot(shared, &worker).await;
+        snapshot::observe_crashed_sighting(shared, &worker);
         let mut projected = false;
         native_admission::snapshot(shared, &worker, || {
             projected = project_snapshot_with_protocol(shared, &worker, runtime_protocol);

@@ -175,40 +175,11 @@ pub(super) fn acknowledged_uncertain_sequence_for(hub: &crate::core::Hub, sessio
         .unwrap_or(0)
 }
 
-pub(super) fn persisted_uncertain_effect_for(
-    hub: &crate::core::Hub,
-    session_id: &str,
-) -> Option<crate::runtime_wire::UncertainEffect> {
-    let key = format!(
-        "{}{}",
-        crate::core::settings_keys::SESSION_UNCERTAIN_EFFECT_ACK_PREFIX,
-        session_id
-    );
-    let value = hub.setting(&key)?;
-    let observed = value.get("observed").and_then(serde_json::Value::as_u64)?;
-    if observed == 0 {
-        return None;
-    }
-    let method = value
-        .get("method")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("target")
-        .to_owned();
-    Some(crate::runtime_wire::UncertainEffect {
-        method,
-        sequence: observed,
-    })
-}
-
 pub(super) fn unacknowledged_uncertain_effect(
     hub: &crate::core::Hub,
     worker: &WorkerSnapshot,
 ) -> Option<String> {
-    let mut effect = worker.uncertain_effect.clone();
-    if let Some(persisted) = persisted_uncertain_effect_for(hub, &worker.session_id) {
-        crate::runtime_wire::merge_uncertain_effect(&mut effect, persisted);
-    }
-    let effect = effect?;
+    let effect = worker.uncertain_effect.as_ref()?;
     let required = effect.sequence.max(1);
     let acknowledged = acknowledged_uncertain_sequence_for(hub, &worker.session_id);
     (required > acknowledged).then(|| {

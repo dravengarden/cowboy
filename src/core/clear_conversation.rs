@@ -76,8 +76,6 @@ impl Hub {
             && commit.fence != (fence_key.clone(), fence.clone())
             && let Some(tx) = self.inner.store_tx.as_ref()
         {
-            let _guard = self.runtime_projection_exclusive();
-            self.advance_uncertain_effect_context_epoch(session_id);
             let _ = tx.send(StoreWrite::ClearAgentSession {
                 session_id: session_id.to_owned(),
                 fence_key,

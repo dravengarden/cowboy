@@ -50,6 +50,7 @@ impl Broker {
                     .is_some_and(|recorded| recorded.epoch == entry.epoch)
                 {
                     state.unconfirmed_teardown.remove(&session_id);
+                    state.trusted_epoch_pids.remove(&session_id);
                     let rejections = classify_and_drain_queued_commands(
                         &mut pending_cmds,
                         &mut dispatched,
@@ -145,6 +146,7 @@ impl Broker {
                             .is_some_and(|recorded| recorded.epoch == entry.epoch)
                     {
                         state.unconfirmed_teardown.remove(&session_id);
+                        state.trusted_epoch_pids.remove(&session_id);
                         let rejections = classify_and_drain_queued_commands(
                             &mut pending_cmds,
                             &mut dispatched,
@@ -262,6 +264,7 @@ impl Broker {
                     {
                         state.active.remove(&session_id);
                     }
+                    state.trusted_epoch_pids.remove(&session_id);
                     drain_pending_for_epoch(&mut state.pending, &session_id, &worker_epoch)
                 };
                 for (sid, cid) in orphaned {

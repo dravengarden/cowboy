@@ -31,6 +31,7 @@ pub(super) struct State {
     /// original decision.
     decisions: Mutex<VecDeque<(String, bool, Option<String>)>>,
     accepted_command_id: Mutex<Option<String>>,
+    accepted_ack_seq: std::sync::atomic::AtomicU64,
 }
 
 pub(super) struct EventPublisherGuard {
@@ -199,22 +200,18 @@ pub(super) fn handle_drain_crashed(
             Some("session has background work in progress")
         } else if snapshot.pending_prompt_count > 0 {
             Some("session has a queued prompt")
-        } else if snapshot
-            .uncertain_effect
-            .as_ref()
-            .is_some_and(|effect| effect.sequence.max(1) > acknowledged_uncertain_sequence)
-            || shared
-                .execution
-                .as_ref()
-                .and_then(|client| client.ledger())
-                .is_some_and(|ledger| {
-                    ledger.uncertain_effect().is_some()
-                        && ledger.uncertain_sequence().max(1) > acknowledged_uncertain_sequence
-                })
-        {
+        } else if has_unacknowledged_uncertain_effect_locked(
+            shared,
+            &snapshot,
+            acknowledged_uncertain_sequence,
+        ) {
             Some("crashed worker has unacknowledged uncertain effect")
         } else {
             snapshot.drain_requested = true;
+            shared
+                .crashed_drain
+                .accepted_ack_seq
+                .store(acknowledged_uncertain_sequence, Ordering::Release);
             shared.crashed_drain.draining.store(true, Ordering::Release);
             None
         }
@@ -237,9 +234,31 @@ pub(super) fn handle_drain_crashed(
     command_ack(shared, command_id, true, None)
 }
 
+fn has_unacknowledged_uncertain_effect_locked(
+    shared: &Shared,
+    snapshot: &WorkerSnapshot,
+    acknowledged_uncertain_sequence: u64,
+) -> bool {
+    snapshot
+        .uncertain_effect
+        .as_ref()
+        .is_some_and(|effect| effect.sequence.max(1) > acknowledged_uncertain_sequence)
+        || shared
+            .execution
+            .as_ref()
+            .and_then(|client| client.ledger())
+            .is_some_and(|ledger| {
+                ledger.uncertain_effect().is_some()
+                    && ledger.uncertain_sequence().max(1) > acknowledged_uncertain_sequence
+            })
+}
+
 /// If the ACP thread has ended and every outbox event has been acknowledged by
 /// the Controller, emit `Frame::CrashedDrainCompleted` ONLY when ACP settled
-/// cleanly (`agent_settled_cleanly`, never on panic or forced SIGTERM cutoff).
+/// cleanly (`agent_settled_cleanly`, never on panic or forced SIGTERM cutoff)
+/// AND no unacknowledged `uncertain_effect` exists on this worker. If a late
+/// unacknowledged `uncertain_effect` appeared during drain, abort the drain and
+/// stay alive holding the live `uncertain_effect` snapshot instead of exiting.
 pub(super) async fn finish_if_drained<W: tokio::io::AsyncWrite + Unpin>(
     shared: &Shared,
     writer: &mut W,
@@ -255,6 +274,31 @@ pub(super) async fn finish_if_drained<W: tokio::io::AsyncWrite + Unpin>(
         || !shared.outbox.lock().is_empty()
     {
         return Ok(false);
+    }
+    if shared.crashed_drain.draining.load(Ordering::Acquire) {
+        let ack_seq = shared
+            .crashed_drain
+            .accepted_ack_seq
+            .load(Ordering::Acquire);
+        let aborted_snapshot = {
+            let snapshot = shared.snapshot.lock();
+            has_unacknowledged_uncertain_effect_locked(shared, &snapshot, ack_seq)
+                .then(|| snapshot.clone())
+        };
+        if let Some(snapshot) = aborted_snapshot {
+            shared
+                .crashed_drain
+                .draining
+                .store(false, Ordering::Release);
+            write_frame(
+                writer,
+                &Frame::Snapshot {
+                    worker: Box::new(snapshot),
+                },
+            )
+            .await?;
+            return Ok(false);
+        }
     }
     if settled_cleanly
         && shared.crashed_drain.draining.load(Ordering::Acquire)

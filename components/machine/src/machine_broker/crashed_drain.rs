@@ -28,6 +28,10 @@ struct Inner {
     active: HashMap<String, ActiveDrain>,
     unconfirmed_teardown: HashMap<String, UnconfirmedTeardown>,
     recently_drained: HashMap<String, (String, Instant)>,
+    /// Last trusted Direct PID observed for `(session_id -> (epoch, pid))`,
+    /// preserved across same-epoch reconnects and cleared on epoch change or
+    /// confirmed process exit (R5-M5).
+    trusted_epoch_pids: HashMap<String, (String, u32)>,
 }
 
 struct PendingDrain {
@@ -457,12 +461,27 @@ impl Broker {
         session_id: &str,
         epoch: &str,
         connection_id: u64,
+        replaced_same_epoch_pid: Option<u32>,
         worker: &mut WorkerPeer,
     ) -> Vec<(String, String)> {
         let mut state = self.crashed_drains.inner.lock();
         let mut same_epoch = false;
+        let remembered_same_epoch_pid = state
+            .trusted_epoch_pids
+            .get(session_id)
+            .filter(|(recorded_epoch, _)| recorded_epoch == epoch)
+            .map(|(_, pid)| *pid);
+        if state
+            .trusted_epoch_pids
+            .get(session_id)
+            .is_some_and(|(recorded_epoch, _)| recorded_epoch != epoch)
+        {
+            state.trusted_epoch_pids.remove(session_id);
+        }
         let mut preserved_pid = worker
             .peer_pid
+            .or(replaced_same_epoch_pid)
+            .or(remembered_same_epoch_pid)
             .or_else(|| self.direct_worker_pids.lock().get(session_id).copied());
         if let Some(active) = state.active.get_mut(session_id)
             && active.epoch == epoch
@@ -485,8 +504,11 @@ impl Broker {
                 same_epoch = true;
             }
         }
-        if preserved_pid.is_some() {
-            worker.peer_pid = preserved_pid;
+        if let Some(pid) = preserved_pid {
+            worker.peer_pid = Some(pid);
+            state
+                .trusted_epoch_pids
+                .insert(session_id.to_owned(), (epoch.to_owned(), pid));
         }
         if same_epoch {
             worker.crashed_drain_fenced = true;
@@ -689,13 +711,22 @@ impl Broker {
             .get_mut(session_id)
             .filter(|w| w.connection_id == connection_id)
         {
+            let mut state = self.crashed_drains.inner.lock();
+            let remembered_pid = state
+                .trusted_epoch_pids
+                .get(session_id)
+                .filter(|(recorded_epoch, _)| recorded_epoch == &worker.epoch)
+                .map(|(_, recorded_pid)| *recorded_pid);
             let resolved = pid
                 .or(worker.peer_pid)
+                .or(remembered_pid)
                 .or_else(|| self.direct_worker_pids.lock().get(session_id).copied());
-            if resolved.is_some() {
-                worker.peer_pid = resolved;
+            if let Some(pid_val) = resolved {
+                worker.peer_pid = Some(pid_val);
+                state
+                    .trusted_epoch_pids
+                    .insert(session_id.to_owned(), (worker.epoch.clone(), pid_val));
             }
-            let mut state = self.crashed_drains.inner.lock();
             if let Some(active) = state.active.get_mut(session_id)
                 && active.connection_id == connection_id
                 && resolved.is_some()
@@ -881,6 +912,7 @@ impl Broker {
                 );
                 if teardown_ok {
                     state.unconfirmed_teardown.remove(session_id);
+                    state.trusted_epoch_pids.remove(session_id);
                     (
                         true,
                         sessions.get(session_id).cloned(),
@@ -1102,6 +1134,7 @@ impl Broker {
             let mut state = self.crashed_drains.inner.lock();
             state.active.remove(session_id);
             state.unconfirmed_teardown.remove(session_id);
+            state.trusted_epoch_pids.remove(session_id);
             drain_pending_for_session(&mut state.pending, session_id)
         };
         for (sid, cid) in orphaned {
@@ -1205,21 +1238,29 @@ impl Broker {
                 .recently_drained
                 .insert(session_id.to_owned(), (worker_epoch.to_owned(), now));
         }
-        let tx = {
+        let controller_outcome = {
             let guard = self.controller.lock();
-            guard.as_ref().and_then(|controller| {
+            guard.as_ref().map(|controller| {
                 let capable = controller.protocol >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
                     && controller
                         .outer_machine_protocol
                         .is_some_and(|proto| proto >= CRASHED_WORKER_DRAIN_PROTOCOL_VERSION);
-                capable.then(|| controller.tx.clone())
+                (capable, controller.tx.clone())
             })
         };
-        if let Some(tx) = tx {
-            let _ = tx.send(Frame::CrashedWorkerDrained {
-                session_id: session_id.to_owned(),
-                worker_epoch: worker_epoch.to_owned(),
-            });
+        match controller_outcome {
+            Some((true, tx)) => {
+                let _ = tx.send(Frame::CrashedWorkerDrained {
+                    session_id: session_id.to_owned(),
+                    worker_epoch: worker_epoch.to_owned(),
+                });
+            }
+            Some((false, _)) => {
+                // Downgraded Controller cannot read CrashedWorkerDrained: publish
+                // compatible ownerless snapshot so it drops the exited worker (R5-M4).
+                self.publish_ownerless_crashed_snapshot(session_id);
+            }
+            None => {}
         }
     }
 

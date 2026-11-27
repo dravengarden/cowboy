@@ -106,12 +106,10 @@ impl Env for AppEnv {
 
     fn worker(&self, session: &str) -> Option<crate::runtime_wire::WorkerSnapshot> {
         let machine = self.0.hub.session_info(session)?.meta.machine_id;
-        let runtime = self.0.runtime_router.runtime(&machine)?;
-        let mut worker = runtime.worker_snapshot(session)?;
-        if !runtime.worker_snapshot_binding_verified(&worker) {
-            worker.uncertain_effect = None;
-        }
-        Some(worker)
+        self.0
+            .runtime_router
+            .runtime(&machine)?
+            .worker_snapshot(session)
     }
 
     fn machine_connected(&self, machine: &str) -> bool {
@@ -159,11 +157,7 @@ impl Env for AppEnv {
     }
 
     fn set_setting(&self, key: String, value: Value) {
-        if key.starts_with(crate::core::settings_keys::SESSION_UNCERTAIN_EFFECT_ACK_PREFIX) {
-            self.0.hub.merge_cached_uncertain_effect_setting(key, value);
-        } else {
-            self.0.hub.load_settings(vec![(key, value)]);
-        }
+        self.0.hub.load_settings(vec![(key, value)]);
     }
 
     fn fence(

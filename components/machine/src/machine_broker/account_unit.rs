@@ -6,7 +6,46 @@
 
 use super::*;
 
+tokio::task_local! {
+    /// Prompt `(session_id, command_id)` whose `DispatchedPrompts` ingress record
+    /// was freshly created by this exact core-command invocation (R5-M1).
+    pub(super) static OWNED_PROMPT_INGRESS: Option<(String, String)>;
+}
+
 impl Broker {
+    pub(super) fn retire_if_not_queued(&self, session_id: &str, command_id: &str) {
+        let pending = self.pending_commands.lock();
+        let queued = pending.get(session_id).is_some_and(|queue| {
+            queue.iter().any(|cmd| {
+                matches!(
+                    cmd,
+                    WorkerCommand::Prompt {
+                        command_id: queued_id,
+                        ..
+                    } if queued_id == command_id
+                )
+            })
+        });
+        if !queued {
+            self.dispatched_prompts
+                .lock()
+                .retire_if_unhanded(session_id, command_id);
+        }
+    }
+
+    pub(super) fn retire_owned_unhanded_prompt(&self, session_id: &str, command_id: &str) {
+        let owns_ingress = OWNED_PROMPT_INGRESS
+            .try_with(|owned| {
+                owned
+                    .as_ref()
+                    .is_some_and(|(s, c)| s == session_id && c == command_id)
+            })
+            .unwrap_or(false);
+        if owns_ingress {
+            self.retire_if_not_queued(session_id, command_id);
+        }
+    }
+
     pub(super) fn retire_stale_lease_prompt(&self, command: &crate::runtime_wire::CoreCommand) {
         if let crate::runtime_wire::CoreCommand::Prompt {
             session_id,
@@ -14,9 +53,7 @@ impl Broker {
             ..
         } = command
         {
-            self.dispatched_prompts
-                .lock()
-                .retire_if_unhanded(session_id, command_id);
+            self.retire_owned_unhanded_prompt(session_id, command_id);
         }
     }
 

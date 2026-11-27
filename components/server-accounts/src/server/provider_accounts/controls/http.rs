@@ -165,34 +165,18 @@ impl Controls {
             return Err("uncertain_effect_changed");
         }
         let key = uncertain_key(session);
-        let prev = self
-            .store
-            .load_settings()
-            .await
-            .map_err(|_| "outcome_unknown")?
-            .into_iter()
-            .find(|(k, _)| k == &key)
-            .map(|(_, v)| v);
-        let mut record = prev.clone().unwrap_or_else(|| json!({}));
+        let mut record = self.env.setting(&key).unwrap_or_else(|| json!({}));
         if record["observed"].as_u64().unwrap_or(0) > sequence {
             return Err("uncertain_effect_changed");
         }
-        if record["observed"].as_u64().unwrap_or(0) < sequence {
-            record["observed"] = json!(sequence);
-            record["method"] = json!(method);
-        } else if record.get("method").is_none() {
-            record["method"] = json!(method);
-        }
+        record["observed"] = json!(sequence);
+        record["method"] = json!(method);
         record["acknowledged"] = json!(sequence);
         record["acknowledged_at_ms"] = json!(now_ms());
-        let swapped = self
-            .store
-            .compare_and_put_setting(&key, prev.as_ref(), &record)
+        self.store
+            .put_setting(&key, &record)
             .await
             .map_err(|_| "outcome_unknown")?;
-        if !swapped {
-            return Err("uncertain_effect_changed");
-        }
         // Published under the same lock as every observation of the record.
         self.env.set_setting(key.clone(), record.clone());
         Ok((key, record))
