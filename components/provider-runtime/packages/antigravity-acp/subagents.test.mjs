@@ -1916,3 +1916,126 @@ test("a running child's form elicitation/create forwards to the owner and retire
   });
   assert.equal(client.length, 0);
 });
+
+test("pre-turn elicitation during pending child open cancels immediately without buffering or stalling (R1)", async () => {
+  const made = await parent({}, { elicitation: { form: {} } });
+  const { proxy, agent, client, control } = made;
+  control.beforeNew = (sessionId) => [
+    {
+      jsonrpc: "2.0",
+      id: "pre-open-elicit",
+      method: "elicitation/create",
+      params: {
+        sessionId,
+        mode: "form",
+        message: "Before session/new answered",
+        requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+      },
+    },
+  ];
+  control.afterNew = (sessionId) => [
+    {
+      jsonrpc: "2.0",
+      id: "post-open-pre-prompt-elicit",
+      method: "elicitation/create",
+      params: {
+        sessionId,
+        mode: "form",
+        message: "After session/new before child prompt",
+        requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+      },
+    },
+  ];
+
+  const id = await startChild(made);
+  await flush();
+  assert.deepEqual(
+    agent.find((m) => m.id === "pre-open-elicit"),
+    { jsonrpc: "2.0", id: "pre-open-elicit", result: { action: "cancel" } },
+  );
+  assert.deepEqual(
+    agent.find((m) => m.id === "post-open-pre-prompt-elicit"),
+    { jsonrpc: "2.0", id: "post-open-pre-prompt-elicit", result: { action: "cancel" } },
+  );
+  assert.equal(
+    client.some((m) => m.method === "elicitation/create"),
+    false,
+    "pre-turn child elicitations must never reach the worker",
+  );
+  assert.equal(proxy.subagents.active(id), true);
+});
+
+test("buffered duplicate native ID during child open retires live parent form and parent reopen retires child form (R1)", async () => {
+  const made = await parent({}, { elicitation: { form: {} } });
+  const { proxy, agent, client, control } = made;
+
+  // Open a live form on the parent session under native ID "shared-id".
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "shared-id",
+    method: "elicitation/create",
+    params: {
+      sessionId: "s",
+      mode: "form",
+      message: "Parent form",
+      requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+    },
+  });
+  const parentFwd = client.at(-1);
+  assert.equal(parentFwd.method, "elicitation/create");
+
+  // While a child is opening, agy sends a permission request reusing "shared-id".
+  control.beforeNew = (sessionId) => [
+    {
+      jsonrpc: "2.0",
+      id: "shared-id",
+      method: "session/request_permission",
+      params: {
+        sessionId,
+        toolCall: { toolCallId: "t1", name: "mcp_cowboy_ReadFile" },
+        options: [{ optionId: "yes", kind: "allow_once" }],
+      },
+    },
+  ];
+  const childId = await startChild(made);
+  await flush();
+  assert.ok(
+    client.some((m) => m.method === "$/cancel_request" && m.params?.requestId === parentFwd.id),
+    "buffered duplicate retires original parent form in worker",
+  );
+  const sharedReplies = agent.filter((m) => m.id === "shared-id");
+  assert.equal(sharedReplies.length, 1);
+  assert.equal(sharedReplies[0].error?.code, -32600);
+  // Late worker reply on original parent form produces zero frames.
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: parentFwd.id,
+    result: { action: "accept", content: { q1: "late" } },
+  });
+  assert.equal(agent.filter((m) => m.id === "shared-id").length, 1);
+
+  // Open a live child form, then reopen parent session via session/load -> child form retires.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "child-reopen-elicit",
+    method: "elicitation/create",
+    params: {
+      sessionId: childId,
+      mode: "form",
+      message: "Child form before parent reopen",
+      requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+    },
+  });
+  const childFwd = client.at(-1);
+  await proxy.fromClient(
+    request(55, "session/load", { sessionId: "s", cwd: "/work/repo", mcpServers: [] }),
+  );
+  assert.ok(
+    client.some((m) => m.method === "$/cancel_request" && m.params?.requestId === childFwd.id),
+    "parent reopen cancels child form in worker",
+  );
+  assert.deepEqual(
+    agent.find((m) => m.id === "child-reopen-elicit"),
+    { jsonrpc: "2.0", id: "child-reopen-elicit", result: { action: "cancel" } },
+  );
+});

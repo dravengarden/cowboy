@@ -301,3 +301,46 @@ test("Antigravity ask_question form elicitation parses single, multi, and option
     'accept:{"q1":"1","q2":["1","2"],"q2_other":"prioritize iOS"}',
   );
 });
+
+test("parent tool completion with a colliding toolCallId does not hide a child elicitation form", () => {
+  const timeline: Envelope[] = [
+    {
+      seq: 1,
+      ts: 1,
+      kind: "permission_request",
+      request_id: "child-req-1",
+      tool_call: {
+        toolCallId: "call_1",
+        title: "Subagent question",
+        _cowboy: {
+          subagent: { sessionId: "child-1", title: "Helper" },
+          elicitation: {
+            mode: "form",
+            sessionId: "child-1",
+            toolCallId: "call_1",
+            message: "Subagent question",
+            requestedSchema: { type: "object", properties: { q1: { type: "string", title: "Q" } } },
+          },
+        },
+      },
+      options: [{ optionId: "accept", name: "Submit", kind: "allow_once" }],
+    },
+    {
+      seq: 2,
+      ts: 2,
+      kind: "permission_request",
+      request_id: "parent-req-1",
+      tool_call: { toolCallId: "call_1", title: "Parent tool" },
+      options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+    },
+    {
+      seq: 3,
+      ts: 3,
+      kind: "update",
+      update: { sessionUpdate: "tool_call_update", toolCallId: "call_1", status: "completed" },
+    },
+  ];
+  const pending = pendingPermissions(timeline);
+  assertEquals(pending.map((p) => p.requestId), ["child-req-1"]);
+  assertEquals(pending[0]?.subagentId, "child-1");
+});

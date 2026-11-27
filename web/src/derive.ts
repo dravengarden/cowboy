@@ -952,7 +952,9 @@ export function pendingPermissions(timeline: Envelope[]): PendingPermission[] {
         ...(subagentId ? { subagentId } : {}),
       });
       const tool = toolCallIdOf(env.tool_call);
-      if (tool !== null) byTool.set(tool, env.request_id);
+      if (tool !== null && (subagent === null || subagentId !== null)) {
+        byTool.set(subagent === null ? `r:${tool}` : `c:${subagentId}:${tool}`, env.request_id);
+      }
     } else if (env.kind === "permission_resolved") {
       drop(env.request_id);
     } else if (pending.size === 0) {
@@ -972,7 +974,11 @@ export function pendingPermissions(timeline: Envelope[]): PendingPermission[] {
       env.update.sessionUpdate === "tool_call_update" &&
       (env.update.status === "completed" || env.update.status === "failed")
     ) {
-      const request = byTool.get(env.update.toolCallId ?? "");
+      const uSub = requestingSubagent(env.update);
+      const uSid = requestingSubagentId(env.update);
+      const tid = env.update.toolCallId ?? "";
+      const key = uSub === null ? `r:${tid}` : uSid !== null ? `c:${uSid}:${tid}` : null;
+      const request = key !== null ? byTool.get(key) : undefined;
       if (request !== undefined) drop(request);
     }
   }

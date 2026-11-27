@@ -211,6 +211,180 @@ export function supportsFormElicitation(clientCapabilities) {
   return isObject(form) || form === true;
 }
 
+function parseChoices(titled, plain) {
+  if (titled !== undefined && plain !== undefined) return null;
+  if (titled !== undefined) {
+    if (!Array.isArray(titled) || titled.length === 0) return null;
+    const choices = new Set();
+    for (const option of titled) {
+      if (!isObject(option) || typeof option.const !== "string") return null;
+      choices.add(option.const);
+    }
+    return choices;
+  }
+  if (plain !== undefined) {
+    if (!Array.isArray(plain) || plain.length === 0) return null;
+    const choices = new Set();
+    for (const value of plain) {
+      if (typeof value !== "string") return null;
+      choices.add(value);
+    }
+    return choices;
+  }
+  return undefined;
+}
+
+function validOptionalBound(value, { integer = false, min = -Infinity } = {}) {
+  if (value === undefined) return true;
+  if (typeof value !== "number" || !Number.isFinite(value) || value < min) return false;
+  return !integer || Number.isInteger(value);
+}
+
+function parseElicitationField(prop) {
+  if (!isObject(prop) || typeof prop.type !== "string") return null;
+  switch (prop.type) {
+    case "string": {
+      const choices = parseChoices(prop.oneOf, prop.enum);
+      if (choices === null) return null;
+      if (choices !== undefined) {
+        return { kind: "single", choices };
+      }
+      if (
+        !validOptionalBound(prop.minLength, { integer: true, min: 0 }) ||
+        !validOptionalBound(prop.maxLength, { integer: true, min: 0 }) ||
+        (prop.minLength !== undefined &&
+          prop.maxLength !== undefined &&
+          prop.minLength > prop.maxLength)
+      ) {
+        return null;
+      }
+      return { kind: "string", minLength: prop.minLength, maxLength: prop.maxLength };
+    }
+    case "array": {
+      if (!isObject(prop.items)) return null;
+      if (prop.items.anyOf !== undefined && prop.items.oneOf !== undefined) return null;
+      const choices = parseChoices(prop.items.anyOf ?? prop.items.oneOf, prop.items.enum);
+      if (!choices || choices.size === 0) return null;
+      if (
+        !validOptionalBound(prop.minItems, { integer: true, min: 0 }) ||
+        !validOptionalBound(prop.maxItems, { integer: true, min: 0 }) ||
+        (prop.minItems !== undefined &&
+          prop.maxItems !== undefined &&
+          prop.minItems > prop.maxItems)
+      ) {
+        return null;
+      }
+      return { kind: "multi", choices, minItems: prop.minItems, maxItems: prop.maxItems };
+    }
+    case "boolean":
+      return { kind: "boolean" };
+    case "number":
+    case "integer": {
+      if (
+        !validOptionalBound(prop.minimum) ||
+        !validOptionalBound(prop.maximum) ||
+        (prop.minimum !== undefined && prop.maximum !== undefined && prop.minimum > prop.maximum)
+      ) {
+        return null;
+      }
+      return { kind: prop.type, minimum: prop.minimum, maximum: prop.maximum };
+    }
+    default:
+      return null;
+  }
+}
+
+/**
+ * Validate an ACP form `requestedSchema` and extract the renderable field map.
+ * Returns `null` if any property is unsupported/malformed or if any entry in
+ * `required` does not identify a declared supported field.
+ */
+export function parseElicitationSchema(requestedSchema) {
+  if (!isObject(requestedSchema)) return null;
+  if (requestedSchema.type !== undefined && requestedSchema.type !== "object") return null;
+  if (!isObject(requestedSchema.properties)) return null;
+  const required = new Set();
+  if (requestedSchema.required !== undefined) {
+    if (!Array.isArray(requestedSchema.required)) return null;
+    for (const name of requestedSchema.required) {
+      if (typeof name !== "string" || name.length === 0) return null;
+      required.add(name);
+    }
+  }
+  const fields = new Map();
+  for (const [name, prop] of Object.entries(requestedSchema.properties)) {
+    const parsed = parseElicitationField(prop);
+    if (!parsed) return null;
+    fields.set(name, parsed);
+  }
+  for (const name of required) {
+    if (!fields.has(name)) return null;
+  }
+  return { fields, required };
+}
+
+/**
+ * Validate an `accept` elicitation `content` object against a previously
+ * parsed schema. Preserves valid partial answers on optional fields while
+ * rejecting unknown keys, wrong types, unoffered choices, and missing required
+ * answers. Returns `undefined` for valid content-less accept on an optional
+ * schema, a sanitized plain object for valid content, or `null` on mismatch.
+ */
+export function validateElicitationContent(schema, content) {
+  if (content === undefined) {
+    return schema.required.size === 0 ? undefined : null;
+  }
+  if (!isObject(content)) return null;
+  for (const name of schema.required) {
+    if (!Object.hasOwn(content, name) || content[name] === undefined) return null;
+  }
+  const sanitized = {};
+  for (const [key, value] of Object.entries(content)) {
+    if (value === undefined) continue;
+    const field = schema.fields.get(key);
+    if (!field) return null;
+    const isRequired = schema.required.has(key);
+    switch (field.kind) {
+      case "single":
+        if (typeof value !== "string" || !field.choices.has(value)) return null;
+        break;
+      case "string":
+        if (typeof value !== "string") return null;
+        if (isRequired && value.trim().length === 0) return null;
+        if (field.minLength !== undefined && value.length < field.minLength) return null;
+        if (field.maxLength !== undefined && value.length > field.maxLength) return null;
+        break;
+      case "multi": {
+        if (!Array.isArray(value)) return null;
+        if (isRequired && value.length === 0) return null;
+        if (field.minItems !== undefined && value.length < field.minItems) return null;
+        if (field.maxItems !== undefined && value.length > field.maxItems) return null;
+        const seen = new Set();
+        for (const item of value) {
+          if (typeof item !== "string" || !field.choices.has(item) || seen.has(item)) return null;
+          seen.add(item);
+        }
+        break;
+      }
+      case "boolean":
+        if (typeof value !== "boolean") return null;
+        break;
+      case "number":
+        if (typeof value !== "number" || !Number.isFinite(value)) return null;
+        if (field.minimum !== undefined && value < field.minimum) return null;
+        if (field.maximum !== undefined && value > field.maximum) return null;
+        break;
+      case "integer":
+        if (typeof value !== "number" || !Number.isInteger(value)) return null;
+        if (field.minimum !== undefined && value < field.minimum) return null;
+        if (field.maximum !== undefined && value > field.maximum) return null;
+        break;
+    }
+    sanitized[key] = value;
+  }
+  return sanitized;
+}
+
 /** A removed field, in the changes a parent applies to its copy. */
 const REMOVED = Symbol("removed");
 
@@ -572,13 +746,18 @@ export class AcpProxy {
   /**
    * Advance the root owner's mode generation and retire every pending permission
    * across that owner session and all of its active subagents. Never called for
-   * a child subagent's own native mode reports. Form elicitations (`ask_question`)
-   * authorize no tool execution and stay open across mode toggles.
+   * a child subagent's own native mode reports. Callers that represent a pure
+   * mode toggle (not a session reopen or eviction) pass `includeElicitations: false`
+   * because form elicitations (`ask_question`) authorize no tool execution.
    */
-  invalidateModeFamily(ownerId, reason = "The session's mode changed.") {
+  invalidateModeFamily(
+    ownerId,
+    reason = "The session's mode changed.",
+    { includeElicitations = true } = {},
+  ) {
     if (typeof ownerId !== "string" || this.subagents.owns(ownerId)) return;
     this.planGate.bumpModeGeneration(ownerId);
-    this.retirePermissions({ ownerId, reason, includeElicitations: false });
+    this.retirePermissions({ ownerId, reason, includeElicitations });
   }
 
   /** Ensure per-session mode-operation sequence state exists for root owner `sessionId`. */
@@ -632,7 +811,9 @@ export class AcpProxy {
     state.latestSeq = seq;
     state.active.add(seq);
     this.modes.delete(sessionId);
-    this.invalidateModeFamily(sessionId, "The session's mode is changing.");
+    this.invalidateModeFamily(sessionId, "The session's mode is changing.", {
+      includeElicitations: false,
+    });
     return { seq, incarnation: state.incarnation };
   }
 
@@ -650,7 +831,9 @@ export class AcpProxy {
       // Intermediate switch errors still invalidate switching-era prompts while
       // keeping the effective mode restricted until all switches finish.
       if (result === undefined) {
-        this.invalidateModeFamily(sessionId, "A mode switch failed.");
+        this.invalidateModeFamily(sessionId, "A mode switch failed.", {
+          includeElicitations: false,
+        });
       }
       return;
     }
@@ -659,7 +842,9 @@ export class AcpProxy {
     if (state.activeReopens.size === 0) state.overlapped = false;
     // Always invalidate generation & switching-era prompts on final outcome,
     // including errors.
-    this.invalidateModeFamily(sessionId, "The session's mode changed.");
+    this.invalidateModeFamily(sessionId, "The session's mode changed.", {
+      includeElicitations: false,
+    });
     if (result === undefined) {
       this.modes.delete(sessionId);
       return;
@@ -912,19 +1097,16 @@ export class AcpProxy {
     }
     const params = redactedMessage.params;
     if (!isObject(params) || params.mode !== "form") {
-      return this.cancelElicitation(
-        agyId,
-        `cancelled elicitation: unsupported mode ${String(params?.mode)}`,
-      );
+      const modeDetail = typeof params?.mode === "string" ? params.mode : "(non-string)";
+      return this.cancelElicitation(agyId, `cancelled elicitation: unsupported mode ${modeDetail}`);
     }
     const sessionId = params.sessionId;
+    const schema = parseElicitationSchema(params.requestedSchema);
     if (
       typeof sessionId !== "string" ||
       sessionId.length === 0 ||
       typeof params.message !== "string" ||
-      !isObject(params.requestedSchema) ||
-      (params.requestedSchema.type !== undefined && params.requestedSchema.type !== "object") ||
-      !isObject(params.requestedSchema.properties) ||
+      schema === null ||
       (params.toolCallId !== undefined &&
         (typeof params.toolCallId !== "string" || params.toolCallId.length === 0))
     ) {
@@ -940,8 +1122,16 @@ export class AcpProxy {
     if (!this.isKnownLiveSession(sessionId, { requireTurn: true })) {
       return this.cancelElicitation(agyId, "cancelled elicitation: no known live session");
     }
+    const ownerId = this.subagents.parentOf(sessionId) ?? sessionId;
     const turn = this.turns.get(sessionId);
-    if (!turn || turn.cancelled || turn.closed) {
+    const parentTurn = ownerId !== sessionId ? this.turns.get(ownerId) : undefined;
+    if (
+      !turn ||
+      turn.cancelled ||
+      turn.closed ||
+      turn.uncertain !== undefined ||
+      parentTurn?.uncertain !== undefined
+    ) {
       return this.cancelElicitation(agyId, "cancelled elicitation: no live turn");
     }
     if (this.workerPermissions.size >= MAX_PENDING_PERMISSIONS) {
@@ -957,7 +1147,6 @@ export class AcpProxy {
     if (isObject(params._meta)) forwardParams._meta = params._meta;
     const agyKey = JSON.stringify(agyId);
     const workerId = this.allocateWorkerPermId();
-    const ownerId = this.subagents.parentOf(sessionId) ?? sessionId;
     this.agentPermToWorker.set(agyKey, workerId);
     this.workerPermissions.set(workerId, {
       kind: "elicitation",
@@ -968,6 +1157,7 @@ export class AcpProxy {
       child: this.subagents.childOf(sessionId),
       turn,
       attempt: turn.attempt,
+      schema,
     });
     return this.client({
       jsonrpc: "2.0",
@@ -1012,7 +1202,9 @@ export class AcpProxy {
       const previous = this.modes.get(sessionId);
       this.modes.set(sessionId, current);
       if (previous !== current) {
-        this.invalidateModeFamily(sessionId, "The session's mode changed.");
+        this.invalidateModeFamily(sessionId, "The session's mode changed.", {
+          includeElicitations: false,
+        });
       }
     }
   }
@@ -1657,18 +1849,24 @@ export class AcpProxy {
           !entry.turn.cancelled &&
           !entry.turn.closed;
         if (entry.kind === "elicitation") {
+          const parentTurn =
+            entry.ownerId !== entry.sessionId ? this.turns.get(entry.ownerId) : undefined;
+          const notUncertain =
+            entry.turn.uncertain === undefined && parentTurn?.uncertain === undefined;
           const result =
             message.error === undefined && isObject(message.result) ? message.result : undefined;
           const action = result?.action;
-          const validAction = action === "accept" || action === "decline" || action === "cancel";
-          const validContent =
-            action !== "accept" || result.content === undefined || isObject(result.content);
-          if (!this.closing && childOpen && turnValid && validAction && validContent) {
-            const reply =
-              action === "accept" && result.content !== undefined
-                ? { action, content: result.content }
-                : { action };
-            return this.agent({ jsonrpc: "2.0", id: entry.agyId, result: reply });
+          if (!this.closing && childOpen && turnValid && notUncertain) {
+            if (action === "decline" || action === "cancel") {
+              return this.agent({ jsonrpc: "2.0", id: entry.agyId, result: { action } });
+            }
+            if (action === "accept") {
+              const validated = validateElicitationContent(entry.schema, result.content);
+              if (validated !== null) {
+                const reply = validated !== undefined ? { action, content: validated } : { action };
+                return this.agent({ jsonrpc: "2.0", id: entry.agyId, result: reply });
+              }
+            }
           }
           return this.agent({
             jsonrpc: "2.0",
@@ -2248,6 +2446,10 @@ export class AcpProxy {
     const turn = this.turns.get(sessionId);
     if (!turn) return;
     turn.uncertain ??= method;
+    this.retirePermissions({
+      sessionId,
+      reason: "The turn was fenced after an uncertain effect.",
+    });
     this.agent({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
   }
 
@@ -2328,6 +2530,45 @@ export class AcpProxy {
   async fromAgent(message, replayOptions = undefined) {
     if (message === null || typeof message !== "object" || Array.isArray(message)) return;
     const { id, method } = message;
+    // Detect duplicate live native request IDs BEFORE buffering or method
+    // dispatch so neither an unsupported method nor a buffered child request
+    // can leave an earlier live worker prompt answerable on the same ID.
+    if (typeof method === "string" && id !== undefined) {
+      const agyKey = JSON.stringify(id);
+      if (this.agentPermToWorker.has(agyKey)) {
+        const existingWorkerId = this.agentPermToWorker.get(agyKey);
+        const existing = this.workerPermissions.get(existingWorkerId);
+        const sameKind =
+          (existing?.kind === "agent" && method === "session/request_permission") ||
+          (existing?.kind === "elicitation" && method === "elicitation/create");
+        if (sameKind) {
+          this.retirePermission(existingWorkerId, {
+            reason: "Duplicate native request ID.",
+            notifyWorker: true,
+            replyAgent: true,
+          });
+        } else {
+          this.retirePermission(existingWorkerId, {
+            reason: "Duplicate native request ID.",
+            notifyWorker: true,
+            replyAgent: false,
+          });
+          this.agent({
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32600, message: "Duplicate native request ID" },
+          });
+        }
+        this.log("rejected request: duplicate live native request ID");
+        return;
+      }
+      // Pre-turn form elicitations on an opening/unannounced session must
+      // never be buffered in `subagents.hold` (where a waiting `session/new`
+      // could stall or an abandoned/full buffer could drop the reply).
+      if (method === "elicitation/create" && this.subagents.holds(message.params?.sessionId)) {
+        return this.cancelElicitation(id, "cancelled elicitation: session still opening");
+      }
+    }
     // A subagent's session the worker has not been told about yet: nothing of
     // it reaches the worker (it would read as the parent's) until it is.
     if (typeof method === "string" && this.subagents.holds(message.params?.sessionId)) {
@@ -2341,10 +2582,14 @@ export class AcpProxy {
             const agyKey = JSON.stringify(reqId);
             const workerId = this.agentPermToWorker.get(agyKey);
             if (workerId !== undefined) {
+              const entry = this.workerPermissions.get(workerId);
+              const isElicitation = entry?.kind === "elicitation";
               this.retirePermission(workerId, {
-                reason: "Antigravity cancelled the permission request.",
+                reason: isElicitation
+                  ? "Antigravity cancelled the elicitation request."
+                  : "Antigravity cancelled the permission request.",
                 notifyWorker: true,
-                replyAgent: false,
+                replyAgent: isElicitation,
               });
             }
           }
@@ -2436,18 +2681,6 @@ export class AcpProxy {
       }
       // Redact account tier metadata before inspecting or forwarding options.
       const asked = stripTier(message);
-      const agyKey = JSON.stringify(id);
-      if (this.agentPermToWorker.has(agyKey)) {
-        // Live duplicate native permission ID: retire the existing worker
-        // prompt and send a single cancellation reply for `id`.
-        this.retirePermission(this.agentPermToWorker.get(agyKey), {
-          reason: "Duplicate native permission request ID.",
-          notifyWorker: true,
-          replyAgent: true,
-        });
-        this.log("rejected permission: duplicate live native request ID");
-        return;
-      }
       if (this.closing) {
         if (method === "elicitation/create") {
           return this.cancelElicitation(id, "cancelled elicitation: proxy closing");
