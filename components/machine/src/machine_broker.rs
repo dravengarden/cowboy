@@ -4866,23 +4866,12 @@ async fn handle_worker(
                 );
             }
             Frame::ExecutionRequest { request } => {
-                let allowed = broker.execution_request_allowed(session_id, epoch, &request);
-                if allowed {
-                    broker.send_controller(Frame::ExecutionRequest { request });
-                } else if let Some(worker) = broker.workers.lock().get(session_id) {
-                    let _ = worker.tx.send(Frame::ExecutionReply {
-                        reply: Box::new(crate::execution_protocol::RuntimeReply {
-                            session_id: session_id.to_owned(),
-                            worker_epoch: epoch.to_owned(),
-                            request_id: request.request_id,
-                            scope: crate::execution_protocol::Scope::from_binding(&request.binding),
-                            response: crate::machine_protocol::execution::Response::Refused {
-                                reason:
-                                    crate::machine_protocol::execution::Refusal::IdentityMismatch,
-                            },
-                        }),
-                    });
-                }
+                broker.forward_or_refuse_execution_request(
+                    session_id,
+                    epoch,
+                    connection_id,
+                    request,
+                );
             }
             Frame::Snapshot { worker } if worker.session_id == session_id => {
                 if !broker.update_snapshot((*worker).clone(), connection_id) {

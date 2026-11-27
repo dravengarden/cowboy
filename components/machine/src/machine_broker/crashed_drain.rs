@@ -381,6 +381,10 @@ impl Broker {
         self.send_controller(frame);
         if cleared_fence {
             self.flush_pending(&sid);
+            // Publish an ordered snapshot clearing `crashed_drain_active` even
+            // when the prompt queue was empty so a post-handover Controller
+            // without the original pending command clears its drain marker (R12-M1).
+            self.publish_snapshot_after_crashed_flush(&sid, true);
         }
     }
 
@@ -2122,7 +2126,7 @@ mod tests {
     async fn broker_execution_boundary_restricts_draining_crashed_epoch_to_cleanup_only() {
         let dir = tempfile::tempdir().unwrap();
         let broker = test_broker(dir.path());
-        let _w_rx = attach_crashed_worker(
+        let mut w_rx = attach_crashed_worker(
             &broker,
             "s-r11-h2",
             "61-1",
@@ -2205,14 +2209,45 @@ mod tests {
             },
             wait_ms: 1000,
         });
-        assert!(broker.execution_request_allowed("s-r11-h2", "61-1", &terminate));
-        assert!(broker.execution_request_allowed("s-r11-h2", "61-1", &stop_mcp));
-        assert!(!broker.execution_request_allowed("s-r11-h2", "61-1", &start_proc));
-        assert!(!broker.execution_request_allowed(
+        let mut ctrl_rx = attach_controller(
+            &broker,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+            Some(CRASHED_WORKER_DRAIN_PROTOCOL_VERSION),
+        );
+        broker.forward_or_refuse_execution_request("s-r11-h2", "61-1", 1, Box::new(terminate));
+        broker.forward_or_refuse_execution_request("s-r11-h2", "61-1", 1, Box::new(stop_mcp));
+        broker.forward_or_refuse_execution_request("s-r11-h2", "61-1", 1, Box::new(start_proc));
+        broker.forward_or_refuse_execution_request(
             "s-r11-h2",
             "61-1",
-            &make_req(crate::execution_protocol::Command::Describe),
+            1,
+            Box::new(make_req(crate::execution_protocol::Command::Describe)),
+        );
+        assert!(matches!(
+            ctrl_rx.try_recv().expect("terminate forwarded"),
+            Frame::ExecutionRequest { .. }
         ));
+        assert!(matches!(
+            ctrl_rx.try_recv().expect("stop_mcp forwarded"),
+            Frame::ExecutionRequest { .. }
+        ));
+        assert!(
+            ctrl_rx.try_recv().is_err(),
+            "non-cleanup execution requests must never be forwarded during crashed drain"
+        );
+        // Both non-cleanup commands must receive IdentityMismatch refusals on worker channel.
+        for _ in 0..2 {
+            assert!(matches!(
+                w_rx.try_recv().expect("worker refusal"),
+                Frame::ExecutionReply { reply }
+                    if matches!(
+                        reply.response,
+                        crate::machine_protocol::execution::Response::Refused {
+                            reason: crate::machine_protocol::execution::Refusal::IdentityMismatch
+                        }
+                    )
+            ));
+        }
     }
 
     #[tokio::test]
@@ -2268,6 +2303,174 @@ mod tests {
         match second {
             Frame::Snapshot { worker } => {
                 assert_eq!(worker.session_id, "s-r11-m1");
+                assert_eq!(worker.pending_prompt_count, 0);
+            }
+            other => panic!("expected refreshed Frame::Snapshot, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn genuine_drain_refusal_publishes_cleared_snapshot_and_late_abort_after_delete_is_ignored()
+     {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let mut ctrl_rx = attach_controller(
+            &broker,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+            Some(CRASHED_WORKER_DRAIN_PROTOCOL_VERSION),
+        );
+        let _w_rx = attach_crashed_worker(
+            &broker,
+            "s-r12-m1",
+            "70-1",
+            1,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+        );
+        // Simulate pending drain with empty prompt queue, then worker refuses (R12-M1).
+        broker
+            .workers
+            .lock()
+            .get_mut("s-r12-m1")
+            .unwrap()
+            .crashed_drain_fenced = true;
+        broker.crashed_drains.inner.lock().pending.insert(
+            "dc-refuse".into(),
+            PendingDrain {
+                session_id: "s-r12-m1".into(),
+                epoch: "70-1".into(),
+                connection_id: 1,
+                acknowledged_uncertain_sequence: 0,
+                peer_pid: None,
+                retired_launch: RetiredLaunch::VerifiedNone,
+                needs_replay: false,
+            },
+        );
+        broker.handle_worker_command_ack(
+            "70-1",
+            1,
+            Frame::CommandAck {
+                session_id: "s-r12-m1".into(),
+                command_id: "dc-refuse".into(),
+                accepted: false,
+                reason: Some("busy".into()),
+            },
+        );
+        assert!(matches!(
+            ctrl_rx.try_recv().expect("refusal ack"),
+            Frame::CommandAck {
+                accepted: false,
+                ..
+            }
+        ));
+        match ctrl_rx.try_recv().expect("cleared drain snapshot") {
+            Frame::Snapshot { worker } => {
+                assert_eq!(worker.session_id, "s-r12-m1");
+                assert!(!worker.crashed_drain_active);
+            }
+            other => panic!("expected Frame::Snapshot clearing drain marker, got {other:?}"),
+        }
+
+        // Permanent deletion followed by late drain abort must neither retain
+        // uncertain_effect nor publish a snapshot (R12-M2).
+        broker.clear_crashed_drain("s-r12-m1", "deleted", true);
+        broker.cancelled_sessions.lock().insert("s-r12-m1".into());
+        broker
+            .permanently_deleted_sessions
+            .lock()
+            .insert("s-r12-m1".into());
+        broker.handle_crashed_drain_aborted(
+            "s-r12-m1",
+            "70-1",
+            1,
+            Some("dc-late"),
+            Some(crate::runtime_wire::UncertainEffect {
+                method: "tool/late".into(),
+                sequence: 99,
+            }),
+        );
+        assert!(broker.retained_receiptless_uncertain("s-r12-m1").is_none());
+        assert!(ctrl_rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn stale_peer_uncertain_event_ignored_and_direct_refusal_refreshes_crashed_queue_count() {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let mut ctrl_rx = attach_controller(
+            &broker,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+            Some(CRASHED_WORKER_DRAIN_PROTOCOL_VERSION),
+        );
+        let _w_rx = attach_crashed_worker(
+            &broker,
+            "s-r12-m3",
+            "71-2",
+            2,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+        );
+        // Stale connection 1 / old epoch 71-1 must NOT pollute retained uncertainty (R12-M3).
+        let stale_event = RuntimeEvent::Update {
+            cmid: None,
+            update: serde_json::json!({
+                "sessionUpdate": "cowboy_uncertain_effect",
+                "method": "tool/stale",
+                "sequence": 42
+            }),
+        };
+        broker.handle_worker_event(
+            "s-r12-m3",
+            1,
+            "s-r12-m3".into(),
+            "71-1".into(),
+            1,
+            stale_event,
+            Vec::new(),
+        );
+        assert!(
+            broker.retained_receiptless_uncertain("s-r12-m3").is_none(),
+            "stale/replaced peer must not record uncertain_effect"
+        );
+
+        // Direct prompt refusal removing queued copy on Crashed worker must
+        // publish refreshed snapshot with pending_prompt_count == 0 (R12-M5).
+        broker
+            .workers
+            .lock()
+            .get_mut("s-r12-m3")
+            .unwrap()
+            .crashed_drain_fenced = true;
+        let prompt = WorkerCommand::Prompt {
+            command_id: "cmd-r12-m5".into(),
+            content: Vec::new(),
+            turn_id: "t-1".into(),
+            cmid: None,
+            expected_worker_epoch: None,
+            trace: None,
+            echo_artifacts: false,
+            observe_subagents: false,
+            acknowledged_uncertain_sequence: None,
+        };
+        broker
+            .pending_commands
+            .lock()
+            .entry("s-r12-m3".into())
+            .or_default()
+            .push_back(prompt.clone());
+        broker.route_prompt_for_optional_lease(Some(1), "s-r12-m3", prompt);
+        assert!(matches!(
+            ctrl_rx.try_recv().expect("direct refusal ack"),
+            Frame::CommandAck {
+                ref command_id,
+                accepted: false,
+                ..
+            } if command_id == "cmd-r12-m5"
+        ));
+        match ctrl_rx
+            .try_recv()
+            .expect("refreshed snapshot after direct refusal")
+        {
+            Frame::Snapshot { worker } => {
+                assert_eq!(worker.session_id, "s-r12-m3");
                 assert_eq!(worker.pending_prompt_count, 0);
             }
             other => panic!("expected refreshed Frame::Snapshot, got {other:?}"),

@@ -2202,7 +2202,13 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
             }
             if previous.is_none_or(|previous| runtime_seq > previous) {
                 let mut undelivered_ack = None;
-                snapshot::observe_crashed_event(shared, &session_id, &worker_epoch, &event);
+                snapshot::observe_crashed_event(
+                    shared,
+                    &session_id,
+                    &worker_epoch,
+                    runtime_seq,
+                    &event,
+                );
                 let admission = native_admission::event(shared, &session_id, &worker_epoch, || {
                     undelivered_ack =
                         notice_recovery::suppressed_undelivered(&key, runtime_seq, &event, true);
@@ -2613,7 +2619,7 @@ fn update_snapshot_from_event(
     let Some(worker) = workers.get_mut(session_id) else {
         return;
     };
-    worker.last_runtime_seq = runtime_seq;
+    worker.last_runtime_seq = worker.last_runtime_seq.max(runtime_seq);
     match event {
         RuntimeEvent::Ready { agent_session_id } => {
             worker.state = WorkerState::Running;

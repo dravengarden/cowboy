@@ -211,6 +211,7 @@ pub struct CrashedWorkerSighting {
 pub(super) struct SightingActivity {
     state: WorkerState,
     worker_epoch: String,
+    last_runtime_seq: u64,
     generation: String,
     drain_requested: bool,
     busy_turn: bool,
@@ -226,6 +227,7 @@ impl SightingActivity {
         Self {
             state: worker.state,
             worker_epoch: worker.worker_epoch.clone(),
+            last_runtime_seq: worker.last_runtime_seq,
             generation: worker.generation.clone(),
             drain_requested: worker.drain_requested,
             busy_turn: worker.current_turn_id.is_some(),
@@ -235,6 +237,23 @@ impl SightingActivity {
             native_cycle_active: worker.native_cycle_active || worker.native_cycle_id.is_some(),
             uncertain_effect: worker.uncertain_effect.clone(),
         }
+    }
+
+    /// Merge a same-epoch delayed snapshot (`worker.last_runtime_seq <
+    /// self.last_runtime_seq`) without regressing newer lifecycle state while
+    /// still applying broker-owned drain/queue/uncertainty metadata (R12-M4).
+    fn merge_snapshot(&mut self, worker: &WorkerSnapshot) {
+        if self.worker_epoch == worker.worker_epoch
+            && worker.last_runtime_seq < self.last_runtime_seq
+        {
+            self.drain_requested |= worker.drain_requested;
+            self.pending_prompt_count = worker.pending_prompt_count;
+            if let Some(effect) = worker.uncertain_effect.clone() {
+                crate::runtime_wire::merge_uncertain_effect(&mut self.uncertain_effect, effect);
+            }
+            return;
+        }
+        *self = Self::from_snapshot(worker);
     }
 
     fn to_sighting(&self, hub: &crate::core::Hub, session_id: &str) -> CrashedWorkerSighting {
@@ -575,10 +594,17 @@ pub(super) fn observe_crashed_sighting(shared: &Shared, worker: &WorkerSnapshot)
                 &worker.worker_epoch,
             );
         }
-        shared.crashed_worker_sightings.lock().insert(
-            worker.session_id.clone(),
-            SightingActivity::from_snapshot(worker),
-        );
+        {
+            let mut sightings = shared.crashed_worker_sightings.lock();
+            if let Some(existing) = sightings.get_mut(&worker.session_id) {
+                existing.merge_snapshot(worker);
+            } else {
+                sightings.insert(
+                    worker.session_id.clone(),
+                    SightingActivity::from_snapshot(worker),
+                );
+            }
+        }
     } else {
         shared
             .crashed_worker_sightings
@@ -786,6 +812,7 @@ pub(super) fn observe_crashed_event(
     shared: &Shared,
     session_id: &str,
     worker_epoch: &str,
+    runtime_seq: u64,
     event: &RuntimeEvent,
 ) {
     let fence = shared.projection_fence.lock();
@@ -822,6 +849,7 @@ pub(super) fn observe_crashed_event(
     let Some(entry) = sightings.get_mut(session_id) else {
         return;
     };
+    entry.last_runtime_seq = entry.last_runtime_seq.max(runtime_seq);
     match event {
         RuntimeEvent::Ready { .. } => entry.state = WorkerState::Running,
         RuntimeEvent::TurnStarted { .. } => {
@@ -1140,16 +1168,44 @@ pub(super) fn project_snapshot_with_protocol(
         }
         return false;
     }
+    if worker.has_connected_owner()
+        && let Some(existing) = shared.workers.lock().get(&worker.session_id).cloned()
+        && existing.has_connected_owner()
+        && existing.worker_epoch == worker.worker_epoch
+        && worker.last_runtime_seq < existing.last_runtime_seq
+    {
+        // Reject older same-epoch lifecycle fields while keeping broker-owned
+        // drain, queue, incarnation, and uncertainty metadata (R12-M4).
+        let mut merged = existing;
+        merged.drain_requested |= worker.drain_requested;
+        merged.crashed_drain_active = worker.crashed_drain_active;
+        merged.pending_prompt_count = worker.pending_prompt_count;
+        if worker.incarnation.is_some() {
+            merged.incarnation.clone_from(&worker.incarnation);
+        }
+        if let Some(effect) = worker.uncertain_effect.clone() {
+            crate::runtime_wire::merge_uncertain_effect(&mut merged.uncertain_effect, effect);
+        }
+        merged.wrap_up_steering = worker.wrap_up_steering;
+        merged.supports_current_turn = worker.supports_current_turn;
+        merged.delivery_controls = worker.delivery_controls.clone();
+        merged.supports_subagent_cancel = worker.supports_subagent_cancel;
+        worker = merged;
+    }
     let applied = apply_snapshot(shared, &worker);
     let repaired = update_declaration(shared, &worker);
     shared.install_worker_with_raw_wrap_up(worker.clone(), raw_wrap);
     if !shared.resetting.lock().contains(&worker.session_id) {
         let mut sightings = shared.crashed_worker_sightings.lock();
         if worker.has_connected_owner() {
-            sightings.insert(
-                worker.session_id.clone(),
-                SightingActivity::from_snapshot(&worker),
-            );
+            if let Some(existing) = sightings.get_mut(&worker.session_id) {
+                existing.merge_snapshot(&worker);
+            } else {
+                sightings.insert(
+                    worker.session_id.clone(),
+                    SightingActivity::from_snapshot(&worker),
+                );
+            }
         } else {
             sightings.remove(&worker.session_id);
         }
@@ -1411,6 +1467,7 @@ mod crashed_drain_tests {
             &rt.shared,
             "s-named",
             "88-1",
+            1,
             &RuntimeEvent::Status {
                 state: WorkerState::Crashed,
                 detail: Some("expired".into()),
@@ -1429,6 +1486,7 @@ mod crashed_drain_tests {
             &rt.shared,
             "s-named",
             "88-1",
+            1,
             &RuntimeEvent::PermissionResolved {
                 request_id: "perm-1".into(),
                 option_id: Some("allow".into()),
@@ -1480,6 +1538,7 @@ mod crashed_drain_tests {
             &rt.shared,
             "s-r3",
             "101-1",
+            1,
             &RuntimeEvent::Ready {
                 agent_session_id: Some("ag-1".into()),
             },
@@ -1731,5 +1790,87 @@ mod crashed_drain_tests {
             workers[0].crashed_drain_active,
             "later abort snapshot during settle must not overwrite Welcome draining marker before buffered replay runs"
         );
+    }
+
+    #[tokio::test]
+    async fn live_handle_frame_duplicate_drain_refusal_keeps_active_drain_and_delayed_snapshot_keeps_crashed()
+     {
+        let hub = crate::core::Hub::new();
+        let mut initial = crashed_snapshot("s-r12", "120-1");
+        initial.last_runtime_seq = 10;
+        let rt = super::super::RemoteRuntime::for_test(hub, vec![initial.clone()]);
+        rt.connect_for_test();
+
+        // Authorize first drain via accepted CommandAck through live handle_frame.
+        let first_cmd = super::super::CoreCommand::DrainCrashedWorker {
+            session_id: "s-r12".into(),
+            command_id: "dc-live-1".into(),
+            worker_epoch: "120-1".into(),
+            acknowledged_uncertain_sequence: 0,
+        };
+        rt.shared
+            .pending
+            .lock()
+            .insert("dc-live-1".into(), first_cmd);
+        rt.project_trace_fixture(Frame::CommandAck {
+            session_id: "s-r12".into(),
+            command_id: "dc-live-1".into(),
+            accepted: true,
+            reason: None,
+        })
+        .await;
+        assert!(is_draining_crashed_epoch(&rt.shared, "s-r12", "120-1"));
+
+        // Queue a duplicate drain command and deliver broker's refusal through
+        // live `handle_frame` -> `handle_crashed_drain_command_ack` + `handle_rejected_ack` (R12-H2).
+        let dup_cmd = super::super::CoreCommand::DrainCrashedWorker {
+            session_id: "s-r12".into(),
+            command_id: "dc-live-2".into(),
+            worker_epoch: "120-1".into(),
+            acknowledged_uncertain_sequence: 0,
+        };
+        rt.shared.pending.lock().insert("dc-live-2".into(), dup_cmd);
+        rt.project_trace_fixture(Frame::CommandAck {
+            session_id: "s-r12".into(),
+            command_id: "dc-live-2".into(),
+            accepted: false,
+            reason: Some("crashed_worker_drain_already_in_progress".into()),
+        })
+        .await;
+        assert!(
+            is_draining_crashed_epoch(&rt.shared, "s-r12", "120-1"),
+            "live handle_frame duplicate refusal must not revoke active drain"
+        );
+        assert!(
+            rt.shared
+                .draining_replay_snapshots
+                .lock()
+                .contains_key(&("s-r12".into(), "120-1".into()))
+        );
+
+        // Delayed same-epoch Running snapshot (`last_runtime_seq = 5 < 10`) must
+        // NOT overwrite newer Crashed lifecycle state while still applying
+        // broker-owned queue/drain metadata (R12-M4).
+        let mut delayed_running = initial;
+        delayed_running.state = WorkerState::Running;
+        delayed_running.last_runtime_seq = 5;
+        delayed_running.crashed_drain_active = true;
+        delayed_running.drain_requested = true;
+        delayed_running.pending_prompt_count = 0;
+        observe_crashed_sighting(&rt.shared, &delayed_running);
+        assert!(project_snapshot_with_protocol(
+            &rt.shared,
+            &delayed_running,
+            crate::runtime_wire::PROTOCOL_VERSION,
+        ));
+        let cached = rt.shared.workers.lock().get("s-r12").cloned().unwrap();
+        assert_eq!(cached.state, WorkerState::Crashed);
+        assert_eq!(cached.last_runtime_seq, 10);
+        assert!(cached.crashed_drain_active);
+        assert!(cached.drain_requested);
+        assert!(matches!(
+            rt.last_crashed_worker("s-r12"),
+            CrashedWorkerObservation::Seen(s) if s.worker_epoch == "120-1" && s.drain_requested
+        ));
     }
 }

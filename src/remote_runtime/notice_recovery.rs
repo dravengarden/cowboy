@@ -227,11 +227,10 @@ pub(super) fn handle_rejected_ack(
     reset_stop: bool,
     reason: Option<String>,
 ) {
-    if let Some(CoreCommand::DrainCrashedWorker {
-        ref worker_epoch, ..
-    }) = command
-    {
-        super::snapshot::clear_draining_crashed_epoch_if_matches(shared, session_id, worker_epoch);
+    if matches!(&command, Some(CoreCommand::DrainCrashedWorker { .. })) {
+        // Correlated acceptance/revocation already ran in
+        // `snapshot::handle_crashed_drain_command_ack` (R12-H2); never
+        // unconditionally clear an active drain on a duplicate refusal here.
         tracing::debug!(
             session = session_id,
             %command_id,

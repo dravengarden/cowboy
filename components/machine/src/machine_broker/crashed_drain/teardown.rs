@@ -73,6 +73,14 @@ impl Broker {
         uncertain_effect: Option<crate::runtime_wire::UncertainEffect>,
     ) {
         let (mut updated_snapshot, cleared_fence) = {
+            let _cancelled = self.cancelled_sessions.lock();
+            if self
+                .permanently_deleted_sessions
+                .lock()
+                .contains(session_id)
+            {
+                return;
+            }
             let mut workers = self.workers.lock();
             let Some(worker) = workers
                 .get_mut(session_id)
@@ -491,18 +499,31 @@ impl Broker {
         }
     }
 
-    /// Persist `uncertain_effect` reported by a live worker event so an explicit
-    /// revive or reset preserves it across worker disconnect (R10-H2).
-    pub(in crate::machine_broker) fn observe_worker_event_uncertain_effect(
+    /// Validate that `(connection_id, worker_epoch)` is still the active peer
+    /// and persist its `uncertain_effect` atomically under `workers ->
+    /// crashed_drains` (caller holds `cancelled_sessions` and has checked
+    /// `!permanently_deleted`, R10-H2, R11-H1, R12-M3).
+    pub(in crate::machine_broker) fn record_uncertain_if_validated_peer(
         &self,
         session_id: &str,
+        connection_id: u64,
+        worker_epoch: &str,
         event: &crate::runtime_wire::RuntimeEvent,
     ) {
-        if let crate::runtime_wire::RuntimeEvent::Update { update, .. } = event
-            && let Some(effect) = crate::runtime_wire::uncertain_effect(update)
+        let crate::runtime_wire::RuntimeEvent::Update { update, .. } = event else {
+            return;
+        };
+        let Some(effect) = crate::runtime_wire::uncertain_effect(update) else {
+            return;
+        };
+        let workers = self.workers.lock();
+        if !workers
+            .get(session_id)
+            .is_some_and(|w| w.connection_id == connection_id && w.epoch == worker_epoch)
         {
-            self.record_session_uncertain_effect(session_id, effect);
+            return;
         }
+        self.record_session_uncertain_effect(session_id, effect);
     }
 
     /// Flush queued rollout prompts immediately when a rollout-draining worker
@@ -523,34 +544,42 @@ impl Broker {
         }
     }
 
-    /// Enforce broker-side execution forwarding policy: a live worker may run
-    /// any matching-binding request unless cancelled (where departing cleanup
-    /// applies); a broker-fenced draining crashed epoch is restricted strictly
-    /// to cleanup-only commands independent of replayed status events (R11-H2).
-    pub(in crate::machine_broker) fn execution_request_allowed(
+    /// Atomically validate exact peer/binding/crashed-drain fence and enqueue
+    /// `Frame::ExecutionRequest` (or send `IdentityMismatch` refusal to the
+    /// worker) under canonical `controller -> cancelled_sessions -> sessions ->
+    /// workers -> crashed_drains` locks so drain admission cannot race ahead
+    /// of forwarding (R11-H2, R12-H1).
+    pub(in crate::machine_broker) fn forward_or_refuse_execution_request(
         &self,
         session_id: &str,
         epoch: &str,
-        request: &crate::execution_protocol::RuntimeRequest,
-    ) -> bool {
-        if request.session_id != session_id || request.worker_epoch != epoch {
-            return false;
-        }
-        let draining_crashed = self.has_crashed_drain_for_epoch(session_id, epoch)
-            || self
-                .workers
-                .lock()
-                .get(session_id)
-                .is_some_and(|w| w.epoch == epoch && w.crashed_drain_fenced);
-        let binding_matches = !self.cancelled_sessions.lock().contains(session_id)
-            && self
-                .sessions
-                .lock()
+        connection_id: u64,
+        request: Box<crate::execution_protocol::RuntimeRequest>,
+    ) {
+        let ctrl_guard = self.controller.lock();
+        let cancelled = self.cancelled_sessions.lock();
+        let sessions = self.sessions.lock();
+        let workers = self.workers.lock();
+        let Some(worker) = workers
+            .get(session_id)
+            .filter(|w| w.connection_id == connection_id && w.epoch == epoch)
+        else {
+            return;
+        };
+        let drain_state = self.crashed_drains.inner.lock();
+        let draining_crashed = worker.crashed_drain_fenced
+            || Self::has_crashed_drain_for_epoch_locked(&drain_state, session_id, epoch);
+        let binding_matches = request.session_id == session_id
+            && request.worker_epoch == epoch
+            && !cancelled.contains(session_id)
+            && sessions
                 .get(session_id)
                 .and_then(|launch| launch.execution_binding.as_ref())
                 .and_then(|binding| binding.decode().ok())
                 .is_some_and(|binding| binding == request.binding);
-        if draining_crashed {
+        let allowed = if request.session_id != session_id || request.worker_epoch != epoch {
+            false
+        } else if draining_crashed {
             let cleanup_only = match &request.command {
                 crate::execution_protocol::Command::Invoke { invocation, .. } => matches!(
                     invocation.method.as_str(),
@@ -563,10 +592,28 @@ impl Broker {
                 crate::execution_protocol::Command::Describe
                 | crate::execution_protocol::Command::Shutdown => false,
             };
-            return (cleanup_only && binding_matches)
-                || wrap_up::departing_cleanup_allows(self, session_id, epoch, request);
+            (cleanup_only && binding_matches)
+                || wrap_up::departing_cleanup_allows(self, session_id, epoch, &request)
+        } else {
+            binding_matches || wrap_up::departing_cleanup_allows(self, session_id, epoch, &request)
+        };
+        if allowed {
+            if let Some(ctrl) = ctrl_guard.as_ref() {
+                let _ = ctrl.tx.send(Frame::ExecutionRequest { request });
+            }
+        } else {
+            let _ = worker.tx.send(Frame::ExecutionReply {
+                reply: Box::new(crate::execution_protocol::RuntimeReply {
+                    session_id: session_id.to_owned(),
+                    worker_epoch: epoch.to_owned(),
+                    request_id: request.request_id,
+                    scope: crate::execution_protocol::Scope::from_binding(&request.binding),
+                    response: crate::machine_protocol::execution::Response::Refused {
+                        reason: crate::machine_protocol::execution::Refusal::IdentityMismatch,
+                    },
+                }),
+            });
         }
-        binding_matches || wrap_up::departing_cleanup_allows(self, session_id, epoch, request)
     }
 
     /// Publish refreshed broker queue count after rejecting queued prompts for a

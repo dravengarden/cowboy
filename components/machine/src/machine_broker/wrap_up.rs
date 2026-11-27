@@ -1072,7 +1072,7 @@ impl super::Broker {
             self.route_worker(session_id, command);
             return;
         };
-        let reject: Option<(Option<mpsc::UnboundedSender<Frame>>, String, String)> = {
+        let reject: Option<(Option<mpsc::UnboundedSender<Frame>>, String, String, bool)> = {
             // Single consistent lock order (`controller` -> `workers` -> `pending_commands` -> `dispatched_prompts`)
             // validates the lease at effect admission (Finding 7) and serializes routing & flushes.
             let ctrl_guard = self.controller.lock();
@@ -1181,19 +1181,17 @@ impl super::Broker {
                     ),
                 }
             };
-            if let Some((ref cid, _)) = reject_inner
-                && let Some(queue) = pending.get_mut(session_id)
-            {
-                queue.retain(|cmd| {
-                    !matches!(cmd, WorkerCommand::Prompt { command_id: qid, .. } if qid == cid)
-                });
-                if queue.is_empty() {
-                    pending.remove(session_id);
-                }
-            }
-            reject_inner.map(|(cid, reason)| (bound_tx, cid, reason))
+            let removed_for_crashed = reject_inner.as_ref().is_some_and(|(cid, _)| {
+                super::account_unit::purge_queued_prompt_on_refusal(
+                    &mut pending,
+                    &workers,
+                    session_id,
+                    cid,
+                )
+            });
+            reject_inner.map(|(cid, reason)| (bound_tx, cid, reason, removed_for_crashed))
         };
-        if let Some((bound_tx, command_id, reason)) = reject {
+        if let Some((bound_tx, command_id, reason, removed_for_crashed)) = reject {
             let frame = Frame::CommandAck {
                 session_id: session_id.to_owned(),
                 command_id,
@@ -1205,6 +1203,7 @@ impl super::Broker {
             } else {
                 self.send_controller(frame);
             }
+            self.publish_snapshot_after_crashed_flush(session_id, removed_for_crashed);
         }
     }
 
@@ -1320,9 +1319,13 @@ impl super::Broker {
                 .permanently_deleted_sessions
                 .lock()
                 .contains(session_id);
-            if !permanently_deleted && self.worker_matches(session_id, connection_id, &worker_epoch)
-            {
-                self.observe_worker_event_uncertain_effect(session_id, &event);
+            if !permanently_deleted {
+                self.record_uncertain_if_validated_peer(
+                    session_id,
+                    connection_id,
+                    &worker_epoch,
+                    &event,
+                );
             }
             drop(cancelled);
             if permanently_deleted {
@@ -1347,7 +1350,7 @@ impl super::Broker {
         }
         let bound_ctrl =
             self.admit_and_bind_controller_for_event(session_id, connection_id, runtime_seq);
-        self.observe_worker_event_uncertain_effect(session_id, &event);
+        self.record_uncertain_if_validated_peer(session_id, connection_id, &worker_epoch, &event);
         let crashed_event = matches!(
             event,
             crate::runtime_wire::RuntimeEvent::Status {

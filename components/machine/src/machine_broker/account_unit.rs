@@ -336,3 +336,29 @@ pub(super) fn departing_cleanup_allows(
             .get(session_id)
             .is_some_and(|entry| entry.epoch == epoch && entry.binding == request.binding)
 }
+
+/// Remove any queued prompt matching `command_id` on a definitive refusal;
+/// returns `true` when at least one entry was removed while the session has a
+/// connected `Crashed` worker so the caller refreshes Controller's queue count (R11-H6, R12-M5).
+pub(super) fn purge_queued_prompt_on_refusal(
+    pending: &mut std::collections::HashMap<String, std::collections::VecDeque<WorkerCommand>>,
+    workers: &std::collections::HashMap<String, WorkerPeer>,
+    session_id: &str,
+    command_id: &str,
+) -> bool {
+    let Some(queue) = pending.get_mut(session_id) else {
+        return false;
+    };
+    let before = queue.len();
+    queue.retain(
+        |cmd| !matches!(cmd, WorkerCommand::Prompt { command_id: qid, .. } if qid == command_id),
+    );
+    let removed = queue.len() < before;
+    if queue.is_empty() {
+        pending.remove(session_id);
+    }
+    removed
+        && workers
+            .get(session_id)
+            .is_some_and(|w| w.snapshot.state == crate::runtime_wire::WorkerState::Crashed)
+}
