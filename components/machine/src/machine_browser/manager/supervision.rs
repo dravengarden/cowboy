@@ -44,7 +44,7 @@ impl BrowserManager {
         }
         // A latch another path set (a stop that was then abandoned, or a
         // waiter that counted the last denial) is enforced here.
-        let latched = *instance.latch.lock();
+        let latched = instance.latched_reason();
         if let Some(reason) = latched {
             let event = self.stop_instance(instance, reason, false, None).await;
             self.send_state(event);
@@ -299,6 +299,7 @@ impl BrowserManager {
                     if stopping {
                         Ok(())
                     } else if !pins_ok {
+                        instance.record_latch(Reason::ConfinementUnverified);
                         Err((Reason::ConfinementUnverified, false))
                     } else {
                         live.scan_denied = 0;
@@ -309,6 +310,7 @@ impl BrowserManager {
                     if stopping {
                         Ok(())
                     } else if !pins_ok {
+                        instance.record_latch(Reason::ConfinementUnverified);
                         Err((Reason::ConfinementUnverified, false))
                     } else {
                         live.scan_denied = live.scan_denied.saturating_add(1);
@@ -324,6 +326,7 @@ impl BrowserManager {
                                 attempt = live.scan_denied,
                                 "browser socket scan denied repeatedly"
                             );
+                            instance.record_latch(Reason::ConfinementUnverified);
                             Err((Reason::ConfinementUnverified, false))
                         } else {
                             Ok(())
@@ -335,8 +338,12 @@ impl BrowserManager {
         };
         match outcome {
             Ok(()) => Ok(()),
-            Err((reason, definite)) => {
-                if definite && torn_down_by_stop(instance) {
+            Err((reason, false)) => {
+                instance.cancel_copy();
+                Err(reason)
+            }
+            Err((reason, true)) => {
+                if torn_down_by_stop(instance) {
                     return Ok(());
                 }
                 latch_forced(instance, reason);
@@ -375,7 +382,7 @@ pub(super) fn torn_down_by_stop(instance: &Instance) -> bool {
 /// Latch a stop that must be forced (the first reason wins) and cancel any
 /// running copy.
 pub(super) fn latch_forced(instance: &Instance, reason: Reason) {
-    instance.latch.lock().get_or_insert(reason);
+    instance.record_latch(reason);
     instance.cancel_copy();
 }
 

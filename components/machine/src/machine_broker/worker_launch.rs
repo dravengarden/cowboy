@@ -101,11 +101,14 @@ impl Broker {
             // no live installer still fails at once for reconciliation.
             let install_deadline = Instant::now() + PROVIDER_INSTALL_LAUNCH_WAIT;
             loop {
-                let launch = {
+                let (launch, install_in_progress) = {
                     let (store, provider_id, digest) =
                         (Arc::clone(&store), provider_id.clone(), digest.clone());
                     tokio::task::spawn_blocking(move || {
-                        store.launch_context(&provider_id, &digest, auth_generation)
+                        let launch = store.launch_context(&provider_id, &digest, auth_generation);
+                        let in_progress =
+                            launch.is_err() && store.install_in_progress(&provider_id);
+                        (launch, in_progress)
                     })
                     .await
                     .context("Provider launch verification task failed")?
@@ -113,7 +116,7 @@ impl Broker {
                 match launch {
                     Ok(launch) => break Some(launch),
                     Err(error)
-                        if store.install_in_progress(&provider_id)
+                        if install_in_progress
                             && Instant::now() < install_deadline
                             && !self.cancelled_sessions.lock().contains(&session.session_id) =>
                     {

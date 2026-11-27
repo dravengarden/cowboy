@@ -65,22 +65,24 @@ pub(super) fn handle(
                             .map_or(UninstallAccess::Observe, UninstallAccess::Execute),
                     )
                     .await;
-                if !query_only {
-                    // An inventory read failure must not advertise an empty
-                    // installation as proof of a completed uninstall.
-                    let _ = providers
-                        .publish_inventory_with(|plugins| {
-                            let _ = events.send(MachineEvent::PluginInventory {
-                                plugins,
-                                observed_at_ms: unix_ms(),
-                            });
-                        })
-                        .await;
-                }
                 let _ = events.send(MachineEvent::PluginUninstallStep {
                     request_id,
                     observation: Box::new(observation),
                 });
+                if !query_only {
+                    // An inventory read failure must not advertise an empty
+                    // installation as proof of a completed uninstall.
+                    tokio::spawn(async move {
+                        let _ = providers
+                            .publish_inventory_with(|plugins| {
+                                let _ = events.send(MachineEvent::PluginInventory {
+                                    plugins,
+                                    observed_at_ms: unix_ms(),
+                                });
+                            })
+                            .await;
+                    });
+                }
             });
         }
         MachineCommand::RefreshInventory { request_id } => {
@@ -323,4 +325,22 @@ async fn publish_plugin_inventory_if_ok(
             "Plugin inventory refresh failed; preserving previous observed Plugins"
         );
     }
+}
+
+pub(super) fn spawn_post_welcome_inventory_publish(
+    providers: &Arc<MachinePluginStore>,
+    events: &tokio::sync::mpsc::UnboundedSender<MachineEvent>,
+) {
+    let providers = Arc::clone(providers);
+    let events = events.clone();
+    tokio::spawn(async move {
+        let _ = providers
+            .publish_inventory_with(|plugins| {
+                let _ = events.send(MachineEvent::PluginInventory {
+                    plugins,
+                    observed_at_ms: unix_ms(),
+                });
+            })
+            .await;
+    });
 }

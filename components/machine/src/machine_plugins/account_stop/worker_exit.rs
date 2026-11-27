@@ -270,8 +270,10 @@ pub struct SystemdWorker {
 /// previously recorded exit binding, verified off the broker's Tokio threads.
 pub struct VerifiedReleaseCarry {
     account: ProviderAccountId,
+    previous_launch: uuid::Uuid,
     previous: WorkerBinding,
     incoming: WorkerBinding,
+    profile_evidence: super::super::native_profile::NativeProfileCarryEvidence,
 }
 
 impl MachinePluginStore {
@@ -477,10 +479,15 @@ impl MachinePluginStore {
             return Ok(None);
         }
         if self.account_release_carries(&launch.provider_account_id, &previous, &incoming) {
+            let profile_evidence = self
+                .for_account(&launch.provider_account_id)?
+                .native_profile_carry_evidence(&incoming.provider, incoming.generation)?;
             return Ok(Some(VerifiedReleaseCarry {
                 account: launch.provider_account_id.clone(),
+                previous_launch: old.launch,
                 previous,
                 incoming,
+                profile_evidence,
             }));
         }
         Ok(None)
@@ -555,15 +562,25 @@ impl MachinePluginStore {
                 old.account == *account && old.tree_exited,
                 "previous worker tree exit unconfirmed"
             );
+            let carry_valid = matches!(
+                (&old.binding, &binding, carry),
+                (Some(previous), Some(incoming), Some(proof))
+                    if proof.account == *account
+                        && proof.previous_launch == old.launch
+                        && proof.previous == *previous
+                        && proof.incoming == *incoming
+                        && self
+                            .for_account(account)
+                            .and_then(|scoped| {
+                                scoped.native_profile_carry_evidence(
+                                    &incoming.provider,
+                                    incoming.generation,
+                                )
+                            })
+                            .is_ok_and(|live| live == proof.profile_evidence)
+            );
             ensure!(
-                old.binding == binding
-                    || matches!(
-                        (&old.binding, &binding, carry),
-                        (Some(previous), Some(incoming), Some(proof))
-                            if proof.account == *account
-                                && proof.previous == *previous
-                                && proof.incoming == *incoming
-                    ),
+                old.binding == binding || carry_valid,
                 "worker native binding changed without readmission"
             );
         }

@@ -712,7 +712,8 @@ impl MachinePluginStore {
                 lease_check.check()?;
                 if let Err(error) = store.commit_prepared_auth(&envelope, Some(&package), prepared) {
                     lease_check.check()?;
-                    if let Err(rollback_error) = Self::restore_activation(&plugin_root, &activation)
+                    if let Err(rollback_error) =
+                        Self::restore_activation_checked(&plugin_root, &activation, &lease_check)
                     {
                         bail!(
                             "Provider authentication activation failed: {error:#}; restoring the previous Provider generation also failed: {rollback_error:#}"
@@ -970,6 +971,119 @@ impl MachinePluginStore {
             },
         )
         .await
+    }
+
+    /// Run [`Self::inventory`] on Tokio's blocking pool under the owned
+    /// lifecycle guard so retained runtime verification never starves the
+    /// Machine broker's async worker threads and cannot race lifecycle writes.
+    pub async fn inventory_async(&self) -> Result<Vec<PluginInventory>> {
+        let lifecycle = self.lock_lifecycle_owned().await;
+        let store = self.clone();
+        let plugins = tokio::task::spawn_blocking(move || {
+            let _lifecycle = lifecycle;
+            store.inventory()
+        })
+        .await
+        .context("Plugin inventory task failed")??;
+        *self.last_inventory.lock() = Some(plugins.clone());
+        Ok(plugins)
+    }
+
+    /// Coherent Plugin inventory for the Controller `Hello` handshake without
+    /// waiting behind an in-flight install download or probe. When no lifecycle
+    /// mutation holds the guard, collects a fresh snapshot immediately; when an
+    /// install holds the guard, returns the last coherent snapshot (or reads an
+    /// unblocked snapshot if none was cached yet), and the caller publishes a
+    /// fresh serialized inventory right after connection.
+    pub async fn inventory_for_hello(&self) -> Result<Vec<PluginInventory>> {
+        if let Ok(lifecycle) = std::sync::Arc::clone(&self.lifecycle).try_lock_owned() {
+            let store = self.clone();
+            let plugins = tokio::task::spawn_blocking(move || {
+                let _lifecycle = lifecycle;
+                store.inventory()
+            })
+            .await
+            .context("Plugin hello inventory task failed")??;
+            *self.last_inventory.lock() = Some(plugins.clone());
+            return Ok(plugins);
+        }
+        if let Some(cached) = self.last_inventory.lock().clone() {
+            return Ok(cached);
+        }
+        let store = self.clone();
+        tokio::task::spawn_blocking(move || store.inventory())
+            .await
+            .context("Plugin hello fallback inventory task failed")?
+    }
+
+    /// Collect full Plugin inventory on the blocking pool under the owned
+    /// lifecycle guard and invoke `publish` (nonblocking channel enqueue)
+    /// BEFORE releasing the guard, ensuring older scans can never overtake
+    /// newer install/uninstall observations in the Controller event stream.
+    pub async fn publish_inventory_with<F>(&self, publish: F) -> Result<()>
+    where
+        F: FnOnce(Vec<PluginInventory>),
+    {
+        let lifecycle = self.lock_lifecycle_owned().await;
+        let store = self.clone();
+        let (result, lifecycle) = tokio::task::spawn_blocking(move || {
+            let result = store.inventory();
+            (result, lifecycle)
+        })
+        .await
+        .context("Plugin inventory task failed")?;
+        let plugins = result?;
+        *self.last_inventory.lock() = Some(plugins.clone());
+        publish(plugins);
+        drop(lifecycle);
+        Ok(())
+    }
+
+    /// Inventory only non-Agent Plugins, classifying each active generation
+    /// strictly from its signed descriptor so unrelated Agent Provider runtimes
+    /// are never decompressed or hashed while malformed active targets or
+    /// missing/unsigned descriptors fail closed.
+    pub(super) fn inventory_non_agent(&self) -> Result<Vec<PluginInventory>> {
+        let mut output = Vec::new();
+        if !self.root.exists() {
+            return Ok(output);
+        }
+        for entry in fs::read_dir(&self.root).context("reading Provider store")? {
+            let entry = entry?;
+            if !entry.file_type()?.is_dir() {
+                continue;
+            }
+            let provider_id = entry.file_name().to_string_lossy().into_owned();
+            let plugin_root = self.plugin_root(&provider_id);
+            let Some(generation) = operations::active_generation_strict(&plugin_root)? else {
+                continue;
+            };
+            let generation_dir = plugin_root.join("generations").join(&generation);
+            let kind = retirement::classify_signed_generation_kind(
+                &provider_id,
+                &generation,
+                &generation_dir,
+            )
+            .with_context(|| {
+                format!(
+                    "active generation {generation} for Plugin {provider_id} cannot be classified"
+                )
+            })?;
+            if kind == cowboy_plugin_sdk::PluginKind::AgentProvider {
+                continue;
+            }
+            let marker = generation_dir.join("content/plugin-inventory.json");
+            ensure!(
+                marker.is_file(),
+                "active non-Agent Plugin {provider_id} is missing content/plugin-inventory.json"
+            );
+            let inventory = self.inventory_one(&provider_id)?.with_context(|| {
+                format!("active non-Agent Plugin {provider_id} is missing from inventory")
+            })?;
+            output.push(inventory);
+        }
+        output.sort_by(|left, right| left.plugin_id.cmp(&right.plugin_id));
+        Ok(output)
     }
 }
 

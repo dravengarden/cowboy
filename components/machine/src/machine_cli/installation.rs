@@ -34,17 +34,19 @@ pub(super) fn install(
     };
     tokio::spawn(async move {
         let observation = store.install_step(&step, &plugin, &lease, admitted).await;
-        let _ = store
-            .publish_inventory_with(|plugins| {
-                let _ = events.send(MachineEvent::PluginInventory {
-                    plugins,
-                    observed_at_ms: super::unix_ms(),
-                });
-            })
-            .await;
         let _ = events.send(MachineEvent::PluginInstallationStep {
             request_id,
             observation: Box::new(observation),
+        });
+        tokio::spawn(async move {
+            let _ = store
+                .publish_inventory_with(|plugins| {
+                    let _ = events.send(MachineEvent::PluginInventory {
+                        plugins,
+                        observed_at_ms: super::unix_ms(),
+                    });
+                })
+                .await;
         });
     });
 }

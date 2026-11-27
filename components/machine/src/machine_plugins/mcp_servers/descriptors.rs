@@ -257,3 +257,21 @@ async fn drop_entries_async(entries: Vec<Arc<Entry>>) {
     }
     let _ = tokio::task::spawn_blocking(move || drop(entries)).await;
 }
+
+impl Drop for Descriptors {
+    fn drop(&mut self) {
+        let drained: Vec<Arc<Entry>> = {
+            let mut state = self.0.lock();
+            state.pending.clear();
+            state.reusable.clear();
+            state.receipts.drain().map(|(_, entry)| entry).collect()
+        };
+        if !drained.is_empty() {
+            if let Ok(handle) = tokio::runtime::Handle::try_current() {
+                handle.spawn_blocking(move || drop(drained));
+            } else {
+                drop(drained);
+            }
+        }
+    }
+}

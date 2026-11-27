@@ -1324,7 +1324,7 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
         encryption_public_key: Some(config.providers.encryption_public_key().to_owned()),
         components: collect_inventory(&config.components, config.zed_adapter_socket.as_deref())
             .await,
-        plugins: config.providers.inventory_async().await?,
+        plugins: config.providers.inventory_for_hello().await?,
         provider_contracts: Some(cowboy_provider_sdk::ProviderContractInventory::current_machine()),
         plugin_contracts: Some(cowboy_plugin_sdk::PluginContractInventory::current_machine(
             crate::plugin_host::PLUGIN_HOST_SCHEMA_VERSION,
@@ -1392,13 +1392,13 @@ async fn controller_connection(config: &ControllerConfig, retry: &mut Backoff) -
     let mut heartbeat =
         tokio::time::interval(Duration::from_millis(heartbeat_interval_ms.max(1_000)));
     let (event_tx, mut event_rx) = tokio::sync::mpsc::unbounded_channel();
+    command_plugins::spawn_post_welcome_inventory_publish(&config.providers, &event_tx);
     let plugin_execution = Arc::new(PluginExecutionScope::new(
         config.service_id.as_deref(),
         &config.machine_id,
     ));
     let mcp_link = connection_extensions::McpLink::new(&plugin_execution);
-    // Gateway actions travel only over a connection that negotiated them; a
-    // replaced or dropped connection fails the actions still waiting on it.
+    // Gateway actions travel only over a negotiated connection.
     let _call_uplink = (protocol >= crate::machine_protocol::MANAGED_CALL_PROTOCOL_VERSION)
         .then(|| config.execution.calls())
         .flatten()

@@ -497,6 +497,7 @@ impl MachinePluginStore {
                 Some(guard),
             )
             .await
+            .0
             .map(|reply| crate::machine_protocol::project_native_reset_reply(&reply))
             .map_err(|failure| PluginHostInvocationFailure {
                 started: failure.started,
@@ -569,7 +570,7 @@ impl MachinePluginStore {
         admission.remaining()?;
         // No sidecar and no private home: the session environment.
         admission.sidecars = Some(BTreeMap::new());
-        let ran = scoped
+        let (ran, _account_guard) = scoped
             .invoke_executable_host_with_admission(
                 PluginHostRequest {
                     plugin_id: request.plugin_id.clone(),
@@ -582,11 +583,11 @@ impl MachinePluginStore {
                 Some(&admission),
                 Some(guard),
             )
-            .await
-            .map_err(|failure| PluginHostInvocationFailure {
-                started: failure.started,
-                error: anyhow::anyhow!(portable_usage_error_code(&format!("{:#}", failure.error))),
-            });
+            .await;
+        let ran = ran.map_err(|failure| PluginHostInvocationFailure {
+            started: failure.started,
+            error: anyhow::anyhow!(portable_usage_error_code(&format!("{:#}", failure.error))),
+        });
         if let Err(failure) = &ran
             && !failure.started
         {
@@ -703,6 +704,7 @@ impl MachinePluginStore {
                 Some(guard),
             )
             .await
+            .0
             .map_err(|failure| {
                 anyhow::anyhow!(portable_usage_error_code(&format!("{:#}", failure.error)))
             })

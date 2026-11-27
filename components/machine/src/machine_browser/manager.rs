@@ -228,14 +228,35 @@ pub struct Instance {
     abandoned: parking_lot::Mutex<Option<(u64, StagingReservation)>>,
     /// The Machine-wide instance slot, released on confirmed exit.
     capacity: parking_lot::Mutex<Option<CapacityGuard>>,
+    /// Nonblocking commit-vs-latch arbitration state (always locked before
+    /// `latch`, never held across disk I/O): serializes whether a snapshot
+    /// commit or a confinement latch linearized first without blocking Tokio.
+    commit_state: parking_lot::Mutex<CommitArbitration>,
     /// Latched once a stop must be forced (repeatedly unverified
     /// confinement): every competing stop honours it, supervision enforces
-    /// it, and no snapshot is published once it is set. A publication
-    /// holds it across its commit, so latching and committing serialize.
+    /// it, and no snapshot is published once it is set.
     latch: parking_lot::Mutex<Option<Reason>>,
     /// The terminal outcome of the stop that ended this instance: reason
     /// and whether unsaved state was lost, reported to every later caller.
     outcome: parking_lot::Mutex<Option<(Reason, bool)>>,
+}
+
+#[derive(Default)]
+struct CommitArbitration {
+    committing: bool,
+    deferred_latch: Option<Reason>,
+}
+
+pub(super) struct PublishCommitGuard(Arc<Instance>);
+
+impl Drop for PublishCommitGuard {
+    fn drop(&mut self) {
+        let mut commit = self.0.commit_state.lock();
+        commit.committing = false;
+        if let Some(reason) = commit.deferred_latch.take() {
+            self.0.latch.lock().get_or_insert(reason);
+        }
+    }
 }
 
 impl Instance {
@@ -278,15 +299,39 @@ impl Instance {
             copy_holds: std::sync::atomic::AtomicUsize::new(0),
             abandoned: parking_lot::Mutex::new(None),
             capacity: parking_lot::Mutex::new(parts.capacity),
+            commit_state: parking_lot::Mutex::new(CommitArbitration::default()),
             latch: parking_lot::Mutex::new(None),
             outcome: parking_lot::Mutex::new(None),
         }
     }
 
+    pub(super) fn begin_publish_commit(self: &Arc<Self>) -> Option<PublishCommitGuard> {
+        let mut commit = self.commit_state.lock();
+        if commit.committing || commit.deferred_latch.is_some() || self.latch.lock().is_some() {
+            return None;
+        }
+        commit.committing = true;
+        Some(PublishCommitGuard(Arc::clone(self)))
+    }
+
+    pub(super) fn record_latch(&self, reason: Reason) {
+        let mut commit = self.commit_state.lock();
+        if commit.committing {
+            commit.deferred_latch.get_or_insert(reason);
+        } else {
+            self.latch.lock().get_or_insert(reason);
+        }
+    }
+
+    pub(super) fn latched_reason(&self) -> Option<Reason> {
+        let commit = self.commit_state.lock();
+        self.latch.lock().or(commit.deferred_latch)
+    }
+
     /// Record the stop's terminal outcome, with a latched forced reason
     /// taking precedence; returns the reason to report.
     fn finalize_outcome(&self, reason: Reason, unsaved: bool) -> Reason {
-        let reason = self.latch.lock().unwrap_or(reason);
+        let reason = self.latched_reason().unwrap_or(reason);
         *self.outcome.lock() = Some((reason, unsaved));
         reason
     }

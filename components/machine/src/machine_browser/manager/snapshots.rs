@@ -365,7 +365,7 @@ impl BrowserManager {
             if claim_scan(instance, Instant::now()) {
                 self.recheck_periodic_async(instance).await?;
             }
-            if let Some(reason) = *instance.latch.lock() {
+            if let Some(reason) = instance.latched_reason() {
                 return Err(reason);
             }
             let _ = tokio::time::timeout(SUPERVISOR_TICK, done.wait_for(|done| *done)).await;
@@ -435,7 +435,7 @@ impl BrowserManager {
         generation: u64,
         reservation: StagingReservation,
     ) -> Result<()> {
-        if instance.latch.lock().is_some() {
+        if instance.latched_reason().is_some() {
             self.retire_staging(account_dir, generation, reservation);
             bail!("browser confinement unverified; staging discarded");
         }
@@ -461,10 +461,10 @@ impl BrowserManager {
             &mut record,
             snapshot::Bounds::for_profile(instance.settings.profile_max_bytes),
             unix_ms(),
-            // Checked nonblockingly right before commit (never held across disk
-            // fsyncs, control writes, or pruning); account lifecycle mutex
-            // serializes concurrent stops, resets, and revocations asynchronously.
-            || instance.latch.lock().is_none().then_some(()),
+            // Nonblocking commit arbitration: refuses if already latched,
+            // defers latches arriving during commit until after control write
+            // (and before pruning), and never blocks Tokio on a sync mutex.
+            || instance.begin_publish_commit(),
         ) {
             Ok(stats) => {
                 drop(reservation);

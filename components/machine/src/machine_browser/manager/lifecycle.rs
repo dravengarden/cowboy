@@ -596,7 +596,7 @@ impl BrowserManager {
         let (already_stopping, before, idle_ms, forced) = {
             let mut live = instance.live.lock();
             // A latched forced stop is never abandoned for renewed use.
-            let forced = *instance.latch.lock();
+            let forced = instance.latched_reason();
             if forced.is_none() {
                 still(&live)?;
             }

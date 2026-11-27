@@ -479,6 +479,12 @@ async fn native_descriptors_are_verified_private_and_connection_owned() {
     drop(pending);
     drop(fence);
     drop(sessions);
+    for _ in 0..100 {
+        if !changed_path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert!(!changed_path.exists());
 }
 
@@ -508,6 +514,12 @@ async fn a_replacement_connection_prepares_the_same_descriptor_path() {
     );
     drop(new);
     drop(new_scope);
+    for _ in 0..100 {
+        if !path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert!(!path.exists());
     // Without overlap the same content returns to the same path.
     let (_scope, again) = connection(&profile);
@@ -563,6 +575,12 @@ async fn releasing_native_receipts_recovers_capacity_without_ending_the_connecti
     // Content-addressed: the same profile and descriptor return to their path.
     assert_eq!(fresh_path, path);
     drop(sessions);
+    for _ in 0..100 {
+        if !fresh_path.exists() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
     assert!(!fresh_path.exists());
 }
 
