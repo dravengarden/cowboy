@@ -1328,33 +1328,9 @@ export function ComposerWorkspace({
           />
         )}
       </Box>
-      {showPlan && plan && (
-        <Box
-          data-composer-stack-slot="plan"
-          data-mobile-input-context={!desktop ? "plan" : undefined}
-          {...(desktop
-            ? {
-              "data-desktop-region": "prompt.plan",
-              tabIndex: -1,
-            }
-            : {})}
-        >
-          <PlanDock
-            entries={plan.entries}
-            onDismiss={dismissPlan}
-            desktop={desktop}
-            shortcut={desktop
-              ? (
-                <Suspense fallback={null}>
-                  <DesktopRegionShortcut
-                    shortcut={DESKTOP_FOCUS_PLAN_SHORTCUT}
-                    title="Focus Plan"
-                    singleKeycap={DESKTOP_FOCUS_PLAN_SHORTCUT}
-                  />
-                </Suspense>
-              )
-              : undefined}
-          />
+      {showPlan && plan && !desktop && (
+        <Box data-composer-stack-slot="plan" data-mobile-input-context="plan">
+          <PlanDock entries={plan.entries} onDismiss={dismissPlan} desktop={false} />
         </Box>
       )}
       {scheduleTarget !== null && <ScheduleSheet
@@ -1439,6 +1415,20 @@ export function ComposerWorkspace({
         <Suspense fallback={<Box sx={{ flex: 1 }} />}>
           <DesktopPromptWorkbench
             sessionId={sessionId}
+            planSlot={showPlan && plan ? (
+              <Box data-composer-stack-slot="plan" data-desktop-region="prompt.plan" tabIndex={-1}>
+                <PlanDock
+                  entries={plan.entries}
+                  onDismiss={dismissPlan}
+                  desktop
+                  shortcut={(
+                    <Suspense fallback={null}>
+                      <DesktopRegionShortcut shortcut={DESKTOP_FOCUS_PLAN_SHORTCUT} title="Focus Plan" singleKeycap={DESKTOP_FOCUS_PLAN_SHORTCUT} />
+                    </Suspense>
+                  )}
+                />
+              </Box>
+            ) : undefined}
             status={status}
             paused={paused}
             serverConnected={serverConnected}

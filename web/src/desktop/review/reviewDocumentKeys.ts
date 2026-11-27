@@ -13,6 +13,8 @@ export type ReviewDocumentAction =
   | { readonly kind: "tab"; readonly offset: number }
   | { readonly kind: "nthTab"; readonly n: number }
   | { readonly kind: "send" }
+  /** `c`: stage an inline review note on the line or visual selection without leaving Review. */
+  | { readonly kind: "comment" }
   /** `]d`/`[d`: the next problem the Inspector places in this Document. */
   | { readonly kind: "problem"; readonly offset: 1 | -1 }
   /** `gO`: the outline, in the Inspector (Vim's `gO`). */
@@ -56,6 +58,7 @@ export function reviewDocumentAction(
   const sequence = input.keyBuffer + key;
   if (userMapped(sequence, input.visual)) return null;
   if (sequence === "<CR>") return { kind: "send" };
+  if (sequence === "c") return { kind: "comment" };
   if (input.visual) return null;
   if ((input.keyBuffer === "]" || input.keyBuffer === "[") && BRACKETS[key]) {
     const kind = BRACKETS[key] as "hunk" | "file" | "unreviewed" | "problem";

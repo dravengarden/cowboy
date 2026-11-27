@@ -1,4 +1,5 @@
-import { Box, InputBase, Tab, Tabs } from "@mui/material";
+import { alpha, Box, InputBase, Tab, Tabs, Tooltip } from "@mui/material";
+import { useDesktopLeaderOptional } from "../commands/leaderContext";
 import { useEffect, useRef } from "react";
 import { desktopSize } from "../../surface/desktopSize";
 import { LeaderKeycap } from "../commands/DesktopKeycap";
@@ -18,13 +19,14 @@ export type ReviewNavigatorTab = "changes" | "files" | "history" | "worktrees" |
 export const REVIEW_NAVIGATOR_TABS: readonly {
   value: ReviewNavigatorTab;
   label: string;
+  fullLabel: string;
   leaderKey: string;
 }[] = [
-  { value: "changes", label: "Changes", leaderKey: "VC" },
-  { value: "files", label: "Files", leaderKey: "VF" },
-  { value: "history", label: "History", leaderKey: "VH" },
-  { value: "worktrees", label: "Worktrees", leaderKey: "VW" },
-  { value: "pulls", label: "Pull request", leaderKey: "VG" },
+  { value: "changes", label: "Changes", fullLabel: "Changes", leaderKey: "VC" },
+  { value: "files", label: "Files", fullLabel: "Files", leaderKey: "VF" },
+  { value: "history", label: "History", fullLabel: "History", leaderKey: "VH" },
+  { value: "worktrees", label: "Trees", fullLabel: "Worktrees", leaderKey: "VW" },
+  { value: "pulls", label: "PRs", fullLabel: "Pull requests", leaderKey: "VG" },
 ];
 export const REVIEW_NAVIGATOR_REGION = "review.navigator";
 export const REVIEW_FILTER_FOCUS_EVENT = "cowboy:review-filter-focus";
@@ -36,27 +38,59 @@ export const REVIEW_FILTER_FOCUS_EVENT = "cowboy:review-filter-focus";
  */
 /** The Navigator's tabs; each names its leader key (focus stays on rows). */
 function NavigatorTabs({ tab, onTab }: { tab: ReviewNavigatorTab; onTab: (tab: ReviewNavigatorTab) => void }): React.JSX.Element {
+  const leader = useDesktopLeaderOptional();
+  const showLeader = leader?.armed === true && (leader.layer === "root" || leader.layer === "group:v");
   return (
     <Tabs
       value={tab}
-      variant="scrollable"
-      scrollButtons={false}
+      variant="fullWidth"
       onChange={(_event, next: ReviewNavigatorTab) => onTab(next)}
       aria-label="Review navigator"
-      sx={{ minHeight: desktopSize(32), px: 0.5, borderBottom: 1, borderColor: "divider", flexShrink: 0 }}
+      sx={{
+        minHeight: desktopSize(32),
+        px: 0.75,
+        py: 0.4,
+        borderBottom: 1,
+        borderColor: "divider",
+        flexShrink: 0,
+        "& .MuiTabs-flexContainer": { gap: 0.35, alignItems: "center" },
+        "& .MuiTabs-indicator": { display: "none" },
+      }}
     >
-      {REVIEW_NAVIGATOR_TABS.map(({ value, label, leaderKey }) => (
-        <Tab
-          key={value}
-          value={value}
-          tabIndex={-1}
-          data-review-navigator-tab={value}
-          disableRipple
-          label={label}
-          icon={<LeaderKeycap leaderKey={leaderKey} />}
-          iconPosition="end"
-          sx={{ minHeight: desktopSize(32), minWidth: 0, px: 1, py: 0, gap: 0.5, textTransform: "none", fontSize: "0.75rem", "& .MuiTab-icon": { m: 0 } }}
-        />
+      {REVIEW_NAVIGATOR_TABS.map(({ value, label, fullLabel, leaderKey }) => (
+        <Tooltip key={value} title={`${fullLabel} (␣${leaderKey})`} enterDelay={400}>
+          <Tab
+            value={value}
+            tabIndex={-1}
+            data-review-navigator-tab={value}
+            disableRipple
+            label={label}
+            icon={showLeader ? <LeaderKeycap leaderKey={leaderKey} /> : undefined}
+            iconPosition="end"
+            sx={{
+              minHeight: desktopSize(24),
+              minWidth: 0,
+              flex: "1 1 auto",
+              px: 0.65,
+              py: 0,
+              gap: 0.4,
+              borderRadius: "6px",
+              textTransform: "none",
+              fontSize: "0.73rem",
+              fontWeight: 550,
+              color: "text.secondary",
+              whiteSpace: "nowrap",
+              transition: "background-color 120ms ease, color 120ms ease",
+              "&:hover": { bgcolor: "action.hover", color: "text.primary" },
+              "&.Mui-selected": {
+                color: "text.primary",
+                fontWeight: 650,
+                bgcolor: (theme) => alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.18 : 0.11),
+              },
+              "& .MuiTab-icon": { m: 0 },
+            }}
+          />
+        </Tooltip>
       ))}
     </Tabs>
   );
@@ -71,16 +105,20 @@ export function DesktopReviewNavigator({
   openPullPath,
   onOpenPull,
   sessionId,
+  agentSessionId,
   tab,
   onTab,
   filter,
   onFilter,
   changes,
   reviewed,
+  progress,
   openEntryKey,
   openSourcePath,
   unreadOnly,
   onUnreadOnly,
+  streamMode,
+  onToggleStream,
   compareRequest,
   onOpenEntry,
   onOpenSource,
@@ -96,16 +134,20 @@ export function DesktopReviewNavigator({
   openPullPath: string | undefined;
   onOpenPull: (binding: RemoteReviewBinding, revision: string, file: RemoteReviewFile) => void;
   sessionId: string;
+  agentSessionId: string | undefined;
   tab: ReviewNavigatorTab;
   onTab: (tab: ReviewNavigatorTab) => void;
   filter: string;
   onFilter: (filter: string) => void;
   changes: DesktopReviewChanges;
   reviewed: ReadonlySet<string>;
+  progress: Readonly<Record<string, string>>;
   openEntryKey: string | undefined;
   openSourcePath: string | undefined;
   unreadOnly: boolean;
   onUnreadOnly: (value: boolean) => void;
+  streamMode: boolean;
+  onToggleStream: () => void;
   compareRequest: number;
   onOpenEntry: (entry: GitReviewEntry) => void;
   onOpenSource: (path: string) => void;
@@ -170,11 +212,16 @@ export function DesktopReviewNavigator({
       {tab === "changes"
         ? (
           <ReviewChangesList
+            sessionId={sessionId}
+            agentSessionId={agentSessionId}
             changes={changes}
             reviewed={reviewed}
+            progress={progress}
             openKey={openEntryKey}
             unreadOnly={unreadOnly}
             onUnreadOnly={onUnreadOnly}
+            streamMode={streamMode}
+            onToggleStream={onToggleStream}
             filter={filter}
             compareRequest={compareRequest}
             onOpen={onOpenEntry}

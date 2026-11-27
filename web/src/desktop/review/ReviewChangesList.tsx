@@ -22,6 +22,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { HintTooltip } from "../../HintTooltip";
 import { desktopSize } from "../../surface/desktopSize";
 import { LeaderKeycap } from "../commands/DesktopKeycap";
+import { useDesktopLeaderOptional } from "../commands/leaderContext";
 import { DESKTOP_SURFACE_RADIUS } from "../DesktopEmbeddedControl";
 import { ReviewPathText, REVIEW_TRUNCATED_PATH_SX } from "./ReviewPathText";
 import type { CodeChange } from "../../review/codeApi";
@@ -34,6 +35,7 @@ import {
 } from "../../review/reviewCompareModel";
 import type { DesktopReviewChanges } from "./useDesktopReviewChanges";
 import { findingBadge, type FindingSeverity, type ReviewFinding } from "./reviewFindingsModel";
+import { ReviewChangesOverview } from "./ReviewChangesOverview";
 
 const STATUS: Record<CodeChange["status"], { letter: string; color: string }> = {
   modified: { letter: "M", color: "warning.main" },
@@ -58,12 +60,14 @@ function ChangeRow({
   entry,
   open,
   reviewed,
+  updatedSinceReview,
   onOpen,
   badge,
 }: {
   entry: GitReviewEntry;
   open: boolean;
   reviewed: boolean;
+  updatedSinceReview: boolean;
   onOpen: (entry: GitReviewEntry) => void;
   /** Current AI review findings in this file: a read-out, not a control. */
   badge: { count: number; severity: FindingSeverity } | undefined;
@@ -126,6 +130,15 @@ function ChangeRow({
           >
             {badge.count}
           </Box>
+        )}
+        {updatedSinceReview && (
+          <Typography
+            component="span"
+            data-review-updated-badge
+            sx={{ fontSize: "0.64rem", fontWeight: 700, color: "warning.main", flexShrink: 0 }}
+          >
+            Updated
+          </Typography>
         )}
         {reviewed && <CheckCircle aria-label="Reviewed" sx={{ fontSize: "1rem", color: "success.main", flexShrink: 0 }} />}
       </ListItemButton>
@@ -207,35 +220,58 @@ function ComparisonMenu({
 
 /** Changes: the comparison, the unread filter and the change list. */
 export function ReviewChangesList({
+  sessionId,
+  agentSessionId,
   changes,
   reviewed,
+  progress,
   openKey,
   unreadOnly,
   onUnreadOnly,
+  streamMode,
+  onToggleStream,
   filter,
   compareRequest,
   onOpen,
   findings,
 }: {
+  sessionId: string;
+  agentSessionId: string | undefined;
   findings: readonly ReviewFinding[];
   changes: DesktopReviewChanges;
   reviewed: ReadonlySet<string>;
+  progress: Readonly<Record<string, string>>;
   openKey: string | undefined;
   unreadOnly: boolean;
   onUnreadOnly: (value: boolean) => void;
+  streamMode: boolean;
+  onToggleStream: () => void;
   filter: string;
   compareRequest: number;
   onOpen: (entry: GitReviewEntry) => void;
 }): React.JSX.Element {
   const [visible, setVisible] = useState(WINDOW);
+  const [updatedOnly, setUpdatedOnly] = useState(false);
+  const leader = useDesktopLeaderOptional();
+  const showLeader = leader?.armed === true && (leader.layer === "root" || leader.layer === "group:v");
+  const updatedKeys = useMemo(() => new Set(
+    changes.queue
+      .filter((entry) => {
+        const k = entryKey(entry);
+        const mark = progress[k];
+        return Boolean(mark && entry.change.fingerprint && mark !== entry.change.fingerprint);
+      })
+      .map(entryKey),
+  ), [changes.queue, progress]);
   const needle = filter.trim().toLowerCase();
   const sections = useMemo(() => changes.sections.map((section) => ({
     ...section,
     entries: section.entries.filter((entry) =>
       (!unreadOnly || !reviewed.has(entryKey(entry))) &&
+      (!updatedOnly || updatedKeys.has(entryKey(entry))) &&
       (!needle || entry.change.path.toLowerCase().includes(needle))
     ),
-  })).filter((section) => section.entries.length > 0), [changes.sections, needle, reviewed, unreadOnly]);
+  })).filter((section) => section.entries.length > 0), [changes.sections, needle, reviewed, unreadOnly, updatedKeys, updatedOnly]);
   const total = changes.queue.length;
   const done = changes.queue.filter((entry) => reviewed.has(entryKey(entry))).length;
   let budget = visible;
@@ -254,7 +290,7 @@ export function ReviewChangesList({
             data-review-unread-toggle
             sx={{ py: 0, px: 0.75, gap: 0.5, textTransform: "none", fontSize: "0.72rem", height: desktopSize(26), border: 0 }}
           >
-            Unread <LeaderKeycap leaderKey="VU" />
+            Unread {showLeader && <LeaderKeycap leaderKey="VU" />}
           </ToggleButton>
         </Tooltip>
         <Tooltip title="Refresh">
@@ -263,6 +299,18 @@ export function ReviewChangesList({
           </IconButton>
         </Tooltip>
       </Box>
+      <ReviewChangesOverview
+        sessionId={sessionId}
+        agentSessionId={agentSessionId}
+        changes={changes}
+        reviewedCount={done}
+        updatedCount={updatedKeys.size}
+        updatedOnly={updatedOnly}
+        onToggleUpdatedOnly={(): void => setUpdatedOnly((v) => !v)}
+        streamMode={streamMode}
+        onToggleStream={onToggleStream}
+        findings={findings}
+      />
       <Typography sx={{ px: 1.5, pb: 0.5, fontSize: "0.7rem", color: "text.secondary" }} data-review-progress>
         {changes.error
           ? "Changes could not be read."
@@ -298,6 +346,7 @@ export function ReviewChangesList({
                     entry={entry}
                     open={entryKey(entry) === openKey}
                     reviewed={reviewed.has(entryKey(entry))}
+                    updatedSinceReview={updatedKeys.has(entryKey(entry))}
                     onOpen={onOpen}
                     badge={findingBadge(findings, entry.change.path)}
                   />

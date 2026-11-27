@@ -211,3 +211,16 @@ export function desktopPanelSx() {
       ),
   };
 }
+
+/** Unified calm tonal pill for active Desktop tabs & activity buttons.
+ *  Matches the SessionList current-row aesthetic (soft fill, zero underline
+ *  or harsh border) so tabbars never stack colored stripes on dividers. */
+export function desktopActiveTabPillSx() {
+  return {
+    bgcolor: (theme: Theme) =>
+      alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.18 : 0.11),
+    color: "text.primary",
+    fontWeight: 650,
+    boxShadow: "none",
+  };
+}

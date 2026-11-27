@@ -103,7 +103,8 @@ export const DesktopWorkViewTabs = memo(function DesktopWorkViewTabs({
       sx={{
         minHeight: desktopSize(28),
         flexShrink: 0,
-        "& .MuiTabs-indicator": { height: 2 },
+        "& .MuiTabs-flexContainer": { gap: 0.5, alignItems: "center" },
+        "& .MuiTabs-indicator": { display: "none" },
       }}
     >
       {views.map((item) => (
@@ -126,19 +127,24 @@ export const DesktopWorkViewTabs = memo(function DesktopWorkViewTabs({
           icon={<LeaderKeycap leaderKey={item.leaderKey} />}
           iconPosition="end"
           sx={{
-            minHeight: desktopSize(28),
+            minHeight: desktopSize(24),
             minWidth: 0,
             px: 1,
             py: 0,
-            mr: 0.5,
-            gap: 0.75,
+            gap: 0.65,
             borderRadius: `${String(DESKTOP_INSET_RADIUS)}px`,
             textTransform: "none",
             fontSize: "0.75rem",
-            fontWeight: 650,
-            letterSpacing: "0.02em",
+            fontWeight: 550,
+            letterSpacing: "0.01em",
             color: "text.secondary",
-            "&.Mui-selected": { color: "text.primary" },
+            transition: "background-color 120ms ease, color 120ms ease",
+            "&:hover": { bgcolor: "action.hover", color: "text.primary" },
+            "&.Mui-selected": {
+              color: "text.primary",
+              fontWeight: 650,
+              bgcolor: (theme) => alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.18 : 0.11),
+            },
             "& .MuiTab-icon": { m: 0 },
           }}
         />

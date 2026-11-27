@@ -24,7 +24,7 @@ import {
 } from "@mui/icons-material";
 import { alpha } from "@mui/material/styles";
 import type { PlanEntry } from "./protocol";
-import { memo, type ReactNode } from "react";
+import { memo, type ReactNode, useEffect, useRef } from "react";
 import { useStore } from "@cowboy/state-store";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { desktopSize } from "./surface/desktopSize";
@@ -33,6 +33,7 @@ import {
   mobileComposerPanelHeaderMinHeight,
 } from "./mobileComposerPrimitives";
 import {
+  collapseComposerStackPanel,
   composerStackExpandedStore,
   toggleComposerStackPanel,
 } from "./composerStackAccordion";
@@ -43,6 +44,14 @@ import {
 // in-progress step + an N/M counter + a determinate bar. Expanded: the full
 // checklist. The plan no longer renders inline in the transcript (it updates in
 // place / latest-wins anyway), so this is the single place it lives.
+
+function useAutoCollapseCompletedPlan(desktop: boolean, allDone: boolean, expanded: boolean): void {
+  const prev = useRef(allDone);
+  useEffect(() => {
+    if (desktop && allDone && !prev.current && expanded) collapseComposerStackPanel("plan");
+    prev.current = allDone;
+  }, [allDone, desktop, expanded]);
+}
 
 export const PlanDock = memo(function PlanDock({
   entries,
@@ -70,9 +79,8 @@ export const PlanDock = memo(function PlanDock({
   const active = entries.find((e) => e.status === "in_progress");
   const current = active ?? entries.find((e) => e.status !== "completed");
 
-  const toggle = (): void => {
-    toggleComposerStackPanel("plan");
-  };
+  useAutoCollapseCompletedPlan(desktop, allDone, expanded);
+  const toggle = (): void => toggleComposerStackPanel("plan");
   const toggleTap = useReliableTouchTap<HTMLButtonElement>(
     toggle,
     swallowStrayDisclosureClick,
@@ -378,10 +386,10 @@ function DesktopPlanRail({
           position: "absolute",
           left: 0,
           bottom: 0,
-          height: 2,
+          height: allDone ? 1.5 : 2,
           width: `${String(pct)}%`,
           bgcolor: allDone ? "success.main" : "primary.main",
-          opacity: allDone ? 0.7 : 0.55,
+          opacity: allDone ? 0.28 : 0.5,
           transition: "width 240ms ease",
         }}
       />

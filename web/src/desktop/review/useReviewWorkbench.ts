@@ -164,6 +164,7 @@ export function useReviewWorkbench(active: boolean) {
   const inspectorAction = useRef<((action: ReviewDocumentAction, view: EditorView) => void) | undefined>(undefined);
   // `K` and `gd`… belong to the language layer, which the view owns.
   const languageAction = useRef<((action: ReviewDocumentAction, view: EditorView) => void) | undefined>(undefined);
+  const commentAction = useRef<((view: EditorView) => void) | undefined>(undefined);
   const [cursorLine, setCursorLine] = useState(1);
   const ready = load?.state === "ready" ? load.value : undefined;
   const split = useSplitDiff(document, ready);
@@ -226,6 +227,9 @@ export function useReviewWorkbench(active: boolean) {
       case "send":
         send(false);
         return;
+      case "comment":
+        commentAction.current?.(view);
+        return;
       case "problem":
       case "outline":
         inspectorAction.current?.(action, view);
@@ -257,6 +261,7 @@ export function useReviewWorkbench(active: boolean) {
     editor,
     inspectorAction,
     languageAction,
+    commentAction,
     cursorLine,
     reviewed,
     openKey,

@@ -492,19 +492,15 @@ const tabsFlow = async (): Promise<void> => {
   await leader("]");
   await leader("]");
   await expect("beta* gamma delta draft:notes?", "␣] wraps to the first tab");
-  check(
-    await page.evaluate<boolean>(
-      `document.querySelector('${tab("gamma")} kbd')?.textContent?.trim() === "␣2"`,
-    ),
-    "Every tab shows its leader digit",
-  );
+  check(await page.evaluate<boolean>(`document.querySelector('${tab("gamma")} kbd') === null`), "Tab digits stay hidden at rest");
   await body();
   await key(" ");
   await sleep(350);
+  check(await page.evaluate<boolean>(`document.querySelector('${tab("gamma")} kbd')?.textContent?.trim() === "␣2"`), "Visible tabs reveal digits on leader");
   await shot("6-tabs-leader");
   await key("3");
   await expect("beta gamma delta* draft:notes?", "␣3 opens the third tab");
-  results.push("␣[ ␣] step and wrap; every tab shows its digit and ␣3 opens the third");
+  results.push("␣[ ␣] step and wrap; every tab reveals its digit on leader and ␣3 opens the third");
 
   await leader("b", "p");
   await expect("^delta* beta gamma draft:notes?", "␣BP pins to the front");

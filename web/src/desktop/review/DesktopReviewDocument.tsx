@@ -1,6 +1,7 @@
-import { CheckCircle, CheckCircleOutline, Close, SendOutlined } from "@mui/icons-material";
+import { CheckCircle, CheckCircleOutline, Close, RateReviewOutlined, SendOutlined } from "@mui/icons-material";
 import {
   Alert,
+  alpha,
   Box,
   Button,
   ListItemText,
@@ -28,6 +29,7 @@ import type { CodeDiagnostic } from "../../review/codeApi";
 import { useState } from "react";
 import type { ReviewDocumentAction } from "./reviewDocumentKeys";
 import type { ReviewDocumentLoad } from "./useReviewDocumentText";
+import { ReviewNotesTrayButton } from "./ReviewInlineCommentBar";
 
 function tabLabel(document: ReviewDocumentRef): string {
   return document.path.split("/").at(-1) ?? document.path;
@@ -125,7 +127,24 @@ function ReviewFileTabs({
         scrollButtons={false}
         onChange={(_event, key: string) => onSelect(key)}
         aria-label="Open review files"
-        sx={{ flex: 1, minHeight: desktopSize(32), "& .MuiTabs-indicator": { height: 2 } }}
+        sx={{
+          flex: 1,
+          minHeight: desktopSize(32),
+          px: 0.5,
+          "& .MuiTabs-flexContainer": { gap: 0.35, alignItems: "center", py: 0.35 },
+          "& .MuiTabs-indicator": { display: "none" },
+          "& .MuiTab-root": {
+            minHeight: desktopSize(24),
+            borderRadius: "6px",
+            transition: "background-color 120ms ease, color 120ms ease",
+          },
+          "& .MuiTab-root:hover": { bgcolor: "action.hover", color: "text.primary" },
+          "& .MuiTab-root.Mui-selected": {
+            color: "text.primary",
+            fontWeight: 600,
+            bgcolor: (theme) => alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.18 : 0.11),
+          },
+        }}
       >
         {tabs.tabs.map((tab) => {
           const key = reviewDocumentKey(tab.document);
@@ -254,6 +273,75 @@ export interface ReviewDocumentStatus {
  * the open file's facts and its actions. Nothing here owns data; the view
  * passes the loaded text and the actions.
  */
+function ReviewDocumentFooter({
+  document,
+  ready,
+  status,
+  agentSessionId,
+  onMark,
+  onComment,
+  onSend,
+  onDelegate,
+  onFocusPrompt,
+}: {
+  document: ReviewDocumentRef;
+  ready: { added?: number | undefined; removed?: number | undefined; context?: string | undefined } | undefined;
+  status: ReviewDocumentStatus;
+  agentSessionId?: string | undefined;
+  onMark: () => void;
+  onComment?: (() => void) | undefined;
+  onSend: () => void;
+  onDelegate: (kind: "explain" | "review") => void;
+  onFocusPrompt?: (() => void) | undefined;
+}): React.JSX.Element {
+  return (
+    <Toolbar variant="dense" disableGutters data-review-document-footer sx={{ minHeight: desktopSize(34), px: 1, gap: 1, borderTop: 1, borderColor: "divider", flexShrink: 0 }}>
+      <HintTooltip title={document.path} enterDelay={400}>
+        <Typography noWrap sx={{ fontSize: "0.75rem", minWidth: "6em", flex: 1, ...REVIEW_TRUNCATED_PATH_SX }}>
+          <ReviewPathText path={document.path} />
+        </Typography>
+      </HintTooltip>
+      {ready?.added !== undefined && (
+        <Typography sx={{ fontFamily: "monospace", fontSize: "0.72rem", flexShrink: 0 }}>
+          <Box component="span" sx={{ color: "success.main" }}>+{ready.added}</Box>{" "}
+          <Box component="span" sx={{ color: "error.main" }}>−{ready.removed ?? 0}</Box>
+        </Typography>
+      )}
+      {ready?.context && (
+        <Typography sx={{ fontSize: "0.72rem", color: "text.secondary", flexShrink: 0 }} data-review-diff-context={ready.context}>
+          {ready.context === "file" ? "Whole file" : "Patch context only"} <LeaderKeycap leaderKey="VZ" />
+        </Typography>
+      )}
+      <Typography sx={{ fontSize: "0.72rem", color: "text.secondary", flexShrink: 0 }} data-review-cursor-line={status.line}>
+        Ln {status.line}
+      </Typography>
+      {status.hunk && status.hunk.total > 0 && (
+        <Typography sx={{ fontSize: "0.72rem", color: "text.secondary", flexShrink: 0 }} data-review-hunk-position>
+          Hunk {status.hunk.index}/{status.hunk.total} <DesktopKeycap keyLabel="]c" quiet />
+        </Typography>
+      )}
+      {status.reviewed !== undefined && (
+        <Button size="small" color={status.reviewed ? "success" : "inherit"} onClick={onMark} data-review-mark aria-pressed={status.reviewed} startIcon={status.reviewed ? <CheckCircle /> : <CheckCircleOutline />} sx={{ textTransform: "none", fontSize: "0.72rem", flexShrink: 0, gap: 0.5 }}>
+          {status.reviewed ? "Reviewed" : "Mark reviewed"}
+          <LeaderKeycap leaderKey="VM" />
+        </Button>
+      )}
+      <DelegateButtons onDelegate={onDelegate} />
+      {onComment && (
+        <Button size="small" color="inherit" onClick={onComment} data-review-add-note startIcon={<RateReviewOutlined />} sx={{ textTransform: "none", fontSize: "0.72rem", flexShrink: 0, gap: 0.5 }}>
+          Note
+          <DesktopKeycap keyLabel="c" quiet />
+        </Button>
+      )}
+      <ReviewNotesTrayButton sessionId={agentSessionId} onFocusPrompt={onFocusPrompt ?? ((): void => undefined)} />
+      <Button size="small" color="inherit" onClick={onSend} data-review-send startIcon={<SendOutlined />} sx={{ textTransform: "none", fontSize: "0.72rem", flexShrink: 0, gap: 0.5 }}>
+        Send to Prompt
+        <DesktopKeycap keyLabel="⏎" quiet />
+      </Button>
+    </Toolbar>
+  );
+}
+
 export function DesktopReviewDocument({
   tabs,
   document,
@@ -270,7 +358,11 @@ export function DesktopReviewDocument({
   onView,
   onMark,
   onSend,
+  onComment,
   onDelegate,
+  agentSessionId,
+  onFocusPrompt,
+  commentComposer,
   empty,
   split,
   diagnostics,
@@ -290,8 +382,12 @@ export function DesktopReviewDocument({
   onView: (view: EditorView | null) => void;
   onMark: () => void;
   onSend: () => void;
+  onComment?: (() => void) | undefined;
   /** Ask a fork of the source Session to explain or review the open file. */
   onDelegate: (kind: "explain" | "review") => void;
+  agentSessionId?: string | undefined;
+  onFocusPrompt?: (() => void) | undefined;
+  commentComposer?: React.ReactNode;
   empty: React.ReactNode;
   split?: SplitDiff | undefined;
   diagnostics?: readonly CodeDiagnostic[] | undefined;
@@ -336,65 +432,8 @@ export function DesktopReviewDocument({
         />
         </Box>
       )}
-      {document && (
-        <Toolbar
-          variant="dense"
-          disableGutters
-          data-review-document-footer
-          sx={{ minHeight: desktopSize(34), px: 1, gap: 1, borderTop: 1, borderColor: "divider", flexShrink: 0 }}
-        >
-          <HintTooltip title={document.path} enterDelay={400}>
-            <Typography noWrap sx={{ fontSize: "0.75rem", minWidth: "6em", flex: 1, ...REVIEW_TRUNCATED_PATH_SX }}>
-              <ReviewPathText path={document.path} />
-            </Typography>
-          </HintTooltip>
-          {ready?.added !== undefined && (
-            <Typography sx={{ fontFamily: "monospace", fontSize: "0.72rem", flexShrink: 0 }}>
-              <Box component="span" sx={{ color: "success.main" }}>+{ready.added}</Box>{" "}
-              <Box component="span" sx={{ color: "error.main" }}>−{ready.removed ?? 0}</Box>
-            </Typography>
-          )}
-          {ready?.context && (
-            <Typography sx={{ fontSize: "0.72rem", color: "text.secondary", flexShrink: 0 }} data-review-diff-context={ready.context}>
-              {ready.context === "file" ? "Whole file" : "Patch context only"} <LeaderKeycap leaderKey="VZ" />
-            </Typography>
-          )}
-          <Typography sx={{ fontSize: "0.72rem", color: "text.secondary", flexShrink: 0 }} data-review-cursor-line={status.line}>
-            Ln {status.line}
-          </Typography>
-          {status.hunk && status.hunk.total > 0 && (
-            <Typography sx={{ fontSize: "0.72rem", color: "text.secondary", flexShrink: 0 }} data-review-hunk-position>
-              Hunk {status.hunk.index}/{status.hunk.total} <DesktopKeycap keyLabel="]c" quiet />
-            </Typography>
-          )}
-          {status.reviewed !== undefined && (
-            <Button
-              size="small"
-              color={status.reviewed ? "success" : "inherit"}
-              onClick={onMark}
-              data-review-mark
-              aria-pressed={status.reviewed}
-              startIcon={status.reviewed ? <CheckCircle /> : <CheckCircleOutline />}
-              sx={{ textTransform: "none", fontSize: "0.72rem", flexShrink: 0, gap: 0.5 }}
-            >
-              {status.reviewed ? "Reviewed" : "Mark reviewed"}
-              <LeaderKeycap leaderKey="VM" />
-            </Button>
-          )}
-          <DelegateButtons onDelegate={onDelegate} />
-          <Button
-            size="small"
-            color="inherit"
-            onClick={onSend}
-            data-review-send
-            startIcon={<SendOutlined />}
-            sx={{ textTransform: "none", fontSize: "0.72rem", flexShrink: 0, gap: 0.5 }}
-          >
-            Send to Prompt
-            <DesktopKeycap keyLabel="⏎" quiet />
-          </Button>
-        </Toolbar>
-      )}
+      {commentComposer}
+      {document && <ReviewDocumentFooter document={document} ready={ready} status={status} agentSessionId={agentSessionId} onMark={onMark} onComment={onComment} onSend={onSend} onDelegate={onDelegate} onFocusPrompt={onFocusPrompt} />}
     </Box>
   );
 }
