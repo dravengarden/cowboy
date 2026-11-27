@@ -41571,7 +41571,7 @@
             "name": "@cowboy/provider-runtime",
             "manifest": "components/provider-runtime/package.json"
           },
-          "source_digest": "sha256:de59580bc2ede196c8b40ed509e85ac5f58390abcb91989247a3e69d30b26bf0"
+          "sha256": "sha256:de59580bc2ede196c8b40ed509e85ac5f58390abcb91989247a3e69d30b26bf0"
         },
         {
           "id": "cowboy.code-intelligence",

@@ -1530,8 +1530,8 @@ mod startup_mode_tests {
         assert_eq!(tool_call["title"], "The agent has 3 questions.");
         assert_eq!(tool_call["_cowboy"]["elicitation"]["mode"], "form");
         assert_eq!(
-            tool_call["_cowboy"]["elicitation"]["requestedSchema"]["properties"]["q2"]["items"]
-                ["anyOf"][1]["const"],
+            tool_call["_cowboy"]["elicitation"]["requestedSchema"]["properties"]["q2"]["items"]["anyOf"]
+                [1]["const"],
             "2"
         );
         assert_eq!(options[0]["optionId"], "accept");
