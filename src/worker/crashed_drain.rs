@@ -21,6 +21,17 @@ const MAX_REMEMBERED_DECISIONS: usize = 8;
 #[derive(Default)]
 pub(super) struct State {
     pub(super) draining: AtomicBool,
+    /// True after a drain aborted due to an unacknowledged `uncertain_effect`;
+    /// blocks worker exit across subsequent finish checks and reconnects until
+    /// a fresh drain covers the sequence or an explicit terminal Stop arrives (R6-H1).
+    pub(super) holding_uncertain_effect: AtomicBool,
+    /// True once an explicit terminal `WorkerCommand::Stop` arrived (R6-H1).
+    pub(super) terminal_stop: AtomicBool,
+    /// True once `finish_if_drained` closed publisher admission and committed
+    /// `CrashedDrainCompleted` (R6-H2).
+    drain_committed: AtomicBool,
+    /// Serializes late uncertainty/event publishers with `finish_if_drained` commit (R6-H2).
+    pub(super) drain_commit_lock: Mutex<()>,
     pub(super) native_cycle_active: AtomicBool,
     pub(super) pending_event_publishers: std::sync::atomic::AtomicUsize,
     /// Persistent ACP settlement result across broker reconnects and
@@ -32,6 +43,9 @@ pub(super) struct State {
     decisions: Mutex<VecDeque<(String, bool, Option<String>)>>,
     accepted_command_id: Mutex<Option<String>>,
     accepted_ack_seq: std::sync::atomic::AtomicU64,
+    /// Pending explicit `CrashedDrainAborted` notice retained across reconnects
+    /// until flushed to the broker (R6-M1).
+    pending_abort: Mutex<Option<(Option<String>, crate::runtime_wire::UncertainEffect)>>,
 }
 
 pub(super) struct EventPublisherGuard {
@@ -57,6 +71,16 @@ impl State {
         EventPublisherGuard {
             shared: std::sync::Arc::clone(shared),
         }
+    }
+
+    pub(super) fn drain_committed(&self) -> bool {
+        self.drain_committed.load(Ordering::Acquire)
+    }
+
+    pub(super) fn mark_terminal_stop(&self) {
+        self.terminal_stop.store(true, Ordering::Release);
+        self.holding_uncertain_effect
+            .store(false, Ordering::Release);
     }
 
     pub(super) fn agent_settled(&self) -> Option<bool> {
@@ -165,7 +189,7 @@ pub(super) fn handle_drain(shared: &Shared) -> Frame {
 /// `worker_epoch` while holding the canonical `outbox` -> `snapshot` lock
 /// order, so a racing ACP `Status::Exited` can never slip in after acceptance.
 pub(super) fn handle_drain_crashed(
-    shared: &Shared,
+    shared: &std::sync::Arc<Shared>,
     cmd_tx: &mut Option<mpsc::UnboundedSender<AgentCommand>>,
     command_id: String,
     worker_epoch: String,
@@ -212,6 +236,11 @@ pub(super) fn handle_drain_crashed(
                 .crashed_drain
                 .accepted_ack_seq
                 .store(acknowledged_uncertain_sequence, Ordering::Release);
+            shared
+                .crashed_drain
+                .holding_uncertain_effect
+                .store(false, Ordering::Release);
+            shared.crashed_drain.pending_abort.lock().take();
             shared.crashed_drain.draining.store(true, Ordering::Release);
             None
         }
@@ -228,10 +257,37 @@ pub(super) fn handle_drain_crashed(
         .remember_decision(command_id.clone(), true, None);
     *shared.crashed_drain.accepted_command_id.lock() = Some(command_id.clone());
     shared.mark_command(&command_id);
+    if let Some(execution) = shared.execution.clone() {
+        // Settle/fence execution publishers under EventPublisherGuard so
+        // finish_if_drained joins them before emitting CrashedDrainCompleted (R6-H2).
+        let pub_guard = shared.crashed_drain.enter_event_publisher(shared);
+        tokio::spawn(async move {
+            let _guard = pub_guard;
+            super::execution_launch::settle(execution).await;
+        });
+    }
     if let Some(tx) = cmd_tx.take() {
         shared.forward(&tx, AgentCommand::Cancel);
     }
     command_ack(shared, command_id, true, None)
+}
+
+fn authoritative_uncertain_effect_locked(
+    shared: &Shared,
+    snapshot: &mut WorkerSnapshot,
+) -> Option<crate::runtime_wire::UncertainEffect> {
+    if let Some(ledger) = shared.execution.as_ref().and_then(|client| client.ledger())
+        && let Some(method) = ledger.uncertain_effect()
+    {
+        crate::runtime_wire::merge_uncertain_effect(
+            &mut snapshot.uncertain_effect,
+            crate::runtime_wire::UncertainEffect {
+                method,
+                sequence: ledger.uncertain_sequence().max(1),
+            },
+        );
+    }
+    snapshot.uncertain_effect.clone()
 }
 
 fn has_unacknowledged_uncertain_effect_locked(
@@ -253,68 +309,182 @@ fn has_unacknowledged_uncertain_effect_locked(
             })
 }
 
+/// Flush post-handshake crashed-drain state to a (re)connected Runtime 10+
+/// broker: restores an accepted drain fence after broker restart (R6-M5) or
+/// delivers any buffered explicit drain abort (R6-M1).
+pub(super) async fn send_post_handshake_state<W: tokio::io::AsyncWrite + Unpin>(
+    shared: &Shared,
+    writer: &mut W,
+) -> Result<()> {
+    if shared.observation.peer_protocol.load(Ordering::Relaxed)
+        < CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
+    {
+        return Ok(());
+    }
+    let pending_abort = shared.crashed_drain.pending_abort.lock().clone();
+    if let Some((command_id, uncertain_effect)) = pending_abort {
+        write_frame(
+            writer,
+            &Frame::CrashedDrainAborted {
+                session_id: shared.session_id.clone(),
+                worker_epoch: shared.worker_epoch.clone(),
+                command_id,
+                uncertain_effect,
+            },
+        )
+        .await?;
+        shared.crashed_drain.pending_abort.lock().take();
+        return Ok(());
+    }
+    if shared.crashed_drain.draining.load(Ordering::Acquire) {
+        let command_id = shared.crashed_drain.accepted_command_id.lock().clone();
+        let acknowledged_uncertain_sequence = shared
+            .crashed_drain
+            .accepted_ack_seq
+            .load(Ordering::Acquire);
+        write_frame(
+            writer,
+            &Frame::CrashedDrainResume {
+                session_id: shared.session_id.clone(),
+                worker_epoch: shared.worker_epoch.clone(),
+                command_id,
+                acknowledged_uncertain_sequence,
+            },
+        )
+        .await?;
+    }
+    Ok(())
+}
+
 /// If the ACP thread has ended and every outbox event has been acknowledged by
-/// the Controller, emit `Frame::CrashedDrainCompleted` ONLY when ACP settled
-/// cleanly (`agent_settled_cleanly`, never on panic or forced SIGTERM cutoff)
-/// AND no unacknowledged `uncertain_effect` exists on this worker. If a late
-/// unacknowledged `uncertain_effect` appeared during drain, abort the drain and
-/// stay alive holding the live `uncertain_effect` snapshot instead of exiting.
+/// the Controller, atomically close uncertainty publisher admission under
+/// `drain_commit_lock`, verify no unacknowledged `uncertain_effect` exists,
+/// and emit `Frame::CrashedDrainCompleted` ONLY when ACP settled cleanly
+/// (R6-H1, R6-H2, R6-M1).
 pub(super) async fn finish_if_drained<W: tokio::io::AsyncWrite + Unpin>(
     shared: &Shared,
     writer: &mut W,
 ) -> Result<bool> {
+    let pending_abort = shared.crashed_drain.pending_abort.lock().clone();
+    if let Some((command_id, uncertain_effect)) = pending_abort
+        && shared.observation.peer_protocol.load(Ordering::Relaxed)
+            >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
+    {
+        write_frame(
+            writer,
+            &Frame::CrashedDrainAborted {
+                session_id: shared.session_id.clone(),
+                worker_epoch: shared.worker_epoch.clone(),
+                command_id,
+                uncertain_effect,
+            },
+        )
+        .await?;
+        shared.crashed_drain.pending_abort.lock().take();
+    }
     let Some(settled_cleanly) = shared.crashed_drain.agent_settled() else {
         return Ok(false);
     };
     if shared
         .crashed_drain
-        .pending_event_publishers
+        .holding_uncertain_effect
         .load(Ordering::Acquire)
-        > 0
-        || !shared.outbox.lock().is_empty()
+        && !shared.crashed_drain.draining.load(Ordering::Acquire)
+        && !shared.crashed_drain.terminal_stop.load(Ordering::Acquire)
     {
         return Ok(false);
     }
-    if shared.crashed_drain.draining.load(Ordering::Acquire) {
-        let ack_seq = shared
+    enum CommitDecision {
+        NotReady,
+        Aborted(
+            Option<String>,
+            crate::runtime_wire::UncertainEffect,
+            Box<WorkerSnapshot>,
+        ),
+        CompleteWithReceipt(Option<String>),
+        ExitWithoutReceipt,
+    }
+    let decision = {
+        let _commit = shared.crashed_drain.drain_commit_lock.lock();
+        if shared
             .crashed_drain
-            .accepted_ack_seq
-            .load(Ordering::Acquire);
-        let aborted_snapshot = {
-            let snapshot = shared.snapshot.lock();
-            has_unacknowledged_uncertain_effect_locked(shared, &snapshot, ack_seq)
-                .then(|| snapshot.clone())
-        };
-        if let Some(snapshot) = aborted_snapshot {
-            shared
+            .pending_event_publishers
+            .load(Ordering::Acquire)
+            > 0
+            || !shared.outbox.lock().is_empty()
+        {
+            CommitDecision::NotReady
+        } else if shared.crashed_drain.draining.load(Ordering::Acquire) {
+            let ack_seq = shared
                 .crashed_drain
-                .draining
-                .store(false, Ordering::Release);
+                .accepted_ack_seq
+                .load(Ordering::Acquire);
+            let mut snapshot = shared.snapshot.lock();
+            if let Some(effect) = authoritative_uncertain_effect_locked(shared, &mut snapshot)
+                && effect.sequence.max(1) > ack_seq
+            {
+                let command_id = shared.crashed_drain.accepted_command_id.lock().clone();
+                shared
+                    .crashed_drain
+                    .holding_uncertain_effect
+                    .store(true, Ordering::Release);
+                shared
+                    .crashed_drain
+                    .draining
+                    .store(false, Ordering::Release);
+                *shared.crashed_drain.pending_abort.lock() =
+                    Some((command_id.clone(), effect.clone()));
+                CommitDecision::Aborted(command_id, effect, Box::new(snapshot.clone()))
+            } else if settled_cleanly
+                && shared.observation.peer_protocol.load(Ordering::Relaxed)
+                    >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
+            {
+                shared
+                    .crashed_drain
+                    .drain_committed
+                    .store(true, Ordering::Release);
+                let command_id = shared.crashed_drain.accepted_command_id.lock().clone();
+                CommitDecision::CompleteWithReceipt(command_id)
+            } else {
+                CommitDecision::ExitWithoutReceipt
+            }
+        } else {
+            CommitDecision::ExitWithoutReceipt
+        }
+    };
+    match decision {
+        CommitDecision::NotReady => Ok(false),
+        CommitDecision::Aborted(command_id, uncertain_effect, snapshot) => {
+            if shared.observation.peer_protocol.load(Ordering::Relaxed)
+                >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
+            {
+                write_frame(
+                    writer,
+                    &Frame::CrashedDrainAborted {
+                        session_id: shared.session_id.clone(),
+                        worker_epoch: shared.worker_epoch.clone(),
+                        command_id,
+                        uncertain_effect,
+                    },
+                )
+                .await?;
+                shared.crashed_drain.pending_abort.lock().take();
+            }
+            write_frame(writer, &Frame::Snapshot { worker: snapshot }).await?;
+            Ok(false)
+        }
+        CommitDecision::CompleteWithReceipt(command_id) => {
             write_frame(
                 writer,
-                &Frame::Snapshot {
-                    worker: Box::new(snapshot),
+                &Frame::CrashedDrainCompleted {
+                    session_id: shared.session_id.clone(),
+                    worker_epoch: shared.worker_epoch.clone(),
+                    command_id,
                 },
             )
             .await?;
-            return Ok(false);
+            Ok(true)
         }
+        CommitDecision::ExitWithoutReceipt => Ok(true),
     }
-    if settled_cleanly
-        && shared.crashed_drain.draining.load(Ordering::Acquire)
-        && shared.observation.peer_protocol.load(Ordering::Relaxed)
-            >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
-    {
-        let command_id = shared.crashed_drain.accepted_command_id.lock().clone();
-        write_frame(
-            writer,
-            &Frame::CrashedDrainCompleted {
-                session_id: shared.session_id.clone(),
-                worker_epoch: shared.worker_epoch.clone(),
-                command_id,
-            },
-        )
-        .await?;
-    }
-    Ok(true)
 }

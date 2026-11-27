@@ -4,6 +4,249 @@
 use super::*;
 
 impl Broker {
+    pub(in crate::machine_broker) async fn handle_crashed_drain_worker_frame(
+        &self,
+        session_id: &str,
+        epoch: &str,
+        connection_id: u64,
+        frame: Frame,
+    ) {
+        match frame {
+            Frame::CrashedDrainCompleted {
+                session_id: drained_session,
+                worker_epoch,
+                command_id,
+            } if drained_session == session_id && worker_epoch == epoch => {
+                self.confirm_crashed_drain(session_id, epoch, connection_id, command_id.as_deref());
+            }
+            Frame::CrashedDrainAborted {
+                session_id: aborted_session,
+                worker_epoch,
+                command_id,
+                uncertain_effect,
+            } if aborted_session == session_id && worker_epoch == epoch => {
+                self.handle_crashed_drain_aborted(
+                    session_id,
+                    epoch,
+                    connection_id,
+                    command_id.as_deref(),
+                    uncertain_effect,
+                );
+            }
+            Frame::CrashedDrainResume {
+                session_id: resumed_session,
+                worker_epoch,
+                command_id,
+                ..
+            } if resumed_session == session_id && worker_epoch == epoch => {
+                self.handle_crashed_drain_resume(
+                    session_id,
+                    epoch,
+                    connection_id,
+                    command_id.as_deref(),
+                )
+                .await;
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle explicit `Frame::CrashedDrainAborted` from a worker that observed
+    /// an unacknowledged `uncertain_effect`: merges the authoritative effect,
+    /// clears matching pending/active drain state and fence, surfaces the
+    /// updated snapshot, and flushes pending commands (R6-M1).
+    pub(in crate::machine_broker) fn handle_crashed_drain_aborted(
+        &self,
+        session_id: &str,
+        epoch: &str,
+        connection_id: u64,
+        command_id: Option<&str>,
+        uncertain_effect: crate::runtime_wire::UncertainEffect,
+    ) {
+        let (updated_snapshot, cleared_fence) = {
+            let mut workers = self.workers.lock();
+            let Some(worker) = workers
+                .get_mut(session_id)
+                .filter(|w| w.connection_id == connection_id && w.epoch == epoch)
+            else {
+                return;
+            };
+            let mut state = self.crashed_drains.inner.lock();
+            let matched_active = state.active.get(session_id).is_some_and(|a| {
+                !a.confirmed && a.epoch == epoch && a.connection_id == connection_id
+            });
+            let matched_pending = command_id.is_some_and(|cid| {
+                state.pending.get(cid).is_some_and(|p| {
+                    p.session_id == session_id
+                        && p.epoch == epoch
+                        && p.connection_id == connection_id
+                })
+            });
+            if !matched_active && !matched_pending {
+                return;
+            }
+            crate::runtime_wire::merge_uncertain_effect(
+                &mut worker.snapshot.uncertain_effect,
+                uncertain_effect,
+            );
+            if matched_active {
+                state.active.remove(session_id);
+            }
+            if let Some(cid) = command_id {
+                state.pending.remove(cid);
+            }
+            let still_pending = state
+                .pending
+                .values()
+                .any(|p| p.session_id == session_id && p.epoch == epoch);
+            let cleared = if !still_pending && !state.active.contains_key(session_id) {
+                worker.crashed_drain_fenced = false;
+                true
+            } else {
+                false
+            };
+            (worker.snapshot.clone(), cleared)
+        };
+        self.send_controller(Frame::Snapshot {
+            worker: Box::new(updated_snapshot),
+        });
+        if cleared_fence {
+            self.flush_pending(session_id);
+        }
+        self.crashed_drains.settled.notify_waiters();
+    }
+
+    /// Restore an accepted crashed-drain ownership fence after broker restart
+    /// when a surviving worker reports `Frame::CrashedDrainResume` during
+    /// handshake (R6-M5).
+    pub(in crate::machine_broker) async fn handle_crashed_drain_resume(
+        &self,
+        session_id: &str,
+        epoch: &str,
+        connection_id: u64,
+        _command_id: Option<&str>,
+    ) {
+        let retired_launch = self
+            .current_durable_launch_id(session_id)
+            .await
+            .ok()
+            .flatten();
+        let mut workers = self.workers.lock();
+        let Some(worker) = workers
+            .get_mut(session_id)
+            .filter(|w| w.connection_id == connection_id && w.epoch == epoch)
+        else {
+            return;
+        };
+        let trusted_pid = worker
+            .peer_pid
+            .or_else(|| self.direct_worker_pids.lock().get(session_id).copied());
+        if trusted_pid.is_some() {
+            worker.peer_pid = trusted_pid;
+        }
+        let mut state = self.crashed_drains.inner.lock();
+        if let Some(pid) = trusted_pid {
+            state
+                .trusted_epoch_pids
+                .insert(session_id.to_owned(), (epoch.to_owned(), pid));
+        }
+        worker.crashed_drain_fenced = true;
+        let already_active = state
+            .active
+            .get(session_id)
+            .is_some_and(|a| a.epoch == epoch);
+        if !already_active {
+            state.active.insert(
+                session_id.to_owned(),
+                ActiveDrain {
+                    epoch: epoch.to_owned(),
+                    connection_id,
+                    confirmed: false,
+                    peer_pid: trusted_pid,
+                    retired_launch,
+                },
+            );
+        }
+    }
+
+    pub(in crate::machine_broker) fn retained_receiptless_uncertain(
+        &self,
+        session_id: &str,
+    ) -> Option<crate::runtime_wire::UncertainEffect> {
+        self.crashed_drains
+            .inner
+            .lock()
+            .receiptless_uncertain_effects
+            .get(session_id)
+            .map(|(_, eff)| eff.clone())
+    }
+
+    /// Enqueue changed snapshots after `Welcome` under the exact
+    /// `controller -> sessions -> workers -> crashed_drains` ordering boundary
+    /// so a retired worker's ownerless fallback can never be overwritten by a
+    /// stale connected catch-up snapshot on a downgraded Controller (R6-M4).
+    pub(in crate::machine_broker) fn send_handover_catchup_snapshots(
+        &self,
+        welcome: &[WorkerSnapshot],
+        lease: u64,
+    ) {
+        let controller = self.controller.lock();
+        let Some(ctrl) = controller.as_ref().filter(|c| c.lease == lease) else {
+            return;
+        };
+        let tx = ctrl.tx.clone();
+        let outer = ctrl.outer_machine_protocol;
+        let protocol = ctrl.protocol;
+        let sessions = self.sessions.lock();
+        let workers = self.workers.lock();
+        let pending_prompts: HashMap<String, u64> = self
+            .pending_commands
+            .lock()
+            .iter()
+            .map(|(sid, cmds)| {
+                let count = cmds
+                    .iter()
+                    .filter(|cmd| matches!(cmd, WorkerCommand::Prompt { .. }))
+                    .count();
+                (sid.clone(), u64::try_from(count).unwrap_or(u64::MAX))
+            })
+            .collect();
+        let state = self.crashed_drains.inner.lock();
+        for worker in workers.values() {
+            let mut snap = worker.snapshot.clone();
+            snap.pending_prompt_count = pending_prompts.get(&snap.session_id).copied().unwrap_or(0);
+            if snap.launch.is_none() {
+                snap.launch = sessions.get(&snap.session_id).cloned();
+            }
+            let has_drain = state
+                .active
+                .get(&snap.session_id)
+                .is_some_and(|a| a.epoch == worker.epoch)
+                || state
+                    .pending
+                    .values()
+                    .any(|p| p.session_id == snap.session_id && p.epoch == worker.epoch);
+            if has_drain {
+                snap.drain_requested = true;
+            }
+            snap.incarnation = self.reported_lineage(&snap.session_id);
+            let declared_provider = sessions.get(&snap.session_id).map(|s| s.provider.as_str());
+            wrap_up::sanitize_snapshot_for_controller(
+                &mut snap,
+                worker.raw_wrap_up_steering,
+                worker.negotiated_protocol,
+                outer,
+                protocol,
+                declared_provider,
+            );
+            if !welcome.contains(&snap) {
+                let _ = tx.send(Frame::Snapshot {
+                    worker: Box::new(snap),
+                });
+            }
+        }
+    }
+
     pub(super) fn spawn_unconfirmed_sandbox_drain_retry(
         self: &Arc<Self>,
         lifecycle_guard: tokio::sync::OwnedMutexGuard<()>,

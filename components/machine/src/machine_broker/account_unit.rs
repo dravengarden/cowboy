@@ -12,10 +12,44 @@ tokio::task_local! {
     pub(super) static OWNED_PROMPT_INGRESS: Option<(String, String)>;
 }
 
+pub(super) struct PendingCoreCommandGuard {
+    pub(super) broker: Arc<super::Broker>,
+    pub(super) session_id: Option<String>,
+    pub(super) core_prompt: Option<(String, String, bool)>,
+}
+
+impl PendingCoreCommandGuard {
+    pub(super) fn take_for_dispatch(&mut self) -> Option<(String, String)> {
+        let (sid, cid, owns) = self.core_prompt.take()?;
+        self.broker
+            .dispatched_prompts
+            .lock()
+            .dec_core_queue(&sid, &cid);
+        owns.then_some((sid, cid))
+    }
+}
+
+impl Drop for PendingCoreCommandGuard {
+    fn drop(&mut self) {
+        if let Some((sid, cid, _)) = self.core_prompt.take() {
+            self.broker.retire_core_queue_copy(&sid, &cid);
+        }
+        if let Some(session_id) = self.session_id.take() {
+            let mut pending = self.broker.pending_core_commands.lock();
+            if let Some(count) = pending.get_mut(&session_id) {
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    pending.remove(&session_id);
+                }
+            }
+        }
+    }
+}
+
 impl Broker {
-    pub(super) fn retire_if_not_queued(&self, session_id: &str, command_id: &str) {
+    pub(super) fn retire_core_queue_copy(&self, session_id: &str, command_id: &str) {
         let pending = self.pending_commands.lock();
-        let queued = pending.get(session_id).is_some_and(|queue| {
+        let queued_worker = pending.get(session_id).is_some_and(|queue| {
             queue.iter().any(|cmd| {
                 matches!(
                     cmd,
@@ -26,10 +60,10 @@ impl Broker {
                 )
             })
         });
-        if !queued {
-            self.dispatched_prompts
-                .lock()
-                .retire_if_unhanded(session_id, command_id);
+        let mut dispatched = self.dispatched_prompts.lock();
+        let remaining_core = dispatched.dec_core_queue(session_id, command_id);
+        if remaining_core == 0 && !queued_worker {
+            dispatched.retire_if_unhanded(session_id, command_id);
         }
     }
 
@@ -41,8 +75,29 @@ impl Broker {
                     .is_some_and(|(s, c)| s == session_id && c == command_id)
             })
             .unwrap_or(false);
-        if owns_ingress {
-            self.retire_if_not_queued(session_id, command_id);
+        if !owns_ingress {
+            return;
+        }
+        let pending = self.pending_commands.lock();
+        let queued_worker = pending.get(session_id).is_some_and(|queue| {
+            queue.iter().any(|cmd| {
+                matches!(
+                    cmd,
+                    WorkerCommand::Prompt {
+                        command_id: queued_id,
+                        ..
+                    } if queued_id == command_id
+                )
+            })
+        });
+        let mut dispatched = self.dispatched_prompts.lock();
+        let remaining_core = dispatched
+            .queued_core_prompts
+            .get(&(session_id.to_owned(), command_id.to_owned()))
+            .copied()
+            .unwrap_or(0);
+        if remaining_core == 0 && !queued_worker {
+            dispatched.retire_if_unhanded(session_id, command_id);
         }
     }
 

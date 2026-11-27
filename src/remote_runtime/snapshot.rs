@@ -326,7 +326,10 @@ pub(super) fn seed_draining_crashed_epochs(
 }
 
 /// Capture epoch-bound draining crashed worker evidence from Welcome before
-/// `resetting` filters normal snapshot projection during bootstrap reload (R5-H5).
+/// `resetting` filters normal snapshot projection during bootstrap reload.
+/// Validates Clear fence (including native ID) and launch binding under Hub's
+/// projection guard (R6-H4), and seeds `shared.workers` when absent so
+/// `native_admission::event` admits trailing replay before acknowledging (R6-H5).
 pub(super) fn record_welcome_draining_crashed_epoch(shared: &Shared, worker: &WorkerSnapshot) {
     let fence = shared.projection_fence.lock();
     if *fence
@@ -334,6 +337,16 @@ pub(super) fn record_welcome_draining_crashed_epoch(shared: &Shared, worker: &Wo
         || worker.state != WorkerState::Crashed
         || !worker.drain_requested
         || is_retired_crashed_epoch(shared, &worker.session_id, &worker.worker_epoch)
+    {
+        return;
+    }
+    let _proj = shared.hub.runtime_projection_guard();
+    if shared.hub.classify_runtime_epoch(
+        &worker.session_id,
+        &worker.worker_epoch,
+        worker.agent_session_id.as_deref(),
+    ) != crate::core::RuntimeEpoch::Current
+        || !shared.hub.matches_runtime_snapshot_binding(worker)
     {
         return;
     }
@@ -345,6 +358,10 @@ pub(super) fn record_welcome_draining_crashed_epoch(shared: &Shared, worker: &Wo
         worker.session_id.clone(),
         SightingActivity::from_snapshot(worker),
     );
+    let mut workers = shared.workers.lock();
+    workers
+        .entry(worker.session_id.clone())
+        .or_insert_with(|| worker.clone());
 }
 
 /// Observe raw connected-worker state. Rejects late snapshots for already-retired

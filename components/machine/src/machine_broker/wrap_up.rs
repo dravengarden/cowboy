@@ -207,11 +207,10 @@ pub(super) fn spawn_core_command_loop(
                 continue;
             }
             let broker = Arc::clone(&broker);
-            let owned_ingress = guard.ingressed_prompt.take();
+            let owned_ingress = guard.take_for_dispatch();
             let _ = tokio::spawn(super::COMMAND_LEASE.scope(
                 lease,
                 super::account_unit::OWNED_PROMPT_INGRESS.scope(owned_ingress, async move {
-                    guard.mark_entered();
                     let _guard = guard;
                     super::handle_core_command(&broker, command).await
                 }),
@@ -259,10 +258,11 @@ pub(super) fn enqueue_leased_core_command(
             _ => None,
         };
         let mut guard = broker.enter_pending_core_command(command.session_id().map(str::to_owned));
-        if let Some((sid, cid)) = prompt_key
-            && broker.dispatched_prompts.lock().mark_ingressed(&sid, &cid)
-        {
-            guard.track_ingressed_prompt(sid, cid);
+        if let Some((sid, cid)) = prompt_key {
+            let mut dispatched = broker.dispatched_prompts.lock();
+            dispatched.inc_core_queue(&sid, &cid);
+            let newly = dispatched.mark_ingressed(&sid, &cid);
+            guard.core_prompt = Some((sid, cid, newly));
         }
         match command_tx.try_send((lease, command, guard)) {
             Ok(()) => None,
@@ -310,42 +310,7 @@ pub(super) fn enqueue_leased_core_command(
     Ok(())
 }
 
-pub(super) struct PendingCoreCommandGuard {
-    broker: Arc<super::Broker>,
-    session_id: Option<String>,
-    ingressed_prompt: Option<(String, String)>,
-    entered: bool,
-}
-
-impl PendingCoreCommandGuard {
-    pub(super) fn track_ingressed_prompt(&mut self, session_id: String, command_id: String) {
-        self.ingressed_prompt = Some((session_id, command_id));
-    }
-
-    pub(super) fn mark_entered(&mut self) {
-        self.entered = true;
-    }
-}
-
-impl Drop for PendingCoreCommandGuard {
-    fn drop(&mut self) {
-        if !self.entered
-            && let Some((sid, cid)) = self.ingressed_prompt.take()
-        {
-            self.broker.retire_if_not_queued(&sid, &cid);
-        }
-        if let Some(session_id) = self.session_id.take() {
-            let mut pending = self.broker.pending_core_commands.lock();
-            if let Some(count) = pending.get_mut(&session_id) {
-                *count = count.saturating_sub(1);
-                if *count == 0 {
-                    pending.remove(&session_id);
-                }
-            }
-        }
-    }
-}
-
+pub(super) use super::account_unit::PendingCoreCommandGuard;
 pub(super) use super::account_unit::sanitize_snapshot_for_controller;
 
 /// Sanitize a live `CURRENT_TURN_CAPABILITIES_UPDATE` event before forwarding
@@ -518,8 +483,7 @@ impl super::Broker {
         PendingCoreCommandGuard {
             broker: Arc::clone(self),
             session_id,
-            ingressed_prompt: None,
-            entered: false,
+            core_prompt: None,
         }
     }
 
@@ -680,6 +644,7 @@ struct DispatchedPromptRecord {
 #[derive(Default)]
 pub(super) struct DispatchedPrompts {
     entries: std::collections::HashMap<(String, String), DispatchedPromptRecord>,
+    pub(super) queued_core_prompts: std::collections::HashMap<(String, String), usize>,
     order: std::collections::VecDeque<(String, String, u64)>,
     next_seq: u64,
     /// Evicted command disposition keyed by `(session_id, digest(command_id))`:
@@ -692,6 +657,23 @@ pub(super) struct DispatchedPrompts {
 
 impl DispatchedPrompts {
     const MAX_ENTRIES: usize = 16_384;
+    pub(super) fn inc_core_queue(&mut self, sid: &str, cid: &str) {
+        *self
+            .queued_core_prompts
+            .entry((sid.to_owned(), cid.to_owned()))
+            .or_insert(0) += 1;
+    }
+    pub(super) fn dec_core_queue(&mut self, sid: &str, cid: &str) -> usize {
+        let k = (sid.to_owned(), cid.to_owned());
+        let left = self.queued_core_prompts.get_mut(&k).map_or(0, |c| {
+            *c = c.saturating_sub(1);
+            *c
+        });
+        if left == 0 {
+            self.queued_core_prompts.remove(&k);
+        }
+        left
+    }
     const MAX_EVICTED_COMMANDS: usize = 262_144;
 
     pub(super) fn has_unacked_for_epoch_or_ingress(

@@ -163,6 +163,7 @@ pub(super) fn observe(shared: &Arc<super::Shared>) {
     let weak = Arc::downgrade(shared);
     ledger.set_observer(Box::new(move |method, sequence| {
         if let Some(shared) = weak.upgrade() {
+            let _pub_guard = shared.crashed_drain.enter_event_publisher(&shared);
             shared.mark_uncertain_effect(method, sequence);
         }
     }));

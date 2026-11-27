@@ -1194,6 +1194,26 @@ pub enum Frame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         command_id: Option<String>,
     },
+    /// Worker-issued explicit abort on Runtime 10+ when an unacknowledged
+    /// `uncertain_effect` prevents `DrainCrashed` completion; carries the
+    /// authoritative effect so the broker un-fences and surfaces it (R6-M1).
+    CrashedDrainAborted {
+        session_id: String,
+        worker_epoch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command_id: Option<String>,
+        uncertain_effect: UncertainEffect,
+    },
+    /// Worker-issued handshake notice on Runtime 10+ after broker restart so
+    /// the new broker restores the accepted crashed-drain ownership fence (R6-M5).
+    CrashedDrainResume {
+        session_id: String,
+        worker_epoch: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        command_id: Option<String>,
+        #[serde(default)]
+        acknowledged_uncertain_sequence: u64,
+    },
     /// Broker-only maintenance retirement notice sent on Machine 55+ / Runtime
     /// 10+ after a crashed worker confirmed completion, disconnected, and (for
     /// sandboxed Providers) had its account unit confirmed gone.

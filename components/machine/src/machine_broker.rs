@@ -614,7 +614,7 @@ impl Broker {
                 native_cycle_active: false,
                 incarnation: None,
                 account_unit: None,
-                uncertain_effect: None,
+                uncertain_effect: self.retained_receiptless_uncertain(&session_id),
             });
         }
         for snapshot in &mut snapshots {
@@ -652,13 +652,7 @@ impl Broker {
         post_edit::notify_orphaned(orphaned);
         self.replay_recently_drained_after_welcome(&welcome, lease);
         self.replay_pending_crashed_drains_for_new_controller(lease);
-        for current in self.snapshots() {
-            if !welcome.contains(&current) {
-                self.send_controller(Frame::Snapshot {
-                    worker: Box::new(current),
-                });
-            }
-        }
+        self.send_handover_catchup_snapshots(&welcome, lease);
         lease
     }
 
@@ -1073,7 +1067,6 @@ impl Broker {
             return false;
         }
         let mut accepted = false;
-        let mut cleared_drain_fence = false;
         if let Some(worker) = self.workers.lock().get_mut(&session_id)
             && worker.connection_id == connection_id
             && worker.epoch == snapshot.worker_epoch
@@ -1082,18 +1075,10 @@ impl Broker {
             worker.raw_wrap_up_steering = snapshot.wrap_up_steering;
             worker.snapshot = snapshot;
             worker.last_seen = Instant::now();
-            cleared_drain_fence = self.maybe_abort_crashed_drain_on_uncertain_effect(
-                &session_id,
-                connection_id,
-                worker,
-            );
             accepted = true;
         }
         if !accepted {
             return false;
-        }
-        if cleared_drain_fence {
-            self.flush_pending(&session_id);
         }
         if cancelled.contains(&session_id) {
             return false;
@@ -4926,17 +4911,12 @@ async fn handle_worker(
                     diagnostics,
                 );
             }
-            Frame::CrashedDrainCompleted {
-                session_id: drained_session,
-                worker_epoch,
-                command_id,
-            } if drained_session == session_id && worker_epoch == epoch => {
-                broker.confirm_crashed_drain(
-                    session_id,
-                    epoch,
-                    connection_id,
-                    command_id.as_deref(),
-                );
+            frame @ (Frame::CrashedDrainCompleted { .. }
+            | Frame::CrashedDrainAborted { .. }
+            | Frame::CrashedDrainResume { .. }) => {
+                broker
+                    .handle_crashed_drain_worker_frame(session_id, epoch, connection_id, frame)
+                    .await;
             }
             Frame::CommandAck { .. } => {
                 broker.handle_worker_command_ack(epoch, connection_id, frame);

@@ -355,6 +355,10 @@ impl Shared {
     /// Surface a lost mutation reply: the session holds an effect whose
     /// outcome on the target is unknown until the owner reviews it.
     fn mark_uncertain_effect(&self, method: &str, sequence: u64) {
+        let _commit = self.crashed_drain.drain_commit_lock.lock();
+        if self.crashed_drain.drain_committed() {
+            return;
+        }
         let effect = crate::runtime_wire::UncertainEffect {
             method: method.to_owned(),
             sequence,
@@ -910,6 +914,7 @@ async fn handshake_broker(
         },
     )
     .await?;
+    crashed_drain::send_post_handshake_state(shared, writer).await?;
     Ok(None)
 }
 
@@ -970,6 +975,11 @@ async fn connected(
                         // authoritative across an immediate core restart.
                         send_outbox(&shared, &mut writer, &mut last_sent).await?;
                         write_frame(&mut writer, &ack).await?;
+                        // Renewed drain on an already-settled idle worker must
+                        // check completion immediately after writing ACK (R6-M2).
+                        if crashed_drain::finish_if_drained(&shared, &mut writer).await? {
+                            return Ok(ConnectedExit::WorkerDrained);
+                        }
                     }
                     Frame::Ack { session_id, worker_epoch, runtime_seq }
                         if session_id == shared.session_id && worker_epoch == shared.worker_epoch => {
@@ -1114,7 +1124,7 @@ fn parse_steer_blocks(content: Vec<serde_json::Value>) -> Result<Vec<ContentBloc
 }
 
 pub fn handle_command(
-    shared: &Shared,
+    shared: &Arc<Shared>,
     cmd_tx: &mut Option<mpsc::UnboundedSender<AgentCommand>>,
     command: WorkerCommand,
 ) -> Frame {
@@ -1328,6 +1338,7 @@ pub fn handle_command(
                 );
             }
             WorkerCommand::Stop { command_id } => {
+                shared.crashed_drain.mark_terminal_stop();
                 if !shared.mark_command(&command_id) {
                     return command_ack(shared, command_id, true, Some("duplicate".to_owned()));
                 }
