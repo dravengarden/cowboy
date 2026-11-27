@@ -88,6 +88,14 @@ adapter's lock moves `url` to 2.5.9 for RUSTSEC-2026-0592 (unbounded
 recursion in `Url::origin()` on nested `blob:` URLs). Native pins and its
 component release are unchanged.
 
+Component release 3.160.0 records `app-shell` 1.1.46: unifies all Mobile
+floating control islands (`FloatingActionIsland`, `SheetContextSummary`) onto
+a calm Cowboy frosted-matte surface (`floatingIslandSurfaceSx`, removing the
+radial glare orb and stacked pseudo-element blur), extends `readerBottomEdge`
+to accept sheet surface colors, and restores a centered drag grabber pill on
+non-fullscreen `DetentSheet` surfaces. It is a Web-only component; no Plugin
+pins it, so every Plugin and the closure are unchanged.
+
 Component release 3.159.0 records `state-sync-idb` 1.8.6: adds atomic
 `retireOutboxIf` conditional outbox deletion for Trash purge recovery so a
 stale cleanup can never discard newer cross-tab pending mutations. It is a
