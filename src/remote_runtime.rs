@@ -1781,6 +1781,7 @@ async fn connection_manager(
             None => match connect_settled(&shared.socket).await {
                 Ok((reader, writer, workers, buffered, protocol)) => {
                     shared.protocol.store(protocol, Ordering::Release);
+                    snapshot::clear_blocked_draining_epochs(&shared);
                     merge_worker_snapshots_with_protocol(&shared, workers, protocol).await;
                     Ok((reader, writer, buffered, protocol))
                 }
@@ -1806,9 +1807,11 @@ async fn connection_manager(
         shared.account_stop_epoch.fetch_add(1, Ordering::AcqRel);
         notice_recovery::set_connected_if_active(&shared);
         shared.sent.lock().clear();
+        snapshot::clear_blocked_draining_epochs(&shared);
         if let Err(error) = connected(&shared, reader, writer, buffered, &mut notify_rx).await {
             tracing::warn!(error = %error, "Machine broker connection dropped");
         }
+        snapshot::clear_blocked_draining_epochs(&shared);
         notice_recovery::set_connected(&shared, false);
         if shared.shutdown.load(Ordering::Acquire) {
             return;
@@ -2217,7 +2220,20 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                     // projected (a reset).
                     // A turn ending retires its own pending prompt by turn id,
                     // also when Clear fences the epoch that ran it.
-                    turn_end::signal(shared, &session_id, &event);
+                    let historical_only = snapshot::is_historical_replay_event(
+                        shared,
+                        &session_id,
+                        &worker_epoch,
+                        runtime_seq,
+                    );
+                    if snapshot::should_signal_turn_end(
+                        shared,
+                        &session_id,
+                        &worker_epoch,
+                        historical_only,
+                    ) {
+                        turn_end::signal(shared, &session_id, &event);
+                    }
                     turn_end::ended(shared, &session_id, &event);
                     snapshot::record_uncertain_effect(shared, &session_id, &worker_epoch, &event);
                     let _projection = shared.hub.runtime_projection_guard();
@@ -2233,14 +2249,12 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                     );
                 })
                 .await;
-                if !snapshot::settle_draining_event_admission(
+                snapshot::settle_draining_event_admission(
                     shared,
                     &session_id,
                     &worker_epoch,
                     admission,
-                )? {
-                    return Ok(());
-                }
+                )?;
                 notice_recovery::settle_event_undelivered(
                     shared,
                     &key,
@@ -2904,23 +2918,11 @@ fn mark_projected_provider_auth_expired(
     let Some(provider_auth) = shared.provider_auth.as_ref() else {
         return;
     };
-    let Some((mut provider_id, mut account_id, mut generation)) =
-        projected_provider_auth_failure(&shared.hub, session_id, event)
+    let Some((provider_id, account_id, generation)) =
+        snapshot::provider_auth_expiry_target(shared, session_id, worker_epoch, event)
     else {
         return;
     };
-    if let Some(launch) = shared
-        .workers
-        .lock()
-        .get(session_id)
-        .filter(|w| w.worker_epoch == worker_epoch)
-        .and_then(|w| w.launch.clone())
-        && let Some(launch_gen) = launch.provider_auth_generation
-    {
-        provider_id = launch.provider;
-        account_id = launch.provider_account_id;
-        generation = launch_gen;
-    }
     let scope =
         native_admission::credential_scope(shared, provider_auth, &account_id, &provider_id);
     match scope.and_then(|scope| scope.mark_expired(&provider_id, generation)) {

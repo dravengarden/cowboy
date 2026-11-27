@@ -329,6 +329,10 @@ pub(super) fn clear_draining_crashed_epoch_if_matches(
         .draining_replay_snapshots
         .lock()
         .remove(&(session_id.to_owned(), worker_epoch.to_owned()));
+    shared
+        .blocked_draining_epochs
+        .lock()
+        .remove(&(session_id.to_owned(), worker_epoch.to_owned()));
     if let Some(worker) = shared
         .workers
         .lock()
@@ -391,6 +395,10 @@ pub(super) fn handle_crashed_drain_command_ack(
     }
 }
 
+pub(super) fn clear_blocked_draining_epochs(shared: &Shared) {
+    shared.blocked_draining_epochs.lock().clear();
+}
+
 pub(super) fn is_event_epoch_blocked(
     shared: &Shared,
     session_id: &str,
@@ -402,33 +410,46 @@ pub(super) fn is_event_epoch_blocked(
         .contains(&(session_id.to_owned(), worker_epoch.to_owned()))
 }
 
+/// Handle non-admitted events for a draining crashed epoch:
+/// - `TransientlyDeferred`: mark the epoch blocked for the current connection
+///   only and bail so reconnect restarts ordered replay (cleared on every new
+///   connection, R16-H3).
+/// - `PermanentlyDenied`: explicitly clear draining replay bypass without
+///   blocking later frames, then continue so durably-backed `call-notice:`
+///   undelivered receipts still settle and ordered replay is never stranded
+///   (R16-H3).
 pub(super) fn settle_draining_event_admission(
     shared: &Shared,
     session_id: &str,
     worker_epoch: &str,
     outcome: super::native_admission::EventAdmission,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<()> {
     use super::native_admission::EventAdmission;
     if outcome == EventAdmission::Admitted
         || !is_draining_crashed_epoch(shared, session_id, worker_epoch)
     {
-        return Ok(true);
+        return Ok(());
     }
-    shared
-        .blocked_draining_epochs
-        .lock()
-        .insert((session_id.to_owned(), worker_epoch.to_owned()));
     match outcome {
         EventAdmission::TransientlyDeferred => {
+            shared
+                .blocked_draining_epochs
+                .lock()
+                .insert((session_id.to_owned(), worker_epoch.to_owned()));
             anyhow::bail!(
                 "draining crashed worker event admission transiently deferred; restarting ordered replay"
             )
         }
         EventAdmission::PermanentlyDenied => {
+            tracing::warn!(
+                session = %session_id,
+                %worker_epoch,
+                "draining crashed worker event permanently denied; aborting drain replay authorization"
+            );
             clear_draining_crashed_epoch_if_matches(shared, session_id, worker_epoch);
-            Ok(false)
+            Ok(())
         }
-        EventAdmission::Admitted => Ok(true),
+        EventAdmission::Admitted => Ok(()),
     }
 }
 
@@ -519,11 +540,34 @@ fn authorize_draining_crashed_epoch_locked(
             },
         );
     }
-    shared.draining_replay_snapshots.lock().insert(
-        (worker.session_id.clone(), worker.worker_epoch.clone()),
-        worker.clone(),
-    );
+    upsert_draining_replay_snapshot(shared, worker);
     true
+}
+
+/// Preserve the highest observed `last_runtime_seq` and its associated snapshot
+/// for each draining epoch so a delayed snapshot or drain ACK cloning an older
+/// worker cache can never lower the replay watermark (R16-M2).
+fn upsert_draining_replay_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
+    let mut snaps = shared.draining_replay_snapshots.lock();
+    let key = (worker.session_id.clone(), worker.worker_epoch.clone());
+    match snaps.get_mut(&key) {
+        Some(existing) if existing.last_runtime_seq > worker.last_runtime_seq => {
+            if let Some(effect) = worker.uncertain_effect.clone() {
+                crate::runtime_wire::merge_uncertain_effect(&mut existing.uncertain_effect, effect);
+            }
+        }
+        Some(existing) => {
+            let prev_effect = existing.uncertain_effect.clone();
+            let mut next = worker.clone();
+            if let Some(effect) = prev_effect {
+                crate::runtime_wire::merge_uncertain_effect(&mut next.uncertain_effect, effect);
+            }
+            *existing = next;
+        }
+        None => {
+            snaps.insert(key, worker.clone());
+        }
+    }
 }
 
 /// Capture epoch-bound draining crashed worker evidence from Welcome before
@@ -734,6 +778,120 @@ pub(super) fn is_draining_crashed_epoch(
         .is_some_and(|entry| entry.worker_epoch == worker_epoch)
 }
 
+/// Scope historical-only gating strictly to non-owning draining epochs OR
+/// below-watermark replay of an already-Crashed/draining epoch (using the max
+/// same-epoch watermark across `shared.workers` and
+/// `draining_replay_snapshots`), leaving live Running/Busy replay untouched
+/// (R15-H1, R15-H2, R15-M2).
+pub(super) fn is_historical_replay_event(
+    shared: &Shared,
+    session_id: &str,
+    worker_epoch: &str,
+    runtime_seq: u64,
+) -> bool {
+    let owning_worker = shared
+        .workers
+        .lock()
+        .get(session_id)
+        .filter(|w| w.has_connected_owner() && w.worker_epoch == worker_epoch)
+        .cloned();
+    let drain_replay_snap = shared
+        .draining_replay_snapshots
+        .lock()
+        .get(&(session_id.to_owned(), worker_epoch.to_owned()))
+        .cloned();
+    let non_owning_epoch = owning_worker.is_none() && drain_replay_snap.is_some();
+    let max_watermark = owning_worker
+        .as_ref()
+        .map_or(0, |w| w.last_runtime_seq)
+        .max(drain_replay_snap.as_ref().map_or(0, |w| w.last_runtime_seq));
+    let crashed_or_draining = non_owning_epoch
+        || is_draining_crashed_epoch(shared, session_id, worker_epoch)
+        || owning_worker
+            .as_ref()
+            .is_some_and(|w| w.state == WorkerState::Crashed);
+    non_owning_epoch || (crashed_or_draining && runtime_seq > 0 && runtime_seq < max_watermark)
+}
+
+/// True only when an admitted `TurnEnded` may trigger account-wide transitions:
+/// skips historical replay, draining crashed epochs, non-owning epochs, and
+/// launches whose provider/account/generation no longer matches the session's
+/// current pin (R16-H1).
+pub(super) fn should_signal_turn_end(
+    shared: &Shared,
+    session_id: &str,
+    worker_epoch: &str,
+    historical_only: bool,
+) -> bool {
+    if historical_only || is_draining_crashed_epoch(shared, session_id, worker_epoch) {
+        return false;
+    }
+    if let Some(worker) = shared.workers.lock().get(session_id).cloned() {
+        if worker.worker_epoch != worker_epoch {
+            return false;
+        }
+        if let Some(launch) = worker.launch.as_ref()
+            && let Some(info) = shared.hub.session_info(session_id)
+            && (info.meta.provider != launch.provider
+                || info.meta.provider_account_id != launch.provider_account_id
+                || info.meta.provider_auth_generation != launch.provider_auth_generation)
+        {
+            return false;
+        }
+    }
+    true
+}
+
+/// Resolve the credential target for `mark_projected_provider_auth_expired`
+/// strictly from the admitted launch identity for `worker_epoch`: a launch
+/// with `provider_auth_generation: None` never falls back to mutable Hub
+/// metadata, and a non-owning epoch never expires the session's current pin
+/// (R16-M3).
+pub(super) fn provider_auth_expiry_target(
+    shared: &Shared,
+    session_id: &str,
+    worker_epoch: &str,
+    event: &RuntimeEvent,
+) -> Option<(String, crate::provider_account::ProviderAccountId, u64)> {
+    let RuntimeEvent::Status {
+        detail: Some(detail),
+        ..
+    } = event
+    else {
+        return None;
+    };
+    if !crate::provider_behavior::is_provider_auth_required_error(detail) {
+        return None;
+    }
+    if let Some(worker) = shared.workers.lock().get(session_id).cloned() {
+        if worker.worker_epoch != worker_epoch {
+            return None;
+        }
+        if let Some(launch) = worker.launch {
+            return Some((
+                launch.provider,
+                launch.provider_account_id,
+                launch.provider_auth_generation?,
+            ));
+        }
+        return super::projected_provider_auth_failure(&shared.hub, session_id, event);
+    }
+    if let Some(worker) = shared
+        .draining_replay_snapshots
+        .lock()
+        .get(&(session_id.to_owned(), worker_epoch.to_owned()))
+        .cloned()
+    {
+        let launch = worker.launch?;
+        return Some((
+            launch.provider,
+            launch.provider_account_id,
+            launch.provider_auth_generation?,
+        ));
+    }
+    super::projected_provider_auth_failure(&shared.hub, session_id, event)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub(super) fn project_admitted_worker_event(
     shared: &Shared,
@@ -771,34 +929,7 @@ pub(super) fn project_admitted_worker_event(
     if let Some((machine, telemetry)) = shared.telemetry.lock().as_ref() {
         telemetry.record_runtime_spans(machine, session_id, diagnostics);
     }
-    let owning_worker = shared
-        .workers
-        .lock()
-        .get(session_id)
-        .filter(|w| w.has_connected_owner() && w.worker_epoch == worker_epoch)
-        .cloned();
-    let drain_replay_snap = shared
-        .draining_replay_snapshots
-        .lock()
-        .get(&(session_id.to_owned(), worker_epoch.to_owned()))
-        .cloned();
-    // Scope historical-only gating strictly to non-owning draining epochs OR
-    // below-watermark replay of an already-Crashed/draining epoch (using the
-    // max same-epoch watermark across `shared.workers` and
-    // `draining_replay_snapshots`), leaving live Running/Busy replay untouched
-    // (R15-H1, R15-H2, R15-M2).
-    let non_owning_epoch = owning_worker.is_none() && drain_replay_snap.is_some();
-    let max_watermark = owning_worker
-        .as_ref()
-        .map_or(0, |w| w.last_runtime_seq)
-        .max(drain_replay_snap.as_ref().map_or(0, |w| w.last_runtime_seq));
-    let crashed_or_draining = non_owning_epoch
-        || is_draining_crashed_epoch(shared, session_id, worker_epoch)
-        || owning_worker
-            .as_ref()
-            .is_some_and(|w| w.state == WorkerState::Crashed);
-    let historical_only =
-        non_owning_epoch || (crashed_or_draining && runtime_seq > 0 && runtime_seq < max_watermark);
+    let historical_only = is_historical_replay_event(shared, session_id, worker_epoch, runtime_seq);
     super::resolve_steering_update(shared, session_id, event);
     super::update_snapshot_from_event(
         shared,
@@ -2101,5 +2232,221 @@ mod crashed_drain_tests {
                 .lock()
                 .contains_key(&("s-r14".into(), "140-1".into()))
         );
+    }
+
+    #[tokio::test]
+    #[allow(clippy::too_many_lines)]
+    async fn r16_historical_replay_isolation_watermark_admission_and_auth_target() {
+        let hub = crate::core::Hub::new();
+        hub.create_session(crate::core::SessionRegistration {
+            id: "s-r16".into(),
+            provider: "codex".into(),
+            provider_version: "1.0.0".into(),
+            provider_generation_digest: "sha256:r16".into(),
+            provider_account_id: crate::provider_account::ProviderAccountId::default(),
+            provider_auth_generation: Some(2),
+            provider_behavior: None,
+            machine_id: "local".into(),
+            workspace_id: None,
+            workspace_name: None,
+            workspace_source_path: None,
+            execution_binding: None,
+            cwd: "/tmp".into(),
+            title: "r16".into(),
+            origin: crate::model::SessionOrigin::Web,
+            system: false,
+            owner_user_id: None,
+            owner_username: None,
+        });
+        hub.set_agent_session_id("s-r16", "native-live".into());
+        hub.note_worker_incarnation("s-r16", "200-live");
+        // Install live non-child permission attention with request_id "req-1".
+        hub.push(
+            "s-r16",
+            crate::agent_model::Event::PermissionRequest {
+                request_id: "req-1".into(),
+                tool_call: serde_json::json!({ "title": "run" }),
+                options: serde_json::Value::Array(Vec::new()),
+            },
+        );
+        assert_eq!(
+            hub.session_info("s-r16").unwrap().meta.attention.approvals,
+            1
+        );
+
+        let mut old_snap = crashed_snapshot("s-r16", "100-old");
+        old_snap.last_runtime_seq = 4;
+        old_snap.crashed_drain_active = true;
+        old_snap.launch.as_mut().unwrap().provider_auth_generation = None;
+
+        let rt = super::super::RemoteRuntime::for_test(hub.clone(), vec![old_snap.clone()]);
+        rt.connect_for_test();
+        let signalled = std::sync::Arc::new(parking_lot::Mutex::new(Vec::new()));
+        let sink = std::sync::Arc::clone(&signalled);
+        rt.set_turn_end_listener(std::sync::Arc::new(move |end| sink.lock().push(end)));
+
+        // R16-M2: higher watermark in draining_replay_snapshots must never be lowered
+        // by a delayed snapshot or a drain ACK cloning older shared.workers.
+        let mut higher_snap = old_snap.clone();
+        higher_snap.last_runtime_seq = 12;
+        assert!(authorize_draining_crashed_epoch_locked(
+            &rt.shared,
+            &higher_snap,
+            None
+        ));
+        assert_eq!(
+            rt.shared
+                .draining_replay_snapshots
+                .lock()
+                .get(&("s-r16".into(), "100-old".into()))
+                .unwrap()
+                .last_runtime_seq,
+            12
+        );
+        let ack_cmd = super::super::CoreCommand::DrainCrashedWorker {
+            session_id: "s-r16".into(),
+            command_id: "dc-r16".into(),
+            worker_epoch: "100-old".into(),
+            acknowledged_uncertain_sequence: 0,
+        };
+        handle_crashed_drain_command_ack(&rt.shared, "s-r16", Some(&ack_cmd), true, None);
+        assert_eq!(
+            rt.shared
+                .draining_replay_snapshots
+                .lock()
+                .get(&("s-r16".into(), "100-old".into()))
+                .unwrap()
+                .last_runtime_seq,
+            12,
+            "drain ACK cloning older worker cache must preserve higher watermark"
+        );
+
+        // R16-M3: launch with provider_auth_generation=None must never fall back to
+        // mutable Hub metadata (which has generation=Some(2)).
+        let auth_err = RuntimeEvent::Status {
+            state: WorkerState::Crashed,
+            detail: Some(crate::provider::provider_auth_required_detail(
+                "codex", true,
+            )),
+        };
+        assert_eq!(
+            provider_auth_expiry_target(&rt.shared, "s-r16", "100-old", &auth_err),
+            None
+        );
+
+        // Install a newer live worker in shared.workers while 100-old remains draining.
+        let mut live_snap = crashed_snapshot("s-r16", "200-live");
+        live_snap.state = WorkerState::Running;
+        live_snap.last_runtime_seq = 1;
+        live_snap.launch.as_mut().unwrap().provider_auth_generation = Some(2);
+        rt.shared.workers.lock().insert("s-r16".into(), live_snap);
+
+        // R16-H1: historical TurnEnded from 100-old must retire its exact prompt
+        // WITHOUT calling turn_end_listener; R16-M1: must NOT clear live attention
+        // or overwrite live worker incarnation.
+        rt.prompt_traced("s-r16", Vec::new(), Some("cmid-old".into()), None);
+        let turn_id = rt
+            .pending_for_test()
+            .into_iter()
+            .find_map(|cmd| match cmd {
+                super::super::CoreCommand::Prompt { turn_id, .. } => Some(turn_id),
+                _ => None,
+            })
+            .unwrap();
+        rt.project_trace_fixture(Frame::WorkerEvent {
+            session_id: "s-r16".into(),
+            worker_epoch: "100-old".into(),
+            runtime_seq: 6,
+            event: RuntimeEvent::TurnEnded {
+                turn_id,
+                stop_reason: "policy_violation".into(),
+                usage: None,
+            },
+            diagnostics: Vec::new(),
+        })
+        .await;
+        assert!(
+            rt.pending_for_test().is_empty(),
+            "exact prompt must still retire on historical TurnEnded"
+        );
+        assert!(
+            signalled.lock().is_empty(),
+            "historical TurnEnded must not fire account-wide turn_end_listener"
+        );
+        assert_eq!(
+            hub.session_info("s-r16").unwrap().meta.attention.approvals,
+            1,
+            "historical TurnEnded must not clear live non-child attention"
+        );
+
+        // R16-H2: historical AgentSessionId must NOT overwrite durable native thread ID.
+        rt.project_trace_fixture(Frame::WorkerEvent {
+            session_id: "s-r16".into(),
+            worker_epoch: "100-old".into(),
+            runtime_seq: 7,
+            event: RuntimeEvent::AgentSessionId {
+                agent_session_id: "native-stale".into(),
+                materialized: false,
+            },
+            diagnostics: Vec::new(),
+        })
+        .await;
+        assert_eq!(
+            hub.session_info("s-r16")
+                .unwrap()
+                .meta
+                .agent_session_id
+                .as_deref(),
+            Some("native-live")
+        );
+
+        // R16-M1: historical PermissionResolved must NOT clear live permission request,
+        // and historical replay must NOT overwrite live worker incarnation.
+        rt.project_trace_fixture(Frame::WorkerEvent {
+            session_id: "s-r16".into(),
+            worker_epoch: "100-old".into(),
+            runtime_seq: 8,
+            event: RuntimeEvent::PermissionResolved {
+                request_id: "req-1".into(),
+                option_id: Some("allow".into()),
+            },
+            diagnostics: Vec::new(),
+        })
+        .await;
+        assert_eq!(
+            hub.session_info("s-r16").unwrap().meta.attention.approvals,
+            1
+        );
+        assert_eq!(
+            hub.worker_incarnation_for_test("s-r16").as_deref(),
+            Some("200-live"),
+            "historical replay must never overwrite live worker incarnation"
+        );
+
+        // R16-H3: TransientlyDeferred blocks for this connection and clears on reconnect;
+        // PermanentlyDenied clears drain authorization WITHOUT blocking later frames.
+        assert!(
+            settle_draining_event_admission(
+                &rt.shared,
+                "s-r16",
+                "100-old",
+                super::super::native_admission::EventAdmission::TransientlyDeferred,
+            )
+            .is_err()
+        );
+        assert!(is_event_epoch_blocked(&rt.shared, "s-r16", "100-old"));
+        clear_blocked_draining_epochs(&rt.shared);
+        assert!(!is_event_epoch_blocked(&rt.shared, "s-r16", "100-old"));
+        assert!(
+            settle_draining_event_admission(
+                &rt.shared,
+                "s-r16",
+                "100-old",
+                super::super::native_admission::EventAdmission::PermanentlyDenied,
+            )
+            .is_ok()
+        );
+        assert!(!is_draining_crashed_epoch(&rt.shared, "s-r16", "100-old"));
+        assert!(!is_event_epoch_blocked(&rt.shared, "s-r16", "100-old"));
     }
 }

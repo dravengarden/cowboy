@@ -2644,5 +2644,66 @@ mod tests {
                 .active
                 .contains_key("s-a")
         );
+
+        // R16-M4: when an abort consumes a pending drain command, the broker
+        // MUST emit a correlated rejection CommandAck before Snapshot so the
+        // Controller does not orphan the pending command if the worker drops.
+        let (ctrl_tx, mut ctrl_rx) = mpsc::unbounded_channel();
+        *broker.controller.lock() = Some(Controller {
+            lease: 1,
+            tx: ctrl_tx,
+            protocol: CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+            outer_machine_protocol: Some(CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION),
+        });
+        broker.handle_crashed_drain_aborted(
+            "s-b",
+            "82-1",
+            2,
+            Some("dc-b"),
+            Some(crate::runtime_wire::UncertainEffect {
+                method: "user_mcp".into(),
+                sequence: 1,
+            }),
+        );
+        assert!(
+            !broker
+                .crashed_drains
+                .inner
+                .lock()
+                .pending
+                .contains_key("dc-b")
+        );
+        match ctrl_rx.try_recv().expect("expected correlated CommandAck") {
+            Frame::CommandAck {
+                session_id,
+                command_id,
+                accepted,
+                reason,
+            } => {
+                assert_eq!(session_id, "s-b");
+                assert_eq!(command_id, "dc-b");
+                assert!(!accepted);
+                assert!(
+                    reason.as_deref().is_some_and(
+                        |r| r.contains("crashed_worker_drain_aborted_uncertain_effect")
+                    )
+                );
+            }
+            other => panic!("expected CommandAck before Snapshot, got {other:?}"),
+        }
+        match ctrl_rx
+            .try_recv()
+            .expect("expected Snapshot after CommandAck")
+        {
+            Frame::Snapshot { worker } => {
+                assert_eq!(worker.session_id, "s-b");
+                assert!(!worker.crashed_drain_active);
+                assert_eq!(
+                    worker.uncertain_effect.as_ref().map(|e| e.sequence),
+                    Some(1)
+                );
+            }
+            other => panic!("expected Snapshot after CommandAck, got {other:?}"),
+        }
     }
 }

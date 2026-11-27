@@ -126,6 +126,7 @@ impl Broker {
                         .insert(session_id.to_owned(), merged);
                 }
             }
+            let mut aborted_pending_command_id = None;
             let cleared = if !matched_active && !matched_pending {
                 if worker.snapshot.uncertain_effect == prev_effect {
                     return;
@@ -137,6 +138,7 @@ impl Broker {
                 }
                 if matched_pending && let Some(cid) = command_id {
                     state.pending.remove(cid);
+                    aborted_pending_command_id = Some(cid.to_owned());
                 }
                 let still_pending = state
                     .pending
@@ -150,6 +152,18 @@ impl Broker {
                 }
             };
             if let Some(ctrl) = ctrl_guard.as_ref() {
+                // Send a correlated terminal rejection whenever the abort
+                // consumes a pending drain command so the Controller never
+                // retains an orphaned command if the worker disconnects before
+                // answering the broker's replayed DrainCrashedWorker (R16-M4).
+                if let Some(cid) = aborted_pending_command_id {
+                    let _ = ctrl.tx.send(Frame::CommandAck {
+                        session_id: session_id.to_owned(),
+                        command_id: cid,
+                        accepted: false,
+                        reason: Some("crashed_worker_drain_aborted_uncertain_effect".to_owned()),
+                    });
+                }
                 let mut snap = worker.snapshot.clone();
                 snap.pending_prompt_count = pending.get(session_id).map_or(0, |commands| {
                     u64::try_from(

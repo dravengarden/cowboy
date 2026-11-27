@@ -216,14 +216,26 @@ impl Hub {
     /// used to tag a dispatched prompt's user-message echo so the originating
     /// client reconciles its optimistic bubble (see Envelope::cmid).
     pub fn push_tagged(&self, session_id: &str, event: Event, cmid: Option<String>) {
-        self.push_tagged_inner(session_id, event, cmid, false);
+        self.push_tagged_inner(session_id, event, cmid, false, false);
     }
 
     /// Like [`Self::push_tagged`] for live worker-emitted events: any
     /// `user_message_chunk` not backed by a Controller dispatch fails closed as
     /// non-owner.
     pub fn push_tagged_from_worker(&self, session_id: &str, event: Event, cmid: Option<String>) {
-        self.push_tagged_inner(session_id, event, cmid, true);
+        self.push_tagged_inner(session_id, event, cmid, true, false);
+    }
+
+    /// Append a historical replay transcript row from a crashed/draining worker
+    /// without touching live attention, compaction, activity, or native-ID
+    /// reducers (R16-M1).
+    pub fn push_historical_from_worker(
+        &self,
+        session_id: &str,
+        event: Event,
+        cmid: Option<String>,
+    ) {
+        self.push_tagged_inner(session_id, event, cmid, true, true);
     }
 
     fn push_tagged_inner(
@@ -232,6 +244,7 @@ impl Hub {
         event: Event,
         mut cmid: Option<String>,
         from_worker: bool,
+        historical: bool,
     ) {
         let mut event = self.prepare_attention_event(session_id, event);
         // A subagent snapshot is fenced by its producer identity (I4) before
@@ -268,23 +281,17 @@ impl Hub {
             {
                 return;
             }
-            if matches!(event, Event::TurnEnd { .. }) {
-                s.active_turn_compacting = false;
-            }
-            s.pending_actions.observe(&event);
-            let attention = s.pending_actions.summary();
-            let attention_changed = s.meta.attention != attention;
-            s.meta.attention = attention;
+            let (attention_changed, native_wait_started) = if historical {
+                (false, false)
+            } else {
+                Self::apply_live_event_reducers(
+                    s,
+                    &event,
+                    subagent_child.as_deref(),
+                    subagent_ending,
+                )
+            };
             s.next_seq += 1;
-            if let Some(boundary) = context_rollover::HistoryBoundary::from_event(&event) {
-                s.history_boundary = boundary;
-            }
-            let native_wait_started = subagent_child
-                .as_deref()
-                .is_some_and(|child| native_wait_start(s, &event, child, subagent_ending));
-            if counts_as_activity(&event) {
-                s.last_activity = std::time::Instant::now();
-            }
             if subagent_child.is_some() {
                 stamp_subagent_snapshot(&mut event, seq, subagent_ending);
             }
@@ -295,7 +302,8 @@ impl Hub {
                 cmid,
             };
             // A send begins one turn at its first chunk, however many blocks follow.
-            if Self::is_owner_envelope_for_session(s, &envelope)
+            if !historical
+                && Self::is_owner_envelope_for_session(s, &envelope)
                 && !s
                     .log
                     .last()
@@ -329,7 +337,7 @@ impl Hub {
             {
                 s.reached_start = false;
             }
-            let durable_agent_session_id = is_user_message_chunk(&envelope)
+            let durable_agent_session_id = (!historical && is_user_message_chunk(&envelope))
                 .then(|| s.meta.agent_session_id.clone())
                 .flatten();
             let turn_completion = if matches!(envelope.event, Event::TurnEnd { .. }) {
@@ -364,7 +372,37 @@ impl Hub {
             }
             (envelope, attention_changed, native_wait_started)
         };
-        self.finish_pushed_event(session_id, envelope, attention_changed, native_wait_started);
+        self.finish_pushed_event(
+            session_id,
+            envelope,
+            attention_changed,
+            native_wait_started,
+            historical,
+        );
+    }
+
+    fn apply_live_event_reducers(
+        s: &mut Session,
+        event: &Event,
+        subagent_child: Option<&str>,
+        subagent_ending: Option<SubagentEnding>,
+    ) -> (bool, bool) {
+        if matches!(event, Event::TurnEnd { .. }) {
+            s.active_turn_compacting = false;
+        }
+        s.pending_actions.observe(event);
+        let attention = s.pending_actions.summary();
+        let attention_changed = s.meta.attention != attention;
+        s.meta.attention = attention;
+        if let Some(boundary) = context_rollover::HistoryBoundary::from_event(event) {
+            s.history_boundary = boundary;
+        }
+        let native_wait_started =
+            subagent_child.is_some_and(|child| native_wait_start(s, event, child, subagent_ending));
+        if counts_as_activity(event) {
+            s.last_activity = std::time::Instant::now();
+        }
+        (attention_changed, native_wait_started)
     }
 
     fn apply_canonical_hot_log(s: &mut Session, seq: u64, canonical: Envelope) {
@@ -396,8 +434,11 @@ impl Hub {
         envelope: Envelope,
         attention_changed: bool,
         native_wait_started: bool,
+        historical: bool,
     ) {
-        self.observe_compaction(session_id, &envelope.event);
+        if !historical {
+            self.observe_compaction(session_id, &envelope.event);
+        }
         if is_user_message_chunk(&envelope)
             && let Some(cmid) = envelope
                 .cmid

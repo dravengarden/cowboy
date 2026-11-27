@@ -442,71 +442,85 @@ pub(super) fn project_worker_outcome(
         super::mark_projected_provider_auth_expired(shared, session_id, &key.1, &event);
     }
     super::prompt_tracking::observe_worker_event(shared, session_id, &event);
-    let deferred =
-        super::divert(&shared.hub, key, runtime_seq, event).and_then(|event| match event {
-            RuntimeEvent::UndeliveredPrompt {
+    // Historical replay skips `super::divert`'s live `note_worker_incarnation`
+    // call so a replaying epoch never overwrites the live owner's worker
+    // incarnation (R16-M1).
+    let remaining = if apply_lifecycle {
+        super::divert(&shared.hub, key, runtime_seq, event)
+    } else {
+        crate::subagent_transcripts::intercept(&key.0, &key.1, runtime_seq, event)
+    };
+    let deferred = remaining.and_then(|event| match event {
+        RuntimeEvent::UndeliveredPrompt {
+            command_id,
+            cmid: Some(cid),
+            content,
+            error,
+        } if cid.starts_with(CALL_NOTICE_PREFIX) => {
+            shared.in_flight_prompts.lock().retire_command(&command_id);
+            let text = content
+                .iter()
+                .filter_map(|value| value.get("text").and_then(serde_json::Value::as_str))
+                .collect::<Vec<_>>()
+                .join("\n");
+            Some(PendingUndeliveredNotice {
+                session_id: session_id.to_owned(),
+                worker_epoch: key.1.clone(),
+                runtime_seq,
                 command_id,
-                cmid: Some(cid),
+                cmid: cid,
+                text,
                 content,
                 error,
-            } if cid.starts_with(CALL_NOTICE_PREFIX) => {
-                shared.in_flight_prompts.lock().retire_command(&command_id);
-                let text = content
-                    .iter()
-                    .filter_map(|value| value.get("text").and_then(serde_json::Value::as_str))
-                    .collect::<Vec<_>>()
-                    .join("\n");
-                Some(PendingUndeliveredNotice {
-                    session_id: session_id.to_owned(),
-                    worker_epoch: key.1.clone(),
-                    runtime_seq,
-                    command_id,
-                    cmid: cid,
-                    text,
-                    content,
-                    error,
-                    admitted: true,
-                })
-            }
-            RuntimeEvent::UndeliveredPrompt {
-                command_id,
-                cmid,
+                admitted: true,
+            })
+        }
+        RuntimeEvent::UndeliveredPrompt {
+            command_id,
+            cmid,
+            content,
+            error,
+        } => {
+            super::prompt_tracking::handle_undelivered_prompt(
+                shared,
+                session_id,
+                &command_id,
+                cmid.as_deref(),
                 content,
                 error,
-            } => {
-                super::prompt_tracking::handle_undelivered_prompt(
-                    shared,
-                    session_id,
-                    &command_id,
-                    cmid.as_deref(),
-                    content,
-                    error,
-                );
-                None
+            );
+            None
+        }
+        other => {
+            if !apply_lifecycle {
+                project_historical_replay_event(&shared.hub, session_id, &key.1, other);
+                return None;
             }
-            other => {
-                if !apply_lifecycle {
-                    project_historical_replay_event(&shared.hub, session_id, other);
-                    return None;
-                }
-                super::apply_event(&shared.hub, session_id, other);
-                None
-            }
-        });
+            super::apply_event(&shared.hub, session_id, other);
+            None
+        }
+    });
     super::reconcile_idle_guard(shared, session_id, idle_guard);
     deferred
 }
 
 /// Strict allowlist for historical replay outcomes (non-owning draining epochs
 /// or below-watermark replay of an already-Crashed/draining epoch): appends
-/// historical transcript rows without running live Hub lifecycle, capability,
-/// config, wakeup, permission, or credential-expiry hooks (R15-M3, R15-M6).
-fn project_historical_replay_event(hub: &crate::core::Hub, session_id: &str, event: RuntimeEvent) {
+/// historical transcript rows via `push_historical_from_worker`, preserving
+/// producer epoch on subagent snapshots while skipping live worker incarnation,
+/// native thread ID, attention, compaction, permission, capability, config,
+/// wakeup, and credential-expiry hooks (R15-M3, R15-M6, R16-H2, R16-M1).
+fn project_historical_replay_event(
+    hub: &crate::core::Hub,
+    session_id: &str,
+    worker_epoch: &str,
+    event: RuntimeEvent,
+) {
     if !hub.accepts_runtime_projection(session_id) {
         return;
     }
     match event {
-        RuntimeEvent::Update { update, cmid }
+        RuntimeEvent::Update { mut update, cmid }
             if crate::runtime_wire::current_turn_support(&update).is_none()
                 && crate::runtime_wire::background_tasks_count(&update).is_none()
                 && crate::runtime_wire::native_cycle(&update).is_none()
@@ -516,32 +530,32 @@ fn project_historical_replay_event(hub: &crate::core::Hub, session_id: &str, eve
                     .and_then(serde_json::Value::as_str)
                     != Some(crate::runtime_wire::STEERING_RESULT_UPDATE) =>
         {
-            super::apply_event(hub, session_id, RuntimeEvent::Update { update, cmid });
+            if !worker_epoch.is_empty()
+                && update
+                    .get("sessionUpdate")
+                    .and_then(serde_json::Value::as_str)
+                    == Some(crate::runtime_wire::SUBAGENT_UPDATE)
+                && let Some(object) = update.as_object_mut()
+            {
+                object.insert(
+                    "incarnation".to_owned(),
+                    serde_json::Value::String(worker_epoch.to_owned()),
+                );
+            }
+            hub.push_historical_from_worker(
+                session_id,
+                crate::agent_model::Event::Update { update },
+                cmid,
+            );
         }
         RuntimeEvent::TurnEnded {
             stop_reason, usage, ..
         } => {
-            hub.push(
+            hub.push_historical_from_worker(
                 session_id,
                 crate::agent_model::Event::TurnEnd { stop_reason, usage },
+                None,
             );
-        }
-        RuntimeEvent::PermissionResolved {
-            request_id,
-            option_id,
-        } => {
-            hub.push(
-                session_id,
-                crate::agent_model::Event::PermissionResolved {
-                    request_id,
-                    option_id,
-                },
-            );
-        }
-        RuntimeEvent::AgentSessionId {
-            agent_session_id, ..
-        } => {
-            hub.set_agent_session_id(session_id, agent_session_id);
         }
         RuntimeEvent::CommandRejected { message, .. } | RuntimeEvent::Error { message } => {
             hub.broadcast_error(Some(session_id.to_owned()), message);

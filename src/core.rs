@@ -4029,6 +4029,16 @@ impl Hub {
         ledger.incarnation = Some(incarnation.to_owned());
     }
 
+    #[cfg(test)]
+    #[must_use]
+    pub fn worker_incarnation_for_test(&self, session_id: &str) -> Option<String> {
+        self.inner
+            .background
+            .lock()
+            .get(session_id)
+            .and_then(|ledger| ledger.incarnation.clone())
+    }
+
     /// This Controller process's bootstrap epoch.
     #[must_use]
     pub fn boot_epoch(&self) -> &str {
