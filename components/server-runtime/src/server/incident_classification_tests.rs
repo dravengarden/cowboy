@@ -114,6 +114,37 @@ fn session_errors_retain_provider_and_transport_classifications() {
 }
 
 #[test]
+fn a_prompt_the_agent_refused_before_running_is_refused_input() {
+    // sess-1795343291454: images sent while `agy` awaited an `ask_question`
+    // answer. Nothing ran, so the ending is not a critical runtime failure.
+    let data = serde_json::json!({
+        "message": "Antigravity is waiting for your answer to its question.",
+        "cowboy": {
+            "prompt_rejected": "image_answer",
+            "antigravity_backend": {
+                "class": "not_dispatched", "successes": 0, "barrier": true,
+                "prompts": 1, "dispatches": 0, "transient": 0, "refusals": [],
+            },
+        },
+    });
+    let detail = format!(
+        "antigravity_prompt_rejected:image_answer: {}",
+        serde_json::to_string_pretty(&data).unwrap()
+    );
+    assert_eq!(
+        classify_crash_detail(Some(&detail)),
+        "provider_input_rejected"
+    );
+    assert_eq!(classify_session_error(&detail), "provider_input_rejected");
+    assert_eq!(session_error_severity("provider_input_rejected"), "warning");
+    // Text that only names the code is not the proxy's proven result.
+    assert_eq!(
+        classify_session_error("antigravity_prompt_rejected:image_answer"),
+        "session_command_error"
+    );
+}
+
+#[test]
 fn incident_summaries_are_bounded_on_utf8_boundaries() {
     let (summary, truncated) = bounded_incident_summary(&"你".repeat(2_000));
     assert!(truncated);

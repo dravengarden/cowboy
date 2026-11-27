@@ -548,6 +548,29 @@ fn proxy_result(error: &str) -> Option<Signal> {
     }
 }
 
+/// Whether a turn ending (`error: …`) or its bare error text is the proxy's
+/// complete, consistent prompt rejection: `agy` refused the prompt before its
+/// agent loop saw it, so nothing ran and nothing reached the backend. Only
+/// such an ending lets the Controller treat the turn as refused input rather
+/// than a runtime failure.
+#[must_use]
+pub fn is_prompt_rejection(ending: &str) -> bool {
+    let error = ending.strip_prefix("error: ").unwrap_or(ending);
+    let Some((message, data)) = error.split_once(": ") else {
+        return false;
+    };
+    let Some(code) = message.strip_prefix(PROMPT_REJECTED_PREFIX) else {
+        return false;
+    };
+    serde_json::from_str::<serde_json::Value>(data)
+        .ok()
+        .and_then(|data| {
+            let cowboy = data.get("cowboy")?.as_object()?;
+            Some(prompt_rejection(code, cowboy))
+        })
+        .unwrap_or(false)
+}
+
 /// Whether a prompt rejection is the proxy's complete, consistent result: a
 /// known code, the same code in `cowboy`, no violation or possible effect,
 /// and not-dispatched evidence that itself proves it (its barrier, exactly

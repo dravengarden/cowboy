@@ -492,11 +492,11 @@ fn a_prompt_agy_rejected_before_dispatch_leaves_the_account_alone() {
     // sess-1795490077099: images sent while an `ask_question` was pending;
     // `agy` refused the prompt locally and no backend request was made.
     let rejected = |code: &str, cowboy: serde_json::Value| {
-        classify_stop_reason(&displayed_proxy_error(
+        displayed_proxy_error(
             &format!("antigravity_prompt_rejected:{code}"),
             "Antigravity is waiting for your answer to its question.",
             &cowboy,
-        ))
+        )
     };
     let evidence = serde_json::json!({
         "class": "not_dispatched", "successes": 0, "barrier": true,
@@ -516,8 +516,12 @@ fn a_prompt_agy_rejected_before_dispatch_leaves_the_account_alone() {
         "image_answer",
         serde_json::json!({"antigravity_backend": evidence, "prompt_rejected": "image_answer"}),
     );
-    assert_eq!(proven, Signal::None);
-    assert_eq!(signal_transition(&proven), None);
+    assert_eq!(classify_stop_reason(&proven), Signal::None);
+    assert_eq!(signal_transition(&classify_stop_reason(&proven)), None);
+    // The Controller recognises the same ending as refused input, from the
+    // turn ending and from the bare error a lifecycle detail carries.
+    assert!(is_prompt_rejection(&proven));
+    assert!(is_prompt_rejection(proven.strip_prefix("error: ").unwrap()));
     // Only the complete, self-consistent result of a known code counts.
     let mut unproven = vec![
         rejected(
@@ -575,12 +579,17 @@ fn a_prompt_agy_rejected_before_dispatch_leaves_the_account_alone() {
     ] {
         unproven.push(rejected("image_answer", without(key)));
     }
-    for signal in unproven {
-        assert_eq!(signal, Signal::Unclassified);
+    for ending in unproven {
+        assert_eq!(classify_stop_reason(&ending), Signal::Unclassified);
+        assert!(!is_prompt_rejection(&ending), "{ending}");
     }
     // Vendor text that merely names the prefix is not the proxy's result.
     assert_eq!(
         classify_stop_reason("error: antigravity_prompt_rejected:image_answer"),
         Signal::Unclassified
     );
+    assert!(!is_prompt_rejection(
+        "error: antigravity_prompt_rejected:image_answer"
+    ));
+    assert!(!is_prompt_rejection("Cancelled"));
 }

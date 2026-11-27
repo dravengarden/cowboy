@@ -278,7 +278,11 @@ pub async fn record_lifecycle_incidents(store: &Store, rows: &[Envelope]) -> any
                 occurred_at_ms,
                 source: "controller".to_owned(),
                 classification: classification.to_owned(),
-                severity: if *status == Status::Crashed && classification != "provider_refusal" {
+                severity: if *status == Status::Crashed
+                    && !matches!(
+                        classification,
+                        "provider_refusal" | "provider_input_rejected"
+                    ) {
                     "critical".to_owned()
                 } else {
                     "warning".to_owned()
@@ -328,6 +332,11 @@ pub async fn record_lifecycle_incidents(store: &Store, rows: &[Envelope]) -> any
 pub fn classify_crash_detail(detail: Option<&str>) -> &'static str {
     if detail == Some(crate::core::MODEL_REFUSAL_DETAIL) {
         return "provider_refusal";
+    }
+    // The agent refused the prompt before running it (nothing was sent):
+    // refused input the owner can correct, not a runtime failure.
+    if detail.is_some_and(crate::account_controls::is_prompt_rejection) {
+        return "provider_input_rejected";
     }
     if detail.is_some_and(crate::provider_behavior::is_session_restore_timeout_error) {
         return "session_restore_timeout";
@@ -1237,6 +1246,7 @@ pub fn session_error_severity(classification: &str) -> &'static str {
         "worker_startup_failure" | "process_exit" | "resource_exhaustion" | "runtime_failure" => {
             "critical"
         }
+        "provider_input_rejected" => "warning",
         _ => "error",
     }
 }

@@ -141,4 +141,91 @@ impl Hub {
         );
         self.drain_head(session_id, true, true, Some(caller));
     }
+
+    /// Park the prompt the agent refused before running it (a proven
+    /// [`crate::account_controls::is_prompt_rejection`] turn ending) as a
+    /// draft, images included, so the owner edits and resends it instead of
+    /// composing it again. A Retry would only repeat the refusal. The draft
+    /// keeps the prompt's proven dispatch origin; an unknown one stays
+    /// non-owner. Any other ending, a managed child (nobody edits its
+    /// drafts), or a prompt whose stored image is gone, parks nothing.
+    pub fn restore_rejected_prompt(&self, session_id: &str, stop_reason: &str) {
+        if self.is_managed_child(session_id)
+            || !crate::account_controls::is_prompt_rejection(stop_reason)
+        {
+            return;
+        }
+        let (text, mut content, origin) = {
+            let sessions = self.inner.sessions.lock();
+            let Some(s) = sessions.get(session_id) else {
+                return;
+            };
+            let LastUserPrompt {
+                text,
+                content,
+                cmid,
+            } = last_user_prompt(&s.log);
+            let origin = cmid
+                .as_deref()
+                .and_then(|cmid| s.dispatched_origins.get(cmid))
+                .map(|record| record.origin.clone());
+            (text, content, origin)
+        };
+        if text.trim().is_empty() && content.is_empty() {
+            return;
+        }
+        if let Err(reference) = self.restore_externalized_images(&mut content) {
+            tracing::warn!(session = %session_id, %reference, "rejected prompt's image is no longer stored; not restoring it as a draft");
+            return;
+        }
+        let text = if content.is_empty() {
+            text
+        } else {
+            draft_text_with_image_tokens(&content)
+        };
+        let parked = {
+            let sessions = self.inner.sessions.lock();
+            sessions.get(session_id).is_some_and(|s| {
+                s.drafts.iter().any(|draft| {
+                    if content.is_empty() {
+                        draft.content.is_empty() && draft.text == text
+                    } else {
+                        draft.content == content
+                    }
+                })
+            })
+        };
+        if !parked {
+            tracing::info!(session = %session_id, blocks = content.len(), "restoring a prompt the agent refused as a draft");
+            self.add_draft_with_origin(session_id, text, content, None, origin);
+        }
+    }
+}
+
+/// A draft's text for prompt blocks: the text blocks in order, each image as
+/// the inline `![image](cowboy-att:<id>)` token the Web composer writes, so the
+/// draft opens with its images where they were. The Web pairs the Nth token
+/// with the Nth image block; other attachments follow the text.
+fn draft_text_with_image_tokens(content: &[serde_json::Value]) -> String {
+    let mut text = String::new();
+    for block in content {
+        match block.get("type").and_then(serde_json::Value::as_str) {
+            Some("text") => {
+                text.push_str(
+                    block
+                        .get("text")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default(),
+                );
+            }
+            Some("image") => {
+                text.push_str(&format!(
+                    "![image](cowboy-att:att-{})",
+                    uuid::Uuid::new_v4()
+                ));
+            }
+            _ => {}
+        }
+    }
+    text
 }

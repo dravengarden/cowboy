@@ -2854,6 +2854,7 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             stop_reason, usage, ..
         } => {
             let refused = stop_reason.eq_ignore_ascii_case("refusal");
+            hub.restore_rejected_prompt(session_id, &stop_reason);
             hub.push(session_id, Event::TurnEnd { stop_reason, usage });
             if refused {
                 // Set the hold before releasing the dispatch guard, including
@@ -2863,8 +2864,7 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
                     Status::Crashed,
                     Some(crate::core::MODEL_REFUSAL_DETAIL.to_owned()),
                 );
-            }
-            if !refused {
+            } else {
                 hub.settle_restart_interruption(session_id);
             }
             // TurnEnded is the authoritative terminal edge. Do not rely
@@ -3943,6 +3943,80 @@ mod tests {
                 ServiceAuthenticationState::Ready
             );
         }
+    }
+
+    #[test]
+    fn a_prompt_the_agent_refused_before_running_returns_as_a_draft() {
+        // sess-1795343291454: images sent while `agy` awaited an
+        // `ask_question` answer were refused locally, and the owner had to
+        // compose the whole prompt again.
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "antigravity".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::model::SessionOrigin::Web,
+            false,
+        );
+        hub.set_status("s", Status::Busy, None);
+        let blocks = [
+            serde_json::json!({"type": "text", "text": "like this "}),
+            serde_json::json!({"type": "image", "mimeType": "image/png", "data": "aW1n"}),
+            serde_json::json!({"type": "text", "text": "\nredesign the dialogs"}),
+        ];
+        for content in &blocks {
+            apply_event(
+                &hub,
+                "s",
+                RuntimeEvent::Update {
+                    update: serde_json::json!({
+                        "sessionUpdate": "user_message_chunk",
+                        "content": content,
+                    }),
+                    cmid: None,
+                },
+            );
+        }
+        let ending = |cowboy: serde_json::Value| RuntimeEvent::TurnEnded {
+            usage: None,
+            turn_id: "turn-1".to_owned(),
+            stop_reason: format!(
+                "error: antigravity_prompt_rejected:image_answer: {}",
+                serde_json::json!({"message": "Antigravity is waiting.", "cowboy": cowboy})
+            ),
+        };
+        let drafts = || hub.queue_and_drafts("s", |_| true).unwrap().1;
+        // An ending that only names the code proves nothing: no draft.
+        apply_event(
+            &hub,
+            "s",
+            ending(serde_json::json!({"prompt_rejected": "image_answer"})),
+        );
+        assert!(drafts().is_empty());
+        let proven = serde_json::json!({
+            "prompt_rejected": "image_answer",
+            "antigravity_backend": {
+                "class": "not_dispatched", "successes": 0, "barrier": true,
+                "prompts": 1, "dispatches": 0, "transient": 0, "refusals": [],
+            },
+        });
+        apply_event(&hub, "s", ending(proven.clone()));
+        let parked = drafts();
+        assert_eq!(parked.len(), 1);
+        assert_eq!(parked[0].content, blocks.to_vec());
+        // The image sits where it was, as the Web composer's inline token.
+        let (head, rest) = parked[0]
+            .text
+            .split_once("![image](cowboy-att:att-")
+            .unwrap();
+        assert_eq!(head, "like this ");
+        assert!(rest.ends_with(")\nredesign the dialogs"), "{rest}");
+        // An unknown dispatch origin never becomes the owner's.
+        assert!(parked[0].origin.is_none());
+        // The same refusal again parks no second copy.
+        apply_event(&hub, "s", ending(proven));
+        assert_eq!(drafts().len(), 1);
     }
 
     fn assistant_chunk(text: &str) -> RuntimeEvent {

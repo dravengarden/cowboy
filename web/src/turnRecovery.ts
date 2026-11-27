@@ -52,3 +52,21 @@ export function turnFailureTelemetry(
     error_kind: errorKind ?? "unclassified",
   };
 }
+
+/** The proxy's closed prefix of a prompt the agent refused before running it
+ *  (Antigravity: images while its `ask_question` awaits an answer). Nothing
+ *  ran, and the Controller parks the refused prompt back in Drafts. */
+const REFUSED_INPUT_PREFIX = "antigravity_prompt_rejected:";
+
+/** What the reader does next after refused input: the prompt is a Draft
+ *  again, and only a text reply unblocks the agent. */
+export const REFUSED_INPUT_HINT =
+  "Your message is back in Drafts. Answer the agent's question in text " +
+  "first, then send it.";
+
+/** Whether a failed turn's detail is input the agent refused before running
+ *  it. The transport continuation must never be offered there: the agent
+ *  would read it as the answer to its pending question. */
+export function isRefusedInput(detail: string | null): boolean {
+  return detail?.startsWith(REFUSED_INPUT_PREFIX) ?? false;
+}

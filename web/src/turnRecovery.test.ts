@@ -2,6 +2,8 @@ import { test } from "bun:test";
 import { assert, assertEquals } from "../../tools/test-assert.ts";
 import {
   canContinueFailedTurn,
+  isRefusedInput,
+  REFUSED_INPUT_HINT,
   TURN_CONTINUATION_PROMPT,
   turnFailureTelemetry,
 } from "./turnRecovery.ts";
@@ -66,6 +68,29 @@ test("the card knows which session it is offering to continue", () => {
     ),
   );
   assert(
-    transcript.includes("const continuable = canContinueFailedTurn(status);"),
+    transcript.includes(
+      "const continuable = !refusedInput && canContinueFailedTurn(status);",
+    ),
   );
+});
+
+test("refused input points to the restored draft, never to the continuation", () => {
+  // sess-1795343291454: images sent while Antigravity awaited an answer.
+  assert(
+    isRefusedInput(
+      "antigravity_prompt_rejected:image_answer: " +
+        '{"cowboy": {"prompt_rejected": "image_answer"}}',
+    ),
+  );
+  assertEquals(
+    isRefusedInput("antigravity_backend_refusal:rate_limited: {}"),
+    false,
+  );
+  assertEquals(isRefusedInput("worker exited"), false);
+  assertEquals(isRefusedInput(null), false);
+  assert(REFUSED_INPUT_HINT.includes("Drafts"));
+  assert(REFUSED_INPUT_HINT.includes("in text"));
+  // The card hides Continue for refused input: its text would answer the
+  // agent's pending question.
+  assert(transcript.includes("const refusedInput = isRefusedInput(detail);"));
 });

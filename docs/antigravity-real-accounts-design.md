@@ -865,7 +865,16 @@ query and force release of "Controller account controls (step 5a)" and the
   rejection: a listed `agy` error whose log window holds the turn's barrier
   and no dispatch or backend record arrives as
   `antigravity_prompt_rejected:<code>` with `not_dispatched` evidence and
-  changes nothing (package README, "Backend evidence"). The raise is one transaction compared with
+  changes nothing (package README, "Backend evidence"). The Controller
+  records that ending as refused input (incident class
+  `provider_input_rejected`, severity `warning`), never a runtime failure,
+  and parks the refused prompt, images included, as a Draft
+  (`Hub::restore_rejected_prompt`); the Web points the owner there and
+  withholds the transport continuation, whose text the agent would take as
+  its answer. With `agy` 1.5.14 the pending question need not reach the
+  owner as a permission request: in sess-1795343291454 the `ask_question`
+  `tool_call` stayed `pending`, the turn ended `EndTurn`, and the next
+  prompt was taken as its answer. The raise is one transaction compared with
   the stored state: it never lowers a more severe state and never replaces
   `blocked`. `suspended`, `blocked` and `needs_attention` write stop fences.
   A rate limit holds until its quota group resets (default one hour; see

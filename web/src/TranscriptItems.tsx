@@ -23,7 +23,13 @@ import { formatShellForDisplay } from "./shellFormatter";
 import { COMPACTING_NOTICE, type ContentChunk, isCompactionCommandText, isCompactionCompletionText, isHumanPrompt, type PromptOrigin, type RenderItem } from "./derive";
 import { prettifyCrashDetail, rpcErrorKind } from "./crashDetail";
 import { reportClientLog } from "./observability";
-import { canContinueFailedTurn, TURN_CONTINUATION_PROMPT, turnFailureTelemetry } from "./turnRecovery";
+import {
+  canContinueFailedTurn,
+  isRefusedInput,
+  REFUSED_INPUT_HINT,
+  TURN_CONTINUATION_PROMPT,
+  turnFailureTelemetry,
+} from "./turnRecovery";
 import { PromptOriginNote } from "./PromptOriginNote";
 import { TranscriptFileChip } from "./TranscriptFileChip";
 import { ToolStatusChip } from "./tools/ToolStatusChip";
@@ -898,7 +904,8 @@ export function TurnFailureRecovery({
   status: Status;
   provider: string;
 }): React.JSX.Element {
-  const continuable = canContinueFailedTurn(status);
+  const refusedInput = isRefusedInput(detail);
+  const continuable = !refusedInput && canContinueFailedTurn(status);
   useEffect(() => {
     if (reportedTurnFailures.has(itemKey)) return;
     reportedTurnFailures.add(itemKey);
@@ -917,7 +924,9 @@ export function TurnFailureRecovery({
       sx={{ mt: 0.25, flexWrap: "wrap" }}
     >
       <Typography variant="caption" sx={{ color: "text.secondary" }}>
-        {continuable
+        {refusedInput
+          ? REFUSED_INPUT_HINT
+          : continuable
           ? "The session is still open where it stopped."
           : "Send a message to continue."}
       </Typography>
