@@ -383,9 +383,9 @@ macro_rules! impl_turn_cache_backend {
 
             let markers_sql = concat!(
                 "SELECT \
-                   COALESCE(MAX(CASE WHEN ", $update_expr, " = 'context_rolled_over' THEN 1 ELSE 0 END), 0), \
-                   COALESCE(MAX(CASE WHEN ", $update_expr, " = 'compaction_update' \
-                                     AND ", $status_expr, " = 'completed' THEN 1 ELSE 0 END), 0), \
+                   CAST(COALESCE(MAX(CASE WHEN ", $update_expr, " = 'context_rolled_over' THEN 1 ELSE 0 END), 0) AS BIGINT), \
+                   CAST(COALESCE(MAX(CASE WHEN ", $update_expr, " = 'compaction_update' \
+                                     AND ", $status_expr, " = 'completed' THEN 1 ELSE 0 END), 0) AS BIGINT), \
                    MAX(CASE WHEN ", $update_expr, " = 'context_cleared' THEN seq ELSE NULL END) \
                  FROM events \
                  WHERE session_id = $1 AND seq > $2 AND seq < $3 \

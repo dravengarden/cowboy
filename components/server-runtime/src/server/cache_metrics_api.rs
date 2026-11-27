@@ -473,6 +473,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)]
     async fn account_and_session_cache_metrics_enforce_owner_and_visibility_isolation() {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::connect("sqlite::memory:", dir.path().join("artifacts"))

@@ -169,9 +169,8 @@ fn normalize_stop_reason_bounds_verbose_errors() {
     );
 }
 
-#[tokio::test]
-async fn sqlite_projection_survives_clear_isolates_accounts_and_backfills() {
-    let (_dir, store) = sqlite_test_store().await;
+#[allow(clippy::too_many_lines)]
+async fn assert_projection_contract(store: &Store) {
     store
         .insert_user(&sample_user("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "alice"))
         .await
@@ -446,4 +445,23 @@ async fn sqlite_projection_survives_clear_isolates_accounts_and_backfills() {
             .expect("prune"),
         0
     );
+}
+
+#[tokio::test]
+async fn sqlite_projection_survives_clear_isolates_accounts_and_backfills() {
+    let (_dir, store) = sqlite_test_store().await;
+    assert_projection_contract(&store).await;
+}
+
+#[tokio::test]
+#[ignore = "run nix develop -c just test-postgres (owns an isolated database)"]
+async fn postgres_projection_survives_clear_isolates_accounts_and_backfills() {
+    let url = std::env::var("COWBOY_TEST_POSTGRES_URL")
+        .expect("COWBOY_TEST_POSTGRES_URL must name an isolated empty database");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let store = Store::connect(&url, dir.path().join("artifacts"))
+        .await
+        .expect("connect postgres");
+    store.migrate().await.expect("migrate postgres");
+    assert_projection_contract(&store).await;
 }
