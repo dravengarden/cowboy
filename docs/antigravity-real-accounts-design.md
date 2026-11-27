@@ -867,11 +867,16 @@ query and force release of "Controller account controls (step 5a)" and the
   `antigravity_prompt_rejected:<code>` with `not_dispatched` evidence and
   changes nothing (package README, "Backend evidence"). The Controller
   records that ending as refused input (incident class
-  `provider_input_rejected`, severity `warning`), never a runtime failure,
-  and parks the refused prompt, images included, as a Draft
-  (`Hub::restore_rejected_prompt`); the Web points the owner there and
-  withholds the transport continuation, whose text the agent would take as
-  its answer. With `agy` 1.5.14 the pending question need not reach the
+  `provider_input_rejected`, severity `warning`), never a runtime failure.
+  When the Owner sent the refused prompt, the Controller parks it as a Draft
+  exactly as it dispatched it, images included: the runtime keeps each
+  turn's dispatched prompt until that turn's `TurnEnded` takes it once
+  (`prompt_tracking`, `Hub::restore_rejected_prompt`). Automation and peer
+  prompts are not parked, and a turn whose record is gone (a Controller
+  restart, eviction) parks nothing. The Web, in the failed turn's row and in
+  the status bar that replaces it while the session shows `crashed`, points
+  the owner there and withholds the transport continuation, whose text the
+  agent would take as its answer. With `agy` 1.5.14 the pending question need not reach the
   owner as a permission request: in sess-1795343291454 the `ask_question`
   `tool_call` stayed `pending`, the turn ended `EndTurn`, and the next
   prompt was taken as its answer. The raise is one transaction compared with

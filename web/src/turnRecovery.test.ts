@@ -76,12 +76,11 @@ test("the card knows which session it is offering to continue", () => {
 
 test("refused input points to the restored draft, never to the continuation", () => {
   // sess-1795343291454: images sent while Antigravity awaited an answer.
-  assert(
-    isRefusedInput(
-      "antigravity_prompt_rejected:image_answer: " +
-        '{"cowboy": {"prompt_rejected": "image_answer"}}',
-    ),
-  );
+  const proven = "antigravity_prompt_rejected:image_answer: " +
+    '{"cowboy": {"antigravity_backend": {"class": "not_dispatched"}}}';
+  assert(isRefusedInput(proven));
+  // The bare prefix is not the proxy's result.
+  assertEquals(isRefusedInput("antigravity_prompt_rejected:image_answer"), false);
   assertEquals(
     isRefusedInput("antigravity_backend_refusal:rate_limited: {}"),
     false,
@@ -93,4 +92,11 @@ test("refused input points to the restored draft, never to the continuation", ()
   // The card hides Continue for refused input: its text would answer the
   // agent's pending question.
   assert(transcript.includes("const refusedInput = isRefusedInput(detail);"));
+  // A remote worker's refusal projects as `crashed`, which hides the failed
+  // turn's row behind the status bar; the bar carries the hint then.
+  assert(
+    transcript.includes(
+      'status === "crashed" && isRefusedInput(crashDetail) && (',
+    ),
+  );
 });

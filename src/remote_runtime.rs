@@ -2854,7 +2854,6 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
             stop_reason, usage, ..
         } => {
             let refused = stop_reason.eq_ignore_ascii_case("refusal");
-            hub.restore_rejected_prompt(session_id, &stop_reason);
             hub.push(session_id, Event::TurnEnd { stop_reason, usage });
             if refused {
                 // Set the hold before releasing the dispatch guard, including
@@ -2864,7 +2863,8 @@ fn apply_event(hub: &Hub, session_id: &str, event: RuntimeEvent) {
                     Status::Crashed,
                     Some(crate::core::MODEL_REFUSAL_DETAIL.to_owned()),
                 );
-            } else {
+            }
+            if !refused {
                 hub.settle_restart_interruption(session_id);
             }
             // TurnEnded is the authoritative terminal edge. Do not rely
@@ -3943,80 +3943,6 @@ mod tests {
                 ServiceAuthenticationState::Ready
             );
         }
-    }
-
-    #[test]
-    fn a_prompt_the_agent_refused_before_running_returns_as_a_draft() {
-        // sess-1795343291454: images sent while `agy` awaited an
-        // `ask_question` answer were refused locally, and the owner had to
-        // compose the whole prompt again.
-        let hub = Hub::new();
-        hub.create_local_session(
-            "s".to_owned(),
-            "antigravity".to_owned(),
-            "/tmp".to_owned(),
-            "test".to_owned(),
-            crate::model::SessionOrigin::Web,
-            false,
-        );
-        hub.set_status("s", Status::Busy, None);
-        let blocks = [
-            serde_json::json!({"type": "text", "text": "like this "}),
-            serde_json::json!({"type": "image", "mimeType": "image/png", "data": "aW1n"}),
-            serde_json::json!({"type": "text", "text": "\nredesign the dialogs"}),
-        ];
-        for content in &blocks {
-            apply_event(
-                &hub,
-                "s",
-                RuntimeEvent::Update {
-                    update: serde_json::json!({
-                        "sessionUpdate": "user_message_chunk",
-                        "content": content,
-                    }),
-                    cmid: None,
-                },
-            );
-        }
-        let ending = |cowboy: serde_json::Value| RuntimeEvent::TurnEnded {
-            usage: None,
-            turn_id: "turn-1".to_owned(),
-            stop_reason: format!(
-                "error: antigravity_prompt_rejected:image_answer: {}",
-                serde_json::json!({"message": "Antigravity is waiting.", "cowboy": cowboy})
-            ),
-        };
-        let drafts = || hub.queue_and_drafts("s", |_| true).unwrap().1;
-        // An ending that only names the code proves nothing: no draft.
-        apply_event(
-            &hub,
-            "s",
-            ending(serde_json::json!({"prompt_rejected": "image_answer"})),
-        );
-        assert!(drafts().is_empty());
-        let proven = serde_json::json!({
-            "prompt_rejected": "image_answer",
-            "antigravity_backend": {
-                "class": "not_dispatched", "successes": 0, "barrier": true,
-                "prompts": 1, "dispatches": 0, "transient": 0, "refusals": [],
-            },
-        });
-        apply_event(&hub, "s", ending(proven.clone()));
-        let parked = drafts();
-        assert_eq!(parked.len(), 1);
-        assert_eq!(parked[0].content, blocks.to_vec());
-        // The image sits where it was, as the Web composer's inline token.
-        let (head, rest) = parked[0]
-            .text
-            .split_once("![image](cowboy-att:att-")
-            .unwrap();
-        assert_eq!(head, "like this ");
-        assert!(rest.ends_with(")\nredesign the dialogs"), "{rest}");
-        // An unknown dispatch origin never becomes the owner's.
-        assert!(parked[0].origin.is_none());
-        // The same refusal again parks no second copy.
-        apply_event(&hub, "s", ending(proven));
-        assert_eq!(drafts().len(), 1);
     }
 
     fn assistant_chunk(text: &str) -> RuntimeEvent {
@@ -6185,6 +6111,104 @@ mod tests {
             Some("failed".to_owned()),
         );
         assert_eq!(hub.session_info("s").expect("session").queue_count, 1);
+    }
+
+    #[tokio::test]
+    async fn a_prompt_the_agent_refused_before_running_returns_to_drafts_as_sent() {
+        // sess-1795343291454: images sent while `agy` awaited an
+        // `ask_question` answer were refused locally, and the owner had to
+        // compose the whole prompt again.
+        let hub = Hub::new();
+        hub.create_local_session(
+            "s".to_owned(),
+            "antigravity".to_owned(),
+            "/tmp".to_owned(),
+            "test".to_owned(),
+            crate::model::SessionOrigin::Web,
+            false,
+        );
+        hub.set_paused("s", true);
+        hub.set_status("s", Status::Running, None);
+        let runtime = RemoteRuntime::for_test(hub.clone(), Vec::new());
+        let blocks = vec![
+            serde_json::json!({"type": "text", "text": "like this "}),
+            serde_json::json!({"type": "image", "mimeType": "image/png", "data": "aW1n"}),
+            serde_json::json!({"type": "text", "text": "\nredesign the dialogs"}),
+        ];
+        let proven = serde_json::json!({
+            "prompt_rejected": "image_answer",
+            "antigravity_backend": {
+                "class": "not_dispatched", "successes": 0, "barrier": true,
+                "prompts": 1, "dispatches": 0, "transient": 0, "refusals": [],
+            },
+        });
+        let ending = |turn_id: &str, cowboy: &serde_json::Value| RuntimeEvent::TurnEnded {
+            usage: None,
+            turn_id: turn_id.to_owned(),
+            stop_reason: format!(
+                "error: antigravity_prompt_rejected:image_answer: {}",
+                serde_json::json!({"message": "Antigravity is waiting.", "cowboy": cowboy})
+            ),
+        };
+        let dispatch = |cmid: &str, origin: crate::prompt_origin::DeliveryOrigin| {
+            hub.record_prompt_dispatch("s", cmid.to_owned(), origin.clone(), origin, 100);
+            let command = runtime
+                .try_prompt_traced_with_command_id(
+                    "s",
+                    blocks.clone(),
+                    Some(cmid.to_owned()),
+                    None,
+                    None,
+                )
+                .unwrap();
+            runtime
+                .shared
+                .in_flight_prompts
+                .lock()
+                .turn_of(&command)
+                .unwrap()
+        };
+        let observe = |event: RuntimeEvent| {
+            prompt_tracking::observe_worker_event(&runtime.shared, "s", &event);
+        };
+        let drafts = || hub.queue_and_drafts("s", |_| true).unwrap().1;
+        let owner = crate::prompt_origin::DeliveryOrigin::Owner;
+        // An ending that only names the code proves nothing.
+        let turn = dispatch("unproven", owner.clone());
+        observe(ending(
+            &turn,
+            &serde_json::json!({"prompt_rejected": "image_answer"}),
+        ));
+        assert!(drafts().is_empty());
+        // Automation's refused input never becomes an Owner draft.
+        let turn = dispatch(
+            "notice",
+            crate::prompt_origin::DeliveryOrigin::cowboy("managed_call"),
+        );
+        observe(ending(&turn, &proven));
+        assert!(drafts().is_empty());
+        // The Owner's prompt returns exactly as dispatched, even after the
+        // worker echoed it (the echo retires only the delivery record).
+        let turn = dispatch("owner", owner.clone());
+        observe(RuntimeEvent::Update {
+            update: serde_json::json!({"sessionUpdate": "user_message_chunk", "content": blocks[0]}),
+            cmid: Some("owner".to_owned()),
+        });
+        observe(ending(&turn, &proven));
+        let parked = drafts();
+        assert_eq!(parked.len(), 1);
+        assert_eq!(parked[0].content, blocks);
+        assert_eq!(parked[0].origin, Some(owner));
+        // The image sits where it was, as the Web composer's inline token.
+        let (head, rest) = parked[0]
+            .text
+            .split_once("![image](cowboy-att:att-")
+            .unwrap();
+        assert_eq!(head, "like this ");
+        assert!(rest.ends_with(")\nredesign the dialogs"), "{rest}");
+        // The turn's record is taken once: a repeated ending parks nothing.
+        observe(ending(&turn, &proven));
+        assert_eq!(drafts().len(), 1);
     }
 
     #[tokio::test]

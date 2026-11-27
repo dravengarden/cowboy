@@ -45,6 +45,7 @@ import { toolRuns } from "./tools/runs";
 
 import { derive, isCompactingTail, isCompactionCompletionTail, isCompactionRequestTail, isHumanPrompt, type RenderItem } from "./derive";
 import { hideLiveCrashDuplicate, prettifyCrashDetail } from "./crashDetail";
+import { isRefusedInput, REFUSED_INPUT_HINT } from "./turnRecovery";
 
 import { optimisticQuestionKey } from "./explore/optimisticPages";
 import type { Envelope, Status } from "./protocol";
@@ -357,6 +358,11 @@ function SessionStatusBar({
         <Typography variant="caption" sx={{ fontWeight: 600, lineHeight: 1.3 }}>
           {text}
         </Typography>
+        {status === "crashed" && isRefusedInput(crashDetail) && (
+          <Typography variant="caption" component="div" sx={{ lineHeight: 1.3 }}>
+            {REFUSED_INPUT_HINT}
+          </Typography>
+        )}
         {status === "crashed" && crashDetail && crashDetail !== text && (
           <ErrorDetails detail={crashDetail} />
         )}

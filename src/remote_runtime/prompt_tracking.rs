@@ -20,6 +20,10 @@ use crate::runtime_wire::RuntimeEvent;
 use super::Shared;
 
 const MAX_IN_FLIGHT_PROMPTS: usize = 2048;
+/// Dispatched prompts kept until their turn ends, so a prompt the agent
+/// refused before running it returns to Drafts exactly as sent. Only running
+/// turns hold one; an evicted turn is simply not restored.
+const MAX_TURN_PROMPTS: usize = 64;
 
 #[derive(Clone, Debug)]
 pub(super) struct InFlightPrompt {
@@ -35,6 +39,10 @@ pub(super) struct InFlightPrompt {
 pub(super) struct InFlightPrompts {
     entries: HashMap<String, InFlightPrompt>,
     order: VecDeque<String>,
+    /// `(session_id, turn_id)` -> the prompt dispatched for that turn, kept
+    /// past its echo and taken once by the turn's `TurnEnded`.
+    turns: HashMap<(String, String), InFlightPrompt>,
+    turn_order: VecDeque<(String, String)>,
 }
 
 impl InFlightPrompts {
@@ -48,7 +56,25 @@ impl InFlightPrompts {
             }
         }
         self.order.push_back(command_id.clone());
+        let turn = (entry.session_id.clone(), entry.turn_id.clone());
+        if self.turns.insert(turn.clone(), entry.clone()).is_some() {
+            self.turn_order.retain(|key| key != &turn);
+        }
+        self.turn_order.push_back(turn);
+        while self.turn_order.len() > MAX_TURN_PROMPTS {
+            if let Some(oldest) = self.turn_order.pop_front() {
+                self.turns.remove(&oldest);
+            }
+        }
         self.entries.insert(command_id, entry);
+    }
+
+    /// The prompt this Controller dispatched for a turn, once.
+    pub(super) fn take_turn(&mut self, session_id: &str, turn_id: &str) -> Option<InFlightPrompt> {
+        let key = (session_id.to_owned(), turn_id.to_owned());
+        let entry = self.turns.remove(&key)?;
+        self.turn_order.retain(|turn| turn != &key);
+        Some(entry)
     }
 
     pub(super) fn take_command(&mut self, command_id: &str) -> Option<InFlightPrompt> {
@@ -105,9 +131,18 @@ impl InFlightPrompts {
         }
     }
 
+    #[cfg(test)]
+    pub(super) fn turn_of(&self, command_id: &str) -> Option<String> {
+        self.entries
+            .get(command_id)
+            .map(|entry| entry.turn_id.clone())
+    }
+
     pub(super) fn clear(&mut self) {
         self.entries.clear();
         self.order.clear();
+        self.turns.clear();
+        self.turn_order.clear();
     }
 }
 
@@ -158,11 +193,27 @@ pub(super) fn prepare_sent_prompt(
 /// salvage emits `UndeliveredPrompt` after `TurnStarted`.
 pub(super) fn observe_worker_event(shared: &Shared, session_id: &str, event: &RuntimeEvent) {
     match event {
-        RuntimeEvent::TurnEnded { turn_id, .. } => {
-            shared
-                .in_flight_prompts
-                .lock()
-                .retire_turn(session_id, turn_id);
+        RuntimeEvent::TurnEnded {
+            turn_id,
+            stop_reason,
+            ..
+        } => {
+            let dispatched = {
+                let mut prompts = shared.in_flight_prompts.lock();
+                prompts.retire_turn(session_id, turn_id);
+                prompts.take_turn(session_id, turn_id)
+            };
+            // A prompt the agent refused before running it (the proxy's
+            // proven rejection) returns to Drafts exactly as this Controller
+            // sent it, and only when the Owner sent it.
+            if let Some(prompt) = dispatched
+                && prompt.origin.as_ref().is_some_and(DeliveryOrigin::is_owner)
+                && crate::account_controls::is_prompt_rejection(stop_reason)
+            {
+                shared
+                    .hub
+                    .restore_rejected_prompt(session_id, prompt.content);
+            }
         }
         RuntimeEvent::Update {
             update,
