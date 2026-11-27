@@ -110,3 +110,12 @@ test("rectIntersectsViewport rejects scrolled-offscreen focused message wrappers
   expect(rectIntersectsViewport(710, 900, 0, 700)).toBe(false);
   expect(rectIntersectsViewport(-50, 120, 0, 700)).toBe(true);
 });
+
+test("clampMobilePillPosition keeps pill inside narrow and short zoomed visual viewports", () => {
+  // Very narrow zoomed viewport (180x220) at offset (50, 80)
+  const narrow = clampMobilePillPosition(200, 120, 180, 220, 228, 44, 50, 80);
+  expect(narrow.left).toBeGreaterThanOrEqual(50);
+  expect(narrow.left).toBeLessThanOrEqual(50 + 180 - 8);
+  expect(narrow.top).toBeGreaterThanOrEqual(80);
+  expect(narrow.top + 44).toBeLessThanOrEqual(80 + 220);
+});

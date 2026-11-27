@@ -14,7 +14,7 @@ import { alpha, type Theme } from "@mui/material/styles";
 import Check from "@mui/icons-material/Check";
 import Code from "@mui/icons-material/Code";
 import ContentCopy from "@mui/icons-material/ContentCopy";
-import { copyRichTextDetailed, copyText } from "./clipboard";
+import { claimClipboardEpoch, copyRichTextDetailed, copyText, isCurrentClipboardEpoch } from "./clipboard";
 import { writeVimRegister } from "./desktop/vim/vimRegister";
 import type { RenderItem } from "./derive";
 import { magneticHaptic } from "./haptic";
@@ -71,14 +71,19 @@ export function clampMobilePillPosition(
   offsetLeft = 0,
   offsetTop = 0,
 ): { left: number; top: number } {
-  const margin = 12;
-  const minLeft = offsetLeft + margin;
-  const maxLeft = Math.max(minLeft, offsetLeft + viewportWidth - pillWidth - margin);
-  const left = Math.min(Math.max(minLeft, Math.round(tapX - pillWidth / 2)), maxLeft);
-  const minTop = offsetTop + 56;
+  const hMargin = Math.min(12, Math.max(4, Math.floor((viewportWidth - pillWidth) / 2)));
+  const clampedWidth = Math.min(pillWidth, Math.max(0, viewportWidth - hMargin * 2));
+  const minLeft = offsetLeft + hMargin;
+  const maxLeft = Math.max(minLeft, offsetLeft + viewportWidth - clampedWidth - hMargin);
+  const left = Math.min(Math.max(minLeft, Math.round(tapX - clampedWidth / 2)), maxLeft);
+
+  const slackY = Math.max(0, viewportHeight - pillHeight);
+  const topClear = slackY >= 152 ? 56 : Math.min(56, Math.floor(slackY * 0.35));
+  const bottomClear = slackY >= 152 ? 76 : Math.min(76, Math.floor(slackY * 0.45));
+  const minTop = offsetTop + topClear;
+  const maxTop = Math.max(minTop, offsetTop + viewportHeight - pillHeight - bottomClear);
   const preferAbove = tapY - pillHeight - 14;
   const topCandidate = preferAbove >= minTop ? preferAbove : tapY + 16;
-  const maxTop = Math.max(minTop, offsetTop + viewportHeight - pillHeight - 76);
   const top = Math.min(Math.max(minTop, Math.round(topCandidate)), maxTop);
   return { left, top };
 }
@@ -290,8 +295,11 @@ function MobileFloatingCopyPill({
         top: pos.top,
         zIndex: 1400,
         display: "inline-flex",
+        flexWrap: "wrap",
+        justifyContent: "center",
         alignItems: "center",
-        borderRadius: "999px",
+        maxWidth: `${Math.max(88, Math.floor(vw - 8))}px`,
+        borderRadius: size.h > 52 ? "16px" : "999px",
         overflow: "hidden",
         ...floatingIslandSurfaceSx(theme, { compact: true }),
       })}
@@ -411,19 +419,21 @@ function useMessageCopyRunner(
 
   const runCopy = useCallback(async (mode: MessageCopyMode): Promise<boolean> => {
     if (!markdown.trim()) return false;
+    const epoch = claimClipboardEpoch();
     let ok = false;
     if (mode === "markdown") {
       if (desktop) writeVimRegister(markdown, false);
-      ok = await copyText(markdown);
+      ok = await copyText(markdown, epoch);
     } else {
       const { html, plain } = formatMessageForCopy(markdown);
       const plainText = plain.trim() ? plain : markdown;
       if (desktop) writeVimRegister(plainText, false);
       if (preferPlainRetryRef.current) {
-        ok = await copyText(plainText);
-        if (ok) preferPlainRetryRef.current = false;
+        ok = await copyText(plainText, epoch);
+        if (ok && isCurrentClipboardEpoch(epoch)) preferPlainRetryRef.current = false;
       } else {
-        const res = await copyRichTextDetailed(plainText, html);
+        const res = await copyRichTextDetailed(plainText, html, epoch);
+        if (res.superseded || !isCurrentClipboardEpoch(epoch)) return false;
         ok = res.ok;
         if (!ok && res.retryPlainText) {
           preferPlainRetryRef.current = true;
@@ -432,6 +442,7 @@ function useMessageCopyRunner(
         }
       }
     }
+    if (!isCurrentClipboardEpoch(epoch)) return false;
     if (!ok) {
       notify("Could not copy to clipboard", "error");
       return false;

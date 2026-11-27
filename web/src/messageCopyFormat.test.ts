@@ -204,3 +204,63 @@ test("formatMessageForCopy preserves fenced code verbatim, neutralizes XSS/unsaf
   expect(plain).toContain("const html = `<script>alert(1)</script>`;");
   expect(plain).toContain("const bold = **not_bold**;");
 });
+
+test("formatMessageForCopy handles R2 parser findings: sparse table output cap, incomplete link budget, unclosed list fence, backslashes, entities, unmatched LaTeX, and valid GFM tables", () => {
+  // R2-1: sparse wide table (500 cols x 300 short rows) must cap output cleanly instead of expanding to megabytes
+  const wideHeader = `| ${Array.from({ length: 300 }, (_, i) => `C${String(i)}`).join(" | ")} |`;
+  const wideSep = `| ${Array.from({ length: 300 }, () => "-").join(" | ")} |`;
+  const sparseRows = Array.from({ length: 200 }, () => "| x |").join("\n");
+  const t0 = Date.now();
+  const sparse = formatMessageForCopy(`${wideHeader}\n${wideSep}\n${sparseRows}`);
+  expect(Date.now() - t0).toBeLessThan(250);
+  expect(sparse.html.length).toBeLessThan(100_000);
+  expect(sparse.html).not.toContain("<table");
+
+  // R2-2: many incomplete link destinations stay bounded under parse budget
+  const t1 = Date.now();
+  const badLinks = "[a](http://example.com ".repeat(1500);
+  const boundedLinks = formatMessageForCopy(badLinks);
+  expect(Date.now() - t1).toBeLessThan(300);
+  expect(boundedLinks.plain.length).toBeGreaterThan(0);
+
+  // R2-4: unclosed fence inside a list item does NOT absorb the next unindented sibling bullet
+  const unclosedListFence = formatMessageForCopy([
+    "- First item:",
+    "  ```ts",
+    "  const a = 1;",
+    "- Second sibling item",
+  ].join("\n"));
+  expect(unclosedListFence.html).toContain("<li>Second sibling item</li>");
+  expect(unclosedListFence.html).not.toContain("Second sibling item</code>");
+
+  // R2-5: trailing backslash in Windows path and multiline code span stay intact; prose hard breaks work
+  const backslashes = formatMessageForCopy("Path is C:\\\n\nCode `foo\\\nbar` and line1\\\nline2");
+  expect(backslashes.plain).toContain("Path is C:\\");
+  expect(backslashes.plain).toContain("foo\\ bar");
+  expect(backslashes.html).toContain("<code>foo\\ bar</code>");
+  expect(backslashes.html).toContain("line1<br>line2");
+
+  // R2-6: single-pass destination decoding resolves &copy; without double-decoding \&amp;
+  const entities = formatMessageForCopy(
+    "[Copy](https://example.com/?s=&copy;) and [Esc](https://example.com/?q=\\&amp;x=1)",
+  );
+  expect(entities.html).toContain("https://example.com/?s=%C2%A9");
+  expect(entities.html).toContain("https://example.com/?q=&amp;amp;x=1");
+
+  // R2-9: unmatched \[ does NOT swallow remaining prose into a code block
+  const unmatchedLatex = formatMessageForCopy("\\[\nThis stays **normal** prose.");
+  expect(unmatchedLatex.html).not.toContain("<pre><code>");
+  expect(unmatchedLatex.html).toContain("<strong>normal</strong>");
+
+  // R2-10: single-dash GFM delimiters and sparse 1-cell body rows preserve table structure
+  const gfmTable = formatMessageForCopy([
+    "| A | B |",
+    "| - | - |",
+    "only-first-col",
+    "| r2a | r2b |",
+  ].join("\n"));
+  expect(gfmTable.html).toContain("<table");
+  expect(gfmTable.html).toContain("only-first-col");
+  expect(gfmTable.html).toContain("r2b");
+  expect(gfmTable.plain).toContain("A\tB\nonly-first-col\t\nr2a\tr2b");
+});

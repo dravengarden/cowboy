@@ -32,6 +32,9 @@ export interface CopyableMessage {
   readonly role: "assistant" | "user";
 }
 
+const MAX_TABLE_CELLS = 4000;
+const MAX_TABLE_OUTPUT_CHARS = 512_000;
+
 /** Extract verbatim Markdown source from a message's content chunks. Drops
  *  non-text binary attachment previews so copied Markdown never leaks dead
  *  internal blob or artifact URLs. */
@@ -97,13 +100,14 @@ function splitTableRow(line: string): string[] {
   return cells;
 }
 
+/** Accept valid GFM delimiter cells of any dash length (`| - | - |`, `:-:`, etc.). */
 function parseTableAlignments(line: string): TableAlign[] | null {
-  if (!line.includes("-")) return null;
+  if (!line.includes("-") || !line.includes("|")) return null;
   const cells = splitTableRow(line);
   if (cells.length === 0) return null;
   const aligns: TableAlign[] = [];
   for (const cell of cells) {
-    if (!/^:?-{3,}:?$/.test(cell)) return null;
+    if (!/^:?-{1,}:?$/.test(cell)) return null;
     if (cell.startsWith(":") && cell.endsWith(":")) aligns.push("center");
     else if (cell.endsWith(":")) aligns.push("right");
     else aligns.push("left");
@@ -141,21 +145,47 @@ function isFenceClose(line: string, opener: { markerChar: "`" | "~"; markerLen: 
   return count >= opener.markerLen && trimmed.slice(count).trim().length === 0;
 }
 
+function findBlockMathClose(
+  lines: readonly string[],
+  start: number,
+  budget: ParseBudget,
+): { closeIndex: number; kind: "$$" | "\\[" } | null {
+  const opener = /^\s{0,3}(\$\$|\\\[)\s*$/.exec(lines[start] ?? "");
+  if (!opener) return null;
+  const kind = opener[1] as "$$" | "\\[";
+  const closeRe = kind === "$$" ? /^\s{0,3}\$\$\s*$/ : /^\s{0,3}\\\]\s*$/;
+  for (let j = start + 1; j < lines.length; j++) {
+    if (!chargeBudget(budget)) return null;
+    if (closeRe.test(lines[j]!)) return { closeIndex: j, kind };
+  }
+  return null;
+}
+
 const TABLE_STYLE = ' style="border-collapse:collapse;margin:8px 0"';
 function cellStyle(align: TableAlign, header: boolean): string {
   const weight = header ? ";font-weight:600" : "";
   return ` style="border:1px solid #d0d7de;padding:6px 10px;text-align:${align}${weight}"`;
 }
 
-function isTableRowTerminator(line: string): boolean {
-  if (!line.trim() || !line.includes("|")) return true;
+/** Per GFM §4.10, a table body continues until a blank line or another
+ *  block-level starter (sparse 1-cell rows without `|` remain part of the table). */
+function isTableRowTerminator(lines: readonly string[], index: number, budget: ParseBudget): boolean {
+  const line = lines[index]!;
+  if (!line.trim()) return true;
   if (parseFenceOpener(line)) return true;
-  if (/^\s{0,3}(?:\$\$|\\\[)/.test(line)) return true;
+  if (/^\s{0,3}(?:\$\$.+\$\$|\\\[.+\\\])\s*$/.test(line)) return true;
+  if (findBlockMathClose(lines, index, budget) !== null) return true;
   if (/^\s{0,3}#{1,6}\s+/.test(line)) return true;
   if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) return true;
   if (/^\s{0,3}>/.test(line)) return true;
   if (matchListMarker(line)) return true;
+  if (matchTableHeader(lines, index)) return true;
   return false;
+}
+
+function fallbackEscapedLines(lines: readonly string[], start: number, end: number): { html: string; plain: string; next: number } {
+  const raw = lines.slice(start, end).join("\n");
+  return { html: `<p>${escapeHtml(raw).replaceAll("\n", "<br>")}</p>`, plain: raw, next: end };
 }
 
 function parseTableBlock(
@@ -169,25 +199,44 @@ function parseTableBlock(
   const { headers, aligns } = matched;
   const rows: string[][] = [];
   let i = start + 2;
+  let cellCount = aligns.length;
+  let oversized = cellCount > MAX_TABLE_CELLS;
+
   while (i < lines.length) {
-    if (!chargeBudget(budget)) break;
-    const row = lines[i]!;
-    if (isTableRowTerminator(row)) break;
-    rows.push(splitTableRow(row));
+    if (!chargeBudget(budget)) { oversized = true; break; }
+    if (isTableRowTerminator(lines, i, budget)) break;
+    cellCount += aligns.length;
+    if (cellCount > MAX_TABLE_CELLS || !chargeBudget(budget, aligns.length)) {
+      oversized = true;
+      i++;
+      while (i < lines.length && lines[i]!.trim() && !isTableRowTerminator(lines, i, budget)) i++;
+      break;
+    }
+    rows.push(splitTableRow(lines[i]!));
     i++;
   }
+  if (oversized || budget.exceeded) return fallbackEscapedLines(lines, start, i);
+
   const headRendered = headers.map((cell) => renderInlineInternal(cell, depth + 1, budget));
+  if (budget.exceeded) return fallbackEscapedLines(lines, start, i);
   const headHtml = headRendered
     .map((c, idx) => `<th${cellStyle(aligns[idx] ?? "left", true)}>${c.html}</th>`)
     .join("");
   const plainLines = [headRendered.map((c) => c.plain).join("\t")];
-  const bodyHtml = rows
-    .map((cells) => {
-      const rendered = aligns.map((_, idx) => renderInlineInternal(cells[idx] ?? "", depth + 1, budget));
-      plainLines.push(rendered.map((c) => c.plain).join("\t"));
-      return `<tr>${rendered.map((c, idx) => `<td${cellStyle(aligns[idx] ?? "left", false)}>${c.html}</td>`).join("")}</tr>`;
-    })
-    .join("");
+  const bodyRows: string[] = [];
+  let htmlChars = headHtml.length + 64;
+
+  for (const cells of rows) {
+    const rendered = aligns.map((_, idx) => renderInlineInternal(cells[idx] ?? "", depth + 1, budget));
+    const rowHtml = `<tr>${rendered.map((c, idx) => `<td${cellStyle(aligns[idx] ?? "left", false)}>${c.html}</td>`).join("")}</tr>`;
+    htmlChars += rowHtml.length;
+    if (budget.exceeded || htmlChars > MAX_TABLE_OUTPUT_CHARS) {
+      return fallbackEscapedLines(lines, start, i);
+    }
+    plainLines.push(rendered.map((c) => c.plain).join("\t"));
+    bodyRows.push(rowHtml);
+  }
+  const bodyHtml = bodyRows.join("");
   const html = `<table${TABLE_STYLE}><thead><tr>${headHtml}</tr></thead>${bodyHtml ? `<tbody>${bodyHtml}</tbody>` : ""}</table>`;
   return { html, plain: plainLines.join("\n"), next: i };
 }
@@ -274,15 +323,10 @@ function collectListItemLines(
     if (!nextLine.trim()) {
       let j = i;
       while (j < lines.length && !lines[j]!.trim()) j++;
-      if (fence) {
-        for (let k = i; k < j; k++) rawContinuations.push("");
-        i = j;
-        continue;
-      }
       if (j >= lines.length) break;
       const peek = lines[j]!;
       if (measureLeadingCols(peek) > marker.indent) {
-        hasBlank = true;
+        if (!fence) hasBlank = true;
         for (let k = i; k < j; k++) rawContinuations.push("");
         i = j;
         continue;
@@ -294,7 +338,10 @@ function collectListItemLines(
       break;
     }
 
+    // List item boundary always terminates even an unclosed inner fence.
     const leading = measureLeadingCols(nextLine);
+    if (leading <= marker.indent) break;
+
     if (fence) {
       const stripped = stripIndentCols(nextLine, Math.min(leading, minContIndent));
       if (isFenceClose(stripped, fence)) fence = null;
@@ -303,7 +350,6 @@ function collectListItemLines(
       continue;
     }
 
-    if (leading <= marker.indent) break;
     minContIndent = Math.min(minContIndent, leading);
     const tentative = stripIndentCols(nextLine, Math.min(leading, minContIndent));
     const opener = parseFenceOpener(tentative);
@@ -369,11 +415,12 @@ function parseListBlock(
   return { html: `<${tag}>${htmlItems.join("")}</${tag}>`, plain: plainItems.join("\n"), next: i };
 }
 
-function isBlockStarter(lines: readonly string[], index: number): boolean {
+function isBlockStarter(lines: readonly string[], index: number, budget: ParseBudget): boolean {
   const line = lines[index]!;
   if (!line.trim()) return true;
   if (parseFenceOpener(line)) return true;
-  if (/^\s{0,3}(?:\$\$|\\\[)\s*$/.test(line) || /^\s{0,3}(?:\$\$.+\$\$|\\\[.+\\\])\s*$/.test(line)) return true;
+  if (/^\s{0,3}(?:\$\$.+\$\$|\\\[.+\\\])\s*$/.test(line)) return true;
+  if (findBlockMathClose(lines, index, budget) !== null) return true;
   if (/^\s{0,3}#{1,6}\s+/.test(line)) return true;
   if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) return true;
   if (/^\s{0,3}>/.test(line)) return true;
@@ -434,20 +481,12 @@ function formatBlocks(
       continue;
     }
 
-    const blockMathOpen = /^\s{0,3}(\$\$|\\\[)\s*$/.exec(line);
-    if (blockMathOpen) {
-      const closeRe = blockMathOpen[1] === "$$" ? /^\s{0,3}\$\$\s*$/ : /^\s{0,3}\\\]\s*$/;
-      const mathLines: string[] = [];
-      i++;
-      while (i < lines.length && !closeRe.test(lines[i]!)) {
-        if (!chargeBudget(budget)) break;
-        mathLines.push(lines[i]!);
-        i++;
-      }
-      if (i < lines.length) i++;
-      const math = mathLines.join("\n").trim();
+    const blockMath = findBlockMathClose(lines, i, budget);
+    if (blockMath) {
+      const math = lines.slice(i + 1, blockMath.closeIndex).join("\n").trim();
       htmlBlocks.push(`<pre><code>${escapeHtml(math)}</code></pre>`);
       plainBlocks.push(math);
+      i = blockMath.closeIndex + 1;
       continue;
     }
 
@@ -498,9 +537,9 @@ function formatBlocks(
     }
 
     const paraLines: string[] = [];
-    while (i < lines.length && (paraLines.length === 0 || !isBlockStarter(lines, i))) {
+    while (i < lines.length && (paraLines.length === 0 || !isBlockStarter(lines, i, budget))) {
       if (!chargeBudget(budget)) break;
-      paraLines.push(lines[i]!.replace(/(?: {2}|\\)$/, ""));
+      paraLines.push(lines[i]!);
       i++;
     }
     const rendered = renderInlineInternal(paraLines.join("\n"), depth + 1, budget);

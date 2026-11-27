@@ -175,3 +175,42 @@ test("copyRichTextDetailed pre-checks ClipboardItem.supports synchronously and s
     Object.defineProperty(globalThis, "ClipboardItem", { value: origItem, configurable: true });
   }
 });
+
+test("superseded copyRichTextDetailed rejection never overwrites a newer copyText write", async () => {
+  const { copyRichTextDetailed, copyText } = await import("./clipboard.ts");
+  const origNav = globalThis.navigator;
+  const origItem = globalThis.ClipboardItem;
+  let rejectRich!: (err: Error) => void;
+  const writes: string[] = [];
+  class SupportedClipboardItem {
+    static supports(): boolean { return true; }
+    constructor(readonly items: Record<string, Blob>) {}
+  }
+  try {
+    Object.defineProperty(globalThis, "ClipboardItem", {
+      value: SupportedClipboardItem,
+      configurable: true,
+    });
+    Object.defineProperty(globalThis, "navigator", {
+      value: {
+        clipboard: {
+          write: () => new Promise<void>((_, reject) => { rejectRich = reject; }),
+          writeText: async (text: string) => { writes.push(text); },
+        },
+      },
+      configurable: true,
+    });
+    const pendingRich = copyRichTextDetailed("OLD_PLAIN", "<p>OLD</p>");
+    const mdOk = await copyText("**NEW_MARKDOWN**");
+    assertEquals(mdOk, true);
+    assertEquals(writes, ["**NEW_MARKDOWN**"]);
+    rejectRich(new Error("late failure"));
+    const richRes = await pendingRich;
+    assertEquals(richRes.ok, false);
+    assertEquals(richRes.superseded, true);
+    assertEquals(writes, ["**NEW_MARKDOWN**"]);
+  } finally {
+    Object.defineProperty(globalThis, "navigator", { value: origNav, configurable: true });
+    Object.defineProperty(globalThis, "ClipboardItem", { value: origItem, configurable: true });
+  }
+});

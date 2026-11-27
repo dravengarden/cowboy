@@ -1,14 +1,30 @@
+// Monotonic ownership epoch so a slower rejected clipboard write can never
+// overwrite a newer copy attempt with its plain-text fallback.
+let clipboardEpoch = 0;
+
+export function claimClipboardEpoch(): number {
+  clipboardEpoch += 1;
+  return clipboardEpoch;
+}
+
+export function isCurrentClipboardEpoch(epoch: number): boolean {
+  return epoch === clipboardEpoch;
+}
+
 // Clipboard API for secure production origins, with a legacy fallback for the
 // plain-HTTP development bridge where navigator.clipboard is unavailable.
-export async function copyText(text: string): Promise<boolean> {
+export async function copyText(text: string, epoch?: number): Promise<boolean> {
+  const ownEpoch = epoch ?? claimClipboardEpoch();
+  if (!isCurrentClipboardEpoch(ownEpoch)) return false;
   try {
     if (globalThis.navigator?.clipboard?.writeText) {
       await globalThis.navigator.clipboard.writeText(text);
-      return true;
+      return isCurrentClipboardEpoch(ownEpoch);
     }
   } catch {
     // A denied or unfocused secure context can still use the fallback below.
   }
+  if (!isCurrentClipboardEpoch(ownEpoch)) return false;
   try {
     const doc = globalThis.document;
     const textarea = doc.createElement("textarea");
@@ -20,7 +36,7 @@ export async function copyText(text: string): Promise<boolean> {
     // eslint-disable-next-line @typescript-eslint/no-deprecated -- HTTP dev fallback
     const copied = doc.execCommand("copy");
     textarea.remove();
-    return copied;
+    return copied && isCurrentClipboardEpoch(ownEpoch);
   } catch {
     return false;
   }
@@ -32,6 +48,8 @@ export interface RichCopyResult {
    *  failed (e.g. iOS user-activation expired), so a fresh tap should retry
    *  synchronously with plain text. */
   readonly retryPlainText: boolean;
+  /** True when a newer copy attempt superseded this write before completion. */
+  readonly superseded?: boolean;
 }
 
 function supportsRichClipboardWrite(): boolean {
@@ -52,9 +70,21 @@ function supportsRichClipboardWrite(): boolean {
  *  ClipboardItem.supports synchronously before calling clipboard.write so
  *  unsupported engines fall straight into synchronous plain-text copy without
  *  spending the user gesture on a doomed async write. */
-export async function copyRichTextDetailed(plain: string, html: string): Promise<RichCopyResult> {
+export async function copyRichTextDetailed(
+  plain: string,
+  html: string,
+  epoch?: number,
+): Promise<RichCopyResult> {
+  const ownEpoch = epoch ?? claimClipboardEpoch();
+  if (!isCurrentClipboardEpoch(ownEpoch)) {
+    return { ok: false, retryPlainText: false, superseded: true };
+  }
   if (!supportsRichClipboardWrite()) {
-    return { ok: await copyText(plain), retryPlainText: false };
+    const ok = await copyText(plain, ownEpoch);
+    if (!isCurrentClipboardEpoch(ownEpoch)) {
+      return { ok: false, retryPlainText: false, superseded: true };
+    }
+    return { ok, retryPlainText: false };
   }
   try {
     const item = new globalThis.ClipboardItem({
@@ -62,9 +92,18 @@ export async function copyRichTextDetailed(plain: string, html: string): Promise
       "text/html": new Blob([html], { type: "text/html" }),
     });
     await globalThis.navigator.clipboard.write([item]);
+    if (!isCurrentClipboardEpoch(ownEpoch)) {
+      return { ok: false, retryPlainText: false, superseded: true };
+    }
     return { ok: true, retryPlainText: false };
   } catch {
-    const ok = await copyText(plain);
+    if (!isCurrentClipboardEpoch(ownEpoch)) {
+      return { ok: false, retryPlainText: false, superseded: true };
+    }
+    const ok = await copyText(plain, ownEpoch);
+    if (!isCurrentClipboardEpoch(ownEpoch)) {
+      return { ok: false, retryPlainText: false, superseded: true };
+    }
     return { ok, retryPlainText: !ok };
   }
 }

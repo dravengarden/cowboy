@@ -966,6 +966,16 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
       wrap.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, isPrimary: true, pointerId: 11, pointerType: "touch", clientX: 195, clientY: 180 }));
       await gone(() => document.querySelector('[data-message-action-bar="mobile"]'), "Mobile pill dismissed on horizontal drag");
 
+      // Re-open and verify horizontal swipe starting on a LINK inside the bubble also dismisses pill (no lingering over drawer)
+      wrap.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, pointerId: 12, pointerType: "touch", clientX: 160, clientY: 180 }));
+      wrap.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, isPrimary: true, pointerId: 12, pointerType: "touch", clientX: 160, clientY: 180 }));
+      await until(() => document.querySelector<HTMLElement>('[data-message-action-bar="mobile"]'), "Mobile pill open before link swipe");
+      const linkInBubble = wrap.querySelector<HTMLAnchorElement>("a")!;
+      check(Boolean(linkInBubble), "mobile bubble contains link");
+      linkInBubble.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, pointerId: 13, pointerType: "touch", clientX: 160, clientY: 180 }));
+      linkInBubble.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, isPrimary: true, pointerId: 13, pointerType: "touch", clientX: 200, clientY: 180 }));
+      await gone(() => document.querySelector('[data-message-action-bar="mobile"]'), "Mobile pill dismissed when swiping from link");
+
       // Re-open and verify Copy + Escape dismiss
       wrap.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, isPrimary: true, pointerId: 4, pointerType: "touch", clientX: 160, clientY: 180 }));
       wrap.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, isPrimary: true, pointerId: 4, pointerType: "touch", clientX: 160, clientY: 180 }));

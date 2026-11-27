@@ -15,6 +15,55 @@ export const MAX_NESTING_DEPTH = 12;
 const MAX_PARSE_STEPS = 200_000;
 const ESCAPABLE_PUNCT = /[\\`*_{}[\]()#+\-.!|>~$=]/;
 
+const NAMED_ENTITIES: Readonly<Record<string, string>> = {
+  amp: "&",
+  lt: "<",
+  gt: ">",
+  quot: '"',
+  apos: "'",
+  nbsp: "\u00a0",
+  copy: "\u00a9",
+  reg: "\u00ae",
+  trade: "\u2122",
+  ndash: "\u2013",
+  mdash: "\u2014",
+  hellip: "\u2026",
+  times: "\u00d7",
+  divide: "\u00f7",
+  plusmn: "\u00b1",
+  deg: "\u00b0",
+  sect: "\u00a7",
+  para: "\u00b6",
+  middot: "\u00b7",
+  laquo: "\u00ab",
+  raquo: "\u00bb",
+  lsquo: "\u2018",
+  rsquo: "\u2019",
+  ldquo: "\u201c",
+  rdquo: "\u201d",
+  euro: "\u20ac",
+  pound: "\u00a3",
+  yen: "\u00a5",
+  cent: "\u00a2",
+  frac12: "\u00bd",
+  frac14: "\u00bc",
+  frac34: "\u00be",
+};
+
+let entityDecoder: HTMLTextAreaElement | null = null;
+
+function decodeNamedEntity(rawEntity: string, name: string): string {
+  const known = NAMED_ENTITIES[name];
+  if (known !== undefined) return known;
+  if (typeof document !== "undefined") {
+    entityDecoder ??= document.createElement("textarea");
+    entityDecoder.innerHTML = rawEntity;
+    const decoded = entityDecoder.value;
+    if (decoded !== rawEntity) return decoded;
+  }
+  return rawEntity;
+}
+
 export function createBudget(): ParseBudget {
   return { steps: 0, exceeded: false };
 }
@@ -36,28 +85,24 @@ export function escapeHtml(text: string): string {
     .replaceAll('"', "&quot;");
 }
 
-function decodeHtmlEntities(text: string): string {
-  return text.replace(/&(?:#(\d+)|#x([0-9a-fA-F]+)|(amp|lt|gt|quot|apos));/g, (match, dec, hex, named) => {
-    if (named) {
-      if (named === "amp") return "&";
-      if (named === "lt") return "<";
-      if (named === "gt") return ">";
-      if (named === "quot") return '"';
-      if (named === "apos") return "'";
-    }
-    const code = dec ? Number.parseInt(dec, 10) : hex ? Number.parseInt(hex, 16) : -1;
-    if (code <= 0 || code > 0x10ffff) return match;
-    try {
-      return String.fromCodePoint(code);
-    } catch {
-      return match;
-    }
-  });
-}
-
+/** Single-pass decode of Markdown backslash escapes and HTML entities so
+ *  escaped `&amp;` (`\&amp;`) is never double-decoded while full named and
+ *  numeric entities (e.g. `&copy;`, `&#38;`) resolve accurately. */
 function unescapeDestination(raw: string): string {
-  const unescaped = raw.replace(/\\([\\!"#$%&'()*+,\-./:;<=>?@[\]^_`{|}~])/g, "$1");
-  return decodeHtmlEntities(unescaped);
+  return raw.replace(
+    /\\([\\!"#$%&'()*+,\-./:;<=>?@[\]^_`{|}~])|&(?:#(\d+)|#x([0-9a-fA-F]+)|([a-zA-Z][a-zA-Z0-9]+));/g,
+    (match, escaped, dec, hex, named) => {
+      if (escaped !== undefined) return escaped as string;
+      if (named !== undefined) return decodeNamedEntity(match, named as string);
+      const code = dec ? Number.parseInt(dec as string, 10) : hex ? Number.parseInt(hex as string, 16) : -1;
+      if (code <= 0 || code > 0x10ffff) return match;
+      try {
+        return String.fromCodePoint(code);
+      } catch {
+        return match;
+      }
+    },
+  );
 }
 
 function safeHref(raw: string): string | null {
@@ -103,10 +148,11 @@ function findClosingCodeSpan(
   return -1;
 }
 
-function skipInlineWs(text: string, from: number): number {
+function skipInlineWs(text: string, from: number, budget: ParseBudget): number {
   let i = from;
   let sawNewline = false;
   while (i < text.length) {
+    if (!chargeBudget(budget)) return i;
     const ch = text[i]!;
     if (ch === " " || ch === "\t") { i++; continue; }
     if (ch === "\n" && !sawNewline) { sawNewline = true; i++; continue; }
@@ -115,12 +161,13 @@ function skipInlineWs(text: string, from: number): number {
   return i;
 }
 
-function skipLinkTitle(text: string, from: number): number {
+function skipLinkTitle(text: string, from: number, budget: ParseBudget): number {
   const open = text[from];
   if (open !== '"' && open !== "'" && open !== "(") return -1;
   const close = open === "(" ? ")" : open;
   let i = from + 1;
   while (i < text.length) {
+    if (!chargeBudget(budget)) return -1;
     const ch = text[i]!;
     if (ch === "\\" && i + 1 < text.length) { i += 2; continue; }
     if (ch === close) return i + 1;
@@ -131,14 +178,19 @@ function skipLinkTitle(text: string, from: number): number {
   return -1;
 }
 
-function parseLinkDestination(text: string, openParen: number): { url: string; end: number } | null {
-  let i = skipInlineWs(text, openParen + 1);
-  if (i >= text.length) return null;
+function parseLinkDestination(
+  text: string,
+  openParen: number,
+  budget: ParseBudget,
+): { url: string; end: number } | null {
+  let i = skipInlineWs(text, openParen + 1, budget);
+  if (i >= text.length || budget.exceeded) return null;
   let rawUrl = "";
   if (text[i] === "<") {
     i++;
     const start = i;
     while (i < text.length) {
+      if (!chargeBudget(budget)) return null;
       const ch = text[i]!;
       if (ch === "\\" && i + 1 < text.length) { i += 2; continue; }
       if (ch === "<" || ch === "\n") return null;
@@ -152,6 +204,7 @@ function parseLinkDestination(text: string, openParen: number): { url: string; e
     const start = i;
     let depth = 0;
     while (i < text.length) {
+      if (!chargeBudget(budget)) return null;
       const ch = text[i]!;
       if (ch === "\\" && i + 1 < text.length) { i += 2; continue; }
       if (ch === " " || ch === "\t" || ch === "\n" || ch.charCodeAt(0) < 0x20) break;
@@ -167,12 +220,13 @@ function parseLinkDestination(text: string, openParen: number): { url: string; e
     rawUrl = text.slice(start, i);
   }
   const afterUrl = i;
-  i = skipInlineWs(text, i);
+  i = skipInlineWs(text, i, budget);
+  if (budget.exceeded) return null;
   if (text[i] === ")") return { url: unescapeDestination(rawUrl), end: i + 1 };
   if (i === afterUrl) return null;
-  const afterTitle = skipLinkTitle(text, i);
+  const afterTitle = skipLinkTitle(text, i, budget);
   if (afterTitle < 0) return null;
-  i = skipInlineWs(text, afterTitle);
+  i = skipInlineWs(text, afterTitle, budget);
   if (text[i] !== ")") return null;
   return { url: unescapeDestination(rawUrl), end: i + 1 };
 }
@@ -209,6 +263,7 @@ interface InlineState {
   readonly brackets: Map<number, number>;
   readonly deadTicks: Map<number, number>;
   readonly deadMarkers: Map<string, number>;
+  readonly lastCloseParen: number;
   readonly budget: ParseBudget;
   readonly depth: number;
 }
@@ -256,7 +311,8 @@ function tryInlineLink(
   const openBracket = isImage ? start + 1 : start;
   const closeBracket = state.brackets.get(openBracket);
   if (closeBracket === undefined || text[closeBracket + 1] !== "(") return null;
-  const dest = parseLinkDestination(text, closeBracket + 1);
+  if (closeBracket + 1 >= state.lastCloseParen) return null;
+  const dest = parseLinkDestination(text, closeBracket + 1, state.budget);
   if (!dest) return null;
   const rawLabel = text.slice(openBracket + 1, closeBracket);
   if (isImage) {
@@ -383,6 +439,7 @@ export function renderInlineInternal(text: string, depth: number, budget: ParseB
       : new Map(),
     deadTicks,
     deadMarkers: new Map(),
+    lastCloseParen: text.lastIndexOf(")"),
     budget,
     depth,
   };
@@ -395,23 +452,12 @@ export function renderInlineInternal(text: string, depth: number, budget: ParseB
       return { html: html + escapeHtml(rest).replaceAll("\n", "<br>"), plain: plain + rest };
     }
     const ch = text[i]!;
-    if (ch === "$" || (ch === "\\" && (text[i + 1] === "(" || text[i + 1] === "["))) {
-      const math = tryInlineMath(text, i, budget);
-      if (math) { html += math.html; plain += math.plain; i = math.next; continue; }
-    }
-    if (ch === "\\" && i + 1 < text.length && ESCAPABLE_PUNCT.test(text[i + 1]!)) {
-      const lit = text[i + 1]!;
-      html += escapeHtml(lit);
-      plain += lit;
-      i += 2;
-      continue;
-    }
     if (ch === "`") {
       let ticks = 0;
       while (i + ticks < text.length && text[i + ticks] === "`") ticks++;
       const close = findClosingCodeSpan(text, i + ticks, ticks, deadTicks, budget);
       if (close >= 0) {
-        let code = text.slice(i + ticks, close);
+        let code = text.slice(i + ticks, close).replaceAll("\n", " ");
         if (code.length >= 2 && code.startsWith(" ") && code.endsWith(" ") && code.trim().length > 0) {
           code = code.slice(1, -1);
         }
@@ -424,6 +470,24 @@ export function renderInlineInternal(text: string, depth: number, budget: ParseB
       html += literalTicks;
       plain += literalTicks;
       i += ticks;
+      continue;
+    }
+    if (ch === "$" || (ch === "\\" && (text[i + 1] === "(" || text[i + 1] === "["))) {
+      const math = tryInlineMath(text, i, budget);
+      if (math) { html += math.html; plain += math.plain; i = math.next; continue; }
+    }
+    // Prose backslash hard break (`\` immediately followed by `\n`)
+    if (ch === "\\" && text[i + 1] === "\n") {
+      html += "<br>";
+      plain += "\n";
+      i += 2;
+      continue;
+    }
+    if (ch === "\\" && i + 1 < text.length && ESCAPABLE_PUNCT.test(text[i + 1]!)) {
+      const lit = text[i + 1]!;
+      html += escapeHtml(lit);
+      plain += lit;
+      i += 2;
       continue;
     }
     if (ch === "!" && text[i + 1] === "[") {
@@ -452,8 +516,9 @@ export function renderInlineInternal(text: string, depth: number, budget: ParseB
       if (em) { html += em.html; plain += em.plain; i = em.next; continue; }
     }
     if (ch === "\n") {
-      html += "<br>";
-      plain += "\n";
+      // Strip two-space CommonMark hard-break trailing spaces only in prose
+      html = html.replace(/ {2,}$/, "") + "<br>";
+      plain = plain.replace(/ {2,}$/, "") + "\n";
       i++;
       continue;
     }

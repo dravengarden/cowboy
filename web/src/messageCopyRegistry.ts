@@ -2,6 +2,8 @@
 // the single active Mobile floating copy pill. Zero React hooks are required in
 // Transcript.tsx; components subscribe via useSyncExternalStore.
 
+import { RELIABLE_TOUCH_TAP_MOVE_SLOP_PX } from "./touchGestures";
+
 export type MessageCopyMode = "rich" | "markdown";
 export type MessageCopyHandler = (mode: MessageCopyMode) => Promise<boolean>;
 
@@ -47,13 +49,32 @@ function teardownGlobalDismiss(): void {
 
 function installGlobalDismiss(): void {
   if (dismissCleanup || typeof document === "undefined") return;
+  let dragStart: { id: number; x: number; y: number } | null = null;
   const onPointerDown = (event: PointerEvent): void => {
     const target = event.target instanceof Element ? event.target : null;
-    if (target?.closest("[data-message-action-bar]")) return;
+    if (target?.closest("[data-message-action-bar]")) {
+      dragStart = null;
+      return;
+    }
+    if (event.isPrimary) {
+      dragStart = { id: event.pointerId, x: event.clientX, y: event.clientY };
+    }
     if (mobileActive && target?.closest(`[data-message-copy-id="${CSS.escape(mobileActive.copyId)}"]`)) {
       return;
     }
     closeMobileMessageActions();
+  };
+  // Dismiss if ANY drag/swipe (including starting on an <a> link inside the
+  // active bubble for a horizontal drawer swipe) exceeds touch slop.
+  const onPointerMove = (event: PointerEvent): void => {
+    if (!dragStart || dragStart.id !== event.pointerId) return;
+    if (Math.hypot(event.clientX - dragStart.x, event.clientY - dragStart.y) > RELIABLE_TOUCH_TAP_MOVE_SLOP_PX) {
+      dragStart = null;
+      closeMobileMessageActions();
+    }
+  };
+  const clearDrag = (event: PointerEvent): void => {
+    if (dragStart?.id === event.pointerId) dragStart = null;
   };
   const onDismiss = (): void => {
     closeMobileMessageActions();
@@ -65,6 +86,9 @@ function installGlobalDismiss(): void {
     if (event.key === "Escape") closeMobileMessageActions();
   };
   document.addEventListener("pointerdown", onPointerDown, true);
+  document.addEventListener("pointermove", onPointerMove, true);
+  document.addEventListener("pointerup", clearDrag, true);
+  document.addEventListener("pointercancel", clearDrag, true);
   document.addEventListener("scroll", onDismiss, true);
   document.addEventListener("selectionchange", onSelectionChange);
   document.addEventListener("keydown", onKeyDown, true);
@@ -74,6 +98,9 @@ function installGlobalDismiss(): void {
   vv?.addEventListener("scroll", onDismiss);
   dismissCleanup = () => {
     document.removeEventListener("pointerdown", onPointerDown, true);
+    document.removeEventListener("pointermove", onPointerMove, true);
+    document.removeEventListener("pointerup", clearDrag, true);
+    document.removeEventListener("pointercancel", clearDrag, true);
     document.removeEventListener("scroll", onDismiss, true);
     document.removeEventListener("selectionchange", onSelectionChange);
     document.removeEventListener("keydown", onKeyDown, true);
