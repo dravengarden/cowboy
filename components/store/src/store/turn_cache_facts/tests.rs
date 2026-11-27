@@ -1002,3 +1002,68 @@ async fn sqlite_reused_session_id_incarnations_and_pre_clear_rollover_stay_isola
     assert_eq!(acct_metrics.totals.total_turns, 3);
     assert_eq!(acct_metrics.totals.inclusive_input_tokens, Some(6_000));
 }
+
+#[tokio::test]
+async fn startup_reconcile_repairs_rollback_inserted_unmetered_zero_cache_writes() {
+    use crate::store::StorageBackend;
+    let dir = tempfile::tempdir().expect("dir");
+    let store = Store::connect("sqlite::memory:", dir.path().join("artifacts"))
+        .await
+        .expect("store");
+    store.migrate().await.expect("migrate");
+    let owner = "owner-rb-1";
+    let acct = "00000000-0000-0000-0000-000000000099";
+    let now = chrono::Utc::now().timestamp_millis();
+
+    // Simulate a predecessor Controller during a temporary rollback writing
+    // cache_write_tokens = 0 for codex, claude-code, third-party-acp, and positive codex.
+    for (idx, (provider, write_val)) in [
+        ("codex", 0_i64),
+        ("claude-code", 0_i64),
+        ("third-party-acp", 0_i64),
+        ("codex", 120_i64),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let seq = i64::try_from(idx + 1).unwrap();
+        let sid = format!("sess-rb-{idx}");
+        let StorageBackend::Sqlite(db) = &store.backend else {
+            unreachable!();
+        };
+        sqlx::query(
+            "INSERT INTO turn_cache_facts (session_id, session_created_at_ms, turn_end_seq, occurred_at_ms, owner_user_id, provider, provider_account_id, provider_version, provider_generation_digest, model, stop_reason, prompt_origin, idle_gap_ms, renewed, usage_observed, total_tokens, inclusive_input_tokens, output_tokens, cached_read_tokens, cache_write_tokens, other_uncached_input_tokens, reasoning_tokens) VALUES ($1, 0, $2, $3, $4, $5, $6, '1.0.0', 'gen', 'model', 'EndTurn', 'human', NULL, 0, 1, 1000, 900, 100, 500, $7, 400 - $7, 0)",
+        )
+        .bind(&sid)
+        .bind(seq)
+        .bind(now)
+        .bind(owner.to_string())
+        .bind(provider)
+        .bind(acct.to_string())
+        .bind(write_val)
+        .execute(&db.pool)
+        .await
+        .expect("insert rollback fixture");
+    }
+
+    store
+        .begin_turn_cache_reconcile()
+        .await
+        .expect("startup reconcile");
+
+    let StorageBackend::Sqlite(db) = &store.backend else {
+        unreachable!();
+    };
+    let rows: Vec<(String, Option<i64>, Option<i64>)> = sqlx::query_as(
+        "SELECT session_id, cache_write_tokens, other_uncached_input_tokens
+         FROM turn_cache_facts ORDER BY session_id",
+    )
+    .fetch_all(&db.pool)
+    .await
+    .expect("read repaired rows");
+
+    assert_eq!(rows[0], ("sess-rb-0".into(), None, None)); // codex 0 -> repaired to NULL
+    assert_eq!(rows[1], ("sess-rb-1".into(), Some(0), Some(400))); // claude-code 0 preserved
+    assert_eq!(rows[2], ("sess-rb-2".into(), Some(0), Some(400))); // third-party-acp 0 preserved
+    assert_eq!(rows[3], ("sess-rb-3".into(), Some(120), Some(280))); // codex positive preserved
+}

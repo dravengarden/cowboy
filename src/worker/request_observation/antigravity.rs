@@ -2,10 +2,14 @@
 //!
 //! `agy` runs inside `account_sandbox_v1` with `--disable-telemetry`. Its
 //! signed proxy (`cowboy-antigravity-acp`) attaches bounded numeric backend
-//! evidence (`antigravity_backend`, plus optional `antigravity_cache_diagnostics`
-//! from `evidence.mjs`) under `PromptResponse._meta.cowboy`. This recorder
-//! projects those counters plus `TurnUsage` into the worker's local `wait_cache`
-//! log without opening extra sockets or changing upstream protocol behavior.
+//! evidence (`antigravity_backend`, plus barrier-bounded
+//! `antigravity_cache_diagnostics` from `evidence.mjs`) under
+//! `PromptResponse._meta.cowboy` (and error `data.cowboy` on refusals).
+//!
+//! Because Antigravity reports turn-level ACP usage rather than 1:1 native
+//! HTTP request usage, this recorder emits distinct
+//! `cowboy.provider.turn_diagnostics` records (never `cowboy.provider.request_usage`)
+//! so HTTP request counters and parent clocks stay exact.
 
 use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
@@ -28,17 +32,19 @@ struct State {
     session: String,
     epoch: String,
     release: String,
-    prefix_fingerprint: String,
+    launch_prefix_fingerprint: String,
     managed: bool,
     fresh: bool,
-    first_in_epoch: bool,
+    epoch_first_start_ms: Option<i64>,
+    epoch_saw_loss_before_first: bool,
     renewed_at: Option<i64>,
     compacted: VecDeque<i64>,
     compact_coverage: bool,
-    prompt_started_at_ms: Option<i64>,
+    pending_prompt_started_at_ms: Option<i64>,
     model: Option<String>,
     turn_seq: u64,
     dropped: u64,
+    unmatched: u64,
     facts: metadata::Facts,
 }
 
@@ -46,7 +52,7 @@ impl Recorder {
     pub(super) fn new(
         args: &WorkerArgs,
         epoch: &str,
-        prefix_fingerprint: String,
+        launch_prefix_fingerprint: String,
         facts: metadata::Facts,
     ) -> Self {
         let managed = args
@@ -59,24 +65,32 @@ impl Recorder {
                 session: args.session_id.clone(),
                 epoch: epoch.into(),
                 release: args.provider_version.clone(),
-                prefix_fingerprint,
+                launch_prefix_fingerprint,
                 managed,
                 fresh: args.resume.is_none() && args.native_fork.is_none(),
-                first_in_epoch: true,
+                epoch_first_start_ms: None,
+                epoch_saw_loss_before_first: false,
                 renewed_at: None,
                 compacted: VecDeque::new(),
                 compact_coverage: true,
-                prompt_started_at_ms: None,
+                pending_prompt_started_at_ms: None,
                 model: None,
                 turn_seq: 0,
                 dropped: 0,
+                unmatched: 0,
                 facts,
             }),
         }
     }
 
     pub(super) fn prompt_started(&self, at_ms: i64) {
-        self.state.lock().prompt_started_at_ms = Some(at_ms);
+        let mut state = self.state.lock();
+        if state.pending_prompt_started_at_ms.replace(at_ms).is_some() {
+            state.unmatched = state.unmatched.saturating_add(1);
+            if state.epoch_first_start_ms.is_none() {
+                state.epoch_saw_loss_before_first = true;
+            }
+        }
     }
 
     pub(super) fn set_model(&self, model: &str) {
@@ -96,18 +110,15 @@ impl Recorder {
         state.sync_facts();
         state.turn_seq = state.turn_seq.saturating_add(1);
         let turn_seq = state.turn_seq;
-        let start_ms = state
-            .prompt_started_at_ms
-            .take()
-            .unwrap_or(end_ms)
-            .min(end_ms);
+        let had_start = state.pending_prompt_started_at_ms.take();
+        let start_ms = had_start.unwrap_or(end_ms).min(end_ms);
         let role = if state.managed {
             "managed_child"
         } else {
             "parent"
         };
         let is_parent = role == "parent";
-        let (first_rollover, first_compact, first_in_epoch) = if is_parent {
+        let (first_rollover, first_compact) = if is_parent {
             let rollover = state.renewed_at.is_some_and(|start| start <= start_ms);
             if rollover {
                 state.renewed_at = None;
@@ -118,15 +129,23 @@ impl Recorder {
                 state.compacted.pop_front();
                 compact = true;
             }
-            let first_epoch = state.first_in_epoch;
-            state.first_in_epoch = false;
             (
                 Some(rollover),
                 (compact || state.compact_coverage).then_some(compact),
-                Some(first_epoch),
             )
         } else {
-            (None, None, None)
+            (None, None)
+        };
+
+        // Consistent epoch ordering across managed and unmanaged roots; unknown
+        // when prompt start was missing or prior unmatched loss preceded first turn.
+        let first_in_epoch = match (had_start, state.epoch_first_start_ms) {
+            (Some(started), None) if started > 0 && !state.epoch_saw_loss_before_first => {
+                state.epoch_first_start_ms = Some(started);
+                Some(true)
+            }
+            (Some(started), Some(first)) if started >= first => Some(false),
+            _ => None,
         };
 
         let outcome =
@@ -144,10 +163,16 @@ impl Recorder {
                 "no_usage"
             };
 
+        let cowboy = meta
+            .and_then(|m| m.get("cowboy"))
+            .and_then(Value::as_object);
+        let dispatch_status = classify_dispatch_status(cowboy);
+
         let mut fields = state
             .common()
             .string("role", role)
             .string("outcome", outcome)
+            .string("dispatch_status", dispatch_status)
             .string("start_source", "worker_prompt_start")
             .string("usage_source", "acp_prompt_response")
             .string("retention_tier", "unknown")
@@ -173,10 +198,7 @@ impl Recorder {
             fields = fields.string("model", model);
         }
 
-        if let Some(cowboy) = meta
-            .and_then(|m| m.get("cowboy"))
-            .and_then(Value::as_object)
-        {
+        if let Some(cowboy) = cowboy {
             fields = append_proxy_diagnostics(fields, cowboy);
         }
 
@@ -189,7 +211,7 @@ impl Recorder {
         });
         let attempt_id = format!("turn:{turn_seq}");
         wait_cache::record(
-            wait_cache::REQUEST,
+            wait_cache::TURN_DIAGNOSTICS,
             &[&state.session, &state.epoch, &attempt_id],
             Some(start_ms),
             tokens.fields(fields, "normalized_total"),
@@ -199,7 +221,11 @@ impl Recorder {
     pub(super) fn emit_coverage(&self, outcome: &str) {
         let mut state = self.state.lock();
         state.sync_facts();
+        if outcome == "closed" && state.pending_prompt_started_at_ms.take().is_some() {
+            state.unmatched = state.unmatched.saturating_add(1);
+        }
         let dropped = std::mem::take(&mut state.dropped);
+        let unmatched = std::mem::take(&mut state.unmatched);
         wait_cache::record(
             wait_cache::COVERAGE,
             &[],
@@ -208,7 +234,7 @@ impl Recorder {
                 .common()
                 .string("outcome", outcome)
                 .integer("producer_dropped", dropped)
-                .integer("producer_unmatched", 0_u64),
+                .integer("producer_unmatched", unmatched),
         );
     }
 }
@@ -242,7 +268,7 @@ impl State {
             .string("provider", "antigravity")
             .string("producer", "antigravity_proxy")
             .string("producer_release", &self.release)
-            .string("prefix_fingerprint", &self.prefix_fingerprint)
+            .string("launch_prefix_fingerprint", &self.launch_prefix_fingerprint)
             .integer("producer_schema_version", 1_u64)
     }
 }
@@ -253,29 +279,86 @@ fn bounded_u64(map: &Map<String, Value>, key: &str, max: u64) -> Option<u64> {
         .filter(|value| *value <= max)
 }
 
+fn allowlisted_backend_class(class: &str) -> Option<&'static str> {
+    match class {
+        "ok" => Some("ok"),
+        "not_dispatched" => Some("not_dispatched"),
+        "rate_limited" => Some("rate_limited"),
+        "verification_required" => Some("verification_required"),
+        "location_unsupported" => Some("location_unsupported"),
+        "unknown_refusal" => Some("unknown_refusal"),
+        _ => None,
+    }
+}
+
+fn classify_dispatch_status(cowboy: Option<&Map<String, Value>>) -> &'static str {
+    let Some(cowboy) = cowboy else {
+        return "unknown";
+    };
+    let backend = cowboy.get("antigravity_backend").and_then(Value::as_object);
+    if backend.and_then(|b| b.get("class")).and_then(Value::as_str) == Some("not_dispatched") {
+        return "not_dispatched";
+    }
+    let diag = cowboy
+        .get("antigravity_cache_diagnostics")
+        .and_then(Value::as_object)
+        .filter(|d| d.get("schema").and_then(Value::as_u64) == Some(1));
+    if diag
+        .and_then(|d| bounded_u64(d, "backend_steps", 10_000))
+        .is_some_and(|n| n > 0)
+        || backend
+            .and_then(|b| bounded_u64(b, "dispatches", 10_000))
+            .is_some_and(|n| n > 0)
+    {
+        return "dispatched";
+    }
+    if backend
+        .and_then(|b| b.get("barrier"))
+        .and_then(Value::as_bool)
+        == Some(true)
+        && backend.and_then(|b| bounded_u64(b, "dispatches", 10_000)) == Some(0)
+        && diag
+            .and_then(|d| bounded_u64(d, "backend_steps", 10_000))
+            .unwrap_or(0)
+            == 0
+    {
+        return "not_dispatched";
+    }
+    "unknown"
+}
+
 fn append_proxy_diagnostics(mut fields: Fields, cowboy: &Map<String, Value>) -> Fields {
     const MAX_STEPS: u64 = 10_000;
     const MAX_MS: u64 = 86_400_000;
     const MAX_TOKENS: u64 = 9_007_199_254_740_991;
 
+    if let Some(class) = cowboy
+        .get("antigravity_backend")
+        .and_then(Value::as_object)
+        .and_then(|b| b.get("class"))
+        .and_then(Value::as_str)
+        .and_then(allowlisted_backend_class)
+    {
+        fields = fields.string("backend_class", class);
+    }
+
     let diag = cowboy
         .get("antigravity_cache_diagnostics")
         .and_then(Value::as_object)
         .filter(|d| d.get("schema").and_then(Value::as_u64) == Some(1));
-    let backend = cowboy.get("antigravity_backend").and_then(Value::as_object);
 
-    let steps = diag
-        .and_then(|d| bounded_u64(d, "backend_steps", MAX_STEPS))
-        .or_else(|| backend.and_then(|b| bounded_u64(b, "successes", MAX_STEPS)));
-    let retries = diag
-        .and_then(|d| bounded_u64(d, "transient_retries", MAX_STEPS))
-        .or_else(|| backend.and_then(|b| bounded_u64(b, "transient", MAX_STEPS)));
-    fields = fields
-        .integer("backend_step_count", steps)
-        .integer("transient_retry_count", retries);
-
+    // Only project barrier-bounded counts from typed cache diagnostics; never
+    // fall back to un-bounded post-barrier classifier totals.
     if let Some(diag) = diag {
         fields = fields
+            .integer(
+                "backend_step_count",
+                bounded_u64(diag, "backend_steps", MAX_STEPS),
+            )
+            .integer(
+                "transient_retry_count",
+                bounded_u64(diag, "transient_retries", MAX_STEPS),
+            )
             .integer(
                 "first_step_offset_ms",
                 bounded_u64(diag, "first_step_offset_ms", MAX_MS),
@@ -300,6 +383,10 @@ fn append_proxy_diagnostics(mut fields: Fields, cowboy: &Map<String, Value>) -> 
             .integer(
                 "context_size",
                 bounded_u64(diag, "context_size", MAX_TOKENS),
+            )
+            .boolean(
+                "had_subagents",
+                diag.get("had_subagents").and_then(Value::as_bool),
             )
             .integer(
                 "subagent_step_count",
@@ -327,20 +414,29 @@ mod tests {
     }
 
     #[test]
-    fn proxy_diagnostics_prefers_typed_cache_diagnostics_and_falls_back_to_backend_counts() {
-        let fallback = serde_json::json!({
-            "antigravity_backend": { "class": "ok", "successes": 4, "transient": 1 }
+    fn proxy_diagnostics_uses_only_barrier_bounded_counts_and_allowlisted_classes() {
+        let without_diag = serde_json::json!({
+            "antigravity_backend": { "class": "rate_limited", "successes": 4, "transient": 1 }
         });
-        let ints = extract_ints(&append_proxy_diagnostics(
-            Fields::default(),
-            fallback.as_object().unwrap(),
-        ));
-        assert_eq!(ints.get("backend_step_count"), Some(&4));
-        assert_eq!(ints.get("transient_retry_count"), Some(&1));
-        assert!(!ints.contains_key("step_span_ms"));
+        let fields = append_proxy_diagnostics(Fields::default(), without_diag.as_object().unwrap());
+        let ints = extract_ints(&fields);
+        assert!(!ints.contains_key("backend_step_count"));
+        assert!(!ints.contains_key("transient_retry_count"));
+        assert_eq!(
+            classify_dispatch_status(without_diag.as_object()),
+            "unknown"
+        );
+
+        let not_dispatched = serde_json::json!({
+            "antigravity_backend": { "class": "not_dispatched", "barrier": true, "dispatches": 0 }
+        });
+        assert_eq!(
+            classify_dispatch_status(not_dispatched.as_object()),
+            "not_dispatched"
+        );
 
         let full = serde_json::json!({
-            "antigravity_backend": { "class": "ok", "successes": 5, "transient": 0 },
+            "antigravity_backend": { "class": "ok", "successes": 9, "transient": 3, "barrier": true, "dispatches": 1 },
             "antigravity_cache_diagnostics": {
                 "schema": 1,
                 "backend_steps": 5,
@@ -352,9 +448,11 @@ mod tests {
                 "start_context_used": 42000,
                 "end_context_used": 58000,
                 "context_size": 1048576,
-                "subagent_steps": 1
+                "had_subagents": true,
+                "subagent_steps": null
             }
         });
+        assert_eq!(classify_dispatch_status(full.as_object()), "dispatched");
         let ints = extract_ints(&append_proxy_diagnostics(
             Fields::default(),
             full.as_object().unwrap(),
@@ -368,6 +466,21 @@ mod tests {
         assert_eq!(ints.get("start_context_used"), Some(&42000));
         assert_eq!(ints.get("end_context_used"), Some(&58000));
         assert_eq!(ints.get("context_size"), Some(&1048576));
-        assert_eq!(ints.get("subagent_step_count"), Some(&1));
+        assert!(!ints.contains_key("subagent_step_count"));
+    }
+
+    #[test]
+    fn shutdown_with_pending_prompt_records_unmatched_and_managed_tracks_epoch_order() {
+        let (mut args, _) = super::super::tests::fixture_input("antigravity");
+        args.execution_binding = None;
+        let (_obs, facts) = metadata::Observer::new(None);
+        let rec = Recorder::new(&args, "ep-1", "0123456789abcdef".into(), facts);
+        rec.prompt_started(1_700_000_000_000);
+        // Second prompt_started before first finalized increments unmatched
+        rec.prompt_started(1_700_000_001_000);
+        assert_eq!(rec.state.lock().unmatched, 1);
+        rec.emit_coverage("closed");
+        assert!(rec.state.lock().pending_prompt_started_at_ms.is_none());
+        assert_eq!(rec.state.lock().unmatched, 0);
     }
 }

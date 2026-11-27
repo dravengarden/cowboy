@@ -60,9 +60,9 @@
           "notes": "Reports cached_input_tokens on TurnEnd without separate cache_write_tokens; zero-defaulted cache_write_tokens are normalized to null while positive writes remain preserved."
         },
         "level2_per_request": {
-          "status": "shipped_proxy_diagnostics",
-          "source": "antigravity_proxy_evidence_mjs",
-          "notes": "Content-free per-step backend timing and usage-update diagnostics emitted from cowboy-antigravity-acp (evidence.mjs + proxy.mjs) and projected by the worker into wait_cache local logs without modifying upstream protocol behavior or consumer-account custody."
+          "status": "shipped_turn_diagnostics",
+          "source": "cowboy.provider.turn_diagnostics (antigravity_proxy)",
+          "notes": "Signed cowboy-antigravity-acp proxy attaches barrier-bounded step counts/timings and usage_update context progression, projected by the worker into distinct cowboy.provider.turn_diagnostics records (not 1:1 native HTTP request_usage events); token totals remain turn-level ACP usage without modifying upstream requests or exposing consumer-account custody state."
         }
       },
       "prompt_cache_ttl": {
@@ -136,7 +136,7 @@
         "level2_per_request": {
           "status": "shipped_gateway_ledger",
           "source": "provider_usage_events",
-          "notes": "Gateway sidecar records agent='deepseek-harness' rows in provider_usage_events (100% cache hit/miss coverage on Hawk) and projects them into wait_cache under provider='deepseek-harness'."
+          "notes": "Gateway sidecar attributes agent='deepseek-harness' rows in provider_usage_events into wait_cache under provider='deepseek-harness'; long-horizon coverage remains unknown until a bounded cohort receipt is captured."
         }
       },
       "prompt_cache_ttl": {

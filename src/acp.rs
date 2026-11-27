@@ -4672,14 +4672,10 @@ async fn run_session(
                             prompt.capture.lock().take();
                             let _ = tx.send(Err(reason.clone()));
                         }
+                        let err_stop = format!("error: {reason}");
                         sink.prompt_completed(&sid, cmid.as_deref(), "Error");
-                        sink.push(
-                            &sid,
-                            Event::TurnEnd {
-                                usage: None,
-                                stop_reason: format!("error: {reason}"),
-                            },
-                        );
+                        sink.record_prompt_observation(&sid, &err_stop, None, None);
+                        sink.push(&sid, Event::TurnEnd { usage: None, stop_reason: err_stop });
                         // Only the turn died. The agent is alive and answers the
                         // next prompt immediately — on a switched model it just
                         // works — so the session stays Running and keeps draining.
@@ -4688,17 +4684,12 @@ async fn run_session(
                     }
                     if cancelled_during_retry && !recycled_by_watchdog && !response.as_ref().is_err_and(|e| crate::provider::governed_terminal_error(&provider, e)) {
                         sink.prompt_completed(&sid, cmid.as_deref(), "Cancelled");
+                        sink.record_prompt_observation(&sid, "Cancelled", None, None);
                         prompt.pending_empty_stream_update.lock().take();
                         if let Some(tx) = completion {
                             let _ = tx.send(Err("prompt cancelled".to_owned()));
                         }
-                        sink.push(
-                            &sid,
-                            Event::TurnEnd {
-                                usage: None,
-                                stop_reason: "Cancelled".to_owned(),
-                            },
-                        );
+                        sink.push(&sid, Event::TurnEnd { usage: None, stop_reason: "Cancelled".to_owned() });
                         state.set_status(Status::Running, None);
                         return Ok(());
                     }
@@ -4718,14 +4709,10 @@ async fn run_session(
                             prompt.capture.lock().take();
                             let _ = tx.send(Err(detail.clone()));
                         }
+                        let err_stop = format!("error: {detail}");
                         sink.prompt_completed(&sid, cmid.as_deref(), "Error");
-                        sink.push(
-                            &sid,
-                            Event::TurnEnd {
-                                usage: None,
-                                stop_reason: format!("error: {detail}"),
-                            },
-                        );
+                        sink.record_prompt_observation(&sid, &err_stop, None, None);
+                        sink.push(&sid, Event::TurnEnd { usage: None, stop_reason: err_stop });
                         state.set_status(Status::Crashed, Some(detail));
                         return Ok(());
                     }
@@ -4799,14 +4786,10 @@ async fn run_session(
                             // permission — and it Cancels first, keeping the
                             // prompt future alive so a late response cannot crash the
                             // connection.
+                            let err_stop = format!("error: {detail}");
                             sink.prompt_completed(&sid, cmid.as_deref(), "Error");
-                            sink.push(
-                                &sid,
-                                Event::TurnEnd {
-                                    usage: None,
-                                    stop_reason: format!("error: {detail}"),
-                                },
-                            );
+                            sink.record_prompt_observation(&sid, &err_stop, None, e.data.as_ref().and_then(serde_json::Value::as_object));
+                            sink.push(&sid, Event::TurnEnd { usage: None, stop_reason: err_stop });
                             state.set_status(
                                 if worker_alive {
                                     Status::Running

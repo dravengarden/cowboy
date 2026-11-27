@@ -1824,6 +1824,7 @@ export class AcpProxy {
           structured: promptRecord.schema
             ? {
                 schema: promptRecord.schema,
+                stepTimings: [],
                 reply: "",
                 messageId: undefined,
                 retired: new Set(),
@@ -2025,22 +2026,25 @@ export class AcpProxy {
    * namespace. Anything `agy` itself put there is dropped first. `message`
    * has already lost its raw tier (`stripTier`).
    */
+  recordUsageDiagnostics(sessionId, update) {
+    if (update?.sessionUpdate !== "usage_update") return;
+    const turn = this.turns.get(sessionId);
+    if (!turn || turn.child || this.compacting.has(sessionId) || !turn.cacheDiag) return;
+    turn.cacheDiag.usageUpdates += 1;
+    if (Number.isSafeInteger(update.used) && update.used >= 0) {
+      if (turn.cacheDiag.startContextUsed === null) {
+        turn.cacheDiag.startContextUsed = update.used;
+      }
+      turn.cacheDiag.endContextUsed = update.used;
+    }
+    if (Number.isSafeInteger(update.size) && update.size >= 0) {
+      turn.cacheDiag.contextSize = update.size;
+    }
+  }
+
   annotateUsage(message) {
     const update = message.params?.update;
     if (update?.sessionUpdate !== "usage_update") return message;
-    const turn = this.turns.get(message.params?.sessionId);
-    if (turn && !turn.child && !this.compacting.has(message.params?.sessionId) && turn.cacheDiag) {
-      turn.cacheDiag.usageUpdates += 1;
-      if (Number.isSafeInteger(update.used) && update.used >= 0) {
-        if (turn.cacheDiag.startContextUsed === null) {
-          turn.cacheDiag.startContextUsed = update.used;
-        }
-        turn.cacheDiag.endContextUsed = update.used;
-      }
-      if (Number.isSafeInteger(update.size) && update.size >= 0) {
-        turn.cacheDiag.contextSize = update.size;
-      }
-    }
     const meta = update._meta;
     const hasOwn = isObject(meta);
     if (this.plan === undefined && !(hasOwn && Object.hasOwn(meta, "cowboy"))) return message;
@@ -2271,6 +2275,7 @@ export class AcpProxy {
           // Evidence and the worker see the same sanitized, presented
           // update: a tool's result counts, `agy`'s status lines do not
           // (text the answer took is never shown as one).
+          this.recordUsageDiagnostics(message.params?.sessionId, update);
           const presented = this.presentUpdate(this.annotateUsage(stripTier(message)), answer);
           const shown = presented && this.holdReply(presented);
           if (shown === undefined) return;
@@ -2732,24 +2737,38 @@ export class AcpProxy {
         },
       });
     }
-    const stepTimings = stepTimingsFor(settled) ?? runtime.evidence?.lastStepTimings;
-    const diag = turn?.cacheDiag;
-    const subagentSteps = (turn?.childBackends ?? []).reduce(
-      (sum, child) => sum + (Number.isSafeInteger(child?.successes) ? child.successes : 0),
-      0,
+    const stepTimings = stepTimingsFor(settled) ?? runtime.evidence?.lastStepTimings ?? null;
+    const attemptTimings = turn?.structured
+      ? [...turn.structured.stepTimings, stepTimings]
+      : [stepTimings];
+    const allBarrierBounded = attemptTimings.every(
+      (entry) =>
+        entry != null &&
+        Number.isSafeInteger(entry.backend_steps) &&
+        Number.isSafeInteger(entry.transient_retries),
     );
+    const singleAttempt = attemptTimings.length === 1 ? attemptTimings[0] : null;
+    const diag = turn?.cacheDiag;
+    // agy's shared log lines carry no session ID, so child step counts are only
+    // provably zero when no subagents ran during this turn.
+    const hadSubagents = turn?.subagents === true || Boolean(turn?.childBackends?.length);
     cowboy.antigravity_cache_diagnostics = {
       schema: 1,
-      backend_steps: backend.successes ?? stepTimings?.backend_steps ?? 0,
-      transient_retries: backend.transient ?? stepTimings?.transient_retries ?? 0,
-      first_step_offset_ms: stepTimings?.first_step_offset_ms ?? null,
-      step_span_ms: stepTimings?.step_span_ms ?? null,
-      max_inter_step_ms: stepTimings?.max_inter_step_ms ?? null,
+      backend_steps: allBarrierBounded
+        ? attemptTimings.reduce((sum, entry) => sum + entry.backend_steps, 0)
+        : null,
+      transient_retries: allBarrierBounded
+        ? attemptTimings.reduce((sum, entry) => sum + entry.transient_retries, 0)
+        : null,
+      first_step_offset_ms: singleAttempt?.first_step_offset_ms ?? null,
+      step_span_ms: singleAttempt?.step_span_ms ?? null,
+      max_inter_step_ms: singleAttempt?.max_inter_step_ms ?? null,
       usage_updates: diag?.usageUpdates ?? 0,
       start_context_used: diag?.startContextUsed ?? null,
       end_context_used: diag?.endContextUsed ?? null,
       context_size: diag?.contextSize ?? null,
-      subagent_steps: subagentSteps,
+      had_subagents: hadSubagents,
+      subagent_steps: hadSubagents ? null : 0,
     };
     const result = structuredClone(message.result);
     result._meta = { ...(result._meta ?? {}), cowboy };
@@ -2925,6 +2944,9 @@ export class AcpProxy {
     // Without a cursor the correction's evidence could not be settled.
     if (cursor === undefined || stopped()) return false;
     structured.backends.push(settled);
+    structured.stepTimings.push(
+      stepTimingsFor(settled) ?? runtime.evidence?.lastStepTimings ?? null,
+    );
     structured.usage.push(message.result?.usage);
     structured.corrections += 1;
     // Only a reply that begins with this nonce can answer the correction.

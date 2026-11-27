@@ -55,7 +55,7 @@ See also [context renewal](context-rollover.md) and
   (`producer = "antigravity_proxy"`) from `cowboy-antigravity-acp`'s
   `PromptResponse._meta.cowboy` without opening additional sockets or altering
   upstream `agy` requests. Worker request records also carry a 16-hex-char
-  structural `prefix_fingerprint` and `is_first_in_worker_epoch` locally
+  structural `launch_prefix_fingerprint` and `is_first_in_worker_epoch` locally
   (never exported as metric series labels). Explicit telemetry environments,
   ambient proxies and sandbox-owned OTLP launches keep their own policy.
   Coverage and source fields record native loss, including at process death.
@@ -105,7 +105,7 @@ See also [context renewal](context-rollover.md) and
 ```sh
 cowboy logs --directory "$LOG_DIRECTORY" query --from 7d --event cowboy.provider.request_usage
 cowboy logs --directory "$LOG_DIRECTORY" wait-cache-daily --from 30d
-cowboy logs --directory "$LOG_DIRECTORY" wait-cache-metrics --day 2026-11-19 > wait-cache.otlp.pb
+cowboy logs --directory "$LOG_DIRECTORY" wait-cache-metrics --day 2026-11-19 --writer-state "$WRITER_STATE" > wait-cache.otlp.pb
 ```
 
 The daily report reads compact UTC cohorts recorded with tracked detail
@@ -126,7 +126,7 @@ with `logs export --signal logs`.
 The Controller offers one compact previous-day OTLP counter snapshot to its
 existing configured exporter. Machine counters can be extracted from a
 closed UTC day with `cowboy logs wait-cache-metrics --day YYYY-MM-DD`,
-including across multiple `--source` Machines in one invocation so the CLI
+including across multiple `--sources` Machines in one invocation so the CLI
 aggregates them fail-closed into one single-writer `cowboy.source="machine"`
 OTLP snapshot without colliding host series. The existing binding governs delivery.
 Every signed metrics lane validates its encoding and admits only finite

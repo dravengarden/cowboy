@@ -73,7 +73,7 @@ impl Collector {
         prepared: &PreparedLaunch,
         epoch: &str,
     ) -> Option<Self> {
-        let prefix_fingerprint = metadata::compute_prefix_fingerprint(args);
+        let prefix_fingerprint = metadata::compute_launch_prefix_fingerprint(args, spec);
         if args.provider == "antigravity" {
             if args.provider_generation_digest.is_empty() {
                 return None;
@@ -255,11 +255,12 @@ struct Observations {
     session: String,
     epoch: String,
     release: String,
-    prefix_fingerprint: String,
+    launch_prefix_fingerprint: String,
     facts: metadata::Facts,
     managed: bool,
     fresh: bool,
-    first_in_epoch: bool,
+    epoch_first_start_ms: Option<i64>,
+    epoch_saw_loss_before_first: bool,
     renewed_at: Option<i64>,
     compacted: VecDeque<i64>,
     compact_coverage: bool,
@@ -276,7 +277,7 @@ impl Observations {
         producer: Producer,
         args: &WorkerArgs,
         epoch: &str,
-        prefix_fingerprint: String,
+        launch_prefix_fingerprint: String,
         facts: metadata::Facts,
     ) -> Self {
         Self {
@@ -285,7 +286,7 @@ impl Observations {
             session: args.session_id.clone(),
             epoch: epoch.into(),
             release: args.provider_version.clone(),
-            prefix_fingerprint,
+            launch_prefix_fingerprint,
             facts,
             managed: args
                 .execution_binding
@@ -293,7 +294,8 @@ impl Observations {
                 .and_then(crate::execution_environment::ExecutionBinding::managed)
                 .is_some(),
             fresh: args.resume.is_none() && args.native_fork.is_none(),
-            first_in_epoch: true,
+            epoch_first_start_ms: None,
+            epoch_saw_loss_before_first: false,
             renewed_at: None,
             compacted: VecDeque::new(),
             compact_coverage: true,
@@ -398,8 +400,21 @@ impl Observations {
             *index += 1;
             *index
         });
+        if self.epoch_first_start_ms.is_none() && (self.dropped != 0 || self.unmatched != 0) {
+            self.epoch_saw_loss_before_first = true;
+        }
+        // Track epoch position from attributable request starts independently of
+        // role, rollover, and compaction; report unknown if ordering cannot be proven.
+        let first_in_epoch = match self.epoch_first_start_ms {
+            None if attempt.start_ms > 0 && !self.epoch_saw_loss_before_first => {
+                self.epoch_first_start_ms = Some(attempt.start_ms);
+                Some(true)
+            }
+            Some(first) if attempt.start_ms >= first => Some(false),
+            _ => None,
+        };
         let parent = attempt.role == "parent";
-        let (first_rollover, first_compact, first_in_epoch) = if parent {
+        let (first_rollover, first_compact) = if parent {
             let rollover = self
                 .renewed_at
                 .is_some_and(|start| start <= attempt.start_ms);
@@ -418,15 +433,12 @@ impl Observations {
                 self.compacted.pop_front();
                 compact = true;
             }
-            let first_epoch = self.first_in_epoch;
-            self.first_in_epoch = false;
             (
                 Some(rollover),
                 (compact || self.compact_coverage).then_some(compact),
-                Some(first_epoch),
             )
         } else {
-            (None, None, None)
+            (None, None)
         };
         let role = if parent && self.managed {
             "managed_child"
@@ -485,7 +497,7 @@ impl Observations {
             )
             .string("producer", self.producer.name())
             .string("producer_release", &self.release)
-            .string("prefix_fingerprint", &self.prefix_fingerprint)
+            .string("launch_prefix_fingerprint", &self.launch_prefix_fingerprint)
             .integer("producer_schema_version", 1_u64)
     }
 

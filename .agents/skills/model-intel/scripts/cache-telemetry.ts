@@ -229,6 +229,23 @@ function compareSemver(a: SemverTuple, b: SemverTuple): number {
   return comparePrerelease(a[3], b[3]);
 }
 
+/** First-party providers whose ACP/gateway surfaces default unsupported cache_write_tokens to 0. */
+export const UNMETERED_ZERO_CACHE_WRITE_PROVIDERS = new Set([
+  "codex",
+  "antigravity",
+  "claude-deepseek",
+  "codex-deepseek",
+  "deepseek-harness",
+  "grok",
+]);
+
+function normalizeCacheWriteForProvider(provider: string, written: number | null): number | null {
+  if (written === 0 && UNMETERED_ZERO_CACHE_WRITE_PROVIDERS.has(provider)) {
+    return null;
+  }
+  return written;
+}
+
 export function summarizeCacheTelemetryRows(
   rows: readonly CacheFactInputRow[],
   nowMs: number,
@@ -312,7 +329,7 @@ export function summarizeCacheTelemetryRows(
         ? normalizeTurnCacheUsage({
             input: row.inclusive_input_tokens,
             cached: row.cached_read_tokens,
-            written: row.cache_write_tokens,
+            written: normalizeCacheWriteForProvider(row.provider, row.cache_write_tokens),
             uncached: row.uncached_input_tokens,
           })
         : null;
@@ -811,8 +828,7 @@ export function readCacheTelemetryAudit(
       usage_observed: r.inclusive_input_tokens !== null,
       inclusive_input_tokens: r.inclusive_input_tokens,
       cached_read_tokens: r.cached_read_tokens,
-      cache_write_tokens:
-        r.cache_write_tokens === 0 && r.provider !== "claude-code" ? null : r.cache_write_tokens,
+      cache_write_tokens: normalizeCacheWriteForProvider(r.provider, r.cache_write_tokens),
       uncached_input_tokens: r.uncached_input_tokens,
     }));
     return summarizeCacheTelemetryRows(rows, nowMs, days, "events_fallback", {

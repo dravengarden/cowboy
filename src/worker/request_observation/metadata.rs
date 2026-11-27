@@ -6,30 +6,46 @@ use std::sync::{
 };
 use tokio::sync::{mpsc, watch};
 
-use super::{WorkerArgs, antigravity};
+use super::{LaunchSpec, WorkerArgs, antigravity};
 use crate::agent_model::TurnUsage;
 use crate::logs::now_ms;
 
 pub(super) const COMPACTIONS: usize = 32;
 
-/// Content-free 16-hex-char fingerprint of structural launch inputs that affect
-/// prompt prefix stability (provider, signed version/generation, placement mode,
-/// and sorted MCP binding names). Never hashes prompts, paths, or credentials.
-pub(super) fn compute_prefix_fingerprint(args: &WorkerArgs) -> String {
+/// Content-free 16-hex-char partial launch signature over worker-known
+/// structural inputs before adapter-side tool collision resolution (provider,
+/// signed version/generation, system/placement profile, sorted MCP binding
+/// names, and presence booleans for Matrix memory / call context / execution
+/// descriptor attachments). Never hashes prompts, paths, or credential values.
+pub(super) fn compute_launch_prefix_fingerprint(args: &WorkerArgs, spec: &LaunchSpec) -> String {
     let mut hasher = Sha256::new();
-    hasher.update(b"cowboy.prefix.v1\0");
+    hasher.update(b"cowboy.launch_prefix.v2\0");
     hasher.update(args.provider.as_bytes());
     hasher.update(b"\0");
     hasher.update(args.provider_version.as_bytes());
     hasher.update(b"\0");
     hasher.update(args.provider_generation_digest.as_bytes());
     hasher.update(b"\0");
+    hasher.update(if args.system {
+        b"system\0".as_slice()
+    } else {
+        b"user\0".as_slice()
+    });
     let placement = match args.execution_binding.as_ref() {
         Some(binding) if binding.managed().is_some() => "managed",
         Some(_) => "remote",
         None => "local",
     };
     hasher.update(placement.as_bytes());
+    hasher.update(b"\0");
+    let has_memory = spec.env.keys().any(|k| k.starts_with("COWBOY_MEMORY_"));
+    let has_call_ctx = spec.env.contains_key("COWBOY_CALL_CONTEXT");
+    let has_exec_desc = spec.env.contains_key("COWBOY_EXECUTION_DESCRIPTOR");
+    hasher.update([
+        u8::from(has_memory),
+        u8::from(has_call_ctx),
+        u8::from(has_exec_desc),
+    ]);
     hasher.update(b"\0");
     if let Some(plan) = args.mcp_plan.as_deref() {
         let mut names: Vec<&str> = plan.bindings.iter().map(|b| b.name.as_str()).collect();

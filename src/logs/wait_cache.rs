@@ -4,6 +4,7 @@ use super::{capture, data::text};
 use opentelemetry_proto::tonic::common::v1::{AnyValue, KeyValue, any_value};
 
 pub const REQUEST: &str = "cowboy.provider.request_usage";
+pub const TURN_DIAGNOSTICS: &str = "cowboy.provider.turn_diagnostics";
 pub const DISPATCH: &str = "cowboy.wait.dispatch";
 pub const SETTLED: &str = "cowboy.wait.settled";
 pub const DECISION: &str = "cowboy.cache_opt.decision";
@@ -287,9 +288,12 @@ pub fn gateway_usage(id: &str, event: &crate::machine_protocol::ProviderUsageEve
     let started = event
         .duration_ms
         .and_then(|ms| u64::try_from(event.occurred_at_ms).ok()?.checked_sub(ms));
+    // Keep event.producer_id (not logical provider) in the deterministic replay
+    // identity so upgrading attribution for deepseek-harness preserves dedup
+    // against pre-upgrade spooled events.
     record(
         REQUEST,
-        &[provider, id],
+        &[&event.producer_id, id],
         Some(event.occurred_at_ms),
         Tokens {
             input: event.input_tokens,
@@ -418,6 +422,18 @@ mod tests {
         assert_eq!(
             gateway_provider("codex-deepseek", "codex"),
             "codex-deepseek"
+        );
+    }
+
+    #[test]
+    fn gateway_provider_maps_deepseek_harness_and_keeps_other_producers() {
+        assert_eq!(
+            gateway_provider("claude-deepseek", "deepseek-harness"),
+            "deepseek-harness"
+        );
+        assert_eq!(
+            gateway_provider("claude-deepseek", "claude-deepseek"),
+            "claude-deepseek"
         );
     }
 }

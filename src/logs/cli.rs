@@ -79,6 +79,14 @@ enum Command {
         /// Date in UTC (YYYY-MM-DD).
         #[arg(long)]
         day: chrono::NaiveDate,
+        /// Private single-writer state file binding the authoritative source
+        /// cohort and accepted UTC day payload hashes.
+        #[arg(long)]
+        writer_state: PathBuf,
+        /// Explicitly allow updating the bound source cohort for future days
+        /// (never permits overwriting an already-exported UTC day).
+        #[arg(long)]
+        update_cohort: bool,
     },
     /// Poll recent records as JSONL; every frame reports gaps and truncation.
     Tail(WatchArgs),
@@ -340,8 +348,12 @@ impl LogsArgs {
                 .await
             }
             #[cfg(any(feature = "full", feature = "machine-host"))]
-            Command::WaitCacheMetrics { day } => {
-                let day = day
+            Command::WaitCacheMetrics {
+                day: day_date,
+                writer_state,
+                update_cohort,
+            } => {
+                let day = day_date
                     .and_hms_opt(0, 0, 0)
                     .expect("midnight")
                     .and_utc()
@@ -349,7 +361,8 @@ impl LogsArgs {
                 let now = now_ms();
                 // Single-writer multi-Machine aggregation: collect every
                 // configured source's closed UTC day report and fail closed on
-                // any unavailable, truncated, or degraded source.
+                // duplicate store_id, absent rollup, truncation, degradation,
+                // unresolved coverage issues, or cohort/day conflicts.
                 let mut reports = Vec::with_capacity(sources.len());
                 for source in &sources {
                     let value = source
@@ -361,8 +374,15 @@ impl LogsArgs {
                     reports.push(value);
                 }
                 let refs: Vec<&serde_json::Value> = reports.iter().collect();
-                let bytes = super::storage::encode_wait_cache_otlp(day, now, &refs, false)?;
-                std::io::stdout().lock().write_all(&bytes)?;
+                let encoded = super::storage::encode_wait_cache_otlp(day, now, &refs, false)?;
+                super::storage::verify_and_record_writer_state(
+                    &writer_state,
+                    day_date,
+                    now,
+                    &encoded,
+                    update_cohort,
+                )?;
+                std::io::stdout().lock().write_all(&encoded.bytes)?;
                 Ok(())
             }
             Command::Status => report(&sources, Operation::Status, self.allow_partial).await,

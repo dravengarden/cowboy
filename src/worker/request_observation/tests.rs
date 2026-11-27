@@ -1,7 +1,7 @@
 use super::*;
 use crate::{agent_sink::AgentSink as _, provider, worker::RemoteSink};
 
-fn input(provider: &str) -> (WorkerArgs, PreparedLaunch) {
+pub(super) fn fixture_input(provider: &str) -> (WorkerArgs, PreparedLaunch) {
     let mut spec = provider::remote_generation(provider).unwrap();
     spec.package_remove_env_prefixes.extend([
         "OTEL_".into(),
@@ -61,7 +61,7 @@ fn client() -> reqwest::Client {
 
 #[tokio::test]
 async fn claude_routes_both_standard_signals_to_one_private_listener() {
-    let (args, prepared) = input("claude-code");
+    let (args, prepared) = fixture_input("claude-code");
     let mut spec = prepared.spec.clone();
     let _collector = Collector::start(&mut spec, &args, &prepared, "test")
         .await
@@ -80,7 +80,7 @@ async fn claude_routes_both_standard_signals_to_one_private_listener() {
 
 #[tokio::test]
 async fn codex_uses_a_signed_adapter_binding_without_exporter_overrides_or_argv_secrets() {
-    let (mut args, mut prepared) = input("codex");
+    let (mut args, mut prepared) = fixture_input("codex");
     let root = tempfile::tempdir().unwrap();
     let project = root.path().join(".codex");
     std::fs::create_dir(&project).unwrap();
@@ -153,7 +153,7 @@ fn fork_callback_updates_attribution_and_keeps_its_existing_wire_event() {
 
 #[tokio::test]
 async fn antigravity_collector_attaches_without_opening_listener_or_mutating_env() {
-    let (args, prepared) = input("antigravity");
+    let (args, prepared) = fixture_input("antigravity");
     let mut spec = prepared.spec.clone();
     let original_env = spec.env.clone();
     let collector = Collector::start(&mut spec, &args, &prepared, "epoch-1")
@@ -187,9 +187,10 @@ async fn antigravity_collector_attaches_without_opening_listener_or_mutating_env
 }
 
 #[test]
-fn prefix_fingerprint_is_deterministic_order_independent_and_sensitive_to_structural_changes() {
-    let (mut a, _) = input("codex");
+fn launch_prefix_fingerprint_is_deterministic_and_sensitive_to_matrix_and_structural_changes() {
+    let (mut a, prep_a) = fixture_input("codex");
     let mut b = a.clone();
+    let mut spec_b = prep_a.spec.clone();
     a.mcp_plan = Some(Box::new(crate::mcp_binding::NativeLaunchPlan {
         schema: 1,
         command: "/bin/cowboy".into(),
@@ -218,12 +219,36 @@ fn prefix_fingerprint_is_deterministic_order_independent_and_sensitive_to_struct
             },
         ],
     }));
-    let fp_a = metadata::compute_prefix_fingerprint(&a);
-    let fp_b = metadata::compute_prefix_fingerprint(&b);
+    let fp_a = metadata::compute_launch_prefix_fingerprint(&a, &prep_a.spec);
+    let fp_b = metadata::compute_launch_prefix_fingerprint(&b, &spec_b);
     assert_eq!(fp_a.len(), 16);
     assert!(fp_a.bytes().all(|ch| ch.is_ascii_hexdigit()));
     assert_eq!(fp_a, fp_b);
 
+    // Matrix memory enrollment changes the launch signature without hashing secret values
+    spec_b
+        .env
+        .insert("COWBOY_MEMORY_DESCRIPTOR".into(), "/tmp/mem.json".into());
+    let fp_mem = metadata::compute_launch_prefix_fingerprint(&b, &spec_b);
+    assert_ne!(fp_a, fp_mem);
+
     b.provider_version = "3.6.99".into();
-    assert_ne!(fp_a, metadata::compute_prefix_fingerprint(&b));
+    assert_ne!(
+        fp_mem,
+        metadata::compute_launch_prefix_fingerprint(&b, &spec_b)
+    );
+}
+
+#[tokio::test]
+async fn codex_listener_declines_when_node_debug_is_set() {
+    let (args, mut prepared) = fixture_input("codex");
+    prepared.codex_request_observation = true;
+    let mut spec = prepared.spec.clone();
+    spec.env.insert("NODE_DEBUG".into(), "child_process".into());
+    assert!(
+        Collector::start(&mut spec, &args, &prepared, "test")
+            .await
+            .is_none()
+    );
+    assert!(!spec.env.contains_key(CODEX_REQUEST_OBSERVATION_ENV));
 }

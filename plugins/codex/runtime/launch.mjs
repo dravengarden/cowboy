@@ -227,11 +227,13 @@ export async function main(args) {
   if (configuration.length && !isAbsolute(process.env.CODEX_PATH ?? "")) {
     throw new Error("Configured Codex requires an exact Machine-bound CLI");
   }
+  // Strip the loopback observation credential from process.env immediately so
+  // preflight children (MCP enumeration, policy probe, memory setup) never
+  // inherit it or leak it via NODE_DEBUG. Re-attach only when approved below.
+  const rawObservationEnv = process.env[CODEX_OBSERVATION_ENV];
+  delete process.env[CODEX_OBSERVATION_ENV];
   const inspection =
     forwarded.length === 1 && ["--version", "-V", "--help", "-h"].includes(forwarded[0]);
-  if (inspection) {
-    delete process.env[CODEX_OBSERVATION_ENV];
-  }
   // The client passes these to the exact native CLI it launches.
   const extensions = inspection ? null : await sessionExtensions();
   if (!inspection && isAbsolute(process.env.CODEX_PATH ?? "")) {
@@ -257,18 +259,18 @@ export async function main(args) {
     configuration.push(...bindingConfiguration(bindings, descriptor));
     nativeNames.push(...bindings.map((entry) => entry.name));
   }
-  if (!inspection) {
+  if (!inspection && rawObservationEnv) {
     const observation = await resolveCodexObservation({
       codexPath: process.env.CODEX_PATH,
       configuration,
       cwd: process.cwd(),
       env: process.env,
+      rawBinding: rawObservationEnv,
       helperPath: fileURLToPath(new URL("../bin/codex-otel-headers", import.meta.url)),
     });
     if (observation.keepEnv) {
+      process.env[CODEX_OBSERVATION_ENV] = rawObservationEnv;
       configuration.push(...observation.args);
-    } else {
-      delete process.env[CODEX_OBSERVATION_ENV];
     }
   }
   process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);

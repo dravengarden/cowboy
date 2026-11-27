@@ -912,12 +912,24 @@ pub struct TurnUsage {
     pub reasoning_tokens: Option<u64>,
 }
 
+/// First-party providers whose ACP/gateway surfaces do not meter cache writes
+/// (or default absent write counts to zero). Third-party ACP plugins and
+/// `claude-code` are NOT listed here, so measured zero write counts are preserved.
+pub const UNMETERED_ZERO_CACHE_WRITE_PROVIDERS: &[&str] = &[
+    "codex",
+    "antigravity",
+    "claude-deepseek",
+    "codex-deepseek",
+    "deepseek-harness",
+    "grok",
+];
+
 /// Whether `provider` genuinely reports `cache_write_tokens == 0` as a measured
-/// zero (as Anthropic Messages does on pure cache-hit turns) rather than
-/// defaulting an unsupported/absent write counter to zero.
+/// zero (as Anthropic Messages and third-party metered ACP plugins do) rather
+/// than defaulting an unsupported/absent write counter to zero.
 #[must_use]
 pub fn provider_reports_zero_cache_write_meaningfully(provider: &str) -> bool {
-    provider == "claude-code"
+    !UNMETERED_ZERO_CACHE_WRITE_PROVIDERS.contains(&provider)
 }
 
 impl TurnUsage {
@@ -1946,6 +1958,12 @@ mod tests {
             .cached_write_tokens(0);
         assert_eq!(
             TurnUsage::from_acp_for_provider("claude-code", &zero_write)
+                .unwrap()
+                .cache_write_tokens,
+            Some(0)
+        );
+        assert_eq!(
+            TurnUsage::from_acp_for_provider("third-party-acp", &zero_write)
                 .unwrap()
                 .cache_write_tokens,
             Some(0)

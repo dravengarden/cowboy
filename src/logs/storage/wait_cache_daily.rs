@@ -14,7 +14,7 @@ use std::time::Instant;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod metrics;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub use metrics::encode_wait_cache_otlp;
+pub use metrics::{encode_wait_cache_otlp, verify_and_record_writer_state};
 
 mod files;
 mod parent_clock;
@@ -42,7 +42,7 @@ pub(super) fn tracks(entry: &Entry) -> bool {
     let service = entry.service.as_str();
     match entry.event.as_str() {
         events::REQUEST => matches!(service, "cowboy-worker" | "cowboy-machine"),
-        events::RECEIPT => service == "cowboy-worker",
+        events::TURN_DIAGNOSTICS | events::RECEIPT => service == "cowboy-worker",
         events::DISPATCH
         | events::SETTLED
         | events::DECISION
@@ -595,8 +595,11 @@ impl SqliteStore {
         if report.capacity_floor.is_some_and(|floor| from < floor) {
             issues.push("wait_cache_rollup_capacity_evicted".into());
         }
+        let store_id = self.state().ok().map(|s| s.id);
         Ok(json!({
             "schema": "cowboy.wait_cache.daily/v1",
+            "store_id": store_id,
+            "rollup_present": report.rollup_present,
             "from_ms": from, "to_ms": to, "retention_days": RETENTION_MS / DAY_MS,
             "truncated": report.truncated, "groups": report.groups,
             "capacity_floor_ms": report.capacity_floor,
@@ -611,6 +614,7 @@ struct Report {
     groups: Vec<Value>,
     snapshots: Vec<Value>,
     truncated: bool,
+    rollup_present: bool,
     capacity_floor: Option<i64>,
 }
 
@@ -619,6 +623,7 @@ fn read_report(directory: &Path, from: i64, to: i64) -> Result<Report> {
     let Some(db) = files::open(directory, true)? else {
         return Ok(report);
     };
+    report.rollup_present = true;
     query_deadline(&db, Instant::now());
     report.capacity_floor = db
         .query_row(

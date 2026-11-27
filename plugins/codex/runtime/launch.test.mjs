@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -25,9 +25,13 @@ import { formatObservationHeaders } from "./otel-headers.mjs";
 import {
   CODEX_OBSERVATION_ENV,
   CODEX_OBSERVATION_HEADER,
+  REFRESH_REFUSED_URL,
   codexObservationConfiguration,
+  hasEnvDumpingNodeDebug,
   hasExplicitCodexOtelPolicy,
   parseObservationBinding,
+  probeCodexOtelConfig,
+  readBoundedRegularFile,
   resolveCodexObservation,
   tomlHasOtelPolicy,
 } from "./otel-observation.mjs";
@@ -464,4 +468,166 @@ test("codex observation respects explicit user/project/managed OTel policies and
       }),
     /absolute/,
   );
+});
+
+test("codex OTLP observation handles inline/quoted/malformed TOML, FIFOs, NODE_DEBUG, execution descriptors, and malformed probe replies fail-closed", async () => {
+  assert.equal(tomlHasOtelPolicy('otel = { exporter = "none" }\n'), true);
+  assert.equal(tomlHasOtelPolicy('["otel"]\nexporter = "none"\n'), true);
+  assert.equal(tomlHasOtelPolicy("['otel']\nheaders_helper = '/bin/true'\n"), true);
+  assert.equal(tomlHasOtelPolicy('["otel"."exporter"]\nendpoint = "http://x"\n'), true);
+  assert.equal(
+    tomlHasOtelPolicy('model = "gpt-6.2-sol"\n[otel]\nlog_user_prompt = false\n'),
+    false,
+  );
+  assert.equal(tomlHasOtelPolicy('otel = { exporter = "unterminated\n'), true);
+  assert.equal(tomlHasOtelPolicy("[broken\n"), true);
+
+  assert.equal(hasEnvDumpingNodeDebug({}), false);
+  assert.equal(hasEnvDumpingNodeDebug({ NODE_DEBUG: "child_process" }), true);
+  assert.equal(hasEnvDumpingNodeDebug({ NODE_DEBUG_NATIVE: "http" }), true);
+
+  const dir = mkdtempSync(join(tmpdir(), "codex-otel-hardening-"));
+  try {
+    const helper = join(dir, "codex-otel-headers");
+    writeFileSync(helper, "#!/bin/sh\n", { mode: 0o755 });
+    const home = join(dir, "home");
+    const project = join(dir, "project");
+    mkdirSync(join(project, ".codex"), { recursive: true });
+    mkdirSync(home, { recursive: true });
+    const validBinding = JSON.stringify({
+      schema: 1,
+      logs_endpoint: "http://127.0.0.1:4318/v1/logs",
+      header_name: CODEX_OBSERVATION_HEADER,
+      header_value: "secret-token-xyz",
+    });
+    const cleanProbe = async () => ({ config: {}, origins: {}, layers: [], requirements: null });
+
+    const withDebug = await resolveCodexObservation({
+      codexPath: "/usr/bin/codex",
+      cwd: project,
+      env: { CODEX_HOME: home, NODE_DEBUG: "child_process" },
+      rawBinding: validBinding,
+      helperPath: helper,
+      probeConfig: cleanProbe,
+    });
+    assert.deepEqual(withDebug, { args: [], keepEnv: false });
+
+    const withExec = await resolveCodexObservation({
+      codexPath: "/usr/bin/codex",
+      cwd: project,
+      env: { CODEX_HOME: home, COWBOY_EXECUTION_DESCRIPTOR: "/tmp/exec.json" },
+      rawBinding: validBinding,
+      helperPath: helper,
+      probeConfig: cleanProbe,
+    });
+    assert.deepEqual(withExec, { args: [], keepEnv: false });
+
+    for (const bad of [
+      null,
+      {},
+      { config: null, requirements: null },
+      { config: {} },
+      { config: {}, requirements: "bad" },
+      { config: {}, origins: "bad", requirements: null },
+      { config: {}, layers: "bad", requirements: null },
+    ]) {
+      const res = await resolveCodexObservation({
+        codexPath: "/usr/bin/codex",
+        cwd: project,
+        env: { CODEX_HOME: home },
+        rawBinding: validBinding,
+        helperPath: helper,
+        probeConfig: async () => bad,
+      });
+      assert.deepEqual(res, { args: [], keepEnv: false });
+    }
+
+    const bigConfig = join(project, ".codex", "config.toml");
+    writeFileSync(bigConfig, "# " + "a".repeat(300 * 1024) + "\n");
+    assert.equal(readBoundedRegularFile(bigConfig).status, "unreadable");
+    assert.equal(
+      await hasExplicitCodexOtelPolicy({
+        codexPath: "/usr/bin/codex",
+        cwd: project,
+        env: { CODEX_HOME: home },
+        probeConfig: cleanProbe,
+      }),
+      true,
+    );
+
+    rmSync(bigConfig);
+    const fifoRes = spawnSync("mkfifo", [bigConfig]);
+    if (fifoRes.status === 0) {
+      assert.equal(readBoundedRegularFile(bigConfig).status, "unreadable");
+      assert.equal(
+        await hasExplicitCodexOtelPolicy({
+          codexPath: "/usr/bin/codex",
+          cwd: project,
+          env: { CODEX_HOME: home },
+          probeConfig: cleanProbe,
+        }),
+        true,
+      );
+    }
+    rmSync(bigConfig, { force: true });
+
+    const fakeCodex = join(dir, "fake-codex.mjs");
+    writeFileSync(
+      fakeCodex,
+      `#!${process.execPath}
+import readline from "node:readline";
+const rl = readline.createInterface({ input: process.stdin });
+const mode = process.env.FAKE_PROBE_MODE || "ok";
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.id === 1) {
+    if (process.env.CODEX_REFRESH_TOKEN_URL_OVERRIDE !== ${JSON.stringify(REFRESH_REFUSED_URL)}) {
+      process.exit(2);
+    }
+    if (!process.argv.includes("approval_policy=never")) {
+      process.exit(3);
+    }
+    process.stdout.write(JSON.stringify({ id: 1, result: { ok: true } }) + "\\n");
+  } else if (msg.id === 2) {
+    if (mode === "null_frame") {
+      process.stdout.write("null\\n");
+      return;
+    }
+    if (mode === "null_result") {
+      process.stdout.write(JSON.stringify({ id: 2, result: null }) + "\\n");
+      return;
+    }
+    process.stdout.write(JSON.stringify({ id: 2, result: { config: {}, origins: {}, layers: [] } }) + "\\n");
+  } else if (msg.id === 3) {
+    if (mode === "missing_requirements") {
+      process.stdout.write(JSON.stringify({ id: 3, result: {} }) + "\\n");
+      return;
+    }
+    process.stdout.write(JSON.stringify({ id: 3, result: { requirements: null } }) + "\\n");
+  }
+});
+`,
+      { mode: 0o755 },
+    );
+    const ok = await probeCodexOtelConfig(
+      fakeCodex,
+      project,
+      { ...process.env, FAKE_PROBE_MODE: "ok" },
+      3000,
+      ["-c", "approval_policy=never"],
+    );
+    assert.deepEqual(ok, { config: {}, origins: {}, layers: [], requirements: null });
+    for (const mode of ["null_frame", "null_result", "missing_requirements"]) {
+      const bad = await probeCodexOtelConfig(
+        fakeCodex,
+        project,
+        { ...process.env, FAKE_PROBE_MODE: mode },
+        3000,
+        ["-c", "approval_policy=never"],
+      );
+      assert.equal(bad, null, `expected probe to fail closed on ${mode}`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });

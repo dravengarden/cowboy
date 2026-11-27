@@ -768,6 +768,14 @@ macro_rules! impl_turn_cache_backend {
                 .execute(&mut *tx)
                 .await
                 .context("reset turn_cache_backfill_state for startup reconcile")?;
+                // Also repair any zero-defaulted unmetered cache_write_tokens rows
+                // inserted by an older Controller during a temporary rollback.
+                sqlx::query(
+                    "UPDATE turn_cache_facts                      SET cache_write_tokens = NULL,                          other_uncached_input_tokens = NULL                      WHERE cache_write_tokens = 0                        AND provider IN (                            'codex', 'antigravity', 'claude-deepseek',                            'codex-deepseek', 'deepseek-harness', 'grok'                        )",
+                )
+                .execute(&mut *tx)
+                .await
+                .context("repair unmetered zero cache_write_tokens on startup reconcile")?;
                 tx.commit().await?;
                 Ok(())
             }

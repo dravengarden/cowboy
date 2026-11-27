@@ -2488,10 +2488,11 @@ test("an empty delayed chunk cannot adopt a correction's id-less nonce line", as
   );
 });
 
-test("settled turns attach content-free antigravity_cache_diagnostics from usage updates and backend counts", async () => {
+test("settled turns attach barrier-bounded antigravity_cache_diagnostics and keep stale replays read-only", async () => {
   const { proxy, client } = harness({
-    backend: { class: "ok", successes: 3, transient: 1, barrier: true, refusals: [] },
+    backend: { class: "ok", successes: 9, transient: 4, barrier: true, refusals: [] },
   });
+  // Without barrier-bounded stepTimings, counts stay null rather than using unbounded buffer counts.
   await proxy.fromClient(request(101, "session/prompt", { sessionId: "s-diag", prompt: [] }));
   await proxy.fromAgent({
     jsonrpc: "2.0",
@@ -2509,6 +2510,15 @@ test("settled turns attach content-free antigravity_cache_diagnostics from usage
       update: { sessionUpdate: "usage_update", used: 58000, size: 1048576 },
     },
   });
+  // Calling annotateUsage directly (as staleReplay does) must stay read-only.
+  proxy.annotateUsage({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-diag",
+      update: { sessionUpdate: "usage_update", used: 999999, size: 2097152 },
+    },
+  });
   await proxy.fromAgent({
     jsonrpc: "2.0",
     id: 101,
@@ -2520,8 +2530,8 @@ test("settled turns attach content-free antigravity_cache_diagnostics from usage
   const reply = client.at(-1);
   assert.deepEqual(reply.result._meta.cowboy.antigravity_cache_diagnostics, {
     schema: 1,
-    backend_steps: 3,
-    transient_retries: 1,
+    backend_steps: null,
+    transient_retries: null,
     first_step_offset_ms: null,
     step_span_ms: null,
     max_inter_step_ms: null,
@@ -2529,6 +2539,21 @@ test("settled turns attach content-free antigravity_cache_diagnostics from usage
     start_context_used: 42000,
     end_context_used: 58000,
     context_size: 1048576,
+    had_subagents: false,
     subagent_steps: 0,
   });
+
+  // When subagents ran, subagent_steps is reported as null (unknown) rather than 0.
+  await proxy.fromClient(request(102, "session/prompt", { sessionId: "s-diag", prompt: [] }));
+  proxy.turns.get("s-diag").subagents = true;
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: 102,
+    result: { stopReason: "end_turn" },
+  });
+  assert.equal(client.at(-1).result._meta.cowboy.antigravity_cache_diagnostics.had_subagents, true);
+  assert.equal(
+    client.at(-1).result._meta.cowboy.antigravity_cache_diagnostics.subagent_steps,
+    null,
+  );
 });
