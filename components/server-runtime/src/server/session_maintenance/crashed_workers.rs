@@ -289,100 +289,108 @@ fn worker_pid(epoch: &str) -> Option<u32> {
 }
 
 pub fn start(state: &Arc<AppState>) {
-    let state = Arc::clone(state);
+    let weak = Arc::downgrade(state);
     tokio::spawn(async move {
         loop {
-            let all_metas = state.hub.session_list();
-            let mut metas = Vec::new();
-            let mut candidates = Vec::new();
-            for meta in all_metas {
-                let worker = state
-                    .runtime_router
-                    .runtime(&meta.machine_id)
-                    .map_or(CrashedWorkerObservation::Unavailable, |runtime| {
-                        runtime.last_crashed_worker(&meta.id)
-                    });
-                let unprojected_named_crash = meta.status != Status::Crashed
-                    && !meta.provider_account_id.is_default()
-                    && matches!(worker, CrashedWorkerObservation::Seen(_));
-                let offline_named = meta.status != Status::Crashed
-                    && !meta.provider_account_id.is_default()
-                    && matches!(worker, CrashedWorkerObservation::Unavailable);
-                if meta.status == Status::Crashed || unprojected_named_crash || offline_named {
-                    candidates.push(Candidate {
-                        session_id: meta.id.clone(),
-                        worker,
-                        unprojected_named_crash,
-                    });
-                    metas.push(meta);
+            {
+                let Some(state) = weak.upgrade() else {
+                    return;
+                };
+                if *state.shutdown.borrow() {
+                    return;
                 }
-            }
-            let now = Instant::now();
-            let outcome = state
-                .session_maintenance
-                .crashed_workers
-                .observe(&candidates, now);
-            let mut per_machine_dispatched: HashMap<String, usize> = HashMap::new();
-            for (session_id, worker) in outcome.drain {
-                let machine_id = metas
-                    .iter()
-                    .find(|meta| meta.id == session_id)
-                    .map(|meta| meta.machine_id.clone())
-                    .unwrap_or_default();
-                let count = per_machine_dispatched
-                    .entry(machine_id.clone())
-                    .or_insert(0);
-                if *count >= MAX_DRAINS_PER_MACHINE_PER_TICK {
-                    continue;
+                let all_metas = state.hub.session_list();
+                let mut metas = Vec::new();
+                let mut candidates = Vec::new();
+                for meta in all_metas {
+                    let worker = state
+                        .runtime_router
+                        .runtime(&meta.machine_id)
+                        .map_or(CrashedWorkerObservation::Unavailable, |runtime| {
+                            runtime.last_crashed_worker(&meta.id)
+                        });
+                    let unprojected_named_crash = meta.status != Status::Crashed
+                        && !meta.provider_account_id.is_default()
+                        && matches!(worker, CrashedWorkerObservation::Seen(_));
+                    let offline_named = meta.status != Status::Crashed
+                        && !meta.provider_account_id.is_default()
+                        && matches!(worker, CrashedWorkerObservation::Unavailable);
+                    if meta.status == Status::Crashed || unprojected_named_crash || offline_named {
+                        candidates.push(Candidate {
+                            session_id: meta.id.clone(),
+                            worker,
+                            unprojected_named_crash,
+                        });
+                        metas.push(meta);
+                    }
                 }
-                match state
-                    .supervisor
-                    .drain_crashed_worker(&session_id, &worker.worker_epoch)
-                {
-                    Ok(true) => {
-                        *count += 1;
-                        state
-                            .session_maintenance
-                            .crashed_workers
-                            .record_drain_attempt(
-                                &session_id,
-                                &worker.worker_epoch,
-                                worker.drain_requested,
-                                now,
+                let now = Instant::now();
+                let outcome = state
+                    .session_maintenance
+                    .crashed_workers
+                    .observe(&candidates, now);
+                let mut per_machine_dispatched: HashMap<String, usize> = HashMap::new();
+                for (session_id, worker) in outcome.drain {
+                    let machine_id = metas
+                        .iter()
+                        .find(|meta| meta.id == session_id)
+                        .map(|meta| meta.machine_id.clone())
+                        .unwrap_or_default();
+                    let count = per_machine_dispatched
+                        .entry(machine_id.clone())
+                        .or_insert(0);
+                    if *count >= MAX_DRAINS_PER_MACHINE_PER_TICK {
+                        continue;
+                    }
+                    match state
+                        .supervisor
+                        .drain_crashed_worker(&session_id, &worker.worker_epoch)
+                    {
+                        Ok(true) => {
+                            *count += 1;
+                            state
+                                .session_maintenance
+                                .crashed_workers
+                                .record_drain_attempt(
+                                    &session_id,
+                                    &worker.worker_epoch,
+                                    worker.drain_requested,
+                                    now,
+                                );
+                            tracing::info!(
+                                session = %session_id,
+                                machine = %machine_id,
+                                worker_epoch = %worker.worker_epoch,
+                                generation = %worker.generation,
+                                drain_requested = worker.drain_requested,
+                                "requested cooperative drain for idle crashed worker"
                             );
-                        tracing::info!(
-                            session = %session_id,
-                            machine = %machine_id,
-                            worker_epoch = %worker.worker_epoch,
-                            generation = %worker.generation,
-                            drain_requested = worker.drain_requested,
-                            "requested cooperative drain for idle crashed worker"
-                        );
-                    }
-                    Ok(false) => {}
-                    Err(error) => {
-                        tracing::debug!(
-                            session = %session_id,
-                            worker_epoch = %worker.worker_epoch,
-                            %error,
-                            "skipped automatic crashed-worker drain"
-                        );
+                        }
+                        Ok(false) => {}
+                        Err(error) => {
+                            tracing::debug!(
+                                session = %session_id,
+                                worker_epoch = %worker.worker_epoch,
+                                %error,
+                                "skipped automatic crashed-worker drain"
+                            );
+                        }
                     }
                 }
-            }
-            for (session_id, worker, age) in outcome.warn {
-                if let Some(meta) = metas.iter().find(|meta| meta.id == session_id) {
-                    let machine = &meta.machine_id;
-                    let provider = &meta.provider;
-                    let account = if meta.provider_account_id.is_default() {
-                        "default"
-                    } else {
-                        "named"
-                    };
-                    tracing::warn!(session = %session_id, %machine, %provider, account,
+                for (session_id, worker, age) in outcome.warn {
+                    if let Some(meta) = metas.iter().find(|meta| meta.id == session_id) {
+                        let machine = &meta.machine_id;
+                        let provider = &meta.provider;
+                        let account = if meta.provider_account_id.is_default() {
+                            "default"
+                        } else {
+                            "named"
+                        };
+                        tracing::warn!(session = %session_id, %machine, %provider, account,
                         worker_epoch = %worker.worker_epoch, generation = %worker.generation,
                         attached_for_s = age.as_secs(),
                         "crashed session may still hold a live worker; verify and stop it by hand                          (docs/machine-operations.md#crashed-sessions-with-a-live-worker)");
+                    }
                 }
             }
             tokio::time::sleep(TICK).await;

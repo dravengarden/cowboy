@@ -22,6 +22,7 @@ const MAX_REMEMBERED_DECISIONS: usize = 8;
 pub(super) struct State {
     pub(super) draining: AtomicBool,
     pub(super) native_cycle_active: AtomicBool,
+    pub(super) pending_event_publishers: std::sync::atomic::AtomicUsize,
     /// Persistent ACP settlement result across broker reconnects and
     /// receipt-write failures: `Some(true)` = clean exit, `Some(false)` = panic.
     agent_settled: Mutex<Option<bool>>,
@@ -32,7 +33,31 @@ pub(super) struct State {
     accepted_command_id: Mutex<Option<String>>,
 }
 
+pub(super) struct EventPublisherGuard {
+    shared: std::sync::Arc<Shared>,
+}
+
+impl Drop for EventPublisherGuard {
+    fn drop(&mut self) {
+        self.shared
+            .crashed_drain
+            .pending_event_publishers
+            .fetch_sub(1, Ordering::AcqRel);
+        let _ = self.shared.notify.send(());
+    }
+}
+
 impl State {
+    pub(super) fn enter_event_publisher(
+        &self,
+        shared: &std::sync::Arc<Shared>,
+    ) -> EventPublisherGuard {
+        self.pending_event_publishers.fetch_add(1, Ordering::AcqRel);
+        EventPublisherGuard {
+            shared: std::sync::Arc::clone(shared),
+        }
+    }
+
     pub(super) fn agent_settled(&self) -> Option<bool> {
         *self.agent_settled.lock()
     }
@@ -143,6 +168,7 @@ pub(super) fn handle_drain_crashed(
     cmd_tx: &mut Option<mpsc::UnboundedSender<AgentCommand>>,
     command_id: String,
     worker_epoch: String,
+    acknowledged_uncertain_sequence: u64,
 ) -> Frame {
     if let Some((accepted, reason)) = shared.crashed_drain.remembered_decision(&command_id) {
         return command_ack(shared, command_id, accepted, reason);
@@ -173,6 +199,20 @@ pub(super) fn handle_drain_crashed(
             Some("session has background work in progress")
         } else if snapshot.pending_prompt_count > 0 {
             Some("session has a queued prompt")
+        } else if snapshot
+            .uncertain_effect
+            .as_ref()
+            .is_some_and(|effect| effect.sequence.max(1) > acknowledged_uncertain_sequence)
+            || shared
+                .execution
+                .as_ref()
+                .and_then(|client| client.ledger())
+                .is_some_and(|ledger| {
+                    ledger.uncertain_effect().is_some()
+                        && ledger.uncertain_sequence().max(1) > acknowledged_uncertain_sequence
+                })
+        {
+            Some("crashed worker has unacknowledged uncertain effect")
         } else {
             snapshot.drain_requested = true;
             shared.crashed_drain.draining.store(true, Ordering::Release);
@@ -207,7 +247,13 @@ pub(super) async fn finish_if_drained<W: tokio::io::AsyncWrite + Unpin>(
     let Some(settled_cleanly) = shared.crashed_drain.agent_settled() else {
         return Ok(false);
     };
-    if !shared.outbox.lock().is_empty() {
+    if shared
+        .crashed_drain
+        .pending_event_publishers
+        .load(Ordering::Acquire)
+        > 0
+        || !shared.outbox.lock().is_empty()
+    {
         return Ok(false);
     }
     if settled_cleanly

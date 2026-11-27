@@ -3,16 +3,14 @@
 //! both runtime legs >= 8), and stateless hint forwarding outside
 //! `pending_commands` / `CommandAck`.
 
+use super::crashed_drain::evicted_command_digest;
 use std::os::fd::AsRawFd;
 use std::sync::Arc;
 
 use tokio::sync::mpsc;
 
 use crate::runtime_wire::{DeliveryTarget, Frame, WorkerCommand, WorkerSnapshot, write_frame};
-use crate::wrap_up::{
-    clamp_delivery_capabilities_for_provider, effective_wrap_up_steering,
-    wrap_up_hint_within_size_limit,
-};
+use crate::wrap_up::{effective_wrap_up_steering, wrap_up_hint_within_size_limit};
 
 /// Bounded per-worker hint queue capacity from broker to worker UnixStream.
 pub(super) const WORKER_HINT_CAPACITY: usize = 8;
@@ -347,36 +345,7 @@ impl Drop for PendingCoreCommandGuard {
     }
 }
 
-/// Sanitize a worker snapshot for the currently attached Controller using exact
-/// `(controller_outer_protocol, controller_runtime_protocol, worker_protocol)`
-/// and broker-verified provider identity (fails closed if provider is missing).
-pub(super) fn sanitize_snapshot_for_controller(
-    snapshot: &mut WorkerSnapshot,
-    raw_wrap_up: bool,
-    worker_protocol: u16,
-    controller_outer_protocol: Option<u16>,
-    controller_runtime_protocol: u16,
-    declared_provider: Option<&str>,
-) {
-    let provider = snapshot
-        .launch
-        .as_ref()
-        .map(|launch| launch.provider.as_str())
-        .or(declared_provider);
-    clamp_delivery_capabilities_for_provider(
-        provider,
-        &mut snapshot.supports_current_turn,
-        &mut snapshot.delivery_controls.next_checkpoint,
-    );
-    let min_runtime_protocol = worker_protocol.min(controller_runtime_protocol);
-    snapshot.wrap_up_steering = effective_wrap_up_steering(
-        provider,
-        raw_wrap_up,
-        controller_outer_protocol,
-        min_runtime_protocol,
-        true,
-    );
-}
+pub(super) use super::crashed_drain::sanitize_snapshot_for_controller;
 
 /// Sanitize a live `CURRENT_TURN_CAPABILITIES_UPDATE` event before forwarding
 /// to the currently attached Controller.
@@ -709,14 +678,6 @@ struct DispatchedPromptRecord {
     seq: u64,
 }
 
-fn evicted_command_digest(command_id: &str) -> [u8; 16] {
-    use sha2::Digest as _;
-    let hash = sha2::Sha256::digest(command_id.as_bytes());
-    let mut out = [0_u8; 16];
-    out.copy_from_slice(&hash[..16]);
-    out
-}
-
 /// Record of `(session_id, command_id)` from ingress admission through worker
 /// handoff. Each insertion carries a monotonic `seq` so retired/reinserted keys
 /// never match stale `order` entries. Evicted commands stay indexed by exact
@@ -739,6 +700,12 @@ pub(super) struct DispatchedPrompts {
 impl DispatchedPrompts {
     const MAX_ENTRIES: usize = 16_384;
     const MAX_EVICTED_COMMANDS: usize = 262_144;
+
+    pub(super) fn has_unacked_for_session(&self, session_id: &str) -> bool {
+        self.entries
+            .iter()
+            .any(|((sid, _), rec)| sid == session_id && !rec.acked)
+    }
 
     pub(super) fn get(&self, session_id: &str, command_id: &str) -> Option<&str> {
         self.entries
@@ -1435,8 +1402,9 @@ impl super::Broker {
             let mut dispatched = self.dispatched_prompts.lock();
             let mut remaining = std::collections::VecDeque::new();
             while let Some(command) = queue.pop_front() {
-                if worker.snapshot.drain_requested
-                    && matches!(command, WorkerCommand::Prompt { .. })
+                if worker.crashed_drain_fenced
+                    || (worker.snapshot.drain_requested
+                        && matches!(command, WorkerCommand::Prompt { .. }))
                 {
                     remaining.push_back(command);
                     continue;
@@ -1950,6 +1918,7 @@ mod tests {
                 diag_reply_tx: None,
                 last_hinted_target: None,
                 crashed_drain_fenced: false,
+                peer_pid: None,
             },
         );
         let target = DeliveryTarget {
@@ -2133,6 +2102,7 @@ mod tests {
                 diag_reply_tx: None,
                 last_hinted_target: None,
                 crashed_drain_fenced: false,
+                peer_pid: None,
             },
         );
 
@@ -2217,6 +2187,7 @@ mod tests {
                 diag_reply_tx: None,
                 last_hinted_target: None,
                 crashed_drain_fenced: false,
+                peer_pid: None,
             },
         );
         broker.route_prompt_guarded("s1", first);
@@ -2278,6 +2249,7 @@ mod tests {
                 diag_reply_tx: None,
                 last_hinted_target: None,
                 crashed_drain_fenced: false,
+                peer_pid: None,
             },
         );
         assert!(
@@ -2428,6 +2400,7 @@ mod tests {
                 diag_reply_tx: None,
                 last_hinted_target: None,
                 crashed_drain_fenced: false,
+                peer_pid: None,
             },
         );
 
@@ -2581,6 +2554,7 @@ mod tests {
                 diag_reply_tx: None,
                 last_hinted_target: None,
                 crashed_drain_fenced: false,
+                peer_pid: None,
             },
         );
         broker.flush_pending_guarded("s-evict");

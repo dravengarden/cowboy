@@ -76,7 +76,9 @@ impl RemoteSink {
                     && let Some(settled) = execution.finish_turn(&turn_id)
                 {
                     let shared = Arc::clone(&self.shared);
+                    let publisher_guard = shared.crashed_drain.enter_event_publisher(&shared);
                     execution.spawn_settled(async move {
+                        let _guard = publisher_guard;
                         settled.await;
                         shared.emit(ended);
                     });

@@ -325,6 +325,7 @@ struct WorkerPeer {
     diag_reply_tx: Option<mpsc::Sender<Frame>>,
     last_hinted_target: Option<crate::runtime_wire::DeliveryTarget>,
     crashed_drain_fenced: bool,
+    peer_pid: Option<u32>,
 }
 
 /// Outcome of one heartbeat sweep.
@@ -583,7 +584,9 @@ impl Broker {
                 .flatten();
             snapshots.push(WorkerSnapshot {
                 session_id: session_id.clone(),
-                worker_epoch: format!("broker-{session_id}"),
+                worker_epoch: self
+                    .unconfirmed_sandbox_epoch(&session_id)
+                    .unwrap_or_else(|| format!("broker-{session_id}")),
                 generation: session.generation.clone(),
                 executable: commands
                     .get(&session.generation)
@@ -646,6 +649,7 @@ impl Broker {
             post_edit,
         );
         post_edit::notify_orphaned(orphaned);
+        self.replay_recently_drained_after_welcome(&welcome, lease);
         for current in self.snapshots() {
             if !welcome.contains(&current) {
                 self.send_controller(Frame::Snapshot {
@@ -2087,7 +2091,20 @@ impl Broker {
         let session_id = session.session_id.clone();
         session.adopt_only = false;
         let cleanup_gate = self.session_lifecycle_gate(&session_id);
-        let _cleanup_guard = cleanup_gate.lock().await;
+        let _cleanup_guard = match self
+            .wait_for_crashed_drain_before_reset(
+                &session_id,
+                &cleanup_gate,
+                cleanup_gate.lock().await,
+            )
+            .await
+        {
+            Ok(guard) => guard,
+            Err(reason) => {
+                self.command_rejected(&session_id, command_id, reason);
+                return;
+            }
+        };
         if !lease_active(self) {
             return;
         }
@@ -4216,13 +4233,12 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
             let peer_pid = reader.as_ref().peer_cred().ok().and_then(|peer| peer.pid());
             let unit = (broker.args.spawn_mode == SpawnMode::SystemdUser)
                 .then(|| worker_unit_name(&broker.args.socket, &session_id));
-            let observed = broker.liveness.connect(
-                &session_id,
-                connection_id,
-                &epoch,
-                unit,
-                peer_pid.and_then(|pid| u32::try_from(pid).ok()),
-            );
+            let peer_pid_u32 = peer_pid.and_then(|pid| u32::try_from(pid).ok());
+            broker.attach_worker_peer_pid(&session_id, connection_id, peer_pid_u32);
+            let observed =
+                broker
+                    .liveness
+                    .connect(&session_id, connection_id, &epoch, unit, peer_pid_u32);
             let fd = reader.as_ref().as_fd();
             broker.attach_worker_wrap_up(
                 &session_id,
@@ -4251,6 +4267,7 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
             if draining {
                 broker.route_worker(&session_id, WorkerCommand::Drain);
             }
+            broker.replay_pending_crashed_drain(&session_id, connection_id);
             broker.flush_pending(&session_id);
             let worker_result = handle_worker(
                 Arc::clone(&broker),
@@ -4760,14 +4777,8 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
             broker.arm_deleted_worker_unit_stop(&session_id);
             broker.cleanup_deleted_session(&session_id, &cleanup_command_id);
         }
-        CoreCommand::DrainCrashedWorker {
-            session_id,
-            command_id,
-            worker_epoch,
-        } => {
-            broker
-                .drain_crashed_worker(session_id, command_id, worker_epoch)
-                .await;
+        cmd @ CoreCommand::DrainCrashedWorker { .. } => {
+            broker.handle_drain_crashed_command(cmd).await
         }
         CoreCommand::QuiesceAccountSession {
             session_id,
@@ -4927,13 +4938,15 @@ async fn handle_worker(
                 accepted,
                 ..
             } => {
-                broker.record_crashed_drain_ack(
+                if !broker.record_crashed_drain_ack(
                     session_id,
                     epoch,
                     connection_id,
                     command_id,
                     accepted,
-                );
+                ) {
+                    continue;
+                }
                 broker
                     .dispatched_prompts
                     .lock()

@@ -1317,12 +1317,14 @@ pub fn handle_command(
             WorkerCommand::DrainCrashed {
                 command_id,
                 worker_epoch,
+                acknowledged_uncertain_sequence,
             } => {
                 return crashed_drain::handle_drain_crashed(
                     shared,
                     cmd_tx,
                     command_id,
                     worker_epoch,
+                    acknowledged_uncertain_sequence,
                 );
             }
             WorkerCommand::Stop { command_id } => {
@@ -1534,6 +1536,7 @@ mod tests {
             WorkerCommand::DrainCrashed {
                 command_id: "dc-1".into(),
                 worker_epoch: epoch.clone(),
+                acknowledged_uncertain_sequence: 0,
             },
         )
         else {
@@ -1552,6 +1555,7 @@ mod tests {
             WorkerCommand::DrainCrashed {
                 command_id: "dc-2".into(),
                 worker_epoch: "other-epoch".into(),
+                acknowledged_uncertain_sequence: 0,
             },
         )
         else {
@@ -1582,6 +1586,7 @@ mod tests {
             WorkerCommand::DrainCrashed {
                 command_id: "dc-3".into(),
                 worker_epoch: epoch.clone(),
+                acknowledged_uncertain_sequence: 0,
             },
         )
         else {
@@ -1604,6 +1609,7 @@ mod tests {
             WorkerCommand::DrainCrashed {
                 command_id: "dc-4".into(),
                 worker_epoch: epoch.clone(),
+                acknowledged_uncertain_sequence: 0,
             },
         )
         else {
@@ -1622,6 +1628,7 @@ mod tests {
             WorkerCommand::DrainCrashed {
                 command_id: "dc-5".into(),
                 worker_epoch: epoch.clone(),
+                acknowledged_uncertain_sequence: 0,
             },
         ) else {
             panic!("ack");
@@ -1733,6 +1740,7 @@ mod tests {
                 command: WorkerCommand::DrainCrashed {
                     command_id: "dc-outbox".into(),
                     worker_epoch: epoch.clone(),
+                    acknowledged_uncertain_sequence: 0,
                 },
             },
         )
@@ -1855,6 +1863,7 @@ mod tests {
                 command: WorkerCommand::DrainCrashed {
                     command_id: "dc-panic".into(),
                     worker_epoch: epoch,
+                    acknowledged_uncertain_sequence: 0,
                 },
             },
         )
@@ -1958,6 +1967,7 @@ mod tests {
                     command: WorkerCommand::DrainCrashed {
                         command_id: "dc-reconnect".into(),
                         worker_epoch: epoch.clone(),
+                        acknowledged_uncertain_sequence: 0,
                     },
                 },
             )
@@ -2020,6 +2030,7 @@ mod tests {
                     command: WorkerCommand::DrainCrashed {
                         command_id: "dc-reconnect".into(),
                         worker_epoch: epoch.clone(),
+                        acknowledged_uncertain_sequence: 0,
                     },
                 },
             )

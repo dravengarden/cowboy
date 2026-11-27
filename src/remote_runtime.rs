@@ -2005,6 +2005,14 @@ fn command_supported(shared: &Shared, command: &CoreCommand) -> bool {
     if matches!(command, CoreCommand::CancelSubagent { .. }) && !subagent_cancel_supported(shared) {
         return false;
     }
+    if matches!(command, CoreCommand::DrainCrashedWorker { .. })
+        && (shared.machine_protocol
+            < crate::machine_protocol::CRASHED_WORKER_DRAIN_PROTOCOL_VERSION
+            || shared.protocol.load(Ordering::Acquire)
+                < crate::runtime_wire::CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION)
+    {
+        return false;
+    }
     if shared.protocol.load(Ordering::Acquire)
         >= crate::runtime_wire::PROVIDER_ACCOUNT_PROTOCOL_VERSION
     {
@@ -2262,6 +2270,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                 .await?;
                 shared.highwaters.lock().insert(key, runtime_seq);
             }
+            snapshot::persist_event_uncertain_effect(shared, &session_id, &event).await;
             write_broker_frame(
                 writer,
                 &Frame::Ack {
@@ -2379,7 +2388,7 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                 reject_foreign_frame(shared, &worker.session_id, "worker snapshot");
                 return Ok(());
             }
-            snapshot::observe_crashed_sighting(shared, &worker);
+            snapshot::observe_and_persist_snapshot(shared, &worker).await;
             let mut projected = false;
             native_admission::snapshot(shared, &worker, || {
                 let session_id = worker.session_id.clone();
@@ -2404,7 +2413,9 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
         Frame::CrashedWorkerDrained {
             session_id,
             worker_epoch,
-        } => snapshot::handle_crashed_worker_drained_frame(shared, &session_id, &worker_epoch),
+        } => {
+            snapshot::handle_crashed_worker_drained_frame(shared, &session_id, &worker_epoch).await;
+        }
         Frame::Welcome {
             workers, protocol, ..
         } => {
@@ -2500,7 +2511,7 @@ async fn merge_worker_snapshots_with_protocol(
         if shared.resetting.lock().contains(&worker.session_id) {
             continue;
         }
-        snapshot::observe_crashed_sighting(shared, &worker);
+        snapshot::observe_and_persist_snapshot(shared, &worker).await;
         let mut projected = false;
         native_admission::snapshot(shared, &worker, || {
             projected = project_snapshot_with_protocol(shared, &worker, runtime_protocol);

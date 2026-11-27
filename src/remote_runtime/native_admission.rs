@@ -444,6 +444,14 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin + Send>(
     expected: Option<(&str, u64)>,
     command: CoreCommand,
 ) -> Result<SendOutcome> {
+    if matches!(command, CoreCommand::DrainCrashedWorker { .. })
+        && (shared.machine_protocol
+            < crate::machine_protocol::CRASHED_WORKER_DRAIN_PROTOCOL_VERSION
+            || shared.protocol.load(Ordering::Acquire)
+                < crate::runtime_wire::CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION)
+    {
+        return Ok(SendOutcome::Denied);
+    }
     if matches!(
         command,
         CoreCommand::StopSession { .. }

@@ -785,6 +785,8 @@ pub enum CoreCommand {
         session_id: String,
         command_id: String,
         worker_epoch: String,
+        #[serde(default)]
+        acknowledged_uncertain_sequence: u64,
     },
     /// Stop a named account's worker without deleting its session. This is
     /// process-stop evidence only, not account-wide logout or credential cleanup.
@@ -920,6 +922,8 @@ pub enum WorkerCommand {
     DrainCrashed {
         command_id: String,
         worker_epoch: String,
+        #[serde(default)]
+        acknowledged_uncertain_sequence: u64,
     },
     Stop {
         command_id: String,
@@ -2045,6 +2049,7 @@ mod tests {
             session_id: "sess-1".into(),
             command_id: "drain-crashed-1".into(),
             worker_epoch: "42-99".into(),
+            acknowledged_uncertain_sequence: 3,
         };
         assert_eq!(core.session_id(), Some("sess-1"));
         let core_json = serde_json::to_value(&core).unwrap();
@@ -2058,6 +2063,7 @@ mod tests {
         let worker = WorkerCommand::DrainCrashed {
             command_id: "drain-crashed-1".into(),
             worker_epoch: "42-99".into(),
+            acknowledged_uncertain_sequence: 3,
         };
         let worker_json = serde_json::to_value(&worker).unwrap();
         assert_eq!(worker_json["command"], "drain_crashed");
