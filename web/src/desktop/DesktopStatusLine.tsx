@@ -195,7 +195,7 @@ const TASKS_ROSTER_HINTS: RegionHint[] = [
   { keys: "Enter", label: "Open" },
   { keys: "[/]", label: "Worker" },
   { keys: "I", label: "Info" },
-  { keys: "Q", label: "Quote" },
+  { keys: "S", label: "Quote" },
   { keys: DESKTOP_FOCUS_PROMPT_SHORTCUT, label: "Prompt" },
   { keys: DESKTOP_SHORTCUTS.focusConversation, label: "Conversation" },
 ];
@@ -205,7 +205,7 @@ const TASKS_READER_HINTS: RegionHint[] = [
   { keys: "[/]", label: "Worker" },
   { keys: "T", label: "Transcript" },
   { keys: "I", label: "Info" },
-  { keys: "Q", label: "Quote" },
+  { keys: "S", label: "Quote" },
   { keys: "O", label: "Session" },
   { keys: "Shift+L", label: "Locate" },
   { keys: "X", label: "Stop" },

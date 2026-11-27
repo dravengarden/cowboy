@@ -12,7 +12,7 @@
 // It must not import store.ts: the store feeds it.
 
 import { persisted, useStore } from "@cowboy/state-store";
-import { useSyncExternalStore } from "react";
+import { useMemo, useSyncExternalStore } from "react";
 import type { CallApproval } from "./callApproval";
 import { callApprovalTitle } from "./callApproval";
 import { derive, type PendingPermission, type RenderItem } from "./derive";
@@ -979,23 +979,19 @@ export function receiveTaskAcknowledgements(
 
 export function useAcknowledgements(sessionId: string): (key: string, marker: string) => boolean {
   const list = useStore(acknowledgements);
-  useSyncExternalStore(
-    (listener) => {
-      accountListeners.add(listener);
-      return (): void => {
-        accountListeners.delete(listener);
-      };
-    },
+  const accountVersion = useSyncExternalStore(
+    (listener) => { accountListeners.add(listener); return (): void => { accountListeners.delete(listener); }; },
     () => accountAcknowledgementsVersion,
     () => 0,
   );
-  const local = new Set(list);
-  const account = accountAcknowledgements.get(sessionId);
-  return (key, marker) => {
-    const entry = entryOf(key, marker);
-    // Unqualified entries are Phase 1's, kept readable on this device.
-    return local.has(sessionEntryOf(sessionId, entry)) || local.has(entry) || (account?.has(entry) ?? false);
-  };
+  return useMemo(() => {
+    const local = new Set(list);
+    const account = accountAcknowledgements.get(sessionId);
+    return (key: string, marker: string): boolean => {
+      const entry = entryOf(key, marker);
+      return local.has(sessionEntryOf(sessionId, entry)) || local.has(entry) || (account?.has(entry) ?? false);
+    };
+  }, [list, accountVersion, sessionId]);
 }
 
 /** Whether this device acknowledged a task in this session. */
@@ -1029,9 +1025,8 @@ const callsDockLegacy = persisted(CALLS_DOCK_LEGACY_KEY, false, {
   deserialize: (raw) => raw === "1",
 });
 
-export function useCallsDockLegacy(): boolean {
-  return useStore(callsDockLegacy);
-}
+export const callsDockLegacyEnabled = (): boolean => callsDockLegacy.get();
+export function useCallsDockLegacy(): boolean { return useStore(callsDockLegacy); }
 
 export function setCallsDockLegacy(on: boolean): void {
   callsDockLegacy.set(on);

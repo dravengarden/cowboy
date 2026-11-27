@@ -17,7 +17,7 @@ import { useSubagentTranscript } from "./SubagentTranscript";
 import type { BackgroundTasks } from "./useBackgroundTasks";
 import { MobileTasksSheet } from "./tasks/MobileTasksSheet";
 import { LegacyCallsSwitch } from "./tasks/TaskDiagnostics";
-import { LOCATE_TASK_EVENT, OPEN_TASK_ORIGIN_TOOL_EVENT, useDesktopTasksHostActive } from "./tasks/taskEvents";
+import { focusTaskApprovalSurface, LOCATE_TASK_EVENT, OPEN_TASK_ORIGIN_TOOL_EVENT, useDesktopTasksHostActive } from "./tasks/taskEvents";
 import { TaskResultReader } from "./tasks/TaskResultReader";
 import { TaskRoster } from "./tasks/TaskRoster";
 import { buildTaskForest, flattenTaskSections } from "./tasks/taskTree";
@@ -103,9 +103,14 @@ function StandaloneDesktopTasksDialog({ sessionId, background, onLocate, onOpenT
     return () => globalThis.removeEventListener(OPEN_BACKGROUND_TASKS_EVENT, onOpen);
   }, [sessionId]);
 
+  const consumedDeepLinkRef = useRef<string | null>(null);
   useEffect(() => {
-    const key = taskKeyFromHash(globalThis.location?.hash ?? "");
-    if (!key || inspectorState().sessionId === sessionId || !background.byKey.has(key)) return;
+    const rawHash = globalThis.location?.hash ?? "";
+    const key = taskKeyFromHash(rawHash);
+    if (!key) { consumedDeepLinkRef.current = null; return; }
+    const intent = `${sessionId}\u0000${rawHash}`;
+    if (consumedDeepLinkRef.current === intent || inspectorState().sessionId === sessionId || !background.byKey.has(key)) return;
+    consumedDeepLinkRef.current = intent;
     openBackgroundTask(sessionId, key, "link");
   }, [sessionId, background.byKey]);
 
@@ -126,13 +131,11 @@ function StandaloneDesktopTasksDialog({ sessionId, background, onLocate, onOpenT
   }, [ordered, select, selected]);
   const locate = useCallback((key: string): void => { close(); requestAnimationFrame(() => onLocate?.(key)); }, [close, onLocate]);
   const answerApproval = useCallback((): void => {
+    const target = selected;
     close();
-    requestAnimationFrame(() => {
-      const approval = document.querySelector<HTMLElement>("[data-call-approval]");
-      approval?.scrollIntoView({ block: "nearest" });
-      approval?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
-    });
-  }, [close]);
+    if (!target) return;
+    requestAnimationFrame(() => { focusTaskApprovalSurface(sessionId, target); });
+  }, [close, selected, sessionId]);
 
   const keyContextRef = useRef<BackgroundTasksKeyContext>({ ownNode: null, selected: null, step: () => undefined, openConversation: () => undefined, locate: () => undefined, answerApproval: () => undefined, close: () => undefined });
   keyContextRef.current = { ownNode: inspectorRef.current, selected, step, openConversation: () => { if (selected?.call) setActiveSessionId(callConversationId(selected.call)); }, locate, answerApproval, close };

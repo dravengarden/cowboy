@@ -497,13 +497,19 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
     document.querySelector<HTMLElement>("[data-mobile-tasks-info]")!.click();
     await waitFor(() => document.querySelector("[data-mobile-task-level='info']"), "T16 Info opens execution details & diagnostics");
     check(Boolean(document.querySelector("[data-task-diagnostics]")), "T16 Info carries Diagnostics");
+    // Data refresh while reading Info must NOT eject the reader back to Result!
+    scene({ ...background, byKey: new Map(background.byKey) }, false);
+    await settle();
+    check(Boolean(document.querySelector("[data-mobile-task-level='info']")), "T16 Info stays open across background data refreshes");
     check(history.length > historyBefore, "T16 distinct levels use browser history");
+    // Closing Info with its own button unwinds history synchronously with popstate.
+    document.querySelector<HTMLElement>("[data-mobile-tasks-info]")!.click();
+    await waitFor(() => document.querySelector("[data-mobile-task-level='reader']"), "T16 Info button returns cleanly to Reader");
+    // Peek -> Reader -> All unwinds back to the existing Peek entry so Back closes sheet cleanly.
+    document.querySelector<HTMLElement>("[data-mobile-tasks-all]")!.click();
+    await waitFor(() => document.querySelector("[data-mobile-task-level='peek']"), "T16 All returns to Triage Peek");
     history.back();
-    await waitFor(() => document.querySelector("[data-mobile-task-level='reader']"), "T16 Back returns from Info to Reader");
-    history.back();
-    await waitFor(() => document.querySelector("[data-mobile-task-level='peek']"), "T16 Back returns from Reader to Triage Peek");
-    history.back();
-    await waitFor(() => inspector() === null, "T16 Back returns from Triage Peek to main transcript");
+    await waitFor(() => inspector() === null, "T16 Back from Peek after All returns directly to main transcript");
     check(scroller.scrollTop === scrollBefore, "T16 transcript keeps its scroll position");
     setDraft("s", { text: "", attachments: [] });
     openBackgroundTask("s", subagentKey("b"), "row");
@@ -731,29 +737,30 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
     setDraft("s", { text: "", attachments: [] });
     render(
       <Box sx={{ width: 1280, height: 760, display: "flex" }}>
-        <DesktopWorkspaceProvider>
-          <DesktopCommandProvider>
-            <DesktopCommandHost onNewSession={() => undefined} onOpenSettings={() => undefined} />
-            <DesktopWorkspace
-              promptWidth={440}
-              resizing={false}
-              onResizeStart={() => undefined}
-              sessionId="s"
-              projection="history"
-              onProjectionChange={() => undefined}
-              prompt={<Box data-fixture-prompt-visible sx={{ p: 2 }}>Parent Prompt stays visible</Box>}
-              conversation={<Box data-fixture-conversation>Main Conversation</Box>}
-            />
-          </DesktopCommandProvider>
-        </DesktopWorkspaceProvider>
+        <DesktopCommandHost onNewSession={() => undefined} onOpenSettings={() => undefined} />
+        <DesktopWorkspace
+          promptWidth={440}
+          resizing={false}
+          onResizeStart={() => undefined}
+          sessionId="s"
+          projection="history"
+          onProjectionChange={() => undefined}
+          prompt={<Box data-fixture-prompt-visible sx={{ p: 2 }}>Parent Prompt stays visible</Box>}
+          conversation={<Box data-fixture-conversation>Main Conversation</Box>}
+        />
       </Box>,
     );
+    await settle(2);
+    requestDesktopWorkView("tasks");
+    await waitFor(() => desktopWorkView() === "tasks" ? true : null, "Desktop work view enters Tasks");
+    setCallsDockLegacy(true);
+    await waitFor(() => desktopWorkView() === "conversation" ? true : null, "Enabling legacy rollback exits phantom Tasks view");
+    setCallsDockLegacy(false);
+
     const endedBg = backgroundOf([snapshot(2, "b", { state: "idle", stopReason: "end_turn", result: "Found stale cache." })]);
     render(
-      <Box sx={{ width: 560, height: 600, display: "flex", flexDirection: "column" }}>
-        <DesktopWorkspaceProvider>
-          <DesktopTasksView sessionId="s" active providedBackground={background} />
-        </DesktopWorkspaceProvider>
+      <Box data-desktop-pane="conversation" sx={{ width: 560, height: 600, display: "flex", flexDirection: "column" }}>
+        <DesktopTasksView sessionId="s" active providedBackground={background} />
       </Box>,
     );
     await waitFor(
@@ -763,10 +770,8 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
     document.querySelector<HTMLButtonElement>("[data-task-quote-prompt]")!.click();
     check(getDraft("s").text.includes("Regarding background task"), "Desktop Quote to Prompt appends reference to parent draft");
     render(
-      <Box sx={{ width: 960, height: 600, display: "flex", flexDirection: "column" }}>
-        <DesktopWorkspaceProvider>
-          <DesktopTasksView sessionId="s" active providedBackground={endedBg} />
-        </DesktopWorkspaceProvider>
+      <Box data-desktop-pane="conversation" sx={{ width: 960, height: 600, display: "flex", flexDirection: "column" }}>
+        <DesktopTasksView sessionId="s" active providedBackground={endedBg} />
       </Box>,
     );
     await waitFor(
@@ -777,6 +782,21 @@ export async function runBackgroundTasksBrowserConformance(observe?: () => Promi
       document.querySelector("[data-task-reader-mode='result']") !== null,
       "Ended task opens Result-First inside Desktop Tasks view",
     );
+    const desktopInfoBtn = document.querySelector<HTMLButtonElement>("[data-task-info-toggle]")!;
+    desktopInfoBtn.focus();
+    desktopInfoBtn.click();
+    await waitFor(() => document.querySelector("[data-task-reader-mode='info']"), "Clicking Info opens task info");
+    desktopInfoBtn.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
+    await waitFor(() => document.querySelector("[data-task-reader-mode='result']"), "Escape closes clicked Info back to Result");
+    const hideChip = document.querySelector<HTMLElement>("[data-task-hide-ended]")!;
+    hideChip.focus();
+    hideChip.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    hideChip.dispatchEvent(new KeyboardEvent("keyup", { key: "Enter", bubbles: true, cancelable: true }));
+    await waitFor(
+      () => document.querySelector("[data-task-hide-ended]")?.textContent?.includes("Showing active") ? true : null,
+      "Roster Enter preserves native activation on non-option controls",
+    );
+    check(document.activeElement === hideChip, "Roster Enter on Hide ended does not move focus away to reader");
     requestDesktopWorkView("conversation");
     check(desktopWorkView() === "conversation", "Work view switches cleanly back to Conversation");
     setDraft("s", { text: "", attachments: [] });

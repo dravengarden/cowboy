@@ -2,28 +2,21 @@
 // 1-tap content-height Triage Peek -> same-host Reader + 1-tap bottom worker switcher.
 
 import { FloatingActionIsland } from "@cowboy/app-shell";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { alpha, Box, ButtonBase, Chip, Stack, Typography } from "@mui/material";
 import { ChatBubbleOutline, ChevronLeft, ChevronRight, FormatListBulleted, FormatQuoteOutlined, InfoOutlined, SubjectOutlined, TerminalOutlined } from "@mui/icons-material";
-import { acknowledgeTask, taskHash, taskKeyFromHash, type TaskSummary } from "../backgroundTasks";
-import { closeBackgroundTasks, inspectorState, openBackgroundTask, OPEN_BACKGROUND_TASKS_EVENT, selectBackgroundTask, useInspectorState } from "../backgroundTaskInspectorState";
-import { appendDraftText } from "../draftStore";
+import type { TaskSummary } from "../backgroundTasks";
 import { Sheet } from "../Sheet";
-import { notify } from "../store";
 import { taskToneColor } from "../SubagentCard";
 import { useSubagentTranscript } from "../SubagentTranscript";
 import { taskTone } from "../TaskRow";
 import type { BackgroundTasks } from "../useBackgroundTasks";
 import { LegacyCallsSwitch } from "./TaskDiagnostics";
-import { TaskResultReader, type TaskReaderViewMode } from "./TaskResultReader";
+import { focusTaskApprovalSurface, quoteTaskToPrompt } from "./taskEvents";
+import { type TaskReaderViewMode, TaskResultReader } from "./TaskResultReader";
 import { TaskRoster } from "./TaskRoster";
-import { buildTaskForest, flattenTaskSections, formatTaskQuote, isTaskEnded, taskPillLabel, taskTabSummary } from "./taskTree";
-
-type MobileLevel = "peek" | "reader" | "info";
-
-function defaultMobileMode(task: TaskSummary): TaskReaderViewMode {
-  return isTaskEnded(task) ? "result" : task.source === "call" ? "transcript" : "result";
-}
+import { buildTaskForest, flattenTaskSections, taskPillLabel, taskTabSummary } from "./taskTree";
+import { useMobileTasksHistory } from "./useMobileTasksHistory";
 
 function DockActionButton({ label, ariaLabel, icon, active = false, dataAttr, onClick }: { label: string; ariaLabel?: string; icon: React.ReactNode; active?: boolean; dataAttr?: string; onClick: () => void }): React.JSX.Element {
   return (
@@ -98,116 +91,6 @@ function MobileReaderDock({ tasks, selected, mode, hasConversation, onClose, onS
   );
 }
 
-function useMobileTasksHistory({ sessionId, background, visibleTasks }: { sessionId: string; background: BackgroundTasks; visibleTasks: readonly TaskSummary[] }) {
-  const state = useInspectorState();
-  const open = state.sessionId === sessionId;
-  const [level, setLevel] = useState<MobileLevel>("peek");
-  const [readerMode, setReaderMode] = useState<TaskReaderViewMode>("result");
-  const depth = useRef(0);
-  const closingHash = useRef<string | null>(null);
-  const selected = state.key ? background.byKey.get(state.key) ?? null : null;
-
-  useEffect(() => {
-    const hash = globalThis.location?.hash ?? "";
-    const key = taskKeyFromHash(hash);
-    if (!key) { closingHash.current = null; return; }
-    if (closingHash.current === hash || inspectorState().sessionId === sessionId || !background.byKey.has(key)) return;
-    openBackgroundTask(sessionId, key, "link");
-  }, [sessionId, background.byKey]);
-
-  useEffect(() => {
-    const onOpen = (event: Event): void => {
-      const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
-      if (detail?.sessionId && detail.sessionId !== sessionId) return;
-      openBackgroundTask(sessionId, null, "command");
-    };
-    globalThis.addEventListener(OPEN_BACKGROUND_TASKS_EVENT, onOpen);
-    return () => globalThis.removeEventListener(OPEN_BACKGROUND_TASKS_EVENT, onOpen);
-  }, [sessionId]);
-
-  useEffect(() => {
-    if (!open) { depth.current = 0; return; }
-    const target = state.key ? background.byKey.get(state.key) ?? null : null;
-    if (target) {
-      setLevel("reader");
-      setReaderMode(defaultMobileMode(target));
-      if (state.origin !== "link" && target.attention === "failed_unseen") acknowledgeTask(sessionId, target);
-    } else {
-      setLevel("peek");
-    }
-    if (depth.current === 0) {
-      globalThis.history?.pushState({ cowboyTasks: target ? 2 : 1 }, "", target ? taskHash(target.key) : "#tasks");
-      depth.current = 1;
-    }
-  }, [open, state.revision, state.key, state.origin, sessionId, background.byKey]);
-
-  const close = useCallback((): void => {
-    const steps = depth.current;
-    depth.current = 0;
-    const hash = globalThis.location?.hash ?? "";
-    if (taskKeyFromHash(hash)) closingHash.current = hash;
-    closeBackgroundTasks();
-    if (steps > 0) globalThis.history?.go(-steps);
-  }, []);
-
-  useEffect(() => {
-    if (!open) return undefined;
-    const onPop = (): void => {
-      if (depth.current <= 1) { depth.current = 0; closeBackgroundTasks(); return; }
-      depth.current -= 1;
-      if (level === "info") { setLevel("reader"); setReaderMode("result"); }
-      else if (level === "reader") { setLevel("peek"); selectBackgroundTask(null); }
-    };
-    globalThis.addEventListener("popstate", onPop);
-    return () => globalThis.removeEventListener("popstate", onPop);
-  }, [open, level]);
-
-  const openWorkerFromPeek = useCallback((key: string): void => {
-    const target = background.byKey.get(key);
-    if (!target) return;
-    selectBackgroundTask(key);
-    setLevel("reader");
-    setReaderMode(defaultMobileMode(target));
-    if (target.attention === "failed_unseen") acknowledgeTask(sessionId, target);
-    globalThis.history?.pushState({ cowboyTasks: 2 }, "", taskHash(key));
-    depth.current += 1;
-  }, [background.byKey, sessionId]);
-
-  const switchSibling = useCallback((key: string): void => {
-    const target = background.byKey.get(key);
-    if (!target) return;
-    selectBackgroundTask(key);
-    setLevel("reader");
-    setReaderMode(defaultMobileMode(target));
-    if (target.attention === "failed_unseen") acknowledgeTask(sessionId, target);
-    globalThis.history?.replaceState({ cowboyTasks: 2 }, "", taskHash(key));
-  }, [background.byKey, sessionId]);
-
-  const stepSibling = useCallback((delta: -1 | 1): void => {
-    if (visibleTasks.length <= 1 || !selected) return;
-    const index = visibleTasks.findIndex((item) => item.key === selected.key);
-    const next = visibleTasks[(index + delta + visibleTasks.length) % visibleTasks.length];
-    if (next) switchSibling(next.key);
-  }, [selected, switchSibling, visibleTasks]);
-
-  const openInfo = useCallback((): void => {
-    if (!selected) return;
-    if (level === "info") { setLevel("reader"); setReaderMode("result"); if (depth.current > 1) globalThis.history?.back(); return; }
-    setLevel("info");
-    setReaderMode("info");
-    globalThis.history?.pushState({ cowboyTasks: 3 }, "", taskHash(selected.key));
-    depth.current += 1;
-  }, [level, selected]);
-
-  const showPeek = useCallback((): void => {
-    setLevel("peek");
-    selectBackgroundTask(null);
-    globalThis.history?.replaceState({ cowboyTasks: 1 }, "", "#tasks");
-  }, []);
-
-  return { open, selected, level, readerMode, setLevel, setReaderMode, close, openWorkerFromPeek, switchSibling, stepSibling, openInfo, showPeek };
-}
-
 export function MobileTasksSheet({ sessionId, background, onOpenTool }: { sessionId: string; background: BackgroundTasks; onOpenTool?: ((toolKey: string) => void) | undefined }): React.JSX.Element | null {
   const { tasks, calls, refreshCalls, backgroundActivity } = background;
   const [hideEnded, setHideEnded] = useState(false);
@@ -218,14 +101,11 @@ export function MobileTasksSheet({ sessionId, background, onOpenTool }: { sessio
   const nav = useMobileTasksHistory({ sessionId, background, visibleTasks });
   const subagentTranscript = useSubagentTranscript(sessionId, nav.open && nav.selected?.source === "subagent" ? (nav.selected.subagent ?? null) : null);
   const hasConversation = Boolean(nav.selected && (nav.selected.source === "call" || (nav.selected.source === "subagent" && subagentTranscript.observed)));
-  const answerApproval = useCallback((): void => {
+
+  const answerApproval = useCallback((task: TaskSummary): void => {
     nav.close();
-    requestAnimationFrame(() => {
-      const approval = document.querySelector<HTMLElement>("[data-call-approval], [data-permission-overlay]");
-      approval?.scrollIntoView({ block: "nearest" });
-      approval?.querySelector<HTMLElement>("button")?.focus({ preventScroll: true });
-    });
-  }, [nav]);
+    requestAnimationFrame(() => focusTaskApprovalSurface(sessionId, task));
+  }, [nav, sessionId]);
 
   if (!nav.open) return null;
   const isPeek = nav.level === "peek" || !nav.selected;
@@ -274,9 +154,9 @@ export function MobileTasksSheet({ sessionId, background, onOpenTool }: { sessio
           onShowPeek={nav.showPeek}
           onSelectSibling={nav.switchSibling}
           onStepSibling={nav.stepSibling}
-          onToggleLog={(): void => { nav.setLevel("reader"); nav.setReaderMode((current) => (current === "transcript" ? "result" : "transcript")); }}
-          onToggleInfo={nav.openInfo}
-          onQuote={(): void => { appendDraftText(sessionId, formatTaskQuote(nav.selected!)); notify("Quoted to Prompt", "info"); nav.close(); }}
+          onToggleLog={(): void => nav.setContentMode(effectiveMode === "transcript" ? "result" : "transcript")}
+          onToggleInfo={nav.toggleInfo}
+          onQuote={(): void => quoteTaskToPrompt(sessionId, nav.selected!, nav.close)}
         />
       )}
     >
@@ -289,12 +169,12 @@ export function MobileTasksSheet({ sessionId, background, onOpenTool }: { sessio
                   {statusPills.map((pill) => <Chip key={pill} size="small" variant="outlined" label={pill} sx={{ height: 22, fontSize: "0.7rem" }} />)}
                 </Stack>
               )}
-              <TaskRoster sessionId={sessionId} tasks={tasks} calls={calls} selectedKey={null} desktop={false} hideEnded={hideEnded} onToggleHideEnded={(): void => setHideEnded((value) => !value)} collapsedKeys={collapsedKeys} onToggleFold={(key): void => setCollapsedKeys((prev) => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })} onSelect={nav.openWorkerFromPeek} onRefreshCalls={refreshCalls} onReviewRequest={(): void => answerApproval()} />
+              <TaskRoster sessionId={sessionId} tasks={tasks} calls={calls} selectedKey={null} desktop={false} hideEnded={hideEnded} onToggleHideEnded={(): void => setHideEnded((value) => !value)} collapsedKeys={collapsedKeys} onToggleFold={(key): void => setCollapsedKeys((prev) => { const next = new Set(prev); if (next.has(key)) next.delete(key); else next.add(key); return next; })} onSelect={nav.openWorkerFromPeek} onRefreshCalls={refreshCalls} onReviewRequest={answerApproval} />
               <LegacyCallsSwitch onSwitch={nav.close} />
             </Stack>
           )
           : (
-            <TaskResultReader sessionId={sessionId} task={nav.selected!} background={background} subagentTranscript={subagentTranscript} desktop={false} modeOverride={effectiveMode} onModeChange={(next): void => { if (next === "info") nav.openInfo(); else { nav.setLevel("reader"); nav.setReaderMode(next); } }} onAnswerApproval={answerApproval} onOpenOriginTool={onOpenTool ? (toolKey): void => { nav.close(); onOpenTool(toolKey); } : undefined} onQuoted={nav.close} bottomInset="var(--cowboy-sheet-dock-clearance, 108px)" />
+            <TaskResultReader sessionId={sessionId} task={nav.selected!} background={background} subagentTranscript={subagentTranscript} desktop={false} mode={effectiveMode} onModeChange={(next): void => { if (next === "info") nav.toggleInfo(); else nav.setContentMode(next); }} onAnswerApproval={(): void => answerApproval(nav.selected!)} onOpenOriginTool={onOpenTool ? (toolKey): void => { nav.close(); onOpenTool(toolKey); } : undefined} onOpenChildSession={nav.openChildSession} onQuoted={nav.close} bottomInset="var(--cowboy-sheet-dock-clearance, 108px)" />
           )}
       </Box>
     </Sheet>

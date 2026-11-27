@@ -92,6 +92,8 @@ export function PermissionOverlay({
   return (
     <Box
       data-permission-overlay
+      data-approval-session={sessionId}
+      data-approval-target={item.subagentId ? `subagent:${item.subagentId}` : `permission:${item.requestId}`}
       data-composer-stack-slot="status"
       {...answerKeyboard.props}
       sx={{

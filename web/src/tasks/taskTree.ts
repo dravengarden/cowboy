@@ -13,7 +13,7 @@ import {
   elapsedLabel,
   type ManagedCallSummary,
 } from "../managedCalls";
-import { type Subagent, subagentCounts } from "../subagents";
+import { type Subagent, subagentCounts, terminalGroup } from "../subagents";
 
 export interface TaskTabSummary {
   /** Session has retained task history or reported background activity. */
@@ -83,28 +83,36 @@ function sourceRank(source: TaskSummary["source"]): number {
   }
 }
 
-/** Stable comparator that never pits Call epoch ms against subagent seq numbers.
- *  When both tasks share parent timeline anchors, newer anchors sort first;
- *  otherwise tasks compare within their own clock domain and stabilize by key. */
-export function compareTaskOrder(a: TaskSummary, b: TaskSummary): number {
-  if (a.anchorSeq !== null && b.anchorSeq !== null && a.anchorSeq !== b.anchorSeq) {
-    return b.anchorSeq - a.anchorSeq;
+function orderPartition(task: TaskSummary): number {
+  if (task.source === "approval") return 0;
+  return task.anchorSeq !== null ? 1 : 2;
+}
+
+function unanchoredClock(task: TaskSummary): number {
+  if (task.source === "call" && task.call) return task.call.created_at_ms;
+  if (task.source === "subagent" && task.subagent) {
+    return task.subagent.observedSeq ?? task.subagent.revision;
   }
-  if (a.source === b.source) {
-    if (a.source === "call" && a.call && b.call) {
-      if (a.call.created_at_ms !== b.call.created_at_ms) {
-        return b.call.created_at_ms - a.call.created_at_ms;
-      }
-    } else if (a.source === "subagent" && a.subagent && b.subagent) {
-      const seqA = a.anchorSeq ?? a.subagent.observedSeq ?? a.subagent.revision;
-      const seqB = b.anchorSeq ?? b.subagent.observedSeq ?? b.subagent.revision;
-      if (seqA !== seqB) return seqB - seqA;
-    } else if (a.sortAt !== b.sortAt) {
-      return b.sortAt - a.sortAt;
-    }
+  return task.sortAt;
+}
+
+/** Strict total-order comparator that never mixes incompatible clocks:
+ *  Partition 0: pending approvals (sortAt desc).
+ *  Partition 1: tasks anchored on the shared parent timeline (anchorSeq desc, then sourceRank).
+ *  Partition 2: unanchored tasks (sourceRank first so each source stays in its own clock domain,
+ *  then source-local timestamp/seq desc). Ties break by key. */
+export function compareTaskOrder(a: TaskSummary, b: TaskSummary): number {
+  const partDiff = orderPartition(a) - orderPartition(b);
+  if (partDiff !== 0) return partDiff;
+  if (a.anchorSeq !== null && b.anchorSeq !== null) {
+    if (a.anchorSeq !== b.anchorSeq) return b.anchorSeq - a.anchorSeq;
+    const rankDiff = sourceRank(a.source) - sourceRank(b.source);
+    if (rankDiff !== 0) return rankDiff;
   } else {
     const rankDiff = sourceRank(a.source) - sourceRank(b.source);
     if (rankDiff !== 0) return rankDiff;
+    const clockDiff = unanchoredClock(b) - unanchoredClock(a);
+    if (clockDiff !== 0) return clockDiff;
   }
   return a.key.localeCompare(b.key);
 }
@@ -401,7 +409,11 @@ export function formatTaskQuote(task: TaskSummary, excerpt?: string | null): str
   return `Regarding background task "${task.title}" (${ref}, ${statusLine}):\n> ${clipped.replaceAll("\n", "\n> ")}`;
 }
 
-/** True when a task has reached a terminal state and should lead with its result. */
+/** True when a task has reached a terminal execution state and should lead with
+ *  its outcome/result. Unseen failed tasks stay in the Needs you roster section
+ *  for triage, yet are still execution-terminal here. */
 export function isTaskEnded(task: TaskSummary): boolean {
-  return taskSection(task) === "ended";
+  if (task.source === "approval") return false;
+  if (task.source === "call" && task.call) return !callActive(task.call.state);
+  return terminalGroup(task.group) || task.group === "unavailable";
 }

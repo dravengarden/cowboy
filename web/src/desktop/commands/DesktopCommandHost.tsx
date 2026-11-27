@@ -1,6 +1,6 @@
 import { useDesktopInsertCommand } from "../editorInsert";
 import { DESKTOP_TOGGLE_EMPTY_DRAFTS_EVENT } from "../promptBuffer";
-import { CALLS_DOCK_LEGACY_KEY } from "../../backgroundTasks";
+import { callsDockLegacyEnabled } from "../../backgroundTasks";
 import { OPEN_BACKGROUND_TASKS_EVENT } from "../../backgroundTaskInspectorState";
 import { activeTasksSessionId, sessionTasksAvailability } from "../../tasks/taskEvents";
 import { desktopTasksShown } from "../review/desktopWorkView";
@@ -465,14 +465,14 @@ export function DesktopCommandHost({
       description: "Show and focus the session's Background Tasks view in the work pane. With the previous Calls panel restored, open or close Calls instead",
       group: "Prompt",
       sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.focusCalls),
-      when: () => (globalThis.localStorage?.getItem(CALLS_DOCK_LEGACY_KEY) === "1")
+      when: () => callsDockLegacyEnabled()
         ? document.querySelector("[data-desktop-region='prompt.calls'] > *") !== null
         : sessionTasksAvailability().hasTasks || desktopTasksShown() ||
           document.querySelector("[data-desktop-region='prompt.calls'] [data-background-tasks-available='true']") !== null,
       disabledReason: "This session has no background tasks",
       consumeWhenDisabled: true,
       run: () => {
-        if (!(globalThis.localStorage?.getItem(CALLS_DOCK_LEGACY_KEY) === "1")) {
+        if (!callsDockLegacyEnabled()) {
           const domSession = document.querySelector<HTMLElement>("[data-desktop-region='prompt.calls'] [data-background-tasks-available='true']")?.dataset["backgroundTasksSession"];
           globalThis.dispatchEvent(new CustomEvent(OPEN_BACKGROUND_TASKS_EVENT, { detail: { sessionId: activeTasksSessionId() ?? domSession } }));
           return;

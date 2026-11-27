@@ -9,6 +9,7 @@ import {
   compareTaskOrder,
   flattenTaskSections,
   formatTaskQuote,
+  isTaskEnded,
   taskHeadline,
   taskTabSummary,
   taskTimeLabel,
@@ -238,4 +239,91 @@ test("taskHeadline and taskTimeLabel report real activity, verdicts and honest m
       quote.includes("> Retry can repeat the write."),
     true,
   );
+});
+
+test("compareTaskOrder is strictly transitive across mixed anchored, unanchored, and approval tasks", () => {
+  const tasks = buildTaskSummaries({
+    subagents: [
+      { subagent: subagent({ id: "s-anch-30", observedSeq: 30 }), anchorSeq: 30, reconciledBy: "live", reconciledAt: 100 },
+      { subagent: subagent({ id: "s-anch-10", observedSeq: 10 }), anchorSeq: 10, reconciledBy: "live", reconciledAt: 100 },
+      { subagent: subagent({ id: "s-unanch-90", observedSeq: 90 }), anchorSeq: null, reconciledBy: "live", reconciledAt: 100 },
+      { subagent: subagent({ id: "s-unanch-40", observedSeq: 40 }), anchorSeq: null, reconciledBy: "live", reconciledAt: 100 },
+    ],
+    calls: [
+      call({ call_id: "c-anch-20", created_at_ms: 1_700_000_200_000 }),
+      call({ call_id: "c-unanch-old", created_at_ms: 1_700_000_010_000 }),
+      call({ call_id: "c-unanch-new", created_at_ms: 1_700_000_500_000 }),
+    ],
+    callAnchors: new Map([["c-anch-20", 20]]),
+    approval: {
+      schema: 1,
+      caller: "claude-code",
+      reason: "calls_disabled",
+      requests: 1,
+      agents: ["codex"],
+      prompt_revision: 7,
+      request_ids: ["req-app-1"],
+      ttl_ms: 60_000,
+      items: [{ agent: "codex", purpose: "review", summary: "Review patch" }],
+    },
+    pending: [],
+  });
+  // Verify strict weak ordering axioms on all triples (irreflexivity, antisymmetry, transitivity).
+  for (const a of tasks) {
+    assertEquals(compareTaskOrder(a, a), 0);
+    for (const b of tasks) {
+      const ab = Math.sign(compareTaskOrder(a, b));
+      const ba = Math.sign(compareTaskOrder(b, a));
+      assertEquals(ab, ba === 0 ? 0 : -ba);
+      for (const c of tasks) {
+        const bc = Math.sign(compareTaskOrder(b, c));
+        const ac = Math.sign(compareTaskOrder(a, c));
+        if (ab < 0 && bc < 0) assertEquals(ac, -1);
+        if (ab > 0 && bc > 0) assertEquals(ac, 1);
+      }
+    }
+  }
+  const sorted = [...tasks].sort(compareTaskOrder);
+  assertEquals(sorted.map((t) => t.key), [
+    "approval:req-app-1",
+    subagentKey("s-anch-30"),
+    callKey("c-anch-20"),
+    subagentKey("s-anch-10"),
+    callKey("c-unanch-new"),
+    callKey("c-unanch-old"),
+    subagentKey("s-unanch-90"),
+    subagentKey("s-unanch-40"),
+  ]);
+});
+
+test("isTaskEnded uses execution status rather than Needs you attention grouping", () => {
+  const tasks = buildTaskSummaries({
+    subagents: [
+      { subagent: subagent({ id: "s-fail-unseen", state: "idle", stopReason: "error", error: "crashed" }), anchorSeq: 1, reconciledBy: "live", reconciledAt: 100 },
+      { subagent: subagent({ id: "s-live", state: "running" }), anchorSeq: 2, reconciledBy: "live", reconciledAt: 100 },
+    ],
+    calls: [
+      call({ call_id: "c-fail-unseen", state: "failed", finished_at_ms: 1_700_000_090_000, error: { code: "provider_error", detail: "oops" } }),
+      call({ call_id: "c-live", state: "running" }),
+    ],
+    approval: {
+      schema: 1,
+      caller: "claude-code",
+      reason: "calls_disabled",
+      requests: 1,
+      agents: ["codex"],
+      prompt_revision: 1,
+      request_ids: ["app-1"],
+      ttl_ms: 60_000,
+      items: [{ agent: "codex", purpose: "review", summary: "Review" }],
+    },
+    pending: [],
+  });
+  const byKey = new Map(tasks.map((t) => [t.key, t]));
+  assertEquals(byKey.get(callKey("c-fail-unseen"))!.attention, "failed_unseen");
+  assertEquals(isTaskEnded(byKey.get(callKey("c-fail-unseen"))!), true);
+  assertEquals(isTaskEnded(byKey.get(subagentKey("s-fail-unseen"))!), true);
+  assertEquals(isTaskEnded(byKey.get(callKey("c-live"))!), false);
+  assertEquals(isTaskEnded(byKey.get(subagentKey("s-live"))!), false);
+  assertEquals(isTaskEnded(byKey.get("approval:app-1")!), false);
 });

@@ -532,65 +532,42 @@ export function DetentSheet(
     }
   }, []);
 
-  // (Re)compute geometry against the rendered content on open, then animate in.
-  // Do the geometry read from a frame callback rather than directly in the
-  // discrete click's effect flush. Mounting a sheet invalidates style/layout;
-  // reading offsetHeight in that same turn forced a synchronous reflow on
-  // slower iPhones (and made a nested filter feel stuck before it moved). The
-  // Paper starts at 100vh in CSS, so the one-frame measurement delay remains
-  // visually hidden; the following frame starts the normal settle transition.
+  // Measure rendered content in a rAF (avoiding sync reflow during click flush),
+  // then animate in. Opt-in maxHeight sheets also observe height changes so a
+  // growing peek sheet never dismisses using its stale initial height.
   useEffect(() => {
-    if (!open) {
-      animatedRef.current = false;
-      return;
+    if (!open) { animatedRef.current = false; return; }
+    const measureGeom = (): { detents: number[]; closedPx: number } => {
+      const closedPx = sheetRef.current?.offsetHeight ?? MAX_FRACTION * globalThis.innerHeight;
+      const h = globalThis.innerHeight;
+      const hasPeek = peekDetent && !isCover && closedPx >= PEEK_ENABLE_FRACTION * h;
+      const detents = hasPeek ? [sign * (closedPx - PEEK_FRACTION * h), 0] : [0];
+      geomRef.current = { detents, closedPx };
+      return geomRef.current;
+    };
+    let ro: ResizeObserver | null = null;
+    if (!isCover && maxHeight && sheetRef.current && typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver(() => {
+        if (!animatedRef.current || dragRef.current) return;
+        measureGeom();
+      });
+      ro.observe(sheetRef.current);
     }
     const measureFrame = globalThis.requestAnimationFrame(() => {
-      const closedPx = sheetRef.current?.offsetHeight ?? MAX_FRACTION * globalThis.innerHeight,
-        h = globalThis.innerHeight;
-      // The sheet's ACTUAL rendered height — content-driven, clamped by the CSS
-      // maxHeight (MAX_FRACTION vh). This is both the slide-out distance and the
-      // "full" extent: opening at translateY 0 reveals the whole sheet, so a short
-      // confirm shows its actions without any drag. offsetHeight (not a vh
-      // computation) is exact under the iOS Safari 100vh-vs-innerHeight gap.
-      // Two levels only when the content is tall enough for a peek to be a
-      // distinct stop; otherwise a single content-sized level. Detents are
-      // translateY values, ordered most-hidden → full (0).
-      // A cover is a single full level (flick down dismisses) — never a peek, even
-      // though it's tall enough to otherwise earn one.
-      const hasPeek = peekDetent && !isCover && closedPx >= PEEK_ENABLE_FRACTION * h;
-      const peekY = sign * (closedPx - PEEK_FRACTION * h);
-      const detents = hasPeek ? [peekY, 0] : [0];
-      geomRef.current = { detents, closedPx };
-      const openY = detents.at(-1) ?? 0; // full
-      if (animatedRef.current) {
-        // Already open — this is a geometry change (cover ↔ content-height), the
-        // CSS height/anchor already updated reactively. Just settle to the open
-        // position (snaps a stale peek offset to full); never re-seed + re-slide.
-        paint(openY, true);
-        return;
-      }
+      const { detents, closedPx } = measureGeom();
+      const openY = detents.at(-1) ?? 0;
+      if (animatedRef.current) { paint(openY, true); return; }
       animatedRef.current = true;
-      if (haptic) {
-        sheetHaptic(); // light tap on open (best-effort; see sheetHaptic)
-      }
-      // Keep the temporary opaque surface from the very first measured frame.
-      // The closed offset still leaves the sheet's lower edge visible while the
-      // next rAF starts the slide; without the moving marker that small strip
-      // would briefly expose the page through the translucent frosted tint.
-      paint(animateOnOpen ? sign * closedPx : openY, false, animateOnOpen); // seed closed (no transition)…
+      if (haptic) sheetHaptic();
+      paint(animateOnOpen ? sign * closedPx : openY, false, animateOnOpen);
       rafRef.current = animateOnOpen
-        ? globalThis.requestAnimationFrame(() => {
-          rafRef.current = 0;
-          paint(openY, true);
-        })
-        : 0; // …then slide open
+        ? globalThis.requestAnimationFrame(() => { rafRef.current = 0; paint(openY, true); })
+        : 0;
     });
     return () => {
+      ro?.disconnect();
       globalThis.cancelAnimationFrame(measureFrame);
-      if (rafRef.current !== 0) {
-        globalThis.cancelAnimationFrame(rafRef.current);
-        rafRef.current = 0;
-      }
+      if (rafRef.current !== 0) { globalThis.cancelAnimationFrame(rafRef.current); rafRef.current = 0; }
     };
   }, [open, paint, sign, isCover, peekDetent, haptic, animateOnOpen, maxHeight]);
 

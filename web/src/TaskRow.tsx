@@ -93,7 +93,7 @@ export const TaskRow = memo(function TaskRow({
   const [confirming, setConfirming] = useState(false);
   const [focused, setFocused] = useState(false);
   const tone = taskTone(task.group);
-  const subtitle = stopLine(stop) ?? taskHeadline(task);
+  const subtitle = stopLine(stop) ?? (task.source === "call" ? taskHeadline(task) : task.subtitle);
   const nested = task.source === "subagent" && task.parentKey !== null;
   const Icon = task.source === "call" ? CallSplitOutlined : AccountTreeOutlined;
   const confirmStop = (): void => {

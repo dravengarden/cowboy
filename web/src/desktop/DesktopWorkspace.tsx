@@ -213,8 +213,8 @@ export const DesktopWorkspace = memo(function DesktopWorkspace({
   const callsDockLegacy = useCallsDockLegacy();
   const tasksAvailability = useSessionTasksAvailability(callsDockLegacy ? null : sessionId);
   const reviewShown = view === "review";
-  const tasksShown = !callsDockLegacy && view === "tasks";
-  const conversationShown = !reviewShown && !tasksShown;
+  const tasksShown = view === "tasks";
+  const conversationShown = view === "conversation";
   const conversationShortcutsActive = workspace.focusedPane === "conversation" && conversationShown;
   const toggleProjectionCommand = useMemo<DesktopCommand>(() => ({
     id: "conversation.toggleProjection",
@@ -426,7 +426,7 @@ export const DesktopWorkspace = memo(function DesktopWorkspace({
             tabIndex={-1}
             sx={{ flex: 1, minHeight: 0, display: tasksShown ? "flex" : "none", flexDirection: "column", "&:focus": { outline: "none" } }}
           >
-            <DesktopTasksView sessionId={sessionId} active={tasksShown} />
+            <DesktopTasksView key={sessionId} sessionId={sessionId} active={tasksShown} />
           </Box>
         )}
         {

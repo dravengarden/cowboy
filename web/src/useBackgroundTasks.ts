@@ -142,7 +142,12 @@ function isBackgroundEnvelope(envelope: Envelope): boolean {
   if (envelope.kind === "lifecycle") return true;
   if (envelope.kind !== "update") return false;
   const kind = envelope.update.sessionUpdate;
-  return kind === "cowboy_subagent" || kind === "cowboy_call_anchor";
+  return (
+    kind === "cowboy_subagent" ||
+    kind === "cowboy_call_anchor" ||
+    kind === "tool_call" ||
+    kind === "tool_call_update"
+  );
 }
 
 /** Subagent rows carry `Stopping` only while the source has not confirmed. */

@@ -52,7 +52,7 @@ export function CallApprovalOverlay({
   const more = approval.requests - shown.length;
   return (
     <Box
-      data-call-approval-overlay
+      data-call-approval-overlay data-approval-session={sessionId} data-approval-target={`approval:${approval.request_ids?.join(",") ?? String(approval.prompt_revision ?? 0)}`}
       data-composer-stack-slot="status"
       sx={{
         position: "relative",
