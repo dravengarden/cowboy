@@ -1,4 +1,5 @@
 import { LineageExploreQuestions } from "./LineageExploreQuestions";
+import { useComposeToggle } from "./composeOnFocusRequest";
 import { desktopSize } from "../surface/desktopSize";
 import {
   ArrowDownward,
@@ -61,7 +62,6 @@ import {
 } from "../store";
 import { requestStickToBottom, setSticky } from "../stickyStore";
 import { Transcript } from "../Transcript";
-import { useReliableTouchTap } from "../useReliableTouchTap";
 import {
   beginExplorePageLoading,
   setExplorePage,
@@ -1917,9 +1917,7 @@ export function MobilePageDock({
     : undefined;
   const next = pages[currentIndex + 1];
   const knownPageIds = pages.map((page) => page.id);
-  const composeToggleTap = useReliableTouchTap<HTMLButtonElement>(() =>
-    onComposeToggle(knownPageIds)
-  );
+  const composeToggleTap = useComposeToggle(sessionId, composeOpen, () => onComposeToggle(knownPageIds));
   const hasEarlierHistory = pagination?.reachedStart === false;
   const loadingEarlier = pagination?.loadingOlder === true;
   const indexedOrLoadedTotal = Math.max(pages.length, pageIndex.data?.total ?? 0);

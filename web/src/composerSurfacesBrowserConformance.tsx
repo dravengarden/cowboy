@@ -17,7 +17,7 @@ import { loadProviderCatalog, resetProviderCatalog } from "./providerCatalogRegi
 import { isMac } from "./platform";
 import type { SessionMeta } from "./protocol";
 import { composePendingPrompt } from "./contextPendingPrompt";
-import { draftFromMessage } from "./refusedMessage";
+import { draftFromBlocks } from "./refusedMessage";
 
 const SESSION = "surface-session";
 /** The newest in-page socket, so a test can deliver a live transcript event. */
@@ -665,11 +665,12 @@ export async function runComposerSurfacesBrowserConformance(): Promise<string[]>
   // Composer with its image as an inline thumbnail where it was sent.
   const putBack = mount("desktop", "1200px");
   await until(() => editorIn(putBack.container), "the Desktop composer");
-  const { draft } = await draftFromMessage([
+  const { draft } = await draftFromBlocks([
     { type: "text", text: "put back " },
     {
       type: "image",
-      src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
+      mimeType: "image/png",
+      data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==",
     },
     { type: "text", text: " with its image" },
   ]);

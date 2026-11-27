@@ -98,6 +98,8 @@ test("refused input asks for a text answer, never offers the continuation", () =
       "antigravity_prompt_rejected:image_answer: {not json",
       detail({ antigravity_backend: backend }),
       detail(proven, "other"),
+      // Self-consistent, but not a code the Controller recognises.
+      detail({ ...proven, prompt_rejected: "other" }, "other"),
       detail({ ...proven, policy_violation: "search_web" }),
       detail({ ...proven, uncertain_effect: "fs/writeFile" }),
       detail({ ...proven, antigravity_backend: { class: "not_dispatched" } }),
@@ -119,7 +121,7 @@ test("refused input asks for a text answer, never offers the continuation", () =
   // turn's row behind the status bar; the bar carries the hint then.
   assert(
     transcript.includes(
-      'status === "crashed" && isRefusedInput(crashDetail) && (',
+      'status === "crashed" && crashKey !== null && isRefusedInput(crashDetail) && (',
     ),
   );
 });

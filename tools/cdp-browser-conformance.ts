@@ -36,7 +36,7 @@ const ENTRIES: Readonly<Record<string, [string, number]>> = {
   "workspace-picker": ["runWorkspacePickerBrowserConformance", 10],
   "project-placement": ["runProjectPlacementBrowserConformance", 13],
   "session-maintenance": ["runSessionMaintenanceBrowserConformance", 8],
-  "dormant-session": ["runDormantSessionBrowserConformance", 31],
+  "dormant-session": ["runDormantSessionBrowserConformance", 32],
   elicitation: ["runElicitationBrowserConformance", 6],
   widgets: ["runWidgetsBrowserConformance", 15],
   "widget-apps": ["runWidgetAppsBrowserConformance", 14],

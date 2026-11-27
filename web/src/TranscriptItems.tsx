@@ -946,7 +946,7 @@ export function TurnFailureRecovery({
           Continue
         </Button>
       )}
-      <PutBackButton sessionId={sessionId} beforeKey={itemKey} primary={refusedInput} />
+      <PutBackButton sessionId={sessionId} failureKey={itemKey} primary={refusedInput} />
     </Stack>
   );
 }

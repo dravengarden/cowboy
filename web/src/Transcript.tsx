@@ -291,13 +291,13 @@ function ThinkingIndicator({
 // surfaces as `interrupted` (amber, "didn't finish"), distinct from the normal
 // `exited` dormant (grey, "completed, asleep") — completed vs interrupted at a
 // glance, no percentage.
-function latestCrashDetail(items: RenderItem[]): string | null {
+function latestCrash(items: RenderItem[]): { key: string; detail: string } | null {
   for (let index = items.length - 1; index >= 0; index -= 1) {
     const item = items[index];
     if (
       item?.kind === "lifecycle" && item.status === "crashed" && !item.recovered && item.detail
     ) {
-      return item.detail;
+      return { key: item.key, detail: item.detail };
     }
   }
   return null;
@@ -307,10 +307,13 @@ function SessionStatusBar({
   sessionId,
   status,
   crashDetail,
+  crashKey,
 }: {
   sessionId: string;
   status: Status;
   crashDetail: string | null;
+  /** The live crash's row: Back to Prompt restores what was sent before it. */
+  crashKey: string | null;
 }): React.JSX.Element | null {
   let tone: "warning" | "error" | "neutral";
   let icon: React.JSX.Element;
@@ -361,12 +364,12 @@ function SessionStatusBar({
         <Typography variant="caption" sx={{ fontWeight: 600, lineHeight: 1.3 }}>
           {text}
         </Typography>
-        {status === "crashed" && isRefusedInput(crashDetail) && (
+        {status === "crashed" && crashKey !== null && isRefusedInput(crashDetail) && (
           <Stack direction="row" spacing={0.75} alignItems="center" sx={{ flexWrap: "wrap" }}>
             <Typography variant="caption" component="div" sx={{ lineHeight: 1.3 }}>
               {REFUSED_INPUT_HINT}
             </Typography>
-            <PutBackButton sessionId={sessionId} primary />
+            <PutBackButton sessionId={sessionId} failureKey={crashKey} primary />
           </Stack>
         )}
         {status === "crashed" && crashDetail && crashDetail !== text && (
@@ -640,7 +643,8 @@ export function Transcript({
       revealLocatedTranscriptRow(parentRef.current, row, freezeRef.current, "[data-task-open]");
     }, 40);
   }, []);
-  const crashDetail = useMemo(() => latestCrashDetail(allItems), [allItems]);
+  const crash = useMemo(() => latestCrash(allItems), [allItems]);
+  const crashDetail = crash?.detail ?? null;
   const liveItems = useMemo(
     () => {
       const visible = visibleItemKeys
@@ -3054,7 +3058,7 @@ export function Transcript({
           composer — never covering the last message. */
       }
       {statusBar && emptyPresentation?.kind !== "blocked" && (status !== "exited" || (optimisticMsgs.length === 0 && emptyPresentation === null)) && (
-        <SessionStatusBar sessionId={sessionId} status={status} crashDetail={crashDetail} />
+        <SessionStatusBar sessionId={sessionId} status={status} crashDetail={crashDetail} crashKey={crash?.key ?? null} />
       )}
       {
         /* The scroll-to-latest affordance is the persistent sticky/auto-scroll

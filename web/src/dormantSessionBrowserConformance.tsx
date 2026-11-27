@@ -16,7 +16,7 @@ import {
   resetProviderCatalog,
 } from "./providerCatalogRegistry";
 import { openSession, useStore } from "./store";
-import { getDraft } from "./draftStore";
+import { getDraft, setDraft } from "./draftStore";
 import { imageTokensInText } from "./attachments";
 import { openSessionSettings } from "./sessionSettingsOpen";
 import { type SessionToolsOverride, withMemoryKey } from "./agentTools";
@@ -733,8 +733,15 @@ export async function runDormantSessionBrowserConformance(
       kind: "update" as const,
       update: { sessionUpdate: "user_message_chunk", content },
     })), {
+      // The production sequence (sess-1795343291454): the failed turn's
+      // ending, then the held session's crashed lifecycle with its detail.
       session_id: session.id,
       seq: 42,
+      kind: "turn_end" as const,
+      stop_reason: `error: ${refused}`,
+    }, {
+      session_id: session.id,
+      seq: 43,
       kind: "lifecycle" as const,
       status: "crashed" as const,
       detail: refused,
@@ -756,18 +763,70 @@ export async function runDormantSessionBrowserConformance(
     );
     container.querySelector<HTMLButtonElement>("[data-turn-failure-put-back]")!
       .click();
-    await until(
-      () => getDraft(session.id).attachments.length === 1,
-      "the refused message is not back in the Prompt",
-    );
-    const restored = getDraft(session.id);
-    check(
-      restored.text.endsWith("\nUse the whole screen for dialogs") &&
-        imageTokensInText(restored.text)[0]?.id === restored.attachments[0]?.id &&
-        restored.attachments[0]?.block.data === REFUSED_IMAGE_BASE64 &&
-        restored.attachments[0]?.mimeType === "image/png",
-      "Back to Prompt returns the text with the artifact image read back in place",
-    );
+    const notices: unknown[] = [];
+    const warn = console.warn;
+    console.warn = (...args: unknown[]) => {
+      notices.push(args);
+      warn(...args);
+    };
+    const restored = async (stage: string): Promise<void> => {
+      await until(
+        () => getDraft(session.id).attachments.length === 1,
+        `${stage}: the refused message is not back in the Prompt (${JSON.stringify(notices)})`,
+      );
+      const draft = getDraft(session.id);
+      check(
+        draft.text.endsWith("\nUse the whole screen for dialogs") &&
+          imageTokensInText(draft.text)[0]?.id === draft.attachments[0]?.id &&
+          draft.attachments[0]?.block.data === REFUSED_IMAGE_BASE64 &&
+          draft.attachments[0]?.mimeType === "image/png",
+        `${stage}: Back to Prompt returns the text with the artifact image in place`,
+      );
+      // Clear as the Composer does after a send (not `discardDraft`, which
+      // retires a deleted session's drafts for good).
+      setDraft(session.id, { text: "", attachments: [] });
+    };
+    await restored("status bar");
+    // The hint's order: answer in text first. The session runs again and the
+    // failed turn's row, no longer hidden behind the status bar, keeps the
+    // action for the refused message, not the answer.
+    session.status = "running";
+    timeline = [...timeline, {
+      session_id: session.id,
+      seq: 44,
+      kind: "update" as const,
+      update: {
+        sessionUpdate: "user_message_chunk",
+        content: { type: "text", text: "1, then 2" },
+      },
+    }, {
+      session_id: session.id,
+      seq: 45,
+      kind: "lifecycle" as const,
+      status: "running" as const,
+      detail: null,
+    }];
+    socket!.publish({
+      type: "snapshot",
+      session_id: session.id,
+      events: timeline,
+      reached_start: true,
+    });
+    flushSync(() => root.render(<Fixture key="refused-answered" />));
+    const folded = (): HTMLButtonElement | null =>
+      container.querySelector<HTMLButtonElement>(
+        "[data-key='43'] [data-turn-failure-put-back]",
+      );
+    // The remounted transcript can replace the row while it settles: click the
+    // current button until the action reports.
+    const reported = notices.length;
+    await until(() => {
+      if (notices.length > reported) return true;
+      folded()?.click();
+      return false;
+    }, "the answered refusal keeps Back to Prompt");
+    await restored("after the answer");
+    console.warn = warn;
     await capture?.("desktop-refused-put-back");
     if (keepFixture) {
       desktop = false;

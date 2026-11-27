@@ -56,6 +56,8 @@ export function turnFailureTelemetry(
 /** The proxy's closed prefix of a prompt the agent refused before running it
  *  (Antigravity: images while its `ask_question` awaits an answer). */
 const REFUSED_INPUT_PREFIX = "antigravity_prompt_rejected:";
+/** The codes the Controller recognises (`PROMPT_REJECTION_CODES`). */
+const REFUSED_INPUT_CODES: ReadonlySet<string> = new Set(["image_answer"]);
 
 /** What the reader does next after refused input: only a text reply unblocks
  *  the agent, which takes the next message as its answer; then Back to Prompt
@@ -89,7 +91,7 @@ export function isRefusedInput(detail: string | null): boolean {
   if (!plainObject(data) || !plainObject(data.cowboy)) return false;
   const cowboy = data.cowboy;
   const backend = cowboy.antigravity_backend;
-  return code.length > 0 && cowboy.prompt_rejected === code &&
+  return REFUSED_INPUT_CODES.has(code) && cowboy.prompt_rejected === code &&
     cowboy.policy_violation === undefined &&
     cowboy.uncertain_effect === undefined &&
     plainObject(backend) && backend.class === "not_dispatched" &&
