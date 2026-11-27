@@ -55,16 +55,16 @@ export function turnFailureTelemetry(
 
 /** The proxy's closed prefix of a prompt the agent refused before running it
  *  (Antigravity: images while its `ask_question` awaits an answer), and the
- *  evidence class it always carries. Nothing ran; the Controller returns an
- *  Owner's refused prompt to Drafts. */
+ *  evidence class it always carries. Nothing ran. */
 const REFUSED_INPUT_PREFIX = "antigravity_prompt_rejected:";
 const REFUSED_INPUT_EVIDENCE = '"not_dispatched"';
 
 /** What the reader does next after refused input: only a text reply unblocks
- *  the agent, and a refused message the owner sent waits in Drafts. */
+ *  the agent. The card makes no claim about Drafts; when the Controller
+ *  restored the message, the Drafts list shows it. */
 export const REFUSED_INPUT_HINT =
-  "Answer the agent's question in text first. A refused message you sent " +
-  "is back in Drafts to resend.";
+  "Answer the agent's question in text first; it takes your next message as " +
+  "the answer, so Cowboy offers no Continue here.";
 
 /** Whether a failed turn's detail is input the agent refused before running
  *  it: the proxy's prefix with its `not_dispatched` evidence, as the

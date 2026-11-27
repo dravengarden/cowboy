@@ -6114,6 +6114,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[allow(clippy::too_many_lines)] // One ordered dispatch/echo/ending sequence per recovery case.
     async fn a_prompt_the_agent_refused_before_running_returns_to_drafts_as_sent() {
         // sess-1795343291454: images sent while `agy` awaited an
         // `ask_question` answer were refused locally, and the owner had to
@@ -6198,7 +6199,7 @@ mod tests {
         let parked = drafts();
         assert_eq!(parked.len(), 1);
         assert_eq!(parked[0].content, blocks);
-        assert_eq!(parked[0].origin, Some(owner));
+        assert_eq!(parked[0].origin, Some(owner.clone()));
         // The image sits where it was, as the Web composer's inline token.
         let (head, rest) = parked[0]
             .text
@@ -6209,6 +6210,59 @@ mod tests {
         // The turn's record is taken once: a repeated ending parks nothing.
         observe(ending(&turn, &proven));
         assert_eq!(drafts().len(), 1);
+        // A command parked or requeued elsewhere never ran as its turn: a
+        // late proven ending parks no second copy.
+        hub.record_prompt_dispatch("s", "parked".to_owned(), owner.clone(), owner.clone(), 100);
+        let command = runtime
+            .try_prompt_traced_with_command_id(
+                "s",
+                blocks.clone(),
+                Some("parked".to_owned()),
+                None,
+                None,
+            )
+            .unwrap();
+        let turn = runtime
+            .shared
+            .in_flight_prompts
+            .lock()
+            .turn_of(&command)
+            .unwrap();
+        runtime
+            .shared
+            .in_flight_prompts
+            .lock()
+            .retire_command(&command);
+        observe(ending(&turn, &proven));
+        assert_eq!(drafts().len(), 1);
+        // A text-only prompt is not kept (nothing a text prompt can be
+        // refused for), and one quoting an attachment token cannot round-trip.
+        for (cmid, content) in [
+            (
+                "text",
+                vec![serde_json::json!({"type": "text", "text": "plain"})],
+            ),
+            (
+                "quoted",
+                vec![
+                    serde_json::json!({"type": "text", "text": "see ![x](cowboy-att:a) "}),
+                    blocks[1].clone(),
+                ],
+            ),
+        ] {
+            hub.record_prompt_dispatch("s", cmid.to_owned(), owner.clone(), owner.clone(), 100);
+            let command = runtime
+                .try_prompt_traced_with_command_id("s", content, Some(cmid.to_owned()), None, None)
+                .unwrap();
+            let turn = runtime
+                .shared
+                .in_flight_prompts
+                .lock()
+                .turn_of(&command)
+                .unwrap();
+            observe(ending(&turn, &proven));
+            assert_eq!(drafts().len(), 1, "{cmid}");
+        }
     }
 
     #[tokio::test]

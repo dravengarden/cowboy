@@ -159,7 +159,10 @@ impl Hub {
                 .and_then(serde_json::Value::as_str)
                 .is_none_or(|kind| kind == "text")
         });
-        let text = draft_text(&content);
+        let Some(text) = draft_text(&content) else {
+            tracing::warn!(session = %session_id, "refused prompt quotes an attachment token; not restoring it as a draft");
+            return;
+        };
         if text.trim().is_empty() && text_only {
             return;
         }
@@ -177,27 +180,23 @@ impl Hub {
 /// A draft's text for prompt blocks: the text blocks in order, each image as
 /// the inline `![image](cowboy-att:<id>)` token the Web composer writes, so the
 /// draft opens with its images where they were (the Web pairs the Nth token
-/// with the Nth image block; other attachments follow the text). Text that
-/// already holds such a token would shift that pairing, so then no token is
-/// written and the Web appends the images after the text.
-fn draft_text(content: &[serde_json::Value]) -> String {
-    let texts = content.iter().filter_map(|block| {
-        (block.get("type").and_then(serde_json::Value::as_str) == Some("text"))
-            .then(|| block.get("text").and_then(serde_json::Value::as_str))
-            .flatten()
-    });
-    if texts.clone().any(|text| text.contains("cowboy-att:")) {
-        return texts.collect();
-    }
+/// with the Nth image block; other attachments follow the text). `None` when
+/// the text already holds such a token: the Web would pair an image with it,
+/// so the draft could not round-trip and is not offered.
+fn draft_text(content: &[serde_json::Value]) -> Option<String> {
     let mut text = String::new();
     for block in content {
         match block.get("type").and_then(serde_json::Value::as_str) {
-            Some("text") => text.push_str(
-                block
+            Some("text") => {
+                let part = block
                     .get("text")
                     .and_then(serde_json::Value::as_str)
-                    .unwrap_or_default(),
-            ),
+                    .unwrap_or_default();
+                if part.contains("cowboy-att:") {
+                    return None;
+                }
+                text.push_str(part);
+            }
             Some("image") => {
                 text.push_str(&format!(
                     "![image](cowboy-att:att-{})",
@@ -207,5 +206,5 @@ fn draft_text(content: &[serde_json::Value]) -> String {
             _ => {}
         }
     }
-    text
+    Some(text)
 }

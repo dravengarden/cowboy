@@ -74,7 +74,7 @@ test("the card knows which session it is offering to continue", () => {
   );
 });
 
-test("refused input points to the restored draft, never to the continuation", () => {
+test("refused input asks for a text answer, never offers the continuation", () => {
   // sess-1795343291454: images sent while Antigravity awaited an answer.
   const proven = "antigravity_prompt_rejected:image_answer: " +
     '{"cowboy": {"antigravity_backend": {"class": "not_dispatched"}}}';
@@ -87,7 +87,8 @@ test("refused input points to the restored draft, never to the continuation", ()
   );
   assertEquals(isRefusedInput("worker exited"), false);
   assertEquals(isRefusedInput(null), false);
-  assert(REFUSED_INPUT_HINT.includes("Drafts"));
+  // Whether a Draft exists is the Controller's outcome, not the card's.
+  assertEquals(REFUSED_INPUT_HINT.includes("Drafts"), false);
   assert(REFUSED_INPUT_HINT.includes("in text"));
   // The card hides Continue for refused input: its text would answer the
   // agent's pending question.
