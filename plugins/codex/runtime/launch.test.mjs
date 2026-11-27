@@ -16,6 +16,7 @@ import {
   managedMcpOverrides,
   managedRuleViolations,
   splitConfigurationArguments,
+  userCodexConfig,
 } from "./launch.mjs";
 import { spawnSync } from "node:child_process";
 import { chmodSync } from "node:fs";
@@ -35,6 +36,7 @@ import {
   resolveCodexObservation,
   tomlHasOtelPolicy,
 } from "./otel-observation.mjs";
+import { nativeMcpServerNames } from "./memory.mjs";
 
 test("Cowboy MCP follows native execution placement without copying credentials", () => {
   assert.deepEqual(agentApiConfiguration(), []);
@@ -626,6 +628,100 @@ rl.on("line", (line) => {
         ["-c", "approval_policy=never"],
       );
       assert.equal(bad, null, `expected probe to fail closed on ${mode}`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("codex OTLP round-2 hardening: strict TOML scalars/duplicates, ordered probe layers, bounded userCodexConfig, and credential-free mcp list", async () => {
+  // Invalid bare scalars and duplicate keys/tables fail closed
+  assert.equal(tomlHasOtelPolicy("x = nope\n"), true);
+  assert.equal(tomlHasOtelPolicy('model = "a"\nmodel = "b"\n'), true);
+  assert.equal(tomlHasOtelPolicy("[a]\nx = 1\n[a]\ny = 2\n"), true);
+  assert.equal(tomlHasOtelPolicy("count = 42\nenabled = true\nratio = 0.5\n"), false);
+
+  const dir = mkdtempSync(join(tmpdir(), "codex-otel-r2-"));
+  try {
+    // userCodexConfig refuses oversized and FIFO files without hanging
+    const bigHome = join(dir, "big-home");
+    mkdirSync(bigHome, { recursive: true });
+    writeFileSync(join(bigHome, "config.toml"), "# " + "z".repeat(300 * 1024) + "\n");
+    assert.equal(userCodexConfig({ CODEX_HOME: bigHome }), "");
+
+    const fifoHome = join(dir, "fifo-home");
+    mkdirSync(fifoHome, { recursive: true });
+    const fifoPath = join(fifoHome, "config.toml");
+    if (spawnSync("mkfifo", [fifoPath]).status === 0) {
+      assert.equal(userCodexConfig({ CODEX_HOME: fifoHome }), "");
+    }
+
+    // nativeMcpServerNames strips COWBOY_PRIVATE_CODEX_REQUEST_OBSERVATION and -c otel.* overrides
+    const fakeMcp = join(dir, "fake-mcp.mjs");
+    writeFileSync(
+      fakeMcp,
+      `#!${process.execPath}
+if (process.env.COWBOY_PRIVATE_CODEX_REQUEST_OBSERVATION) process.exit(11);
+if (process.argv.some((a) => a.startsWith("otel."))) process.exit(12);
+process.stdout.write(JSON.stringify([{ name: "srv1" }]));
+`,
+      { mode: 0o755 },
+    );
+    const prevObs = process.env[CODEX_OBSERVATION_ENV];
+    process.env[CODEX_OBSERVATION_ENV] = "secret-must-not-leak";
+    try {
+      const names = nativeMcpServerNames(fakeMcp, [
+        "-c",
+        'otel.exporter={"otlp-http"={endpoint="http://127.0.0.1:9/v1/logs"}}',
+        "-c",
+        "approval_policy=never",
+      ]);
+      assert.deepEqual(names, ["srv1"]);
+    } finally {
+      if (prevObs === undefined) delete process.env[CODEX_OBSERVATION_ENV];
+      else process.env[CODEX_OBSERVATION_ENV] = prevObs;
+    }
+
+    // Probe rejects misordered id=2 before initialize, omitted origins/layers, and malformed layer entries
+    const fakeProbe = join(dir, "fake-probe-r2.mjs");
+    writeFileSync(
+      fakeProbe,
+      `#!${process.execPath}
+import readline from "node:readline";
+const rl = readline.createInterface({ input: process.stdin });
+const mode = process.env.FAKE_R2_MODE;
+rl.on("line", (line) => {
+  const msg = JSON.parse(line);
+  if (msg.id === 1) {
+    if (mode === "out_of_order") {
+      process.stdout.write(JSON.stringify({ id: 2, result: { config: {}, origins: {}, layers: [] } }) + "\\n");
+      process.stdout.write(JSON.stringify({ id: 3, result: { requirements: null } }) + "\\n");
+      return;
+    }
+    process.stdout.write(JSON.stringify({ id: 1, result: { ok: true } }) + "\\n");
+  } else if (msg.id === 2) {
+    if (mode === "missing_origins") {
+      process.stdout.write(JSON.stringify({ id: 2, result: { config: {}, layers: [] } }) + "\\n");
+    } else if (mode === "missing_layers") {
+      process.stdout.write(JSON.stringify({ id: 2, result: { config: {}, origins: {} } }) + "\\n");
+    } else if (mode === "bad_layer") {
+      process.stdout.write(JSON.stringify({ id: 2, result: { config: {}, origins: {}, layers: ["bad"] } }) + "\\n");
+    }
+  } else if (msg.id === 3) {
+    process.stdout.write(JSON.stringify({ id: 3, result: { requirements: null } }) + "\\n");
+  }
+});
+`,
+      { mode: 0o755 },
+    );
+    for (const mode of ["out_of_order", "missing_origins", "missing_layers", "bad_layer"]) {
+      const res = await probeCodexOtelConfig(
+        fakeProbe,
+        dir,
+        { ...process.env, FAKE_R2_MODE: mode },
+        2000,
+      );
+      assert.equal(res, null, `expected fail-closed null for ${mode}`);
     }
   } finally {
     rmSync(dir, { recursive: true, force: true });

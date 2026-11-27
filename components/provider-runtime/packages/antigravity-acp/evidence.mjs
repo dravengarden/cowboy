@@ -107,11 +107,12 @@ export function parseStepTimings(text, sessionId, nonce) {
   }
   return {
     schema: 1,
-    backend_steps: stepTimes.length,
-    transient_retries: transientRetries,
-    first_step_offset_ms: firstStepOffsetMs,
-    step_span_ms: stepSpanMs,
-    max_inter_step_ms: maxInterStepMs,
+    barrier_matched: sawBarrier,
+    backend_steps: sawBarrier ? stepTimes.length : null,
+    transient_retries: sawBarrier ? transientRetries : null,
+    first_step_offset_ms: sawBarrier ? firstStepOffsetMs : null,
+    step_span_ms: sawBarrier ? stepSpanMs : null,
+    max_inter_step_ms: sawBarrier ? maxInterStepMs : null,
   };
 }
 // One successful model request (a backend step) of the turn.

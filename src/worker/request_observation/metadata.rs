@@ -38,11 +38,30 @@ pub(super) fn compute_launch_prefix_fingerprint(args: &WorkerArgs, spec: &Launch
     };
     hasher.update(placement.as_bytes());
     hasher.update(b"\0");
-    let has_memory = spec.env.keys().any(|k| k.starts_with("COWBOY_MEMORY_"));
-    let has_call_ctx = spec.env.contains_key("COWBOY_CALL_CONTEXT");
-    let has_exec_desc = spec.env.contains_key("COWBOY_EXECUTION_DESCRIPTOR");
+    let effective = |name: &str| -> Option<String> {
+        spec.env
+            .get(name)
+            .cloned()
+            .or_else(|| {
+                (!spec.removes_inherited_env(name))
+                    .then(|| std::env::var(name).ok())
+                    .flatten()
+            })
+            .filter(|v| !v.is_empty())
+    };
+    let extensions_path = effective("COWBOY_SESSION_EXTENSIONS");
+    let (ext_has_memory, ext_has_mcp) = extensions_path
+        .as_deref()
+        .and_then(inspect_session_extensions_flags)
+        .unwrap_or((false, false));
+    let has_memory = ext_has_memory
+        || effective("COWBOY_MATRIX_CONFIG").is_some()
+        || spec.env.keys().any(|k| k.starts_with("COWBOY_MEMORY_"));
+    let has_call_ctx = effective("COWBOY_CALL_CONTEXT").is_some();
+    let has_exec_desc = effective("COWBOY_EXECUTION_DESCRIPTOR").is_some();
     hasher.update([
         u8::from(has_memory),
+        u8::from(ext_has_mcp),
         u8::from(has_call_ctx),
         u8::from(has_exec_desc),
     ]);
@@ -57,6 +76,29 @@ pub(super) fn compute_launch_prefix_fingerprint(args: &WorkerArgs, spec: &Launch
     }
     let digest = format!("{:x}", hasher.finalize());
     digest[..16].to_owned()
+}
+
+fn inspect_session_extensions_flags(path: &str) -> Option<(bool, bool)> {
+    use std::io::Read as _;
+    let meta = std::fs::metadata(path).ok()?;
+    if !meta.is_file() || meta.len() > 64 * 1024 {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    let mut buf = Vec::new();
+    file.take(64 * 1024 + 1).read_to_end(&mut buf).ok()?;
+    if buf.len() > 64 * 1024 {
+        return None;
+    }
+    let json: Value = serde_json::from_slice(&buf).ok()?;
+    let has_memory = json
+        .get("memory")
+        .or_else(|| json.get("matrix"))
+        .is_some_and(|v| !v.is_null());
+    let has_mcp = json
+        .get("mcp")
+        .is_some_and(|v| !v.is_null() && v.as_array().is_none_or(|a| !a.is_empty()));
+    Some((has_memory, has_mcp))
 }
 
 /// The worker publishes attribution facts independently of the OTLP parser and

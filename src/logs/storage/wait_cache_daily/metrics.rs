@@ -1,13 +1,14 @@
 //! Export one closed UTC cohort as cumulative counters. Series are aggregated
 //! again across the diagnostic dimensions and then passed through the same
 //! allowlist as the signed VictoriaMetrics connector.
-use super::{DAY_MS, SqliteStore, utc_day};
+use super::{DAY_MS, RETENTION_MS, SqliteStore, utc_day};
 use crate::logs::storage::{atomic_json, private_read};
 use crate::logs::wait_cache as events;
 use crate::metrics_egress::{self, DECISIONS, LOSSES, REQUESTS, TOKENS, WAITS, string};
 use anyhow::{Context as _, Result, ensure};
 use opentelemetry_proto::tonic::{
     collector::metrics::v1::ExportMetricsServiceRequest,
+    common::v1::KeyValue,
     metrics::v1::{
         Metric, NumberDataPoint, ResourceMetrics, ScopeMetrics, Sum, metric, number_data_point,
     },
@@ -18,9 +19,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest as _, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::Path;
+use std::fs::{File, OpenOptions};
+use std::os::unix::fs::OpenOptionsExt as _;
+use std::path::{Path, PathBuf};
 
 type Series = BTreeMap<(&'static str, &'static str, &'static str, &'static str), u64>;
+
+/// Settle margin after UTC midnight before multi-Machine CLI exports freeze a
+/// closed day's single-writer claim (exceeds worker OTLP coalescing + flush lag).
+const FINALIZE_GRACE_MS: i64 = 15 * 60 * 1000;
 
 /// Verified store identities collected across one closed UTC day's reports.
 pub struct EncodedWaitCacheOtlp {
@@ -28,23 +35,50 @@ pub struct EncodedWaitCacheOtlp {
     pub store_ids: Vec<String>,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReportGroup {
+    from_ms: i64,
+    to_ms: i64,
+    dimensions: serde_json::Map<String, Value>,
+    totals: ReportTotals,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReportTotals {
+    records: u64,
+    #[serde(default)]
+    values: BTreeMap<String, [u64; 2]>,
+}
+
 /// Aggregate one or more closed-UTC-day `wait-cache-daily` reports into a single
 /// single-writer OTLP cumulative counter payload. Fails closed on:
+/// - unclosed, unfinalized, or expired (>45d) UTC days,
 /// - wrong schema or day window,
 /// - missing or duplicate `store_id` (preventing alias double-counting while
 ///   keeping `store_id` internal to collection),
-/// - absent rollup database (`rollup_present != true`),
+/// - absent rollup database (`rollup_present != true`) or `capacity_floor_ms > day`,
 /// - truncation, degraded days, or any `coverage_issues` (including writer loss),
-/// - malformed or cross-day group rows.
+/// - malformed, duplicate, or cross-day groups and invalid total tuples.
 pub fn encode_wait_cache_otlp(
     day: i64,
     now: i64,
     reports: &[&Value],
     controller: bool,
 ) -> Result<EncodedWaitCacheOtlp> {
+    let required_close = if controller {
+        day.saturating_add(DAY_MS)
+    } else {
+        day.saturating_add(DAY_MS).saturating_add(FINALIZE_GRACE_MS)
+    };
     ensure!(
-        day >= 0 && day == utc_day(day) && day <= now.saturating_sub(DAY_MS),
-        "wait/cache metric export requires a closed UTC day"
+        day >= 0 && day == utc_day(day) && now >= required_close,
+        "wait/cache metric export requires a closed and finalized UTC day"
+    );
+    ensure!(
+        day >= utc_day(now).saturating_sub(RETENTION_MS),
+        "wait/cache cohort is outside the 45-day retention horizon"
     );
     ensure!(
         !reports.is_empty(),
@@ -77,6 +111,12 @@ pub fn encode_wait_cache_otlp(
             report["rollup_present"].as_bool() == Some(true),
             "wait/cache cohort source lacks an initialized rollup database"
         );
+        if let Some(floor) = report["capacity_floor_ms"].as_i64() {
+            ensure!(
+                day >= floor,
+                "wait/cache cohort predates source capacity_floor_ms"
+            );
+        }
         ensure!(
             report["truncated"].as_bool() == Some(false),
             "wait/cache cohort exceeded the rollup bound"
@@ -93,18 +133,29 @@ pub fn encode_wait_cache_otlp(
                 .is_some_and(Vec::is_empty),
             "wait/cache cohort has unresolved coverage or writer-loss issues"
         );
-        let groups = report["groups"]
+        let raw_groups = report["groups"]
             .as_array()
             .ok_or_else(|| anyhow::anyhow!("wait/cache cohort missing groups array"))?;
-        for group in groups {
+        let mut seen_dimensions = BTreeSet::new();
+        for raw_group in raw_groups {
+            let group: ReportGroup = serde_json::from_value(raw_group.clone())
+                .context("wait/cache cohort contains malformed group or totals")?;
             ensure!(
-                group["from_ms"].as_i64() == Some(day)
-                    && group["to_ms"].as_i64() == Some(expected_to)
-                    && group["dimensions"].is_object()
-                    && group["totals"].is_object(),
-                "wait/cache cohort contains malformed or cross-day group"
+                group.from_ms == day && group.to_ms == expected_to,
+                "wait/cache cohort contains cross-day group"
             );
-            add_group(&mut series, group);
+            let canonical_dim = serde_json::to_string(&group.dimensions)?;
+            ensure!(
+                seen_dimensions.insert(canonical_dim),
+                "wait/cache cohort contains duplicate dimension group within one source"
+            );
+            for &[sum, count] in group.totals.values.values() {
+                ensure!(
+                    count <= group.totals.records && (count > 0 || sum == 0),
+                    "wait/cache cohort contains inconsistent value tuple"
+                );
+            }
+            add_group(&mut series, &group);
         }
     }
     let request = ExportMetricsServiceRequest {
@@ -132,47 +183,115 @@ pub fn encode_wait_cache_otlp(
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct WriterState {
-    schema: u16,
-    cohort_store_ids: Vec<String>,
-    exported_days: BTreeMap<String, ExportedDay>,
+struct CohortEffective {
+    effective_day: String,
+    store_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ExportedDay {
     payload_sha256: String,
+    payload_hex: String,
     store_ids: Vec<String>,
     exported_at_ms: i64,
 }
 
-/// Bind `cowboy logs wait-cache-metrics` to a single writer, one authoritative
-/// sorted `store_id` cohort, and immutable per-day payload hashes so subset
-/// invocations or stale retries can never emit conflicting samples for the
-/// same `cowboy.source="machine"` day-end series.
-pub fn verify_and_record_writer_state(
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WriterState {
+    schema: u16,
+    cohort_history: Vec<CohortEffective>,
+    exported_days: BTreeMap<String, ExportedDay>,
+}
+
+fn lock_path_for(state_path: &Path) -> Result<PathBuf> {
+    let parent = state_path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or_else(|| Path::new("."));
+    let name = state_path
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(|| anyhow::anyhow!("invalid wait-cache writer state filename"))?;
+    Ok(parent.join(format!(".{name}.lock")))
+}
+
+struct FileLock(#[allow(dead_code)] File);
+
+fn acquire_writer_lock(state_path: &Path) -> Result<FileLock> {
+    let lock_path = lock_path_for(state_path)?;
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&lock_path)
+        .with_context(|| format!("opening writer state lock {}", lock_path.display()))?;
+    file.lock()
+        .with_context(|| format!("locking wait-cache writer state {}", lock_path.display()))?;
+    Ok(FileLock(file))
+}
+
+fn encode_hex(bytes: &[u8]) -> String {
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for b in bytes {
+        use std::fmt::Write as _;
+        let _ = write!(&mut out, "{b:02x}");
+    }
+    out
+}
+
+fn decode_hex(hex: &str) -> Result<Vec<u8>> {
+    ensure!(
+        hex.len().is_multiple_of(2),
+        "corrupt hex payload in writer state"
+    );
+    let mut out = Vec::with_capacity(hex.len() / 2);
+    let (chunks, _) = hex.as_bytes().as_chunks::<2>();
+    for pair in chunks {
+        let s = std::str::from_utf8(pair).context("non-UTF8 hex payload")?;
+        out.push(u8::from_str_radix(s, 16).context("invalid hex byte")?);
+    }
+    Ok(out)
+}
+
+/// Serialize access via an exclusive file lock beside `path`, validate `day`
+/// against the effective-day cohort history, and atomically claim and persist
+/// the exact OTLP payload bytes.
+///
+/// Re-running for an already-claimed day with the same cohort replays the
+/// exact persisted payload bytes so a failed stdout delivery never strands a
+/// day behind an unrecoverable hash. Cohort changes (`--update-cohort`) apply
+/// only going forward from a strictly newer UTC day, never retroactively.
+pub fn claim_or_replay_writer_state(
     path: &Path,
     day: chrono::NaiveDate,
     now_ms: i64,
     encoded: &EncodedWaitCacheOtlp,
     update_cohort: bool,
-) -> Result<()> {
+) -> Result<Vec<u8>> {
+    let _lock = acquire_writer_lock(path)?;
     let day_key = day.format("%Y-%m-%d").to_string();
     let payload_sha256 = format!("{:x}", Sha256::digest(&encoded.bytes));
     let mut state = match std::fs::symlink_metadata(path) {
         Ok(_) => {
-            let raw = private_read(path, 512 * 1024)?;
+            let raw = private_read(path, 8 * 1024 * 1024)?;
             let parsed: WriterState =
                 serde_json::from_slice(&raw).context("invalid wait-cache writer state file")?;
             ensure!(
-                parsed.schema == 1,
+                parsed.schema == 1 && !parsed.cohort_history.is_empty(),
                 "unsupported wait-cache writer state schema"
             );
             parsed
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => WriterState {
             schema: 1,
-            cohort_store_ids: encoded.store_ids.clone(),
+            cohort_history: vec![CohortEffective {
+                effective_day: day_key.clone(),
+                store_ids: encoded.store_ids.clone(),
+            }],
             exported_days: BTreeMap::new(),
         },
         Err(error) => return Err(error).context("reading wait-cache writer state"),
@@ -180,24 +299,52 @@ pub fn verify_and_record_writer_state(
 
     if let Some(existing) = state.exported_days.get(&day_key) {
         ensure!(
-            existing.payload_sha256 == payload_sha256 && existing.store_ids == encoded.store_ids,
-            "refusing to publish conflicting wait/cache metrics for already-exported day {day_key}"
+            existing.store_ids == encoded.store_ids,
+            "refusing to replay or alter already-exported day {day_key} with a different source cohort"
         );
-        return Ok(());
+        let bytes = decode_hex(&existing.payload_hex)?;
+        let actual_sha = format!("{:x}", Sha256::digest(&bytes));
+        ensure!(
+            actual_sha == existing.payload_sha256,
+            "wait-cache writer state payload checksum mismatch for {day_key}"
+        );
+        return Ok(bytes);
     }
 
-    if state.cohort_store_ids != encoded.store_ids {
+    // Find the cohort effective on `day_key` (never apply newer cohort changes retroactively).
+    let effective = state
+        .cohort_history
+        .iter()
+        .rev()
+        .find(|entry| entry.effective_day <= day_key)
+        .or_else(|| state.cohort_history.first())
+        .ok_or_else(|| anyhow::anyhow!("writer state missing cohort history"))?;
+
+    if effective.store_ids != encoded.store_ids {
         ensure!(
             update_cohort,
-            "wait/cache source cohort does not match bound writer state; pass --update-cohort only when intentionally changing the authoritative Machine set"
+            "wait/cache source cohort does not match bound cohort effective on {day_key}; pass --update-cohort only when intentionally changing the authoritative Machine set going forward"
         );
-        state.cohort_store_ids = encoded.store_ids.clone();
+        let latest_effective = state
+            .cohort_history
+            .last()
+            .map(|e| e.effective_day.as_str())
+            .unwrap_or("");
+        ensure!(
+            day_key.as_str() > latest_effective,
+            "--update-cohort cannot apply retroactively on or before {latest_effective}"
+        );
+        state.cohort_history.push(CohortEffective {
+            effective_day: day_key.clone(),
+            store_ids: encoded.store_ids.clone(),
+        });
     }
 
     state.exported_days.insert(
         day_key,
         ExportedDay {
             payload_sha256,
+            payload_hex: encode_hex(&encoded.bytes),
             store_ids: encoded.store_ids.clone(),
             exported_at_ms: now_ms,
         },
@@ -208,7 +355,8 @@ pub fn verify_and_record_writer_state(
             state.exported_days.remove(&oldest);
         }
     }
-    atomic_json(path, &state)
+    atomic_json(path, &state)?;
+    Ok(encoded.bytes.clone())
 }
 
 impl SqliteStore {
@@ -225,23 +373,31 @@ impl SqliteStore {
     }
 }
 
-fn add_group(series: &mut Series, group: &Value) {
-    let dim = &group["dimensions"];
-    let provider = events::provider(dim["provider"].as_str().unwrap_or_default());
-    let role = match dim["role"].as_str() {
+fn add_group(series: &mut Series, group: &ReportGroup) {
+    let dim = &group.dimensions;
+    let provider = events::provider(
+        dim.get("provider")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    );
+    let role = match dim.get("role").and_then(Value::as_str) {
         Some("parent" | "subagent" | "managed_child") => "interactive",
         Some("keepalive") => "keepalive",
         Some("auxiliary") => "auxiliary",
         _ => "unknown",
     };
-    let outcome = events::outcome(dim["outcome"].as_str().unwrap_or_default());
-    let records = group["totals"]["records"].as_u64().unwrap_or_default();
-    let sum = |key| group["totals"]["values"][key][0].as_u64();
+    let outcome = events::outcome(
+        dim.get("outcome")
+            .and_then(Value::as_str)
+            .unwrap_or_default(),
+    );
+    let records = group.totals.records;
+    let sum = |key: &str| group.totals.values.get(key).map(|tuple| tuple[0]);
     let mut add = |metric, provider, label, role, value: u64| {
         let total = series.entry((metric, provider, label, role)).or_default();
         *total = total.saturating_add(value);
     };
-    match dim["event"].as_str() {
+    match dim.get("event").and_then(Value::as_str) {
         Some(events::REQUEST) => {
             let outcome = match outcome {
                 "usage" | "error" | "incomplete" | "no_usage" => outcome,
@@ -288,40 +444,37 @@ fn add_group(series: &mut Series, group: &Value) {
 }
 
 fn counters(series: Series, day: i64) -> Vec<Metric> {
-    let mut by_name: BTreeMap<&'static str, Vec<NumberDataPoint>> = BTreeMap::new();
     let start = u64::try_from(day)
         .unwrap_or_default()
         .saturating_mul(1_000_000);
-    let end = u64::try_from(day + DAY_MS)
-        .unwrap_or_default()
-        .saturating_mul(1_000_000);
-    for ((name, provider, label, role), value) in series {
-        let mut attributes = Vec::new();
-        if !provider.is_empty() {
-            attributes.push(string("provider", provider));
-        }
-        let key = match name {
-            TOKENS => "token",
-            LOSSES => "reason",
-            _ => "outcome",
+    // Keep the established last-millisecond UTC day timestamp for upgrade continuity.
+    let end = start.saturating_add(u64::try_from(DAY_MS - 1).unwrap_or_default() * 1_000_000);
+    let mut instruments: BTreeMap<&str, Vec<NumberDataPoint>> = BTreeMap::new();
+    for ((metric, provider, label, role), value) in series {
+        let key = if matches!(metric, TOKENS | LOSSES) {
+            "kind"
+        } else {
+            "outcome"
         };
-        attributes.push(string(key, label));
-        if !role.is_empty() {
-            attributes.push(string("role", role));
-        }
-        attributes.sort_by(|a, b| a.key.cmp(&b.key));
-        let point = NumberDataPoint {
-            attributes,
-            start_time_unix_nano: start,
-            time_unix_nano: end,
-            value: Some(number_data_point::Value::AsInt(
-                i64::try_from(value).unwrap_or(i64::MAX),
-            )),
-            ..Default::default()
-        };
-        by_name.entry(name).or_default().push(point);
+        let attributes = [(key, label), ("provider", provider), ("role", role)]
+            .into_iter()
+            .filter(|(_, value)| !value.is_empty())
+            .map(|(key, value)| string(key, value))
+            .collect::<Vec<KeyValue>>();
+        instruments
+            .entry(metric)
+            .or_default()
+            .push(NumberDataPoint {
+                attributes,
+                start_time_unix_nano: start,
+                time_unix_nano: end,
+                value: Some(number_data_point::Value::AsInt(
+                    i64::try_from(value).unwrap_or(i64::MAX),
+                )),
+                ..Default::default()
+            });
     }
-    by_name
+    instruments
         .into_iter()
         .map(|(name, data_points)| Metric {
             name: name.to_owned(),
@@ -358,13 +511,14 @@ mod tests {
     fn noninteractive_requests_keep_separate_finite_series() {
         let mut series = Series::new();
         for role in ["parent", "keepalive", "auxiliary", "unknown", "unexpected"] {
-            add_group(
-                &mut series,
-                &serde_json::json!({
-                    "dimensions": {"event":events::REQUEST,"provider":"codex","role":role,"outcome":"usage"},
-                    "totals": {"records":1},
-                }),
-            );
+            let group: ReportGroup = serde_json::from_value(serde_json::json!({
+                "from_ms": 0,
+                "to_ms": DAY_MS,
+                "dimensions": {"event":events::REQUEST,"provider":"codex","role":role,"outcome":"usage"},
+                "totals": {"records":1},
+            }))
+            .unwrap();
+            add_group(&mut series, &group);
         }
         assert_eq!(series[&(REQUESTS, "codex", "usage", "interactive")], 1);
         assert_eq!(series[&(REQUESTS, "codex", "usage", "keepalive")], 1);
@@ -397,20 +551,28 @@ mod tests {
     }
 
     #[test]
-    fn multi_machine_encode_validates_store_uniqueness_rollup_presence_day_and_coverage() {
+    fn multi_machine_encode_preserves_kind_labels_day_end_timestamp_and_strict_validation() {
         let day = 10 * DAY_MS;
-        let now = day + 2 * DAY_MS;
+        let now = day + DAY_MS + FINALIZE_GRACE_MS;
         let hawk_id = "11111111111111111111111111111111";
         let ovh_id = "22222222222222222222222222222222";
         let hawk = valid_report(
             day,
             hawk_id,
-            serde_json::json!([{
-                "from_ms": day,
-                "to_ms": day + DAY_MS,
-                "dimensions": {"event": events::REQUEST, "provider": "codex", "role": "parent", "outcome": "usage"},
-                "totals": {"records": 10, "values": {"input_tokens": [1000, 10], "cache_read_input_tokens": [800, 10]}}
-            }]),
+            serde_json::json!([
+                {
+                    "from_ms": day,
+                    "to_ms": day + DAY_MS,
+                    "dimensions": {"event": events::REQUEST, "provider": "codex", "role": "parent", "outcome": "usage"},
+                    "totals": {"records": 10, "values": {"input_tokens": [1000, 10], "cache_read_input_tokens": [800, 10], "output_tokens": [250, 10]}}
+                },
+                {
+                    "from_ms": day,
+                    "to_ms": day + DAY_MS,
+                    "dimensions": {"event": events::LOSS},
+                    "totals": {"records": 2, "values": {"local_dropped_records": [3, 1], "local_write_failures": [1, 1]}}
+                }
+            ]),
         );
         let ovh = valid_report(
             day,
@@ -436,49 +598,111 @@ mod tests {
         assert!(metrics_egress::admitted(&encoded.bytes));
         let decoded = ExportMetricsServiceRequest::decode(encoded.bytes.as_slice()).unwrap();
         let metrics = &decoded.resource_metrics[0].scope_metrics[0].metrics;
-        let reqs = metrics.iter().find(|m| m.name == REQUESTS).unwrap();
-        let Some(metric::Data::Sum(sum)) = &reqs.data else {
-            panic!("missing request sum");
+
+        // Verify established last-ms timestamp (day + DAY_MS - 1)
+        let expected_start = u64::try_from(day).unwrap() * 1_000_000;
+        let expected_end = expected_start + u64::try_from(DAY_MS - 1).unwrap() * 1_000_000;
+
+        // Verify distinct `kind` labels survive sanitization on TOKENS and LOSSES
+        let tokens = metrics.iter().find(|m| m.name == TOKENS).unwrap();
+        let Some(metric::Data::Sum(tok_sum)) = &tokens.data else {
+            panic!("missing token sum");
         };
-        // Antigravity turn_diagnostics must NOT increment HTTP request counter
-        assert_eq!(sum.data_points.len(), 1);
-        assert_eq!(
-            sum.data_points[0].value,
-            Some(number_data_point::Value::AsInt(15))
+        let mut by_kind = BTreeMap::new();
+        for p in &tok_sum.data_points {
+            assert_eq!(p.start_time_unix_nano, expected_start);
+            assert_eq!(p.time_unix_nano, expected_end);
+            let kind = p
+                .attributes
+                .iter()
+                .find(|a| a.key == "kind")
+                .and_then(|a| a.value.as_ref())
+                .and_then(|v| match &v.value {
+                    Some(
+                        opentelemetry_proto::tonic::common::v1::any_value::Value::StringValue(s),
+                    ) => Some(s.clone()),
+                    _ => None,
+                })
+                .expect("sanitized token point must retain kind label");
+            let val = match p.value {
+                Some(number_data_point::Value::AsInt(v)) => v,
+                _ => panic!("missing int"),
+            };
+            assert!(by_kind.insert(kind, val).is_none());
+        }
+        assert_eq!(by_kind.get("input"), Some(&1500));
+        assert_eq!(by_kind.get("cache_read"), Some(&1100));
+        assert_eq!(by_kind.get("output"), Some(&250));
+
+        let losses = metrics.iter().find(|m| m.name == LOSSES).unwrap();
+        let Some(metric::Data::Sum(loss_sum)) = &losses.data else {
+            panic!("missing losses sum");
+        };
+        assert_eq!(loss_sum.data_points.len(), 2);
+        assert!(
+            loss_sum
+                .data_points
+                .iter()
+                .any(|p| p.attributes.contains(&string("kind", "queue_drop")))
+        );
+        assert!(
+            loss_sum
+                .data_points
+                .iter()
+                .any(|p| p.attributes.contains(&string("kind", "write_failure")))
         );
 
-        // Duplicate store_id fails closed
-        assert!(encode_wait_cache_otlp(day, now, &[&hawk, &hawk], false).is_err());
+        // Unfinalized midnight (inside 15m grace) and expired (>45d) both fail closed
+        assert!(encode_wait_cache_otlp(day, day + DAY_MS, &[&hawk, &ovh], false).is_err());
+        assert!(encode_wait_cache_otlp(day, day + 50 * DAY_MS, &[&hawk, &ovh], false).is_err());
 
-        // Missing rollup DB fails closed (never passes as zero)
-        let mut no_rollup = ovh.clone();
-        no_rollup["rollup_present"] = serde_json::json!(false);
-        assert!(encode_wait_cache_otlp(day, now, &[&hawk, &no_rollup], false).is_err());
+        // Malformed group (missing records), bad tuple, and duplicate dimensions within one source fail closed
+        let empty_totals = valid_report(
+            day,
+            ovh_id,
+            serde_json::json!([{"from_ms": day, "to_ms": day + DAY_MS, "dimensions": {"event": events::REQUEST}, "totals": {}}]),
+        );
+        assert!(encode_wait_cache_otlp(day, now, &[&empty_totals], false).is_err());
+        let dup_dim = valid_report(
+            day,
+            ovh_id,
+            serde_json::json!([
+                {"from_ms": day, "to_ms": day + DAY_MS, "dimensions": {"event": events::REQUEST, "provider": "codex"}, "totals": {"records": 1}},
+                {"from_ms": day, "to_ms": day + DAY_MS, "dimensions": {"event": events::REQUEST, "provider": "codex"}, "totals": {"records": 1}}
+            ]),
+        );
+        assert!(encode_wait_cache_otlp(day, now, &[&dup_dim], false).is_err());
 
-        // Wrong day fails closed
-        let wrong_day = valid_report(day - DAY_MS, ovh_id, serde_json::json!([]));
-        assert!(encode_wait_cache_otlp(day, now, &[&hawk, &wrong_day], false).is_err());
-
-        // Writer-loss coverage issue fails closed
-        let mut loss = ovh.clone();
-        loss["coverage_issues"] = serde_json::json!(["local_dropped_records"]);
-        assert!(encode_wait_cache_otlp(day, now, &[&hawk, &loss], false).is_err());
-
-        // Single-writer cohort & day immutability
+        // Writer state: payload replay on retry, effective-day cohort non-retroactivity, and bare filename support
         let dir = tempfile::tempdir().unwrap();
         let state_path = dir.path().join("writer-state.json");
-        let date = chrono::NaiveDate::from_ymd_opt(2026, 11, 19).unwrap();
-        verify_and_record_writer_state(&state_path, date, now, &encoded, false).unwrap();
-        // Idempotent retry of exact same day & payload succeeds
-        verify_and_record_writer_state(&state_path, date, now, &encoded, false).unwrap();
-        // Subset (hawk-only) for same day fails closed
+        let day19 = chrono::NaiveDate::from_ymd_opt(2026, 11, 19).unwrap();
+        let day20 = chrono::NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
+        let day21 = chrono::NaiveDate::from_ymd_opt(2026, 11, 21).unwrap();
+        let committed =
+            claim_or_replay_writer_state(&state_path, day19, now, &encoded, false).unwrap();
+        assert_eq!(committed, encoded.bytes);
+
+        // If source data mutates slightly after a failed stdout write, retry replays exact committed bytes
+        let mutated = EncodedWaitCacheOtlp {
+            bytes: vec![1, 2, 3, 4],
+            store_ids: encoded.store_ids.clone(),
+        };
+        let replayed =
+            claim_or_replay_writer_state(&state_path, day19, now, &mutated, false).unwrap();
+        assert_eq!(replayed, committed);
+
+        // Changing cohort on day21 via --update-cohort must NOT apply retroactively to unexported day20
         let hawk_only = encode_wait_cache_otlp(day, now, &[&hawk], false).unwrap();
-        assert!(verify_and_record_writer_state(&state_path, date, now, &hawk_only, false).is_err());
-        // Subset for next day fails closed without --update-cohort, succeeds with --update-cohort
-        let next_date = chrono::NaiveDate::from_ymd_opt(2026, 11, 20).unwrap();
-        assert!(
-            verify_and_record_writer_state(&state_path, next_date, now, &hawk_only, false).is_err()
+        claim_or_replay_writer_state(&state_path, day21, now, &hawk_only, true).unwrap();
+        assert!(claim_or_replay_writer_state(&state_path, day20, now, &hawk_only, false).is_err());
+        assert!(claim_or_replay_writer_state(&state_path, day20, now, &hawk_only, true).is_err());
+        // Original cohort is still valid for backfilling unexported day20
+        claim_or_replay_writer_state(&state_path, day20, now, &encoded, false).unwrap();
+        // Bare filename resolves parent "." for lock path
+        assert_eq!(
+            lock_path_for(Path::new("state.json")).unwrap(),
+            PathBuf::from("./.state.json.lock")
         );
-        verify_and_record_writer_state(&state_path, next_date, now, &hawk_only, true).unwrap();
     }
 }

@@ -301,6 +301,7 @@ test("parseStepTimings extracts content-free numeric step timings and handles mi
   const timings = parseStepTimings(ok, OK_SESSION);
   assert.deepEqual(timings, {
     schema: 1,
+    barrier_matched: true,
     backend_steps: 5,
     transient_retries: 0,
     first_step_offset_ms: 780,
@@ -321,6 +322,7 @@ test("parseStepTimings extracts content-free numeric step timings and handles mi
   ].join("\n");
   assert.deepEqual(parseStepTimings(midnight, undefined, "mid"), {
     schema: 1,
+    barrier_matched: true,
     backend_steps: 2,
     transient_retries: 0,
     first_step_offset_ms: 750,

@@ -259,8 +259,9 @@ struct Observations {
     facts: metadata::Facts,
     managed: bool,
     fresh: bool,
-    epoch_first_start_ms: Option<i64>,
-    epoch_saw_loss_before_first: bool,
+    epoch_min_start_ms: Option<i64>,
+    epoch_first_claimed: bool,
+    epoch_order_unproven: bool,
     renewed_at: Option<i64>,
     compacted: VecDeque<i64>,
     compact_coverage: bool,
@@ -294,8 +295,9 @@ impl Observations {
                 .and_then(crate::execution_environment::ExecutionBinding::managed)
                 .is_some(),
             fresh: args.resume.is_none() && args.native_fork.is_none(),
-            epoch_first_start_ms: None,
-            epoch_saw_loss_before_first: false,
+            epoch_min_start_ms: None,
+            epoch_first_claimed: false,
+            epoch_order_unproven: false,
             renewed_at: None,
             compacted: VecDeque::new(),
             compact_coverage: true,
@@ -367,9 +369,16 @@ impl Observations {
                 &mut self.unmatched,
             ),
         };
+        if (self.dropped != 0 || self.unmatched != 0) && !self.epoch_first_claimed {
+            self.epoch_order_unproven = true;
+        }
+        let earliest_pending = match self.producer {
+            Producer::Claude => self.claude.earliest_pending_start_ms(),
+            Producer::Codex => self.codex.earliest_pending_start_ms(),
+        };
         observed.sort_by_key(|attempt| attempt.start_ms);
         for attempt in observed {
-            self.record(attempt);
+            self.record(attempt, earliest_pending);
         }
         if self.dropped != 0 || self.unmatched != 0 || force {
             let dropped = std::mem::take(&mut self.dropped);
@@ -383,7 +392,7 @@ impl Observations {
         }
     }
 
-    fn record(&mut self, attempt: Attempt) {
+    fn record(&mut self, attempt: Attempt, earliest_pending_start_ms: Option<i64>) {
         if self.seen.contains(&attempt.id) {
             return;
         }
@@ -400,18 +409,34 @@ impl Observations {
             *index += 1;
             *index
         });
-        if self.epoch_first_start_ms.is_none() && (self.dropped != 0 || self.unmatched != 0) {
-            self.epoch_saw_loss_before_first = true;
-        }
-        // Track epoch position from attributable request starts independently of
-        // role, rollover, and compaction; report unknown if ordering cannot be proven.
-        let first_in_epoch = match self.epoch_first_start_ms {
-            None if attempt.start_ms > 0 && !self.epoch_saw_loss_before_first => {
-                self.epoch_first_start_ms = Some(attempt.start_ms);
+        // Track epoch position from attributable request starts across flushes.
+        // Never mark a later completion true while an earlier start is still
+        // pending or after pre-first coverage loss.
+        let first_in_epoch = if attempt.start_ms <= 0 {
+            self.epoch_order_unproven = true;
+            None
+        } else if !self.epoch_first_claimed && !self.epoch_order_unproven {
+            if earliest_pending_start_ms.is_some_and(|pending| pending < attempt.start_ms) {
+                self.epoch_order_unproven = true;
+                self.epoch_min_start_ms = Some(
+                    self.epoch_min_start_ms
+                        .map_or(attempt.start_ms, |m| m.min(attempt.start_ms)),
+                );
+                None
+            } else {
+                self.epoch_first_claimed = true;
+                self.epoch_min_start_ms = Some(attempt.start_ms);
                 Some(true)
             }
-            Some(first) if attempt.start_ms >= first => Some(false),
-            _ => None,
+        } else if self
+            .epoch_min_start_ms
+            .is_some_and(|min| attempt.start_ms >= min)
+        {
+            Some(false)
+        } else {
+            self.epoch_order_unproven = true;
+            self.epoch_min_start_ms = Some(attempt.start_ms);
+            None
         };
         let parent = attempt.role == "parent";
         let (first_rollover, first_compact) = if parent {

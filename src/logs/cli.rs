@@ -375,14 +375,14 @@ impl LogsArgs {
                 }
                 let refs: Vec<&serde_json::Value> = reports.iter().collect();
                 let encoded = super::storage::encode_wait_cache_otlp(day, now, &refs, false)?;
-                super::storage::verify_and_record_writer_state(
+                let payload = super::storage::claim_or_replay_writer_state(
                     &writer_state,
                     day_date,
                     now,
                     &encoded,
                     update_cohort,
                 )?;
-                std::io::stdout().lock().write_all(&encoded.bytes)?;
+                std::io::stdout().lock().write_all(&payload)?;
                 Ok(())
             }
             Command::Status => report(&sources, Operation::Status, self.allow_partial).await,

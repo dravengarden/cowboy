@@ -252,3 +252,84 @@ async fn codex_listener_declines_when_node_debug_is_set() {
     );
     assert!(!spec.env.contains_key(CODEX_REQUEST_OBSERVATION_ENV));
 }
+
+#[test]
+fn launch_prefix_fingerprint_detects_session_extensions_memory_and_call_context() {
+    let dir = tempfile::tempdir().unwrap();
+    let ext_no_mem = dir.path().join("ext-no-mem.json");
+    let ext_with_mem = dir.path().join("ext-with-mem.json");
+    std::fs::write(&ext_no_mem, r#"{"schema":1,"memory":null}"#).unwrap();
+    std::fs::write(
+        &ext_with_mem,
+        r#"{"schema":1,"memory":{"server":"matrix"}}"#,
+    )
+    .unwrap();
+
+    let (args, prep) = fixture_input("codex");
+    let mut s1 = prep.spec.clone();
+    s1.env.insert(
+        "COWBOY_SESSION_EXTENSIONS".into(),
+        ext_no_mem.display().to_string(),
+    );
+    s1.remove_env.push("COWBOY_CALL_CONTEXT");
+    let mut s2 = s1.clone();
+    s2.env.insert(
+        "COWBOY_SESSION_EXTENSIONS".into(),
+        ext_with_mem.display().to_string(),
+    );
+    let fp1 = metadata::compute_launch_prefix_fingerprint(&args, &s1);
+    let fp2 = metadata::compute_launch_prefix_fingerprint(&args, &s2);
+    assert_ne!(fp1, fp2);
+
+    let mut s3 = s2.clone();
+    s3.env
+        .insert("COWBOY_CALL_CONTEXT".into(), "/tmp/call-ctx.json".into());
+    assert_ne!(fp2, metadata::compute_launch_prefix_fingerprint(&args, &s3));
+}
+
+#[test]
+fn epoch_ordering_stays_unknown_when_loss_precedes_first_or_earlier_request_is_pending() {
+    let (args, prep) = fixture_input("claude-code");
+    let (_obs, facts) = Observer::new(None);
+    let mut state = Observations::new(
+        Producer::Claude,
+        &args,
+        "ep-loss",
+        metadata::compute_launch_prefix_fingerprint(&args, &prep.spec),
+        facts,
+    );
+    state.dropped = 1;
+    state.flush(1_000, false);
+    assert!(state.epoch_order_unproven);
+    assert!(!state.epoch_first_claimed);
+
+    let (_obs2, facts2) = Observer::new(None);
+    let mut state2 = Observations::new(
+        Producer::Claude,
+        &args,
+        "ep-pending",
+        metadata::compute_launch_prefix_fingerprint(&args, &prep.spec),
+        facts2,
+    );
+    let later = Attempt {
+        id: "late-1".into(),
+        thread: "t1".into(),
+        role: "parent",
+        outcome: "usage",
+        start_source: "span",
+        usage_source: "log",
+        retention: "unknown",
+        start_ms: 200,
+        end_ms: 250,
+        tokens: Tokens::default(),
+        overage: None,
+        status: Some(200),
+        cost: None,
+        model: None,
+        native_release: None,
+        turn: None,
+    };
+    state2.record(later, Some(100));
+    assert!(!state2.epoch_first_claimed);
+    assert!(state2.epoch_order_unproven);
+}

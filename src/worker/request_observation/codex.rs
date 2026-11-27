@@ -67,6 +67,14 @@ impl Pending {
         0
     }
 
+    pub(super) fn earliest_pending_start_ms(&self) -> Option<i64> {
+        self.open
+            .values()
+            .map(|open| open.attempt.start_ms)
+            .chain(self.records.values().map(Record::time))
+            .min()
+    }
+
     pub(super) fn drain(
         &mut self,
         now: i64,

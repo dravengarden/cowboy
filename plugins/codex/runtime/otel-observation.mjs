@@ -304,6 +304,23 @@ function createTomlCursor(text) {
     const start = pos;
     while (pos < len && !/[\s#,}\]]/.test(text[pos])) pos += 1;
     if (pos === start) throw new Error("empty scalar");
+    const raw = text.slice(start, pos);
+    // Allow only legal TOML bare scalars: booleans, integers, floats, inf/nan, or RFC3339 date/time.
+    const validScalar =
+      raw === "true" ||
+      raw === "false" ||
+      /^[+-]?(?:inf|nan)$/.test(raw) ||
+      /^0x[0-9a-fA-F](?:_?[0-9a-fA-F])*$/.test(raw) ||
+      /^0o[0-7](?:_?[0-7])*$/.test(raw) ||
+      /^0b[01](?:_?[01])*$/.test(raw) ||
+      /^[+-]?(?:0|[1-9](?:_?[0-9])*)(?:\.[0-9](?:_?[0-9])*)?(?:[eE][+-]?[0-9](?:_?[0-9])*)?$/.test(
+        raw,
+      ) ||
+      /^\d{4}-\d{2}-\d{2}(?:[Tt ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:[Zz]|[+-]\d{2}:\d{2})?)?$/.test(
+        raw,
+      ) ||
+      /^\d{2}:\d{2}:\d{2}(?:\.\d+)?$/.test(raw);
+    if (!validScalar) throw new Error(`invalid TOML scalar: ${raw}`);
   };
 
   return {
@@ -330,12 +347,16 @@ export function tomlHasOtelPolicy(text) {
   if (typeof text !== "string" || !text) return false;
   if (Buffer.byteLength(text, "utf8") > MAX_CONFIG_BYTES) return true;
   let found = false;
+  const definedTables = new Set();
+  const definedKeys = new Set();
+  const pathKey = (segments) => JSON.stringify(segments);
   const checkPath = (segments) => {
     if (isOtelPolicyPath(segments)) found = true;
   };
   try {
     const cursor = createTomlCursor(text);
     let currentTable = [];
+    let currentArrayIndex = -1;
     while (!cursor.eof()) {
       cursor.skipWsAndComments();
       if (cursor.eof()) break;
@@ -349,9 +370,15 @@ export function tomlHasOtelPolicy(text) {
             throw new Error("unclosed array table header");
           }
           cursor.advance(2);
+          currentArrayIndex += 1;
         } else {
           if (cursor.peek() !== "]") throw new Error("unclosed table header");
           cursor.advance(1);
+          const tk = pathKey(header);
+          if (definedTables.has(tk) || definedKeys.has(tk)) {
+            throw new Error(`duplicate table definition: ${tk}`);
+          }
+          definedTables.add(tk);
         }
         currentTable = header;
         checkPath(currentTable);
@@ -368,8 +395,25 @@ export function tomlHasOtelPolicy(text) {
       if (cursor.peek() !== "=") throw new Error("expected '=' after key");
       cursor.advance(1);
       const fullPath = [...currentTable, ...key];
+      const scopedKey = `${currentArrayIndex}:${pathKey(fullPath)}`;
+      if (
+        definedKeys.has(scopedKey) ||
+        (currentArrayIndex === -1 && definedTables.has(pathKey(fullPath)))
+      ) {
+        throw new Error(`duplicate key definition: ${scopedKey}`);
+      }
+      definedKeys.add(scopedKey);
       checkPath(fullPath);
-      cursor.scanValue(fullPath, checkPath, 0);
+      cursor.scanValue(
+        fullPath,
+        (subPath) => {
+          const sk = `${currentArrayIndex}:${pathKey(subPath)}`;
+          if (definedKeys.has(sk)) throw new Error(`duplicate inline key: ${sk}`);
+          definedKeys.add(sk);
+          checkPath(subPath);
+        },
+        0,
+      );
       if (found) return true;
       cursor.skipSpaces();
       if (cursor.peek() === "#") cursor.skipCommentToEol();
@@ -552,6 +596,7 @@ export function probeCodexOtelConfig(
     child.stdout.on("error", () => finish(null));
 
     let buffer = "";
+    let initialized = false;
     let configRead;
     let reqRead;
     child.stdout.setEncoding("utf8");
@@ -579,10 +624,11 @@ export function probeCodexOtelConfig(
           return;
         }
         if (message.id === 1) {
-          if (message.error !== undefined || !isPlainObject(message.result)) {
+          if (initialized || message.error !== undefined || !isPlainObject(message.result)) {
             finish(null);
             return;
           }
+          initialized = true;
           try {
             child.stdin.write(
               `${JSON.stringify({ method: "initialized", params: {} })}\n` +
@@ -600,22 +646,38 @@ export function probeCodexOtelConfig(
           continue;
         }
         if (message.id === 2) {
-          if (message.error !== undefined || !isPlainObject(message.result)) {
+          if (
+            !initialized ||
+            configRead !== undefined ||
+            message.error !== undefined ||
+            !isPlainObject(message.result)
+          ) {
             finish(null);
             return;
           }
           const res = message.result;
           if (
             !isPlainObject(res.config) ||
-            (res.origins !== undefined && !isPlainObject(res.origins)) ||
-            (res.layers !== undefined && res.layers !== null && !Array.isArray(res.layers))
+            !isPlainObject(res.origins) ||
+            !Array.isArray(res.layers) ||
+            res.layers.some(
+              (layer) =>
+                !isPlainObject(layer) ||
+                (layer.name !== undefined && !isPlainObject(layer.name)) ||
+                (layer.config !== undefined && !isPlainObject(layer.config)),
+            )
           ) {
             finish(null);
             return;
           }
           configRead = res;
         } else if (message.id === 3) {
-          if (message.error !== undefined || !isPlainObject(message.result)) {
+          if (
+            !initialized ||
+            reqRead !== undefined ||
+            message.error !== undefined ||
+            !isPlainObject(message.result)
+          ) {
             finish(null);
             return;
           }
@@ -632,8 +694,8 @@ export function probeCodexOtelConfig(
         if (configRead !== undefined && reqRead !== undefined) {
           finish({
             config: configRead.config,
-            origins: configRead.origins ?? null,
-            layers: Array.isArray(configRead.layers) ? configRead.layers : [],
+            origins: configRead.origins,
+            layers: configRead.layers,
             requirements: reqRead.requirements,
           });
           return;
@@ -716,10 +778,16 @@ export async function hasExplicitCodexOtelPolicy({
   if (
     !isPlainObject(probed) ||
     !isPlainObject(probed.config) ||
+    !isPlainObject(probed.origins) ||
+    !Array.isArray(probed.layers) ||
+    probed.layers.some(
+      (layer) =>
+        !isPlainObject(layer) ||
+        (layer.name !== undefined && !isPlainObject(layer.name)) ||
+        (layer.config !== undefined && !isPlainObject(layer.config)),
+    ) ||
     !Object.hasOwn(probed, "requirements") ||
-    (probed.requirements !== null && !isPlainObject(probed.requirements)) ||
-    (probed.origins !== null && probed.origins !== undefined && !isPlainObject(probed.origins)) ||
-    (probed.layers !== undefined && !Array.isArray(probed.layers))
+    (probed.requirements !== null && !isPlainObject(probed.requirements))
   ) {
     return true;
   }

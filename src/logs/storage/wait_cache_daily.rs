@@ -14,7 +14,7 @@ use std::time::Instant;
 #[cfg(any(feature = "full", feature = "machine-host"))]
 mod metrics;
 #[cfg(any(feature = "full", feature = "machine-host"))]
-pub use metrics::{encode_wait_cache_otlp, verify_and_record_writer_state};
+pub use metrics::{claim_or_replay_writer_state, encode_wait_cache_otlp};
 
 mod files;
 mod parent_clock;

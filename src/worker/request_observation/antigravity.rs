@@ -45,6 +45,7 @@ struct State {
     turn_seq: u64,
     dropped: u64,
     unmatched: u64,
+    closed: bool,
     facts: metadata::Facts,
 }
 
@@ -78,6 +79,7 @@ impl Recorder {
                 turn_seq: 0,
                 dropped: 0,
                 unmatched: 0,
+                closed: false,
                 facts,
             }),
         }
@@ -85,6 +87,9 @@ impl Recorder {
 
     pub(super) fn prompt_started(&self, at_ms: i64) {
         let mut state = self.state.lock();
+        if state.closed {
+            return;
+        }
         if state.pending_prompt_started_at_ms.replace(at_ms).is_some() {
             state.unmatched = state.unmatched.saturating_add(1);
             if state.epoch_first_start_ms.is_none() {
@@ -107,6 +112,9 @@ impl Recorder {
     ) {
         let end_ms = now_ms();
         let mut state = self.state.lock();
+        if state.closed {
+            return;
+        }
         state.sync_facts();
         state.turn_seq = state.turn_seq.saturating_add(1);
         let turn_seq = state.turn_seq;
@@ -221,8 +229,11 @@ impl Recorder {
     pub(super) fn emit_coverage(&self, outcome: &str) {
         let mut state = self.state.lock();
         state.sync_facts();
-        if outcome == "closed" && state.pending_prompt_started_at_ms.take().is_some() {
-            state.unmatched = state.unmatched.saturating_add(1);
+        if outcome == "closed" {
+            state.closed = true;
+            if state.pending_prompt_started_at_ms.take().is_some() {
+                state.unmatched = state.unmatched.saturating_add(1);
+            }
         }
         let dropped = std::mem::take(&mut state.dropped);
         let unmatched = std::mem::take(&mut state.unmatched);
@@ -480,7 +491,12 @@ mod tests {
         rec.prompt_started(1_700_000_001_000);
         assert_eq!(rec.state.lock().unmatched, 1);
         rec.emit_coverage("closed");
+        assert!(rec.state.lock().closed);
         assert!(rec.state.lock().pending_prompt_started_at_ms.is_none());
         assert_eq!(rec.state.lock().unmatched, 0);
+        // Late prompt_started / record_turn after close are fenced and do not advance turn_seq.
+        rec.prompt_started(1_700_000_002_000);
+        rec.record_turn("EndTurn", None, None);
+        assert_eq!(rec.state.lock().turn_seq, 0);
     }
 }

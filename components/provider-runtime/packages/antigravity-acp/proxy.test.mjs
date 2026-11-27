@@ -2557,3 +2557,24 @@ test("settled turns attach barrier-bounded antigravity_cache_diagnostics and kee
     null,
   );
 });
+
+test("refusal error replies still attach barrier-bounded antigravity_cache_diagnostics", async () => {
+  const { proxy, client } = harness({
+    backend: { class: "rate_limited", successes: 0, transient: 2, barrier: true, refusals: [] },
+  });
+  await proxy.fromClient(request(103, "session/prompt", { sessionId: "s-refuse", prompt: [] }));
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    method: "session/update",
+    params: {
+      sessionId: "s-refuse",
+      update: { sessionUpdate: "usage_update", used: 12000, size: 1048576 },
+    },
+  });
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 103, result: { stopReason: "end_turn" } });
+  const err = client.at(-1).error;
+  assert.equal(err.data.cowboy.antigravity_backend.class, "rate_limited");
+  assert.equal(err.data.cowboy.antigravity_cache_diagnostics.schema, 1);
+  assert.equal(err.data.cowboy.antigravity_cache_diagnostics.usage_updates, 1);
+  assert.equal(err.data.cowboy.antigravity_cache_diagnostics.start_context_used, 12000);
+});

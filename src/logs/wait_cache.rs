@@ -242,6 +242,17 @@ pub fn record_notice_receipt(session: &str, turn_id: &str, stop_reason: &str) {
 
 /// The gateway commits one accounting envelope before projecting it here.
 /// Its input field is already normalized to total input across wire dialects.
+#[cfg(any(test, feature = "machine-host"))]
+fn legacy_gateway_replay_producer(producer_id: &str) -> &'static str {
+    match producer_id {
+        "codex" => "codex",
+        "claude-code" => "claude-code",
+        "codex-deepseek" => "codex-deepseek",
+        "claude-deepseek" => "claude-deepseek",
+        _ => "other",
+    }
+}
+
 #[cfg(feature = "machine-host")]
 pub fn gateway_usage(id: &str, event: &crate::machine_protocol::ProviderUsageEvent) {
     capture::provider_usage(event);
@@ -288,12 +299,13 @@ pub fn gateway_usage(id: &str, event: &crate::machine_protocol::ProviderUsageEve
     let started = event
         .duration_ms
         .and_then(|ms| u64::try_from(event.occurred_at_ms).ok()?.checked_sub(ms));
-    // Keep event.producer_id (not logical provider) in the deterministic replay
-    // identity so upgrading attribution for deepseek-harness preserves dedup
-    // against pre-upgrade spooled events.
+    // Preserve the exact pre-upgrade gateway replay producer bucket so
+    // replayed spooled events (including deepseek-harness and former "other"
+    // producers) keep identical rollup deduplication hashes.
+    let replay_producer = legacy_gateway_replay_producer(&event.producer_id);
     record(
         REQUEST,
-        &[&event.producer_id, id],
+        &[replay_producer, id],
         Some(event.occurred_at_ms),
         Tokens {
             input: event.input_tokens,
@@ -435,5 +447,11 @@ mod tests {
             gateway_provider("claude-deepseek", "claude-deepseek"),
             "claude-deepseek"
         );
+        assert_eq!(
+            legacy_gateway_replay_producer("claude-deepseek"),
+            "claude-deepseek"
+        );
+        assert_eq!(legacy_gateway_replay_producer("antigravity"), "other");
+        assert_eq!(legacy_gateway_replay_producer("custom-gw"), "other");
     }
 }

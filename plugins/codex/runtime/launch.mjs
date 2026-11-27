@@ -13,7 +13,11 @@ import {
   nativeMcpServerNames,
   sessionExtensions,
 } from "./memory.mjs";
-import { CODEX_OBSERVATION_ENV, resolveCodexObservation } from "./otel-observation.mjs";
+import {
+  CODEX_OBSERVATION_ENV,
+  readBoundedRegularFile,
+  resolveCodexObservation,
+} from "./otel-observation.mjs";
 
 export function splitConfigurationArguments(args) {
   const configuration = [];
@@ -63,13 +67,10 @@ export function agentCallsPrompt(extensions) {
 
 export { agentApiConfiguration } from "./memory.mjs";
 
-function userCodexConfig() {
-  const home = process.env.CODEX_HOME ?? join(process.env.HOME ?? "", ".codex");
-  try {
-    return readFileSync(join(home, "config.toml"), "utf8");
-  } catch {
-    return "";
-  }
+export function userCodexConfig(env = process.env) {
+  const home = env.CODEX_HOME ?? join(env.HOME ?? "", ".codex");
+  const read = readBoundedRegularFile(join(home, "config.toml"));
+  return read.status === "ok" ? read.text : "";
 }
 
 // codex-acp logs in with DEFAULT_AUTH_REQUEST whenever the native app-server
@@ -259,21 +260,6 @@ export async function main(args) {
     configuration.push(...bindingConfiguration(bindings, descriptor));
     nativeNames.push(...bindings.map((entry) => entry.name));
   }
-  if (!inspection && rawObservationEnv) {
-    const observation = await resolveCodexObservation({
-      codexPath: process.env.CODEX_PATH,
-      configuration,
-      cwd: process.cwd(),
-      env: process.env,
-      rawBinding: rawObservationEnv,
-      helperPath: fileURLToPath(new URL("../bin/codex-otel-headers", import.meta.url)),
-    });
-    if (observation.keepEnv) {
-      process.env[CODEX_OBSERVATION_ENV] = rawObservationEnv;
-      configuration.push(...observation.args);
-    }
-  }
-  process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
   if (!inspection && (cowboyMcp || memory)) {
     if (!isAbsolute(process.env.CODEX_PATH ?? "")) {
       throw new Error("Remote execution requires an exact Machine-bound CLI");
@@ -294,6 +280,23 @@ export async function main(args) {
     delete process.env.COWBOY_PRIVATE_CODEX_BRIDGE;
     applyAwaitedMcpServers([]);
   }
+  // Attach OTLP observation ONLY after all local MCP preflight enumerations
+  // finish so preflight children never see the credential or -c otel.* overrides.
+  if (!inspection && rawObservationEnv) {
+    const observation = await resolveCodexObservation({
+      codexPath: process.env.CODEX_PATH,
+      configuration,
+      cwd: process.cwd(),
+      env: process.env,
+      rawBinding: rawObservationEnv,
+      helperPath: fileURLToPath(new URL("../bin/codex-otel-headers", import.meta.url)),
+    });
+    if (observation.keepEnv) {
+      process.env[CODEX_OBSERVATION_ENV] = rawObservationEnv;
+      configuration.push(...observation.args);
+    }
+  }
+  process.env.COWBOY_PRIVATE_CODEX_ARGUMENTS = JSON.stringify(configuration);
   const upstream = fileURLToPath(
     new URL("./node_modules/@agentclientprotocol/codex-acp/dist/index.js", import.meta.url),
   );

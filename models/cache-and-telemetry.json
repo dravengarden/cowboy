@@ -127,11 +127,11 @@
     "deepseek-harness": {
       "telemetry": {
         "level1_turn_end": {
-          "input_tokens": false,
-          "cached_read_tokens": false,
-          "cache_write_tokens": false,
-          "reasoning_tokens": false,
-          "notes": "Verified in @deepseek-ai/dsh@0.2.2-rc.1 (@deepseek-ai/dsh-acp): session/prompt returns stopReason without a TurnEnd usage block; per-request cache telemetry comes from the Level 2 gateway ledger."
+          "input_tokens": null,
+          "cached_read_tokens": null,
+          "cache_write_tokens": null,
+          "reasoning_tokens": null,
+          "notes": "Unverified in checked-in fixtures (dsh@0.2.2-rc.1 pinned in lock.json; no checked-in session/prompt usage fixture or probe receipt yet). Per-request cache telemetry comes from the Level 2 gateway ledger."
         },
         "level2_per_request": {
           "status": "shipped_gateway_ledger",

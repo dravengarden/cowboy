@@ -4683,8 +4683,19 @@ async fn run_session(
                         return Ok(());
                     }
                     if cancelled_during_retry && !recycled_by_watchdog && !response.as_ref().is_err_and(|e| crate::provider::governed_terminal_error(&provider, e)) {
+                        let (obs_usage, obs_meta) = match &response {
+                            Ok(r) => (
+                                r.usage.as_ref().and_then(|u| {
+                                    crate::agent_model::TurnUsage::from_acp_for_provider(
+                                        &provider, u,
+                                    )
+                                }),
+                                r.meta.as_ref(),
+                            ),
+                            Err(e) => (None, e.data.as_ref().and_then(serde_json::Value::as_object)),
+                        };
                         sink.prompt_completed(&sid, cmid.as_deref(), "Cancelled");
-                        sink.record_prompt_observation(&sid, "Cancelled", None, None);
+                        sink.record_prompt_observation(&sid, "Cancelled", obs_usage, obs_meta);
                         prompt.pending_empty_stream_update.lock().take();
                         if let Some(tx) = completion {
                             let _ = tx.send(Err("prompt cancelled".to_owned()));

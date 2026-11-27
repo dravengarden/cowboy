@@ -74,6 +74,13 @@ impl Pending {
         0
     }
 
+    pub(super) fn earliest_pending_start_ms(&self) -> Option<i64> {
+        self.spans
+            .iter()
+            .flat_map(|span| span.attempts.iter().map(|(_, start)| *start))
+            .min()
+    }
+
     pub(super) fn drain(&mut self, now: i64, force: bool, unmatched: &mut u64) -> Vec<Attempt> {
         self.spans.sort_by_key(|span| span.end_ms);
         let mut result = Vec::new();

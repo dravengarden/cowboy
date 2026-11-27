@@ -124,11 +124,20 @@ SSH uses the same bounded read protocol. Read exact event detail with
 with `logs export --signal logs`.
 
 The Controller offers one compact previous-day OTLP counter snapshot to its
-existing configured exporter. Machine counters can be extracted from a
-closed UTC day with `cowboy logs wait-cache-metrics --day YYYY-MM-DD`,
-including across multiple `--sources` Machines in one invocation so the CLI
-aggregates them fail-closed into one single-writer `cowboy.source="machine"`
-OTLP snapshot without colliding host series. The existing binding governs delivery.
+existing configured exporter. Machine counters are extracted on the designated
+single writer for a closed, finalized UTC day (at least 15 minutes past UTC
+midnight and within the 45-day retention horizon) across the authoritative
+Machine set while reusing the same `--writer-state` file:
+
+```sh
+cowboy logs --sources "$SOURCES" wait-cache-metrics --day YYYY-MM-DD --writer-state "$WRITER_STATE" > wait-cache.otlp.pb
+```
+
+The CLI aggregates all sources in memory, rejects duplicate `store_id` aliases,
+absent rollups, truncation, degradation, or `coverage_issues`, binds the sorted
+`store_id` cohort by effective UTC day (`--update-cohort` applies forward-only),
+and persists the claimed payload bytes under an exclusive lock so retries replay
+identical bytes without colliding host series. The existing binding governs delivery.
 Every signed metrics lane validates its encoding and admits only finite
 instruments, labels and resource attributes independently of its route.
 Request series retain
