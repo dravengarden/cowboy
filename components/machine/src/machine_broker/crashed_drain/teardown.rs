@@ -260,7 +260,7 @@ impl Broker {
             .lock()
             .receiptless_uncertain_effects
             .get(session_id)
-            .map(|(_, eff)| eff.clone())
+            .cloned()
     }
 
     /// Enqueue changed snapshots after `Welcome` under the exact
@@ -280,6 +280,9 @@ impl Broker {
         let outer = ctrl.outer_machine_protocol;
         let protocol = ctrl.protocol;
         let sessions = self.sessions.lock();
+        let session_states = self.session_states.lock().clone();
+        let startup_failures = self.startup_failures.lock().clone();
+        let generation_commands = self.generation_commands.lock().clone();
         let workers = self.workers.lock();
         let pending_prompts: HashMap<String, u64> = self
             .pending_commands
@@ -325,40 +328,51 @@ impl Broker {
                 });
             }
         }
+        // Reconcile all changed dormant snapshots for still-declared sessions
+        // during handover (covering ordinary disconnects, hibernations,
+        // downgraded Controllers, and receiptless drains) while skipping only
+        // confirmed crashed-drain retirements that `replay_recently_drained_after_welcome`
+        // will deliver via `Frame::CrashedWorkerDrained` (R8-M5, R9-M3).
         let controller_capable = protocol >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
             && outer.is_some_and(|p| p >= CRASHED_WORKER_DRAIN_PROTOCOL_VERSION);
         let now = Instant::now();
-        for welcomed in welcome {
-            if !welcomed.has_connected_owner() || workers.contains_key(&welcomed.session_id) {
+        for (session_id, session) in sessions.iter() {
+            if workers.contains_key(session_id) {
                 continue;
             }
-            let Some(session) = sessions.get(&welcomed.session_id) else {
-                continue;
-            };
-            let Some((ep, confirmed_receipt, at)) =
-                state.recently_drained.get(&welcomed.session_id)
-            else {
-                continue;
-            };
-            if now.saturating_duration_since(*at) >= RECENTLY_DRAINED_TTL
-                || ep != &welcomed.worker_epoch
-            {
+            let replayed_drained = controller_capable
+                && welcome.iter().any(|w| {
+                    w.session_id == *session_id
+                        && w.has_connected_owner()
+                        && state.recently_drained.get(session_id).is_some_and(
+                            |(ep, confirmed_receipt, at)| {
+                                *confirmed_receipt
+                                    && now.saturating_duration_since(*at) < RECENTLY_DRAINED_TTL
+                                    && ep == &w.worker_epoch
+                            },
+                        )
+                });
+            if replayed_drained {
                 continue;
             }
-            if *confirmed_receipt && controller_capable {
-                continue;
-            }
-            let mut ownerless = WorkerSnapshot {
-                session_id: welcomed.session_id.clone(),
-                worker_epoch: format!("broker-{}", welcomed.session_id),
+            let dormant_state = session_states
+                .get(session_id)
+                .copied()
+                .unwrap_or(WorkerState::Crashed);
+            let exit_detail = (dormant_state == WorkerState::Crashed)
+                .then(|| startup_failures.get(session_id).cloned())
+                .flatten();
+            let executable = generation_commands
+                .get(&session.generation)
+                .map(|path| path.display().to_string());
+            let mut dormant = WorkerSnapshot {
+                session_id: session_id.clone(),
+                worker_epoch: format!("broker-{session_id}"),
                 generation: session.generation.clone(),
-                executable: welcomed.executable.clone(),
+                executable,
                 launch: Some(session.clone()),
-                state: WorkerState::Crashed,
-                agent_session_id: session
-                    .agent_session_id
-                    .clone()
-                    .or_else(|| welcomed.agent_session_id.clone()),
+                state: dormant_state,
+                agent_session_id: session.agent_session_id.clone(),
                 native_thread_materialized: None,
                 current_turn_id: None,
                 supports_current_turn: false,
@@ -370,36 +384,30 @@ impl Broker {
                 config_options: None,
                 context_used: None,
                 context_size: None,
-                pending_prompt_count: pending_prompts
-                    .get(&welcomed.session_id)
-                    .copied()
-                    .unwrap_or(0),
+                pending_prompt_count: pending_prompts.get(session_id).copied().unwrap_or(0),
                 drain_requested: false,
-                exit_detail: welcomed.exit_detail.clone(),
+                exit_detail,
                 background_tasks: None,
                 native_cycle_id: None,
                 native_cycle_active: false,
-                incarnation: self.reported_lineage(&welcomed.session_id),
+                incarnation: self.reported_lineage(session_id),
                 account_unit: None,
-                uncertain_effect: state
-                    .receiptless_uncertain_effects
-                    .get(&welcomed.session_id)
-                    .map(|(_, eff)| eff.clone())
-                    .or_else(|| welcomed.uncertain_effect.clone()),
+                uncertain_effect: state.receiptless_uncertain_effects.get(session_id).cloned(),
                 crashed_drain_active: false,
             };
-            let declared_provider = Some(session.provider.as_str());
             wrap_up::sanitize_snapshot_for_controller(
-                &mut ownerless,
+                &mut dormant,
                 false,
                 protocol,
                 outer,
                 protocol,
-                declared_provider,
+                Some(session.provider.as_str()),
             );
-            let _ = tx.send(Frame::Snapshot {
-                worker: Box::new(ownerless),
-            });
+            if !welcome.contains(&dormant) {
+                let _ = tx.send(Frame::Snapshot {
+                    worker: Box::new(dormant),
+                });
+            }
         }
     }
 
@@ -583,17 +591,15 @@ impl Broker {
         recorded_pid: Option<u32>,
         retired_launch: RetiredLaunch,
     ) -> bool {
-        if self.args.spawn_mode == SpawnMode::Direct {
-            let deadline = tokio::time::Instant::now() + DIRECT_EXIT_GRACE;
-            while !self
-                .confirm_direct_owner_gone(session_id, recorded_pid)
-                .await
-            {
-                if tokio::time::Instant::now() >= deadline {
-                    return false;
-                }
-                tokio::time::sleep(Duration::from_millis(25)).await;
+        let deadline = tokio::time::Instant::now() + DIRECT_EXIT_GRACE;
+        while !self
+            .confirm_mid_drain_worker_exited(session_id, recorded_pid)
+            .await
+        {
+            if tokio::time::Instant::now() >= deadline {
+                return false;
             }
+            tokio::time::sleep(Duration::from_millis(25)).await;
         }
         self.confirm_retired_sandbox_units_gone(session_id, retired_launch)
             .await
@@ -736,10 +742,9 @@ impl Broker {
         recorded_pid: Option<u32>,
         retired_launch: RetiredLaunch,
     ) -> bool {
-        if self.args.spawn_mode == SpawnMode::Direct
-            && !self
-                .confirm_direct_owner_gone(session_id, recorded_pid)
-                .await
+        if !self
+            .confirm_mid_drain_worker_exited(session_id, recorded_pid)
+            .await
         {
             return false;
         }

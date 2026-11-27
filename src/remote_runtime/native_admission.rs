@@ -316,10 +316,7 @@ async fn snapshot_outcome(
         .await
         {
             Ok(()) => EventAdmission::Admitted,
-            Err(error) if error.to_string().contains("runtime_disconnected") => {
-                EventAdmission::TransientlyDeferred
-            }
-            Err(_) => EventAdmission::PermanentlyDenied,
+            Err(error) => classify_admission_error(&error),
         };
     };
     let profile = &completion.profile;
@@ -355,10 +352,36 @@ async fn snapshot_outcome(
         .await
     {
         Ok(()) => EventAdmission::Admitted,
-        Err(error) if error.to_string().contains("runtime_disconnected") => {
-            EventAdmission::TransientlyDeferred
-        }
-        Err(_) => EventAdmission::PermanentlyDenied,
+        Err(error) => classify_admission_error(&error),
+    }
+}
+
+/// Classify store/account admission errors: only explicit policy denials are
+/// `PermanentlyDenied`; SQLite/store transaction or I/O errors and disconnects
+/// remain retryable `TransientlyDeferred` (R9-M2).
+fn classify_admission_error(error: &anyhow::Error) -> EventAdmission {
+    const PERMANENT_CODES: &[&str] = &[
+        "portable_key_unavailable",
+        "named_account_required",
+        "account_unavailable",
+        "portable_credentials_unmarked",
+        "native_identity_mismatch",
+        "portable_session_scope_mismatch",
+        "portable_session_binding_changed",
+        "login_not_admitted",
+        "native_identity_not_bound",
+        "native_generation_superseded",
+        "machine_unavailable",
+        "machine_enrollment_changed",
+        "native_binding_changed",
+        "native_session_binding_changed",
+        "session_unavailable",
+    ];
+    let message = error.to_string();
+    if PERMANENT_CODES.iter().any(|code| message.contains(code)) {
+        EventAdmission::PermanentlyDenied
+    } else {
+        EventAdmission::TransientlyDeferred
     }
 }
 

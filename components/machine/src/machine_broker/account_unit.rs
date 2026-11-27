@@ -289,3 +289,21 @@ pub(super) fn sanitize_snapshot_for_controller(
         true,
     );
 }
+
+pub(super) fn crashed_or_draining_prompt_refusal(
+    worker: &WorkerPeer,
+    expected_epoch: Option<&str>,
+) -> Option<&'static str> {
+    if worker.crashed_drain_fenced {
+        return Some("unhanded: crashed worker is draining; retry on replacement");
+    }
+    if worker.snapshot.drain_requested
+        && worker.snapshot.state == crate::runtime_wire::WorkerState::Crashed
+    {
+        return Some("unhanded: crashed worker is draining for rollout; retry on replacement");
+    }
+    if worker.snapshot.drain_requested && expected_epoch.is_some_and(|exp| exp != worker.epoch) {
+        return Some("unhanded: worker epoch changed before prompt admission");
+    }
+    None
+}

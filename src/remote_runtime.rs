@@ -687,20 +687,7 @@ impl RemoteRuntime {
         &self,
         request: &crate::execution_protocol::RuntimeRequest,
     ) -> bool {
-        self.shared
-            .workers
-            .lock()
-            .get(&request.session_id)
-            .is_some_and(|worker| {
-                worker.worker_epoch == request.worker_epoch
-                    && !matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
-                    && worker
-                        .launch
-                        .as_ref()
-                        .and_then(|launch| launch.execution_binding.as_ref())
-                        .and_then(|binding| binding.decode().ok())
-                        .is_some_and(|binding| binding == request.binding)
-            })
+        snapshot::execution_owner_matches(&self.shared, request)
     }
 
     /// Verify that an unmanaged runtime worker matching `(session_id, worker_epoch,
@@ -2187,6 +2174,9 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                 reject_foreign_frame(shared, &session_id, "worker event");
                 return Ok(());
             }
+            if snapshot::is_event_epoch_blocked(shared, &session_id, &worker_epoch) {
+                return Ok(());
+            }
             let key = (session_id.clone(), worker_epoch.clone());
             let previous = shared.highwaters.lock().get(&key).copied();
             // After a Cowboy restart the worker has already discarded every
@@ -2198,9 +2188,6 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                 anyhow::bail!(
                     "runtime event gap for {session_id}/{worker_epoch}: have {previous}, got {runtime_seq}"
                 );
-            }
-            if snapshot::is_event_epoch_blocked(shared, &session_id, &worker_epoch) {
-                return Ok(());
             }
             if previous.is_none_or(|previous| runtime_seq > previous) {
                 let mut undelivered_ack = None;

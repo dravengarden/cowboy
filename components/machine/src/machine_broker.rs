@@ -1079,6 +1079,12 @@ impl Broker {
                     retained,
                 );
             }
+            if let Some(session_retained) = self.retained_receiptless_uncertain(&session_id) {
+                crate::runtime_wire::merge_uncertain_effect(
+                    &mut snapshot.uncertain_effect,
+                    session_retained,
+                );
+            }
             worker.raw_wrap_up_steering = snapshot.wrap_up_steering;
             worker.snapshot = snapshot;
             worker.last_seen = Instant::now();

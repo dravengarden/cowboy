@@ -545,6 +545,62 @@ pub(super) fn observe_crashed_sighting(shared: &Shared, worker: &WorkerSnapshot)
 /// True ONLY when `worker_epoch` is a verified draining crashed epoch
 /// (Clear-fence and launch-binding checked, R7-H2). Raw maintenance sightings
 /// never authorize replay bypass on their own.
+fn is_cleanup_only_execution_command(command: &crate::execution_protocol::Command) -> bool {
+    use crate::execution_protocol::Command;
+    match command {
+        Command::Invoke { invocation, .. } => matches!(
+            invocation.method.as_str(),
+            "process/terminate" | "process/read" | crate::worker_execution::USER_MCP_STOP_METHOD
+        ),
+        Command::Observe { .. } | Command::Events { .. } => true,
+        Command::Describe | Command::Shutdown => false,
+    }
+}
+
+/// Verify execution-request ownership. Normally requires a live non-terminal
+/// worker; additionally permits a strict cleanup-only allowlist (`process/terminate`,
+/// `process/read`, `cowboy/stopUserMcp`, `Observe`, `Events`) for an exact
+/// broker-fenced draining crashed epoch and execution binding so cooperative
+/// drain settlement completes cleanly (R9-M1).
+pub(super) fn execution_owner_matches(
+    shared: &Shared,
+    request: &crate::execution_protocol::RuntimeRequest,
+) -> bool {
+    let matches_binding = |worker: &WorkerSnapshot| {
+        worker.worker_epoch == request.worker_epoch
+            && worker
+                .launch
+                .as_ref()
+                .and_then(|launch| launch.execution_binding.as_ref())
+                .and_then(|binding| binding.decode().ok())
+                .is_some_and(|binding| binding == request.binding)
+    };
+    if let Some(worker) = shared.workers.lock().get(&request.session_id)
+        && matches_binding(worker)
+    {
+        if !matches!(worker.state, WorkerState::Exited | WorkerState::Crashed) {
+            return true;
+        }
+        if worker.state == WorkerState::Crashed
+            && (worker.crashed_drain_active
+                || is_draining_crashed_epoch(shared, &request.session_id, &request.worker_epoch))
+            && is_cleanup_only_execution_command(&request.command)
+        {
+            return true;
+        }
+    }
+    if is_draining_crashed_epoch(shared, &request.session_id, &request.worker_epoch)
+        && is_cleanup_only_execution_command(&request.command)
+        && let Some(worker) = shared
+            .draining_replay_snapshots
+            .lock()
+            .get(&(request.session_id.clone(), request.worker_epoch.clone()))
+    {
+        return worker.state == WorkerState::Crashed && matches_binding(worker);
+    }
+    false
+}
+
 pub(super) fn is_draining_crashed_epoch(
     shared: &Shared,
     session_id: &str,

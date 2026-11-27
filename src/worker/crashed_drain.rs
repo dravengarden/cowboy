@@ -389,15 +389,19 @@ enum CommitDecision {
 
 fn decide_drain_commit(shared: &Shared, settled_cleanly: bool) -> CommitDecision {
     let _commit = shared.crashed_drain.drain_commit_lock.lock();
-    let outbox_empty = shared.outbox.lock().is_empty();
+    // Hold `outbox` across both emptiness and `pending_event_publishers` checks
+    // through `drain_committed = true` (canonical `drain_commit_lock -> outbox
+    // -> snapshot` order) so a deferred `TurnEnded` publisher cannot push an
+    // event and drop its guard between the two reads (R9-H1).
+    let outbox = shared.outbox.lock();
+    let outbox_empty = outbox.is_empty();
+    let publishers_in_flight = shared
+        .crashed_drain
+        .pending_event_publishers
+        .load(Ordering::Acquire)
+        > 0;
     if shared.crashed_drain.terminal_stop.load(Ordering::Acquire) {
-        return if shared
-            .crashed_drain
-            .pending_event_publishers
-            .load(Ordering::Acquire)
-            > 0
-            || !outbox_empty
-        {
+        return if publishers_in_flight || !outbox_empty {
             CommitDecision::NotReady
         } else {
             CommitDecision::ExitWithoutReceipt
@@ -405,6 +409,7 @@ fn decide_drain_commit(shared: &Shared, settled_cleanly: bool) -> CommitDecision
     }
     if !outbox_empty {
         let timed_out = shared.crashed_drain.draining.load(Ordering::Acquire)
+            && !publishers_in_flight
             && shared
                 .crashed_drain
                 .drain_wait_started
@@ -430,12 +435,7 @@ fn decide_drain_commit(shared: &Shared, settled_cleanly: bool) -> CommitDecision
         }
         return CommitDecision::NotReady;
     }
-    if shared
-        .crashed_drain
-        .pending_event_publishers
-        .load(Ordering::Acquire)
-        > 0
-    {
+    if publishers_in_flight {
         return CommitDecision::NotReady;
     }
     if !shared.crashed_drain.draining.load(Ordering::Acquire) {

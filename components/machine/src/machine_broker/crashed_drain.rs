@@ -36,7 +36,10 @@ struct Inner {
     /// preserved across same-epoch reconnects and cleared on epoch change or
     /// confirmed process exit (R5-M5).
     trusted_epoch_pids: HashMap<String, (String, u32)>,
-    receiptless_uncertain_effects: HashMap<String, (String, crate::runtime_wire::UncertainEffect)>,
+    /// Session-scoped highest unpersisted/receiptless `UncertainEffect`
+    /// retained across worker replacement and reset until durably acknowledged
+    /// by the owner or the session is permanently deleted (R9-H3).
+    receiptless_uncertain_effects: HashMap<String, crate::runtime_wire::UncertainEffect>,
 }
 
 /// Durable launch ownership proof for a retiring crashed worker (R7-H6).
@@ -193,18 +196,22 @@ impl Broker {
     ) -> DrainAdmission {
         let controller = self.controller.lock();
         let expected_lease = active_command_lease();
-        let controller_capable = controller.as_ref().is_some_and(|ctrl| {
-            expected_lease.is_none_or(|lease| ctrl.lease == lease)
-                && ctrl.protocol >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
-                && ctrl
-                    .outer_machine_protocol
-                    .is_some_and(|proto| proto >= CRASHED_WORKER_DRAIN_PROTOCOL_VERSION)
-        });
-        if !controller_capable {
+        let controller_meta = controller
+            .as_ref()
+            .filter(|ctrl| {
+                expected_lease.is_none_or(|lease| ctrl.lease == lease)
+                    && ctrl.protocol >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
+                    && ctrl
+                        .outer_machine_protocol
+                        .is_some_and(|proto| proto >= CRASHED_WORKER_DRAIN_PROTOCOL_VERSION)
+            })
+            .map(|ctrl| (ctrl.tx.clone(), ctrl.protocol, ctrl.outer_machine_protocol));
+        let Some((ctrl_tx, ctrl_protocol, ctrl_outer)) = controller_meta else {
             return DrainAdmission::Rejected(
                 "controller protocol does not support crashed worker drain".into(),
             );
-        }
+        };
+        let sessions = self.sessions.lock();
         let mut workers = self.workers.lock();
         let pending_cmds = self.pending_commands.lock();
         let dispatched = self.dispatched_prompts.lock();
@@ -295,6 +302,28 @@ impl Broker {
                             needs_replay: false,
                         },
                     );
+                    // Publish broker-verified `crashed_drain_active: true`
+                    // atomically under `controller -> sessions -> workers`
+                    // BEFORE any trailing worker event can be forwarded to the
+                    // Controller (R9-H2).
+                    let mut snap = worker.snapshot.clone();
+                    if snap.launch.is_none() {
+                        snap.launch = sessions.get(session_id).cloned();
+                    }
+                    snap.crashed_drain_active = true;
+                    snap.incarnation = self.reported_lineage(session_id);
+                    let declared_provider = sessions.get(session_id).map(|s| s.provider.as_str());
+                    wrap_up::sanitize_snapshot_for_controller(
+                        &mut snap,
+                        worker.raw_wrap_up_steering,
+                        worker.negotiated_protocol,
+                        ctrl_outer,
+                        ctrl_protocol,
+                        declared_provider,
+                    );
+                    let _ = ctrl_tx.send(Frame::Snapshot {
+                        worker: Box::new(snap),
+                    });
                     DrainAdmission::Forwarded
                 } else {
                     DrainAdmission::Rejected(
@@ -508,20 +537,14 @@ impl Broker {
         {
             state.trusted_epoch_pids.remove(session_id);
         }
-        // Match `receiptless_uncertain_effects` by its own recorded epoch: merge
-        // into a same-epoch reconnect (including after abort!) and delete only
-        // on genuine epoch replacement (R7-H5).
-        if let Some((recorded_epoch, effect)) =
-            state.receiptless_uncertain_effects.get(session_id).cloned()
-        {
-            if recorded_epoch == epoch {
-                crate::runtime_wire::merge_uncertain_effect(
-                    &mut worker.snapshot.uncertain_effect,
-                    effect,
-                );
-            } else {
-                state.receiptless_uncertain_effects.remove(session_id);
-            }
+        // Retain the session-scoped highest unpersisted `uncertain_effect`
+        // across worker replacement and reset until the owner explicitly
+        // acknowledges it or deletes the session (R9-H3).
+        if let Some(effect) = state.receiptless_uncertain_effects.get(session_id).cloned() {
+            crate::runtime_wire::merge_uncertain_effect(
+                &mut worker.snapshot.uncertain_effect,
+                effect,
+            );
         }
         let mut preserved_pid = worker
             .peer_pid
@@ -852,16 +875,12 @@ impl Broker {
             let receiptless = {
                 let mut state = self.crashed_drains.inner.lock();
                 if let Some(effect) = peer.snapshot.uncertain_effect.clone() {
-                    let mut merged = state
-                        .receiptless_uncertain_effects
-                        .get(session_id)
-                        .filter(|(ep, _)| ep == &peer.epoch)
-                        .map(|(_, existing)| existing.clone());
+                    let mut merged = state.receiptless_uncertain_effects.get(session_id).cloned();
                     crate::runtime_wire::merge_uncertain_effect(&mut merged, effect);
                     if let Some(merged) = merged {
                         state
                             .receiptless_uncertain_effects
-                            .insert(session_id.to_owned(), (peer.epoch.clone(), merged));
+                            .insert(session_id.to_owned(), merged);
                     }
                 }
                 let active = state
@@ -1240,7 +1259,14 @@ impl Broker {
             state.active.remove(session_id);
             state.unconfirmed_teardown.remove(session_id);
             state.trusted_epoch_pids.remove(session_id);
-            state.receiptless_uncertain_effects.remove(session_id);
+            if self.cancelled_sessions.lock().contains(session_id)
+                || self
+                    .permanently_deleted_sessions
+                    .lock()
+                    .contains(session_id)
+            {
+                state.receiptless_uncertain_effects.remove(session_id);
+            }
             drain_pending_for_session(&mut state.pending, session_id)
         };
         for (sid, cid) in orphaned {
@@ -1460,6 +1486,13 @@ mod tests {
             }) if command_id == "dc-1" && worker_epoch == "100-1"
         ));
         assert!(broker.workers.lock()["s-1"].crashed_drain_fenced);
+        assert!(matches!(
+            ctrl_rx.try_recv(),
+            Ok(Frame::Snapshot { ref worker })
+                if worker.session_id == "s-1"
+                    && worker.worker_epoch == "100-1"
+                    && worker.crashed_drain_active
+        ));
 
         broker.route_prompt(
             "s-1",
@@ -1733,6 +1766,11 @@ mod tests {
         broker
             .drain_crashed_worker("s-ambig".into(), "dc-ambig".into(), "500-1".into(), 0)
             .await;
+        assert!(matches!(
+            ctrl_rx.try_recv(),
+            Ok(Frame::Snapshot { ref worker })
+                if worker.session_id == "s-ambig" && worker.crashed_drain_active
+        ));
         assert_eq!(
             broker.record_crashed_drain_ack("s-ambig", "500-1", 1, "dc-ambig", true),
             (true, false)
@@ -1828,13 +1866,10 @@ mod tests {
             .receiptless_uncertain_effects
             .insert(
                 "s-r7-h5".into(),
-                (
-                    "705-1".into(),
-                    crate::runtime_wire::UncertainEffect {
-                        method: "write".into(),
-                        sequence: 9,
-                    },
-                ),
+                crate::runtime_wire::UncertainEffect {
+                    method: "write".into(),
+                    sequence: 9,
+                },
             );
         let _rx1 = attach_crashed_worker(
             &broker,
@@ -1881,7 +1916,8 @@ mod tests {
             Some(9)
         );
 
-        // Actual epoch replacement clears the old epoch's receiptless entry.
+        // R9-H3: Replacement epoch must STILL preserve the session-scoped
+        // unresolved uncertain_effect until durably acknowledged or deleted!
         broker.remove_worker("s-r7-h5", 1);
         let _rx2 = attach_crashed_worker(
             &broker,
@@ -1890,6 +1926,18 @@ mod tests {
             2,
             CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
         );
+        assert_eq!(
+            broker
+                .workers
+                .lock()
+                .get("s-r7-h5")
+                .and_then(|w| w.snapshot.uncertain_effect.as_ref())
+                .map(|e| e.sequence),
+            Some(9)
+        );
+        // Permanent session deletion clears the retained uncertain effect.
+        broker.cancelled_sessions.lock().insert("s-r7-h5".into());
+        broker.clear_crashed_drain("s-r7-h5", "deleted");
         assert!(
             !broker
                 .crashed_drains

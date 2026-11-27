@@ -1140,21 +1140,22 @@ impl super::Broker {
                 )
             } else {
                 match workers.get(session_id) {
-                    Some(worker) if worker.crashed_drain_fenced => {
-                        dispatched.mark_acked(session_id, &command_id);
-                        Some((
-                            command_id,
-                            refusal_reason(
-                                "unhanded: crashed worker is draining; retry on replacement".into(),
-                            ),
-                        ))
-                    }
                     Some(worker)
-                        if worker.welcomed
-                            && (!worker.snapshot.drain_requested
-                                || worker.snapshot.state
-                                    == crate::runtime_wire::WorkerState::Crashed) =>
+                        if super::account_unit::crashed_or_draining_prompt_refusal(
+                            worker,
+                            expected_epoch.as_deref(),
+                        )
+                        .is_some() =>
                     {
+                        let base = super::account_unit::crashed_or_draining_prompt_refusal(
+                            worker,
+                            expected_epoch.as_deref(),
+                        )
+                        .expect("checked above");
+                        dispatched.mark_acked(session_id, &command_id);
+                        Some((command_id, refusal_reason(base.to_owned())))
+                    }
+                    Some(worker) if worker.welcomed && !worker.snapshot.drain_requested => {
                         if let Some((cid, reason)) = fresh_prompt_refusal(
                             &dispatched,
                             session_id,
@@ -1196,20 +1197,7 @@ impl super::Broker {
                             }
                         }
                     }
-                    Some(worker)
-                        if worker.snapshot.drain_requested
-                            && expected_epoch
-                                .as_deref()
-                                .is_some_and(|exp| exp != worker.epoch) =>
-                    {
-                        dispatched.mark_acked(session_id, &command_id);
-                        Some((
-                            command_id,
-                            refusal_reason(
-                                "unhanded: worker epoch changed before prompt admission".to_owned(),
-                            ),
-                        ))
-                    }
+
                     _ => super::account_unit::enqueue_pending_prompt(
                         &mut pending,
                         session_id,
@@ -1408,11 +1396,26 @@ impl super::Broker {
             let mut dispatched = self.dispatched_prompts.lock();
             let mut remaining = std::collections::VecDeque::new();
             while let Some(command) = queue.pop_front() {
-                if worker.crashed_drain_fenced
-                    || (worker.snapshot.drain_requested
-                        && worker.snapshot.state != crate::runtime_wire::WorkerState::Crashed
-                        && matches!(command, WorkerCommand::Prompt { .. }))
+                if worker.crashed_drain_fenced {
+                    remaining.push_back(command);
+                    continue;
+                }
+                if worker.snapshot.drain_requested
+                    && matches!(command, WorkerCommand::Prompt { .. })
                 {
+                    if worker.snapshot.state == crate::runtime_wire::WorkerState::Crashed {
+                        if let WorkerCommand::Prompt { command_id, .. } = command {
+                            let reason = if dispatched.was_command_evicted(session_id, &command_id)
+                            {
+                                "delivery_ambiguous: crashed worker is draining for rollout; retry on replacement"
+                            } else {
+                                "unhanded: crashed worker is draining for rollout; retry on replacement"
+                            };
+                            dispatched.mark_acked(session_id, &command_id);
+                            rejects.push((command_id, reason.to_owned()));
+                        }
+                        continue;
+                    }
                     remaining.push_back(command);
                     continue;
                 }
