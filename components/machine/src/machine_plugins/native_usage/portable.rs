@@ -87,11 +87,14 @@ impl HostAdmission {
         let Some((generation, required)) = self.private_home else {
             return Ok(None);
         };
-        match store.private_credential_home(plugin_id, generation) {
+        match store.private_credential_home_admitted(plugin_id, generation, Some(self)) {
             Ok(Some(home)) => Ok(Some(home)),
             Ok(None) if !required => Ok(None),
             Ok(None) => Err(anyhow::anyhow!("native_reset_unsupported").into()),
-            Err(_) => Err(anyhow::anyhow!("portable_usage_replica_pending").into()),
+            Err(_) => match self.remaining() {
+                Err(admission_error) => Err(admission_error.into()),
+                Ok(_) => Err(anyhow::anyhow!("portable_usage_replica_pending").into()),
+            },
         }
     }
 
@@ -313,10 +316,20 @@ impl MachinePluginStore {
     /// sign-in) without advancing the sealed generation, so neither a read
     /// nor a reset ever runs from it. `None` keeps the session environment
     /// (a non-rotating key, such as a `DeepSeek` API key).
+    #[cfg(test)]
     pub(in crate::machine_plugins) fn private_credential_home(
         &self,
         plugin_id: &str,
         generation: u64,
+    ) -> Result<Option<(PrivateHome, BTreeMap<String, String>)>> {
+        self.private_credential_home_admitted(plugin_id, generation, None)
+    }
+
+    pub(in crate::machine_plugins) fn private_credential_home_admitted(
+        &self,
+        plugin_id: &str,
+        generation: u64,
+        admission: Option<&HostAdmission>,
     ) -> Result<Option<(PrivateHome, BTreeMap<String, String>)>> {
         let (package, _) = self
             .active_package(plugin_id)?
@@ -338,6 +351,9 @@ impl MachinePluginStore {
         else {
             anyhow::bail!("portable_usage_replica_pending");
         };
+        if let Some(admission) = admission {
+            admission.remaining()?;
+        }
         // Account-owned (removed with the account's credentials and at
         // Machine start), never the shared system temporary directory. Each
         // level is created parent-first and a symlink is refused.

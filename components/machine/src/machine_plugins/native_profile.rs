@@ -600,13 +600,34 @@ impl MachinePluginStore {
         Ok((directory, profile))
     }
 
-    /// Lightweight profile evidence (no retained package hashing) used to bind
-    /// a pre-verified release-carry proof to the current live native profile
-    /// under `auth_candidates` right before persisting a worker reservation.
+    /// Full profile evidence (including sandbox daemon liveness when
+    /// sandboxed, without retained package hashing) collected on the blocking
+    /// pool when preparing a release-carry proof.
     pub(super) fn native_profile_carry_evidence(
         &self,
         provider: &str,
         generation: u64,
+    ) -> Result<NativeProfileCarryEvidence> {
+        self.native_profile_carry_evidence_inner(provider, generation, true)
+    }
+
+    /// Local-file profile evidence rechecked under `auth_candidates` right
+    /// before persisting a worker reservation. Skips only the blocking sandbox
+    /// daemon socket query while still checking local revocation, logout
+    /// reservation, profile metadata, identity binding, and non-sandbox home.
+    pub(super) fn native_profile_local_carry_evidence(
+        &self,
+        provider: &str,
+        generation: u64,
+    ) -> Result<NativeProfileCarryEvidence> {
+        self.native_profile_carry_evidence_inner(provider, generation, false)
+    }
+
+    fn native_profile_carry_evidence_inner(
+        &self,
+        provider: &str,
+        generation: u64,
+        verify_sandbox_daemon: bool,
     ) -> Result<NativeProfileCarryEvidence> {
         let (directory, profile) = self.read_native_profile_metadata(provider, generation)?;
         ensure!(
@@ -622,8 +643,10 @@ impl MachinePluginStore {
             4096,
         )?)?;
         ensure!(identity == bound, "native profile identity mismatch");
-        let home = directory.join("home");
-        self.native_home_evidence(profile.account_sandbox, generation, &home)?;
+        if verify_sandbox_daemon || !profile.account_sandbox {
+            let home = directory.join("home");
+            self.native_home_evidence(profile.account_sandbox, generation, &home)?;
+        }
         Ok(NativeProfileCarryEvidence {
             contract: profile.contract,
             version: profile.version,
@@ -1989,7 +2012,7 @@ pub(in crate::machine_plugins) mod tests {
         );
         assert!(
             !scoped
-                .credential_directories(&package, Some(&home))
+                .credential_directories(&package, Some(&home), None)
                 .unwrap()
                 .is_empty()
         );

@@ -979,14 +979,14 @@ impl MachinePluginStore {
     pub async fn inventory_async(&self) -> Result<Vec<PluginInventory>> {
         let lifecycle = self.lock_lifecycle_owned().await;
         let store = self.clone();
-        let plugins = tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             let _lifecycle = lifecycle;
-            store.inventory()
+            let plugins = store.inventory()?;
+            *store.last_inventory.lock() = Some(plugins.clone());
+            Ok(plugins)
         })
         .await
-        .context("Plugin inventory task failed")??;
-        *self.last_inventory.lock() = Some(plugins.clone());
-        Ok(plugins)
+        .context("Plugin inventory task failed")?
     }
 
     /// Coherent Plugin inventory for the Controller `Hello` handshake without
@@ -998,14 +998,14 @@ impl MachinePluginStore {
     pub async fn inventory_for_hello(&self) -> Result<Vec<PluginInventory>> {
         if let Ok(lifecycle) = std::sync::Arc::clone(&self.lifecycle).try_lock_owned() {
             let store = self.clone();
-            let plugins = tokio::task::spawn_blocking(move || {
+            return tokio::task::spawn_blocking(move || {
                 let _lifecycle = lifecycle;
-                store.inventory()
+                let plugins = store.inventory()?;
+                *store.last_inventory.lock() = Some(plugins.clone());
+                Ok(plugins)
             })
             .await
-            .context("Plugin hello inventory task failed")??;
-            *self.last_inventory.lock() = Some(plugins.clone());
-            return Ok(plugins);
+            .context("Plugin hello inventory task failed")?;
         }
         if let Some(cached) = self.last_inventory.lock().clone() {
             return Ok(cached);

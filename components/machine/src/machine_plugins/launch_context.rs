@@ -30,11 +30,29 @@ pub struct ProviderLaunchContext {
 impl MachinePluginStore {
     /// The account a launch runs on: the daemon launch of an account-sandboxed
     /// Provider, or else the authenticated home of a Provider that requires one.
+    #[cfg(test)]
+    pub(super) fn prepare_launch_auth_home(
+        &self,
+        provider_id: &str,
+        package: &ProviderPackage,
+        generation: u64,
+        generation_digest: &str,
+    ) -> Result<PathBuf> {
+        self.prepare_launch_auth_home_admitted(
+            provider_id,
+            package,
+            generation,
+            generation_digest,
+            None,
+        )
+    }
+
     pub(super) fn launch_account(
         &self,
         package: &ProviderPackage,
         auth_generation: Option<u64>,
         generation_digest: &str,
+        admission: Option<&super::native_usage::HostAdmission>,
     ) -> Result<(Option<crate::account_sandbox::Launch>, Option<PathBuf>)> {
         if account_sandbox::sandboxed(package) {
             let launch =
@@ -45,11 +63,12 @@ impl MachinePluginStore {
             return Ok((None, None));
         }
         let generation = auth_generation.context("session has no Provider auth generation")?;
-        let home = self.prepare_launch_auth_home(
+        let home = self.prepare_launch_auth_home_admitted(
             &package.manifest.id,
             package,
             generation,
             generation_digest,
+            admission,
         )?;
         Ok((None, Some(home)))
     }
@@ -62,6 +81,7 @@ impl MachinePluginStore {
         &self,
         package: &ProviderPackage,
         native_home: Option<&Path>,
+        admission: Option<&super::native_usage::HostAdmission>,
     ) -> Result<BTreeMap<String, String>> {
         let auth = &package.manifest.authentication;
         // A sandboxed Provider's credentials live only in the daemon.
@@ -83,6 +103,9 @@ impl MachinePluginStore {
             let directory = path
                 .parent()
                 .context("projected credential has no directory")?;
+            if let Some(admission) = admission {
+                admission.remaining()?;
+            }
             fs::create_dir_all(directory)?;
             set_directory_chain_permissions(&home, directory)?;
             directories.insert(

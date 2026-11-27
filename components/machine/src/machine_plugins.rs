@@ -1533,6 +1533,7 @@ impl MachinePluginStore {
             package_path,
             generation,
             &release.artifact_digest,
+            admission,
         )?;
         tracing::info!(%plugin_id, ?operation, verification_ms, inventory_ms,
             launch_ms = launch_started.elapsed().as_millis(), "Plugin host resolution completed");
@@ -1786,7 +1787,13 @@ impl MachinePluginStore {
         self.operations.ensure_unfenced(provider_id)?;
         let (package, package_path) =
             self.package_for_generation(provider_id, generation_digest)?;
-        self.launch_context_from_package(&package, package_path, auth_generation, generation_digest)
+        self.launch_context_from_package(
+            &package,
+            package_path,
+            auth_generation,
+            generation_digest,
+            None,
+        )
     }
 
     fn launch_context_from_package(
@@ -1795,10 +1802,11 @@ impl MachinePluginStore {
         package_path: PathBuf,
         auth_generation: Option<u64>,
         generation_digest: &str,
+        admission: Option<&native_usage::HostAdmission>,
     ) -> Result<ProviderLaunchContext> {
         let payload = matching_payload(package, &self.platform, &self.architecture)?;
         let (account_sandbox, home) =
-            self.launch_account(package, auth_generation, generation_digest)?;
+            self.launch_account(package, auth_generation, generation_digest, admission)?;
         let mut environment = BTreeMap::new();
         if let Some(current) = home.as_ref().and_then(|home| home.parent()) {
             let env_path = current.join("environment.json");
@@ -1827,8 +1835,11 @@ impl MachinePluginStore {
         // rotations there instead of inside its private generation home.
         let native =
             auth_generation.is_some_and(|generation| self.native_session(package, generation));
-        let credential_directories =
-            self.credential_directories(package, native.then_some(home.as_deref()).flatten())?;
+        let credential_directories = self.credential_directories(
+            package,
+            native.then_some(home.as_deref()).flatten(),
+            admission,
+        )?;
         if !credential_directories.is_empty() {
             environment.insert(
                 crate::provider_behavior::CREDENTIAL_DIRECTORIES_ENV.to_owned(),
@@ -1906,12 +1917,13 @@ impl MachinePluginStore {
                 || self.native_profile_bound(&package.manifest.id, generation))
     }
 
-    fn prepare_launch_auth_home(
+    pub(super) fn prepare_launch_auth_home_admitted(
         &self,
         provider_id: &str,
         package: &ProviderPackage,
         generation: u64,
         generation_digest: &str,
+        admission: Option<&native_usage::HostAdmission>,
     ) -> Result<PathBuf> {
         if self.native_session(package, generation) {
             self.ensure_native_release(package, generation, generation_digest)?;
@@ -1940,29 +1952,29 @@ impl MachinePluginStore {
         let bundle: PortableCredentialBundle = serde_json::from_slice(&plaintext)
             .context("decoding Provider runtime credential bundle")?;
         validate_portable_bundle(&portable_contract::contract(package), &bundle)?;
+        if let Some(admission) = admission {
+            admission.remaining()?;
+        }
         let materialized = self
             .auth_provider_root(provider_id)
             .join("materialized/generations")
             .join(generation.to_string());
         if envelope.auth_generation == generation {
-            // A Machine upgrade or interrupted projection may leave the
-            // durable sealed replica ahead of its local projections. Repair
-            // the current immutable materialization before admitting the
-            // session so recovery does not depend on a later Controller retry
-            // or filesystem event.
+            // Repair the current immutable materialization before admitting the
+            // session when the durable sealed replica is ahead of projections.
             self.materialize_bundle(package, generation, &bundle)?;
             ensure!(
                 self.materialization_is_current(package, &envelope)?,
                 "session Provider auth generation is missing projected credentials"
             );
         } else {
-            // Established sessions retain their recorded projection identity,
-            // while successful Service refreshes reconcile the writable
-            // runtime copy to the newest credential bundle. Rebuild only that
-            // historical runtime directory: activating its immutable
-            // materialization would move `current` backwards for new sessions.
+            // Rebuild only this historical runtime directory so `current` never
+            // moves backwards for new sessions.
             validate_materialization_metadata(&materialized, package, generation)
                 .context("validating historical Provider auth materialization")?;
+            if let Some(admission) = admission {
+                admission.remaining()?;
+            }
             self.ensure_runtime_projection(package, generation, &bundle)?;
         }
         let runtime = self

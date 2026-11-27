@@ -236,12 +236,13 @@ impl BrowserManager {
     ) -> Result<(), Reason> {
         {
             let live = instance.live.lock();
+            if live.phase == Phase::Stopping {
+                return Ok(());
+            }
             if !live.verified.pins_hold() {
-                let stopping = live.phase == Phase::Stopping;
+                instance.record_latch(Reason::ConfinementUnverified);
                 drop(live);
-                if !stopping {
-                    latch_forced(instance, Reason::ConfinementUnverified);
-                }
+                instance.cancel_copy();
                 return Err(Reason::ConfinementUnverified);
             }
         }
