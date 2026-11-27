@@ -95,3 +95,13 @@ test("aggregateRolloverReport computes cached_share, uncached_share, and fresh_r
   assertEquals(report[0]?.uncached_share, 0.2);
   assertEquals(report[0]?.fresh_ratio, 0.2);
 });
+
+test("aggregateRolloverReport includes write-only observations in mean_cache_write independently of cached_read", () => {
+  const rows = aggregateRolloverReport([
+    { provider: "claude-code", renewed: 0, gap_ms: 10 * 60_000, input: 100_000, cached: null, written: 40_000, uncached: null },
+    { provider: "claude-code", renewed: 0, gap_ms: 10 * 60_000, input: 100_000, cached: 80_000, written: 20_000, uncached: 20_000 },
+  ]);
+  assertEquals(rows.length, 1);
+  assertEquals(rows[0]?.observed_cache_turns, 1);
+  assertEquals(rows[0]?.mean_cache_write, 30_000);
+});

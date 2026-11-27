@@ -140,9 +140,9 @@
         }
       },
       "prompt_cache_ttl": {
-        "documented_policy": "DeepSeek automatic context caching via sidecar gateway; signed Provider selects anthropic_gateway_v1 where Machine launches cache protection as auto (adaptive-replay-v1 >= 64K verified cache-hit tokens) unless the session opts out.",
+        "documented_policy": "DeepSeek automatic context caching via sidecar gateway; signed Provider selects anthropic_gateway_v1 (Machine sets COWBOY_DEEPSEEK_CACHE_PROTECTION), but dsh cannot send custom policy headers and host.features does not declare cache_protection_v1, so per-session gateway keepalive enforcement/opt-out is unverified.",
         "empirical_notes": "Insufficient Hawk turn volume for empirical TTL curve or turn-level cache-counter coverage baseline (unknown).",
-        "current_default_strategy": "gateway_adaptive_replay_v1_auto_unless_opted_out"
+        "current_default_strategy": "gateway_keepalive_enforcement_unverified"
       },
       "policy_boundaries": [
         "DSH_HOME remains an isolated Provider home; never share Claude/Codex credentials."

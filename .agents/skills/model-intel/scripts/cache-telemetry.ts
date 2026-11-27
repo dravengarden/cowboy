@@ -197,6 +197,28 @@ function parseSemver(version: string): SemverTuple | null {
   ];
 }
 
+function comparePrerelease(a: string, b: string): number {
+  const aParts = a.split(".");
+  const bParts = b.split(".");
+  const len = Math.min(aParts.length, bParts.length);
+  const numeric = /^\d+$/;
+  for (let i = 0; i < len; i++) {
+    const ai = aParts[i]!;
+    const bi = bParts[i]!;
+    if (ai === bi) continue;
+    const aNum = numeric.test(ai);
+    const bNum = numeric.test(bi);
+    if (aNum && bNum) {
+      const aBig = BigInt(ai);
+      const bBig = BigInt(bi);
+      return aBig < bBig ? -1 : 1;
+    }
+    if (aNum !== bNum) return aNum ? -1 : 1;
+    return ai < bi ? -1 : 1;
+  }
+  return aParts.length - bParts.length;
+}
+
 function compareSemver(a: SemverTuple, b: SemverTuple): number {
   if (a[0] !== b[0]) return a[0] - b[0];
   if (a[1] !== b[1]) return a[1] - b[1];
@@ -204,7 +226,7 @@ function compareSemver(a: SemverTuple, b: SemverTuple): number {
   if (a[3] === b[3]) return 0;
   if (a[3] === null) return 1;
   if (b[3] === null) return -1;
-  return a[3].localeCompare(b[3]);
+  return comparePrerelease(a[3], b[3]);
 }
 
 export function summarizeCacheTelemetryRows(
@@ -421,10 +443,16 @@ export function summarizeCacheTelemetryRows(
     let orderedVersions: Array<[string, CohortCounts]> = [];
     if (eligibleVersions.length >= 2) {
       const parsed = eligibleVersions.map(([v, c]) => [v, c, parseSemver(v)] as const);
-      if (parsed.every(([, , sv]) => sv !== null)) {
-        orderedVersions = [...parsed]
-          .sort((a, b) => compareSemver(a[2]!, b[2]!))
-          .map(([v, c]) => [v, c]);
+      const semverSorted = parsed.every(([, , sv]) => sv !== null)
+        ? [...parsed].sort((a, b) => compareSemver(a[2]!, b[2]!))
+        : null;
+      const semverStrictlyOrdered =
+        semverSorted !== null &&
+        semverSorted.every(
+          (entry, idx) => idx === 0 || compareSemver(semverSorted[idx - 1]![2]!, entry[2]!) < 0,
+        );
+      if (semverStrictlyOrdered && semverSorted !== null) {
+        orderedVersions = semverSorted.map(([v, c]) => [v, c]);
       } else if (
         options.versionFirstSeenMs &&
         eligibleVersions.every(([v]) => options.versionFirstSeenMs!.has(`${provider}\u0000${v}`))
@@ -556,10 +584,19 @@ export function readCacheTelemetryAudit(
 ): CacheTelemetryAudit {
   const since = nowMs - days * 86_400_000;
   const db = new Database(database, { readonly: true });
+  let inTx = false;
   try {
     db.exec("PRAGMA query_only = 1");
+    db.exec("BEGIN DEFERRED");
+    inTx = true;
     const hasFacts = db
       .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'turn_cache_facts'")
+      .get();
+    const hasEvents = db
+      .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+      .get();
+    const hasSessions = db
+      .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions'")
       .get();
     let projectionComplete = false;
     if (hasFacts) {
@@ -573,6 +610,35 @@ export function readCacheTelemetryAudit(
           .query("SELECT completed_at_ms FROM turn_cache_backfill_state WHERE slot = 1")
           .get() as { completed_at_ms: number | null } | null;
         projectionComplete = stateRow !== null && stateRow.completed_at_ms !== null;
+      }
+      if (projectionComplete && hasEvents && hasSessions) {
+        const hasIncarnationCol = (
+          db.query("PRAGMA table_info(turn_cache_facts)").all() as Array<{ name: string }>
+        ).some((col) => col.name === "session_created_at_ms");
+        const hasSessionCreatedCol = (
+          db.query("PRAGMA table_info(sessions)").all() as Array<{ name: string }>
+        ).some((col) => col.name === "created_at_ms");
+        const joinIncarnation =
+          hasIncarnationCol && hasSessionCreatedCol
+            ? " AND f.session_created_at_ms = s.created_at_ms"
+            : "";
+        const unprojected = db
+          .query(
+            `SELECT 1
+             FROM events e
+             JOIN sessions s ON s.id = e.session_id
+             LEFT JOIN turn_cache_facts f
+               ON f.session_id = e.session_id${joinIncarnation}
+              AND f.turn_end_seq = e.seq
+             WHERE json_extract(e.payload, '$.kind') = 'turn_end'
+               AND e.ts_ms >= ?
+               AND f.session_id IS NULL
+             LIMIT 1`,
+          )
+          .get(since);
+        if (unprojected !== null) {
+          projectionComplete = false;
+        }
       }
     }
 
@@ -640,12 +706,7 @@ export function readCacheTelemetryAudit(
       });
     }
 
-    const hasEvents = db
-      .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events'")
-      .get();
-    const hasSessions = db
-      .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions'")
-      .get();
+
     if (!hasEvents || !hasSessions) {
       return summarizeCacheTelemetryRows([], nowMs, days, "events_fallback", {
         projectionComplete: false,
@@ -715,7 +776,7 @@ export function readCacheTelemetryAudit(
                EXISTS (
                  SELECT 1 FROM events x
                  WHERE x.session_id = o.session_id
-                   AND x.seq > COALESCE(o.prev_seq, -1) AND x.seq < o.seq
+                   AND x.seq > o.window_start AND x.seq < o.seq
                    AND json_extract(x.payload, '$.kind') = 'update'
                    AND json_extract(x.payload, '$.update.sessionUpdate') = 'context_rolled_over'
                ) AS renewed
@@ -756,6 +817,13 @@ export function readCacheTelemetryAudit(
       projectionComplete: false,
     });
   } finally {
+    if (inTx) {
+      try {
+        db.exec("ROLLBACK");
+      } catch {
+        // Ignore rollback errors on already closed handle.
+      }
+    }
     db.close();
   }
 }

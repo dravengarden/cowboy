@@ -1,5 +1,6 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../tools/test-assert";
+import { latestTurnEndSeq, recordTurnEndSeq } from "./turnEndWatermark";
 import {
   buildDisjointCacheSegments,
   type CacheMetricsCoverage,
@@ -197,4 +198,52 @@ test("formatStrategySummary distinguishes inherited, unavailable, restricted, an
     }),
     "Gateway keepalive (unknown)",
   );
+});
+
+test("buildDisjointCacheSegments suppresses clamped bar on saturated totals and formats lower bounds", () => {
+  assertEquals(
+    buildDisjointCacheSegments(
+      baseTotals({
+        observed_cache_turns: 1_030,
+        observed_cache_write_turns: 1_030,
+        cached_read_tokens: Number.MAX_SAFE_INTEGER,
+        cache_write_tokens: Number.MAX_SAFE_INTEGER,
+        uncached_input_tokens: Number.MAX_SAFE_INTEGER,
+        other_uncached_input_tokens: 0,
+        totals_saturated: true,
+      }),
+    ),
+    [],
+  );
+  assertEquals(formatCompactTokens(Number.MAX_SAFE_INTEGER, true).startsWith("≥"), true);
+});
+
+test("formatStrategySummary shows native-fork exclusion even when inherited rollover preference is enabled", () => {
+  assertEquals(
+    formatStrategySummary({
+      effective_mode: "none",
+      rollover: {
+        availability: "available",
+        supported: false,
+        enabled: true,
+        inherited: true,
+        session_override: null,
+        idle_minutes: 60,
+        min_context_tokens: 80_000,
+        due: false,
+        restriction:
+          "Automatic context renewal is excluded for native fork sessions because inherited history lives only in the native thread.",
+      },
+      gateway_keepalive: { supported: false, enabled: null },
+    }),
+    "Idle renewal excluded for native fork (inherited preference on)",
+  );
+});
+
+test("recordTurnEndSeq retains monotonic turn_end watermarks independently of transcript caching", () => {
+  recordTurnEndSeq("sess-unfocused-test", 12);
+  recordTurnEndSeq("sess-unfocused-test", 7);
+  assertEquals(latestTurnEndSeq("sess-unfocused-test"), 12);
+  recordTurnEndSeq("sess-unfocused-test", 19);
+  assertEquals(latestTurnEndSeq("sess-unfocused-test"), 19);
 });

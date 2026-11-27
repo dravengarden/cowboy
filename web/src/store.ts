@@ -104,6 +104,7 @@ import {
   settledTransitionIds,
 } from "./queueMutators.ts";
 import { shouldApplyHydratedConfigOptions } from "./configOptionsHydration";
+import { recordTurnEndSeq } from "./turnEndWatermark";
 import {
   type ConfigOptionChange,
   configOptionsMatchChanges,
@@ -1778,10 +1779,9 @@ function handle(msg: Outbound): void {
           optimisticMessages.delete(env.session_id);
         }
       }
+      if (env.kind === "turn_end") recordTurnEndSeq(env.session_id, env.seq);
       const cached = transcriptIsCached(env.session_id);
-      const timelines = cached
-        ? applyEnvelope(state.timelines, env)
-        : state.timelines;
+      const timelines = cached ? applyEnvelope(state.timelines, env) : state.timelines;
       if (
         cached && (
           cmid !== undefined ||

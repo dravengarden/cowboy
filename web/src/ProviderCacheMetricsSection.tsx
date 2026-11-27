@@ -57,7 +57,7 @@ function AccountCacheMetricsBody({
     },
     {
       label: "Uncached input",
-      value: formatCompactTokens(totals.uncached_input_tokens),
+      value: formatCompactTokens(totals.uncached_input_tokens, totals.totals_saturated),
     },
     {
       label: "Coverage",
@@ -72,7 +72,7 @@ function AccountCacheMetricsBody({
             label: partialWrites
               ? `Cache write (${totals.observed_cache_write_turns}/${totals.observed_cache_turns})`
               : "Cache write",
-            value: formatCompactTokens(totals.cache_write_tokens),
+            value: formatCompactTokens(totals.cache_write_tokens, totals.totals_saturated),
           },
         ]
       : []),

@@ -419,3 +419,88 @@ test("readCacheTelemetryAudit fallback uses predecessor outside window, honors c
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+test("summarizeCacheTelemetryRows orders numeric SemVer prereleases rc.2 < rc.10", () => {
+  const now = Date.parse("2026-11-27T00:00:00Z");
+  const rows: CacheFactInputRow[] = [];
+  for (let i = 0; i < 12; i++) {
+    rows.push({
+      session_key: `rc10-${i}`,
+      occurred_at_ms: now - 10 * 86_400_000 + i * 1000,
+      provider: "deepseek-harness",
+      provider_version: "1.0.0-rc.10",
+      model: "deepseek-flash",
+      stop_reason: "end_turn",
+      prompt_origin: "human",
+      idle_gap_ms: 600_000,
+      renewed: false,
+      usage_observed: true,
+      inclusive_input_tokens: 100_000,
+      cached_read_tokens: null,
+      cache_write_tokens: null,
+      uncached_input_tokens: null,
+    });
+    rows.push({
+      session_key: `rc2-${i}`,
+      occurred_at_ms: now - 2 * 86_400_000 + i * 1000,
+      provider: "deepseek-harness",
+      provider_version: "1.0.0-rc.2",
+      model: "deepseek-flash",
+      stop_reason: "end_turn",
+      prompt_origin: "human",
+      idle_gap_ms: 600_000,
+      renewed: false,
+      usage_observed: true,
+      inclusive_input_tokens: 100_000,
+      cached_read_tokens: 80_000,
+      cache_write_tokens: null,
+      uncached_input_tokens: 20_000,
+    });
+  }
+  const audit = summarizeCacheTelemetryRows(rows, now, 14, "turn_cache_facts");
+  const drop = audit.coverage_regressions.find((r) => r.metric === "cache_coverage");
+  assertEquals(drop?.previous_version, "1.0.0-rc.2");
+  assertEquals(drop?.current_version, "1.0.0-rc.10");
+});
+
+test("readCacheTelemetryAudit detects unprojected rollback turns despite stale completed_at_ms and honors context_cleared before rollover", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cowboy-cache-r3-"));
+  try {
+    const dbPath = join(dir, "cowboy.sqlite3");
+    const db = new Database(dbPath);
+    db.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, provider TEXT, provider_version TEXT, created_at_ms INTEGER, last_usage TEXT, config_preferences TEXT);
+      CREATE TABLE events (session_id TEXT, seq INTEGER, ts_ms INTEGER, payload TEXT);
+      CREATE TABLE turn_cache_facts (
+        session_id TEXT, session_created_at_ms INTEGER, turn_end_seq INTEGER, occurred_at_ms INTEGER,
+        provider TEXT, provider_version TEXT, model TEXT, stop_reason TEXT,
+        prompt_origin TEXT, idle_gap_ms INTEGER, renewed INTEGER, usage_observed INTEGER,
+        inclusive_input_tokens INTEGER, cached_read_tokens INTEGER, cache_write_tokens INTEGER
+      );
+      CREATE TABLE turn_cache_backfill_state (slot INTEGER PRIMARY KEY, cursor_session_id TEXT, cursor_seq INTEGER, completed_at_ms INTEGER);
+      INSERT INTO turn_cache_backfill_state VALUES (1, '', -1, 1795700000000);
+    `);
+    const now = Date.parse("2026-11-27T00:00:00Z");
+    const inWindow = now - 2 * 86_400_000;
+    db.query("INSERT INTO sessions VALUES (?,?,?,?,?,?)").run("s1", "codex", "3.6.32", 1000, null, null);
+    const ins = db.query("INSERT INTO events VALUES (?,?,?,?)");
+    ins.run("s1", 1, inWindow - 600_000, JSON.stringify({ kind: "turn_end", stop_reason: "EndTurn", usage: { input_tokens: 1000, cached_input_tokens: 900, uncached_input_tokens: 100 } }));
+    db.query("INSERT INTO turn_cache_facts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
+      "s1", 1000, 1, inWindow - 600_000, "codex", "3.6.32", "gpt-6.2-sol", "end_turn", "human", null, 0, 1, 1000, 900, null,
+    );
+    ins.run("s1", 2, inWindow - 400_000, JSON.stringify({ kind: "update", update: { sessionUpdate: "context_rolled_over" } }));
+    ins.run("s1", 3, inWindow - 300_000, JSON.stringify({ kind: "update", update: { sessionUpdate: "context_cleared" } }));
+    ins.run("s1", 4, inWindow - 100_000, JSON.stringify({ kind: "update", update: { sessionUpdate: "user_message_chunk", promptOrigin: { actor: "human" }, content: { text: "after clear" } } }));
+    ins.run("s1", 5, inWindow, JSON.stringify({ kind: "turn_end", stop_reason: "EndTurn", usage: { input_tokens: 2000, cached_input_tokens: 1800, uncached_input_tokens: 200 } }));
+    db.close();
+
+    const audit = readCacheTelemetryAudit(dbPath, 14, now);
+    assertEquals(audit.source, "events_fallback");
+    assertEquals(audit.projection_complete, false);
+    assertEquals(audit.providers[0]?.turns, 2);
+    assertEquals(audit.providers[0]?.renewed_turns, 0);
+    assertEquals(audit.shadow_ttl_curves.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

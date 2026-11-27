@@ -47,6 +47,7 @@ impl Default for BackfillState {
 
 #[derive(Debug)]
 struct SessionSnapshot {
+    session_created_at_ms: i64,
     owner_user_id: Option<String>,
     provider: String,
     provider_account_id: String,
@@ -284,6 +285,8 @@ macro_rules! impl_turn_cache_backend {
         $row_ty:ty,
         $ts_expr:literal,
         $e_ts_expr:literal,
+        $sess_created_expr:literal,
+        $s_created_expr:literal,
         $kind_expr:literal,
         $e_kind_expr:literal,
         $update_expr:literal,
@@ -392,11 +395,13 @@ macro_rules! impl_turn_cache_backend {
             tx: &mut sqlx::Transaction<'_, $db>,
             session_id: &str,
         ) -> Result<Option<SessionSnapshot>> {
-            let row = sqlx::query(
-                "SELECT owner_user_id, provider, provider_account_id, provider_version, \
+            let snap_sql = concat!(
+                "SELECT ", $sess_created_expr, " AS session_created_at_ms, \
+                        owner_user_id, provider, provider_account_id, provider_version, \
                         provider_generation_digest, last_usage, config_preferences, config_options \
-                 FROM sessions WHERE id = $1",
-            )
+                 FROM sessions WHERE id = $1"
+            );
+            let row = sqlx::query(snap_sql)
             .bind(session_id)
             .fetch_optional(&mut **tx)
             .await
@@ -411,6 +416,7 @@ macro_rules! impl_turn_cache_backend {
             let raw_version: String = row.try_get("provider_version")?;
             let raw_digest: String = row.try_get("provider_generation_digest")?;
             Ok(Some(SessionSnapshot {
+                session_created_at_ms: row.try_get("session_created_at_ms")?,
                 owner_user_id: row.try_get("owner_user_id")?,
                 provider: row.try_get("provider")?,
                 provider_account_id: row.try_get("provider_account_id")?,
@@ -455,30 +461,43 @@ macro_rules! impl_turn_cache_backend {
             let mut window_start = prev.map_or(-1_i64, |(prev_seq, _)| prev_seq);
             let mut prev_turn_end_ms = prev.map(|(_, prev_ms)| prev_ms);
 
-            let markers_sql = concat!(
-                "SELECT \
-                   CAST(COALESCE(MAX(CASE WHEN ", $update_expr, " = 'context_rolled_over' THEN 1 ELSE 0 END), 0) AS BIGINT), \
-                   CAST(COALESCE(MAX(CASE WHEN ", $update_expr, " = 'compaction_update' \
-                                     AND ", $status_expr, " = 'completed' THEN 1 ELSE 0 END), 0) AS BIGINT), \
-                   MAX(CASE WHEN ", $update_expr, " = 'context_cleared' THEN seq ELSE NULL END) \
-                 FROM events \
+            // Resolve the latest `context_cleared` boundary FIRST so pre-clear
+            // rollover/compaction markers can never classify a post-clear turn.
+            let clear_sql = concat!(
+                "SELECT MAX(seq) FROM events \
                  WHERE session_id = $1 AND seq > $2 AND seq < $3 \
                    AND ", $kind_expr, " = 'update' \
-                   AND ", $update_expr, " IN ('context_rolled_over', 'compaction_update', 'context_cleared')"
+                   AND ", $update_expr, " = 'context_cleared'"
             );
-            let (renewed_i, compacted_i, cleared_seq): (i64, i64, Option<i64>) =
-                sqlx::query_as(markers_sql)
-                    .bind(session_id)
-                    .bind(window_start)
-                    .bind(seq)
-                    .fetch_one(&mut **tx)
-                    .await?;
-            let renewed = renewed_i != 0;
-            let compacted = compacted_i != 0;
+            let cleared_seq: Option<i64> = sqlx::query_scalar(clear_sql)
+                .bind(session_id)
+                .bind(window_start)
+                .bind(seq)
+                .fetch_one(&mut **tx)
+                .await?;
             if let Some(cs) = cleared_seq {
                 prev_turn_end_ms = None;
                 window_start = cs;
             }
+
+            let markers_sql = concat!(
+                "SELECT \
+                   CAST(COALESCE(MAX(CASE WHEN ", $update_expr, " = 'context_rolled_over' THEN 1 ELSE 0 END), 0) AS BIGINT), \
+                   CAST(COALESCE(MAX(CASE WHEN ", $update_expr, " = 'compaction_update' \
+                                     AND ", $status_expr, " = 'completed' THEN 1 ELSE 0 END), 0) AS BIGINT) \
+                 FROM events \
+                 WHERE session_id = $1 AND seq > $2 AND seq < $3 \
+                   AND ", $kind_expr, " = 'update' \
+                   AND ", $update_expr, " IN ('context_rolled_over', 'compaction_update')"
+            );
+            let (renewed_i, compacted_i): (i64, i64) = sqlx::query_as(markers_sql)
+                .bind(session_id)
+                .bind(window_start)
+                .bind(seq)
+                .fetch_one(&mut **tx)
+                .await?;
+            let renewed = renewed_i != 0;
+            let compacted = compacted_i != 0;
 
             let prompt_sql = concat!(
                 "SELECT ", $ts_expr, " AS ts_ms, payload \
@@ -525,16 +544,17 @@ macro_rules! impl_turn_cache_backend {
             let upsert_sql = match mode {
                 ProjectionMode::Live => {
                     "INSERT INTO turn_cache_facts ( \
-                        session_id, turn_end_seq, occurred_at_ms, owner_user_id, provider, \
-                        provider_account_id, provider_version, provider_generation_digest, \
-                        model, stop_reason, prompt_origin, prev_turn_end_ms, idle_gap_ms, \
-                        renewed, compacted, usage_observed, total_tokens, inclusive_input_tokens, \
-                        cached_read_tokens, cache_write_tokens, other_uncached_input_tokens, \
-                        output_tokens, reasoning_tokens, accounting_source \
+                        session_id, session_created_at_ms, turn_end_seq, occurred_at_ms, \
+                        owner_user_id, provider, provider_account_id, provider_version, \
+                        provider_generation_digest, model, stop_reason, prompt_origin, \
+                        prev_turn_end_ms, idle_gap_ms, renewed, compacted, usage_observed, \
+                        total_tokens, inclusive_input_tokens, cached_read_tokens, \
+                        cache_write_tokens, other_uncached_input_tokens, output_tokens, \
+                        reasoning_tokens, accounting_source \
                      ) VALUES ( \
-                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, \
-                        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 'turn_end' \
-                     ) ON CONFLICT (session_id, turn_end_seq) DO UPDATE SET \
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, \
+                        $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, 'turn_end' \
+                     ) ON CONFLICT (session_id, session_created_at_ms, turn_end_seq) DO UPDATE SET \
                         occurred_at_ms = EXCLUDED.occurred_at_ms, \
                         owner_user_id = EXCLUDED.owner_user_id, \
                         provider = EXCLUDED.provider, \
@@ -559,21 +579,23 @@ macro_rules! impl_turn_cache_backend {
                 }
                 ProjectionMode::BackfillMissing => {
                     "INSERT INTO turn_cache_facts ( \
-                        session_id, turn_end_seq, occurred_at_ms, owner_user_id, provider, \
-                        provider_account_id, provider_version, provider_generation_digest, \
-                        model, stop_reason, prompt_origin, prev_turn_end_ms, idle_gap_ms, \
-                        renewed, compacted, usage_observed, total_tokens, inclusive_input_tokens, \
-                        cached_read_tokens, cache_write_tokens, other_uncached_input_tokens, \
-                        output_tokens, reasoning_tokens, accounting_source \
+                        session_id, session_created_at_ms, turn_end_seq, occurred_at_ms, \
+                        owner_user_id, provider, provider_account_id, provider_version, \
+                        provider_generation_digest, model, stop_reason, prompt_origin, \
+                        prev_turn_end_ms, idle_gap_ms, renewed, compacted, usage_observed, \
+                        total_tokens, inclusive_input_tokens, cached_read_tokens, \
+                        cache_write_tokens, other_uncached_input_tokens, output_tokens, \
+                        reasoning_tokens, accounting_source \
                      ) VALUES ( \
-                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, \
-                        $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, 'turn_end' \
-                     ) ON CONFLICT (session_id, turn_end_seq) DO NOTHING"
+                        $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, \
+                        $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, 'turn_end' \
+                     ) ON CONFLICT (session_id, session_created_at_ms, turn_end_seq) DO NOTHING"
                 }
             };
 
             let done = sqlx::query(upsert_sql)
                 .bind(session_id)
+                .bind(session.session_created_at_ms)
                 .bind(seq)
                 .bind(occurred_at_ms)
                 .bind(&session.owner_user_id)
@@ -656,8 +678,11 @@ macro_rules! impl_turn_cache_backend {
             let sql = concat!(
                 "SELECT e.seq, ", $e_ts_expr, " AS ts_ms, e.payload \
                  FROM events e \
+                 JOIN sessions s ON s.id = e.session_id \
                  LEFT JOIN turn_cache_facts f \
-                   ON f.session_id = e.session_id AND f.turn_end_seq = e.seq \
+                   ON f.session_id = e.session_id \
+                  AND f.session_created_at_ms = ", $s_created_expr, " \
+                  AND f.turn_end_seq = e.seq \
                  WHERE e.session_id = $1 \
                    AND ", $e_kind_expr, " = 'turn_end' \
                    AND f.session_id IS NULL \
@@ -773,8 +798,11 @@ macro_rules! impl_turn_cache_backend {
                             CASE WHEN ", $e_kind_expr, " = 'turn_end' AND f.session_id IS NULL \
                                  THEN e.payload ELSE NULL END AS turn_payload \
                      FROM events e \
+                     JOIN sessions s ON s.id = e.session_id \
                      LEFT JOIN turn_cache_facts f \
-                       ON f.session_id = e.session_id AND f.turn_end_seq = e.seq \
+                       ON f.session_id = e.session_id \
+                      AND f.session_created_at_ms = ", $s_created_expr, " \
+                      AND f.turn_end_seq = e.seq \
                      WHERE (e.session_id, e.seq) > ($1, $2) \
                      ORDER BY e.session_id ASC, e.seq ASC \
                      LIMIT $3"
@@ -971,6 +999,7 @@ macro_rules! impl_turn_cache_backend {
                 })
             }
 
+            #[allow(clippy::too_many_lines)]
             pub(in crate::store) async fn session_cache_metrics(
                 &self,
                 session_id: &str,
@@ -980,19 +1009,30 @@ macro_rules! impl_turn_cache_backend {
                 recent_turn_limit: usize,
             ) -> Result<SessionCacheMetrics> {
                 let mut tx = $begin_read_tx_fn(&self.pool).await?;
+                let created_sql = concat!(
+                    "SELECT ", $sess_created_expr, " FROM sessions WHERE id = $1"
+                );
+                let live_incarnation: Option<i64> = sqlx::query_scalar(created_sql)
+                    .bind(session_id)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .context("read live session incarnation for cache metrics")?;
+
                 let totals_sql = concat!(
                     "SELECT ", agg_select_exprs!($bool_true), " \
                      FROM turn_cache_facts \
                      WHERE session_id = $1 \
                        AND provider = $2 \
                        AND provider_account_id = $3 \
-                       AND ", $owner_eq_expr
+                       AND ", $owner_eq_expr, " \
+                       AND ($5 IS NULL OR session_created_at_ms = $5)"
                 );
                 let agg_row = sqlx::query(totals_sql)
                     .bind(session_id)
                     .bind(provider)
                     .bind(provider_account_id)
                     .bind(owner_user_id)
+                    .bind(live_incarnation)
                     .fetch_one(&mut *tx)
                     .await
                     .context("aggregate session turn_cache_facts")?;
@@ -1006,15 +1046,17 @@ macro_rules! impl_turn_cache_backend {
                        AND provider = $2 \
                        AND provider_account_id = $3 \
                        AND ", $owner_eq_expr, " \
+                       AND ($5 IS NULL OR session_created_at_ms = $5) \
                      GROUP BY model_key) AS grouped \
                      ORDER BY (grouped.inclusive_input_hi * 1073741824.0 + grouped.inclusive_input_lo) DESC, grouped.total_turns DESC, grouped.model_key ASC \
-                     LIMIT $5"
+                     LIMIT $6"
                 );
                 let model_rows = sqlx::query(models_sql)
                     .bind(session_id)
                     .bind(provider)
                     .bind(provider_account_id)
                     .bind(owner_user_id)
+                    .bind(live_incarnation)
                     .bind(MAX_MODELS_IN_RESPONSE)
                     .fetch_all(&mut *tx)
                     .await
@@ -1041,14 +1083,16 @@ macro_rules! impl_turn_cache_backend {
                        AND provider = $2 \
                        AND provider_account_id = $3 \
                        AND ", $owner_eq_expr, " \
+                       AND ($5 IS NULL OR session_created_at_ms = $5) \
                      ORDER BY turn_end_seq DESC \
-                     LIMIT $5"
+                     LIMIT $6"
                 );
                 let recent_rows = sqlx::query(recent_sql)
                     .bind(session_id)
                     .bind(provider)
                     .bind(provider_account_id)
                     .bind(owner_user_id)
+                    .bind(live_incarnation)
                     .bind(limit)
                     .fetch_all(&mut *tx)
                     .await
@@ -1091,6 +1135,8 @@ impl_turn_cache_backend!(
     sqlx::postgres::PgRow,
     "round(extract(epoch FROM ts) * 1000)::bigint",
     "round(extract(epoch FROM e.ts) * 1000)::bigint",
+    "round(extract(epoch FROM created_at) * 1000)::bigint",
+    "round(extract(epoch FROM s.created_at) * 1000)::bigint",
     "(payload ->> 'kind')",
     "(e.payload ->> 'kind')",
     "(payload #>> '{update,sessionUpdate}')",
@@ -1116,6 +1162,8 @@ impl_turn_cache_backend!(
     sqlx::sqlite::SqliteRow,
     "ts_ms",
     "e.ts_ms",
+    "created_at_ms",
+    "s.created_at_ms",
     "json_extract(payload, '$.kind')",
     "json_extract(e.payload, '$.kind')",
     "json_extract(payload, '$.update.sessionUpdate')",

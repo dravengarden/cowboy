@@ -25,6 +25,7 @@ import {
   type MetricTone,
 } from "./InfoMetricVisuals";
 import { useStoreSelector } from "./store";
+import { useLatestTurnEndSeq } from "./turnEndWatermark";
 
 function shareTone(share: number | null): MetricTone | undefined {
   if (share === null) return undefined;
@@ -145,7 +146,9 @@ export function SessionCacheMetricsSection({
   refreshKey?: number;
 }): React.JSX.Element | null {
   const [data, setData] = useState<SessionCacheMetricsResponse | null>(null);
-  const latestTurnEndSeq = useStoreSelector((snapshot) => {
+  const [syncPending, setSyncPending] = useState(false);
+  const liveWatermark = useLatestTurnEndSeq(sessionId);
+  const timelineWatermark = useStoreSelector((snapshot) => {
     const timeline = snapshot.timelines.get(sessionId);
     if (!timeline) return 0;
     for (let i = timeline.length - 1; i >= 0; i -= 1) {
@@ -154,6 +157,7 @@ export function SessionCacheMetricsSection({
     }
     return 0;
   });
+  const latestTurnEndSeq = Math.max(liveWatermark, timelineWatermark);
   const liveSignal = useStoreSelector((snapshot) => {
     const session = snapshot.sessionsById.get(sessionId);
     const options = snapshot.configOptions.get(sessionId);
@@ -174,14 +178,14 @@ export function SessionCacheMetricsSection({
           if (controller.signal.aborted) return;
           setData(response);
           const projectedMaxSeq = response.recent_turns[0]?.turn_end_seq ?? 0;
-          if (
-            latestTurnEndSeq > 0 &&
-            projectedMaxSeq < latestTurnEndSeq &&
-            attempt < WRITE_BEHIND_RETRY_DELAYS_MS.length
-          ) {
+          const behind = latestTurnEndSeq > 0 && projectedMaxSeq < latestTurnEndSeq;
+          if (behind && attempt < WRITE_BEHIND_RETRY_DELAYS_MS.length) {
+            setSyncPending(true);
             timerId = globalThis.setTimeout(() => {
               if (!controller.signal.aborted) load(attempt + 1);
             }, WRITE_BEHIND_RETRY_DELAYS_MS[attempt]);
+          } else {
+            setSyncPending(behind);
           }
         })
         .catch(() => {
@@ -245,7 +249,7 @@ export function SessionCacheMetricsSection({
               },
               {
                 label: "Uncached input",
-                value: formatCompactTokens(totals.uncached_input_tokens),
+                value: formatCompactTokens(totals.uncached_input_tokens, totals.totals_saturated),
               },
               {
                 label: "Coverage",
@@ -258,6 +262,7 @@ export function SessionCacheMetricsSection({
           />
           <Typography variant="caption" color="text.secondary">
             Turn-level totals · {formatCoverageSummary(totals, coverage)}
+            {syncPending ? " · latest turn syncing…" : ""}
           </Typography>
         </>
       )}

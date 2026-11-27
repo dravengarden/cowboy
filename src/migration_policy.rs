@@ -256,7 +256,7 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
     ),
     (
         "0095_turn_cache_facts.sql",
-        "828a0bfaf2791dd5b57c9d5329736f78eaec83e0f7899c587baa714475aaa7e8",
+        "033b43f1d4a0f9b4b1759e0d45a70570fadb25dbcbc8e8ad21be434884442ef2",
     ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
@@ -506,7 +506,7 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     ),
     (
         "0069_turn_cache_facts.sql",
-        "b27f9353af9e6a70b24608bfcf6fad31c51e05d314cd55e13940a0cb894dce56",
+        "12abb2a5ccf9978b9fcb432498e83ba3cb1f15cde1548fe3707ee636d6e50720",
     ),
 ];
 

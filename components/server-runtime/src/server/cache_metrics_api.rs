@@ -27,6 +27,7 @@ const DEFAULT_RECENT_TURN_LIMIT: usize = 30;
 const MAX_RECENT_TURN_LIMIT: usize = 100;
 const ANTIGRAVITY_ROLLOVER_RESTRICTION: &str =
     "Automatic context renewal is disabled for Antigravity accounts by host policy.";
+const NATIVE_FORK_ROLLOVER_RESTRICTION: &str = "Automatic context renewal is excluded for native fork sessions because inherited history lives only in the native thread.";
 
 #[derive(Debug, Default, Deserialize)]
 pub struct AccountCacheMetricsQuery {
@@ -236,34 +237,59 @@ async fn resolve_account_keepalive_capability(
         machines.iter().filter(|m| !m.revoked).map(|m| &m.inventory),
         provider_id,
         |id, version, digest| {
-            state
-                .provider_catalog
-                .package(id, version, digest)
-                .map(|pkg| {
-                    crate::managed_config::cache_protection(
-                        &pkg.manifest.runtime.behavior.configuration,
-                        &serde_json::json!({}),
-                    )
-                    .is_some()
-                })
+            let pkg = state.provider_catalog.package(id, version, digest)?;
+            let behavior_supports = crate::managed_config::cache_protection(
+                &pkg.manifest.runtime.behavior.configuration,
+                &serde_json::json!({}),
+            )
+            .is_some();
+            if !behavior_supports {
+                return Some(false);
+            }
+            // Only Providers declaring `cache_protection_v1` in signed host
+            // features expose a verified policy transport to the gateway
+            // sidecar; others (e.g. dsh without custom policy headers) stay
+            // unverified rather than falsely promising opt-out enforcement.
+            pkg.manifest
+                .host
+                .features
+                .iter()
+                .any(|feature| *feature == cowboy_provider_sdk::HostFeature::CacheProtectionV1)
+                .then_some(true)
         },
     )
 }
 
-fn resolve_session_configuration(
+struct SessionKeepaliveEvidence {
+    configuration: cowboy_provider_sdk::ConfigurationBehavior,
+    policy_transport_verified: Option<bool>,
+}
+
+fn resolve_session_keepalive_evidence(
     provider_catalog: &crate::provider_catalog::ProviderCatalog,
     meta: &crate::core::SessionMeta,
-) -> Option<cowboy_provider_sdk::ConfigurationBehavior> {
-    if let Some(behavior) = meta.provider_behavior.as_ref() {
-        return Some(behavior.configuration.clone());
-    }
-    provider_catalog
-        .package(
-            &meta.provider,
-            &meta.provider_version,
-            &meta.provider_generation_digest,
-        )
-        .map(|pkg| pkg.manifest.runtime.behavior.configuration)
+) -> Option<SessionKeepaliveEvidence> {
+    let pkg = provider_catalog.package(
+        &meta.provider,
+        &meta.provider_version,
+        &meta.provider_generation_digest,
+    );
+    let policy_transport_verified = pkg.as_ref().map(|p| {
+        p.manifest
+            .host
+            .features
+            .iter()
+            .any(|feature| *feature == cowboy_provider_sdk::HostFeature::CacheProtectionV1)
+    });
+    let configuration = meta
+        .provider_behavior
+        .as_ref()
+        .map(|behavior| behavior.configuration.clone())
+        .or_else(|| pkg.map(|p| p.manifest.runtime.behavior.configuration))?;
+    Some(SessionKeepaliveEvidence {
+        configuration,
+        policy_transport_verified,
+    })
 }
 
 fn resolve_capabilities(
@@ -358,7 +384,8 @@ async fn load_authorized_session_cache_metrics(
     query: &SessionCacheMetricsQuery,
     rollover_policy: Option<crate::context_rollover::Policy>,
     due: bool,
-    configuration: Option<&cowboy_provider_sdk::ConfigurationBehavior>,
+    native_fork: bool,
+    keepalive_evidence: Option<&SessionKeepaliveEvidence>,
 ) -> Result<SessionCacheMetricsResponse, (StatusCode, &'static str)> {
     if !session_is_visible(hub, principal, session_id) {
         return Err((StatusCode::NOT_FOUND, "unknown session"));
@@ -387,41 +414,51 @@ async fn load_authorized_session_cache_metrics(
     let preferences = hub
         .config_preferences(&meta.id)
         .unwrap_or_else(|| serde_json::json!({}));
-    let (keepalive_cap, keepalive_enabled) = match configuration {
-        Some(cfg) => {
-            let enabled = crate::managed_config::cache_protection(cfg, &preferences);
-            (KeepaliveCapability::Verified(enabled.is_some()), enabled)
+    let (keepalive_cap, keepalive_enabled) = match keepalive_evidence {
+        Some(ev) => {
+            match crate::managed_config::cache_protection(&ev.configuration, &preferences) {
+                None => (KeepaliveCapability::Verified(false), None),
+                Some(enabled) if ev.policy_transport_verified == Some(true) => {
+                    (KeepaliveCapability::Verified(true), Some(enabled))
+                }
+                Some(_) => (KeepaliveCapability::Unverified, None),
+            }
         }
         None => (KeepaliveCapability::Unverified, None),
     };
     let capabilities = resolve_capabilities(&meta.provider, keepalive_cap, &metrics.totals);
+    let session_rollover_supported = capabilities.supports_idle_rollover && !native_fork;
+    let session_rollover_restriction = capabilities
+        .rollover_restriction
+        .clone()
+        .or_else(|| native_fork.then(|| NATIVE_FORK_ROLLOVER_RESTRICTION.to_owned()));
 
     let (rollover_view, rollover_enabled) = match rollover_policy {
         Some(policy) => (
             RolloverStrategyView {
                 availability: "available".to_owned(),
-                supported: capabilities.supports_idle_rollover,
+                supported: session_rollover_supported,
                 enabled: Some(policy.enabled),
                 inherited: Some(policy.session_override.is_none()),
                 session_override: policy.session_override,
                 idle_minutes: policy.idle_minutes,
                 min_context_tokens: Some(policy.min_context_tokens),
-                due,
-                restriction: capabilities.rollover_restriction.clone(),
+                due: due && session_rollover_supported,
+                restriction: session_rollover_restriction,
             },
-            Some(policy.enabled),
+            Some(policy.enabled && session_rollover_supported),
         ),
         None => (
             RolloverStrategyView {
                 availability: "unavailable".to_owned(),
-                supported: capabilities.supports_idle_rollover,
+                supported: session_rollover_supported,
                 enabled: None,
                 inherited: None,
                 session_override: None,
                 idle_minutes: None,
                 min_context_tokens: None,
                 due: false,
-                restriction: capabilities.rollover_restriction.clone(),
+                restriction: session_rollover_restriction,
             },
             None,
         ),
@@ -521,7 +558,8 @@ pub async fn session_cache_metrics(
             })
             && super::session_context::rollover::is_ordinary_session(&state, &meta)
     });
-    let configuration = resolve_session_configuration(&state.provider_catalog, &meta);
+    let native_fork = state.hub.session_fork(&meta.id).is_some() || meta.forked_from.is_some();
+    let keepalive_evidence = resolve_session_keepalive_evidence(&state.provider_catalog, &meta);
 
     match load_authorized_session_cache_metrics(
         &state.hub,
@@ -531,7 +569,8 @@ pub async fn session_cache_metrics(
         &query,
         rollover_policy,
         due,
-        configuration.as_ref(),
+        native_fork,
+        keepalive_evidence.as_ref(),
     )
     .await
     {
@@ -909,6 +948,7 @@ mod tests {
             &SessionCacheMetricsQuery::default(),
             None,
             false,
+            false,
             None,
         )
         .await;
@@ -923,6 +963,7 @@ mod tests {
             &SessionCacheMetricsQuery::default(),
             None,
             false,
+            false,
             None,
         )
         .await
@@ -934,6 +975,67 @@ mod tests {
         assert_eq!(
             unavailable.capabilities.keepalive_capability_status,
             "unverified"
+        );
+
+        // R3-L1: Native fork keeps inherited preference visible while excluding effective renewal.
+        let fork_policy = crate::context_rollover::Policy {
+            enabled: true,
+            idle_minutes: Some(60),
+            min_context_tokens: 80_000,
+            session_override: None,
+        };
+        let verified_portable = SessionKeepaliveEvidence {
+            configuration: cowboy_provider_sdk::ConfigurationBehavior::PortableV1,
+            policy_transport_verified: Some(false),
+        };
+        let fork_res = load_authorized_session_cache_metrics(
+            &hub,
+            &store,
+            &principal_a,
+            "sess-a",
+            &SessionCacheMetricsQuery::default(),
+            Some(fork_policy.clone()),
+            true,
+            true,
+            Some(&verified_portable),
+        )
+        .await
+        .expect("native fork metrics");
+        assert!(!fork_res.strategy.rollover.supported);
+        assert_eq!(fork_res.strategy.rollover.enabled, Some(true));
+        assert_eq!(fork_res.strategy.rollover.inherited, Some(true));
+        assert!(!fork_res.strategy.rollover.due);
+        assert!(fork_res.strategy.rollover.restriction.is_some());
+        assert_eq!(fork_res.strategy.effective_mode, "none");
+
+        // R3-M2: Gateway behavior without verified `cache_protection_v1` reports unverified keepalive.
+        let unverified_dsh = SessionKeepaliveEvidence {
+            configuration: cowboy_provider_sdk::ConfigurationBehavior::AnthropicGatewayV1,
+            policy_transport_verified: Some(false),
+        };
+        let dsh_res = load_authorized_session_cache_metrics(
+            &hub,
+            &store,
+            &principal_a,
+            "sess-a",
+            &SessionCacheMetricsQuery::default(),
+            Some(fork_policy),
+            false,
+            false,
+            Some(&unverified_dsh),
+        )
+        .await
+        .expect("unverified gateway metrics");
+        assert_eq!(dsh_res.capabilities.supports_gateway_keepalive, None);
+        assert_eq!(
+            dsh_res.capabilities.keepalive_capability_status,
+            "unverified"
+        );
+        assert_eq!(dsh_res.strategy.gateway_keepalive.supported, None);
+        assert_eq!(dsh_res.strategy.gateway_keepalive.enabled, None);
+        assert_eq!(
+            dsh_res.strategy.effective_mode,
+            "rollover_keepalive_unknown"
         );
     }
 }

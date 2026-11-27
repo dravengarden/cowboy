@@ -2,6 +2,7 @@
 -- short-lived session purge (retained independently by occurred_at_ms).
 CREATE TABLE IF NOT EXISTS turn_cache_facts (
     session_id TEXT NOT NULL,
+    session_created_at_ms BIGINT NOT NULL DEFAULT 0,
     turn_end_seq BIGINT NOT NULL,
     occurred_at_ms BIGINT NOT NULL,
     owner_user_id TEXT,
@@ -25,7 +26,7 @@ CREATE TABLE IF NOT EXISTS turn_cache_facts (
     output_tokens BIGINT,
     reasoning_tokens BIGINT,
     accounting_source TEXT NOT NULL DEFAULT 'turn_end',
-    PRIMARY KEY (session_id, turn_end_seq)
+    PRIMARY KEY (session_id, session_created_at_ms, turn_end_seq)
 );
 
 CREATE INDEX IF NOT EXISTS turn_cache_facts_account_time_idx
@@ -35,7 +36,7 @@ CREATE INDEX IF NOT EXISTS turn_cache_facts_provider_time_idx
     ON turn_cache_facts (provider, occurred_at_ms DESC);
 
 CREATE INDEX IF NOT EXISTS turn_cache_facts_session_time_idx
-    ON turn_cache_facts (session_id, occurred_at_ms DESC);
+    ON turn_cache_facts (session_id, session_created_at_ms, occurred_at_ms DESC);
 
 CREATE INDEX IF NOT EXISTS turn_cache_facts_occurred_at_idx
     ON turn_cache_facts (occurred_at_ms);

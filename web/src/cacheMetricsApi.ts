@@ -157,15 +157,19 @@ export async function fetchSessionCacheMetrics(
   return (await response.json()) as SessionCacheMetricsResponse;
 }
 
-export function formatCompactTokens(tokens: number | null | undefined): string {
+export function formatCompactTokens(
+  tokens: number | null | undefined,
+  saturated = false,
+): string {
   if (tokens === null || tokens === undefined || !Number.isFinite(tokens) || tokens < 0) {
     return "Not reported";
   }
-  if (tokens >= 1_000_000_000) return `${(tokens / 1_000_000_000).toFixed(2)}B`;
-  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1)}M`;
-  if (tokens >= 10_000) return `${Math.round(tokens / 1_000)}k`;
-  if (tokens >= 1_000) return `${(tokens / 1_000).toFixed(1)}k`;
-  return Math.round(tokens).toLocaleString();
+  const prefix = saturated && tokens >= Number.MAX_SAFE_INTEGER ? "≥" : "";
+  if (tokens >= 1_000_000_000) return `${prefix}${(tokens / 1_000_000_000).toFixed(2)}B`;
+  if (tokens >= 1_000_000) return `${prefix}${(tokens / 1_000_000).toFixed(1)}M`;
+  if (tokens >= 10_000) return `${prefix}${Math.round(tokens / 1_000)}k`;
+  if (tokens >= 1_000) return `${prefix}${(tokens / 1_000).toFixed(1)}k`;
+  return `${prefix}${Math.round(tokens).toLocaleString()}`;
 }
 
 export function formatSharePercent(ratio: number | null | undefined): string {
@@ -207,6 +211,7 @@ export function buildDisjointCacheSegments(
   totals: CacheMetricsTotals,
 ): MetricSegment[] {
   if (
+    totals.totals_saturated === true ||
     totals.observed_cache_turns <= 0 ||
     totals.cached_read_tokens === null ||
     totals.uncached_input_tokens === null
@@ -253,6 +258,13 @@ export function formatStrategySummary(strategy: SessionCacheStrategyView): strin
   const { rollover, gateway_keepalive: keepalive } = strategy;
   if (rollover.availability === "unavailable") {
     parts.push("Renewal policy unavailable");
+  } else if (!rollover.supported && rollover.restriction) {
+    const label = rollover.restriction.toLowerCase().includes("native fork")
+      ? "Idle renewal excluded for native fork"
+      : "Idle renewal disabled by host policy";
+    parts.push(
+      rollover.enabled ? `${label} (inherited preference on)` : label,
+    );
   } else if (rollover.enabled && rollover.idle_minutes !== null && rollover.min_context_tokens !== null) {
     const idle =
       rollover.idle_minutes % 60 === 0
@@ -261,8 +273,6 @@ export function formatStrategySummary(strategy: SessionCacheStrategyView): strin
     const minTokens = `${Math.round(rollover.min_context_tokens / 1_000)}k+`;
     const source = rollover.inherited ? "default" : "session override";
     parts.push(`Idle renewal (${source} · ${idle} / ${minTokens})`);
-  } else if (!rollover.supported && rollover.restriction) {
-    parts.push("Idle renewal disabled by host policy");
   }
   if (keepalive.supported === true) {
     parts.push(`Gateway keepalive (${keepalive.enabled ? "on" : "off"})`);

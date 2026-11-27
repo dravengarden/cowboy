@@ -165,25 +165,56 @@ pub fn normalize_stop_reason(raw: &str) -> &'static str {
     }
 }
 
-fn model_identifiers_compatible(selected: &str, observed: &str) -> bool {
-    let sel = selected.trim().to_ascii_lowercase();
-    let obs = observed.trim().to_ascii_lowercase();
-    if sel.is_empty() || obs.is_empty() {
-        return false;
-    }
-    if sel == obs {
-        return true;
-    }
-    let contains_token = |haystack: &str, needle: &str| -> bool {
-        haystack
-            .split(|c: char| !c.is_ascii_alphanumeric())
-            .any(|tok| tok == needle)
+fn active_model_option(config_options: Option<&Value>) -> Option<&Value> {
+    config_options?
+        .as_array()?
+        .iter()
+        .find(|option| option.get("id").and_then(Value::as_str) == Some("model"))
+}
+
+fn provider_declared_equivalences(option: &Value, expected: &str) -> Vec<String> {
+    let Some(current) = option.get("currentValue").and_then(Value::as_str) else {
+        return Vec::new();
     };
-    contains_token(&obs, &sel)
-        || contains_token(&sel, &obs)
-        || obs.starts_with(&format!("{sel}-"))
-        || obs.starts_with(&format!("{sel}["))
-        || sel.starts_with(&format!("{obs}-"))
+    let Some(equivalence) = option.pointer("/_meta/cowboy.dev~1configuration-equivalence") else {
+        return Vec::new();
+    };
+    if equivalence["schema"] != 1
+        || equivalence.get("value").and_then(Value::as_str) != Some(current)
+    {
+        return Vec::new();
+    }
+    let Some(values) = equivalence["equivalent_values"].as_array() else {
+        return Vec::new();
+    };
+    if values.len() > 8 || !values.iter().all(Value::is_string) {
+        return Vec::new();
+    }
+    let mut set = Vec::with_capacity(values.len() + 2);
+    let current_norm = normalize_model_value(current);
+    if !current_norm.is_empty() {
+        set.push(current_norm);
+    }
+    let current_clean = sanitize_text(current, MAX_MODEL_BYTES);
+    if !current_clean.is_empty() {
+        set.push(current_clean);
+    }
+    for val in values {
+        if let Some(s) = val.as_str() {
+            let clean = sanitize_text(s, MAX_MODEL_BYTES);
+            if !clean.is_empty() {
+                set.push(clean);
+            }
+        }
+    }
+    if set
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(expected))
+    {
+        set
+    } else {
+        Vec::new()
+    }
 }
 
 fn extract_selected_model(
@@ -198,31 +229,30 @@ fn extract_selected_model(
     {
         return Some(model);
     }
-    let options = config_options.and_then(Value::as_array)?;
-    for option in options {
-        if option.get("id").and_then(Value::as_str) != Some("model") {
-            continue;
-        }
-        if let Some(current) = option.get("currentValue").and_then(Value::as_str) {
-            let normalized = normalize_model_value(current);
-            if !normalized.is_empty() {
-                return Some(normalized);
-            }
-        }
-    }
-    None
+    let option = active_model_option(config_options)?;
+    let current = option.get("currentValue").and_then(Value::as_str)?;
+    let normalized = normalize_model_value(current);
+    (!normalized.is_empty()).then_some(normalized)
+}
+
+fn matches_selected_model(
+    selected: &str,
+    observed: &str,
+    declared_equivalences: &[String],
+) -> bool {
+    selected.eq_ignore_ascii_case(observed)
+        || declared_equivalences
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(observed))
 }
 
 /// Extract the best unambiguous live turn-time model identifier from session
 /// metadata.
 ///
-/// `last_usage.raw._cowboy.modelUsage` is cumulative and flushed asynchronously
-/// by the write-behind worker, so on the first turn after a model switch A -> B
-/// `modelUsage` may still contain only `[A]` while `config_preferences` holds
-/// `B` (or vice-versa right after a switch). Whenever cumulative `modelUsage`
-/// conflicts with the active selected model (or has multiple models without a
-/// unique match for the selected model), return `None` (`unknown`) instead of
-/// misattributing the turn to the wrong model.
+/// Matches strictly by exact identifier or the active `"model"` option's
+/// provider-declared `cowboy.dev/configuration-equivalence` metadata (never
+/// fuzzy substrings). Returns `None` (`unknown`) whenever cumulative usage
+/// conflicts with the active selection.
 #[must_use]
 pub fn extract_session_model(
     last_usage: Option<&Value>,
@@ -230,6 +260,12 @@ pub fn extract_session_model(
     config_options: Option<&Value>,
 ) -> Option<String> {
     let selected = extract_selected_model(config_preferences, config_options);
+    let equivalences = selected
+        .as_deref()
+        .and_then(|sel| active_model_option(config_options).map(|opt| (opt, sel)))
+        .map(|(opt, sel)| provider_declared_equivalences(opt, sel))
+        .unwrap_or_default();
+
     let usage_models: Vec<String> = last_usage
         .and_then(|value| value.pointer("/raw/_cowboy/modelUsage"))
         .and_then(Value::as_array)
@@ -249,14 +285,14 @@ pub fn extract_session_model(
         [] => selected,
         [only] => match selected.as_deref() {
             None => Some(only.clone()),
-            Some(sel) if model_identifiers_compatible(sel, only) => Some(only.clone()),
+            Some(sel) if matches_selected_model(sel, only, &equivalences) => Some(only.clone()),
             Some(_) => None,
         },
         many => {
             let sel = selected.as_deref()?;
             let mut matches = many
                 .iter()
-                .filter(|observed| model_identifiers_compatible(sel, observed));
+                .filter(|observed| matches_selected_model(sel, observed, &equivalences));
             let first = matches.next()?;
             if matches.next().is_some() {
                 return None;

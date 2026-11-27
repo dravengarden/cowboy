@@ -170,10 +170,10 @@ export function aggregateRolloverReport(
       group.observed_cache_input += normalized.inclusive_input;
       group.cached_read += normalized.cached_read;
       group.uncached_total += normalized.uncached_total;
-      if (normalized.cache_write !== null) {
-        group.observed_write_turns += 1;
-        group.cache_write += normalized.cache_write;
-      }
+    }
+    if (normalized.cache_write !== null) {
+      group.observed_write_turns += 1;
+      group.cache_write += normalized.cache_write;
     }
     groups.set(key, group);
   }

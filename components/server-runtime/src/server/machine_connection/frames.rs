@@ -19,10 +19,14 @@ pub struct MachineInventory {
     workspace_revision: Option<String>,
     workspace_owner: Option<crate::machine_protocol::projects::Owner>,
     providers: Vec<PluginInventory>,
+    plugins_reported: bool,
 }
 
 impl MachineInventory {
-    pub fn from_hello(hello: &crate::machine_protocol::MachineHello) -> Self {
+    pub fn from_hello(
+        hello: &crate::machine_protocol::MachineHello,
+        plugins_reported: bool,
+    ) -> Self {
         Self {
             components: hello.components.clone(),
             workspaces: hello.workspaces.clone(),
@@ -30,6 +34,7 @@ impl MachineInventory {
             workspace_revision: hello.workspace_revision.clone(),
             workspace_owner: hello.workspace_owner,
             providers: hello.plugins.clone(),
+            plugins_reported,
         }
     }
 }
@@ -311,9 +316,8 @@ impl MachineLink<'_> {
                 observed_at_ms: now_ms(),
             },
         );
-        let seen = serde_json::json!({
+        let mut seen = serde_json::json!({
             "components": &inventory.components,
-            "providers": &inventory.providers,
             "provider_contracts": &hello.provider_contracts,
             "plugin_contracts": &hello.plugin_contracts,
             "workspaces": &inventory.workspaces,
@@ -321,6 +325,14 @@ impl MachineLink<'_> {
             "workspace_owner": &inventory.workspace_owner,
             "capacity": &hello.capacity,
         });
+        if inventory.plugins_reported
+            && let (Some(map), Ok(providers_val)) = (
+                seen.as_object_mut(),
+                serde_json::to_value(&inventory.providers),
+            )
+        {
+            map.insert("providers".to_owned(), providers_val);
+        }
         let result = store
             .machine_seen(&hello.machine_id, challenge_id, Some(&seen))
             .await;
@@ -345,6 +357,7 @@ impl MachineLink<'_> {
             ..
         } = self;
         inventory.providers = plugins;
+        inventory.plugins_reported = true;
         state.machine_control.record_remote(
             connection,
             MachineEvent::PluginInventory {

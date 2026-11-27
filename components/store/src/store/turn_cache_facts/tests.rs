@@ -121,46 +121,70 @@ fn normalize_turn_usage_enforces_disjoint_breakdown_and_preserves_unknowns() {
 }
 
 #[test]
-fn extract_session_model_rejects_ambiguous_multi_model_cumulative_usage() {
-    let single_usage = json!({
-        "raw": { "_cowboy": { "modelUsage": [{ "model": "claude-opus-4-6" }] } }
+fn extract_session_model_uses_exact_and_provider_declared_equivalences_only() {
+    let fable_51_usage = json!({
+        "raw": { "_cowboy": { "modelUsage": [{ "model": "claude-fable-5-1" }] } }
+    });
+    let fable_52_usage = json!({
+        "raw": { "_cowboy": { "modelUsage": [{ "model": "claude-fable-5-2" }] } }
     });
     let multi_usage = json!({
         "raw": { "_cowboy": { "modelUsage": [
-            { "model": "claude-opus-4-6", "totalTokens": 500_000 },
-            { "model": "claude-sonnet-4-6", "totalTokens": 50_000 }
+            { "model": "claude-fable-5-1", "totalTokens": 500_000 },
+            { "model": "claude-fable-5-2", "totalTokens": 50_000 }
         ] } }
     });
-    let prefs = json!({ "model": "sonnet" });
-    let options = json!([{
+    let fable_prefs = json!({ "model": "fable" });
+    let fable_options = json!([{
+        "id": "model",
+        "currentValue": "fable",
+        "_meta": {
+            "cowboy.dev/configuration-equivalence": {
+                "schema": 1,
+                "value": "fable",
+                "equivalent_values": ["claude-fable-5-2", "claude-fable-5-2[1m]"]
+            }
+        }
+    }]);
+    let dsh_options = json!([{
         "id": "model",
         "currentValue": "[\"deepseek-official\",\"deepseek-v4-flash\"]"
     }]);
-    let opus_prefs = json!({ "model": "opus" });
-    // Single modelUsage with compatible alias or absent selection wins.
+
     assert_eq!(
-        extract_session_model(Some(&single_usage), None, None).as_deref(),
-        Some("claude-opus-4-6")
+        extract_session_model(Some(&fable_52_usage), None, None).as_deref(),
+        Some("claude-fable-5-2")
     );
     assert_eq!(
-        extract_session_model(Some(&single_usage), Some(&opus_prefs), None).as_deref(),
-        Some("claude-opus-4-6")
+        extract_session_model(
+            Some(&fable_52_usage),
+            Some(&fable_prefs),
+            Some(&fable_options)
+        )
+        .as_deref(),
+        Some("claude-fable-5-2")
     );
-    // First turn after switching opus -> sonnet while stale cumulative modelUsage
-    // still holds only opus MUST stay None (unknown) rather than attributing to opus.
+    // R3-M3: Stale cumulative claude-fable-5-1 MUST NOT match alias "fable".
     assert_eq!(
-        extract_session_model(Some(&single_usage), Some(&prefs), Some(&options)),
+        extract_session_model(
+            Some(&fable_51_usage),
+            Some(&fable_prefs),
+            Some(&fable_options)
+        ),
         None
     );
-    // Once cumulative usage contains both models, unique match for active preference resolves.
     assert_eq!(
-        extract_session_model(Some(&multi_usage), Some(&prefs), Some(&options)).as_deref(),
-        Some("claude-sonnet-4-6")
+        extract_session_model(Some(&fable_52_usage), Some(&fable_prefs), None),
+        None
     );
-    // Multi-model cumulative usage with no preferences/options stays unknown (None).
+    assert_eq!(
+        extract_session_model(Some(&multi_usage), Some(&fable_prefs), Some(&fable_options))
+            .as_deref(),
+        Some("claude-fable-5-2")
+    );
     assert_eq!(extract_session_model(Some(&multi_usage), None, None), None);
     assert_eq!(
-        extract_session_model(None, None, Some(&options)).as_deref(),
+        extract_session_model(None, None, Some(&dsh_options)).as_deref(),
         Some("deepseek-v4-flash")
     );
 }
@@ -765,4 +789,187 @@ async fn sqlite_independent_cache_write_and_large_token_sums_never_overflow() {
     assert!(m601.totals.totals_saturated);
     assert_eq!(m601.totals.inclusive_input_tokens, Some(MAX_SAFE_TOKENS));
     assert!((m601.totals.cached_input_share.unwrap() - 0.5).abs() < 1e-9);
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn sqlite_reused_session_id_incarnations_and_pre_clear_rollover_stay_isolated() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let db_path = dir.path().join("incarnations.sqlite3");
+    let url = format!("sqlite://{}?mode=rwc", db_path.display());
+    let store = Store::connect(&url, dir.path().join("artifacts"))
+        .await
+        .expect("connect sqlite");
+    store.migrate().await.expect("migrate sqlite");
+
+    let owner = "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee";
+    let acct = "55555555-5555-5555-5555-555555555555";
+    store
+        .insert_user(&sample_user(owner, "erin"))
+        .await
+        .expect("owner");
+    store
+        .insert_session(&sample_meta("sess-700", owner, "claude-code", acct))
+        .await
+        .expect("s700-1");
+    store
+        .update_config_preferences("sess-700", &json!({"model": "claude-opus-4-6"}))
+        .await
+        .expect("prefs 1");
+    store
+        .upsert_event_batch(
+            &[Envelope {
+                session_id: "sess-700".into(),
+                seq: 1,
+                event: Event::TurnEnd {
+                    stop_reason: "EndTurn".into(),
+                    usage: Some(TurnUsage {
+                        total_tokens: 1_100,
+                        input_tokens: 1_000,
+                        output_tokens: 100,
+                        cached_input_tokens: Some(800),
+                        uncached_input_tokens: Some(200),
+                        cache_write_tokens: None,
+                        reasoning_tokens: None,
+                    }),
+                },
+                cmid: None,
+            }],
+            &HashMap::from([("sess-700".into(), 2)]),
+        )
+        .await
+        .expect("turn inc1");
+    store.delete_session("sess-700").await.expect("delete inc1");
+    assert_eq!(store.purge_deleted(0).await.expect("purge inc1"), 1);
+
+    // Rolled-back predecessor reuses sess-700 at a strictly newer created_at_ms (T2)
+    store
+        .insert_session(&sample_meta("sess-700", owner, "claude-code", acct))
+        .await
+        .expect("s700-2");
+    let raw = sqlx::SqlitePool::connect(&url).await.expect("raw sqlite");
+    let now = chrono::Utc::now().timestamp_millis();
+    sqlx::query("UPDATE sessions SET created_at_ms = created_at_ms + 5000 WHERE id = 'sess-700'")
+        .execute(&raw)
+        .await
+        .expect("bump created_at_ms");
+    let raw_turn1 = serde_json::to_string(&Event::TurnEnd {
+        stop_reason: "EndTurn".into(),
+        usage: Some(TurnUsage {
+            total_tokens: 2_200,
+            input_tokens: 2_000,
+            output_tokens: 200,
+            cached_input_tokens: Some(1_000),
+            uncached_input_tokens: Some(1_000),
+            cache_write_tokens: None,
+            reasoning_tokens: None,
+        }),
+    })
+    .expect("ser");
+    sqlx::query(
+        "INSERT INTO events (session_id, seq, payload, ts_ms) VALUES ('sess-700', 1, ?, ?)",
+    )
+    .bind(&raw_turn1)
+    .bind(now - 2_000)
+    .execute(&raw)
+    .await
+    .expect("raw inc2 turn1");
+    raw.close().await;
+
+    store
+        .begin_turn_cache_reconcile()
+        .await
+        .expect("begin reconcile");
+    let progress = store
+        .backfill_turn_cache_facts_batch(50, DEFAULT_RETENTION_DAYS)
+        .await
+        .expect("reconcile inc2");
+    assert!(progress.completed);
+    assert_eq!(progress.rows_projected, 1);
+
+    // R3-L2: Pre-clear rollover followed by context_cleared before TurnEnd -> renewed=false
+    store
+        .upsert_event_batch(
+            &[
+                Envelope {
+                    session_id: "sess-700".into(),
+                    seq: 2,
+                    event: Event::Update {
+                        update: json!({ "sessionUpdate": "context_rolled_over" }),
+                    },
+                    cmid: None,
+                },
+                Envelope {
+                    session_id: "sess-700".into(),
+                    seq: 3,
+                    event: Event::Update {
+                        update: json!({ "sessionUpdate": "context_cleared" }),
+                    },
+                    cmid: None,
+                },
+                Envelope {
+                    session_id: "sess-700".into(),
+                    seq: 4,
+                    event: Event::Update {
+                        update: json!({
+                            "sessionUpdate": "user_message_chunk",
+                            "promptOrigin": { "actor": "human" },
+                            "content": { "type": "text", "text": "fresh after clear" }
+                        }),
+                    },
+                    cmid: None,
+                },
+                Envelope {
+                    session_id: "sess-700".into(),
+                    seq: 5,
+                    event: Event::TurnEnd {
+                        stop_reason: "EndTurn".into(),
+                        usage: Some(TurnUsage {
+                            total_tokens: 3_300,
+                            input_tokens: 3_000,
+                            output_tokens: 300,
+                            cached_input_tokens: Some(2_700),
+                            uncached_input_tokens: Some(300),
+                            cache_write_tokens: None,
+                            reasoning_tokens: None,
+                        }),
+                    },
+                    cmid: None,
+                },
+            ],
+            &HashMap::from([("sess-700".into(), 6)]),
+        )
+        .await
+        .expect("post-clear turn");
+
+    let live_sess = store
+        .session_cache_metrics("sess-700", Some(owner), "claude-code", acct, 10)
+        .await
+        .expect("live sess");
+    assert_eq!(live_sess.totals.total_turns, 2);
+    assert_eq!(live_sess.totals.renewed_turns, 0);
+    assert_eq!(live_sess.totals.inclusive_input_tokens, Some(5_000));
+    assert!(
+        live_sess
+            .by_model
+            .iter()
+            .all(|m| m.model != "claude-opus-4-6")
+    );
+    assert_eq!(live_sess.recent_turns[0].turn_end_seq, 5);
+    assert!(!live_sess.recent_turns[0].renewed);
+    assert_eq!(live_sess.recent_turns[0].idle_gap_ms, None);
+
+    let acct_metrics = store
+        .account_cache_metrics(
+            owner,
+            "claude-code",
+            acct,
+            now - 86_400_000,
+            now + 60_000,
+            "24h",
+        )
+        .await
+        .expect("acct metrics");
+    assert_eq!(acct_metrics.totals.total_turns, 3);
+    assert_eq!(acct_metrics.totals.inclusive_input_tokens, Some(6_000));
 }
