@@ -155,14 +155,28 @@ pub(super) fn install_controller_and_arm_replays(
     broker: &super::Broker,
     controller: super::Controller,
     post_edit: Option<(bool, mpsc::Sender<QueuedControllerPostEdit>)>,
+    welcome: &[crate::runtime_wire::WorkerSnapshot],
 ) -> Vec<OrphanedInspect> {
     let mut ctrl_guard = broker.controller.lock();
+    let sessions = broker.sessions.lock();
+    let session_states = broker.session_states.lock().clone();
+    let startup_failures = broker.startup_failures.lock().clone();
+    let generation_commands = broker.generation_commands.lock().clone();
     let mut workers = broker.workers.lock();
     let orphaned = post_edit.map_or_else(Vec::new, |(http, tx)| {
         broker
             .post_edit
             .attach_controller_collect(controller.lease, controller.protocol, http, tx)
     });
+    broker.enqueue_handover_reconciliation_locked(
+        &controller,
+        &sessions,
+        &session_states,
+        &startup_failures,
+        &generation_commands,
+        &workers,
+        welcome,
+    );
     ctrl_guard.replace(controller);
     super::Broker::arm_all_worker_replays_locked(&mut workers);
     orphaned

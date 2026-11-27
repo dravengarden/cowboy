@@ -1253,18 +1253,18 @@ impl Broker {
         Ok(())
     }
 
-    pub(super) fn clear_crashed_drain(&self, session_id: &str, reason: &str) {
+    pub(super) fn clear_crashed_drain(
+        &self,
+        session_id: &str,
+        reason: &str,
+        permanent_delete: bool,
+    ) {
         let orphaned = {
             let mut state = self.crashed_drains.inner.lock();
             state.active.remove(session_id);
             state.unconfirmed_teardown.remove(session_id);
             state.trusted_epoch_pids.remove(session_id);
-            if self.cancelled_sessions.lock().contains(session_id)
-                || self
-                    .permanently_deleted_sessions
-                    .lock()
-                    .contains(session_id)
-            {
+            if permanent_delete {
                 state.receiptless_uncertain_effects.remove(session_id);
             }
             drain_pending_for_session(&mut state.pending, session_id)
@@ -1936,8 +1936,18 @@ mod tests {
             Some(9)
         );
         // Permanent session deletion clears the retained uncertain effect.
-        broker.cancelled_sessions.lock().insert("s-r7-h5".into());
-        broker.clear_crashed_drain("s-r7-h5", "deleted");
+        // Reset (`permanent_delete = false`) must preserve the session-scoped effect.
+        broker.clear_crashed_drain("s-r7-h5", "reset", false);
+        assert!(
+            broker
+                .crashed_drains
+                .inner
+                .lock()
+                .receiptless_uncertain_effects
+                .contains_key("s-r7-h5")
+        );
+        // Permanent session deletion clears the retained uncertain effect.
+        broker.clear_crashed_drain("s-r7-h5", "deleted", true);
         assert!(
             !broker
                 .crashed_drains
@@ -1945,6 +1955,88 @@ mod tests {
                 .lock()
                 .receiptless_uncertain_effects
                 .contains_key("s-r7-h5")
+        );
+    }
+
+    #[tokio::test]
+    async fn handover_reconciliation_stamps_crashed_drain_active_and_defaults_dormant_to_starting()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        let dormant: StartSession = serde_json::from_value(serde_json::json!({
+            "session_id": "s-dormant",
+            "provider": "codex",
+            "cwd": "/tmp",
+            "generation": "gen-1"
+        }))
+        .unwrap();
+        broker.sessions.lock().insert("s-dormant".into(), dormant);
+        // Intentionally leave `session_states` empty for `s-dormant` (adopt-only).
+
+        let _w_rx = attach_crashed_worker(
+            &broker,
+            "s-draining",
+            "50-1",
+            1,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+        );
+        broker
+            .workers
+            .lock()
+            .get_mut("s-draining")
+            .unwrap()
+            .crashed_drain_fenced = true;
+        broker.crashed_drains.inner.lock().active.insert(
+            "s-draining".into(),
+            ActiveDrain {
+                epoch: "50-1".into(),
+                connection_id: 1,
+                confirmed: false,
+                peer_pid: None,
+                retired_launch: RetiredLaunch::VerifiedNone,
+            },
+        );
+
+        let (ctrl_tx, mut ctrl_rx) = mpsc::unbounded_channel();
+        post_edit::install_controller_and_arm_replays(
+            &broker,
+            Controller {
+                lease: 1,
+                tx: ctrl_tx,
+                protocol: CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+                outer_machine_protocol: Some(CRASHED_WORKER_DRAIN_PROTOCOL_VERSION),
+            },
+            None,
+            &[],
+        );
+
+        let mut saw_draining = false;
+        let mut saw_dormant_starting = false;
+        while let Ok(frame) = ctrl_rx.try_recv() {
+            if let Frame::Snapshot { worker } = frame {
+                if worker.session_id == "s-draining" {
+                    assert!(
+                        worker.crashed_drain_active,
+                        "handover reconciliation must stamp crashed_drain_active=true"
+                    );
+                    saw_draining = true;
+                } else if worker.session_id == "s-dormant" {
+                    assert_eq!(
+                        worker.state,
+                        WorkerState::Starting,
+                        "missing session_states entry must default to Starting, not Crashed"
+                    );
+                    saw_dormant_starting = true;
+                }
+            }
+        }
+        assert!(
+            saw_draining,
+            "expected draining worker snapshot on handover"
+        );
+        assert!(
+            saw_dormant_starting,
+            "expected dormant Starting snapshot on handover"
         );
     }
 }

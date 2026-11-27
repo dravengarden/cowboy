@@ -88,6 +88,10 @@ pub struct Client {
 const SLOW_CALL: Duration = Duration::from_secs(5);
 
 impl Client {
+    pub(crate) fn relays(&self) -> &Arc<crate::account_sandbox::RelayQuiet> {
+        &self.relays
+    }
+
     pub fn new(
         session: String,
         epoch: String,

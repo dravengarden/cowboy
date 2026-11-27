@@ -399,7 +399,11 @@ fn decide_drain_commit(shared: &Shared, settled_cleanly: bool) -> CommitDecision
         .crashed_drain
         .pending_event_publishers
         .load(Ordering::Acquire)
-        > 0;
+        > 0
+        || shared
+            .execution
+            .as_ref()
+            .is_some_and(|client| client.relays().recording_in_flight());
     if shared.crashed_drain.terminal_stop.load(Ordering::Acquire) {
         return if publishers_in_flight || !outbox_empty {
             CommitDecision::NotReady

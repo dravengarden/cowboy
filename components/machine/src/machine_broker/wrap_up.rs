@@ -1152,6 +1152,11 @@ impl super::Broker {
                             expected_epoch.as_deref(),
                         )
                         .expect("checked above");
+                        if let Some(queue) = pending.get_mut(session_id) {
+                            queue.retain(|cmd| {
+                                !matches!(cmd, WorkerCommand::Prompt { command_id: cid, .. } if cid == &command_id)
+                            });
+                        }
                         dispatched.mark_acked(session_id, &command_id);
                         Some((command_id, refusal_reason(base.to_owned())))
                     }
@@ -1358,6 +1363,14 @@ impl super::Broker {
         }
         let bound_ctrl =
             self.admit_and_bind_controller_for_event(session_id, connection_id, runtime_seq);
+        self.observe_worker_event_uncertain_effect(session_id, &event);
+        let crashed_event = matches!(
+            event,
+            crate::runtime_wire::RuntimeEvent::Status {
+                state: crate::runtime_wire::WorkerState::Crashed,
+                ..
+            }
+        );
         let rehabilitated = self.update_from_event(session_id, connection_id, runtime_seq, &event);
         if let Some((ctrl_tx, protocol, outer)) = bound_ctrl {
             self.send_sanitized_to_controller(
@@ -1375,6 +1388,7 @@ impl super::Broker {
         }
         self.maybe_cutover(session_id);
         drop(cancelled);
+        self.flush_if_crashed_rollout_event(session_id, crashed_event);
         for fallback_session in rehabilitated {
             if fallback_session != session_id {
                 self.maybe_cutover(&fallback_session);
@@ -2288,6 +2302,7 @@ mod tests {
                 outer_machine_protocol: Some(53),
             },
             None,
+            &[],
         );
 
         assert!(
@@ -2318,6 +2333,7 @@ mod tests {
                 outer_machine_protocol: Some(53),
             },
             None,
+            &[],
         );
         assert!(
             broker

@@ -19,14 +19,14 @@ async fn binding(
     store: &crate::store::Store,
     owner: &str,
     meta: &crate::model::SessionMeta,
-) -> Option<Binding> {
+) -> Result<Binding, EventAdmission> {
     match store
         .native_login_for_registered_session(owner, &meta.id)
         .await
     {
-        Ok(Some((operation, completion))) => Some(Binding::Native(operation, Box::new(completion))),
-        Ok(None) => Some(Binding::Vault),
-        Err(_) => None,
+        Ok(Some((operation, completion))) => Ok(Binding::Native(operation, Box::new(completion))),
+        Ok(None) => Ok(Binding::Vault),
+        Err(error) => Err(classify_admission_error(&error)),
     }
 }
 
@@ -291,8 +291,9 @@ async fn snapshot_outcome(
     if meta.machine_id != machine {
         return EventAdmission::PermanentlyDenied;
     }
-    let Some(selection) = binding(&store, owner, &meta).await else {
-        return EventAdmission::TransientlyDeferred;
+    let selection = match binding(&store, owner, &meta).await {
+        Ok(selection) => selection,
+        Err(denial) => return denial,
     };
     let Binding::Native(operation, completion) = selection else {
         return match with_portable(shared, &store, owner, &meta, || async {
@@ -370,6 +371,8 @@ fn classify_admission_error(error: &anyhow::Error) -> EventAdmission {
         "portable_session_binding_changed",
         "login_not_admitted",
         "native_identity_not_bound",
+        "native_generation_ambiguous",
+        "native_completion_scope_mismatch",
         "native_generation_superseded",
         "machine_unavailable",
         "machine_enrollment_changed",
@@ -597,7 +600,7 @@ pub(super) async fn send<W: tokio::io::AsyncWrite + Unpin + Send>(
     if meta.machine_id != machine || meta.provider_account_id.is_default() {
         return Ok(SendOutcome::Denied);
     }
-    let Some(selection) = binding(&store, owner, &meta).await else {
+    let Ok(selection) = binding(&store, owner, &meta).await else {
         return Ok(SendOutcome::Denied);
     };
     let Binding::Native(operation, completion) = selection else {
@@ -870,7 +873,7 @@ mod tests {
             let session = meta(provider, &id, 1);
             assert!(matches!(
                 binding(&store, OWNER, &session).await,
-                Some(Binding::Vault)
+                Ok(Binding::Vault)
             ));
             persist(&store, &session).await.unwrap();
             assert!(portable_admitted(shared, &store, OWNER, &session).await);
@@ -887,7 +890,7 @@ mod tests {
         let subscription = meta("claude-code", &id, 1);
         assert!(matches!(
             binding(&store, OWNER, &subscription).await,
-            Some(Binding::Vault)
+            Ok(Binding::Vault)
         ));
         assert!(!portable_admitted(shared, &store, OWNER, &subscription).await);
         // A newer key keeps older sessions admitted, like the Service account.
@@ -958,5 +961,23 @@ mod tests {
                 "a stale plan is deferred, not reported"
             );
         }
+    }
+
+    #[test]
+    fn classify_admission_error_marks_ambiguous_and_scope_mismatch_permanent() {
+        for code in [
+            "native_generation_ambiguous: multiple active generations",
+            "native_completion_scope_mismatch: wrong machine",
+        ] {
+            assert_eq!(
+                classify_admission_error(&anyhow::anyhow!("{code}")),
+                EventAdmission::PermanentlyDenied,
+                "{code} must fail permanently rather than defer"
+            );
+        }
+        assert_eq!(
+            classify_admission_error(&anyhow::anyhow!("sqlite database is locked")),
+            EventAdmission::TransientlyDeferred
+        );
     }
 }

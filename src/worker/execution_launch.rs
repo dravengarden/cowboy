@@ -151,7 +151,16 @@ pub(super) async fn settle(execution: Arc<Client>) {
 /// Surface the ledger's uncertain effect, durable across workers, in this
 /// worker's snapshot.
 pub(super) fn observe(shared: &Arc<super::Shared>) {
-    let Some(ledger) = shared.execution.as_ref().and_then(|client| client.ledger()) else {
+    let Some(client) = shared.execution.as_ref() else {
+        return;
+    };
+    let weak_wake = Arc::downgrade(shared);
+    client.relays().set_recording_wakeup(Box::new(move || {
+        if let Some(shared) = weak_wake.upgrade() {
+            let _ = shared.notify.send(());
+        }
+    }));
+    let Some(ledger) = client.ledger() else {
         return;
     };
     if let Some(method) = ledger.uncertain_effect() {

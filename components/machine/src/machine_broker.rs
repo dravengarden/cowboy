@@ -638,7 +638,10 @@ impl Broker {
             controller_epoch: lease,
             workers: welcome.clone(),
         });
-        // Atomically install primary and diagnostic leases under controller->workers.
+        // Atomically install primary/diagnostic leases and enqueue reconciled
+        // catch-up snapshots (with `crashed_drain_active`) + drain retirements
+        // BEFORE arming worker replay so no replayed event can overtake an
+        // active drain marker (R10-H6).
         let orphaned = post_edit::install_controller_and_arm_replays(
             self,
             Controller {
@@ -648,11 +651,10 @@ impl Broker {
                 outer_machine_protocol,
             },
             post_edit,
+            &welcome,
         );
         post_edit::notify_orphaned(orphaned);
-        self.replay_recently_drained_after_welcome(&welcome, lease);
         self.replay_pending_crashed_drains_for_new_controller(lease);
-        self.send_handover_catchup_snapshots(&welcome, lease);
         lease
     }
 
@@ -784,6 +786,7 @@ impl Broker {
     }
 
     fn route_worker(&self, session_id: &str, command: WorkerCommand) {
+        let is_drain = matches!(command, WorkerCommand::Drain);
         let terminal_stop = matches!(&command, WorkerCommand::Stop { .. });
         match self
             .workers
@@ -803,6 +806,15 @@ impl Broker {
         }
         if terminal_stop {
             self.arm_direct_worker_stop(session_id);
+        }
+        if is_drain
+            && self
+                .workers
+                .lock()
+                .get(session_id)
+                .is_some_and(|w| w.snapshot.state == WorkerState::Crashed)
+        {
+            self.flush_pending(session_id);
         }
     }
 
@@ -1085,6 +1097,9 @@ impl Broker {
                     session_retained,
                 );
             }
+            if let Some(effect) = snapshot.uncertain_effect.clone() {
+                self.record_session_uncertain_effect(&session_id, effect);
+            }
             worker.raw_wrap_up_steering = snapshot.wrap_up_steering;
             worker.snapshot = snapshot;
             worker.last_seen = Instant::now();
@@ -1338,6 +1353,8 @@ impl Broker {
     ) {
         match &mut frame {
             Frame::Snapshot { worker } => {
+                worker.crashed_drain_active = worker.has_connected_owner()
+                    && self.has_crashed_drain_for_epoch(&worker.session_id, &worker.worker_epoch);
                 worker.incarnation = self.reported_lineage(&worker.session_id);
                 self.sanitize_snapshot_for_controller_protocols(worker, outer, protocol);
             }
@@ -2221,7 +2238,11 @@ impl Broker {
 
         // `force_recycle_failed_start` queues Stop when no worker was attached;
         // do not let that stale command reach the fresh replacement.
-        self.clear_crashed_drain(&session_id, "session reset superseded crashed worker drain");
+        self.clear_crashed_drain(
+            &session_id,
+            "session reset superseded crashed worker drain",
+            false,
+        );
         self.pending_commands.lock().remove(&session_id);
         self.cancelled_sessions.lock().remove(&session_id);
         self.resetting_sessions.lock().remove(&session_id);
@@ -3212,7 +3233,11 @@ impl Broker {
         exit_detail: Option<String>,
     ) {
         if !self.sessions.lock().contains_key(&session_id) {
-            self.clear_crashed_drain(&session_id, "session was deleted");
+            let permanent_delete = self
+                .permanently_deleted_sessions
+                .lock()
+                .contains(&session_id);
+            self.clear_crashed_drain(&session_id, "session was deleted", permanent_delete);
             self.session_states.lock().remove(&session_id);
             self.pending_commands.lock().remove(&session_id);
             self.startup_failures.lock().remove(&session_id);
@@ -4776,7 +4801,7 @@ async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
                 // Deletion must still arm the process-group watchdog.
                 broker.arm_direct_worker_stop(&session_id);
             }
-            broker.clear_crashed_drain(&session_id, "session was deleted");
+            broker.clear_crashed_drain(&session_id, "session was deleted", true);
             broker.arm_deleted_worker_unit_stop(&session_id);
             broker.cleanup_deleted_session(&session_id, &cleanup_command_id);
         }
@@ -4897,10 +4922,15 @@ async fn handle_worker(
                     .map_or_else(|| *worker, |peer| peer.snapshot.clone());
                 worker.crashed_drain_active =
                     broker.has_crashed_drain_for_epoch(session_id, &worker.worker_epoch);
+                let flush_crashed_rollout =
+                    worker.state == WorkerState::Crashed && worker.drain_requested;
                 broker.send_controller(Frame::Snapshot {
                     worker: Box::new(worker),
                 });
                 drop(cancelled);
+                if flush_crashed_rollout {
+                    broker.flush_pending(session_id);
+                }
                 broker.maybe_cutover(session_id);
                 for fallback_session in rehabilitated {
                     if fallback_session != session_id {

@@ -298,6 +298,14 @@ pub(super) fn clear_draining_crashed_epoch_if_matches(
         .draining_replay_snapshots
         .lock()
         .remove(&(session_id.to_owned(), worker_epoch.to_owned()));
+    if let Some(worker) = shared
+        .workers
+        .lock()
+        .get_mut(session_id)
+        .filter(|w| w.worker_epoch == worker_epoch)
+    {
+        worker.crashed_drain_active = false;
+    }
 }
 
 /// Handle broker confirmation/refusal of `CoreCommand::DrainCrashedWorker`
@@ -575,30 +583,35 @@ pub(super) fn execution_owner_matches(
                 .and_then(|binding| binding.decode().ok())
                 .is_some_and(|binding| binding == request.binding)
     };
-    if let Some(worker) = shared.workers.lock().get(&request.session_id)
-        && matches_binding(worker)
-    {
-        if !matches!(worker.state, WorkerState::Exited | WorkerState::Crashed) {
-            return true;
+    // Evaluate verified draining crashed epoch FIRST so replayed Running/TurnStarted
+    // events can never escalate a draining epoch into the unrestricted live-worker
+    // path, and never trust stale cached `crashed_drain_active` after revocation (R10-H5).
+    if is_draining_crashed_epoch(shared, &request.session_id, &request.worker_epoch) {
+        if !is_cleanup_only_execution_command(&request.command) {
+            return false;
         }
-        if worker.state == WorkerState::Crashed
-            && (worker.crashed_drain_active
-                || is_draining_crashed_epoch(shared, &request.session_id, &request.worker_epoch))
-            && is_cleanup_only_execution_command(&request.command)
-        {
-            return true;
-        }
-    }
-    if is_draining_crashed_epoch(shared, &request.session_id, &request.worker_epoch)
-        && is_cleanup_only_execution_command(&request.command)
-        && let Some(worker) = shared
+        if let Some(worker) = shared
             .draining_replay_snapshots
             .lock()
             .get(&(request.session_id.clone(), request.worker_epoch.clone()))
-    {
-        return worker.state == WorkerState::Crashed && matches_binding(worker);
+            && matches_binding(worker)
+        {
+            return true;
+        }
+        return shared
+            .workers
+            .lock()
+            .get(&request.session_id)
+            .is_some_and(matches_binding);
     }
-    false
+    shared
+        .workers
+        .lock()
+        .get(&request.session_id)
+        .is_some_and(|worker| {
+            matches_binding(worker)
+                && !matches!(worker.state, WorkerState::Exited | WorkerState::Crashed)
+        })
 }
 
 pub(super) fn is_draining_crashed_epoch(
@@ -1502,5 +1515,86 @@ mod crashed_drain_tests {
         .is_admitted();
         assert!(admitted);
         assert!(projected);
+    }
+
+    #[tokio::test]
+    async fn execution_owner_matches_enforces_cleanup_only_on_draining_epoch_and_ignores_unverified_flag()
+     {
+        let hub = crate::core::Hub::new();
+        let rt = super::super::RemoteRuntime::for_test(hub, Vec::new());
+        let binding = crate::execution_environment::BindingV1 {
+            schema: 1,
+            id: "binding-r10".into(),
+            revision: 1,
+            runtime: crate::execution_environment::RuntimeLocation {
+                machine_id: "runtime".into(),
+                cwd: "/runtime".into(),
+            },
+            environment: crate::execution_environment::EnvironmentLocation {
+                machine_id: "target".into(),
+                id: "environment".into(),
+                incarnation: "incarnation".into(),
+                executor_digest: format!("sha256:{}", "a".repeat(64)),
+                protocol: 1,
+            },
+            workspace: crate::execution_environment::WorkspaceLocation {
+                id: "project".into(),
+                worktree_id: "session".into(),
+                source_path: "/source".into(),
+                cwd: "/target".into(),
+            },
+            access: crate::execution_environment::ExecutionAccess::Project,
+            managed: None,
+        };
+        let encoded = crate::execution_environment::ExecutionBinding::from_record(
+            serde_json::to_value(&binding).unwrap(),
+        );
+
+        let make_req = |command: crate::execution_protocol::Command| {
+            crate::execution_protocol::RuntimeRequest {
+                session_id: "s-r10-h5".into(),
+                worker_epoch: "100-1".into(),
+                request_id: "req-1".into(),
+                binding: binding.clone(),
+                command,
+            }
+        };
+        let cleanup_cmd = crate::execution_protocol::Command::Observe {
+            operation_id: "op-1".into(),
+            wait_ms: 0,
+        };
+        let non_cleanup_cmd = crate::execution_protocol::Command::Describe;
+
+        // Case 1: Unverified cached `crashed_drain_active: true` on a Crashed worker
+        // must NOT authorize even cleanup commands when `draining_crashed_epochs` has no entry.
+        let mut stale_crashed = crashed_snapshot("s-r10-h5", "100-1");
+        stale_crashed.crashed_drain_active = true;
+        stale_crashed.launch.as_mut().unwrap().execution_binding = Some(encoded.clone());
+        rt.shared
+            .workers
+            .lock()
+            .insert("s-r10-h5".into(), stale_crashed);
+        assert!(!execution_owner_matches(
+            &rt.shared,
+            &make_req(cleanup_cmd.clone())
+        ));
+
+        // Case 2: Once verified as draining, even if a replayed Running status
+        // overwrote `worker.state`, non-cleanup commands MUST be rejected while
+        // cleanup-only commands remain allowed.
+        let mut draining_running = crashed_snapshot("s-r10-h5", "100-1");
+        draining_running.crashed_drain_active = true;
+        draining_running.launch.as_mut().unwrap().execution_binding = Some(encoded);
+        record_welcome_draining_crashed_epoch(&rt.shared, &draining_running);
+        draining_running.state = WorkerState::Running;
+        rt.shared
+            .workers
+            .lock()
+            .insert("s-r10-h5".into(), draining_running);
+        assert!(execution_owner_matches(&rt.shared, &make_req(cleanup_cmd)));
+        assert!(!execution_owner_matches(
+            &rt.shared,
+            &make_req(non_cleanup_cmd)
+        ));
     }
 }

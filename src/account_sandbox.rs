@@ -189,6 +189,11 @@ pub struct RelayQuiet {
     receipts: parking_lot::Mutex<Receipts>,
     acknowledged: tokio::sync::Notify,
     recorder: std::sync::OnceLock<Recorder>,
+    /// In-flight unread-effect recording spans reserved before draining
+    /// `receipts.unproven`, so cooperative crashed-worker drain cannot issue a
+    /// clean receipt while a forced/written recorder is still publishing (R10-H3).
+    recording: std::sync::atomic::AtomicUsize,
+    on_recording_done: std::sync::OnceLock<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl Default for RelayQuiet {
@@ -205,6 +210,8 @@ impl Default for RelayQuiet {
             receipts: parking_lot::Mutex::default(),
             acknowledged: tokio::sync::Notify::default(),
             recorder: std::sync::OnceLock::new(),
+            recording: std::sync::atomic::AtomicUsize::default(),
+            on_recording_done: std::sync::OnceLock::new(),
         }
     }
 }
@@ -230,6 +237,24 @@ impl Drop for RelayGuard {
             == 1
         {
             self.0.idle.notify_waiters();
+        }
+    }
+}
+
+struct RecordingGuard<'a>(&'a RelayQuiet);
+
+impl Drop for RecordingGuard<'_> {
+    fn drop(&mut self) {
+        if self
+            .0
+            .recording
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst)
+            == 1
+        {
+            self.0.idle.notify_waiters();
+            if let Some(wake) = self.0.on_recording_done.get() {
+                wake();
+            }
         }
     }
 }
@@ -317,6 +342,27 @@ impl RelayQuiet {
         let _ = self.recorder.set(recorder);
     }
 
+    /// Optional wakeup invoked after an unread-effect recording span finishes.
+    pub fn set_recording_wakeup(&self, wake: Box<dyn Fn() + Send + Sync>) {
+        let _ = self.on_recording_done.set(wake);
+    }
+
+    /// Whether unproven draining replies are still pending unit acknowledgement
+    /// OR an unread-effect `written`/`forced` recording span is in flight.
+    /// Checking `unproven` BEFORE `recording` pairs with `enter_recording()`
+    /// BEFORE `receipts.lock()` in `forced()`/`written()` to eliminate any gap (R10-H3).
+    #[must_use]
+    pub fn recording_in_flight(&self) -> bool {
+        let has_unproven = !self.receipts.lock().unproven.is_empty();
+        has_unproven || self.recording.load(std::sync::atomic::Ordering::SeqCst) > 0
+    }
+
+    fn enter_recording(&self) -> RecordingGuard<'_> {
+        self.recording
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        RecordingGuard(self)
+    }
+
     fn record(&self, effects: &[String]) {
         if let (Some(recorder), false) = (self.recorder.get(), effects.is_empty()) {
             recorder(effects);
@@ -331,6 +377,7 @@ impl RelayQuiet {
         if effects.is_empty() || !self.draining() {
             return;
         }
+        let _recording = self.enter_recording();
         let mut receipts = self.receipts.lock();
         if receipts.forced
             || receipts.acknowledged
@@ -356,12 +403,19 @@ impl RelayQuiet {
             return;
         }
         let mut receipts = self.receipts.lock();
-        if !receipts.forced {
+        let cleared_unproven = if !receipts.forced {
             receipts.acknowledged = true;
+            let had = !receipts.unproven.is_empty();
             receipts.unproven.clear();
-        }
+            had
+        } else {
+            false
+        };
         drop(receipts);
         self.acknowledged.notify_waiters();
+        if cleared_unproven && let Some(wake) = self.on_recording_done.get() {
+            wake();
+        }
     }
 
     /// The unit's socket ended: while draining, its unproven replies stay
@@ -392,6 +446,7 @@ impl RelayQuiet {
     /// The unit is stopped without its acknowledgement: every reply written
     /// while draining, also one written from now on, may be unread.
     pub fn forced(&self) {
+        let _recording = self.enter_recording();
         let unproven = {
             let mut receipts = self.receipts.lock();
             receipts.forced = true;

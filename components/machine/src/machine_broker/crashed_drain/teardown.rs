@@ -95,8 +95,15 @@ impl Broker {
             if let Some(effect) = uncertain_effect {
                 crate::runtime_wire::merge_uncertain_effect(
                     &mut worker.snapshot.uncertain_effect,
-                    effect,
+                    effect.clone(),
                 );
+                let mut merged = state.receiptless_uncertain_effects.get(session_id).cloned();
+                crate::runtime_wire::merge_uncertain_effect(&mut merged, effect);
+                if let Some(merged) = merged {
+                    state
+                        .receiptless_uncertain_effects
+                        .insert(session_id.to_owned(), merged);
+                }
             }
             if !matched_active && !matched_pending {
                 if worker.snapshot.uncertain_effect == prev_effect {
@@ -161,7 +168,14 @@ impl Broker {
                         desired_generation,
                     ) =>
             {
-                Ok((workers.remove(session_id).map(Ok), false))
+                let removed = workers.remove(session_id);
+                if let Some(effect) = removed
+                    .as_ref()
+                    .and_then(|peer| peer.snapshot.uncertain_effect.clone())
+                {
+                    self.record_session_uncertain_effect(session_id, effect);
+                }
+                Ok((removed.map(Ok), false))
             }
             Some(worker) => Ok((Some(Err(worker.snapshot.clone())), false)),
             None => {
@@ -251,6 +265,21 @@ impl Broker {
         }
     }
 
+    pub(in crate::machine_broker) fn record_session_uncertain_effect(
+        &self,
+        session_id: &str,
+        effect: crate::runtime_wire::UncertainEffect,
+    ) {
+        let mut state = self.crashed_drains.inner.lock();
+        let mut merged = state.receiptless_uncertain_effects.get(session_id).cloned();
+        crate::runtime_wire::merge_uncertain_effect(&mut merged, effect);
+        if let Some(merged) = merged {
+            state
+                .receiptless_uncertain_effects
+                .insert(session_id.to_owned(), merged);
+        }
+    }
+
     pub(in crate::machine_broker) fn retained_receiptless_uncertain(
         &self,
         session_id: &str,
@@ -263,27 +292,24 @@ impl Broker {
             .cloned()
     }
 
-    /// Enqueue changed snapshots after `Welcome` under the exact
-    /// `controller -> sessions -> workers -> crashed_drains` ordering boundary
-    /// so a retired worker's ownerless fallback can never be overwritten by a
-    /// stale connected catch-up snapshot on a downgraded Controller (R6-M4).
-    pub(in crate::machine_broker) fn send_handover_catchup_snapshots(
+    /// Atomically enqueue reconciled catch-up snapshots (with broker-verified
+    /// `crashed_drain_active`) and `CrashedWorkerDrained` retirements under
+    /// `controller -> sessions -> workers -> pending_commands -> crashed_drains`
+    /// BEFORE arming worker replay (R10-H6, R10-M3).
+    #[allow(clippy::too_many_arguments)]
+    pub(in crate::machine_broker) fn enqueue_handover_reconciliation_locked(
         &self,
+        ctrl: &Controller,
+        sessions: &HashMap<String, StartSession>,
+        session_states: &HashMap<String, WorkerState>,
+        startup_failures: &HashMap<String, String>,
+        generation_commands: &HashMap<String, PathBuf>,
+        workers: &HashMap<String, WorkerPeer>,
         welcome: &[WorkerSnapshot],
-        lease: u64,
     ) {
-        let controller = self.controller.lock();
-        let Some(ctrl) = controller.as_ref().filter(|c| c.lease == lease) else {
-            return;
-        };
         let tx = ctrl.tx.clone();
         let outer = ctrl.outer_machine_protocol;
         let protocol = ctrl.protocol;
-        let sessions = self.sessions.lock();
-        let session_states = self.session_states.lock().clone();
-        let startup_failures = self.startup_failures.lock().clone();
-        let generation_commands = self.generation_commands.lock().clone();
-        let workers = self.workers.lock();
         let pending_prompts: HashMap<String, u64> = self
             .pending_commands
             .lock()
@@ -328,14 +354,65 @@ impl Broker {
                 });
             }
         }
-        // Reconcile all changed dormant snapshots for still-declared sessions
-        // during handover (covering ordinary disconnects, hibernations,
-        // downgraded Controllers, and receiptless drains) while skipping only
-        // confirmed crashed-drain retirements that `replay_recently_drained_after_welcome`
-        // will deliver via `Frame::CrashedWorkerDrained` (R8-M5, R9-M3).
         let controller_capable = protocol >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
             && outer.is_some_and(|p| p >= CRASHED_WORKER_DRAIN_PROTOCOL_VERSION);
         let now = Instant::now();
+        self.enqueue_dormant_handover_snapshots_locked(
+            &tx,
+            protocol,
+            outer,
+            controller_capable,
+            now,
+            sessions,
+            session_states,
+            startup_failures,
+            generation_commands,
+            workers,
+            &pending_prompts,
+            &state,
+            welcome,
+        );
+        if controller_capable {
+            for snap in welcome {
+                if !snap.has_connected_owner() || workers.contains_key(&snap.session_id) {
+                    continue;
+                }
+                if let Some((ep, confirmed_receipt, at)) =
+                    state.recently_drained.get(&snap.session_id)
+                    && *confirmed_receipt
+                    && now.saturating_duration_since(*at) < RECENTLY_DRAINED_TTL
+                    && ep == &snap.worker_epoch
+                {
+                    let _ = tx.send(Frame::CrashedWorkerDrained {
+                        session_id: snap.session_id.clone(),
+                        worker_epoch: ep.clone(),
+                    });
+                }
+            }
+        }
+    }
+
+    /// Reconcile dormant snapshots for still-declared sessions during handover
+    /// (ordinary disconnects, hibernations, downgraded Controllers, receiptless
+    /// drains) while skipping confirmed crashed-drain retirements delivered via
+    /// `Frame::CrashedWorkerDrained` (R8-M5, R9-M3, R10-H6, R10-M3).
+    #[allow(clippy::too_many_arguments)]
+    fn enqueue_dormant_handover_snapshots_locked(
+        &self,
+        tx: &tokio::sync::mpsc::UnboundedSender<Frame>,
+        protocol: u16,
+        outer: Option<u16>,
+        controller_capable: bool,
+        now: Instant,
+        sessions: &HashMap<String, StartSession>,
+        session_states: &HashMap<String, WorkerState>,
+        startup_failures: &HashMap<String, String>,
+        generation_commands: &HashMap<String, PathBuf>,
+        workers: &HashMap<String, WorkerPeer>,
+        pending_prompts: &HashMap<String, u64>,
+        state: &Inner,
+        welcome: &[WorkerSnapshot],
+    ) {
         for (session_id, session) in sessions.iter() {
             if workers.contains_key(session_id) {
                 continue;
@@ -355,10 +432,13 @@ impl Broker {
             if replayed_drained {
                 continue;
             }
+            // Match `snapshots()` default (`WorkerState::Starting`) so an
+            // adopt-only declaration with no `session_states` entry never
+            // invents a spurious `Crashed` transition during handover (R10-M3).
             let dormant_state = session_states
                 .get(session_id)
                 .copied()
-                .unwrap_or(WorkerState::Crashed);
+                .unwrap_or(WorkerState::Starting);
             let exit_detail = (dormant_state == WorkerState::Crashed)
                 .then(|| startup_failures.get(session_id).cloned())
                 .flatten();
@@ -408,6 +488,38 @@ impl Broker {
                     worker: Box::new(dormant),
                 });
             }
+        }
+    }
+
+    /// Persist `uncertain_effect` reported by a live worker event so an explicit
+    /// revive or reset preserves it across worker disconnect (R10-H2).
+    pub(in crate::machine_broker) fn observe_worker_event_uncertain_effect(
+        &self,
+        session_id: &str,
+        event: &crate::runtime_wire::RuntimeEvent,
+    ) {
+        if let crate::runtime_wire::RuntimeEvent::Update { update, .. } = event
+            && let Some(effect) = crate::runtime_wire::uncertain_effect(update)
+        {
+            self.record_session_uncertain_effect(session_id, effect);
+        }
+    }
+
+    /// Flush queued rollout prompts immediately when a rollout-draining worker
+    /// transitions to `Crashed` without a crashed-drain fence (R10-M1).
+    pub(in crate::machine_broker) fn flush_if_crashed_rollout_event(
+        &self,
+        session_id: &str,
+        crashed_event: bool,
+    ) {
+        if crashed_event
+            && self
+                .workers
+                .lock()
+                .get(session_id)
+                .is_some_and(|w| w.snapshot.drain_requested && !w.crashed_drain_fenced)
+        {
+            self.flush_pending(session_id);
         }
     }
 
@@ -943,6 +1055,7 @@ impl Broker {
     /// Close the Controller handover gap: if a worker appeared in `welcome`
     /// and completed crashed-drain retirement before the new Controller lease
     /// was installed, replay `CrashedWorkerDrained` to the new lease.
+    #[cfg(test)]
     pub(in crate::machine_broker) fn replay_recently_drained_after_welcome(
         &self,
         welcome: &[WorkerSnapshot],

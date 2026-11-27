@@ -339,3 +339,37 @@ fn usage_reports_name_the_account_and_carry_only_their_projection() {
         json!({"op": "collect_usage", "key": KEY, "credential_generation": 3, "runtime_sha256": SHA})
     );
 }
+
+#[test]
+fn relay_quiet_tracks_unproven_and_forced_recording_with_wakeup() {
+    use std::sync::Arc;
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+    let quiet = Arc::new(RelayQuiet::default());
+    let wakeups = Arc::new(AtomicUsize::new(0));
+    let observed_in_flight = Arc::new(AtomicBool::new(false));
+    let q_rec = Arc::clone(&quiet);
+    let obs_rec = Arc::clone(&observed_in_flight);
+    quiet.set_recorder(Box::new(move |_effects| {
+        obs_rec.store(q_rec.recording_in_flight(), Ordering::SeqCst);
+    }));
+    let w_cb = Arc::clone(&wakeups);
+    quiet.set_recording_wakeup(Box::new(move || {
+        w_cb.fetch_add(1, Ordering::SeqCst);
+    }));
+
+    quiet.begin_drain();
+    assert!(!quiet.recording_in_flight());
+    quiet.written(&["effect.write"]);
+    assert!(
+        quiet.recording_in_flight(),
+        "unproven draining reply keeps recording_in_flight true until ack or forced record"
+    );
+    quiet.forced();
+    assert!(
+        observed_in_flight.load(Ordering::SeqCst),
+        "recording_in_flight must be true while forced() recorder is running"
+    );
+    assert!(!quiet.recording_in_flight());
+    assert!(wakeups.load(Ordering::SeqCst) >= 1);
+}
