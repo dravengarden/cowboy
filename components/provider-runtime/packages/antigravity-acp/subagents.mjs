@@ -154,6 +154,8 @@ export class Subagents {
     this.opening = new Map();
     /** Buffered pre-open/quarantined frame -> arrival-time `{ turn, attempt }` (R12-L3). */
     this.heldTurns = new WeakMap();
+    /** Native JSON-RPC request ID key -> buffered request frame currently held in `opening`/`quarantine`. */
+    this.heldRequests = new Map();
     /** `session/new` requests of this host that `agy` has not answered. */
     this.pendingOpens = 0;
     /** Frames of sessions nobody knows while a start is opening one (bounded). */
@@ -361,14 +363,68 @@ export class Subagents {
     this.opening.set(sessionId, held);
   }
 
+  /** Drop any held-request ID reservations for discarded/drained frames. */
+  untrackHeldFrame(frame) {
+    if (typeof frame?.method === "string" && frame.id !== undefined) {
+      const key = JSON.stringify(frame.id);
+      if (this.heldRequests.get(key) === frame) this.heldRequests.delete(key);
+    }
+  }
+
+  /** Discard buffered frames of an abandoned/closed opening session cleanly. */
+  discardOpening(sessionId) {
+    const frames = this.opening.get(sessionId);
+    if (frames) {
+      for (const frame of frames) {
+        this.untrackHeldFrame(frame);
+        this.heldTurns.delete(frame);
+      }
+      this.opening.delete(sessionId);
+    }
+  }
+
+  /**
+   * If `agyKey` matches a buffered JSON-RPC request in `opening` or `quarantine`,
+   * remove that frame from the buffer so it never replays later and return it.
+   */
+  takeHeldRequest(agyKey) {
+    const frame = this.heldRequests.get(agyKey);
+    if (frame === undefined) return undefined;
+    this.heldRequests.delete(agyKey);
+    this.heldTurns.delete(frame);
+    const qIdx = this.quarantine.indexOf(frame);
+    if (qIdx >= 0) {
+      this.quarantine.splice(qIdx, 1);
+      return frame;
+    }
+    const sid = frame.params?.sessionId;
+    const frames = typeof sid === "string" ? this.opening.get(sid) : undefined;
+    if (frames) {
+      const idx = frames.indexOf(frame);
+      if (idx >= 0) {
+        frames.splice(idx, 1);
+        if (typeof frames.beforeReply === "number" && idx < frames.beforeReply) {
+          frames.beforeReply -= 1;
+        }
+      }
+    }
+    return frame;
+  }
+
   /** No start is opening a session any more: unclaimed frames take the ordinary path. */
   releaseQuarantine() {
     // A configuration update of a session nobody claimed (its open was refused,
     // or never answered) would be read as the parent's: it is dropped. The root
     // session's own configuration also arrives in its `session/new` answer.
-    const frames = this.quarantine.filter(
-      (frame) => frame.params?.update?.sessionUpdate !== "config_option_update",
-    );
+    const frames = [];
+    for (const frame of this.quarantine) {
+      this.untrackHeldFrame(frame);
+      if (frame.params?.update?.sessionUpdate === "config_option_update") {
+        this.heldTurns.delete(frame);
+      } else {
+        frames.push(frame);
+      }
+    }
     this.quarantine = [];
     frames
       .reduce((done, frame) => {
@@ -392,8 +448,12 @@ export class Subagents {
   hold(message) {
     const sid = message.params?.sessionId;
     const arrivalTurn = typeof sid === "string" ? this.proxy.turns.get(sid) : undefined;
-    const recordArrival = () =>
+    const recordArrival = () => {
       this.heldTurns.set(message, { turn: arrivalTurn, attempt: arrivalTurn?.attempt });
+      if (typeof message.method === "string" && message.id !== undefined) {
+        this.heldRequests.set(JSON.stringify(message.id), message);
+      }
+    };
     const frames = this.opening.get(sid);
     if (frames) {
       if (frames.length < MAX_HELD) {
@@ -410,6 +470,7 @@ export class Subagents {
   release(sessionId, publish = () => {}) {
     const frames = this.opening.get(sessionId) ?? [];
     this.opening.delete(sessionId);
+    for (const frame of frames) this.untrackHeldFrame(frame);
     const before = frames.beforeReply ?? 0;
     const drain = (done, list) =>
       list.reduce((chain, frame) => {
@@ -685,7 +746,7 @@ export class Subagents {
         proxy.planGate?.clearTurn(child.id, failedTurn);
         proxy.clearStaleReplayTools?.(child.id, failedTurn);
         proxy.turns.delete(child.id);
-        this.opening.delete(child.id);
+        this.discardOpening(child.id);
         this.finishChild(child, "failed", { stopReason: "error", error: text });
       }
       if (error instanceof ToolError) throw error;
@@ -843,7 +904,7 @@ export class Subagents {
     const { proxy } = this;
     proxy.modes.delete(child.id);
     proxy.waiting?.delete(child.id);
-    this.opening.delete(child.id);
+    this.discardOpening(child.id);
     Promise.resolve(proxy.runtime).then(
       (runtime) => {
         runtime.unbindChannel?.(child.channel);
@@ -875,7 +936,7 @@ export class Subagents {
         // not close after a failed start is not left unreconciled.
         if (strict) this.terminate("a late subagent session could not be closed");
       })
-      .finally(() => this.opening.delete(id));
+      .finally(() => this.discardOpening(id));
   }
 
   /** Forget the oldest settled children beyond what a later wait can need. */

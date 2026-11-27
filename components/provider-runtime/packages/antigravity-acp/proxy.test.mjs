@@ -3325,3 +3325,184 @@ test("reopening a session and uncertain workspace effects retire and fence open 
   });
   assert.deepEqual(unc.agent.at(-1), { jsonrpc: "2.0", id: 113, result: { action: "cancel" } });
 });
+
+test("elicitation enforces reopen fencing, string bounds on choices, Unicode code-point counts, impossible schemas, and __proto__ keys (R2)", async () => {
+  const { proxy, agent, client } = harness();
+  await proxy.fromClient(
+    request(1, "initialize", {
+      protocolVersion: 1,
+      clientCapabilities: { elicitation: { form: {} } },
+    }),
+  );
+  await proxy.fromClient(request(2, "session/new", { cwd: "/work/repo", mcpServers: [] }));
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 2, result: { sessionId: "s-r2" } });
+  await proxy.fromClient(request(3, "session/prompt", { sessionId: "s-r2", prompt: [] }));
+
+  // Impossible schemas reject before forwarding to worker.
+  for (const [agyId, requestedSchema] of [
+    [
+      201,
+      {
+        type: "object",
+        properties: { q: { type: "array", items: { enum: ["a", "b"] }, minItems: 3 } },
+        required: ["q"],
+      },
+    ],
+    [
+      202,
+      {
+        type: "object",
+        properties: { q: { type: "string", oneOf: [{ const: "long" }], maxLength: 2 } },
+        required: ["q"],
+      },
+    ],
+    [
+      203,
+      {
+        type: "object",
+        properties: { q: { type: "integer", minimum: 1.2, maximum: 1.8 } },
+        required: ["q"],
+      },
+    ],
+    [
+      204,
+      {
+        type: "object",
+        properties: { q: { type: "string", maxLength: 0 } },
+        required: ["q"],
+      },
+    ],
+  ]) {
+    await proxy.fromAgent(
+      request(agyId, "elicitation/create", {
+        sessionId: "s-r2",
+        mode: "form",
+        message: "Impossible",
+        requestedSchema,
+      }),
+    );
+    assert.deepEqual(agent.at(-1), { jsonrpc: "2.0", id: agyId, result: { action: "cancel" } });
+  }
+  assert.equal(client.filter((m) => m.method === "elicitation/create").length, 0);
+
+  // String bounds apply to choice fields AND count Unicode code points (emoji = 1 code point).
+  const unicodeSchema = {
+    type: "object",
+    properties: {
+      choice: {
+        type: "string",
+        oneOf: [
+          { const: "😀", title: "One emoji" },
+          { const: "😀😁", title: "Two emoji" },
+        ],
+        maxLength: 1,
+      },
+      note: { type: "string", maxLength: 1 },
+    },
+  };
+  await proxy.fromAgent(
+    request(205, "elicitation/create", {
+      sessionId: "s-r2",
+      mode: "form",
+      message: "Unicode ok",
+      requestedSchema: unicodeSchema,
+    }),
+  );
+  const fwd205 = client.at(-1);
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: fwd205.id,
+    result: { action: "accept", content: { choice: "😀", note: "😀" } },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: 205,
+    result: { action: "accept", content: { choice: "😀", note: "😀" } },
+  });
+
+  // Choice violating maxLength fails closed to cancel.
+  await proxy.fromAgent(
+    request(206, "elicitation/create", {
+      sessionId: "s-r2",
+      mode: "form",
+      message: "Choice too long",
+      requestedSchema: unicodeSchema,
+    }),
+  );
+  const fwd206 = client.at(-1);
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: fwd206.id,
+    result: { action: "accept", content: { choice: "😀😁" } },
+  });
+  assert.deepEqual(agent.at(-1), { jsonrpc: "2.0", id: 206, result: { action: "cancel" } });
+
+  // Own "__proto__" field is preserved in serialized accepted reply.
+  await proxy.fromAgent(
+    request(207, "elicitation/create", {
+      sessionId: "s-r2",
+      mode: "form",
+      message: "Proto field",
+      requestedSchema: {
+        type: "object",
+        properties: JSON.parse('{"__proto__":{"type":"string"}}'),
+        required: ["__proto__"],
+      },
+    }),
+  );
+  const fwd207 = client.at(-1);
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: fwd207.id,
+    result: { action: "accept", content: JSON.parse('{"__proto__":"kept"}') },
+  });
+  assert.equal(
+    JSON.stringify(agent.at(-1).result),
+    '{"action":"accept","content":{"__proto__":"kept"}}',
+  );
+
+  // Pending mode switch still allows form admission and acceptance.
+  await proxy.fromClient(request(4, "session/set_mode", { sessionId: "s-r2", modeId: "plan" }));
+  await proxy.fromAgent(
+    request(208, "elicitation/create", {
+      sessionId: "s-r2",
+      mode: "form",
+      message: "During mode switch",
+      requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+    }),
+  );
+  const fwd208 = client.at(-1);
+  assert.equal(fwd208.method, "elicitation/create");
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: fwd208.id,
+    result: { action: "accept", content: { q1: "ok" } },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: 208,
+    result: { action: "accept", content: { q1: "ok" } },
+  });
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 4, result: { currentModeId: "plan" } });
+
+  // Pending session reopen (session/load in flight) fences NEW form admission until reopen settles.
+  await proxy.fromClient(
+    request(5, "session/load", { sessionId: "s-r2", cwd: "/work/repo", mcpServers: [] }),
+  );
+  const countBeforeReopenForm = client.filter((m) => m.method === "elicitation/create").length;
+  await proxy.fromAgent(
+    request(209, "elicitation/create", {
+      sessionId: "s-r2",
+      mode: "form",
+      message: "During pending reopen",
+      requestedSchema: { type: "object", properties: { q1: { type: "string" } } },
+    }),
+  );
+  assert.deepEqual(agent.at(-1), { jsonrpc: "2.0", id: 209, result: { action: "cancel" } });
+  assert.equal(
+    client.filter((m) => m.method === "elicitation/create").length,
+    countBeforeReopenForm,
+    "new form during pending session/load must not reach worker",
+  );
+  await proxy.fromAgent({ jsonrpc: "2.0", id: 5, result: {} });
+});

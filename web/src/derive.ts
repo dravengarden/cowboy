@@ -18,6 +18,7 @@ import {
   orphanedSubagent,
   requestingSubagent,
   requestingSubagentId,
+  scopedToolKey,
   type Subagent,
   subagentOf,
 } from "./subagents";
@@ -592,7 +593,8 @@ export function derive(timeline: Envelope[]): RenderItem[] {
             if (u.status === "completed" || u.status === "failed") {
               // The request's own resolution row can be missing; a tool that
               // reached a terminal status is no longer asking.
-              const asked = permByTool.get(id);
+              const tKey = scopedToolKey(u, id);
+              const asked = tKey !== null ? permByTool.get(tKey) : undefined;
               const marker = asked === undefined ? undefined : items[asked];
               if (marker?.kind === "permission" && !marker.resolved) {
                 marker.resolved = true;
@@ -720,7 +722,7 @@ export function derive(timeline: Envelope[]): RenderItem[] {
           ...(subagent ? { subagent } : {}),
         });
         permIndex.set(env.request_id, items.length - 1);
-        const asking = toolCallIdOf(env.tool_call);
+        const asking = scopedToolKey(env.tool_call, toolCallIdOf(env.tool_call));
         if (asking !== null) permByTool.set(asking, items.length - 1);
         break;
       }
@@ -951,10 +953,8 @@ export function pendingPermissions(timeline: Envelope[]): PendingPermission[] {
         ...(subagent ? { subagent } : {}),
         ...(subagentId ? { subagentId } : {}),
       });
-      const tool = toolCallIdOf(env.tool_call);
-      if (tool !== null && (subagent === null || subagentId !== null)) {
-        byTool.set(subagent === null ? `r:${tool}` : `c:${subagentId}:${tool}`, env.request_id);
-      }
+      const tKey = scopedToolKey(env.tool_call, toolCallIdOf(env.tool_call));
+      if (tKey !== null) byTool.set(tKey, env.request_id);
     } else if (env.kind === "permission_resolved") {
       drop(env.request_id);
     } else if (pending.size === 0) {
@@ -974,10 +974,7 @@ export function pendingPermissions(timeline: Envelope[]): PendingPermission[] {
       env.update.sessionUpdate === "tool_call_update" &&
       (env.update.status === "completed" || env.update.status === "failed")
     ) {
-      const uSub = requestingSubagent(env.update);
-      const uSid = requestingSubagentId(env.update);
-      const tid = env.update.toolCallId ?? "";
-      const key = uSub === null ? `r:${tid}` : uSid !== null ? `c:${uSid}:${tid}` : null;
+      const key = scopedToolKey(env.update, env.update.toolCallId ?? null);
       const request = key !== null ? byTool.get(key) : undefined;
       if (request !== undefined) drop(request);
     }

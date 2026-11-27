@@ -240,15 +240,24 @@ function validOptionalBound(value, { integer = false, min = -Infinity } = {}) {
   return !integer || Number.isInteger(value);
 }
 
+/** Unicode code-point count (JSON Schema string length unit, RFC 8259). */
+function codePointLength(value) {
+  let count = 0;
+  for (const _ of value) count += 1;
+  return count;
+}
+
+function stringFitsBounds(value, field) {
+  const len = codePointLength(value);
+  if (field.minLength !== undefined && len < field.minLength) return false;
+  if (field.maxLength !== undefined && len > field.maxLength) return false;
+  return true;
+}
+
 function parseElicitationField(prop) {
   if (!isObject(prop) || typeof prop.type !== "string") return null;
   switch (prop.type) {
     case "string": {
-      const choices = parseChoices(prop.oneOf, prop.enum);
-      if (choices === null) return null;
-      if (choices !== undefined) {
-        return { kind: "single", choices };
-      }
       if (
         !validOptionalBound(prop.minLength, { integer: true, min: 0 }) ||
         !validOptionalBound(prop.maxLength, { integer: true, min: 0 }) ||
@@ -257,6 +266,16 @@ function parseElicitationField(prop) {
           prop.minLength > prop.maxLength)
       ) {
         return null;
+      }
+      const choices = parseChoices(prop.oneOf, prop.enum);
+      if (choices === null) return null;
+      if (choices !== undefined) {
+        return {
+          kind: "single",
+          choices,
+          minLength: prop.minLength,
+          maxLength: prop.maxLength,
+        };
       }
       return { kind: "string", minLength: prop.minLength, maxLength: prop.maxLength };
     }
@@ -274,6 +293,8 @@ function parseElicitationField(prop) {
       ) {
         return null;
       }
+      // Impossible if minimum selection count exceeds the number of distinct choices.
+      if (prop.minItems !== undefined && prop.minItems > choices.size) return null;
       return { kind: "multi", choices, minItems: prop.minItems, maxItems: prop.maxItems };
     }
     case "boolean":
@@ -287,6 +308,14 @@ function parseElicitationField(prop) {
       ) {
         return null;
       }
+      if (
+        prop.type === "integer" &&
+        prop.minimum !== undefined &&
+        prop.maximum !== undefined &&
+        Math.ceil(prop.minimum) > Math.floor(prop.maximum)
+      ) {
+        return null;
+      }
       return { kind: prop.type, minimum: prop.minimum, maximum: prop.maximum };
     }
     default:
@@ -296,8 +325,9 @@ function parseElicitationField(prop) {
 
 /**
  * Validate an ACP form `requestedSchema` and extract the renderable field map.
- * Returns `null` if any property is unsupported/malformed or if any entry in
- * `required` does not identify a declared supported field.
+ * Returns `null` if any property is unsupported/malformed, if any entry in
+ * `required` does not identify a declared supported field, or if a required
+ * field has an impossible constraint (no answer can satisfy it).
  */
 export function parseElicitationSchema(requestedSchema) {
   if (!isObject(requestedSchema)) return null;
@@ -318,7 +348,24 @@ export function parseElicitationSchema(requestedSchema) {
     fields.set(name, parsed);
   }
   for (const name of required) {
-    if (!fields.has(name)) return null;
+    const field = fields.get(name);
+    if (!field) return null;
+    if (field.kind === "single") {
+      let anyFits = false;
+      for (const choice of field.choices) {
+        if (stringFitsBounds(choice, field)) {
+          anyFits = true;
+          break;
+        }
+      }
+      if (!anyFits) return null;
+    } else if (field.kind === "string" && field.maxLength === 0) {
+      return null;
+    } else if (field.kind === "multi") {
+      const minNeeded = Math.max(1, field.minItems ?? 0);
+      if (minNeeded > field.choices.size) return null;
+      if (field.maxItems !== undefined && field.maxItems < minNeeded) return null;
+    }
   }
   return { fields, required };
 }
@@ -327,8 +374,10 @@ export function parseElicitationSchema(requestedSchema) {
  * Validate an `accept` elicitation `content` object against a previously
  * parsed schema. Preserves valid partial answers on optional fields while
  * rejecting unknown keys, wrong types, unoffered choices, and missing required
- * answers. Returns `undefined` for valid content-less accept on an optional
- * schema, a sanitized plain object for valid content, or `null` on mismatch.
+ * answers. Uses `Object.defineProperty` so own keys such as `"__proto__"` are
+ * never lost to prototype setters. Returns `undefined` for valid content-less
+ * accept on an optional schema, a sanitized plain object for valid content, or
+ * `null` on mismatch.
  */
 export function validateElicitationContent(schema, content) {
   if (content === undefined) {
@@ -347,12 +396,12 @@ export function validateElicitationContent(schema, content) {
     switch (field.kind) {
       case "single":
         if (typeof value !== "string" || !field.choices.has(value)) return null;
+        if (!stringFitsBounds(value, field)) return null;
         break;
       case "string":
         if (typeof value !== "string") return null;
         if (isRequired && value.trim().length === 0) return null;
-        if (field.minLength !== undefined && value.length < field.minLength) return null;
-        if (field.maxLength !== undefined && value.length > field.maxLength) return null;
+        if (!stringFitsBounds(value, field)) return null;
         break;
       case "multi": {
         if (!Array.isArray(value)) return null;
@@ -380,7 +429,12 @@ export function validateElicitationContent(schema, content) {
         if (field.maximum !== undefined && value > field.maximum) return null;
         break;
     }
-    sanitized[key] = value;
+    Object.defineProperty(sanitized, key, {
+      value,
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
   }
   return sanitized;
 }
@@ -777,6 +831,11 @@ export class AcpProxy {
     return state;
   }
 
+  /** Whether root owner `ownerId` currently has an unsettled `session/load` or `session/resume`. */
+  hasActiveReopen(ownerId) {
+    return (this.switchState.get(ownerId)?.activeReopens?.size ?? 0) > 0;
+  }
+
   /** Record the start of a session reopen (`load`/`resume`) in the shared mode sequence. */
   beginModeReopen(sessionId) {
     if (typeof sessionId !== "string" || this.subagents.owns(sessionId)) return undefined;
@@ -1123,6 +1182,9 @@ export class AcpProxy {
       return this.cancelElicitation(agyId, "cancelled elicitation: no known live session");
     }
     const ownerId = this.subagents.parentOf(sessionId) ?? sessionId;
+    if (this.hasActiveReopen(ownerId)) {
+      return this.cancelElicitation(agyId, "cancelled elicitation: session is reopening");
+    }
     const turn = this.turns.get(sessionId);
     const parentTurn = ownerId !== sessionId ? this.turns.get(ownerId) : undefined;
     if (
@@ -1853,10 +1915,11 @@ export class AcpProxy {
             entry.ownerId !== entry.sessionId ? this.turns.get(entry.ownerId) : undefined;
           const notUncertain =
             entry.turn.uncertain === undefined && parentTurn?.uncertain === undefined;
+          const notReopening = !this.hasActiveReopen(entry.ownerId);
           const result =
             message.error === undefined && isObject(message.result) ? message.result : undefined;
           const action = result?.action;
-          if (!this.closing && childOpen && turnValid && notUncertain) {
+          if (!this.closing && childOpen && turnValid && notUncertain && notReopening) {
             if (action === "decline" || action === "cancel") {
               return this.agent({ jsonrpc: "2.0", id: entry.agyId, result: { action } });
             }
@@ -2447,7 +2510,7 @@ export class AcpProxy {
     if (!turn) return;
     turn.uncertain ??= method;
     this.retirePermissions({
-      sessionId,
+      ...(this.subagents.owns(sessionId) ? { sessionId } : { ownerId: sessionId }),
       reason: "The turn was fenced after an uncertain effect.",
     });
     this.agent({ jsonrpc: "2.0", method: "session/cancel", params: { sessionId } });
@@ -2562,6 +2625,27 @@ export class AcpProxy {
         this.log("rejected request: duplicate live native request ID");
         return;
       }
+      const heldCollision = this.subagents.takeHeldRequest(agyKey);
+      if (heldCollision !== undefined) {
+        if (
+          heldCollision.method === "session/request_permission" &&
+          method === "session/request_permission"
+        ) {
+          this.agent({
+            jsonrpc: "2.0",
+            id,
+            result: { outcome: { outcome: "cancelled" } },
+          });
+        } else {
+          this.agent({
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32600, message: "Duplicate native request ID" },
+          });
+        }
+        this.log("rejected request: duplicate buffered native request ID");
+        return;
+      }
       // Pre-turn form elicitations on an opening/unannounced session must
       // never be buffered in `subagents.hold` (where a waiting `session/new`
       // could stall or an abandoned/full buffer could drop the reply).
@@ -2580,6 +2664,7 @@ export class AcpProxy {
           const reqId = message.params?.requestId;
           if (reqId !== undefined) {
             const agyKey = JSON.stringify(reqId);
+            this.subagents.takeHeldRequest(agyKey);
             const workerId = this.agentPermToWorker.get(agyKey);
             if (workerId !== undefined) {
               const entry = this.workerPermissions.get(workerId);

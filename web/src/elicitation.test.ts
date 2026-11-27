@@ -302,11 +302,19 @@ test("Antigravity ask_question form elicitation parses single, multi, and option
   );
 });
 
-test("parent tool completion with a colliding toolCallId does not hide a child elicitation form", () => {
+test("parent tool completion with a colliding toolCallId keeps child form pending in both derive() and pendingPermissions() (child last)", () => {
   const timeline: Envelope[] = [
     {
       seq: 1,
       ts: 1,
+      kind: "permission_request",
+      request_id: "parent-req-1",
+      tool_call: { toolCallId: "call_1", title: "Parent tool" },
+      options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
+    },
+    {
+      seq: 2,
+      ts: 2,
       kind: "permission_request",
       request_id: "child-req-1",
       tool_call: {
@@ -326,14 +334,6 @@ test("parent tool completion with a colliding toolCallId does not hide a child e
       options: [{ optionId: "accept", name: "Submit", kind: "allow_once" }],
     },
     {
-      seq: 2,
-      ts: 2,
-      kind: "permission_request",
-      request_id: "parent-req-1",
-      tool_call: { toolCallId: "call_1", title: "Parent tool" },
-      options: [{ optionId: "allow", name: "Allow", kind: "allow_once" }],
-    },
-    {
       seq: 3,
       ts: 3,
       kind: "update",
@@ -343,4 +343,100 @@ test("parent tool completion with a colliding toolCallId does not hide a child e
   const pending = pendingPermissions(timeline);
   assertEquals(pending.map((p) => p.requestId), ["child-req-1"]);
   assertEquals(pending[0]?.subagentId, "child-1");
+
+  const derived = derive(timeline).filter((item) => item.kind === "permission");
+  assertEquals(
+    derived.map((item) => [item.requestId, item.resolved]),
+    [
+      ["parent-req-1", true],
+      ["child-req-1", false],
+    ],
+  );
+});
+
+test("elicitation bounds, verbatim choices, Unicode code-point lengths, and __proto__ keys stay aligned with proxy", () => {
+  const schemaWithBounds = JSON.parse(
+    JSON.stringify({
+      mode: "form",
+      sessionId: "s",
+      message: "Bounded form",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          score: { type: "integer", title: "Score", minimum: 1, maximum: 5 },
+          choice: {
+            type: "string",
+            title: "Choice",
+            oneOf: [
+              { const: " spaced ", title: "Spaced" },
+              { const: "too-long", title: "Too long" },
+            ],
+            maxLength: 8,
+          },
+          emoji: { type: "string", title: "Emoji", maxLength: 1 },
+        },
+        required: ["score", "choice"],
+      },
+    }),
+  );
+  const form = elicitationOf(carrying(schemaWithBounds));
+  if (form?.mode !== "form") throw new Error("expected form");
+  // Out-of-range integer blocks Submit.
+  assertEquals(elicitationComplete(form.fields, { score: "6", choice: " spaced ", emoji: "" }), false);
+  assertEquals(elicitationComplete(form.fields, { score: "0", choice: " spaced ", emoji: "" }), false);
+  // Single emoji is 1 Unicode code point (UTF-16 length 2) and satisfies maxLength: 1.
+  assertEquals(elicitationComplete(form.fields, { score: "3", choice: " spaced ", emoji: "😀" }), true);
+  assertEquals(elicitationComplete(form.fields, { score: "3", choice: " spaced ", emoji: "😀😁" }), false);
+  // Choice with surrounding whitespace is serialized verbatim (never trimmed).
+  assertEquals(
+    elicitationAnswer(form.fields, { score: "3", choice: " spaced ", emoji: "😀" }),
+    'accept:{"score":3,"choice":" spaced ","emoji":"😀"}',
+  );
+
+  // Impossible required multi-select (minItems > distinct choices) is unrenderable.
+  assertEquals(
+    elicitationOf(
+      carrying({
+        mode: "form",
+        sessionId: "s",
+        message: "Impossible",
+        requestedSchema: {
+          type: "object",
+          properties: {
+            tags: {
+              type: "array",
+              items: { enum: ["a", "b"] },
+              minItems: 3,
+            },
+          },
+          required: ["tags"],
+        },
+      }),
+    ),
+    null,
+  );
+
+  // Own "__proto__" property survives initialElicitationValues, elicitationComplete, and elicitationAnswer.
+  const protoForm = elicitationOf(
+    carrying({
+      mode: "form",
+      sessionId: "s",
+      message: "Proto field",
+      requestedSchema: {
+        type: "object",
+        properties: JSON.parse('{"__proto__":{"type":"string","title":"Proto"}}'),
+        required: ["__proto__"],
+      },
+    }),
+  );
+  if (protoForm?.mode !== "form") throw new Error("expected proto form");
+  const values = initialElicitationValues(protoForm.fields);
+  Object.defineProperty(values, "__proto__", {
+    value: "kept",
+    enumerable: true,
+    writable: true,
+    configurable: true,
+  });
+  assertEquals(elicitationComplete(protoForm.fields, values), true);
+  assertEquals(elicitationAnswer(protoForm.fields, values), 'accept:{"__proto__":"kept"}');
 });
