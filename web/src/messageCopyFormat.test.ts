@@ -264,3 +264,34 @@ test("formatMessageForCopy handles R2 parser findings: sparse table output cap, 
   expect(gfmTable.html).toContain("r2b");
   expect(gfmTable.plain).toContain("A\tB\nonly-first-col\t\nr2a\tr2b");
 });
+
+test("formatMessageForCopy handles R3 findings: O(N) prose spaces, code-span trailing spaces, prototype-safe entities, uppercase hex, and unmatched LaTeX before fences", () => {
+  // R3-1: 30,000 spaces stays linear & code span ending in two spaces keeps its spaces before newline
+  const t0 = Date.now();
+  const manySpaces = formatMessageForCopy(`a${" ".repeat(30_000)}b\nnext`);
+  expect(Date.now() - t0).toBeLessThan(200);
+  expect(manySpaces.plain).toContain("b\nnext");
+
+  const codeTrailingSpaces = formatMessageForCopy("`keep  `\nnext   \nline");
+  expect(codeTrailingSpaces.plain).toBe("keep  \nnext\nline");
+  expect(codeTrailingSpaces.html).toContain("<code>keep  </code><br>next<br>line");
+
+  // R3-2: &constructor; stays literal (never Object constructor) and &#X26; uppercase hex decodes cleanly
+  const protoUrl = formatMessageForCopy(
+    "[Safe](https://example.com/?a=&constructor;&b=&#X26;c=1)",
+  );
+  expect(protoUrl.html).not.toContain("function Object");
+  expect(protoUrl.html).toContain("a=&amp;constructor;");
+  expect(protoUrl.html).toContain("&amp;b=&amp;c=1");
+
+  // R3-3: unmatched \[ before a fenced code block containing literal \] does NOT swallow fence or trailing prose
+  const latexBeforeFence = formatMessageForCopy([
+    "\\[",
+    "```tex",
+    "\\]",
+    "```",
+    "Trailing **prose** stays prose.",
+  ].join("\n"));
+  expect(latexBeforeFence.html).toContain("<pre><code>\\]</code></pre>");
+  expect(latexBeforeFence.html).toContain("<p>Trailing <strong>prose</strong> stays prose.</p>");
+});

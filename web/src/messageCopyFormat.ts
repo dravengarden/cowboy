@@ -156,6 +156,7 @@ function findBlockMathClose(
   const closeRe = kind === "$$" ? /^\s{0,3}\$\$\s*$/ : /^\s{0,3}\\\]\s*$/;
   for (let j = start + 1; j < lines.length; j++) {
     if (!chargeBudget(budget)) return null;
+    if (parseFenceOpener(lines[j]!)) return null;
     if (closeRe.test(lines[j]!)) return { closeIndex: j, kind };
   }
   return null;

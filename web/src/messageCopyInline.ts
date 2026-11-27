@@ -15,45 +15,45 @@ export const MAX_NESTING_DEPTH = 12;
 const MAX_PARSE_STEPS = 200_000;
 const ESCAPABLE_PUNCT = /[\\`*_{}[\]()#+\-.!|>~$=]/;
 
-const NAMED_ENTITIES: Readonly<Record<string, string>> = {
-  amp: "&",
-  lt: "<",
-  gt: ">",
-  quot: '"',
-  apos: "'",
-  nbsp: "\u00a0",
-  copy: "\u00a9",
-  reg: "\u00ae",
-  trade: "\u2122",
-  ndash: "\u2013",
-  mdash: "\u2014",
-  hellip: "\u2026",
-  times: "\u00d7",
-  divide: "\u00f7",
-  plusmn: "\u00b1",
-  deg: "\u00b0",
-  sect: "\u00a7",
-  para: "\u00b6",
-  middot: "\u00b7",
-  laquo: "\u00ab",
-  raquo: "\u00bb",
-  lsquo: "\u2018",
-  rsquo: "\u2019",
-  ldquo: "\u201c",
-  rdquo: "\u201d",
-  euro: "\u20ac",
-  pound: "\u00a3",
-  yen: "\u00a5",
-  cent: "\u00a2",
-  frac12: "\u00bd",
-  frac14: "\u00bc",
-  frac34: "\u00be",
-};
+const NAMED_ENTITIES: ReadonlyMap<string, string> = new Map([
+  ["amp", "&"],
+  ["lt", "<"],
+  ["gt", ">"],
+  ["quot", '"'],
+  ["apos", "'"],
+  ["nbsp", "\u00a0"],
+  ["copy", "\u00a9"],
+  ["reg", "\u00ae"],
+  ["trade", "\u2122"],
+  ["ndash", "\u2013"],
+  ["mdash", "\u2014"],
+  ["hellip", "\u2026"],
+  ["times", "\u00d7"],
+  ["divide", "\u00f7"],
+  ["plusmn", "\u00b1"],
+  ["deg", "\u00b0"],
+  ["sect", "\u00a7"],
+  ["para", "\u00b6"],
+  ["middot", "\u00b7"],
+  ["laquo", "\u00ab"],
+  ["raquo", "\u00bb"],
+  ["lsquo", "\u2018"],
+  ["rsquo", "\u2019"],
+  ["ldquo", "\u201c"],
+  ["rdquo", "\u201d"],
+  ["euro", "\u20ac"],
+  ["pound", "\u00a3"],
+  ["yen", "\u00a5"],
+  ["cent", "\u00a2"],
+  ["frac12", "\u00bd"],
+  ["frac14", "\u00bc"],
+  ["frac34", "\u00be"],
+]);
 
 let entityDecoder: HTMLTextAreaElement | null = null;
 
 function decodeNamedEntity(rawEntity: string, name: string): string {
-  const known = NAMED_ENTITIES[name];
+  const known = NAMED_ENTITIES.get(name);
   if (known !== undefined) return known;
   if (typeof document !== "undefined") {
     entityDecoder ??= document.createElement("textarea");
@@ -90,7 +90,7 @@ export function escapeHtml(text: string): string {
  *  numeric entities (e.g. `&copy;`, `&#38;`) resolve accurately. */
 function unescapeDestination(raw: string): string {
   return raw.replace(
-    /\\([\\!"#$%&'()*+,\-./:;<=>?@[\]^_`{|}~])|&(?:#(\d+)|#x([0-9a-fA-F]+)|([a-zA-Z][a-zA-Z0-9]+));/g,
+    /\\([\\!"#$%&'()*+,\-./:;<=>?@[\]^_`{|}~])|&(?:#(\d+)|#[xX]([0-9a-fA-F]+)|([a-zA-Z][a-zA-Z0-9]+));/g,
     (match, escaped, dec, hex, named) => {
       if (escaped !== undefined) return escaped as string;
       if (named !== undefined) return decodeNamedEntity(match, named as string);
@@ -515,10 +515,29 @@ export function renderInlineInternal(text: string, depth: number, budget: ParseB
       const em = tryInlineEmphasis(text, i, state);
       if (em) { html += em.html; plain += em.plain; i = em.next; continue; }
     }
+    if (ch === " ") {
+      let end = i + 1;
+      while (end < text.length && text[end] === " ") end++;
+      const count = end - i;
+      if (!chargeBudget(budget, count - 1)) {
+        const rest = text.slice(i);
+        return { html: html + escapeHtml(rest).replaceAll("\n", "<br>"), plain: plain + rest };
+      }
+      if (count >= 2 && text[end] === "\n") {
+        html += "<br>";
+        plain += "\n";
+        i = end + 1;
+        continue;
+      }
+      const spaces = text.slice(i, end);
+      html += spaces;
+      plain += spaces;
+      i = end;
+      continue;
+    }
     if (ch === "\n") {
-      // Strip two-space CommonMark hard-break trailing spaces only in prose
-      html = html.replace(/ {2,}$/, "") + "<br>";
-      plain = plain.replace(/ {2,}$/, "") + "\n";
+      html += "<br>";
+      plain += "\n";
       i++;
       continue;
     }
