@@ -5,11 +5,13 @@ import { acknowledgeTask, taskHash, taskKeyFromHash, type TaskSummary } from "..
 import { closeBackgroundTasks, inspectorState, openBackgroundTask, OPEN_BACKGROUND_TASKS_EVENT, selectBackgroundTask, useInspectorState } from "../backgroundTaskInspectorState";
 import { setActiveSessionId } from "../controlPlane";
 import type { BackgroundTasks } from "../useBackgroundTasks";
+import { clearConsumedDeepLinks, consumeDeepLink, isDeepLinkConsumed } from "./taskEvents";
 import { defaultReaderMode, type TaskReaderContentMode } from "./TaskResultReader";
 
 export type MobileLevel = "peek" | "reader" | "info";
 
 let nextMobileHistoryOpenId = 1;
+let activeChildSwitchToken = 0;
 
 interface MobileTasksHistoryEntry {
   openId: number;
@@ -118,11 +120,14 @@ function applyMobilePopState({
   refs.lastContentMode.current = { key: dest.key, mode };
 }
 
-function unwindAndSwitchSession(steps: number, childId: string): void {
-  let switched = false;
+/** Unwind all history entries belonging to `retiringOpenId` before switching to
+ *  `childId`. Switches only after a matching popstate exits `retiringOpenId`,
+ *  and expires harmlessly if newer navigation claims ownership. */
+function unwindAndSwitchSession(steps: number, retiringOpenId: number, childId: string): void {
+  const token = ++activeChildSwitchToken;
   const finish = (): void => {
-    if (switched) return;
-    switched = true;
+    if (activeChildSwitchToken !== token) return;
+    activeChildSwitchToken += 1;
     const currentHash = globalThis.location?.hash ?? "";
     if (taskKeyFromHash(currentHash) || currentHash === "#tasks") {
       globalThis.history?.replaceState(globalThis.history.state, "", `${globalThis.location.pathname}${globalThis.location.search}`);
@@ -130,32 +135,48 @@ function unwindAndSwitchSession(steps: number, childId: string): void {
     setActiveSessionId(childId);
   };
   if (steps <= 0) { finish(); return; }
-  const onUnwound = (): void => { globalThis.removeEventListener("popstate", onUnwound); finish(); };
-  globalThis.addEventListener("popstate", onUnwound);
+  const onPop = (event: PopStateEvent): void => {
+    if (activeChildSwitchToken !== token) {
+      globalThis.removeEventListener("popstate", onPop);
+      return;
+    }
+    const dest = readHistoryState(event.state);
+    if (dest && dest.openId === retiringOpenId) return;
+    globalThis.removeEventListener("popstate", onPop);
+    finish();
+  };
+  globalThis.addEventListener("popstate", onPop);
   globalThis.history?.go(-steps);
-  globalThis.setTimeout(() => { globalThis.removeEventListener("popstate", onUnwound); finish(); }, 120);
 }
 
 function useMobileDeepLinkAndCommand(
   sessionId: string,
   byKey: ReadonlyMap<string, TaskSummary>,
-  consumedDeepLinkRef: MutableRefObject<string | null>,
+  open: boolean,
 ): void {
   const [hashEpoch, setHashEpoch] = useState(0);
   useEffect(() => {
-    const onHashChange = (): void => { consumedDeepLinkRef.current = null; setHashEpoch((n) => n + 1); };
+    const onHashChange = (): void => {
+      const rawHash = globalThis.location?.hash ?? "";
+      // Ignore hash changes caused by internal Tasks history entries or unwinding
+      // back to an already-consumed initial fragment; only clear when external
+      // navigation moves away from task hashes entirely.
+      if (!rawHash || (!taskKeyFromHash(rawHash) && rawHash !== "#tasks")) {
+        clearConsumedDeepLinks(sessionId);
+      }
+      setHashEpoch((n) => n + 1);
+    };
     globalThis.addEventListener("hashchange", onHashChange);
     return () => globalThis.removeEventListener("hashchange", onHashChange);
-  }, [consumedDeepLinkRef]);
+  }, [sessionId]);
   useEffect(() => {
     const rawHash = globalThis.location?.hash ?? "";
     const key = taskKeyFromHash(rawHash);
-    if (!key) { consumedDeepLinkRef.current = null; return; }
-    const intent = `${sessionId}\u0000${rawHash}`;
-    if (consumedDeepLinkRef.current === intent || inspectorState().sessionId === sessionId || !byKey.has(key)) return;
-    consumedDeepLinkRef.current = intent;
+    if (!key) { clearConsumedDeepLinks(sessionId); return; }
+    if (open || inspectorState().sessionId === sessionId || isDeepLinkConsumed(sessionId, rawHash) || !byKey.has(key)) return;
+    consumeDeepLink(sessionId, rawHash);
     openBackgroundTask(sessionId, key, "link");
-  }, [sessionId, byKey, consumedDeepLinkRef, hashEpoch]);
+  }, [sessionId, byKey, open, hashEpoch]);
   useEffect(() => {
     const onOpen = (event: Event): void => {
       const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
@@ -174,15 +195,15 @@ export function useMobileTasksHistory({ sessionId, background, visibleTasks }: {
   const [readerMode, setReaderMode] = useState<TaskReaderContentMode>("result");
   const openIdRef = useRef(0);
   const depthRef = useRef(0);
-  const consumedDeepLinkRef = useRef<string | null>(null);
   const initializedRef = useRef<{ revision: number; key: string | null; resolved: boolean } | null>(null);
   const lastContentModeRef = useRef<{ key: string; mode: TaskReaderContentMode } | null>(null);
   const pendingPopRef = useRef<PendingPopAction>(null);
   const selected = state.key ? background.byKey.get(state.key) ?? null : null;
-  useMobileDeepLinkAndCommand(sessionId, background.byKey, consumedDeepLinkRef);
+  useMobileDeepLinkAndCommand(sessionId, background.byKey, open);
 
   useEffect(() => {
     if (!open) { openIdRef.current = 0; depthRef.current = 0; initializedRef.current = null; pendingPopRef.current = null; return; }
+    activeChildSwitchToken += 1;
     const target = state.key ? background.byKey.get(state.key) ?? null : null;
     const prev = initializedRef.current;
     if (prev && prev.revision === state.revision && prev.key === state.key && (prev.resolved || !target)) return;
@@ -215,12 +236,13 @@ export function useMobileTasksHistory({ sessionId, background, visibleTasks }: {
   }, [open, sessionId, background.byKey]);
 
   const close = useCallback((): void => {
+    activeChildSwitchToken += 1;
     const steps = depthRef.current;
     openIdRef.current = 0;
     depthRef.current = 0;
     pendingPopRef.current = null;
     const rawHash = globalThis.location?.hash ?? "";
-    if (taskKeyFromHash(rawHash)) consumedDeepLinkRef.current = `${sessionId}\u0000${rawHash}`;
+    if (taskKeyFromHash(rawHash)) consumeDeepLink(sessionId, rawHash);
     closeBackgroundTasks();
     if (steps > 0) globalThis.history?.go(-steps);
   }, [sessionId]);
@@ -284,15 +306,22 @@ export function useMobileTasksHistory({ sessionId, background, visibleTasks }: {
   }, [sessionId]);
 
   const openChildSession = useCallback((childId: string): void => {
+    const retiringOpenId = openIdRef.current;
     const steps = depthRef.current;
     openIdRef.current = 0;
     depthRef.current = 0;
     pendingPopRef.current = null;
     const rawHash = globalThis.location?.hash ?? "";
-    if (taskKeyFromHash(rawHash)) consumedDeepLinkRef.current = `${sessionId}\u0000${rawHash}`;
+    if (taskKeyFromHash(rawHash)) consumeDeepLink(sessionId, rawHash);
     closeBackgroundTasks();
-    unwindAndSwitchSession(steps, childId);
+    unwindAndSwitchSession(steps, retiringOpenId, childId);
   }, [sessionId]);
 
-  return { open, selected, level, readerMode, setContentMode, close, openWorkerFromPeek, switchSibling, stepSibling, toggleInfo, showPeek, openChildSession };
+  const currentOpenId = useCallback((): number => openIdRef.current, []);
+  const isStillOwner = useCallback((ownerOpenId: number, taskKey: string): boolean => {
+    const live = inspectorState();
+    return ownerOpenId > 0 && openIdRef.current === ownerOpenId && live.sessionId === sessionId && live.key === taskKey;
+  }, [sessionId]);
+
+  return { open, selected, level, readerMode, setContentMode, close, openWorkerFromPeek, switchSibling, stepSibling, toggleInfo, showPeek, openChildSession, currentOpenId, isStillOwner };
 }

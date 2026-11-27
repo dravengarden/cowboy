@@ -327,3 +327,26 @@ test("isTaskEnded uses execution status rather than Needs you attention grouping
   assertEquals(isTaskEnded(byKey.get(subagentKey("s-live"))!), false);
   assertEquals(isTaskEnded(byKey.get("approval:app-1")!), false);
 });
+
+test("compareTaskOrder distinguishes Unicode keys that collate equally", () => {
+  const nfc = "caf\u00e9";
+  const nfd = "cafe\u0301";
+  assertEquals(nfc === nfd, false);
+  assertEquals(nfc.localeCompare(nfd), 0);
+  const tasks = buildTaskSummaries({
+    subagents: [
+      { subagent: subagent({ id: nfc, observedSeq: 10 }), anchorSeq: 10, reconciledBy: "live", reconciledAt: 100 },
+      { subagent: subagent({ id: nfd, observedSeq: 10 }), anchorSeq: 10, reconciledBy: "live", reconciledAt: 100 },
+    ],
+    calls: [],
+    approval: null,
+    pending: [],
+  });
+  const [a, b] = tasks;
+  const cmp = compareTaskOrder(a!, b!);
+  assertEquals(cmp !== 0, true);
+  assertEquals(compareTaskOrder(b!, a!), -cmp);
+  const forward = [a!, b!].sort(compareTaskOrder).map((t) => t.key);
+  const reversed = [b!, a!].sort(compareTaskOrder).map((t) => t.key);
+  assertEquals(forward, reversed);
+});

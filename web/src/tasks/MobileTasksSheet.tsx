@@ -106,6 +106,15 @@ export function MobileTasksSheet({ sessionId, background, onOpenTool }: { sessio
     nav.close();
     requestAnimationFrame(() => focusTaskApprovalSurface(sessionId, task));
   }, [nav, sessionId]);
+  const quoteSelected = useCallback((): void => {
+    const target = nav.selected;
+    if (!target) return;
+    const reqOpenId = nav.currentOpenId();
+    const reqKey = target.key;
+    quoteTaskToPrompt(sessionId, target, () => {
+      if (nav.isStillOwner(reqOpenId, reqKey)) nav.close();
+    });
+  }, [nav, sessionId]);
 
   if (!nav.open) return null;
   const isPeek = nav.level === "peek" || !nav.selected;
@@ -156,7 +165,7 @@ export function MobileTasksSheet({ sessionId, background, onOpenTool }: { sessio
           onStepSibling={nav.stepSibling}
           onToggleLog={(): void => nav.setContentMode(effectiveMode === "transcript" ? "result" : "transcript")}
           onToggleInfo={nav.toggleInfo}
-          onQuote={(): void => quoteTaskToPrompt(sessionId, nav.selected!, nav.close)}
+          onQuote={quoteSelected}
         />
       )}
     >
@@ -174,7 +183,7 @@ export function MobileTasksSheet({ sessionId, background, onOpenTool }: { sessio
             </Stack>
           )
           : (
-            <TaskResultReader sessionId={sessionId} task={nav.selected!} background={background} subagentTranscript={subagentTranscript} desktop={false} mode={effectiveMode} onModeChange={(next): void => { if (next === "info") nav.toggleInfo(); else nav.setContentMode(next); }} onAnswerApproval={(): void => answerApproval(nav.selected!)} onOpenOriginTool={onOpenTool ? (toolKey): void => { nav.close(); onOpenTool(toolKey); } : undefined} onOpenChildSession={nav.openChildSession} onQuoted={nav.close} bottomInset="var(--cowboy-sheet-dock-clearance, 108px)" />
+            <TaskResultReader sessionId={sessionId} task={nav.selected!} background={background} subagentTranscript={subagentTranscript} desktop={false} mode={effectiveMode} onModeChange={(next): void => { if (next === "info") nav.toggleInfo(); else nav.setContentMode(next); }} onAnswerApproval={(): void => answerApproval(nav.selected!)} onOpenOriginTool={onOpenTool ? (toolKey): void => { nav.close(); onOpenTool(toolKey); } : undefined} onOpenChildSession={nav.openChildSession} onQuoteRequest={quoteSelected} bottomInset="var(--cowboy-sheet-dock-clearance, 108px)" />
           )}
       </Box>
     </Sheet>

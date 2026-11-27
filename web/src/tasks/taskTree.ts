@@ -114,7 +114,7 @@ export function compareTaskOrder(a: TaskSummary, b: TaskSummary): number {
     const clockDiff = unanchoredClock(b) - unanchoredClock(a);
     if (clockDiff !== 0) return clockDiff;
   }
-  return a.key.localeCompare(b.key);
+  return a.key < b.key ? -1 : a.key > b.key ? 1 : 0;
 }
 
 export interface TaskTreeNode {

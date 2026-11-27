@@ -17,7 +17,8 @@ import { SubagentStopConfirm, taskChipColor, taskToneColor } from "./SubagentCar
 import { glyphSize } from "./surface/desktopSize";
 import { SUBAGENT_STOP_KEY, type DisplayGroup, type SubagentTone } from "./subagents";
 import { taskHeadline } from "./tasks/taskTree";
-import { requestTaskStop, STOP_MESSAGE, type StopState } from "./useBackgroundTasks";
+import { STOP_MESSAGE, type StopState } from "./useBackgroundTasks";
+import { useBoundStopConfirm } from "./tasks/useBoundStopConfirm";
 
 export function taskTone(group: DisplayGroup): SubagentTone {
   switch (group) {
@@ -90,16 +91,12 @@ export const TaskRow = memo(function TaskRow({
   /** Fixtures capture a subagent Stop instead of sending it. */
   stopSender?: ((sessionId: string, child: string) => boolean) | undefined;
 }): React.JSX.Element {
-  const [confirming, setConfirming] = useState(false);
+  const stopGuard = useBoundStopConfirm(sessionId, task, { stop, stopSender });
   const [focused, setFocused] = useState(false);
   const tone = taskTone(task.group);
   const subtitle = stopLine(stop) ?? (task.source === "call" ? taskHeadline(task) : task.subtitle);
   const nested = task.source === "subagent" && task.parentKey !== null;
   const Icon = task.source === "call" ? CallSplitOutlined : AccountTreeOutlined;
-  const confirmStop = (): void => {
-    setConfirming(false);
-    requestTaskStop(sessionId, task, stopSender);
-  };
   return (
     <Paper
       elevation={0}
@@ -190,7 +187,7 @@ export const TaskRow = memo(function TaskRow({
           data-task-stop
           disabled={stop?.outcome === "stopping"}
           aria-label={`Stop ${task.source === "call" ? "call" : "subagent"} ${task.title}`}
-          onClick={(): void => setConfirming(true)}
+          onClick={stopGuard.trigger}
           sx={{ flexShrink: 0, minWidth: { xs: 40, sm: 30 }, minHeight: { xs: 40, sm: 30 } }}
         >
           <StopCircleOutlined fontSize="small" />
@@ -198,11 +195,11 @@ export const TaskRow = memo(function TaskRow({
         </IconButton>
       )}
       <SubagentStopConfirm
-        open={confirming && task.canStop}
-        title={task.title}
-        noun={task.source === "call" ? "call" : "subagent"}
-        onClose={(): void => setConfirming(false)}
-        onConfirm={confirmStop}
+        open={stopGuard.open}
+        title={stopGuard.pending?.task.title ?? task.title}
+        noun={(stopGuard.pending?.task.source ?? task.source) === "call" ? "call" : "subagent"}
+        onClose={stopGuard.close}
+        onConfirm={stopGuard.confirm}
       />
       <TaskChip task={task} />
     </Paper>

@@ -47,11 +47,12 @@ export interface StopState {
 export const STOP_TIMEOUT_MS = 30_000;
 
 const stops = new Map<string, StopState>();
+const EMPTY_STOPS: ReadonlyMap<string, StopState> = new Map();
+let stopsSnapshot: ReadonlyMap<string, StopState> = EMPTY_STOPS;
 const stopListeners = new Set<() => void>();
-let stopsVersion = 0;
 
 function emitStops(): void {
-  stopsVersion += 1;
+  stopsSnapshot = stops.size === 0 ? EMPTY_STOPS : new Map(stops);
   for (const listener of stopListeners) listener();
 }
 
@@ -69,17 +70,16 @@ export function setStopState(key: string, next: StopState | null): void {
 }
 
 export function useStopStates(): ReadonlyMap<string, StopState> {
-  useSyncExternalStore(
+  return useSyncExternalStore(
     (listener) => {
       stopListeners.add(listener);
       return (): void => {
         stopListeners.delete(listener);
       };
     },
-    () => stopsVersion,
-    () => 0,
+    () => stopsSnapshot,
+    () => EMPTY_STOPS,
   );
-  return stops;
 }
 
 export const STOP_MESSAGE: Record<StopOutcome, string> = {
@@ -309,9 +309,16 @@ export function useBackgroundTasks(
     }
   }, [lastError, sessionId, stopStates]);
   useEffect(() => {
-    settleStops(tasks, stopStates, Date.now());
-    if (![...stopStates.values()].some((stop) => stop.outcome === "stopping")) return undefined;
-    const timer = globalThis.setTimeout(() => settleStops(tasks, stopStates, Date.now()), STOP_TIMEOUT_MS);
+    const now = Date.now();
+    settleStops(tasks, stopStates, now);
+    let earliestRemaining = Number.POSITIVE_INFINITY;
+    for (const stop of stopStates.values()) {
+      if (stop.outcome === "stopping") {
+        earliestRemaining = Math.min(earliestRemaining, Math.max(0, STOP_TIMEOUT_MS - (now - stop.at)));
+      }
+    }
+    if (!Number.isFinite(earliestRemaining)) return undefined;
+    const timer = globalThis.setTimeout(() => settleStops(tasks, stopStates, Date.now()), earliestRemaining);
     return () => globalThis.clearTimeout(timer);
   }, [tasks, stopStates]);
   const byKey = useMemo(() => new Map(tasks.map((task) => [task.key, task])), [tasks]);

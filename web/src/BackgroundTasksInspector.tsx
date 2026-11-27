@@ -17,7 +17,7 @@ import { useSubagentTranscript } from "./SubagentTranscript";
 import type { BackgroundTasks } from "./useBackgroundTasks";
 import { MobileTasksSheet } from "./tasks/MobileTasksSheet";
 import { LegacyCallsSwitch } from "./tasks/TaskDiagnostics";
-import { focusTaskApprovalSurface, LOCATE_TASK_EVENT, OPEN_TASK_ORIGIN_TOOL_EVENT, useDesktopTasksHostActive } from "./tasks/taskEvents";
+import { clearConsumedDeepLinks, consumeDeepLink, consumePendingLocateTask, consumePendingOpenTaskOriginTool, focusTaskApprovalSurface, isDeepLinkConsumed, LOCATE_TASK_EVENT, OPEN_TASK_ORIGIN_TOOL_EVENT, useDesktopTasksHostActive } from "./tasks/taskEvents";
 import { TaskResultReader } from "./tasks/TaskResultReader";
 import { TaskRoster } from "./tasks/TaskRoster";
 import { buildTaskForest, flattenTaskSections } from "./tasks/taskTree";
@@ -103,14 +103,12 @@ function StandaloneDesktopTasksDialog({ sessionId, background, onLocate, onOpenT
     return () => globalThis.removeEventListener(OPEN_BACKGROUND_TASKS_EVENT, onOpen);
   }, [sessionId]);
 
-  const consumedDeepLinkRef = useRef<string | null>(null);
   useEffect(() => {
     const rawHash = globalThis.location?.hash ?? "";
     const key = taskKeyFromHash(rawHash);
-    if (!key) { consumedDeepLinkRef.current = null; return; }
-    const intent = `${sessionId}\u0000${rawHash}`;
-    if (consumedDeepLinkRef.current === intent || inspectorState().sessionId === sessionId || !background.byKey.has(key)) return;
-    consumedDeepLinkRef.current = intent;
+    if (!key) { clearConsumedDeepLinks(sessionId); return; }
+    if (isDeepLinkConsumed(sessionId, rawHash) || inspectorState().sessionId === sessionId || !background.byKey.has(key)) return;
+    consumeDeepLink(sessionId, rawHash);
     openBackgroundTask(sessionId, key, "link");
   }, [sessionId, background.byKey]);
 
@@ -153,13 +151,23 @@ function StandaloneDesktopTasksDialog({ sessionId, background, onLocate, onOpenT
 export function BackgroundTasksInspector({ sessionId, desktop, background, onLocate, onOpenTool }: { sessionId: string; desktop: boolean; background: BackgroundTasks; onLocate?: ((key: string) => void) | undefined; onOpenTool?: ((toolKey: string) => void) | undefined }): React.JSX.Element | null {
   const desktopHostActive = useDesktopTasksHostActive(sessionId);
   useEffect(() => {
+    const pendingLocate = consumePendingLocateTask(sessionId);
+    if (pendingLocate) requestAnimationFrame(() => onLocate?.(pendingLocate));
+    const pendingTool = consumePendingOpenTaskOriginTool(sessionId);
+    if (pendingTool) requestAnimationFrame(() => onOpenTool?.(pendingTool));
     const handleLocate = (event: Event): void => {
       const detail = (event as CustomEvent<{ sessionId?: string; key?: string }>).detail;
-      if (detail?.sessionId === sessionId && detail.key) requestAnimationFrame(() => onLocate?.(detail.key!));
+      if (detail?.sessionId === sessionId && detail.key) {
+        consumePendingLocateTask(sessionId);
+        requestAnimationFrame(() => onLocate?.(detail.key!));
+      }
     };
     const handleOpenTool = (event: Event): void => {
       const detail = (event as CustomEvent<{ sessionId?: string; toolKey?: string }>).detail;
-      if (detail?.sessionId === sessionId && detail.toolKey) requestAnimationFrame(() => onOpenTool?.(detail.toolKey!));
+      if (detail?.sessionId === sessionId && detail.toolKey) {
+        consumePendingOpenTaskOriginTool(sessionId);
+        requestAnimationFrame(() => onOpenTool?.(detail.toolKey!));
+      }
     };
     globalThis.addEventListener(LOCATE_TASK_EVENT, handleLocate);
     globalThis.addEventListener(OPEN_TASK_ORIGIN_TOOL_EVENT, handleOpenTool);

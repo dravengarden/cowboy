@@ -7,7 +7,7 @@ import { type DesktopCommand, useDesktopCommandActions } from "../desktop/comman
 import { shortcutKey } from "../desktop/commands/imeShortcut";
 import { requestDesktopWorkView } from "../desktop/review/desktopWorkView";
 import { type BackgroundTasks, useBackgroundTasks } from "../useBackgroundTasks";
-import { clearSessionTasksAvailability, publishSessionTasksAvailability, registerDesktopTasksHost } from "./taskEvents";
+import { clearConsumedDeepLinks, clearSessionTasksAvailability, consumeDeepLink, isDeepLinkConsumed, publishSessionTasksAvailability, registerDesktopTasksHost } from "./taskEvents";
 import type { TaskReaderContentMode, TaskReaderViewMode } from "./TaskResultReader";
 import { buildTaskForest, flattenTaskSections, taskTabSummary } from "./taskTree";
 
@@ -101,7 +101,7 @@ export function useDesktopTasksPaneKeyHandler({
     if (key === "j" || key === "ArrowDown" || key === "k" || key === "ArrowUp") {
       const delta = key === "j" || key === "ArrowDown" ? 1 : -1;
       if (inRoster) { event.preventDefault(); event.stopPropagation(); stepTask(delta); return; }
-      const scroller = rootRef.current?.querySelector<HTMLElement>("[data-task-reader-scroll], [data-task-transcript-host]:not([hidden]) [tabindex]");
+      const scroller = rootRef.current?.querySelector<HTMLElement>("[data-task-reader-scroll], [data-task-transcript-host]:not([hidden]) [data-desktop-transcript-scroller]");
       if (scroller) { event.preventDefault(); event.stopPropagation(); scroller.scrollBy({ top: delta * 72 }); }
       return;
     }
@@ -146,16 +146,19 @@ export function useDesktopTasksController(sessionId: string, active: boolean, pr
   const [readerMode, setReaderMode] = useState<DesktopModeState | null>(null);
   const [localKey, setLocalKey] = useState<string | null>(null);
   const [now, setNow] = useState(() => Date.now());
-  const consumedDeepLinkRef = useRef<string | null>(null);
   const handledInspectorRef = useRef<{ revision: number; key: string | null; resolved: boolean } | null>(null);
   const [hashEpoch, setHashEpoch] = useState(0);
 
   useEffect(() => registerDesktopTasksHost(sessionId), [sessionId]);
   useEffect(() => {
-    const onHashChange = (): void => { consumedDeepLinkRef.current = null; setHashEpoch((n) => n + 1); };
+    const onHashChange = (): void => {
+      const rawHash = globalThis.location?.hash ?? "";
+      if (!taskKeyFromHash(rawHash)) clearConsumedDeepLinks(sessionId);
+      setHashEpoch((n) => n + 1);
+    };
     globalThis.addEventListener("hashchange", onHashChange);
     return () => globalThis.removeEventListener("hashchange", onHashChange);
-  }, []);
+  }, [sessionId]);
 
   const summary = useMemo(() => taskTabSummary(background.tasks, background.backgroundActivity), [background.tasks, background.backgroundActivity]);
   useEffect(() => {
@@ -185,10 +188,10 @@ export function useDesktopTasksController(sessionId: string, active: boolean, pr
   useEffect(() => {
     const rawHash = globalThis.location?.hash ?? "";
     const key = taskKeyFromHash(rawHash);
-    if (!key) { consumedDeepLinkRef.current = null; return; }
-    const intent = `${sessionId}\u0000${rawHash}`;
-    if (consumedDeepLinkRef.current === intent || !background.byKey.has(key)) return;
-    consumedDeepLinkRef.current = intent;
+    if (!key) { clearConsumedDeepLinks(sessionId); return; }
+    if (isDeepLinkConsumed(sessionId, rawHash) || !background.byKey.has(key)) return;
+    consumeDeepLink(sessionId, rawHash);
+    globalThis.history?.replaceState(globalThis.history.state, "", `${globalThis.location.pathname}${globalThis.location.search}`);
     setLocalKey(key);
     setCompactShowRoster(false);
     openBackgroundTask(sessionId, key, "link");

@@ -12,10 +12,11 @@ import { CallConversation, CallDetailView, ResultSection } from "../ManagedCalls
 import { SubagentDetail, SubagentStopConfirm } from "../SubagentCard";
 import { SubagentConversation, type SubagentTranscriptState } from "../SubagentTranscript";
 import { TaskChip } from "../TaskRow";
-import { type BackgroundTasks, requestTaskStop, STOP_MESSAGE, useStopStates } from "../useBackgroundTasks";
+import type { BackgroundTasks } from "../useBackgroundTasks";
 import { TaskDiagnostics } from "./TaskDiagnostics";
 import { quoteTaskToPrompt, rememberCallDetail, rememberTaskReaderScroll, savedTaskReaderScroll } from "./taskEvents";
 import { callVerdictLabel, isTaskEnded, taskTimeLabel } from "./taskTree";
+import { useBoundStopConfirm } from "./useBoundStopConfirm";
 
 export type TaskReaderViewMode = "result" | "transcript" | "info";
 export type TaskReaderContentMode = "result" | "transcript";
@@ -24,17 +25,6 @@ export function defaultReaderMode(task: TaskSummary, observedSubagent: boolean):
   if (task.source === "approval" || isTaskEnded(task)) return "result";
   if (task.source === "call") return "transcript";
   return observedSubagent ? "transcript" : "result";
-}
-
-function stopGrantKey(sessionId: string, task: TaskSummary): string | null {
-  if (!task.canStop) return null;
-  if (task.source === "subagent" && task.subagent) {
-    return `${sessionId}\u0000subagent:${task.subagent.id}\u0000${task.subagent.incarnation ?? ""}\u0000${String(task.subagent.terminalSeq ?? "live")}`;
-  }
-  if (task.source === "call" && task.call) {
-    return `${sessionId}\u0000call:${task.call.call_id}`;
-  }
-  return null;
 }
 
 function CallResultSummaryBody({
@@ -238,6 +228,7 @@ function TaskReaderInfoPanel({
   task,
   desktop,
   originKey,
+  callQuery,
   onOpenChild,
   onOpenOriginTool,
   extraInfoFooter,
@@ -246,6 +237,7 @@ function TaskReaderInfoPanel({
   task: TaskSummary;
   desktop: boolean;
   originKey: string | null;
+  callQuery: { detail: ManagedCallDetail | null; error: string | null };
   onOpenChild: () => void;
   onOpenOriginTool?: ((toolKey: string) => void) | undefined;
   extraInfoFooter?: React.ReactNode;
@@ -253,7 +245,7 @@ function TaskReaderInfoPanel({
   return (
     <Box data-task-detail={task.key} data-task-info-panel sx={{ minWidth: 0 }}>
       {task.source === "call" && task.call
-        ? <CallDetailView parent={sessionId} call={task.call} desktop={desktop} onOpenChild={onOpenChild} />
+        ? <CallDetailView parent={sessionId} call={task.call} desktop={desktop} onOpenChild={onOpenChild} prefetched={callQuery} />
         : task.source === "subagent" && task.subagent
         ? <SubagentDetail subagent={task.subagent} resumed={task.subagent.revision > 1 && task.subagent.terminalSeq !== null} />
         : <Typography variant="body2" color="text.secondary">{task.subtitle || "Pending call approval request."}</Typography>}
@@ -268,116 +260,88 @@ function TaskReaderInfoPanel({
   );
 }
 
-function useBoundStopConfirm(sessionId: string, task: TaskSummary) {
-  const stops = useStopStates();
-  const stop = stops.get(task.key);
-  const currentStopGrant = stopGrantKey(sessionId, task);
-  const [stopConfirm, setStopConfirm] = useState<{ sessionId: string; task: TaskSummary; grant: string } | null>(null);
-  useEffect(() => {
-    if (!stopConfirm) return;
-    if (stopConfirm.sessionId !== sessionId || stopConfirm.task.key !== task.key || currentStopGrant !== stopConfirm.grant) {
-      setStopConfirm(null);
-    }
-  }, [stopConfirm, sessionId, task.key, currentStopGrant]);
-  const open = Boolean(stopConfirm && stopConfirm.sessionId === sessionId && stopConfirm.task.key === task.key && currentStopGrant === stopConfirm.grant);
-  const stopMessage = stop && stop.outcome !== "stopping"
-    ? (stop.message ? `${STOP_MESSAGE[stop.outcome]}: ${stop.message}` : STOP_MESSAGE[stop.outcome])
-    : null;
-  const trigger = (): void => { if (currentStopGrant) setStopConfirm({ sessionId, task, grant: currentStopGrant }); };
-  const close = (): void => setStopConfirm(null);
-  const confirm = (): void => {
-    const pending = stopConfirm;
-    setStopConfirm(null);
-    if (!pending || pending.sessionId !== sessionId || pending.task.key !== task.key) return;
-    if (stopGrantKey(sessionId, task) !== pending.grant) return;
-    requestTaskStop(pending.sessionId, pending.task);
-  };
-  return { open, stopConfirm, stopStopping: stop?.outcome === "stopping", stopMessage, trigger, close, confirm };
-}
-
 export interface TaskResultReaderProps {
   sessionId: string;
   task: TaskSummary;
   background: BackgroundTasks;
   subagentTranscript: SubagentTranscriptState;
   desktop: boolean;
-  /** Single-owner controlled mode; when provided, internal state is bypassed. */
   mode?: TaskReaderViewMode | undefined;
   onModeChange?: ((mode: TaskReaderViewMode) => void) | undefined;
   onAnswerApproval: () => void;
   onLocate?: (() => void) | undefined;
   onOpenOriginTool?: ((toolKey: string) => void) | undefined;
   onQuoted?: (() => void) | undefined;
+  onQuoteRequest?: (() => void) | undefined;
   onOpenChildSession?: ((childSessionId: string) => void) | undefined;
+  stopTrigger?: { key: string; nonce: number } | null | undefined;
   extraInfoFooter?: React.ReactNode;
   bottomInset?: string | undefined;
 }
 
-export function TaskResultReader({ sessionId, task, background, subagentTranscript, desktop, mode, onModeChange, onAnswerApproval, onLocate, onOpenOriginTool, onQuoted, onOpenChildSession, extraInfoFooter, bottomInset }: TaskResultReaderProps): React.JSX.Element {
+export function TaskResultReader({ sessionId, task, background, subagentTranscript, desktop, mode, onModeChange, onAnswerApproval, onLocate, onOpenOriginTool, onQuoted, onQuoteRequest, onOpenChildSession, stopTrigger, extraInfoFooter, bottomInset }: TaskResultReaderProps): React.JSX.Element {
   const hasConversation = task.source === "call" || (task.source === "subagent" && subagentTranscript.observed);
   const controlled = mode !== undefined;
-  const [internalMode, setInternalMode] = useState<{ key: string; mode: TaskReaderViewMode }>(() => ({
-    key: task.key,
-    mode: defaultReaderMode(task, subagentTranscript.observed),
-  }));
+  const [internalMode, setInternalMode] = useState<{ key: string; mode: TaskReaderViewMode }>(() => ({ key: task.key, mode: defaultReaderMode(task, subagentTranscript.observed) }));
   const activeMode: TaskReaderViewMode = controlled
     ? mode
-    : internalMode.key === task.key
-    ? internalMode.mode
-    : defaultReaderMode(task, subagentTranscript.observed);
+    : internalMode.key === task.key ? internalMode.mode : defaultReaderMode(task, subagentTranscript.observed);
 
-  const lastContentModeRef = useRef<{ key: string; mode: TaskReaderContentMode }>({
-    key: task.key,
-    mode: defaultReaderMode(task, subagentTranscript.observed),
-  });
-  if (activeMode === "result" || activeMode === "transcript") {
-    lastContentModeRef.current = { key: task.key, mode: activeMode };
-  }
+  const lastContentModeRef = useRef<{ key: string; mode: TaskReaderContentMode }>({ key: task.key, mode: defaultReaderMode(task, subagentTranscript.observed) });
+  if (activeMode === "result" || activeMode === "transcript") lastContentModeRef.current = { key: task.key, mode: activeMode };
   const setMode = (next: TaskReaderViewMode): void => {
     if (!controlled) setInternalMode({ key: task.key, mode: next });
     onModeChange?.(next);
   };
 
-  // Hoist Call detail fetch above Result/Transcript/Info so switching modes
-  // never refetches and Quote-to-Prompt shares the exact identity-checked result.
   const callId = task.source === "call" && task.call ? task.call.call_id : null;
   const callRev = task.source === "call" && task.call ? task.call.updated_at_ms : 0;
   const callQuery = useManagedCall(sessionId, callId, callRev);
+  const callLoaded = callId === null || callQuery.detail !== null || callQuery.error !== null;
   useEffect(() => {
-    if (callQuery.detail && callId && callQuery.detail.call_id === callId) {
-      rememberCallDetail(sessionId, callQuery.detail);
-    }
+    if (callQuery.detail && callId && callQuery.detail.call_id === callId) rememberCallDetail(sessionId, callQuery.detail);
   }, [sessionId, callId, callQuery.detail]);
 
-  // Keep transcript mounted while Info is open so opening Info never discards it.
+  // Keep transcript mounted across Info toggles without a self-triggering effect loop.
   const [mountedTranscript, setMountedTranscript] = useState<{ sessionId: string; key: string } | null>(null);
   useEffect(() => {
     if (activeMode === "transcript" && hasConversation) {
-      setMountedTranscript({ sessionId, key: task.key });
-    } else if (mountedTranscript && (mountedTranscript.sessionId !== sessionId || mountedTranscript.key !== task.key)) {
-      setMountedTranscript(null);
+      setMountedTranscript((prev) => prev && prev.sessionId === sessionId && prev.key === task.key ? prev : { sessionId, key: task.key });
+    } else {
+      setMountedTranscript((prev) => prev && (prev.sessionId !== sessionId || prev.key !== task.key) ? null : prev);
     }
-  }, [activeMode, hasConversation, mountedTranscript, sessionId, task.key]);
+  }, [activeMode, hasConversation, sessionId, task.key]);
   const keepTranscriptMounted = hasConversation && (
-    activeMode === "transcript" ||
-    (mountedTranscript?.sessionId === sessionId && mountedTranscript.key === task.key)
+    activeMode === "transcript" || (mountedTranscript?.sessionId === sessionId && mountedTranscript.key === task.key)
   );
 
   const stopGuard = useBoundStopConfirm(sessionId, task);
+  const handledStopNonce = useRef(0);
+  useEffect(() => {
+    if (!stopTrigger || stopTrigger.key !== task.key || stopTrigger.nonce === handledStopNonce.current) return;
+    handledStopNonce.current = stopTrigger.nonce;
+    stopGuard.trigger();
+  }, [stopTrigger, task.key, stopGuard]);
 
-  // Separate scroll restoration for Result and Info panes.
   const resultScrollRef = useRef<HTMLDivElement>(null);
   const infoScrollRef = useRef<HTMLDivElement>(null);
   useLayoutEffect(() => {
-    if (activeMode === "result" && resultScrollRef.current) {
-      resultScrollRef.current.scrollTop = savedTaskReaderScroll(sessionId, `${task.key}:result`);
-    } else if (activeMode === "info" && infoScrollRef.current) {
-      infoScrollRef.current.scrollTop = savedTaskReaderScroll(sessionId, `${task.key}:info`);
-    }
-  }, [sessionId, task.key, activeMode]);
+    const node = activeMode === "result" ? resultScrollRef.current : activeMode === "info" ? infoScrollRef.current : null;
+    if (!node) return;
+    const saved = savedTaskReaderScroll(sessionId, `${task.key}:${activeMode}`);
+    if (saved > 0 || callLoaded) node.scrollTop = saved;
+  }, [sessionId, task.key, activeMode, callLoaded]);
+
+  const recordScroll = (pane: "result" | "info", top: number): void => {
+    if (!callLoaded && top === 0 && savedTaskReaderScroll(sessionId, `${task.key}:${pane}`) > 0) return;
+    rememberTaskReaderScroll(sessionId, `${task.key}:${pane}`, top);
+  };
 
   const originKey = task.call ? originToolKey(background.items, task.call.request_id) : null;
-  const quoteToPrompt = (): void => quoteTaskToPrompt(sessionId, task, onQuoted);
+  const quoteToPrompt = (): void => {
+    if (onQuoteRequest) onQuoteRequest();
+    else quoteTaskToPrompt(sessionId, task, onQuoted);
+  };
   const openChild = (): void => {
     if (!task.call) return;
     const childId = callConversationId(task.call);
@@ -386,10 +350,7 @@ export function TaskResultReader({ sessionId, task, background, subagentTranscri
   };
   const toggleInfo = (): void => {
     if (activeMode === "info") {
-      const prev = lastContentModeRef.current.key === task.key
-        ? lastContentModeRef.current.mode
-        : defaultReaderMode(task, subagentTranscript.observed);
-      setMode(prev);
+      setMode(lastContentModeRef.current.key === task.key ? lastContentModeRef.current.mode : defaultReaderMode(task, subagentTranscript.observed));
     } else {
       setMode("info");
     }
@@ -398,21 +359,7 @@ export function TaskResultReader({ sessionId, task, background, subagentTranscri
 
   return (
     <Box data-task-reader={task.key} data-task-reader-mode={activeMode} sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-      <TaskReaderHeader
-        sessionId={sessionId}
-        task={task}
-        desktop={desktop}
-        activeMode={activeMode}
-        hasConversation={hasConversation}
-        stopStopping={stopGuard.stopStopping}
-        stopMessage={stopGuard.stopMessage}
-        onToggleInfo={toggleInfo}
-        onToggleTranscript={(): void => setMode(activeMode === "transcript" ? "result" : "transcript")}
-        onQuote={quoteToPrompt}
-        onOpenChild={openChild}
-        onLocate={onLocate}
-        onStopClick={stopGuard.trigger}
-      />
+      <TaskReaderHeader sessionId={sessionId} task={task} desktop={desktop} activeMode={activeMode} hasConversation={hasConversation} stopStopping={stopGuard.stopStopping} stopMessage={stopGuard.stopMessage} onToggleInfo={toggleInfo} onToggleTranscript={(): void => setMode(activeMode === "transcript" ? "result" : "transcript")} onQuote={quoteToPrompt} onOpenChild={openChild} onLocate={onLocate} onStopClick={stopGuard.trigger} />
       {keepTranscriptMounted && (
         <Box data-task-transcript-host hidden={activeMode !== "transcript"} sx={{ flex: 1, minHeight: 0, minWidth: 0, display: activeMode === "transcript" ? "flex" : "none", position: "relative" }}>
           {task.source === "call" && task.call
@@ -421,35 +368,18 @@ export function TaskResultReader({ sessionId, task, background, subagentTranscri
         </Box>
       )}
       {activeMode === "result" && (
-        <Box ref={resultScrollRef} data-task-reader-scroll="result" onScroll={(event): void => rememberTaskReaderScroll(sessionId, `${task.key}:result`, event.currentTarget.scrollTop)} sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 2, py: 1.5, pb: paneInset, ...desktopScrollbarSx }}>
-          <TaskReaderSummaryBody
-            task={task}
-            desktop={desktop}
-            hasConversation={hasConversation}
-            originKey={originKey}
-            callDetail={callQuery.detail}
-            callError={callQuery.error}
-            onAnswerApproval={onAnswerApproval}
-            onOpenTranscript={(): void => setMode("transcript")}
-            onQuote={quoteToPrompt}
-            onOpenOriginTool={onOpenOriginTool}
-          />
+        <Box ref={resultScrollRef} data-task-reader-scroll="result" onScroll={(event): void => recordScroll("result", event.currentTarget.scrollTop)} sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 2, py: 1.5, pb: paneInset, ...desktopScrollbarSx }}>
+          <TaskReaderSummaryBody task={task} desktop={desktop} hasConversation={hasConversation} originKey={originKey} callDetail={callQuery.detail} callError={callQuery.error} onAnswerApproval={onAnswerApproval} onOpenTranscript={(): void => setMode("transcript")} onQuote={quoteToPrompt} onOpenOriginTool={onOpenOriginTool} />
           <ScrollEdges />
         </Box>
       )}
       {activeMode === "info" && (
-        <Box ref={infoScrollRef} data-task-reader-scroll="info" onScroll={(event): void => rememberTaskReaderScroll(sessionId, `${task.key}:info`, event.currentTarget.scrollTop)} sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 2, py: 1.5, pb: paneInset, ...desktopScrollbarSx }}>
-          <TaskReaderInfoPanel sessionId={sessionId} task={task} desktop={desktop} originKey={originKey} onOpenChild={openChild} onOpenOriginTool={onOpenOriginTool} extraInfoFooter={extraInfoFooter} />
+        <Box ref={infoScrollRef} data-task-reader-scroll="info" onScroll={(event): void => recordScroll("info", event.currentTarget.scrollTop)} sx={{ flex: 1, minHeight: 0, overflowY: "auto", px: 2, py: 1.5, pb: paneInset, ...desktopScrollbarSx }}>
+          <TaskReaderInfoPanel sessionId={sessionId} task={task} desktop={desktop} originKey={originKey} callQuery={callQuery} onOpenChild={openChild} onOpenOriginTool={onOpenOriginTool} extraInfoFooter={extraInfoFooter} />
           <ScrollEdges />
         </Box>
       )}
-      <SubagentStopConfirm
-        open={stopGuard.open}
-        title={stopGuard.stopConfirm?.task.title ?? task.title}
-        noun={(stopGuard.stopConfirm?.task.source ?? task.source) === "call" ? "call" : "subagent"}
-        onClose={stopGuard.close}
-        onConfirm={stopGuard.confirm}
-      />
+      <SubagentStopConfirm open={stopGuard.open} title={stopGuard.pending?.task.title ?? task.title} noun={(stopGuard.pending?.task.source ?? task.source) === "call" ? "call" : "subagent"} onClose={stopGuard.close} onConfirm={stopGuard.confirm} />
     </Box>
   );
 }

@@ -451,8 +451,9 @@ export async function fetchAnchoredCall(
   );
   if (response.status === 404) return null;
   if (!response.ok) throw new Error(`Call unavailable (${String(response.status)})`);
-  const body = await response.json() as { call: ManagedCallSummary; dismissed?: boolean };
-  return body.dismissed === true ? null : body.call;
+  const body = await response.json() as { call: ManagedCallSummary & { result?: unknown }; dismissed?: boolean };
+  if (body.dismissed === true) return null;
+  return { ...body.call, has_result: body.call.has_result ?? (body.call.result != null) };
 }
 
 export async function fetchCall(

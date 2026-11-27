@@ -1,6 +1,6 @@
 // Lightweight event & state bridge connecting DesktopWorkspace (Tasks tab),
 // Transcript (anchors / origin tools), Composer (Mobile entry), approvals,
-// shared call result quoting, and commands without circular imports.
+// deep-link consumption, shared call result quoting, and commands.
 
 import { useSyncExternalStore } from "react";
 import type { TaskSummary } from "../backgroundTasks";
@@ -32,10 +32,7 @@ function emit(): void {
   for (const listener of listeners) listener();
 }
 
-export function publishSessionTasksAvailability(
-  sessionId: string,
-  next: SessionTasksAvailability,
-): void {
+export function publishSessionTasksAvailability(sessionId: string, next: SessionTasksAvailability): void {
   const prev = availabilityBySession.get(sessionId);
   activeSessionId = sessionId;
   if (
@@ -68,18 +65,14 @@ export function useSessionTasksAvailability(sessionId: string | null): SessionTa
   return useSyncExternalStore(
     (listener) => {
       listeners.add(listener);
-      return (): void => {
-        listeners.delete(listener);
-      };
+      return (): void => { listeners.delete(listener); };
     },
     () => sessionTasksAvailability(sessionId),
     () => EMPTY_AVAILABILITY,
   );
 }
 
-// Tracks when DesktopWorkspace is hosting the non-modal Tasks work-pane view
-// for a session, so Transcript's embedded BackgroundTasksInspector stands down
-// on Desktop while still powering standalone fixtures and Mobile.
+// Tracks when DesktopWorkspace is hosting the non-modal Tasks work-pane view.
 const hostedDesktopSessions = new Map<string, number>();
 
 export function registerDesktopTasksHost(sessionId: string): () => void {
@@ -97,13 +90,41 @@ export function useDesktopTasksHostActive(sessionId: string): boolean {
   return useSyncExternalStore(
     (listener) => {
       listeners.add(listener);
-      return (): void => {
-        listeners.delete(listener);
-      };
+      return (): void => { listeners.delete(listener); };
     },
     () => (hostedDesktopSessions.get(sessionId) ?? 0) > 0,
     () => false,
   );
+}
+
+// Module-level deep-link consumption so closing a Mobile sheet after sibling
+// switches or remounting a session-keyed Desktop view never reopens the link.
+const consumedDeepLinksBySession = new Map<string, Set<string>>();
+
+export function isDeepLinkConsumed(sessionId: string, rawHash: string): boolean {
+  return consumedDeepLinksBySession.get(sessionId)?.has(rawHash) ?? false;
+}
+
+export function consumeDeepLink(sessionId: string, rawHash: string): void {
+  let set = consumedDeepLinksBySession.get(sessionId);
+  if (!set) {
+    set = new Set();
+    consumedDeepLinksBySession.set(sessionId, set);
+  }
+  set.add(rawHash);
+}
+
+export function clearConsumedDeepLinks(sessionId: string, keepHash?: string | null): void {
+  const set = consumedDeepLinksBySession.get(sessionId);
+  if (!set) return;
+  if (!keepHash) {
+    consumedDeepLinksBySession.delete(sessionId);
+    return;
+  }
+  for (const hash of [...set]) {
+    if (hash !== keepHash) set.delete(hash);
+  }
+  if (set.size === 0) consumedDeepLinksBySession.delete(sessionId);
 }
 
 // Per-worker, per-pane scroll position preservation (Result and Info kept separate).
@@ -145,7 +166,7 @@ export function cachedCallDetail(
   return detail;
 }
 
-export function callResultExcerpt(detail: ManagedCallDetail | null): string | null {
+export function callResultExcerpt(detail: Partial<Pick<ManagedCallDetail, "result">> | null | undefined): string | null {
   if (!detail?.result) return null;
   if (detail.result.text?.trim()) return detail.result.text;
   if (detail.result.structured !== undefined && detail.result.structured !== null) {
@@ -155,8 +176,8 @@ export function callResultExcerpt(detail: ManagedCallDetail | null): string | nu
 }
 
 /** Shared Quote-to-Prompt helper used by Mobile dock, Desktop header, and Result CTA.
- *  Runs synchronously when the call result is already cached (or for non-Calls),
- *  and fetches the exact session+call result when a completed Call has not loaded yet. */
+ *  Runs synchronously when the call result is already embedded/cached (or for non-Calls),
+ *  and fetches the exact session+call detail unless `has_result === false`. */
 export function quoteTaskToPrompt(
   sessionId: string,
   task: TaskSummary,
@@ -172,8 +193,13 @@ export function quoteTaskToPrompt(
     return;
   }
   const call = task.call;
+  const embedded = callResultExcerpt(call as Partial<ManagedCallDetail>);
+  if (embedded !== null) {
+    finish(embedded);
+    return;
+  }
   const cached = cachedCallDetail(sessionId, call.call_id, call.updated_at_ms);
-  if (cached || !call.has_result) {
+  if (cached || call.has_result === false) {
     finish(callResultExcerpt(cached));
     return;
   }
@@ -204,9 +230,8 @@ function focusControlIn(surface: HTMLElement): boolean {
   return false;
 }
 
-/** Route `Review request` directly to the current session's live approval
- *  surface matching this task's request type and identity (never focusing an
- *  unrelated permission or another session's overlay). */
+/** Route `Review request` strictly to the current session's live approval
+ *  surface matching this task's exact request type and presented identity. */
 export function focusTaskApprovalSurface(sessionId: string, task: TaskSummary): boolean {
   const escSession = CSS.escape(sessionId);
   const escTarget = CSS.escape(task.key);
@@ -214,8 +239,6 @@ export function focusTaskApprovalSurface(sessionId: string, task: TaskSummary): 
     ? [
       `[data-desktop-approval-dock="call"][data-approval-session="${escSession}"][data-approval-target="${escTarget}"]`,
       `[data-call-approval-overlay][data-approval-session="${escSession}"][data-approval-target="${escTarget}"]`,
-      `[data-desktop-approval-dock="call"][data-approval-session="${escSession}"]`,
-      `[data-call-approval-overlay][data-approval-session="${escSession}"]`,
     ]
     : [
       `[data-desktop-approval-dock="permission"][data-approval-session="${escSession}"][data-approval-target="${escTarget}"]`,
@@ -225,22 +248,29 @@ export function focusTaskApprovalSurface(sessionId: string, task: TaskSummary): 
     const surface = document.querySelector<HTMLElement>(selector);
     if (!surface) continue;
     if (focusControlIn(surface)) return true;
-    // Collapsed Mobile approval pill: expand it by sticking to bottom, then focus.
+    // Collapsed Mobile approval pill: expand it by sticking to bottom, then verify the exact match still exists.
     requestStickToBottom(sessionId);
     requestAnimationFrame(() => {
       const expanded = document.querySelector<HTMLElement>(selector);
-      if (expanded) focusControlIn(expanded);
+      if (expanded && focusControlIn(expanded)) return;
+      notify("This approval request has changed or is no longer active.", "info");
     });
     return true;
   }
-  notify("Answer the current session request above the composer first", "info");
+  notify("This approval request has changed or is no longer active.", "info");
   return false;
 }
 
-/** Ask the mounted Transcript to scroll to a task's anchor row. */
+// Session-scoped pending Locate / Origin Tool reveals so switching from Explore
+// to History delivers the navigation as soon as Transcript mounts.
 export const LOCATE_TASK_EVENT = "cowboy:locate-background-task";
+export const OPEN_TASK_ORIGIN_TOOL_EVENT = "cowboy:open-task-origin-tool";
+
+const pendingLocateBySession = new Map<string, string>();
+const pendingOriginToolBySession = new Map<string, string>();
 
 export function dispatchLocateTask(sessionId: string, key: string): void {
+  pendingLocateBySession.set(sessionId, key);
   globalThis.dispatchEvent(
     new CustomEvent<{ sessionId: string; key: string }>(LOCATE_TASK_EVENT, {
       detail: { sessionId, key },
@@ -248,13 +278,23 @@ export function dispatchLocateTask(sessionId: string, key: string): void {
   );
 }
 
-/** Ask the mounted Transcript to open an MCP Call's originating tool card. */
-export const OPEN_TASK_ORIGIN_TOOL_EVENT = "cowboy:open-task-origin-tool";
+export function consumePendingLocateTask(sessionId: string): string | null {
+  const key = pendingLocateBySession.get(sessionId) ?? null;
+  if (key !== null) pendingLocateBySession.delete(sessionId);
+  return key;
+}
 
 export function dispatchOpenTaskOriginTool(sessionId: string, toolKey: string): void {
+  pendingOriginToolBySession.set(sessionId, toolKey);
   globalThis.dispatchEvent(
     new CustomEvent<{ sessionId: string; toolKey: string }>(OPEN_TASK_ORIGIN_TOOL_EVENT, {
       detail: { sessionId, toolKey },
     }),
   );
+}
+
+export function consumePendingOpenTaskOriginTool(sessionId: string): string | null {
+  const key = pendingOriginToolBySession.get(sessionId) ?? null;
+  if (key !== null) pendingOriginToolBySession.delete(sessionId);
+  return key;
 }

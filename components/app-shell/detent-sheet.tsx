@@ -328,12 +328,14 @@ function useDetentDismiss({
   paint,
   signRef,
   geomRef,
+  onBeforeDismiss,
 }: {
   readonly open: boolean;
   readonly onClose: () => void;
   readonly paint: (y: number, animate: boolean) => void;
   readonly signRef: { current: number };
   readonly geomRef: { current: { detents: number[]; closedPx: number } };
+  readonly onBeforeDismiss?: () => void;
 }): () => void {
   const timerRef = useRef<ReturnType<typeof globalThis.setTimeout> | null>(null);
   useEffect(() => () => {
@@ -352,6 +354,7 @@ function useDetentDismiss({
     if (timerRef.current !== null) {
       return;
     }
+    onBeforeDismiss?.();
     fireHaptic("light");
     paint(signRef.current * geomRef.current.closedPx, true);
     const timer = globalThis.setTimeout(() => {
@@ -535,8 +538,15 @@ export function DetentSheet(
   // Measure rendered content in a rAF (avoiding sync reflow during click flush),
   // then animate in. Opt-in maxHeight sheets also observe height changes so a
   // growing peek sheet never dismisses using its stale initial height.
+  const measureGeomRef = useRef<(() => void) | null>(null);
+  const pendingResizeRef = useRef(false);
+  const flushPendingResize = useCallback((): void => {
+    if (!pendingResizeRef.current) return;
+    pendingResizeRef.current = false;
+    measureGeomRef.current?.();
+  }, []);
   useEffect(() => {
-    if (!open) { animatedRef.current = false; return; }
+    if (!open) { animatedRef.current = false; pendingResizeRef.current = false; measureGeomRef.current = null; return; }
     const measureGeom = (): { detents: number[]; closedPx: number } => {
       const closedPx = sheetRef.current?.offsetHeight ?? MAX_FRACTION * globalThis.innerHeight;
       const h = globalThis.innerHeight;
@@ -545,10 +555,12 @@ export function DetentSheet(
       geomRef.current = { detents, closedPx };
       return geomRef.current;
     };
+    measureGeomRef.current = measureGeom;
     let ro: ResizeObserver | null = null;
     if (!isCover && maxHeight && sheetRef.current && typeof ResizeObserver !== "undefined") {
       ro = new ResizeObserver(() => {
-        if (!animatedRef.current || dragRef.current) return;
+        if (!animatedRef.current) return;
+        if (dragRef.current) { pendingResizeRef.current = true; return; }
         measureGeom();
       });
       ro.observe(sheetRef.current);
@@ -566,15 +578,12 @@ export function DetentSheet(
     });
     return () => {
       ro?.disconnect();
+      measureGeomRef.current = null;
       globalThis.cancelAnimationFrame(measureFrame);
       if (rafRef.current !== 0) { globalThis.cancelAnimationFrame(rafRef.current); rafRef.current = 0; }
     };
   }, [open, paint, sign, isCover, peekDetent, haptic, animateOnOpen, maxHeight]);
-
-  // Light tap on dismiss — the single choke point for every close path (flick
-  // down, tap-outside, programmatic), mirroring the tap on open. The helper
-  // also cancels a stale settle when a controlled sheet reopens quickly.
-  const dismiss = useDetentDismiss({ open, onClose, paint, signRef, geomRef });
+  const dismiss = useDetentDismiss({ open, onClose, paint, signRef, geomRef, onBeforeDismiss: flushPendingResize });
 
   const onPointerDown = useCallback((e: ReactPointerEvent<HTMLDivElement>): void => {
     e.preventDefault();
@@ -608,9 +617,8 @@ export function DetentSheet(
   const finishDrag = useCallback((projectVelocity: boolean): void => {
     const d = dragRef.current;
     dragRef.current = null;
-    if (!d) {
-      return;
-    }
+    if (!d) return;
+    flushPendingResize();
     const s = signRef.current;
     const { detents, closedPx } = geomRef.current;
     const last = d.samples.at(-1);
@@ -640,7 +648,7 @@ export function DetentSheet(
       }
     });
     paint(detents[best] ?? 0, true);
-  }, [dismiss, paint]);
+  }, [dismiss, flushPendingResize, paint]);
 
   const onPointerUp = useCallback((): void => finishDrag(true), [finishDrag]);
   // iOS can cancel a captured pointer when a system gesture or interruption

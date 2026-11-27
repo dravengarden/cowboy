@@ -1,6 +1,6 @@
 import { desktopSize } from "../surface/desktopSize";
 import { alpha, Box, Typography } from "@mui/material";
-import { lazy, memo, Suspense, useMemo } from "react";
+import { lazy, memo, Suspense, useEffect, useMemo } from "react";
 import {
   type DesktopPane,
   useDesktopWorkspace,
@@ -39,7 +39,7 @@ import { TRANSCRIPT_HIDDEN_REASON } from "./review/conversationViewCommands";
 import { useCallsDockLegacy } from "../backgroundTasks";
 import { focusedSubagentStop, SUBAGENT_STOP_KEY } from "../subagents";
 import { DesktopTasksView } from "../tasks/DesktopTasksView";
-import { useSessionTasksAvailability } from "../tasks/taskEvents";
+import { LOCATE_TASK_EVENT, OPEN_TASK_ORIGIN_TOOL_EVENT, useSessionTasksAvailability } from "../tasks/taskEvents";
 
 const DesktopReviewView = lazy(async () => {
   const module = await import("./review/DesktopReviewView");
@@ -177,6 +177,21 @@ function PaneHeader({
   );
 }
 
+function useHistoryRevealOnTaskNavigation(sessionId: string, projection: TranscriptProjection, onProjectionChange: (next: TranscriptProjection) => void): void {
+  useEffect(() => {
+    const ensureHistory = (event: Event): void => {
+      const detail = (event as CustomEvent<{ sessionId?: string }>).detail;
+      if (detail?.sessionId === sessionId && projection !== "history") onProjectionChange("history");
+    };
+    globalThis.addEventListener(LOCATE_TASK_EVENT, ensureHistory);
+    globalThis.addEventListener(OPEN_TASK_ORIGIN_TOOL_EVENT, ensureHistory);
+    return () => {
+      globalThis.removeEventListener(LOCATE_TASK_EVENT, ensureHistory);
+      globalThis.removeEventListener(OPEN_TASK_ORIGIN_TOOL_EVENT, ensureHistory);
+    };
+  }, [sessionId, projection, onProjectionChange]);
+}
+
 export const DesktopWorkspace = memo(function DesktopWorkspace({
   promptWidth,
   resizing,
@@ -207,6 +222,7 @@ export const DesktopWorkspace = memo(function DesktopWorkspace({
   promptRatio?: number | null;
 }): React.JSX.Element {
   const workspace = useDesktopWorkspace();
+  useHistoryRevealOnTaskNavigation(sessionId, projection, onProjectionChange);
   const promptCollapsed = workspace.collapsedPanes.prompt;
   const conversationCollapsed = workspace.collapsedPanes.conversation;
   const { view, reviewMounted, showView } = useDesktopWorkView(sessionId);
