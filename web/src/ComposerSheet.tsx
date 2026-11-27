@@ -42,6 +42,7 @@ import { MobileSheetDismiss } from "@cowboy/app-shell";
 import { type SessionSettingsFocus } from "./sessionSettingsOpen";
 import { ConfigRevertBack } from "./ConfigRevertBack";
 import { ContextRolloverSettings, useCacheProtectionStatus } from "./ContextRolloverSettings";
+import { SessionCacheMetricsSection } from "./SessionCacheMetricsSection";
 
 export function SessionActionConfirmDialog({
   action,
@@ -963,6 +964,7 @@ export function SessionInfoSection({
           </Stack>
         )}
         <ContextRolloverSettings sessionId={session.id} />
+        <SessionCacheMetricsSection sessionId={session.id} />
         <Box sx={{ pt: 0.5 }}>
           <ButtonBase
             aria-label={actionsExpanded

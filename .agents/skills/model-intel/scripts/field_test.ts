@@ -198,3 +198,97 @@ test("pruneOlderSnapshots removes older dated snapshots and keeps latest and non
     rmSync(dir, { recursive: true, force: true });
   }
 });
+
+import { readCacheTelemetryAudit, summarizeCacheTelemetryRows } from "./field.ts";
+
+test("summarizeCacheTelemetryRows detects telemetry-coverage-drop and stratifies shadow TTL curves", () => {
+  const nowMs = Date.parse("2026-11-27T00:00:00Z");
+  const rows = [];
+  // Previous half (10 days ago, v1.0.0): 12 turns, 100% cache coverage, Claude disjoint write math.
+  for (let i = 0; i < 12; i++) {
+    rows.push({
+      session_key: `sess-prev-${i % 3}`,
+      occurred_at_ms: nowMs - 10 * 86_400_000 + i * 60_000,
+      provider: "claude-code",
+      provider_version: "1.0.0",
+      model: "claude-opus-4-6",
+      stop_reason: "end_turn",
+      prompt_origin: "human",
+      idle_gap_ms: 12 * 60_000, // 10-20m bucket
+      renewed: false,
+      usage_observed: true,
+      inclusive_input_tokens: 100_000,
+      cached_read_tokens: 80_000,
+      cache_write_tokens: 18_000,
+      uncached_input_tokens: 20_000,
+    });
+  }
+  // Current half (2 days ago, v1.1.0): 12 turns, cache counters dropped to 0% -> regression alert!
+  for (let i = 0; i < 12; i++) {
+    rows.push({
+      session_key: `sess-curr-${i % 2}`,
+      occurred_at_ms: nowMs - 2 * 86_400_000 + i * 60_000,
+      provider: "claude-code",
+      provider_version: "1.1.0",
+      model: "claude-opus-4-6",
+      stop_reason: "end_turn",
+      prompt_origin: "human",
+      idle_gap_ms: 45 * 60_000, // 30-60m bucket
+      renewed: true,
+      usage_observed: true,
+      inclusive_input_tokens: 50_000,
+      cached_read_tokens: null,
+      cache_write_tokens: null,
+      uncached_input_tokens: null,
+    });
+  }
+  const audit = summarizeCacheTelemetryRows(rows, nowMs, 14, "turn_cache_facts");
+  assertEquals(audit.providers.length, 1);
+  const claude = audit.providers[0]!;
+  assertEquals(claude.observed_cache_turns, 12);
+  assertEquals(claude.uncached_input_tokens, 240_000);
+  assertEquals(claude.cache_write_tokens, 216_000);
+  assertEquals(claude.cached_input_share, 0.8);
+  assertEquals(claude.cache_coverage, 0.5);
+
+  assertEquals(audit.coverage_regressions.length, 1);
+  assertEquals(audit.coverage_regressions[0]?.metric, "cache_coverage");
+  assertEquals(audit.coverage_regressions[0]?.previous_version, "1.0.0");
+  assertEquals(audit.coverage_regressions[0]?.current_version, "1.1.0");
+  assertEquals(audit.coverage_regressions[0]?.drop_ratio, 1);
+
+  assertEquals(audit.shadow_ttl_curves.length, 2);
+  assertEquals(audit.shadow_ttl_curves[0]?.gap_bucket, "10-20m");
+  assertEquals(audit.shadow_ttl_curves[0]?.renewed, false);
+  assertEquals(audit.shadow_ttl_curves[0]?.distinct_sessions, 3);
+  assertEquals(audit.shadow_ttl_curves[0]?.distinct_days, 1);
+  assertEquals(audit.shadow_ttl_curves[1]?.gap_bucket, "30-60m");
+  assertEquals(audit.shadow_ttl_curves[1]?.renewed, true);
+  assertEquals(audit.shadow_ttl_curves[1]?.mean_uncached_input, null);
+});
+
+test("readCacheTelemetryAudit reads indexed turn_cache_facts when present", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cowboy-cache-audit-test-"));
+  try {
+    const dbPath = join(dir, "cowboy.sqlite3");
+    const db = new Database(dbPath);
+    db.exec(`CREATE TABLE turn_cache_facts (
+      session_id TEXT, turn_end_seq INTEGER, occurred_at_ms INTEGER,
+      provider TEXT, provider_version TEXT, model TEXT, stop_reason TEXT,
+      prompt_origin TEXT, idle_gap_ms INTEGER, renewed INTEGER, usage_observed INTEGER,
+      inclusive_input_tokens INTEGER, cached_read_tokens INTEGER, cache_write_tokens INTEGER
+    )`);
+    const now = Date.parse("2026-11-27T00:00:00Z");
+    db.query(
+      "INSERT INTO turn_cache_facts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    ).run("s1", 2, now - 1_000, "codex", "3.6.32", "gpt-6.2-sol", "end_turn", "human", 8 * 60_000, 0, 1, 100_000, 90_000, null);
+    db.close();
+    const audit = readCacheTelemetryAudit(dbPath, 14, now);
+    assertEquals(audit.source, "turn_cache_facts");
+    assertEquals(audit.providers[0]?.provider, "codex");
+    assertEquals(audit.providers[0]?.cached_input_share, 0.9);
+    assertEquals(audit.shadow_ttl_curves[0]?.gap_bucket, "5-10m");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});

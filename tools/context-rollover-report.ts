@@ -6,23 +6,224 @@
 //   bun tools/context-rollover-report.ts /var/lib/cowboy/cowboy.sqlite3 [--days 30] [--json]
 import { Database } from "bun:sqlite";
 
-const args = process.argv.slice(2);
-const path = args.find((arg) => !arg.startsWith("--"));
-if (!path) {
-  console.error("usage: context-rollover-report.ts <cowboy.sqlite3> [--days N] [--json]");
-  process.exit(2);
+export interface RawTurnRow {
+  provider: string;
+  input: number;
+  cached: number | null;
+  written: number | null;
+  uncached: number | null;
+  gap_ms: number | null;
+  renewed: number;
 }
-const daysIndex = args.indexOf("--days");
-const days = daysIndex >= 0 ? Number(args[daysIndex + 1]) : 30;
-const since = Date.now() - days * 86_400_000;
 
-const db = new Database(path, { readonly: true });
-db.exec("PRAGMA query_only = 1");
+/**
+ * Disjoint cache token breakdown for one turn.
+ *
+ * `TurnUsage.uncached_input_tokens` equals `input_tokens - cached_input_tokens`
+ * and therefore already includes `cache_write_tokens` (e.g. Claude Messages).
+ * Never sum `cache_write_tokens + uncached_input_tokens`.
+ */
+export interface NormalizedTurnCacheUsage {
+  inclusive_input: number;
+  cached_read: number | null;
+  cache_write: number | null;
+  uncached_total: number | null;
+  other_uncached: number | null;
+}
 
-// One row per completed turn after a human prompt. `renewed` marks a turn
-// whose prompt followed a renewal marker in the same gap.
-const rows = db
-  .query(`
+export function normalizeTurnCacheUsage(row: {
+  input: number;
+  cached: number | null;
+  written: number | null;
+  uncached: number | null;
+}): NormalizedTurnCacheUsage | null {
+  if (!Number.isFinite(row.input) || row.input < 0) return null;
+  const inclusive_input = row.input;
+  const cached_read =
+    row.cached !== null && Number.isFinite(row.cached) && row.cached >= 0
+      ? row.cached
+      : null;
+  const cache_write =
+    row.written !== null && Number.isFinite(row.written) && row.written >= 0
+      ? row.written
+      : null;
+  const raw_uncached =
+    row.uncached !== null && Number.isFinite(row.uncached) && row.uncached >= 0
+      ? row.uncached
+      : null;
+
+  if (cached_read !== null && cached_read > inclusive_input) return null;
+
+  // `uncached_total` is strictly `inclusive_input - cached_read` when observed.
+  const derived_uncached =
+    cached_read !== null ? inclusive_input - cached_read : raw_uncached;
+  if (
+    derived_uncached !== null &&
+    raw_uncached !== null &&
+    derived_uncached !== raw_uncached
+  ) {
+    return null;
+  }
+  const uncached_total = derived_uncached;
+
+  if (
+    cache_write !== null &&
+    uncached_total !== null &&
+    cache_write > uncached_total
+  ) {
+    return null;
+  }
+  const other_uncached =
+    uncached_total !== null && cache_write !== null
+      ? uncached_total - cache_write
+      : null;
+
+  return {
+    inclusive_input,
+    cached_read,
+    cache_write,
+    uncached_total,
+    other_uncached,
+  };
+}
+
+export const GAP_BUCKETS: [string, number][] = [
+  ["<5m", 5 * 60_000],
+  ["5-30m", 30 * 60_000],
+  ["30-60m", 60 * 60_000],
+  ["1-3h", 3 * 3_600_000],
+  ["3-12h", 12 * 3_600_000],
+  [">12h", Number.POSITIVE_INFINITY],
+];
+
+const bucket = (gap: number): string =>
+  GAP_BUCKETS.find(([, limit]) => gap < limit)![0];
+
+export interface RolloverReportRow {
+  provider: string;
+  gap: string;
+  renewed: boolean;
+  turns: number;
+  observed_cache_turns: number;
+  mean_input: number;
+  mean_cached_read: number | null;
+  mean_cache_write: number | null;
+  mean_uncached_total: number | null;
+  cached_share: number | null;
+  uncached_share: number | null;
+}
+
+interface Group {
+  provider: string;
+  gap: string;
+  renewed: boolean;
+  turns: number;
+  input: number;
+  observed_cache_turns: number;
+  observed_cache_input: number;
+  cached_read: number;
+  uncached_total: number;
+  observed_write_turns: number;
+  cache_write: number;
+}
+
+export function aggregateRolloverReport(
+  rows: readonly RawTurnRow[],
+): RolloverReportRow[] {
+  const groups = new Map<string, Group>();
+  for (const row of rows) {
+    if (row.gap_ms === null || row.gap_ms < 0) continue;
+    const normalized = normalizeTurnCacheUsage(row);
+    if (!normalized) continue;
+    const gap = bucket(row.gap_ms);
+    const key = `${row.provider}|${gap}|${row.renewed}`;
+    const group = groups.get(key) ?? {
+      provider: row.provider,
+      gap,
+      renewed: row.renewed === 1,
+      turns: 0,
+      input: 0,
+      observed_cache_turns: 0,
+      observed_cache_input: 0,
+      cached_read: 0,
+      uncached_total: 0,
+      observed_write_turns: 0,
+      cache_write: 0,
+    };
+    group.turns += 1;
+    group.input += normalized.inclusive_input;
+    if (normalized.cached_read !== null && normalized.uncached_total !== null) {
+      group.observed_cache_turns += 1;
+      group.observed_cache_input += normalized.inclusive_input;
+      group.cached_read += normalized.cached_read;
+      group.uncached_total += normalized.uncached_total;
+    }
+    if (normalized.cache_write !== null) {
+      group.observed_write_turns += 1;
+      group.cache_write += normalized.cache_write;
+    }
+    groups.set(key, group);
+  }
+  return [...groups.values()]
+    .sort(
+      (a, b) =>
+        a.provider.localeCompare(b.provider) ||
+        GAP_BUCKETS.findIndex(([name]) => name === a.gap) -
+          GAP_BUCKETS.findIndex(([name]) => name === b.gap) ||
+        Number(a.renewed) - Number(b.renewed),
+    )
+    .map((group) => ({
+      provider: group.provider,
+      gap: group.gap,
+      renewed: group.renewed,
+      turns: group.turns,
+      observed_cache_turns: group.observed_cache_turns,
+      mean_input: Math.round(group.input / group.turns),
+      mean_cached_read:
+        group.observed_cache_turns > 0
+          ? Math.round(group.cached_read / group.observed_cache_turns)
+          : null,
+      mean_cache_write:
+        group.observed_write_turns > 0
+          ? Math.round(group.cache_write / group.observed_write_turns)
+          : null,
+      mean_uncached_total:
+        group.observed_cache_turns > 0
+          ? Math.round(group.uncached_total / group.observed_cache_turns)
+          : null,
+      cached_share:
+        group.observed_cache_input > 0
+          ? Number((group.cached_read / group.observed_cache_input).toFixed(4))
+          : null,
+      uncached_share:
+        group.observed_cache_input > 0
+          ? Number(
+              (group.uncached_total / group.observed_cache_input).toFixed(4),
+            )
+          : null,
+    }));
+}
+
+if (import.meta.main) {
+  const args = process.argv.slice(2);
+  const path = args.find((arg) => !arg.startsWith("--"));
+  if (!path) {
+    console.error(
+      "usage: context-rollover-report.ts <cowboy.sqlite3> [--days N] [--json]",
+    );
+    process.exit(2);
+  }
+  const daysIndex = args.indexOf("--days");
+  const days = daysIndex >= 0 ? Number(args[daysIndex + 1]) : 30;
+  const since = Date.now() - days * 86_400_000;
+
+  const db = new Database(path, { readonly: true });
+  db.exec("PRAGMA query_only = 1");
+
+  // One row per completed turn after a human prompt. `renewed` marks a turn
+  // whose prompt followed a renewal marker in the same gap.
+  const rows = db
+    .query(`
   WITH te AS (
     SELECT e.session_id, e.seq, e.ts_ms, s.provider,
       json_extract(e.payload, '$.usage.input_tokens') AS input,
@@ -50,77 +251,14 @@ const rows = db
   FROM te
   WHERE te.prev_end IS NOT NULL AND te.input > 0
 `)
-  .all(since) as {
-  provider: string;
-  input: number;
-  cached: number | null;
-  written: number | null;
-  uncached: number | null;
-  gap_ms: number | null;
-  renewed: number;
-}[];
+    .all(since) as RawTurnRow[];
 
-const buckets: [string, number][] = [
-  ["<5m", 5 * 60_000],
-  ["5-30m", 30 * 60_000],
-  ["30-60m", 60 * 60_000],
-  ["1-3h", 3 * 3_600_000],
-  ["3-12h", 12 * 3_600_000],
-  [">12h", Number.POSITIVE_INFINITY],
-];
-const bucket = (gap: number): string => buckets.find(([, limit]) => gap < limit)![0];
+  const report = aggregateRolloverReport(rows);
 
-interface Group {
-  provider: string;
-  gap: string;
-  renewed: boolean;
-  turns: number;
-  input: number;
-  written: number;
-  fresh: number;
-}
-const groups = new Map<string, Group>();
-for (const row of rows) {
-  if (row.gap_ms === null) continue;
-  const gap = bucket(row.gap_ms);
-  const key = `${row.provider}|${gap}|${row.renewed}`;
-  const group = groups.get(key) ?? {
-    provider: row.provider,
-    gap,
-    renewed: row.renewed === 1,
-    turns: 0,
-    input: 0,
-    written: 0,
-    fresh: 0,
-  };
-  group.turns += 1;
-  group.input += row.input;
-  group.written += row.written ?? 0;
-  group.fresh += (row.written ?? 0) + (row.uncached ?? 0);
-  groups.set(key, group);
-}
-const report = [...groups.values()]
-  .sort(
-    (a, b) =>
-      a.provider.localeCompare(b.provider) ||
-      buckets.findIndex(([name]) => name === a.gap) -
-        buckets.findIndex(([name]) => name === b.gap) ||
-      Number(a.renewed) - Number(b.renewed),
-  )
-  .map((group) => ({
-    provider: group.provider,
-    gap: group.gap,
-    renewed: group.renewed,
-    turns: group.turns,
-    mean_input: Math.round(group.input / group.turns),
-    mean_cache_write: Math.round(group.written / group.turns),
-    // Written plus uncached input: what the turn paid at more than read rate.
-    fresh_ratio: Number((group.fresh / Math.max(1, group.input)).toFixed(3)),
-  }));
-
-if (args.includes("--json")) {
-  console.log(JSON.stringify({ since_ms: since, days, groups: report }, null, 2));
-} else {
-  console.log(`Turns since ${new Date(since).toISOString()} (${days} days)`);
-  console.table(report);
+  if (args.includes("--json")) {
+    console.log(JSON.stringify({ since_ms: since, days, groups: report }, null, 2));
+  } else {
+    console.log(`Turns since ${new Date(since).toISOString()} (${days} days)`);
+    console.table(report);
+  }
 }

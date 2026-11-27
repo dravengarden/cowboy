@@ -72,6 +72,7 @@ mod sqlite;
 pub mod task_notifications;
 mod telemetry_bindings;
 pub mod transcript_anchors;
+pub mod turn_cache_facts;
 mod usage_execution;
 
 use sqlite::SqliteStorage;
@@ -6049,6 +6050,7 @@ impl PostgresStorage {
                 .context("INSERT notification intent")?;
         }
         managed_calls::project_events_pg(&mut tx, events, created_at_ms).await?;
+        turn_cache_facts::project_events_pg(&mut tx, events, created_at_ms).await?;
         tx.commit().await.context("commit event batch")?;
         Ok(())
     }

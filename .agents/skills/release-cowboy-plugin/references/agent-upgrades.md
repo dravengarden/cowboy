@@ -101,6 +101,54 @@ namespace, no model request):
   SHA-512 in Columbus `machines/ovh/account-sandbox/agy-sha512.allow` before
   OVH can run it, and one real turn's acceptance after installation.
 
+## Telemetry capability and prompt-cache audit
+
+Every Agent CLI, ACP adapter, gateway, or model-lineup upgrade MUST run this
+check before finalizing release notes or proposing default changes. Compare
+against the advisory inventory in `models/cache-and-telemetry.json` (which
+never grants runtime capability):
+
+1. **Diff upstream metrics and accounting semantics**:
+   - Inspect upstream release notes and adapter/gateway code for added,
+     renamed, changed, or dropped usage counters (`input_tokens`,
+     `cached_input_tokens`, `cache_write_tokens`, `uncached_input_tokens`,
+     `reasoning_tokens`, `_meta.quota.model_usage`, OTLP/request observation
+     events, and gateway cache headers/ledgers).
+   - Preserve Cowboy's disjoint token accounting invariant:
+     `uncached_input_tokens` equals `input_tokens - cached_input_tokens` and
+     already includes `cache_write_tokens`. Unknown counters stay `null`, never
+     coerced to `0`.
+2. **Enforce runtime capability truth and graceful App degradation**:
+   - Never rely on `models/cache-and-telemetry.json` to enable a runtime
+     feature. Any new telemetry emitter (for example `codex-otlp-http-v1`)
+     requires **both** its signed manifest declaration and its runtime consumer
+     in the same release.
+   - Verify `GET /api/provider-accounts/{account_id}/cache-metrics` and
+     `GET /api/sessions/{id}/cache-metrics` remain honest when a counter is
+     unreported or regresses (`cached_input_share: null`, explicit
+     `observed_cache_turns / eligible_turns` coverage, no fabricated cold
+     request counts or savings).
+3. **Review prompt-cache TTL curves and policy boundaries**:
+   - Check official vendor prompt-caching documentation for TTL or pricing
+     changes on the upgraded models/plans, recording date and source.
+   - Run the read-only periodic audit to check for `telemetry-coverage-drop`
+     regressions and inspect the shadow `(provider, model, renewed)` idle-gap
+     diagnostic curves:
+
+     ```bash
+     nix develop -c bun .agents/skills/model-intel/scripts/periodic-audit.ts \
+       --database /var/lib/cowboy/cowboy.sqlite3 --days 14
+     ```
+
+   - Treat shadow turn-level idle-gap curves as advisory diagnostics, never as
+     an automatic trigger to mutate `context_rollover` defaults. Never weaken
+     Antigravity's `docs/requirements.md` consumer-account boundary (automatic
+     rollover disabled; background keepalive forbidden) or merge DeepSeek's
+     independent `deepseek_cache_protection` flag with idle rollover during an
+     ordinary dependency upgrade.
+   - Update `models/cache-and-telemetry.json` when verified telemetry capabilities
+     or official/empirical TTL observations change.
+
 ## Configure Recommended without product code
 
 The source of truth is `plugins/<id>/provider.json` → `configuration_presets`.

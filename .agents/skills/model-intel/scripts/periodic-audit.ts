@@ -20,10 +20,12 @@ import {
   type FetchFn,
 } from "../../release-cowboy-plugin/scripts/audit-dependencies.ts";
 import {
+  type CacheTelemetryAudit,
   computeQuotaBurn,
   type DeepSeekGatewayStat,
   type QuotaBurn,
   type QuotaWindow,
+  readCacheTelemetryAudit,
   readCompletedCallCounts,
   readDeepSeekGatewayStats,
   readLedgerCalls,
@@ -76,6 +78,7 @@ export type PeriodicAuditReport = {
         total_reviews: number;
         total_analyses: number;
         deepseek_gateway: DeepSeekGatewayStat[];
+        cache_telemetry: CacheTelemetryAudit;
       } & TelemetrySummary)
     | {
         available: false;
@@ -252,12 +255,14 @@ export async function runPeriodicAudit(
         threshold: options.driftThreshold ?? 0.3,
       });
       const deepseekGateway = readDeepSeekGatewayStats(database, since);
+      const cacheTelemetry = readCacheTelemetryAudit(database, windowDays, nowMs);
       fieldTelemetry = {
         available: true,
         window_days: windowDays,
         total_reviews: summary.review_groups.reduce((s, g) => s + g.n, 0),
         total_analyses: summary.analysis_groups.reduce((s, g) => s + g.n, 0),
         deepseek_gateway: deepseekGateway,
+        cache_telemetry: cacheTelemetry,
         ...summary,
       };
     } catch (error) {
@@ -353,6 +358,13 @@ export async function runPeriodicAudit(
       const pct = `${drift.delta_ratio >= 0 ? "+" : ""}${Math.round(drift.delta_ratio * 100)}%`;
       reasons.push(
         `field-cost-drift: ${drift.target} median ${drift.live_median_tokens} vs recorded ${drift.recorded_median_tokens} (${pct}, n=${drift.n})`,
+      );
+    }
+    for (const drop of fieldTelemetry.cache_telemetry.coverage_regressions) {
+      const prevPct = Math.round(drop.previous_coverage * 100);
+      const currPct = Math.round(drop.current_coverage * 100);
+      reasons.push(
+        `telemetry-coverage-drop: ${drop.provider} ${drop.metric} ${prevPct}% (${drop.previous_version}, n=${drop.previous_turns}) -> ${currPct}% (${drop.current_version}, n=${drop.current_turns})`,
       );
     }
   }
@@ -498,6 +510,46 @@ export function renderMarkdown(report: PeriodicAuditReport): string {
         "",
       );
     }
+    const ct = ft.cache_telemetry;
+    if (ct.providers.length > 0) {
+      const fmtPct = (v: number | null) => (v !== null ? `${(v * 100).toFixed(1)}%` : "-");
+      lines.push(
+        `### Prompt-cache telemetry (turn-level · source: ${ct.source})`,
+        "| Provider | Eligible turns | Usage cov | Cache cov | Cached input share | Uncached tokens | Renewed |",
+        "| --- | --- | --- | --- | --- | --- | --- |",
+        ...ct.providers.map(
+          (p) =>
+            `| ${p.provider} | ${p.eligible_turns} | ${fmtPct(p.usage_coverage)} | ${fmtPct(p.cache_coverage)} | ${fmtPct(p.cached_input_share)} | ${p.uncached_input_tokens !== null ? p.uncached_input_tokens.toLocaleString() : "-"} | ${p.renewed_turns} |`,
+        ),
+        "",
+      );
+    }
+    if (ct.coverage_regressions.length > 0) {
+      lines.push(
+        "### Telemetry coverage regressions",
+        ...ct.coverage_regressions.map(
+          (r) =>
+            `- ${r.provider} ${r.metric}: ${(r.previous_coverage * 100).toFixed(1)}% (${r.previous_version}, n=${r.previous_turns}) -> ${(r.current_coverage * 100).toFixed(1)}% (${r.current_version}, n=${r.current_turns})`,
+        ),
+        "",
+      );
+    }
+    const visibleCurves = ct.shadow_ttl_curves.filter((c) => c.turns >= 2);
+    if (visibleCurves.length > 0) {
+      const fmtPct = (v: number | null) => (v !== null ? `${(v * 100).toFixed(1)}%` : "-");
+      lines.push(
+        "### Shadow idle-gap diagnostic curves (turn-level, advisory)",
+        `> ${ct.shadow_diagnostic_note}`,
+        "",
+        "| Provider | Model | Renewed | Gap | Turns | Sessions | Days | Mean uncached | Cached share |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ...visibleCurves.slice(0, 40).map(
+          (c) =>
+            `| ${c.provider} | ${c.model} | ${c.renewed ? "yes" : "no"} | ${c.gap_bucket} | ${c.turns} | ${c.distinct_sessions} | ${c.distinct_days} | ${c.mean_uncached_input !== null ? c.mean_uncached_input.toLocaleString() : "-"} | ${fmtPct(c.cached_input_share)} |`,
+        ),
+        "",
+      );
+    }
   }
   lines.push("## Upstream harness dependencies");
   if (!report.upstream_dependencies.checked) {
@@ -547,6 +599,11 @@ export function formatLogfmt(report: PeriodicAuditReport): string {
       ["analyses", report.field_telemetry.total_analyses],
       ["cost_drifts", report.field_telemetry.cost_drifts.length],
       ["deepseek_requests", dsReqs],
+      ["cache_providers", report.field_telemetry.cache_telemetry.providers.length],
+      [
+        "telemetry_coverage_drops",
+        report.field_telemetry.cache_telemetry.coverage_regressions.length,
+      ],
     );
   }
   if (report.quota_telemetry.available) {

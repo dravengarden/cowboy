@@ -19,6 +19,7 @@ are changed only through `release-cowboy-plugin`.
 | `models/catalog.json` | `scripts/score.ts` | per-target task cells, workload scores, tiers, recommendations |
 | `models/summary.md` | `scripts/score.ts` | short routing summary for agents; never hand-edited |
 | `models/report.md` | this workflow | detailed report: sources, disagreements, gaps, decisions |
+| `models/cache-and-telemetry.json` | advisory inventory | per-Provider telemetry coverage and observed prompt-cache TTL notes; never grants runtime capability |
 
 Reference-only measurements (sources whose terms forbid redistribution) stay
 in `$XDG_STATE_HOME/cowboy/model-intel/observations/`. The scorer rejects them

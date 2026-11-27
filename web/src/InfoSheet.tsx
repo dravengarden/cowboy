@@ -57,6 +57,7 @@ import { CodeBufferCleanupPanel } from "./CodeBufferCleanupPanel";
 import { CodeBufferSynchronizationPanel } from "./CodeBufferSynchronizationPanel";
 import { CodeBufferNavigationPanel } from "./CodeBufferNavigationPanel";
 import { QuotaMeter } from "./InfoMetricVisuals";
+import { ProviderCacheMetricsSection } from "./ProviderCacheMetricsSection";
 import { ClientStorageInfoSection, ServiceStorageInfoSection } from "./InfoRuntimeMetrics";
 import { SessionMaintenancePanel } from "./SessionMaintenancePanel";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
@@ -327,7 +328,7 @@ function ProviderUsageCardBody({ account: identity, usage, schedule: serviceSche
         </PluginSlot>
         </Box>
         {action}
-        {!!(detailsContext.creditDetails?.length || manageUrl || usage.activity || usage.observed_at_ms > 0 || Children.toArray(children).length) && (
+        {!!(identity.id || detailsContext.creditDetails?.length || manageUrl || usage.activity || usage.observed_at_ms > 0 || Children.toArray(children).length) && (
           <Accordion
             disableGutters
             elevation={0}
@@ -348,6 +349,7 @@ function ProviderUsageCardBody({ account: identity, usage, schedule: serviceSche
         <PluginSlot pluginId={usagePluginId(usage.provider)} slot="provider.usage" context={detailsContext}>
           <ProviderUsageCredits rows={detailsContext.creditDetails} />
         </PluginSlot>
+        <ProviderCacheMetricsSection accountId={identity.id} active={detailsOpen} />
         {credits.length > 0 && (
           <Accordion
             disableGutters

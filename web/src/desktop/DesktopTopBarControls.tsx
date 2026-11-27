@@ -98,6 +98,7 @@ import { useNativeAccountUsage } from "../nativeAccountUsage";
 import { sameComposerSheetSession } from "../composerSessionSlice";
 import { registeredUsageAccounts, sameSessionQuotaInputs, type UsageAccountCard, usageCardBrowserManageLink, usageCardManageUrl, usageCardResetSchedule, usageResetTarget, usageResetUnavailableMessage } from "../usageAccounts";
 import { AccountBrowserEntry } from "../machineBrowser/AccountBrowserEntry";
+import { ProviderCacheMetricsSection } from "../ProviderCacheMetricsSection";
 import { desktopDialogSlotProps, DesktopModal, InstantModalTransition, isImeBlockedEscape } from "./DesktopModal";
 import { RunConfigurationDialog } from "./RunConfigurationDialog";
 import { compactOptionName } from "./runConfigOptions";
@@ -771,6 +772,7 @@ function DesktopProviderUsage({ account, schedule, onUsageChanged, onRefresh, re
         sx={{ alignSelf: "flex-start" }}>{details ? "Hide details" : "Details"}</Button>
       <Collapse in={details}>
         <ProviderUsageCredits rows={usageContext.creditDetails} />
+        <ProviderCacheMetricsSection accountId={account.id} active={details} dense />
         {account.native?.message && <Typography variant="caption" color="text.secondary">{account.native.message}</Typography>}
         {account.native?.machine_id && <Typography variant="caption" color="text.secondary">Usage query Machine: {account.native.machine_id}</Typography>}
         {manageUrl !== undefined && <Button size="small" component="a" href={manageUrl} target="_blank" rel="noopener noreferrer"

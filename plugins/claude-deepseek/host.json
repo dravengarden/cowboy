@@ -75,8 +75,8 @@
     "cache_protection": {
       "min_hit_tokens": 64000,
       "min_hit_label": "64K",
-      "interval_ms": 28800000,
-      "interval_label": "8h",
+      "interval_ms": 19800000,
+      "interval_label": "5h30m",
       "option_name": "Cache protection",
       "option_description": "Automatically protects DeepSeek prompt caches after at least 64K verified hit tokens. Keepalives run only while idle, are preempted by real requests, and changing this setting restarts only this idle session.",
       "option_on": "Auto · recommended",

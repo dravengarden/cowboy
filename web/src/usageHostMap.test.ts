@@ -234,8 +234,8 @@ test("host usage specs overlay parser, order, errors, and top-bar windows", () =
   assertEquals(usageActivityModels("future-account"), []);
   assertEquals(usageCacheMinHitTokens(), 64_000);
   assertEquals(usageCacheMinHitLabel(), "64K");
-  assertEquals(usageCacheIntervalMs(), 28_800_000);
-  assertEquals(usageCacheIntervalLabel(), "8h");
+  assertEquals(usageCacheIntervalMs(), 19_800_000);
+  assertEquals(usageCacheIntervalLabel(), "5h30m");
   assertEquals(usageCacheOptionName(), "Cache protection");
   assertEquals(usageCacheMinHitTokens("future-account"), 0);
   assertEquals(usageCacheOptionName("future-account"), "");
@@ -268,7 +268,7 @@ test("host usage specs overlay cache-protection thresholds", () => {
     restoreFirstPartyHosts();
   }
   assertEquals(usageCacheMinHitTokens(), 64_000);
-  assertEquals(usageCacheIntervalLabel(), "8h");
+  assertEquals(usageCacheIntervalLabel(), "5h30m");
 });
 
 test("host usage specs overlay activity model families", () => {

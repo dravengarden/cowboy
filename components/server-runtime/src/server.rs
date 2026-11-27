@@ -11,6 +11,7 @@
 //! challenge before WebSocket protocol negotiation.
 
 pub mod agent_tools;
+pub mod cache_metrics_api;
 pub mod config_revert;
 pub mod model_catalog;
 pub use agent_tools::launch_extensions;
@@ -361,6 +362,63 @@ pub async fn run_purge_sweeper(store: Store) {
             Ok(0) => {}
             Ok(n) => tracing::info!(purged = n, "swept expired provider usage events"),
             Err(e) => tracing::warn!(error = %e, "provider usage purge failed"),
+        }
+        match store
+            .prune_turn_cache_facts(crate::store::turn_cache_facts::DEFAULT_RETENTION_DAYS)
+            .await
+        {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(purged = n, "swept expired turn cache facts"),
+            Err(e) => tracing::warn!(error = %e, "turn cache facts purge failed"),
+        }
+    }
+}
+
+/// Checkpointed background backfill from historical `events` into
+/// `turn_cache_facts`. Yields between bounded batches and stops cleanly once
+/// complete or when `shutdown` fires.
+pub async fn run_turn_cache_backfill(store: Store, mut shutdown: watch::Receiver<bool>) {
+    const SCAN_BATCH: usize = 1_000;
+    const MAX_CONSECUTIVE_ERRORS: u32 = 8;
+    let mut consecutive_errors = 0_u32;
+    loop {
+        if *shutdown.borrow() {
+            return;
+        }
+        match store
+            .backfill_turn_cache_facts_batch(
+                SCAN_BATCH,
+                crate::store::turn_cache_facts::DEFAULT_RETENTION_DAYS,
+            )
+            .await
+        {
+            Ok(progress) if progress.completed => {
+                if progress.rows_projected > 0 {
+                    tracing::info!(
+                        rows = progress.rows_projected,
+                        "completed turn_cache_facts historical backfill"
+                    );
+                }
+                return;
+            }
+            Ok(_) => {
+                consecutive_errors = 0;
+                tokio::select! {
+                    _ = shutdown.changed() => return,
+                    () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+                }
+            }
+            Err(error) => {
+                consecutive_errors = consecutive_errors.saturating_add(1);
+                tracing::warn!(%error, attempt = consecutive_errors, "turn_cache_facts backfill batch failed");
+                if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                    return;
+                }
+                tokio::select! {
+                    _ = shutdown.changed() => return,
+                    () = tokio::time::sleep(std::time::Duration::from_secs(5)) => {}
+                }
+            }
         }
     }
 }

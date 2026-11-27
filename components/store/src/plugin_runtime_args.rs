@@ -1710,8 +1710,8 @@ mod tests {
         );
         assert_eq!(cache_protection_policy().min_hit_tokens, 64_000);
         assert_eq!(cache_protection_policy().min_hit_label, "64K");
-        assert_eq!(cache_protection_policy().interval_ms, 28_800_000);
-        assert_eq!(cache_protection_policy().interval_label, "8h");
+        assert_eq!(cache_protection_policy().interval_ms, 19_800_000);
+        assert_eq!(cache_protection_policy().interval_label, "5h30m");
         assert_eq!(cache_protection_policy().option_name, "Cache protection");
         assert_eq!(cache_protection_policy().option_on, "Auto · recommended");
         assert_eq!(cache_protection_policy().option_off, "Off");

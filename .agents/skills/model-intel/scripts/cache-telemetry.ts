@@ -1,0 +1,518 @@
+// Read-only turn-level prompt-cache telemetry audit, coverage regression
+// detection, and stratified shadow idle-gap diagnostic curves.
+//
+// Strictly anonymized: session IDs are hashed/counted only in memory to compute
+// `distinct_sessions` and never emitted in reports.
+
+import { Database } from "bun:sqlite";
+import { normalizeTurnCacheUsage } from "../../../../tools/context-rollover-report.ts";
+
+export const SHADOW_IDLE_GAP_BUCKETS: ReadonlyArray<readonly [string, number]> = [
+  ["<5m", 5 * 60_000],
+  ["5-10m", 10 * 60_000],
+  ["10-20m", 20 * 60_000],
+  ["20-30m", 30 * 60_000],
+  ["30-60m", 60 * 60_000],
+  ["1-3h", 3 * 3_600_000],
+  ["3-12h", 12 * 3_600_000],
+  [">12h", Number.POSITIVE_INFINITY],
+];
+
+export type CacheFactInputRow = {
+  session_key: string;
+  occurred_at_ms: number;
+  provider: string;
+  provider_version: string;
+  model: string | null;
+  stop_reason: string;
+  prompt_origin: string;
+  idle_gap_ms: number | null;
+  renewed: boolean;
+  usage_observed: boolean;
+  inclusive_input_tokens: number | null;
+  cached_read_tokens: number | null;
+  cache_write_tokens: number | null;
+  uncached_input_tokens: number | null;
+};
+
+export type ProviderCacheAuditStat = {
+  provider: string;
+  turns: number;
+  eligible_turns: number;
+  observed_usage_turns: number;
+  observed_cache_turns: number;
+  observed_cache_write_turns: number;
+  renewed_turns: number;
+  inclusive_input_tokens: number;
+  cached_read_tokens: number | null;
+  cache_write_tokens: number | null;
+  uncached_input_tokens: number | null;
+  usage_coverage: number | null;
+  cache_coverage: number | null;
+  cached_input_share: number | null;
+};
+
+export type TelemetryCoverageRegression = {
+  provider: string;
+  metric: "usage_coverage" | "cache_coverage";
+  previous_version: string;
+  current_version: string;
+  previous_coverage: number;
+  current_coverage: number;
+  drop_ratio: number;
+  previous_turns: number;
+  current_turns: number;
+};
+
+export type ShadowIdleGapBucket = {
+  provider: string;
+  model: string;
+  renewed: boolean;
+  gap_bucket: string;
+  turns: number;
+  observed_cache_turns: number;
+  distinct_sessions: number;
+  distinct_days: number;
+  mean_inclusive_input: number;
+  mean_uncached_input: number | null;
+  cached_input_share: number | null;
+};
+
+export type CacheTelemetryAudit = {
+  source: "turn_cache_facts" | "events_fallback";
+  granularity: "turn_total";
+  shadow_diagnostic_note: string;
+  providers: ProviderCacheAuditStat[];
+  coverage_regressions: TelemetryCoverageRegression[];
+  shadow_ttl_curves: ShadowIdleGapBucket[];
+};
+
+const SHADOW_NOTE =
+  "Shadow turn-level diagnostic only (multi-step turns summed); advisory evidence for upgrade audits, never an automatic default mutator.";
+
+function gapBucketLabel(gapMs: number): string {
+  for (const [label, upper] of SHADOW_IDLE_GAP_BUCKETS) {
+    if (gapMs < upper) return label;
+  }
+  return ">12h";
+}
+
+function isEligibleStopReason(stopReason: string, usageObserved: boolean): boolean {
+  if (usageObserved) return true;
+  const lowered = stopReason.trim().toLowerCase();
+  return lowered !== "cancelled" && lowered !== "canceled" && lowered !== "error" && !lowered.startsWith("error:");
+}
+
+function roundRatio(n: number, d: number): number | null {
+  if (d <= 0) return null;
+  return Math.round((n / d) * 10_000) / 10_000;
+}
+
+function dominantVersion(counts: Map<string, number>): string {
+  let best = "unknown";
+  let bestCount = -1;
+  for (const [ver, count] of counts.entries()) {
+    if (count > bestCount || (count === bestCount && ver.localeCompare(best) > 0)) {
+      best = ver;
+      bestCount = count;
+    }
+  }
+  return best;
+}
+
+export function summarizeCacheTelemetryRows(
+  rows: readonly CacheFactInputRow[],
+  nowMs: number,
+  windowDays: number,
+  source: "turn_cache_facts" | "events_fallback",
+  options: { minRegressionTurns?: number; dropThreshold?: number } = {},
+): CacheTelemetryAudit {
+  const minTurns = options.minRegressionTurns ?? 10;
+  const dropThreshold = options.dropThreshold ?? 0.15;
+  const halfBoundaryMs = nowMs - (windowDays * 86_400_000) / 2;
+
+  type ProvAcc = {
+    turns: number;
+    eligible: number;
+    usageTurns: number;
+    cacheTurns: number;
+    writeTurns: number;
+    renewedTurns: number;
+    inclusiveInput: number;
+    observedCacheInput: number;
+    cachedRead: number;
+    cacheWrite: number;
+    uncachedTotal: number;
+    prevEligible: number;
+    prevUsage: number;
+    prevCache: number;
+    prevVersions: Map<string, number>;
+    currEligible: number;
+    currUsage: number;
+    currCache: number;
+    currVersions: Map<string, number>;
+  };
+
+  type GapAcc = {
+    provider: string;
+    model: string;
+    renewed: boolean;
+    gap_bucket: string;
+    turns: number;
+    observedCacheTurns: number;
+    sessions: Set<string>;
+    days: Set<string>;
+    inputSum: number;
+    observedCacheInput: number;
+    cachedReadSum: number;
+    uncachedSum: number;
+  };
+
+  const providers = new Map<string, ProvAcc>();
+  const gaps = new Map<string, GapAcc>();
+
+  for (const row of rows) {
+    const normalized =
+      row.usage_observed && row.inclusive_input_tokens !== null
+        ? normalizeTurnCacheUsage({
+            input: row.inclusive_input_tokens,
+            cached: row.cached_read_tokens,
+            written: row.cache_write_tokens,
+            uncached: row.uncached_input_tokens,
+          })
+        : null;
+    const usageValid = normalized !== null;
+    const cacheValid =
+      normalized !== null &&
+      normalized.cached_read !== null &&
+      normalized.uncached_total !== null;
+    const eligible = isEligibleStopReason(row.stop_reason, usageValid);
+
+    const acc = providers.get(row.provider) ?? {
+      turns: 0,
+      eligible: 0,
+      usageTurns: 0,
+      cacheTurns: 0,
+      writeTurns: 0,
+      renewedTurns: 0,
+      inclusiveInput: 0,
+      observedCacheInput: 0,
+      cachedRead: 0,
+      cacheWrite: 0,
+      uncachedTotal: 0,
+      prevEligible: 0,
+      prevUsage: 0,
+      prevCache: 0,
+      prevVersions: new Map(),
+      currEligible: 0,
+      currUsage: 0,
+      currCache: 0,
+      currVersions: new Map(),
+    };
+    acc.turns += 1;
+    if (eligible) acc.eligible += 1;
+    if (row.renewed) acc.renewedTurns += 1;
+    if (usageValid) {
+      acc.usageTurns += 1;
+      acc.inclusiveInput += normalized.inclusive_input;
+    }
+    if (cacheValid) {
+      acc.cacheTurns += 1;
+      acc.observedCacheInput += normalized.inclusive_input;
+      acc.cachedRead += normalized.cached_read!;
+      acc.uncachedTotal += normalized.uncached_total!;
+    }
+    if (normalized?.cache_write !== null && normalized?.cache_write !== undefined) {
+      acc.writeTurns += 1;
+      acc.cacheWrite += normalized.cache_write;
+    }
+    if (eligible) {
+      const ver = row.provider_version.trim() || "unknown";
+      if (row.occurred_at_ms >= halfBoundaryMs) {
+        acc.currEligible += 1;
+        if (usageValid) acc.currUsage += 1;
+        if (cacheValid) acc.currCache += 1;
+        acc.currVersions.set(ver, (acc.currVersions.get(ver) ?? 0) + 1);
+      } else {
+        acc.prevEligible += 1;
+        if (usageValid) acc.prevUsage += 1;
+        if (cacheValid) acc.prevCache += 1;
+        acc.prevVersions.set(ver, (acc.prevVersions.get(ver) ?? 0) + 1);
+      }
+    }
+    providers.set(row.provider, acc);
+
+    // Shadow idle-gap curve: human-origin turns with known non-negative gap & input > 0.
+    if (
+      usageValid &&
+      normalized.inclusive_input > 0 &&
+      row.prompt_origin === "human" &&
+      row.idle_gap_ms !== null &&
+      row.idle_gap_ms >= 0
+    ) {
+      const model = row.model?.trim() || "unknown";
+      const bucket = gapBucketLabel(row.idle_gap_ms);
+      const key = `${row.provider}\u0000${model}\u0000${row.renewed ? 1 : 0}\u0000${bucket}`;
+      const g = gaps.get(key) ?? {
+        provider: row.provider,
+        model,
+        renewed: row.renewed,
+        gap_bucket: bucket,
+        turns: 0,
+        observedCacheTurns: 0,
+        sessions: new Set<string>(),
+        days: new Set<string>(),
+        inputSum: 0,
+        observedCacheInput: 0,
+        cachedReadSum: 0,
+        uncachedSum: 0,
+      };
+      g.turns += 1;
+      g.sessions.add(row.session_key);
+      g.days.add(new Date(row.occurred_at_ms).toISOString().slice(0, 10));
+      g.inputSum += normalized.inclusive_input;
+      if (cacheValid) {
+        g.observedCacheTurns += 1;
+        g.observedCacheInput += normalized.inclusive_input;
+        g.cachedReadSum += normalized.cached_read!;
+        g.uncachedSum += normalized.uncached_total!;
+      }
+      gaps.set(key, g);
+    }
+  }
+
+  const providerStats: ProviderCacheAuditStat[] = [...providers.entries()]
+    .sort(([a], [b]) => a.localeCompare(b))
+    .map(([provider, acc]) => ({
+      provider,
+      turns: acc.turns,
+      eligible_turns: acc.eligible,
+      observed_usage_turns: acc.usageTurns,
+      observed_cache_turns: acc.cacheTurns,
+      observed_cache_write_turns: acc.writeTurns,
+      renewed_turns: acc.renewedTurns,
+      inclusive_input_tokens: acc.inclusiveInput,
+      cached_read_tokens: acc.cacheTurns > 0 ? acc.cachedRead : null,
+      cache_write_tokens: acc.writeTurns > 0 ? acc.cacheWrite : null,
+      uncached_input_tokens: acc.cacheTurns > 0 ? acc.uncachedTotal : null,
+      usage_coverage: roundRatio(acc.usageTurns, acc.eligible),
+      cache_coverage: roundRatio(acc.cacheTurns, acc.eligible),
+      cached_input_share: roundRatio(acc.cachedRead, acc.observedCacheInput),
+    }));
+
+  const coverageRegressions: TelemetryCoverageRegression[] = [];
+  for (const [provider, acc] of [...providers.entries()].sort(([a], [b]) => a.localeCompare(b))) {
+    if (acc.prevEligible < minTurns || acc.currEligible < minTurns) continue;
+    const prevVer = dominantVersion(acc.prevVersions);
+    const currVer = dominantVersion(acc.currVersions);
+    for (const metric of ["usage_coverage", "cache_coverage"] as const) {
+      const prevCov =
+        metric === "usage_coverage"
+          ? acc.prevUsage / acc.prevEligible
+          : acc.prevCache / acc.prevEligible;
+      const currCov =
+        metric === "usage_coverage"
+          ? acc.currUsage / acc.currEligible
+          : acc.currCache / acc.currEligible;
+      const drop = prevCov - currCov;
+      if (drop > dropThreshold) {
+        coverageRegressions.push({
+          provider,
+          metric,
+          previous_version: prevVer,
+          current_version: currVer,
+          previous_coverage: Math.round(prevCov * 10_000) / 10_000,
+          current_coverage: Math.round(currCov * 10_000) / 10_000,
+          drop_ratio: Math.round(drop * 10_000) / 10_000,
+          previous_turns: acc.prevEligible,
+          current_turns: acc.currEligible,
+        });
+      }
+    }
+  }
+
+  const bucketRank = new Map(SHADOW_IDLE_GAP_BUCKETS.map(([name], index) => [name, index]));
+  const shadowCurves: ShadowIdleGapBucket[] = [...gaps.values()]
+    .sort(
+      (a, b) =>
+        a.provider.localeCompare(b.provider) ||
+        a.model.localeCompare(b.model) ||
+        Number(a.renewed) - Number(b.renewed) ||
+        (bucketRank.get(a.gap_bucket) ?? 99) - (bucketRank.get(b.gap_bucket) ?? 99),
+    )
+    .map((g) => ({
+      provider: g.provider,
+      model: g.model,
+      renewed: g.renewed,
+      gap_bucket: g.gap_bucket,
+      turns: g.turns,
+      observed_cache_turns: g.observedCacheTurns,
+      distinct_sessions: g.sessions.size,
+      distinct_days: g.days.size,
+      mean_inclusive_input: Math.round(g.inputSum / g.turns),
+      mean_uncached_input:
+        g.observedCacheTurns > 0 ? Math.round(g.uncachedSum / g.observedCacheTurns) : null,
+      cached_input_share: roundRatio(g.cachedReadSum, g.observedCacheInput),
+    }));
+
+  return {
+    source,
+    granularity: "turn_total",
+    shadow_diagnostic_note: SHADOW_NOTE,
+    providers: providerStats,
+    coverage_regressions: coverageRegressions,
+    shadow_ttl_curves: shadowCurves,
+  };
+}
+
+export function readCacheTelemetryAudit(
+  database: string,
+  days: number,
+  nowMs: number,
+): CacheTelemetryAudit {
+  const since = nowMs - days * 86_400_000;
+  const db = new Database(database, { readonly: true });
+  try {
+    db.exec("PRAGMA query_only = 1");
+    const hasFacts = db
+      .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'turn_cache_facts'")
+      .get();
+    if (hasFacts) {
+      const raw = db
+        .query(
+          `SELECT session_id, occurred_at_ms, provider, provider_version, model,
+                  stop_reason, prompt_origin, idle_gap_ms, renewed, usage_observed,
+                  inclusive_input_tokens, cached_read_tokens, cache_write_tokens,
+                  CASE
+                    WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL
+                    THEN inclusive_input_tokens - cached_read_tokens
+                    ELSE NULL
+                  END AS uncached_input_tokens
+           FROM turn_cache_facts
+           WHERE occurred_at_ms >= ?`,
+        )
+        .all(since) as Array<{
+        session_id: string;
+        occurred_at_ms: number;
+        provider: string;
+        provider_version: string;
+        model: string | null;
+        stop_reason: string;
+        prompt_origin: string;
+        idle_gap_ms: number | null;
+        renewed: number;
+        usage_observed: number;
+        inclusive_input_tokens: number | null;
+        cached_read_tokens: number | null;
+        cache_write_tokens: number | null;
+        uncached_input_tokens: number | null;
+      }>;
+      const rows: CacheFactInputRow[] = raw.map((r) => ({
+        session_key: r.session_id,
+        occurred_at_ms: r.occurred_at_ms,
+        provider: r.provider,
+        provider_version: r.provider_version ?? "",
+        model: r.model,
+        stop_reason: r.stop_reason,
+        prompt_origin: r.prompt_origin,
+        idle_gap_ms: r.idle_gap_ms,
+        renewed: r.renewed === 1,
+        usage_observed: r.usage_observed === 1,
+        inclusive_input_tokens: r.inclusive_input_tokens,
+        cached_read_tokens: r.cached_read_tokens,
+        cache_write_tokens: r.cache_write_tokens,
+        uncached_input_tokens: r.uncached_input_tokens,
+      }));
+      return summarizeCacheTelemetryRows(rows, nowMs, days, "turn_cache_facts");
+    }
+
+    const hasEvents = db
+      .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+      .get();
+    const hasSessions = db
+      .query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'sessions'")
+      .get();
+    if (!hasEvents || !hasSessions) {
+      return summarizeCacheTelemetryRows([], nowMs, days, "events_fallback");
+    }
+
+    const raw = db
+      .query(
+        `WITH te AS (
+          SELECT e.session_id, e.seq, e.ts_ms, s.provider,
+                 COALESCE(s.provider_version, '') AS provider_version,
+                 COALESCE(
+                   json_extract(s.last_usage, '$.raw._cowboy.modelUsage[0].model'),
+                   json_extract(s.config_preferences, '$.model')
+                 ) AS model,
+                 COALESCE(json_extract(e.payload, '$.stop_reason'), 'unknown') AS stop_reason,
+                 json_extract(e.payload, '$.usage.input_tokens') AS inclusive_input_tokens,
+                 json_extract(e.payload, '$.usage.cached_input_tokens') AS cached_read_tokens,
+                 json_extract(e.payload, '$.usage.cache_write_tokens') AS cache_write_tokens,
+                 json_extract(e.payload, '$.usage.uncached_input_tokens') AS uncached_input_tokens,
+                 lag(e.ts_ms) OVER (PARTITION BY e.session_id ORDER BY e.seq) AS prev_end,
+                 lag(e.seq) OVER (PARTITION BY e.session_id ORDER BY e.seq) AS prev_seq
+          FROM events e
+          JOIN sessions s ON s.id = e.session_id
+          WHERE json_extract(e.payload, '$.kind') = 'turn_end' AND e.ts_ms >= ?1
+        )
+        SELECT te.session_id, te.ts_ms AS occurred_at_ms, te.provider, te.provider_version,
+               te.model, te.stop_reason,
+               te.inclusive_input_tokens, te.cached_read_tokens,
+               te.cache_write_tokens, te.uncached_input_tokens,
+               CASE
+                 WHEN te.prev_end IS NULL THEN NULL
+                 ELSE (
+                   SELECT min(x.ts_ms) FROM events x
+                   WHERE x.session_id = te.session_id
+                     AND x.seq > te.prev_seq AND x.seq < te.seq
+                     AND json_extract(x.payload, '$.update.sessionUpdate') = 'user_message_chunk'
+                     AND COALESCE(json_extract(x.payload, '$.update.promptOrigin.actor'), 'human') = 'human'
+                     AND COALESCE(json_extract(x.payload, '$.update.autoResumed'), 0) = 0
+                     AND COALESCE(json_extract(x.payload, '$.update.content.text'), '') NOT LIKE '<system-reminder>%'
+                 ) - te.prev_end
+               END AS idle_gap_ms,
+               EXISTS (
+                 SELECT 1 FROM events x
+                 WHERE x.session_id = te.session_id
+                   AND x.seq > COALESCE(te.prev_seq, -1) AND x.seq < te.seq
+                   AND json_extract(x.payload, '$.update.sessionUpdate') = 'context_rolled_over'
+               ) AS renewed
+        FROM te`,
+      )
+      .all(since) as Array<{
+      session_id: string;
+      occurred_at_ms: number;
+      provider: string;
+      provider_version: string;
+      model: string | null;
+      stop_reason: string;
+      inclusive_input_tokens: number | null;
+      cached_read_tokens: number | null;
+      cache_write_tokens: number | null;
+      uncached_input_tokens: number | null;
+      idle_gap_ms: number | null;
+      renewed: number;
+    }>;
+
+    const rows: CacheFactInputRow[] = raw.map((r) => ({
+      session_key: r.session_id,
+      occurred_at_ms: r.occurred_at_ms,
+      provider: r.provider,
+      provider_version: r.provider_version ?? "",
+      model: r.model,
+      stop_reason: r.stop_reason,
+      prompt_origin: r.idle_gap_ms !== null ? "human" : "unknown",
+      idle_gap_ms: r.idle_gap_ms,
+      renewed: r.renewed === 1,
+      usage_observed: r.inclusive_input_tokens !== null,
+      inclusive_input_tokens: r.inclusive_input_tokens,
+      cached_read_tokens: r.cached_read_tokens,
+      cache_write_tokens: r.cache_write_tokens,
+      uncached_input_tokens: r.uncached_input_tokens,
+    }));
+    return summarizeCacheTelemetryRows(rows, nowMs, days, "events_fallback");
+  } finally {
+    db.close();
+  }
+}

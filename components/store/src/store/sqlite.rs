@@ -5076,6 +5076,7 @@ impl SqliteStorage {
                 .context("INSERT SQLite notification intent")?;
         }
         super::managed_calls::project_events_sqlite(&mut transaction, events, now_ms()).await?;
+        super::turn_cache_facts::project_events_sqlite(&mut transaction, events, timestamp).await?;
         transaction
             .commit()
             .await
