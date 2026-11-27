@@ -87,11 +87,6 @@ pub(super) fn publish_subagents(state: &ClientState, snapshots: Vec<serde_json::
     report_background_tasks(state, &mut activity);
 }
 
-/// Retire any pending permission or elicitation request tied to `(child_session_id,
-/// tool_call_id)` when the child's terminal `tool_call_update` is diverted out
-/// of the root timeline. Emits `PermissionResolved` and cancels the waiting
-/// responder without disturbing parent or sibling-child requests.
-
 pub(super) fn track_permission_tool(
     state: &ClientState,
     request_id: &str,
@@ -125,6 +120,10 @@ pub(super) fn track_elicitation_tool(
     }
 }
 
+/// Retire any pending permission or elicitation request tied to `(child_session_id,
+/// tool_call_id)` when the child's terminal `tool_call_update` is diverted out
+/// of the root timeline. Emits `PermissionResolved` and cancels the waiting
+/// responder without disturbing parent or sibling-child requests.
 pub(super) fn retire_child_tool_requests(
     state: &ClientState,
     child_session_id: &str,
