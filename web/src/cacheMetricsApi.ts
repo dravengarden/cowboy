@@ -21,6 +21,7 @@ export interface CacheMetricsTotals {
   reasoning_tokens: number | null;
   cached_input_share: number | null;
   uncached_input_share: number | null;
+  totals_saturated?: boolean;
 }
 
 export interface ModelCacheMetrics {
@@ -263,8 +264,10 @@ export function formatStrategySummary(strategy: SessionCacheStrategyView): strin
   } else if (!rollover.supported && rollover.restriction) {
     parts.push("Idle renewal disabled by host policy");
   }
-  if (keepalive.supported) {
+  if (keepalive.supported === true) {
     parts.push(`Gateway keepalive (${keepalive.enabled ? "on" : "off"})`);
+  } else if (keepalive.supported === null) {
+    parts.push("Gateway keepalive (unknown)");
   }
   if (parts.length === 0) {
     const source = rollover.inherited ? "default" : "session override";

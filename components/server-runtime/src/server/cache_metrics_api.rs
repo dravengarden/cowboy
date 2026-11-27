@@ -187,6 +187,43 @@ fn combine_keepalive_observations(observations: &[Option<bool>]) -> KeepaliveCap
     }
 }
 
+fn resolve_keepalive_from_inventories<'a>(
+    inventories: impl IntoIterator<Item = &'a serde_json::Value>,
+    provider_id: &str,
+    lookup_supports: impl Fn(&str, &str, &str) -> Option<bool>,
+) -> KeepaliveCapability {
+    let mut observations = Vec::new();
+    for inventory in inventories {
+        // Machine inventory frames persist installations under "plugins" or
+        // "providers"; normalize both and preserve unknown evidence when an
+        // active machine's inventory is absent or undecodable so mixed fleets
+        // never appear falsely verified.
+        let Some(raw_plugins) = inventory
+            .get("plugins")
+            .or_else(|| inventory.get("providers"))
+        else {
+            observations.push(None);
+            continue;
+        };
+        let Ok(plugins) = serde_json::from_value::<Vec<PluginInventory>>(raw_plugins.clone())
+        else {
+            observations.push(None);
+            continue;
+        };
+        for plugin in plugins
+            .into_iter()
+            .filter(|p| p.plugin_id == provider_id && p.state == PluginInstallationState::Active)
+        {
+            observations.push(lookup_supports(
+                provider_id,
+                &plugin.plugin_version,
+                &plugin.generation_digest,
+            ));
+        }
+    }
+    combine_keepalive_observations(&observations)
+}
+
 async fn resolve_account_keepalive_capability(
     state: &AppState,
     store: &Store,
@@ -195,37 +232,22 @@ async fn resolve_account_keepalive_capability(
     let Ok(machines) = store.list_machines().await else {
         return KeepaliveCapability::Unverified;
     };
-    let mut observations = Vec::new();
-    for machine in machines.iter().filter(|m| !m.revoked) {
-        let Some(raw_plugins) = machine.inventory.get("plugins") else {
-            continue;
-        };
-        let Ok(plugins) = serde_json::from_value::<Vec<PluginInventory>>(raw_plugins.clone())
-        else {
-            continue;
-        };
-        for plugin in plugins
-            .into_iter()
-            .filter(|p| p.plugin_id == provider_id && p.state == PluginInstallationState::Active)
-        {
-            let obs = state
+    resolve_keepalive_from_inventories(
+        machines.iter().filter(|m| !m.revoked).map(|m| &m.inventory),
+        provider_id,
+        |id, version, digest| {
+            state
                 .provider_catalog
-                .package(
-                    provider_id,
-                    &plugin.plugin_version,
-                    &plugin.generation_digest,
-                )
+                .package(id, version, digest)
                 .map(|pkg| {
                     crate::managed_config::cache_protection(
                         &pkg.manifest.runtime.behavior.configuration,
                         &serde_json::json!({}),
                     )
                     .is_some()
-                });
-            observations.push(obs);
-        }
-    }
-    combine_keepalive_observations(&observations)
+                })
+        },
+    )
 }
 
 fn resolve_session_configuration(
@@ -264,14 +286,17 @@ fn resolve_capabilities(
 fn effective_strategy_mode(
     rollover_enabled: Option<bool>,
     keepalive_enabled: Option<bool>,
+    keepalive_verified: bool,
 ) -> &'static str {
-    match (rollover_enabled, keepalive_enabled) {
-        (Some(true), Some(true)) => "rollover_and_keepalive",
-        (Some(true), _) => "rollover",
-        (Some(false), Some(true)) => "keepalive",
-        (Some(false), _) => "none",
-        (None, Some(true)) => "keepalive_rollover_unknown",
-        (None, _) => "unavailable",
+    match (rollover_enabled, keepalive_enabled, keepalive_verified) {
+        (Some(true), Some(true), _) => "rollover_and_keepalive",
+        (Some(true), _, true) => "rollover",
+        (Some(true), _, false) => "rollover_keepalive_unknown",
+        (Some(false), Some(true), _) => "keepalive",
+        (Some(false), _, true) => "none",
+        (Some(false), _, false) => "keepalive_unknown",
+        (None, Some(true), _) => "keepalive_rollover_unknown",
+        (None, _, _) => "unavailable",
     }
 }
 
@@ -403,7 +428,12 @@ async fn load_authorized_session_cache_metrics(
     };
 
     let strategy = SessionCacheStrategyView {
-        effective_mode: effective_strategy_mode(rollover_enabled, keepalive_enabled).to_owned(),
+        effective_mode: effective_strategy_mode(
+            rollover_enabled,
+            keepalive_enabled,
+            matches!(keepalive_cap, KeepaliveCapability::Verified(_)),
+        )
+        .to_owned(),
         rollover: rollover_view,
         gateway_keepalive: KeepaliveStrategyView {
             supported: keepalive_cap.supports(),
@@ -638,20 +668,81 @@ mod tests {
         assert_eq!(unverified.supports_gateway_keepalive, None);
         assert_eq!(unverified.keepalive_capability_status, "unverified");
 
-        assert_eq!(effective_strategy_mode(None, None), "unavailable");
+        assert_eq!(effective_strategy_mode(None, None, false), "unavailable");
         assert_eq!(
-            effective_strategy_mode(None, Some(true)),
+            effective_strategy_mode(None, Some(true), true),
             "keepalive_rollover_unknown"
         );
-        assert_eq!(effective_strategy_mode(Some(false), Some(false)), "none");
-        assert_eq!(effective_strategy_mode(Some(true), Some(false)), "rollover");
         assert_eq!(
-            effective_strategy_mode(Some(false), Some(true)),
+            effective_strategy_mode(Some(false), Some(false), true),
+            "none"
+        );
+        assert_eq!(
+            effective_strategy_mode(Some(false), None, false),
+            "keepalive_unknown"
+        );
+        assert_eq!(
+            effective_strategy_mode(Some(true), Some(false), true),
+            "rollover"
+        );
+        assert_eq!(
+            effective_strategy_mode(Some(true), None, false),
+            "rollover_keepalive_unknown"
+        );
+        assert_eq!(
+            effective_strategy_mode(Some(false), Some(true), true),
             "keepalive"
         );
         assert_eq!(
-            effective_strategy_mode(Some(true), Some(true)),
+            effective_strategy_mode(Some(true), Some(true), true),
             "rollover_and_keepalive"
+        );
+
+        // R2-M2: Machine inventory stored under either "plugins" or "providers"
+        // must be normalized, and missing/undecodable inventories must prevent
+        // false verified agreement across a mixed fleet.
+        let inv_plugins = serde_json::json!({
+            "plugins": [{
+                "plugin_id": "claude-deepseek",
+                "plugin_version": "3.1.100",
+                "generation_digest": "sha256:v2",
+                "contract_fingerprint": "fp-v2",
+                "state": "active"
+            }]
+        });
+        let inv_providers = serde_json::json!({
+            "providers": [{
+                "plugin_id": "claude-deepseek",
+                "plugin_version": "3.1.99",
+                "generation_digest": "sha256:v1",
+                "contract_fingerprint": "fp-v1",
+                "state": "active"
+            }]
+        });
+        let inv_missing = serde_json::json!({});
+        assert_eq!(
+            resolve_keepalive_from_inventories(
+                [&inv_plugins, &inv_providers],
+                "claude-deepseek",
+                |_, version, _| Some(version == "3.1.100"),
+            ),
+            KeepaliveCapability::Mixed
+        );
+        assert_eq!(
+            resolve_keepalive_from_inventories(
+                [&inv_providers],
+                "claude-deepseek",
+                |_, _, _| Some(true),
+            ),
+            KeepaliveCapability::Verified(true)
+        );
+        assert_eq!(
+            resolve_keepalive_from_inventories(
+                [&inv_plugins, &inv_missing],
+                "claude-deepseek",
+                |_, _, _| Some(true),
+            ),
+            KeepaliveCapability::Mixed
         );
     }
 

@@ -136,15 +136,26 @@ fn extract_session_model_rejects_ambiguous_multi_model_cumulative_usage() {
         "id": "model",
         "currentValue": "[\"deepseek-official\",\"deepseek-v4-flash\"]"
     }]);
-    // Single unambiguous modelUsage wins.
+    let opus_prefs = json!({ "model": "opus" });
+    // Single modelUsage with compatible alias or absent selection wins.
     assert_eq!(
-        extract_session_model(Some(&single_usage), Some(&prefs), Some(&options)).as_deref(),
+        extract_session_model(Some(&single_usage), None, None).as_deref(),
         Some("claude-opus-4-6")
     );
-    // Multi-model cumulative usage falls back to active config_preferences.model, never modelUsage[0].
+    assert_eq!(
+        extract_session_model(Some(&single_usage), Some(&opus_prefs), None).as_deref(),
+        Some("claude-opus-4-6")
+    );
+    // First turn after switching opus -> sonnet while stale cumulative modelUsage
+    // still holds only opus MUST stay None (unknown) rather than attributing to opus.
+    assert_eq!(
+        extract_session_model(Some(&single_usage), Some(&prefs), Some(&options)),
+        None
+    );
+    // Once cumulative usage contains both models, unique match for active preference resolves.
     assert_eq!(
         extract_session_model(Some(&multi_usage), Some(&prefs), Some(&options)).as_deref(),
-        Some("sonnet")
+        Some("claude-sonnet-4-6")
     );
     // Multi-model cumulative usage with no preferences/options stays unknown (None).
     assert_eq!(extract_session_model(Some(&multi_usage), None, None), None);
@@ -660,4 +671,98 @@ async fn sqlite_pre_delete_and_startup_reconcile_preserve_unprojected_turns() {
         m502.by_model.iter().any(|m| m.model == "unknown"),
         "reconciled historical seq=2 must leave model unknown"
     );
+}
+
+#[tokio::test]
+async fn sqlite_independent_cache_write_and_large_token_sums_never_overflow() {
+    let (_dir, store) = sqlite_test_store().await;
+    let owner = "dddddddddddddddddddddddddddddddd";
+    let acct = "44444444-4444-4444-4444-444444444444";
+    store
+        .insert_user(&sample_user(owner, "dave"))
+        .await
+        .expect("owner");
+    store
+        .insert_session(&sample_meta("sess-600", owner, "claude-code", acct))
+        .await
+        .expect("s600");
+    store
+        .insert_session(&sample_meta("sess-601", owner, "claude-code", acct))
+        .await
+        .expect("s601");
+
+    // R2-M5: Turn reporting cache_write_tokens WITHOUT cached_read_tokens must
+    // still report observed_cache_write_turns and cache_write_tokens cleanly
+    // while keeping other_uncached_input_tokens None (no mismatched 3-way bar).
+    store
+        .upsert_event_batch(
+            &[Envelope {
+                session_id: "sess-600".into(),
+                seq: 1,
+                event: Event::TurnEnd {
+                    stop_reason: "EndTurn".into(),
+                    usage: Some(TurnUsage {
+                        total_tokens: 1_100,
+                        input_tokens: 1_000,
+                        output_tokens: 100,
+                        cached_input_tokens: None,
+                        uncached_input_tokens: None,
+                        cache_write_tokens: Some(400),
+                        reasoning_tokens: None,
+                    }),
+                },
+                cmid: None,
+            }],
+            &HashMap::from([("sess-600".into(), 2)]),
+        )
+        .await
+        .expect("write-only turn");
+    let m600 = store
+        .session_cache_metrics("sess-600", Some(owner), "claude-code", acct, 10)
+        .await
+        .expect("m600");
+    assert_eq!(m600.totals.observed_cache_turns, 0);
+    assert_eq!(m600.totals.observed_cache_write_turns, 1);
+    assert_eq!(m600.totals.cache_write_tokens, Some(400));
+    assert_eq!(m600.totals.other_uncached_input_tokens, None);
+    assert!(!m600.totals.totals_saturated);
+
+    // R2-L3: 1,030 turns at MAX_SAFE_TOKENS (2^53 - 1) would overflow SQLite
+    // 64-bit SUM (> 2^63 - 1). Two-limb accumulation must succeed without 500,
+    // compute exact cached_input_share, and set totals_saturated = true.
+    let per_turn_input = MAX_SAFE_TOKENS - 1_000;
+    let per_turn_cached = per_turn_input / 2;
+    let per_turn_uncached = per_turn_input - per_turn_cached;
+    let mut envelopes = Vec::with_capacity(1_030);
+    for seq in 1..=1_030_u64 {
+        envelopes.push(Envelope {
+            session_id: "sess-601".into(),
+            seq,
+            event: Event::TurnEnd {
+                stop_reason: "EndTurn".into(),
+                usage: Some(TurnUsage {
+                    total_tokens: per_turn_input + 1_000,
+                    input_tokens: per_turn_input,
+                    output_tokens: 1_000,
+                    cached_input_tokens: Some(per_turn_cached),
+                    uncached_input_tokens: Some(per_turn_uncached),
+                    cache_write_tokens: None,
+                    reasoning_tokens: None,
+                }),
+            },
+            cmid: None,
+        });
+    }
+    store
+        .upsert_event_batch(&envelopes, &HashMap::from([("sess-601".into(), 1_031)]))
+        .await
+        .expect("1030 huge turns");
+    let m601 = store
+        .session_cache_metrics("sess-601", Some(owner), "claude-code", acct, 5)
+        .await
+        .expect("m601 no overflow");
+    assert_eq!(m601.totals.total_turns, 1_030);
+    assert!(m601.totals.totals_saturated);
+    assert_eq!(m601.totals.inclusive_input_tokens, Some(MAX_SAFE_TOKENS));
+    assert!((m601.totals.cached_input_share.unwrap() - 0.5).abs() < 1e-9);
 }

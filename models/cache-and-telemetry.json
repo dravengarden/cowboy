@@ -140,9 +140,9 @@
         }
       },
       "prompt_cache_ttl": {
-        "documented_policy": "DeepSeek automatic context caching via sidecar gateway; verify adapter & gateway cache reporting on upgrade.",
-        "empirical_notes": "Insufficient Hawk turn volume for empirical TTL curve or cache-counter coverage baseline (unknown).",
-        "current_default_strategy": "none_default"
+        "documented_policy": "DeepSeek automatic context caching via sidecar gateway; signed Provider selects anthropic_gateway_v1 where Machine launches cache protection as auto (adaptive-replay-v1 >= 64K verified cache-hit tokens) unless the session opts out.",
+        "empirical_notes": "Insufficient Hawk turn volume for empirical TTL curve or turn-level cache-counter coverage baseline (unknown).",
+        "current_default_strategy": "gateway_adaptive_replay_v1_auto_unless_opted_out"
       },
       "policy_boundaries": [
         "DSH_HOME remains an isolated Provider home; never share Claude/Codex credentials."

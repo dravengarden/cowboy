@@ -159,7 +159,7 @@ test("formatStrategySummary distinguishes inherited, unavailable, restricted, an
       },
       gateway_keepalive: { supported: null, enabled: null },
     }),
-    "Renewal policy unavailable",
+    "Renewal policy unavailable · Gateway keepalive (unknown)",
   );
   assertEquals(
     formatStrategySummary({
@@ -178,5 +178,23 @@ test("formatStrategySummary distinguishes inherited, unavailable, restricted, an
       gateway_keepalive: { supported: false, enabled: null },
     }),
     "Idle renewal disabled by host policy",
+  );
+
+  assertEquals(
+    formatStrategySummary({
+      effective_mode: "keepalive_unknown",
+      rollover: {
+        availability: "available",
+        supported: true,
+        enabled: false,
+        inherited: true,
+        session_override: null,
+        idle_minutes: null,
+        min_context_tokens: 80_000,
+        due: false,
+      },
+      gateway_keepalive: { supported: null, enabled: null },
+    }),
+    "Gateway keepalive (unknown)",
   );
 });

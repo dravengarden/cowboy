@@ -8,9 +8,10 @@ use sqlx::Row as _;
 
 use super::{
     AccountCacheMetrics, BackfillProgress, CacheMetricsCoverage, CacheMetricsTotals,
-    DEFAULT_RETENTION_DAYS, MAX_MODELS_IN_RESPONSE, MAX_RECENT_TURNS, MAX_VERSION_BYTES,
-    ModelCacheMetrics, SessionCacheMetrics, TurnCacheFact, classify_prompt_origin,
-    extract_session_model, normalize_stop_reason, normalize_turn_usage, sanitize_text,
+    DEFAULT_RETENTION_DAYS, MAX_MODELS_IN_RESPONSE, MAX_RECENT_TURNS, MAX_SAFE_TOKENS,
+    MAX_VERSION_BYTES, ModelCacheMetrics, SessionCacheMetrics, TurnCacheFact,
+    classify_prompt_origin, extract_session_model, normalize_stop_reason, normalize_turn_usage,
+    sanitize_text,
 };
 use crate::agent_model::{Event, TurnUsage};
 use crate::model::Envelope;
@@ -54,6 +55,12 @@ struct SessionSnapshot {
     model: Option<String>,
 }
 
+/// Base for splitting non-negative `i64` token counters into two SQL `SUM`
+/// limbs (`2^30 = 1_073_741_824`) so neither SQLite's 64-bit signed `SUM` nor
+/// PostgreSQL's `BIGINT` cast can overflow even across millions of max-sized
+/// (`2^53 - 1`) turns.
+const TOKEN_LIMB_BASE: u128 = 1_073_741_824;
+
 #[derive(Debug)]
 struct AggRow {
     total_turns: i64,
@@ -61,20 +68,35 @@ struct AggRow {
     observed_usage_turns: i64,
     observed_cache_turns: i64,
     observed_cache_write_turns: i64,
-    observed_other_uncached_turns: i64,
+    observed_complete_breakdown_turns: i64,
     observed_reasoning_turns: i64,
     renewed_turns: i64,
     compacted_turns: i64,
-    inclusive_input_tokens: i64,
-    observed_cache_input_tokens: i64,
-    cached_read_tokens: i64,
-    cache_write_tokens: i64,
-    uncached_input_tokens: i64,
-    other_uncached_input_tokens: i64,
-    output_tokens: i64,
-    reasoning_tokens: i64,
+    inclusive_input_tokens: u128,
+    observed_cache_input_tokens: u128,
+    cached_read_tokens: u128,
+    cache_write_tokens: u128,
+    uncached_input_tokens: u128,
+    other_uncached_input_tokens: u128,
+    output_tokens: u128,
+    reasoning_tokens: u128,
     oldest_fact_ms: Option<i64>,
     newest_fact_ms: Option<i64>,
+}
+
+fn combine_limbs(hi: i64, lo: i64) -> u128 {
+    let hi_u = u128::try_from(hi).unwrap_or(0);
+    let lo_u = u128::try_from(lo).unwrap_or(0);
+    hi_u.saturating_mul(TOKEN_LIMB_BASE).saturating_add(lo_u)
+}
+
+fn clamp_safe_json_tokens(value: u128, saturated: &mut bool) -> u64 {
+    if value > u128::from(MAX_SAFE_TOKENS) {
+        *saturated = true;
+        MAX_SAFE_TOKENS
+    } else {
+        u64::try_from(value).unwrap_or(MAX_SAFE_TOKENS)
+    }
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -91,30 +113,50 @@ fn agg_to_totals(row: &AggRow) -> CacheMetricsTotals {
     let observed_usage = to_u64(row.observed_usage_turns);
     let observed_cache = to_u64(row.observed_cache_turns);
     let observed_write = to_u64(row.observed_cache_write_turns);
-    let observed_other = to_u64(row.observed_other_uncached_turns);
+    let observed_complete = to_u64(row.observed_complete_breakdown_turns);
     let observed_reasoning = to_u64(row.observed_reasoning_turns);
-    let observed_cache_input = to_u64(row.observed_cache_input_tokens);
-    let cached_read = to_u64(row.cached_read_tokens);
-    let uncached = to_u64(row.uncached_input_tokens);
 
-    let cached_input_share = if observed_cache > 0 && observed_cache_input > 0 {
-        Some(cached_read as f64 / observed_cache_input as f64)
+    // Compute shares from full 128-bit sums before safe-JSON clamping.
+    let cached_input_share = if observed_cache > 0 && row.observed_cache_input_tokens > 0 {
+        Some(row.cached_read_tokens as f64 / row.observed_cache_input_tokens as f64)
     } else {
         None
     };
-    let uncached_input_share = if observed_cache > 0 && observed_cache_input > 0 {
-        Some(uncached as f64 / observed_cache_input as f64)
+    let uncached_input_share = if observed_cache > 0 && row.observed_cache_input_tokens > 0 {
+        Some(row.uncached_input_tokens as f64 / row.observed_cache_input_tokens as f64)
     } else {
         None
     };
+
+    let mut totals_saturated = false;
+    let inclusive_input = (observed_usage > 0)
+        .then(|| clamp_safe_json_tokens(row.inclusive_input_tokens, &mut totals_saturated));
+    let observed_cache_input = (observed_cache > 0)
+        .then(|| clamp_safe_json_tokens(row.observed_cache_input_tokens, &mut totals_saturated));
+    let cached_read = (observed_cache > 0)
+        .then(|| clamp_safe_json_tokens(row.cached_read_tokens, &mut totals_saturated));
+    let cache_write = (observed_write > 0)
+        .then(|| clamp_safe_json_tokens(row.cache_write_tokens, &mut totals_saturated));
+    let uncached = (observed_cache > 0)
+        .then(|| clamp_safe_json_tokens(row.uncached_input_tokens, &mut totals_saturated));
+    // Only emit `other_uncached_input_tokens` when every observed-cache turn has
+    // a complete disjoint breakdown AND no extra write-only turn diverges from
+    // that cohort, so a 3-way stacked bar always sums to observed_cache_input.
     let other_uncached = if observed_cache > 0
+        && observed_complete == observed_cache
         && observed_write == observed_cache
-        && observed_other == observed_cache
     {
-        Some(to_u64(row.other_uncached_input_tokens))
+        Some(clamp_safe_json_tokens(
+            row.other_uncached_input_tokens,
+            &mut totals_saturated,
+        ))
     } else {
         None
     };
+    let output = (observed_usage > 0)
+        .then(|| clamp_safe_json_tokens(row.output_tokens, &mut totals_saturated));
+    let reasoning = (observed_reasoning > 0)
+        .then(|| clamp_safe_json_tokens(row.reasoning_tokens, &mut totals_saturated));
 
     CacheMetricsTotals {
         total_turns: to_u64(row.total_turns),
@@ -124,16 +166,17 @@ fn agg_to_totals(row: &AggRow) -> CacheMetricsTotals {
         observed_cache_write_turns: observed_write,
         renewed_turns: to_u64(row.renewed_turns),
         compacted_turns: to_u64(row.compacted_turns),
-        inclusive_input_tokens: (observed_usage > 0).then(|| to_u64(row.inclusive_input_tokens)),
-        observed_cache_input_tokens: (observed_cache > 0).then_some(observed_cache_input),
-        cached_read_tokens: (observed_cache > 0).then_some(cached_read),
-        cache_write_tokens: (observed_write > 0).then(|| to_u64(row.cache_write_tokens)),
-        uncached_input_tokens: (observed_cache > 0).then_some(uncached),
+        inclusive_input_tokens: inclusive_input,
+        observed_cache_input_tokens: observed_cache_input,
+        cached_read_tokens: cached_read,
+        cache_write_tokens: cache_write,
+        uncached_input_tokens: uncached,
         other_uncached_input_tokens: other_uncached,
-        output_tokens: (observed_usage > 0).then(|| to_u64(row.output_tokens)),
-        reasoning_tokens: (observed_reasoning > 0).then(|| to_u64(row.reasoning_tokens)),
+        output_tokens: output,
+        reasoning_tokens: reasoning,
         cached_input_share,
         uncached_input_share,
+        totals_saturated,
     }
 }
 
@@ -165,28 +208,62 @@ async fn begin_write_tx_sqlite(
         .context("begin SQLite immediate write tx")
 }
 
+async fn begin_read_tx_pg(pool: &sqlx::PgPool) -> Result<sqlx::Transaction<'_, sqlx::Postgres>> {
+    pool.begin_with("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .await
+        .context("begin PostgreSQL repeatable-read snapshot tx")
+}
+
+async fn begin_read_tx_sqlite(
+    pool: &sqlx::SqlitePool,
+) -> Result<sqlx::Transaction<'_, sqlx::Sqlite>> {
+    pool.begin_with("BEGIN DEFERRED")
+        .await
+        .context("begin SQLite snapshot read tx")
+}
+
+macro_rules! limb_sum {
+    ($cond:expr, $expr:expr, $hi:literal, $lo:literal) => {
+        concat!(
+            "CAST(COALESCE(SUM(CASE WHEN ",
+            $cond,
+            " THEN ((",
+            $expr,
+            ") / 1073741824) ELSE 0 END), 0) AS BIGINT) AS ",
+            $hi,
+            ", ",
+            "CAST(COALESCE(SUM(CASE WHEN ",
+            $cond,
+            " THEN ((",
+            $expr,
+            ") % 1073741824) ELSE 0 END), 0) AS BIGINT) AS ",
+            $lo
+        )
+    };
+}
+
 macro_rules! agg_select_exprs {
     ($bool_true:literal) => {
         concat!(
-            "CAST(COUNT(*) AS BIGINT) AS total_turns, \
-             CAST(COALESCE(SUM(CASE WHEN usage_observed = ", $bool_true, " OR stop_reason NOT IN ('cancelled', 'error') THEN 1 ELSE 0 END), 0) AS BIGINT) AS eligible_turns, \
-             CAST(COALESCE(SUM(CASE WHEN usage_observed = ", $bool_true, " THEN 1 ELSE 0 END), 0) AS BIGINT) AS observed_usage_turns, \
-             CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_read_tokens <= inclusive_input_tokens THEN 1 ELSE 0 END), 0) AS BIGINT) AS observed_cache_turns, \
-             CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_read_tokens <= inclusive_input_tokens AND cache_write_tokens IS NOT NULL THEN 1 ELSE 0 END), 0) AS BIGINT) AS observed_cache_write_turns, \
-             CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_read_tokens <= inclusive_input_tokens AND cache_write_tokens IS NOT NULL AND other_uncached_input_tokens IS NOT NULL THEN 1 ELSE 0 END), 0) AS BIGINT) AS observed_other_uncached_turns, \
-             CAST(COALESCE(SUM(CASE WHEN reasoning_tokens IS NOT NULL THEN 1 ELSE 0 END), 0) AS BIGINT) AS observed_reasoning_turns, \
-             CAST(COALESCE(SUM(CASE WHEN renewed = ", $bool_true, " THEN 1 ELSE 0 END), 0) AS BIGINT) AS renewed_turns, \
-             CAST(COALESCE(SUM(CASE WHEN compacted = ", $bool_true, " THEN 1 ELSE 0 END), 0) AS BIGINT) AS compacted_turns, \
-             CAST(COALESCE(SUM(CASE WHEN usage_observed = ", $bool_true, " THEN COALESCE(inclusive_input_tokens, 0) ELSE 0 END), 0) AS BIGINT) AS inclusive_input_tokens, \
-             CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_read_tokens <= inclusive_input_tokens THEN inclusive_input_tokens ELSE 0 END), 0) AS BIGINT) AS observed_cache_input_tokens, \
-             CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_read_tokens <= inclusive_input_tokens THEN cached_read_tokens ELSE 0 END), 0) AS BIGINT) AS cached_read_tokens, \
-             CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_read_tokens <= inclusive_input_tokens AND cache_write_tokens IS NOT NULL THEN cache_write_tokens ELSE 0 END), 0) AS BIGINT) AS cache_write_tokens, \
-             CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_read_tokens <= inclusive_input_tokens THEN inclusive_input_tokens - cached_read_tokens ELSE 0 END), 0) AS BIGINT) AS uncached_input_tokens, \
-             CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND cached_read_tokens IS NOT NULL AND cached_read_tokens <= inclusive_input_tokens AND cache_write_tokens IS NOT NULL AND other_uncached_input_tokens IS NOT NULL THEN other_uncached_input_tokens ELSE 0 END), 0) AS BIGINT) AS other_uncached_input_tokens, \
-             CAST(COALESCE(SUM(CASE WHEN usage_observed = ", $bool_true, " THEN COALESCE(output_tokens, 0) ELSE 0 END), 0) AS BIGINT) AS output_tokens, \
-             CAST(COALESCE(SUM(COALESCE(reasoning_tokens, 0)), 0) AS BIGINT) AS reasoning_tokens, \
-             MIN(occurred_at_ms) AS oldest_fact_ms, \
-             MAX(occurred_at_ms) AS newest_fact_ms"
+            "CAST(COUNT(*) AS BIGINT) AS total_turns, ",
+            "CAST(COALESCE(SUM(CASE WHEN usage_observed = ", $bool_true, " OR stop_reason NOT IN ('cancelled', 'error') THEN 1 ELSE 0 END), 0) AS BIGINT) AS eligible_turns, ",
+            "CAST(COALESCE(SUM(CASE WHEN usage_observed = ", $bool_true, " THEN 1 ELSE 0 END), 0) AS BIGINT) AS observed_usage_turns, ",
+            "CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND inclusive_input_tokens >= 0 AND cached_read_tokens IS NOT NULL AND cached_read_tokens >= 0 AND cached_read_tokens <= inclusive_input_tokens THEN 1 ELSE 0 END), 0) AS BIGINT) AS observed_cache_turns, ",
+            "CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND inclusive_input_tokens >= 0 AND cache_write_tokens IS NOT NULL AND cache_write_tokens >= 0 AND cache_write_tokens <= inclusive_input_tokens THEN 1 ELSE 0 END), 0) AS BIGINT) AS observed_cache_write_turns, ",
+            "CAST(COALESCE(SUM(CASE WHEN inclusive_input_tokens IS NOT NULL AND inclusive_input_tokens >= 0 AND cached_read_tokens IS NOT NULL AND cached_read_tokens >= 0 AND cache_write_tokens IS NOT NULL AND cache_write_tokens >= 0 AND other_uncached_input_tokens IS NOT NULL AND other_uncached_input_tokens >= 0 AND cached_read_tokens + cache_write_tokens + other_uncached_input_tokens = inclusive_input_tokens THEN 1 ELSE 0 END), 0) AS BIGINT) AS observed_complete_breakdown_turns, ",
+            "CAST(COALESCE(SUM(CASE WHEN reasoning_tokens IS NOT NULL AND reasoning_tokens >= 0 THEN 1 ELSE 0 END), 0) AS BIGINT) AS observed_reasoning_turns, ",
+            "CAST(COALESCE(SUM(CASE WHEN renewed = ", $bool_true, " THEN 1 ELSE 0 END), 0) AS BIGINT) AS renewed_turns, ",
+            "CAST(COALESCE(SUM(CASE WHEN compacted = ", $bool_true, " THEN 1 ELSE 0 END), 0) AS BIGINT) AS compacted_turns, ",
+            limb_sum!(concat!("usage_observed = ", $bool_true, " AND inclusive_input_tokens IS NOT NULL AND inclusive_input_tokens >= 0"), "inclusive_input_tokens", "inclusive_input_hi", "inclusive_input_lo"), ", ",
+            limb_sum!("inclusive_input_tokens IS NOT NULL AND inclusive_input_tokens >= 0 AND cached_read_tokens IS NOT NULL AND cached_read_tokens >= 0 AND cached_read_tokens <= inclusive_input_tokens", "inclusive_input_tokens", "observed_cache_input_hi", "observed_cache_input_lo"), ", ",
+            limb_sum!("inclusive_input_tokens IS NOT NULL AND inclusive_input_tokens >= 0 AND cached_read_tokens IS NOT NULL AND cached_read_tokens >= 0 AND cached_read_tokens <= inclusive_input_tokens", "cached_read_tokens", "cached_read_hi", "cached_read_lo"), ", ",
+            limb_sum!("inclusive_input_tokens IS NOT NULL AND inclusive_input_tokens >= 0 AND cache_write_tokens IS NOT NULL AND cache_write_tokens >= 0 AND cache_write_tokens <= inclusive_input_tokens", "cache_write_tokens", "cache_write_hi", "cache_write_lo"), ", ",
+            limb_sum!("inclusive_input_tokens IS NOT NULL AND inclusive_input_tokens >= 0 AND cached_read_tokens IS NOT NULL AND cached_read_tokens >= 0 AND cached_read_tokens <= inclusive_input_tokens", "inclusive_input_tokens - cached_read_tokens", "uncached_input_hi", "uncached_input_lo"), ", ",
+            limb_sum!("inclusive_input_tokens IS NOT NULL AND inclusive_input_tokens >= 0 AND cached_read_tokens IS NOT NULL AND cached_read_tokens >= 0 AND cache_write_tokens IS NOT NULL AND cache_write_tokens >= 0 AND other_uncached_input_tokens IS NOT NULL AND other_uncached_input_tokens >= 0 AND cached_read_tokens + cache_write_tokens + other_uncached_input_tokens = inclusive_input_tokens", "other_uncached_input_tokens", "other_uncached_hi", "other_uncached_lo"), ", ",
+            limb_sum!(concat!("usage_observed = ", $bool_true, " AND output_tokens IS NOT NULL AND output_tokens >= 0"), "output_tokens", "output_hi", "output_lo"), ", ",
+            limb_sum!("reasoning_tokens IS NOT NULL AND reasoning_tokens >= 0", "reasoning_tokens", "reasoning_hi", "reasoning_lo"), ", ",
+            "MIN(occurred_at_ms) AS oldest_fact_ms, ",
+            "MAX(occurred_at_ms) AS newest_fact_ms"
         )
     };
 }
@@ -201,6 +278,7 @@ macro_rules! impl_turn_cache_backend {
         $decode_agg_fn:ident,
         $decode_turn_fn:ident,
         $begin_tx_fn:ident,
+        $begin_read_tx_fn:ident,
         $db:ty,
         $storage:ty,
         $row_ty:ty,
@@ -222,18 +300,43 @@ macro_rules! impl_turn_cache_backend {
                 observed_usage_turns: row.try_get("observed_usage_turns")?,
                 observed_cache_turns: row.try_get("observed_cache_turns")?,
                 observed_cache_write_turns: row.try_get("observed_cache_write_turns")?,
-                observed_other_uncached_turns: row.try_get("observed_other_uncached_turns")?,
+                observed_complete_breakdown_turns: row
+                    .try_get("observed_complete_breakdown_turns")?,
                 observed_reasoning_turns: row.try_get("observed_reasoning_turns")?,
                 renewed_turns: row.try_get("renewed_turns")?,
                 compacted_turns: row.try_get("compacted_turns")?,
-                inclusive_input_tokens: row.try_get("inclusive_input_tokens")?,
-                observed_cache_input_tokens: row.try_get("observed_cache_input_tokens")?,
-                cached_read_tokens: row.try_get("cached_read_tokens")?,
-                cache_write_tokens: row.try_get("cache_write_tokens")?,
-                uncached_input_tokens: row.try_get("uncached_input_tokens")?,
-                other_uncached_input_tokens: row.try_get("other_uncached_input_tokens")?,
-                output_tokens: row.try_get("output_tokens")?,
-                reasoning_tokens: row.try_get("reasoning_tokens")?,
+                inclusive_input_tokens: combine_limbs(
+                    row.try_get("inclusive_input_hi")?,
+                    row.try_get("inclusive_input_lo")?,
+                ),
+                observed_cache_input_tokens: combine_limbs(
+                    row.try_get("observed_cache_input_hi")?,
+                    row.try_get("observed_cache_input_lo")?,
+                ),
+                cached_read_tokens: combine_limbs(
+                    row.try_get("cached_read_hi")?,
+                    row.try_get("cached_read_lo")?,
+                ),
+                cache_write_tokens: combine_limbs(
+                    row.try_get("cache_write_hi")?,
+                    row.try_get("cache_write_lo")?,
+                ),
+                uncached_input_tokens: combine_limbs(
+                    row.try_get("uncached_input_hi")?,
+                    row.try_get("uncached_input_lo")?,
+                ),
+                other_uncached_input_tokens: combine_limbs(
+                    row.try_get("other_uncached_hi")?,
+                    row.try_get("other_uncached_lo")?,
+                ),
+                output_tokens: combine_limbs(
+                    row.try_get("output_hi")?,
+                    row.try_get("output_lo")?,
+                ),
+                reasoning_tokens: combine_limbs(
+                    row.try_get("reasoning_hi")?,
+                    row.try_get("reasoning_lo")?,
+                ),
                 oldest_fact_ms: row.try_get("oldest_fact_ms")?,
                 newest_fact_ms: row.try_get("newest_fact_ms")?,
             })
@@ -597,12 +700,15 @@ macro_rules! impl_turn_cache_backend {
             Ok(inserted)
         }
 
-        async fn $backfill_state_fn(pool: &sqlx::Pool<$db>) -> Result<BackfillState> {
+        async fn $backfill_state_fn<'e, E>(exec: E) -> Result<BackfillState>
+        where
+            E: sqlx::Executor<'e, Database = $db>,
+        {
             let row = sqlx::query(
                 "SELECT cursor_session_id, cursor_seq, completed_at_ms \
                  FROM turn_cache_backfill_state WHERE slot = 1",
             )
-            .fetch_optional(pool)
+            .fetch_optional(exec)
             .await?;
             let Some(row) = row else {
                 return Ok(BackfillState::default());
@@ -794,6 +900,7 @@ macro_rules! impl_turn_cache_backend {
                 to_ms: i64,
                 window: &str,
             ) -> Result<AccountCacheMetrics> {
+                let mut tx = $begin_read_tx_fn(&self.pool).await?;
                 let totals_sql = concat!(
                     "SELECT ", agg_select_exprs!($bool_true), " \
                      FROM turn_cache_facts \
@@ -809,13 +916,13 @@ macro_rules! impl_turn_cache_backend {
                     .bind(provider_account_id)
                     .bind(from_ms)
                     .bind(to_ms)
-                    .fetch_one(&self.pool)
+                    .fetch_one(&mut *tx)
                     .await
                     .context("aggregate account turn_cache_facts")?;
                 let agg = $decode_agg_fn(&agg_row)?;
 
                 let models_sql = concat!(
-                    "SELECT COALESCE(NULLIF(model, ''), 'unknown') AS model_key, ",
+                    "SELECT * FROM (SELECT COALESCE(NULLIF(model, ''), 'unknown') AS model_key, ",
                     agg_select_exprs!($bool_true),
                     " FROM turn_cache_facts \
                      WHERE owner_user_id = $1 \
@@ -823,8 +930,8 @@ macro_rules! impl_turn_cache_backend {
                        AND provider_account_id = $3 \
                        AND occurred_at_ms >= $4 \
                        AND occurred_at_ms <= $5 \
-                     GROUP BY model_key \
-                     ORDER BY inclusive_input_tokens DESC, total_turns DESC, model_key ASC \
+                     GROUP BY model_key) AS grouped \
+                     ORDER BY (grouped.inclusive_input_hi * 1073741824.0 + grouped.inclusive_input_lo) DESC, grouped.total_turns DESC, grouped.model_key ASC \
                      LIMIT $6"
                 );
                 let model_rows = sqlx::query(models_sql)
@@ -834,7 +941,7 @@ macro_rules! impl_turn_cache_backend {
                     .bind(from_ms)
                     .bind(to_ms)
                     .bind(MAX_MODELS_IN_RESPONSE)
-                    .fetch_all(&self.pool)
+                    .fetch_all(&mut *tx)
                     .await
                     .context("aggregate account turn_cache_facts by model")?;
 
@@ -848,7 +955,8 @@ macro_rules! impl_turn_cache_backend {
                     });
                 }
 
-                let backfill = $backfill_state_fn(&self.pool).await?;
+                let backfill = $backfill_state_fn(&mut *tx).await?;
+                let _ = tx.rollback().await;
                 let totals = agg_to_totals(&agg);
                 let coverage = build_scoped_coverage(&totals, &agg, &backfill);
                 Ok(AccountCacheMetrics {
@@ -871,6 +979,7 @@ macro_rules! impl_turn_cache_backend {
                 provider_account_id: &str,
                 recent_turn_limit: usize,
             ) -> Result<SessionCacheMetrics> {
+                let mut tx = $begin_read_tx_fn(&self.pool).await?;
                 let totals_sql = concat!(
                     "SELECT ", agg_select_exprs!($bool_true), " \
                      FROM turn_cache_facts \
@@ -884,21 +993,21 @@ macro_rules! impl_turn_cache_backend {
                     .bind(provider)
                     .bind(provider_account_id)
                     .bind(owner_user_id)
-                    .fetch_one(&self.pool)
+                    .fetch_one(&mut *tx)
                     .await
                     .context("aggregate session turn_cache_facts")?;
                 let agg = $decode_agg_fn(&agg_row)?;
 
                 let models_sql = concat!(
-                    "SELECT COALESCE(NULLIF(model, ''), 'unknown') AS model_key, ",
+                    "SELECT * FROM (SELECT COALESCE(NULLIF(model, ''), 'unknown') AS model_key, ",
                     agg_select_exprs!($bool_true),
                     " FROM turn_cache_facts \
                      WHERE session_id = $1 \
                        AND provider = $2 \
                        AND provider_account_id = $3 \
                        AND ", $owner_eq_expr, " \
-                     GROUP BY model_key \
-                     ORDER BY inclusive_input_tokens DESC, total_turns DESC, model_key ASC \
+                     GROUP BY model_key) AS grouped \
+                     ORDER BY (grouped.inclusive_input_hi * 1073741824.0 + grouped.inclusive_input_lo) DESC, grouped.total_turns DESC, grouped.model_key ASC \
                      LIMIT $5"
                 );
                 let model_rows = sqlx::query(models_sql)
@@ -907,7 +1016,7 @@ macro_rules! impl_turn_cache_backend {
                     .bind(provider_account_id)
                     .bind(owner_user_id)
                     .bind(MAX_MODELS_IN_RESPONSE)
-                    .fetch_all(&self.pool)
+                    .fetch_all(&mut *tx)
                     .await
                     .context("aggregate session turn_cache_facts by model")?;
                 let mut by_model = Vec::with_capacity(model_rows.len());
@@ -941,7 +1050,7 @@ macro_rules! impl_turn_cache_backend {
                     .bind(provider_account_id)
                     .bind(owner_user_id)
                     .bind(limit)
-                    .fetch_all(&self.pool)
+                    .fetch_all(&mut *tx)
                     .await
                     .context("query recent session turn_cache_facts")?;
                 let mut recent_turns = Vec::with_capacity(recent_rows.len());
@@ -949,7 +1058,8 @@ macro_rules! impl_turn_cache_backend {
                     recent_turns.push($decode_turn_fn(row)?);
                 }
 
-                let backfill = $backfill_state_fn(&self.pool).await?;
+                let backfill = $backfill_state_fn(&mut *tx).await?;
+                let _ = tx.rollback().await;
                 let totals = agg_to_totals(&agg);
                 let coverage = build_scoped_coverage(&totals, &agg, &backfill);
                 Ok(SessionCacheMetrics {
@@ -975,6 +1085,7 @@ impl_turn_cache_backend!(
     decode_agg_pg,
     decode_turn_pg,
     begin_write_tx_pg,
+    begin_read_tx_pg,
     sqlx::Postgres,
     PostgresStorage,
     sqlx::postgres::PgRow,
@@ -999,6 +1110,7 @@ impl_turn_cache_backend!(
     decode_agg_sqlite,
     decode_turn_sqlite,
     begin_write_tx_sqlite,
+    begin_read_tx_sqlite,
     sqlx::Sqlite,
     SqliteStorage,
     sqlx::sqlite::SqliteRow,

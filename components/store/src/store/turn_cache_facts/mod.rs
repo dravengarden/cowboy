@@ -30,7 +30,7 @@ pub(in crate::store) use queries::{
 /// Default retention window for `turn_cache_facts` rows (days).
 pub const DEFAULT_RETENTION_DAYS: i64 = 90;
 /// Maximum safe integer (JS `Number.MAX_SAFE_INTEGER`) matching `TurnUsage`.
-const MAX_SAFE_TOKENS: u64 = 9_007_199_254_740_991;
+pub(super) const MAX_SAFE_TOKENS: u64 = 9_007_199_254_740_991;
 const MAX_MODEL_BYTES: usize = 120;
 const MAX_PROMPT_ORIGIN_BYTES: usize = 32;
 const MAX_VERSION_BYTES: usize = 128;
@@ -165,32 +165,31 @@ pub fn normalize_stop_reason(raw: &str) -> &'static str {
     }
 }
 
-/// Extract the best unambiguous live turn-time model identifier from session
-/// metadata.
-///
-/// `last_usage.raw._cowboy.modelUsage` is sorted by cumulative session token
-/// volume, so after a mid-session model switch `modelUsage[0]` can remain the
-/// old model. We therefore use `modelUsage` only when it contains a single
-/// unambiguous model; otherwise we prefer `config_preferences.model` and then
-/// the `"model"` entry in `config_options`.
-#[must_use]
-pub fn extract_session_model(
-    last_usage: Option<&Value>,
+fn model_identifiers_compatible(selected: &str, observed: &str) -> bool {
+    let sel = selected.trim().to_ascii_lowercase();
+    let obs = observed.trim().to_ascii_lowercase();
+    if sel.is_empty() || obs.is_empty() {
+        return false;
+    }
+    if sel == obs {
+        return true;
+    }
+    let contains_token = |haystack: &str, needle: &str| -> bool {
+        haystack
+            .split(|c: char| !c.is_ascii_alphanumeric())
+            .any(|tok| tok == needle)
+    };
+    contains_token(&obs, &sel)
+        || contains_token(&sel, &obs)
+        || obs.starts_with(&format!("{sel}-"))
+        || obs.starts_with(&format!("{sel}["))
+        || sel.starts_with(&format!("{obs}-"))
+}
+
+fn extract_selected_model(
     config_preferences: Option<&Value>,
     config_options: Option<&Value>,
 ) -> Option<String> {
-    if let Some(rows) = last_usage
-        .and_then(|value| value.pointer("/raw/_cowboy/modelUsage"))
-        .and_then(Value::as_array)
-        && rows.len() == 1
-        && let Some(model) = rows[0]
-            .get("model")
-            .and_then(Value::as_str)
-            .map(|value| sanitize_text(value, MAX_MODEL_BYTES))
-            .filter(|value| !value.is_empty())
-    {
-        return Some(model);
-    }
     if let Some(model) = config_preferences
         .and_then(|value| value.get("model"))
         .and_then(Value::as_str)
@@ -212,6 +211,59 @@ pub fn extract_session_model(
         }
     }
     None
+}
+
+/// Extract the best unambiguous live turn-time model identifier from session
+/// metadata.
+///
+/// `last_usage.raw._cowboy.modelUsage` is cumulative and flushed asynchronously
+/// by the write-behind worker, so on the first turn after a model switch A -> B
+/// `modelUsage` may still contain only `[A]` while `config_preferences` holds
+/// `B` (or vice-versa right after a switch). Whenever cumulative `modelUsage`
+/// conflicts with the active selected model (or has multiple models without a
+/// unique match for the selected model), return `None` (`unknown`) instead of
+/// misattributing the turn to the wrong model.
+#[must_use]
+pub fn extract_session_model(
+    last_usage: Option<&Value>,
+    config_preferences: Option<&Value>,
+    config_options: Option<&Value>,
+) -> Option<String> {
+    let selected = extract_selected_model(config_preferences, config_options);
+    let usage_models: Vec<String> = last_usage
+        .and_then(|value| value.pointer("/raw/_cowboy/modelUsage"))
+        .and_then(Value::as_array)
+        .map(|rows| {
+            rows.iter()
+                .filter_map(|row| {
+                    row.get("model")
+                        .and_then(Value::as_str)
+                        .map(|value| sanitize_text(value, MAX_MODEL_BYTES))
+                        .filter(|value| !value.is_empty())
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    match usage_models.as_slice() {
+        [] => selected,
+        [only] => match selected.as_deref() {
+            None => Some(only.clone()),
+            Some(sel) if model_identifiers_compatible(sel, only) => Some(only.clone()),
+            Some(_) => None,
+        },
+        many => {
+            let sel = selected.as_deref()?;
+            let mut matches = many
+                .iter()
+                .filter(|observed| model_identifiers_compatible(sel, observed));
+            let first = matches.next()?;
+            if matches.next().is_some() {
+                return None;
+            }
+            Some(first.clone())
+        }
+    }
 }
 
 fn normalize_model_value(raw: &str) -> String {
@@ -252,11 +304,19 @@ pub(super) fn classify_prompt_origin(payload: &Value) -> String {
 
 /// Aggregated turn-level cache efficiency totals over a window or session.
 ///
+/// Token sums accumulate in checked 128-bit arithmetic (split into 30-bit SQL
+/// limbs so neither SQLite `SUM` nor PostgreSQL `BIGINT` can overflow) and
+/// clamp to `MAX_SAFE_TOKENS` (`2^53 - 1`) for exact JavaScript JSON numbers;
+/// `totals_saturated` is `true` if any token sum exceeded `2^53 - 1` (ratios
+/// are always computed from full 128-bit sums before clamping).
+///
 /// Token sums stay `None` when no contributing turn reported valid usage/cache
 /// counters, preserving `Some(0)` strictly for genuinely observed zero-token
-/// turns. `cache_write_tokens` and `observed_cache_write_turns` are counted
-/// over the same observed-cache cohort as `cached_read_tokens` so partial
-/// write counters can never make stacked segments exceed observed input.
+/// turns. `observed_cache_write_turns` and `cache_write_tokens` track write
+/// telemetry independently of `cached_read_tokens`, while
+/// `other_uncached_input_tokens` is populated only when every observed-cache
+/// turn has a complete disjoint `cached_read + cache_write + other_uncached`
+/// breakdown and no unpaired write-only turn skews the cohort.
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct CacheMetricsTotals {
     pub total_turns: u64,
@@ -279,6 +339,10 @@ pub struct CacheMetricsTotals {
     pub cached_input_share: Option<f64>,
     /// `sum(uncached_input_tokens) / sum(observed_cache_input_tokens)`.
     pub uncached_input_share: Option<f64>,
+    /// `true` when at least one token sum exceeded JS `Number.MAX_SAFE_INTEGER`
+    /// (`2^53 - 1`) and was clamped for exact JSON serialization.
+    #[serde(default)]
+    pub totals_saturated: bool,
 }
 
 /// Per-model breakdown inside an account or session cache metrics response.

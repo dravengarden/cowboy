@@ -182,6 +182,31 @@ function compareCohorts(
   }
 }
 
+type SemverTuple = readonly [number, number, number, string | null];
+
+function parseSemver(version: string): SemverTuple | null {
+  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:-([0-9A-Za-z.-]+))?(?:\+[0-9A-Za-z.-]+)?$/.exec(
+    version.trim(),
+  );
+  if (!match) return null;
+  return [
+    Number.parseInt(match[1]!, 10),
+    Number.parseInt(match[2]!, 10),
+    Number.parseInt(match[3]!, 10),
+    match[4] ?? null,
+  ];
+}
+
+function compareSemver(a: SemverTuple, b: SemverTuple): number {
+  if (a[0] !== b[0]) return a[0] - b[0];
+  if (a[1] !== b[1]) return a[1] - b[1];
+  if (a[2] !== b[2]) return a[2] - b[2];
+  if (a[3] === b[3]) return 0;
+  if (a[3] === null) return 1;
+  if (b[3] === null) return -1;
+  return a[3].localeCompare(b[3]);
+}
+
 export function summarizeCacheTelemetryRows(
   rows: readonly CacheFactInputRow[],
   nowMs: number,
@@ -191,6 +216,8 @@ export function summarizeCacheTelemetryRows(
     minRegressionTurns?: number;
     dropThreshold?: number;
     projectionComplete?: boolean;
+    /** Full-history `MIN(occurred_at_ms)` keyed by `${provider}\u0000${version}`. */
+    versionFirstSeenMs?: ReadonlyMap<string, number>;
   } = {},
 ): CacheTelemetryAudit {
   const minTurns = options.minRegressionTurns ?? 10;
@@ -272,7 +299,7 @@ export function summarizeCacheTelemetryRows(
       normalized !== null &&
       normalized.cached_read !== null &&
       normalized.uncached_total !== null;
-    const writeValid = cacheValid && normalized!.cache_write !== null;
+    const writeValid = normalized !== null && normalized.cache_write !== null;
     const eligible = isEligibleStopReason(row.stop_reason, usageValid);
 
     const acc = providers.get(row.provider) ?? {
@@ -381,18 +408,54 @@ export function summarizeCacheTelemetryRows(
 
   const coverageRegressions: TelemetryCoverageRegression[] = [];
   for (const [provider, acc] of [...providers.entries()].sort(([a], [b]) => a.localeCompare(b))) {
-    // 1. Compare exact per-version cohorts (ordered chronologically by firstSeenMs)
-    // so a broken newly deployed version alerts even when an older healthy
-    // version still serves most turns in the window.
-    const versions = [...acc.versionCohorts.entries()]
-      .filter(([, cohort]) => cohort.eligible >= minTurns)
-      .sort((a, b) => a[1].firstSeenMs - b[1].firstSeenMs || a[0].localeCompare(b[0]));
+    // 1. Compare exact per-version cohorts using rollout-safe ordering:
+    //    (a) strict semver when every qualifying version parses as semver
+    //        (immune to overlapping rolling upgrades);
+    //    (b) full-table first-seen timestamps outside the report window;
+    //    (c) strictly non-overlapping in-window intervals.
+    //    If non-semver cohorts overlap with unknown order, skip directional
+    //    version_cohort comparison and let the unoriented time_window check run.
+    const eligibleVersions = [...acc.versionCohorts.entries()].filter(
+      ([, cohort]) => cohort.eligible >= minTurns,
+    );
+    let orderedVersions: Array<[string, CohortCounts]> = [];
+    if (eligibleVersions.length >= 2) {
+      const parsed = eligibleVersions.map(([v, c]) => [v, c, parseSemver(v)] as const);
+      if (parsed.every(([, , sv]) => sv !== null)) {
+        orderedVersions = [...parsed]
+          .sort((a, b) => compareSemver(a[2]!, b[2]!))
+          .map(([v, c]) => [v, c]);
+      } else if (
+        options.versionFirstSeenMs &&
+        eligibleVersions.every(([v]) => options.versionFirstSeenMs!.has(`${provider}\u0000${v}`))
+      ) {
+        const withFullFirst = eligibleVersions.map(
+          ([v, c]) => [v, c, options.versionFirstSeenMs!.get(`${provider}\u0000${v}`)!] as const,
+        );
+        const sorted = [...withFullFirst].sort((a, b) => a[2] - b[2] || a[0].localeCompare(b[0]));
+        const strictlyOrdered = sorted.every(
+          (entry, idx) => idx === 0 || sorted[idx - 1]![2] < entry[2],
+        );
+        if (strictlyOrdered) {
+          orderedVersions = sorted.map(([v, c]) => [v, c]);
+        }
+      } else {
+        const byStart = [...eligibleVersions].sort(
+          (a, b) => a[1].firstSeenMs - b[1].firstSeenMs || a[0].localeCompare(b[0]),
+        );
+        const nonOverlapping = byStart.every(
+          (entry, idx) => idx === 0 || byStart[idx - 1]![1].lastSeenMs <= entry[1].firstSeenMs,
+        );
+        if (nonOverlapping) {
+          orderedVersions = byStart;
+        }
+      }
+    }
     let detectedForProvider = false;
-    if (versions.length >= 2) {
-      for (let i = 1; i < versions.length; i++) {
-        const [currVersion, currCohort] = versions[i]!;
-        // Compare against the immediately preceding version cohort with >= minTurns.
-        const [prevVersion, prevCohort] = versions[i - 1]!;
+    if (orderedVersions.length >= 2) {
+      for (let i = 1; i < orderedVersions.length; i++) {
+        const [currVersion, currCohort] = orderedVersions[i]!;
+        const [prevVersion, prevCohort] = orderedVersions[i - 1]!;
         const beforeCount = coverageRegressions.length;
         compareCohorts(
           provider,
@@ -510,13 +573,22 @@ export function readCacheTelemetryAudit(
           .query("SELECT completed_at_ms FROM turn_cache_backfill_state WHERE slot = 1")
           .get() as { completed_at_ms: number | null } | null;
         projectionComplete = stateRow !== null && stateRow.completed_at_ms !== null;
-      } else {
-        // Test/fixture databases without a backfill state table use turn_cache_facts directly.
-        projectionComplete = true;
       }
     }
 
     if (hasFacts && projectionComplete) {
+      const firstSeenRows = db
+        .query(
+          `SELECT provider, provider_version, MIN(occurred_at_ms) AS first_seen_ms
+           FROM turn_cache_facts
+           WHERE provider_version != ''
+           GROUP BY provider, provider_version`,
+        )
+        .all() as Array<{ provider: string; provider_version: string; first_seen_ms: number }>;
+      const versionFirstSeenMs = new Map<string, number>();
+      for (const row of firstSeenRows) {
+        versionFirstSeenMs.set(`${row.provider}\u0000${row.provider_version}`, row.first_seen_ms);
+      }
       const raw = db
         .query(
           `SELECT session_id, occurred_at_ms, provider, provider_version, model,
@@ -564,6 +636,7 @@ export function readCacheTelemetryAudit(
       }));
       return summarizeCacheTelemetryRows(rows, nowMs, days, "turn_cache_facts", {
         projectionComplete: true,
+        versionFirstSeenMs,
       });
     }
 
@@ -579,44 +652,58 @@ export function readCacheTelemetryAudit(
       });
     }
 
-    // Fallback reader matches queries.rs opener provenance: locate the FIRST
-    // non-steering `user_message_chunk` between `prev_seq` and `seq`, then
-    // classify that opener instead of accepting a later human steer.
+    // Fallback reader matches queries.rs exactly:
+    // - Find the nearest preceding canonical TurnEnd by `(session_id, seq)`
+    //   across ALL history (not filtered by `since`) so the first in-window turn
+    //   never scans back into an earlier turn's opener or renewal marker.
+    // - Honor `context_cleared` boundaries between `prev_seq` and `seq`.
+    // - Locate the FIRST non-steering `user_message_chunk` after the boundary.
+    // - Leave historical `provider_version` and `model` unknown (`""` / `null`)
+    //   so pre-switch turns are never misattributed to current session metadata.
     const raw = db
       .query(
         `WITH te AS (
           SELECT e.session_id, e.seq, e.ts_ms, s.provider,
-                 COALESCE(s.provider_version, '') AS provider_version,
-                 CASE
-                   WHEN json_type(s.last_usage, '$.raw._cowboy.modelUsage') = 'array'
-                    AND json_array_length(s.last_usage, '$.raw._cowboy.modelUsage') = 1
-                   THEN json_extract(s.last_usage, '$.raw._cowboy.modelUsage[0].model')
-                   ELSE json_extract(s.config_preferences, '$.model')
-                 END AS model,
                  COALESCE(json_extract(e.payload, '$.stop_reason'), 'unknown') AS stop_reason,
                  json_extract(e.payload, '$.usage.input_tokens') AS inclusive_input_tokens,
                  json_extract(e.payload, '$.usage.cached_input_tokens') AS cached_read_tokens,
                  json_extract(e.payload, '$.usage.cache_write_tokens') AS cache_write_tokens,
                  json_extract(e.payload, '$.usage.uncached_input_tokens') AS uncached_input_tokens,
-                 lag(e.ts_ms) OVER (PARTITION BY e.session_id ORDER BY e.seq) AS prev_end,
-                 lag(e.seq) OVER (PARTITION BY e.session_id ORDER BY e.seq) AS prev_seq
+                 (SELECT prev.seq FROM events prev
+                  WHERE prev.session_id = e.session_id
+                    AND prev.seq < e.seq
+                    AND json_extract(prev.payload, '$.kind') = 'turn_end'
+                  ORDER BY prev.seq DESC LIMIT 1) AS prev_seq
           FROM events e
           JOIN sessions s ON s.id = e.session_id
           WHERE json_extract(e.payload, '$.kind') = 'turn_end' AND e.ts_ms >= ?1
         ),
-        with_opener AS (
+        with_bounds AS (
           SELECT te.*,
+                 prev.ts_ms AS raw_prev_end,
+                 (SELECT MAX(c.seq) FROM events c
+                  WHERE c.session_id = te.session_id
+                    AND c.seq > COALESCE(te.prev_seq, -1) AND c.seq < te.seq
+                    AND json_extract(c.payload, '$.kind') = 'update'
+                    AND json_extract(c.payload, '$.update.sessionUpdate') = 'context_cleared') AS cleared_seq
+          FROM te
+          LEFT JOIN events prev ON prev.session_id = te.session_id AND prev.seq = te.prev_seq
+        ),
+        with_opener AS (
+          SELECT b.*,
+                 COALESCE(b.cleared_seq, b.prev_seq, -1) AS window_start,
+                 CASE WHEN b.cleared_seq IS NOT NULL THEN NULL ELSE b.raw_prev_end END AS prev_end,
                  (SELECT x.seq FROM events x
-                  WHERE x.session_id = te.session_id
-                    AND x.seq > COALESCE(te.prev_seq, -1) AND x.seq < te.seq
+                  WHERE x.session_id = b.session_id
+                    AND x.seq > COALESCE(b.cleared_seq, b.prev_seq, -1) AND x.seq < b.seq
                     AND json_extract(x.payload, '$.kind') = 'update'
                     AND json_extract(x.payload, '$.update.sessionUpdate') = 'user_message_chunk'
                     AND COALESCE(json_extract(x.payload, '$.update._meta.cowboyDelivery'), '') != 'current_turn'
                   ORDER BY x.seq ASC LIMIT 1) AS opener_seq
-          FROM te
+          FROM with_bounds b
         )
-        SELECT o.session_id, o.ts_ms AS occurred_at_ms, o.provider, o.provider_version,
-               o.model, o.stop_reason,
+        SELECT o.session_id, o.ts_ms AS occurred_at_ms, o.provider,
+               o.stop_reason,
                o.inclusive_input_tokens, o.cached_read_tokens,
                o.cache_write_tokens, o.uncached_input_tokens,
                p.payload AS opener_payload,
@@ -629,6 +716,7 @@ export function readCacheTelemetryAudit(
                  SELECT 1 FROM events x
                  WHERE x.session_id = o.session_id
                    AND x.seq > COALESCE(o.prev_seq, -1) AND x.seq < o.seq
+                   AND json_extract(x.payload, '$.kind') = 'update'
                    AND json_extract(x.payload, '$.update.sessionUpdate') = 'context_rolled_over'
                ) AS renewed
         FROM with_opener o
@@ -638,8 +726,6 @@ export function readCacheTelemetryAudit(
       session_id: string;
       occurred_at_ms: number;
       provider: string;
-      provider_version: string;
-      model: string | null;
       stop_reason: string;
       inclusive_input_tokens: number | null;
       cached_read_tokens: number | null;
@@ -655,7 +741,7 @@ export function readCacheTelemetryAudit(
       occurred_at_ms: r.occurred_at_ms,
       provider: r.provider,
       provider_version: "",
-      model: r.model,
+      model: null,
       stop_reason: r.stop_reason,
       prompt_origin: classifyOpenerOrigin(r.opener_payload),
       idle_gap_ms: r.idle_gap_ms,

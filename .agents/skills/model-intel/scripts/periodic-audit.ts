@@ -360,12 +360,17 @@ export async function runPeriodicAudit(
         `field-cost-drift: ${drift.target} median ${drift.live_median_tokens} vs recorded ${drift.recorded_median_tokens} (${pct}, n=${drift.n})`,
       );
     }
-    for (const drop of fieldTelemetry.cache_telemetry.coverage_regressions) {
-      const prevPct = Math.round(drop.previous_coverage * 100);
-      const currPct = Math.round(drop.current_coverage * 100);
-      reasons.push(
-        `telemetry-coverage-drop: ${drop.provider} ${drop.metric} ${prevPct}% (${drop.previous_version}, n=${drop.previous_turns}) -> ${currPct}% (${drop.current_version}, n=${drop.current_turns})`,
-      );
+    // Only promote coverage regressions to release-action alerts when
+    // turn_cache_facts reconciliation is complete; incomplete events fallbacks
+    // can omit turns preserved across Clear/Purge and stay provisional.
+    if (fieldTelemetry.cache_telemetry.projection_complete) {
+      for (const drop of fieldTelemetry.cache_telemetry.coverage_regressions) {
+        const prevPct = Math.round(drop.previous_coverage * 100);
+        const currPct = Math.round(drop.current_coverage * 100);
+        reasons.push(
+          `telemetry-coverage-drop: ${drop.provider} ${drop.metric} ${prevPct}% (${drop.previous_version}, n=${drop.previous_turns}) -> ${currPct}% (${drop.current_version}, n=${drop.current_turns})`,
+        );
+      }
     }
   }
   if (quotaTelemetry.available) {
@@ -526,7 +531,7 @@ export function renderMarkdown(report: PeriodicAuditReport): string {
     }
     if (ct.coverage_regressions.length > 0) {
       lines.push(
-        "### Telemetry coverage regressions",
+        ct.projection_complete ? "### Telemetry coverage regressions" : "### Telemetry coverage regressions (provisional — backfill incomplete)",
         ...ct.coverage_regressions.map(
           (r) =>
             `- ${r.provider} ${r.metric} [${r.comparison_kind}]: ${(r.previous_coverage * 100).toFixed(1)}% (${r.previous_version}, n=${r.previous_turns}) -> ${(r.current_coverage * 100).toFixed(1)}% (${r.current_version}, n=${r.current_turns})`,

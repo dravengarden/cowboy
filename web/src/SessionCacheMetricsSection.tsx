@@ -133,6 +133,8 @@ function RecentTurnsDisclosure({
  * and collapsible per-turn diagnostic disclosure. Refreshes when strategy
  * toggles (`refreshKey`) or the session finishes a turn / updates usage.
  */
+const WRITE_BEHIND_RETRY_DELAYS_MS = [300, 600, 1_200, 2_000] as const;
+
 export function SessionCacheMetricsSection({
   sessionId,
   compact = false,
@@ -143,24 +145,55 @@ export function SessionCacheMetricsSection({
   refreshKey?: number;
 }): React.JSX.Element | null {
   const [data, setData] = useState<SessionCacheMetricsResponse | null>(null);
+  const latestTurnEndSeq = useStoreSelector((snapshot) => {
+    const timeline = snapshot.timelines.get(sessionId);
+    if (!timeline) return 0;
+    for (let i = timeline.length - 1; i >= 0; i -= 1) {
+      const env = timeline[i];
+      if (env && env.kind === "turn_end") return env.seq;
+    }
+    return 0;
+  });
   const liveSignal = useStoreSelector((snapshot) => {
     const session = snapshot.sessionsById.get(sessionId);
-    return session
-      ? `${session.status}:${session.usage?.observed_at_ms ?? 0}:${session.context_used}`
+    const options = snapshot.configOptions.get(sessionId);
+    const optionSig = options
+      ? options.map((opt) => `${opt.id}=${String(opt.currentValue)}`).join(";")
       : "";
+    return session
+      ? `${session.status}:${session.usage?.observed_at_ms ?? 0}:${session.context_used}|${optionSig}`
+      : optionSig;
   });
 
   useEffect(() => {
     const controller = new AbortController();
-    void fetchSessionCacheMetrics(sessionId, 25, controller.signal)
-      .then((response) => setData(response))
-      .catch(() => {
-        if (!controller.signal.aborted) setData(null);
-      });
+    let timerId: ReturnType<typeof globalThis.setTimeout> | null = null;
+    const load = (attempt: number): void => {
+      void fetchSessionCacheMetrics(sessionId, 25, controller.signal)
+        .then((response) => {
+          if (controller.signal.aborted) return;
+          setData(response);
+          const projectedMaxSeq = response.recent_turns[0]?.turn_end_seq ?? 0;
+          if (
+            latestTurnEndSeq > 0 &&
+            projectedMaxSeq < latestTurnEndSeq &&
+            attempt < WRITE_BEHIND_RETRY_DELAYS_MS.length
+          ) {
+            timerId = globalThis.setTimeout(() => {
+              if (!controller.signal.aborted) load(attempt + 1);
+            }, WRITE_BEHIND_RETRY_DELAYS_MS[attempt]);
+          }
+        })
+        .catch(() => {
+          if (!controller.signal.aborted) setData(null);
+        });
+    };
+    load(0);
     return (): void => {
       controller.abort();
+      if (timerId !== null) globalThis.clearTimeout(timerId);
     };
-  }, [sessionId, refreshKey, liveSignal]);
+  }, [sessionId, refreshKey, latestTurnEndSeq, liveSignal]);
 
   const currentData = data !== null && data.session_id === sessionId ? data : null;
   const segments = useMemo(
