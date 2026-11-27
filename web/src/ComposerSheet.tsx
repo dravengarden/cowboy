@@ -42,6 +42,7 @@ import { MobileSheetDismiss } from "@cowboy/app-shell";
 import { type SessionSettingsFocus } from "./sessionSettingsOpen";
 import { ConfigRevertBack } from "./ConfigRevertBack";
 import { ContextRolloverSettings, useCacheProtectionStatus } from "./ContextRolloverSettings";
+import { SessionCacheMetricsSection } from "./SessionCacheMetricsSection";
 
 export function SessionActionConfirmDialog({
   action,
@@ -785,6 +786,7 @@ export function SessionInfoSection({
   );
   const { cacheProtection, cacheProtectionUnavailable } =
     useCacheProtectionStatus(cacheProtectionVisible, session.id);
+  const [cacheMetricsNonce, setCacheMetricsNonce] = useState(0);
   const rows: { label: string; value: string; mono?: boolean }[] = [
     { label: "Project", value: project },
     { label: "Working dir", value: execution.cwd, mono: true },
@@ -962,7 +964,14 @@ export function SessionInfoSection({
             )}
           </Stack>
         )}
-        <ContextRolloverSettings sessionId={session.id} />
+        <ContextRolloverSettings
+          sessionId={session.id}
+          onPolicyChange={(): void => setCacheMetricsNonce((n) => n + 1)}
+        />
+        <SessionCacheMetricsSection
+          sessionId={session.id}
+          refreshKey={cacheMetricsNonce}
+        />
         <Box sx={{ pt: 0.5 }}>
           <ButtonBase
             aria-label={actionsExpanded

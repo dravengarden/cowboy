@@ -1079,6 +1079,12 @@ here says otherwise.
 
 ## Verification matrix (run the WHOLE thing after any editor change)
 
+2026-11-27: the Mobile Clear composer (`DeleteOutline`) trigger and its non-modal
+Popper were removed from `Composer.tsx`; `MobileBranchSwitcherButton` moved to
+the trailing slot of the Mobile action row with `GitForkIcon`, leaving
+`AccountTreeOutlined` reserved for background tasks / future orchestrator &
+swarm. Historical note below retained for any future non-modal composer Popper:
+
 2026-10-03: the Clear composer trigger and its non-modal Cancel/Clear all
 buttons need both pointer-down and mouse-down focus prevention, matching the
 expand control. iOS 26.5 WebKit still delivered a compatibility mouse-down after

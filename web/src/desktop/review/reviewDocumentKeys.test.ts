@@ -52,3 +52,18 @@ test("adjacent anchors stop at the ends", () => {
   assertEquals(adjacentIndex(4, -1, -1), 3);
   assertEquals(adjacentIndex(4, 0, 1, (i) => i === 3), 3);
 });
+
+test("c stages a review note unless shadowed by a user mapping or longer mapping prefix", () => {
+  assertEquals(reviewDocumentAction(normal, "c", none), { kind: "comment" });
+  assertEquals(reviewDocumentAction({ ...normal, visual: true }, "c", none), { kind: "comment" });
+  const normalPrefix = [{ lhs: "cz", rhs: "zz", mode: "normal" as const, recursive: false }];
+  const mappedNormal = (seq: string, vis: boolean) => userMapsSequence(normalPrefix, seq, vis);
+  // Longer Normal mapping `cz` defers `c` in Normal mode while keeping Visual `c` and `]c` hunk motion.
+  assertEquals(reviewDocumentAction(normal, "c", mappedNormal), null);
+  assertEquals(reviewDocumentAction({ ...normal, visual: true }, "c", mappedNormal), { kind: "comment" });
+  assertEquals(reviewDocumentAction({ ...normal, keyBuffer: "]" }, "c", mappedNormal), { kind: "hunk", offset: 1 });
+  const visualPrefix = [{ lhs: "cz", rhs: "y", mode: "visual" as const, recursive: false }];
+  const mappedVisual = (seq: string, vis: boolean) => userMapsSequence(visualPrefix, seq, vis);
+  assertEquals(reviewDocumentAction({ ...normal, visual: true }, "c", mappedVisual), null);
+  assertEquals(reviewDocumentAction(normal, "c", mappedVisual), { kind: "comment" });
+});

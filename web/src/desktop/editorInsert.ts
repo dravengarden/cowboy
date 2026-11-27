@@ -75,3 +75,26 @@ export function useDesktopInsertCommand(
   }), [draftOpen]);
   useDesktopCommand(command);
 }
+
+/**
+ * Hand focus to the session's New Prompt buffer via the workbench's guarded
+ * buffer switch. Returns `"focused"` when the New Prompt buffer is active (or
+ * switched synchronously), or `"deferred"` when a Queue / Session Draft edit
+ * intercepted the switch (for example to ask before discarding unsaved edits).
+ */
+export function handoffToNewPrompt(
+  focusRegion: (region: string) => void,
+): "focused" | "deferred" {
+  const region = document.querySelector<HTMLElement>(PROMPT_REGION);
+  const deferred = region
+    ? !region.dispatchEvent(
+      new CustomEvent(DESKTOP_FOCUS_NEW_PROMPT_EVENT, {
+        bubbles: true,
+        cancelable: true,
+      }),
+    )
+    : false;
+  if (deferred) return "deferred";
+  focusRegion("prompt.composer");
+  return "focused";
+}

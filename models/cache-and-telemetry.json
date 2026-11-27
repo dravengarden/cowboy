@@ -1,0 +1,178 @@
+{
+  "schema": 1,
+  "authority": "advisory",
+  "audited_at": "2026-11-27",
+  "runtime_note": "Strictly advisory inventory for periodic audits and agent upgrade reviews. Never grants runtime capability; runtime capabilities are resolved exclusively from installed signed plugins, worker protocols, account policies, and observed telemetry counters.",
+  "providers": {
+    "claude-code": {
+      "telemetry": {
+        "level1_turn_end": {
+          "input_tokens": true,
+          "cached_read_tokens": true,
+          "cache_write_tokens": true,
+          "reasoning_tokens": false,
+          "notes": "TurnUsage.uncached_input_tokens equals input_tokens - cached_input_tokens and includes cache_write_tokens."
+        },
+        "level2_per_request": {
+          "status": "shipped_loopback_otlp",
+          "source": "claude_otlp_v1",
+          "notes": "Captured via worker wait_cache OTel SQLite rollups and Prometheus egress."
+        }
+      },
+      "prompt_cache_ttl": {
+        "documented_policy": "Included subscription main thread observed ~1h cache TTL; other/ephemeral usage ~5m.",
+        "empirical_notes": "Hawk 14d baseline (1,711 turns): 98.9% cached input share overall; cold cache write jumps sharply past 60m idle.",
+        "current_default_strategy": "idle_context_rollover_60m_80k"
+      },
+      "policy_boundaries": [
+        "Native-only account custody per Machine."
+      ]
+    },
+    "codex": {
+      "telemetry": {
+        "level1_turn_end": {
+          "input_tokens": true,
+          "cached_read_tokens": true,
+          "cache_write_tokens": false,
+          "reasoning_tokens": true,
+          "notes": "Reports cached_input_tokens without separate cache_write_tokens."
+        },
+        "level2_per_request": {
+          "status": "planned_stage2",
+          "source": "codex-otlp-http-v1",
+          "notes": "Requires both signed manifest declaration COWBOY_PRIVATE_CODEX_REQUEST_OBSERVATION=codex-otlp-http-v1 and runtime launch.mjs consumer."
+        }
+      },
+      "prompt_cache_ttl": {
+        "documented_policy": "Prompt cache retention varies by model family and routing; verify against OpenAI docs on every model/CLI upgrade.",
+        "empirical_notes": "Hawk 14d baseline (515 turns): 95.9% cached input share; newer models (gpt-6.2-sol, gpt-6.2-astra) show higher uncached growth in 5-30m gaps than earlier assumptions. Re-evaluate after Level 2 per-request telemetry lands.",
+        "current_default_strategy": "none_default_opt_in_rollover"
+      },
+      "policy_boundaries": []
+    },
+    "antigravity": {
+      "telemetry": {
+        "level1_turn_end": {
+          "input_tokens": true,
+          "cached_read_tokens": true,
+          "cache_write_tokens": false,
+          "reasoning_tokens": true,
+          "notes": "Reports cached_input_tokens on TurnEnd without separate cache_write_tokens."
+        },
+        "level2_per_request": {
+          "status": "planned_stage2",
+          "source": "antigravity_proxy_evidence_mjs",
+          "notes": "Diagnostic per-step cache evidence to be emitted from cowboy-antigravity-acp without modifying upstream protocol behavior."
+        }
+      },
+      "prompt_cache_ttl": {
+        "documented_policy": "Implicit prompt cache retention is dynamic and not guaranteed across idle intervals.",
+        "empirical_notes": "Hawk 14d baseline (821 turns): 96.6% cached input share, 142.65M uncached (largest uncached volume); gemini-4-neon uncached climbs steeply across 5-15m / 15-30m / 30-60m gaps.",
+        "current_default_strategy": "observability_only_restricted"
+      },
+      "policy_boundaries": [
+        "docs/requirements.md consumer-account boundary and named_only custody apply.",
+        "Automatic context rollover is disabled by host policy.",
+        "Background synthetic keepalive probes are strictly forbidden."
+      ]
+    },
+    "claude-deepseek": {
+      "telemetry": {
+        "level1_turn_end": {
+          "input_tokens": true,
+          "cached_read_tokens": true,
+          "cache_write_tokens": false,
+          "reasoning_tokens": true,
+          "notes": "TurnEnd usage reflects gateway responses."
+        },
+        "level2_per_request": {
+          "status": "shipped_gateway_ledger",
+          "source": "provider_usage_events",
+          "notes": "Per-request cache_hit_tokens, cache_miss_tokens, and adaptive-replay-v1 keepalive outcomes recorded by DeepSeek gateway."
+        }
+      },
+      "prompt_cache_ttl": {
+        "documented_policy": "DeepSeek automatic context caching; gateway adaptive-replay-v1 starts probing at 5h30m (19800000ms) only after >= 64K verified cache-hit tokens (min_hit_tokens: 64000; cold contexts do not qualify).",
+        "empirical_notes": "Hawk 30d gateway ledger showed 3/3 keepalive hits had 0 subsequent interactive turns on the same session. Keep deepseek_cache_protection independent from idle rollover.",
+        "current_default_strategy": "gateway_adaptive_replay_v1_independent_flag"
+      },
+      "policy_boundaries": [
+        "Preserve independent deepseek_cache_protection boolean for rollback safety; never silently re-enable paid replay."
+      ]
+    },
+    "codex-deepseek": {
+      "telemetry": {
+        "level1_turn_end": {
+          "input_tokens": true,
+          "cached_read_tokens": true,
+          "cache_write_tokens": false,
+          "reasoning_tokens": true,
+          "notes": "TurnEnd usage reflects gateway responses."
+        },
+        "level2_per_request": {
+          "status": "shipped_gateway_ledger",
+          "source": "provider_usage_events",
+          "notes": "Per-request cache_hit_tokens, cache_miss_tokens, and adaptive-replay-v1 keepalive outcomes recorded by DeepSeek gateway."
+        }
+      },
+      "prompt_cache_ttl": {
+        "documented_policy": "DeepSeek automatic context caching; gateway adaptive-replay-v1 starts probing at 5h30m (19800000ms) only after >= 64K verified cache-hit tokens (min_hit_tokens: 64000; cold contexts do not qualify).",
+        "empirical_notes": "Low volume on Hawk; keep deepseek_cache_protection independent from idle rollover.",
+        "current_default_strategy": "gateway_adaptive_replay_v1_independent_flag"
+      },
+      "policy_boundaries": [
+        "Preserve independent deepseek_cache_protection boolean for rollback safety; never silently re-enable paid replay."
+      ]
+    },
+    "deepseek-harness": {
+      "telemetry": {
+        "level1_turn_end": {
+          "input_tokens": true,
+          "cached_read_tokens": null,
+          "cache_write_tokens": null,
+          "reasoning_tokens": null,
+          "notes": "First-party DeepSeek Harness (dsh --profile acp) routed through the DeepSeek Anthropic Messages sidecar gateway; TurnEnd cache field coverage not yet established on Hawk (unknown)."
+        },
+        "level2_per_request": {
+          "status": "shipped_gateway_ledger",
+          "source": "provider_usage_events",
+          "notes": "Gateway sidecar records agent='deepseek-harness' rows in provider_usage_events when requests occur."
+        }
+      },
+      "prompt_cache_ttl": {
+        "documented_policy": "DeepSeek automatic context caching via sidecar gateway; signed Provider selects anthropic_gateway_v1 (Machine sets COWBOY_DEEPSEEK_CACHE_PROTECTION), but dsh cannot send custom policy headers and host.features does not declare cache_protection_v1, so per-session gateway keepalive enforcement/opt-out is unverified.",
+        "empirical_notes": "Insufficient Hawk turn volume for empirical TTL curve or turn-level cache-counter coverage baseline (unknown).",
+        "current_default_strategy": "gateway_keepalive_enforcement_unverified"
+      },
+      "policy_boundaries": [
+        "DSH_HOME remains an isolated Provider home; never share Claude/Codex credentials."
+      ]
+    },
+    "grok": {
+      "telemetry": {
+        "level1_turn_end": {
+          "input_tokens": true,
+          "cached_read_tokens": true,
+          "cache_write_tokens": false,
+          "reasoning_tokens": true,
+          "notes": "Observed via TurnEnd usage when reported by adapter."
+        },
+        "level2_per_request": {
+          "status": "none",
+          "source": null,
+          "notes": "Level 1 turn_end metrics only until volume warrants per-request instrumentation."
+        }
+      },
+      "prompt_cache_ttl": {
+        "documented_policy": "xAI automatic prompt caching; verify against xAI docs on upgrade.",
+        "empirical_notes": "Insufficient Hawk turn volume for empirical TTL curve.",
+        "current_default_strategy": "none_default"
+      },
+      "policy_boundaries": []
+    }
+  },
+  "upgrade_audit_hooks": {
+    "periodic_audit_script": ".agents/skills/model-intel/scripts/periodic-audit.ts",
+    "plugin_upgrade_checklist": ".agents/skills/release-cowboy-plugin/references/agent-upgrades.md"
+  }
+}

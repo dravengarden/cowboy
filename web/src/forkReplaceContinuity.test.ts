@@ -297,13 +297,18 @@ test("MessageWithFork keeps Mobile transcript free of inline fork chrome and Des
   expect(forkActionSrc).not.toContain("executeForkAttempt");
 });
 
-test("Composer places MobileBranchSwitcherButton after Send and before Save as draft", async () => {
+test("Composer places MobileBranchSwitcherButton at the end of mobile actions without Clear composer and uses GitForkIcon", async () => {
   const fs = await import("node:fs/promises");
   const composerSrc = await fs.readFile(new URL("./Composer.tsx", import.meta.url), "utf8");
-  const sendIdx = composerSrc.indexOf('aria-label="send"');
-  const branchIdx = composerSrc.indexOf("{compact && <MobileBranchSwitcherButton sessionId={sessionId} />}");
-  const draftIdx = composerSrc.indexOf('aria-label="save as draft"');
-  expect(sendIdx).toBeGreaterThan(0);
-  expect(branchIdx).toBeGreaterThan(sendIdx);
-  expect(draftIdx).toBeGreaterThan(branchIdx);
+  const switcherSrc = await fs.readFile(new URL("./LineageBranchSwitcher.tsx", import.meta.url), "utf8");
+  const scheduleIdx = composerSrc.indexOf('aria-label="schedule send"');
+  const branchIdx = composerSrc.indexOf("<MobileBranchSwitcherButton sessionId={sessionId} />");
+  const stackEndIdx = composerSrc.indexOf("</Stack>", scheduleIdx);
+  expect(scheduleIdx).toBeGreaterThan(0);
+  expect(branchIdx).toBeGreaterThan(scheduleIdx);
+  expect(stackEndIdx).toBeGreaterThan(branchIdx);
+  expect(composerSrc).not.toContain("data-mobile-composer-clear");
+  expect(composerSrc).not.toContain('aria-label="clear composer"');
+  expect(switcherSrc).toContain("GitForkIcon");
+  expect(switcherSrc).not.toContain("AccountTreeOutlined");
 });

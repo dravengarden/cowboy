@@ -158,6 +158,7 @@ function cursorOf(field: Field): number {
 
 /** Enter Normal on `field`, the cursor on `cursor` (default: where it is). */
 export function enterInputNormal(field: Field, cursor?: number): void {
+  escapeMatcher(field).reset();
   const current = state(field);
   if (
     field.getAttribute(MODE) !== "normal" && current.insertStart &&
@@ -179,6 +180,7 @@ export function enterInputNormal(field: Field, cursor?: number): void {
 
 /** Enter Insert with the caret at `at`. */
 export function enterInputInsert(field: Field, at: number): void {
+  escapeMatcher(field).reset();
   const current = state(field);
   current.insertStart = snapshot(field);
   current.pending = "";
@@ -543,6 +545,7 @@ export function installInputVim(): () => void {
       field.removeAttribute(OWNED_READONLY);
     }
     field.removeAttribute(MODE);
+    escapeMatchers.get(field)?.reset();
     if (hadMode) notifyInputVimMode();
     const current = states.get(field);
     if (current) {
@@ -555,10 +558,9 @@ export function installInputVim(): () => void {
   };
   const onMouseUp = (event: MouseEvent): void => {
     const field = event.target;
-    if (
-      (field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement) &&
-      isInputVimNormal(field) && field.selectionStart === field.selectionEnd
-    ) {
+    if (!(field instanceof HTMLInputElement || field instanceof HTMLTextAreaElement)) return;
+    escapeMatchers.get(field)?.reset();
+    if (isInputVimNormal(field) && field.selectionStart === field.selectionEnd) {
       place(field, field.selectionStart ?? 0);
     }
   };

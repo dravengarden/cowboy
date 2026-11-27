@@ -120,7 +120,7 @@ export interface ComposerEditorHandle {
   /** Adopt text merged from another device: minimal edits that keep the
    * caret where it was and stay out of local Undo. False (nothing written)
    * while an IME composition owns the editor; the caller retries later. */
-  applyRemoteText: (next: string) => boolean;
+  applyRemoteText: (next: string) => boolean; isComposing?: () => boolean;
   /** Read the logical selection before replacing one editor surface with another. */
   getSelection: () => ComposerEditorSelection;
   /** Focus this editor and restore a selection captured from the replaced surface. */
@@ -544,7 +544,7 @@ export const ComposerEditor = forwardRef<
       const view = cmRef.current?.view;
       if (view) revealFocusedSelection(view);
     },
-    getValue: (): string => cmRef.current?.view?.state.doc.toString() ?? "",
+    getValue: (): string => cmRef.current?.view?.state.doc.toString() ?? "", isComposing: (): boolean => Boolean(cmRef.current?.view?.composing || cmRef.current?.view?.compositionStarted),
     applyRemoteText: (next: string): boolean => {
       const view = cmRef.current?.view;
       if (!view || view.composing || view.compositionStarted) return false;

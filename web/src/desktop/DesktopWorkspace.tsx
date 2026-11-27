@@ -101,18 +101,34 @@ function PaneHeader({
       }}
     >
       {typeof children === "string" ? (
-        <Typography
-          variant="overline"
-          color="inherit"
-          sx={{
-            fontWeight: 700,
-            letterSpacing: "0.09em",
-            lineHeight: 1,
-            flexShrink: 0,
-          }}
-        >
-          {children}
-        </Typography>
+        <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.75, flexShrink: 0 }}>
+          <Box
+            component="span"
+            data-desktop-pane-dot
+            aria-hidden
+            sx={{
+              width: 6,
+              height: 6,
+              borderRadius: "50%",
+              bgcolor: "primary.main",
+              opacity: 0,
+              transition: "opacity 140ms ease",
+              flexShrink: 0,
+            }}
+          />
+          <Typography
+            variant="overline"
+            color="inherit"
+            sx={{
+              fontWeight: 700,
+              letterSpacing: "0.09em",
+              lineHeight: 1,
+              flexShrink: 0,
+            }}
+          >
+            {children}
+          </Typography>
+        </Box>
       ) : children}
       {actions
         ? (
@@ -264,6 +280,7 @@ export const DesktopWorkspace = memo(function DesktopWorkspace({
       sx={{
         order: 1,
         flex: 1,
+        minWidth: 0,
         minHeight: 0,
         display: "flex",
         flexDirection: "row",
@@ -430,7 +447,7 @@ export const DesktopWorkspace = memo(function DesktopWorkspace({
             data-desktop-review
             hidden={!reviewShown}
             tabIndex={-1}
-            sx={{ flex: 1, minHeight: 0, display: reviewShown ? "flex" : "none", flexDirection: "column", "&:focus": { outline: "none" } }}
+            sx={{ flex: 1, minWidth: 0, minHeight: 0, display: reviewShown ? "flex" : "none", flexDirection: "column", "&:focus": { outline: "none" } }}
           >
             <Suspense fallback={null}><DesktopReviewView active={reviewShown} /></Suspense>
           </Box>

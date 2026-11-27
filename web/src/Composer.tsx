@@ -12,8 +12,8 @@ import type { DeliveryTarget } from "./currentTurnDelivery";
 import { DraftMoveSurfaces } from "./DraftMoveSurfaces";
 
 import { lazy, type PointerEvent as ReactPointerEvent, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { alpha, Badge, Box, Button, Chip, CircularProgress, ClickAwayListener, DialogContentText, IconButton, Paper, Popper, Stack, Tooltip, Typography, useMediaQuery, useTheme } from "@mui/material";
-import { AlternateEmail, AttachFile, CleaningServices, CloseFullscreen, Compress, DeleteOutline, EditNoteOutlined, KeyboardHide, OpenInFull, Schedule, Stop, Tune, VerticalAlignBottom } from "@mui/icons-material";
+import { alpha, Badge, Box, Button, Chip, CircularProgress, DialogContentText, IconButton, Paper, Stack, Tooltip, useMediaQuery, useTheme } from "@mui/material";
+import { AlternateEmail, AttachFile, CleaningServices, CloseFullscreen, Compress, EditNoteOutlined, KeyboardHide, OpenInFull, Schedule, Stop, Tune, VerticalAlignBottom } from "@mui/icons-material";
 import {
   type ComposerEditorHandle,
   type ComposerEditorSelection,
@@ -45,7 +45,6 @@ import { dismissPromptSuggestion, usePromptSuggestion } from "./promptSuggestion
 import { useTouchComposer } from "./ComposerTextarea";
 import { shouldExpandInlineComposer } from "./composer/mobileCompactEditorPolicy";
 
-import { isImeKeyEvent } from "./imeKey";
 import { Kbd, useConfirmEnter } from "./Kbd";
 import { ENTER_LABEL, MOD_LABEL } from "./platform";
 
@@ -404,7 +403,6 @@ export function ComposerWorkspace({
     addFiles,
     pasteClipboardImages,
     removeAttachment,
-    clear: clearComposer,
     submit,
     submitTracked,
     currentTurnTracked,
@@ -422,10 +420,6 @@ export function ComposerWorkspace({
     !touchInput,
     (files): void => addFiles(files, { preserveFocus: true }),
   );
-  // Clearing is independent from sending. A still-uploading attachment cannot
-  // be sent yet, but it is still user-owned staged content and must remain
-  // removable from the utility rail.
-  const clearable = text.trim().length > 0 || attachments.length > 0;
   const surfaces = useComposerSurfaces();
   const deliveryAnchor = surfaces.modal.kind === "delivery" ? surfaces.modal.anchor : null;
   const deliverySource = useRef<
@@ -661,19 +655,6 @@ export function ComposerWorkspace({
   const cancelOpen = surfaces.modal.kind === "stop";
   // Long-press and ordinary busy Send share the same picker.
   const [holding, setHolding] = useState(false);
-  const clearComposerAnchor = surfaces.modal.kind === "clear" ? surfaces.modal.anchor : null;
-  useEffect(() => {
-    if (clearComposerAnchor === null) return undefined;
-    const closeOnEscape = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape" || isImeKeyEvent(event)) return;
-      event.preventDefault();
-      event.stopPropagation();
-      surfaces.close("clear");
-    };
-    globalThis.addEventListener("keydown", closeOnEscape, true);
-    return (): void =>
-      globalThis.removeEventListener("keydown", closeOnEscape, true);
-  }, [clearComposerAnchor, surfaces.close]);
   // Send owns the picker anchor for pointer and keyboard activation alike.
   const queueBtnRef = useRef<HTMLButtonElement | null>(null);
   const mobileActionsRef = useRef<HTMLDivElement | null>(null);
@@ -1328,33 +1309,9 @@ export function ComposerWorkspace({
           />
         )}
       </Box>
-      {showPlan && plan && (
-        <Box
-          data-composer-stack-slot="plan"
-          data-mobile-input-context={!desktop ? "plan" : undefined}
-          {...(desktop
-            ? {
-              "data-desktop-region": "prompt.plan",
-              tabIndex: -1,
-            }
-            : {})}
-        >
-          <PlanDock
-            entries={plan.entries}
-            onDismiss={dismissPlan}
-            desktop={desktop}
-            shortcut={desktop
-              ? (
-                <Suspense fallback={null}>
-                  <DesktopRegionShortcut
-                    shortcut={DESKTOP_FOCUS_PLAN_SHORTCUT}
-                    title="Focus Plan"
-                    singleKeycap={DESKTOP_FOCUS_PLAN_SHORTCUT}
-                  />
-                </Suspense>
-              )
-              : undefined}
-          />
+      {showPlan && plan && !desktop && (
+        <Box data-composer-stack-slot="plan" data-mobile-input-context="plan">
+          <PlanDock entries={plan.entries} onDismiss={dismissPlan} desktop={false} />
         </Box>
       )}
       {scheduleTarget !== null && <ScheduleSheet
@@ -1439,6 +1396,20 @@ export function ComposerWorkspace({
         <Suspense fallback={<Box sx={{ flex: 1 }} />}>
           <DesktopPromptWorkbench
             sessionId={sessionId}
+            planSlot={showPlan && plan ? (
+              <Box data-composer-stack-slot="plan" data-desktop-region="prompt.plan" tabIndex={-1}>
+                <PlanDock
+                  entries={plan.entries}
+                  onDismiss={dismissPlan}
+                  desktop
+                  shortcut={(
+                    <Suspense fallback={null}>
+                      <DesktopRegionShortcut shortcut={DESKTOP_FOCUS_PLAN_SHORTCUT} title="Focus Plan" singleKeycap={DESKTOP_FOCUS_PLAN_SHORTCUT} />
+                    </Suspense>
+                  )}
+                />
+              </Box>
+            ) : undefined}
             status={status}
             paused={paused}
             serverConnected={serverConnected}
@@ -2303,9 +2274,8 @@ export function ComposerWorkspace({
                         </span>
                       </Tooltip>
                     )}
-                  {compact && <MobileBranchSwitcherButton sessionId={sessionId} />}
                   {
-                    /* Secondary actions: Draft, Schedule and Clear. Delivery
+                    /* Secondary actions: Draft, Schedule and Branches. Delivery
             timing and queue position share the send picker. The narrow-phone ⋮ fold
             is gone — moving the session-level controls (config / auto-scroll / Stop)
             out to the navbar freed the room that fold used to reclaim.
@@ -2344,21 +2314,7 @@ export function ComposerWorkspace({
                       </IconButton>
                     </span>
                   </Tooltip>
-                  <Tooltip title="Clear composer">
-                    <span data-mobile-composer-clear>
-                      <IconButton
-                        aria-label="clear composer"
-                        disabled={!clearable}
-                        sx={TOOLBAR_ICON_BTN}
-                        onPointerDown={(event): void => event.preventDefault()}
-                        onMouseDown={(event): void => event.preventDefault()}
-                        onClick={(event): void =>
-                          surfaces.open({ kind: "clear", anchor: event.currentTarget })}
-                      >
-                        <DeleteOutline fontSize="small" />
-                      </IconButton>
-                    </span>
-                  </Tooltip>
+                  <MobileBranchSwitcherButton sessionId={sessionId} />
                 </Stack>
                 {touchInput && !desktop && !callsDockLegacy && (
                   <MobileTasksButton
@@ -2386,82 +2342,6 @@ export function ComposerWorkspace({
             StatusBar at the very bottom of the window, Zed/VSCode style.) */
         }
       </Paper>}
-      {
-        /* Keep this confirmation non-modal. Even with every FocusTrap option
-          disabled, MUI Popover still mounts a Modal and applies its document
-          lifecycle; on iOS that ends the focused editor's software-keyboard
-          session. Popper leaves the native first responder untouched. */
-      }
-      <Popper
-        open={clearComposerAnchor !== null}
-        anchorEl={clearComposerAnchor}
-        placement="bottom-end"
-        modifiers={[
-          { name: "offset", options: { offset: [0, 8] } },
-          {
-            name: "flip",
-            options: { fallbackPlacements: ["top-end", "left"] },
-          },
-          { name: "preventOverflow", options: { padding: 8 } },
-        ]}
-        sx={{ zIndex: (theme) => theme.zIndex.modal }}
-      >
-        <ClickAwayListener
-          onClickAway={(): void => surfaces.close("clear")}
-        >
-          <Paper
-            role="dialog"
-            aria-modal="false"
-            aria-label="Clear composer confirmation"
-            sx={{ maxWidth: 244, borderRadius: 2, boxShadow: 8 }}
-          >
-            <Box sx={{ p: 1.5 }}>
-              <Typography variant="body2" sx={{ fontWeight: 700 }}>
-                Clear this composer?
-              </Typography>
-              <Typography
-                variant="caption"
-                color="text.secondary"
-                sx={{ display: "block", mt: 0.5 }}
-              >
-                Text and attachments in this unsent message will be removed.
-              </Typography>
-              <Stack
-                direction="row"
-                spacing={1}
-                justifyContent="flex-end"
-                sx={{ mt: 1.5 }}
-              >
-                <Button
-                  size="small"
-                  color="inherit"
-                  onPointerDown={(event): void => event.preventDefault()}
-                  onMouseDown={(event): void => event.preventDefault()}
-                  onClick={(): void => surfaces.close("clear")}
-                  sx={{ textTransform: "none" }}
-                >
-                  Cancel
-                </Button>
-                <Button
-                  size="small"
-                  variant="contained"
-                  color="error"
-                  onPointerDown={(event): void => event.preventDefault()}
-                  onMouseDown={(event): void => event.preventDefault()}
-                  onClick={(): void => {
-                    importantHaptic();
-                    clearComposer();
-                    surfaces.close("clear");
-                  }}
-                  sx={{ textTransform: "none" }}
-                >
-                  Clear all
-                </Button>
-              </Stack>
-            </Box>
-          </Paper>
-        </ClickAwayListener>
-      </Popper>
       {
         /* One-shot delivery actions share the same picker. */
       }

@@ -199,6 +199,7 @@ impl PostgresStorage {
         let mut tx = self.pool.begin().await?;
         if let Some(calls_before_ms) = transcript {
             session_lineage::seal_lineage_on_clear_pg(&mut tx, session_id).await?;
+            turn_cache_facts::project_missing_for_session_pg(&mut tx, session_id).await?;
             sqlx::query("DELETE FROM events WHERE session_id = $1")
                 .bind(session_id)
                 .execute(&mut *tx)

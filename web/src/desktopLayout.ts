@@ -91,6 +91,70 @@ export function togglePaneCollapsed(
   return withPaneCollapsed(panes, pane, !panes[pane]);
 }
 
+export function zoomedPanesFor(
+  target: "prompt" | "conversation",
+): DesktopCollapsedPanes {
+  return {
+    sessions: true,
+    prompt: target !== "prompt",
+    conversation: target !== "conversation",
+  };
+}
+
+export function isPaneZoomed(
+  panes: DesktopCollapsedPanes,
+  sessionPage: boolean,
+  compactWidth = false,
+): boolean {
+  if (!sessionPage) return !compactWidth && panes.sessions;
+  return panes.prompt !== panes.conversation && (compactWidth || panes.sessions);
+}
+
+function sameCollapsedPanes(
+  a: DesktopCollapsedPanes,
+  b: DesktopCollapsedPanes,
+): boolean {
+  return a.sessions === b.sessions && a.prompt === b.prompt &&
+    a.conversation === b.conversation;
+}
+
+/**
+ * Toggle solo focus (zoom) on the focused work pane, remembering the previous
+ * layout so a second press restores it (like tmux `prefix z`).
+ */
+export function toggleZoomPanes(
+  current: DesktopCollapsedPanes,
+  saved: DesktopCollapsedPanes | null,
+  focusedPane: DesktopCollapsiblePane,
+  sessionPage: boolean,
+  compactWidth = false,
+): {
+  next: DesktopCollapsedPanes;
+  saved: DesktopCollapsedPanes | null;
+  target: "prompt" | "conversation";
+} {
+  if (isPaneZoomed(current, sessionPage, compactWidth)) {
+    const candidate = saved ? normalizeCollapsedPanes(saved) : DESKTOP_PANES_EXPANDED;
+    const next = sameCollapsedPanes(candidate, current) ? DESKTOP_PANES_EXPANDED : candidate;
+    const target = !sessionPage ? "prompt" : current.prompt ? "conversation" : "prompt";
+    return { next, saved: null, target };
+  }
+  if (!sessionPage) {
+    if (compactWidth) return { next: current, saved: null, target: "prompt" };
+    return { next: { ...current, sessions: true }, saved: current, target: "prompt" };
+  }
+  const target: "prompt" | "conversation" =
+    focusedPane === "prompt" || focusedPane === "conversation"
+      ? focusedPane
+      : current.prompt && !current.conversation
+      ? "conversation"
+      : "prompt";
+  const next = compactWidth
+    ? withPaneCollapsed(current, target === "prompt" ? "conversation" : "prompt", true)
+    : zoomedPanesFor(target);
+  return { next, saved: current, target };
+}
+
 export function parseCollapsedPanes(raw: string): DesktopCollapsedPanes {
   try {
     const value = JSON.parse(raw) as Record<string, unknown> | null;

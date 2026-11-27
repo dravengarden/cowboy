@@ -20,7 +20,7 @@ For requests to update Claude, Codex, DeepSeek or another Agent, or the
 Recommended cards in session settings, first read
 [Agent upgrade and recommendation workflow](references/agent-upgrades.md).
 It distinguishes private CLI/adapter versions, hosted model IDs, Plugin release
-versions, and installed Machine generations; these are not interchangeable.
+versions, and installed Machine generations; these are not interchangeable. It also defines the mandatory **Telemetry capability and prompt-cache audit**: diff upstream metrics against advisory `models/cache-and-telemetry.json`, keep runtime capability truth and graceful UI degradation intact, and run `model-intel` `periodic-audit.ts` to check for `telemetry-coverage-drop` regressions and shadow idle-gap TTL curves before proposing cache-strategy changes.
 For Claude CLI, SDK, ACP or remote runtime changes, also read
 [Claude Remote compatibility](references/claude-remote-upgrades.md). It defines
 the fast feedback gate and the exact packaged-native acceptance required before

@@ -36,8 +36,8 @@ import {
 } from "../desktopSplitterKeyboard";
 import { retrySyncNow } from "../../store";
 import {
-  DESKTOP_PANES_EXPANDED,
-  desktopCollapsedPanesStore,
+  DESKTOP_COMPACT_WIDTH_QUERY,
+  isPaneZoomed,
 } from "../../desktopLayout";
 
 function DesktopCommandRegistration(
@@ -426,15 +426,35 @@ export function DesktopCommandHost({
       run: () => workspace.togglePane("conversation"),
     },
     {
+      id: "workspace.toggleZoom",
+      title: isPaneZoomed(
+          workspace.collapsedPanes,
+          !draftOpen,
+          globalThis.matchMedia?.(DESKTOP_COMPACT_WIDTH_QUERY).matches ?? false,
+        )
+        ? "Restore Panes"
+        : "Zoom Focused Pane",
+      description:
+        "Focus the current work pane across the full window, or press again to restore",
+      group: "Workspace",
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.toggleZoom),
+      when: () =>
+        sessionWorkspaceMounted() ||
+        !(globalThis.matchMedia?.(DESKTOP_COMPACT_WIDTH_QUERY).matches ?? false),
+      disabledReason: "Only one pane is shown at this width",
+      run: () => workspace.toggleZoom(sessionWorkspaceMounted()),
+    },
+    {
       id: "workspace.expandAllPanes",
       title: "Expand All Panes",
       description: "Restore Sessions, Prompt and Conversation",
       group: "Workspace",
+      sequence: desktopLeaderSequence(DESKTOP_WORKSPACE_KEYS.expandAllPanes),
       when: () =>
         workspace.collapsedPanes.sessions || workspace.collapsedPanes.prompt ||
         workspace.collapsedPanes.conversation,
       disabledReason: "Every pane is already expanded",
-      run: () => desktopCollapsedPanesStore.set(DESKTOP_PANES_EXPANDED),
+      run: () => workspace.expandAllPanes(),
     },
     {
       id: "prompt.focusPlan",

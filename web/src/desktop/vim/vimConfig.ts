@@ -53,6 +53,9 @@ export function escapeMappingLine(sequence: string): string {
   return `inoremap ${sequence} <Esc>`;
 }
 
+/** Default per-device Vim config: `jj` leaves Insert without reaching for Esc. */
+export const DEFAULT_VIM_CONFIG_SOURCE = escapeMappingLine("jj");
+
 export function parseVimConfig(source: string): VimConfig {
   const mappings: VimMapping[] = [];
   const errors: VimConfigError[] = [];

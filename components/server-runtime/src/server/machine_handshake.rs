@@ -10,6 +10,7 @@ pub struct MachineHandshake {
     pub challenge_id: String,
     pub protocol: u16,
     pub connection_mode: &'static str,
+    pub plugins_reported: bool,
 }
 
 /// The oldest Machine protocol this Controller admits. The wire crate's
@@ -26,6 +27,14 @@ pub async fn verified_machine_hello(
     socket: &mut WebSocket,
     store: &Store,
 ) -> Option<(crate::machine_protocol::MachineHello, String)> {
+    let (hello, challenge_id, _) = verified_machine_hello_with_presence(socket, store).await?;
+    Some((hello, challenge_id))
+}
+
+async fn verified_machine_hello_with_presence(
+    socket: &mut WebSocket,
+    store: &Store,
+) -> Option<(crate::machine_protocol::MachineHello, String, bool)> {
     let challenge_id = match random_machine_token() {
         Ok(value) => value,
         Err(error) => {
@@ -69,6 +78,17 @@ pub async fn verified_machine_hello(
             return None;
         }
     };
+    let plugins_reported = serde_json::from_str::<serde_json::Value>(&incoming)
+        .ok()
+        .and_then(|frame| frame.get("hello").cloned())
+        .is_some_and(|raw_hello| {
+            raw_hello
+                .get("plugins")
+                .is_some_and(serde_json::Value::is_array)
+                || raw_hello
+                    .get("providers")
+                    .is_some_and(serde_json::Value::is_array)
+        });
     let crate::machine_protocol::MachineFrame::Hello { hello } =
         (match serde_json::from_str(&incoming) {
             Ok(frame) => frame,
@@ -113,7 +133,7 @@ pub async fn verified_machine_hello(
         tracing::warn!(machine = %hello.machine_id, "Machine challenge verification failed");
         return None;
     }
-    Some((hello, challenge_id))
+    Some((hello, challenge_id, plugins_reported))
 }
 
 /// Per-Machine async mutex ordering durable `machine_connected` epoch writes
@@ -152,7 +172,8 @@ pub async fn machine_handshake(
         .await;
         return None;
     };
-    let (hello, challenge_id) = verified_machine_hello(socket, &store).await?;
+    let (hello, challenge_id, plugins_reported) =
+        verified_machine_hello_with_presence(socket, &store).await?;
     if hello.max_protocol >= 3 {
         let Some(encryption_public_key) = hello.encryption_public_key.as_deref() else {
             tracing::warn!(machine = %hello.machine_id, "protocol-three Machine omitted encryption key");
@@ -189,9 +210,8 @@ pub async fn machine_handshake(
         crate::machine_protocol::ConnectionMode::LocalUds => "local",
         crate::machine_protocol::ConnectionMode::OutboundTls => "outbound_wss",
     };
-    let inventory = serde_json::json!({
+    let mut inventory = serde_json::json!({
         "components": &hello.components,
-        "plugins": &hello.plugins,
         "provider_contracts": &hello.provider_contracts,
         "plugin_contracts": &hello.plugin_contracts,
         "workspaces": &hello.workspaces,
@@ -199,6 +219,14 @@ pub async fn machine_handshake(
         "workspace_owner": &hello.workspace_owner,
         "capacity": &hello.capacity,
     });
+    if plugins_reported
+        && let (Some(map), Ok(plugins_val)) = (
+            inventory.as_object_mut(),
+            serde_json::to_value(&hello.plugins),
+        )
+    {
+        map.insert("plugins".to_owned(), plugins_val);
+    }
     {
         let _reg_guard = machine_registration_lock(&hello.machine_id).await;
         if let Err(error) = store
@@ -244,6 +272,7 @@ pub async fn machine_handshake(
         challenge_id,
         protocol,
         connection_mode,
+        plugins_reported,
     })
 }
 

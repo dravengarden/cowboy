@@ -1,5 +1,6 @@
 import { test } from "bun:test";
 import { assertEquals } from "../../../../tools/test-assert.ts";
+import { type CacheFactInputRow } from "./cache-telemetry.ts";
 import { aggregate, type Call } from "./field.ts";
 
 const call = (overrides: Partial<Call>): Call => ({
@@ -194,6 +195,311 @@ test("pruneOlderSnapshots removes older dated snapshots and keeps latest and non
     writeFileSync(join(dir, "notes.txt"), "keep");
     const removed = pruneOlderSnapshots(join(dir, "2026-11-23.json"));
     assertEquals(removed, ["2026-11-21.json"]);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+import { readdirSync, readFileSync } from "node:fs";
+import { readCacheTelemetryAudit, summarizeCacheTelemetryRows } from "./field.ts";
+
+test("summarizeCacheTelemetryRows detects version-cohort cache & cache-write drops even when an older healthy version dominates", () => {
+  const nowMs = Date.parse("2026-11-27T00:00:00Z");
+  const rows = [];
+  // Healthy older v1.0.0 dominates the window (40 turns, 100% cache + write coverage).
+  for (let i = 0; i < 40; i++) {
+    rows.push({
+      session_key: `sess-old-${i % 4}`,
+      occurred_at_ms: nowMs - 8 * 86_400_000 + i * 60_000,
+      provider: "claude-code",
+      provider_version: "1.0.0",
+      model: "claude-opus-4-6",
+      stop_reason: "end_turn",
+      prompt_origin: "human",
+      idle_gap_ms: 12 * 60_000,
+      renewed: false,
+      usage_observed: true,
+      inclusive_input_tokens: 100_000,
+      cached_read_tokens: 80_000,
+      cache_write_tokens: 18_000,
+      uncached_input_tokens: 20_000,
+    });
+  }
+  // Newly deployed v1.1.0 has only 12 turns (minority of volume) and loses cache_write_tokens while keeping cached_read.
+  for (let i = 0; i < 12; i++) {
+    rows.push({
+      session_key: `sess-new-${i % 2}`,
+      occurred_at_ms: nowMs - 1 * 86_400_000 + i * 60_000,
+      provider: "claude-code",
+      provider_version: "1.1.0",
+      model: "claude-opus-4-6",
+      stop_reason: "end_turn",
+      prompt_origin: "human",
+      idle_gap_ms: 45 * 60_000,
+      renewed: true,
+      usage_observed: true,
+      inclusive_input_tokens: 50_000,
+      cached_read_tokens: 40_000,
+      cache_write_tokens: null,
+      uncached_input_tokens: 10_000,
+    });
+  }
+  const audit = summarizeCacheTelemetryRows(rows, nowMs, 14, "turn_cache_facts");
+  assertEquals(audit.coverage_regressions.length, 1);
+  assertEquals(audit.coverage_regressions[0]?.comparison_kind, "version_cohort");
+  assertEquals(audit.coverage_regressions[0]?.metric, "cache_write_coverage");
+  assertEquals(audit.coverage_regressions[0]?.previous_version, "1.0.0");
+  assertEquals(audit.coverage_regressions[0]?.current_version, "1.1.0");
+  assertEquals(audit.coverage_regressions[0]?.drop_ratio, 1);
+  assertEquals(audit.shadow_ttl_curves.length, 2);
+  assertEquals(audit.shadow_ttl_curves[0]?.gap_bucket, "10-20m");
+  assertEquals(audit.shadow_ttl_curves[0]?.distinct_sessions, 4);
+  assertEquals(audit.shadow_ttl_curves[1]?.gap_bucket, "30-60m");
+  assertEquals(audit.shadow_ttl_curves[1]?.renewed, true);
+});
+
+test("readCacheTelemetryAudit falls back to events when backfill is incomplete and never treats a human steer as opener", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cowboy-cache-audit-test-"));
+  try {
+    const dbPath = join(dir, "cowboy.sqlite3");
+    const db = new Database(dbPath);
+    db.exec(`CREATE TABLE turn_cache_facts (
+      session_id TEXT, turn_end_seq INTEGER, occurred_at_ms INTEGER,
+      provider TEXT, provider_version TEXT, model TEXT, stop_reason TEXT,
+      prompt_origin TEXT, idle_gap_ms INTEGER, renewed INTEGER, usage_observed INTEGER,
+      inclusive_input_tokens INTEGER, cached_read_tokens INTEGER, cache_write_tokens INTEGER
+    );
+    CREATE TABLE turn_cache_backfill_state (
+      slot INTEGER PRIMARY KEY, completed_at_ms INTEGER
+    );
+    INSERT INTO turn_cache_backfill_state VALUES (1, NULL);
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY, provider TEXT, provider_version TEXT,
+      last_usage TEXT, config_preferences TEXT
+    );
+    CREATE TABLE events (
+      session_id TEXT, seq INTEGER, ts_ms INTEGER, payload TEXT
+    );`);
+    const now = Date.parse("2026-11-27T00:00:00Z");
+    db.query("INSERT INTO sessions VALUES (?,?,?,?,?)").run(
+      "s1", "codex", "3.6.32", null, JSON.stringify({ model: "gpt-6.2-sol" }),
+    );
+    const ins = db.query("INSERT INTO events VALUES (?,?,?,?)");
+    // Turn 1
+    ins.run("s1", 1, now - 600_000, JSON.stringify({ kind: "turn_end", stop_reason: "EndTurn", usage: { input_tokens: 1000, cached_input_tokens: 800, uncached_input_tokens: 200 } }));
+    // Turn 2: opened by automation (agent), later steered by a human -> must NOT become a human TTL bucket!
+    ins.run("s1", 2, now - 300_000, JSON.stringify({ kind: "update", update: { sessionUpdate: "user_message_chunk", promptOrigin: { actor: "agent" }, content: { text: "notice" } } }));
+    ins.run("s1", 3, now - 100_000, JSON.stringify({ kind: "update", update: { sessionUpdate: "user_message_chunk", promptOrigin: { actor: "human" }, _meta: { cowboyDelivery: "current_turn" }, content: { text: "steer" } } }));
+    ins.run("s1", 4, now - 50_000, JSON.stringify({ kind: "turn_end", stop_reason: "EndTurn", usage: { input_tokens: 2000, cached_input_tokens: 1800, uncached_input_tokens: 200 } }));
+    db.close();
+
+    const audit = readCacheTelemetryAudit(dbPath, 14, now);
+    assertEquals(audit.source, "events_fallback");
+    assertEquals(audit.projection_complete, false);
+    assertEquals(audit.providers[0]?.turns, 2);
+    // Automation-opened turn steered by human must not enter human shadow TTL curves.
+    assertEquals(audit.shadow_ttl_curves.length, 0);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("models/cache-and-telemetry.json covers every first-party agent provider", () => {
+  const repoRoot = join(import.meta.dir, "../../../..");
+  const inventory = JSON.parse(
+    readFileSync(join(repoRoot, "models/cache-and-telemetry.json"), "utf8"),
+  ) as { authority: string; providers: Record<string, unknown> };
+  assertEquals(inventory.authority, "advisory");
+  const pluginsDir = join(repoRoot, "plugins");
+  for (const entry of readdirSync(pluginsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const providerPath = join(pluginsDir, entry.name, "provider.json");
+    try {
+      const manifest = JSON.parse(readFileSync(providerPath, "utf8")) as { id: string };
+      assertEquals(
+        Object.hasOwn(inventory.providers, manifest.id),
+        true,
+        `models/cache-and-telemetry.json missing provider ${manifest.id}`,
+      );
+    } catch {
+      // Non-agent plugin directory without provider.json.
+    }
+  }
+});
+
+test("summarizeCacheTelemetryRows orders overlapping rolling upgrades by semver and keeps write coverage independent of read coverage", () => {
+  const now = Date.parse("2026-11-27T00:00:00Z");
+  const rows: CacheFactInputRow[] = [];
+  // Broken newer version 3.6.32 appears FIRST inside the window (rolling upgrade overlap),
+  // while older healthy version 3.6.31 keeps emitting turns later in the window.
+  // 3.6.32 drops cached_read_tokens ONLY while preserving cache_write_tokens.
+  for (let i = 0; i < 12; i++) {
+    rows.push({
+      session_key: `new-${i}`,
+      occurred_at_ms: now - 12 * 86_400_000 + i * 1000,
+      provider: "claude-code",
+      provider_version: "3.6.32",
+      model: "claude-opus-4-6",
+      stop_reason: "end_turn",
+      prompt_origin: "human",
+      idle_gap_ms: 600_000,
+      renewed: false,
+      usage_observed: true,
+      inclusive_input_tokens: 100_000,
+      cached_read_tokens: null,
+      cache_write_tokens: 20_000,
+      uncached_input_tokens: null,
+    });
+    rows.push({
+      session_key: `old-${i}`,
+      occurred_at_ms: now - 2 * 86_400_000 + i * 1000,
+      provider: "claude-code",
+      provider_version: "3.6.31",
+      model: "claude-opus-4-6",
+      stop_reason: "end_turn",
+      prompt_origin: "human",
+      idle_gap_ms: 600_000,
+      renewed: false,
+      usage_observed: true,
+      inclusive_input_tokens: 100_000,
+      cached_read_tokens: 80_000,
+      cache_write_tokens: 15_000,
+      uncached_input_tokens: 20_000,
+    });
+  }
+  const audit = summarizeCacheTelemetryRows(rows, now, 14, "turn_cache_facts");
+  // Must detect cache_coverage drop 3.6.31 -> 3.6.32 (NOT run backward)
+  const readDrop = audit.coverage_regressions.find((r) => r.metric === "cache_coverage");
+  assertEquals(readDrop?.previous_version, "3.6.31");
+  assertEquals(readDrop?.current_version, "3.6.32");
+  // Must NOT report a false cache_write_coverage drop because 3.6.32 still reported writes!
+  const writeDrop = audit.coverage_regressions.find((r) => r.metric === "cache_write_coverage");
+  assertEquals(writeDrop, undefined);
+  assertEquals(audit.providers[0]?.cache_write_coverage, 1);
+});
+
+test("readCacheTelemetryAudit fallback uses predecessor outside window, honors context_cleared, and leaves historical model unknown", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cowboy-cache-fallback-bounds-"));
+  try {
+    const dbPath = join(dir, "cowboy.sqlite3");
+    const db = new Database(dbPath);
+    db.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, provider TEXT, provider_version TEXT, last_usage TEXT, config_preferences TEXT);
+      CREATE TABLE events (session_id TEXT, seq INTEGER, ts_ms INTEGER, payload TEXT);
+    `);
+    const now = Date.parse("2026-11-27T00:00:00Z");
+    const beforeWindow = now - 20 * 86_400_000;
+    const inWindow = now - 2 * 86_400_000;
+    db.query("INSERT INTO sessions VALUES (?,?,?,?,?)").run(
+      "s1",
+      "codex",
+      "3.6.32",
+      null,
+      JSON.stringify({ model: "gpt-6.2-sol" }),
+    );
+    const ins = db.query("INSERT INTO events VALUES (?,?,?,?)");
+    // Pre-window turn opened by automation + renewed -> must NOT leak into in-window human turn!
+    ins.run("s1", 1, beforeWindow - 20_000, JSON.stringify({ kind: "update", update: { sessionUpdate: "context_rolled_over" } }));
+    ins.run("s1", 2, beforeWindow - 10_000, JSON.stringify({ kind: "update", update: { sessionUpdate: "user_message_chunk", promptOrigin: { actor: "agent" }, content: { text: "old notice" } } }));
+    ins.run("s1", 3, beforeWindow, JSON.stringify({ kind: "turn_end", stop_reason: "EndTurn", usage: { input_tokens: 1000, cached_input_tokens: 500, uncached_input_tokens: 500 } }));
+    // In-window turn opened by human -> must be human, renewed=false, model="unknown"!
+    ins.run("s1", 4, inWindow - 300_000, JSON.stringify({ kind: "update", update: { sessionUpdate: "user_message_chunk", promptOrigin: { actor: "human" }, content: { text: "real question" } } }));
+    ins.run("s1", 5, inWindow, JSON.stringify({ kind: "turn_end", stop_reason: "EndTurn", usage: { input_tokens: 2000, cached_input_tokens: 1800, uncached_input_tokens: 200 } }));
+    db.close();
+
+    const audit = readCacheTelemetryAudit(dbPath, 14, now);
+    assertEquals(audit.source, "events_fallback");
+    assertEquals(audit.projection_complete, false);
+    assertEquals(audit.providers[0]?.turns, 1);
+    assertEquals(audit.providers[0]?.renewed_turns, 0);
+    assertEquals(audit.shadow_ttl_curves.length, 1);
+    assertEquals(audit.shadow_ttl_curves[0]?.model, "unknown");
+    assertEquals(audit.shadow_ttl_curves[0]?.renewed, false);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("summarizeCacheTelemetryRows orders numeric SemVer prereleases rc.2 < rc.10", () => {
+  const now = Date.parse("2026-11-27T00:00:00Z");
+  const rows: CacheFactInputRow[] = [];
+  for (let i = 0; i < 12; i++) {
+    rows.push({
+      session_key: `rc10-${i}`,
+      occurred_at_ms: now - 10 * 86_400_000 + i * 1000,
+      provider: "deepseek-harness",
+      provider_version: "1.0.0-rc.10",
+      model: "deepseek-flash",
+      stop_reason: "end_turn",
+      prompt_origin: "human",
+      idle_gap_ms: 600_000,
+      renewed: false,
+      usage_observed: true,
+      inclusive_input_tokens: 100_000,
+      cached_read_tokens: null,
+      cache_write_tokens: null,
+      uncached_input_tokens: null,
+    });
+    rows.push({
+      session_key: `rc2-${i}`,
+      occurred_at_ms: now - 2 * 86_400_000 + i * 1000,
+      provider: "deepseek-harness",
+      provider_version: "1.0.0-rc.2",
+      model: "deepseek-flash",
+      stop_reason: "end_turn",
+      prompt_origin: "human",
+      idle_gap_ms: 600_000,
+      renewed: false,
+      usage_observed: true,
+      inclusive_input_tokens: 100_000,
+      cached_read_tokens: 80_000,
+      cache_write_tokens: null,
+      uncached_input_tokens: 20_000,
+    });
+  }
+  const audit = summarizeCacheTelemetryRows(rows, now, 14, "turn_cache_facts");
+  const drop = audit.coverage_regressions.find((r) => r.metric === "cache_coverage");
+  assertEquals(drop?.previous_version, "1.0.0-rc.2");
+  assertEquals(drop?.current_version, "1.0.0-rc.10");
+});
+
+test("readCacheTelemetryAudit detects unprojected rollback turns despite stale completed_at_ms and honors context_cleared before rollover", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cowboy-cache-r3-"));
+  try {
+    const dbPath = join(dir, "cowboy.sqlite3");
+    const db = new Database(dbPath);
+    db.exec(`
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, provider TEXT, provider_version TEXT, created_at_ms INTEGER, last_usage TEXT, config_preferences TEXT);
+      CREATE TABLE events (session_id TEXT, seq INTEGER, ts_ms INTEGER, payload TEXT);
+      CREATE TABLE turn_cache_facts (
+        session_id TEXT, session_created_at_ms INTEGER, turn_end_seq INTEGER, occurred_at_ms INTEGER,
+        provider TEXT, provider_version TEXT, model TEXT, stop_reason TEXT,
+        prompt_origin TEXT, idle_gap_ms INTEGER, renewed INTEGER, usage_observed INTEGER,
+        inclusive_input_tokens INTEGER, cached_read_tokens INTEGER, cache_write_tokens INTEGER
+      );
+      CREATE TABLE turn_cache_backfill_state (slot INTEGER PRIMARY KEY, cursor_session_id TEXT, cursor_seq INTEGER, completed_at_ms INTEGER);
+      INSERT INTO turn_cache_backfill_state VALUES (1, '', -1, 1795700000000);
+    `);
+    const now = Date.parse("2026-11-27T00:00:00Z");
+    const inWindow = now - 2 * 86_400_000;
+    db.query("INSERT INTO sessions VALUES (?,?,?,?,?,?)").run("s1", "codex", "3.6.32", 1000, null, null);
+    const ins = db.query("INSERT INTO events VALUES (?,?,?,?)");
+    ins.run("s1", 1, inWindow - 600_000, JSON.stringify({ kind: "turn_end", stop_reason: "EndTurn", usage: { input_tokens: 1000, cached_input_tokens: 900, uncached_input_tokens: 100 } }));
+    db.query("INSERT INTO turn_cache_facts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
+      "s1", 1000, 1, inWindow - 600_000, "codex", "3.6.32", "gpt-6.2-sol", "end_turn", "human", null, 0, 1, 1000, 900, null,
+    );
+    ins.run("s1", 2, inWindow - 400_000, JSON.stringify({ kind: "update", update: { sessionUpdate: "context_rolled_over" } }));
+    ins.run("s1", 3, inWindow - 300_000, JSON.stringify({ kind: "update", update: { sessionUpdate: "context_cleared" } }));
+    ins.run("s1", 4, inWindow - 100_000, JSON.stringify({ kind: "update", update: { sessionUpdate: "user_message_chunk", promptOrigin: { actor: "human" }, content: { text: "after clear" } } }));
+    ins.run("s1", 5, inWindow, JSON.stringify({ kind: "turn_end", stop_reason: "EndTurn", usage: { input_tokens: 2000, cached_input_tokens: 1800, uncached_input_tokens: 200 } }));
+    db.close();
+
+    const audit = readCacheTelemetryAudit(dbPath, 14, now);
+    assertEquals(audit.source, "events_fallback");
+    assertEquals(audit.projection_complete, false);
+    assertEquals(audit.providers[0]?.turns, 2);
+    assertEquals(audit.providers[0]?.renewed_turns, 0);
+    assertEquals(audit.shadow_ttl_curves.length, 0);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

@@ -16,8 +16,9 @@ import {
   useWorkbenchEvents,
   useWorkbenchStatusSync,
 } from "./DesktopPromptWorkbenchHelpers";
+import { DesktopPromptCompanionLayout } from "./DesktopPromptCompanionRail";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
-import { requestDesktopEditorInsert } from "./editorInsert";
+import { handoffToNewPrompt, requestDesktopEditorInsert } from "./editorInsert";
 import {
   getLastSubmittedPending,
   newDraftBufferCmid,
@@ -43,6 +44,7 @@ export interface DesktopPromptWorkbenchProps {
   newPromptEditorRef: RefObject<ComposerEditorHandle | null>;
   sendButtonRef: RefObject<HTMLButtonElement | null>;
   newPrompt: NewPromptCallbacks;
+  planSlot?: ReactNode;
   beforeCanvas: ReactNode;
   newPromptCanvas: ReactNode;
   onMoveDraft?: ((id: string) => void) | undefined;
@@ -56,7 +58,7 @@ export function DesktopPromptWorkbench(
   const {
     sessionId, status, paused, serverConnected, currentTurnAvailable,
     queue, drafts, nextAgentContext, commands, handedOff, overlayOpen,
-    newPromptEditorRef, sendButtonRef, newPrompt, beforeCanvas,
+    newPromptEditorRef, sendButtonRef, newPrompt, planSlot, beforeCanvas,
     newPromptCanvas, onMoveDraft, onScheduleDraft, onOpenStop,
   } = props;
 
@@ -66,6 +68,7 @@ export function DesktopPromptWorkbench(
   const closingRef = useRef(false);
   const chordTrackerRef = useRef(createPromptChordTracker());
   const composerPaperRef = useRef<HTMLDivElement | null>(null);
+  const workbenchRef = useRef<HTMLDivElement | null>(null);
 
   const state = useWorkbenchBufferState({
     sessionId, queue, drafts, pendingRef, workspace,
@@ -131,45 +134,33 @@ export function DesktopPromptWorkbench(
     prevDeliveryAnchorRef.current = actions.deliveryAnchor;
   }, [actions.deliveryAnchor, activeEditorProxy]);
 
+  const pendingSlot = (
+    <DesktopPendingPanels
+      sessionId={sessionId} status={status} queue={queue} drafts={drafts} emptyDraftOpen={state.emptyDraftOpen}
+      nextAgentContext={nextAgentContext} commands={commands} activeBuffer={state.activeBuffer}
+      resolvedRowId={state.activeBuffer.kind === "queued" || state.activeBuffer.kind === "draft" ? (state.resolved?.row.id ?? state.activeBuffer.id) : null}
+      preferredQueueFocus={preferredQueueFocus} onMoveDraft={onMoveDraft} onScheduleDraft={onScheduleDraft}
+      onEditRow={(kind, msg, entryMode) => state.openBuffer({ kind, id: msg.id, ...(msg.cmid ? { cmid: msg.cmid } : {}), origin: "list", entryMode })}
+      onNewDraft={() => { state.setEmptyDraftOpen(false); state.openBuffer({ kind: "new-draft", cmid: newDraftBufferCmid(), origin: "list", entryMode: "insert" }); }}
+    />
+  );
   return (
     <>
-      <DesktopPendingPanels
-        sessionId={sessionId} status={status} queue={queue} drafts={drafts}
-        emptyDraftOpen={state.emptyDraftOpen} nextAgentContext={nextAgentContext}
-        commands={commands} activeBuffer={state.activeBuffer}
-        resolvedRowId={state.activeBuffer.kind === "queued" || state.activeBuffer.kind === "draft"
-          ? (state.resolved?.row.id ?? state.activeBuffer.id)
-          : null}
-        preferredQueueFocus={preferredQueueFocus} onMoveDraft={onMoveDraft}
-        onScheduleDraft={onScheduleDraft}
-        onEditRow={(kind, msg, entryMode) =>
-          state.openBuffer({
-            kind, id: msg.id, ...(msg.cmid ? { cmid: msg.cmid } : {}),
-            origin: "list", entryMode,
-          })}
-        onNewDraft={() => {
-          state.setEmptyDraftOpen(false);
-          state.openBuffer({
-            kind: "new-draft",
-            cmid: newDraftBufferCmid(),
-            origin: "list",
-            entryMode: "insert",
-          });
-        }}
-      />
-      {beforeCanvas}
-      <DesktopWorkbenchCanvas
-        composerPaperRef={composerPaperRef} pendingRef={pendingRef}
-        activeEditorProxy={activeEditorProxy} sendButtonRef={sendButtonRef}
-        sessionId={sessionId} status={status} handedOff={handedOff}
-        overlayOpen={overlayOpen} currentTurnAvailable={currentTurnAvailable}
-        commands={commands} activeBuffer={state.activeBuffer} bufferKey={bufferKey}
-        resolved={state.resolved} bufferMeta={state.bufferMeta}
-        setBufferMeta={state.setBufferMeta} setActiveBuffer={state.setActiveBuffer}
-        closeBuffer={state.closeBuffer} newPrompt={newPrompt}
-        newPromptCanvas={newPromptCanvas} actions={actions}
-        onMoveDraft={onMoveDraft} onCanvasKeyDownCapture={onCanvasKeyDownCapture}
-      />
+      <DesktopPromptCompanionLayout sessionId={sessionId} containerRef={workbenchRef} planSlot={planSlot} pendingSlot={pendingSlot} hasPending={queue.length > 0 || drafts.length > 0 || state.emptyDraftOpen} onFocusPrompt={(): "focused" | "deferred" => handoffToNewPrompt(workspace.focusRegion)}>
+        {beforeCanvas}
+        <DesktopWorkbenchCanvas
+          composerPaperRef={composerPaperRef} pendingRef={pendingRef}
+          activeEditorProxy={activeEditorProxy} sendButtonRef={sendButtonRef}
+          sessionId={sessionId} status={status} handedOff={handedOff}
+          overlayOpen={overlayOpen} currentTurnAvailable={currentTurnAvailable}
+          commands={commands} activeBuffer={state.activeBuffer} bufferKey={bufferKey}
+          resolved={state.resolved} bufferMeta={state.bufferMeta}
+          setBufferMeta={state.setBufferMeta} setActiveBuffer={state.setActiveBuffer}
+          closeBuffer={state.closeBuffer} newPrompt={newPrompt}
+          newPromptCanvas={newPromptCanvas} actions={actions}
+          onMoveDraft={onMoveDraft} onCanvasKeyDownCapture={onCanvasKeyDownCapture}
+        />
+      </DesktopPromptCompanionLayout>
       <DesktopWorkbenchDialogs
         sessionId={sessionId} status={status} paused={paused}
         currentTurnAvailable={currentTurnAvailable}

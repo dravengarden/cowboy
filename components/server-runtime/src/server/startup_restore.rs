@@ -218,6 +218,11 @@ pub async fn open_persistence(
         // Observed subagent transcripts have their own bounded writer, so
         // they can never delay the session timeline's persistence.
         crate::subagent_transcripts::spawn_writer(store.clone());
+        let backfill_store = store.clone();
+        let backfill_shutdown = store_shutdown_rx.clone();
+        tokio::spawn(async move {
+            run_turn_cache_backfill(backfill_store, backfill_shutdown).await;
+        });
         // Background sweeper: hard-delete sessions soft-deleted past the
         // retention window, reclaiming their event storage.
         runtime_health.set_purge_sweeper(true);

@@ -19,6 +19,9 @@ import {
   useDesktopCommandSelector,
 } from "./commands/DesktopCommandProvider";
 import { LeaderKeycap } from "./commands/DesktopKeycap";
+import { useDesktopLeaderOptional } from "./commands/leaderContext";
+import { DESKTOP_OPEN_TAB_OVERFLOW_EVENT, TabStripOverflowButton, TabStripOverflowEdges } from "./DesktopTabOverflowButton";
+import { partitionDesktopTabWorkingSet } from "./desktopTabWorkingSet";
 import {
   DESKTOP_TAB_GROUP,
   DESKTOP_TAB_KEYS,
@@ -51,49 +54,6 @@ export interface DesktopTabItem {
   readonly preview: boolean;
   /** Status dot and Provider icon, or the Draft glyph. */
   readonly leading: ReactNode;
-}
-
-function TabStripOverflowEdges({
-  overflow,
-}: {
-  overflow: { readonly left: boolean; readonly right: boolean };
-}): React.JSX.Element {
-  return (
-    <>
-      {overflow.left && (
-        <Box
-          aria-hidden
-          data-desktop-tabs-overflow="left"
-          sx={{
-            position: "absolute",
-            top: 0,
-            bottom: 1,
-            left: 0,
-            width: 22,
-            pointerEvents: "none",
-            background: (t: Theme) =>
-              `linear-gradient(to right, ${t.palette.background.default}, transparent)`,
-          }}
-        />
-      )}
-      {overflow.right && (
-        <Box
-          aria-hidden
-          data-desktop-tabs-overflow="right"
-          sx={{
-            position: "absolute",
-            top: 0,
-            bottom: 1,
-            right: "2.75rem",
-            width: 24,
-            pointerEvents: "none",
-            background: (t: Theme) =>
-              `linear-gradient(to left, ${t.palette.background.default}, transparent)`,
-          }}
-        />
-      )}
-    </>
-  );
 }
 
 function TabStripActionsButton({
@@ -309,11 +269,30 @@ export const DesktopTabStrip = memo(function DesktopTabStrip({
       prev.left === left && prev.right === right ? prev : { left, right }
     );
   }, []);
-  const live = useRef({ items, currentKey, visits, exists, onOpen, onRename });
-  live.current = { items, currentKey, visits, exists, onOpen, onRename };
+  const leader = useDesktopLeaderOptional();
+  const leaderDigitsVisible = leader?.armed === true && leader.layer === "root";
+  const workingSet = useMemo(
+    () => partitionDesktopTabWorkingSet(items, currentKey, visits),
+    [items, currentKey, visits],
+  );
+  const live = useRef({ items, visible: workingSet.visible, overflow: workingSet.overflow, currentKey, visits, exists, onOpen, onRename });
+  live.current = { items, visible: workingSet.visible, overflow: workingSet.overflow, currentKey, visits, exists, onOpen, onRename };
 
   const actions = useMemo(() => {
     const order = (): string[] => live.current.items.map((item) => item.key);
+    const closeKeys = (keys: readonly string[]): void => {
+      const { currentKey: current, visits: visited, onOpen: open } = live.current;
+      const { tabs } = desktopTabs();
+      const pinnedKeys = new Set(tabs.filter((t) => t.pinned).map((t) => t.key));
+      let closing = keys.filter((k) => !pinnedKeys.has(k));
+      if (closing.length === 0) return;
+      if (current && closing.includes(current)) {
+        const next = desktopTabAfterClose(tabs, current, closing, visited);
+        if (next === null) closing = closing.filter((k) => k !== current);
+        else open(next);
+      }
+      updateDesktopTabs((state) => withoutDesktopTabs(state, closing));
+    };
     const close = (key: string | null, scope: DesktopTabCloseScope): void => {
       const { currentKey: current, visits: visited, onOpen: open } =
         live.current;
@@ -330,6 +309,7 @@ export const DesktopTabStrip = memo(function DesktopTabStrip({
     };
     return {
       close,
+      closeKeys,
       step: (delta: number): void => {
         const { currentKey: current, onOpen: open } = live.current;
         const keys = order();
@@ -342,7 +322,7 @@ export const DesktopTabStrip = memo(function DesktopTabStrip({
         if (next && next !== current) open(next);
       },
       openAt: (index: number): void => {
-        const key = order()[index];
+        const key = live.current.visible[index]?.key;
         if (key && key !== live.current.currentKey) live.current.onOpen(key);
       },
       pin: (key: string | null): void => {
@@ -486,13 +466,21 @@ export const DesktopTabStrip = memo(function DesktopTabStrip({
         when: () => count() > 1,
         run: () => actions.move(current(), 1),
       },
+      {
+        ...base,
+        id: "tabs.overflow",
+        title: "Open Overflow Tabs Menu",
+        description: "Inspect or close open tabs folded beyond the 9 visible slots",
+        when: () => live.current.overflow.length > 0,
+        run: () => globalThis.dispatchEvent(new CustomEvent(DESKTOP_OPEN_TAB_OVERFLOW_EVENT)),
+      },
       ...Array.from({ length: 9 }, (_, index): DesktopCommand => ({
         ...base,
         id: `tabs.open.${String(index + 1)}`,
         title: `Open Tab ${String(index + 1)}`,
         sequence: desktopLeaderSequence(String(index + 1)),
         fallback: true,
-        when: () => index < count(),
+        when: () => index < live.current.visible.length,
         run: () => actions.openAt(index),
       })),
     ];
@@ -563,22 +551,23 @@ export const DesktopTabStrip = memo(function DesktopTabStrip({
         }}
         sx={{
           display: "flex",
-          alignItems: "stretch",
+          alignItems: "center",
+          gap: "0.25rem",
           height: "2.375rem",
+          px: "0.375rem",
           minWidth: 0,
           overflowX: "auto",
           overflowY: "hidden",
           scrollbarWidth: "none",
           "&::-webkit-scrollbar": { display: "none" },
-          // A recessed rail: the selected tab rises out of it into the page.
           borderBottom: 1,
           borderColor: "divider",
           bgcolor: (t: Theme) =>
-            alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.28 : 0.045),
+            alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.24 : 0.032),
           ...sx,
         }}
       >
-        {items.map((item, index) => {
+        {workingSet.visible.map((item, index) => {
           const selected = item.key === currentKey;
           return (
             <HintTooltip
@@ -652,28 +641,38 @@ export const DesktopTabStrip = memo(function DesktopTabStrip({
               display: "flex",
               alignItems: "center",
               gap: "0.375rem",
-              flex: item.pinned ? "0 0 auto" : "0 1 13rem",
-              minWidth: item.pinned ? 0 : "7.5rem",
-              maxWidth: item.pinned ? "9rem" : "13rem",
-              pl: "0.625rem",
-              pr: "0.375rem",
-              borderRight: 1,
-              borderColor: "divider",
+              height: "1.8125rem",
+              flex: item.pinned ? "0 0 auto" : "1 1 11rem",
+              minWidth: item.pinned ? 0 : "6.5rem",
+              maxWidth: item.pinned ? "9.5rem" : "14rem",
+              pl: "0.55rem",
+              pr: "0.3rem",
+              borderRadius: "7px",
+              border: 1,
+              borderColor: selected
+                ? (t: Theme) => t.palette.mode === "dark" ? alpha(t.palette.primary.main, 0.28) : t.palette.divider
+                : "transparent",
               cursor: "pointer",
               userSelect: "none",
               fontSize: "0.8125rem",
               color: selected ? "text.primary" : "text.secondary",
-              transition: "background-color 120ms ease, color 120ms ease",
+              transition: "background-color 120ms ease, color 120ms ease, border-color 120ms ease",
               "&:hover": { bgcolor: "action.hover", color: "text.primary" },
-              // The selected tab is the page's own surface: it covers the
-              // rail's bottom edge and carries the accent on top.
+              // Calm lifted pill card for the active tab (no harsh top stripe).
               ...(selected && {
-                bgcolor: "background.default",
-                mb: "-1px",
-                fontWeight: 500,
+                bgcolor: (t: Theme) =>
+                  t.palette.mode === "dark"
+                    ? alpha(t.palette.primary.main, 0.16)
+                    : t.palette.background.default,
+                fontWeight: 600,
                 boxShadow: (t: Theme) =>
-                  `inset 0 2px 0 ${t.palette.primary.main}`,
-                "&:hover": { bgcolor: "background.default" },
+                  t.palette.mode === "dark" ? "none" : "0 1px 2px rgba(15, 23, 42, 0.06)",
+                "&:hover": {
+                  bgcolor: (t: Theme) =>
+                    t.palette.mode === "dark"
+                      ? alpha(t.palette.primary.main, 0.2)
+                      : t.palette.background.default,
+                },
               }),
               "&:hover [data-desktop-tab-close], &[aria-selected='true'] [data-desktop-tab-close]":
                 { opacity: 1 },
@@ -690,7 +689,7 @@ export const DesktopTabStrip = memo(function DesktopTabStrip({
               }),
             }}
           >
-            {index < 9 && digits && (
+            {index < 9 && digits && leaderDigitsVisible && (
               <LeaderKeycap leaderKey={String(index + 1)} />
             )}
             <Box
@@ -760,14 +759,21 @@ export const DesktopTabStrip = memo(function DesktopTabStrip({
           </HintTooltip>
         );
       })}
-      <TabStripActionsButton
-        overflowRight={overflow.right}
-        onOpenMenu={(rect): void => {
-          const targetKey = currentKey ?? items[0]?.key;
-          if (!targetKey) return;
-          setMenu({ key: targetKey, left: rect.left, top: rect.bottom });
-        }}
-      />
+      <Box sx={{ display: "inline-flex", alignItems: "center", gap: 0.5, ml: "auto", flexShrink: 0, position: "sticky", right: 0, zIndex: 2 }}>
+        <TabStripOverflowButton
+          overflow={workingSet.overflow}
+          onOpen={onOpen}
+          onCloseAllOverflow={actions.closeKeys}
+        />
+        <TabStripActionsButton
+          overflowRight={overflow.right}
+          onOpenMenu={(rect): void => {
+            const targetKey = currentKey ?? items[0]?.key;
+            if (!targetKey) return;
+            setMenu({ key: targetKey, left: rect.left, top: rect.bottom });
+          }}
+        />
+      </Box>
       </Box>
       <TabStripOverflowEdges overflow={overflow} />
       <TabStripContextMenu

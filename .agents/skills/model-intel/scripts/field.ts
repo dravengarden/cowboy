@@ -24,6 +24,17 @@ import {
 import { basename, dirname, join, resolve } from "node:path";
 import type { RoutingTable } from "./score.ts";
 
+export {
+  type CacheFactInputRow,
+  type CacheTelemetryAudit,
+  type ProviderCacheAuditStat,
+  readCacheTelemetryAudit,
+  SHADOW_IDLE_GAP_BUCKETS,
+  type ShadowIdleGapBucket,
+  summarizeCacheTelemetryRows,
+  type TelemetryCoverageRegression,
+} from "./cache-telemetry.ts";
+
 export type Call = {
   provider: string;
   purpose: string;

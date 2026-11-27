@@ -41,8 +41,10 @@ export const DESKTOP_LEADER_GROUPS: Readonly<Record<string, string>> = {
   // The Sessions sidebar: focus it (`␣SS`), fold its tree, file folders.
   s: "Sessions",
   t: "Top bar",
-  // Layout: cycle regions, resize, fold panes.
+  // Layout: cycle regions and resize splits.
   w: "Window",
+  // Pane folding and zoom (Vim's `z` fold/zoom prefix).
+  z: "Fold",
   // Presentation toggles.
   u: "Interface",
   // The tab strip, on LazyVim's buffer keys.
@@ -161,12 +163,15 @@ export const DESKTOP_WORKSPACE_KEYS = {
   composerSchedule: "H",
   composerJumpFront: "J",
   composerMore: "M",
-  // Pane collapse uses three adjacent physical keys whose left-to-right order
-  // matches the panes on screen: Sessions | Prompt | Conversation, inside the
-  // Window group (`␣W[` `␣W]` `␣W\\`).
-  toggleSessions: "W[",
-  togglePrompt: "W]",
-  toggleConversation: "W\\",
+  // Pane folding & zoom live in the Fold group (`␣Z`, Vim's fold/zoom prefix),
+  // using each pane's own letter (`␣ZS` Sessions, `␣ZP` Prompt, `␣ZC`
+  // Conversation), `␣ZZ` to zoom/restore the focused pane, and `␣ZA` to
+  // expand every pane.
+  toggleSessions: "ZS",
+  togglePrompt: "ZP",
+  toggleConversation: "ZC",
+  toggleZoom: "ZZ",
+  expandAllPanes: "ZA",
 } as const;
 
 
@@ -277,6 +282,10 @@ export const DESKTOP_SHORTCUTS = {
   toggleConversation: desktopWorkspaceSequence(
     DESKTOP_WORKSPACE_KEYS.toggleConversation,
   ),
+  toggleZoom: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.toggleZoom),
+  expandAllPanes: desktopWorkspaceSequence(
+    DESKTOP_WORKSPACE_KEYS.expandAllPanes,
+  ),
   switchSession: desktopWorkspaceSequence(DESKTOP_WORKSPACE_KEYS.switchSession),
   alternateSession: desktopWorkspaceSequence(
     DESKTOP_WORKSPACE_KEYS.alternateSession,
@@ -318,8 +327,9 @@ export const DESKTOP_WORKSPACE_COMMANDS: Readonly<Record<string, string>> = {
   d: "prompt.focusDrafts",
   n: "session.new",
   m: "composer.more",
-  // Groups, not commands: their layers hold layout and toggles.
+  // Groups, not commands: their layers hold layout, folding and toggles.
   w: "group:w",
+  z: "group:z",
   u: "group:u",
   b: "group:b",
   "[": "tabs.previous",

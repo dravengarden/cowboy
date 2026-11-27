@@ -24,9 +24,9 @@ test("DeepSeek cache protection uses the shared 64K minimum", () => {
   assertEquals(usageCacheMinHitLabel(), "64K");
 });
 
-test("DeepSeek cache protection exposes the eight-hour base interval", () => {
-  assertEquals(usageCacheIntervalMs(), 28_800_000);
-  assertEquals(usageCacheIntervalLabel(), "8h");
+test("DeepSeek cache protection exposes the gateway initial 5h30m base interval", () => {
+  assertEquals(usageCacheIntervalMs(), 19_800_000);
+  assertEquals(usageCacheIntervalLabel(), "5h30m");
 });
 
 test("DeepSeek agent capability follows the full retained telemetry window", () => {

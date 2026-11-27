@@ -394,10 +394,14 @@ try {
     await page.evaluate<boolean>(`getComputedStyle(document.querySelector("[data-desktop-region='review.inspector']")).display === "none"`),
     "a narrow Review folds the Inspector",
   );
-  await keys(" ", "v", "]");
-  await until(`getComputedStyle(document.querySelector("[data-review-inspector-placement='inset']")).display !== "none"`, "␣V] opens the Inspector inset");
-  await keys(" ", "v", "]");
-  await until(`getComputedStyle(document.querySelector("[data-desktop-region='review.inspector']")).display === "none"`, "␣V] folds it again");
+  await keys(" ", "v", "i");
+  await until(`getComputedStyle(document.querySelector("[data-review-inspector-placement='inset']")).display !== "none"`, "␣VI opens the Inspector inset");
+  await keys(" ", "v", "i");
+  await until(`getComputedStyle(document.querySelector("[data-desktop-region='review.inspector']")).display === "none"`, "␣VI folds it again");
+  await keys(" ", "v", "l");
+  await until(`document.querySelector("[data-review-navigator-overlay]")`, "␣VL opens the Navigator inset");
+  await keys(" ", "v", "l");
+  await until(`!document.querySelector("[data-review-navigator-overlay]")`, "␣VL folds the Navigator inset again");
   await keys(" ", "v", "c");
   await until(`document.querySelector("[data-review-navigator-overlay]")`, "␣VC opens the inset Navigator");
   await shot("4-compact");

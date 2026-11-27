@@ -20,10 +20,12 @@ import {
 } from "./desktopComposerOwnership";
 import {
   DESKTOP_COMPACT_WIDTH_QUERY,
+  DESKTOP_PANES_EXPANDED,
   DESKTOP_SESSIONS_DRAWER_TOGGLE_EVENT,
   type DesktopCollapsedPanes,
   desktopCollapsedPanesStore,
   togglePaneCollapsed,
+  toggleZoomPanes,
   useDesktopCollapsedPanes,
   withPaneCollapsed,
 } from "../desktopLayout";
@@ -47,6 +49,10 @@ interface DesktopWorkspaceContextValue {
   collapsedPanes: DesktopCollapsedPanes;
   /** Collapse or restore a pane, keeping keyboard focus on a visible pane. */
   togglePane: (pane: DesktopPane) => void;
+  /** Zoom the focused work pane to full width, or restore the prior layout. */
+  toggleZoom: (sessionPage: boolean) => void;
+  /** Restore Sessions, Prompt and Conversation and clear any zoom snapshot. */
+  expandAllPanes: () => void;
 }
 
 /** Where keyboard focus lands when a pane is restored by its own command. */
@@ -166,6 +172,60 @@ function focusElement(element: HTMLElement | null): void {
   element.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
+function useDesktopPaneCollapseActions(
+  focusedPaneRef: { readonly current: DesktopPane },
+  focusRegion: (region: string) => void,
+) {
+  const zoomRestoreRef = useRef<DesktopCollapsedPanes | null>(null);
+  const togglePane = useCallback((pane: DesktopPane): void => {
+    if (pane === "sessions" && globalThis.matchMedia?.(DESKTOP_COMPACT_WIDTH_QUERY).matches) {
+      globalThis.dispatchEvent(new CustomEvent(DESKTOP_SESSIONS_DRAWER_TOGGLE_EVENT));
+      return;
+    }
+    zoomRestoreRef.current = null;
+    const current = desktopCollapsedPanesStore.get();
+    const next = togglePaneCollapsed(current, pane);
+    desktopCollapsedPanesStore.set(next);
+    if (!next[pane]) {
+      // Restoring is an explicit request for that pane: move into it.
+      afterLayout(() => focusRegion(PANE_ENTRY_REGION[pane]));
+      return;
+    }
+    const active = document.activeElement;
+    const paneElement = document.querySelector(`[data-desktop-pane="${pane}"]`);
+    const focusInside = focusedPaneRef.current === pane ||
+      (active instanceof Node && paneElement?.contains(active) === true);
+    // A swap (hiding the last work pane) always lands in the pane it revealed.
+    const swapped = (["prompt", "conversation"] as const).find((other) =>
+      other !== pane && current[other] && !next[other]
+    );
+    if (!focusInside && !swapped) return;
+    const target: DesktopPane = swapped ??
+      (pane === "prompt" ? "conversation" : next.prompt ? "conversation" : "prompt");
+    afterLayout(() => focusRegion(PANE_ENTRY_REGION[target]));
+  }, [focusRegion, focusedPaneRef]);
+  const toggleZoom = useCallback((sessionPage: boolean): void => {
+    const compact = globalThis.matchMedia?.(DESKTOP_COMPACT_WIDTH_QUERY).matches ?? false;
+    const result = toggleZoomPanes(
+      desktopCollapsedPanesStore.get(),
+      zoomRestoreRef.current,
+      focusedPaneRef.current,
+      sessionPage,
+      compact,
+    );
+    zoomRestoreRef.current = result.saved;
+    desktopCollapsedPanesStore.set(result.next);
+    if (focusedPaneRef.current !== result.target) {
+      afterLayout(() => focusRegion(PANE_ENTRY_REGION[result.target]));
+    }
+  }, [focusRegion, focusedPaneRef]);
+  const expandAllPanes = useCallback((): void => {
+    zoomRestoreRef.current = null;
+    desktopCollapsedPanesStore.set(DESKTOP_PANES_EXPANDED);
+  }, []);
+  return { togglePane, toggleZoom, expandAllPanes };
+}
+
 export function DesktopWorkspaceProvider({
   children,
 }: {
@@ -241,32 +301,10 @@ export function DesktopWorkspaceProvider({
     const current = Math.max(0, available.indexOf(focusedPane));
     focusPane(available[(current + delta + available.length) % available.length] as DesktopPane);
   }, [collapsedPanes, focusPane, focusedPane]);
-  const togglePane = useCallback((pane: DesktopPane): void => {
-    if (pane === "sessions" && globalThis.matchMedia?.(DESKTOP_COMPACT_WIDTH_QUERY).matches) {
-      globalThis.dispatchEvent(new CustomEvent(DESKTOP_SESSIONS_DRAWER_TOGGLE_EVENT));
-      return;
-    }
-    const current = desktopCollapsedPanesStore.get();
-    const next = togglePaneCollapsed(current, pane);
-    desktopCollapsedPanesStore.set(next);
-    if (!next[pane]) {
-      // Restoring is an explicit request for that pane: move into it.
-      afterLayout(() => focusRegion(PANE_ENTRY_REGION[pane]));
-      return;
-    }
-    const active = document.activeElement;
-    const paneElement = document.querySelector(`[data-desktop-pane="${pane}"]`);
-    const focusInside = focusedPaneRef.current === pane ||
-      (active instanceof Node && paneElement?.contains(active) === true);
-    // A swap (hiding the last work pane) always lands in the pane it revealed.
-    const swapped = (["prompt", "conversation"] as const).find((other) =>
-      other !== pane && current[other] && !next[other]
-    );
-    if (!focusInside && !swapped) return;
-    const target: DesktopPane = swapped ??
-      (pane === "prompt" ? "conversation" : next.prompt ? "conversation" : "prompt");
-    afterLayout(() => focusRegion(PANE_ENTRY_REGION[target]));
-  }, [focusRegion]);
+  const { togglePane, toggleZoom, expandAllPanes } = useDesktopPaneCollapseActions(
+    focusedPaneRef,
+    focusRegion,
+  );
   const focusAdjacentRegion = useCallback((delta: -1 | 1): void => {
     const next = verticalWorkspaceRegion(focusedPane, focusedRegion, delta);
     if (next && document.querySelector(`[data-desktop-region="${CSS.escape(next)}"]`)) {
@@ -400,9 +438,13 @@ export function DesktopWorkspaceProvider({
     setSelectedSplitter,
     collapsedPanes,
     togglePane,
+    toggleZoom,
+    expandAllPanes,
   }), [
     collapsedPanes,
     togglePane,
+    toggleZoom,
+    expandAllPanes,
     cycleRegion,
     focusAdjacentPane,
     focusAdjacentRegion,

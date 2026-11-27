@@ -271,6 +271,8 @@ pub struct CodeDiffQuery {
     #[serde(default)]
     pub scope: CodeDiffScope,
     pub comparison: Option<String>,
+    #[serde(default)]
+    pub change_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Clone, Copy)]
@@ -292,6 +294,8 @@ pub struct CodeDiffResponse {
     pub api_version: u8,
     pub path: String,
     pub revision: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub change_fingerprint: Option<String>,
     pub text: String,
     pub added: usize,
     pub removed: usize,

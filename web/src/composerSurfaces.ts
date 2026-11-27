@@ -23,9 +23,7 @@ export type ComposerModal =
   | { kind: "move"; sourceId: string }
   | { kind: "toolbarSettings" }
   | { kind: "stop" }
-  | { kind: "delivery"; anchor: HTMLElement }
-  /** Deliberately a non-modal Popper: it leaves the iOS first responder alone. */
-  | { kind: "clear"; anchor: HTMLElement };
+  | { kind: "delivery"; anchor: HTMLElement };
 
 type OpenModal = Exclude<ComposerModal, { kind: "none" }>;
 type ModalKind = OpenModal["kind"];
@@ -40,7 +38,7 @@ export type ComposerSurfaceEvent =
   | { type: "close"; kind: ModalKind }
   | { type: "fullscreen"; open: boolean }
   /** A context reset ends the input interaction on touch devices: the
-   *  full-screen editor and the clear-draft popper go with it. */
+   *  full-screen editor closes with it. */
   | { type: "contextReset" };
 
 const NONE: ComposerModal = { kind: "none" };
@@ -60,10 +58,7 @@ export function composerSurfacesReducer(
     case "fullscreen":
       return current.fullscreen === event.open ? current : { ...current, fullscreen: event.open };
     case "contextReset":
-      return {
-        fullscreen: false,
-        modal: current.modal.kind === "clear" ? NONE : current.modal,
-      };
+      return current.fullscreen ? { ...current, fullscreen: false } : current;
   }
 }
 

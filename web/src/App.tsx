@@ -127,7 +127,7 @@ import type { DesktopTabItem } from "./desktop/DesktopTabStrip";
 import { DesktopShortcut, desktopShortcutCaps } from "./desktop/commands/DesktopKeycap";
 
 import { ResourceLightbox } from "./ResourceLightbox";
-import { desktopFocusBoundary, desktopFocusFill, type Mode as ThemeMode } from "./theme";
+import { desktopFocusFill, type Mode as ThemeMode } from "./theme";
 
 import { useSurfaceProfile } from "./surface/SurfaceProfile";
 
@@ -1094,64 +1094,56 @@ export function App({
                         outline: "none",
                         transition: "background-color 120ms ease, border-color 120ms ease, box-shadow 120ms ease",
                     },
+                    // Calm focus language aligned with SessionList's selected row:
+                    // subtle luminance elevation with no harsh 1px box outlines or 2px
+                    // colored stripes across pane headers.
                     "& [data-desktop-region][data-desktop-focused='true']:not([data-desktop-region='prompt.calls']):not([data-desktop-region='prompt.plan']):not([data-desktop-region='prompt.queued']):not([data-desktop-region='prompt.draft']):not([data-desktop-region='prompt.composer']):not([data-desktop-region='topbar.controls']):not([data-desktop-region='conversation.transcript']):not([data-desktop-region='sessions.list'])": {
-                        bgcolor: desktopFocusFill,
-                        boxShadow: (t) =>
-                            `inset 0 0 0 1px ${desktopFocusBoundary(t)}`,
-                    },
-                    // Regions with a real outlined surface recolor that existing
-                    // 1px edge instead of stacking an inset boundary on top.
-                    "& [data-desktop-region='prompt.queued'][data-desktop-focused='true'], & [data-desktop-region='prompt.draft'][data-desktop-focused='true']": {
-                        borderColor: desktopFocusBoundary,
-                        bgcolor: desktopFocusFill,
+                        bgcolor: (t) =>
+                            alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.032 : 0.018),
                         boxShadow: "none",
                     },
-                    // The Calls and Plan region wrappers have no visual
-                    // geometry of their own. Recolor the real dock surface
-                    // (the Calls and Plan disclosure rails), exactly
-                    // like Queue/Draft, instead of drawing a square ring
-                    // around its margin box.
+                    // Bounded Prompt cards lift softly when focused without heavy borders.
+                    "& [data-desktop-region='prompt.queued'][data-desktop-focused='true'], & [data-desktop-region='prompt.draft'][data-desktop-focused='true']": {
+                        borderColor: (t) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.24 : 0.18),
+                        bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.07 : 0.04),
+                        boxShadow: "none",
+                    },
                     "& [data-desktop-region='prompt.calls'][data-desktop-focused='true'] > [data-desktop-calls-surface], & [data-desktop-region='prompt.plan'][data-desktop-focused='true'] > [data-desktop-plan-surface]": {
-                        borderColor: desktopFocusBoundary,
-                        bgcolor: desktopFocusFill,
+                        borderColor: (t) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.24 : 0.18),
+                        bgcolor: (t) => alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.07 : 0.04),
                     },
                     "& [data-desktop-pane] > [data-desktop-pane-header]": {
                         color: "text.secondary",
-                        bgcolor: (t) => alpha(t.palette.background.paper, 0.16),
+                        bgcolor: (t) =>
+                            alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.14 : 0.022),
                         boxShadow: "none",
+                        transition: "background-color 140ms ease, color 140ms ease",
                     },
                     "& [data-desktop-pane][data-desktop-pane-focused='true'] > [data-desktop-pane-header]": {
-                        color: "primary.main",
-                        bgcolor: (t) => alpha(t.palette.primary.main, 0.08),
-                        boxShadow: "inset 0 2px 0 0 currentColor",
+                        color: "text.primary",
+                        bgcolor: "background.default",
+                        boxShadow: "none",
+                    },
+                    "& [data-desktop-pane][data-desktop-pane-focused='true'] > [data-desktop-pane-header] [data-desktop-pane-dot]": {
+                        opacity: 1,
                     },
                     // The full-height Composer expresses focus through its live
-                    // caret, the Prompt header and the Desktop status line. Do
-                    // not tint or ring the entire writing canvas: that treatment
-                    // belongs to bounded cards such as Plan, Queue and Draft.
+                    // caret, the Prompt header and the Desktop status line.
                     "& [data-desktop-region='prompt.composer']:focus-visible": {
                         outline: "none",
                         boxShadow: "none",
                     },
-                    // Top Bar is a workspace region, exclusive with Sessions
-                    // and Prompt. Paint the strip itself with the shared focus
-                    // fill and a primary underline. Do not set `color` on the
-                    // Toolbar: every color="inherit" control would then look
-                    // selected. The keyboard cursor still belongs to the
-                    // focused control; programmatic focus() is not reliably
-                    // :focus-visible on macOS, so combine region ownership
-                    // with real DOM :focus just as Sessions does below.
+                    // Top Bar uses the same calm surface tint without coloring every
+                    // inherit control or drawing a heavy bottom accent bar.
                     "& [data-desktop-region='topbar.controls'][data-desktop-focused='true']": {
                         bgcolor: desktopFocusFill,
-                        boxShadow: (t) =>
-                            `inset 0 -2px 0 0 ${t.palette.primary.main}`,
+                        boxShadow: "none",
                     },
                     "& [data-desktop-region='topbar.controls'][data-desktop-focused='true'] [data-desktop-item]:focus": {
                         outline: "none",
-                        borderColor: "primary.main",
-                        bgcolor: (t) => alpha(t.palette.primary.main, 0.105),
-                        boxShadow: (t) =>
-                            `0 0 0 2px ${alpha(t.palette.primary.main, 0.16)}`,
+                        borderColor: (t) => alpha(t.palette.primary.main, 0.34),
+                        bgcolor: (t) => alpha(t.palette.primary.main, 0.11),
+                        boxShadow: "none",
                     },
                     "& [data-desktop-item]:focus-visible": {
                         outline: "none",

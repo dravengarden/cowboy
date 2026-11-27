@@ -45,6 +45,13 @@ pub fn inherit(state: &AppState, source: &str, target: &str) {
 
 /// The effective policy, or `None` when the owner's preferences cannot be
 /// read: an unknown choice is never taken as consent.
+pub(crate) async fn effective_policy(
+    state: &AppState,
+    meta: &crate::core::SessionMeta,
+) -> Option<Policy> {
+    policy(state, meta).await
+}
+
 async fn policy(state: &AppState, meta: &crate::core::SessionMeta) -> Option<Policy> {
     let preferences = match (meta.owner_user_id.as_deref(), state.store.as_ref()) {
         (Some(owner), Some(store)) => store
@@ -64,6 +71,10 @@ async fn policy(state: &AppState, meta: &crate::core::SessionMeta) -> Option<Pol
 /// Shared gate for renewal and hibernation: an ordinary, resumable session
 /// with no background work. A native fork keeps inherited history only in its
 /// native thread, so it is never renewed.
+pub(crate) fn is_ordinary_session(state: &AppState, meta: &crate::core::SessionMeta) -> bool {
+    ordinary(state, meta)
+}
+
 fn ordinary(state: &AppState, meta: &crate::core::SessionMeta) -> bool {
     !meta.system
         && !meta.closing

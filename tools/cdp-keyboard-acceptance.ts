@@ -12,7 +12,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { type CdpParams, openFixturePage } from "./cdp-fixture.ts";
 import { runConfigFlow } from "./cdp-run-config-flow.ts";
-import { surfacesFlow } from "./cdp-surfaces-flow.ts";
+import { checkDefaultVimJj, surfacesFlow } from "./cdp-surfaces-flow.ts";
 
 const endpoint = process.argv.slice(2)[0] ?? "";
 const output = process.argv.slice(2)[1];
@@ -492,19 +492,19 @@ const tabsFlow = async (): Promise<void> => {
   await leader("]");
   await leader("]");
   await expect("beta* gamma delta draft:notes?", "␣] wraps to the first tab");
-  check(
-    await page.evaluate<boolean>(
-      `document.querySelector('${tab("gamma")} kbd')?.textContent?.trim() === "␣2"`,
-    ),
-    "Every tab shows its leader digit",
-  );
+  const kbd = () =>
+    page.evaluate<string | null>(
+      `document.querySelector('${tab("gamma")} kbd')?.textContent?.trim() ?? null`,
+    );
+  check((await kbd()) === null, "Tab digits stay hidden at rest");
   await body();
   await key(" ");
   await sleep(350);
+  check((await kbd()) === "␣2", "Visible tabs reveal digits on leader");
   await shot("6-tabs-leader");
   await key("3");
   await expect("beta gamma delta* draft:notes?", "␣3 opens the third tab");
-  results.push("␣[ ␣] step and wrap; every tab shows its digit and ␣3 opens the third");
+  results.push("␣[ ␣] step and wrap; every tab reveals its digit on leader and ␣3 opens the third");
 
   await leader("b", "p");
   await expect("^delta* beta gamma draft:notes?", "␣BP pins to the front");
@@ -728,12 +728,12 @@ try {
       }): Space during composition stays with the editor; commit lands`,
     );
 
-    // 4. ⌘K from Insert arms the same leader.
+    // 4. ⌘K from Insert arms the leader; default `jj` leaves Insert cleanly.
     await prefix();
     check((await mode()) === "command", "Mod+K arms the leader from Insert");
     await key("Escape");
-    await key("Escape");
-    results.push(`${mac ? "⌘K" : "Alt+K"} arms the leader from Insert`);
+    await checkDefaultVimJj(key, until, check, editorText);
+    results.push(`${mac ? "⌘K" : "Alt+K"} arms leader; default jj exits Insert`);
 
     // 5. ' labels the focused list; a label moves the cursor.
     await click("[data-desktop-item='beta']");

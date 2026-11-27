@@ -691,6 +691,9 @@ pub(in crate::store) async fn purge_deleted_pg(
     for (session_id, max_before) in to_archive {
         seal_session_prefix_pg(&mut tx, &session_id, max_before, "purge", now_ms).await?;
     }
+    for session_id in &purging {
+        crate::store::turn_cache_facts::project_missing_for_session_pg(&mut tx, session_id).await?;
+    }
 
     let actually_purged: Vec<String> = if purging.is_empty() {
         Vec::new()

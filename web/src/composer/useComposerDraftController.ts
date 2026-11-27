@@ -112,6 +112,25 @@ export interface ComposerDraftControllerOptions {
 // Owns the local, not-yet-sent prompt. This is product behaviour shared by the
 // Desktop and Mobile composer shells: persistence, attachment staging and the
 // imperative clear required by the uncontrolled CM6 editor all live here.
+function applyDraftAppend(
+  editor: ComposerEditorHandle | null,
+  fallbackText: string,
+  added: string,
+  setText: (next: string) => void,
+  options?: import("../draftStore").DraftAppendOptions,
+): import("../draftStore").DraftAppendStatus {
+  if (editor?.isComposing?.()) return "composing";
+  const current = editor?.getValue() ?? fallbackText;
+  const next = current ? `${current.trimEnd()}\n\n${added}` : added;
+  if (options?.checkDurable && !options.checkDurable(next)) return "storage-failed";
+  if (editor && !editor.applyRemoteText(next)) {
+    options?.rollback?.();
+    return "composing";
+  }
+  setText(next);
+  return "ok";
+}
+
 export function useComposerDraftController(
   sessionId: string,
   editorRef: RefObject<ComposerEditorHandle | null>,
@@ -242,13 +261,7 @@ export function useComposerDraftController(
   }, [persistDraft, attachments]);
 
   useEffect(
-    () =>
-      subscribeDraftAppend(sessionId, (added) => {
-        const current = editorRef.current?.getValue() ?? textRef.current;
-        const next = current ? `${current.trimEnd()}\n\n${added}` : added;
-        editorRef.current?.applyRemoteText(next);
-        setText(next);
-      }),
+    () => subscribeDraftAppend(sessionId, (added, options) => applyDraftAppend(editorRef.current, textRef.current, added, setText, options)),
     [editorRef, sessionId, setText],
   );
 

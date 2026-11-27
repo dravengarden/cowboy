@@ -109,11 +109,10 @@ test("workspace navigation has no global bare-letter shortcut", () => {
     "v",
     "w",
     "x",
+    "z",
   ]);
-  // Windows/Linux held-prefix pane folds (Alt + [ ] \) are not Chrome chords.
-  // macOS Cmd+[ / Cmd+] are Chrome Back/Forward, which are not reserved
-  // accelerators; the claimed continuation cancels them (FOCUS.md).
-  for (const key of ["[", "]", "\\"]) {
+  // Windows/Linux held-prefix tab stepping (`Alt+[` / `Alt+]`) is not a Chrome chord.
+  for (const key of ["[", "]"]) {
     assertEquals(
       chromeShortcutConflict("test.command", `Alt+${key}`, false),
       null,

@@ -172,10 +172,10 @@ function discardDatabaseDraft(sessionId: string, force = false): void {
   void writeDatabase(sessionId, () => cache.discard()).catch(() => undefined);
 }
 
-function persist(sessionId: string, draft: Draft | null): void {
-  if (isSessionRemoved(sessionId)) return;
+function persist(sessionId: string, draft: Draft | null): boolean {
+  if (isSessionRemoved(sessionId)) return false;
   const ls = globalThis.localStorage;
-  if (!ls) return;
+  if (!ls) return true;
   const key = KEY_PREFIX + sessionId;
   if (!draft) {
     try {
@@ -184,7 +184,7 @@ function persist(sessionId: string, draft: Draft | null): void {
       /* unavailable — in-memory copy already updated */
     }
     discardDatabaseDraft(sessionId);
-    return;
+    return true;
   }
   const attachments = storableAttachments(draft.attachments);
   if (awaitingDatabase.has(sessionId)) {
@@ -195,10 +195,11 @@ function persist(sessionId: string, draft: Draft | null): void {
     const mirror: DraftMirror = { text: draft.text, attachments: [], attachmentsInDatabase: true };
     try {
       ls.setItem(key, JSON.stringify(mirror));
+      return true;
     } catch {
       /* the previous mirror and the database record still hold the draft */
+      return false;
     }
-    return;
   }
   if (attachments.length === 0) {
     discardDatabaseDraft(sessionId);
@@ -210,8 +211,10 @@ function persist(sessionId: string, draft: Draft | null): void {
       // was typed. The bytes follow; if the database refuses them, the record
       // falls back to the old localStorage quota policy.
       const mirror: DraftMirror = { text: draft.text, attachments: [], attachmentsInDatabase: true };
+      let mirrored = false;
       try {
         ls.setItem(key, JSON.stringify(mirror));
+        mirrored = true;
       } catch {
         /* the database record below still holds the whole draft */
       }
@@ -227,15 +230,16 @@ function persist(sessionId: string, draft: Draft | null): void {
           persistLegacy(ls, key, draft);
         }
       });
-      return;
+      return mirrored;
     }
   }
-  persistLegacy(ls, key, draft);
+  return persistLegacy(ls, key, draft);
 }
 
-function persistLegacy(ls: Storage, key: string, draft: Draft): void {
+function persistLegacy(ls: Storage, key: string, draft: Draft): boolean {
   try {
     ls.setItem(key, JSON.stringify(draft));
+    return true;
   } catch {
     // Quota (likely large attachment data) — keep at least the text so a reload
     // doesn't lose what was typed; attachments can be re-added. STRIP the inline
@@ -246,8 +250,10 @@ function persistLegacy(ls: Storage, key: string, draft: Draft): void {
         key,
         JSON.stringify({ text: dropOrphanImageTokens(draft.text, new Set()), attachments: [] }),
       );
+      return true;
     } catch {
       /* still failing — the in-memory copy holds it for this session */
+      return false;
     }
   }
 }
@@ -428,7 +434,21 @@ export function announceDraft(sessionId: string): void {
   }
 }
 
-const appendListeners = new Map<string, (text: string) => void>();
+export type DraftAppendStatus = "ok" | "composing" | "storage-failed";
+
+export interface DraftAppendOptions {
+  /** Persist candidate text before mutating the live editor. */
+  readonly checkDurable?: (candidateText: string) => boolean;
+  /** Roll back any pre-persisted candidate when the editor refuses the edit. */
+  readonly rollback?: () => void;
+}
+
+export type DraftAppendListener = (
+  text: string,
+  options?: DraftAppendOptions,
+) => DraftAppendStatus | void;
+
+const appendListeners = new Map<string, DraftAppendListener>();
 
 /** Add text to a session's draft from outside its Composer. A mounted Composer
  * takes it, so it never overwrites keystrokes the store has not seen yet. */
@@ -445,6 +465,122 @@ export function appendDraftText(sessionId: string, text: string): void {
   });
 }
 
+/**
+ * Append text with durability and editor-acceptance checks:
+ * 1. Persists the candidate draft to localStorage BEFORE mutating the live
+ *    editor or in-memory draft map, so a quota failure leaves the live Prompt
+ *    and retry state clean.
+ * 2. Requires a mounted Composer's editor to acknowledge `applyRemoteText`
+ *    (which rejects edits while IME composition is active); on refusal, rolls
+ *    back the pre-persisted mirror and returns `"composing"`.
+ */
+/** Strict localStorage-first persistence for durable transfers:
+ *  - NEVER falls back to stripping previously saved attachments on quota.
+ *  - NEVER queues an IndexedDB write unless the synchronous mirror succeeded. */
+function persistStrictMirror(sessionId: string, draft: Draft): { ok: boolean; queueDb: boolean } {
+  if (isSessionRemoved(sessionId)) return { ok: false, queueDb: false };
+  const ls = globalThis.localStorage;
+  if (!ls) return { ok: true, queueDb: false };
+  const key = KEY_PREFIX + sessionId;
+  const attachments = storableAttachments(draft.attachments);
+  if (awaitingDatabase.has(sessionId) || (attachments.length > 0 && draftCache(sessionId) !== undefined)) {
+    const mirror: DraftMirror = { text: draft.text, attachments: [], attachmentsInDatabase: true };
+    try {
+      ls.setItem(key, JSON.stringify(mirror));
+      return { ok: true, queueDb: !awaitingDatabase.has(sessionId) && attachments.length > 0 };
+    } catch {
+      return { ok: false, queueDb: false };
+    }
+  }
+  // No database available (or no attachments): write the FULL draft strictly so
+  // previously saved attachments and inline image tokens are never silently dropped.
+  try {
+    ls.setItem(key, JSON.stringify(draft));
+    return { ok: true, queueDb: false };
+  } catch {
+    return { ok: false, queueDb: false };
+  }
+}
+
+function commitStrictDatabaseIfNeeded(sessionId: string, draft: Draft, queueDb: boolean): void {
+  const attachments = storableAttachments(draft.attachments);
+  if (!queueDb || attachments.length === 0) return;
+  const cache = draftCache(sessionId);
+  if (cache === undefined) return;
+  const stored: StoredDraft = { text: draft.text, attachments, savedAt: Date.now() };
+  databaseDrafts.add(sessionId);
+  pendingDiscards.delete(sessionId);
+  void writeDatabase(sessionId, () =>
+    cache.update(() => (isSessionRemoved(sessionId) ? null : stored)),
+  ).catch((): void => {
+    databaseDrafts.delete(sessionId);
+  });
+}
+
+export function appendDraftTextDurable(
+  sessionId: string,
+  text: string,
+): DraftAppendStatus {
+  if (isSessionRemoved(sessionId)) return "storage-failed";
+  const previous = drafts.get(sessionId) ?? null;
+  const composer = appendListeners.get(sessionId);
+  if (composer) {
+    let persistedCandidate = false;
+    let queuedDb = false;
+    let candidateDraft: Draft | null = null;
+    const status = composer(text, {
+      checkDurable: (candidateText: string): boolean => {
+        const base = drafts.get(sessionId) ?? EMPTY;
+        const candidate: Draft = { ...base, text: candidateText };
+        const res = persistStrictMirror(sessionId, candidate);
+        persistedCandidate = res.ok;
+        queuedDb = res.queueDb;
+        candidateDraft = res.ok ? candidate : null;
+        return res.ok;
+      },
+      rollback: (): void => {
+        if (persistedCandidate) {
+          if (previous) persistStrictMirror(sessionId, previous);
+          else persist(sessionId, null);
+          persistedCandidate = false;
+          queuedDb = false;
+          candidateDraft = null;
+        }
+      },
+    });
+    if (status === "storage-failed" || status === "composing") return status;
+    if (!persistedCandidate) {
+      const latest = drafts.get(sessionId);
+      if (latest) {
+        const res = persistStrictMirror(sessionId, latest);
+        if (!res.ok) {
+          if (previous) drafts.set(sessionId, previous);
+          else drafts.delete(sessionId);
+          dirty.delete(sessionId);
+          return "storage-failed";
+        }
+        commitStrictDatabaseIfNeeded(sessionId, latest, res.queueDb);
+      }
+    } else if (candidateDraft) {
+      commitStrictDatabaseIfNeeded(sessionId, candidateDraft, queuedDb);
+    }
+    dirty.delete(sessionId);
+    return "ok";
+  }
+  const draft = getDraft(sessionId);
+  const nextDraft: Draft = {
+    ...draft,
+    text: draft.text ? `${draft.text.trimEnd()}\n\n${text}` : text,
+  };
+  const res = persistStrictMirror(sessionId, nextDraft);
+  if (!res.ok) return "storage-failed";
+  drafts.set(sessionId, nextDraft);
+  cleared.delete(sessionId);
+  dirty.delete(sessionId);
+  commitStrictDatabaseIfNeeded(sessionId, nextDraft, res.queueDb);
+  return "ok";
+}
+
 export function appendComposerDraft(
   sessionId: string,
   { text, attachments }: Draft,
@@ -459,7 +595,7 @@ export function appendComposerDraft(
 
 export function subscribeDraftAppend(
   sessionId: string,
-  listener: (text: string) => void,
+  listener: DraftAppendListener,
 ): () => void {
   appendListeners.set(sessionId, listener);
   return () => {

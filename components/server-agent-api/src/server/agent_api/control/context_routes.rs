@@ -62,6 +62,16 @@ pub(super) fn context_route(
             "/api/sessions/{session_id}/context-rollover",
             put(web::session_context::rollover::set),
         ),
+        "sessions.cache_metrics" => (
+            "GET",
+            "/api/sessions/{session_id}/cache-metrics",
+            get(web::cache_metrics_api::session_cache_metrics),
+        ),
+        "accounts.cache_metrics" => (
+            "GET",
+            "/api/provider-accounts/{account}/cache-metrics",
+            get(web::cache_metrics_api::account_cache_metrics),
+        ),
         _ => return None,
     })
 }

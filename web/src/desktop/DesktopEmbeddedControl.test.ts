@@ -85,10 +85,8 @@ test("focused Topbar paints the region without selecting every inherit control",
     true,
   );
   assertEquals(
-    appSource.includes(
-      "`inset 0 -2px 0 0 ${t.palette.primary.main}`",
-    ),
-    true,
+    appSource.includes("inset 0 -2px 0 0"),
+    false,
   );
   assertEquals(
     appSource.includes(

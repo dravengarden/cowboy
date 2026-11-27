@@ -24,7 +24,7 @@ import {
 } from "@mui/icons-material";
 import { alpha } from "@mui/material/styles";
 import type { PlanEntry } from "./protocol";
-import { memo, type ReactNode } from "react";
+import { memo, type ReactNode, useEffect, useRef } from "react";
 import { useStore } from "@cowboy/state-store";
 import { useReliableTouchTap } from "./useReliableTouchTap";
 import { desktopSize } from "./surface/desktopSize";
@@ -33,6 +33,7 @@ import {
   mobileComposerPanelHeaderMinHeight,
 } from "./mobileComposerPrimitives";
 import {
+  collapseComposerStackPanel,
   composerStackExpandedStore,
   toggleComposerStackPanel,
 } from "./composerStackAccordion";
@@ -43,6 +44,26 @@ import {
 // in-progress step + an N/M counter + a determinate bar. Expanded: the full
 // checklist. The plan no longer renders inline in the transcript (it updates in
 // place / latest-wins anyway), so this is the single place it lives.
+
+function useAutoCollapseCompletedPlan(
+  desktop: boolean,
+  allDone: boolean,
+  expanded: boolean,
+  listRef: { readonly current: HTMLElement | null },
+  toggleRef: { readonly current: HTMLElement | null },
+): void {
+  const prev = useRef(allDone);
+  useEffect(() => {
+    if (desktop && allDone && !prev.current && expanded) {
+      const active = globalThis.document?.activeElement;
+      if (active instanceof HTMLElement && listRef.current?.contains(active)) {
+        toggleRef.current?.focus({ preventScroll: true });
+      }
+      collapseComposerStackPanel("plan");
+    }
+    prev.current = allDone;
+  }, [allDone, desktop, expanded, listRef, toggleRef]);
+}
 
 export const PlanDock = memo(function PlanDock({
   entries,
@@ -70,9 +91,8 @@ export const PlanDock = memo(function PlanDock({
   const active = entries.find((e) => e.status === "in_progress");
   const current = active ?? entries.find((e) => e.status !== "completed");
 
-  const toggle = (): void => {
-    toggleComposerStackPanel("plan");
-  };
+
+  const toggle = (): void => toggleComposerStackPanel("plan");
   const toggleTap = useReliableTouchTap<HTMLButtonElement>(
     toggle,
     swallowStrayDisclosureClick,
@@ -274,6 +294,9 @@ function DesktopPlanRail({
   onDismiss: () => void;
   shortcut?: ReactNode;
 }): React.JSX.Element {
+  const listRef = useRef<HTMLDivElement | null>(null);
+  const toggleRef = useRef<HTMLButtonElement | null>(null);
+  useAutoCollapseCompletedPlan(true, allDone, expanded, listRef, toggleRef);
   return (
     <Box
       data-desktop-plan-surface="true"
@@ -293,6 +316,7 @@ function DesktopPlanRail({
     >
       <Stack direction="row" alignItems="center" sx={{ pr: 0.5 }}>
         <ButtonBase
+          ref={toggleRef as React.RefObject<HTMLButtonElement | null>}
           onClick={onToggle}
           disableRipple
           aria-label={expanded ? "Collapse plan" : "Expand plan"}
@@ -378,10 +402,10 @@ function DesktopPlanRail({
           position: "absolute",
           left: 0,
           bottom: 0,
-          height: 2,
+          height: allDone ? 1.5 : 2,
           width: `${String(pct)}%`,
           bgcolor: allDone ? "success.main" : "primary.main",
-          opacity: allDone ? 0.7 : 0.55,
+          opacity: allDone ? 0.28 : 0.5,
           transition: "width 240ms ease",
         }}
       />
@@ -391,6 +415,7 @@ function DesktopPlanRail({
         sx={composerStackDisclosureSx(expanded)}
       >
         <Box
+          ref={listRef as React.RefObject<HTMLDivElement | null>}
           data-desktop-plan-list="true"
           data-desktop-aux-list="true"
           sx={{
@@ -401,67 +426,60 @@ function DesktopPlanRail({
             transition: "max-height 150ms ease, padding 150ms ease",
           }}
         >
-          {entries.map((entry, index) => {
-            const completed = entry.status === "completed";
-            const inProgress = entry.status === "in_progress";
-            return (
-              <Stack
-                key={index}
-                direction="row"
-                alignItems="center"
-                data-desktop-item={`plan-${String(index)}`}
-                tabIndex={-1}
-                sx={{
-                  pl: 0.5,
-                  pr: 1,
-                  gap: "0.375rem",
-                  minHeight: desktopSize(28),
-                  outline: "none",
-                  transition: "background-color 120ms ease, box-shadow 120ms ease",
-                  "&:hover": {
-                    bgcolor: (t) => alpha(t.palette.primary.main, 0.025),
-                  },
-                  "&:focus": {
-                    bgcolor: (t) => alpha(t.palette.primary.main, 0.05),
-                    boxShadow: (t) => `inset 2px 0 0 ${t.palette.primary.main}`,
-                  },
-                }}
-              >
-                <Box
-                  sx={{
-                    width: desktopSize(22),
-                    display: "inline-flex",
-                    justifyContent: "center",
-                    flexShrink: 0,
-                    "& .MuiSvgIcon-root": {
-                      fontSize: "0.875rem",
-                      width: "0.875rem",
-                      height: "0.875rem",
-                    },
-                  }}
-                >
-                  {completed
-                    ? <CheckCircle color="success" />
-                    : inProgress
-                    ? <CircularProgress size="0.75rem" thickness={5} color="warning" />
-                    : <RadioButtonUnchecked color="disabled" />}
-                </Box>
-                <Typography
-                  variant="caption"
-                  color={completed ? "text.disabled" : "text.primary"}
-                  sx={{
-                    minWidth: 0,
-                    fontWeight: inProgress ? 600 : 400,
-                    textDecoration: completed ? "line-through" : "none",
-                  }}
-                >
-                  {entry.content}
-                </Typography>
-              </Stack>
-            );
-          })}
+          {entries.map((entry, index) => (
+            <DesktopPlanStepRow key={index} entry={entry} index={index} />
+          ))}
         </Box>
       </Collapse>
     </Box>
+  );
+}
+
+function DesktopPlanStepRow({ entry, index }: { entry: PlanEntry; index: number }): React.JSX.Element {
+  const completed = entry.status === "completed";
+  const inProgress = entry.status === "in_progress";
+  return (
+    <Stack
+      direction="row"
+      alignItems="center"
+      data-desktop-item={`plan-${String(index)}`}
+      tabIndex={-1}
+      sx={{
+        pl: 0.5,
+        pr: 1,
+        gap: "0.375rem",
+        minHeight: desktopSize(28),
+        outline: "none",
+        transition: "background-color 120ms ease, box-shadow 120ms ease",
+        "&:hover": { bgcolor: (t) => alpha(t.palette.primary.main, 0.025) },
+        "&:focus": {
+          bgcolor: (t) => alpha(t.palette.primary.main, 0.05),
+          boxShadow: (t) => `inset 2px 0 0 ${t.palette.primary.main}`,
+        },
+      }}
+    >
+      <Box
+        sx={{
+          width: desktopSize(22),
+          display: "inline-flex",
+          justifyContent: "center",
+          flexShrink: 0,
+          "& .MuiSvgIcon-root": { fontSize: "0.875rem", width: "0.875rem", height: "0.875rem" },
+        }}
+      >
+        {completed
+          ? <CheckCircle color="success" />
+          : inProgress
+          ? <CircularProgress size="0.75rem" thickness={5} color="warning" />
+          : <RadioButtonUnchecked color="disabled" />}
+      </Box>
+      <Typography
+        variant="caption"
+        color={completed ? "text.disabled" : "text.primary"}
+        sx={{ minWidth: 0, fontWeight: inProgress ? 600 : 400, textDecoration: completed ? "line-through" : "none" }}
+      >
+        {entry.content}
+      </Typography>
+    </Stack>
   );
 }

@@ -5,6 +5,11 @@ import { DESKTOP_SHORTCUTS } from "./workspaceShortcuts";
 
 test("hover hints draw a leader path as one keycap, not the prefix string", () => {
   assert.deepEqual(desktopShortcutCaps(DESKTOP_SHORTCUTS.resize), ["␣WR"]);
+  assert.deepEqual(desktopShortcutCaps(DESKTOP_SHORTCUTS.toggleSessions), ["␣ZS"]);
+  assert.deepEqual(desktopShortcutCaps(DESKTOP_SHORTCUTS.togglePrompt), ["␣ZP"]);
+  assert.deepEqual(desktopShortcutCaps(DESKTOP_SHORTCUTS.toggleConversation), ["␣ZC"]);
+  assert.deepEqual(desktopShortcutCaps(DESKTOP_SHORTCUTS.toggleZoom), ["␣ZZ"]);
+  assert.deepEqual(desktopShortcutCaps(DESKTOP_SHORTCUTS.expandAllPanes), ["␣ZA"]);
   assert.deepEqual(desktopShortcutCaps(DESKTOP_SHORTCUTS.alternateSession), [
     "␣⇥",
   ]);

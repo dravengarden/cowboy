@@ -11,6 +11,7 @@
 //! challenge before WebSocket protocol negotiation.
 
 pub mod agent_tools;
+pub mod cache_metrics_api;
 pub mod config_revert;
 pub mod model_catalog;
 pub use agent_tools::launch_extensions;
@@ -361,6 +362,81 @@ pub async fn run_purge_sweeper(store: Store) {
             Ok(0) => {}
             Ok(n) => tracing::info!(purged = n, "swept expired provider usage events"),
             Err(e) => tracing::warn!(error = %e, "provider usage purge failed"),
+        }
+        match store
+            .prune_turn_cache_facts(crate::store::turn_cache_facts::DEFAULT_RETENTION_DAYS)
+            .await
+        {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(purged = n, "swept expired turn cache facts"),
+            Err(e) => tracing::warn!(error = %e, "turn cache facts purge failed"),
+        }
+    }
+}
+
+/// Checkpointed background reconciliation from historical `events` into
+/// `turn_cache_facts`. Resets the scan cursor on startup so turns written
+/// during a temporary Controller rollback are repaired (`ON CONFLICT DO NOTHING`),
+/// yields between bounded batches, and retries transient DB errors with capped
+/// exponential backoff until completion or `shutdown`.
+pub async fn run_turn_cache_backfill(store: Store, mut shutdown: watch::Receiver<bool>) {
+    const SCAN_BATCH: usize = 1_000;
+    const MAX_BACKOFF_SECS: u64 = 60;
+    let mut backoff_secs = 2_u64;
+    loop {
+        if *shutdown.borrow() {
+            return;
+        }
+        match store.begin_turn_cache_reconcile().await {
+            Ok(()) => {
+                backoff_secs = 2;
+                break;
+            }
+            Err(error) => {
+                tracing::warn!(%error, backoff_secs, "turn_cache_facts reconcile reset failed; retrying");
+                tokio::select! {
+                    _ = shutdown.changed() => return,
+                    () = tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)) => {}
+                }
+                backoff_secs = backoff_secs.saturating_mul(2).min(MAX_BACKOFF_SECS);
+            }
+        }
+    }
+    loop {
+        if *shutdown.borrow() {
+            return;
+        }
+        match store
+            .backfill_turn_cache_facts_batch(
+                SCAN_BATCH,
+                crate::store::turn_cache_facts::DEFAULT_RETENTION_DAYS,
+            )
+            .await
+        {
+            Ok(progress) if progress.completed => {
+                if progress.rows_projected > 0 {
+                    tracing::info!(
+                        rows = progress.rows_projected,
+                        "completed turn_cache_facts historical reconciliation"
+                    );
+                }
+                return;
+            }
+            Ok(_) => {
+                backoff_secs = 2;
+                tokio::select! {
+                    _ = shutdown.changed() => return,
+                    () = tokio::time::sleep(std::time::Duration::from_millis(50)) => {}
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, backoff_secs, "turn_cache_facts backfill batch failed; retrying");
+                tokio::select! {
+                    _ = shutdown.changed() => return,
+                    () = tokio::time::sleep(std::time::Duration::from_secs(backoff_secs)) => {}
+                }
+                backoff_secs = backoff_secs.saturating_mul(2).min(MAX_BACKOFF_SECS);
+            }
         }
     }
 }

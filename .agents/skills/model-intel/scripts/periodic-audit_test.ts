@@ -359,3 +359,235 @@ values = { model = "gpt-6.2-sol", reasoning_effort = "max" }
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("periodic audit surfaces telemetry-coverage-drop regressions in reasons, markdown and logfmt", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cowboy-periodic-cache-drop-"));
+  try {
+    mkdirSync(join(root, "models/observations"), { recursive: true });
+    mkdirSync(join(root, "models/field"), { recursive: true });
+    mkdirSync(join(root, "plugins/codex"), { recursive: true });
+    const methodologyText = `schema = 1
+efforts = ["max"]
+[provenance]
+independent = 1.0
+third_party = 0.7
+vendor = 0.25
+internal = 1.0
+[freshness]
+half_life_days = 60
+provisional_days = 14
+[evidence]
+min_lineages = 2
+min_workload_coverage = 0.7
+high_confidence_lineages = 3
+high_confidence_max_age_days = 45
+saturation_fraction = 0.9
+min_spread = 0.03
+uncertainty_floor = 0.05
+[tasks.code_review]
+benchmarks = ["rb"]
+[workloads.session_default]
+weights = { code_review = 1.0 }
+cost_metric = "tokens_per_task"
+noninferiority_margin = 0.05
+value_floor = 0.5
+tie_margin = 0.03
+`;
+    const targetsText = `schema = 1
+[[targets]]
+id = "gpt-6.2-sol:max"
+vendor = "openai"
+model = "gpt-6.2-sol"
+effort = "max"
+provider = "codex"
+preset = "sol-6-2-max"
+values = { model = "gpt-6.2-sol", reasoning_effort = "max" }
+`;
+    writeFileSync(join(root, "models/methodology.toml"), methodologyText);
+    writeFileSync(join(root, "models/targets.toml"), targetsText);
+    writeFileSync(join(root, "models/observations/2026-11.jsonl"), "");
+    const m = Bun.TOML.parse(methodologyText) as Parameters<typeof buildCatalog>[0];
+    const t = (Bun.TOML.parse(targetsText) as { targets: Parameters<typeof buildCatalog>[1] })
+      .targets;
+    const empty = { rows: [], count: 0, digest: digest(""), present: false };
+    const cat = buildCatalog(m, t, empty, empty, "2026-11-27", {
+      methodology: digest(methodologyText),
+      targets: digest(targetsText),
+    });
+    writeFileSync(join(root, "models/catalog.json"), JSON.stringify(cat));
+    writeFileSync(
+      join(root, "plugins/codex/provider.json"),
+      JSON.stringify({
+        id: "codex",
+        version: "3.6.32",
+        configuration_presets: [
+          {
+            id: "sol-6-2-max",
+            is_default: true,
+            values: { model: "gpt-6.2-sol", reasoning_effort: "max" },
+          },
+        ],
+        runtime: { dependencies: [] },
+      }),
+    );
+
+    const dbPath = join(root, "cowboy.sqlite3");
+    const db = new Database(dbPath);
+    db.exec(`CREATE TABLE managed_agent_calls (state TEXT, document TEXT, request_document TEXT);
+      CREATE TABLE turn_cache_facts (
+        session_id TEXT, turn_end_seq INTEGER, occurred_at_ms INTEGER,
+        provider TEXT, provider_version TEXT, model TEXT, stop_reason TEXT,
+        prompt_origin TEXT, idle_gap_ms INTEGER, renewed INTEGER, usage_observed INTEGER,
+        inclusive_input_tokens INTEGER, cached_read_tokens INTEGER, cache_write_tokens INTEGER
+      );
+      CREATE TABLE turn_cache_backfill_state (
+        slot INTEGER PRIMARY KEY, cursor_session_id TEXT, cursor_seq INTEGER,
+        completed_at_ms INTEGER
+      );
+      INSERT INTO turn_cache_backfill_state VALUES (1, '', -1, 1795700000000);`);
+    const nowMs = Date.parse("2026-11-27T00:00:00Z");
+    const ins = db.query(
+      "INSERT INTO turn_cache_facts VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+    );
+    for (let i = 0; i < 12; i++) {
+      ins.run("s-old", i + 1, nowMs - 10 * 86_400_000 + i * 1000, "codex", "3.6.31", "gpt-6.2-sol", "end_turn", "human", 600_000, 0, 1, 100_000, 90_000, null);
+      ins.run("s-new", i + 1, nowMs - 2 * 86_400_000 + i * 1000, "codex", "3.6.32", "gpt-6.2-sol", "end_turn", "human", 600_000, 0, 1, 100_000, null, null);
+    }
+    db.close();
+
+    const report = await runPeriodicAudit({
+      repoRoot: root,
+      database: dbPath,
+      asOf: "2026-11-27",
+      nowMs,
+      days: 14,
+      localObservations: join(root, "missing-local"),
+    });
+    assertEquals(report.action_needed, true);
+    assertEquals(
+      report.reasons.some((r) => r.startsWith("telemetry-coverage-drop: codex cache_coverage")),
+      true,
+    );
+    const md = renderMarkdown(report);
+    assertEquals(md.includes("### Prompt-cache telemetry (turn-level · source: turn_cache_facts)"), true);
+    assertEquals(md.includes("### Telemetry coverage regressions"), true);
+    assertEquals(md.includes("### Shadow idle-gap diagnostic curves (turn-level, advisory)"), true);
+    assertEquals(formatLogfmt(report).includes("telemetry_coverage_drops=1"), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("periodic audit keeps incomplete backfill coverage drops provisional and out of action_needed", async () => {
+  const root = mkdtempSync(join(tmpdir(), "cowboy-periodic-cache-incomplete-"));
+  try {
+    mkdirSync(join(root, "models/observations"), { recursive: true });
+    mkdirSync(join(root, "models/field"), { recursive: true });
+    mkdirSync(join(root, "plugins/codex"), { recursive: true });
+    const methodologyText = `schema = 1
+efforts = ["max"]
+[provenance]
+independent = 1.0
+third_party = 0.7
+vendor = 0.25
+internal = 1.0
+[freshness]
+half_life_days = 60
+provisional_days = 14
+[evidence]
+min_lineages = 2
+min_workload_coverage = 0.7
+high_confidence_lineages = 3
+high_confidence_max_age_days = 45
+saturation_fraction = 0.9
+min_spread = 0.03
+uncertainty_floor = 0.05
+[tasks.code_review]
+benchmarks = ["rb"]
+[workloads.session_default]
+weights = { code_review = 1.0 }
+cost_metric = "tokens_per_task"
+noninferiority_margin = 0.05
+value_floor = 0.5
+tie_margin = 0.03
+`;
+    const targetsText = `schema = 1
+[[targets]]
+id = "gpt-6.2-sol:max"
+vendor = "openai"
+model = "gpt-6.2-sol"
+effort = "max"
+provider = "codex"
+preset = "sol-6-2-max"
+values = { model = "gpt-6.2-sol", reasoning_effort = "max" }
+`;
+    writeFileSync(join(root, "models/methodology.toml"), methodologyText);
+    writeFileSync(join(root, "models/targets.toml"), targetsText);
+    writeFileSync(join(root, "models/observations/2026-11.jsonl"), "");
+    const m = Bun.TOML.parse(methodologyText) as Parameters<typeof buildCatalog>[0];
+    const t = (Bun.TOML.parse(targetsText) as { targets: Parameters<typeof buildCatalog>[1] })
+      .targets;
+    const empty = { rows: [], count: 0, digest: digest(""), present: false };
+    const cat = buildCatalog(m, t, empty, empty, "2026-11-27", {
+      methodology: digest(methodologyText),
+      targets: digest(targetsText),
+    });
+    writeFileSync(join(root, "models/catalog.json"), JSON.stringify(cat));
+    writeFileSync(
+      join(root, "plugins/codex/provider.json"),
+      JSON.stringify({
+        id: "codex",
+        version: "3.6.32",
+        configuration_presets: [
+          {
+            id: "sol-6-2-max",
+            is_default: true,
+            values: { model: "gpt-6.2-sol", reasoning_effort: "max" },
+          },
+        ],
+        runtime: { dependencies: [] },
+      }),
+    );
+
+    const dbPath = join(root, "cowboy.sqlite3");
+    const db = new Database(dbPath);
+    db.exec(`CREATE TABLE managed_agent_calls (state TEXT, document TEXT, request_document TEXT);
+      CREATE TABLE sessions (id TEXT PRIMARY KEY, provider TEXT, provider_version TEXT, last_usage TEXT, config_preferences TEXT);
+      CREATE TABLE events (session_id TEXT, seq INTEGER, ts_ms INTEGER, payload TEXT);
+      CREATE TABLE turn_cache_facts (session_id TEXT, turn_end_seq INTEGER, occurred_at_ms INTEGER);
+      CREATE TABLE turn_cache_backfill_state (slot INTEGER PRIMARY KEY, cursor_session_id TEXT, cursor_seq INTEGER, completed_at_ms INTEGER);
+      INSERT INTO turn_cache_backfill_state VALUES (1, '', -1, NULL);`);
+    const nowMs = Date.parse("2026-11-27T00:00:00Z");
+    db.query("INSERT INTO sessions VALUES (?,?,?,?,?)").run("s1", "codex", "3.6.32", null, null);
+    const ins = db.query("INSERT INTO events VALUES (?,?,?,?)");
+    for (let i = 0; i < 12; i++) {
+      ins.run("s1", i + 1, nowMs - 10 * 86_400_000 + i * 1000, JSON.stringify({ kind: "turn_end", stop_reason: "EndTurn", usage: { input_tokens: 1000, cached_input_tokens: 800, uncached_input_tokens: 200 } }));
+      ins.run("s1", 100 + i, nowMs - 2 * 86_400_000 + i * 1000, JSON.stringify({ kind: "turn_end", stop_reason: "EndTurn", usage: { input_tokens: 1000 } }));
+    }
+    db.close();
+
+    const report = await runPeriodicAudit({
+      repoRoot: root,
+      database: dbPath,
+      asOf: "2026-11-27",
+      nowMs,
+      days: 14,
+      localObservations: join(root, "missing-local"),
+    });
+    assertEquals(report.field_telemetry.available, true);
+    if (report.field_telemetry.available) {
+      assertEquals(report.field_telemetry.cache_telemetry.projection_complete, false);
+      assertEquals(report.field_telemetry.cache_telemetry.coverage_regressions.length > 0, true);
+    }
+    assertEquals(
+      report.reasons.some((r) => r.startsWith("telemetry-coverage-drop:")),
+      false,
+    );
+    assertEquals(
+      renderMarkdown(report).includes("### Telemetry coverage regressions (provisional — backfill incomplete)"),
+      true,
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

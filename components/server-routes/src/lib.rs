@@ -62,6 +62,10 @@ pub fn provider_routes(state: &AppState) -> Router<Arc<AppState>> {
             cowboy_server_accounts::server::routes::accounts_routes()
                 .with_state(Arc::clone(&state.accounts)),
         )
+        .route(
+            "/api/provider-accounts/{account_id}/cache-metrics",
+            get(cache_metrics_api::account_cache_metrics),
+        )
         .route("/api/usage", get(api_usage).post(api_usage_refresh))
         .route("/api/usage/executors", get(api_usage_executors))
         .route(
@@ -338,6 +342,10 @@ pub fn session_routes(state: &Arc<AppState>) -> Router<Arc<AppState>> {
         .route(
             "/api/sessions/{id}/cache-protection",
             get(api_session_cache_protection),
+        )
+        .route(
+            "/api/sessions/{id}/cache-metrics",
+            get(cache_metrics_api::session_cache_metrics),
         )
         .route(
             "/api/sessions/{id}/context-rollover",

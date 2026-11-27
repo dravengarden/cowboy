@@ -802,6 +802,7 @@ pub async fn handle_machine_ws(
         challenge_id,
         protocol,
         connection_mode,
+        plugins_reported,
     }) = machine_handshake(&mut socket, &state).await
     else {
         return;
@@ -917,15 +918,17 @@ pub async fn handle_machine_ws(
         },
     );
     state.machine_snapshots.publish().await;
-    state.machine_control.record_remote(
-        &connection,
-        crate::machine_protocol::MachineEvent::PluginInventory {
-            plugins: hello.plugins.clone(),
-            observed_at_ms: now_ms(),
-        },
-    );
+    if plugins_reported {
+        state.machine_control.record_remote(
+            &connection,
+            crate::machine_protocol::MachineEvent::PluginInventory {
+                plugins: hello.plugins.clone(),
+                observed_at_ms: now_ms(),
+            },
+        );
+    }
     spawn_machine_reconnect_sync(&state, &hello, &connection);
-    let mut inventory = MachineInventory::from_hello(&hello);
+    let mut inventory = MachineInventory::from_hello(&hello, plugins_reported);
     let link = MachineLink {
         state: &state,
         store: &store,

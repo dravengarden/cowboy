@@ -9,6 +9,7 @@ import {
 } from "./sessionOverview";
 import { useStoreSelector } from "./store";
 import { useSubscriptionAccounts } from "./subscriptionAccounts";
+import { SessionCacheMetricsSection } from "./SessionCacheMetricsSection";
 
 // A label/value row used by both info surfaces.
 export function InfoRow({ k, v }: { k: string; v: string }): React.JSX.Element {
@@ -53,6 +54,8 @@ export function SessionOverviewRows({
           ))}
         </Fragment>
       ))}
+      <Divider />
+      <SessionCacheMetricsSection sessionId={info.id} compact />
     </Stack>
   );
 }

@@ -72,6 +72,7 @@ mod sqlite;
 pub mod task_notifications;
 mod telemetry_bindings;
 pub mod transcript_anchors;
+pub mod turn_cache_facts;
 mod usage_execution;
 
 use sqlite::SqliteStorage;
@@ -3309,6 +3310,9 @@ impl PostgresStorage {
                UNION ALL \
                SELECT (substring(key FROM 19))::bigint AS n FROM settings \
                WHERE key ~ '^session_fork:sess-[0-9]+$' \
+               UNION ALL \
+               SELECT (substring(session_id FROM 6))::bigint AS n FROM turn_cache_facts \
+               WHERE session_id ~ '^sess-[0-9]+$' \
              ) AS ids",
         )
         .fetch_one(&self.pool)
@@ -6049,6 +6053,7 @@ impl PostgresStorage {
                 .context("INSERT notification intent")?;
         }
         managed_calls::project_events_pg(&mut tx, events, created_at_ms).await?;
+        turn_cache_facts::project_events_pg(&mut tx, events, created_at_ms).await?;
         tx.commit().await.context("commit event batch")?;
         Ok(())
     }

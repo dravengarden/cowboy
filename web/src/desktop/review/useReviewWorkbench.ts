@@ -157,22 +157,22 @@ export function useReviewWorkbench(active: boolean) {
   const [tabs, updateTabs] = useReviewTabsState(context.stateKey);
   const document = activeReviewDocument(tabs);
   const diffContext = useReviewDiffContext();
-  const load = useReviewDocumentText(target?.sessionId, document, settings, changes.dataRevision, diffContext);
-  const editor = useRef<EditorView | null>(null);
-  const positions = useRef(new Map<string, number>());
-  // `]d`/`[d` and `gO` belong to the Inspector, which the view owns.
-  const inspectorAction = useRef<((action: ReviewDocumentAction, view: EditorView) => void) | undefined>(undefined);
-  // `K` and `gd`… belong to the language layer, which the view owns.
-  const languageAction = useRef<((action: ReviewDocumentAction, view: EditorView) => void) | undefined>(undefined);
-  const [cursorLine, setCursorLine] = useState(1);
-  const ready = load?.state === "ready" ? load.value : undefined;
-  const split = useSplitDiff(document, ready);
-  const reviewed = useReviewedMarks(context.synced.progress, changes.queue);
+  const [docRetry, setDocRetry] = useState(0);
   const pull = document?.kind === "pr"
     ? pullFile(document.repositoryId, document.number, document.revision, document.path)
     : undefined;
   const openKey = pull ? remoteFileKey(pull.binding, pull.file.path) : documentEntryKey(document);
   const openEntry = changes.queue.find((entry) => entryKey(entry) === openKey);
+  const load = useReviewDocumentText(target?.sessionId, document, settings, changes.dataRevision, diffContext, openEntry?.change.fingerprint, docRetry);
+  const editor = useRef<EditorView | null>(null);
+  const positions = useRef(new Map<string, number>());
+  const inspectorAction = useRef<((action: ReviewDocumentAction, view: EditorView) => void) | undefined>(undefined);
+  const languageAction = useRef<((action: ReviewDocumentAction, view: EditorView) => void) | undefined>(undefined);
+  const commentAction = useRef<((view: EditorView) => void) | undefined>(undefined);
+  const [cursorLine, setCursorLine] = useState(1);
+  const ready = load?.state === "ready" ? load.value : undefined;
+  const split = useSplitDiff(document, ready);
+  const reviewed = useReviewedMarks(context.synced.progress, changes.queue);
   const openMark = pull ? remoteFileMark(pull.file) : openEntry?.change.fingerprint ?? ready?.revision;
   const root = target && !target.own ? target.cwd : undefined;
 
@@ -180,14 +180,18 @@ export function useReviewWorkbench(active: boolean) {
     requestAnimationFrame(() => workspace.focusRegion(REVIEW_DOCUMENT_REGION));
   }, [workspace]);
   const { open, openSource, placeSource, openCommit, openPull } = useDocumentOpeners(updateTabs, focusDocument, positions);
+  const setMark = useCallback((key: string, mark: string): void => {
+    if (context.stateKey) mutateMobileReview(context.stateKey, "markReviewed", { key, revision: mark });
+  }, [context.stateKey]);
+  const clearMark = useCallback((key: string): void => {
+    if (context.stateKey) mutateMobileReview(context.stateKey, "markReviewed", { key, revision: null });
+  }, [context.stateKey]);
   const markEntry = useCallback((key: string, mark: string | undefined): void => {
-    if (!context.stateKey || !mark) {
-      notify("Open the diff to mark it reviewed", "info");
-      return;
-    }
+    if (!context.stateKey || !mark) { notify("Open the diff to mark it reviewed", "info"); return; }
     const done = revisionMatches(context.synced.progress, key, mark);
     mutateMobileReview(context.stateKey, "markReviewed", { key, revision: done ? null : mark });
   }, [context.stateKey, context.synced.progress]);
+  const retryDocument = useCallback((): void => setDocRetry((n) => n + 1), []);
   const send = useSendRemark(context.agentSessionId, document, ready, root, split, editor);
 
   const onAction = useCallback((action: ReviewDocumentAction, view: EditorView): void => {
@@ -226,6 +230,9 @@ export function useReviewWorkbench(active: boolean) {
       case "send":
         send(false);
         return;
+      case "comment":
+        commentAction.current?.(view);
+        return;
       case "problem":
       case "outline":
         inspectorAction.current?.(action, view);
@@ -257,6 +264,7 @@ export function useReviewWorkbench(active: boolean) {
     editor,
     inspectorAction,
     languageAction,
+    commentAction,
     cursorLine,
     reviewed,
     openKey,
@@ -274,6 +282,9 @@ export function useReviewWorkbench(active: boolean) {
     openPull,
     markOpen: () => openKey && markEntry(openKey, openMark),
     markEntry,
+    setMark,
+    clearMark,
+    retryDocument,
     send,
     onAction,
     onCursorLine,

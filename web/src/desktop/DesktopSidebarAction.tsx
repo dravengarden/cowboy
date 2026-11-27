@@ -90,7 +90,10 @@ export const DesktopSidebarAction = forwardRef<HTMLButtonElement, {
               gap: desktopSize(3),
               flexShrink: 0,
               borderRadius: `${DESKTOP_INSET_RADIUS}px`,
-              color: active ? "primary.main" : "text.secondary",
+              color: active ? "text.primary" : "text.secondary",
+              bgcolor: active
+                ? (theme) => alpha(theme.palette.primary.main, theme.palette.mode === "dark" ? 0.18 : 0.12)
+                : "transparent",
               border: 1,
               borderColor: "transparent",
               WebkitAppRegion: "no-drag",
@@ -99,11 +102,11 @@ export const DesktopSidebarAction = forwardRef<HTMLButtonElement, {
                 fontSize: desktopSize(16),
                 width: desktopSize(16),
                 height: desktopSize(16),
+                ...(active ? { color: "primary.main" } : {}),
               },
               "&:hover": {
-                color: "primary.main",
-                borderColor: (theme) => alpha(theme.palette.primary.main, 0.28),
-                bgcolor: (theme) => alpha(theme.palette.primary.main, 0.06),
+                color: "text.primary",
+                bgcolor: (theme) => alpha(theme.palette.primary.main, active ? 0.16 : 0.07),
               },
               "&.Mui-disabled": { color: "text.disabled" },
               "&.Mui-focusVisible": {
@@ -124,22 +127,7 @@ export const DesktopSidebarAction = forwardRef<HTMLButtonElement, {
               {...(disabled ? { availability: "inactive" as const } : {})}
             />
           </span>
-          {active && (
-            // VS Code's active-view underline, on the bar's bottom edge: the
-            // 24-unit capsule sits centred in the 44-unit bar.
-            <span
-              aria-hidden
-              style={{
-                position: "absolute",
-                left: 4,
-                right: 4,
-                bottom: `calc(-1 * ${desktopSize(10)} - 1px)`,
-                height: 2,
-                borderRadius: 1,
-                background: "currentColor",
-              }}
-            />
-          )}
+
         </ButtonBase>
       </span>
     </HintTooltip>
