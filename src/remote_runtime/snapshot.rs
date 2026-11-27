@@ -219,14 +219,37 @@ pub(super) struct SightingActivity {
     pending_prompt_count: u64,
     native_cycle_active: bool,
     uncertain_effect: Option<crate::runtime_wire::UncertainEffect>,
-    /// True only when this epoch's snapshot passed `current_context` and
-    /// `matches_runtime_snapshot_binding`, so unverified / mismatched stale
-    /// workers can never persist uncertain effects into the session gate.
-    binding_verified: bool,
+    /// Retained launch identity verified live against Hub on every write (R4-H4).
+    launch: Option<crate::runtime_wire::StartSession>,
+    /// Retained native session identity verified live against Hub on every write (R4-H4).
+    agent_session_id: Option<String>,
+}
+
+/// Verified conversation + execution identity scoping uncertain-effect writes,
+/// in-memory retention, and pending retirement retries (R4-H3, R4-H4, R4-H5).
+#[derive(Debug, Clone)]
+pub(super) struct UncertainEffectContext {
+    pub(super) worker_epoch: String,
+    pub(super) agent_session_id: Option<String>,
+    pub(super) launch: Option<crate::runtime_wire::StartSession>,
+    pub(super) context_generation: u64,
+    pub(super) durable_context_epoch: u64,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct RetainedUncertainEffect {
+    pub(super) context: UncertainEffectContext,
+    pub(super) effect: crate::runtime_wire::UncertainEffect,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct PendingRetirement {
+    pub(super) context: UncertainEffectContext,
+    pub(super) effect: crate::runtime_wire::UncertainEffect,
 }
 
 impl SightingActivity {
-    pub(super) fn from_snapshot_verified(worker: &WorkerSnapshot, binding_verified: bool) -> Self {
+    pub(super) fn from_snapshot(worker: &WorkerSnapshot) -> Self {
         Self {
             state: worker.state,
             worker_epoch: worker.worker_epoch.clone(),
@@ -238,12 +261,9 @@ impl SightingActivity {
             pending_prompt_count: worker.pending_prompt_count,
             native_cycle_active: worker.native_cycle_active || worker.native_cycle_id.is_some(),
             uncertain_effect: worker.uncertain_effect.clone(),
-            binding_verified,
+            launch: worker.launch.clone(),
+            agent_session_id: worker.agent_session_id.clone(),
         }
-    }
-
-    pub(super) fn from_snapshot(worker: &WorkerSnapshot) -> Self {
-        Self::from_snapshot_verified(worker, true)
     }
 
     fn to_sighting(&self, hub: &crate::core::Hub, session_id: &str) -> CrashedWorkerSighting {
@@ -274,7 +294,7 @@ impl SightingActivity {
 }
 
 const RETIRED_EPOCH_TTL: std::time::Duration = std::time::Duration::from_secs(600);
-const MAX_RETIRED_EPOCHS: usize = 512;
+const MAX_RETIRED_EPOCHS: usize = 4096;
 
 fn binding_verified_for_uncertain_effect(shared: &Shared, worker: &WorkerSnapshot) -> bool {
     worker.has_connected_owner()
@@ -283,55 +303,99 @@ fn binding_verified_for_uncertain_effect(shared: &Shared, worker: &WorkerSnapsho
         && !shared.hub.is_reconciling_runtime_placeholder(worker)
 }
 
-/// Live verification for an epoch-only event: re-checks `classify_runtime_epoch`
-/// NOW (so Clear fences take effect immediately) AND requires a verified
-/// snapshot binding for that exact epoch (R3-H1).
-pub(super) fn epoch_binding_verified_now(
+fn context_for_verified_snapshot(
+    shared: &Shared,
+    worker: &WorkerSnapshot,
+) -> Option<UncertainEffectContext> {
+    let _proj = shared.hub.runtime_projection_guard();
+    if !binding_verified_for_uncertain_effect(shared, worker) {
+        return None;
+    }
+    Some(UncertainEffectContext {
+        worker_epoch: worker.worker_epoch.clone(),
+        agent_session_id: worker.agent_session_id.clone(),
+        launch: worker.launch.clone(),
+        context_generation: shared.hub.runtime_context_generation(&worker.session_id),
+        durable_context_epoch: shared
+            .hub
+            .uncertain_effect_context_epoch(&worker.session_id),
+    })
+}
+
+fn live_context_verified(
+    hub: &crate::core::Hub,
+    session_id: &str,
+    ctx: &UncertainEffectContext,
+) -> bool {
+    hub.runtime_context_generation(session_id) == ctx.context_generation
+        && hub.uncertain_effect_context_epoch(session_id) == ctx.durable_context_epoch
+        && hub.classify_runtime_epoch(
+            session_id,
+            &ctx.worker_epoch,
+            ctx.agent_session_id.as_deref(),
+        ) == crate::core::RuntimeEpoch::Current
+        && hub.matches_runtime_launch_binding(session_id, ctx.launch.as_ref())
+}
+
+/// Live verification for an epoch-only event or drain retirement: re-checks
+/// `classify_runtime_epoch` and live `matches_runtime_launch_binding` against
+/// `Hub` NOW using retained launch identity (never a stale boolean, R4-H4).
+pub(super) fn verified_context_for_epoch_now(
     shared: &Shared,
     session_id: &str,
     worker_epoch: &str,
-) -> bool {
-    if shared
-        .hub
-        .classify_runtime_epoch(session_id, worker_epoch, None)
-        != crate::core::RuntimeEpoch::Current
-    {
-        return false;
-    }
+) -> Option<UncertainEffectContext> {
+    let _proj = shared.hub.runtime_projection_guard();
     if let Some(worker) = shared.workers.lock().get(session_id)
         && worker.worker_epoch == worker_epoch
     {
-        return binding_verified_for_uncertain_effect(shared, worker);
+        if !binding_verified_for_uncertain_effect(shared, worker) {
+            return None;
+        }
+        return Some(UncertainEffectContext {
+            worker_epoch: worker.worker_epoch.clone(),
+            agent_session_id: worker.agent_session_id.clone(),
+            launch: worker.launch.clone(),
+            context_generation: shared.hub.runtime_context_generation(session_id),
+            durable_context_epoch: shared.hub.uncertain_effect_context_epoch(session_id),
+        });
     }
-    shared
+    let entry = shared
         .crashed_worker_sightings
         .lock()
         .get(session_id)
-        .is_some_and(|entry| entry.worker_epoch == worker_epoch && entry.binding_verified)
+        .filter(|entry| entry.worker_epoch == worker_epoch)
+        .cloned()?;
+    let ctx = UncertainEffectContext {
+        worker_epoch: entry.worker_epoch,
+        agent_session_id: entry.agent_session_id,
+        launch: entry.launch,
+        context_generation: shared.hub.runtime_context_generation(session_id),
+        durable_context_epoch: shared.hub.uncertain_effect_context_epoch(session_id),
+    };
+    live_context_verified(&shared.hub, session_id, &ctx).then_some(ctx)
 }
 
 fn is_retired_crashed_epoch(shared: &Shared, session_id: &str, worker_epoch: &str) -> bool {
     let mut retired = shared.retired_crashed_epochs.lock();
     let now = std::time::Instant::now();
-    retired.retain(|_, (_, at)| now.saturating_duration_since(*at) < RETIRED_EPOCH_TTL);
-    retired
-        .get(session_id)
-        .is_some_and(|(epoch, _)| epoch == worker_epoch)
+    retired.retain(|_, at| now.saturating_duration_since(*at) < RETIRED_EPOCH_TTL);
+    retired.contains_key(&(session_id.to_owned(), worker_epoch.to_owned()))
 }
 
 fn record_retired_crashed_epoch(shared: &Shared, session_id: &str, worker_epoch: &str) {
     let mut retired = shared.retired_crashed_epochs.lock();
     let now = std::time::Instant::now();
-    retired.retain(|_, (_, at)| now.saturating_duration_since(*at) < RETIRED_EPOCH_TTL);
+    retired.retain(|_, at| now.saturating_duration_since(*at) < RETIRED_EPOCH_TTL);
     if retired.len() >= MAX_RETIRED_EPOCHS
         && let Some(oldest) = retired
             .iter()
-            .min_by_key(|(_, (_, at))| *at)
+            .min_by_key(|(_, at)| *at)
             .map(|(k, _)| k.clone())
     {
         retired.remove(&oldest);
     }
-    retired.insert(session_id.to_owned(), (worker_epoch.to_owned(), now));
+    retired.insert((session_id.to_owned(), worker_epoch.to_owned()), now);
 }
 
 pub(super) fn clear_draining_crashed_epoch_if_matches(
@@ -354,9 +418,23 @@ pub(super) fn seed_crashed_sightings(
         .map(|worker| {
             (
                 worker.session_id.clone(),
-                SightingActivity::from_snapshot_verified(worker, true),
+                SightingActivity::from_snapshot(worker),
             )
         })
+        .collect()
+}
+
+pub(super) fn seed_draining_crashed_epochs(
+    workers: &[WorkerSnapshot],
+) -> std::collections::HashMap<String, String> {
+    workers
+        .iter()
+        .filter(|worker| {
+            worker.has_connected_owner()
+                && worker.state == WorkerState::Crashed
+                && worker.drain_requested
+        })
+        .map(|worker| (worker.session_id.clone(), worker.worker_epoch.clone()))
         .collect()
 }
 
@@ -381,19 +459,10 @@ pub(super) fn observe_crashed_sighting(shared: &Shared, worker: &WorkerSnapshot)
             return;
         }
     }
-    let verified = binding_verified_for_uncertain_effect(shared, worker);
     let mut sightings = shared.crashed_worker_sightings.lock();
     if worker.has_connected_owner() {
-        // A newer epoch clears any older retired/draining epoch markers.
-        {
-            let mut retired = shared.retired_crashed_epochs.lock();
-            if retired
-                .get(&worker.session_id)
-                .is_some_and(|(e, _)| e != &worker.worker_epoch)
-            {
-                retired.remove(&worker.session_id);
-            }
-        }
+        // Never erase retired epoch tombstones on successor snapshots (R4-M5);
+        // only update the active draining marker for the current connected epoch.
         {
             let mut draining = shared.draining_crashed_epochs.lock();
             if draining
@@ -408,10 +477,14 @@ pub(super) fn observe_crashed_sighting(shared: &Shared, worker: &WorkerSnapshot)
         }
         sightings.insert(
             worker.session_id.clone(),
-            SightingActivity::from_snapshot_verified(worker, verified),
+            SightingActivity::from_snapshot(worker),
         );
     } else {
         sightings.remove(&worker.session_id);
+        shared
+            .draining_crashed_epochs
+            .lock()
+            .remove(&worker.session_id);
     }
 }
 
@@ -492,10 +565,9 @@ pub(super) fn observe_crashed_event(
             && worker.worker_epoch == worker_epoch
             && worker.has_connected_owner()
         {
-            let verified = binding_verified_for_uncertain_effect(shared, &worker);
             sightings.insert(
                 session_id.to_owned(),
-                SightingActivity::from_snapshot_verified(&worker, verified),
+                SightingActivity::from_snapshot(&worker),
             );
         } else {
             return;
@@ -542,9 +614,57 @@ pub(super) fn observe_crashed_event(
 /// `session_uncertain_effect_ack:<session>` (CAS against concurrent owner
 /// acknowledgements or reconciler writes) and update Hub's in-memory cache
 /// monotonically WITHOUT enqueuing an unconditional `StoreWrite::PutSetting`.
+fn retain_uncertain_effect_in_memory(
+    shared: &Shared,
+    session_id: &str,
+    key: &str,
+    context: &UncertainEffectContext,
+    method: &str,
+    sequence: u64,
+) -> bool {
+    let _proj = shared.hub.runtime_projection_guard();
+    if !live_context_verified(&shared.hub, session_id, context) {
+        return false;
+    }
+    let mut retained = shared.retained_uncertain_effects.lock();
+    let mut slot = retained
+        .get(session_id)
+        .filter(|existing| {
+            existing.context.context_generation == context.context_generation
+                && existing.context.durable_context_epoch == context.durable_context_epoch
+                && existing.context.worker_epoch == context.worker_epoch
+        })
+        .map(|existing| existing.effect.clone());
+    crate::runtime_wire::merge_uncertain_effect(
+        &mut slot,
+        crate::runtime_wire::UncertainEffect {
+            method: method.to_owned(),
+            sequence,
+        },
+    );
+    if let Some(updated) = slot {
+        retained.insert(
+            session_id.to_owned(),
+            RetainedUncertainEffect {
+                context: context.clone(),
+                effect: updated,
+            },
+        );
+    }
+    shared
+        .hub
+        .setting(key)
+        .filter(|value| {
+            value["context_epoch"].as_u64().unwrap_or(0) == context.durable_context_epoch
+        })
+        .and_then(|value| value.get("observed").and_then(serde_json::Value::as_u64))
+        .is_none_or(|observed| observed < sequence)
+}
+
 pub(super) async fn persist_observed_uncertain_effect(
     shared: &Shared,
     session_id: &str,
+    context: &UncertainEffectContext,
     effect: crate::runtime_wire::UncertainEffect,
 ) -> anyhow::Result<()> {
     let sequence = effect.sequence.max(1);
@@ -553,26 +673,14 @@ pub(super) async fn persist_observed_uncertain_effect(
         crate::core::settings_keys::SESSION_UNCERTAIN_EFFECT_ACK_PREFIX,
         session_id
     );
-    {
-        let mut retained = shared.retained_uncertain_effects.lock();
-        let merged = retained.entry(session_id.to_owned()).or_insert_with(|| {
-            crate::runtime_wire::UncertainEffect {
-                method: effect.method.clone(),
-                sequence,
-            }
-        });
-        let mut slot = Some(merged.clone());
-        crate::runtime_wire::merge_uncertain_effect(&mut slot, effect.clone());
-        if let Some(updated) = slot {
-            *merged = updated;
-        }
-    }
-    if shared
-        .hub
-        .setting(&key)
-        .and_then(|value| value.get("observed").and_then(serde_json::Value::as_u64))
-        .is_some_and(|observed| observed >= sequence)
-    {
+    if !retain_uncertain_effect_in_memory(
+        shared,
+        session_id,
+        &key,
+        context,
+        &effect.method,
+        sequence,
+    ) {
         return Ok(());
     }
     let store = shared
@@ -586,14 +694,18 @@ pub(super) async fn persist_observed_uncertain_effect(
             u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
         });
     let Some(store) = store else {
-        shared.hub.merge_cached_uncertain_effect_setting(
-            key,
-            serde_json::json!({
-                "observed": sequence,
-                "method": effect.method,
-                "observed_at_ms": now_ms,
-            }),
-        );
+        let _proj = shared.hub.runtime_projection_guard();
+        if live_context_verified(&shared.hub, session_id, context) {
+            shared.hub.merge_cached_uncertain_effect_setting(
+                key,
+                serde_json::json!({
+                    "context_epoch": context.durable_context_epoch,
+                    "observed": sequence,
+                    "method": effect.method,
+                    "observed_at_ms": now_ms,
+                }),
+            );
+        }
         return Ok(());
     };
     for _ in 0..8 {
@@ -604,13 +716,31 @@ pub(super) async fn persist_observed_uncertain_effect(
             .into_iter()
             .find(|(existing_key, _)| existing_key == &key)
             .map(|(_, value)| value);
-        let mut record = prev.clone().unwrap_or_else(|| serde_json::json!({}));
-        if record["observed"].as_u64().unwrap_or(0) >= sequence {
-            shared
-                .hub
-                .merge_cached_uncertain_effect_setting(key, record);
+        let prev_context_epoch = prev
+            .as_ref()
+            .and_then(|v| v["context_epoch"].as_u64())
+            .unwrap_or(0);
+        if prev_context_epoch != context.durable_context_epoch {
+            // Clear committed and advanced the durable context epoch; abandon stale write (R4-H5).
             return Ok(());
         }
+        {
+            let _proj = shared.hub.runtime_projection_guard();
+            if !live_context_verified(&shared.hub, session_id, context) {
+                return Ok(());
+            }
+        }
+        let mut record = prev.clone().unwrap_or_else(|| serde_json::json!({}));
+        if record["observed"].as_u64().unwrap_or(0) >= sequence {
+            let _proj = shared.hub.runtime_projection_guard();
+            if live_context_verified(&shared.hub, session_id, context) {
+                shared
+                    .hub
+                    .merge_cached_uncertain_effect_setting(key, record);
+            }
+            return Ok(());
+        }
+        record["context_epoch"] = serde_json::json!(context.durable_context_epoch);
         record["observed"] = serde_json::json!(sequence);
         record["method"] = serde_json::json!(effect.method);
         record["observed_at_ms"] = serde_json::json!(now_ms);
@@ -621,9 +751,12 @@ pub(super) async fn persist_observed_uncertain_effect(
                 anyhow::anyhow!("persisting uncertain effect setting failed: {error}")
             })?
         {
-            shared
-                .hub
-                .merge_cached_uncertain_effect_setting(key, record);
+            let _proj = shared.hub.runtime_projection_guard();
+            if live_context_verified(&shared.hub, session_id, context) {
+                shared
+                    .hub
+                    .merge_cached_uncertain_effect_setting(key, record);
+            }
             return Ok(());
         }
     }
@@ -633,8 +766,7 @@ pub(super) async fn persist_observed_uncertain_effect(
 }
 
 /// Persist an uncertain effect from a streamed event ONLY when live context +
-/// launch-binding verification passes (never trusting `admitted` alone on
-/// default sessions after Clear, R3-H1).
+/// launch-binding verification passes (R3-H1, R4-H4, R4-H5).
 pub(super) async fn persist_event_uncertain_effect(
     shared: &Shared,
     session_id: &str,
@@ -648,18 +780,18 @@ pub(super) async fn persist_event_uncertain_effect(
     let Some(effect) = crate::runtime_wire::uncertain_effect(update) else {
         return Ok(());
     };
-    if !epoch_binding_verified_now(shared, session_id, worker_epoch) {
+    let Some(context) = verified_context_for_epoch_now(shared, session_id, worker_epoch) else {
         return Ok(());
-    }
-    persist_observed_uncertain_effect(shared, session_id, effect).await
+    };
+    persist_observed_uncertain_effect(shared, session_id, &context, effect).await
 }
 
 pub(super) async fn observe_and_persist_snapshot(shared: &Shared, worker: &WorkerSnapshot) {
     observe_crashed_sighting(shared, worker);
     if let Some(effect) = worker.uncertain_effect.clone()
-        && binding_verified_for_uncertain_effect(shared, worker)
+        && let Some(context) = context_for_verified_snapshot(shared, worker)
         && let Err(error) =
-            persist_observed_uncertain_effect(shared, &worker.session_id, effect).await
+            persist_observed_uncertain_effect(shared, &worker.session_id, &context, effect).await
     {
         tracing::warn!(
             session = %worker.session_id,
@@ -697,33 +829,34 @@ pub(super) async fn retire_crashed_worker_drained(
     session_id: &str,
     worker_epoch: &str,
 ) {
-    let effect_to_persist = {
+    let to_persist = {
         let fence = shared.projection_fence.lock();
         if *fence {
             return;
         }
         let mut merged: Option<crate::runtime_wire::UncertainEffect> = None;
-        if epoch_binding_verified_now(shared, session_id, worker_epoch) {
+        let verified_ctx = verified_context_for_epoch_now(shared, session_id, worker_epoch);
+        if let Some(ctx) = verified_ctx {
             if let Some(entry) = shared.crashed_worker_sightings.lock().get(session_id)
                 && entry.worker_epoch == worker_epoch
-                && entry.binding_verified
                 && let Some(effect) = entry.uncertain_effect.clone()
             {
                 crate::runtime_wire::merge_uncertain_effect(&mut merged, effect);
             }
             if let Some(worker) = shared.workers.lock().get(session_id)
                 && worker.worker_epoch == worker_epoch
-                && binding_verified_for_uncertain_effect(shared, worker)
                 && let Some(effect) = worker.uncertain_effect.clone()
             {
                 crate::runtime_wire::merge_uncertain_effect(&mut merged, effect);
             }
+            merged.map(|effect| (ctx, effect))
+        } else {
+            None
         }
-        merged
     };
-    if let Some(effect) = effect_to_persist
+    if let Some((ctx, effect)) = to_persist
         && let Err(error) =
-            persist_observed_uncertain_effect(shared, session_id, effect.clone()).await
+            persist_observed_uncertain_effect(shared, session_id, &ctx, effect.clone()).await
     {
         tracing::error!(
             session = session_id,
@@ -731,7 +864,7 @@ pub(super) async fn retire_crashed_worker_drained(
             %error,
             "deferring crashed worker retirement and scheduling durable persistence retry"
         );
-        schedule_pending_retirement_retry(shared, session_id, worker_epoch, effect);
+        schedule_pending_retirement_retry(shared, session_id, ctx, effect);
         return;
     }
     finalize_crashed_worker_retirement(shared, session_id, worker_epoch);
@@ -740,21 +873,28 @@ pub(super) async fn retire_crashed_worker_drained(
 fn schedule_pending_retirement_retry(
     shared: &std::sync::Arc<Shared>,
     session_id: &str,
-    worker_epoch: &str,
+    context: UncertainEffectContext,
     effect: crate::runtime_wire::UncertainEffect,
 ) {
+    let worker_epoch = context.worker_epoch.clone();
     let should_spawn = {
         let mut pending = shared.pending_retirements.lock();
         let already = pending
             .get(session_id)
-            .is_some_and(|(epoch, _)| epoch == worker_epoch);
+            .is_some_and(|entry| entry.context.worker_epoch == worker_epoch);
         let mut merged = pending
             .get(session_id)
-            .filter(|(epoch, _)| epoch == worker_epoch)
-            .map(|(_, existing)| existing.clone());
+            .filter(|entry| entry.context.worker_epoch == worker_epoch)
+            .map(|entry| entry.effect.clone());
         crate::runtime_wire::merge_uncertain_effect(&mut merged, effect);
         if let Some(merged) = merged {
-            pending.insert(session_id.to_owned(), (worker_epoch.to_owned(), merged));
+            pending.insert(
+                session_id.to_owned(),
+                PendingRetirement {
+                    context,
+                    effect: merged,
+                },
+            );
         }
         !already
     };
@@ -763,7 +903,6 @@ fn schedule_pending_retirement_retry(
     }
     let shared = std::sync::Arc::clone(shared);
     let session_id = session_id.to_owned();
-    let worker_epoch = worker_epoch.to_owned();
     tokio::spawn(async move {
         let mut attempt: u32 = 0;
         loop {
@@ -774,17 +913,23 @@ fn schedule_pending_retirement_retry(
                 let pending = shared.pending_retirements.lock();
                 pending
                     .get(&session_id)
-                    .filter(|(epoch, _)| epoch == &worker_epoch)
-                    .map(|(_, eff)| eff.clone())
+                    .filter(|entry| entry.context.worker_epoch == worker_epoch)
+                    .cloned()
             };
-            let Some(eff) = current else {
+            let Some(entry) = current else {
                 return;
             };
-            if !epoch_binding_verified_now(&shared, &session_id, &worker_epoch) {
+            // Validate against live Hub session context & launch binding using
+            // the retained identity (independent of worker/sighting caches, R4-H3).
+            let still_valid = {
+                let _proj = shared.hub.runtime_projection_guard();
+                live_context_verified(&shared.hub, &session_id, &entry.context)
+            };
+            if !still_valid {
                 let mut pending = shared.pending_retirements.lock();
                 if pending
                     .get(&session_id)
-                    .is_some_and(|(ep, _)| ep == &worker_epoch)
+                    .is_some_and(|e| e.context.worker_epoch == worker_epoch)
                 {
                     pending.remove(&session_id);
                     drop(pending);
@@ -792,16 +937,16 @@ fn schedule_pending_retirement_retry(
                 }
                 return;
             }
-            let persisted_seq = eff.sequence;
-            if persist_observed_uncertain_effect(&shared, &session_id, eff)
+            let persisted_seq = entry.effect.sequence;
+            if persist_observed_uncertain_effect(&shared, &session_id, &entry.context, entry.effect)
                 .await
                 .is_ok()
             {
                 let should_finalize = {
                     let mut pending = shared.pending_retirements.lock();
                     match pending.get(&session_id) {
-                        Some((ep, latest)) if ep == &worker_epoch => {
-                            if latest.sequence > persisted_seq {
+                        Some(latest) if latest.context.worker_epoch == worker_epoch => {
+                            if latest.effect.sequence > persisted_seq {
                                 None
                             } else {
                                 pending.remove(&session_id);
@@ -835,7 +980,7 @@ fn finalize_crashed_worker_retirement(shared: &Shared, session_id: &str, worker_
         let mut pending = shared.pending_retirements.lock();
         if pending
             .get(session_id)
-            .is_some_and(|(epoch, _)| epoch == worker_epoch)
+            .is_some_and(|entry| entry.context.worker_epoch == worker_epoch)
         {
             pending.remove(session_id);
         }
@@ -883,7 +1028,10 @@ pub(super) fn discard_pending_crashed_drain(
         shared.crashed_worker_sightings.lock().remove(session_id);
         shared.retained_uncertain_effects.lock().remove(session_id);
         shared.draining_crashed_epochs.lock().remove(session_id);
-        shared.retired_crashed_epochs.lock().remove(session_id);
+        shared
+            .retired_crashed_epochs
+            .lock()
+            .retain(|(sid, _), _| sid != session_id);
         shared.pending_retirements.lock().remove(session_id);
     }
     let mut pending = shared.pending.lock();
@@ -911,13 +1059,18 @@ pub(super) fn worker_snapshot_with_retained_uncertain(
         .lock()
         .get(session_id)
         .cloned();
-    if let Some(effect) = retained {
-        if super::config_sync::acknowledged_uncertain_sequence_for(&shared.hub, session_id)
-            >= effect.sequence.max(1)
+    if let Some(entry) = retained {
+        let context_valid = {
+            let _proj = shared.hub.runtime_projection_guard();
+            live_context_verified(&shared.hub, session_id, &entry.context)
+        };
+        if !context_valid
+            || super::config_sync::acknowledged_uncertain_sequence_for(&shared.hub, session_id)
+                >= entry.effect.sequence.max(1)
         {
             shared.retained_uncertain_effects.lock().remove(session_id);
         } else {
-            crate::runtime_wire::merge_uncertain_effect(&mut worker.uncertain_effect, effect);
+            crate::runtime_wire::merge_uncertain_effect(&mut worker.uncertain_effect, entry.effect);
         }
     }
     if let Some(persisted) =
@@ -1042,7 +1195,7 @@ pub(super) fn record_uncertain_effect(
     let Some(effect) = crate::runtime_wire::uncertain_effect(update) else {
         return;
     };
-    if !epoch_binding_verified_now(shared, session_id, worker_epoch) {
+    if verified_context_for_epoch_now(shared, session_id, worker_epoch).is_none() {
         return;
     }
     if let Some(worker) = shared.workers.lock().get_mut(session_id)
@@ -1487,6 +1640,14 @@ mod crashed_drain_tests {
         // A genuinely newer epoch for the same session is admitted normally.
         let newer = crashed_snapshot("s-r3", "101-2");
         observe_crashed_sighting(&rt.shared, &newer);
+        assert!(matches!(
+            rt.last_crashed_worker("s-r3"),
+            CrashedWorkerObservation::Seen(s) if s.worker_epoch == "101-2"
+        ));
+        // Even AFTER the successor snapshot arrived, a late snapshot for the
+        // retired epoch must STILL be rejected (R4-M5).
+        observe_crashed_sighting(&rt.shared, &snap);
+        assert!(!project_snapshot(&rt.shared, &snap));
         assert!(matches!(
             rt.last_crashed_worker("s-r3"),
             CrashedWorkerObservation::Seen(s) if s.worker_epoch == "101-2"

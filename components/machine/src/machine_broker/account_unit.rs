@@ -7,6 +7,19 @@
 use super::*;
 
 impl Broker {
+    pub(super) fn retire_stale_lease_prompt(&self, command: &crate::runtime_wire::CoreCommand) {
+        if let crate::runtime_wire::CoreCommand::Prompt {
+            session_id,
+            command_id,
+            ..
+        } = command
+        {
+            self.dispatched_prompts
+                .lock()
+                .retire_if_unhanded(session_id, command_id);
+        }
+    }
+
     pub(super) fn has_pending_core_command(&self, session_id: &str) -> bool {
         self.pending_core_commands
             .lock()

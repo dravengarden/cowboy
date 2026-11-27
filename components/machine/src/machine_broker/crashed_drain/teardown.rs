@@ -271,6 +271,7 @@ impl Broker {
                         "worker exited during crashed drain without completion receipt".into(),
                     );
                 }
+                broker.publish_ownerless_crashed_snapshot(&session_id);
                 broker.crashed_drains.settled.notify_waiters();
                 return;
             }
@@ -352,12 +353,9 @@ impl Broker {
         let store = Arc::clone(&self.args.provider_store);
         let session = session_id.to_owned();
         let confirmed = tokio::task::spawn_blocking(move || match expected_launch {
-            Some(expected) => match store.account_worker_exit(&session)? {
-                Some(receipt) if receipt.launch == expected => {
-                    store.confirm_session_account_units_gone(&session)
-                }
-                _ => Ok(()),
-            },
+            Some(expected) => {
+                store.confirm_session_account_units_gone_for_launch(&session, expected)
+            }
             None => match store.account_worker_exit(&session)? {
                 None => Ok(()),
                 Some(_) => {

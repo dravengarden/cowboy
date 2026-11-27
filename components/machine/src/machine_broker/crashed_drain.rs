@@ -39,6 +39,9 @@ struct PendingDrain {
     acknowledged_uncertain_sequence: u64,
     peer_pid: Option<u32>,
     retired_launch: Option<uuid::Uuid>,
+    /// True ONLY after a same-epoch disconnect/reconnect when the command must
+    /// be replayed; false while the live worker's ACK is already in flight (R4-M1).
+    needs_replay: bool,
 }
 
 struct ActiveDrain {
@@ -177,6 +180,10 @@ impl Broker {
         let dispatched = self.dispatched_prompts.lock();
         let pending_core = self.pending_core_commands.lock();
         let mut state = self.crashed_drains.inner.lock();
+        let replacing = self.replacing.lock();
+        if replacing.contains_key(session_id) {
+            return DrainAdmission::Rejected("session rollout replacement is in progress".into());
+        }
         match workers.get_mut(session_id) {
             None => {
                 if let Some(entry) = state
@@ -225,6 +232,17 @@ impl Broker {
                 DrainAdmission::Rejected("session has queued or in-flight prompt handoffs".into())
             }
             Some(worker) => {
+                let trusted_pid = worker
+                    .peer_pid
+                    .or_else(|| self.direct_worker_pids.lock().get(session_id).copied());
+                if self.args.spawn_mode == SpawnMode::Direct && trusted_pid.is_none() {
+                    return DrainAdmission::Rejected(
+                        "direct worker lacks verifiable process identity for drain teardown".into(),
+                    );
+                }
+                if trusted_pid.is_some() {
+                    worker.peer_pid = trusted_pid;
+                }
                 let frame = Frame::WorkerCommand {
                     session_id: session_id.to_owned(),
                     command: WorkerCommand::DrainCrashed {
@@ -242,8 +260,9 @@ impl Broker {
                             epoch: worker_epoch.to_owned(),
                             connection_id: worker.connection_id,
                             acknowledged_uncertain_sequence,
-                            peer_pid: worker.peer_pid,
+                            peer_pid: trusted_pid,
                             retired_launch,
+                            needs_replay: false,
                         },
                     );
                     DrainAdmission::Forwarded
@@ -442,17 +461,32 @@ impl Broker {
     ) -> Vec<(String, String)> {
         let mut state = self.crashed_drains.inner.lock();
         let mut same_epoch = false;
+        let mut preserved_pid = worker
+            .peer_pid
+            .or_else(|| self.direct_worker_pids.lock().get(session_id).copied());
         if let Some(active) = state.active.get_mut(session_id)
             && active.epoch == epoch
         {
             active.connection_id = connection_id;
+            preserved_pid = preserved_pid.or(active.peer_pid);
+            if preserved_pid.is_some() {
+                active.peer_pid = preserved_pid;
+            }
             same_epoch = true;
         }
         for pending in state.pending.values_mut() {
             if pending.session_id == session_id && pending.epoch == epoch {
                 pending.connection_id = connection_id;
+                pending.needs_replay = true;
+                preserved_pid = preserved_pid.or(pending.peer_pid);
+                if preserved_pid.is_some() {
+                    pending.peer_pid = preserved_pid;
+                }
                 same_epoch = true;
             }
+        }
+        if preserved_pid.is_some() {
+            worker.peer_pid = preserved_pid;
         }
         if same_epoch {
             worker.crashed_drain_fenced = true;
@@ -475,12 +509,58 @@ impl Broker {
                 .any(|p| p.session_id == session_id && p.epoch == epoch)
     }
 
-    pub(super) fn crashed_drain_fenced_for_epoch(&self, session_id: &str, epoch: &str) -> bool {
+    /// Atomically serialize rollout cutover admission against crashed-worker
+    /// drain under the shared `workers -> crashed_drains -> replacing` lock
+    /// boundary and enqueue `Stop` onto the exact validated peer (R4-H1).
+    /// Returns the validated Direct PID when a Direct watchdog should be armed.
+    pub(super) fn try_admit_rollout_cutover(&self, session_id: &str) -> Option<u32> {
         let workers = self.workers.lock();
-        workers
+        let state = self.crashed_drains.inner.lock();
+        let mut replacing = self.replacing.lock();
+        let worker = workers.get(session_id)?;
+        let snapshot = &worker.snapshot;
+        let has_drain = state
+            .active
             .get(session_id)
-            .is_some_and(|w| w.epoch == epoch && w.crashed_drain_fenced)
-            || self.has_crashed_drain_for_epoch(session_id, epoch)
+            .is_some_and(|a| a.epoch == worker.epoch)
+            || state
+                .pending
+                .values()
+                .any(|p| p.session_id == session_id && p.epoch == worker.epoch);
+        if worker.crashed_drain_fenced
+            || has_drain
+            || !snapshot.drain_requested
+            || snapshot.current_turn_id.is_some()
+            || !snapshot.pending_permissions.is_empty()
+            || !matches!(snapshot.state, WorkerState::Running | WorkerState::Draining)
+            || replacing.contains_key(session_id)
+        {
+            return None;
+        }
+        let command = self.trace_worker_dispatch(
+            session_id,
+            WorkerCommand::Stop {
+                command_id: format!("rollout-stop-{session_id}"),
+            },
+        );
+        if worker
+            .tx
+            .send(Frame::WorkerCommand {
+                session_id: session_id.to_owned(),
+                command,
+            })
+            .is_err()
+        {
+            return None;
+        }
+        replacing.insert(session_id.to_owned(), snapshot.generation.clone());
+        if self.args.spawn_mode == SpawnMode::Direct {
+            worker
+                .peer_pid
+                .or_else(|| self.direct_worker_pids.lock().get(session_id).copied())
+        } else {
+            None
+        }
     }
 
     /// After sending `Welcome` to a reconnected worker, replay any ambiguous
@@ -491,14 +571,10 @@ impl Broker {
     pub(super) fn replay_pending_crashed_drain(&self, session_id: &str, connection_id: u64) {
         let (incompatible_rejects, cleared_fence) = {
             let controller = self.controller.lock();
-            let Some(ctrl) = controller.as_ref() else {
+            if controller.is_none() {
                 // Handover gap: keep ambiguous ownership fenced until next lease installs.
                 return;
-            };
-            let controller_capable = ctrl.protocol >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
-                && ctrl
-                    .outer_machine_protocol
-                    .is_some_and(|proto| proto >= CRASHED_WORKER_DRAIN_PROTOCOL_VERSION);
+            }
             let mut workers = self.workers.lock();
             let Some(worker) = workers
                 .get_mut(session_id)
@@ -511,7 +587,8 @@ impl Broker {
                 .pending
                 .iter()
                 .filter(|(_, entry)| {
-                    entry.session_id == session_id
+                    entry.needs_replay
+                        && entry.session_id == session_id
                         && entry.epoch == worker.epoch
                         && entry.connection_id == connection_id
                 })
@@ -520,9 +597,9 @@ impl Broker {
             if matching_ids.is_empty() {
                 return;
             }
-            if !controller_capable
-                || worker.negotiated_protocol < CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
-            {
+            // Only clear if the *worker* itself downgraded below drain support;
+            // a downgraded Controller must NEVER release an ambiguous drain (R4-M1).
+            if worker.negotiated_protocol < CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION {
                 let mut rejects = Vec::new();
                 for cid in matching_ids {
                     if let Some(entry) = state.pending.remove(&cid) {
@@ -537,7 +614,7 @@ impl Broker {
                 (rejects, cleared)
             } else {
                 for cid in matching_ids {
-                    if let Some(entry) = state.pending.get(&cid) {
+                    if let Some(entry) = state.pending.get_mut(&cid) {
                         let _ = worker.tx.send(Frame::WorkerCommand {
                             session_id: session_id.to_owned(),
                             command: WorkerCommand::DrainCrashed {
@@ -547,6 +624,7 @@ impl Broker {
                                     .acknowledged_uncertain_sequence,
                             },
                         });
+                        entry.needs_replay = false;
                     }
                 }
                 (Vec::new(), false)
@@ -578,6 +656,9 @@ impl Broker {
                 .pending
                 .values()
                 .filter_map(|entry| {
+                    if !entry.needs_replay {
+                        return None;
+                    }
                     workers
                         .get(&entry.session_id)
                         .filter(|w| {
@@ -608,16 +689,25 @@ impl Broker {
             .get_mut(session_id)
             .filter(|w| w.connection_id == connection_id)
         {
-            worker.peer_pid = pid;
+            let resolved = pid
+                .or(worker.peer_pid)
+                .or_else(|| self.direct_worker_pids.lock().get(session_id).copied());
+            if resolved.is_some() {
+                worker.peer_pid = resolved;
+            }
             let mut state = self.crashed_drains.inner.lock();
             if let Some(active) = state.active.get_mut(session_id)
                 && active.connection_id == connection_id
+                && resolved.is_some()
             {
-                active.peer_pid = pid;
+                active.peer_pid = resolved;
             }
             for pending in state.pending.values_mut() {
-                if pending.session_id == session_id && pending.connection_id == connection_id {
-                    pending.peer_pid = pid;
+                if pending.session_id == session_id
+                    && pending.connection_id == connection_id
+                    && resolved.is_some()
+                {
+                    pending.peer_pid = resolved;
                 }
             }
         }
@@ -651,6 +741,7 @@ impl Broker {
                         && pending.connection_id == peer.connection_id
                     {
                         pending.connection_id = 0;
+                        pending.needs_replay = true;
                     }
                 }
                 (false, None, None)
@@ -1019,25 +1110,79 @@ impl Broker {
         self.crashed_drains.settled.notify_waiters();
     }
 
-    pub(super) fn unconfirmed_sandbox_epoch(&self, session_id: &str) -> Option<String> {
-        let state = self.crashed_drains.inner.lock();
-        state
-            .unconfirmed_teardown
-            .get(session_id)
-            .map(|entry| entry.epoch.clone())
-            .or_else(|| {
-                state
-                    .active
+    /// Publish an ownerless snapshot after receiptless exit + sandbox teardown
+    /// are confirmed so the Controller drops the dead worker epoch instead of
+    /// treating it as a live connected worker (R4-M3).
+    pub(super) fn publish_ownerless_crashed_snapshot(&self, session_id: &str) {
+        let snapshot = {
+            let sessions = self.sessions.lock();
+            let Some(session) = sessions.get(session_id).cloned() else {
+                return;
+            };
+            let workers = self.workers.lock();
+            if workers.contains_key(session_id) {
+                return;
+            }
+            let state = self
+                .session_states
+                .lock()
+                .get(session_id)
+                .copied()
+                .unwrap_or(WorkerState::Crashed);
+            let exit_detail = (state == WorkerState::Crashed)
+                .then(|| self.startup_failures.lock().get(session_id).cloned())
+                .flatten();
+            let executable = self
+                .generation_commands
+                .lock()
+                .get(&session.generation)
+                .map(|path| path.display().to_string());
+            let pending_prompt_count =
+                self.pending_commands
+                    .lock()
                     .get(session_id)
-                    .map(|entry| entry.epoch.clone())
-            })
-            .or_else(|| {
-                state
-                    .pending
-                    .values()
-                    .find(|entry| entry.session_id == session_id)
-                    .map(|entry| entry.epoch.clone())
-            })
+                    .map_or(0, |commands| {
+                        u64::try_from(
+                            commands
+                                .iter()
+                                .filter(|cmd| matches!(cmd, WorkerCommand::Prompt { .. }))
+                                .count(),
+                        )
+                        .unwrap_or(u64::MAX)
+                    });
+            WorkerSnapshot {
+                session_id: session_id.to_owned(),
+                worker_epoch: format!("broker-{session_id}"),
+                generation: session.generation.clone(),
+                executable,
+                launch: Some(session.clone()),
+                state,
+                agent_session_id: session.agent_session_id,
+                native_thread_materialized: None,
+                current_turn_id: None,
+                supports_current_turn: false,
+                delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+                wrap_up_steering: false,
+                supports_subagent_cancel: false,
+                last_runtime_seq: 0,
+                pending_permissions: Vec::new(),
+                config_options: None,
+                context_used: None,
+                context_size: None,
+                pending_prompt_count,
+                drain_requested: false,
+                exit_detail,
+                background_tasks: None,
+                native_cycle_id: None,
+                native_cycle_active: false,
+                incarnation: self.reported_lineage(session_id),
+                account_unit: None,
+                uncertain_effect: None,
+            }
+        };
+        self.send_controller(Frame::Snapshot {
+            worker: Box::new(snapshot),
+        });
     }
 
     pub(super) fn send_crashed_worker_drained(&self, session_id: &str, worker_epoch: &str) {

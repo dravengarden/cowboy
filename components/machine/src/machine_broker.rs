@@ -561,6 +561,9 @@ impl Broker {
                 if snapshot.launch.is_none() {
                     snapshot.launch = sessions.get(&snapshot.session_id).cloned();
                 }
+                if self.has_crashed_drain_for_epoch(&snapshot.session_id, &worker.epoch) {
+                    snapshot.drain_requested = true;
+                }
                 snapshot
             })
             .collect();
@@ -584,9 +587,7 @@ impl Broker {
                 .flatten();
             snapshots.push(WorkerSnapshot {
                 session_id: session_id.clone(),
-                worker_epoch: self
-                    .unconfirmed_sandbox_epoch(&session_id)
-                    .unwrap_or_else(|| format!("broker-{session_id}")),
+                worker_epoch: format!("broker-{session_id}"),
                 generation: session.generation.clone(),
                 executable: commands
                     .get(&session.generation)
@@ -815,11 +816,17 @@ impl Broker {
         if self.args.spawn_mode != SpawnMode::Direct {
             return;
         }
-        let workers = Arc::clone(&self.direct_worker_pids);
-        let pid = workers.lock().get(session_id).copied();
-        let Some(pid) = pid else {
+        let pid = self.direct_worker_pids.lock().get(session_id).copied();
+        if let Some(pid) = pid {
+            self.arm_direct_worker_stop_pid(session_id, pid);
+        }
+    }
+
+    fn arm_direct_worker_stop_pid(&self, session_id: &str, pid: u32) {
+        if self.args.spawn_mode != SpawnMode::Direct {
             return;
-        };
+        }
+        let workers = Arc::clone(&self.direct_worker_pids);
         let session_id = session_id.to_owned();
         tokio::spawn(async move {
             if !enforce_direct_worker_exit(
@@ -3177,27 +3184,9 @@ impl Broker {
     }
 
     fn maybe_cutover(&self, session_id: &str) {
-        let desired = self.desired_generation.lock().clone();
-        if desired.is_empty() {
+        if self.desired_generation.lock().is_empty() {
             return;
         }
-        let (old_generation, epoch) = {
-            let workers = self.workers.lock();
-            let Some(worker) = workers.get(session_id) else {
-                return;
-            };
-            let snapshot = &worker.snapshot;
-            if worker.crashed_drain_fenced
-                || self.has_crashed_drain_for_epoch(session_id, &worker.epoch)
-                || !snapshot.drain_requested
-                || snapshot.current_turn_id.is_some()
-                || !snapshot.pending_permissions.is_empty()
-                || !matches!(snapshot.state, WorkerState::Running | WorkerState::Draining)
-            {
-                return;
-            }
-            (snapshot.generation.clone(), worker.epoch.clone())
-        };
         if self
             .sessions
             .lock()
@@ -3206,24 +3195,10 @@ impl Broker {
         {
             return;
         }
-        if self
-            .replacing
-            .lock()
-            .insert(session_id.to_owned(), old_generation)
-            .is_some()
-        {
-            return;
+        let stop_pid = self.try_admit_rollout_cutover(session_id);
+        if let Some(pid) = stop_pid {
+            self.arm_direct_worker_stop_pid(session_id, pid);
         }
-        if self.crashed_drain_fenced_for_epoch(session_id, &epoch) {
-            self.replacing.lock().remove(session_id);
-            return;
-        }
-        self.route_worker(
-            session_id,
-            WorkerCommand::Stop {
-                command_id: format!("rollout-stop-{session_id}"),
-            },
-        );
     }
 
     async fn worker_disconnected(
@@ -4412,6 +4387,7 @@ fn lease_active(broker: &Broker) -> bool {
 
 async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
     if !lease_active(broker) {
+        broker.retire_stale_lease_prompt(&command);
         return;
     }
     match command {

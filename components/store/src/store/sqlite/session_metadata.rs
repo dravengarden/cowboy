@@ -156,6 +156,32 @@ impl SqliteStorage {
             .await
             .with_context(|| format!("UPSERT SQLite Hub setting {key}"))?;
         }
+        if fence.is_some() {
+            let ack_key = format!(
+                "{}{session_id}",
+                crate::model::settings_keys::SESSION_UNCERTAIN_EFFECT_ACK_PREFIX
+            );
+            let existing: Option<(serde_json::Value,)> =
+                sqlx::query_as("SELECT value FROM settings WHERE key = ?1")
+                    .bind(&ack_key)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .with_context(|| format!("SELECT SQLite Hub setting {ack_key}"))?;
+            let bumped = crate::store::session_metadata::advance_uncertain_effect_context_record(
+                existing.map(|(v,)| v),
+            );
+            sqlx::query(
+                "INSERT INTO settings(key, value, updated_at_ms) VALUES (?1, ?2, ?3) \
+                 ON CONFLICT (key) DO UPDATE SET value = excluded.value, \
+                 updated_at_ms = excluded.updated_at_ms",
+            )
+            .bind(&ack_key)
+            .bind(&bumped)
+            .bind(now)
+            .execute(&mut *tx)
+            .await
+            .with_context(|| format!("UPSERT SQLite Hub setting {ack_key}"))?;
+        }
         tx.commit().await?;
         Ok(())
     }

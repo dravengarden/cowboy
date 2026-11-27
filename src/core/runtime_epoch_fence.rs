@@ -152,6 +152,17 @@ impl Hub {
         self.inner.runtime_projection.read_recursive()
     }
 
+    /// Monotonic in-memory context generation incremented by Clear under
+    /// [`Self::runtime_projection_exclusive`].
+    #[must_use]
+    pub fn runtime_context_generation(&self, session_id: &str) -> u64 {
+        self.inner
+            .sessions
+            .lock()
+            .get(session_id)
+            .map_or(0, |session| session.runtime_epochs.generation)
+    }
+
     pub(super) fn runtime_projection_exclusive(&self) -> parking_lot::RwLockWriteGuard<'_, ()> {
         self.inner.runtime_projection.write()
     }

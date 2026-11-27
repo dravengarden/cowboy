@@ -1127,6 +1127,9 @@ impl super::Broker {
                     Some(c) => Some(c.tx.clone()),
                     None => {
                         tracing::warn!(lease, session = %session_id, "discarding stale-lease prompt at admission");
+                        self.dispatched_prompts
+                            .lock()
+                            .retire_if_unhanded(session_id, &command_id);
                         return;
                     }
                 },

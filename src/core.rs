@@ -3691,6 +3691,7 @@ impl Hub {
         };
         let cleared_native_id = discarded.is_some();
         let (fence_key, fence) = self.record_cleared_native(session_id, discarded);
+        self.advance_uncertain_effect_context_epoch(session_id);
         if persist && let Some(tx) = self.inner.store_tx.as_ref() {
             let _ = tx.send(StoreWrite::ClearAgentSession {
                 session_id: session_id.to_owned(),
@@ -3711,6 +3712,7 @@ impl Hub {
         let turn_lost = self.owner_turn_lost(session_id);
         self.apply_owner_turn_lost(turn_lost.clone());
         self.clear_transcript_memory(session_id);
+        self.advance_uncertain_effect_context_epoch(session_id);
         if let Some(tx) = self.inner.store_tx.as_ref() {
             // One transaction with the native id's removal and its fence: a
             // failed write keeps both the transcript and the old context.

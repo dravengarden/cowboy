@@ -7,25 +7,85 @@ impl Hub {
     /// cache ONLY (never enqueuing an unconditional `StoreWrite::PutSetting`),
     /// merging `observed` and `acknowledged` sequences monotonically so a
     /// stale reader or concurrent CAS writer can never regress a newer record.
+    #[must_use]
+    pub fn uncertain_effect_context_epoch(&self, session_id: &str) -> u64 {
+        let key = format!(
+            "{}{session_id}",
+            super::settings_keys::SESSION_UNCERTAIN_EFFECT_ACK_PREFIX
+        );
+        self.setting(&key)
+            .and_then(|value| {
+                value
+                    .get("context_epoch")
+                    .and_then(serde_json::Value::as_u64)
+            })
+            .unwrap_or(0)
+    }
+
+    pub(super) fn advance_uncertain_effect_context_epoch(&self, session_id: &str) {
+        let key = format!(
+            "{}{session_id}",
+            super::settings_keys::SESSION_UNCERTAIN_EFFECT_ACK_PREFIX
+        );
+        self.with_settings_mut(|settings| {
+            let mut map = match settings.get(&key) {
+                Some(serde_json::Value::Object(existing)) => existing.clone(),
+                _ => serde_json::Map::new(),
+            };
+            let next_epoch = map
+                .get("context_epoch")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0)
+                .saturating_add(1);
+            map.insert("context_epoch".into(), serde_json::json!(next_epoch));
+            map.remove("observed");
+            map.remove("method");
+            map.remove("observed_at_ms");
+            settings.insert(key, serde_json::Value::Object(map));
+        });
+    }
+
     pub fn merge_cached_uncertain_effect_setting(&self, key: String, value: serde_json::Value) {
         self.with_settings_mut(|settings| {
             let merged = match settings.get(&key) {
                 Some(existing) if existing.is_object() && value.is_object() => {
+                    let ex_ctx = existing["context_epoch"].as_u64().unwrap_or(0);
+                    let new_ctx = value["context_epoch"].as_u64().unwrap_or(0);
                     let mut out = existing.clone();
-                    let ex_obs = existing["observed"].as_u64().unwrap_or(0);
-                    let new_obs = value["observed"].as_u64().unwrap_or(0);
-                    if new_obs > ex_obs {
-                        out["observed"] = serde_json::json!(new_obs);
-                        if let Some(method) = value.get("method") {
+                    if new_ctx > ex_ctx {
+                        out["context_epoch"] = serde_json::json!(new_ctx);
+                        if let Some(map) = out.as_object_mut() {
+                            map.remove("observed");
+                            map.remove("method");
+                            map.remove("observed_at_ms");
+                        }
+                        if let Some(obs) = value.get("observed").and_then(serde_json::Value::as_u64)
+                            && obs > 0
+                        {
+                            out["observed"] = serde_json::json!(obs);
+                            if let Some(method) = value.get("method") {
+                                out["method"] = method.clone();
+                            }
+                            if let Some(ts) = value.get("observed_at_ms") {
+                                out["observed_at_ms"] = ts.clone();
+                            }
+                        }
+                    } else if new_ctx == ex_ctx {
+                        let ex_obs = existing["observed"].as_u64().unwrap_or(0);
+                        let new_obs = value["observed"].as_u64().unwrap_or(0);
+                        if new_obs > ex_obs {
+                            out["observed"] = serde_json::json!(new_obs);
+                            if let Some(method) = value.get("method") {
+                                out["method"] = method.clone();
+                            }
+                            if let Some(ts) = value.get("observed_at_ms") {
+                                out["observed_at_ms"] = ts.clone();
+                            }
+                        } else if out.get("method").is_none()
+                            && let Some(method) = value.get("method")
+                        {
                             out["method"] = method.clone();
                         }
-                        if let Some(ts) = value.get("observed_at_ms") {
-                            out["observed_at_ms"] = ts.clone();
-                        }
-                    } else if out.get("method").is_none()
-                        && let Some(method) = value.get("method")
-                    {
-                        out["method"] = method.clone();
                     }
                     let ex_ack = existing["acknowledged"].as_u64().unwrap_or(0);
                     let new_ack = value["acknowledged"].as_u64().unwrap_or(0);

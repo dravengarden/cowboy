@@ -488,9 +488,19 @@ impl Hub {
     /// provider account receives a snapshot whose launch spec does not match
     /// the session's bound execution/provider tuple.
     pub fn matches_runtime_snapshot_binding(&self, worker: &WorkerSnapshot) -> bool {
-        !self.session_info(&worker.session_id).is_some_and(|info| {
+        self.matches_runtime_launch_binding(&worker.session_id, worker.launch.as_ref())
+    }
+
+    /// Live comparison of a retained launch identity against the session's
+    /// current execution/provider binding (R4-H3, R4-H4).
+    pub fn matches_runtime_launch_binding(
+        &self,
+        session_id: &str,
+        launch: Option<&crate::runtime_wire::StartSession>,
+    ) -> bool {
+        !self.session_info(session_id).is_some_and(|info| {
             (info.meta.execution_binding.is_some() || !info.meta.provider_account_id.is_default())
-                && !worker.launch.as_ref().is_some_and(|launch| {
+                && !launch.is_some_and(|launch| {
                     launch.execution_binding == info.meta.execution_binding
                         && launch.provider == info.meta.provider
                         && launch.provider_account_id == info.meta.provider_account_id

@@ -287,6 +287,48 @@ impl MachinePluginStore {
             return Ok(());
         };
         let (provider, digest) = binding.provider_generation();
+        self.confirm_session_account_units_gone_for_binding(
+            session,
+            &receipt.account,
+            provider,
+            digest,
+        )
+    }
+
+    /// Launch-UUID-scoped variant holding `auth_candidates` across receipt
+    /// validation and unit teardown so a competing launch cannot publish in
+    /// between and have its sandbox stopped (R4-M2).
+    pub fn confirm_session_account_units_gone_for_launch(
+        &self,
+        session: &str,
+        expected_launch: uuid::Uuid,
+    ) -> Result<()> {
+        let _guard = self.auth_candidates.lock();
+        let Some(receipt) = self.account_worker_exit(session)? else {
+            return Ok(());
+        };
+        if receipt.launch != expected_launch {
+            return Ok(());
+        }
+        let Some(binding) = &receipt.binding else {
+            return Ok(());
+        };
+        let (provider, digest) = binding.provider_generation();
+        self.confirm_session_account_units_gone_for_binding(
+            session,
+            &receipt.account,
+            provider,
+            digest,
+        )
+    }
+
+    fn confirm_session_account_units_gone_for_binding(
+        &self,
+        session: &str,
+        account_id: &crate::provider_account::ProviderAccountId,
+        provider: &str,
+        digest: &str,
+    ) -> Result<()> {
         // A retained generation decides; without it, a named-only Provider
         // is assumed sandboxed so a lost unit is never skipped.
         let isolated = self.package_for_generation(provider, digest).map_or_else(
@@ -296,7 +338,7 @@ impl MachinePluginStore {
         if !isolated {
             return Ok(());
         }
-        let account = self.for_account(&receipt.account)?;
+        let account = self.for_account(account_id)?;
         let units = match account.account_sandbox_units() {
             Ok(units) => units,
             // The daemon has no such account, so it runs no unit of it.

@@ -151,13 +151,13 @@ pub struct Shared {
     declaration_repairs: Mutex<HashMap<String, String>>,
     workers: Mutex<HashMap<String, WorkerSnapshot>>,
     crashed_worker_sightings: Mutex<HashMap<String, snapshot::SightingActivity>>,
-    retained_uncertain_effects: Mutex<HashMap<String, crate::runtime_wire::UncertainEffect>>,
-    /// Exact crashed epochs currently draining (preserved across replayed events during reload, R3-H2).
+    retained_uncertain_effects: Mutex<HashMap<String, snapshot::RetainedUncertainEffect>>,
+    /// Exact crashed epochs currently draining (preserved across replayed events and handover, R3-H2/R4-H6).
     draining_crashed_epochs: Mutex<HashMap<String, String>>,
-    /// Recently retired `(session_id -> (worker_epoch, Instant))` to reject late snapshots (R3-M7).
-    retired_crashed_epochs: Mutex<HashMap<String, (String, std::time::Instant)>>,
-    /// Pending retirements retrying durable uncertain-effect persistence (R3-M2).
-    pending_retirements: Mutex<HashMap<String, (String, crate::runtime_wire::UncertainEffect)>>,
+    /// Bounded `(session_id, worker_epoch)` tombstones rejecting late handover snapshots (R4-M5).
+    retired_crashed_epochs: Mutex<HashMap<(String, String), std::time::Instant>>,
+    /// Pending retirements retrying durable uncertain-effect persistence with retained context (R4-H3).
+    pending_retirements: Mutex<HashMap<String, snapshot::PendingRetirement>>,
     /// Worker epochs whose initial config snapshot has already triggered
     /// preference reconciliation. This prevents an agent that rejects a value
     /// from causing a config-option event/retry loop.
@@ -398,7 +398,9 @@ impl RemoteRuntime {
                     &bootstrap.workers,
                 )),
                 retained_uncertain_effects: Mutex::new(HashMap::new()),
-                draining_crashed_epochs: Mutex::new(HashMap::new()),
+                draining_crashed_epochs: Mutex::new(snapshot::seed_draining_crashed_epochs(
+                    &bootstrap.workers,
+                )),
                 retired_crashed_epochs: Mutex::new(HashMap::new()),
                 pending_retirements: Mutex::new(HashMap::new()),
                 config_sync_epochs: Mutex::new(HashMap::new()),
