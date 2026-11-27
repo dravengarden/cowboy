@@ -888,6 +888,7 @@ async fn handshake_broker(
             fallback_for: shared.fallback_for.clone(),
             outer_machine_protocol: None,
             post_edit_http: false,
+            accepted_crashed_drain: shared.crashed_drain.active_drain_command_id(),
         },
     )
     .await?;
@@ -1646,7 +1647,11 @@ mod tests {
         };
         assert!(accepted);
         assert!(cmd_tx.is_none());
-        assert!(shared.snapshot().drain_requested);
+        assert!(!shared.snapshot().drain_requested);
+        assert_eq!(
+            shared.crashed_drain.active_drain_command_id().as_deref(),
+            Some("dc-5")
+        );
         assert!(matches!(cmd_rx.try_recv(), Ok(AgentCommand::Cancel)));
         assert!(cmd_rx.try_recv().is_err());
 

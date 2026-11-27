@@ -1132,6 +1132,11 @@ pub enum Frame {
         /// independent HTTPS post-edit inspection route (`POST /api/machine/post-edit-inspect`).
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         post_edit_http: bool,
+        /// Set on Runtime 10+ worker reconnects when the worker already accepted
+        /// a cooperative `DrainCrashed` command, so a restarted broker restores
+        /// the ownership fence BEFORE welcoming or flushing commands (R7-H4).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        accepted_crashed_drain: Option<String>,
     },
     Welcome {
         protocol: u16,
@@ -1203,16 +1208,6 @@ pub enum Frame {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         command_id: Option<String>,
         uncertain_effect: UncertainEffect,
-    },
-    /// Worker-issued handshake notice on Runtime 10+ after broker restart so
-    /// the new broker restores the accepted crashed-drain ownership fence (R6-M5).
-    CrashedDrainResume {
-        session_id: String,
-        worker_epoch: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
-        command_id: Option<String>,
-        #[serde(default)]
-        acknowledged_uncertain_sequence: u64,
     },
     /// Broker-only maintenance retirement notice sent on Machine 55+ / Runtime
     /// 10+ after a crashed worker confirmed completion, disconnected, and (for

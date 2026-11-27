@@ -1153,13 +1153,14 @@ impl Broker {
 
     #[cfg(test)]
     fn register_worker(&self, registration: WorkerRegistration) -> Result<()> {
-        self.register_worker_inner(registration, true)
+        self.register_worker_inner(registration, true, None)
     }
 
     fn register_worker_inner(
         &self,
         registration: WorkerRegistration,
         welcomed: bool,
+        resumed_drain: Option<crashed_drain::RetiredLaunch>,
     ) -> Result<()> {
         self.check_deletion_journal()?;
         if let Some(exit) = self
@@ -1265,6 +1266,7 @@ impl Broker {
             &epoch,
             connection_id,
             replaced_same_epoch_pid,
+            resumed_drain,
             workers.get_mut(&session_id).expect("just inserted"),
         );
         if let Some(old) = replaced {
@@ -4201,6 +4203,13 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
                 let _ = writer_task.await;
                 return Ok(());
             }
+            let resumed_drain = if hello.accepted_crashed_drain.is_some()
+                && protocol >= crate::runtime_wire::CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
+            {
+                Some(broker.resolve_durable_launch_for_drain(&session_id).await)
+            } else {
+                None
+            };
             if let Err(error) = broker.register_worker_inner(
                 WorkerRegistration {
                     session_id: session_id.clone(),
@@ -4212,6 +4221,7 @@ async fn handle_peer(broker: Arc<Broker>, stream: UnixStream) -> Result<()> {
                     tx: tx.clone(),
                 },
                 false,
+                resumed_drain,
             ) {
                 let _ = tx.send(Frame::Reject {
                     reason: error.to_string(),
@@ -4386,7 +4396,6 @@ fn lease_active(broker: &Broker) -> bool {
 
 async fn handle_core_command(broker: &Arc<Broker>, command: CoreCommand) {
     if !lease_active(broker) {
-        broker.retire_stale_lease_prompt(&command);
         return;
     }
     match command {
@@ -4911,9 +4920,7 @@ async fn handle_worker(
                     diagnostics,
                 );
             }
-            frame @ (Frame::CrashedDrainCompleted { .. }
-            | Frame::CrashedDrainAborted { .. }
-            | Frame::CrashedDrainResume { .. }) => {
+            frame @ (Frame::CrashedDrainCompleted { .. } | Frame::CrashedDrainAborted { .. }) => {
                 broker
                     .handle_crashed_drain_worker_frame(session_id, epoch, connection_id, frame)
                     .await;
@@ -5202,6 +5209,7 @@ mod tests {
                 fallback_for: None,
                 outer_machine_protocol: None,
                 post_edit_http: false,
+                accepted_crashed_drain: None,
             },
         )
         .await
@@ -9331,6 +9339,7 @@ mod tests {
                 fallback_for: None,
                 outer_machine_protocol: None,
                 post_edit_http: false,
+                accepted_crashed_drain: None,
             },
         )
         .await
@@ -9395,6 +9404,7 @@ mod tests {
                 fallback_for: None,
                 outer_machine_protocol: None,
                 post_edit_http: false,
+                accepted_crashed_drain: None,
             },
         )
         .await

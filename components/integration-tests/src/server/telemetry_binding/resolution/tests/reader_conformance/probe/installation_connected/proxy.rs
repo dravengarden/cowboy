@@ -409,7 +409,6 @@ fn handshake(
             }
             | Frame::CrashedDrainCompleted { .. }
             | Frame::CrashedDrainAborted { .. }
-            | Frame::CrashedDrainResume { .. }
             | Frame::CrashedWorkerDrained { .. }
             | Frame::Heartbeat => {}
             Frame::Welcome { workers, .. } if workers.is_empty() => {}

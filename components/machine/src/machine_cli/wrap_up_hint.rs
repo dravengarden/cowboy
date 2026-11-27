@@ -224,6 +224,7 @@ mod tests {
             fallback_for: None,
             outer_machine_protocol: None,
             post_edit_http: false,
+            accepted_crashed_drain: None,
         };
         route_inbound_runtime_frame(hello, 53, true, &reliable_tx, &hint_tx).unwrap();
         let hint = Frame::CoreCommand {

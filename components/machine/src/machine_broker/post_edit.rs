@@ -39,6 +39,7 @@ pub(super) struct NegotiatedPeerHello {
     pub(super) fallback_for: Option<String>,
     pub(super) outer_machine_protocol: Option<u16>,
     pub(super) post_edit_http: bool,
+    pub(super) accepted_crashed_drain: Option<String>,
 }
 
 pub(super) async fn read_and_negotiate_hello(
@@ -59,6 +60,7 @@ pub(super) async fn read_and_negotiate_hello(
         fallback_for,
         outer_machine_protocol,
         post_edit_http,
+        accepted_crashed_drain,
         ..
     } = hello
     else {
@@ -93,6 +95,7 @@ pub(super) async fn read_and_negotiate_hello(
         fallback_for,
         outer_machine_protocol,
         post_edit_http,
+        accepted_crashed_drain,
     }))
 }
 

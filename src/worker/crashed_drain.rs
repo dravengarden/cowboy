@@ -79,8 +79,20 @@ impl State {
 
     pub(super) fn mark_terminal_stop(&self) {
         self.terminal_stop.store(true, Ordering::Release);
+        self.draining.store(false, Ordering::Release);
         self.holding_uncertain_effect
             .store(false, Ordering::Release);
+        self.pending_abort.lock().take();
+    }
+
+    /// Active accepted `DrainCrashed` command id carried on `Frame::Hello` so a
+    /// restarted broker installs the drain fence atomically during worker
+    /// registration before `Welcome` and `flush_pending` (R7-H4, R7-M6).
+    pub(super) fn active_drain_command_id(&self) -> Option<String> {
+        if !self.draining.load(Ordering::Acquire) {
+            return None;
+        }
+        self.accepted_command_id.lock().clone()
     }
 
     pub(super) fn agent_settled(&self) -> Option<bool> {
@@ -203,7 +215,7 @@ pub(super) fn handle_drain_crashed(
     }
     let refusal = {
         let _outbox = shared.outbox.lock();
-        let mut snapshot = shared.snapshot.lock();
+        let snapshot = shared.snapshot.lock();
         if snapshot.worker_epoch != worker_epoch {
             Some("crashed worker epoch changed")
         } else if snapshot.state != WorkerState::Crashed {
@@ -231,7 +243,10 @@ pub(super) fn handle_drain_crashed(
         ) {
             Some("crashed worker has unacknowledged uncertain effect")
         } else {
-            snapshot.drain_requested = true;
+            // Do not latch `snapshot.drain_requested = true` on crashed drain:
+            // the broker projects `drain_requested = true` on wire snapshots
+            // while active/pending, and keeping it false avoids blocking
+            // post-abort prompt flushing in `flush_pending_guarded` (R7-M4).
             shared
                 .crashed_drain
                 .accepted_ack_seq
@@ -272,24 +287,6 @@ pub(super) fn handle_drain_crashed(
     command_ack(shared, command_id, true, None)
 }
 
-fn authoritative_uncertain_effect_locked(
-    shared: &Shared,
-    snapshot: &mut WorkerSnapshot,
-) -> Option<crate::runtime_wire::UncertainEffect> {
-    if let Some(ledger) = shared.execution.as_ref().and_then(|client| client.ledger())
-        && let Some(method) = ledger.uncertain_effect()
-    {
-        crate::runtime_wire::merge_uncertain_effect(
-            &mut snapshot.uncertain_effect,
-            crate::runtime_wire::UncertainEffect {
-                method,
-                sequence: ledger.uncertain_sequence().max(1),
-            },
-        );
-    }
-    snapshot.uncertain_effect.clone()
-}
-
 fn has_unacknowledged_uncertain_effect_locked(
     shared: &Shared,
     snapshot: &WorkerSnapshot,
@@ -309,15 +306,24 @@ fn has_unacknowledged_uncertain_effect_locked(
             })
 }
 
-/// Flush post-handshake crashed-drain state to a (re)connected Runtime 10+
-/// broker: restores an accepted drain fence after broker restart (R6-M5) or
-/// delivers any buffered explicit drain abort (R6-M1).
+/// Restate any retained `Frame::CrashedDrainAborted` on Runtime 10+ reconnect
+/// while `holding_uncertain_effect` remains true, so a broker restart or socket
+/// drop right after an abort can never strand the broker's drain fence (R7-M1).
+/// Accepted active drains are carried on `Frame::Hello.accepted_crashed_drain`
+/// instead of a post-handshake frame (R7-H4, R7-M6).
 pub(super) async fn send_post_handshake_state<W: tokio::io::AsyncWrite + Unpin>(
     shared: &Shared,
     writer: &mut W,
 ) -> Result<()> {
     if shared.observation.peer_protocol.load(Ordering::Relaxed)
         < CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
+    {
+        return Ok(());
+    }
+    if !shared
+        .crashed_drain
+        .holding_uncertain_effect
+        .load(Ordering::Acquire)
     {
         return Ok(());
     }
@@ -333,55 +339,19 @@ pub(super) async fn send_post_handshake_state<W: tokio::io::AsyncWrite + Unpin>(
             },
         )
         .await?;
-        shared.crashed_drain.pending_abort.lock().take();
-        return Ok(());
-    }
-    if shared.crashed_drain.draining.load(Ordering::Acquire) {
-        let command_id = shared.crashed_drain.accepted_command_id.lock().clone();
-        let acknowledged_uncertain_sequence = shared
-            .crashed_drain
-            .accepted_ack_seq
-            .load(Ordering::Acquire);
-        write_frame(
-            writer,
-            &Frame::CrashedDrainResume {
-                session_id: shared.session_id.clone(),
-                worker_epoch: shared.worker_epoch.clone(),
-                command_id,
-                acknowledged_uncertain_sequence,
-            },
-        )
-        .await?;
     }
     Ok(())
 }
 
 /// If the ACP thread has ended and every outbox event has been acknowledged by
-/// the Controller, atomically close uncertainty publisher admission under
-/// `drain_commit_lock`, verify no unacknowledged `uncertain_effect` exists,
-/// and emit `Frame::CrashedDrainCompleted` ONLY when ACP settled cleanly
-/// (R6-H1, R6-H2, R6-M1).
+/// the Controller, atomically fence execution uncertainty reports under
+/// `drain_commit_lock`, read the ledger's uncertain effect, and either abort
+/// (retaining `pending_abort` while holding) or emit `Frame::CrashedDrainCompleted`
+/// ONLY when ACP settled cleanly (R7-H1, R7-M1, R7-M5).
 pub(super) async fn finish_if_drained<W: tokio::io::AsyncWrite + Unpin>(
     shared: &Shared,
     writer: &mut W,
 ) -> Result<bool> {
-    let pending_abort = shared.crashed_drain.pending_abort.lock().clone();
-    if let Some((command_id, uncertain_effect)) = pending_abort
-        && shared.observation.peer_protocol.load(Ordering::Relaxed)
-            >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
-    {
-        write_frame(
-            writer,
-            &Frame::CrashedDrainAborted {
-                session_id: shared.session_id.clone(),
-                worker_epoch: shared.worker_epoch.clone(),
-                command_id,
-                uncertain_effect,
-            },
-        )
-        .await?;
-        shared.crashed_drain.pending_abort.lock().take();
-    }
     let Some(settled_cleanly) = shared.crashed_drain.agent_settled() else {
         return Ok(false);
     };
@@ -414,15 +384,35 @@ pub(super) async fn finish_if_drained<W: tokio::io::AsyncWrite + Unpin>(
             || !shared.outbox.lock().is_empty()
         {
             CommitDecision::NotReady
+        } else if shared.crashed_drain.terminal_stop.load(Ordering::Acquire) {
+            // Explicit terminal Stop always wins over cooperative abort/receipt (R7-M5).
+            CommitDecision::ExitWithoutReceipt
         } else if shared.crashed_drain.draining.load(Ordering::Acquire) {
+            let ledger = shared.execution.as_ref().and_then(|client| client.ledger());
+            let ledger_effect = match ledger.as_ref() {
+                Some(ledger) => match ledger.close_uncertain_reports_and_read() {
+                    Ok(effect) => effect,
+                    Err(()) => return Ok(false),
+                },
+                None => None,
+            };
             let ack_seq = shared
                 .crashed_drain
                 .accepted_ack_seq
                 .load(Ordering::Acquire);
             let mut snapshot = shared.snapshot.lock();
-            if let Some(effect) = authoritative_uncertain_effect_locked(shared, &mut snapshot)
+            if let Some((method, sequence)) = ledger_effect {
+                crate::runtime_wire::merge_uncertain_effect(
+                    &mut snapshot.uncertain_effect,
+                    crate::runtime_wire::UncertainEffect { method, sequence },
+                );
+            }
+            if let Some(effect) = snapshot.uncertain_effect.clone()
                 && effect.sequence.max(1) > ack_seq
             {
+                if let Some(ledger) = ledger.as_ref() {
+                    ledger.reopen_uncertain_reports();
+                }
                 let command_id = shared.crashed_drain.accepted_command_id.lock().clone();
                 shared
                     .crashed_drain
@@ -458,6 +448,8 @@ pub(super) async fn finish_if_drained<W: tokio::io::AsyncWrite + Unpin>(
             if shared.observation.peer_protocol.load(Ordering::Relaxed)
                 >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
             {
+                // Keep `pending_abort` retained while `holding_uncertain_effect`
+                // stays true so reconnects after a drop/broker-restart restate it (R7-M1).
                 write_frame(
                     writer,
                     &Frame::CrashedDrainAborted {
@@ -468,7 +460,6 @@ pub(super) async fn finish_if_drained<W: tokio::io::AsyncWrite + Unpin>(
                     },
                 )
                 .await?;
-                shared.crashed_drain.pending_abort.lock().take();
             }
             write_frame(writer, &Frame::Snapshot { worker: snapshot }).await?;
             Ok(false)

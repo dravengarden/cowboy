@@ -43,8 +43,20 @@ impl Ledger {
         if let Err(error) = self.persist(&state.record) {
             tracing::warn!(%error, "execution ledger pending-call clear failed; failing closed");
             state.unwritable = true;
+            state.uncertain_reports_in_flight += 1;
             let sequence = self.record_uncertain_locked(&mut state, "tools/call");
             drop(state);
+            struct InFlightDrop<'a>(&'a Ledger);
+            impl Drop for InFlightDrop<'_> {
+                fn drop(&mut self) {
+                    let mut state = self.0.state.lock();
+                    state.uncertain_reports_in_flight =
+                        state.uncertain_reports_in_flight.saturating_sub(1);
+                    drop(state);
+                    self.0.changed.send_modify(|value| *value += 1);
+                }
+            }
+            let _in_flight = InFlightDrop(self);
             if let Some(observer) = self.observer.get() {
                 observer("tools/call", sequence);
             }
@@ -69,8 +81,20 @@ impl Ledger {
                 .active_processes
                 .remove(&format!("{PENDING_CALL_PREFIX}{call_id}"));
         }
+        state.uncertain_reports_in_flight += 1;
         let sequence = self.record_uncertain_locked(&mut state, "tools/call");
         drop(state);
+        struct InFlightDrop<'a>(&'a Ledger);
+        impl Drop for InFlightDrop<'_> {
+            fn drop(&mut self) {
+                let mut state = self.0.state.lock();
+                state.uncertain_reports_in_flight =
+                    state.uncertain_reports_in_flight.saturating_sub(1);
+                drop(state);
+                self.0.changed.send_modify(|value| *value += 1);
+            }
+        }
+        let _in_flight = InFlightDrop(self);
         if let Some(observer) = self.observer.get() {
             observer("tools/call", sequence);
         }
@@ -121,6 +145,13 @@ pub(super) async fn relay_local_cowboy(
         });
     }
     if method == UNCERTAIN_REPORT {
+        let Ok(_uncertain_guard) = ledger.enter_uncertain_report() else {
+            return Some((
+                refused("execution ledger closed for cooperative drain"),
+                None,
+                AckState::None,
+            ));
+        };
         if let Some(call_id) = params.get("callId").and_then(Value::as_str)
             && let Some(broker) = client.extensions.get()
             && broker.fail_pending_ack(call_id)
@@ -145,4 +176,69 @@ pub(super) async fn relay_local_cowboy(
         return Some((refused("reserved cowboy method"), None, AckState::None));
     }
     None
+}
+
+/// Keeps an admitted `cowboy/uncertainEffect` report counted until it finishes
+/// mutating the ledger and running the worker observer (R7-H1).
+pub(crate) struct UncertainReportGuard {
+    ledger: Arc<Ledger>,
+}
+
+impl Drop for UncertainReportGuard {
+    fn drop(&mut self) {
+        let mut state = self.ledger.state.lock();
+        state.uncertain_reports_in_flight = state.uncertain_reports_in_flight.saturating_sub(1);
+        drop(state);
+        self.ledger.changed.send_modify(|value| *value += 1);
+    }
+}
+
+pub(super) struct UncertainObserverGuard<'a>(&'a Ledger);
+
+impl Drop for UncertainObserverGuard<'_> {
+    fn drop(&mut self) {
+        let mut state = self.0.state.lock();
+        state.uncertain_reports_in_flight = state.uncertain_reports_in_flight.saturating_sub(1);
+        drop(state);
+        self.0.changed.send_modify(|value| *value += 1);
+    }
+}
+
+impl Ledger {
+    pub(super) fn uncertain_observer_guard(&self) -> UncertainObserverGuard<'_> {
+        UncertainObserverGuard(self)
+    }
+
+    pub(crate) fn enter_uncertain_report(
+        self: &Arc<Self>,
+    ) -> Result<UncertainReportGuard, &'static str> {
+        let mut state = self.state.lock();
+        if state.uncertain_reports_fenced {
+            return Err("execution ledger closed for cooperative drain");
+        }
+        state.uncertain_reports_in_flight += 1;
+        Ok(UncertainReportGuard {
+            ledger: Arc::clone(self),
+        })
+    }
+
+    /// Atomically fence new `cowboy/uncertainEffect` report admission and read
+    /// the ledger's uncertain effect ONLY once every in-flight uncertainty
+    /// report and observer callback has finished publishing (R7-H1).
+    pub(crate) fn close_uncertain_reports_and_read(&self) -> Result<Option<(String, u64)>, ()> {
+        let mut state = self.state.lock();
+        if state.uncertain_reports_in_flight > 0 {
+            return Err(());
+        }
+        state.uncertain_reports_fenced = true;
+        Ok(state
+            .record
+            .uncertain_effect
+            .clone()
+            .map(|method| (method, state.record.uncertain_sequence.max(1))))
+    }
+
+    pub(crate) fn reopen_uncertain_reports(&self) {
+        self.state.lock().uncertain_reports_fenced = false;
+    }
 }

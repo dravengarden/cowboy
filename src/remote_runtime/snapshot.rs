@@ -294,6 +294,10 @@ pub(super) fn clear_draining_crashed_epoch_if_matches(
     if draining.get(session_id).is_some_and(|e| e == worker_epoch) {
         draining.remove(session_id);
     }
+    shared
+        .draining_replay_snapshots
+        .lock()
+        .remove(&(session_id.to_owned(), worker_epoch.to_owned()));
 }
 
 pub(super) fn seed_crashed_sightings(
@@ -325,20 +329,35 @@ pub(super) fn seed_draining_crashed_epochs(
         .collect()
 }
 
-/// Capture epoch-bound draining crashed worker evidence from Welcome before
-/// `resetting` filters normal snapshot projection during bootstrap reload.
-/// Validates Clear fence (including native ID) and launch binding under Hub's
-/// projection guard (R6-H4), and seeds `shared.workers` when absent so
-/// `native_admission::event` admits trailing replay before acknowledging (R6-H5).
-pub(super) fn record_welcome_draining_crashed_epoch(shared: &Shared, worker: &WorkerSnapshot) {
-    let fence = shared.projection_fence.lock();
-    if *fence
-        || !worker.has_connected_owner()
+pub(super) fn seed_draining_replay_snapshots(
+    workers: &[WorkerSnapshot],
+) -> std::collections::HashMap<(String, String), WorkerSnapshot> {
+    workers
+        .iter()
+        .filter(|worker| {
+            worker.has_connected_owner()
+                && worker.state == WorkerState::Crashed
+                && worker.drain_requested
+        })
+        .map(|worker| {
+            (
+                (worker.session_id.clone(), worker.worker_epoch.clone()),
+                worker.clone(),
+            )
+        })
+        .collect()
+}
+
+/// Validate Clear fence (including native ID) and launch binding under Hub's
+/// projection guard before authorizing a crashed worker epoch for draining
+/// replay bypass (R7-H2, R7-H3).
+fn authorize_draining_crashed_epoch_locked(shared: &Shared, worker: &WorkerSnapshot) -> bool {
+    if !worker.has_connected_owner()
         || worker.state != WorkerState::Crashed
         || !worker.drain_requested
         || is_retired_crashed_epoch(shared, &worker.session_id, &worker.worker_epoch)
     {
-        return;
+        return false;
     }
     let _proj = shared.hub.runtime_projection_guard();
     if shared.hub.classify_runtime_epoch(
@@ -348,25 +367,43 @@ pub(super) fn record_welcome_draining_crashed_epoch(shared: &Shared, worker: &Wo
     ) != crate::core::RuntimeEpoch::Current
         || !shared.hub.matches_runtime_snapshot_binding(worker)
     {
-        return;
+        return false;
     }
     shared
         .draining_crashed_epochs
         .lock()
         .insert(worker.session_id.clone(), worker.worker_epoch.clone());
+    shared.draining_replay_snapshots.lock().insert(
+        (worker.session_id.clone(), worker.worker_epoch.clone()),
+        worker.clone(),
+    );
+    true
+}
+
+/// Capture epoch-bound draining crashed worker evidence from Welcome before
+/// `resetting` filters normal snapshot projection during bootstrap reload.
+/// Validates Clear fence (including native ID) and launch binding under Hub's
+/// projection guard and caches the verified snapshot in
+/// `draining_replay_snapshots` so `native_admission::event` admits trailing
+/// replay even when `shared.workers` holds an ownerless placeholder (R7-H2, R7-H3).
+pub(super) fn record_welcome_draining_crashed_epoch(shared: &Shared, worker: &WorkerSnapshot) {
+    let fence = shared.projection_fence.lock();
+    if *fence {
+        return;
+    }
+    if !authorize_draining_crashed_epoch_locked(shared, worker) {
+        return;
+    }
     shared.crashed_worker_sightings.lock().insert(
         worker.session_id.clone(),
         SightingActivity::from_snapshot(worker),
     );
-    let mut workers = shared.workers.lock();
-    workers
-        .entry(worker.session_id.clone())
-        .or_insert_with(|| worker.clone());
 }
 
 /// Observe raw connected-worker state. Rejects late snapshots for already-retired
 /// crashed epochs (R3-M7), records replacement epochs during reset (R2-M6), and
-/// clears stale draining markers when a newer epoch connects.
+/// authorizes draining replay ONLY after verifying Clear fence + launch binding
+/// under Hub's projection guard (R7-H2).
 pub(super) fn observe_crashed_sighting(shared: &Shared, worker: &WorkerSnapshot) {
     let fence = shared.projection_fence.lock();
     if *fence {
@@ -385,10 +422,10 @@ pub(super) fn observe_crashed_sighting(shared: &Shared, worker: &WorkerSnapshot)
             return;
         }
     }
-    let mut sightings = shared.crashed_worker_sightings.lock();
     if worker.has_connected_owner() {
         // Never erase retired epoch tombstones on successor snapshots (R4-M5);
-        // only update the active draining marker for the current connected epoch.
+        // clear stale draining markers for replaced epochs and verify binding
+        // + Clear fence before authorizing draining replay (R7-H2).
         {
             let mut draining = shared.draining_crashed_epochs.lock();
             if draining
@@ -396,47 +433,48 @@ pub(super) fn observe_crashed_sighting(shared: &Shared, worker: &WorkerSnapshot)
                 .is_some_and(|e| e != &worker.worker_epoch)
             {
                 draining.remove(&worker.session_id);
-            }
-            if worker.state == WorkerState::Crashed && worker.drain_requested {
-                draining.insert(worker.session_id.clone(), worker.worker_epoch.clone());
+                shared
+                    .draining_replay_snapshots
+                    .lock()
+                    .retain(|(sid, _), _| sid != &worker.session_id);
             }
         }
-        sightings.insert(
+        if worker.state == WorkerState::Crashed && worker.drain_requested {
+            let _ = authorize_draining_crashed_epoch_locked(shared, worker);
+        }
+        shared.crashed_worker_sightings.lock().insert(
             worker.session_id.clone(),
             SightingActivity::from_snapshot(worker),
         );
     } else {
-        sightings.remove(&worker.session_id);
+        shared
+            .crashed_worker_sightings
+            .lock()
+            .remove(&worker.session_id);
         shared
             .draining_crashed_epochs
             .lock()
             .remove(&worker.session_id);
+        shared
+            .draining_replay_snapshots
+            .lock()
+            .retain(|(sid, _), _| sid != &worker.session_id);
     }
 }
 
-/// True when `worker_epoch` is the explicitly draining crashed epoch (preserved
-/// across replayed Running/TurnStarted events during reload, R3-H2) or is
-/// currently observed in `Crashed` state.
+/// True ONLY when `worker_epoch` is a verified draining crashed epoch
+/// (Clear-fence and launch-binding checked, R7-H2). Raw maintenance sightings
+/// never authorize replay bypass on their own.
 pub(super) fn is_draining_crashed_epoch(
     shared: &Shared,
     session_id: &str,
     worker_epoch: &str,
 ) -> bool {
-    if shared
+    shared
         .draining_crashed_epochs
         .lock()
         .get(session_id)
         .is_some_and(|epoch| epoch == worker_epoch)
-    {
-        return true;
-    }
-    shared
-        .crashed_worker_sightings
-        .lock()
-        .get(session_id)
-        .is_some_and(|entry| {
-            entry.worker_epoch == worker_epoch && entry.state == WorkerState::Crashed
-        })
 }
 
 pub(super) fn should_project_worker_event(
@@ -544,6 +582,14 @@ pub(super) fn retain_crashed_sightings_after_welcome(
         .crashed_worker_sightings
         .lock()
         .retain(|id, _| ids.contains(id));
+    shared
+        .draining_crashed_epochs
+        .lock()
+        .retain(|id, _| ids.contains(id));
+    shared
+        .draining_replay_snapshots
+        .lock()
+        .retain(|(id, _), _| ids.contains(id));
 }
 
 pub(super) fn handle_crashed_worker_drained_frame(
@@ -611,6 +657,10 @@ pub(super) fn discard_pending_crashed_drain(
     if forget_session {
         shared.crashed_worker_sightings.lock().remove(session_id);
         shared.draining_crashed_epochs.lock().remove(session_id);
+        shared
+            .draining_replay_snapshots
+            .lock()
+            .retain(|(sid, _), _| sid != session_id);
         shared
             .retired_crashed_epochs
             .lock()
@@ -691,10 +741,32 @@ impl super::RemoteRuntime {
         }
         let acknowledged_uncertain_sequence =
             super::config_sync::acknowledged_uncertain_sequence_for(&self.shared.hub, session_id);
-        self.shared
-            .draining_crashed_epochs
+        if let Some(worker) = self
+            .shared
+            .workers
             .lock()
-            .insert(session_id.to_owned(), worker_epoch.to_owned());
+            .get(session_id)
+            .filter(|w| w.worker_epoch == worker_epoch)
+            .cloned()
+        {
+            let _proj = self.shared.hub.runtime_projection_guard();
+            if self.shared.hub.classify_runtime_epoch(
+                session_id,
+                worker_epoch,
+                worker.agent_session_id.as_deref(),
+            ) == crate::core::RuntimeEpoch::Current
+                && self.shared.hub.matches_runtime_snapshot_binding(&worker)
+            {
+                self.shared
+                    .draining_crashed_epochs
+                    .lock()
+                    .insert(session_id.to_owned(), worker_epoch.to_owned());
+                self.shared
+                    .draining_replay_snapshots
+                    .lock()
+                    .insert((session_id.to_owned(), worker_epoch.to_owned()), worker);
+            }
+        }
         let command_id = self.next_id("drain-crashed");
         self.queue(
             command_id.clone(),
@@ -1171,5 +1243,43 @@ mod crashed_drain_tests {
             rt.last_crashed_worker("s-r3"),
             CrashedWorkerObservation::Seen(s) if s.worker_epoch == "101-2"
         ));
+    }
+
+    #[tokio::test]
+    async fn draining_replay_snapshots_admit_replay_over_ownerless_placeholder_and_reject_raw_sighting()
+     {
+        let hub = crate::core::Hub::new();
+        let rt = super::super::RemoteRuntime::for_test(hub, Vec::new());
+        rt.connect_for_test();
+
+        // Raw non-draining Crashed sighting must NOT authorize draining replay bypass (R7-H2).
+        let raw_crashed = crashed_snapshot("s-r7", "700-1");
+        observe_crashed_sighting(&rt.shared, &raw_crashed);
+        assert!(!is_draining_crashed_epoch(&rt.shared, "s-r7", "700-1"));
+
+        // Ownerless placeholder in shared.workers must NOT block replay admission
+        // once a verified draining snapshot is captured in draining_replay_snapshots (R7-H3).
+        let mut placeholder = crashed_snapshot("s-r7", "broker-s-r7");
+        placeholder.state = WorkerState::Crashed;
+        rt.shared.workers.lock().insert("s-r7".into(), placeholder);
+
+        let mut draining_snap = crashed_snapshot("s-r7", "700-1");
+        draining_snap.drain_requested = true;
+        record_welcome_draining_crashed_epoch(&rt.shared, &draining_snap);
+        assert!(is_draining_crashed_epoch(&rt.shared, "s-r7", "700-1"));
+        assert!(
+            rt.shared
+                .draining_replay_snapshots
+                .lock()
+                .contains_key(&("s-r7".to_owned(), "700-1".to_owned()))
+        );
+
+        let mut projected = false;
+        let admitted = super::super::native_admission::event(&rt.shared, "s-r7", "700-1", || {
+            projected = true;
+        })
+        .await;
+        assert!(admitted);
+        assert!(projected);
     }
 }

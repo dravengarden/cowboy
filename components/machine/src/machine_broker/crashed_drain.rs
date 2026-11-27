@@ -35,6 +35,26 @@ struct Inner {
     receiptless_uncertain_effects: HashMap<String, (String, crate::runtime_wire::UncertainEffect)>,
 }
 
+/// Durable launch ownership proof for a retiring crashed worker (R7-H6).
+/// Distinguishes a confirmed absent durable record (`VerifiedNone`) from a
+/// transient store-read error (`Unresolved`, which fails closed until resolved).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::machine_broker) enum RetiredLaunch {
+    Verified(uuid::Uuid),
+    VerifiedNone,
+    Unresolved,
+}
+
+impl RetiredLaunch {
+    fn or(self, other: Self) -> Self {
+        if self == Self::Unresolved {
+            other
+        } else {
+            self
+        }
+    }
+}
+
 struct PendingDrain {
     session_id: String,
     epoch: String,
@@ -43,7 +63,7 @@ struct PendingDrain {
     connection_id: u64,
     acknowledged_uncertain_sequence: u64,
     peer_pid: Option<u32>,
-    retired_launch: Option<uuid::Uuid>,
+    retired_launch: RetiredLaunch,
     /// True ONLY after a same-epoch disconnect/reconnect when the command must
     /// be replayed; false while the live worker's ACK is already in flight (R4-M1).
     needs_replay: bool,
@@ -54,14 +74,14 @@ struct ActiveDrain {
     connection_id: u64,
     confirmed: bool,
     peer_pid: Option<u32>,
-    retired_launch: Option<uuid::Uuid>,
+    retired_launch: RetiredLaunch,
 }
 
 #[derive(Clone)]
 struct UnconfirmedTeardown {
     epoch: String,
     peer_pid: Option<u32>,
-    retired_launch: Option<uuid::Uuid>,
+    retired_launch: RetiredLaunch,
 }
 
 enum DrainAdmission {
@@ -126,7 +146,8 @@ impl Broker {
             return;
         }
         let current_launch = match self.current_durable_launch_id(&session_id).await {
-            Ok(launch) => launch,
+            Ok(Some(launch)) => RetiredLaunch::Verified(launch),
+            Ok(None) => RetiredLaunch::VerifiedNone,
             Err(error) => {
                 self.command_rejected(
                     &session_id,
@@ -164,7 +185,7 @@ impl Broker {
         command_id: &str,
         worker_epoch: &str,
         acknowledged_uncertain_sequence: u64,
-        retired_launch: Option<uuid::Uuid>,
+        retired_launch: RetiredLaunch,
     ) -> DrainAdmission {
         let controller = self.controller.lock();
         let expected_lease = active_command_lease();
@@ -418,7 +439,7 @@ impl Broker {
                         && pending.epoch == epoch
                         && pending.connection_id == connection_id
                 })
-                .and_then(|pending| pending.retired_launch)
+                .map(|pending| pending.retired_launch)
         });
         let authorized = worker.crashed_drain_fenced
             || state.active.get(session_id).is_some_and(|active| {
@@ -439,11 +460,14 @@ impl Broker {
             );
             return;
         }
-        let retired_launch = state
+        let retired_launch = match state
             .active
             .get(session_id)
-            .and_then(|active| active.retired_launch)
-            .or(matching_pending_launch);
+            .map(|active| active.retired_launch)
+        {
+            Some(launch) if launch != RetiredLaunch::Unresolved => launch,
+            _ => matching_pending_launch.unwrap_or(RetiredLaunch::Unresolved),
+        };
         worker.crashed_drain_fenced = true;
         state.active.insert(
             session_id.to_owned(),
@@ -463,6 +487,7 @@ impl Broker {
         epoch: &str,
         connection_id: u64,
         replaced_same_epoch_pid: Option<u32>,
+        resumed_drain: Option<RetiredLaunch>,
         worker: &mut WorkerPeer,
     ) -> Vec<(String, String)> {
         let mut state = self.crashed_drains.inner.lock();
@@ -478,7 +503,21 @@ impl Broker {
             .is_some_and(|(recorded_epoch, _)| recorded_epoch != epoch)
         {
             state.trusted_epoch_pids.remove(session_id);
-            state.receiptless_uncertain_effects.remove(session_id);
+        }
+        // Match `receiptless_uncertain_effects` by its own recorded epoch: merge
+        // into a same-epoch reconnect (including after abort!) and delete only
+        // on genuine epoch replacement (R7-H5).
+        if let Some((recorded_epoch, effect)) =
+            state.receiptless_uncertain_effects.get(session_id).cloned()
+        {
+            if recorded_epoch == epoch {
+                crate::runtime_wire::merge_uncertain_effect(
+                    &mut worker.snapshot.uncertain_effect,
+                    effect,
+                );
+            } else {
+                state.receiptless_uncertain_effects.remove(session_id);
+            }
         }
         let mut preserved_pid = worker
             .peer_pid
@@ -492,6 +531,11 @@ impl Broker {
             preserved_pid = preserved_pid.or(active.peer_pid);
             if preserved_pid.is_some() {
                 active.peer_pid = preserved_pid;
+            }
+            if active.retired_launch == RetiredLaunch::Unresolved
+                && let Some(launch) = resumed_drain
+            {
+                active.retired_launch = launch;
             }
             same_epoch = true;
         }
@@ -516,9 +560,28 @@ impl Broker {
             worker.crashed_drain_fenced = true;
             return Vec::new();
         }
+        // Surviving worker reconnecting after broker restart with an accepted
+        // drain carried in `Frame::Hello`: install fence + `ActiveDrain`
+        // atomically during registration before `Welcome` and `flush_pending`
+        // (R7-H4).
+        if let Some(retired_launch) = resumed_drain {
+            state.unconfirmed_teardown.remove(session_id);
+            let orphaned = drain_pending_for_session(&mut state.pending, session_id);
+            state.active.insert(
+                session_id.to_owned(),
+                ActiveDrain {
+                    epoch: epoch.to_owned(),
+                    connection_id,
+                    confirmed: false,
+                    peer_pid: preserved_pid,
+                    retired_launch,
+                },
+            );
+            worker.crashed_drain_fenced = true;
+            return orphaned;
+        }
         state.active.remove(session_id);
         state.unconfirmed_teardown.remove(session_id);
-        state.receiptless_uncertain_effects.remove(session_id);
         drain_pending_for_session(&mut state.pending, session_id)
     }
 
@@ -778,7 +841,7 @@ impl Broker {
                         pending.needs_replay = true;
                     }
                 }
-                (false, None, None)
+                (false, RetiredLaunch::Unresolved, None)
             }
         };
         if !confirmed {
@@ -882,7 +945,7 @@ impl Broker {
         session_id: &str,
         peer: &WorkerPeer,
         recorded_pid: Option<u32>,
-        retired_launch: Option<uuid::Uuid>,
+        retired_launch: RetiredLaunch,
         teardown_ok: bool,
     ) {
         let (commit, session_for_cache, orphaned_pending, queued_rejections, retry_entry) = {
@@ -1007,10 +1070,12 @@ impl Broker {
                             .and_then(|a| a.peer_pid)
                             .or_else(|| pending.and_then(|p| p.peer_pid))
                             .or_else(|| unconfirmed.and_then(|u| u.peer_pid));
-                        let launch = active
-                            .and_then(|a| a.retired_launch)
-                            .or_else(|| pending.and_then(|p| p.retired_launch))
-                            .or_else(|| unconfirmed.and_then(|u| u.retired_launch));
+                        let launch =
+                            active
+                                .map_or(RetiredLaunch::Unresolved, |a| a.retired_launch)
+                                .or(pending.map_or(RetiredLaunch::Unresolved, |p| p.retired_launch))
+                                .or(unconfirmed
+                                    .map_or(RetiredLaunch::Unresolved, |u| u.retired_launch));
                         Some((pid, launch))
                     } else {
                         None
@@ -1068,8 +1133,8 @@ impl Broker {
                         .and_then(|e| e.peer_pid)
                         .or_else(|| pending_entry.and_then(|e| e.peer_pid)),
                     active_entry
-                        .and_then(|e| e.retired_launch)
-                        .or_else(|| pending_entry.and_then(|e| e.retired_launch)),
+                        .map_or(RetiredLaunch::Unresolved, |e| e.retired_launch)
+                        .or(pending_entry.map_or(RetiredLaunch::Unresolved, |e| e.retired_launch)),
                 )
             });
             (
@@ -1151,6 +1216,7 @@ impl Broker {
             state.active.remove(session_id);
             state.unconfirmed_teardown.remove(session_id);
             state.trusted_epoch_pids.remove(session_id);
+            state.receiptless_uncertain_effects.remove(session_id);
             drain_pending_for_session(&mut state.pending, session_id)
         };
         for (sid, cid) in orphaned {
@@ -1479,6 +1545,7 @@ mod tests {
                     tx,
                 },
                 true,
+                None,
             )
             .unwrap();
         let mut workers = broker.workers.lock();
@@ -1877,5 +1944,84 @@ mod tests {
                 ref worker_epoch,
             }) if session_id == "s-ambig" && worker_epoch == "500-1"
         ));
+    }
+
+    #[tokio::test]
+    async fn unresolved_launch_fails_closed_and_same_epoch_reconnect_preserves_receiptless_uncertain()
+     {
+        let dir = tempfile::tempdir().unwrap();
+        let broker = test_broker(dir.path());
+        // R7-H6: Unresolved durable launch identity must fail closed.
+        assert!(
+            !broker
+                .confirm_retired_sandbox_units_gone("s-unresolved", RetiredLaunch::Unresolved)
+                .await
+        );
+        assert!(
+            broker
+                .confirm_retired_sandbox_units_gone("s-unresolved", RetiredLaunch::VerifiedNone)
+                .await
+        );
+
+        // R7-H5: Receiptless uncertain effect is preserved across same-epoch
+        // reconnect (even when no active/pending drain exists, e.g. after abort)
+        // and cleared only on epoch replacement.
+        broker
+            .crashed_drains
+            .inner
+            .lock()
+            .receiptless_uncertain_effects
+            .insert(
+                "s-r7-h5".into(),
+                (
+                    "705-1".into(),
+                    crate::runtime_wire::UncertainEffect {
+                        method: "write".into(),
+                        sequence: 9,
+                    },
+                ),
+            );
+        let _rx1 = attach_crashed_worker(
+            &broker,
+            "s-r7-h5",
+            "705-1",
+            1,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+        );
+        assert_eq!(
+            broker
+                .workers
+                .lock()
+                .get("s-r7-h5")
+                .and_then(|w| w.snapshot.uncertain_effect.as_ref())
+                .map(|e| e.sequence),
+            Some(9)
+        );
+        assert!(
+            broker
+                .crashed_drains
+                .inner
+                .lock()
+                .receiptless_uncertain_effects
+                .contains_key("s-r7-h5")
+        );
+
+        // Actual epoch replacement clears the old epoch's receiptless entry.
+        broker.remove_worker("s-r7-h5", 1);
+        let _rx2 = attach_crashed_worker(
+            &broker,
+            "s-r7-h5",
+            "705-2",
+            2,
+            CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION,
+        );
+        assert!(
+            !broker
+                .crashed_drains
+                .inner
+                .lock()
+                .receiptless_uncertain_effects
+                .contains_key("s-r7-h5")
+        );
     }
 }

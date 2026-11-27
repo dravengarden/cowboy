@@ -200,21 +200,17 @@ pub(super) fn spawn_core_command_loop(
         PendingCoreCommandGuard,
     )>(super::CORE_COMMAND_QUEUE_CAPACITY);
     let task = tokio::spawn(async move {
-        while let Some((lease, command, mut guard)) = rx.recv().await {
+        while let Some((lease, command, guard)) = rx.recv().await {
             if broker.controller_for(lease).is_none() {
                 tracing::warn!(lease, "discarding queued command from replaced controller");
                 drop(guard);
                 continue;
             }
             let broker = Arc::clone(&broker);
-            let owned_ingress = guard.take_for_dispatch();
-            let _ = tokio::spawn(super::COMMAND_LEASE.scope(
-                lease,
-                super::account_unit::OWNED_PROMPT_INGRESS.scope(owned_ingress, async move {
-                    let _guard = guard;
-                    super::handle_core_command(&broker, command).await
-                }),
-            ))
+            let _ = tokio::spawn(super::COMMAND_LEASE.scope(lease, async move {
+                let _guard = guard;
+                super::handle_core_command(&broker, command).await
+            }))
             .await;
         }
     });
@@ -261,8 +257,8 @@ pub(super) fn enqueue_leased_core_command(
         if let Some((sid, cid)) = prompt_key {
             let mut dispatched = broker.dispatched_prompts.lock();
             dispatched.inc_core_queue(&sid, &cid);
-            let newly = dispatched.mark_ingressed(&sid, &cid);
-            guard.core_prompt = Some((sid, cid, newly));
+            dispatched.mark_ingressed(&sid, &cid);
+            guard.core_prompt = Some((sid, cid));
         }
         match command_tx.try_send((lease, command, guard)) {
             Ok(()) => None,
@@ -1110,7 +1106,6 @@ impl super::Broker {
                     Some(c) => Some(c.tx.clone()),
                     None => {
                         tracing::warn!(lease, session = %session_id, "discarding stale-lease prompt at admission");
-                        self.retire_owned_unhanded_prompt(session_id, &command_id);
                         return;
                     }
                 },
@@ -1410,6 +1405,7 @@ impl super::Broker {
             while let Some(command) = queue.pop_front() {
                 if worker.crashed_drain_fenced
                     || (worker.snapshot.drain_requested
+                        && worker.snapshot.state != crate::runtime_wire::WorkerState::Crashed
                         && matches!(command, WorkerCommand::Prompt { .. }))
                 {
                     remaining.push_back(command);

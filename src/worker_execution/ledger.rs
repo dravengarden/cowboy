@@ -202,6 +202,11 @@ struct State {
     /// When the last turn was fenced (its evidence may still be delivered).
     turn_ended: Option<std::time::Instant>,
     closed: bool,
+    /// In-flight `cowboy/uncertainEffect` relays and `mark_uncertain` observer
+    /// callbacks; cooperative crashed-worker drain waits for this to reach 0.
+    uncertain_reports_in_flight: usize,
+    /// True once cooperative crashed-worker drain closed uncertainty admission.
+    uncertain_reports_fenced: bool,
 }
 
 impl State {
@@ -856,6 +861,7 @@ impl Ledger {
 
     pub(crate) fn mark_uncertain(&self, method: &str) {
         let mut state = self.state.lock();
+        state.uncertain_reports_in_flight += 1;
         state.record.uncertain_effect = Some(method.to_owned());
         state.record.uncertain_sequence = next_sequence(state.record.uncertain_sequence);
         let sequence = state.record.uncertain_sequence;
@@ -867,6 +873,7 @@ impl Ledger {
             state.unwritable = true;
         }
         drop(state);
+        let _in_flight = self.uncertain_observer_guard();
         if let Some(observer) = self.observer.get() {
             observer(method, sequence);
         }
@@ -1332,7 +1339,11 @@ impl Client {
                 self.terminate_all(processes, true),
             )
             .await;
-            ledger.wait_until(|ledger| ledger.drained(None)).await;
+            ledger
+                .wait_until(|ledger| {
+                    ledger.drained(None) && ledger.state.lock().uncertain_reports_in_flight == 0
+                })
+                .await;
         }
     }
 

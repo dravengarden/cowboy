@@ -153,6 +153,7 @@ pub struct Shared {
     crashed_worker_sightings: Mutex<HashMap<String, snapshot::SightingActivity>>,
     /// Exact crashed epochs currently draining (preserved across replayed events and handover, R3-H2/R4-H6).
     draining_crashed_epochs: Mutex<HashMap<String, String>>,
+    draining_replay_snapshots: Mutex<HashMap<(String, String), WorkerSnapshot>>,
     /// Bounded `(session_id, worker_epoch)` tombstones rejecting late handover snapshots (R4-M5).
     retired_crashed_epochs: Mutex<HashMap<(String, String), std::time::Instant>>,
     /// Worker epochs whose initial config snapshot has already triggered
@@ -312,6 +313,7 @@ impl RemoteRuntime {
                 workers: Mutex::new(HashMap::new()),
                 crashed_worker_sightings: Mutex::new(HashMap::new()),
                 draining_crashed_epochs: Mutex::new(HashMap::new()),
+                draining_replay_snapshots: Mutex::new(HashMap::new()),
                 retired_crashed_epochs: Mutex::new(HashMap::new()),
                 config_sync_epochs: Mutex::new(HashMap::new()),
                 config_startups: Mutex::new(HashSet::new()),
@@ -393,6 +395,9 @@ impl RemoteRuntime {
                     &bootstrap.workers,
                 )),
                 draining_crashed_epochs: Mutex::new(snapshot::seed_draining_crashed_epochs(
+                    &bootstrap.workers,
+                )),
+                draining_replay_snapshots: Mutex::new(snapshot::seed_draining_replay_snapshots(
                     &bootstrap.workers,
                 )),
                 retired_crashed_epochs: Mutex::new(HashMap::new()),
@@ -1613,6 +1618,7 @@ async fn connect_once(
             fallback_for: None,
             outer_machine_protocol: Some(crate::machine_protocol::MACHINE_PROTOCOL_VERSION),
             post_edit_http: false,
+            accepted_crashed_drain: None,
         },
     )
     .await?;
@@ -1652,6 +1658,7 @@ async fn connect_once_stream(
             fallback_for: None,
             outer_machine_protocol: None,
             post_edit_http: false,
+            accepted_crashed_drain: None,
         },
     )
     .await?;
@@ -2270,6 +2277,11 @@ async fn handle_frame<W: tokio::io::AsyncWrite + Unpin + Send>(
                     }
                 })
                 .await;
+                if !admitted
+                    && snapshot::is_draining_crashed_epoch(shared, &session_id, &worker_epoch)
+                {
+                    return Ok(());
+                }
                 notice_recovery::settle_event_undelivered(
                     shared,
                     &key,

@@ -6,32 +6,17 @@
 
 use super::*;
 
-tokio::task_local! {
-    /// Prompt `(session_id, command_id)` whose `DispatchedPrompts` ingress record
-    /// was freshly created by this exact core-command invocation (R5-M1).
-    pub(super) static OWNED_PROMPT_INGRESS: Option<(String, String)>;
-}
-
 pub(super) struct PendingCoreCommandGuard {
     pub(super) broker: Arc<super::Broker>,
     pub(super) session_id: Option<String>,
-    pub(super) core_prompt: Option<(String, String, bool)>,
-}
-
-impl PendingCoreCommandGuard {
-    pub(super) fn take_for_dispatch(&mut self) -> Option<(String, String)> {
-        let (sid, cid, owns) = self.core_prompt.take()?;
-        self.broker
-            .dispatched_prompts
-            .lock()
-            .dec_core_queue(&sid, &cid);
-        owns.then_some((sid, cid))
-    }
+    /// Prompt `(session_id, command_id)` counted in `queued_core_prompts`
+    /// through routing/discard until this guard drops (R7-M2).
+    pub(super) core_prompt: Option<(String, String)>,
 }
 
 impl Drop for PendingCoreCommandGuard {
     fn drop(&mut self) {
-        if let Some((sid, cid, _)) = self.core_prompt.take() {
+        if let Some((sid, cid)) = self.core_prompt.take() {
             self.broker.retire_core_queue_copy(&sid, &cid);
         }
         if let Some(session_id) = self.session_id.take() {
@@ -64,51 +49,6 @@ impl Broker {
         let remaining_core = dispatched.dec_core_queue(session_id, command_id);
         if remaining_core == 0 && !queued_worker {
             dispatched.retire_if_unhanded(session_id, command_id);
-        }
-    }
-
-    pub(super) fn retire_owned_unhanded_prompt(&self, session_id: &str, command_id: &str) {
-        let owns_ingress = OWNED_PROMPT_INGRESS
-            .try_with(|owned| {
-                owned
-                    .as_ref()
-                    .is_some_and(|(s, c)| s == session_id && c == command_id)
-            })
-            .unwrap_or(false);
-        if !owns_ingress {
-            return;
-        }
-        let pending = self.pending_commands.lock();
-        let queued_worker = pending.get(session_id).is_some_and(|queue| {
-            queue.iter().any(|cmd| {
-                matches!(
-                    cmd,
-                    WorkerCommand::Prompt {
-                        command_id: queued_id,
-                        ..
-                    } if queued_id == command_id
-                )
-            })
-        });
-        let mut dispatched = self.dispatched_prompts.lock();
-        let remaining_core = dispatched
-            .queued_core_prompts
-            .get(&(session_id.to_owned(), command_id.to_owned()))
-            .copied()
-            .unwrap_or(0);
-        if remaining_core == 0 && !queued_worker {
-            dispatched.retire_if_unhanded(session_id, command_id);
-        }
-    }
-
-    pub(super) fn retire_stale_lease_prompt(&self, command: &crate::runtime_wire::CoreCommand) {
-        if let crate::runtime_wire::CoreCommand::Prompt {
-            session_id,
-            command_id,
-            ..
-        } = command
-        {
-            self.retire_owned_unhanded_prompt(session_id, command_id);
         }
     }
 

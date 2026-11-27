@@ -128,13 +128,25 @@ pub(super) async fn event(
     worker_epoch: &str,
     project: impl FnOnce() + Send,
 ) -> bool {
-    let worker = shared.workers.lock().get(session_id).cloned();
+    let cached = shared.workers.lock().get(session_id).cloned();
+    let replay_snapshot = cached
+        .as_ref()
+        .filter(|worker| worker.worker_epoch == worker_epoch)
+        .cloned()
+        .or_else(|| {
+            shared
+                .draining_replay_snapshots
+                .lock()
+                .get(&(session_id.to_owned(), worker_epoch.to_owned()))
+                .cloned()
+        });
     let named = shared
         .hub
         .session_info(session_id)
         .is_some_and(|info| !info.meta.provider_account_id.is_default())
-        || worker
+        || replay_snapshot
             .as_ref()
+            .or(cached.as_ref())
             .and_then(|worker| worker.launch.as_ref())
             .is_some_and(|launch| !launch.provider_account_id.is_default());
     let execution_bound = shared
@@ -147,11 +159,24 @@ pub(super) async fn event(
             return false;
         }
         if execution_bound {
-            // Finding 5: an execution-bound default-account session must only
-            // project events from the exact binding-matched cached worker epoch
-            // so a rejected mismatched worker cannot persist native IDs or turn
-            // state onto the session.
-            let Some(current) = shared.workers.lock().get(session_id).cloned() else {
+            // Finding 5 + R7-H3: an execution-bound default-account session must
+            // only project events from the exact binding-matched cached or
+            // verified draining-replay worker epoch so a rejected mismatched
+            // worker cannot persist native IDs or turn state onto the session.
+            let Some(current) = shared
+                .workers
+                .lock()
+                .get(session_id)
+                .filter(|worker| worker.worker_epoch == worker_epoch)
+                .cloned()
+                .or_else(|| {
+                    shared
+                        .draining_replay_snapshots
+                        .lock()
+                        .get(&(session_id.to_owned(), worker_epoch.to_owned()))
+                        .cloned()
+                })
+            else {
                 return false;
             };
             if current.worker_epoch != worker_epoch
@@ -163,7 +188,7 @@ pub(super) async fn event(
         project();
         return true;
     }
-    let Some(worker) = worker else {
+    let Some(worker) = replay_snapshot else {
         return false;
     };
     if worker.worker_epoch != worker_epoch {
@@ -173,14 +198,22 @@ pub(super) async fn event(
     snapshot(shared, &worker, || {
         // Recheck after the asynchronous DB admission. Do not hold the cache
         // mutex across projection: projection itself updates that cache.
-        if shared
+        let matches_cached = shared
             .workers
             .lock()
             .get(session_id)
             .is_some_and(|current| {
                 current.worker_epoch == worker_epoch && current.launch == worker.launch
-            })
-        {
+            });
+        let matches_draining_replay = !matches_cached
+            && shared
+                .draining_replay_snapshots
+                .lock()
+                .get(&(session_id.to_owned(), worker_epoch.to_owned()))
+                .is_some_and(|current| {
+                    current.worker_epoch == worker_epoch && current.launch == worker.launch
+                });
+        if matches_cached || matches_draining_replay {
             project();
             projected.store(true, Ordering::Release);
         }

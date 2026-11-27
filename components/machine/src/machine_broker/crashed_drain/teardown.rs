@@ -17,6 +17,29 @@ impl Broker {
                 worker_epoch,
                 command_id,
             } if drained_session == session_id && worker_epoch == epoch => {
+                // Retry resolving durable launch identity if a post-restart
+                // Hello lookup failed transiently before confirming teardown (R7-H6).
+                let needs_launch = {
+                    let state = self.crashed_drains.inner.lock();
+                    state.active.get(session_id).is_some_and(|a| {
+                        a.epoch == epoch
+                            && a.connection_id == connection_id
+                            && a.retired_launch == RetiredLaunch::Unresolved
+                    })
+                };
+                if needs_launch {
+                    let resolved = self.resolve_durable_launch_for_drain(session_id).await;
+                    if resolved != RetiredLaunch::Unresolved {
+                        let mut state = self.crashed_drains.inner.lock();
+                        if let Some(active) = state.active.get_mut(session_id)
+                            && active.epoch == epoch
+                            && active.connection_id == connection_id
+                            && active.retired_launch == RetiredLaunch::Unresolved
+                        {
+                            active.retired_launch = resolved;
+                        }
+                    }
+                }
                 self.confirm_crashed_drain(session_id, epoch, connection_id, command_id.as_deref());
             }
             Frame::CrashedDrainAborted {
@@ -32,20 +55,6 @@ impl Broker {
                     command_id.as_deref(),
                     uncertain_effect,
                 );
-            }
-            Frame::CrashedDrainResume {
-                session_id: resumed_session,
-                worker_epoch,
-                command_id,
-                ..
-            } if resumed_session == session_id && worker_epoch == epoch => {
-                self.handle_crashed_drain_resume(
-                    session_id,
-                    epoch,
-                    connection_id,
-                    command_id.as_deref(),
-                )
-                .await;
             }
             _ => {}
         }
@@ -82,30 +91,39 @@ impl Broker {
                         && p.connection_id == connection_id
                 })
             });
-            if !matched_active && !matched_pending {
-                return;
-            }
+            // Idempotent for restated aborts after reconnect/broker-restart
+            // (R7-M1): still merge a newer uncertain_effect onto the matching
+            // live worker snapshot even when active/pending drain was already
+            // cleared on an earlier abort.
+            let prev_effect = worker.snapshot.uncertain_effect.clone();
             crate::runtime_wire::merge_uncertain_effect(
                 &mut worker.snapshot.uncertain_effect,
                 uncertain_effect,
             );
-            if matched_active {
-                state.active.remove(session_id);
-            }
-            if let Some(cid) = command_id {
-                state.pending.remove(cid);
-            }
-            let still_pending = state
-                .pending
-                .values()
-                .any(|p| p.session_id == session_id && p.epoch == epoch);
-            let cleared = if !still_pending && !state.active.contains_key(session_id) {
-                worker.crashed_drain_fenced = false;
-                true
+            if !matched_active && !matched_pending {
+                if worker.snapshot.uncertain_effect == prev_effect {
+                    return;
+                }
+                (worker.snapshot.clone(), false)
             } else {
-                false
-            };
-            (worker.snapshot.clone(), cleared)
+                if matched_active {
+                    state.active.remove(session_id);
+                }
+                if let Some(cid) = command_id {
+                    state.pending.remove(cid);
+                }
+                let still_pending = state
+                    .pending
+                    .values()
+                    .any(|p| p.session_id == session_id && p.epoch == epoch);
+                let cleared = if !still_pending && !state.active.contains_key(session_id) {
+                    worker.crashed_drain_fenced = false;
+                    true
+                } else {
+                    false
+                };
+                (worker.snapshot.clone(), cleared)
+            }
         };
         self.send_controller(Frame::Snapshot {
             worker: Box::new(updated_snapshot),
@@ -116,56 +134,14 @@ impl Broker {
         self.crashed_drains.settled.notify_waiters();
     }
 
-    /// Restore an accepted crashed-drain ownership fence after broker restart
-    /// when a surviving worker reports `Frame::CrashedDrainResume` during
-    /// handshake (R6-M5).
-    pub(in crate::machine_broker) async fn handle_crashed_drain_resume(
+    pub(in crate::machine_broker) async fn resolve_durable_launch_for_drain(
         &self,
         session_id: &str,
-        epoch: &str,
-        connection_id: u64,
-        _command_id: Option<&str>,
-    ) {
-        let retired_launch = self
-            .current_durable_launch_id(session_id)
-            .await
-            .ok()
-            .flatten();
-        let mut workers = self.workers.lock();
-        let Some(worker) = workers
-            .get_mut(session_id)
-            .filter(|w| w.connection_id == connection_id && w.epoch == epoch)
-        else {
-            return;
-        };
-        let trusted_pid = worker
-            .peer_pid
-            .or_else(|| self.direct_worker_pids.lock().get(session_id).copied());
-        if trusted_pid.is_some() {
-            worker.peer_pid = trusted_pid;
-        }
-        let mut state = self.crashed_drains.inner.lock();
-        if let Some(pid) = trusted_pid {
-            state
-                .trusted_epoch_pids
-                .insert(session_id.to_owned(), (epoch.to_owned(), pid));
-        }
-        worker.crashed_drain_fenced = true;
-        let already_active = state
-            .active
-            .get(session_id)
-            .is_some_and(|a| a.epoch == epoch);
-        if !already_active {
-            state.active.insert(
-                session_id.to_owned(),
-                ActiveDrain {
-                    epoch: epoch.to_owned(),
-                    connection_id,
-                    confirmed: false,
-                    peer_pid: trusted_pid,
-                    retired_launch,
-                },
-            );
+    ) -> RetiredLaunch {
+        match self.current_durable_launch_id(session_id).await {
+            Ok(Some(launch)) => RetiredLaunch::Verified(launch),
+            Ok(None) => RetiredLaunch::VerifiedNone,
+            Err(_) => RetiredLaunch::Unresolved,
         }
     }
 
@@ -244,6 +220,79 @@ impl Broker {
                     worker: Box::new(snap),
                 });
             }
+        }
+        // Emit ownerless `broker-<session_id>` corrections for live Welcome
+        // workers that retired before this Controller lease installed, when
+        // the Controller will NOT receive a matching `CrashedWorkerDrained`
+        // replay (for example a downgraded Controller or receiptless exit,
+        // R7-M3).
+        let controller_capable = protocol >= CRASHED_WORKER_DRAIN_RUNTIME_PROTOCOL_VERSION
+            && outer.is_some_and(|p| p >= CRASHED_WORKER_DRAIN_PROTOCOL_VERSION);
+        for welcomed in welcome {
+            if !welcomed.has_connected_owner() || workers.contains_key(&welcomed.session_id) {
+                continue;
+            }
+            let replayed_drained = controller_capable
+                && state
+                    .recently_drained
+                    .get(&welcomed.session_id)
+                    .is_some_and(|(ep, _)| ep == &welcomed.worker_epoch);
+            if replayed_drained {
+                continue;
+            }
+            let session = sessions.get(&welcomed.session_id);
+            let mut ownerless = WorkerSnapshot {
+                session_id: welcomed.session_id.clone(),
+                worker_epoch: format!("broker-{}", welcomed.session_id),
+                generation: session
+                    .map(|s| s.generation.clone())
+                    .unwrap_or_else(|| welcomed.generation.clone()),
+                executable: welcomed.executable.clone(),
+                launch: session.cloned().or_else(|| welcomed.launch.clone()),
+                state: WorkerState::Crashed,
+                agent_session_id: session
+                    .and_then(|s| s.agent_session_id.clone())
+                    .or_else(|| welcomed.agent_session_id.clone()),
+                native_thread_materialized: None,
+                current_turn_id: None,
+                supports_current_turn: false,
+                delivery_controls: crate::runtime_wire::DeliveryControls::default(),
+                wrap_up_steering: false,
+                supports_subagent_cancel: false,
+                last_runtime_seq: 0,
+                pending_permissions: Vec::new(),
+                config_options: None,
+                context_used: None,
+                context_size: None,
+                pending_prompt_count: pending_prompts
+                    .get(&welcomed.session_id)
+                    .copied()
+                    .unwrap_or(0),
+                drain_requested: false,
+                exit_detail: welcomed.exit_detail.clone(),
+                background_tasks: None,
+                native_cycle_id: None,
+                native_cycle_active: false,
+                incarnation: self.reported_lineage(&welcomed.session_id),
+                account_unit: None,
+                uncertain_effect: state
+                    .receiptless_uncertain_effects
+                    .get(&welcomed.session_id)
+                    .map(|(_, eff)| eff.clone())
+                    .or_else(|| welcomed.uncertain_effect.clone()),
+            };
+            let declared_provider = session.map(|s| s.provider.as_str());
+            wrap_up::sanitize_snapshot_for_controller(
+                &mut ownerless,
+                false,
+                protocol,
+                outer,
+                protocol,
+                declared_provider,
+            );
+            let _ = tx.send(Frame::Snapshot {
+                worker: Box::new(ownerless),
+            });
         }
     }
 
@@ -426,7 +475,7 @@ impl Broker {
         &self,
         session_id: &str,
         recorded_pid: Option<u32>,
-        retired_launch: Option<uuid::Uuid>,
+        retired_launch: RetiredLaunch,
     ) -> bool {
         if self.args.spawn_mode == SpawnMode::Direct {
             let deadline = tokio::time::Instant::now() + DIRECT_EXIT_GRACE;
@@ -449,7 +498,7 @@ impl Broker {
         session_id: String,
         worker_epoch: String,
         recorded_pid: Option<u32>,
-        retired_launch: Option<uuid::Uuid>,
+        retired_launch: RetiredLaunch,
     ) {
         let broker = Arc::clone(self);
         tokio::spawn(async move {
@@ -575,7 +624,7 @@ impl Broker {
         &self,
         session_id: &str,
         recorded_pid: Option<u32>,
-        retired_launch: Option<uuid::Uuid>,
+        retired_launch: RetiredLaunch,
     ) -> bool {
         if self.args.spawn_mode == SpawnMode::Direct
             && !self
@@ -594,21 +643,24 @@ impl Broker {
     pub(super) async fn confirm_retired_sandbox_units_gone(
         &self,
         session_id: &str,
-        expected_launch: Option<uuid::Uuid>,
+        expected_launch: RetiredLaunch,
     ) -> bool {
         let store = Arc::clone(&self.args.provider_store);
         let session = session_id.to_owned();
         let confirmed = tokio::task::spawn_blocking(move || match expected_launch {
-            Some(expected) => {
+            RetiredLaunch::Verified(expected) => {
                 store.confirm_session_account_units_gone_for_launch(&session, expected)
             }
-            None => match store.account_worker_exit(&session)? {
+            RetiredLaunch::VerifiedNone => match store.account_worker_exit(&session)? {
                 None => Ok(()),
                 Some(_) => {
                     // A named launch now owns this session; do not stop its sandbox.
                     Ok(())
                 }
             },
+            RetiredLaunch::Unresolved => Err(anyhow::anyhow!(
+                "retired durable launch identity is unresolved; failing sandbox teardown check closed"
+            )),
         })
         .await;
         match confirmed {
