@@ -89,25 +89,35 @@ test("a Codex user-input form becomes typed fields", () => {
 });
 
 test("Claude's AskUserQuestion multi-select and typed answers serialize as the schema expects", () => {
-  const elicitation = elicitationOf(carrying({
-    mode: "form",
-    sessionId: "s",
-    message: "Please answer the following questions.",
-    requestedSchema: {
-      type: "object",
-      properties: {
-        question_0: {
-          type: "array",
-          title: "Features",
-          items: { anyOf: [{ const: "Auth", title: "Auth" }, { const: "Search", title: "Search" }] },
+  const elicitation = elicitationOf(
+    carrying({
+      mode: "form",
+      sessionId: "s",
+      message: "Please answer the following questions.",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          question_0: {
+            type: "array",
+            title: "Features",
+            items: {
+              anyOf: [
+                { const: "Auth", title: "Auth" },
+                { const: "Search", title: "Search" },
+              ],
+            },
+          },
+          retries: { type: "integer", title: "Retries", default: 3 },
+          verbose: { type: "boolean", title: "Verbose" },
         },
-        retries: { type: "integer", title: "Retries", default: 3 },
-        verbose: { type: "boolean", title: "Verbose" },
       },
-    },
-  }));
+    }),
+  );
   if (elicitation?.mode !== "form") throw new Error("expected a form");
-  assertEquals(elicitation.fields.map((field) => field.kind), ["multi", "integer", "boolean"]);
+  assertEquals(
+    elicitation.fields.map((field) => field.kind),
+    ["multi", "integer", "boolean"],
+  );
   const values = initialElicitationValues(elicitation.fields);
   assertEquals(values, { question_0: [], retries: "3", verbose: false });
   values["question_0"] = ["Search"];
@@ -123,53 +133,61 @@ test("Claude's AskUserQuestion multi-select and typed answers serialize as the s
 
 test("a URL elicitation needs an http link; unknown required fields are unanswerable", () => {
   assertEquals(
-    elicitationOf(carrying({
-      mode: "url",
-      requestId: 1,
-      elicitationId: "e",
-      url: "https://example.com/oauth",
-      message: "Sign in",
-    })),
+    elicitationOf(
+      carrying({
+        mode: "url",
+        requestId: 1,
+        elicitationId: "e",
+        url: "https://example.com/oauth",
+        message: "Sign in",
+      }),
+    ),
     { mode: "url", message: "Sign in", url: "https://example.com/oauth" },
   );
   assertEquals(
-    elicitationOf(carrying({
-      mode: "url",
-      requestId: 1,
-      elicitationId: "e",
-      url: "javascript:alert(1)",
-      message: "Sign in",
-    })),
+    elicitationOf(
+      carrying({
+        mode: "url",
+        requestId: 1,
+        elicitationId: "e",
+        url: "javascript:alert(1)",
+        message: "Sign in",
+      }),
+    ),
     null,
   );
   assertEquals(
-    elicitationOf(carrying({
-      mode: "form",
-      sessionId: "s",
-      message: "m",
-      requestedSchema: {
-        type: "object",
-        properties: { blob: { type: "object" } },
-        required: ["blob"],
-      },
-    })),
+    elicitationOf(
+      carrying({
+        mode: "form",
+        sessionId: "s",
+        message: "m",
+        requestedSchema: {
+          type: "object",
+          properties: { blob: { type: "object" } },
+          required: ["blob"],
+        },
+      }),
+    ),
     null,
   );
   assertEquals(elicitationOf({ title: "Run ls?", rawInput: { command: "ls" } }), null);
 });
 
 test("an elicitation permission request is a question that carries its form", () => {
-  const timeline: Envelope[] = [{
-    session_id: "s",
-    seq: 1,
-    kind: "permission_request",
-    request_id: "7",
-    tool_call: carrying(CODEX_FORM),
-    options: [
-      { optionId: "accept", name: "Submit", kind: "allow_once" },
-      { optionId: "decline", name: "Decline", kind: "reject_once" },
-    ],
-  }];
+  const timeline: Envelope[] = [
+    {
+      session_id: "s",
+      seq: 1,
+      kind: "permission_request",
+      request_id: "7",
+      tool_call: carrying(CODEX_FORM),
+      options: [
+        { optionId: "accept", name: "Submit", kind: "allow_once" },
+        { optionId: "decline", name: "Decline", kind: "reject_once" },
+      ],
+    },
+  ];
   const pending = pendingPermissions(timeline);
   assertEquals(pending.length, 1);
   assertEquals(pending[0]?.requestKind, "question");
@@ -181,52 +199,64 @@ test("an elicitation permission request is a question that carries its form", ()
 
 test("AskUserQuestion option previews parse as plain text for single and multi choices", () => {
   const meta = (preview: unknown) => ({ _meta: { "_claude/askUserQuestionOption": { preview } } });
-  const elicitation = elicitationOf(carrying({
-    mode: "form",
-    sessionId: "s",
-    message: "Which layout?",
-    requestedSchema: {
-      type: "object",
-      properties: {
-        question_0: {
-          type: "string",
-          oneOf: [
-            { const: "Grid", title: "Grid", ...meta("<div>grid</div>\n  cells") },
-            { const: "List", title: "List", ...meta("  ") },
-            { const: "Rows", title: "Rows", ...meta(7) },
-          ],
-        },
-        question_1: {
-          type: "array",
-          items: { anyOf: [{ const: "Dark", title: "Dark", ...meta("bg: #000") }] },
+  const elicitation = elicitationOf(
+    carrying({
+      mode: "form",
+      sessionId: "s",
+      message: "Which layout?",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          question_0: {
+            type: "string",
+            oneOf: [
+              { const: "Grid", title: "Grid", ...meta("<div>grid</div>\n  cells") },
+              { const: "List", title: "List", ...meta("  ") },
+              { const: "Rows", title: "Rows", ...meta(7) },
+            ],
+          },
+          question_1: {
+            type: "array",
+            items: { anyOf: [{ const: "Dark", title: "Dark", ...meta("bg: #000") }] },
+          },
         },
       },
-    },
-  }));
+    }),
+  );
   if (elicitation?.mode !== "form") throw new Error("expected a form");
   assertEquals(
     elicitation.fields[0]?.choices.map((choice) => choice.preview),
     ["<div>grid</div>\n  cells", null, null],
   );
   assertEquals(elicitation.fields[1]?.choices[0]?.preview, "bg: #000");
-  const huge = elicitationOf(carrying({
-    mode: "form",
-    message: "x",
-    requestedSchema: { type: "object", properties: {
-      q: { type: "string", oneOf: [{ const: "A", ...meta("a".repeat(30_000)) }] },
-    } },
-  }));
+  const huge = elicitationOf(
+    carrying({
+      mode: "form",
+      message: "x",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          q: { type: "string", oneOf: [{ const: "A", ...meta("a".repeat(30_000)) }] },
+        },
+      },
+    }),
+  );
   if (huge?.mode !== "form") throw new Error("expected a form");
   const preview = huge.fields[0]?.choices[0]?.preview ?? "";
-  if (preview.length > 20_010 || !preview.endsWith("…")) throw new Error("preview must stay bounded");
+  if (preview.length > 20_010 || !preview.endsWith("…"))
+    throw new Error("preview must stay bounded");
 });
 
 test("Codex auto-resolution parses and counts down from first sight", () => {
-  const timed = elicitationOf(carrying({ ...CODEX_FORM, _meta: { codex: { autoResolutionMs: 90_000 } } }));
+  const timed = elicitationOf(
+    carrying({ ...CODEX_FORM, _meta: { codex: { autoResolutionMs: 90_000 } } }),
+  );
   if (timed?.mode !== "form") throw new Error("expected a form");
   assertEquals(timed.autoResolutionMs, 90_000);
   for (const value of [null, "60000", -1, Number.NaN]) {
-    const untimed = elicitationOf(carrying({ ...CODEX_FORM, _meta: { codex: { autoResolutionMs: value } } }));
+    const untimed = elicitationOf(
+      carrying({ ...CODEX_FORM, _meta: { codex: { autoResolutionMs: value } } }),
+    );
     if (untimed?.mode !== "form") throw new Error("expected a form");
     assertEquals(untimed.autoResolutionMs, null);
   }
@@ -235,4 +265,69 @@ test("Codex auto-resolution parses and counts down from first sight", () => {
   assertEquals(autoResolutionSecondsLeft(90_000, 1_000, 200_000), 0);
   assertEquals(formatCountdown(42), "42s");
   assertEquals(formatCountdown(65), "1:05");
+});
+
+test("Antigravity ask_question form elicitation parses single, multi, and optional Other fields", () => {
+  const elicitation = elicitationOf(
+    carrying({
+      sessionId: "agy-sess-1",
+      toolCallId: "call_2211613383716556954",
+      mode: "form",
+      message: "The agent has 2 questions.",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          q1: {
+            type: "string",
+            title: "Copy format?",
+            oneOf: [
+              { const: "1", title: "(Recommended) HTML + plain" },
+              { const: "2", title: "Plain only" },
+            ],
+          },
+          q1_other: {
+            type: "string",
+            title: "Other",
+            description: "Optional free-form answer to: Copy format?",
+          },
+          q2: {
+            type: "array",
+            title: "Surfaces?",
+            items: {
+              anyOf: [
+                { const: "1", title: "Mobile" },
+                { const: "2", title: "Desktop" },
+              ],
+            },
+          },
+          q2_other: {
+            type: "string",
+            title: "Other",
+            description: "Optional free-form answer to: Surfaces?",
+          },
+        },
+      },
+    }),
+  );
+  if (elicitation?.mode !== "form") throw new Error("expected a form");
+  assertEquals(
+    elicitation.fields.map((field) => [field.id, field.kind, field.required]),
+    [
+      ["q1", "single", false],
+      ["q1_other", "text", false],
+      ["q2", "multi", false],
+      ["q2_other", "text", false],
+    ],
+  );
+  const values = initialElicitationValues(elicitation.fields);
+  if (!elicitationComplete(elicitation.fields, values)) {
+    throw new Error("optional fields allow submitting write-in or partial answers");
+  }
+  values["q1"] = "1";
+  values["q2"] = ["1", "2"];
+  values["q2_other"] = "prioritize iOS";
+  assertEquals(
+    elicitationAnswer(elicitation.fields, values),
+    'accept:{"q1":"1","q2":["1","2"],"q2_other":"prioritize iOS"}',
+  );
 });

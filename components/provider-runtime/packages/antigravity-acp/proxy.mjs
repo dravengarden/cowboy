@@ -60,7 +60,7 @@ export const WRAP_UP_HINT_METHOD = "cowboy/wrapUpHint";
 export const WRAP_UP_CAPABILITY_KEY = "cowboy.dev/wrapUpSteering";
 export const ATTEMPT_NONCE_KEY = "cowboy.dev/attemptNonce";
 /** Agent requests and notifications forwarded to the worker. */
-export const AGENT_REQUESTS = Object.freeze(["session/request_permission"]);
+export const AGENT_REQUESTS = Object.freeze(["session/request_permission", "elicitation/create"]);
 /** Recalled memory as the prompt block Cowboy prepends. */
 export const MEMORY_OPEN = "<cowboy_memory_context>";
 export function memoryBlock(context) {
@@ -204,6 +204,12 @@ export function accountPlan(meta) {
 
 /** Whether `value` is a plain JSON object. */
 const isObject = (value) => value !== null && typeof value === "object" && !Array.isArray(value);
+
+/** Whether `initialize` client capabilities advertise ACP form elicitation. */
+export function supportsFormElicitation(clientCapabilities) {
+  const form = clientCapabilities?.elicitation?.form;
+  return isObject(form) || form === true;
+}
 
 /** A removed field, in the changes a parent applies to its copy. */
 const REMOVED = Symbol("removed");
@@ -352,6 +358,8 @@ export class AcpProxy {
     this.compacting = new Set();
     /** Whether the worker renders ACP `notice` updates (its `initialize`). */
     this.notices = false;
+    /** Whether the worker advertised form elicitation in an ordinary session. */
+    this.elicitationForm = false;
     /** Shared call-correlation and plan-mode dispatch enforcement state. */
     this.planGate = new PlanGate();
     /** Result content of answered calls, until their terminal update. */
@@ -527,6 +535,16 @@ export class AcpProxy {
       } catch {
         // Child stdin may already be closed during teardown.
       }
+    } else if (entry.kind === "elicitation" && replyAgent) {
+      try {
+        this.agent({
+          jsonrpc: "2.0",
+          id: entry.agyId,
+          result: { action: "cancel" },
+        });
+      } catch {
+        // Child stdin may already be closed during teardown.
+      }
     }
   }
 
@@ -534,8 +552,16 @@ export class AcpProxy {
    * Retire every pending worker permission matching the supplied filter
    * (`sessionId`, `ownerId`, `turn`, or all when no filter is specified).
    */
-  retirePermissions({ sessionId, ownerId, turn, reason, notifyWorker = true } = {}) {
+  retirePermissions({
+    sessionId,
+    ownerId,
+    turn,
+    reason,
+    notifyWorker = true,
+    includeElicitations = true,
+  } = {}) {
     for (const [workerId, entry] of [...this.workerPermissions]) {
+      if (!includeElicitations && entry.kind === "elicitation") continue;
       if (sessionId !== undefined && entry.sessionId !== sessionId) continue;
       if (ownerId !== undefined && entry.ownerId !== ownerId) continue;
       if (turn !== undefined && entry.turn !== turn) continue;
@@ -546,12 +572,13 @@ export class AcpProxy {
   /**
    * Advance the root owner's mode generation and retire every pending permission
    * across that owner session and all of its active subagents. Never called for
-   * a child subagent's own native mode reports.
+   * a child subagent's own native mode reports. Form elicitations (`ask_question`)
+   * authorize no tool execution and stay open across mode toggles.
    */
   invalidateModeFamily(ownerId, reason = "The session's mode changed.") {
     if (typeof ownerId !== "string" || this.subagents.owns(ownerId)) return;
     this.planGate.bumpModeGeneration(ownerId);
-    this.retirePermissions({ ownerId, reason });
+    this.retirePermissions({ ownerId, reason, includeElicitations: false });
   }
 
   /** Ensure per-session mode-operation sequence state exists for root owner `sessionId`. */
@@ -859,6 +886,94 @@ export class AcpProxy {
         options: forwardedOptions,
         toolCall: this.present(redactedMessage.params?.toolCall, sessionId),
       },
+    });
+  }
+
+  /** Reply to `agy` cancelling an `elicitation/create` without asking the owner. */
+  cancelElicitation(id, logMessage) {
+    if (logMessage) this.log(logMessage);
+    return this.agent({
+      jsonrpc: "2.0",
+      id,
+      result: { action: "cancel" },
+    });
+  }
+
+  /**
+   * Validate and forward one form `elicitation/create` request (`agy`'s
+   * `ask_question` UI) under a unique worker ID. Non-form modes (including
+   * `url`), managed sessions, inactive turns, and malformed payloads are
+   * cancelled cleanly (`{ action: "cancel" }`) so `agy` resolves `ask_question`
+   * instead of falling back to chat mode.
+   */
+  handleAgentElicitation(agyId, redactedMessage) {
+    if (this.managed !== false || !this.elicitationForm) {
+      return this.cancelElicitation(agyId, "cancelled elicitation: form elicitation unavailable");
+    }
+    const params = redactedMessage.params;
+    if (!isObject(params) || params.mode !== "form") {
+      return this.cancelElicitation(
+        agyId,
+        `cancelled elicitation: unsupported mode ${String(params?.mode)}`,
+      );
+    }
+    const sessionId = params.sessionId;
+    if (
+      typeof sessionId !== "string" ||
+      sessionId.length === 0 ||
+      typeof params.message !== "string" ||
+      !isObject(params.requestedSchema) ||
+      (params.requestedSchema.type !== undefined && params.requestedSchema.type !== "object") ||
+      !isObject(params.requestedSchema.properties) ||
+      (params.toolCallId !== undefined &&
+        (typeof params.toolCallId !== "string" || params.toolCallId.length === 0))
+    ) {
+      return this.cancelElicitation(agyId, "cancelled elicitation: invalid form parameters");
+    }
+    if (this.foreignSession(params)) {
+      return this.cancelElicitation(agyId, "cancelled elicitation: foreign session");
+    }
+    const ended = this.subagents.owns(sessionId) && !this.subagents.active(sessionId);
+    if (ended) {
+      return this.cancelElicitation(agyId, "cancelled elicitation: subagent ended");
+    }
+    if (!this.isKnownLiveSession(sessionId, { requireTurn: true })) {
+      return this.cancelElicitation(agyId, "cancelled elicitation: no known live session");
+    }
+    const turn = this.turns.get(sessionId);
+    if (!turn || turn.cancelled || turn.closed) {
+      return this.cancelElicitation(agyId, "cancelled elicitation: no live turn");
+    }
+    if (this.workerPermissions.size >= MAX_PENDING_PERMISSIONS) {
+      return this.cancelElicitation(agyId, "cancelled elicitation: too many pending requests");
+    }
+    const forwardParams = {
+      sessionId,
+      mode: "form",
+      message: params.message,
+      requestedSchema: params.requestedSchema,
+    };
+    if (params.toolCallId !== undefined) forwardParams.toolCallId = params.toolCallId;
+    if (isObject(params._meta)) forwardParams._meta = params._meta;
+    const agyKey = JSON.stringify(agyId);
+    const workerId = this.allocateWorkerPermId();
+    const ownerId = this.subagents.parentOf(sessionId) ?? sessionId;
+    this.agentPermToWorker.set(agyKey, workerId);
+    this.workerPermissions.set(workerId, {
+      kind: "elicitation",
+      agyId,
+      agyKey,
+      sessionId,
+      ownerId,
+      child: this.subagents.childOf(sessionId),
+      turn,
+      attempt: turn.attempt,
+    });
+    return this.client({
+      jsonrpc: "2.0",
+      id: workerId,
+      method: "elicitation/create",
+      params: forwardParams,
     });
   }
 
@@ -1533,7 +1648,6 @@ export class AcpProxy {
         }
         entry.cleanup?.();
         const childOpen = entry.child === undefined || this.subagents.isOpen(entry.child);
-        const modeValid = this.planGate.modeGeneration(entry.ownerId) === entry.modeGen;
         const currentTurn =
           typeof entry.sessionId === "string" ? this.turns.get(entry.sessionId) : undefined;
         const turnValid =
@@ -1542,6 +1656,27 @@ export class AcpProxy {
           currentTurn.attempt === entry.attempt &&
           !entry.turn.cancelled &&
           !entry.turn.closed;
+        if (entry.kind === "elicitation") {
+          const result =
+            message.error === undefined && isObject(message.result) ? message.result : undefined;
+          const action = result?.action;
+          const validAction = action === "accept" || action === "decline" || action === "cancel";
+          const validContent =
+            action !== "accept" || result.content === undefined || isObject(result.content);
+          if (!this.closing && childOpen && turnValid && validAction && validContent) {
+            const reply =
+              action === "accept" && result.content !== undefined
+                ? { action, content: result.content }
+                : { action };
+            return this.agent({ jsonrpc: "2.0", id: entry.agyId, result: reply });
+          }
+          return this.agent({
+            jsonrpc: "2.0",
+            id: entry.agyId,
+            result: { action: "cancel" },
+          });
+        }
+        const modeValid = this.planGate.modeGeneration(entry.ownerId) === entry.modeGen;
         const outcome = message.result?.outcome;
         const selectedValid =
           outcome?.outcome === "selected" &&
@@ -1627,12 +1762,19 @@ export class AcpProxy {
       this.compaction.initialize(forwarded.params);
       this.subagents.initialize(forwarded.params);
       this.notices = Boolean(forwarded.params?.clientCapabilities?.session?.notices);
+      // Form elicitation lets `agy` present `ask_question` as a live ACP form
+      // inside the turn instead of falling back to chat mode (which leaves a
+      // pending question after EndTurn and refuses subsequent image prompts).
+      // Managed calls never ask the owner; URL elicitation is never advertised.
+      this.elicitationForm =
+        runtime.managed !== true && supportsFormElicitation(forwarded.params?.clientCapabilities);
       // `agy` must never delegate file or terminal work to the worker: the
       // worker runs on the runtime Machine, not on the session's target.
       forwarded.params = { ...(forwarded.params ?? {}) };
       forwarded.params.clientCapabilities = {
         fs: { readTextFile: false, writeTextFile: false },
         terminal: false,
+        ...(this.elicitationForm ? { elicitation: { form: {} } } : {}),
       };
     } else if (SESSION_REQUESTS.has(method)) {
       const params = forwarded.params ?? {};
@@ -2307,15 +2449,24 @@ export class AcpProxy {
         return;
       }
       if (this.closing) {
+        if (method === "elicitation/create") {
+          return this.cancelElicitation(id, "cancelled elicitation: proxy closing");
+        }
         return this.rejectPermission(id, asked, "rejected permission: proxy closing");
       }
       if (this.isStaleReplay(asked.params?.sessionId, replayOptions?.arrival)) {
+        if (method === "elicitation/create") {
+          return this.cancelElicitation(id, "cancelled stale buffered elicitation request");
+        }
         this.log("cancelled stale buffered permission request");
         return this.agent({
           jsonrpc: "2.0",
           id,
           result: { outcome: { outcome: "cancelled" } },
         });
+      }
+      if (method === "elicitation/create") {
+        return this.handleAgentElicitation(id, asked);
       }
       // Defense in depth beside the PreToolUse hook: a permission request
       // for any tool outside the allow-list is rejected here, never shown; so

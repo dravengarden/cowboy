@@ -1475,6 +1475,83 @@ mod startup_mode_tests {
     }
 
     #[test]
+    fn antigravity_ask_question_form_elicitation_round_trips_through_acp() {
+        // Exact wire shape emitted by `agy` 1.5.14 `buildQuestionElicitation`:
+        // single-select (`oneOf`), multi-select (`items.anyOf`), companion
+        // `qN_other` free-form string, and free-form-only question; `required`
+        // is omitted.
+        let request: agent_client_protocol::schema::v1::CreateElicitationRequest =
+            serde_json::from_value(serde_json::json!({
+                "sessionId": "agy-sess-1",
+                "toolCallId": "call_2211613383716556954",
+                "mode": "form",
+                "message": "The agent has 3 questions.",
+                "requestedSchema": {
+                    "type": "object",
+                    "properties": {
+                        "q1": {
+                            "type": "string",
+                            "title": "Copy format?",
+                            "oneOf": [
+                                { "const": "1", "title": "(Recommended) HTML + plain" },
+                                { "const": "2", "title": "Plain only" }
+                            ]
+                        },
+                        "q1_other": {
+                            "type": "string",
+                            "title": "Other",
+                            "description": "Optional free-form answer to: Copy format?"
+                        },
+                        "q2": {
+                            "type": "array",
+                            "title": "Surfaces?",
+                            "items": {
+                                "anyOf": [
+                                    { "const": "1", "title": "Mobile" },
+                                    { "const": "2", "title": "Desktop" }
+                                ]
+                            }
+                        },
+                        "q2_other": {
+                            "type": "string",
+                            "title": "Other",
+                            "description": "Optional free-form answer to: Surfaces?"
+                        },
+                        "q3_other": {
+                            "type": "string",
+                            "title": "Any extra notes?"
+                        }
+                    }
+                }
+            }))
+            .unwrap();
+        let (tool_call, options) = elicitation_permission("42", &request);
+        assert_eq!(tool_call["toolCallId"], "call_2211613383716556954");
+        assert_eq!(tool_call["title"], "The agent has 3 questions.");
+        assert_eq!(tool_call["_cowboy"]["elicitation"]["mode"], "form");
+        assert_eq!(
+            tool_call["_cowboy"]["elicitation"]["requestedSchema"]["properties"]["q2"]["items"]
+                ["anyOf"][1]["const"],
+            "2"
+        );
+        assert_eq!(options[0]["optionId"], "accept");
+        assert_eq!(options[1]["optionId"], "decline");
+
+        let answer = r#"accept:{"q1":"1","q2":["1","2"],"q3_other":"keep it fast"}"#;
+        assert_eq!(
+            serde_json::to_value(elicitation_response(Some(answer))).unwrap(),
+            serde_json::json!({
+                "action": "accept",
+                "content": { "q1": "1", "q2": ["1", "2"], "q3_other": "keep it fast" }
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(elicitation_response(Some("decline"))).unwrap(),
+            serde_json::json!({ "action": "decline" })
+        );
+    }
+
+    #[test]
     fn providers_use_their_native_full_access_mode() {
         assert_eq!(
             startup_full_access_mode("claude-code"),

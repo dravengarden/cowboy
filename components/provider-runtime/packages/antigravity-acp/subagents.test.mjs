@@ -169,13 +169,20 @@ function unit({
 }
 
 /** A worker that declared subagents, with one session `s` in a turn (id 9). */
-async function parent(options = {}, { subagents = {}, mode = "default" } = {}) {
+async function parent(
+  options = {},
+  { subagents = {}, elicitation = undefined, mode = "default" } = {},
+) {
   const made = unit(options);
   const { proxy, agent } = made;
+  const clientCapabilities = {
+    ...(subagents === null ? {} : { subagents }),
+    ...(elicitation !== undefined ? { elicitation } : {}),
+  };
   await proxy.fromClient(
     request(1, "initialize", {
       protocolVersion: 1,
-      clientCapabilities: subagents === null ? {} : { subagents },
+      clientCapabilities,
     }),
   );
   await proxy.fromClient(request(2, "session/new", { cwd: "/work/repo", mcpServers: [] }));
@@ -1814,4 +1821,98 @@ test("the turn's end waits for a running publish helper", async () => {
   await running;
   await ending;
   assert.equal(ended, true);
+});
+
+test("a running child's form elicitation/create forwards to the owner and retires when the child ends", async () => {
+  const made = await parent({}, { elicitation: { form: {}, url: {} } });
+  const { proxy, agent, client } = made;
+  const id = await startChild(made);
+
+  // Live form elicitation from the running child forwards under a proxy worker ID.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "child-elicit-1",
+    method: "elicitation/create",
+    params: {
+      sessionId: id,
+      toolCallId: "q-child-1",
+      mode: "form",
+      message: "Subagent question",
+      requestedSchema: {
+        type: "object",
+        properties: {
+          q1: {
+            type: "string",
+            title: "Choose",
+            oneOf: [{ const: "1", title: "Yes" }],
+          },
+        },
+      },
+    },
+  });
+  const forwarded1 = client.at(-1);
+  assert.equal(forwarded1.method, "elicitation/create");
+  assert.equal(forwarded1.params.sessionId, id);
+  assert.equal(forwarded1.params.toolCallId, "q-child-1");
+
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: forwarded1.id,
+    result: { action: "accept", content: { q1: "1" } },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: "child-elicit-1",
+    result: { action: "accept", content: { q1: "1" } },
+  });
+
+  // A second open elicitation retires cleanly when the child ends; late owner replies are ignored.
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "child-elicit-2",
+    method: "elicitation/create",
+    params: {
+      sessionId: id,
+      mode: "form",
+      message: "Pending on end",
+      requestedSchema: { type: "object", properties: {} },
+    },
+  });
+  const forwarded2 = client.at(-1);
+  await endPrompt(made, id);
+  assert.deepEqual(
+    agent.find((m) => m.id === "child-elicit-2"),
+    { jsonrpc: "2.0", id: "child-elicit-2", result: { action: "cancel" } },
+  );
+  assert.equal(
+    client.some((m) => m.method === "$/cancel_request" && m.params?.requestId === forwarded2.id),
+    true,
+  );
+  agent.length = 0;
+  await proxy.fromClient({
+    jsonrpc: "2.0",
+    id: forwarded2.id,
+    result: { action: "accept", content: { q1: "1" } },
+  });
+  assert.equal(agent.length, 0);
+
+  // Any new elicitation from the ended child is cancelled without reaching the worker.
+  client.length = 0;
+  await proxy.fromAgent({
+    jsonrpc: "2.0",
+    id: "child-elicit-3",
+    method: "elicitation/create",
+    params: {
+      sessionId: id,
+      mode: "form",
+      message: "After end",
+      requestedSchema: { type: "object", properties: {} },
+    },
+  });
+  assert.deepEqual(agent.at(-1), {
+    jsonrpc: "2.0",
+    id: "child-elicit-3",
+    result: { action: "cancel" },
+  });
+  assert.equal(client.length, 0);
 });
