@@ -23,14 +23,17 @@ export function partitionDesktopTabWorkingSet<T extends WorkingSetTabLike>(
 ): DesktopTabWorkingSet<T> {
   if (items.length <= limit) return { visible: items, overflow: [] };
   const chosen = new Set<string>();
+  const byKey = new Map(items.map((item) => [item.key, item]));
+  // Always keep the active tab in the visible working set first, even when
+  // `limit` or more tabs are pinned, so the current tab retains its active
+  // pill and leader slot and can never land in bulk overflow cleanup.
+  if (limit > 0 && currentKey && byKey.has(currentKey)) {
+    chosen.add(currentKey);
+  }
   const pinned = items.filter((item) => item.pinned);
   for (const item of pinned) {
     if (chosen.size >= limit) break;
     chosen.add(item.key);
-  }
-  const byKey = new Map(items.map((item) => [item.key, item]));
-  if (currentKey && byKey.has(currentKey) && chosen.size < limit) {
-    chosen.add(currentKey);
   }
   for (const key of visits) {
     if (chosen.size >= limit) break;

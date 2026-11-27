@@ -20,7 +20,7 @@ import {
 } from "./commands/DesktopCommandProvider";
 import { LeaderKeycap } from "./commands/DesktopKeycap";
 import { useDesktopLeaderOptional } from "./commands/leaderContext";
-import { TabStripOverflowButton, TabStripOverflowEdges } from "./DesktopTabOverflowButton";
+import { DESKTOP_OPEN_TAB_OVERFLOW_EVENT, TabStripOverflowButton, TabStripOverflowEdges } from "./DesktopTabOverflowButton";
 import { partitionDesktopTabWorkingSet } from "./desktopTabWorkingSet";
 import {
   DESKTOP_TAB_GROUP,
@@ -275,11 +275,24 @@ export const DesktopTabStrip = memo(function DesktopTabStrip({
     () => partitionDesktopTabWorkingSet(items, currentKey, visits),
     [items, currentKey, visits],
   );
-  const live = useRef({ items, visible: workingSet.visible, currentKey, visits, exists, onOpen, onRename });
-  live.current = { items, visible: workingSet.visible, currentKey, visits, exists, onOpen, onRename };
+  const live = useRef({ items, visible: workingSet.visible, overflow: workingSet.overflow, currentKey, visits, exists, onOpen, onRename });
+  live.current = { items, visible: workingSet.visible, overflow: workingSet.overflow, currentKey, visits, exists, onOpen, onRename };
 
   const actions = useMemo(() => {
     const order = (): string[] => live.current.items.map((item) => item.key);
+    const closeKeys = (keys: readonly string[]): void => {
+      const { currentKey: current, visits: visited, onOpen: open } = live.current;
+      const { tabs } = desktopTabs();
+      const pinnedKeys = new Set(tabs.filter((t) => t.pinned).map((t) => t.key));
+      let closing = keys.filter((k) => !pinnedKeys.has(k));
+      if (closing.length === 0) return;
+      if (current && closing.includes(current)) {
+        const next = desktopTabAfterClose(tabs, current, closing, visited);
+        if (next === null) closing = closing.filter((k) => k !== current);
+        else open(next);
+      }
+      updateDesktopTabs((state) => withoutDesktopTabs(state, closing));
+    };
     const close = (key: string | null, scope: DesktopTabCloseScope): void => {
       const { currentKey: current, visits: visited, onOpen: open } =
         live.current;
@@ -296,6 +309,7 @@ export const DesktopTabStrip = memo(function DesktopTabStrip({
     };
     return {
       close,
+      closeKeys,
       step: (delta: number): void => {
         const { currentKey: current, onOpen: open } = live.current;
         const keys = order();
@@ -451,6 +465,14 @@ export const DesktopTabStrip = memo(function DesktopTabStrip({
         sequence: group(DESKTOP_TAB_KEYS.moveRight),
         when: () => count() > 1,
         run: () => actions.move(current(), 1),
+      },
+      {
+        ...base,
+        id: "tabs.overflow",
+        title: "Open Overflow Tabs Menu",
+        description: "Inspect or close open tabs folded beyond the 9 visible slots",
+        when: () => live.current.overflow.length > 0,
+        run: () => globalThis.dispatchEvent(new CustomEvent(DESKTOP_OPEN_TAB_OVERFLOW_EVENT)),
       },
       ...Array.from({ length: 9 }, (_, index): DesktopCommand => ({
         ...base,
@@ -741,7 +763,7 @@ export const DesktopTabStrip = memo(function DesktopTabStrip({
         <TabStripOverflowButton
           overflow={workingSet.overflow}
           onOpen={onOpen}
-          onCloseAllOverflow={(keys): void => updateDesktopTabs((st) => withoutDesktopTabs(st, keys))}
+          onCloseAllOverflow={actions.closeKeys}
         />
         <TabStripActionsButton
           overflowRight={overflow.right}

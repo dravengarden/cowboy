@@ -2,6 +2,11 @@
 // width (>= 580px) and holds auxiliary state (Plan, Queue, Drafts, Staged
 // Review Notes, or Active Tasks), places those panels in a calm vertical side
 // column beside the writing canvas instead of stacking them above the editor.
+//
+// IMPORTANT: The writing canvas (`children`), `planSlot`, and `pendingSlot`
+// ALWAYS stay under the exact same React parent elements regardless of width,
+// layout toggle, or companion item count; placement switches purely with CSS
+// flexbox `flexDirection` + `order`, so live Prompt / Draft edits never remount.
 
 import { persisted, useStore } from "@cowboy/state-store";
 import {
@@ -13,11 +18,12 @@ import {
 } from "@mui/icons-material";
 import { alpha, Box, Button, ButtonBase, IconButton, Stack, Tooltip, Typography } from "@mui/material";
 import { type ReactNode, type RefObject, useLayoutEffect, useState } from "react";
+import { OPEN_BACKGROUND_TASKS_EVENT } from "../backgroundTaskInspectorState";
 import { desktopSize } from "../surface/desktopSize";
 import { useSessionTasksAvailability } from "../tasks/taskEvents";
 import { desktopScrollbarSx } from "./desktopScrollbar";
-import { requestDesktopWorkView } from "./review/desktopWorkView";
 import {
+  formatCommentLocation,
   removeReviewComment,
   type StagedReviewComment,
   submitReviewCommentsToPrompt,
@@ -76,7 +82,7 @@ function ReviewCommentsTray({
   sessionId: string;
   comments: readonly StagedReviewComment[];
   compact: boolean;
-  onFocusPrompt: () => void;
+  onFocusPrompt: () => "focused" | "deferred" | void;
 }): React.JSX.Element | null {
   if (comments.length === 0) return null;
   const submit = (): void => {
@@ -150,52 +156,37 @@ function ReviewCommentsTray({
       </Stack>
       <Stack spacing={0.5}>
         {comments.map((item) => {
-          const shortPath = item.path.split("/").at(-1) ?? item.path;
-          const loc = item.startLine === item.endLine
-            ? `L${String(item.startLine)}`
-            : `L${String(item.startLine)}-${String(item.endLine)}`;
+          const shortLoc = formatCommentLocation(item);
+          const fileName = shortLoc.split("/").at(-1) ?? shortLoc;
           return (
             <Box
               key={item.id}
               data-desktop-review-note-item={item.id}
               sx={(theme) => ({
-                p: 0.75,
+                px: 0.75,
+                py: 0.5,
                 borderRadius: "6px",
-                bgcolor: alpha(theme.palette.action.hover, theme.palette.mode === "dark" ? 0.5 : 0.65),
+                bgcolor: alpha(theme.palette.action.hover, theme.palette.mode === "dark" ? 0.45 : 0.7),
                 display: "flex",
                 alignItems: "flex-start",
                 gap: 0.5,
               })}
             >
               <Box sx={{ flex: 1, minWidth: 0 }}>
-                <Typography
-                  variant="caption"
-                  noWrap
-                  sx={{ display: "block", fontFamily: "monospace", fontSize: "0.68rem", color: "primary.main", fontWeight: 600 }}
-                >
-                  {shortPath}:{loc}
+                <Typography variant="caption" noWrap sx={{ display: "block", fontFamily: "monospace", fontSize: "0.68rem", color: "primary.main", fontWeight: 600 }}>
+                  {fileName}
                 </Typography>
-                <Typography
-                  variant="caption"
-                  sx={{
-                    display: "-webkit-box",
-                    WebkitLineClamp: 2,
-                    WebkitBoxOrient: "vertical",
-                    overflow: "hidden",
-                    color: "text.primary",
-                    lineHeight: 1.35,
-                  }}
-                >
+                <Typography variant="caption" sx={{ display: "block", color: "text.primary", fontSize: "0.72rem", lineHeight: 1.35, overflowWrap: "anywhere" }}>
                   {item.body}
                 </Typography>
               </Box>
               <IconButton
                 size="small"
-                aria-label="Remove review note"
+                aria-label="Remove staged review note"
                 onClick={(): void => removeReviewComment(sessionId, item.id)}
                 sx={{ p: 0.25, color: "text.secondary" }}
               >
-                <Close sx={{ fontSize: "0.85rem" }} />
+                <Close sx={{ fontSize: "0.8rem" }} />
               </IconButton>
             </Box>
           );
@@ -208,11 +199,10 @@ function ReviewCommentsTray({
 function TasksPulseCard({ sessionId }: { sessionId: string }): React.JSX.Element | null {
   const tasks = useSessionTasksAvailability(sessionId);
   if (!tasks.hasTasks) return null;
-  const parts = [
-    tasks.needsYouCount > 0 ? `${String(tasks.needsYouCount)} needs you` : null,
-    tasks.activeCount > 0 ? `${String(tasks.activeCount)} running` : null,
-    tasks.failedUnseenCount > 0 ? `${String(tasks.failedUnseenCount)} failed` : null,
-  ].filter(Boolean);
+  const parts: string[] = [];
+  if (tasks.needsYouCount > 0) parts.push(`${String(tasks.needsYouCount)} needs you`);
+  if (tasks.activeCount > 0) parts.push(`${String(tasks.activeCount)} running`);
+  if (tasks.failedUnseenCount > 0) parts.push(`${String(tasks.failedUnseenCount)} failed`);
   const tone = tasks.needsYouCount > 0
     ? "warning.main"
     : tasks.failedUnseenCount > 0
@@ -223,7 +213,13 @@ function TasksPulseCard({ sessionId }: { sessionId: string }): React.JSX.Element
   return (
     <ButtonBase
       data-desktop-companion-tasks-pulse
-      onClick={(): void => requestDesktopWorkView("tasks")}
+      onClick={(): void => {
+        // Use the session-scoped Background Tasks opener (`␣G`) so a folded
+        // work pane unfolds and receives focus instead of switching silently.
+        globalThis.dispatchEvent(
+          new CustomEvent(OPEN_BACKGROUND_TASKS_EVENT, { detail: { sessionId } }),
+        );
+      }}
       sx={{
         width: "100%",
         px: 1.25,
@@ -264,7 +260,7 @@ export function DesktopPromptCompanionLayout({
   planSlot?: ReactNode;
   pendingSlot: ReactNode;
   hasPending: boolean;
-  onFocusPrompt: () => void;
+  onFocusPrompt: () => "focused" | "deferred" | void;
   children: ReactNode;
 }): React.JSX.Element {
   const comments = useReviewComments(sessionId);
@@ -273,85 +269,117 @@ export function DesktopPromptCompanionLayout({
   const width = usePromptCompanionWidth(containerRef);
   const { split, canSplit, toggle } = usePromptCompanionMode(width, hasCompanionContent);
 
-  if (split) {
-    return (
-      <Box
-        ref={containerRef}
-        data-desktop-prompt-layout="split"
-        sx={{
-          flex: 1,
-          minHeight: 0,
-          minWidth: 0,
-          display: "flex",
-          flexDirection: "row",
-          overflow: "hidden",
-          // Side-by-side companion panels stay open smoothly while typing in Composer.
+  return (
+    <Box
+      ref={containerRef}
+      data-desktop-prompt-layout={split ? "split" : "stack"}
+      sx={{
+        flex: 1,
+        minHeight: 0,
+        minWidth: 0,
+        display: "flex",
+        flexDirection: split ? "row" : "column",
+        overflow: "hidden",
+        position: "relative",
+        ...(split && {
           "& [data-desktop-prompt-companion='column'] [data-desktop-aux-list]": {
             maxHeight: "min(44vh, 420px) !important",
             paddingBottom: "4px !important",
           },
+        }),
+      }}
+    >
+      {/* Stable primary writing-canvas slot: NEVER changes React parent when
+          crossing 580px, toggling layout, or gaining companion content. */}
+      <Box
+        data-desktop-prompt-canvas-slot
+        sx={{
+          order: split ? 1 : 2,
+          flex: 1,
+          minWidth: 0,
+          minHeight: 0,
+          display: "flex",
+          flexDirection: "column",
+          overflow: "hidden",
+          position: "relative",
         }}
       >
-        <Box sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", overflow: "hidden" }}>
-          {children}
-        </Box>
-        <Box
-          data-desktop-prompt-companion="column"
-          sx={(theme) => ({
-            width: "clamp(220px, 34%, 272px)",
-            flexShrink: 0,
-            minHeight: 0,
-            display: "flex",
-            flexDirection: "column",
-            borderLeft: 1,
+        {children}
+      </Box>
+      {/* Stable companion panel slot: CSS order & styling switch between
+          stacked top strip and right-hand column without remounting children. */}
+      <Box
+        data-desktop-prompt-companion={split ? "column" : "stack"}
+        sx={(theme) => ({
+          order: split ? 2 : 1,
+          display: hasCompanionContent ? "flex" : "none",
+          flexDirection: "column",
+          flexShrink: 0,
+          minHeight: 0,
+          ...(split
+            ? {
+              width: "clamp(220px, 34%, 272px)",
+              borderLeft: 1,
+              borderColor: "divider",
+              bgcolor: alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.14 : 0.015),
+              overflowY: "auto",
+              ...desktopScrollbarSx,
+            }
+            : {
+              width: "100%",
+              overflow: "visible",
+            }),
+        })}
+      >
+        <Stack
+          direction="row"
+          alignItems="center"
+          sx={{
+            display: split ? "flex" : "none",
+            px: 1.25,
+            minHeight: desktopSize(30),
+            borderBottom: 1,
             borderColor: "divider",
-            bgcolor: alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.14 : 0.015),
-            overflowY: "auto",
-            ...desktopScrollbarSx,
-          })}
+            flexShrink: 0,
+          }}
         >
-          <Stack
-            direction="row"
-            alignItems="center"
-            sx={{ px: 1.25, minHeight: desktopSize(30), borderBottom: 1, borderColor: "divider", flexShrink: 0 }}
-          >
-            <Typography variant="caption" sx={{ fontWeight: 700, color: "text.secondary", letterSpacing: "0.04em", flex: 1 }}>
-              WORKSPACE
-            </Typography>
-            <Tooltip title="Switch to single-column stack">
-              <IconButton size="small" aria-label="Switch companion to stacked layout" data-desktop-companion-toggle onClick={toggle} sx={{ p: 0.35, color: "text.secondary" }}>
-                <ViewSidebarOutlined sx={{ fontSize: "0.95rem" }} />
-              </IconButton>
-            </Tooltip>
-          </Stack>
-          {planSlot}
-          <ReviewCommentsTray sessionId={sessionId} comments={comments} compact={false} onFocusPrompt={onFocusPrompt} />
-          {pendingSlot}
+          <Typography variant="caption" sx={{ fontWeight: 700, color: "text.secondary", letterSpacing: "0.04em", flex: 1 }}>
+            WORKSPACE
+          </Typography>
+          <Tooltip title="Switch to single-column stack">
+            <IconButton
+              size="small"
+              aria-label="Switch companion to stacked layout"
+              data-desktop-companion-toggle
+              onClick={toggle}
+              sx={{ p: 0.35, color: "text.secondary" }}
+            >
+              <ViewSidebarOutlined sx={{ fontSize: "0.95rem" }} />
+            </IconButton>
+          </Tooltip>
+        </Stack>
+        {planSlot}
+        <ReviewCommentsTray sessionId={sessionId} comments={comments} compact={!split} onFocusPrompt={onFocusPrompt} />
+        {pendingSlot}
+        <Box sx={{ display: split ? "block" : "none" }}>
           <TasksPulseCard sessionId={sessionId} />
         </Box>
       </Box>
-    );
-  }
-
-  return (
-    <Box
-      ref={containerRef}
-      data-desktop-prompt-layout="stack"
-      sx={{ flex: 1, minHeight: 0, minWidth: 0, display: "flex", flexDirection: "column", overflow: "hidden", position: "relative" }}
-    >
-      {canSplit && (
+      {!split && canSplit && (
         <Box sx={{ position: "absolute", top: 4, right: 34, zIndex: 5 }}>
           <Tooltip title="Open side-by-side companion column">
-            <IconButton size="small" aria-label="Open companion column" data-desktop-companion-toggle onClick={toggle} sx={{ p: 0.35, color: "text.secondary" }}>
+            <IconButton
+              size="small"
+              aria-label="Open companion column"
+              data-desktop-companion-toggle
+              onClick={toggle}
+              sx={{ p: 0.35, color: "text.secondary" }}
+            >
               <ViewSidebarOutlined sx={{ fontSize: "0.95rem" }} />
             </IconButton>
           </Tooltip>
         </Box>
       )}
-      {planSlot}
-      <ReviewCommentsTray sessionId={sessionId} comments={comments} compact onFocusPrompt={onFocusPrompt} />
-      {pendingSlot}
-      {children}
     </Box>
   );
 }

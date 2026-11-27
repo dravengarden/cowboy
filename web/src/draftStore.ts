@@ -172,10 +172,10 @@ function discardDatabaseDraft(sessionId: string, force = false): void {
   void writeDatabase(sessionId, () => cache.discard()).catch(() => undefined);
 }
 
-function persist(sessionId: string, draft: Draft | null): void {
-  if (isSessionRemoved(sessionId)) return;
+function persist(sessionId: string, draft: Draft | null): boolean {
+  if (isSessionRemoved(sessionId)) return false;
   const ls = globalThis.localStorage;
-  if (!ls) return;
+  if (!ls) return true;
   const key = KEY_PREFIX + sessionId;
   if (!draft) {
     try {
@@ -184,7 +184,7 @@ function persist(sessionId: string, draft: Draft | null): void {
       /* unavailable — in-memory copy already updated */
     }
     discardDatabaseDraft(sessionId);
-    return;
+    return true;
   }
   const attachments = storableAttachments(draft.attachments);
   if (awaitingDatabase.has(sessionId)) {
@@ -195,10 +195,11 @@ function persist(sessionId: string, draft: Draft | null): void {
     const mirror: DraftMirror = { text: draft.text, attachments: [], attachmentsInDatabase: true };
     try {
       ls.setItem(key, JSON.stringify(mirror));
+      return true;
     } catch {
       /* the previous mirror and the database record still hold the draft */
+      return false;
     }
-    return;
   }
   if (attachments.length === 0) {
     discardDatabaseDraft(sessionId);
@@ -210,8 +211,10 @@ function persist(sessionId: string, draft: Draft | null): void {
       // was typed. The bytes follow; if the database refuses them, the record
       // falls back to the old localStorage quota policy.
       const mirror: DraftMirror = { text: draft.text, attachments: [], attachmentsInDatabase: true };
+      let mirrored = false;
       try {
         ls.setItem(key, JSON.stringify(mirror));
+        mirrored = true;
       } catch {
         /* the database record below still holds the whole draft */
       }
@@ -227,15 +230,16 @@ function persist(sessionId: string, draft: Draft | null): void {
           persistLegacy(ls, key, draft);
         }
       });
-      return;
+      return mirrored;
     }
   }
-  persistLegacy(ls, key, draft);
+  return persistLegacy(ls, key, draft);
 }
 
-function persistLegacy(ls: Storage, key: string, draft: Draft): void {
+function persistLegacy(ls: Storage, key: string, draft: Draft): boolean {
   try {
     ls.setItem(key, JSON.stringify(draft));
+    return true;
   } catch {
     // Quota (likely large attachment data) — keep at least the text so a reload
     // doesn't lose what was typed; attachments can be re-added. STRIP the inline
@@ -246,8 +250,10 @@ function persistLegacy(ls: Storage, key: string, draft: Draft): void {
         key,
         JSON.stringify({ text: dropOrphanImageTokens(draft.text, new Set()), attachments: [] }),
       );
+      return true;
     } catch {
       /* still failing — the in-memory copy holds it for this session */
+      return false;
     }
   }
 }
@@ -443,6 +449,19 @@ export function appendDraftText(sessionId: string, text: string): void {
     ...draft,
     text: draft.text ? `${draft.text.trimEnd()}\n\n${text}` : text,
   });
+}
+
+/** Append text and flush synchronously to localStorage, returning whether the
+ *  text write is durable on disk. Callers that clear another store (such as
+ *  staged Review comments) must only drop their source copy when this returns
+ *  `true`. */
+export function appendDraftTextDurable(sessionId: string, text: string): boolean {
+  if (isSessionRemoved(sessionId)) return false;
+  appendDraftText(sessionId, text);
+  const current = drafts.get(sessionId) ?? null;
+  const saved = persist(sessionId, current);
+  if (saved) dirty.delete(sessionId);
+  return saved;
 }
 
 export function appendComposerDraft(

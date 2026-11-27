@@ -1,7 +1,9 @@
 import { Box, ButtonBase, Divider, ListItemText, Menu, MenuItem, type Theme } from "@mui/material";
-import { useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import { HintTooltip } from "../HintTooltip";
 import type { DesktopTabItem } from "./DesktopTabStrip";
+
+export const DESKTOP_OPEN_TAB_OVERFLOW_EVENT = "cowboy:desktop-open-tab-overflow";
 
 export function TabStripOverflowButton({
   overflow,
@@ -13,21 +15,40 @@ export function TabStripOverflowButton({
   onCloseAllOverflow: (keys: readonly string[]) => void;
 }): React.JSX.Element | null {
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
+  const menuId = useId();
+
+  useEffect(() => {
+    const onRequest = (): void => {
+      if (overflow.length > 0 && buttonRef.current) setAnchor(buttonRef.current);
+    };
+    globalThis.addEventListener(DESKTOP_OPEN_TAB_OVERFLOW_EVENT, onRequest);
+    return () => globalThis.removeEventListener(DESKTOP_OPEN_TAB_OVERFLOW_EVENT, onRequest);
+  }, [overflow.length]);
+
+  useEffect(() => {
+    if (overflow.length === 0 && anchor !== null) setAnchor(null);
+  }, [anchor, overflow.length]);
+
   if (overflow.length === 0) return null;
+  const open = anchor !== null;
   const unpinnedKeys = overflow.filter((item) => !item.pinned).map((item) => item.key);
   return (
     <>
       <HintTooltip
         title={`${String(overflow.length)} more open ${overflow.length === 1 ? "tab" : "tabs"}`}
-        detail="Click to switch or close overflow tabs"
+        detail="Click or press Enter to switch or close overflow tabs"
         enterDelay={300}
       >
         <ButtonBase
+          ref={buttonRef}
           type="button"
-          tabIndex={-1}
+          tabIndex={0}
           aria-label={`Show ${String(overflow.length)} more open tabs`}
+          aria-haspopup="menu"
+          aria-expanded={open}
+          aria-controls={open ? menuId : undefined}
           data-desktop-tabs-overflow-menu
-          onMouseDown={(event): void => event.preventDefault()}
           onClick={(event): void => setAnchor(event.currentTarget)}
           sx={{
             display: "inline-flex",
@@ -43,14 +64,16 @@ export function TabStripOverflowButton({
             color: "text.secondary",
             bgcolor: "action.hover",
             "&:hover": { color: "text.primary", bgcolor: "action.selected" },
+            "&:focus-visible": { outline: "2px solid", outlineColor: "primary.main", outlineOffset: 1 },
           }}
         >
           +{String(overflow.length)}
         </ButtonBase>
       </HintTooltip>
       <Menu
+        id={menuId}
         anchorEl={anchor}
-        open={anchor !== null}
+        open={open}
         onClose={(): void => setAnchor(null)}
         slotProps={{ list: { dense: true, sx: { minWidth: 220, maxWidth: 320, maxHeight: 340 } } }}
       >

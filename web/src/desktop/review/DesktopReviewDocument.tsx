@@ -292,7 +292,7 @@ function ReviewDocumentFooter({
   onComment?: (() => void) | undefined;
   onSend: () => void;
   onDelegate: (kind: "explain" | "review") => void;
-  onFocusPrompt?: (() => void) | undefined;
+  onFocusPrompt?: (() => "focused" | "deferred" | void) | undefined;
 }): React.JSX.Element {
   return (
     <Toolbar variant="dense" disableGutters data-review-document-footer sx={{ minHeight: desktopSize(34), minWidth: 0, px: 1, gap: 0.75, borderTop: 1, borderColor: "divider", flexShrink: 0, overflowX: "auto", scrollbarWidth: "none", "&::-webkit-scrollbar": { display: "none" } }}>
@@ -386,7 +386,7 @@ export function DesktopReviewDocument({
   /** Ask a fork of the source Session to explain or review the open file. */
   onDelegate: (kind: "explain" | "review") => void;
   agentSessionId?: string | undefined;
-  onFocusPrompt?: (() => void) | undefined;
+  onFocusPrompt?: (() => "focused" | "deferred" | void) | undefined;
   commentComposer?: React.ReactNode;
   empty: React.ReactNode;
   split?: SplitDiff | undefined;

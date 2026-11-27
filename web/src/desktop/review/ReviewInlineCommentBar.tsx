@@ -1,17 +1,29 @@
-import { Close, DeleteOutline, RateReviewOutlined, SendOutlined, UndoOutlined } from "@mui/icons-material";
+import { Close, DeleteOutline, EditOutlined, RateReviewOutlined, SendOutlined, UndoOutlined } from "@mui/icons-material";
 import { alpha, Box, Button, Chip, IconButton, InputBase, Popover, Stack, Typography } from "@mui/material";
 import { useEffect, useRef, useState } from "react";
+import { ENTER_LABEL, hasSendMod, MOD_LABEL } from "../../platform";
+import type { CodeDiffScope } from "../../review/codeApi";
 import { desktopSize } from "../../surface/desktopSize";
 import { DesktopKeycap, LeaderKeycap } from "../commands/DesktopKeycap";
+import { desktopKeyIntent } from "../commands/keyIntent";
 import {
   addReviewComment,
   clearReviewComments,
+  formatCommentLocation,
   removeReviewComment,
+  type ReviewCommentSide,
+  type StagedReviewComment,
   submitReviewCommentsToPrompt,
+  updateReviewComment,
   useReviewComments,
 } from "./reviewCommentsStore";
 
 export interface ReviewCommentTarget {
+  /** Agent session that owns this note; bound when opened so switching
+   *  sessions can never stage a note into another session's batch. */
+  readonly ownerSessionId: string;
+  /** Review target worktree session ID active when opened. */
+  readonly reviewSessionId: string;
   readonly path: string;
   readonly startLine: number;
   readonly endLine: number;
@@ -19,33 +31,60 @@ export interface ReviewCommentTarget {
   readonly kind: "diff" | "source" | "commit" | "pr";
   readonly root?: string | undefined;
   readonly comparison?: string | undefined;
+  readonly scope?: CodeDiffScope | undefined;
+  readonly side?: ReviewCommentSide | undefined;
+  readonly commitOid?: string | undefined;
+  readonly pullLabel?: string | undefined;
+  readonly revision?: string | undefined;
+}
+
+/** Shared IME- and platform-aware key handler for Review note inputs. */
+export function reviewNoteKeyAction(
+  event: Pick<
+    KeyboardEvent,
+    "key" | "code" | "keyCode" | "isComposing" | "metaKey" | "ctrlKey" | "altKey" | "shiftKey" | "target"
+  >,
+  opts?: { composing?: boolean },
+): "save" | "cancel" | "ignore" {
+  const intent = desktopKeyIntent(event, opts);
+  if (intent.owner === "ime") return "ignore";
+  if (intent.key === "Escape" && !event.metaKey && !event.ctrlKey && !event.altKey) return "cancel";
+  if (intent.key === "Enter" && hasSendMod(event)) return "save";
+  return "ignore";
 }
 
 export function ReviewInlineCommentBar({
-  sessionId,
   target,
+  initialBody = "",
+  onDraftChange,
   onSaved,
   onCancel,
 }: {
-  sessionId: string;
   target: ReviewCommentTarget;
+  initialBody?: string;
+  onDraftChange?: (body: string) => void;
   onSaved: () => void;
   onCancel: () => void;
 }): React.JSX.Element {
-  const [body, setBody] = useState("");
+  const [body, setBody] = useState(initialBody);
   const inputRef = useRef<HTMLTextAreaElement>(null);
-  useEffect(() => {
-    setBody("");
-    requestAnimationFrame(() => inputRef.current?.focus());
-  }, [target.path, target.startLine, target.endLine]);
+  const targetKey = `${target.ownerSessionId}\0${target.reviewSessionId}\0${target.path}\0${String(target.startLine)}:${String(target.endLine)}:${target.side ?? "new"}`;
 
-  const loc = target.startLine === target.endLine
-    ? `L${String(target.startLine)}`
-    : `L${String(target.startLine)}-${String(target.endLine)}`;
+  useEffect(() => {
+    setBody(initialBody);
+    requestAnimationFrame(() => inputRef.current?.focus());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [targetKey]);
+
+  const location = formatCommentLocation(target);
+  const updateBody = (next: string): void => {
+    setBody(next);
+    onDraftChange?.(next);
+  };
   const save = (overrideText?: string): void => {
     const text = (overrideText ?? body).trim();
     if (!text) return;
-    addReviewComment(sessionId, {
+    addReviewComment(target.ownerSessionId, {
       path: target.path,
       startLine: target.startLine,
       endLine: target.endLine,
@@ -54,14 +93,20 @@ export function ReviewInlineCommentBar({
       body: text,
       root: target.root,
       comparison: target.comparison,
+      scope: target.scope,
+      side: target.side,
+      commitOid: target.commitOid,
+      pullLabel: target.pullLabel,
+      revision: target.revision,
     });
-    setBody("");
+    updateBody("");
     onSaved();
   };
 
   return (
     <Box
       data-review-comment-composer
+      data-review-comment-owner={target.ownerSessionId}
       sx={(theme) => ({
         borderTop: 1,
         borderColor: "divider",
@@ -74,7 +119,7 @@ export function ReviewInlineCommentBar({
       <Stack direction="row" alignItems="center" spacing={0.75} sx={{ mb: 0.6 }}>
         <RateReviewOutlined sx={{ fontSize: "0.95rem", color: "primary.main" }} />
         <Typography variant="caption" noWrap sx={{ fontWeight: 650, fontFamily: "monospace", flex: 1 }}>
-          {target.path}:{loc}
+          {location}
         </Typography>
         <Chip
           size="small"
@@ -96,16 +141,16 @@ export function ReviewInlineCommentBar({
         maxRows={5}
         fullWidth
         value={body}
-        onChange={(e): void => setBody(e.target.value)}
+        onChange={(e): void => updateBody(e.target.value)}
         placeholder="Add a review note (stays in Review; batch-send to Agent when done)…"
         inputProps={{ "aria-label": "Review note", "data-desktop-vim": "off", "data-review-comment-input": "true" }}
         onKeyDown={(e): void => {
-          if (e.nativeEvent.isComposing) return;
-          if (e.key === "Escape") {
+          const action = reviewNoteKeyAction(e.nativeEvent);
+          if (action === "cancel") {
             e.preventDefault();
             e.stopPropagation();
             onCancel();
-          } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          } else if (action === "save") {
             e.preventDefault();
             e.stopPropagation();
             save();
@@ -124,7 +169,7 @@ export function ReviewInlineCommentBar({
       />
       <Stack direction="row" alignItems="center" justifyContent="flex-end" spacing={0.75} sx={{ mt: 0.6 }}>
         <Typography variant="caption" color="text.secondary" sx={{ mr: "auto", fontSize: "0.68rem" }}>
-          <DesktopKeycap keyLabel="⌘⏎" quiet /> save · <DesktopKeycap keyLabel="Esc" quiet /> cancel
+          <DesktopKeycap keyLabel={`${MOD_LABEL}${ENTER_LABEL}`} quiet /> save · <DesktopKeycap keyLabel="Esc" quiet /> cancel
         </Typography>
         <Button size="small" color="inherit" onClick={onCancel} sx={{ textTransform: "none", fontSize: "0.72rem" }}>
           Cancel
@@ -145,12 +190,105 @@ export function ReviewInlineCommentBar({
   );
 }
 
+function ReviewNotePopoverRow({
+  sessionId,
+  item,
+}: {
+  sessionId: string;
+  item: StagedReviewComment;
+}): React.JSX.Element {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(item.body);
+  const saveEdit = (): void => {
+    updateReviewComment(sessionId, item.id, draft);
+    setEditing(false);
+  };
+  return (
+    <Box
+      data-review-tray-note={item.id}
+      sx={(theme) => ({
+        p: 0.75,
+        borderRadius: "6px",
+        bgcolor: alpha(theme.palette.action.hover, 0.7),
+        display: "flex",
+        alignItems: "flex-start",
+        gap: 0.5,
+      })}
+    >
+      <Box sx={{ flex: 1, minWidth: 0 }}>
+        <Typography variant="caption" noWrap sx={{ display: "block", fontFamily: "monospace", color: "primary.main", fontWeight: 650 }}>
+          {formatCommentLocation(item)}
+        </Typography>
+        {editing ? (
+          <Stack spacing={0.5} sx={{ mt: 0.4 }}>
+            <InputBase
+              autoFocus
+              multiline
+              minRows={2}
+              maxRows={4}
+              fullWidth
+              value={draft}
+              onChange={(e): void => setDraft(e.target.value)}
+              inputProps={{ "aria-label": "Edit review note", "data-desktop-vim": "off" }}
+              onKeyDown={(e): void => {
+                const action = reviewNoteKeyAction(e.nativeEvent);
+                if (action === "cancel") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setDraft(item.body);
+                  setEditing(false);
+                } else if (action === "save") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  saveEdit();
+                }
+              }}
+              sx={{ px: 0.75, py: 0.4, borderRadius: "5px", fontSize: "0.76rem", bgcolor: "background.default", border: 1, borderColor: "primary.main" }}
+            />
+            <Stack direction="row" justifyContent="flex-end" spacing={0.5}>
+              <Button size="small" color="inherit" onClick={(): void => { setDraft(item.body); setEditing(false); }} sx={{ textTransform: "none", fontSize: "0.68rem", minWidth: 0, px: 0.75 }}>
+                Cancel
+              </Button>
+              <Button size="small" variant="contained" disableElevation onClick={saveEdit} sx={{ textTransform: "none", fontSize: "0.68rem", minWidth: 0, px: 0.75, borderRadius: "5px" }}>
+                Save
+              </Button>
+            </Stack>
+          </Stack>
+        ) : (
+          <Typography variant="caption" sx={{ display: "block", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
+            {item.body}
+          </Typography>
+        )}
+      </Box>
+      {!editing && (
+        <IconButton
+          size="small"
+          aria-label="Edit note"
+          data-review-note-edit={item.id}
+          onClick={(): void => { setDraft(item.body); setEditing(true); }}
+          sx={{ p: 0.25 }}
+        >
+          <EditOutlined sx={{ fontSize: "0.85rem" }} />
+        </IconButton>
+      )}
+      <IconButton
+        size="small"
+        aria-label="Delete note"
+        onClick={(): void => removeReviewComment(sessionId, item.id)}
+        sx={{ p: 0.25 }}
+      >
+        <DeleteOutline sx={{ fontSize: "0.9rem" }} />
+      </IconButton>
+    </Box>
+  );
+}
+
 export function ReviewNotesTrayButton({
   sessionId,
   onFocusPrompt,
 }: {
   sessionId: string | undefined;
-  onFocusPrompt: () => void;
+  onFocusPrompt: () => "focused" | "deferred" | void;
 }): React.JSX.Element | null {
   const comments = useReviewComments(sessionId);
   const [anchor, setAnchor] = useState<HTMLElement | null>(null);
@@ -190,7 +328,7 @@ export function ReviewNotesTrayButton({
         onClose={(): void => setAnchor(null)}
         anchorOrigin={{ vertical: "top", horizontal: "right" }}
         transformOrigin={{ vertical: "bottom", horizontal: "right" }}
-        slotProps={{ paper: { sx: { width: 340, maxWidth: "90vw", p: 1.25, borderRadius: "10px" } } }}
+        slotProps={{ paper: { sx: { width: 356, maxWidth: "90vw", p: 1.25, borderRadius: "10px" } } }}
       >
         <Stack direction="row" alignItems="center" sx={{ mb: 0.75 }}>
           <Typography variant="subtitle2" sx={{ fontWeight: 700, flex: 1 }}>
@@ -208,42 +346,10 @@ export function ReviewNotesTrayButton({
             Clear
           </Button>
         </Stack>
-        <Stack spacing={0.6} sx={{ maxHeight: 260, overflowY: "auto", mb: 1 }}>
-          {comments.map((item) => {
-            const loc = item.startLine === item.endLine
-              ? `L${String(item.startLine)}`
-              : `L${String(item.startLine)}-${String(item.endLine)}`;
-            return (
-              <Box
-                key={item.id}
-                sx={(theme) => ({
-                  p: 0.75,
-                  borderRadius: "6px",
-                  bgcolor: alpha(theme.palette.action.hover, 0.7),
-                  display: "flex",
-                  alignItems: "flex-start",
-                  gap: 0.5,
-                })}
-              >
-                <Box sx={{ flex: 1, minWidth: 0 }}>
-                  <Typography variant="caption" noWrap sx={{ display: "block", fontFamily: "monospace", color: "primary.main", fontWeight: 650 }}>
-                    {item.path}:{loc}
-                  </Typography>
-                  <Typography variant="caption" sx={{ display: "block", whiteSpace: "pre-wrap", overflowWrap: "anywhere" }}>
-                    {item.body}
-                  </Typography>
-                </Box>
-                <IconButton
-                  size="small"
-                  aria-label="Delete note"
-                  onClick={(): void => removeReviewComment(sessionId, item.id)}
-                  sx={{ p: 0.25 }}
-                >
-                  <DeleteOutline sx={{ fontSize: "0.9rem" }} />
-                </IconButton>
-              </Box>
-            );
-          })}
+        <Stack spacing={0.6} sx={{ maxHeight: 280, overflowY: "auto", mb: 1 }}>
+          {comments.map((item) => (
+            <ReviewNotePopoverRow key={item.id} sessionId={sessionId} item={item} />
+          ))}
         </Stack>
         <Button
           fullWidth

@@ -18,7 +18,7 @@ import {
 } from "./DesktopPromptWorkbenchHelpers";
 import { DesktopPromptCompanionLayout } from "./DesktopPromptCompanionRail";
 import { useDesktopWorkspace } from "./DesktopWorkspaceController";
-import { requestDesktopEditorInsert } from "./editorInsert";
+import { handoffToNewPrompt, requestDesktopEditorInsert } from "./editorInsert";
 import {
   getLastSubmittedPending,
   newDraftBufferCmid,
@@ -146,7 +146,7 @@ export function DesktopPromptWorkbench(
   );
   return (
     <>
-      <DesktopPromptCompanionLayout sessionId={sessionId} containerRef={workbenchRef} planSlot={planSlot} pendingSlot={pendingSlot} hasPending={queue.length > 0 || drafts.length > 0 || state.emptyDraftOpen} onFocusPrompt={(): void => workspace.focusRegion("prompt.composer")}>
+      <DesktopPromptCompanionLayout sessionId={sessionId} containerRef={workbenchRef} planSlot={planSlot} pendingSlot={pendingSlot} hasPending={queue.length > 0 || drafts.length > 0 || state.emptyDraftOpen} onFocusPrompt={(): "focused" | "deferred" => handoffToNewPrompt(workspace.focusRegion)}>
         {beforeCanvas}
         <DesktopWorkbenchCanvas
           composerPaperRef={composerPaperRef} pendingRef={pendingRef}

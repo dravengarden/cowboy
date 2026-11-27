@@ -32,6 +32,7 @@ export interface ReviewWorkbenchActions {
   readonly submitComments: () => void;
   readonly toggleStream: () => void;
   readonly hasComments: boolean;
+  readonly canComment: boolean;
   readonly hasDocument: boolean;
   readonly overlay: boolean;
 }
@@ -99,7 +100,7 @@ export function useReviewWorkbenchCommands(actions: ReviewWorkbenchActions): voi
       leader("review.outline", "VO", "Review: Outline in the Inspector", () => a().inspector.show()),
       leader("review.toggleInspector", "V]", "Review: Fold the Inspector", () => a().inspector.toggle()),
       leader("review.check", "VK", "Review: Run a project check", () => a().inspector.runCheck()),
-      leader("review.comment", "VN", "Review: Stage inline review note", () => a().addComment(), withDocument),
+      leader("review.comment", "VN", "Review: Stage inline review note", () => a().addComment(), () => desktopReviewShown() && a().canComment),
       leader("review.submitNotes", "VB", "Review: Send staged notes to Prompt", () => a().submitComments(), () => desktopReviewShown() && a().hasComments),
       leader("review.stream", "VT", "Review: Toggle All-Changes stream", () => a().toggleStream()),
       {

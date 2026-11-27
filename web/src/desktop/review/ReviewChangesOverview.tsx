@@ -35,12 +35,24 @@ function OverviewEvidenceChips({
   findingCount: number;
   commentCount: number;
 }): React.JSX.Element | null {
-  if (updatedCount + failedChecks + runningChecks + passedChecks + findingCount + commentCount === 0) return null;
+  const showUpdated = updatedCount > 0 || updatedOnly;
+  if (!showUpdated && failedChecks + runningChecks + passedChecks + findingCount + commentCount === 0) return null;
   const chipSx = { height: desktopSize(20), fontSize: "0.68rem" } as const;
   return (
     <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: 0.65 }}>
-      {updatedCount > 0 && (
-        <Chip size="small" clickable data-review-updated-filter icon={<HistoryToggleOff sx={{ fontSize: "0.8rem !important" }} />} label={`Updated ${String(updatedCount)}`} color={updatedOnly ? "primary" : "warning"} variant={updatedOnly ? "filled" : "outlined"} onClick={onToggleUpdatedOnly} sx={{ ...chipSx, fontWeight: 600 }} />
+      {showUpdated && (
+        <Chip
+          size="small"
+          clickable
+          data-review-updated-filter
+          aria-pressed={updatedOnly}
+          icon={<HistoryToggleOff sx={{ fontSize: "0.8rem !important" }} />}
+          label={`Updated ${String(updatedCount)}`}
+          color={updatedOnly ? "primary" : "warning"}
+          variant={updatedOnly ? "filled" : "outlined"}
+          onClick={onToggleUpdatedOnly}
+          sx={{ ...chipSx, fontWeight: 600 }}
+        />
       )}
       {failedChecks > 0 && (
         <Chip size="small" icon={<ErrorOutline sx={{ fontSize: "0.8rem !important" }} />} label={`${String(failedChecks)} check failed`} color="error" variant="outlined" sx={chipSx} />
@@ -87,11 +99,14 @@ export function ReviewChangesOverview({
   const total = changes.queue.length;
   if (total === 0) return null;
 
+  // Sum unique API changes so partially staged files (which appear in both
+  // staged and unstaged queue sections with identical combined counts) are
+  // never double-counted.
   let added = 0;
   let removed = 0;
-  for (const entry of changes.queue) {
-    added += entry.change.additions ?? 0;
-    removed += entry.change.deletions ?? 0;
+  for (const change of changes.result?.changes ?? []) {
+    added += change.additions ?? 0;
+    removed += change.deletions ?? 0;
   }
   const pct = Math.round((reviewedCount / total) * 100);
   const failedChecks = checks?.runs.filter((run) => run.state === "failed" || run.state === "error" || run.state === "timed_out").length ?? 0;

@@ -13,7 +13,9 @@ import {
   type ReviewNavigatorTab,
 } from "./DesktopReviewNavigator";
 import { revealedFile } from "../../mobileReviewState";
-import { editorSelection, revealEditorLine } from "./reviewEditorSelection";
+import { handoffToNewPrompt } from "../editorInsert";
+import { buildEditorCommentTarget, commentDraftKey } from "./reviewCommentTarget";
+import { revealEditorLine } from "./reviewEditorSelection";
 import { ReviewAllChangesStream } from "./ReviewAllChangesStream";
 import { type ReviewCommentTarget, ReviewInlineCommentBar } from "./ReviewInlineCommentBar";
 import { submitReviewCommentsToPrompt, useReviewComments } from "./reviewCommentsStore";
@@ -126,9 +128,9 @@ function focusedRow(): HTMLElement | null {
 
 /** An agent's or a link's reveal opens the file it names, as a preview tab,
  *  in the Session's own worktree only; it waits for the context to resolve. */
-function useReviewReveal(review: ReviewWorkbench): void {
-  const latest = useRef(review);
-  latest.current = review;
+function useReviewReveal(review: ReviewWorkbench, onReveal: () => void): void {
+  const latest = useRef({ review, onReveal });
+  latest.current = { review, onReveal };
   const [pending, setPending] = useState(takeDesktopReviewReveal);
   useEffect(() => {
     const take = (): void => {
@@ -141,13 +143,14 @@ function useReviewReveal(review: ReviewWorkbench): void {
   useEffect(() => {
     if (!pending || !ready) return;
     setPending(false);
-    const { context, target, placeSource, document, editor } = latest.current;
+    const { context, target, placeSource, document, editor } = latest.current.review;
     const file = revealedFile(context.agentSynced);
     if (!file) return;
     if (!target?.own) {
       notify("Switch Review back to this session's worktree to open this file.", "info");
       return;
     }
+    latest.current.onReveal();
     placeSource(file.path, file.line);
     // A file already shown keeps its state; move its cursor directly.
     if (file.line !== undefined && document?.kind === "source" && document.path === file.path && editor.current) {
@@ -156,26 +159,7 @@ function useReviewReveal(review: ReviewWorkbench): void {
   }, [pending, ready]);
 }
 
-function captureEditorCommentTarget(review: ReviewWorkbench): ReviewCommentTarget | null {
-  const doc = review.document;
-  if (!doc) return null;
-  const view = review.editor.current;
-  const readyText = review.load?.state === "ready" ? review.load.value.text : "";
-  const sel = view ? editorSelection(view) : { from: review.cursorLine, to: review.cursorLine };
-  const sourceLines = (view ? view.state.doc.toString() : readyText).split("\n");
-  const from = Math.max(1, Math.min(sel.from, sel.to));
-  const to = Math.max(from, Math.max(sel.from, sel.to));
-  const snippet = sourceLines.slice(from - 1, Math.min(sourceLines.length, to + 1)).join("\n");
-  return {
-    path: doc.path,
-    startLine: from,
-    endLine: to,
-    codeSnippet: snippet,
-    kind: doc.kind,
-    root: review.root,
-    comparison: doc.kind === "diff" ? doc.comparison : undefined,
-  };
-}
+
 
 function EmptyDocument({ review, onOpenStream }: { review: ReviewWorkbench; onOpenStream: () => void }): React.JSX.Element {
   const { target, context, changes } = review;
@@ -235,6 +219,7 @@ interface ViewControls {
   readonly submitComments: () => void;
   readonly toggleStream: () => void;
   readonly hasComments: boolean;
+  readonly canComment: boolean;
 }
 
 /** The view's half of the Review commands: the Navigator and its layout. */
@@ -300,6 +285,7 @@ function useReviewViewCommands(review: ReviewWorkbench, controls: ViewControls):
     submitComments: controls.submitComments,
     toggleStream: controls.toggleStream,
     hasComments: controls.hasComments,
+    canComment: controls.canComment,
     hasDocument: review.document !== undefined,
     overlay: compact && overlay,
   });
@@ -308,43 +294,51 @@ function useReviewViewCommands(review: ReviewWorkbench, controls: ViewControls):
 /** The Document region: the open file, its tabs and footer. Focus that
  *  reaches the region before the editor exists is handed on when it mounts. */
 function ReviewDocumentRegion({
+  active,
   review,
   diagnostics,
   onDelegate,
   streamMode,
   unreadOnly,
   commentTarget,
+  commentDraft,
+  onCommentDraftChange,
   onOpenComment,
   onCloseComment,
   onToggleStream,
+  streamScrollerRef,
+  streamCommentGetterRef,
 }: {
+  active: boolean;
   review: ReviewWorkbench;
   diagnostics: readonly CodeDiagnostic[];
   onDelegate: (kind: "explain" | "review") => void;
   streamMode: boolean;
   unreadOnly: boolean;
   commentTarget: ReviewCommentTarget | null;
+  commentDraft: string;
+  onCommentDraftChange: (body: string) => void;
   onOpenComment: (target?: ReviewCommentTarget | null) => void;
   onCloseComment: () => void;
   onToggleStream: () => void;
+  streamScrollerRef: { current: HTMLDivElement | null };
+  streamCommentGetterRef: { current: (() => ReviewCommentTarget | null) | null };
 }): React.JSX.Element {
   const agentSessionId = review.context.agentSessionId;
-  const focusPrompt = (): void => {
-    requestAnimationFrame(() => review.workspace.focusRegion("prompt.composer"));
-  };
-  const composer = commentTarget && agentSessionId ? (
+  const focusPrompt = (): "focused" | "deferred" => handoffToNewPrompt(review.workspace.focusRegion);
+  const targetMatches = commentTarget !== null &&
+    commentTarget.ownerSessionId === agentSessionId &&
+    commentTarget.reviewSessionId === review.target?.sessionId;
+  const composer = targetMatches ? (
     <ReviewInlineCommentBar
-      sessionId={agentSessionId}
       target={commentTarget}
+      initialBody={commentDraft}
+      onDraftChange={onCommentDraftChange}
       onSaved={(): void => {
         onCloseComment();
         notify("Review note staged", "info");
-        requestAnimationFrame(() => review.editor.current?.focus());
       }}
-      onCancel={(): void => {
-        onCloseComment();
-        requestAnimationFrame(() => review.editor.current?.focus());
-      }}
+      onCancel={onCloseComment}
     />
   ) : null;
   const streamEntries = unreadOnly
@@ -355,23 +349,31 @@ function ReviewDocumentRegion({
       data-desktop-region={REVIEW_DOCUMENT_REGION}
       tabIndex={-1}
       onFocus={(event) => {
-        if (event.target === event.currentTarget) review.editor.current?.focus();
+        if (event.target !== event.currentTarget) return;
+        if (streamMode) streamScrollerRef.current?.focus({ preventScroll: true });
+        else review.editor.current?.focus();
       }}
       sx={{ flex: 1, minWidth: 0, minHeight: 0, display: "flex", flexDirection: "column", outline: "none" }}
     >
       {streamMode && review.target ? (
         <>
           <ReviewAllChangesStream
+            active={active && streamMode}
             sessionId={review.target.sessionId}
+            agentSessionId={agentSessionId}
+            comparisonMatched={review.changes.comparisonMatched}
             entries={streamEntries}
             reviewed={review.reviewed}
             root={review.root}
             contextLines={review.settings.contextLines}
             showWhitespace={review.settings.showWhitespaceChanges}
             dataRevision={review.changes.dataRevision}
+            scrollerRef={streamScrollerRef}
+            captureFocusedCommentRef={streamCommentGetterRef}
             onMarkEntry={review.markEntry}
             onOpenEntry={review.open}
             onCommentLine={(target): void => onOpenComment(target)}
+            onFocusPrompt={focusPrompt}
             onExitStream={onToggleStream}
           />
           {composer}
@@ -464,6 +466,51 @@ function ReviewNavigatorShell({
   );
 }
 
+function useReviewCommentComposer(
+  review: ReviewWorkbench,
+  streamMode: boolean,
+  streamScrollerRef: { readonly current: HTMLDivElement | null },
+  streamCommentGetterRef: { readonly current: (() => ReviewCommentTarget | null) | null },
+) {
+  const [target, setTarget] = useState<ReviewCommentTarget | null>(null);
+  const draftsRef = useRef<Map<string, string>>(new Map());
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const activeAgentSession = review.context.agentSessionId;
+  const activeReviewSession = review.target?.sessionId;
+  useEffect(() => {
+    setTarget((current) =>
+      current && (current.ownerSessionId !== activeAgentSession || current.reviewSessionId !== activeReviewSession)
+        ? null
+        : current
+    );
+  }, [activeAgentSession, activeReviewSession]);
+  const open = (explicit?: ReviewCommentTarget | null): void => {
+    const next = explicit ?? (streamMode ? streamCommentGetterRef.current?.() ?? null : buildEditorCommentTarget(review));
+    if (!next) return;
+    const focused = document.activeElement;
+    returnFocusRef.current = focused instanceof HTMLElement ? focused : null;
+    setTarget(next);
+  };
+  const close = (): void => {
+    setTarget(null);
+    const restore = returnFocusRef.current;
+    returnFocusRef.current = null;
+    requestAnimationFrame(() => {
+      if (restore?.isConnected) restore.focus({ preventScroll: true });
+      else if (streamMode) streamScrollerRef.current?.focus({ preventScroll: true });
+      else review.editor.current?.focus();
+    });
+  };
+  const draft = target ? (draftsRef.current.get(commentDraftKey(target)) ?? "") : "";
+  const setDraft = (text: string): void => {
+    if (!target) return;
+    const key = commentDraftKey(target);
+    if (text) draftsRef.current.set(key, text);
+    else draftsRef.current.delete(key);
+  };
+  return { target, draft, setDraft, open, close };
+}
+
 export function DesktopReviewView({ active }: { active: boolean }): React.JSX.Element {
   const review = useReviewWorkbench(active);
   const [root, setRoot] = useState<HTMLDivElement | null>(null);
@@ -478,14 +525,12 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [unreadOnly, setUnreadOnly] = useState(false);
   const [streamMode, setStreamMode] = useState(false);
-  const [commentTarget, setCommentTarget] = useState<ReviewCommentTarget | null>(null);
+  const streamScrollerRef = useRef<HTMLDivElement | null>(null);
+  const streamCommentGetterRef = useRef<(() => ReviewCommentTarget | null) | null>(null);
+  const comment = useReviewCommentComposer(review, streamMode, streamScrollerRef, streamCommentGetterRef);
   const [compareRequest, setCompareRequest] = useState(0);
   const stagedComments = useReviewComments(review.context.agentSessionId);
-  const openComment = (explicit?: ReviewCommentTarget | null): void => {
-    const next = explicit ?? captureEditorCommentTarget(review);
-    if (next) setCommentTarget(next);
-  };
-  review.commentAction.current = () => openComment();
+  review.commentAction.current = () => comment.open();
   const navigatorShown = compact ? overlay : !folded;
   const { workspace } = review;
   // Rows may arrive a few frames later (a new tab or context loads them);
@@ -506,7 +551,7 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
     else setFolded(false);
     focusNavigator();
   };
-  useReviewReveal(review);
+  useReviewReveal(review, () => setStreamMode(false));
   const leaveOverlay = (): void => {
     if (compact && overlay) setOverlay(false);
   };
@@ -531,13 +576,14 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
     setUnreadOnly,
     setTab,
     requestComparison: () => setCompareRequest((value) => value + 1),
-    addComment: () => openComment(),
+    addComment: () => comment.open(),
     submitComments: () => {
       const sid = review.context.agentSessionId;
-      if (sid) submitReviewCommentsToPrompt(sid, () => requestAnimationFrame(() => workspace.focusRegion("prompt.composer")));
+      if (sid) submitReviewCommentsToPrompt(sid, () => handoffToNewPrompt(workspace.focusRegion));
     },
     toggleStream: () => setStreamMode((v) => !v),
     hasComments: stagedComments.length > 0,
+    canComment: streamMode ? review.changes.comparisonMatched && review.changes.queue.length > 0 : review.document !== undefined,
   });
   const navigator = review.target && (
     <DesktopReviewNavigator
@@ -553,11 +599,13 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
       openCommitPath={review.document?.kind === "commit" ? review.document : undefined}
       onOpenCommit={(oid, path) => {
         leaveOverlay();
+        setStreamMode(false);
         review.openCommit(oid, path);
       }}
       openPullPath={review.document?.kind === "pr" ? review.document.path : undefined}
       onOpenPull={(binding, revision, file) => {
         leaveOverlay();
+        setStreamMode(false);
         review.openPull(binding, revision, file);
       }}
       sessionId={review.target.sessionId}
@@ -598,7 +646,7 @@ export function DesktopReviewView({ active }: { active: boolean }): React.JSX.El
       sx={{ flex: 1, minHeight: 0, minWidth: 0, overflow: "hidden", display: "flex", position: "relative" }}
     >
       <ReviewNavigatorShell navigator={navigator} navigatorShown={navigatorShown} compact={compact} overlay={overlay} navigatorWidth={navigatorWidth} width={width} onWidth={setNavigatorWidth} onShow={() => showNavigator(tab)} />
-      <ReviewDocumentRegion review={review} diagnostics={language.diagnostics} onDelegate={(kind) => delegate(kind)} streamMode={streamMode} unreadOnly={unreadOnly} commentTarget={commentTarget} onOpenComment={openComment} onCloseComment={() => setCommentTarget(null)} onToggleStream={() => setStreamMode((v) => !v)} />
+      <ReviewDocumentRegion active={active} review={review} diagnostics={language.diagnostics} onDelegate={(kind) => delegate(kind)} streamMode={streamMode} unreadOnly={unreadOnly} commentTarget={comment.target} commentDraft={comment.draft} onCommentDraftChange={comment.setDraft} onOpenComment={comment.open} onCloseComment={comment.close} onToggleStream={() => setStreamMode((v) => !v)} streamScrollerRef={streamScrollerRef} streamCommentGetterRef={streamCommentGetterRef} />
       {review.target && <InspectorRegion review={review} panel={inspector} language={language} findings={findings} />}
       <ReviewLanguageLayer review={review} language={language} />
       <DesktopModal open={settingsOpen} onClose={() => setSettingsOpen(false)} title="Review settings" width={640}>

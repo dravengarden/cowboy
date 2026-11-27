@@ -75,15 +75,18 @@ export function reviewDocumentAction(
   return null;
 }
 
-/** Whether the user's vimrc maps exactly this sequence in this mode. */
+/** Whether the user's vimrc maps this sequence — or a longer sequence starting
+ *  with it (such as `cz` when pressing `c`) — in this mode. */
 export function userMapsSequence(
   mappings: readonly VimMapping[],
   sequence: string,
   visual: boolean,
 ): boolean {
+  if (!sequence) return false;
   const mode = visual ? "visual" : "normal";
   return mappings.some((mapping) =>
-    mapping.lhs === sequence && (mapping.mode === undefined || mapping.mode === mode)
+    (mapping.lhs === sequence || mapping.lhs.startsWith(sequence)) &&
+    (mapping.mode === undefined || mapping.mode === mode)
   );
 }
 

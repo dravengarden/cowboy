@@ -62,22 +62,22 @@ function NavigatorTabs({ tab, onTab }: { tab: ReviewNavigatorTab; onTab: (tab: R
           key={value}
           value={value}
           tabIndex={-1}
+          aria-label={`${fullLabel} (Space ${leaderKey})`}
           data-review-navigator-tab={value}
+          data-review-navigator-armed={showLeader ? "true" : undefined}
           disableRipple
           label={
             <Tooltip title={`${fullLabel} (␣${leaderKey})`} enterDelay={400}>
-              <span>{label}</span>
+              <span>{showLeader ? <LeaderKeycap leaderKey={leaderKey} /> : label}</span>
             </Tooltip>
           }
-          icon={showLeader ? <LeaderKeycap leaderKey={leaderKey} /> : undefined}
-          iconPosition="end"
           sx={{
             minHeight: desktopSize(24),
             minWidth: 0,
-            flex: "1 1 auto",
-            px: 0.65,
+            flex: "1 1 0%",
+            px: showLeader ? 0.25 : 0.5,
             py: 0,
-            gap: 0.4,
+            gap: 0.25,
             borderRadius: "6px",
             textTransform: "none",
             fontSize: "0.73rem",

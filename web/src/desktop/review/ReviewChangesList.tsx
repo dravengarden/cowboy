@@ -252,6 +252,9 @@ export function ReviewChangesList({
 }): React.JSX.Element {
   const [visible, setVisible] = useState(WINDOW);
   const [updatedOnly, setUpdatedOnly] = useState(false);
+  useEffect(() => {
+    setUpdatedOnly(false);
+  }, [sessionId, changes.comparison]);
   const leader = useDesktopLeaderOptional();
   const showLeader = leader?.armed === true && (leader.layer === "root" || leader.layer === "group:v");
   const updatedKeys = useMemo(() => new Set(
