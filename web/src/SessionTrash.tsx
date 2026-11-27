@@ -30,7 +30,7 @@ import {
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { DraftMetadata } from "./documents/model";
 import { draftRepository } from "./documents/store";
-import { restoreSessionDraftFromTrash } from "./documents/sessionDraftTrash";
+import { purgeTrashPlanOnController, restoreSessionDraftFromTrash } from "./documents/sessionDraftTrash";
 import type { PurgeDraftTarget } from "./documents/repositoryPurge";
 import { documentNotice } from "./documents/DocumentNotifications";
 import { openUndoHistory } from "./UndoHistorySheet";
@@ -41,7 +41,7 @@ import { InAppRoot } from "./SessionFolderUi";
 import { ConfirmSheet } from "./Sheet";
 import { sessionListProjectLabel } from "./sessionProject";
 import { productSessionSignal } from "./productSessionEnd";
-import { purgeItems, restoreItems, useStoreSelector } from "./store";
+import { restoreItems, useStoreSelector } from "./store";
 import { desktopSize } from "./surface/desktopSize";
 import {
   buildTrashTree,
@@ -378,7 +378,11 @@ export async function restoreTrashRow(row: TrashRow, folders: SessionFoldersValu
   if (row.kind === "trash-session") return restoreItems({ sessions: [row.session.id] });
   const owner = draftRepository().document(row.draft.id);
   await owner.hydrate();
-  if (row.draft.deleted) await owner.change({ type: "restore" });
+  if (row.draft.deleted) {
+    await owner.change({ type: "restore" });
+    // Session-archived drafts may contain session-only ACP blocks refused by the server (R3-22).
+    if (row.draft.source_session_id) await owner.whenSynced();
+  }
   const parent = row.draft.parent_id ?? null;
   const target = nearestLiveFolder(folders, parent);
   if (target !== parent) await owner.change({ type: "move", parent_id: target });
@@ -401,15 +405,47 @@ function draftPurgeTarget(
   };
 }
 
+function confirmedFolderPlan(folderId: string, tree: TrashTree, folders: SessionFoldersValue) {
+  const folder = sessionFolderById(folders, folderId);
+  if (!folder || typeof folder.trashed_at_ms !== "number") {
+    throw new Error("Trash metadata is still syncing; refresh and try again.");
+  }
+  const expected_subfolders = tree.folders
+    .filter((f) => f.id !== folderId && folderIsWithin(folders, f.id, folderId))
+    .map((f) => f.id);
+  const expected_sessions = tree.sessions
+    .filter((s) => folderIsWithin(folders, folders.placement[s.id] || null, folderId))
+    .map((s) => s.id);
+  return {
+    id: folderId,
+    expected_trashed_at_ms: folder.trashed_at_ms,
+    expected_subfolders,
+    expected_sessions,
+  };
+}
+
 async function purgeTrashRow(row: TrashRow, tree: TrashTree, folders: SessionFoldersValue): Promise<void> {
   if (row.kind === "trash-folder") {
-    const folderDraftTargets = tree.drafts
+    const drafts = tree.drafts
       .filter((draft) => folderIsWithin(folders, draft.parent_id, row.folder.id))
       .map((draft) => draftPurgeTarget(draft, folders));
-    if (folderDraftTargets.length > 0) await draftRepository().purge(folderDraftTargets);
-    await purgeItems({ folders: [row.folder.id] });
+    const sessions = tree.sessions
+      .filter((s) => folderIsWithin(folders, folders.placement[s.id] || null, row.folder.id) && typeof s.trashed_at_ms === "number")
+      .map((s) => ({ id: s.id, expected_trashed_at_ms: s.trashed_at_ms! }));
+    await purgeTrashPlanOnController({
+      folders: [confirmedFolderPlan(row.folder.id, tree, folders)],
+      sessions,
+      drafts,
+    });
   } else if (row.kind === "trash-session") {
-    await purgeItems({ sessions: [row.session.id] });
+    if (typeof row.session.trashed_at_ms !== "number") {
+      throw new Error("Trash metadata is still syncing; refresh and try again.");
+    }
+    await purgeTrashPlanOnController({
+      folders: [],
+      sessions: [{ id: row.session.id, expected_trashed_at_ms: row.session.trashed_at_ms }],
+      drafts: [],
+    });
   } else {
     await draftRepository().purge([draftPurgeTarget(row.draft, folders)]);
   }
@@ -614,13 +650,16 @@ export function TrashMenuSheet(
   const trashFolders = useStoreSelector((state) => state.trashFolders);
   const empty = (): void => {
     setBusy(true);
-    const sessionIds = tree.sessions.map((session) => session.id);
     void (async (): Promise<void> => {
-      const draftTargets = tree.drafts.map((draft) => draftPurgeTarget(draft, trashFolders));
-      if (draftTargets.length > 0) await draftRepository().purge(draftTargets);
-      if (sessionIds.length > 0 || rootFolders.length > 0) {
-        await purgeItems({ sessions: sessionIds, folders: rootFolders });
-      }
+      const drafts = tree.drafts.map((draft) => draftPurgeTarget(draft, trashFolders));
+      const sessions = tree.sessions.map((s) => {
+        if (typeof s.trashed_at_ms !== "number") {
+          throw new Error("Trash metadata is still syncing; refresh and try again.");
+        }
+        return { id: s.id, expected_trashed_at_ms: s.trashed_at_ms };
+      });
+      const folders = rootFolders.map((id) => confirmedFolderPlan(id, tree, trashFolders));
+      await purgeTrashPlanOnController({ folders, sessions, drafts });
     })()
       .then(() => {
         onClose();

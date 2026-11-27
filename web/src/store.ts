@@ -1089,7 +1089,7 @@ export function setSessionConfigOptions(
 // serialization here anymore — those moved server-side so all terminals stay in
 // sync (see src/core.rs). Build the ACP content blocks for a staged message
 // exactly as a prompt would carry them (empty ⇒ plain text).
-function contentOf(text: string, attachments: readonly Attachment[]): ContentBlock[] {
+export function contentOf(text: string, attachments: readonly Attachment[]): ContentBlock[] {
   return buildContentBlocks(text, attachments) ?? [];
 }
 

@@ -95,6 +95,9 @@ export interface IdbPersistenceOwner {
   /** Permanently delete a previously borrowed outbox record and release its
    *  record-mode reservation after its owner has been disposed. */
   retireOutbox(key: string): Promise<void>;
+  /** Atomically inspect and delete an outbox record inside ONE readwrite
+   *  transaction only when `shouldRetire(stored)` returns true. */
+  retireOutboxIf<S>(key: string, shouldRetire: (stored: S | null) => boolean): Promise<boolean>;
   readonly lifecycle: IdbSnapshot;
   /** Seal new calls, drain admitted transactions, then close all generations.
    * A native open cannot be cancelled: late handles are closed, and a stuck
@@ -210,6 +213,33 @@ async function readScopedKeys(
     if (strict) throw error;
     return [];
   }
+}
+
+async function retireOutboxRecordIf<S>(
+  run: <R>(
+    mode: IDBTransactionMode,
+    make: (store: IDBObjectStore) => TransactionRequest<R>,
+    follow?: (value: R, store: IDBObjectStore) => TransactionRequest<R> | undefined,
+  ) => Promise<R>,
+  recordModes: Map<string, "value" | "outbox">,
+  key: string,
+  shouldRetire: (stored: S | null) => boolean,
+): Promise<boolean> {
+  if (recordModes.get(key) === "value") {
+    throw new IdbPersistenceError("record_mode_conflict");
+  }
+  let retired = false;
+  await run<unknown>(
+    "readwrite",
+    (store) => store.get(key),
+    (stored, store) => {
+      if (!shouldRetire((stored ?? null) as S | null)) return undefined;
+      retired = true;
+      return store.delete(key);
+    },
+  );
+  if (retired) recordModes.delete(key);
+  return retired;
 }
 
 async function deleteIdbRecord(
@@ -641,6 +671,8 @@ export function createIdbPersistenceOwner(opts: IdbOwnerOpts = {}): IdbPersisten
       scope.run(() => deleteIdbRecord(run, recordModes, key, "outbox")),
     retireOutbox: (key: string): Promise<void> =>
       scope.run(() => deleteIdbRecord(run, recordModes, key, "value")),
+    retireOutboxIf: <S>(key: string, shouldRetire: (stored: S | null) => boolean): Promise<boolean> =>
+      scope.run(() => retireOutboxRecordIf(run, recordModes, key, shouldRetire)),
     get lifecycle(): IdbSnapshot {
       const retained = [...generations];
       return Object.freeze({

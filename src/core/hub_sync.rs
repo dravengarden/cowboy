@@ -530,16 +530,9 @@ impl Hub {
         self.sync_apply_as_locked(actor, state, id, name, args)
     }
 
-    fn ensure_folder_not_trashing_only(&self, args: &serde_json::Value) -> Result<(), String> {
-        let busy = self.inner.trashing_only_folders.lock();
-        if !busy.is_empty()
-            && ["id", "parent", "folder"].iter().any(|k| {
-                args.get(*k)
-                    .and_then(serde_json::Value::as_str)
-                    .is_some_and(|v| busy.contains(v))
-            })
-        {
-            return Err("Folder is moving to Trash; try again".into());
+    fn ensure_folder_not_trashing_only(&self, _args: &serde_json::Value) -> Result<(), String> {
+        if *self.inner.folder_tx_in_flight.lock() {
+            return Err("A folder Trash operation is in progress; try again".into());
         }
         Ok(())
     }

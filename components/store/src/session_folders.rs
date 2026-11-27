@@ -34,14 +34,21 @@ pub type FolderOwner = Option<String>;
 /// Result of atomically reparenting a folder's direct contents and trashing
 /// only the emptied folder.
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MovedSessionDelta {
+    pub session_id: String,
+    pub was_implicit: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TrashFolderOnlyDelta {
     pub folder_id: String,
     pub owner: FolderOwner,
+    pub affected_owners: Vec<FolderOwner>,
     pub trashed_at_ms: i64,
     pub destination: Option<String>,
     pub previous_project: Option<String>,
     pub moved_folders: Vec<String>,
-    pub moved_sessions: Vec<String>,
+    pub moved_sessions: Vec<MovedSessionDelta>,
     pub pins: Vec<(String, Option<String>)>,
 }
 
@@ -546,6 +553,7 @@ impl SessionFolders {
         actor: &FolderActor,
         id: &str,
         now_ms: i64,
+        implicit_sessions: &[String],
         check_session_owner: impl Fn(&str) -> Result<(), String>,
     ) -> Result<TrashFolderOnlyDelta, String> {
         let folder = self.touchable(actor, id)?.clone();
@@ -562,24 +570,39 @@ impl SessionFolders {
             .filter(|child| child.parent.as_deref() == Some(id) && child.trashed_at_ms.is_none())
             .map(|child| child.id.clone())
             .collect();
+        let mut affected_owners: Vec<FolderOwner> = vec![owner.clone()];
         for child_id in &moved_folders {
-            let _ = self.touchable(actor, child_id)?;
+            let child = self.touchable(actor, child_id)?;
+            if !affected_owners.contains(&child.owner_user_id) {
+                affected_owners.push(child.owner_user_id.clone());
+            }
         }
-        let candidate_sessions: Vec<String> = self
+        let mut moved_sessions: Vec<MovedSessionDelta> = self
             .placement
             .iter()
             .filter(|(_, placed)| placed.as_str() == id)
-            .map(|(sid, _)| sid.clone())
+            .map(|(sid, _)| MovedSessionDelta {
+                session_id: sid.clone(),
+                was_implicit: false,
+            })
             .collect();
-        for sid in &candidate_sessions {
-            check_session_owner(sid)?;
+        for sid in implicit_sessions {
+            if !self.placement.contains_key(sid)
+                && !moved_sessions.iter().any(|m| m.session_id == *sid)
+            {
+                moved_sessions.push(MovedSessionDelta {
+                    session_id: sid.clone(),
+                    was_implicit: true,
+                });
+            }
+        }
+        for item in &moved_sessions {
+            check_session_owner(&item.session_id)?;
         }
         let mut next_pos = self
             .folders
             .iter()
-            .filter(|f| {
-                f.owner_user_id == owner && f.parent == destination && f.trashed_at_ms.is_none()
-            })
+            .filter(|f| f.parent == destination && f.trashed_at_ms.is_none())
             .map(|f| f.position)
             .max()
             .unwrap_or(-1)
@@ -592,12 +615,11 @@ impl SessionFolders {
             }
         }
         let target_placement = destination.clone().unwrap_or_default();
-        let mut pins: Vec<(String, Option<String>)> = Vec::with_capacity(candidate_sessions.len());
-        for sid in &candidate_sessions {
-            if let Some(placed) = self.placement.get_mut(sid) {
-                *placed = target_placement.clone();
-                pins.push((sid.clone(), Some(target_placement.clone())));
-            }
+        let mut pins: Vec<(String, Option<String>)> = Vec::with_capacity(moved_sessions.len());
+        for item in &moved_sessions {
+            self.placement
+                .insert(item.session_id.clone(), target_placement.clone());
+            pins.push((item.session_id.clone(), Some(target_placement.clone())));
         }
         if let Some(target) = self.folders.iter_mut().find(|f| f.id == id) {
             target.trashed_at_ms = Some(now_ms);
@@ -609,18 +631,43 @@ impl SessionFolders {
         Ok(TrashFolderOnlyDelta {
             folder_id: id.to_owned(),
             owner,
+            affected_owners,
             trashed_at_ms: now_ms,
             destination,
             previous_project,
             moved_folders,
-            moved_sessions: candidate_sessions,
+            moved_sessions,
             pins,
         })
     }
 
-    /// Undo a specific folder-only Trash deletion identified by exact
-    /// `expected_trashed_at_ms`. Untrashes ONLY `folder_id` (never unrelated
-    /// trashed children) and moves back only still-matching live folders/sessions.
+    fn would_create_cycle(&self, parent_id: &str, child_id: &str) -> bool {
+        if parent_id == child_id {
+            return true;
+        }
+        let mut cursor = Some(parent_id);
+        let mut steps = 0usize;
+        while let Some(id) = cursor {
+            if id == child_id {
+                return true;
+            }
+            steps += 1;
+            if steps > self.folders.len() + 1 {
+                return true;
+            }
+            cursor = self
+                .folders
+                .iter()
+                .find(|f| f.id == id)
+                .and_then(|f| f.parent.as_deref());
+        }
+        false
+    }
+
+    /// Undo a server-recorded folder-only Trash receipt identified by exact
+    /// `expected_trashed_at_ms`. Untrashes ONLY `folder_id`, guards against
+    /// cycles, restores implicit project-bound sessions cleanly when the
+    /// project rebinds, and returns every affected owner slot (R3-7, R3-20, R3-21).
     #[allow(clippy::too_many_arguments, clippy::type_complexity)]
     pub fn undo_trash_folder_only(
         &mut self,
@@ -630,9 +677,9 @@ impl SessionFolders {
         destination: Option<&str>,
         previous_project: Option<&str>,
         moved_folders: &[String],
-        moved_sessions: &[String],
+        moved_sessions: &[MovedSessionDelta],
         check_session_owner: impl Fn(&str) -> Result<(), String>,
-    ) -> Result<(FolderOwner, Vec<(String, Option<String>)>), String> {
+    ) -> Result<(Vec<FolderOwner>, Vec<(String, Option<String>)>), String> {
         let folder = self.touchable(actor, folder_id)?.clone();
         if folder.trashed_at_ms != Some(expected_trashed_at_ms) {
             return Err(
@@ -640,6 +687,7 @@ impl SessionFolders {
             );
         }
         let owner = folder.owner_user_id.clone();
+        let mut affected_owners: Vec<FolderOwner> = vec![owner.clone()];
         let resolved_parent = self.nearest_live(folder.parent.as_deref());
         let can_rebind = previous_project.is_some_and(|proj| {
             !self.folders.iter().any(|other| {
@@ -659,11 +707,7 @@ impl SessionFolders {
         let mut next_pos = self
             .folders
             .iter()
-            .filter(|f| {
-                f.owner_user_id == owner
-                    && f.parent.as_deref() == Some(folder_id)
-                    && f.trashed_at_ms.is_none()
-            })
+            .filter(|f| f.parent.as_deref() == Some(folder_id) && f.trashed_at_ms.is_none())
             .map(|f| f.position)
             .max()
             .unwrap_or(-1)
@@ -672,30 +716,44 @@ impl SessionFolders {
             let Ok(child) = self.touchable(actor, child_id) else {
                 continue;
             };
-            if child.trashed_at_ms.is_some() || child.parent.as_deref() != destination {
+            if child.trashed_at_ms.is_some()
+                || child.parent.as_deref() != destination
+                || self.would_create_cycle(folder_id, child_id)
+            {
                 continue;
             }
-            if let Some(c) = self.folders.iter_mut().find(|f| f.id == *child_id) {
-                c.parent = Some(folder_id.to_owned());
-                c.position = next_pos;
+            let child_owner = child.owner_user_id.clone();
+            if !affected_owners.contains(&child_owner) {
+                affected_owners.push(child_owner);
+            }
+            if let Some(f) = self.folders.iter_mut().find(|f| f.id == *child_id) {
+                f.parent = Some(folder_id.to_owned());
+                f.position = next_pos;
                 next_pos += 1;
             }
         }
         let expected_placement = destination.unwrap_or("");
-        let mut pins = Vec::new();
-        for sid in moved_sessions {
-            if check_session_owner(sid).is_err() {
+        let mut pins: Vec<(String, Option<String>)> = Vec::new();
+        for item in moved_sessions {
+            if check_session_owner(&item.session_id).is_err() {
                 continue;
             }
-            if self.placement.get(sid).map(String::as_str) == Some(expected_placement) {
-                self.placement.insert(sid.clone(), folder_id.to_owned());
-                pins.push((sid.clone(), Some(folder_id.to_owned())));
+            if self.placement.get(&item.session_id).map(String::as_str) == Some(expected_placement)
+            {
+                if item.was_implicit && can_rebind {
+                    self.placement.remove(&item.session_id);
+                    pins.push((item.session_id.clone(), None));
+                } else {
+                    self.placement
+                        .insert(item.session_id.clone(), folder_id.to_owned());
+                    pins.push((item.session_id.clone(), Some(folder_id.to_owned())));
+                }
             }
         }
         self.changed();
         self.folders
             .sort_by(|a, b| a.position.cmp(&b.position).then_with(|| a.id.cmp(&b.id)));
-        Ok((owner, pins))
+        Ok((affected_owners, pins))
     }
 
     /// Adopt a newly DB-inserted imported legacy Draft folder into memory if

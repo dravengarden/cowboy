@@ -1,10 +1,10 @@
 import { stripImageTokens } from "../attachments";
 import { productSyncDatabase } from "../productSyncDatabase";
-import { type QueuedMessage, readPresentedDrafts, removeDraft, subscribe } from "../store";
+import { contentOf, discardQueued, type QueuedMessage, readPresentedDrafts, subscribe } from "../store";
 import { recordUndo } from "../undoActions";
 import type { UndoStep } from "../undoHistory";
 import { independentAttachments } from "./sessionDraftImport";
-import { sanitizeDraftTitle } from "./repositoryPurge";
+import { type PurgeDraftTarget, type PurgedDraftReceipt, sanitizeDraftTitle } from "./repositoryPurge";
 import { draftRepository } from "./store";
 export { sanitizeDraftTitle };
 
@@ -23,8 +23,6 @@ function draftTitleForSessionMessage(message: QueuedMessage): string {
 }
 
 function stableOperationId(seed: string): string {
-  // Deterministic 128-bit FNV-1a pair so retrying a single or bulk Trash /
-  // restore request reuses the exact same server idempotency key.
   let h1 = 0x811c9dc5;
   let h2 = 0x811c9dc5 ^ 0x9e3779b9;
   for (let i = 0; i < seed.length; i++) {
@@ -72,47 +70,61 @@ interface TrashSessionDraftResponse {
   };
 }
 
+type OptimisticResolution =
+  | { kind: "confirmed"; row: QueuedMessage }
+  | { kind: "unsent"; cmid: string; row: QueuedMessage }
+  | { kind: "uncertain" };
+
 function findConfirmedDraft(sessionId: string, cmid: string): QueuedMessage | undefined {
   return readPresentedDrafts(sessionId).find(
     (row) => row.cmid === cmid && !row.id.startsWith("opt-") && row.status === undefined,
   );
 }
 
-/** When an optimistic local draft is mid-flight (`committing` / `sending`),
- *  briefly await its server confirmation so Trash captures authoritative
- *  `source_session_id` and raw ACP blocks. */
+/** Resolve an optimistic local draft before trashing:
+ *  - Provably unsent (`pending` / `failed`) -> cancel durably by `cmid`.
+ *  - In-flight (`committing` / `sending`) -> wait for confirmation or refusal;
+ *    never leave an uncertain `addDraft` stranded in the queue outbox. */
 async function resolveOptimisticDraft(
   sessionId: string,
   message: QueuedMessage,
-): Promise<QueuedMessage | null> {
-  if (!message.id.startsWith("opt-") && message.status === undefined) return message;
+): Promise<OptimisticResolution> {
+  if (!message.id.startsWith("opt-") && message.status === undefined) {
+    return { kind: "confirmed", row: message };
+  }
   const cmid = message.cmid;
-  if (!cmid) return null;
+  if (!cmid) return { kind: "uncertain" };
   const existing = findConfirmedDraft(sessionId, cmid);
-  if (existing) return existing;
-  if (message.status === "pending" || message.status === "failed") return null;
-  return await new Promise<QueuedMessage | null>((resolve) => {
+  if (existing) return { kind: "confirmed", row: existing };
+  if (message.status === "pending" || message.status === "failed") {
+    return { kind: "unsent", cmid, row: message };
+  }
+  return await new Promise<OptimisticResolution>((resolve) => {
     let settled = false;
-    const finish = (row: QueuedMessage | null): void => {
+    const finish = (outcome: OptimisticResolution): void => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
       unsub();
-      resolve(row);
+      resolve(outcome);
     };
     const check = (): void => {
       const confirmed = findConfirmedDraft(sessionId, cmid);
       if (confirmed) {
-        finish(confirmed);
+        finish({ kind: "confirmed", row: confirmed });
         return;
       }
       const stillLocal = readPresentedDrafts(sessionId).find((r) => r.cmid === cmid);
-      if (!stillLocal || stillLocal.status === "pending" || stillLocal.status === "failed") {
-        finish(null);
+      if (!stillLocal) {
+        finish({ kind: "uncertain" });
+        return;
+      }
+      if (stillLocal.status === "pending" || stillLocal.status === "failed") {
+        finish({ kind: "unsent", cmid, row: stillLocal });
       }
     };
     const unsub = subscribe(check);
-    const timer = setTimeout(() => finish(null), 4_000);
+    const timer = setTimeout(() => finish({ kind: "uncertain" }), 10_000);
     check();
   });
 }
@@ -121,17 +133,18 @@ async function archiveAndRemoveOne(
   sessionId: string,
   message: QueuedMessage,
 ): Promise<{ title: string; step: UndoStep } | null> {
-  const resolved = await resolveOptimisticDraft(sessionId, message);
-  const target = resolved ?? message;
+  const resolution = await resolveOptimisticDraft(sessionId, message);
+  if (resolution.kind === "uncertain") {
+    throw new Error("This draft is still syncing with the server; try again in a moment.");
+  }
+  const target = resolution.row;
   const attachments = target.attachments.length > 0
     ? await independentAttachments(target.attachments)
     : [];
   const title = draftTitleForSessionMessage(target);
-  // Purely local/offline optimistic draft: durably save into local Trash first,
-  // then drop the unconfirmed local row from the session queue outbox.
-  if (resolved === null) {
+  if (resolution.kind === "unsent") {
     if (!target.text.trim() && attachments.length === 0) {
-      await removeDraft(sessionId, target.id);
+      await discardQueued(sessionId, resolution.cmid);
       return null;
     }
     const draftId = await draftRepository().create(
@@ -142,15 +155,16 @@ async function archiveAndRemoveOne(
       attachments,
       { trashed: true },
     );
-    await removeDraft(sessionId, target.id);
+    await discardQueued(sessionId, resolution.cmid);
     return { title, step: { kind: "restore_draft", id: draftId } };
   }
-  // Operation identity hashes only stable row fields, never regenerated attachment UUIDs.
+  const expectedContent = target.rawContent ?? contentOf(target.text, target.attachments);
+  const durableRowKey = target.cmid ?? target.id;
   const fingerprint = JSON.stringify([
     sessionId,
-    target.id,
+    durableRowKey,
     target.text,
-    target.rawContent ?? null,
+    expectedContent,
     target.schedule ?? null,
   ]);
   const operation_id = stableOperationId(fingerprint);
@@ -159,9 +173,8 @@ async function archiveAndRemoveOne(
     {
       operation_id,
       expected_text: target.text,
-      ...(target.rawContent !== undefined ? { expected_content: target.rawContent } : {}),
+      expected_content: expectedContent,
       expected_schedule: target.schedule ?? null,
-      expected_schedule_ms: target.schedule?.fire_at_ms ?? null,
       title,
       attachments,
     },
@@ -182,8 +195,6 @@ async function archiveAndRemoveOne(
   };
 }
 
-/** Atomically compare, archive to Trash, and remove one session unsent draft
- *  on the Controller, recording an optimistic Undo step. */
 export async function trashSessionDraft(
   sessionId: string,
   message: QueuedMessage,
@@ -194,9 +205,6 @@ export async function trashSessionDraft(
   }
 }
 
-/** Archive and remove all unsent drafts of a session sequentially using stable
- *  per-row operation keys; records Undo for every row that completed even if a
- *  later row fails. */
 export async function trashAllSessionDrafts(
   sessionId: string,
   drafts: readonly QueuedMessage[],
@@ -219,9 +227,6 @@ export async function trashAllSessionDrafts(
   }
 }
 
-/** Durably restore a trashed session draft back to its originating live Session
- *  on the Controller; verifies deleted state, source session, revision, and
- *  Trash timestamp before restoring verbatim ACP blocks and consuming the archive. */
 export async function restoreSessionDraftFromTrash(
   draftId: string,
   sessionId: string,
@@ -244,12 +249,13 @@ export async function restoreSessionDraftFromTrash(
 }
 
 export interface TrashFolderOnlyResult {
+  readonly receipt_id: string;
   readonly folder_id: string;
   readonly trashed_at_ms: number;
   readonly destination: string | null;
   readonly previous_project: string | null;
   readonly moved_folders: string[];
-  readonly moved_sessions: string[];
+  readonly moved_sessions: { readonly session_id: string; readonly was_implicit: boolean }[];
   readonly moved_drafts: {
     readonly owner: string;
     readonly id: string;
@@ -258,8 +264,6 @@ export interface TrashFolderOnlyResult {
   }[];
 }
 
-/** Atomically move a folder's direct subfolders, sessions, and drafts up to its
- *  parent on the Controller and move only the emptied folder into Trash. */
 export async function trashFolderOnlyOnController(
   folderId: string,
 ): Promise<TrashFolderOnlyResult> {
@@ -270,31 +274,44 @@ export async function trashFolderOnlyOnController(
   return result;
 }
 
-/** Atomically undo a specific folder-only Trash deletion on the Controller,
- *  verifying exact `expectedTrashedAtMs` and restoring only still-matching items. */
-export async function undoTrashFolderOnlyOnController(params: {
-  folderId: string;
-  expectedTrashedAtMs: number;
-  destination: string | null;
-  previousProject: string | null;
-  movedFolders: readonly string[];
-  movedSessions: readonly string[];
-  movedDrafts: readonly { owner: string; id: string; metadataRevision: number }[];
-}): Promise<void> {
+export async function undoTrashFolderOnlyOnController(
+  folderId: string,
+  receiptId: string,
+): Promise<void> {
   await datasetPost(
-    `/api/folders/${encodeURIComponent(params.folderId)}/undo-trash-only`,
-    {
-      expected_trashed_at_ms: params.expectedTrashedAtMs,
-      destination: params.destination,
-      previous_project: params.previousProject,
-      moved_folders: params.movedFolders,
-      moved_sessions: params.movedSessions,
-      moved_drafts: params.movedDrafts.map((d) => ({
-        owner: d.owner,
-        id: d.id,
-        metadata_revision: d.metadataRevision,
-      })),
-    },
+    `/api/folders/${encodeURIComponent(folderId)}/undo-trash-only`,
+    { receipt_id: receiptId },
   );
-  if (params.movedDrafts.length > 0) await draftRepository().refresh();
+  await draftRepository().refresh();
+}
+
+export interface PurgeTrashPlanInput {
+  readonly folders: readonly {
+    readonly id: string;
+    readonly expected_trashed_at_ms: number;
+    readonly expected_subfolders: readonly string[];
+    readonly expected_sessions: readonly string[];
+  }[];
+  readonly sessions: readonly {
+    readonly id: string;
+    readonly expected_trashed_at_ms: number;
+  }[];
+  readonly drafts: readonly PurgeDraftTarget[];
+}
+
+export async function purgeTrashPlanOnController(
+  plan: PurgeTrashPlanInput,
+): Promise<PurgedDraftReceipt[]> {
+  const result = await datasetPost<{
+    readonly purged_drafts?: readonly PurgedDraftReceipt[];
+  }>("/api/trash/purge-plan", plan);
+  const purgedDrafts = result.purged_drafts ?? [];
+  if (purgedDrafts.length > 0) {
+    const announcement: Record<string, { id: string; purged: true; revision: number }> = {};
+    for (const item of purgedDrafts) {
+      announcement[item.id] = { id: item.id, purged: true, revision: item.revision };
+    }
+    draftRepository().announce(announcement);
+  }
+  return [...purgedDrafts];
 }

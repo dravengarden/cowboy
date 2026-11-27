@@ -260,7 +260,7 @@ const PUBLISHED_POSTGRES_MIGRATIONS: &[(&str, &str)] = &[
     ),
     (
         "0096_draft_trash_meta.sql",
-        "29212a2a8f01678d5354e8d6c3bfe3ac728ebda1d55c4da9509eba916c62c755",
+        "a923f1f482d3161a9138c9977a433263c5f0cc5511814c62f0acb0e4e218ed00",
     ),
 ];
 const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
@@ -514,7 +514,7 @@ const PUBLISHED_SQLITE_MIGRATIONS: &[(&str, &str)] = &[
     ),
     (
         "0070_draft_trash_meta.sql",
-        "29212a2a8f01678d5354e8d6c3bfe3ac728ebda1d55c4da9509eba916c62c755",
+        "456266d0e5fd03b7c9e1f828831ff21a60231ed1f2757f44e221655c304b39c4",
     ),
 ];
 

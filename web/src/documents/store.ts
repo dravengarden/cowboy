@@ -19,7 +19,9 @@ export function draftRepository(): ReturnType<typeof createDraftRepository> {
       }),
     cache: productSyncDatabase.cache({ kind: "service", state: "drafts" }),
     localIds: () => productSyncDatabase.draftDocumentIds(),
+    peekLocal: (id) => productSyncDatabase.peekDocument(id),
     discardLocal: (id) => productSyncDatabase.discardDocument(id),
+    discardLocalIf: (id, check) => productSyncDatabase.discardDocumentIf(id, check),
     signal: productSyncDatabase.signal,
     notify: (message) => documentNotice(message),
     request: async (path, init = {}) => {

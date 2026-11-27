@@ -4,7 +4,7 @@ use crate::store::draft_documents::{DraftArchiveOptions, DraftChange, DraftMutat
 
 mod folder_trash_routes;
 mod trash_routes;
-pub use folder_trash_routes::{trash_folder_only, undo_trash_folder_only};
+pub use folder_trash_routes::{purge_trash_plan, trash_folder_only, undo_trash_folder_only};
 pub use trash_routes::{purge, read_literal_purge, restore_to_session, trash_session_draft};
 
 fn error(status: StatusCode, message: &str) -> Response {

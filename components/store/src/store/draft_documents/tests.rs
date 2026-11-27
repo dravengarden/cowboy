@@ -485,7 +485,7 @@ async fn sqlite_documents_preserve_conflicts_replay_and_ownership() {
     let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
         .await
         .unwrap();
-    contract(&store).await;
+    Box::pin(contract(&store)).await;
 }
 
 #[tokio::test]
@@ -496,7 +496,7 @@ async fn postgres_documents_preserve_conflicts_replay_and_ownership() {
     let store = Store::connect(&url, root.path().join("artifacts"))
         .await
         .unwrap();
-    contract(&store).await;
+    Box::pin(contract(&store)).await;
 }
 
 #[allow(clippy::too_many_lines)] // One migration/delete/content contract on both database backends.
@@ -965,6 +965,7 @@ async fn draft_trash_refuses_caller_session_provenance_and_lossy_restore() {
 }
 
 #[tokio::test]
+#[allow(clippy::too_many_lines)]
 async fn draft_trash_purged_op_replay_restore_receipt_and_rollback_collision() {
     let root = tempfile::tempdir().unwrap();
     let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
@@ -996,7 +997,13 @@ async fn draft_trash_purged_op_replay_restore_receipt_and_rollback_collision() {
                 expected_revision: created.revision,
                 expected_trashed_at_ms: ts,
             }],
-            Some(("restore-op-1", "draft-restored-9")),
+            Some(RestoreReceiptRef {
+                op_id: "restore-op-1",
+                restored_row_id: "draft-restored-9",
+                session_id: "s1",
+                expected_revision: created.revision,
+                expected_trashed_at_ms: ts,
+            }),
         )
         .await
         .unwrap()
@@ -1144,4 +1151,125 @@ async fn draft_trash_reparent_and_undo_reparent_across_owners() {
             .iter()
             .all(|(_, doc)| doc.parent_id.as_deref() == Some("f-shared"))
     );
+}
+
+#[tokio::test]
+async fn r3_tombstone_survives_absent_doc_and_offline_write_conflicts_after_rollback() {
+    let root = tempfile::tempdir().unwrap();
+    let store = Store::connect("sqlite::memory:", root.path().join("artifacts"))
+        .await
+        .unwrap();
+    store.migrate().await.unwrap();
+
+    let created = applied(
+        store
+            .mutate_draft_document(
+                "alice",
+                &mutation("d-rb", "op-1", 0, create_trashed("Note", "v1", Some("s1"))),
+            )
+            .await
+            .unwrap(),
+    );
+    let ts = created.trashed_at_ms.unwrap();
+    store
+        .purge_trashed_drafts(
+            "alice",
+            &[PurgeDraftTarget {
+                id: "d-rb".into(),
+                expected_revision: created.revision,
+                expected_trashed_at_ms: ts,
+            }],
+        )
+        .await
+        .unwrap()
+        .unwrap();
+
+    // R3-9: reconcile_tombstone_collisions when doc was already purged must NOT delete the tombstone!
+    let mut stale_snapshot = vec![created.clone()];
+    trash::reconcile_tombstone_collisions(&store, "alice", &mut stale_snapshot)
+        .await
+        .unwrap();
+    assert!(
+        store
+            .draft_tombstone("alice", "d-rb")
+            .await
+            .unwrap()
+            .is_some(),
+        "tombstone must survive when no surviving document row exists"
+    );
+
+    // R3-10: rollback recreates d-rb with rev=1, body_revision=1; an offline write with expected=1 BEFORE any read must Conflict (not overwrite)!
+    let mut recreated = created.clone();
+    recreated.revision = 1;
+    recreated.body_revision = 1;
+    recreated.metadata_revision = 1;
+    recreated.deleted = false;
+    recreated.trashed_at_ms = None;
+    let raw = serde_json::to_string(&recreated).unwrap();
+    match &store.backend {
+        StorageBackend::Sqlite(db) => {
+            sqlx::query(
+                "INSERT INTO draft_documents (owner_user_id, id, value, metadata) VALUES ($1, $2, $3, $3)",
+            )
+            .bind("alice")
+            .bind("d-rb")
+            .bind(&raw)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        }
+        StorageBackend::Postgres(_) => unreachable!(),
+    }
+    let stale_write = store
+        .mutate_draft_document_in_workspace(
+            "alice",
+            &mutation(
+                "d-rb",
+                "op-offline-stale",
+                1,
+                DraftChange::Write {
+                    body: "stale overwrite".into(),
+                    attachments: vec![],
+                },
+            ),
+            &[],
+        )
+        .await
+        .unwrap();
+    assert!(
+        matches!(stale_write, DraftResult::Conflict(Some(ref doc)) if doc.body_revision > created.revision + 1),
+        "expected Conflict with bumped body_revision, got {stale_write:?}"
+    );
+}
+
+#[tokio::test]
+async fn r3_strict_acp_block_fidelity_refuses_extra_text_or_mismatched_attachments() {
+    assert!(trash::has_unrepresented_acp_blocks(
+        Some(r#"[{"type":"text","text":"a"},{"type":"text","text":"b"}]"#),
+        "a",
+        &[],
+    ));
+    assert!(trash::has_unrepresented_acp_blocks(
+        Some(r#"[{"type":"text","text":"a","annotations":{"priority":1}}]"#),
+        "a",
+        &[],
+    ));
+    assert!(trash::has_unrepresented_acp_blocks(
+        Some(
+            r#"[{"type":"text","text":"a"},{"type":"image","data":"AAA","mimeType":"image/png"}]"#
+        ),
+        "a",
+        &[
+            serde_json::json!({"id":"x","block":{"type":"image","data":"BBB","mimeType":"image/png"}})
+        ],
+    ));
+    assert!(!trash::has_unrepresented_acp_blocks(
+        Some(
+            r#"[{"type":"text","text":"a"},{"type":"image","data":"AAA","mimeType":"image/png"}]"#
+        ),
+        "a",
+        &[
+            serde_json::json!({"id":"x","block":{"type":"image","data":"AAA","mimeType":"image/png"}})
+        ],
+    ));
 }

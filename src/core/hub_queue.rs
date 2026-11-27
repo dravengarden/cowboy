@@ -3,9 +3,7 @@
 use super::*;
 
 mod draft_transfers;
-pub use draft_transfers::{
-    DraftRestoreStage, DraftTransferReservation, PendingDraftTransferCommit,
-};
+pub use draft_transfers::{DraftTransferReservation, PendingDraftTransferCommit};
 mod drafts;
 pub use drafts::{
     InFlightDispatchCmidGuard, PendingRecoveryActivationCommit, RecoveryActivationCommitStep,
@@ -1207,8 +1205,10 @@ impl Hub {
             if s.steer_reservations
                 .iter()
                 .any(|(op, r)| op != operation && r.row_id == source.id)
+                || (source.kind == SteerSourceKind::Draft
+                    && s.activating_recovery_drafts.contains(&source.id))
             {
-                return Err("The source message is already being delivered.");
+                return Err("The source message is already being delivered or moved.");
             }
             let rows = match source.kind {
                 SteerSourceKind::Draft => &s.drafts,

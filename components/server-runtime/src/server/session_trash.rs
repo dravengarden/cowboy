@@ -399,3 +399,56 @@ pub async fn retention_pass(state: &Arc<AppState>, now_ms: i64) {
         }
     }
 }
+
+pub(crate) fn folder_is_below_trashed(
+    folders: &[crate::session_folders::SessionFolder],
+    candidate: &str,
+    ancestor: &str,
+) -> bool {
+    folder_is_below(folders, candidate, ancestor)
+}
+
+pub(crate) fn validate_purge_sessions(
+    state: &Arc<AppState>,
+    principal: &ProductPrincipal,
+    sessions: &[(String, i64)],
+) -> Result<(), String> {
+    let ids: Vec<String> = sessions.iter().map(|(id, _)| id.clone()).collect();
+    mutable_sessions(state, principal, &ids)?;
+    for (session_id, _) in sessions {
+        if handoff_cancel_pinned(state, session_id) {
+            return Err("Wait until the new agent starts or cancel the switch before permanently deleting the original session".into());
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn execute_guarded_purge(
+    state: &Arc<AppState>,
+    actor: &FolderActor,
+    expected_folders: &[(String, i64)],
+    expected_sessions: &[(String, i64)],
+) -> Result<(), String> {
+    let mut first_error = None;
+    for (session_id, expected_ts) in expected_sessions {
+        if handoff_cancel_pinned(state, session_id) {
+            first_error.get_or_insert_with(|| {
+                "Wait until the new agent starts or cancel the switch before permanently deleting the original session".to_owned()
+            });
+            continue;
+        }
+        if let Err(error) = delete_claimed(state, session_id, Some(*expected_ts)) {
+            first_error.get_or_insert(error);
+        }
+    }
+    let removed = state
+        .hub
+        .purge_trashed_folders_guarded(actor, expected_folders);
+    PENDING_FOLDER_PURGES.lock().extend(
+        expected_folders
+            .iter()
+            .filter(|(folder, _)| !removed.contains(folder))
+            .map(|(folder, _)| folder.clone()),
+    );
+    first_error.map_or(Ok(()), Err)
+}

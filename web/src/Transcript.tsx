@@ -19,6 +19,7 @@ import { desktopScrollbarSx } from "./desktop/desktopScrollbar";
 import { Bedtime, ErrorOutline, Stop, WarningAmberRounded } from "@mui/icons-material";
 
 import { BackgroundTasksInspector } from "./BackgroundTasksInspector";
+import { ExploreOpenToolBridge } from "./tasks/MobileSessionActivityButton";
 import { applySubagentAuthority, useSessionAuthority } from "./backgroundTasks";
 import { useBackgroundTasks, useStopStates } from "./useBackgroundTasks";
 import { InlineAncestorTranscript } from "./InlineAncestorTranscript";
@@ -3034,16 +3035,18 @@ export function Transcript({
           />
         </Box>
       )}
-      {!suppressTasksInspector && (
-        <BackgroundTasksInspector
-          sessionId={sessionId}
-          desktop={desktopNavigation}
-          background={background}
-          consumeReveals={visibleItemKeys === undefined}
-          onLocate={locateTask}
-          onOpenTool={openTool}
-        />
-      )}
+      {suppressTasksInspector
+        ? <ExploreOpenToolBridge sessionId={sessionId} openTool={openTool} />
+        : (
+          <BackgroundTasksInspector
+            sessionId={sessionId}
+            desktop={desktopNavigation}
+            background={background}
+            consumeReveals={visibleItemKeys === undefined}
+            onLocate={locateTask}
+            onOpenTool={openTool}
+          />
+        )}
       <ToolDetailsBrowser
         items={items}
         runs={runs}

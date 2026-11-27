@@ -1,5 +1,5 @@
-import type { Mutation } from "@cowboy/state-sync";
-import type { DraftMutationArgs } from "./model";
+import type { ClientSnapshot, Mutation } from "@cowboy/state-sync";
+import { draftContent, type DraftContent, type DraftDocument, type DraftMetadata, type DraftMutationArgs, draftMutators } from "./model";
 
 export const PURGED_COPY_NOTICE =
   "This draft was permanently deleted elsewhere. Your unsynced version was kept as a copy.";
@@ -85,6 +85,27 @@ export function hasPendingAuthored(pending: readonly Mutation[]): boolean {
   });
 }
 
+/** Project a stored IndexedDB ClientSnapshot to recover unsynced authored
+ *  content (from another tab or before startup hydration) prior to purge (R3-1). */
+export function extractStoredAuthored(
+  stored: ClientSnapshot<DraftDocument | null> | null,
+): { title: string; parent_id: string | null; content: DraftContent; ids: ReadonlySet<string> } | null {
+  if (!stored || !hasPendingAuthored(stored.pending)) return null;
+  let current: DraftDocument | null = stored.base.value;
+  for (const mutation of stored.pending) {
+    current = draftMutators.change(current, mutation.args as DraftMutationArgs);
+  }
+  if (!current) return null;
+  const content = draftContent(current);
+  if (!content.body.trim() && content.attachments.length === 0) return null;
+  return {
+    title: current.title || "Untitled",
+    parent_id: current.parent_id ?? null,
+    content,
+    ids: new Set(stored.pending.map((m) => m.id)),
+  };
+}
+
 export function collectAbsentCleanIds(
   owners: ReadonlyMap<string, { isCleanServerDoc(): boolean }>,
   serverIds: ReadonlySet<string>,
@@ -94,6 +115,24 @@ export function collectAbsentCleanIds(
     if (!serverIds.has(docId) && owner.isCleanServerDoc()) absent.push(docId);
   }
   return absent;
+}
+
+/** Merge a stale GET /api/drafts response with newer pushed entries without
+ *  dropping entries pushed while the request was in flight (R3-23). */
+export function mergeLibraryEntries(
+  previous: readonly DraftMetadata[],
+  fetched: readonly DraftMetadata[],
+  purgedRevisions: ReadonlyMap<string, number>,
+): DraftMetadata[] {
+  const byId = new Map<string, DraftMetadata>();
+  for (const entry of previous) {
+    if (entry.revision > (purgedRevisions.get(entry.id) ?? 0)) byId.set(entry.id, entry);
+  }
+  for (const entry of fetched) {
+    const existing = byId.get(entry.id);
+    if (!existing || entry.revision >= existing.revision) byId.set(entry.id, entry);
+  }
+  return [...byId.values()];
 }
 
 export function sanitizeDraftTitle(raw: string): string {

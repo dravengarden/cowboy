@@ -3,7 +3,7 @@
 // no divider border, no oversized badge). Vanishes (0px) when a session has
 // neither branches nor background tasks.
 
-import { memo, useState } from "react";
+import { memo, useEffect, useState, useSyncExternalStore } from "react";
 import { Box, IconButton, Tooltip } from "@mui/material";
 import { LayersOutlined } from "@mui/icons-material";
 import { openBackgroundTask } from "../backgroundTaskInspectorState";
@@ -116,14 +116,50 @@ export const MobileSessionActivityButton = memo(function MobileSessionActivityBu
   );
 });
 
-/** Mounted by ExploreTranscript ONLY when `<Transcript>` is not rendered (empty
- *  or loading Explore page), so a mobile Explore session always has exactly one
- *  MobileTasksSheet instance. */
+const exploreOpenToolHandlers = new Map<string, (key: string) => void>();
+const exploreOpenToolListeners = new Set<() => void>();
+function emitExploreOpenTool(): void {
+  for (const listener of exploreOpenToolListeners) listener();
+}
+function subscribeExploreOpenTool(listener: () => void): () => void {
+  exploreOpenToolListeners.add(listener);
+  return () => { exploreOpenToolListeners.delete(listener); };
+}
+
+/** Mounted inside `<Transcript>` when `suppressTasksInspector` is true so a
+ *  parent-owned mobile tasks sheet retains the active page's `openTool` action
+ *  across page transitions without adding hooks to Transcript or Explore. */
+export const ExploreOpenToolBridge = memo(function ExploreOpenToolBridge({
+  sessionId,
+  openTool,
+}: {
+  sessionId: string;
+  openTool: (key: string) => void;
+}): null {
+  useEffect(() => {
+    exploreOpenToolHandlers.set(sessionId, openTool);
+    emitExploreOpenTool();
+    return () => {
+      if (exploreOpenToolHandlers.get(sessionId) === openTool) {
+        exploreOpenToolHandlers.delete(sessionId);
+        emitExploreOpenTool();
+      }
+    };
+  }, [sessionId, openTool]);
+  return null;
+});
+
+/** Single stable MobileTasksSheet owner for mobile Explore surfaces (R3-24). */
 export const MobileExploreTasksFallback = memo(function MobileExploreTasksFallback({
   sessionId,
 }: {
   sessionId: string;
 }): React.JSX.Element {
   const background = useBackgroundTasks(sessionId);
-  return <MobileTasksSheet sessionId={sessionId} background={background} />;
+  const onOpenTool = useSyncExternalStore(
+    subscribeExploreOpenTool,
+    () => exploreOpenToolHandlers.get(sessionId),
+    () => undefined,
+  );
+  return <MobileTasksSheet sessionId={sessionId} background={background} onOpenTool={onOpenTool} />;
 });

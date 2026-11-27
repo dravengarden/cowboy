@@ -143,6 +143,7 @@ macro_rules! reparent_workspace_documents {
                     let value: String = sqlx::query_scalar("SELECT value FROM draft_documents WHERE owner_user_id=$1 AND id=$2")
                         .bind(&owner).bind(&metadata.id).fetch_one(&mut *$tx).await?;
                     let mut document: $crate::store::draft_documents::DraftDocument = serde_json::from_str(&value)?;
+                    let prev_revision = document.revision;
                     document.parent_id = parent;
                     document.deleted |= trash;
                     document.trashed_at_ms = None;
@@ -158,21 +159,33 @@ macro_rules! reparent_workspace_documents {
                             "INSERT INTO draft_document_trash_meta (owner_user_id, document_id, revision, trashed_at_ms) \
                              VALUES ($1, $2, $3, $4) ON CONFLICT (owner_user_id, document_id) DO UPDATE SET \
                                revision = excluded.revision, \
-                               trashed_at_ms = CASE WHEN draft_document_trash_meta.revision = excluded.revision \
+                               trashed_at_ms = CASE WHEN draft_document_trash_meta.revision = $5 \
                                  THEN draft_document_trash_meta.trashed_at_ms ELSE excluded.trashed_at_ms END, \
-                               source_session_id = CASE WHEN draft_document_trash_meta.revision = excluded.revision \
+                               source_session_id = CASE WHEN draft_document_trash_meta.revision = $5 \
                                  THEN draft_document_trash_meta.source_session_id ELSE NULL END, \
-                               raw_content_json = CASE WHEN draft_document_trash_meta.revision = excluded.revision \
+                               raw_content_json = CASE WHEN draft_document_trash_meta.revision = $5 \
                                  THEN draft_document_trash_meta.raw_content_json ELSE NULL END, \
-                               source_origin_json = CASE WHEN draft_document_trash_meta.revision = excluded.revision \
+                               source_origin_json = CASE WHEN draft_document_trash_meta.revision = $5 \
                                  THEN draft_document_trash_meta.source_origin_json ELSE NULL END, \
-                               source_is_recovery = CASE WHEN draft_document_trash_meta.revision = excluded.revision \
+                               source_is_recovery = CASE WHEN draft_document_trash_meta.revision = $5 \
                                  THEN draft_document_trash_meta.source_is_recovery ELSE 0 END",
                         )
                         .bind(&owner)
                         .bind(&document.id)
                         .bind(document.revision)
                         .bind(at)
+                        .bind(prev_revision)
+                        .execute(&mut *$tx)
+                        .await?;
+                    } else if document.deleted {
+                        sqlx::query(
+                            "UPDATE draft_document_trash_meta SET revision = $3 \
+                             WHERE owner_user_id = $1 AND document_id = $2 AND revision = $4",
+                        )
+                        .bind(&owner)
+                        .bind(&document.id)
+                        .bind(document.revision)
+                        .bind(prev_revision)
                         .execute(&mut *$tx)
                         .await?;
                     }

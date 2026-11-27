@@ -361,6 +361,7 @@ impl Hub {
             // in-flight steer reservation. Record the elapsed timer so releasing
             // the hold or reservation fires the draft if still due.
             if s.editing.as_deref() == Some(draft_id)
+                || s.activating_recovery_drafts.contains(draft_id)
                 || s.steer_reservations.values().any(|r| r.row_id == draft_id)
             {
                 if !s.deferred_scheduled_drafts.iter().any(|id| id == draft_id) {
@@ -1012,7 +1013,9 @@ impl Hub {
             let Some(s) = sessions.get_mut(session_id) else {
                 return;
             };
-            if s.steer_reservations.values().any(|r| r.row_id == id) {
+            if s.activating_recovery_drafts.contains(id)
+                || s.steer_reservations.values().any(|r| r.row_id == id)
+            {
                 return;
             }
             let Some(pos) = s.drafts.iter().position(|m| m.id == id) else {
@@ -1210,6 +1213,7 @@ impl Hub {
             let mut activated = Vec::new();
             for m in std::mem::take(&mut s.drafts) {
                 if m.id.starts_with("recovery-")
+                    || s.activating_recovery_drafts.contains(&m.id)
                     || s.steer_reservations.values().any(|r| r.row_id == m.id)
                 {
                     kept.push(m);
@@ -1225,8 +1229,12 @@ impl Hub {
                 s.editing_token = None;
             }
             let res = &s.steer_reservations;
-            s.deferred_scheduled_drafts
-                .retain(|d| d.starts_with("recovery-") || res.values().any(|r| r.row_id == *d));
+            let reserved = &s.activating_recovery_drafts;
+            s.deferred_scheduled_drafts.retain(|d| {
+                d.starts_with("recovery-")
+                    || reserved.contains(d)
+                    || res.values().any(|r| r.row_id == *d)
+            });
             s.drafts = kept;
             activated
         };

@@ -1,12 +1,20 @@
-//! Two-phase acknowledged session-draft Trash archive & restore transfers.
+//! Single-transaction atomic session-draft Trash archive & restore staging.
+//!
+//! Both removal and restore hold `in_flight_pending_commits` (preventing any
+//! concurrent `StoreWrite::UpdatePending` for the session) and
+//! `activating_recovery_drafts` (preventing concurrent edits, schedules,
+//! sends, or steers) while a request-independent task flushes the writer
+//! barrier, executes ONE atomic SQL transaction across `sessions` and
+//! `draft_documents`, and then commits or aborts Hub memory deterministically.
 
 use std::sync::Weak;
 
 use super::*;
-use crate::core::hub_managed_calls::StoreAckRx;
 
 /// RAII reservation holding `draft_id` in `activating_recovery_drafts` across
-/// async Trash archive + acknowledged queue removal.
+/// an atomic Trash archive transfer. If a scheduled draft's fire timer elapsed
+/// while reserved and the transfer aborted (leaving the draft in place), Drop
+/// re-triggers `fire_scheduled_draft` so the overdue draft is not stranded.
 pub struct DraftTransferReservation {
     hub: Weak<HubInner>,
     session_id: String,
@@ -15,11 +23,24 @@ pub struct DraftTransferReservation {
 
 impl Drop for DraftTransferReservation {
     fn drop(&mut self) {
-        if let Some(inner) = self.hub.upgrade() {
+        let Some(inner) = self.hub.upgrade() else {
+            return;
+        };
+        let should_refire = {
             let mut sessions = inner.sessions.lock();
             if let Some(s) = sessions.get_mut(&self.session_id) {
                 s.activating_recovery_drafts.remove(&self.draft_id);
+                s.deferred_scheduled_drafts
+                    .iter()
+                    .any(|id| id == &self.draft_id)
+                    && s.drafts.iter().any(|m| m.id == self.draft_id)
+            } else {
+                false
             }
+        };
+        if should_refire {
+            let hub = Hub { inner };
+            hub.fire_scheduled_draft(&self.session_id, &self.draft_id);
         }
     }
 }
@@ -32,8 +53,8 @@ enum DraftTransferKind {
     Insert(Box<QueuedMessage>),
 }
 
-/// Non-mutating two-phase commit guard for durable draft Trash removal or
-/// restore under `in_flight_pending_commits`.
+/// Non-mutating commit guard holding `in_flight_pending_commits` for one
+/// session across a single-transaction atomic archive or restore.
 pub struct PendingDraftTransferCommit {
     hub: Weak<HubInner>,
     active: bool,
@@ -61,17 +82,11 @@ impl Drop for PendingDraftTransferCommit {
     }
 }
 
-pub enum DraftRestoreStage {
-    AlreadyPresent(String),
-    CommittedSync(String),
-    Pending(String, PendingDraftTransferCommit, StoreAckRx),
-}
-
 impl Hub {
     /// Reserve one authoritative session draft in `activating_recovery_drafts`
     /// after verifying full ordinary session mutability (live, non-trashed,
     /// non-closing, non-system, non-managed-child) so no concurrent edit,
-    /// schedule, move, or activation can mutate it during archive transfer.
+    /// schedule, move, send, or steer can mutate or dispatch it during transfer.
     pub fn reserve_draft_for_transfer(
         &self,
         session_id: &str,
@@ -120,14 +135,21 @@ impl Hub {
         )))
     }
 
-    /// Stage a two-phase acknowledged removal of a reserved session draft under
-    /// the per-session `in_flight_pending_commits` fence. Returns `Ok(None)`
-    /// only when running without a store writer (memory-only tests).
-    pub fn begin_durable_draft_removal(
+    /// Install `in_flight_pending_commits` and build the post-removal
+    /// `(queue, drafts)` preview for an atomic SQL transaction without mutating
+    /// Hub memory or enqueueing a separate write-behind `UpdatePending`.
+    pub fn stage_atomic_draft_removal(
         &self,
         session_id: &str,
         draft_id: &str,
-    ) -> Result<Option<(PendingDraftTransferCommit, StoreAckRx)>, &'static str> {
+    ) -> Result<
+        (
+            Vec<QueuedMessage>,
+            Vec<QueuedMessage>,
+            PendingDraftTransferCommit,
+        ),
+        &'static str,
+    > {
         let mut sessions = self.inner.sessions.lock();
         let Some(s) = sessions.get_mut(session_id) else {
             return Err("Session no longer exists");
@@ -139,42 +161,19 @@ impl Hub {
             return Err("Draft no longer exists");
         };
         let had_schedule = s.drafts[pos].schedule.is_some();
-        if !self.has_store_writer() {
-            s.drafts.remove(pos);
-            s.deferred_scheduled_drafts.retain(|d| d != draft_id);
-            if s.editing.as_deref() == Some(draft_id) {
-                s.editing = None;
-                s.editing_token = None;
-            }
-            let (q, d) = (s.queue.clone(), s.drafts.clone());
-            drop(sessions);
-            self.broadcast_pending_snapshot(session_id, &q, &d);
-            if had_schedule {
-                self.cancel_draft_timer(session_id, draft_id);
-                self.broadcast_session(session_id);
-            }
-            return Ok(None);
-        }
         let mut claims = self.inner.notice_claims.lock();
         if claims.in_flight_pending_commits.contains_key(session_id) {
             return Err("Another pending queue update is in progress; try again");
         }
+        let preview_queue = s.queue.clone();
         let mut preview_drafts = s.drafts.clone();
         preview_drafts.remove(pos);
-        let Some(rx) = self.send_acked_update_pending(
-            session_id,
-            s.queue.clone(),
-            preview_drafts,
-            Vec::new(),
-            Vec::new(),
-            false,
-        ) else {
-            return Err("Failed to persist draft removal; try again");
-        };
         claims
             .in_flight_pending_commits
             .insert(session_id.to_owned(), Default::default());
-        Ok(Some((
+        Ok((
+            preview_queue,
+            preview_drafts,
             PendingDraftTransferCommit {
                 hub: Arc::downgrade(&self.inner),
                 active: true,
@@ -184,15 +183,15 @@ impl Hub {
                     had_schedule,
                 },
             },
-            rx,
-        )))
+        ))
     }
 
-    /// Stage a two-phase acknowledged insert of a restored draft into a live,
-    /// mutable session under `in_flight_pending_commits`, preserving original
-    /// `DeliveryOrigin` and `recovery-*` classification.
-    #[allow(clippy::too_many_arguments)]
-    pub fn begin_durable_draft_restore(
+    /// Install `in_flight_pending_commits` and build the post-restore
+    /// `(row_id, queue, drafts)` preview for an atomic SQL transaction without
+    /// mutating Hub memory. Preserves `origin` verbatim (including `None`) and
+    /// `recovery-*` classification (R3-4, R3-14, R3-17).
+    #[allow(clippy::too_many_arguments, clippy::type_complexity)]
+    pub fn stage_atomic_draft_restore(
         &self,
         session_id: &str,
         text: String,
@@ -200,7 +199,15 @@ impl Hub {
         cmid: String,
         origin: Option<crate::prompt_origin::DeliveryOrigin>,
         is_recovery: bool,
-    ) -> Result<DraftRestoreStage, String> {
+    ) -> Result<
+        (
+            String,
+            Vec<QueuedMessage>,
+            Vec<QueuedMessage>,
+            PendingDraftTransferCommit,
+        ),
+        String,
+    > {
         if self.reject_reserved_notice_cmid(session_id, Some(&cmid)) {
             return Err("Invalid restore operation id".into());
         }
@@ -220,8 +227,9 @@ impl Hub {
         if s.meta.system {
             return Err("System sessions cannot receive restored drafts".into());
         }
-        if let Some(existing) = s.drafts.iter().find(|m| m.cmid.as_deref() == Some(&cmid)) {
-            return Ok(DraftRestoreStage::AlreadyPresent(existing.id.clone()));
+        let mut claims = self.inner.notice_claims.lock();
+        if claims.in_flight_pending_commits.contains_key(session_id) {
+            return Err("Another pending queue update is in progress; try again".into());
         }
         let id = if is_recovery {
             format!("recovery-{}", uuid::Uuid::new_v4().simple())
@@ -238,42 +246,54 @@ impl Hub {
             initiator: None,
             explicit: None,
         };
-        if !self.has_store_writer() {
-            s.drafts.push(row);
-            let (q, d) = (s.queue.clone(), s.drafts.clone());
-            drop(sessions);
-            self.broadcast_pending_snapshot(session_id, &q, &d);
-            return Ok(DraftRestoreStage::CommittedSync(id));
-        }
-        let mut claims = self.inner.notice_claims.lock();
-        if claims.in_flight_pending_commits.contains_key(session_id) {
-            return Err("Another pending queue update is in progress; try again".into());
-        }
+        let preview_queue = s.queue.clone();
         let mut preview_drafts = s.drafts.clone();
         preview_drafts.push(row.clone());
-        let Some(rx) = self.send_acked_update_pending(
-            session_id,
-            s.queue.clone(),
-            preview_drafts,
-            Vec::new(),
-            Vec::new(),
-            false,
-        ) else {
-            return Err("Failed to persist restored draft; try again".into());
-        };
         claims
             .in_flight_pending_commits
             .insert(session_id.to_owned(), Default::default());
-        Ok(DraftRestoreStage::Pending(
+        Ok((
             id,
+            preview_queue,
+            preview_drafts,
             PendingDraftTransferCommit {
                 hub: Arc::downgrade(&self.inner),
                 active: true,
                 session_id: session_id.to_owned(),
                 kind: DraftTransferKind::Insert(Box::new(row)),
             },
-            rx,
         ))
+    }
+
+    /// Snapshot the current post-barrier `(queue, drafts)` under the held
+    /// `in_flight_pending_commits` fence right before entering the atomic SQL tx.
+    pub fn snapshot_for_staged_transfer(
+        &self,
+        commit: &PendingDraftTransferCommit,
+    ) -> Result<(Vec<QueuedMessage>, Vec<QueuedMessage>), &'static str> {
+        let sessions = self.inner.sessions.lock();
+        let Some(s) = sessions.get(&commit.session_id) else {
+            return Err("Session no longer exists");
+        };
+        if s.meta.closing || s.meta.trashed_at_ms.is_some() || s.meta.system {
+            return Err("Session is no longer mutable");
+        }
+        let queue = s.queue.clone();
+        let mut drafts = s.drafts.clone();
+        match &commit.kind {
+            DraftTransferKind::Remove { draft_id, .. } => {
+                let Some(pos) = drafts.iter().position(|m| m.id == *draft_id) else {
+                    return Err("Draft no longer exists");
+                };
+                drafts.remove(pos);
+            }
+            DraftTransferKind::Insert(row) => {
+                if !drafts.iter().any(|m| m.id == row.id) {
+                    drafts.push((**row).clone());
+                }
+            }
+        }
+        Ok((queue, drafts))
     }
 
     pub fn commit_durable_draft_transfer(&self, commit: &mut PendingDraftTransferCommit) {
@@ -282,43 +302,40 @@ impl Hub {
         }
         commit.active = false;
         let sid = commit.session_id.clone();
-        let (snapshot, cancel_timer) =
-            {
-                let mut sessions = self.inner.sessions.lock();
-                let mut claims = self.inner.notice_claims.lock();
-                if let Some(s) = sessions.get_mut(&sid) {
-                    let mut cancel_timer = None;
-                    match &commit.kind {
-                        DraftTransferKind::Remove {
-                            draft_id,
-                            had_schedule,
-                        } => {
-                            s.drafts.retain(|m| m.id != *draft_id);
-                            s.deferred_scheduled_drafts.retain(|d| d != draft_id);
-                            if s.editing.as_deref() == Some(draft_id.as_str()) {
-                                s.editing = None;
-                                s.editing_token = None;
-                            }
-                            if *had_schedule {
-                                cancel_timer = Some(draft_id.clone());
-                            }
+        let (snapshot, cancel_timer) = {
+            let mut sessions = self.inner.sessions.lock();
+            let mut claims = self.inner.notice_claims.lock();
+            if let Some(s) = sessions.get_mut(&sid) {
+                let mut cancel_timer = None;
+                match &commit.kind {
+                    DraftTransferKind::Remove {
+                        draft_id,
+                        had_schedule,
+                    } => {
+                        s.drafts.retain(|m| m.id != *draft_id);
+                        s.deferred_scheduled_drafts.retain(|d| d != draft_id);
+                        if s.editing.as_deref() == Some(draft_id.as_str()) {
+                            s.editing = None;
+                            s.editing_token = None;
                         }
-                        DraftTransferKind::Insert(row) => {
-                            if !s.drafts.iter().any(|m| {
-                                m.id == row.id || (row.cmid.is_some() && m.cmid == row.cmid)
-                            }) {
-                                s.drafts.push((**row).clone());
-                            }
+                        if *had_schedule {
+                            cancel_timer = Some(draft_id.clone());
                         }
                     }
-                    let snap = (s.queue.clone(), s.drafts.clone());
-                    self.finish_in_flight_pending_commit(&sid, &snap.0, &snap.1, &mut claims);
-                    (Some(snap), cancel_timer)
-                } else {
-                    claims.in_flight_pending_commits.remove(&sid);
-                    (None, None)
+                    DraftTransferKind::Insert(row) => {
+                        if !s.drafts.iter().any(|m| m.id == row.id) {
+                            s.drafts.push((**row).clone());
+                        }
+                    }
                 }
-            };
+                let snap = (s.queue.clone(), s.drafts.clone());
+                self.finish_in_flight_pending_commit(&sid, &snap.0, &snap.1, &mut claims);
+                (Some(snap), cancel_timer)
+            } else {
+                claims.in_flight_pending_commits.remove(&sid);
+                (None, None)
+            }
+        };
         if let Some((q, d)) = snapshot {
             self.broadcast_pending_snapshot(&sid, &q, &d);
             if let Some(draft_id) = cancel_timer {

@@ -504,3 +504,23 @@ test("discardDocument retires a previously borrowed document outbox without reco
   assertEquals(await reopened.load(), null);
   await db.dispose();
 });
+
+test("discardDocumentIf keeps an outbox with concurrent pending edits and retires when clean", async () => {
+  const factory = new FakeIndexedDb();
+  const ds = descriptor();
+  const db = createProductSyncDatabase(
+    () => "user-a",
+    () => Promise.resolve(ds),
+    { factory: factory as unknown as IDBFactory },
+  );
+  const scope = { kind: "document", document: "doc-guard", state: "entry" } as const;
+  const outbox = db.outbox<number>(scope);
+  assertEquals(await outbox.load(), null);
+  outbox.acceptLoadedSnapshot!(null);
+  await outbox.save(snapshot("m1"));
+  assertEquals(await db.discardDocumentIf<number>("doc-guard", (s) => !s || s.pending.length === 0), false);
+  assertEquals((await db.peekDocument<number>("doc-guard"))?.pending.length, 1);
+  assertEquals(await db.discardDocumentIf<number>("doc-guard", (s) => !s || s.pending.every((m) => m.id === "m1")), true);
+  assertEquals(await db.peekDocument<number>("doc-guard"), null);
+  await db.dispose();
+});

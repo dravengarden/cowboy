@@ -73,6 +73,10 @@ fn independent_draft_routes_require_product_identity_and_operator_writes() {
         RouteAuth::ProductOperator
     );
     assert_eq!(
+        classify_route(&Method::POST, "/api/trash/purge-plan"),
+        RouteAuth::ProductOperator
+    );
+    assert_eq!(
         classify_route(&Method::POST, "/api/sessions/session/drafts/d1/trash"),
         RouteAuth::ProductSessionMutate
     );

@@ -57,7 +57,7 @@ async function runStep(step: UndoStep): Promise<void> {
       );
       return;
     case "restore_folder_only":
-      await undoTrashFolderOnlyOnController(step);
+      await undoTrashFolderOnlyOnController(step.folderId, step.receiptId);
       return;
     case "restore_calls": {
       const restored: string[] = [];

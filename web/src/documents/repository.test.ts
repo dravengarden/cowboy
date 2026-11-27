@@ -54,9 +54,16 @@ function fixture() {
         discard: () => Promise.resolve(),
       },
       localIds: () => Promise.resolve([...local.keys()]),
+      peekLocal: (id) => Promise.resolve(local.has(id) ? structuredClone(local.get(id)!) : null),
       discardLocal: (id) => {
         local.delete(id);
         return Promise.resolve();
+      },
+      discardLocalIf: (id, check) => {
+        const stored = local.has(id) ? structuredClone(local.get(id)!) : null;
+        if (!check(stored)) return Promise.resolve(false);
+        local.delete(id);
+        return Promise.resolve(true);
       },
       notify: (message) => notices.push(message),
       request: (path, init) => {
@@ -163,8 +170,10 @@ function fixture() {
     /** Another device of the same account: its own storage and connection. */
     device: () => {
       let disconnected = false;
+      const deviceLocal = new Map<string, ClientSnapshot<DraftDocument | null>>();
       return {
-        repository: client(new Map(), () => disconnected),
+        local: deviceLocal,
+        repository: client(deviceLocal, () => disconnected),
         offline: (value: boolean) => {
           disconnected = value;
         },
@@ -878,4 +887,70 @@ test("in-flight GET /api/drafts never evicts or tombstones a newly created draft
   await repo.refresh();
   assertEquals(repo.get().entries.some((e) => e.id === newId), true);
   await repo.dispose();
+});
+
+
+test("R3: stale purge receipt never evicts newer incarnation, unhydrated outbox is preserved, and stale list merges pushed entries", async () => {
+  const f = fixture();
+  const primary = f.create();
+  const id = await primary.create("Live note", null, "document", "v1");
+  await settle(() => primary.document(id).get().phase === "saved");
+  await primary.document(id).change({ type: "write", body: "v2", attachments: [] });
+  await settle(() => primary.document(id).get().document?.revision === 2);
+
+  // R3-16: delayed purge receipt with older revision (1 <= 2) must NOT evict rev 2!
+  primary.announce({ [id]: { id, purged: true, revision: 1 } });
+  await settle(() => true);
+  assertEquals(primary.get().entries.some((e) => e.id === id), true);
+  assertEquals(f.local.has(id), true);
+
+  // R3-1: pushed purge arriving BEFORE hydration of a peer tab still recovers unsynced IDB outbox!
+  const peerA = f.device();
+  await peerA.repository.refresh();
+  await peerA.repository.document(id).refresh();
+  peerA.offline(true);
+  await peerA.repository.document(id).change({ type: "write", body: "unhydrated tab edit", attachments: [] });
+  const peerB = createDraftRepository({
+    signal: new AbortController().signal,
+    persistence: (docId) => ({
+      load: () => Promise.resolve(peerA.local.get(docId) ?? null),
+      save: (snap) => { peerA.local.set(docId, structuredClone(snap)); return Promise.resolve(); },
+    }),
+    peekLocal: (docId) => Promise.resolve(peerA.local.has(docId) ? structuredClone(peerA.local.get(docId)!) : null),
+    discardLocalIf: (docId, check) => {
+      const stored = peerA.local.has(docId) ? structuredClone(peerA.local.get(docId)!) : null;
+      if (!check(stored)) return Promise.resolve(false);
+      peerA.local.delete(docId);
+      return Promise.resolve(true);
+    },
+    cache: { load: () => Promise.resolve(null), save: () => Promise.resolve(), discard: () => Promise.resolve() },
+    localIds: () => Promise.resolve([...peerA.local.keys()]),
+    request: (path) =>
+      path === "/api/drafts"
+        ? Promise.resolve(Response.json({ entries: [] }))
+        : Promise.reject(new Error("offline")),
+  });
+  await peerB.refresh();
+  // peerB has NOT hydrated `id`, yet receives a purge push for rev 5: must rescue "unhydrated tab edit"!
+  peerB.announce({ [id]: { id, purged: true, revision: 5 } });
+  await settle(() => peerB.get().entries.some((e) => e.title.includes("(conflicted copy)")));
+  const rescued = peerB.get().entries.find((e) => e.title.includes("(conflicted copy)"))!;
+  assertEquals(peerB.document(rescued.id).get().document?.body, "unhydrated tab edit");
+  await settle(() => !peerA.local.has(id));
+  assertEquals(peerA.local.has(rescued.id), true);
+
+  // R3-23: pushed unopened draft arriving while GET /api/drafts is in flight survives stale list response!
+  let releaseList!: () => void;
+  const gate = new Promise<void>((r) => { releaseList = r; });
+  f.setHoldList(() => gate);
+  const inflight = primary.refresh();
+  const pushedDoc = { ...f.server.get(id)!, id: "doc-pushed-midflight", title: "Pushed while listing", revision: 1 };
+  primary.announce({ [pushedDoc.id]: pushedDoc });
+  releaseList();
+  await inflight;
+  assertEquals(primary.get().entries.some((e) => e.id === "doc-pushed-midflight"), true);
+
+  await primary.dispose();
+  await peerA.repository.dispose();
+  await peerB.dispose();
 });

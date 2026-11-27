@@ -6,10 +6,12 @@ use super::{StorageBackend, Store};
 use anyhow::{Result, bail};
 use serde::{Deserialize, Serialize};
 
-pub mod trash;
+pub mod atomic_transfers;
+mod trash;
+pub use atomic_transfers::*;
 pub use trash::{
     DraftArchiveOptions, DraftMutationOutcome, DraftTombstone, DraftTrashRestoreRecord,
-    PurgeDraftError, PurgeDraftTarget,
+    PurgeDraftError, PurgeDraftTarget, RestoreReceiptRef,
 };
 
 const MAX_BODY: usize = 2 * 1024 * 1024;
@@ -699,7 +701,13 @@ impl Store {
             let mut target_raw_content: Option<String> = None;
             if let Some((raw, mrev, ts, src, raw_blocks)) = target {
                 let mut doc: DraftDocument = serde_json::from_str(&raw)?;
-                if doc.deleted && mrev == Some(doc.revision) {
+                let pre_rev = doc.revision;
+                if let Some(healed) = trash::reconcile_doc_tombstone_tx!(tx, owner, &mutation.document_id) {
+                    doc.revision = doc.revision.max(healed.revision);
+                    doc.body_revision = doc.body_revision.max(healed.body_revision);
+                    doc.metadata_revision = doc.metadata_revision.max(healed.metadata_revision);
+                }
+                if doc.deleted && mrev == Some(pre_rev) {
                     doc.trashed_at_ms = ts; doc.source_session_id = src; target_raw_content = raw_blocks;
                 }
                 if let Some(entry) = entries.iter_mut().find(|d| d.id == doc.id) { *entry = doc; }
@@ -728,7 +736,7 @@ impl Store {
                         && d.deleted
                         && d.revision == mutation.expected_revision
                 })
-                && trash::has_unrepresented_acp_blocks(target_raw_content.as_deref(), &curr.attachments)
+                && trash::has_unrepresented_acp_blocks(target_raw_content.as_deref(), &curr.body, &curr.attachments)
             {
                 return Ok(DraftMutationOutcome {
                     result: DraftResult::Invalid("This session draft contains session-only attachments (such as resource links). Use \"Restore to session\" instead.".to_owned()),
@@ -741,8 +749,12 @@ impl Store {
                 let destination: Option<String> = sqlx::query_scalar("SELECT folder_id FROM draft_workspace_folder_imports WHERE owner_user_id=$1 AND document_id=$2").bind(owner).bind(&*parent).fetch_optional(&mut *tx).await?;
                 if let Some(destination) = destination { *parent = destination; }
             }
+            let (db_folder_map, effective_shared) = trash::resolve_tx_folders!(tx, owner, shared);
             let now = chrono::Utc::now().timestamp_millis();
-            let result = apply(&entries, &mapped, now, shared);
+            let mut result = apply(&entries, &mapped, now, &effective_shared);
+            if matches!(mapped.change, DraftChange::Restore) && let DraftResult::Applied(ref mut next) = result {
+                next.parent_id = trash::resolve_live_restore_parent(next.parent_id.clone(), &db_folder_map, &effective_shared);
+            }
             let mut imported_folder = None;
             if let DraftResult::Applied(ref next) = result {
                 if let Some(prev) = entries.iter().find(|d| d.id == next.id && (d.body != next.body || d.attachments != next.attachments) && d.kind == DraftKind::Document) {

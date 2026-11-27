@@ -112,6 +112,14 @@ pub fn require_admin_role(
     }
 }
 
+fn is_draft_or_folder_route(path: &str) -> bool {
+    path == "/api/drafts"
+        || path.starts_with("/api/drafts/")
+        || path == "/api/folders"
+        || path.starts_with("/api/folders/")
+        || path == "/api/trash/purge-plan"
+}
+
 pub fn classify_route(method: &Method, path: &str) -> RouteAuth {
     if public_route(path) {
         return RouteAuth::Public;
@@ -138,11 +146,7 @@ pub fn classify_route(method: &Method, path: &str) -> RouteAuth {
     if path == "/api/provider-accounts" || path.starts_with("/api/provider-accounts/") {
         return RouteAuth::ProductOperator;
     }
-    if path == "/api/drafts"
-        || path.starts_with("/api/drafts/")
-        || path == "/api/folders"
-        || path.starts_with("/api/folders/")
-    {
+    if is_draft_or_folder_route(path) {
         return if matches!(*method, Method::GET | Method::HEAD) {
             RouteAuth::Product
         } else {

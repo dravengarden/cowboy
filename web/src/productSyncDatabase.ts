@@ -293,6 +293,27 @@ async function listScopedIds(
   return matched;
 }
 
+async function discardDocumentOutbox<T>(
+  owner: IdbPersistenceOwner,
+  borrowed: Set<string>,
+  resolvePrefix: () => Promise<string>,
+  assertCurrent: () => void,
+  id: string,
+  shouldDiscard?: (stored: ClientSnapshot<T> | null) => boolean,
+): Promise<boolean> {
+  const start = await resolvePrefix();
+  assertCurrent();
+  const localKey = `document:${id}:entry`;
+  if (shouldDiscard) {
+    const retired = await owner.retireOutboxIf<ClientSnapshot<T>>(`${start}${localKey}`, shouldDiscard);
+    if (retired) borrowed.delete(localKey);
+    return retired;
+  }
+  borrowed.delete(localKey);
+  await owner.retireOutbox(`${start}${localKey}`);
+  return true;
+}
+
 export function createProductSyncDatabase(
   currentPrincipal: () => string | undefined,
   discover = discoverSyncDataset,
@@ -443,13 +464,15 @@ export function createProductSyncDatabase(
     },
     draftDocumentIds: (): Promise<string[]> =>
       listScopedIds(owner, async () => prefix(await ready()), assertAdmission, "document", ":entry", 20000),
-    async discardDocument(id: string): Promise<void> {
-      const identity = dataset ?? (await ready());
-      assertCurrent();
-      const localKey = `document:${id}:entry`;
-      borrowed.delete(localKey);
-      await owner.retireOutbox(`${prefix(identity)}${localKey}`);
+    peekDocument: async <T>(id: string): Promise<ClientSnapshot<T> | null> => {
+      const identity = dataset ?? (await ready()); assertCurrent();
+      const value = await owner.peek<ClientSnapshot<T>>(`${prefix(identity)}document:${id}:entry`); assertCurrent(); return value;
     },
+    discardDocument: async (id: string): Promise<void> => {
+      await discardDocumentOutbox(owner, borrowed, async () => prefix(dataset ?? (await ready())), assertCurrent, id);
+    },
+    discardDocumentIf: <T>(id: string, shouldDiscard: (stored: ClientSnapshot<T> | null) => boolean): Promise<boolean> =>
+      discardDocumentOutbox(owner, borrowed, async () => prefix(dataset ?? (await ready())), assertCurrent, id, shouldDiscard),
     queueSessions: (): Promise<string[]> =>
       listScopedIds(owner, async () => prefix(await ready()), assertAdmission, "session", ":queue", 4096),
     queueHasPending: (sessionId: string): Promise<boolean> =>

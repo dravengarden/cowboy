@@ -44,12 +44,7 @@ export type UndoStep =
   | {
     kind: "restore_folder_only";
     folderId: string;
-    expectedTrashedAtMs: number;
-    destination: string | null;
-    previousProject: string | null;
-    movedFolders: string[];
-    movedSessions: string[];
-    movedDrafts: { owner: string; id: string; metadataRevision: number }[];
+    receiptId: string;
   }
   | { kind: "restore_calls"; parent: string; ids: string[] };
 

@@ -44,9 +44,9 @@ pub use hub_wrap_up::FrontSubmitOutcome;
 mod hub_events;
 pub use hub_events::FanoutFrame;
 pub use hub_queue::{
-    DraftRestoreStage, DraftTransferReservation, InFlightDispatchCmidGuard,
-    PendingDraftTransferCommit, PendingRecoveryActivationCommit, RecoveryActivationCommitStep,
-    RecoveryActivationReservation, RecoveryReserveErr,
+    DraftTransferReservation, InFlightDispatchCmidGuard, PendingDraftTransferCommit,
+    PendingRecoveryActivationCommit, RecoveryActivationCommitStep, RecoveryActivationReservation,
+    RecoveryReserveErr,
 };
 mod hub_managed_calls;
 pub use hub_managed_calls::{
@@ -1584,7 +1584,8 @@ struct HubInner {
     /// only tells the owner's other devices which revision to fetch.
     draft_announcements: Mutex<HashMap<String, serde_json::Map<String, serde_json::Value>>>,
     purging_draft_folders: Mutex<HashMap<String, usize>>,
-    trashing_only_folders: Mutex<HashSet<String>>,
+    folder_tx_in_flight: Mutex<bool>,
+    folder_tx_lock: Arc<tokio::sync::Mutex<()>>,
     draft_transfer_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
     preference_announcements: Mutex<HashMap<String, serde_json::Map<String, serde_json::Value>>>,
     /// Live fan-out to all connected clients. Lagging receivers are dropped by
@@ -1835,7 +1836,8 @@ impl Hub {
                 workspace_orders: Mutex::new(HashMap::new()),
                 draft_announcements: Mutex::new(HashMap::new()),
                 purging_draft_folders: Mutex::new(HashMap::new()),
-                trashing_only_folders: Mutex::new(HashSet::new()),
+                folder_tx_in_flight: Mutex::new(false),
+                folder_tx_lock: Arc::new(tokio::sync::Mutex::new(())),
                 draft_transfer_locks: Mutex::new(HashMap::new()),
                 preference_announcements: Mutex::new(HashMap::new()),
                 tx,

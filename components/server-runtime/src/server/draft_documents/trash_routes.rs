@@ -1,11 +1,11 @@
-//! Optimistic permanent draft purge, session unsent draft archiving, and
-//! durable session-draft restoration.
+//! Optimistic permanent draft purge, single-transaction session unsent draft
+//! archiving, and single-transaction durable session-draft restoration.
 
 use super::*;
-use crate::core::{DraftRestoreStage, PendingDraftTransferCommit};
 use crate::store::draft_documents::{
-    DraftArchiveOptions, DraftChange, DraftDocument, DraftKind, DraftMutation, DraftResult,
-    PurgeDraftError, PurgeDraftTarget,
+    AtomicArchiveDraftArgs, AtomicRestoreDraftArgs, AtomicRestoreOutcome, DraftArchiveOptions,
+    DraftChange, DraftDocument, DraftKind, DraftMutation, DraftResult, PurgeDraftError,
+    PurgeDraftTarget,
 };
 
 pub(super) fn verify_operator_dataset(
@@ -45,31 +45,13 @@ pub(super) async fn await_store_barrier(state: &Arc<AppState>) -> Result<(), (St
         }
         return Ok(());
     };
-    match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
-        Ok(Ok(Ok(_))) => Ok(()),
-        Ok(Ok(Err(message))) => Err((StatusCode::SERVICE_UNAVAILABLE, message)),
-        Ok(Err(_)) | Err(_) => Err((
+    match rx.await {
+        Ok(Ok(_)) => Ok(()),
+        Ok(Err(message)) => Err((StatusCode::SERVICE_UNAVAILABLE, message)),
+        Err(_) => Err((
             StatusCode::SERVICE_UNAVAILABLE,
-            "Durable storage synchronization timed out; try again".to_owned(),
+            "Durable storage synchronization was interrupted; try again".to_owned(),
         )),
-    }
-}
-
-async fn finish_transfer_commit(
-    state: &Arc<AppState>,
-    mut commit: PendingDraftTransferCommit,
-    rx: tokio::sync::oneshot::Receiver<Result<bool, String>>,
-    failure_message: &str,
-) -> Result<(), (StatusCode, String)> {
-    match tokio::time::timeout(std::time::Duration::from_secs(10), rx).await {
-        Ok(Ok(Ok(true))) => {
-            state.hub.commit_durable_draft_transfer(&mut commit);
-            Ok(())
-        }
-        Ok(Ok(Ok(false))) | Ok(Ok(Err(_))) | Ok(Err(_)) | Err(_) => {
-            state.hub.abort_durable_draft_transfer(&mut commit);
-            Err((StatusCode::SERVICE_UNAVAILABLE, failure_message.to_owned()))
-        }
     }
 }
 
@@ -185,58 +167,66 @@ pub async fn purge(
 pub struct TrashSessionDraftRequest {
     operation_id: String,
     expected_text: String,
-    #[serde(default)]
-    expected_content: Option<Vec<serde_json::Value>>,
-    #[serde(default)]
+    expected_content: Vec<serde_json::Value>,
     expected_schedule: Option<crate::core::DraftSchedule>,
-    #[serde(default)]
-    expected_schedule_ms: Option<i64>,
     #[serde(default)]
     title: String,
     #[serde(default)]
     attachments: Vec<serde_json::Value>,
 }
 
-fn schedule_matches(
+fn schedule_exact_eq(
     actual: Option<&crate::core::DraftSchedule>,
     expected: Option<&crate::core::DraftSchedule>,
-    legacy_ms: Option<i64>,
 ) -> bool {
-    if expected.is_some() || legacy_ms.is_none() {
-        match (actual, expected) {
-            (None, None) => true,
-            (Some(a), Some(b)) => a.fire_at_ms == b.fire_at_ms && a.delivery == b.delivery,
-            _ => false,
+    match (actual, expected) {
+        (None, None) => true,
+        (Some(a), Some(b)) => a.fire_at_ms == b.fire_at_ms && a.delivery == b.delivery,
+        _ => false,
+    }
+}
+
+/// Keep only attachment projections whose embedded ACP block matches a real
+/// non-text block from the authoritative session row (R3-12).
+fn filter_verified_attachments(
+    row_content: &[serde_json::Value],
+    caller_attachments: Vec<serde_json::Value>,
+) -> Vec<serde_json::Value> {
+    let mut available: Vec<&serde_json::Value> = row_content
+        .iter()
+        .filter(|b| {
+            matches!(
+                b.get("type").and_then(serde_json::Value::as_str),
+                Some("image" | "resource")
+            )
+        })
+        .collect();
+    let mut verified = Vec::with_capacity(caller_attachments.len());
+    for att in caller_attachments {
+        if let Some(block) = att.get("block")
+            && let Some(pos) = available.iter().position(|b| *b == block)
+        {
+            available.swap_remove(pos);
+            verified.push(att);
         }
-    } else {
-        actual.map(|s| s.fire_at_ms) == legacy_ms
     }
+    verified
 }
 
-fn content_matches(
-    actual: &[serde_json::Value],
-    expected: Option<&[serde_json::Value]>,
-    expected_text: &str,
-) -> bool {
-    if let Some(expected_blocks) = expected {
-        return actual == expected_blocks;
-    }
-    if actual.is_empty() {
-        return true;
-    }
-    actual.len() == 1
-        && actual[0].get("type").and_then(serde_json::Value::as_str) == Some("text")
-        && actual[0].get("text").and_then(serde_json::Value::as_str) == Some(expected_text)
+struct PreparedArchive {
+    mutation: DraftMutation,
+    raw_content_json: String,
+    source_origin_json: Option<String>,
+    is_recovery: bool,
+    archive_hash: String,
 }
 
-async fn archive_and_remove_session_draft(
-    state: &Arc<AppState>,
-    store: &crate::store::Store,
+fn prepare_archive_payload(
     owner: &str,
     session_id: &str,
     row: &crate::core::QueuedMessage,
     request: TrashSessionDraftRequest,
-) -> Response {
+) -> Result<PreparedArchive, (StatusCode, String)> {
     let title = sanitize_archive_title(if request.title.trim().is_empty() {
         row.text
             .lines()
@@ -245,47 +235,50 @@ async fn archive_and_remove_session_draft(
     } else {
         &request.title
     });
-    let raw_content_json = match serde_json::to_string(&row.content) {
-        Ok(json) => json,
-        Err(e) => {
-            tracing::error!(error = %e, "serialize queue draft raw content");
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Could not archive draft to Trash",
-            );
-        }
-    };
-    let source_origin_json = match row.origin.as_ref().map(serde_json::to_string).transpose() {
-        Ok(json) => json,
-        Err(e) => {
+    let raw_content_json = serde_json::to_string(&row.content).map_err(|e| {
+        tracing::error!(error = %e, "serialize queue draft raw content");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Could not archive draft to Trash".to_owned(),
+        )
+    })?;
+    let source_origin_json = row
+        .origin
+        .as_ref()
+        .map(serde_json::to_string)
+        .transpose()
+        .map_err(|e| {
             tracing::error!(error = %e, "serialize queue draft origin");
-            return error(
+            (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Could not archive draft to Trash",
-            );
-        }
-    };
+                "Could not archive draft to Trash".to_owned(),
+            )
+        })?;
     let is_recovery = row.id.starts_with("recovery-");
+    let durable_row_key = row.cmid.as_deref().unwrap_or(&row.id);
     let doc_id = format!(
         "sd-{}",
         &crate::admin::hex_sha256(
-            format!("{owner}:{session_id}:{}:{}", row.id, request.operation_id).as_bytes(),
+            format!(
+                "{owner}:{session_id}:{durable_row_key}:{}",
+                request.operation_id
+            )
+            .as_bytes()
         )[..32]
     );
     let archive_hash = crate::admin::hex_sha256(
         &serde_json::to_vec(&serde_json::json!({
             "session_id": session_id,
-            "row_id": row.id,
+            "row_key": durable_row_key,
             "text": row.text,
             "raw_content_json": raw_content_json,
             "schedule": row.schedule,
             "origin": row.origin,
             "is_recovery": is_recovery,
-            "title": title,
-            "attachments": request.attachments,
         }))
         .unwrap_or_default(),
     );
+    let verified_attachments = filter_verified_attachments(&row.content, request.attachments);
     let mutation = DraftMutation {
         operation_id: request.operation_id,
         document_id: doc_id,
@@ -295,67 +288,141 @@ async fn archive_and_remove_session_draft(
             title,
             parent_id: None,
             body: row.text.clone(),
-            attachments: request.attachments,
+            attachments: verified_attachments,
             trashed: true,
             source_session_id: Some(session_id.to_owned()),
         },
     };
-    let folders = super::owner_folders(state, owner);
-    let opts = DraftArchiveOptions {
-        raw_content_json: Some(&raw_content_json),
-        source_origin_json: source_origin_json.as_deref(),
-        source_is_recovery: is_recovery,
-        request_hash_override: Some(&archive_hash),
-        allow_session_provenance: true,
-    };
-    let document = match store
-        .mutate_draft_document_with_options(owner, &mutation, &folders, &opts)
-        .await
-    {
-        Ok(outcome) => match outcome.result {
-            DraftResult::Applied(doc) => doc,
-            DraftResult::Invalid(msg) => return error(StatusCode::UNPROCESSABLE_ENTITY, &msg),
-            DraftResult::Conflict(_) | DraftResult::Purged { .. } => {
-                return error(
-                    StatusCode::CONFLICT,
-                    "Archive operation conflicted; refresh and try again",
+    Ok(PreparedArchive {
+        mutation,
+        raw_content_json,
+        source_origin_json,
+        is_recovery,
+        archive_hash,
+    })
+}
+
+async fn run_archive_session_draft(
+    state: Arc<AppState>,
+    store: crate::store::Store,
+    owner: String,
+    session_id: String,
+    draft_id: String,
+    request: TrashSessionDraftRequest,
+) -> Result<serde_json::Value, (StatusCode, String)> {
+    let session_lock = state.hub.draft_transfer_lock(&format!("sess:{session_id}"));
+    let _session_guard = session_lock.lock().await;
+    let (row, _reservation) = match state.hub.reserve_draft_for_transfer(&session_id, &draft_id) {
+        Ok(Some(reserved)) => reserved,
+        Ok(None) => {
+            if let Ok(Some(existing_id)) = store
+                .draft_operation_document(&owner, &request.operation_id)
+                .await
+                && let Ok(Some(existing)) = store.draft_document(&owner, &existing_id).await
+                && existing.source_session_id.as_deref() == Some(session_id.as_str())
+            {
+                return Ok(
+                    serde_json::json!({ "archived": true, "removed": true, "draft": super::metadata(&existing) }),
                 );
             }
-        },
-        Err(e) => {
-            tracing::error!(error = %e, "archive session draft to Trash");
-            return error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Could not archive draft to Trash",
-            );
+            return Err((StatusCode::NOT_FOUND, "Draft no longer exists".to_owned()));
+        }
+        Err(msg) => return Err((StatusCode::CONFLICT, msg.to_owned())),
+    };
+    if row.text != request.expected_text
+        || row.content != request.expected_content
+        || !schedule_exact_eq(row.schedule.as_ref(), request.expected_schedule.as_ref())
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            "This draft was edited, attached, or rescheduled elsewhere; refresh and try again"
+                .to_owned(),
+        ));
+    }
+    let (_, _, mut commit) = state
+        .hub
+        .stage_atomic_draft_removal(&session_id, &row.id)
+        .map_err(|msg| (StatusCode::CONFLICT, msg.to_owned()))?;
+    if let Err(err) = await_store_barrier(&state).await {
+        state.hub.abort_durable_draft_transfer(&mut commit);
+        return Err(err);
+    }
+    let (next_queue, next_drafts) = match state.hub.snapshot_for_staged_transfer(&commit) {
+        Ok(pair) => pair,
+        Err(msg) => {
+            state.hub.abort_durable_draft_transfer(&mut commit);
+            return Err((StatusCode::CONFLICT, msg.to_owned()));
         }
     };
-    state.hub.announce_draft(owner, super::metadata(&document));
-    match state.hub.begin_durable_draft_removal(session_id, &row.id) {
-        Ok(Some((commit, rx))) => {
-            if let Err((status, msg)) = finish_transfer_commit(
-                state,
-                commit,
-                rx,
-                "Archived in Trash, but could not durably remove the session draft; retry with the same operation",
-            )
+    if row.text.trim().is_empty() && row.content.is_empty() {
+        if let Err(e) = store
+            .update_pending(&session_id, &next_queue, &next_drafts)
             .await
-            {
-                return error(status, &msg);
-            }
+        {
+            tracing::error!(error = %e, "remove empty session draft");
+            state.hub.abort_durable_draft_transfer(&mut commit);
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Could not durably remove empty draft; try again".to_owned(),
+            ));
         }
-        Ok(None) => {}
-        Err(msg) => return error(StatusCode::SERVICE_UNAVAILABLE, msg),
+        state.hub.commit_durable_draft_transfer(&mut commit);
+        return Ok(serde_json::json!({ "archived": false, "removed": true }));
     }
-    (
-        [(header::CACHE_CONTROL, "no-store")],
-        Json(serde_json::json!({
-            "archived": true,
-            "removed": true,
-            "draft": super::metadata(&document),
-        })),
-    )
-        .into_response()
+    let prepared = match prepare_archive_payload(&owner, &session_id, &row, request) {
+        Ok(p) => p,
+        Err(err) => {
+            state.hub.abort_durable_draft_transfer(&mut commit);
+            return Err(err);
+        }
+    };
+    let folders = super::owner_folders(&state, &owner);
+    let opts = DraftArchiveOptions {
+        raw_content_json: Some(&prepared.raw_content_json),
+        source_origin_json: prepared.source_origin_json.as_deref(),
+        source_is_recovery: prepared.is_recovery,
+        request_hash_override: Some(&prepared.archive_hash),
+        allow_session_provenance: true,
+    };
+    match store
+        .atomic_archive_session_draft(AtomicArchiveDraftArgs {
+            owner: &owner,
+            session_id: &session_id,
+            mutation: &prepared.mutation,
+            shared_folders: &folders,
+            opts: &opts,
+            next_queue: &next_queue,
+            next_drafts: &next_drafts,
+        })
+        .await
+    {
+        Ok(DraftResult::Applied(doc)) => {
+            state.hub.commit_durable_draft_transfer(&mut commit);
+            state.hub.announce_draft(&owner, super::metadata(&doc));
+            Ok(
+                serde_json::json!({ "archived": true, "removed": true, "draft": super::metadata(&doc) }),
+            )
+        }
+        Ok(DraftResult::Invalid(msg)) => {
+            state.hub.abort_durable_draft_transfer(&mut commit);
+            Err((StatusCode::UNPROCESSABLE_ENTITY, msg))
+        }
+        Ok(DraftResult::Conflict(_) | DraftResult::Purged { .. }) => {
+            state.hub.abort_durable_draft_transfer(&mut commit);
+            Err((
+                StatusCode::CONFLICT,
+                "Archive operation conflicted; refresh and try again".to_owned(),
+            ))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "atomic archive session draft");
+            state.hub.abort_durable_draft_transfer(&mut commit);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not archive draft to Trash".to_owned(),
+            ))
+        }
+    }
 }
 
 pub async fn trash_session_draft(
@@ -370,13 +437,12 @@ pub async fn trash_session_draft(
     {
         return error(status, &msg);
     }
-    let Some(store) = &state.store else {
+    let Some(store) = state.store.clone() else {
         return error(
             StatusCode::SERVICE_UNAVAILABLE,
             "Durable storage is unavailable",
         );
     };
-    let owner = &auth.principal.user_id;
     let Some(info) = state.hub.session_info(&session_id) else {
         return error(StatusCode::NOT_FOUND, "Session no longer exists");
     };
@@ -386,72 +452,23 @@ pub async fn trash_session_draft(
     {
         return error(StatusCode::FORBIDDEN, "Not allowed to change this session");
     }
-    let session_lock = state.hub.draft_transfer_lock(&format!("sess:{session_id}"));
-    let _session_guard = session_lock.lock().await;
-    let (row, _reservation) = match state.hub.reserve_draft_for_transfer(&session_id, &draft_id) {
-        Ok(Some(reserved)) => reserved,
-        Ok(None) => {
-            if let Ok(Some(existing_id)) = store
-                .draft_operation_document(owner, &request.operation_id)
-                .await
-                && let Ok(Some(existing)) = store.draft_document(owner, &existing_id).await
-                && existing.source_session_id.as_deref() == Some(session_id.as_str())
-            {
-                return (
-                    [(header::CACHE_CONTROL, "no-store")],
-                    Json(serde_json::json!({
-                        "archived": true,
-                        "removed": true,
-                        "draft": super::metadata(&existing),
-                    })),
-                )
-                    .into_response();
-            }
-            return error(StatusCode::NOT_FOUND, "Draft no longer exists");
-        }
-        Err(msg) => return error(StatusCode::CONFLICT, msg),
-    };
-    if row.text != request.expected_text
-        || !content_matches(
-            &row.content,
-            request.expected_content.as_deref(),
-            &request.expected_text,
-        )
-        || !schedule_matches(
-            row.schedule.as_ref(),
-            request.expected_schedule.as_ref(),
-            request.expected_schedule_ms,
-        )
-    {
-        return error(
-            StatusCode::CONFLICT,
-            "This draft was edited, attached, or rescheduled elsewhere; refresh and try again",
-        );
+    // Run in a request-independent task so client cancellation or timeout never
+    // drops locks/fences while the atomic SQL commit is in flight (R3-5).
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let owner = auth.principal.user_id.clone();
+    tokio::spawn(async move {
+        let res =
+            run_archive_session_draft(state, store, owner, session_id, draft_id, request).await;
+        let _ = tx.send(res);
+    });
+    match rx.await {
+        Ok(Ok(body)) => ([(header::CACHE_CONTROL, "no-store")], Json(body)).into_response(),
+        Ok(Err((status, msg))) => error(status, &msg),
+        Err(_) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Draft archive task ended unexpectedly",
+        ),
     }
-    if row.text.trim().is_empty() && row.content.is_empty() {
-        match state.hub.begin_durable_draft_removal(&session_id, &row.id) {
-            Ok(Some((commit, rx))) => {
-                if let Err((status, msg)) = finish_transfer_commit(
-                    &state,
-                    commit,
-                    rx,
-                    "Could not durably remove empty draft; try again",
-                )
-                .await
-                {
-                    return error(status, &msg);
-                }
-            }
-            Ok(None) => {}
-            Err(msg) => return error(StatusCode::CONFLICT, msg),
-        }
-        return (
-            [(header::CACHE_CONTROL, "no-store")],
-            Json(serde_json::json!({ "archived": false, "removed": true })),
-        )
-            .into_response();
-    }
-    archive_and_remove_session_draft(&state, store, owner, &session_id, &row, request).await
 }
 
 #[derive(Deserialize)]
@@ -476,42 +493,178 @@ fn build_fallback_content(doc: &DraftDocument) -> Vec<serde_json::Value> {
     blocks
 }
 
-async fn stage_session_restore(
-    state: &Arc<AppState>,
-    session_id: &str,
-    doc: &DraftDocument,
-    content: Vec<serde_json::Value>,
+#[allow(clippy::type_complexity)]
+async fn load_verified_restore_record(
+    store: &crate::store::Store,
+    owner: &str,
+    draft_id: &str,
     cmid: &str,
-    origin: Option<crate::prompt_origin::DeliveryOrigin>,
-    is_recovery: bool,
-) -> Result<String, (StatusCode, String)> {
-    match state.hub.begin_durable_draft_restore(
-        session_id,
-        doc.body.clone(),
-        content,
-        cmid.to_owned(),
-        origin,
-        is_recovery,
-    ) {
-        Ok(DraftRestoreStage::AlreadyPresent(id)) => {
-            await_store_barrier(state).await?;
-            Ok(id)
+    request: &RestoreToSessionRequest,
+) -> Result<
+    Result<crate::store::draft_documents::DraftTrashRestoreRecord, serde_json::Value>,
+    (StatusCode, String),
+> {
+    if let Some(tomb) = store.draft_tombstone(owner, draft_id).await.map_err(|e| {
+        tracing::error!(error = %e, "check draft restore tombstone");
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Could not restore draft".to_owned(),
+        )
+    })? {
+        if tomb.restore_op_id.as_deref() == Some(request.operation_id.as_str())
+            && tomb.restore_session_id.as_deref() == Some(request.session_id.as_str())
+            && tomb.restore_expected_revision == Some(request.expected_revision)
+            && tomb.restore_expected_trashed_at_ms == Some(request.expected_trashed_at_ms)
+        {
+            return Ok(Err(serde_json::json!({
+                "session_id": request.session_id,
+                "restored_draft_id": tomb.restored_row_id,
+                "restored_cmid": cmid,
+                "purged_draft_id": draft_id,
+            })));
         }
-        Ok(DraftRestoreStage::CommittedSync(id)) => {
-            await_store_barrier(state).await?;
-            Ok(id)
-        }
-        Ok(DraftRestoreStage::Pending(id, commit, rx)) => {
-            finish_transfer_commit(
-                state,
-                commit,
-                rx,
-                "Could not durably restore draft to the session; try again",
+        return Err((
+            StatusCode::GONE,
+            "This draft was permanently deleted".to_owned(),
+        ));
+    }
+    let Some(record) = store
+        .draft_trash_for_restore(owner, draft_id)
+        .await
+        .map_err(|e| {
+            tracing::error!(error = %e, "load draft for session restore");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not restore draft".to_owned(),
             )
-            .await?;
-            Ok(id)
+        })?
+    else {
+        return Err((StatusCode::NOT_FOUND, "Draft not found".to_owned()));
+    };
+    let doc = &record.document;
+    if !doc.deleted
+        || doc.revision != request.expected_revision
+        || doc.trashed_at_ms != Some(request.expected_trashed_at_ms)
+        || doc.source_session_id.as_deref() != Some(request.session_id.as_str())
+    {
+        return Err((
+            StatusCode::CONFLICT,
+            "Draft changed or was already restored elsewhere; refresh and try again".to_owned(),
+        ));
+    }
+    Ok(Ok(record))
+}
+
+async fn run_restore_to_session(
+    state: Arc<AppState>,
+    store: crate::store::Store,
+    owner: String,
+    draft_id: String,
+    request: RestoreToSessionRequest,
+) -> Result<serde_json::Value, (StatusCode, String)> {
+    let draft_lock = state
+        .hub
+        .draft_transfer_lock(&format!("draft:{owner}:{draft_id}"));
+    let _draft_guard = draft_lock.lock().await;
+    let session_lock = state
+        .hub
+        .draft_transfer_lock(&format!("sess:{}", request.session_id));
+    let _session_guard = session_lock.lock().await;
+    let cmid = format!(
+        "restore-{}",
+        &crate::admin::hex_sha256(
+            format!("{owner}:{draft_id}:{}", request.operation_id).as_bytes()
+        )[..32]
+    );
+    let record =
+        match load_verified_restore_record(&store, &owner, &draft_id, &cmid, &request).await? {
+            Ok(rec) => rec,
+            Err(replayed) => return Ok(replayed),
+        };
+    let doc = &record.document;
+    let content: Vec<serde_json::Value> = record
+        .raw_content_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(raw).ok())
+        .unwrap_or_else(|| build_fallback_content(doc));
+    let origin = record
+        .source_origin_json
+        .as_deref()
+        .and_then(|raw| serde_json::from_str::<crate::prompt_origin::DeliveryOrigin>(raw).ok());
+    let (restored_id, _, _, mut commit) = state
+        .hub
+        .stage_atomic_draft_restore(
+            &request.session_id,
+            doc.body.clone(),
+            content,
+            cmid.clone(),
+            origin,
+            record.source_is_recovery,
+        )
+        .map_err(|msg| (StatusCode::CONFLICT, msg))?;
+    if let Err(err) = await_store_barrier(&state).await {
+        state.hub.abort_durable_draft_transfer(&mut commit);
+        return Err(err);
+    }
+    let (next_queue, next_drafts) = match state.hub.snapshot_for_staged_transfer(&commit) {
+        Ok(pair) => pair,
+        Err(msg) => {
+            state.hub.abort_durable_draft_transfer(&mut commit);
+            return Err((StatusCode::CONFLICT, msg.to_owned()));
         }
-        Err(msg) => Err((StatusCode::CONFLICT, msg)),
+    };
+    match store
+        .atomic_restore_session_draft(AtomicRestoreDraftArgs {
+            owner: &owner,
+            session_id: &request.session_id,
+            draft_id: &draft_id,
+            operation_id: &request.operation_id,
+            expected_revision: request.expected_revision,
+            expected_trashed_at_ms: request.expected_trashed_at_ms,
+            restored_row_id: &restored_id,
+            next_queue: &next_queue,
+            next_drafts: &next_drafts,
+        })
+        .await
+    {
+        Ok(AtomicRestoreOutcome::Committed { purged_revision }) => {
+            state.hub.commit_durable_draft_transfer(&mut commit);
+            state
+                .hub
+                .announce_draft_purged(&owner, &[(draft_id.clone(), purged_revision)]);
+            Ok(
+                serde_json::json!({ "session_id": request.session_id, "restored_draft_id": restored_id, "restored_cmid": cmid, "purged_draft_id": draft_id }),
+            )
+        }
+        Ok(AtomicRestoreOutcome::AlreadyRestored { restored_row_id }) => {
+            state.hub.abort_durable_draft_transfer(&mut commit);
+            Ok(
+                serde_json::json!({ "session_id": request.session_id, "restored_draft_id": restored_row_id, "restored_cmid": cmid, "purged_draft_id": draft_id }),
+            )
+        }
+        Ok(AtomicRestoreOutcome::Purged) => {
+            state.hub.abort_durable_draft_transfer(&mut commit);
+            Err((
+                StatusCode::GONE,
+                "This draft was permanently deleted".to_owned(),
+            ))
+        }
+        Ok(AtomicRestoreOutcome::NotFound) => {
+            state.hub.abort_durable_draft_transfer(&mut commit);
+            Err((StatusCode::NOT_FOUND, "Draft not found".to_owned()))
+        }
+        Ok(AtomicRestoreOutcome::Conflict(msg)) => {
+            state.hub.abort_durable_draft_transfer(&mut commit);
+            Err((StatusCode::CONFLICT, msg))
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "atomic restore session draft");
+            state.hub.abort_durable_draft_transfer(&mut commit);
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Could not restore draft to session".to_owned(),
+            ))
+        }
     }
 }
 
@@ -526,13 +679,12 @@ pub async fn restore_to_session(
     {
         return error(status, &msg);
     }
-    let Some(store) = &state.store else {
+    let Some(store) = state.store.clone() else {
         return error(
             StatusCode::SERVICE_UNAVAILABLE,
             "Durable storage is unavailable",
         );
     };
-    let owner = &auth.principal.user_id;
     let Some(info) = state.hub.session_info(&request.session_id) else {
         return error(StatusCode::CONFLICT, "Source session no longer exists");
     };
@@ -545,121 +697,18 @@ pub async fn restore_to_session(
             "Not allowed to restore into this session",
         );
     }
-    // Acquire draft lock before session lock so concurrent restores never deadlock.
-    let draft_lock = state
-        .hub
-        .draft_transfer_lock(&format!("draft:{owner}:{draft_id}"));
-    let _draft_guard = draft_lock.lock().await;
-    let session_lock = state
-        .hub
-        .draft_transfer_lock(&format!("sess:{}", request.session_id));
-    let _session_guard = session_lock.lock().await;
-    let cmid = format!(
-        "restore-{}",
-        &crate::admin::hex_sha256(
-            format!("{owner}:{draft_id}:{}", request.operation_id).as_bytes(),
-        )[..32]
-    );
-    match store.draft_tombstone(owner, &draft_id).await {
-        Ok(Some(tomb)) if tomb.restore_op_id.as_deref() == Some(request.operation_id.as_str()) => {
-            return (
-                [(header::CACHE_CONTROL, "no-store")],
-                Json(serde_json::json!({
-                    "session_id": request.session_id,
-                    "restored_draft_id": tomb.restored_row_id,
-                    "restored_cmid": cmid,
-                    "purged_draft_id": draft_id,
-                })),
-            )
-                .into_response();
-        }
-        Ok(Some(_)) => {
-            return error(StatusCode::GONE, "This draft was permanently deleted");
-        }
-        Ok(None) => {}
-        Err(e) => {
-            tracing::error!(error = %e, "check draft restore tombstone");
-            return error(StatusCode::INTERNAL_SERVER_ERROR, "Could not restore draft");
-        }
-    }
-    let record = match store.draft_trash_for_restore(owner, &draft_id).await {
-        Ok(Some(record)) => record,
-        Ok(None) => return error(StatusCode::NOT_FOUND, "Draft not found"),
-        Err(e) => {
-            tracing::error!(error = %e, "load draft for session restore");
-            return error(StatusCode::INTERNAL_SERVER_ERROR, "Could not restore draft");
-        }
-    };
-    let doc = &record.document;
-    if !doc.deleted
-        || doc.revision != request.expected_revision
-        || doc.trashed_at_ms != Some(request.expected_trashed_at_ms)
-        || doc.source_session_id.as_deref() != Some(request.session_id.as_str())
-    {
-        return error(
-            StatusCode::CONFLICT,
-            "Draft changed or was already restored elsewhere; refresh and try again",
-        );
-    }
-    let content: Vec<serde_json::Value> = record
-        .raw_content_json
-        .as_deref()
-        .and_then(|raw| serde_json::from_str::<Vec<serde_json::Value>>(raw).ok())
-        .unwrap_or_else(|| build_fallback_content(doc));
-    let origin = match record.source_origin_json.as_deref() {
-        Some(raw) => serde_json::from_str::<crate::prompt_origin::DeliveryOrigin>(raw).ok(),
-        None => Some(crate::prompt_origin::DeliveryOrigin::from_caller(
-            &auth.caller,
-        )),
-    };
-    let restored_id = match stage_session_restore(
-        &state,
-        &request.session_id,
-        doc,
-        content,
-        &cmid,
-        origin,
-        record.source_is_recovery,
-    )
-    .await
-    {
-        Ok(id) => id,
-        Err((status, msg)) => return error(status, &msg),
-    };
-    let target = PurgeDraftTarget {
-        id: draft_id.clone(),
-        expected_revision: request.expected_revision,
-        expected_trashed_at_ms: request.expected_trashed_at_ms,
-    };
-    match store
-        .purge_trashed_drafts_with_restore_receipt(
-            owner,
-            &[target],
-            Some((&request.operation_id, &restored_id)),
-        )
-        .await
-    {
-        Ok(Ok(purged)) => {
-            state.hub.announce_draft_purged(owner, &purged);
-            (
-                [(header::CACHE_CONTROL, "no-store")],
-                Json(serde_json::json!({
-                    "session_id": request.session_id,
-                    "restored_draft_id": restored_id,
-                    "restored_cmid": cmid,
-                    "purged_draft_id": draft_id,
-                })),
-            )
-                .into_response()
-        }
-        Ok(Err(PurgeDraftError::Conflict(msg))) => error(StatusCode::CONFLICT, &msg),
-        Ok(Err(PurgeDraftError::Invalid(msg))) => error(StatusCode::UNPROCESSABLE_ENTITY, &msg),
-        Err(e) => {
-            tracing::error!(error = %e, "consume restored draft archive");
-            error(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Restored to session, but could not remove Trash archive; refresh Trash",
-            )
-        }
+    let (tx, rx) = tokio::sync::oneshot::channel();
+    let owner = auth.principal.user_id.clone();
+    tokio::spawn(async move {
+        let res = run_restore_to_session(state, store, owner, draft_id, request).await;
+        let _ = tx.send(res);
+    });
+    match rx.await {
+        Ok(Ok(body)) => ([(header::CACHE_CONTROL, "no-store")], Json(body)).into_response(),
+        Ok(Err((status, msg))) => error(status, &msg),
+        Err(_) => error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Draft restore task ended unexpectedly",
+        ),
     }
 }
