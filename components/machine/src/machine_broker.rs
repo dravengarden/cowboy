@@ -1451,6 +1451,14 @@ impl Broker {
                 if journal.writer_enabled() {
                     journal.mark_deleted(&session_id)?;
                 }
+                // Expose permanent deletion immediately at journal commit before
+                // releasing the journal lock so concurrent abort/snapshot handlers
+                // cannot race tombstone installation (R13-M1).
+                broker.cancelled_sessions.lock().insert(session_id.clone());
+                broker
+                    .permanently_deleted_sessions
+                    .lock()
+                    .insert(session_id.clone());
             }
             Ok(())
         })

@@ -134,6 +134,28 @@ impl State {
         }
         decisions.push_back((command_id, accepted, reason));
     }
+
+    /// Overwrite any cached acceptance for an aborted drain command with the
+    /// terminal refusal outcome so a broker reconnect replay never restores
+    /// drain authority after abort (R13-M3).
+    fn record_abort_decision(&self, command_id: Option<&str>, reason: &str) {
+        *self.accepted_command_id.lock() = None;
+        let Some(command_id) = command_id else {
+            return;
+        };
+        let mut decisions = self.decisions.lock();
+        if let Some((_, accepted, stored_reason)) =
+            decisions.iter_mut().find(|(id, _, _)| id == command_id)
+        {
+            *accepted = false;
+            *stored_reason = Some(reason.to_owned());
+            return;
+        }
+        if decisions.len() >= MAX_REMEMBERED_DECISIONS {
+            decisions.pop_front();
+        }
+        decisions.push_back((command_id.to_owned(), false, Some(reason.to_owned())));
+    }
 }
 
 pub(super) fn initial_snapshot(
@@ -423,6 +445,10 @@ fn decide_drain_commit(shared: &Shared, settled_cleanly: bool) -> CommitDecision
                 >= DRAIN_OUTBOX_FLUSH_TIMEOUT;
         if timed_out {
             let command_id = shared.crashed_drain.accepted_command_id.lock().clone();
+            shared.crashed_drain.record_abort_decision(
+                command_id.as_deref(),
+                "crashed_worker_drain_aborted: outbox flush timed out",
+            );
             shared
                 .crashed_drain
                 .holding_uncertain_effect
@@ -471,6 +497,10 @@ fn decide_drain_commit(shared: &Shared, settled_cleanly: bool) -> CommitDecision
             ledger.reopen_uncertain_reports();
         }
         let command_id = shared.crashed_drain.accepted_command_id.lock().clone();
+        shared.crashed_drain.record_abort_decision(
+            command_id.as_deref(),
+            "crashed_worker_drain_aborted: unacknowledged uncertain effect",
+        );
         shared
             .crashed_drain
             .holding_uncertain_effect
@@ -551,5 +581,33 @@ pub(super) async fn finish_if_drained<W: tokio::io::AsyncWrite + Unpin>(
             Ok(true)
         }
         CommitDecision::ExitWithoutReceipt => Ok(true),
+    }
+}
+
+#[cfg(test)]
+mod r13_tests {
+    use super::*;
+
+    #[test]
+    fn aborted_drain_command_replay_returns_terminal_refusal_instead_of_cached_acceptance() {
+        let state = State::default();
+        state.remember_decision("dc-r13".into(), true, None);
+        *state.accepted_command_id.lock() = Some("dc-r13".into());
+        assert_eq!(state.remembered_decision("dc-r13"), Some((true, None)));
+
+        state.record_abort_decision(
+            Some("dc-r13"),
+            "crashed_worker_drain_aborted: unacknowledged uncertain effect",
+        );
+        assert!(state.accepted_command_id.lock().is_none());
+        let (accepted, reason) = state
+            .remembered_decision("dc-r13")
+            .expect("aborted decision recorded");
+        assert!(!accepted);
+        assert!(
+            reason
+                .as_deref()
+                .is_some_and(|r| r.starts_with("crashed_worker_drain_aborted:"))
+        );
     }
 }

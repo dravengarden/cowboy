@@ -72,15 +72,18 @@ impl Broker {
         command_id: Option<&str>,
         uncertain_effect: Option<crate::runtime_wire::UncertainEffect>,
     ) {
-        let (mut updated_snapshot, cleared_fence) = {
+        let cleared_fence = {
+            // Hold canonical `cancelled_sessions -> permanently_deleted_sessions ->
+            // controller -> sessions -> workers -> pending_commands -> crashed_drains`
+            // through exact-peer validation, state mutation, and snapshot enqueue so
+            // permanent deletion cannot race snapshot publication (R12-M2, R13-M1).
             let _cancelled = self.cancelled_sessions.lock();
-            if self
-                .permanently_deleted_sessions
-                .lock()
-                .contains(session_id)
-            {
+            let deleted = self.permanently_deleted_sessions.lock();
+            if deleted.contains(session_id) {
                 return;
             }
+            let ctrl_guard = self.controller.lock();
+            let sessions = self.sessions.lock();
             let mut workers = self.workers.lock();
             let Some(worker) = workers
                 .get_mut(session_id)
@@ -88,6 +91,7 @@ impl Broker {
             else {
                 return;
             };
+            let pending = self.pending_commands.lock();
             let mut state = self.crashed_drains.inner.lock();
             let matched_active = state.active.get(session_id).is_some_and(|a| {
                 !a.confirmed && a.epoch == epoch && a.connection_id == connection_id
@@ -113,11 +117,11 @@ impl Broker {
                         .insert(session_id.to_owned(), merged);
                 }
             }
-            if !matched_active && !matched_pending {
+            let cleared = if !matched_active && !matched_pending {
                 if worker.snapshot.uncertain_effect == prev_effect {
                     return;
                 }
-                (worker.snapshot.clone(), false)
+                false
             } else {
                 if matched_active {
                     state.active.remove(session_id);
@@ -129,19 +133,42 @@ impl Broker {
                     .pending
                     .values()
                     .any(|p| p.session_id == session_id && p.epoch == epoch);
-                let cleared = if !still_pending && !state.active.contains_key(session_id) {
+                if !still_pending && !state.active.contains_key(session_id) {
                     worker.crashed_drain_fenced = false;
                     true
                 } else {
                     false
-                };
-                (worker.snapshot.clone(), cleared)
+                }
+            };
+            if let Some(ctrl) = ctrl_guard.as_ref() {
+                let mut snap = worker.snapshot.clone();
+                snap.pending_prompt_count = pending.get(session_id).map_or(0, |commands| {
+                    u64::try_from(
+                        commands
+                            .iter()
+                            .filter(|cmd| matches!(cmd, WorkerCommand::Prompt { .. }))
+                            .count(),
+                    )
+                    .unwrap_or(u64::MAX)
+                });
+                snap.crashed_drain_active = snap.has_connected_owner()
+                    && Self::has_crashed_drain_for_epoch_locked(&state, session_id, epoch);
+                snap.incarnation = self.reported_lineage(session_id);
+                let declared_provider = sessions.get(session_id).map(|s| s.provider.as_str());
+                wrap_up::sanitize_snapshot_for_controller(
+                    &mut snap,
+                    worker.raw_wrap_up_steering,
+                    worker.negotiated_protocol,
+                    ctrl.outer_machine_protocol,
+                    ctrl.protocol,
+                    declared_provider,
+                );
+                let _ = ctrl.tx.send(Frame::Snapshot {
+                    worker: Box::new(snap),
+                });
             }
+            cleared
         };
-        updated_snapshot.crashed_drain_active = self.has_crashed_drain_for_epoch(session_id, epoch);
-        self.send_controller(Frame::Snapshot {
-            worker: Box::new(updated_snapshot),
-        });
         if cleared_fence {
             self.flush_pending(session_id);
         }
@@ -318,9 +345,8 @@ impl Broker {
         let tx = ctrl.tx.clone();
         let outer = ctrl.outer_machine_protocol;
         let protocol = ctrl.protocol;
-        let pending_prompts: HashMap<String, u64> = self
-            .pending_commands
-            .lock()
+        let pending_guard = self.pending_commands.lock();
+        let pending_prompts: HashMap<String, u64> = pending_guard
             .iter()
             .map(|(sid, cmds)| {
                 let count = cmds
@@ -556,8 +582,11 @@ impl Broker {
         connection_id: u64,
         request: Box<crate::execution_protocol::RuntimeRequest>,
     ) {
-        let ctrl_guard = self.controller.lock();
+        // Acquire `cancelled_sessions` BEFORE `controller` to match
+        // `wrap_up.rs::handle_worker_event` -> `admit_and_bind_controller_for_event`
+        // and eliminate any broker-wide lock-order deadlock (R13-H1).
         let cancelled = self.cancelled_sessions.lock();
+        let ctrl_guard = self.controller.lock();
         let sessions = self.sessions.lock();
         let workers = self.workers.lock();
         let Some(worker) = workers

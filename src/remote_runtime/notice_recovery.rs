@@ -417,6 +417,7 @@ pub(super) fn spawn_record_snapshot_worker_epoch_if_notice(
 /// Defers `UndeliveredPrompt` for a `call-notice:` to [`settle_undelivered_notice`]
 /// so durable validation, payload rebuild, deduplication, and FIFO store admission
 /// run before mutating Hub or sending `Ack`.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn project_worker_outcome(
     shared: &Shared,
     key: &(String, String),
@@ -425,6 +426,7 @@ pub(super) fn project_worker_outcome(
     event: RuntimeEvent,
     idle_guard: Option<u64>,
     auto_permission: Option<(String, String)>,
+    apply_lifecycle: bool,
 ) -> Option<PendingUndeliveredNotice> {
     if let Some((request_id, option_id)) = auto_permission {
         tracing::info!(
@@ -481,6 +483,31 @@ pub(super) fn project_worker_outcome(
                 None
             }
             other => {
+                if !apply_lifecycle {
+                    match other {
+                        RuntimeEvent::Ready {
+                            agent_session_id: Some(agent_session_id),
+                        } => {
+                            if shared.hub.accepts_runtime_projection(session_id) {
+                                shared
+                                    .hub
+                                    .set_agent_session_id(session_id, agent_session_id);
+                            }
+                            return None;
+                        }
+                        RuntimeEvent::Ready { .. }
+                        | RuntimeEvent::Status { .. }
+                        | RuntimeEvent::TurnStarted { .. } => return None,
+                        RuntimeEvent::Update { ref update, .. }
+                            if crate::runtime_wire::current_turn_support(update).is_some()
+                                || crate::runtime_wire::background_tasks_count(update)
+                                    .is_some() =>
+                        {
+                            return None;
+                        }
+                        _ => {}
+                    }
+                }
                 super::apply_event(&shared.hub, session_id, other);
                 None
             }

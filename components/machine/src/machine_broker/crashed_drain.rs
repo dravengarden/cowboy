@@ -632,16 +632,26 @@ impl Broker {
         Self::has_crashed_drain_for_epoch_locked(&state, session_id, epoch)
     }
 
-    /// Stamp `crashed_drain_active` and enqueue `Frame::Snapshot` atomically
-    /// under the leaf `crashed_drains.inner` mutex so a concurrent drain
-    /// admission or cancellation can never reorder an older snapshot ahead of
-    /// or behind a newer drain transition (R11-H3).
+    /// Stamp live `pending_prompt_count` and `crashed_drain_active` and enqueue
+    /// `Frame::Snapshot` atomically under `pending_commands -> crashed_drains`
+    /// so concurrent queue mutations and drain transitions can never publish
+    /// snapshots out of order (R11-H3, R13-M5).
     pub(super) fn send_snapshot_ordered_with_crashed_drain(
         &self,
         tx: &mpsc::UnboundedSender<Frame>,
         mut worker: Box<WorkerSnapshot>,
     ) {
+        let pending = self.pending_commands.lock();
         let state = self.crashed_drains.inner.lock();
+        worker.pending_prompt_count = pending.get(&worker.session_id).map_or(0, |commands| {
+            u64::try_from(
+                commands
+                    .iter()
+                    .filter(|cmd| matches!(cmd, WorkerCommand::Prompt { .. }))
+                    .count(),
+            )
+            .unwrap_or(u64::MAX)
+        });
         worker.crashed_drain_active = worker.has_connected_owner()
             && Self::has_crashed_drain_for_epoch_locked(
                 &state,

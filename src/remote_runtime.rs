@@ -2596,6 +2596,7 @@ fn reconcile_idle_guard(shared: &Shared, session_id: &str, guard_epoch: Option<u
     }
 }
 
+#[allow(clippy::too_many_lines)]
 fn update_snapshot_from_event(
     shared: &Shared,
     session_id: &str,
@@ -2619,6 +2620,19 @@ fn update_snapshot_from_event(
     let Some(worker) = workers.get_mut(session_id) else {
         return;
     };
+    if worker.worker_epoch == worker_epoch
+        && runtime_seq > 0
+        && runtime_seq < worker.last_runtime_seq
+    {
+        // Historical replay event already reflected in the current snapshot's
+        // lifecycle state: never roll back cached state or capabilities (R13-M2).
+        if let RuntimeEvent::Update { update, .. } = event
+            && let Some(effect) = crate::runtime_wire::uncertain_effect(update)
+        {
+            crate::runtime_wire::merge_uncertain_effect(&mut worker.uncertain_effect, effect);
+        }
+        return;
+    }
     worker.last_runtime_seq = worker.last_runtime_seq.max(runtime_seq);
     match event {
         RuntimeEvent::Ready { agent_session_id } => {

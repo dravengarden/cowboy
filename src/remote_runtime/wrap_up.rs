@@ -85,6 +85,13 @@ impl WrapUpState {
             .insert((session_id.to_owned(), worker_epoch.to_owned()), raw);
     }
 
+    pub(super) fn cached_raw(&self, session_id: &str, worker_epoch: &str) -> Option<bool> {
+        self.raw_wrap_up
+            .lock()
+            .get(&(session_id.to_owned(), worker_epoch.to_owned()))
+            .copied()
+    }
+
     pub(super) fn record_raw_event(
         &self,
         session_id: &str,

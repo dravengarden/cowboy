@@ -565,6 +565,16 @@ pub(super) fn observe_crashed_sighting(shared: &Shared, worker: &WorkerSnapshot)
             .get(&worker.session_id)
             .is_none_or(|(replaced, _)| replaced == &worker.worker_epoch);
         if is_replaced_epoch {
+            // Apply authoritative broker drain revocation for this exact epoch
+            // before filtering reset lifecycle projection so a failed/withdrawn
+            // reset never retains a stale drain marker (R13-M4).
+            if !worker.has_connected_owner() || !worker.crashed_drain_active {
+                clear_draining_crashed_epoch_if_matches(
+                    shared,
+                    &worker.session_id,
+                    &worker.worker_epoch,
+                );
+            }
             return;
         }
     }
@@ -734,12 +744,18 @@ pub(super) fn project_admitted_worker_event(
     if let Some((machine, telemetry)) = shared.telemetry.lock().as_ref() {
         telemetry.record_runtime_spans(machine, session_id, diagnostics);
     }
+    let stale_lifecycle_replay =
+        runtime_seq > 0
+            && shared.workers.lock().get(session_id).is_some_and(|w| {
+                w.worker_epoch == worker_epoch && runtime_seq < w.last_runtime_seq
+            });
     super::resolve_steering_update(shared, session_id, event);
     super::update_snapshot_from_event(shared, session_id, worker_epoch, runtime_seq, event);
-    if let RuntimeEvent::Status {
-        state: WorkerState::Crashed | WorkerState::Exited,
-        detail,
-    } = event
+    if !stale_lifecycle_replay
+        && let RuntimeEvent::Status {
+            state: WorkerState::Crashed | WorkerState::Exited,
+            detail,
+        } = event
     {
         super::fail_config_startup(
             shared,
@@ -758,12 +774,12 @@ pub(super) fn project_admitted_worker_event(
             .draining_replay_snapshots
             .lock()
             .contains_key(&(session_id.to_owned(), worker_epoch.to_owned()));
-    let worker = if draining_replay_only {
+    let worker = if draining_replay_only || stale_lifecycle_replay {
         None
     } else {
         shared.workers.lock().get(session_id).cloned()
     };
-    let auto_permission = (!draining_replay_only)
+    let auto_permission = (!draining_replay_only && !stale_lifecycle_replay)
         .then(|| codex_full_access_permission(shared, session_id, event))
         .flatten();
     let idle_guard = worker
@@ -782,6 +798,7 @@ pub(super) fn project_admitted_worker_event(
         event.clone(),
         idle_guard,
         auto_permission,
+        !stale_lifecycle_replay,
     );
 }
 
@@ -849,6 +866,16 @@ pub(super) fn observe_crashed_event(
     let Some(entry) = sightings.get_mut(session_id) else {
         return;
     };
+    if runtime_seq > 0 && runtime_seq < entry.last_runtime_seq {
+        // Never roll back sighting lifecycle state on historical replay below
+        // the already-projected snapshot sequence; keep monotonic uncertainty (R13-M2).
+        if let RuntimeEvent::Update { update, .. } = event
+            && let Some(effect) = crate::runtime_wire::uncertain_effect(update)
+        {
+            crate::runtime_wire::merge_uncertain_effect(&mut entry.uncertain_effect, effect);
+        }
+        return;
+    }
     entry.last_runtime_seq = entry.last_runtime_seq.max(runtime_seq);
     match event {
         RuntimeEvent::Ready { .. } => entry.state = WorkerState::Running,
@@ -1124,7 +1151,7 @@ pub(super) fn project_snapshot_with_protocol(
     runtime_protocol: u16,
 ) -> bool {
     let mut worker = worker.clone();
-    let raw_wrap = worker.wrap_up_steering;
+    let mut raw_wrap = worker.wrap_up_steering;
     let _projection = shared.hub.runtime_projection_guard();
     shared.wrap_up.sanitize_snapshot(
         &mut worker,
@@ -1186,10 +1213,20 @@ pub(super) fn project_snapshot_with_protocol(
         if let Some(effect) = worker.uncertain_effect.clone() {
             crate::runtime_wire::merge_uncertain_effect(&mut merged.uncertain_effect, effect);
         }
-        merged.wrap_up_steering = worker.wrap_up_steering;
-        merged.supports_current_turn = worker.supports_current_turn;
-        merged.delivery_controls = worker.delivery_controls.clone();
-        merged.supports_subagent_cancel = worker.supports_subagent_cancel;
+        // Preserve newer delivery capabilities and cached raw wrap-up state
+        // from `existing`, then recompute protocol/provider policy (R13-L1).
+        let preserved_raw = shared
+            .wrap_up
+            .cached_raw(&merged.session_id, &merged.worker_epoch)
+            .unwrap_or(raw_wrap);
+        shared.wrap_up.sanitize_snapshot(
+            &mut merged,
+            preserved_raw,
+            shared.machine_protocol,
+            runtime_protocol,
+            &shared.hub,
+        );
+        raw_wrap = preserved_raw;
         worker = merged;
     }
     let applied = apply_snapshot(shared, &worker);
@@ -1463,11 +1500,12 @@ mod crashed_drain_tests {
         );
 
         // Streamed Crashed status makes it visible, still non-idle due to perm-1.
+        let next_seq = running.last_runtime_seq + 1;
         observe_crashed_event(
             &rt.shared,
             "s-named",
             "88-1",
-            1,
+            next_seq,
             &RuntimeEvent::Status {
                 state: WorkerState::Crashed,
                 detail: Some("expired".into()),
@@ -1486,7 +1524,7 @@ mod crashed_drain_tests {
             &rt.shared,
             "s-named",
             "88-1",
-            1,
+            next_seq + 1,
             &RuntimeEvent::PermissionResolved {
                 request_id: "perm-1".into(),
                 option_id: Some("allow".into()),
@@ -1872,5 +1910,78 @@ mod crashed_drain_tests {
             rt.last_crashed_worker("s-r12"),
             CrashedWorkerObservation::Seen(s) if s.worker_epoch == "120-1" && s.drain_requested
         ));
+    }
+
+    #[tokio::test]
+    async fn replayed_events_below_snapshot_seq_do_not_roll_back_crashed_and_reset_clears_revoked_drain()
+     {
+        let hub = crate::core::Hub::new();
+        let mut initial = crashed_snapshot("s-r13", "130-1");
+        initial.last_runtime_seq = 10;
+        initial.crashed_drain_active = true;
+        initial.supports_current_turn = true;
+        initial.delivery_controls.next_checkpoint = true;
+        initial.wrap_up_steering = true;
+        let rt = super::super::RemoteRuntime::for_test(hub.clone(), vec![initial.clone()]);
+        rt.connect_for_test();
+        assert!(project_snapshot_with_protocol(
+            &rt.shared,
+            &initial,
+            crate::runtime_wire::PROTOCOL_VERSION,
+        ));
+        assert!(is_draining_crashed_epoch(&rt.shared, "s-r13", "130-1"));
+
+        // Replayed Ready / Status(Running) at seq 4 <= 10 must NOT roll back
+        // worker cache, raw sighting, or Hub status from Crashed (R13-M2).
+        rt.project_trace_fixture(Frame::WorkerEvent {
+            session_id: "s-r13".into(),
+            worker_epoch: "130-1".into(),
+            runtime_seq: 4,
+            event: RuntimeEvent::Status {
+                state: WorkerState::Running,
+                detail: None,
+            },
+            diagnostics: Vec::new(),
+        })
+        .await;
+        let cached = rt.shared.workers.lock().get("s-r13").cloned().unwrap();
+        assert_eq!(cached.state, WorkerState::Crashed);
+        assert_eq!(cached.last_runtime_seq, 10);
+        assert!(matches!(
+            rt.last_crashed_worker("s-r13"),
+            CrashedWorkerObservation::Seen(s) if s.worker_epoch == "130-1"
+        ));
+
+        // Delayed lower-sequence snapshot (seq 5 < 10) must preserve newer
+        // delivery capabilities (R13-L1).
+        let mut delayed = initial.clone();
+        delayed.last_runtime_seq = 5;
+        delayed.supports_current_turn = false;
+        delayed.delivery_controls.next_checkpoint = false;
+        delayed.wrap_up_steering = false;
+        assert!(project_snapshot_with_protocol(
+            &rt.shared,
+            &delayed,
+            crate::runtime_wire::PROTOCOL_VERSION,
+        ));
+        let after_delayed = rt.shared.workers.lock().get("s-r13").cloned().unwrap();
+        assert!(after_delayed.supports_current_turn);
+        assert!(after_delayed.delivery_controls.next_checkpoint);
+
+        // During reset for replaced epoch `130-1`, an authoritative broker
+        // snapshot with `crashed_drain_active = false` MUST still revoke
+        // `draining_crashed_epochs` (R13-M4).
+        rt.shared.resetting.lock().insert("s-r13".into());
+        rt.shared
+            .reset_replacements
+            .lock()
+            .insert("s-r13".into(), ("130-1".into(), None));
+        let mut revoked = initial;
+        revoked.crashed_drain_active = false;
+        observe_crashed_sighting(&rt.shared, &revoked);
+        assert!(
+            !is_draining_crashed_epoch(&rt.shared, "s-r13", "130-1"),
+            "broker revocation snapshot during reset must clear stale drain marker"
+        );
     }
 }
