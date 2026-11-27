@@ -37,6 +37,7 @@ import {
 } from "react";
 
 import { DetentSheet } from "./detent-sheet.tsx";
+import { floatingIslandSurfaceSx } from "./reader-bottom-edge.ts";
 import { ScrollEdges } from "./scroll-edges.tsx";
 
 const DISMISS_TAP_MOVE_SLOP_PX = 10;
@@ -263,15 +264,10 @@ export function FloatingActionIsland(
   },
 ): ReactNode {
   const softRim = rim === "soft";
-  const topHighlightOpacity = (dark: boolean): number => {
-    if (softRim) {
-      return dark ? 0.14 : 0.48;
-    }
-    return dark ? 0.22 : 0.82;
-  };
   return (
     <Box
-      sx={{
+      data-floating-action-island
+      sx={(t) => ({
         position: "relative",
         pointerEvents: "auto",
         isolation: "isolate",
@@ -286,65 +282,12 @@ export function FloatingActionIsland(
         alignItems: "center",
         gap: compact ? 0 : 0.5,
         "& .MuiSvgIcon-root": { fontSize: "1.5rem", width: "1.5rem", height: "1.5rem" },
-        border: softRim ? 0 : 1,
-        borderColor: (t) => alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.18 : 0.62),
         borderRadius: compact ? "1.25rem" : 999,
-        bgcolor: (t) => alpha(t.palette.background.paper, t.palette.mode === "dark" ? 0.48 : 0.42),
-        backgroundImage: (t) =>
-          [
-            `radial-gradient(120% 90% at 18% -18%, ${
-              alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.24 : 0.82)
-            } 0%, transparent 52%)`,
-            `linear-gradient(180deg, ${
-              alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.08 : 0.3)
-            } 0%, transparent 46%, ${alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.08 : 0.055)} 100%)`,
-          ].join(", "),
-        boxShadow: (t) => {
-          if (compact) return `0 4px 14px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.2 : 0.1)}`;
-          const topHighlight = topHighlightOpacity(t.palette.mode === "dark");
-          return [
-            `0 14px 38px ${alpha(t.palette.common.black, t.palette.mode === "dark" ? 0.42 : 0.16)}`,
-            `inset 0 1px 0 ${alpha(t.palette.common.white, topHighlight)}`,
-            `inset 0 -1px 0 ${alpha(t.palette.primary.main, t.palette.mode === "dark" ? 0.18 : 0.12)}`,
-          ].join(", ");
-        },
-        backdropFilter: "blur(34px) saturate(190%) contrast(108%)",
-        WebkitBackdropFilter: "blur(34px) saturate(190%) contrast(108%)",
+        ...floatingIslandSurfaceSx(t, { softRim, compact }),
         userSelect: "none",
         WebkitUserSelect: "none",
-        "&::before": {
-          content: '""',
-          position: "absolute",
-          zIndex: 0,
-          pointerEvents: "none",
-          inset: softRim ? 0 : 1,
-          borderRadius: "inherit",
-          background: (t) =>
-            `linear-gradient(112deg, ${
-              alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.13 : 0.5)
-            } 0%, transparent 31%, transparent 68%, ${
-              alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.07 : 0.2)
-            } 100%)`,
-        },
-        "&::after": {
-          content: '""',
-          position: "absolute",
-          zIndex: 0,
-          pointerEvents: "none",
-          left: "12%",
-          right: "12%",
-          top: 1,
-          height: "42%",
-          borderRadius: "999px 999px 50% 50%",
-          background: (t) =>
-            `linear-gradient(180deg, ${
-              alpha(t.palette.common.white, t.palette.mode === "dark" ? 0.16 : 0.58)
-            }, transparent)`,
-          filter: "blur(7px)",
-          opacity: 0.72,
-        },
         "& > *": { position: "relative", zIndex: 1 },
-      }}
+      })}
     >
       {children}
     </Box>

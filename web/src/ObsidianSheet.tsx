@@ -18,7 +18,7 @@ import { Box, Paper, Typography, useTheme } from "@mui/material";
 import { alpha } from "@mui/material/styles";
 import { decisionShelfSurface } from "./decisionShelf";
 import { ScrollEdges, markDetentSheetOpen } from "@cowboy/app-shell";
-import { haptic as fireHaptic, MobileSheetDismiss } from "@cowboy/app-shell";
+import { FLOATING_CONTROLS_BOTTOM, haptic as fireHaptic, MobileSheetDismiss, readerBottomEdge } from "@cowboy/app-shell";
 import {
   OBSIDIAN_SHEET_INSET_PX,
   OBSIDIAN_SHEET_MAX_FRACTION,
@@ -108,6 +108,10 @@ export interface ObsidianSheetProps {
   readonly floatingDismiss?: boolean | undefined;
   /** Pickers keep a stable canvas while filtering their results. */
   readonly fill?: boolean | undefined;
+}
+
+function ObsidianGrabberPill({ hasTitle }: { readonly hasTitle: boolean }): ReactNode {
+  return <Box sx={{ pt: 1, pb: hasTitle ? 0.25 : 0.75, display: "flex", justifyContent: "center" }}><Box aria-hidden data-sheet-grabber-pill="true" sx={(t) => ({ width: 36, height: 4, borderRadius: 999, bgcolor: alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.24 : 0.18) })} /></Box>;
 }
 
 export function ObsidianSheet({
@@ -417,11 +421,10 @@ export function ObsidianSheet({
             touchAction: "none",
             cursor: "grab",
             userSelect: "none",
-            // No visible pill: the whole strip drags. Keep its clearance.
-            height: title == null ? HANDLE_HEIGHT : undefined,
-            pt: title == null ? 0 : 1.5,
+            minHeight: title == null ? HANDLE_HEIGHT : undefined,
           }}
         >
+          <ObsidianGrabberPill hasTitle={title != null} />
           {title == null ? null : (
             <Typography
               variant="subtitle1"
@@ -453,16 +456,19 @@ export function ObsidianSheet({
         {actions == null && floatingDismiss
           ? (
             <Box
-              sx={{
+              data-obsidian-sheet-footer="overlay"
+              sx={(t) => ({
+                ...readerBottomEdge(t, t.palette.background.paper),
                 position: "absolute",
                 left: 0,
                 right: 0,
                 bottom: 0,
                 zIndex: 2,
                 px: 2,
-                pb: SAFE_INSIDE,
+                pt: 0.5,
+                pb: FLOATING_CONTROLS_BOTTOM,
                 pointerEvents: "none",
-              }}
+              })}
             >
               <MobileSheetDismiss onClose={dismiss} />
             </Box>

@@ -1,7 +1,7 @@
 // Mobile Background Tasks surface (390x844 iOS PWA):
 // 1-tap content-height Triage Peek -> same-host Reader + 1-tap bottom worker switcher.
 
-import { FloatingActionIsland } from "@cowboy/app-shell";
+import { FloatingActionIsland, floatingIslandSurfaceSx } from "@cowboy/app-shell";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { alpha, Box, ButtonBase, Chip, Stack, Typography, type Theme } from "@mui/material";
 import { selectInspectorTab, useInspectorState, type MobileActivityTab } from "../backgroundTaskInspectorState";
@@ -31,7 +31,7 @@ function DockActionButton({ label, ariaLabel, icon, active = false, dataAttr, on
 
 function MobileWorkerSwitcherStrip({ tasks, selectedKey, onSelectSibling, onStepSibling }: { tasks: readonly TaskSummary[]; selectedKey: string; onSelectSibling: (key: string) => void; onStepSibling: (delta: -1 | 1) => void }): React.JSX.Element {
   return (
-    <Box data-mobile-worker-strip sx={(theme) => ({ pointerEvents: "auto", display: "flex", alignItems: "center", gap: 0.5, px: 0.5, py: 0.4, borderRadius: 999, border: 1, borderColor: alpha(theme.palette.common.white, theme.palette.mode === "dark" ? 0.16 : 0.55), bgcolor: alpha(theme.palette.background.paper, theme.palette.mode === "dark" ? 0.72 : 0.76), backdropFilter: "blur(24px) saturate(180%)", WebkitBackdropFilter: "blur(24px) saturate(180%)", boxShadow: `0 6px 20px ${alpha(theme.palette.common.black, theme.palette.mode === "dark" ? 0.34 : 0.12)}` })}>
+    <Box data-mobile-worker-strip sx={(theme) => ({ pointerEvents: "auto", display: "flex", alignItems: "center", gap: 0.5, px: 0.5, py: 0.4, borderRadius: 999, ...floatingIslandSurfaceSx(theme, { compact: true }) })}>
       {tasks.length > 3 && (
         <ButtonBase aria-label="Previous worker" data-mobile-worker-prev onClick={(): void => onStepSibling(-1)} sx={{ width: 40, height: 40, borderRadius: 999, flexShrink: 0, color: "text.secondary" }}>
           <ChevronLeft fontSize="small" />

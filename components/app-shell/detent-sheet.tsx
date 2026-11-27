@@ -368,6 +368,10 @@ function useDetentDismiss({
   }, [onClose, paint, signRef, geomRef]);
 }
 
+function SheetGrabberPill(): ReactNode {
+  return <Box sx={{ pt: 1, pb: 0.5, display: "flex", justifyContent: "center" }}><Box aria-hidden data-sheet-grabber-pill="true" sx={(t) => ({ width: 36, height: 4, borderRadius: 999, bgcolor: alpha(t.palette.text.primary, t.palette.mode === "dark" ? 0.24 : 0.18) })} /></Box>;
+}
+
 export function DetentSheet(
   {
     open,
@@ -710,10 +714,8 @@ export function DetentSheet(
     return null;
   }
 
-  // The grab strip on the sheet's INNER edge: draggable clearance only. The
-  // pill is gone — the whole header bar drags and the island closes, so the
-  // bar only cost a row of height.
-  const grabStrip = grabber ? <Box sx={{ height: 12 }} /> : null;
+  // Full-screen cover sheets sit flush; non-fullscreen sheets show a grab pill.
+  const grabStrip = grabber ? (isCover ? <Box sx={{ height: 12 }} /> : <SheetGrabberPill />) : null;
   // The draggable bar: grab strip + header. For a top sheet it lives at the
   // BOTTOM edge with the handle below the header; for a bottom sheet at the top
   // with the handle above. touchAction:none so the browser doesn't claim the
